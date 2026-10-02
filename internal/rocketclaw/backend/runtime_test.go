@@ -224,6 +224,8 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 
 		for _, id := range []string{"X", "Y"} {
 			require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}))
+			_, err := store.toggleSessionTag(ctx, id, id+"-tag", []string{id + "-tag"})
+			require.NoError(t, err)
 			replay, err := replayInputForMessage("user", id+" history")
 			require.NoError(t, err)
 			_, err = store.AppendEntryID(ctx, id, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replay, Agent: id, Model: "work/" + id, ReasoningEffort: new("high")})
@@ -326,6 +328,13 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		_, err = store.UpdateConversationDetails(ctx, "Y", nil, nil, new(time.Now().Add(time.Hour)))
 		require.NoError(t, err)
 		require.NoError(t, rt.SyncConversation(ctx, "X", "Y"))
+
+		for _, id := range []string{"X", "Y"} {
+			tags, err := sessionTags(ctx, store.db, id)
+			require.NoError(t, err)
+			require.Equal(t, []string{id + "-tag"}, tags)
+		}
+
 		require.NoError(t, waiting.Wait())
 		synctest.Wait()
 		require.Equal(t, []string{"X", "Y", "Y"}, delivered)

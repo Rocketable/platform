@@ -28,7 +28,197 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
+
+func TestSessionTags(t *testing.T) {
+	workspace := t.TempDir()
+	store := newTestSessionServiceAt(t, workspace)
+	ctx := t.Context()
+
+	const id = "external_mcp:tags"
+
+	groups := [][]string{{"triage", "investigating", "resolved"}, {"customer", "internal"}}
+	for _, step := range []struct {
+		tag   string
+		group int
+		want  []string
+	}{
+		{"triage", 0, []string{"triage"}},
+		{"customer", 1, []string{"customer", "triage"}},
+		{"investigating", 0, []string{"customer", "investigating"}},
+		{"investigating", 0, []string{"customer"}},
+	} {
+		tags, err := store.toggleSessionTag(ctx, id, step.tag, groups[step.group])
+		require.NoError(t, err)
+		require.Equal(t, step.want, tags)
+		tags, err = sessionTags(ctx, store.db, id)
+		require.NoError(t, err)
+		require.Equal(t, step.want, tags)
+	}
+
+	ctxCanceled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	_, err := store.toggleSessionTag(ctxCanceled, id, "triage", groups[0])
+	require.ErrorIs(t, err, context.Canceled)
+	_, err = store.AppendEntryID(ctx, id, testSessionEntry("history", "user"))
+	require.NoError(t, err)
+	_, err = store.DeleteSession(ctx, id)
+	require.NoError(t, err)
+	require.NoError(t, store.Stop())
+	store = newTestSessionServiceAt(t, workspace)
+	tags, err := sessionTags(ctx, store.db, id)
+	require.NoError(t, err)
+	require.Equal(t, []string{"customer"}, tags)
+	// Regrouping removes every current member, but keeps unrelated names.
+	_, err = store.toggleSessionTag(ctx, id, "triage", groups[0])
+	require.NoError(t, err)
+	tags, err = store.toggleSessionTag(ctx, id, "resolved", []string{"customer", "triage", "resolved"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"resolved"}, tags)
+
+	stats, err := store.PruneStateBefore(ctx, time.Now().Add(-time.Hour))
+	require.NoError(t, err)
+	require.Zero(t, stats.SessionRows)
+
+	tags, err = sessionTags(ctx, store.db, id)
+	require.NoError(t, err)
+	require.Equal(t, []string{}, tags)
+	require.NoError(t, store.Stop())
+	_, err = sessionTags(ctx, store.db, id)
+	require.Error(t, err)
+	_, err = store.toggleSessionTag(ctx, id, "triage", groups[0])
+	require.Error(t, err)
+}
+
+func TestSessionTagsCommitRollback(t *testing.T) {
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	group := []string{"triage", "resolved"}
+
+	for _, id := range []string{"owning", "other"} {
+		_, err := store.toggleSessionTag(ctx, id, "customer", []string{"customer"})
+		require.NoError(t, err)
+	}
+
+	_, err := store.toggleSessionTag(ctx, "owning", "triage", group)
+	require.NoError(t, err)
+	_, err = store.toggleSessionTag(ctx, "other", "resolved", group)
+	require.NoError(t, err)
+
+	// A deferred constraint fails at commit, after the replacement write succeeds.
+	_, err = store.db.ExecContext(ctx, `ALTER TABLE session_tags ADD CONSTRAINT reject_duplicate_tags UNIQUE (tags) DEFERRABLE INITIALLY DEFERRED`)
+	require.NoError(t, err)
+	_, err = store.toggleSessionTag(ctx, "owning", "resolved", group)
+	require.ErrorContains(t, err, "commit session tag toggle")
+	tags, err := sessionTags(ctx, store.db, "owning")
+	require.NoError(t, err)
+	require.Equal(t, []string{"customer", "triage"}, tags)
+	tags, err = sessionTags(ctx, store.db, "other")
+	require.NoError(t, err)
+	require.Equal(t, []string{"customer", "resolved"}, tags)
+
+	_, err = store.toggleSessionTag(ctx, "other", "resolved", group)
+	require.NoError(t, err)
+	tags, err = store.toggleSessionTag(ctx, "owning", "resolved", group)
+	require.NoError(t, err)
+	require.Equal(t, []string{"customer", "resolved"}, tags)
+}
+
+func TestSessionTagsConcurrent(t *testing.T) {
+	workspace := t.TempDir()
+
+	stores := []*SessionService{newTestSessionServiceAt(t, workspace), newTestSessionServiceAt(t, workspace)}
+	for _, scenario := range []struct {
+		name   string
+		tags   []string
+		groups [][]string
+		want   []string
+	}{
+		{"independent", []string{"triage", "customer"}, [][]string{{"triage"}, {"customer"}}, []string{"customer", "triage"}},
+		{"toggle", []string{"triage", "triage"}, [][]string{{"triage"}, {"triage"}}, []string{}},
+		{"exclusive", []string{"triage", "resolved"}, [][]string{{"triage", "resolved"}, {"triage", "resolved"}}, nil},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			var work errgroup.Group
+			for i, store := range stores {
+				work.Go(func() error {
+					_, err := store.toggleSessionTag(t.Context(), scenario.name, scenario.tags[i], scenario.groups[i])
+					return err
+				})
+			}
+
+			require.NoError(t, work.Wait())
+			tags, err := sessionTags(t.Context(), stores[0].db, scenario.name)
+			require.NoError(t, err)
+
+			if scenario.name == "exclusive" {
+				require.Len(t, tags, 1)
+				require.Contains(t, scenario.tags, tags[0])
+			} else {
+				require.Equal(t, scenario.want, tags)
+			}
+		})
+	}
+}
+
+func TestSessionTagsPrivateLifecycle(t *testing.T) {
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	// Existing history, even before the epoch, takes precedence over the tag-only fallback.
+	_, err := store.AppendEntryID(ctx, "external_mcp:pre-epoch", testSessionEntryAt(time.Unix(-20, 0).UTC(), "old"))
+	require.NoError(t, err)
+	_, err = store.toggleSessionTag(ctx, "external_mcp:pre-epoch", "customer", []string{"customer"})
+	require.NoError(t, err)
+	_, err = store.PruneStateBefore(ctx, time.Unix(-10, 0).UTC())
+	require.NoError(t, err)
+	tags, err := sessionTags(ctx, store.db, "external_mcp:pre-epoch")
+	require.NoError(t, err)
+	require.Empty(t, tags)
+
+	cutoff := time.Unix(1_700_000_000, 0).UTC()
+
+	ids := []string{"external_mcp:orphan", "cron:recent", "external_mcp:queued", "external_mcp:bound", "visible"}
+	for _, id := range ids {
+		_, err := store.toggleSessionTag(ctx, id, "customer", []string{"customer"})
+		require.NoError(t, err)
+	}
+
+	_, err = store.AppendEntryID(ctx, ids[1], testSessionEntryAt(cutoff.Add(time.Hour), "recent"))
+	require.NoError(t, err)
+
+	item := protocol.ThreadQueueItem{ID: "tags-queue", ConversationID: ids[2], Message: "waiting"}
+	require.NoError(t, store.PutThreadQueueItem(item.ID, &item))
+	require.NoError(t, store.RegisterExternalMCPConversation("tags-bound", "main", &ExternalMCPSessionState{Agent: "main", PrivateConversationID: ids[3], ManagedConversationID: ids[4]}))
+	_, err = store.AppendEntryID(ctx, ids[4], testSessionEntryAt(cutoff.Add(time.Hour), "recent"))
+	require.NoError(t, err)
+	_, err = store.PruneStateBefore(ctx, cutoff)
+	require.NoError(t, err)
+
+	for i, id := range ids {
+		tags, err := sessionTags(ctx, store.db, id)
+		require.NoError(t, err)
+
+		if i == 0 {
+			require.Empty(t, tags)
+		} else {
+			require.Equal(t, []string{"customer"}, tags)
+		}
+	}
+
+	require.NoError(t, store.RemoveExternalMCPConversation("tags-bound"))
+
+	for _, id := range ids[3:] {
+		tags, err := sessionTags(ctx, store.db, id)
+		require.NoError(t, err)
+		require.Empty(t, tags)
+	}
+
+	tags, err = sessionTags(ctx, store.db, ids[2])
+	require.NoError(t, err)
+	require.Equal(t, []string{"customer"}, tags)
+}
 
 func testDSNFile(workspace string) string {
 	return filepath.Join(workspace, ".test-database-url")
@@ -587,14 +777,14 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 20, n)
+	assert.Equal(t, 21, n)
 	require.Error(t, first.db.QueryRowContext(t.Context(), `SELECT 1 FROM store_bootstrap`).Scan(&n))
 
 	second, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop()) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 20, n)
+	assert.Equal(t, 21, n)
 }
 
 func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
@@ -640,9 +830,11 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 
 				var count int
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-				require.Equal(t, 20, count)
+				require.Equal(t, 21, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations WHERE applied_at='2026-01-01Z'`).Scan(&count))
 				require.Equal(t, prefix, count)
+				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM session_tags`).Scan(&count))
+				require.Zero(t, count)
 
 				for _, query := range []string{
 					`SELECT count(*) FROM managed_conversations WHERE conversation_id='synthetic' AND agent='main' AND created_by='owner' AND NOT settled AND NOT pinned AND snoozed_until IS NULL AND name='' AND forked_from='' AND settled_override AND bumped_at_unix_ns=123`,
@@ -687,7 +879,7 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 20, n)
+	assert.Equal(t, 21, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
 }
 

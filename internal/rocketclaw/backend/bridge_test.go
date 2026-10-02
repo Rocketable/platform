@@ -2252,10 +2252,35 @@ func TestBridgeInterruptCancelsTurnWaitingForPairedSession(t *testing.T) {
 func TestBridgeSuccessfulManagedWorkflowReleasesPairedReservation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		workspace := t.TempDir()
-		writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
+		writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[customer, internal]]\n---\nMain prompt\n")
 
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Input []struct{ Type, Output string }
+			}
+			if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+				return
+			}
+
 			w.Header().Set("Content-Type", "application/json")
+
+			requests++
+			if requests == 1 {
+				writeRawRunFunctionCall(t, w, "set-tag", setTagToolName, json.RawMessage(`{"tag":"customer"}`))
+				return
+			}
+
+			var outputs []string
+
+			for _, item := range body.Input {
+				if item.Type == "function_call_output" {
+					outputs = append(outputs, item.Output)
+				}
+			}
+
+			assert.Equal(t, []string{`{"tags":["customer"]}`}, outputs)
+
 			_, err := w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"checking workflow","annotations":[]}]},{"id":"msg_2","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"finished","annotations":[]}]}]}`))
 			assert.NoError(t, err)
 		}))
@@ -2321,6 +2346,10 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedReservation(t *testing.T) 
 		server.Close()
 		synctest.Wait()
 
+		tags, err := sessionTags(t.Context(), service.db, pairID)
+		require.NoError(t, err)
+		require.Equal(t, []string{"customer"}, tags)
+
 		entries, err := service.ObserveEntries(t.Context(), pairID)
 		require.NoError(t, err)
 		require.Len(t, entries, 1)
@@ -2335,6 +2364,7 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedReservation(t *testing.T) 
 		require.NoError(t, json.Unmarshal([]byte(payload), &summary))
 		assert.Equal(t, workflowTurnID, summary.RunID)
 		assert.JSONEq(t, fmt.Sprintf(`{"workflow":"audit","run_id":%q,"terminal":"complete","phases":[{"name":"work","status":"complete","scheduled":1,"complete":1},{"name":"later","status":"skipped","scheduled":0,"complete":0}]}`, workflowTurnID), payload)
+		require.Equal(t, 2, requests, "the tag call must complete before the workflow answer")
 
 		privateAcquired := false
 

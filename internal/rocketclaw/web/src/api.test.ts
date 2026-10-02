@@ -3,7 +3,7 @@ import { listSessions, mutations, queries, rpc } from "./api";
 import { readSessionEnumeration, shouldCommitSnapshot } from "./session-list";
 import type { HistoryView, SessionBatch } from "./types";
 
-const first: SessionBatch = { sessions: [{ id: "one", preview: "first" }], owner: "alice", upstreamSuccess: false, summariesComplete: true };
+const first: SessionBatch = { sessions: [{ id: "one", preview: "first", tags: ["customer", "quote\" 日本語"] }, { id: "older", preview: "no tag field" }], owner: "alice", upstreamSuccess: false, summariesComplete: true };
 const terminal: SessionBatch = { sessions: [], owner: "alice", upstreamSuccess: true, summariesComplete: true };
 const frame = (body: SessionBatch) => `data: ${JSON.stringify(body)}\n\n`;
 

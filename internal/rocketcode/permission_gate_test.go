@@ -15,6 +15,18 @@ func TestCheckNestedPermissionOutsideToolCall(t *testing.T) {
 	require.ErrorContains(t, err, "outside a tool call")
 }
 
+func TestToolCallAgent(t *testing.T) {
+	t.Parallel()
+	_, ok := ToolCallAgent(t.Context())
+	require.False(t, ok)
+
+	agent := Agent{Name: "child", Frontmatter: map[string]any{"permissions": "retained"}}
+	ctx := withToolCallContext(t.Context(), &looper{agent: agent}, nil, "call")
+	got, ok := ToolCallAgent(ctx)
+	require.True(t, ok)
+	require.Equal(t, agent, got)
+}
+
 func TestCheckNestedPermissionAllow(t *testing.T) {
 	t.Parallel()
 

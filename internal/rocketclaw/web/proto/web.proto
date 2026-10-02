@@ -20,6 +20,7 @@ message Session {
   reserved 11;
   string snoozed_until = 12;
   string forked_from = 13;
+  repeated string tags = 14;
 }
 
 message HistoryRequest {

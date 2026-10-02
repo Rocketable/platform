@@ -471,7 +471,7 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 			}
 
 			require.Equal(t, []SidebarSession{
-				{Conversation: protocol.Conversation{ID: "history", Agent: "main"}, Summary: &protocol.SessionSummary{ConversationID: "history", LastMessage: "assistant", LastUpdated: time.Unix(2, 123456000).UTC()}},
+				{Conversation: protocol.Conversation{ID: "history", Agent: "main"}, Summary: &protocol.SessionSummary{ConversationID: "history", LastMessage: "assistant", LastUpdated: time.Unix(2, 123456000).UTC()}, Tags: []string{}},
 			}, rows)
 		})
 	}
@@ -713,6 +713,11 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	service := newTestSessionService(t)
 	for _, id := range []string{"a", "Z", "ä", "empty", "missing", "zero", "cron:private", "one-off-cron:private", "private"} {
 		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main", Settled: id == "Z"}))
+
+		if id != "zero" {
+			_, err := service.toggleSessionTag(t.Context(), id, "customer", []string{"customer", "internal"})
+			require.NoError(t, err)
+		}
 	}
 
 	require.NoError(t, service.UpsertExternalMCPSession("external", &ExternalMCPSessionState{PrivateConversationID: "private", ManagedConversationID: "not-recorded"}))
@@ -750,6 +755,12 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 
 	for _, id := range []string{"Z", "a", "ä", "missing", "zero"} {
 		row := SidebarSession{Conversation: protocol.Conversation{ID: id, Agent: "main", Settled: id == "Z"}, Running: id == "a"}
+
+		row.Tags = []string{"customer"}
+		if id == "zero" {
+			row.Tags = []string{}
+		}
+
 		if id == "zero" {
 			row.Summary = &protocol.SessionSummary{ConversationID: id}
 		} else if id != "missing" {
@@ -760,6 +771,18 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	}
 
 	require.Equal(t, want, got)
+	_, err = service.toggleSessionTag(t.Context(), "a", "internal", []string{"customer", "internal"})
+	require.NoError(t, err)
+
+	for row, err := range service.SidebarSessions(t.Context(), time.Time{}) {
+		require.NoError(t, err)
+
+		if row.Conversation.ID == "a" {
+			require.Equal(t, []string{"internal"}, row.Tags)
+			row.Tags = got[1].Tags
+			require.Equal(t, got[1], row, "tag-only changes do not affect sidebar activity")
+		}
+	}
 
 	_, found, err := service.Thread("empty")
 	require.NoError(t, err)

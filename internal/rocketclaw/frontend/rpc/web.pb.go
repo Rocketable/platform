@@ -120,6 +120,7 @@ type Session struct {
 	Name          string                 `protobuf:"bytes,10,opt,name=name,proto3" json:"name,omitempty"`
 	SnoozedUntil  string                 `protobuf:"bytes,12,opt,name=snoozed_until,json=snoozedUntil,proto3" json:"snoozed_until,omitempty"`
 	ForkedFrom    string                 `protobuf:"bytes,13,opt,name=forked_from,json=forkedFrom,proto3" json:"forked_from,omitempty"`
+	Tags          []string               `protobuf:"bytes,14,rep,name=tags,proto3" json:"tags,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -236,6 +237,13 @@ func (x *Session) GetForkedFrom() string {
 		return x.ForkedFrom
 	}
 	return ""
+}
+
+func (x *Session) GetTags() []string {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
 }
 
 type HistoryRequest struct {
@@ -3463,7 +3471,7 @@ var File_web_proto protoreflect.FileDescriptor
 const file_web_proto_rawDesc = "" +
 	"\n" +
 	"\tweb.proto\x12\x03rpc\"\x15\n" +
-	"\x13ListSessionsRequest\"\xd1\x02\n" +
+	"\x13ListSessionsRequest\"\xe5\x02\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
@@ -3479,7 +3487,8 @@ const file_web_proto_rawDesc = "" +
 	" \x01(\tR\x04name\x12#\n" +
 	"\rsnoozed_until\x18\f \x01(\tR\fsnoozedUntil\x12\x1f\n" +
 	"\vforked_from\x18\r \x01(\tR\n" +
-	"forkedFromJ\x04\b\v\x10\f\"\xd5\x01\n" +
+	"forkedFrom\x12\x12\n" +
+	"\x04tags\x18\x0e \x03(\tR\x04tagsJ\x04\b\v\x10\f\"\xd5\x01\n" +
 	"\x0eHistoryRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x124\n" +
 	"\x16source_conversation_id\x18\x02 \x01(\tR\x14sourceConversationId\x12\x1f\n" +

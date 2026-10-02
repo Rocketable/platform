@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -163,6 +165,52 @@ def main(args):
 	require.NoError(t, star.Allow("workflow", "*"))
 	_, ok = (&Bridge{runtime: &config.Config{Workspace: bad}, log: slog.New(slog.DiscardHandler)}).maybeDynamicWorkflowTool(badRoot, &rocketcode.Agent{Permission: star}, "main", "turn-1")
 	assert.False(t, ok)
+}
+
+func TestNestedWorkflowSessionTags(t *testing.T) {
+	workspace := t.TempDir()
+	writeMainAgentSkills(t, workspace, "---\nmodel: gpt-5.5\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[customer, internal]]\n---\nPrompt\n")
+	root := openWorkspaceRoot(t, workspace)
+	require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
+	require.NoError(t, root.WriteFile(".rocketclaw/workflows/tag.star", []byte("meta = {\"name\": \"tag\", \"description\": \"Tag\"}\ndef main(args): return agent(\"tag\", label=\"worker\")\n"), 0o600))
+	service := newTestSessionServiceAt(t, workspace)
+	requests := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Input []struct{ Type, Output string }
+		}
+		if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+			return
+		}
+
+		requests++
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if requests == 1 {
+			writeRawRunFunctionCall(t, w, "set", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_set_tag(tag=\"customer\")\n"}`))
+		} else {
+			for _, item := range body.Input {
+				if item.Type == "function_call_output" {
+					assert.JSONEq(t, `{"tags":["customer"]}`, item.Output)
+				}
+			}
+
+			writeRawRunMessage(t, w, "done", "message", "done")
+		}
+	}))
+	defer server.Close()
+
+	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: "external_mcp:owning", SessionService: service}, log: slog.New(slog.DiscardHandler)}
+	definitions, err := workflow.Load(root, ".rocketclaw")
+	require.NoError(t, err)
+	_, err = bridge.runNestedWorkflow(t.Context(), "main", "turn", "tag", definitions["tag"], "")
+	require.NoError(t, err)
+	require.Equal(t, 2, requests)
+	tags, err := sessionTags(t.Context(), service.db, "external_mcp:owning")
+	require.NoError(t, err)
+	require.Equal(t, []string{"customer"}, tags)
 }
 
 func TestDynamicWorkflowToolNotInRocketClawAutoAllowList(t *testing.T) {

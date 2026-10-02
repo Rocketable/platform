@@ -18,7 +18,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
   const prompts: { id: string; text: string; delivery?: PromptDelivery }[] = [];
   const forks: { id: string; before?: string }[] = [];
   const forkParents: Record<string, string> = {};
-  const details: Record<string, Partial<Session>> = { destination: { agent: "a-very-long-agent-name-that-must-not-hide-the-session-age", updatedAt: "2026-09-09T00:00:00.123456Z" } };
+  const details: Record<string, Partial<Session>> = { destination: { agent: "a-very-long-agent-name-that-must-not-hide-the-session-age", updatedAt: "2026-09-09T00:00:00.123456Z", tags: ["customer", "a-very-long-tag-name-that-must-not-hide-the-session-age", "<b>literal</b>"] } };
   let failPin = true;
   let agentChoices = true;
   let failSettle = true;
@@ -275,6 +275,8 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     const destinationRow = sidebar.locator("li").filter({ has: page.getByRole("link", { name: /Podcast editing notes/ }) });
     await destinationRow.hover();
     const age = destinationRow.locator("time");
+    expect(await destinationRow.locator("span[title]").getAttribute("title")).toBe([details.destination.agent, ...details.destination.tags!].join(" · "));
+    expect(await destinationRow.locator("b").count()).toBe(0);
     expect(await age.count()).toBe(1);
     expect(await age.getAttribute("datetime")).toBe(details.destination.updatedAt);
     const ageText = await age.textContent();
@@ -376,7 +378,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     const destinationMatch = dialog.getByRole("button", { name: /Destination search needle/ });
     await destinationMatch.getByRole("img", { name: "Forked session", exact: true }).waitFor();
     expect(await destinationMatch.getByText("Podcast editing notes with a very long conversation title", { exact: true }).count()).toBe(1);
-    expect(await destinationMatch.getByText(details.destination.agent!, { exact: true }).count()).toBe(1);
+    expect(await destinationMatch.locator("span[title]").getAttribute("title")).toBe([details.destination.agent, ...details.destination.tags!].join(" · "));
     expect(searches).toEqual(["destination search"]);
     await destinationMatch.click();
     await page.waitForURL("**/s/" + btoa("destination").replace(/=+$/, ""));

@@ -39,9 +39,10 @@ type workflowAgentRunner struct {
 	agents        rocketcode.Agents
 	skills        rocketcode.Skills
 	resolver      *modelResolver
+	customTools   []rocketcode.Tool
 }
 
-func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logger) (*workflowAgentRunner, error) {
+func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logger, customTools ...rocketcode.Tool) (*workflowAgentRunner, error) {
 	root, agents, skills, resolver, err := prepareRocketCode(cfg, agent, logger, toolModeWorkflow)
 	if err != nil {
 		return nil, err
@@ -53,7 +54,7 @@ func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logge
 		return nil, fmt.Errorf("create workflow shell temp parent dir: %w", err)
 	}
 
-	return &workflowAgentRunner{cfg: cfg, agent: agent, parent: parent, root: root, agents: agents, skills: skills, resolver: resolver}, nil
+	return &workflowAgentRunner{cfg: cfg, agent: agent, parent: parent, root: root, agents: agents, skills: skills, resolver: resolver, customTools: customTools}, nil
 }
 
 func (r *workflowAgentRunner) Close() error {
@@ -85,6 +86,9 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 	}
 
 	callAgents.Items[r.agent] = active
+	if err := prepareWorkflowTags(callAgents, r.agent, request.Worker.Tools); err != nil {
+		return nil, err
+	}
 
 	shellTempRel := filepath.ToSlash(filepath.Join(r.parent, "workflow-"+rand.Text()))
 	if err := r.root.Mkdir(shellTempRel, 0o700); err != nil {
@@ -97,6 +101,7 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 	}()
 
 	runtimeConfig := rocketcode.Config{AutoApproverModel: r.cfg.AutoApproverModel, ShellTempDir: filepath.Join(r.cfg.Workspace, filepath.FromSlash(shellTempRel)), SpillDir: rocketcodeSpillDir(r.cfg), ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: r.cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: r.cfg.Instrumentation.HideInputs, HideOutputs: r.cfg.Instrumentation.HideOutputs}}, ChildSessions: rocketcode.InertChildSessions{}, CheckpointSink: rocketcode.InertCheckpointSink{}, ShellCommand: rocketcode.DefaultShellCommand}
+	runtimeConfig.CustomTools = r.customTools
 
 	runtime, err := rocketcode.NewWithModelResolver(r.resolver, &runtimeConfig, r.root, callAgents, r.skills, r.agent, io.Discard)
 	if err != nil {
@@ -170,6 +175,39 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 	}
 
 	return json.RawMessage(last), nil
+}
+
+// prepareWorkflowTags keeps worker limits and caller guidance local to one run.
+func prepareWorkflowTags(agents rocketcode.Agents, worker string, tools []string) error {
+	agent := agents.Items[worker]
+
+	agent.Permission.Buckets = slices.Clone(agent.Permission.Buckets)
+	for i, bucket := range agent.Permission.Buckets {
+		if bucket.Name == "rocketclaw_tags" {
+			agent.Permission.Buckets[i].Rules = slices.Clone(bucket.Rules)
+			for j, rule := range bucket.Rules {
+				if tools != nil && !slices.Contains(tools, rule.Pattern) {
+					agent.Permission.Buckets[i].Rules[j].Action = rocketcode.PermissionDeny
+				}
+			}
+		}
+	}
+
+	agents.Items[worker] = agent
+
+	for name := range agents.Items {
+		item := agents.Items[name]
+
+		groups, err := agentTagGroups(&item)
+		if err != nil {
+			return err
+		}
+
+		appendSessionTagPrompt(&item, groups)
+		agents.Items[name] = item
+	}
+
+	return nil
 }
 
 func prepareRocketCode(cfg *config.Config, agent string, logger *slog.Logger, mode toolMode) (*os.Root, rocketcode.Agents, rocketcode.Skills, *modelResolver, error) {

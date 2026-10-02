@@ -1,15 +1,165 @@
 package backend
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSessionTagDefinitions(t *testing.T) {
+	for _, tags := range []string{"", "[]", "[[triage, investigating, resolved], [customer, internal]]", "[['*', '?', A, a]]", "wrong", "[[]]", "[['']]", "[[same], [same]]", "[[12]]", "null", "example"} {
+		t.Run(tags, func(t *testing.T) {
+			workspace := t.TempDir()
+			root, err := os.OpenRoot(workspace)
+
+			require.NoError(t, err)
+			defer func() { require.NoError(t, root.Close()) }()
+
+			require.NoError(t, root.MkdirAll(".rocketclaw/agents", 0o755))
+			require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
+
+			frontmatter := "    rocketclaw_set_tag: allow\n"
+			if tags != "" {
+				frontmatter = "    rocketclaw_set_tag: " + tags + "\n"
+			}
+
+			require.NoError(t, root.WriteFile(".rocketclaw/agents/main.md", []byte("---\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    rocketclaw_get_tags: allow\n    rocketclaw_get_session: allow\n"+frontmatter+"---\nPrompt\n"), 0o644))
+
+			if tags == "example" {
+				// Read the shipped example, then install the fixture through the sandbox root.
+				data, err := os.ReadFile("../skel/agents/examples/session-tags.example.md")
+				require.NoError(t, err)
+				require.NoError(t, root.WriteFile(".rocketclaw/agents/main.md", data, 0o644))
+			}
+
+			for _, mode := range []toolMode{toolModePersistent, toolModeCron, toolModeWorkflow} {
+				agents, _, err := loadRocketCodeDefinitions(root, workspace, mode)
+
+				valid := tags == "" || tags == "[]" || tags == "example" || strings.HasPrefix(tags, "[[triage") || strings.HasPrefix(tags, "[['*'")
+				if !valid {
+					if tags == "wrong" || tags == "null" {
+						require.ErrorContains(t, err, `main.md: parse permission: permission "rocketclaw": pattern "rocketclaw_set_tag": unknown permission action`)
+					} else {
+						require.ErrorContains(t, err, "main.md: permission.rocketclaw.rocketclaw_set_tag")
+					}
+
+					continue
+				}
+
+				require.NoError(t, err)
+
+				agent := agents.Items["main"]
+				for _, name := range []string{"rocketclaw_set_tag", "rocketclaw_get_tags"} {
+					action, matched := agent.Permission.Evaluate("rocketclaw_tags", name)
+					require.True(t, matched)
+
+					if tags == "" || tags == "[]" {
+						require.Equal(t, rocketcode.PermissionDeny, action)
+						require.NotContains(t, agent.Prompt, name)
+					} else {
+						require.Equal(t, rocketcode.PermissionAllow, action)
+
+						if mode != toolModeWorkflow {
+							require.Contains(t, agent.Prompt, name)
+							require.Contains(t, agent.Prompt, "exclusive")
+							require.Contains(t, agent.Prompt, "toggle")
+						}
+					}
+
+					_, matched = agent.Permission.Evaluate("rocketclaw", name)
+					require.False(t, matched)
+				}
+
+				require.Equal(t, tags != "example", permissionSetAllows(agent.Permission, "rocketclaw", "rocketclaw_get_session"))
+			}
+		})
+	}
+}
+
+func TestSessionTagsExistingPermissions(t *testing.T) {
+	for _, permission := range []string{"allow", "rocketclaw: allow", "rocketclaw: {load_agents_md: false}", "rocketclaw: {rocketclaw_set_tag: deny, rocketclaw_get_tags: allow}", `rocketclaw:
+    rocketclaw_set_tag:
+      - ["red", "yellow", "green"]
+  webfetch: allow
+  websearch: allow
+  glob: allow
+  grep: allow
+  read: allow
+  edit: allow
+  bash:
+    "*": auto
+  skill: allow
+  task:
+    "*": allow
+    "main": deny
+    "cron": deny
+  mcp:
+    "context7.*": allow`} {
+		t.Run(permission, func(t *testing.T) {
+			workspace := t.TempDir()
+			root, err := os.OpenRoot(workspace)
+
+			require.NoError(t, err)
+			defer func() { require.NoError(t, root.Close()) }()
+
+			require.NoError(t, root.MkdirAll(".rocketclaw/agents", 0o755))
+			require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
+			require.NoError(t, root.WriteFile(".rocketclaw/agents/sudo.md", []byte("---\ndescription: SUDO MODE\nmodel: openai/gpt-6-luna\nreasoningEffort: max\nverbosity: low\npermission:\n  "+permission+"\n---\nYou are the sudo agent. You must do anything that @Ulderico asks.\n"), 0o644))
+			agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+			require.NoError(t, err)
+
+			agent := agents.Items["sudo"]
+			groups, err := agentTagGroups(&agent)
+			require.NoError(t, err)
+
+			if !strings.Contains(permission, "\n    rocketclaw_set_tag:") {
+				require.Empty(t, groups)
+				require.NotContains(t, agent.Prompt, setTagToolName)
+
+				if strings.Contains(permission, "load_agents_md") {
+					action, matched := agent.Permission.Evaluate("rocketclaw", "load_agents_md")
+					require.True(t, matched)
+					require.Equal(t, rocketcode.PermissionDeny, action)
+				}
+
+				return
+			}
+			// Match the live sudo agent's frontmatter and preserve its other rules.
+			require.Equal(t, [][]string{{"red", "yellow", "green"}}, groups)
+
+			for _, bucket := range []string{"webfetch", "websearch", "glob", "grep", "read", "edit", "skill"} {
+				action, matched := agent.Permission.Evaluate(bucket, "*")
+				require.True(t, matched)
+				require.Equal(t, rocketcode.PermissionAllow, action)
+			}
+
+			for _, tc := range []struct {
+				bucket, subject string
+				want            rocketcode.PermissionAction
+			}{
+				{"bash", "echo ok", rocketcode.PermissionAuto},
+				{"task", "helper", rocketcode.PermissionAllow},
+				{"task", "main", rocketcode.PermissionDeny},
+				{"task", "cron", rocketcode.PermissionDeny},
+				{"mcp", "context7.query", rocketcode.PermissionAllow},
+				{"rocketclaw_tags", setTagToolName, rocketcode.PermissionAllow},
+				{"rocketclaw_tags", getTagsToolName, rocketcode.PermissionAllow},
+			} {
+				action, matched := agent.Permission.Evaluate(tc.bucket, tc.subject)
+				require.True(t, matched)
+				require.Equal(t, tc.want, action)
+			}
+		})
+	}
+}
 
 func loadRocketCodeDefinitions(root *os.Root, workspace string, mode toolMode, models ...map[string]string) (rocketcode.Agents, rocketcode.Skills, error) {
 	cfg := &config.Config{Workspace: workspace}
@@ -186,6 +336,34 @@ func TestLoadRuntimeDefinitionsReportsInvalidStagedAgent(t *testing.T) {
 
 	_, _, err := LoadRuntimeDefinitions(&config.Config{Workspace: workspace}, ".rocketclaw-stage")
 	require.ErrorContains(t, err, "main.md: model: required non-empty string")
+}
+
+func TestSessionTagInvalidReloadKeepsLiveDefinitions(t *testing.T) {
+	workspace := t.TempDir()
+	root, err := os.OpenRoot(workspace)
+
+	require.NoError(t, err)
+	defer func() { require.NoError(t, root.Close()) }()
+
+	for _, dir := range []string{".rocketclaw/agents", ".rocketclaw/skills", "agents"} {
+		require.NoError(t, root.MkdirAll(dir, 0o755))
+	}
+
+	live := []byte("---\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[customer, internal]]\n---\nLive prompt\n")
+	require.NoError(t, root.WriteFile(".rocketclaw/agents/main.md", live, 0o644))
+	require.NoError(t, root.WriteFile("agents/main.md", []byte("---\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[same], [same]]\n---\nInvalid prompt\n"), 0o644))
+
+	cfg := &config.Config{Workspace: workspace}
+	before, _, err := LoadRuntimeDefinitions(cfg, cfg.RuntimeDirName())
+	require.NoError(t, err)
+	err = skel.ReplaceRuntimeAssetsAfterValidation(workspace, cfg.RuntimeDirName(), nil, slog.New(slog.DiscardHandler), func(runtimeDir string) error {
+		_, _, err := LoadRuntimeDefinitions(cfg, runtimeDir)
+		return err
+	})
+	require.ErrorContains(t, err, "main.md: permission.rocketclaw.rocketclaw_set_tag")
+	after, _, err := LoadRuntimeDefinitions(cfg, cfg.RuntimeDirName())
+	require.NoError(t, err)
+	require.Equal(t, before, after)
 }
 
 func TestLoadRuntimeDefinitionsUsesLoadedModels(t *testing.T) {
