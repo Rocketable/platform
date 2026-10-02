@@ -745,9 +745,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     const commandPalette = page.getByRole("dialog", { name: "Run command", exact: true });
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
     expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
-    await commandPalette.getByRole("button", { name: "Session: New session", exact: true }).waitFor();
-    await commandPalette.getByRole("button", { name: "Cron: Run cron", exact: true }).waitFor();
-    await commandPalette.getByRole("button", { name: "Page: Agents", exact: true }).waitFor();
+    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "Hide Sidebar", "List Agents", "List Skills", "Sessions: List Settled", "Sessions: New", "Sessions: Search", "Settings", "Timeline: Compact", "Timeline: Detailed", "Timeline: Everything", "Timeline: Messages only", "Timeline: Quiet"]);
     await page.keyboard.press("Escape");
     await commandPalette.waitFor({ state: "hidden" });
     await navigationCommands.click();
@@ -865,7 +863,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
 
     await skillComposer.fill("retained through browser history");
     await navigationCommands.click();
-    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Page: Agents" }).click();
+    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "List Agents" }).click();
     await page.waitForURL("**/agents");
     await page.goBack();
     await page.waitForURL(origin + "/");
@@ -1084,6 +1082,9 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await page.getByPlaceholder("Message or $command").fill("held in A");
     await page.getByRole("button", { name: "Send" }).click();
     await ctrl.promptStarted.promise;
+    // A held prompt must not make another session's History report it as running.
+    const otherHistory = await fetch(`${origin}/api/History`, { method: "POST", body: JSON.stringify({ id: "gone" }) });
+    expect((await otherHistory.json()).running).toBe(false);
     await page.getByRole("link").filter({ hasText: "will vanish" }).click();
     await page.waitForURL("**/s/Z29uZQ");
     await page.getByPlaceholder("Message or $command").fill("B draft");
@@ -1716,7 +1717,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     const footer = settledPage.locator("footer");
     const openPage = async (name: string) => {
       await footer.getByRole("button", { name: "Open command palette" }).click();
-      await settledPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: `Page: ${name}`, exact: true }).click();
+      await settledPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: ({ Settled: "Sessions: List Settled", Cron: "Cron: Dashboard", Agents: "List Agents", Skills: "List Skills", Config: "Settings" } as Record<string, string>)[name], exact: true }).click();
       await settledPage.locator('[data-slot="dialog-overlay"]').waitFor({ state: "hidden" });
       await settledPage.mouse.move(0, 0);
       await settledPage.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
@@ -2194,7 +2195,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       expect(ctrl.settledRows.find((session) => session.id === "named")?.snoozedUntil).toBe(await detailsPage.evaluate(() => new Date("2027-01-02T09:30").toISOString()));
       if (width === 390) await detailsPage.keyboard.press("Escape");
       await detailsPage.locator("footer").getByRole("button", { name: "Open command palette" }).click();
-      await detailsPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Page: Settled" }).click();
+      await detailsPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: List Settled" }).click();
       const snoozedRow = detailsPage.locator("main li").filter({ hasText: "Original preview" });
       await snoozedRow.getByText(/Snoozed until/).waitFor();
       await snoozedRow.hover();
@@ -2330,7 +2331,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await attachmentPage.getByRole("button", { name: "Remove drop.bin", exact: true }).waitFor();
     await attachmentPage.locator("textarea").fill("  exact file draft\n");
     await attachmentPage.locator("footer").getByRole("button", { name: "Open command palette" }).click();
-    await attachmentPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Page: Config" }).click();
+    await attachmentPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Settings" }).click();
     await attachmentPage.goBack();
     await attachmentPage.getByRole("button", { name: "Remove keep.bin", exact: true }).waitFor();
     expect(await attachmentPage.locator("textarea").inputValue()).toBe("  exact file draft\n");
@@ -2360,7 +2361,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect(await attachmentPage.getByRole("button", { name: /^Remove .*\.bin$/ }).count()).toBe(2);
     expect(ctrl.attachmentPrompts.at(-1)).toMatchObject({ id: "visible-files", text: "  exact file draft\n", delivery: "STEER" });
     expect(ctrl.attachmentPrompts.at(-1)?.attachmentIds?.map((id) => uploadedFiles.find(({ meta }) => meta.id === id)?.meta.name)).toEqual(["keep.bin", "drop.bin"]);
-    expect(uploadedFiles.slice(-2).map(({ data }) => [...data])).toEqual([[0, 255, 1, 2], [3, 4, 0, 255]]);
+    expect(ctrl.attachmentPrompts.at(-1)!.attachmentIds!.map((id) => [...uploadedFiles.find(({ meta }) => meta.id === id)!.data])).toEqual([[0, 255, 1, 2], [3, 4, 0, 255]]);
     ctrl.promptError = false;
     ctrl.holdUpload = true;
     ctrl.uploadStarted = Promise.withResolvers();
@@ -2511,7 +2512,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await desktopPage.getByRole("button", { name: "Show bottom navigation" }).click();
     await desktopPage.setViewportSize({ width: 320, height: 640 });
     await desktopPage.locator("footer").getByRole("button", { name: "Open command palette" }).click();
-    await desktopPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Page: Config" }).click();
+    await desktopPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Settings" }).click();
     await desktopPage.waitForURL("**/config");
     expect(await desktopPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await desktopPage.close();

@@ -46,7 +46,7 @@ import {
 
 const queryClient = new QueryClient();
 const tabReturnTo = { current: "/" };
-type SessionCommand = { mode: "fork" | "handoff" | "name" | "snooze" | "queue"; source: string; target?: MessageMatch };
+type SessionCommand = { mode: "fork" | "handoff" | "name" | "snooze"; source: string; target?: MessageMatch };
 const SessionCommands = createContext<{ command?: SessionCommand; setCommand: Dispatch<SetStateAction<SessionCommand | undefined>>; composer: RefObject<((command: string) => void) | null> }>(null!);
 
 function sessionPath(id: string) {
@@ -128,8 +128,10 @@ const dollarCommands = [
   { name: "cron", label: "Run cron", hint: "[job]", desc: "List or run a cron job" },
   { name: "workflow", label: "Run workflow", hint: "<name> [args]", desc: "Run a saved workflow" },
   { name: "agent", label: "Choose agent", hint: "[name]", desc: "List or switch agent" },
-  { name: "enqueue", label: "Stash work", hint: "<text>", desc: "Stash later work" },
-  { name: "queue", label: "Show queue", hint: "", desc: "List pending steers and later work" },
+  { name: "enqueue", label: "Enqueue work", hint: "<text>", desc: "Queue work to run automatically" },
+  { name: "stash", label: "Stash work", hint: "<text>", desc: "Hold work until explicitly sent" },
+  { name: "steer", label: "Steer turn", hint: "<text>", desc: "Send now or guide the active turn" },
+  { name: "queue", hint: "", desc: "List pending steers and later work" },
   { name: "skill", label: "Invoke skill", hint: "<name> [args]", desc: "Invoke a skill by name" },
 ];
 
@@ -765,7 +767,6 @@ export function App() {
 
 function SessionCommandDialog({ command, drafts, onDraftChange }: { command: SessionCommand; drafts: Map<string, ComposerDraft>; onDraftChange: () => void }) {
   if (command.mode === "name" || command.mode === "snooze") return <NameSessionDialog id={command.source} snooze={command.mode === "snooze"} />;
-  if (command.mode === "queue") return <SessionQueueDialog id={command.source} />;
   return command.mode === "fork" ? <ForkDialog source={command.source} drafts={drafts} onDraftChange={onDraftChange} /> : <HandoffDialog command={command} drafts={drafts} onDraftChange={onDraftChange} />;
 }
 
@@ -904,6 +905,7 @@ function paletteRows(
   filters: ReturnType<typeof sessionSearchTerms>,
   agentFilter: string,
   roomFilter: string,
+  recent: string[],
 ): { key: string; label?: string; detail?: string; session?: Session; loading?: boolean; keep?: boolean; disabled?: boolean; run: () => void }[] {
   if (mode === "sessions") {
     return sidebar.rows.filter((session) => sessionMatchesSearch(session, filters, agentFilter, roomFilter, origins.get(session.id) ?? "")).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map((session) => ({
@@ -919,13 +921,14 @@ function paletteRows(
   }
   return [
     ...actions,
-    { key: "new", label: "Session: New session", detail: "", run: newChat },
-    { key: "search", label: "Session: Search", detail: "", run: () => navigate("/search") },
-    { key: "run-cron", label: "Cron: Run cron", detail: "", keep: true, run: openCron },
-    ...(["settled", "cron", "agents", "skills", "config"] as const).map((key) => ({ key, label: `Page: ${key[0].toUpperCase() + key.slice(1)}`, run: () => navigate(`/${key}`) })),
+    { key: "new", label: "Sessions: New", run: newChat },
+    { key: "search", label: "Sessions: Search", run: () => navigate("/search") },
+    { key: "run-cron", label: "Cron: Run", keep: true, run: openCron },
+    ...([["settled", "Sessions: List Settled"], ["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
     ...timelineLevels.map(({ id, label, rows }) => ({ key: `timeline-${id}`, label: `Timeline: ${label}`, run: () => setTimelineRows(rows) })),
-    { key: "sidebar", label: `Sidebar: ${sidebarOpen ? "Hide sidebar" : "Show sidebar"}`, detail: "", run: onToggleSidebar },
-  ].filter((item) => needle === "" || item.label.toLowerCase().includes(needle));
+    { key: "sidebar", label: sidebarOpen ? "Hide Sidebar" : "Show Sidebar", run: onToggleSidebar },
+    // VS Code: src/vs/platform/quickinput/browser/commandsQuickAccess.ts, _getPicks.
+  ].filter((item) => needle === "" || item.label.toLowerCase().includes(needle)).sort((a, b) => (recent.indexOf(a.key) + 1 || Infinity) - (recent.indexOf(b.key) + 1 || Infinity) || a.label.localeCompare(b.label));
 }
 
 const pendingCronRuns = new Map<string, string>();
@@ -1004,11 +1007,12 @@ function CommandPalette({ drafts, mode, setMode, newChat, sidebarOpen, onToggleS
   const actions = useSessionActions(sidebar.rows.find((row) => row.id === id), () => setMode(undefined));
   const choices = useQuery({ ...queries.agents({ conversationId: id }), enabled: id !== "" });
   const draft = drafts.get(id);
-  const commands = id ? dollarCommands.filter(({ name }) => name !== "cron" && (name !== "stop" || (draft?.busy ?? sidebar.rows.find((row) => row.id === id)?.running)) && (name !== "agent" || !!choices.data?.agents.length)).map(({ name, label }) => ({ key: name, label: `${["fork", "handoff", "queue", "stop", "agent"].includes(name) ? "Session" : "Command"}: ${label}`, disabled: !draft || draft.sending, run: () => {
-    if (name === "fork" || name === "handoff" || name === "queue") setCommand({ mode: name, source: id });
+  const commands = id ? dollarCommands.filter(({ name }) => name !== "cron" && name !== "queue" && (name !== "stop" || (draft?.busy ?? sidebar.rows.find((row) => row.id === id)?.running)) && (name !== "agent" || !!choices.data?.agents.length)).map(({ name, label }) => ({ key: name, label: ["fork", "handoff", "stop", "agent"].includes(name) ? `Sessions: ${label}` : `Command: ${label} ($${name})`, disabled: !draft || draft.sending, run: () => {
+    if (name === "fork" || name === "handoff") setCommand({ mode: name, source: id });
     else composer.current!(name);
   } })) : [];
   const [query, setQuery] = useState("");
+  const [recent, setRecent] = useState<string[]>(() => JSON.parse(localStorage.getItem("command-history") ?? "[]"));
   const [pick, setPick] = useState(0);
   const [agentFilter, setAgentFilter] = useState("");
   const [roomFilter, setRoomFilter] = useState("");
@@ -1048,16 +1052,25 @@ function CommandPalette({ drafts, mode, setMode, newChat, sidebarOpen, onToggleS
       setMode(undefined);
     },
   });
-  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, sidebarOpen, onToggleSidebar, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.values, [...actions.items.map((item) => ({ ...item, label: `Session: ${item.label}` })), ...commands], filters, agentFilter, roomFilter);
+  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, sidebarOpen, onToggleSidebar, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.values, [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands], filters, agentFilter, roomFilter, recent);
   const selected = items.length === 0 ? 0 : pick % items.length;
   const choose = (item: (typeof items)[number]) => {
     if (item.disabled) return;
+    if (mode === "commands") {
+      const next = [item.key, ...recent.filter((key) => key !== item.key)].slice(0, 50);
+      localStorage.setItem("command-history", JSON.stringify(next));
+      setRecent(next);
+      setPick(0);
+    }
     if (!item.keep) setMode(undefined);
     item.run();
   };
   useEffect(() => { active.current?.scrollIntoView({ block: "nearest" }); }, [selected, mode]);
   const copy = paletteCopy[mode ?? "sessions"];
-  const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => setPick(paletteMove(event, selected, items.length, () => { if (items[selected]) choose(items[selected]); }));
+  const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    const next = paletteMove(event, selected, items.length, () => { if (items[selected]) choose(items[selected]); });
+    if (event.key !== "Enter") setPick(next);
+  };
   return (
     <Dialog open={mode !== undefined} onOpenChange={(open) => { if (!open) setMode(undefined); }}>
       <DialogContent initialFocus={input} showCloseButton={false} className="top-[20%] flex max-h-[75vh] translate-y-0 flex-col overflow-hidden sm:max-w-lg [@media(pointer:coarse)]:top-[var(--search-top,1rem)] [@media(pointer:coarse)]:max-h-[var(--search-height,75vh)]">
@@ -1169,15 +1182,6 @@ function SessionRowActions({ session }: { session: Session }) {
       </Menu.Popup></Menu.Positioner></Menu.Portal>
     </Menu.Root>
   </ButtonGroup>{error ? <span role="alert" className="px-2 text-xs text-destructive">{error.message}</span> : null}</>;
-}
-
-function SessionQueueDialog({ id }: { id: string }) {
-  const { setCommand } = useContext(SessionCommands);
-  const queue = useQuery({ ...queries.queue({ id }), refetchOnMount: false });
-  return <Dialog open onOpenChange={(open) => { if (!open) setCommand(undefined); }}><DialogContent>
-    <DialogTitle>Session queue</DialogTitle><DialogDescription>Pending steers and later work. Viewing this list starts no turn.</DialogDescription>
-    {queue.error ? <p role="alert">{queue.error.message}</p> : queue.isPending ? <p role="status">Loading…</p> : <ul className="max-h-[50dvh] overflow-y-auto">{!queue.data.length ? <li>No pending work</li> : null}{queue.data.map((item) => <li key={item.id} className="border-b py-2"><p className="text-xs text-muted-foreground">{item.delivery === "STASH" ? "Stashed" : item.delivery === "STEER" ? "Pending steer" : "Queued"}</p><p className="whitespace-pre-wrap break-words">{item.text}</p><MessageAttachments attachments={item.attachments} conversationId={id} /></li>)}</ul>}
-  </DialogContent></Dialog>;
 }
 
 function NameSessionDialog({ id, snooze }: { id: string; snooze: boolean }) {
@@ -2229,7 +2233,11 @@ async function sendComposer(input: {
   refreshHistory: () => Promise<unknown>;
 }) {
   const { draft } = input;
-  const stashing = input.delivery === "STASH";
+  const delivery = input.delivery ?? (input.busy ? "QUEUE" : "STEER");
+  // Match strings.Fields/unicode.IsSpace in frontend/rpc/server.go, not JavaScript's whitespace.
+  const command = input.delivery === "STASH" ? null : /^\p{White_Space}*\$(enqueue|stash|steer)(?=\p{White_Space}|$)\p{White_Space}*/u.exec(input.text);
+  const followUp: PromptDelivery = command ? command[1] === "enqueue" ? "QUEUE" : command[1] === "stash" ? "STASH" : "STEER" : delivery;
+  const stashing = followUp === "STASH";
   const stopping = !stashing && isStopCommand(input.text);
   if (draft.sending || (input.text.trim() === "" && input.files.length === 0)) {
     return;
@@ -2239,14 +2247,13 @@ async function sendComposer(input: {
   input.onDraftChange();
   const agent = draft.agent;
   let dispatchedEdit: number | undefined;
-  const followUp = input.delivery ?? (input.busy ? "QUEUE" : "STEER");
-  const enqueue = stashing || (followUp === "QUEUE" || /^\s*\$enqueue(?:\s|$)/.test(input.text)) && !stopping;
+  const enqueue = followUp !== "STEER" && !stopping;
   if (!input.busy && !enqueue) {
     input.setBusy(true);
   }
   input.scrollToEnd();
   input.setSendError("");
-  const optimistic: Line = { id: crypto.getRandomValues(new Uint32Array(4)).join("-"), role: "user", text: input.text };
+  const optimistic: Line = { id: crypto.getRandomValues(new Uint32Array(4)).join("-"), role: "user", text: command ? input.text.slice(command[0].length) : input.text };
   try {
     let sessionId = input.sessionId;
     if (sessionId === "") {
@@ -2276,7 +2283,7 @@ async function sendComposer(input: {
     draft.files = [];
     draft.agent = "";
     dispatchedEdit = ++draft.edit;
-    const response = input.prompt.mutateAsync({ id: sessionId, text: input.text, delivery: followUp, messageId: optimistic.id, ...(attachments.length ? { attachmentIds: attachments.map((file) => file.id) } : {}) });
+    const response = input.prompt.mutateAsync({ id: sessionId, text: input.text, delivery, messageId: optimistic.id, ...(attachments.length ? { attachmentIds: attachments.map((file) => file.id) } : {}) });
     draft.sending = false;
     input.onDraftChange();
     input.setAgentOpen(false);

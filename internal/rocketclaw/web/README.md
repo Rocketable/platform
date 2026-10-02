@@ -129,18 +129,32 @@ and unfinished `agent:`/`room:` suggestions do not fetch histories. Ordinary
 sidebar loading stays independent. Incomplete enumeration or origin lookups show
 loading feedback rather than a definitive empty result. Failed origin lookups
 show an error while usable row matches remain selectable.
-The command button and Cmd/Ctrl+Shift+P open the command palette: new session,
-run cron, pages, Timeline detail levels (`Timeline: Messages only` through
-`Timeline: Everything`), and sidebar. Command rows have visible category prefixes such
-as `Session: Name session` and `Page: Agents`, with compact spacing and touch-sized targets on mobile.
+The command button and Cmd/Ctrl+Shift+P open the command palette. It always offers
+**Sessions: New**, **Sessions: Search**, **Sessions: List Settled**, **Cron: Dashboard**,
+**Cron: Run**, **List Agents**, **List Skills**, **Settings**, and **Hide Sidebar / Show Sidebar**.
+Timeline detail levels are also available, from `Timeline: Messages only` through
+`Timeline: Everything`.
+Like VS Code, selected commands appear first, newest first;
+unused commands follow alphabetically, without section dividers. History stays in
+this browser across reloads, stores command IDs rather than session IDs or draft
+text, and records only selections—not searches or dismissals. Search still filters
+the list, and unavailable session commands stay hidden even when recently used.
+Rows keep compact spacing and touch-sized targets on mobile.
 For the current session it also offers **Open original conversation** (when forked),
 **Name session**, **Pin/Unpin**, **Snooze session**, **Settle/Unsettle**, **Fork session**,
-**Handoff session**, **Choose agent**, **Show queue**, and **Stop turn** while running.
+**Handoff session**, **Choose agent**, and **Stop turn** while running.
 The sidebar and palette use the same session-action definitions. Fork, handoff,
-rename, agent selection, and queue viewing open their controls directly; queue viewing
-starts no turn. **Start goal**, **Run workflow**, **Invoke skill**, and **Stash work**
+rename, and agent selection open their controls directly.
+**Command: Start goal ($goal)**, **Command: Run workflow ($workflow)**,
+**Command: Invoke skill ($skill)**, **Command: Enqueue work ($enqueue)**,
+**Command: Stash work ($stash)**, and **Command: Steer turn ($steer)**
 prefix the corresponding `$command` to the current draft and focus the composer.
 Existing draft text and attachments are kept; nothing is sent until you submit.
+In web, `$enqueue <text>` queues automatic later work, `$stash <text>` holds work
+until explicitly sent, and `$steer <text>` sends now or guides the running turn.
+Only the outer delivery command is removed; inner commands and text are preserved.
+The Stash button and shortcut still hold the entire draft literally, including
+any `$command` text. Slack's command language is unchanged.
 Run cron opens a new session immediately. The job still runs privately, and the chat fills in when it finishes.
 A chat that began as a cron run or an external MCP call starts with a collapsed origin card. Use show more to see its details; the card scrolls with the messages. An ordinary chat has no origin card.
 On mobile, the Sessions toggle sits
