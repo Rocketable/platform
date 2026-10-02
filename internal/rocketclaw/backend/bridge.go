@@ -1114,7 +1114,7 @@ func (b *Bridge) runWorkflow(ctx context.Context, msg *protocol.InboundMessage, 
 		return result, fmt.Errorf("workflow %q is not configured", msg.Workflow.Name)
 	}
 
-	runner, err := newWorkflowAgentRunner(b.runtime, b.agentSnapshot(), b.log)
+	runner, err := newWorkflowAgentRunner(b.runtime, b.agentSnapshot(), b.log, sessionTagTools(b.config.SessionService, b.config.ConversationID)...)
 	if err != nil {
 		return result, fmt.Errorf("prepare workflow agent runner: %w", err)
 	}
@@ -1810,6 +1810,8 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv, sourceMetadata 
 	tools := make([]rocketcode.Tool, 0, 6+len(customTools))
 
 	tools = append(tools, reloadTool(b.config.RequestReload), scheduleMessageTool(b.ScheduleMessage, b.log), resetScheduledMessagesTool(b.ResetScheduledMessages), listSessionsTool(b.config.SessionService), getSessionTool(b.config.SessionService), currentSessionIDTool(b.config.ConversationID))
+
+	tools = append(tools, sessionTagTools(b.config.SessionService, b.config.ConversationID)...)
 	if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err == nil && ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
 		tools = append(tools, updateGoalTool(b))
 	}
@@ -1968,6 +1970,30 @@ func loadRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 
 	for name := range agentResult.Agents.Items {
 		agent := agentResult.Agents.Items[name]
+
+		groups, err := agentTagGroups(&agent)
+		if err != nil {
+			return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("%s: permission.rocketclaw.rocketclaw_set_tag: %w", agent.Location, err)
+		}
+
+		agent.Permission.Buckets = slices.DeleteFunc(slices.Clone(agent.Permission.Buckets), func(bucket rocketcode.PermissionBucket) bool { return bucket.Name == "rocketclaw_tags" })
+		for i, bucket := range agent.Permission.Buckets {
+			if bucket.Name == "rocketclaw" {
+				agent.Permission.Buckets[i].Rules = slices.DeleteFunc(slices.Clone(bucket.Rules), func(rule rocketcode.PermissionRule) bool {
+					return rule.Pattern == setTagToolName || rule.Pattern == getTagsToolName
+				})
+			}
+		}
+
+		action := rocketcode.PermissionDeny
+		if len(groups) > 0 {
+			action = rocketcode.PermissionAllow
+		}
+
+		agent.Permission.Buckets = append(agent.Permission.Buckets, rocketcode.PermissionBucket{Name: "rocketclaw_tags", Rules: []rocketcode.PermissionRule{{Pattern: setTagToolName, Action: action}, {Pattern: getTagsToolName, Action: action}}})
+		if mode != toolModeWorkflow {
+			appendSessionTagPrompt(&agent, groups)
+		}
 
 		for _, tool := range tools {
 			action, matched := agent.Permission.Evaluate("rocketclaw", tool)

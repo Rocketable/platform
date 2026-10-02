@@ -168,6 +168,57 @@ strict JSON objects. All three tools are read-only: they do not mark conversatio
 start turns. Full histories can be large; normal Execute output clipping and
 spill handling still apply.
 
+#### Agent session tags
+
+Opt an agent into durable session tags with `permission.rocketclaw.rocketclaw_set_tag` in its
+existing permission configuration. Tag groups grant tag access; other tool rules
+keep their existing meaning:
+
+```yaml
+permission:
+  rocketclaw:
+    rocketclaw_set_tag:
+      - [triage, investigating, resolved]
+      - [customer, internal]
+```
+
+This exposes `rocketclaw_set_tag(tag)` and `rocketclaw_get_tags()`, directly or
+inside Execute. Each agent, including a child, uses its own configured groups;
+without groups, neither tool nor its generated guidance is shown. Explicit
+workflow worker tool lists still limit access, and handoff generation has no tools.
+See the opt-in [agent example](internal/rocketclaw/skel/agents/examples/session-tags.example.md).
+Copy it to `agents/session-tags.md` to enable that agent, or add the field to an
+existing agent and reload. Shipped agents remain untagged by default.
+
+Set an inactive tag to replace the active tags in its group. Set an active tag
+again to clear that group. Other groups stay unchanged. Names are exact,
+case-sensitive strings, not wildcard patterns; an unconfigured tag returns an
+error without changing metadata. Groups must be nonempty lists of nonempty
+strings, with no duplicate names anywhere in an agent's groups. An absent or
+empty outer list disables tagging; invalid configuration fails definition loading
+or staged reload without replacing live definitions.
+
+Both tools return text containing `{"tags":[...]}`, sorted lexically, or
+`{"tags":[]}` when empty. They accept no conversation ID and use the calling
+agent's owning conversation, including for children and workflows. All permitted
+callers can read its complete active tag list. Tags survive restart, compaction,
+history-only deletion, agent changes, and configuration reloads. Regrouping does
+not reconcile old tags until a set call touches that group. Fresh sessions and
+forks start empty; Sync copies history, not tags. Permanent pruning and failed
+session cleanup remove metadata.
+
+Web shows tags beside the agent name on active and settled rows. Cmd/Ctrl+P and
+the Search page accept `tag:customer`, `tag:customer outage`, and JSON-quoted names
+such as `tag:"Needs review"`. Repeated tag filters require every named tag. Labels
+refresh through the existing two-second sidebar cycle, not a pushed tag event.
+Tags do not change activity, settlement, or snooze.
+
+Migration `019_session_tags.sql` runs through normal State Store startup before
+tag-enabled code reads metadata. It needs no backfill. After it runs, binaries
+without migration 019 cannot start against the upgraded database: the migration
+loader rejects unknown ledger entries. Keep the tag table and migration ledger;
+dropping metadata loses tags. A binary-only downgrade is not supported.
+
 ### Invoking Skills
 
 Send bare `$` in Slack, or type a leading `$` in the web composer, to discover built-in commands followed by skills allowed for the selected agent. Web suggestions update when you switch agents; selecting a suggestion inserts its prefix without sending.

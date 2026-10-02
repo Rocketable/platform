@@ -348,7 +348,7 @@ func permissionPrompt(permissions PermissionSet) string {
 	lines := []string{}
 
 	for _, bucket := range permissions.Buckets {
-		if bucket.Name == "*" {
+		if bucket.Name == "*" || bucket.Name == "rocketclaw_tags" {
 			continue
 		}
 

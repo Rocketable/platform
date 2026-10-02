@@ -27,6 +27,17 @@ func toolCallContextFrom(ctx context.Context) (toolCallContext, bool) {
 	return tc, ok && tc.looper != nil
 }
 
+// ToolCallAgent returns the active caller's definition inside a tool call.
+// Its maps and slices are read-only and must not be mutated by consumers.
+func ToolCallAgent(ctx context.Context) (Agent, bool) {
+	tc, ok := toolCallContextFrom(ctx)
+	if !ok {
+		return Agent{}, false
+	}
+
+	return tc.looper.agent, true
+}
+
 // CheckNestedToolCall runs the same allow/deny/auto(+reviewer) gate as a top-level tool call,
 // including multi-subject tools (e.g. apply_patch). Must run inside a looper tool Call context.
 func CheckNestedToolCall(ctx context.Context, toolName string, tool *looperTool, args json.RawMessage) error {

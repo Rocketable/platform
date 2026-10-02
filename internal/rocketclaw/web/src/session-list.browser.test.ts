@@ -30,7 +30,7 @@ test("saved sidebar snapshots isolate owners and commit atomically", async () =>
     const initial = await page.evaluate(async () => {
       const path = "/session-list.js";
       const storage = await import(path);
-      const rows = [{ id: "one", title: "kept", preview: "start\0" + "x".repeat(17 * 1024 * 1024) + "\0end", agent: "agent", settled: true, running: true }];
+      const rows = [{ id: "one", title: "kept", preview: "start\0" + "x".repeat(17 * 1024 * 1024) + "\0end", agent: "agent", tags: ["customer", "Needs review"], settled: true, running: true }];
       await storage.saveCompleteSessions("a", "v1", rows, await storage.loadSnapshotGeneration("a", "v1"));
       const put = IDBObjectStore.prototype.put;
       IDBObjectStore.prototype.put = function (...args) {
@@ -74,7 +74,7 @@ test("saved sidebar snapshots isolate owners and commit atomically", async () =>
     expect(restored).toEqual({
       fullPreview: true,
       running: false,
-      cleared: [{ id: "one", title: "kept", preview: "", updatedAt: "", agent: "agent", settled: true, running: false }],
+      cleared: [{ id: "one", title: "kept", preview: "", updatedAt: "", agent: "agent", tags: ["customer", "Needs review"], settled: true, running: false }],
       empty: [],
     });
   } finally {
@@ -663,10 +663,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
 
     const desktopSidebar = page.locator("#session-sidebar");
     const channelRow = desktopSidebar.getByRole("link").filter({ hasText: "filter preview" });
-    expect(await channelRow.locator("span[title]").getAttribute("title")).toBe("room");
+    expect(await channelRow.locator("span[title]").getAttribute("title")).toBe("room · main");
     expect((await channelRow.locator("span[title]").boundingBox())!.x).toBe((await channelRow.locator('[data-slot="session-title"]').boundingBox())!.x);
     const webRow = desktopSidebar.getByRole("link").filter({ hasText: "saved preview" });
-    expect(await webRow.locator("span[title]").textContent()).toBe("");
+    expect(await webRow.locator("span[title]").textContent()).toBe("main");
     expect(await webRow.locator("time").isVisible()).toBe(true);
     const menuPosition = await page.getByRole("button", { name: "Hide sidebar", exact: true }).boundingBox();
     expect((await desktopSidebar.boundingBox())!.y).toBe(0);
@@ -909,8 +909,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await page.locator("textarea").fill("");
     for (const width of [1280, 390]) {
       await page.setViewportSize({ width, height: 844 });
-      // The layout settles a frame after a resize; measure the word only after that.
-      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      await page.locator('#transcript-scroll [data-slot="bubble-content"] div').first().click({ trial: true }); // Measure after the responsive sidebar width settles.
       const word = await page.locator('#transcript-scroll [data-slot="bubble-content"] div').first().evaluate((element: HTMLElement) => {
         const range = document.createRange();
         range.setStart(element.firstChild!, 0);
@@ -1209,7 +1208,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await search.focus();
     await page.keyboard.press("Shift+Tab");
     await shown(page, "Conversation list may be out of date");
-    await search.fill("missing-stale-preview");
+    await search.fill("tag:missing-stale");
     await shown(sessionPalette, "loading...");
     await hidden(sessionPalette, "No matches");
     wireTail.resolve();
@@ -1226,7 +1225,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     blocked.resolve();
     await page.getByText("loading...", { exact: true }).first().waitFor({ state: "visible", timeout: 15_000 });
     await page.keyboard.press("Control+p");
-    await search.fill("zzz-nope");
+    await search.fill("tag:zzz-nope");
     await shown(sessionPalette, "loading...");
     await staleIndicator.waitFor({ state: "visible" });
     expect(await page.evaluate(() => (window as unknown as { __snapshotPuts: number }).__snapshotPuts)).toBe(putsBeforeIncomplete);
@@ -1271,13 +1270,14 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const ownerStarted = Promise.withResolvers<void>();
     const ownerRequest = page.waitForRequest("**/api/ListSessions*");
     ctrl.yieldBatches = async function* () {
-      yield batch([row("gone", "alice held preview")], { owner: "alice" });
+      yield batch([{ ...row("gone", "alice held preview"), tags: ["alice-only-tag"] }], { owner: "alice" });
       ownerStarted.resolve();
       await ownerTail.promise;
       yield* complete([row("gone", "late alice preview")], "alice")();
     };
     await ownerStarted.promise;
     await shown(page, "alice held preview");
+    await page.locator('#session-sidebar span[title="main · alice-only-tag"]').waitFor();
     const oldRequest = await ownerRequest;
     // Wait for Alice's stream to end however it ends. The test's own timeout bounds this, not a 30s
     // waitForEvent timer started many steps before the tail is released.
@@ -1293,6 +1293,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await page.waitForFunction(() => (window as unknown as { __openHeld: boolean }).__openHeld);
     await hidden(page, "will vanish");
     await hidden(page, "bob preview");
+    expect(await page.locator('#session-sidebar span[title*="alice-only-tag"]').count()).toBe(0);
     await page.evaluate(() => (window as unknown as { __releaseOpen: () => void }).__releaseOpen());
     await hidden(page, "will vanish");
     ctrl.yieldBatches = complete([row("gone", "bob preview")], "bob");
@@ -1426,7 +1427,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await link.click({ trial: true }); // Measure after the mobile sheet finishes moving.
       await sidebar.evaluate(async () => { await Promise.all(document.getAnimations().filter((animation) => animation instanceof CSSTransition).map((animation) => animation.finished)); });
       const before = await link.boundingBox();
-      expect(await link.locator("span[title]").getAttribute("title")).toBe("room");
+      expect(await link.locator("span[title]").getAttribute("title")).toBe("room · main");
       expect((await link.locator("span[title]").boundingBox())!.x).toBe((await link.locator('[data-slot="session-title"]').boundingBox())!.x);
       expect((await indicator.boundingBox())!.x).toBeGreaterThan((await link.locator("span[title]").boundingBox())!.x);
       ctrl.yieldBatches = complete([{ ...row("slack-thread:C:running-chat", "latest assistant reply"), running: false }], "bob");
@@ -1437,12 +1438,12 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await runningPage.close();
     // Exercise the combined expression against the built App, with origins delayed across a row reorder.
     const matrixRows = [
-      { ...row("slack-thread:C:winner", "row and origin union"), name: "Winner", pinned: true },
+      { ...row("slack-thread:C:winner", "row and origin union"), name: "Winner", pinned: true, forkedFrom: "original", tags: ["customer", "Needs review", 'say "hello"'] },
       row("slack-thread:C:another", "Another unpinned chat"),
       { ...row("slack-thread:C:other-agent", "Other agent"), agent: "other", pinned: true },
       { ...row("slack-thread:D:other-room", "Other room"), title: "different", pinned: true },
       row("slack-thread:C:unpinned", "Unpinned chat"),
-      { ...row("slack-thread:C:settled-union", "Settled chat"), settled: true },
+      { ...row("slack-thread:C:settled-union", "Settled chat"), settled: true, tags: ["customer"] },
     ];
     for (const session of matrixRows) origins[session.id] = { kind: "external_mcp", externalConversationId: "union", agent: "source" };
     origins[matrixRows[0].id] = { kind: "external_mcp", externalConversationId: "union winner-origin", agent: "source" };
@@ -1507,14 +1508,39 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await matrixDialog.waitFor({ state: "hidden" });
     }
     await matrix.keyboard.press("Control+p");
+    for (const [query, titles] of [
+      ["tag:customer", ["Winner", "Settled chat"]],
+      ['tag:"Needs review" tag:"say \\"hello\\"" is:pinned is:forked', ["Winner"]],
+      ["tag:Customer", []],
+      ["tag:unknown", []],
+      ["tag:customer tag:internal", []],
+    ] as const) {
+      await matrixSearch.fill(query);
+      expect(await matrixDialog.locator('li > button [data-slot="session-title"]').allTextContents()).toEqual(titles);
+    }
+    const matrixPills = matrixDialog.getByRole("button", { name: /^(?:is|tag):/i });
+    expect(await matrixPills.allTextContents()).toEqual(['tag:"Needs review"', 'tag:"say \\"hello\\""', "is:pinned", "tag:customer"]);
+    while (await matrixPills.count()) await matrixPills.first().click();
+    await matrixSearch.fill("tag:customer");
+    const winnerMeta = matrix.locator('#session-sidebar a').filter({ hasText: "Winner" }).locator("span[title]");
+    expect(await winnerMeta.getAttribute("title")).toBe('room · main · customer · Needs review · say "hello"');
+    const changedWinner = { ...matrixRows[0], tags: ["internal"] };
+    ctrl.yieldBatches = complete([changedWinner, ...matrixRows.slice(1)]);
+    await winnerMeta.filter({ hasText: "internal" }).waitFor();
+    expect(await matrixDialog.locator('li > button [data-slot="session-title"]').allTextContents()).toEqual(["Settled chat"]);
+    ctrl.yieldBatches = complete(matrixRows);
+    await winnerMeta.filter({ hasText: "customer" }).waitFor();
+    expect(await matrixDialog.locator('li > button [data-slot="session-title"]').allTextContents()).toEqual(["Winner", "Settled chat"]);
     for (const prefix of ["agent:main", "room:room"]) {
-      await matrixSearch.fill(`IS:PINNED ${prefix}`);
+      await matrixSearch.fill(`IS:PINNED tag:"Needs review" tag:customer ${prefix}`);
       await matrixSearch.press("Enter");
-      expect(await matrixSearch.inputValue()).toBe("IS:PINNED");
+      expect(await matrixSearch.inputValue()).toBe("");
+      expect(await matrixPills.allTextContents()).toEqual(["IS:PINNED", 'tag:"Needs review"', "tag:customer"]);
       expect(await matrixDialog.getByText("Unpinned chat", { exact: true }).count()).toBe(0);
       expect(await matrixDialog.getByText("Another unpinned chat", { exact: true }).count()).toBe(0);
       await matrixDialog.getByRole("button", { name: prefix, exact: true }).click();
     }
+    while (await matrixPills.count()) await matrixPills.first().click();
     await matrixSearch.fill("agent:");
     for (let i = 0; i < 10; i++) await matrixSearch.press("ArrowDown");
     const lastSuggestion = matrixDialog.getByRole("button", { name: "agent9", exact: true });
@@ -1668,7 +1694,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await many.close();
     ctrl.settledRows = [
       row("slack-thread:C:active", "matching active"),
-      { ...row("slack-thread:C:settled", "matching settled"), settled: true },
+      { ...row("slack-thread:C:settled", "matching settled"), settled: true, tags: ["customer", "resolved"] },
       { ...row("slack-thread:C:other", "matching other agent"), agent: "other", settled: true },
       { ...row("web-session:settled", "matching other room"), settled: true },
     ];
@@ -1707,9 +1733,13 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const settledPalette = settledPage.getByRole("dialog", { name: "Go to session", exact: true });
     const settledSearch = settledPalette.getByPlaceholder("Search sessions");
     await settledSearch.fill("agent:main");
+    await settledPalette.getByRole("button", { name: "main gpt", exact: true }).waitFor();
     await settledPage.keyboard.press("Enter");
+    await settledPalette.getByRole("button", { name: "agent:main", exact: true }).waitFor();
     await settledSearch.fill("room:room");
+    await settledPalette.getByRole("button", { name: "room", exact: true }).waitFor();
     await settledPage.keyboard.press("Enter");
+    await settledPalette.getByRole("button", { name: "room:room", exact: true }).waitFor();
     await settledSearch.fill("IS:SETTLED matching");
     await shown(settledPalette, "matching active");
     await shown(settledPalette, "matching settled");
@@ -1729,6 +1759,14 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const settledMain = settledPage.locator("main");
     await shown(settledMain, "matching settled");
     await hidden(settledMain, "matching active");
+    expect(await settledMain.getByRole("link").filter({ hasText: "matching settled" }).locator("span[title]").getAttribute("title")).toBe("Settled · room · main · customer · resolved");
+    await settledMain.getByRole("textbox").fill("tag:customer tag:resolved");
+    await hidden(settledMain, "matching other agent");
+    await hidden(settledMain, "matching other room");
+    expect(await settledMain.locator('li a[href^="/s/"]:visible').count()).toBe(1);
+    await settledMain.getByRole("textbox").fill("tag:unknown");
+    await shown(settledMain, "No matches");
+    await settledMain.getByRole("button", { name: "tag:customer", exact: true }).click();
     await settledMain.getByPlaceholder("Search or agent: or room:").fill("agent:");
     for (let i = 0; i < 10; i++) await settledPage.keyboard.press("ArrowDown");
     expect(await settledMain.getByRole("button", { name: "agent9", exact: true }).evaluate((node: HTMLElement) => {

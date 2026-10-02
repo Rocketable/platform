@@ -19,6 +19,9 @@ func TestForkConversation(t *testing.T) {
 
 	runtime := &Runtime{Sessions: sessions}
 	require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "source", Agent: "main"}))
+	_, err = sessions.toggleSessionTag(t.Context(), "source", "customer", []string{"customer"})
+	require.NoError(t, err)
+
 	attachment := protocol.OutboundAttachment{ID: "original-file", Name: "notes.txt", MIMEType: "text/plain", Data: []byte("notes")}
 	require.NoError(t, sessions.SaveAttachment(t.Context(), "source", &attachment, true))
 
@@ -49,6 +52,9 @@ func TestForkConversation(t *testing.T) {
 			prompt, err := sessions.ForkConversation(t.Context(), "source", protocol.Conversation{ID: tt.name, Agent: "main", CreatedBy: "alice"}, tt.before)
 			require.NoError(t, err)
 			require.Contains(t, prompt, tt.prompt)
+			tags, err := sessionTags(t.Context(), sessions.db, tt.name)
+			require.NoError(t, err)
+			require.Empty(t, tags)
 
 			var parent string
 			require.NoError(t, sessions.db.QueryRowContext(t.Context(), `SELECT forked_from FROM managed_conversations WHERE conversation_id = $1`, tt.name).Scan(&parent))

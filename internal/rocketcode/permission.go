@@ -211,6 +211,10 @@ func parsePermissionRules(permission string, node *yaml.Node) ([]PermissionRule,
 		rules := []PermissionRule{}
 
 		for i := 0; i+1 < len(node.Content); i += 2 {
+			if permission == "rocketclaw" && node.Content[i].Value == "rocketclaw_set_tag" && node.Content[i+1].Kind == yaml.SequenceNode {
+				continue
+			}
+
 			value := node.Content[i+1]
 
 			actionValue := value.Value

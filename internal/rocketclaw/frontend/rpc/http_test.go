@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -228,7 +229,7 @@ func TestHTTPStreams(t *testing.T) {
 						return stream.SendMsg(&ListSessionsResponse{Sessions: []*Session{{Title: strings.Repeat("x", len(data))}}})
 					}
 
-					require.NoError(t, stream.SendMsg(&ListSessionsResponse{Sessions: []*Session{{Title: strings.Repeat("x", 100000)}}}))
+					require.NoError(t, stream.SendMsg(&ListSessionsResponse{Sessions: []*Session{{Title: strings.Repeat("x", 100000), Tags: []string{"customer", "quote\" 日本語"}}}}))
 					require.NoError(t, stream.SendMsg(&ListSessionsResponse{SummariesComplete: true}))
 
 					if scenario == "wirecut" {
@@ -408,6 +409,13 @@ func TestHTTPStreams(t *testing.T) {
 			default:
 				require.Contains(t, string(body), strings.Repeat("x", 100000))
 				require.Contains(t, string(body), `"sessions":[]`)
+				first, _, _ := strings.Cut(string(body), "\n")
+
+				var batch struct {
+					Sessions []struct{ Tags []string }
+				}
+				require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(first, "data: ")), &batch))
+				require.Equal(t, []string{"customer", "quote\" 日本語"}, batch.Sessions[0].Tags)
 				require.Contains(t, string(body), `"summariesComplete":true`)
 
 				if scenario == "complete" {

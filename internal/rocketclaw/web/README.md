@@ -123,7 +123,15 @@ Search matches names, titles, previews, agents, session labels, origin card fiel
 and original MCP metadata keys and values, case-insensitively. Type `agent:` or
 `room:` to choose a removable filter pill by click, arrows, Tab, or Enter.
 Suggestion keys take priority over results; Escape dismisses suggestions first,
-then closes the dialog. Agent, room, `is:pinned`, and `is:forked` filters constrain
+then closes the dialog. Both Cmd/Ctrl+P and the Search page accept exact,
+case-sensitive tag filters: `tag:customer`, or `tag:"Needs review"` for a name
+containing spaces. Quoted values use JSON escaping, such as `tag:"say \"hello\""`.
+Repeated filters use AND: `tag:customer tag:triage` requires both tags. Unknown
+tags match nothing. Bare `tag:`, unclosed quotes, and invalid quoted values stay
+ordinary search text. A tag-only query loads no transcript; `tag:customer outage`
+sends only `outage` to transcript search and keeps hits from tagged sessions.
+Agent and room selections preserve tag filters, and saved queries keep their raw
+syntax without a migration. Agent, room, tag, `is:pinned`, and `is:forked` filters constrain
 both row and origin matches. The session-search dialog lists each conversation
 once, pinned first, retaining recent-first order within each group.
 Origin data loads only when free text remains: empty input, status tokens, pills,
@@ -241,9 +249,14 @@ recorded history. The source remains intact, and the fork starts no turn until
 you send a message. Active, unrecorded output and queued work are not copied.
 Forked sessions show a fork glyph in the sidebar. Use **Open original conversation**
 on the row to return to the immediate source, or search `is:forked` to find forks.
-Sidebar rows show the title, Slack channel when available, fork/running indicators,
-and relative time. Channel text starts at the row's left edge, without a spinner indent.
-Settled chats, session search, and handoff destinations also show status and agent.
+Sidebar rows show the title, Slack channel when available, agent name and active
+tags, fork/running indicators, and relative time. Metadata text starts at the row's
+left edge, without a spinner indent. Tags render as plain text; the metadata title
+retains long labels. Active and settled rows update even when only tags change.
+Owner/protocol-scoped snapshots retain tags; older cached rows without tags stay
+usable. Labels follow the existing two-second refresh cycle and do not change
+ordering, settlement, snooze, or incomplete-search feedback.
+Settled chats, session search, and handoff destinations also show status.
 The source link is stored for new forks; older forks created without this metadata
 cannot be identified retroactively. Deleting a source leaves its forks intact.
 Send `$handoff` from any session to open a search with **Copy handoff** and

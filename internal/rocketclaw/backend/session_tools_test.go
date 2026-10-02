@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,6 +21,316 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSessionTagToolsBridge(t *testing.T) {
+	for _, configured := range []bool{false, true} {
+		t.Run(strconv.FormatBool(configured), func(t *testing.T) {
+			workspace := t.TempDir()
+
+			groups := "    rocketclaw_set_tag: allow\n"
+			if configured {
+				groups = "    rocketclaw_set_tag: [[triage, investigating, resolved], [customer, internal]]\n"
+			}
+
+			writeMainAgentSkills(t, workspace, "---\nmodel: gpt-5.5\npermission:\n  read: allow\n  rocketclaw:\n    '*': allow\n    rocketclaw_get_tags: allow\n"+groups+"---\nPrompt\n")
+			service := newTestSessionServiceAt(t, workspace)
+			// A real PostgreSQL write failure must reach the tool without changing active tags.
+			_, err := service.db.ExecContext(t.Context(), `ALTER TABLE session_tags ADD CONSTRAINT reject_resolved CHECK (NOT (tags ? 'resolved'))`)
+			require.NoError(t, err)
+
+			calls := []struct{ name, args string }{
+				{"rocketclaw_set_tag", `{"tag":"triage"}`},
+				{"execute", `{"code":"def main():\n    return rocketclaw_set_tag(tag=\"customer\")\n"}`},
+				{"rocketclaw_set_tag", `{"tag":"investigating"}`},
+				{"execute", `{"code":"def main():\n    return rocketclaw_set_tag(tag=\"investigating\")\n"}`},
+				{"rocketclaw_get_tags", `{}`},
+				{"execute", `{"code":"def main():\n    return rocketclaw_get_tags()\n"}`},
+				{"rocketclaw_set_tag", `{"tag":"resolved"}`},
+				{"rocketclaw_set_tag", `{"tag":"urgent"}`},
+				{"rocketclaw_set_tag", `{"tag":12}`},
+				{"rocketclaw_set_tag", `{}`},
+				{"rocketclaw_set_tag", `{"tag":"triage","conversation_id":"other"}`},
+				{"rocketclaw_get_tags", `{"conversation_id":"other"}`},
+				{"rocketclaw_get_tags", `{"tag":null}`},
+				{"rocketclaw_get_tags", `null`},
+				{"rocketclaw_set_tag", `{"tag":null}`},
+			}
+
+			var outputs []string
+
+			requests := 0
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body struct {
+					Instructions string `json:"instructions"`
+					Tools        []struct {
+						Name       string          `json:"name"`
+						Parameters json.RawMessage `json:"parameters"`
+					} `json:"tools"`
+					Input []struct {
+						Type   string `json:"type"`
+						Output string `json:"output"`
+					} `json:"input"`
+				}
+				if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+					return
+				}
+
+				for _, name := range []string{"rocketclaw_set_tag", "rocketclaw_get_tags"} {
+					found := false
+
+					for _, tool := range body.Tools {
+						if tool.Name == name {
+							found = true
+
+							if name == setTagToolName {
+								assert.JSONEq(t, `{"type":"object","properties":{"tag":{"type":"string"}},"required":["tag"],"additionalProperties":false}`, string(tool.Parameters))
+							} else {
+								assert.JSONEq(t, `{"type":"object","properties":{},"required":[],"additionalProperties":false}`, string(tool.Parameters))
+							}
+						}
+					}
+
+					assert.Equal(t, configured, found)
+					assert.Equal(t, configured, strings.Contains(body.Instructions, name))
+				}
+
+				outputs = nil
+
+				for _, item := range body.Input {
+					if item.Type == "function_call_output" {
+						outputs = append(outputs, item.Output)
+					}
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+
+				if requests < len(calls) {
+					call := calls[requests]
+					writeRawRunFunctionCall(t, w, fmt.Sprintf("tag-%d", requests), call.name, json.RawMessage(call.args))
+				} else {
+					writeRawRunMessage(t, w, "done", "message", "done")
+				}
+
+				requests++
+			}))
+			defer server.Close()
+
+			cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
+			root, agents, skills, resolver, err := prepareRocketCode(cfg, "main", slog.New(slog.DiscardHandler), toolModePersistent)
+
+			require.NoError(t, err)
+			defer func() { require.NoError(t, root.Close()) }()
+
+			bridge := &Bridge{runtime: cfg, config: Config{ConversationID: "external_mcp:owning", SessionService: service, RequestReload: testNoopRestart}, log: slog.New(slog.DiscardHandler)}
+			runtimeConfig := bridge.rocketcodeConfig(workspace, nil, nil)
+			runtimeConfig.CheckpointSink = rocketcode.InertCheckpointSink{}
+			runtimeConfig.ChildSessions = rocketcode.InertChildSessions{}
+			runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
+			require.NoError(t, err)
+
+			for _, name := range []string{"rocketclaw_set_tag", "rocketclaw_get_tags"} {
+				_, present := runtime.CodeModeHosts[name]
+				require.Equal(t, configured, present)
+			}
+
+			input := make(chan rocketcode.PromptInput, 1)
+			input <- rocketcode.PromptInput{Text: "tag", Responses: make(chan rocketcode.ChatResponse, 100)}
+
+			close(input)
+
+			memory := new(memoryStore)
+			require.NoError(t, runtime.Loop(t.Context(), input, memory.in(), memory.out, make(chan os.Signal)))
+			require.Len(t, outputs, len(calls))
+			tags, err := sessionTags(t.Context(), service.db, "external_mcp:owning")
+			require.NoError(t, err)
+
+			if configured {
+				require.Equal(t, []string{"customer"}, tags)
+				require.Equal(t, []string{`{"tags":["triage"]}`, `{"tags":["customer","triage"]}`, `{"tags":["customer","investigating"]}`, `{"tags":["customer"]}`, `{"tags":["customer"]}`, `{"tags":["customer"]}`}, outputs[:6])
+				require.Contains(t, outputs[6], "write session tags")
+
+				for _, output := range outputs[6:] {
+					require.Contains(t, output, "failed")
+				}
+
+				for i := range memory.entries {
+					_, err := service.AppendEntryID(t.Context(), "external_mcp:owning", &memory.entries[i])
+					require.NoError(t, err)
+				}
+
+				require.NoError(t, service.Stop())
+				service = newTestSessionServiceAt(t, workspace)
+
+				for _, freshCall := range []bool{false, true} {
+					if freshCall {
+						requests = len(calls)
+						calls = append(calls, struct{ name, args string }{setTagToolName, `{"tag":"customer"}`})
+					}
+
+					runtimeConfig.CustomTools = sessionTagTools(service, "external_mcp:owning")
+					runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
+					require.NoError(t, err)
+
+					input := make(chan rocketcode.PromptInput, 1)
+					input <- rocketcode.PromptInput{Text: "resume", Responses: make(chan rocketcode.ChatResponse, 100)}
+
+					close(input)
+
+					history := newSessionStore("external_mcp:owning", service)
+					require.NoError(t, runtime.Loop(t.Context(), input, history.in(), memory.out, make(chan os.Signal)))
+					tags, err := sessionTags(t.Context(), service.db, "external_mcp:owning")
+					require.NoError(t, err)
+
+					if freshCall {
+						require.Empty(t, tags)
+						require.JSONEq(t, `{"tags":[]}`, outputs[len(outputs)-1])
+					} else {
+						require.Equal(t, []string{"customer"}, tags, "completed replay must not toggle again")
+					}
+				}
+			} else {
+				require.Empty(t, tags)
+
+				for _, output := range outputs {
+					require.Contains(t, output, "failed")
+				}
+			}
+		})
+	}
+}
+
+func TestSessionTagChildAuthority(t *testing.T) {
+	for _, mode := range []toolMode{toolModePersistent, toolModeCron} {
+		for _, tc := range []struct{ root, child bool }{{true, false}, {false, true}, {true, true}} {
+			t.Run(fmt.Sprintf("%v/%v/%v", mode, tc.root, tc.child), func(t *testing.T) {
+				workspace := t.TempDir()
+
+				for _, agent := range []struct {
+					name, model, tag string
+					enabled          bool
+				}{{"main", "gpt-5.5", "root-only", tc.root}, {"helper", "gpt-5.4", "child-only", tc.child}} {
+					groups := ""
+					if agent.enabled {
+						groups = "    rocketclaw_set_tag: [[" + agent.tag + "]]\n"
+					}
+
+					writeAgent(t, workspace, agent.name, "---\ndescription: Agent\nmodel: "+agent.model+"\npermission:\n  read: allow\n  task: {helper: allow}\n  rocketclaw:\n    '*': allow\n"+groups+"---\nPrompt\n")
+				}
+
+				service := newTestSessionServiceAt(t, workspace)
+				counts := map[string]int{}
+
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					var body struct {
+						Model, Instructions string
+						Tools               []struct{ Name string }
+						Input               []struct{ Type, Output string }
+					}
+					if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+						return
+					}
+
+					child := body.Model == "gpt-5.4"
+
+					enabled := tc.root
+					if child {
+						enabled = tc.child
+					}
+
+					for _, name := range []string{setTagToolName, getTagsToolName} {
+						present := false
+						for _, tool := range body.Tools {
+							present = present || tool.Name == name
+						}
+
+						assert.Equal(t, enabled, present)
+						assert.Equal(t, enabled, strings.Contains(body.Instructions, name))
+					}
+
+					var outputs []string
+
+					for _, item := range body.Input {
+						if item.Type == "function_call_output" {
+							outputs = append(outputs, item.Output)
+						}
+					}
+
+					counts[body.Model]++
+					n := counts[body.Model]
+
+					w.Header().Set("Content-Type", "application/json")
+
+					id := fmt.Sprintf("%s-%d", body.Model, n)
+					if child {
+						switch n {
+						case 1:
+							writeRawRunFunctionCall(t, w, id, setTagToolName, json.RawMessage(`{"tag":"root-only"}`))
+						case 2:
+							assert.Contains(t, outputs[0], "failed")
+							writeRawRunFunctionCall(t, w, id, setTagToolName, json.RawMessage(`{"tag":"child-only"}`))
+						case 3:
+							writeRawRunFunctionCall(t, w, id, "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_get_tags()\n"}`))
+						default:
+							if tc.child {
+								assert.Contains(t, outputs[1], `"child-only"`)
+								assert.Equal(t, outputs[1], outputs[2])
+							} else {
+								assert.Contains(t, outputs[1], "failed")
+								assert.Contains(t, outputs[2], "undefined: rocketclaw_get_tags")
+							}
+
+							writeRawRunMessage(t, w, id, "child-message", "child done")
+						}
+					} else {
+						switch n {
+						case 1:
+							writeRawRunFunctionCall(t, w, id, setTagToolName, json.RawMessage(`{"tag":"root-only"}`))
+						case 2:
+							writeRawRunFunctionCall(t, w, id, "task", struct {
+								Description string `json:"description"`
+								Prompt      string `json:"prompt"`
+								Agent       string `json:"subagent_type"`
+							}{"delegate", "delegated prompt", "helper"})
+						default:
+							writeRawRunMessage(t, w, id, "root-message", "done")
+						}
+					}
+				}))
+				defer server.Close()
+
+				cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
+				root, agents, skills, resolver, err := prepareRocketCode(cfg, "main", slog.New(slog.DiscardHandler), mode)
+
+				require.NoError(t, err)
+				defer func() { require.NoError(t, root.Close()) }()
+
+				bridge := &Bridge{runtime: cfg, config: Config{ConversationID: "owning", SessionService: service, RequestReload: testNoopRestart}, log: slog.New(slog.DiscardHandler)}
+				runtimeConfig := bridge.rocketcodeConfig(workspace, nil, nil)
+				runtimeConfig.CheckpointSink = rocketcode.InertCheckpointSink{}
+				runtimeConfig.ChildSessions = rocketcode.InertChildSessions{}
+				runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
+				require.NoError(t, err)
+
+				input := make(chan rocketcode.PromptInput, 1)
+				input <- rocketcode.PromptInput{Text: "delegate", Responses: make(chan rocketcode.ChatResponse, 100)}
+
+				close(input)
+
+				memory := new(memoryStore)
+				require.NoError(t, runtime.Loop(t.Context(), input, memory.in(), memory.out, make(chan os.Signal)))
+				require.Equal(t, 4, counts["gpt-5.4"])
+				tags, err := sessionTags(t.Context(), service.db, "owning")
+				require.NoError(t, err)
+				require.Equal(t, tc.root, slices.Contains(tags, "root-only"))
+				require.Equal(t, tc.child, slices.Contains(tags, "child-only"))
+				ids, err := queryStrings(t.Context(), service.db, "SELECT conversation_id FROM session_tags", "tag owners")
+				require.NoError(t, err)
+				require.Equal(t, []string{"owning"}, ids)
+			})
+		}
+	}
+}
 
 func TestSessionToolsStoredContract(t *testing.T) {
 	service := newTestSessionService(t)

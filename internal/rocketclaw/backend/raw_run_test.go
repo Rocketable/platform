@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -148,6 +149,181 @@ func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 	require.NotContains(t, fmt.Sprint(second["input"])+" "+fmt.Sprint(second["previous_response_id"]), "first")
 	require.Empty(t, noTools["tools"])
 	assert.NotEmpty(t, recorder.Ended(), "workflow run should emit configured tracing spans")
+}
+
+func TestWorkflowAgentRunnerTagLimits(t *testing.T) {
+	workspace := t.TempDir()
+	writeMainAgentSkills(t, workspace, "---\nmodel: gpt-5.5\npermission:\n  read: allow\n  rocketclaw:\n    rocketclaw_set_tag: [[customer, internal]]\n---\nBase prompt\n")
+	service := newTestSessionServiceAt(t, workspace)
+
+	var (
+		tools   []string
+		execute bool
+	)
+
+	requests := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Instructions string
+			Tools        []struct{ Name string }
+			Input        []struct{ Type, Output string }
+		}
+		if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+			return
+		}
+
+		for _, name := range []string{setTagToolName, getTagsToolName} {
+			allowed := tools == nil || slices.Contains(tools, name)
+
+			present := false
+			for _, tool := range body.Tools {
+				present = present || tool.Name == name
+			}
+
+			assert.Equal(t, allowed, present)
+			assert.Equal(t, allowed, strings.Contains(body.Instructions, name))
+		}
+
+		assert.Contains(t, body.Instructions, "Worker instructions")
+		assert.NotContains(t, body.Instructions, "Base prompt")
+
+		var outputs []string
+
+		for _, item := range body.Input {
+			if item.Type == "function_call_output" {
+				outputs = append(outputs, item.Output)
+			}
+		}
+
+		requests++
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if requests < 3 {
+			name, args := setTagToolName, `{"tag":"customer"}`
+			if requests == 2 {
+				name, args = getTagsToolName, `{}`
+			}
+
+			if execute {
+				code := "def main():\n    return rocketclaw_set_tag(tag=\"customer\")\n"
+				if requests == 2 {
+					code = "def main():\n    return rocketclaw_get_tags()\n"
+				}
+
+				writeRawRunFunctionCall(t, w, strconv.Itoa(requests), "execute", struct {
+					Code string `json:"code"`
+				}{code})
+			} else {
+				writeRawRunFunctionCall(t, w, strconv.Itoa(requests), name, json.RawMessage(args))
+			}
+		} else {
+			for i, name := range []string{setTagToolName, getTagsToolName} {
+				if tools == nil || slices.Contains(tools, name) {
+					assert.Contains(t, outputs[i], `{"tags":[`)
+				} else {
+					assert.Contains(t, outputs[i], "failed")
+				}
+			}
+
+			writeRawRunMessage(t, w, "done", "message", "done")
+		}
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
+	run, err := newWorkflowAgentRunner(cfg, "main", slog.New(slog.DiscardHandler), sessionTagTools(service, "owning")...)
+
+	require.NoError(t, err)
+	defer func() { require.NoError(t, run.Close()) }()
+
+	for _, path := range []bool{false, true} {
+		execute = path
+
+		for _, limit := range [][]string{{"execute", setTagToolName}, {"execute", getTagsToolName}, {}, nil} {
+			tools, requests = limit, 0
+			before, err := sessionTags(t.Context(), service.db, "owning")
+			require.NoError(t, err)
+			_, err = run.Run(t.Context(), &workflow.AgentRequest{Prompt: "tag", Worker: workflow.Worker{Name: "label", Instructions: "Worker instructions", Tools: tools}})
+			require.NoError(t, err)
+			require.Equal(t, 3, requests)
+			after, err := sessionTags(t.Context(), service.db, "owning")
+			require.NoError(t, err)
+
+			if tools == nil || slices.Contains(tools, setTagToolName) {
+				require.NotEqual(t, before, after)
+			} else {
+				require.Equal(t, before, after)
+			}
+		}
+	}
+}
+
+func TestWorkflowPermissionReviewerTagGuidance(t *testing.T) {
+	workspace := t.TempDir()
+	writeMainAgentSkills(t, workspace, "---\nmodel: gpt-5.5\npermission:\n  read: auto(reviewer)\n  rocketclaw:\n    rocketclaw_set_tag: [[worker]]\n---\nWorker prompt\n")
+	writeAgent(t, workspace, "reviewer", "---\ndescription: Reviewer\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[review, published]]\n---\nReviewer prompt\n")
+	root, err := os.OpenRoot(workspace)
+
+	require.NoError(t, err)
+	defer func() { require.NoError(t, root.Close()) }()
+
+	require.NoError(t, root.WriteFile("note.txt", []byte("fixture"), 0o644))
+	service := newTestSessionServiceAt(t, workspace)
+
+	requests := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model, Instructions string
+			Tools               []struct{ Name string }
+			Input               []struct{ Type, Output string }
+		}
+		if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+			return
+		}
+
+		requests++
+
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case body.Model == "gpt-5.4":
+			assert.Contains(t, body.Instructions, "Reviewer prompt")
+			assert.Contains(t, body.Instructions, `[["review" "published"]]`)
+			assert.Contains(t, body.Instructions, "set an active tag to toggle it off")
+			assert.NotContains(t, body.Instructions, `[["worker"]]`)
+
+			for _, name := range []string{setTagToolName, getTagsToolName} {
+				assert.Contains(t, body.Tools, struct{ Name string }{name})
+				assert.Contains(t, body.Instructions, name)
+			}
+
+			writeRawRunMessage(t, w, "approval", "approval", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Read-only."}`)
+		case requests == 1:
+			assert.NotContains(t, body.Instructions, "## Session Tags")
+			writeRawRunFunctionCall(t, w, "read", "execute", json.RawMessage(`{"code":"def main():\n    return read(filePath=\"note.txt\")\n"}`))
+		default:
+			for _, item := range body.Input {
+				if item.Type == "function_call_output" {
+					assert.Contains(t, item.Output, "fixture")
+				}
+			}
+
+			writeRawRunMessage(t, w, "done", "done", "done")
+		}
+	}))
+	defer server.Close()
+
+	run, err := newWorkflowAgentRunner(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, "main", slog.New(slog.DiscardHandler), sessionTagTools(service, "owning")...)
+
+	require.NoError(t, err)
+	defer func() { require.NoError(t, run.Close()) }()
+
+	_, err = run.Run(t.Context(), &workflow.AgentRequest{Prompt: "read", Worker: workflow.Worker{Name: "worker", Instructions: "Worker instructions", Tools: []string{"execute"}}})
+	require.NoError(t, err)
+	require.Equal(t, 3, requests)
 }
 
 func TestWorkflowAgentRunnerResolvesNamedProviderModel(t *testing.T) {

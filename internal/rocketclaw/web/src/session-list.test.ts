@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import ts from "typescript";
 import { RPCError } from "./api";
 import type { Session, SessionBatch } from "./types";
 import {
@@ -22,6 +23,44 @@ const alice = (sessions: Session[], flags: Partial<SessionBatch> = {}): SessionB
 async function* batchesOf(rows: SessionBatch[]) {
   yield* rows;
 }
+
+// Keep the shared UI parser private; browser tests cover its mounted callers.
+const source = ts.createSourceFile("ui.tsx", await Bun.file(new URL("./ui.tsx", import.meta.url)).text(), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const functions = source.statements.filter((node) => ts.isFunctionDeclaration(node) && ["slackSession", "sessionLabel", "typedPrefix", "matchesSession", "sessionSearchTerms", "sessionMatchesSearch"].includes(node.name?.text ?? "")).map((node) => node.getText(source)).join("\n");
+const javascript = new Bun.Transpiler({ loader: "tsx" }).transformSync(`${functions}\nexport { sessionSearchTerms, sessionMatchesSearch };`);
+const { sessionSearchTerms, sessionMatchesSearch } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
+
+test("session tag filters are literal AND matches with only valid filters removed from text", () => {
+  const row: Session = { id: "slack-thread:C:one", agent: "main", title: "room", preview: "Outage", pinned: true, forkedFrom: "original", tags: ["customer", "Needs review", 'say "hello"', "is:pinned", "*"] };
+  for (const [query, tags, text, matches] of [
+    ["tag:customer", ["customer"], "", true],
+    ["tag:customer tag:customer is:pinned is:forked outage", ["customer", "customer"], "outage", true],
+    ['tag:"Needs review" tag:"say \\"hello\\""', ["Needs review", 'say "hello"'], "", true],
+    ['tag:"is:pinned"', ["is:pinned"], "", true],
+    ["tag:*", ["*"], "", true],
+    ["tag:Customer", ["Customer"], "", false],
+    ["tag:unknown", ["unknown"], "", false],
+    ["tag:customer tag:internal", ["customer", "internal"], "", false],
+    ["prefix-tag:customer", [], "prefix-tag:customer", false],
+    ["tag:", [], "tag:", false],
+    ['tag:"Needs review', [], 'tag:"Needs review', false],
+    ['tag:"bad\\q"', [], 'tag:"bad\\q"', false],
+    ['tag:""', [], 'tag:""', false],
+    ['tag:"customer"suffix', [], 'tag:"customer"suffix', false],
+  ] as const) {
+    const filters = sessionSearchTerms(query);
+    expect(filters.tags).toEqual(tags);
+    expect(filters.text).toBe(text);
+    expect(!!sessionMatchesSearch(row, filters, "main", "room", "")).toBe(matches);
+  }
+  const filters = sessionSearchTerms("tag:customer");
+  for (const tags of [undefined, [], ["Customer"]]) expect(!!sessionMatchesSearch({ ...row, tags }, filters, "", "", "")).toBe(false);
+  expect(!!sessionMatchesSearch(row, filters, "other", "", "")).toBe(false);
+  expect(!!sessionMatchesSearch(row, filters, "", "other", "")).toBe(false);
+  expect(!!sessionMatchesSearch({ ...row, pinned: false }, sessionSearchTerms("tag:customer is:pinned"), "", "", "")).toBe(false);
+  expect(!!sessionMatchesSearch({ ...row, forkedFrom: undefined }, sessionSearchTerms("tag:customer is:forked"), "", "", "")).toBe(false);
+  expect(sessionSearchTerms('tag:"Needs is:pinned review" agent:ma')).toMatchObject({ pinnedOnly: false, text: "agent:ma", needle: "", filterTerms: ['tag:"Needs is:pinned review"'] });
+});
 
 describe("session list reconciliation", () => {
   test("keeps prior rows and replaces matching IDs in server prefix order", () => {

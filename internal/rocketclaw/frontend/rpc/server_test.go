@@ -926,11 +926,23 @@ func TestSessionEntries(t *testing.T) {
 
 	_, err = sessions.AppendEntryID(ctx, "empty-web", &rocketcode.SessionEntry{Timestamp: time.Now().UTC()})
 	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO session_tags (conversation_id, tags) VALUES ('empty-web', '["customer","triage"]'), ('private-X', '["private"]'), ('empty-tag-only', '["customer"]')`)
+	require.NoError(t, err)
 	listedSessions, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
 	require.Len(t, listedSessions.Sessions, 1)
 	require.Equal(t, "empty-web", listedSessions.Sessions[0].Id)
 	require.Equal(t, "selected", listedSessions.Sessions[0].Agent)
+	require.Equal(t, []string{"customer", "triage"}, listedSessions.Sessions[0].Tags)
+	beforeTagChange := proto.Clone(listedSessions.Sessions[0]).(*Session)
+	_, err = db.ExecContext(ctx, `UPDATE session_tags SET tags = '["resolved"]' WHERE conversation_id = 'empty-web'`)
+	require.NoError(t, err)
+	listedSessions, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
+	require.NoError(t, err)
+	require.Len(t, listedSessions.Sessions, 1)
+	require.Equal(t, []string{"resolved"}, listedSessions.Sessions[0].Tags)
+	listedSessions.Sessions[0].Tags = beforeTagChange.Tags
+	require.True(t, proto.Equal(beforeTagChange, listedSessions.Sessions[0]))
 
 	_, err = sessions.DeleteSession(ctx, "empty-web")
 	require.NoError(t, err)

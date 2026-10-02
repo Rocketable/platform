@@ -196,7 +196,7 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 			metadataByChannel[channel] = channelMetadata
 		}
 
-		session := &Session{Id: conversation.ID, Title: channelMetadata.Title, Agent: conversation.Agent, AllowedAgents: channelMetadata.AllowedAgents, Settled: conversation.Settled, Running: row.Running, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom}
+		session := &Session{Id: conversation.ID, Title: channelMetadata.Title, Agent: conversation.Agent, AllowedAgents: channelMetadata.AllowedAgents, Settled: conversation.Settled, Running: row.Running, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags}
 		if row.SnoozedUntil != nil {
 			session.SnoozedUntil = row.SnoozedUntil.UTC().Format(time.RFC3339Nano)
 		}

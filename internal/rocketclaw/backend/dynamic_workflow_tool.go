@@ -154,7 +154,7 @@ func (b *Bridge) runNestedWorkflow(ctx context.Context, agentName, turnID, name 
 		return "", fmt.Errorf("workflow %q is not configured", name)
 	}
 
-	agentRun, err := newWorkflowAgentRunner(b.runtime, agentName, b.log)
+	agentRun, err := newWorkflowAgentRunner(b.runtime, agentName, b.log, sessionTagTools(b.config.SessionService, b.config.ConversationID)...)
 	if err != nil {
 		return "", fmt.Errorf("prepare nested workflow agent runner: %w", err)
 	}

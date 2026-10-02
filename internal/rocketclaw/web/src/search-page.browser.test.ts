@@ -88,13 +88,17 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     await name.fill("Saved query");
     await name.press("Enter");
     await search.fill("edited");
-    await search.fill("is:forked agent:ma");
+    await search.fill('is:forked tag:"Needs review" tag:customer agent:ma');
     await page.getByRole("button", { name: "main" }).click();
-    expect(await search.inputValue()).toBe("is:forked");
-    await search.fill("edited");
+    const pills = page.getByRole("button", { name: /^(?:is|tag):/ });
+    expect(await search.inputValue()).toBe("");
+    expect(await pills.allTextContents()).toEqual(["is:forked", 'tag:"Needs review"', "tag:customer"]);
     await page.reload();
     await search.waitFor();
-    expect(await search.inputValue()).toBe("edited");
+    expect(await search.inputValue()).toBe("");
+    expect(await pills.allTextContents()).toEqual(["is:forked", 'tag:"Needs review"', "tag:customer"]);
+    while (await pills.count()) await pills.first().click();
+    await search.fill("edited");
     expect(await page.getByRole("tab").first().textContent()).toBe("Saved query");
     expect(await page.getByRole("button", { name: "agent:main" }).count()).toBe(1);
     await page.getByRole("tab", { name: "Saved query", exact: true }).click();
@@ -145,17 +149,18 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
 for (const width of [1280, 390]) test(`search editor groups clickable message matches at ${width}px, and Enter reloads`, async () => {
   const { chromium: engine } = await import(playwright!);
   const searches: string[] = [];
+  let summariesComplete = true;
   const rows = [
     { id: "first", name: "", title: "", preview: "Ordinary", agent: "main" },
     { id: "second", name: "", title: "#notes", preview: "Needle notes\nOther text", agent: "main" },
-    { id: "third", name: "Pinned conversation", preview: "Other text", agent: "main", pinned: true },
+    { id: "third", name: "Pinned conversation", preview: "Other text", agent: "main", pinned: true, tags: ["customer", "Needs review", 'say "hello"'] },
     { id: "fourth", name: "Origin chat", preview: "Other text", agent: "main", pinned: true },
     { id: "web-session:unnamed", name: "", title: "", preview: "", agent: "main" },
   ];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, summariesComplete })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-results" });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
@@ -178,8 +183,29 @@ for (const width of [1280, 390]) test(`search editor groups clickable message ma
     await page.goto(`http://127.0.0.1:${server.port}/search`);
     const search = page.getByRole("textbox", { name: "Search sessions" });
     const results = page.getByLabel("Search results");
-    await search.fill("is:pinned needle");
     const group = results.getByRole("group", { name: "Pinned conversation", exact: true });
+    for (const query of ["tag:customer", 'tag:"Needs review"', 'tag:"say \\"hello\\""', "tag:customer tag:customer is:pinned"]) {
+      await search.fill(query);
+      await group.waitFor();
+      expect(await results.getByRole("group").count()).toBe(1);
+    }
+    rows[2].tags = ["internal"];
+    await results.getByText("No matches").waitFor();
+    rows[2].tags = ["customer", "Needs review", 'say "hello"'];
+    await group.waitFor();
+    for (const query of ["tag:Customer", "tag:unknown", "tag:customer tag:internal"]) {
+      await search.fill(query);
+      await results.getByText("No matches").waitFor();
+      expect(await results.getByRole("group").count()).toBe(0);
+    }
+    summariesComplete = false;
+    await search.fill("tag:unknown");
+    await results.getByText("Session search is still loading.").waitFor();
+    expect(await results.getByText("No matches").count()).toBe(0);
+    summariesComplete = true;
+    await results.getByText("No matches").waitFor();
+    expect(searches).toEqual([]);
+    await search.fill("tag:customer is:pinned needle");
     await group.waitFor({ timeout: 5000 });
     expect(await results.getByRole("group").count()).toBe(1);
     expect(await group.getByRole("heading").textContent()).toBe("Pinned conversation(2)");
@@ -192,6 +218,10 @@ for (const width of [1280, 390]) test(`search editor groups clickable message ma
     expect(bounds!.y + bounds!.height).toBeLessThan(700);
     expect(await results.getByText("Chat", { exact: true }).count()).toBe(0);
     expect(searches).toEqual(["needle"]);
+    const pills = page.getByRole("button", { name: /^(?:is|tag):/ });
+    expect(await pills.allTextContents()).toEqual(["tag:customer", "is:pinned"]);
+    expect(await search.inputValue()).toBe("needle");
+    while (await pills.count()) await pills.first().click();
     await search.fill("needle");
     await results.getByRole("link", { name: /Needle notes/ }).last().waitFor();
     await results.getByRole("link", { name: /Needle in excluded chat/ }).waitFor();
@@ -214,6 +244,14 @@ for (const width of [1280, 390]) test(`search editor groups clickable message ma
     await results.getByText("Type to search messages and conversations.").waitFor();
     expect(await results.getByRole("link").count()).toBe(0);
     expect(searches).toEqual(["needle", "needle", "archive-key", "no-such-match"]);
+    await search.fill("tag:needs");
+    await page.getByRole("button", { name: "Needs review", exact: true }).click();
+    expect(await pills.allTextContents()).toEqual(['tag:"Needs review"']);
+    expect(await search.inputValue()).toBe("");
+    await group.waitFor();
+    await search.pressSequentially("is:pinned ");
+    expect(await pills.allTextContents()).toEqual(['tag:"Needs review"', "is:pinned"]);
+    while (await pills.count()) await pills.first().click();
     await search.fill("is:pinned");
     await results.getByRole("heading").getByRole("link", { name: "Pinned conversation", exact: true }).click();
     await page.waitForURL("**/s/dGhpcmQ");

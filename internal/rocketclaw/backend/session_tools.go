@@ -1,10 +1,12 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,7 +17,146 @@ const (
 	listSessionsToolName     = "rocketclaw_list_sessions"
 	getSessionToolName       = "rocketclaw_get_session"
 	currentSessionIDToolName = "rocketclaw_current_session_id"
+	setTagToolName           = "rocketclaw_set_tag"
+	getTagsToolName          = "rocketclaw_get_tags"
 )
+
+func agentTagGroups(agent *rocketcode.Agent) ([][]string, error) {
+	permission, _ := agent.Frontmatter["permission"].(map[string]any)
+	rocketclaw, _ := permission["rocketclaw"].(map[string]any)
+
+	raw, present := rocketclaw[setTagToolName]
+	if !present {
+		return nil, nil
+	}
+
+	if _, scalar := raw.(string); scalar {
+		return nil, nil
+	}
+
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("encode tag permissions: %w", err)
+	}
+
+	var groups [][]string
+	if err := json.Unmarshal(data, &groups); err != nil {
+		return nil, fmt.Errorf("decode tag groups: %w", err)
+	}
+
+	if groups == nil {
+		return nil, errors.New("tags must be a list of tag lists")
+	}
+
+	var names []string
+
+	for _, group := range groups {
+		if len(group) == 0 {
+			return nil, errors.New("tag groups must not be empty")
+		}
+
+		for _, name := range group {
+			if name == "" || slices.Contains(names, name) {
+				return nil, fmt.Errorf("empty or duplicate tag name %q", name)
+			}
+
+			names = append(names, name)
+		}
+	}
+
+	return groups, nil
+}
+
+func appendSessionTagPrompt(agent *rocketcode.Agent, groups [][]string) {
+	var tools []string
+
+	for _, name := range []string{setTagToolName, getTagsToolName} {
+		if action, _ := agent.Permission.Evaluate("rocketclaw_tags", name); action == rocketcode.PermissionAllow {
+			tools = append(tools, name)
+		}
+	}
+
+	if len(tools) == 0 {
+		return
+	}
+
+	agent.Prompt += "\n\n## Session Tags\n\nAvailable tools: " + strings.Join(tools, ", ") + ". Tags belong to the owning session and persist across restarts. Allowed literal, case-sensitive groups: " + fmt.Sprintf("%q", groups) + ". Each group is exclusive: set an inactive tag to replace its group; set an active tag to toggle it off. Other groups stay unchanged. Get returns all active session tags."
+}
+
+func sessionTagTools(service *SessionService, conversationID string) []rocketcode.Tool {
+	tools := make([]rocketcode.Tool, 0, 2)
+
+	for _, name := range []string{setTagToolName, getTagsToolName} {
+		parameters := map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}, "additionalProperties": false}
+		description := "Return all durable active tags of the owning session as {\"tags\":[...]}. No arguments."
+
+		if name == setTagToolName {
+			parameters["properties"] = map[string]any{"tag": map[string]any{"type": "string"}}
+			parameters["required"] = []string{"tag"}
+			description = "Toggle a permitted literal tag on the owning session. An inactive tag replaces its exclusive group; an active tag is removed. Other groups stay unchanged. Return {\"tags\":[...]} in lexical order."
+		}
+
+		tools = append(tools, rocketcode.Tool{Name: name, Description: description, Permission: "rocketclaw_tags", VisibilitySubjects: []string{name}, Subjects: func(json.RawMessage) ([]string, error) { return []string{name}, nil }, Parameters: parameters,
+			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+				agent, ok := rocketcode.ToolCallAgent(ctx)
+				if !ok {
+					return rocketcode.ToolResult{}, errors.New("tag tools require an active agent call")
+				}
+
+				groups, err := agentTagGroups(&agent)
+				if err != nil {
+					return rocketcode.ToolResult{}, err
+				}
+
+				var (
+					params *struct {
+						Tag *string `json:"tag"`
+					}
+					empty *struct{}
+					input any = &params
+				)
+				if name == getTagsToolName {
+					input = &empty
+				}
+
+				decoder := json.NewDecoder(bytes.NewReader(raw))
+				decoder.DisallowUnknownFields()
+
+				if err := decoder.Decode(input); err != nil {
+					return rocketcode.ToolResult{}, fmt.Errorf("parse tag arguments: %w", err)
+				}
+
+				if !json.Valid(raw) || name == getTagsToolName && empty == nil || name == setTagToolName && (params == nil || params.Tag == nil) {
+					return rocketcode.ToolResult{}, errors.New("invalid tag arguments")
+				}
+
+				var tags []string
+
+				if name == setTagToolName {
+					group := slices.IndexFunc(groups, func(group []string) bool { return slices.Contains(group, *params.Tag) })
+					if group < 0 {
+						return rocketcode.ToolResult{}, fmt.Errorf("tag %q is not permitted for agent %q", *params.Tag, agent.Name)
+					}
+
+					tags, err = service.toggleSessionTag(ctx, conversationID, *params.Tag, groups[group])
+				} else {
+					tags, err = sessionTags(ctx, service.db, conversationID)
+				}
+
+				if err != nil {
+					return rocketcode.ToolResult{}, err
+				}
+
+				result, _ := json.Marshal(struct {
+					Tags []string `json:"tags"`
+				}{tags}) // Encoding a string slice cannot fail.
+
+				return rocketcode.TextToolResult(string(result)), nil
+			}})
+	}
+
+	return tools
+}
 
 type sessionListParams struct {
 	Since                 string `json:"since"`

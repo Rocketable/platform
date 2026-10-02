@@ -217,6 +217,13 @@ func TestSkillsAvailable(t *testing.T) {
 }
 
 func TestPermissionPrompt(t *testing.T) {
+	t.Run("omits generated session tag authority", func(t *testing.T) {
+		permissions := parsePermissionYAML(t, "rocketclaw_tags: {rocketclaw_set_tag: deny, rocketclaw_get_tags: allow}\nread: {README.md: allow}")
+		prompt := permissionPrompt(permissions)
+		require.NotContains(t, prompt, "rocketclaw_set_tag")
+		require.NotContains(t, prompt, "rocketclaw_get_tags")
+		require.Contains(t, prompt, "README.md")
+	})
 	t.Run("renders full bash allow", func(t *testing.T) {
 		prompt := composeSystemPromptWithSkills("base prompt", emptySkills(), testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}))
 

@@ -1127,10 +1127,10 @@ function relativeTime(iso: string) {
   return `${Math.floor(ms / 86_400_000)}d`;
 }
 
-function SessionRowContent({ session, loading = false, age = relativeTime(session.updatedAt ?? ""), channelOnly = false }: { session: Session; loading?: boolean; age?: string; channelOnly?: boolean }) {
+function SessionRowContent({ session, loading = false, age = relativeTime(session.updatedAt ?? "") }: { session: Session; loading?: boolean; age?: string }) {
   const title = session.name || rowPreview(session, loading).split("\n", 1)[0] || sessionLabel(session.id);
   const channel = slackSession(session.id) ? (session.title ?? "") : "";
-  const meta = channelOnly ? channel : [session.snoozedUntil ? `Snoozed until ${new Date(session.snoozedUntil).toLocaleString()}` : session.settled ? "Settled" : "", channel, session.agent].filter(Boolean).join(" · ");
+  const meta = [session.snoozedUntil ? `Snoozed until ${new Date(session.snoozedUntil).toLocaleString()}` : session.settled ? "Settled" : "", channel, session.agent, ...(session.tags ?? [])].filter(Boolean).join(" · ");
   const updated = session.updatedAt ? `Updated ${new Date(session.updatedAt).toLocaleString(undefined, { timeZoneName: "short" })}` : "";
   return <span className="flex min-w-0 w-full flex-1 flex-col gap-0.5">
     <span className="flex items-center gap-1.5 text-sm font-medium">{session.forkedFrom ? <GitFork role="img" aria-label="Forked session" className="size-3.5 shrink-0" /> : null}<span data-slot="session-title" className="truncate">{title}</span></span>
@@ -1219,15 +1219,30 @@ function matchesSession(session: Session, needle: string, agentFilter: string, r
 }
 
 function sessionSearchTerms(query: string) {
-  const pinnedOnly = /(?:^|\s)is:pinned(?=\s|$)/i.test(query);
-  const forkedOnly = /(?:^|\s)is:forked(?=\s|$)/i.test(query);
-  const text = query.replace(/(?:^|\s)is:(?:settled|pinned|forked)(?=\s|$)/gi, " ").trim();
+  const tags: string[] = [], filterTerms: string[] = [];
+  let pinnedOnly = false, forkedOnly = false;
+  const text = query.replace(/(?:^|\s)(is:(?:settled|pinned|forked)|tag:("(?:[^"\\]|\\.)*"|\S+))(?=\s|$)/gi, (term, filter: string, value?: string) => {
+    if (value !== undefined) {
+      let tag = value;
+      if (value.startsWith('"')) {
+        try { tag = JSON.parse(value); } catch { return term; }
+      }
+      if (tag === "") return term;
+      tags.push(tag);
+    } else {
+      pinnedOnly ||= filter.toLowerCase() === "is:pinned";
+      forkedOnly ||= filter.toLowerCase() === "is:forked";
+    }
+    filterTerms.push(filter);
+    return "";
+  }).trim();
   const needle = typedPrefix(text, "agent:") === null && typedPrefix(text, "room:") === null ? text.toLowerCase() : "";
-  return { pinnedOnly, forkedOnly, text, needle };
+  return { pinnedOnly, forkedOnly, tags, filterTerms, text, needle };
 }
 
 function sessionMatchesSearch(session: Session, filters: ReturnType<typeof sessionSearchTerms>, agentFilter: string, roomFilter: string, origin: string) {
-  return (!filters.pinnedOnly || session.pinned) && (!filters.forkedOnly || session.forkedFrom) && matchesSession(session, "", agentFilter, roomFilter) && (matchesSession(session, filters.needle, "", "") || origin.includes(filters.needle));
+  const tags = new Set(session.tags);
+  return filters.tags.every((tag) => tags.has(tag)) && (!filters.pinnedOnly || session.pinned) && (!filters.forkedOnly || session.forkedFrom) && matchesSession(session, "", agentFilter, roomFilter) && (matchesSession(session, filters.needle, "", "") || origin.includes(filters.needle));
 }
 
 type SavedSearch = { id: string; name?: string; query: string; agentFilter: string; roomFilter: string };
@@ -1437,6 +1452,22 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
   </>;
 }
 
+// Pills are the committed filter terms; the input keeps free text and the term still being typed.
+function searchInput(query: string, typed: string, rows: Session[], catalog: { name: string }[]) {
+  const { text, filterTerms } = sessionSearchTerms(query);
+  const input = query.trimEnd().endsWith(typed.trimEnd()) && sessionSearchTerms(typed).text === text ? typed : text;
+  const pills = [...new Set(filterTerms.slice(0, filterTerms.length - sessionSearchTerms(input).filterTerms.length))];
+  const token = input.slice(input.search(/\S*$/));
+  const tagPrefix = typedPrefix(token, "tag:"), isPrefix = typedPrefix(token, "is:");
+  const agentPrefix = typedPrefix(text, "agent:"), roomPrefix = typedPrefix(text, "room:");
+  const needle = (tagPrefix?.replace(/^"|"$/g, "") ?? isPrefix)?.toLowerCase();
+  const names = roomPrefix !== null ? slackRooms(rows) : tagPrefix !== null ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : ["pinned", "forked"];
+  const offered = overlayChoices(agentPrefix, roomPrefix ?? needle ?? null, catalog, names);
+  // A completed is:/tag: term commits on space or Enter instead of offering itself again.
+  const choices = agentPrefix === null && roomPrefix === null && offered.some((item) => item.key.toLowerCase() === needle) ? [] : offered;
+  return { text, filterTerms, input, pills, token, tagPrefix, agentPrefix, roomPrefix, choices };
+}
+
 function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFilter, roomFilter, setRoomFilter, inputRef, placeholder, onKeyDown }: {
   rows: Session[];
   catalog: { name: string }[];
@@ -1453,20 +1484,30 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
   const sidebar = useContext(Sidebar);
   const stale = !sidebar.refreshing && rows.length > 0 && !searchIsAuthoritative(sidebar);
   const [overlayPick, setOverlayPick] = useState(0);
-  const { text } = sessionSearchTerms(query);
-  const agentPrefix = typedPrefix(text, "agent:");
-  const roomPrefix = typedPrefix(text, "room:");
-  const choices = overlayChoices(agentPrefix, roomPrefix, catalog, roomPrefix === null ? [] : slackRooms(rows));
+  const [typed, setTyped] = useState("");
+  const { text, filterTerms, input, pills, token, tagPrefix, agentPrefix, roomPrefix, choices } = searchInput(query, typed, rows, catalog);
   const pick = choices.length === 0 ? 0 : overlayPick % choices.length;
   const active = useRef<HTMLButtonElement>(null);
   useEffect(() => { active.current?.scrollIntoView({ block: "nearest" }); }, [pick, text]);
+  const change = (terms: string[], rest: string) => {
+    setTyped(rest);
+    setQuery([...terms, rest].filter(Boolean).join(" "));
+  };
+  const edit = (value: string, all = false) => {
+    const cut = all ? value.length : value.search(/\s\S*$/) + 1;
+    const head = sessionSearchTerms(value.slice(0, cut));
+    change([...pills, ...head.filterTerms], head.filterTerms.length ? [head.text, value.slice(cut)].filter(Boolean).join(" ") : value);
+  };
   const applyOverlay = (name: string) => {
-    if (agentPrefix !== null) {
+    if (agentPrefix === null && roomPrefix === null) {
+      change([...pills, tagPrefix !== null ? `tag:${/\s/.test(name) || name.startsWith('"') ? JSON.stringify(name) : name}` : `is:${name}`], input.slice(0, input.length - token.length).trim());
+    } else if (agentPrefix !== null) {
       setAgentFilter(name);
+      change(filterTerms, "");
     } else {
       setRoomFilter(name);
+      change(filterTerms, "");
     }
-    setQuery(query.split(/\s+/).filter((term) => /^is:(settled|pinned|forked)$/i.test(term)).join(" "));
     setOverlayPick(0);
   };
   return (
@@ -1482,15 +1523,16 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
             </span>
             {agentFilter ? <FilterPill label={`agent:${agentFilter}`} onClear={() => setAgentFilter("")} /> : null}
             {roomFilter ? <FilterPill label={`room:${roomFilter}`} onClear={() => setRoomFilter("")} /> : null}
+            {pills.map((term) => <FilterPill key={term} label={term} onClear={() => change(pills.filter((pill) => pill !== term), input)} />)}
             <Input
               ref={inputRef}
-              value={query}
+              value={input}
               onChange={(event) => {
                 setOverlayPick(0);
-                setQuery(event.target.value);
+                edit(event.target.value);
               }}
               aria-label={placeholder ?? "Search sessions"}
-              placeholder={placeholder ?? (agentFilter || roomFilter ? "Search" : "Search or agent: or room:")}
+              placeholder={placeholder ?? (agentFilter || roomFilter || pills.length ? "Search" : "Search or agent: or room:")}
               variant="embedded"
               className="h-8 min-w-24 flex-1"
               onKeyDown={(event) => {
@@ -1508,7 +1550,7 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
                   if (event.key === "Escape") {
                     event.preventDefault();
                     event.stopPropagation();
-                    setQuery("");
+                    change(pills, "");
                     return;
                   }
                 }
@@ -1516,6 +1558,7 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
                   event.preventDefault();
                   return;
                 }
+                if (event.key === "Enter") edit(input, true);
                 onKeyDown?.(event);
               }}
             />
@@ -1545,7 +1588,7 @@ function PageTitle({ children }: { children: ReactNode }) {
 const SessionRow = memo(function SessionRow({ session, active, loading, age }: { session: Session; active: boolean; loading: boolean; age: string }) {
   return <li className="group relative flex list-none items-stretch py-0.5">
     <Link href={sessionPath(session.id)} className={cn("relative flex min-w-0 flex-1 cursor-pointer overflow-hidden rounded-md px-2.5 py-2 text-left outline-none select-none", active ? "bg-sidebar-row-active text-sidebar-foreground" : "text-sidebar-foreground hover:bg-sidebar-row-hover")}>
-      <SessionRowContent session={session} loading={loading} age={age} channelOnly={!session.settled} />
+      <SessionRowContent session={session} loading={loading} age={age} />
     </Link>
     <div className="pointer-events-none absolute top-1 right-1 rounded-md bg-sidebar shadow-sm opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
       <SessionRowActions session={session} />
@@ -1554,6 +1597,7 @@ const SessionRow = memo(function SessionRow({ session, active, loading, age }: {
 }, (a, b) => a.active === b.active && a.loading === b.loading && a.age === b.age &&
   a.session.id === b.session.id && a.session.title === b.session.title && a.session.preview === b.session.preview && a.session.updatedAt === b.session.updatedAt &&
   a.session.agent === b.session.agent && a.session.settled === b.session.settled && a.session.running === b.session.running && a.session.pinned === b.session.pinned &&
+  (a.session.tags ?? []).length === (b.session.tags ?? []).length && (a.session.tags ?? []).every((tag, index) => tag === b.session.tags?.[index]) &&
   a.session.name === b.session.name && a.session.snoozedUntil === b.session.snoozedUntil && a.session.forkedFrom === b.session.forkedFrom);
 
 const SessionList = memo(function SessionList({ settledOnly = false }: { settledOnly?: boolean }) {
@@ -1565,9 +1609,9 @@ const SessionList = memo(function SessionList({ settledOnly = false }: { settled
   const [roomFilter, setRoomFilter] = useState("");
   const catalog = agents.data?.agents ?? [];
   const rows = sidebar.rows;
-  const { pinnedOnly, forkedOnly, needle } = sessionSearchTerms(query);
-  const filtered = rows.filter((session) => (settledOnly ? session.settled : !session.settled) && (!pinnedOnly || session.pinned) && (!forkedOnly || session.forkedFrom) && matchesSession(session, needle, agentFilter, roomFilter)).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
-  const searching = [needle, agentFilter, roomFilter, pinnedOnly, forkedOnly].some(Boolean);
+  const filters = sessionSearchTerms(query);
+  const filtered = rows.filter((session) => (settledOnly ? session.settled : !session.settled) && sessionMatchesSearch(session, filters, agentFilter, roomFilter, "")).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
+  const searching = [filters.needle, agentFilter, roomFilter, filters.pinnedOnly, filters.forkedOnly, filters.tags.length].some(Boolean);
   return (
     <div className={cn("flex h-full min-h-0 flex-col", settledOnly && "mx-auto w-full max-w-3xl gap-6 p-4")}>
       {settledOnly ? <PageTitle>Settled</PageTitle> : null}

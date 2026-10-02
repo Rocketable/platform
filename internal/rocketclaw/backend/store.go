@@ -420,6 +420,7 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 		for _, statement := range []string{
 			`DELETE FROM session_entries WHERE ` + historyWithDelegations,
 			`DELETE FROM session_summaries WHERE ` + historyWithDelegations,
+			`DELETE FROM session_tags WHERE conversation_id = $1`,
 			`DELETE FROM active_turns WHERE conversation_id = $1`,
 			`DELETE FROM scheduled_messages WHERE conversation_id = $1`,
 			`DELETE FROM thread_queue WHERE conversation_id = $1`,
@@ -1083,6 +1084,7 @@ type SidebarSession struct {
 	Name         string
 	SnoozedUntil *time.Time
 	ForkedFrom   string
+	Tags         []string
 }
 
 // SidebarSessions yields pinned records first, then recent-first, bytewise-ID order.
@@ -1116,9 +1118,10 @@ eligible_conversations AS (
       AND p.conversation_id IS NULL
 ),
 summarized_conversations AS (
-    SELECT c.*, s.preview, s.last_updated
+    SELECT c.*, s.preview, s.last_updated, COALESCE(t.tags, '[]'::jsonb) AS tags
     FROM eligible_conversations c
     LEFT JOIN session_summaries s ON s.conversation_id = c.conversation_id
+    LEFT JOIN session_tags t ON t.conversation_id = c.conversation_id
 ),
 activity_state AS (
     SELECT *,
@@ -1147,7 +1150,8 @@ SELECT
     pinned,
     name,
     CASE WHEN snoozed THEN snoozed_until END AS snoozed_until,
-    forked_from
+    forked_from,
+    tags
 FROM display_state
 ORDER BY pinned DESC, COALESCE(last_updated, '0001-01-01 00:00:00+00'::timestamptz) DESC, conversation_id COLLATE "C"`, autoSettleBefore)
 		if err != nil {
@@ -1160,10 +1164,16 @@ ORDER BY pinned DESC, COALESCE(last_updated, '0001-01-01 00:00:00+00'::timestamp
 			var (
 				row     SidebarSession
 				preview []byte
+				tags    []byte
 				updated sql.NullTime
 			)
-			if err := rows.Scan(&row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &row.Conversation.Settled, &preview, &updated, &row.Running, &row.Pinned, &row.Name, &row.SnoozedUntil, &row.ForkedFrom); err != nil {
+			if err := rows.Scan(&row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &row.Conversation.Settled, &preview, &updated, &row.Running, &row.Pinned, &row.Name, &row.SnoozedUntil, &row.ForkedFrom, &tags); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
+				return
+			}
+
+			if err := json.Unmarshal(tags, &row.Tags); err != nil {
+				yield(SidebarSession{}, fmt.Errorf("decode sidebar tags: %w", err))
 				return
 			}
 
@@ -1302,6 +1312,58 @@ func (s *SessionService) PairBusyFor(pairID string) bool {
 	}
 
 	return gate.reservedFor != "" || len(gate.token) == 0
+}
+
+func sessionTags(ctx context.Context, db stateStoreDB, conversationID string) ([]string, error) {
+	var data []byte
+	if err := db.QueryRowContext(ctx, `SELECT COALESCE((SELECT tags FROM session_tags WHERE conversation_id = $1), '[]'::jsonb)`, conversationID).Scan(&data); err != nil {
+		return nil, fmt.Errorf("read session tags: %w", err)
+	}
+
+	var tags []string
+	if err := json.Unmarshal(data, &tags); err != nil {
+		return nil, fmt.Errorf("decode session tags: %w", err)
+	}
+
+	return tags, nil
+}
+
+func (s *SessionService) toggleSessionTag(ctx context.Context, conversationID, tag string, group []string) ([]string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin session tag toggle: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := lockSessionHistory(ctx, tx, conversationID); err != nil {
+		return nil, err
+	}
+
+	tags, err := sessionTags(ctx, tx, conversationID)
+	if err != nil {
+		return nil, err
+	}
+
+	active := slices.Contains(tags, tag)
+
+	tags = slices.DeleteFunc(tags, func(name string) bool { return slices.Contains(group, name) })
+	if !active {
+		tags = append(tags, tag)
+	}
+
+	slices.Sort(tags)
+
+	data, _ := json.Marshal(tags) // Encoding a string slice cannot fail.
+
+	if _, err := tx.ExecContext(ctx, `INSERT INTO session_tags (conversation_id, tags) VALUES ($1, $2) ON CONFLICT(conversation_id) DO UPDATE SET tags = excluded.tags`, conversationID, data); err != nil {
+		return nil, fmt.Errorf("write session tags: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit session tag toggle: %w", err)
+	}
+
+	return tags, nil
 }
 
 func (s *SessionService) holdStartupRecovery(turnID, source, destination string) {
@@ -1852,9 +1914,15 @@ func pruneExternalMCPSessions(ctx context.Context, tx *sql.Tx, cutoff time.Time,
 }
 
 func stalePrivateConversationIDs(ctx context.Context, db *sql.Tx, cutoff time.Time) ([]string, error) {
-	return queryStrings(ctx, db, `WITH private_histories AS (
+	return queryStrings(ctx, db, `WITH private_entries AS (
+    SELECT conversation_id, entry_timestamp FROM session_entries
+    UNION ALL
+    SELECT conversation_id, '1970-01-01T00:00:00Z' FROM session_tags t
+    WHERE NOT EXISTS (SELECT 1 FROM session_entries e WHERE e.conversation_id = t.conversation_id)
+),
+private_histories AS (
     SELECT conversation_id, MAX(entry_timestamp) AS last_entry_timestamp
-    FROM session_entries
+    FROM private_entries
     WHERE conversation_id LIKE 'slack-thread:%' OR conversation_id LIKE 'external_mcp:%'
        OR conversation_id LIKE 'cron:%' OR conversation_id LIKE 'one-off-cron:%'
     GROUP BY conversation_id
@@ -1884,6 +1952,10 @@ func deleteSessionEntries(ctx context.Context, db stateStoreDB, conversationIDs 
 	for conversationID := range conversationIDs {
 		if err := lockSessionHistory(ctx, db, conversationID); err != nil {
 			return 0, err
+		}
+
+		if _, err := db.ExecContext(ctx, `DELETE FROM session_tags WHERE conversation_id = $1`, conversationID); err != nil {
+			return 0, fmt.Errorf("delete stale session tags: %w", err)
 		}
 
 		if _, err := db.ExecContext(ctx, `DELETE FROM session_summaries WHERE `+historyWithDelegations, conversationID); err != nil {

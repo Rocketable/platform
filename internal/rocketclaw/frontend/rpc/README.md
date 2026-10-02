@@ -54,6 +54,14 @@ successful delivery report shown in History. Migration `011_last_message_summari
 invalidates the derived user-only previews for the existing background backfill.
 Session `running` reads the active turn checkpoint, independently of settled status.
 
+`Session.tags` (additive protobuf field 14) carries the owning conversation's
+durable, lexically sorted active tag names in `ListSessions`. Missing metadata
+returns an empty list. The existing sidebar query joins tags without adding a
+request per row or widening private-session discovery. Tag-only changes appear
+on the next snapshot without changing previews, timestamps, pin, settlement, or
+snooze. HTTP retains the same owner/completeness envelopes and ordering; no tag
+mutation RPC or event is added.
+
 `UpdateSession` accepts a future RFC3339 `snoozed_until` timestamp alongside name
 and pin metadata. Snoozing replaces explicit settlement and hides the chat until
 the deadline. `ListSessions` reports it as settled with its active deadline;
@@ -257,7 +265,8 @@ bun -e 'console.log(Buffer.from(process.argv[1]).toString("base64url"))' 'slack-
 
 The `DeleteSessionEntries` RPC removes saved entries and retained failed/stopped
 checkpoints for that exact conversation ID, not a live recovery checkpoint or its
-conversation or goal record. Ordinary GC remains responsible for those records.
+conversation or goal record, and retains its session tags. Ordinary GC remains
+responsible for those records; permanent session pruning removes tag metadata too.
 
 ## Identity boundary
 
