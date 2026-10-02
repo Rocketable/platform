@@ -1,13 +1,30 @@
-import { expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { Effect, Fiber, Option, Schema } from "effect";
+import { AtomRegistry } from "effect/reactivity";
 import ts from "typescript";
+import { histories, queries, registry } from "./state";
 import type { HistoryView, TranscriptEvent } from "./types";
 
 // Execute the retained UI's actual private functions without exporting non-components.
 const source = ts.createSourceFile("ui.tsx", await Bun.file(new URL("./ui.tsx", import.meta.url)).text(), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const names = ["applyHistoryDelta", "readHistoryDelta", "sendComposer", "promoteComposer", "stopComposer", "historyLines", "pendingInputs", "lineId", "isStopCommand", "transcriptTurns", "toolTitle"];
-const functions = source.statements.filter((node) => ts.isFunctionDeclaration(node) && names.includes(node.name?.text ?? "")).map((node) => node.getText(source)).join("\n");
-const javascript = ts.transpileModule(`import { QueryClient } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nimport { queries } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};\nconst queryClient = new QueryClient();\n${functions}\nexport { ${names.filter((name) => !["lineId", "isStopCommand"].includes(name)).join(", ")}, queryClient };`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
-const { applyHistoryDelta, readHistoryDelta, sendComposer, promoteComposer, stopComposer, historyLines, pendingInputs, transcriptTurns, toolTitle, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
+const functions = source.statements.flatMap((node) => {
+  if (ts.isFunctionDeclaration(node) && names.includes(node.name?.text ?? "")) return [node.getText(source)];
+  if (ts.isVariableStatement(node)) return node.declarationList.declarations.filter((declaration) => names.includes(declaration.name.getText(source))).map((declaration) => `const ${declaration.getText(source)};`);
+  return [];
+}).join("\n");
+const javascript = ts.transpileModule(`import { Effect, Fiber } from ${JSON.stringify(Bun.resolveSync("effect", import.meta.dir))};\nimport { queries as requests, uploadAttachment } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};\nimport { histories, invalidate, registry } from ${JSON.stringify(new URL("./state.ts", import.meta.url).href)};\n${functions}\nexport { ${names.filter((name) => !["lineId", "isStopCommand"].includes(name)).join(", ")} };`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
+const { applyHistoryDelta, readHistoryDelta, sendComposer, promoteComposer, stopComposer, historyLines, pendingInputs, transcriptTurns, toolTitle } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
+let windowBefore: PropertyDescriptor | undefined;
+beforeEach(() => {
+  windowBefore = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: new EventTarget() });
+});
+afterEach(() => {
+  registry.reset();
+  if (windowBefore) Object.defineProperty(globalThis, "window", windowBefore);
+  else Reflect.deleteProperty(globalThis, "window");
+});
 type Line = { id: string; role: string; text: string; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; origin?: string };
 const event = (entryKey: string, itemId: string, role: string, text: string, extra: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ entryKey, itemId, inputId: "", role, text, turnId: "", complete: true, ...extra });
 const view = (messages: TranscriptEvent[], extra: Partial<HistoryView> = {}): HistoryView => ({ messages, delegations: [], revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(messages.map((message) => message.entryKey))], running: false, terminal: "", ...extra });
@@ -73,13 +90,15 @@ test("reset preserves optimistic inputs and consumes identical parked inputs onl
 });
 
 test("serialized reads coalesce signals and reconnects, use only applied revisions, and retain the cursor on errors", async () => {
-  const draft = { lines: [] as Line[], busy: false, revision: undefined as string | undefined, historyError: "", consumed: new Set<string>() };
+  const draft = { lines: [] as Line[], busy: false, revision: undefined as string | undefined, historyRead: undefined as Fiber.Fiber<void> | undefined, historyError: "", consumed: new Set<string>() };
   const kept = event("kept", "kept:0", "tool", 'execute\n{"code":"print(1)"}', { toolName: "execute", toolCallId: "call", agent: "main" });
   const first = Promise.withResolvers<Response>();
   const second = Promise.withResolvers<Response>();
   const requests: { id: string; revision?: string }[] = [];
+  let queueReads = 0;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = Object.assign(async (_url: URL | RequestInfo, init?: RequestInit) => {
+    if (String(_url) === "/api/ListQueue") { queueReads++; return Response.json({ items: [] }); }
     requests.push(JSON.parse(init!.body as string));
     if (requests.length === 1) return first.promise;
     if (requests.length === 2) return second.promise;
@@ -87,12 +106,21 @@ test("serialized reads coalesce signals and reconnects, use only applied revisio
     if (requests.length >= 7) return Response.json({ ...view(requests.length === 7 ? requests.at(-1)!.revision ? [] : [kept, event("later", "later:0", "assistant", "later")] : [event("later", "later:0", "assistant", "final")], { reset: requests.length !== 7 || !requests.at(-1)!.revision, revision: "reopened", entryKeys: requests.length === 7 ? ["kept", "later"] : ["later"], delegations: ["session/call"] }), origin: "" });
     return Response.json({ ...view([], { reset: false, revision: "recovered", entryKeys: ["kept", "turn"], delegations: requests.length > 5 ? [] : ["session/call"] }), origin: JSON.stringify({ kind: "cron" }) });
   }, { preconnect: originalFetch.preconnect });
-  queryClient.setQueryData(["queue", { id: "session" }], []);
+  const queue = queries.queue({ id: "session" });
+  const unmount = registry.mount(queue);
   let changes = 0;
   const refreshHistory = () => readHistoryDelta("session", draft, () => { changes++; });
   try {
-    const loading = refreshHistory();
-    for (let i = 0; i < 10; i++) expect(refreshHistory()).toBe(loading);
+    expect(await Effect.runPromise(AtomRegistry.getResult(registry, queue))).toEqual([]);
+    expect(queueReads).toBe(1);
+    const loading = Effect.runPromise(refreshHistory());
+    const reading = draft.historyRead;
+    expect(reading).toBeDefined();
+    const coalesced = Array.from({ length: 10 }, () => {
+      const joined = Effect.runPromise(refreshHistory());
+      expect(draft.historyRead).toBe(reading);
+      return joined;
+    });
     expect(requests).toEqual([{ id: "session" }]);
     // This response began before Prompt rendered its uncommitted input.
     draft.lines.push({ id: "local", role: "user", text: "same" });
@@ -102,81 +130,84 @@ test("serialized reads coalesce signals and reconnects, use only applied revisio
     while (requests.length < 2) await Promise.resolve();
     expect(requests[1]).toEqual({ id: "session", revision: "applied" });
     expect(draft.lines.map((line) => line.id)).toEqual(["kept:0", "used", "local"]);
-    expect(queryClient.getQueryState(["queue", { id: "session" }]).isInvalidated).toBe(true);
+    expect(await Effect.runPromise(AtomRegistry.getResult(registry, queue, { suspendOnWaiting: true }))).toEqual([]);
+    expect(queueReads).toBe(2);
     expect(draft.busy).toBe(true);
     draft.lines.push({ id: "private", role: "user", text: "$agent", complete: true }, { id: "private:reply", role: "assistant", text: "Agent: main", complete: true });
     second.resolve(Response.json({ ...view([event("turn", "turn:1", "assistant", "newer")], { reset: false, replacedKeys: ["turn"], entryKeys: ["kept", "turn"], revision: "newest", delegations: ["session/call"] }), origin: "" }));
-    await loading;
+    await Promise.all([loading, ...coalesced]);
     expect(draft.revision).toBe("newest");
     expect(draft.lines.map((line) => line.text)).toEqual([kept.text, "newer", "$agent", "Agent: main", "same"]);
-    const cached = queryClient.getQueryData(["history", { id: "session" }]);
+    const cached = registry.get(histories("session"))!;
     expect(cached.messages).toEqual([kept, event("turn", "turn:1", "assistant", "newer")]);
     expect(cached.delegations).toEqual(["session/call"]);
-    await refreshHistory();
+    await Effect.runPromise(refreshHistory());
     expect(draft.revision).toBe("newest");
     expect(draft.historyError).toBe("history unavailable");
     expect(draft.busy).toBe(true);
-    expect(queryClient.getQueryData(["history", { id: "session" }])).toBe(cached);
+    expect(registry.get(histories("session"))).toBe(cached);
     draft.lines.find((line) => line.id === "local")!.complete = true;
     const unchanged = draft.lines;
-    await refreshHistory();
+    await Effect.runPromise(refreshHistory());
     expect(requests.slice(2)).toEqual([{ id: "session", revision: "newest" }, { id: "session", revision: "newest" }]);
     expect(draft.revision).toBe("recovered");
     expect(draft.historyError).toBe("");
     expect(draft.busy).toBe(false);
     expect(draft.lines).toBe(unchanged);
     expect(changes).toBe(4);
-    await refreshHistory();
+    await Effect.runPromise(refreshHistory());
     expect(changes).toBe(4);
     expect(draft.lines).toBe(unchanged);
-    await refreshHistory();
-    expect(queryClient.getQueryData(["history", { id: "session" }]).delegations).toEqual([]);
+    await Effect.runPromise(refreshHistory());
+    expect(registry.get(histories("session"))!.delegations).toEqual([]);
     expect(changes).toBe(5);
     expect(draft.lines).toBe(unchanged);
-    queryClient.removeQueries({ queryKey: ["history", { id: "session" }], exact: true });
-    expect(queryClient.getQueryData(["history", { id: "session" }])).toBeUndefined();
-    await refreshHistory();
+    registry.set(histories("session"), undefined);
+    expect(registry.get(histories("session"))).toBeUndefined();
+    await Effect.runPromise(refreshHistory());
     expect(requests[6]).toEqual({ id: "session" });
     expect(draft.lines.map((line) => line.text)).toEqual([kept.text, "$agent", "Agent: main", "same", "later"]);
-    const restored = queryClient.getQueryData(["history", { id: "session" }]);
+    const restored = registry.get(histories("session"))!;
     expect(restored.messages).toEqual([kept, event("later", "later:0", "assistant", "later")]);
     expect(restored.delegations).toEqual(["session/call"]);
     expect(toolTitle(historyLines(restored.messages).find((line: { toolCallId: string }) => line.toolCallId === "call"))).toBe("Run · print(1)");
     // An authoritative reset with a retained cursor replaces public groups, not local commands.
-    await refreshHistory();
-    await refreshHistory();
+    await Effect.runPromise(refreshHistory());
+    await Effect.runPromise(refreshHistory());
     expect(requests.slice(7)).toEqual([{ id: "session", revision: "reopened" }, { id: "session", revision: "reopened" }]);
     expect(draft.lines.map((line) => line.text)).toEqual(["$agent", "Agent: main", "same", "final"]);
-    expect(queryClient.getQueryData(["history", { id: "session" }]).messages).toEqual([event("later", "later:0", "assistant", "final")]);
-  } finally { globalThis.fetch = originalFetch; }
+    expect(registry.get(histories("session"))!.messages).toEqual([event("later", "later:0", "assistant", "final")]);
+  } finally { unmount(); globalThis.fetch = originalFetch; }
 });
 
-test("actual stream handlers use metadata only as a hint, including on the first open", () => {
+test("actual stream handlers use metadata only as a hint, including on the first open", async () => {
   let onmessage: ts.Expression | undefined, onopen: ts.Expression | undefined;
+  let decode: ts.VariableDeclaration | undefined;
+  const hook = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "useSessionStream") as ts.FunctionDeclaration;
   const visit = (node: ts.Node) => {
     if (ts.isBinaryExpression(node) && node.left.getText(source) === "stream.onmessage") onmessage = node.right;
     if (ts.isBinaryExpression(node) && node.left.getText(source) === "stream.onopen") onopen = node.right;
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === "decode") decode = node;
     ts.forEachChild(node, visit);
   };
-  visit(source);
+  visit(hook);
   let reads = 0;
-  const refreshHistory = () => { reads++; };
-  const compile = (node: ts.Expression) => new Function("id", "refreshHistory", ts.transpileModule(`return ${node.getText(source)};`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText)("session", refreshHistory);
+  const notify = () => { reads++; };
+  const compile = (node: ts.Expression) => new Function("id", "notify", "Schema", "Option", ts.transpileModule(`const ${decode!.getText(source)};\nreturn ${node.getText(source)};`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText)("session", notify, Schema, Option);
   const opened = compile(onopen!), signaled = compile(onmessage!);
   opened(); opened();
   signaled({ data: JSON.stringify({ conversationId: "other", revision: "future" }) });
   signaled({ data: JSON.stringify({ conversationId: "session", revision: "older" }) });
   expect(reads).toBe(3);
   expect(onmessage!.getText(source)).not.toContain("change.revision");
-  const hook = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "useSessionStream") as ts.FunctionDeclaration;
   const refresh = hook.body!.statements.filter(ts.isVariableStatement).flatMap((node) => [...node.declarationList.declarations]).find((node) => node.name.getText(source) === "refreshHistory")!;
   const callback = (refresh.initializer as ts.CallExpression).arguments[0];
   const draft = { sessionId: "" };
   const ids: string[] = [];
-  const read = new Function("draft", "onDraftChange", "readHistoryDelta", ts.transpileModule(`return ${callback.getText(source)};`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText)(draft, () => {}, (id: string) => { ids.push(id); });
+  const read = new Function("draft", "onDraftChange", "readHistoryDelta", ts.transpileModule(`return ${callback.getText(source)};`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText)(draft, () => {}, (id: string) => Effect.sync(() => { ids.push(id); }));
   // The composer can finish after its original new-chat component unmounts.
   draft.sessionId = "created";
-  read();
+  await Effect.runPromise(read());
   expect(ids).toEqual(["created"]);
 });
 
@@ -247,9 +278,18 @@ test("public call outcomes update their original disclosures independently witho
 
 test("explicit enqueue keeps the composer idle and preserves the inner call for RPC", async () => {
   const text = "$enqueue $skill stop inspect  the logs\nnext  ";
-  queryClient.setQueryData(["queue", { id: "opaque" }], []);
-  await sendComposer({ draft: { text, files: [], agent: "", edit: 0, submission: 0, sending: false }, onDraftChange: () => {}, files: [], text, busy: false, sessionId: "opaque", selected: "main", currentAgent: "main", prompt: { mutateAsync: async (request: object) => { expect(request).toEqual({ id: "opaque", text, delivery: "STEER", messageId: expect.any(String) }); return ""; } }, scrollToEnd: () => true, setBusy: () => { throw new Error("enqueue must not start a busy turn"); }, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, setLines: () => {} });
-  expect(queryClient.getQueryState(["queue", { id: "opaque" }]).isInvalidated).toBe(true);
+  let queueReads = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = Object.assign(async (url: URL | RequestInfo) => { expect(String(url)).toBe("/api/ListQueue"); queueReads++; return Response.json({ items: [] }); }, { preconnect: originalFetch.preconnect });
+  const queue = queries.queue({ id: "opaque" });
+  const unmount = registry.mount(queue);
+  try {
+    expect(await Effect.runPromise(AtomRegistry.getResult(registry, queue))).toEqual([]);
+    expect(queueReads).toBe(1);
+    await Effect.runPromise(sendComposer({ draft: { text, files: [], agent: "", edit: 0, submission: 0, sending: false }, onDraftChange: () => {}, files: [], text, busy: false, sessionId: "opaque", selected: "main", currentAgent: "main", prompt: (request: object) => Effect.sync(() => { expect(request).toEqual({ id: "opaque", text, delivery: "STEER", messageId: expect.any(String) }); return ""; }), scrollToEnd: () => true, setBusy: () => { throw new Error("enqueue must not start a busy turn"); }, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, setLines: () => {} }));
+    expect(await Effect.runPromise(AtomRegistry.getResult(registry, queue, { suspendOnWaiting: true }))).toEqual([]);
+    expect(queueReads).toBe(2);
+  } finally { unmount(); globalThis.fetch = originalFetch; }
 });
 
 test("composer renders exact input before Prompt completes and history failure does not undo acceptance", async () => {
@@ -261,10 +301,10 @@ test("composer renders exact input before Prompt completes and history failure d
   const requests: { id: string; delivery: string; text: string; messageId: string }[] = [];
   globalThis.fetch = Object.assign(async () => idle.promise, { preconnect: originalFetch.preconnect });
   const refreshHistory = () => readHistoryDelta("opaque", draft, () => {});
-  const send = (text: string) => sendComposer({ draft, onDraftChange: () => {}, text, files: [], busy: draft.busy, sessionId: "opaque", selected: "main", currentAgent: "main", prompt: { mutateAsync: (request: typeof requests[number]) => { requests.push(request); dispatched.resolve(); return request.delivery === "QUEUE" ? Promise.resolve("") : completion.promise; } }, scrollToEnd: () => true, setBusy: (busy: boolean) => { draft.busy = busy; }, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, setLines: (update: (lines: Line[]) => Line[]) => { draft.lines = update(draft.lines); }, refreshHistory });
+  const send = (text: string) => sendComposer({ draft, onDraftChange: () => {}, text, files: [], busy: draft.busy, sessionId: "opaque", selected: "main", currentAgent: "main", prompt: (request: typeof requests[number]) => Effect.promise(() => { requests.push(request); dispatched.resolve(); return request.delivery === "QUEUE" ? Promise.resolve("") : completion.promise; }), scrollToEnd: () => true, setBusy: (busy: boolean) => { draft.busy = busy; }, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, setLines: (update: (lines: Line[]) => Line[]) => { draft.lines = update(draft.lines); }, refreshHistory });
   try {
-    const loading = refreshHistory();
-    const sending = send(draft.text);
+    const loading = Effect.runPromise(refreshHistory());
+    const sending = Effect.runPromise(send(draft.text));
     await dispatched.promise;
     expect(requests[0]).toEqual({ id: "opaque", text: "  exact human input\n", delivery: "STEER", messageId: expect.any(String) });
     expect(draft.lines.at(-1)).toMatchObject({ id: requests[0].messageId, text: requests[0].text });
@@ -272,7 +312,7 @@ test("composer renders exact input before Prompt completes and history failure d
     idle.resolve(Response.json({ ...view([], { reset: false, entryKeys: ["prior"] }), origin: "" }));
     await loading;
     expect(draft.busy).toBe(true);
-    await send("follow-up");
+    await Effect.runPromise(send("follow-up"));
     expect(requests[1].delivery).toBe("QUEUE");
     expect(draft.lines.map((line) => line.text)).toEqual(["prior answer", "  exact human input\n"]);
     globalThis.fetch = Object.assign(async () => { throw new Error("refresh failed"); }, { preconnect: originalFetch.preconnect });
@@ -289,7 +329,7 @@ test("composer renders exact input before Prompt completes and history failure d
 
 for (const busy of [true, false]) test(`private commands retire only their own parked input and stay anchored: busy=${busy}`, async () => {
   const draft = { text: "$agent", files: [], agent: "", edit: 0, submission: 0, sending: false, consumed: new Set<string>(), parked: [{ id: "ordinary", role: "user", text: "same" }] as Line[], lines: historyLines([event("turn", "turn:0", "assistant", "working")]) as Line[], busy };
-  await sendComposer({ draft, text: draft.text, files: [], delivery: "STEER", busy, sessionId: "opaque", selected: "", currentAgent: "main", onDraftChange: () => {}, scrollToEnd: () => true, setAgentOpen: () => {}, setBusy: (value: boolean) => { draft.busy = value; }, setSendError: (error: string) => { expect(error).toBe(""); }, setLines: (update: (lines: Line[]) => Line[]) => { draft.lines = update(draft.lines); }, refreshHistory: async () => { applyHistoryDelta(draft, view([], { reset: false, entryKeys: ["turn"], running: busy })); }, prompt: { mutateAsync: async () => "Agent: main" } });
+  await Effect.runPromise(sendComposer({ draft, text: draft.text, files: [], delivery: "STEER", busy, sessionId: "opaque", selected: "", currentAgent: "main", onDraftChange: () => {}, scrollToEnd: () => true, setAgentOpen: () => {}, setBusy: (value: boolean) => { draft.busy = value; }, setSendError: (error: string) => { expect(error).toBe(""); }, setLines: (update: (lines: Line[]) => Line[]) => { draft.lines = update(draft.lines); }, refreshHistory: () => Effect.sync(() => { applyHistoryDelta(draft, view([], { reset: false, entryKeys: ["turn"], running: busy })); }), prompt: () => Effect.succeed("Agent: main") }));
   expect(draft.parked.map((line) => line.id)).toEqual(["ordinary"]);
   expect(draft.lines.map((line) => line.text)).toEqual(["working", "$agent", "Agent: main"]);
   expect(draft.lines.slice(1).every((line) => line.complete)).toBe(true);
@@ -306,10 +346,10 @@ test("identical active sends queue while steers park until History confirms thei
   const requests: { messageId: string; delivery: string }[] = [];
   const completions = [Promise.withResolvers<string>(), Promise.withResolvers<string>()];
   let refreshed = 0;
-  const send = (delivery: string) => sendComposer({ draft, text: "same", files: [], delivery, busy: true, sessionId: "opaque", selected: "", currentAgent: "main", onDraftChange: () => {}, scrollToEnd: () => true, setAgentOpen: () => {}, setBusy: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, setLines: (update: (lines: Line[]) => Line[]) => { draft.lines = update(draft.lines); }, refreshHistory: async () => { refreshed++; }, prompt: { mutateAsync: (request: { messageId: string; delivery: string }) => { requests.push(request); return request.delivery === "QUEUE" ? Promise.resolve("") : completions[requests.filter((item) => item.delivery === "STEER").length - 1].promise; } } });
-  await send("QUEUE");
-  const first = send("STEER"); await Promise.resolve();
-  const second = send("STEER"); await Promise.resolve();
+  const send = (delivery: string) => sendComposer({ draft, text: "same", files: [], delivery, busy: true, sessionId: "opaque", selected: "", currentAgent: "main", onDraftChange: () => {}, scrollToEnd: () => true, setAgentOpen: () => {}, setBusy: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, setLines: (update: (lines: Line[]) => Line[]) => { draft.lines = update(draft.lines); }, refreshHistory: () => Effect.sync(() => { refreshed++; }), prompt: (request: { messageId: string; delivery: string }) => Effect.promise(() => { requests.push(request); return request.delivery === "QUEUE" ? Promise.resolve("") : completions[requests.filter((item) => item.delivery === "STEER").length - 1].promise; }) });
+  await Effect.runPromise(send("QUEUE"));
+  const first = Effect.runPromise(send("STEER")); await Promise.resolve();
+  const second = Effect.runPromise(send("STEER")); await Promise.resolve();
   expect(draft.lines).toEqual([]);
   expect(draft.parked.map((line) => line.id)).toEqual(requests.slice(1).map((item) => item.messageId));
   expect(new Set(requests.map((item) => item.messageId)).size).toBe(3);
@@ -330,9 +370,9 @@ for (const busy of [false, true]) for (const failure of [false, true]) test(`sta
   let lines: Line[] = [], error = "";
   const busyUpdates: boolean[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = Object.assign(async () => Response.json({ id: "uploaded" }), { preconnect: originalFetch.preconnect });
+  globalThis.fetch = Object.assign(async () => Response.json({ id: "uploaded", name: file.name, mimeType: file.type, size: String(file.size), conversationId: "opaque" }), { preconnect: originalFetch.preconnect });
   try {
-    await sendComposer({ draft, text, files, delivery: "STASH", busy, sessionId: "opaque", selected: "", currentAgent: "main", onDraftChange: () => {}, scrollToEnd: () => true, setAgentOpen: () => {}, setBusy: (value: boolean) => { busyUpdates.push(value); }, setSendError: (value: string) => { error = value; }, setLines: (update: (current: Line[]) => Line[]) => { lines = update(lines); }, prompt: { mutateAsync: async (request: object) => { expect(request).toMatchObject({ text, delivery: "STASH", attachmentIds: ["uploaded"] }); expect(lines).toEqual([]); expect(draft.parked).toEqual([]); if (failure) throw new Error("stash failed"); return ""; } } });
+    await Effect.runPromise(sendComposer({ draft, text, files, delivery: "STASH", busy, sessionId: "opaque", selected: "", currentAgent: "main", onDraftChange: () => {}, scrollToEnd: () => true, setAgentOpen: () => {}, setBusy: (value: boolean) => { busyUpdates.push(value); }, setSendError: (value: string) => { error = value; }, setLines: (update: (current: Line[]) => Line[]) => { lines = update(lines); }, prompt: Effect.fnUntraced(function* (request: object) { expect(request).toMatchObject({ text, delivery: "STASH", attachmentIds: ["uploaded"] }); expect(lines).toEqual([]); expect(draft.parked).toEqual([]); if (failure) return yield* Effect.fail(new Error("stash failed")); return ""; }) }));
     expect(busyUpdates).toEqual([]);
     expect(lines).toEqual([]);
     expect(draft.parked).toEqual([]);
@@ -347,7 +387,7 @@ test("promotion keeps chat unchanged until History confirms consumption", async 
   const completion = Promise.withResolvers<void>();
   const calls: string[] = [];
   let busy = false;
-  const promotion = promoteComposer({ draft: { submission: 0 }, id: "session", itemId: "server-queue-id", busy, steerQueueItem: { mutateAsync: async (request: { itemId: string }) => { calls.push(request.itemId); await completion.promise; } }, setBusy: (value: boolean) => { busy = value; }, setSendError: (error: string) => { expect(error).toBe(""); } });
+  const promotion = Effect.runPromise(promoteComposer({ draft: { submission: 0 }, id: "session", itemId: "server-queue-id", busy, steerQueueItem: (request: { itemId: string }) => Effect.promise(() => { calls.push(request.itemId); return completion.promise; }), setBusy: (value: boolean) => { busy = value; }, setSendError: (error: string) => { expect(error).toBe(""); } }));
   expect(calls).toEqual(["server-queue-id"]);
   expect(busy).toBe(true);
   completion.resolve(); await promotion;
@@ -357,11 +397,11 @@ test("promotion keeps chat unchanged until History confirms consumption", async 
 test("stopping leaves busy status to History, which may already contain a running next turn", async () => {
   const draft = { submission: 0, lines: [], busy: true };
   let reads = 0;
-  await stopComposer({ draft, id: "session", busy: true,
-    prompt: { mutateAsync: async (request: object) => { expect(request).toEqual({ id: "session", text: "$stop" }); } },
-    refreshHistory: async () => { reads++; applyHistoryDelta(draft, view([], { running: true })); },
+  await Effect.runPromise(stopComposer({ draft, id: "session", busy: true,
+    prompt: (request: object) => Effect.sync(() => { expect(request).toEqual({ id: "session", text: "$stop" }); }),
+    refreshHistory: () => Effect.sync(() => { reads++; applyHistoryDelta(draft, view([], { running: true })); }),
     setSendError: (error: string) => { expect(error).toBe(""); },
-  });
+  }));
   expect(reads).toBe(1);
   expect(draft.busy).toBe(true);
 });
@@ -381,7 +421,7 @@ test("uploaded steer attachments stay parked until History confirms the consumed
   const originalFetch = globalThis.fetch;
   globalThis.fetch = Object.assign(async () => Response.json(attachment), { preconnect: originalFetch.preconnect });
   try {
-    await sendComposer({ draft, files: draft.files, text: "", delivery: "STEER", busy: true, sessionId: "opaque", selected: "", currentAgent: "main", onDraftChange: () => {}, scrollToEnd: () => true, setBusy: () => {}, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, setLines: (update: (lines: Line[]) => Line[]) => { draft.lines = update(draft.lines); }, refreshHistory: async () => {}, prompt: { mutateAsync: async (request: { messageId: string; attachmentIds: string[] }) => { expect(request.attachmentIds).toEqual(["uploaded"]); expect(draft.lines).toEqual([]); expect(draft.parked[0].attachments[0]).toMatchObject(attachment); applyHistoryDelta(draft, view([event("turn", "turn:0", "user", "", { inputId: request.messageId, attachments: [attachment] })], { running: true })); return ""; } } });
+    await Effect.runPromise(sendComposer({ draft, files: draft.files, text: "", delivery: "STEER", busy: true, sessionId: "opaque", selected: "", currentAgent: "main", onDraftChange: () => {}, scrollToEnd: () => true, setBusy: () => {}, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, setLines: (update: (lines: Line[]) => Line[]) => { draft.lines = update(draft.lines); }, refreshHistory: () => Effect.void, prompt: (request: { messageId: string; attachmentIds: string[] }) => Effect.sync(() => { expect(request.attachmentIds).toEqual(["uploaded"]); expect(draft.lines).toEqual([]); expect(draft.parked[0].attachments[0]).toMatchObject(attachment); applyHistoryDelta(draft, view([event("turn", "turn:0", "user", "", { inputId: request.messageId, attachments: [attachment] })], { running: true })); return ""; }) }));
     expect(draft.lines).toHaveLength(1);
     expect(draft.lines[0]).toMatchObject({ role: "user", text: "", attachments: [attachment] });
     expect(draft.parked).toEqual([]);

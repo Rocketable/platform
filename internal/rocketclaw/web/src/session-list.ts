@@ -1,3 +1,4 @@
+import { Deferred, Effect, Fiber, Stream } from "effect";
 import { RPCError } from "./api";
 import type { Session, SessionBatch } from "./types";
 
@@ -7,7 +8,7 @@ export const SESSION_HISTORY_CHANNEL = "rocketclaw-session-history";
 const epochs = new Map<string, number>();
 let globalEpoch = 0;
 const pendingSaves = new Map<IDBTransaction, string>();
-const pendingClears = new Map<string, Promise<void>>();
+const pendingClears = new Map<string, Set<Deferred.Deferred<void>>>();
 
 function scopeKey(owner: string, protocol: string) {
   return JSON.stringify([owner, protocol]);
@@ -28,129 +29,131 @@ export function invalidatePendingSaves(owner?: string, protocol?: string) {
   }
   for (const [tx, scope] of pendingSaves) {
     if (key !== undefined && scope !== key) continue;
-    try {
-      tx.abort();
-    } catch (error) {
-      // A commit may finish before its completion event reaches this task.
-      if (!(error instanceof DOMException && error.name === "InvalidStateError")) throw error;
-    }
+    abortTransaction(tx);
   }
 }
 
-function openSnapshots(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+function abortTransaction(tx: IDBTransaction) {
+  try {
+    tx.abort();
+  } catch (error) {
+    // A commit may finish before its completion event reaches this task.
+    if (!(error instanceof DOMException && error.name === "InvalidStateError")) throw error;
+  }
+}
+
+const openSnapshots = Effect.acquireRelease(Effect.callback<IDBDatabase, Error>((resume, signal) => {
+  try {
     const request = indexedDB.open("rocketclaw-session-list", 1);
     request.onupgradeneeded = () => request.result.createObjectStore("snapshots");
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => resume(Effect.fail(request.error!));
+    request.onsuccess = () => {
+      // IDB open cannot be cancelled; close a handle arriving after interruption.
+      if (signal.aborted) request.result.close();
+      else resume(Effect.succeed(request.result));
+    };
+  } catch (error) {
+    resume(Effect.fail(error as Error));
+  }
+}), (db) => Effect.sync(() => db.close()), { interruptible: true });
+
+function snapshotTransaction<A>(db: IDBDatabase, mode: IDBTransactionMode, use: (store: IDBObjectStore) => A): Effect.Effect<A, Error> {
+  return Effect.callback((resume) => {
+    let tx: IDBTransaction | undefined;
+    try {
+      const transaction = tx = db.transaction("snapshots", mode);
+      transaction.onabort = () => {
+        pendingSaves.delete(transaction);
+        resume(Effect.fail(transaction.error ?? new DOMException("Transaction aborted", "AbortError")));
+      };
+      const result = use(transaction.objectStore("snapshots"));
+      transaction.oncomplete = () => { pendingSaves.delete(transaction); resume(Effect.succeed(result)); };
+    } catch (error) {
+      if (tx) abortTransaction(tx);
+      resume(Effect.fail(error as Error));
+    }
+    return Effect.sync(() => {
+      if (tx) { pendingSaves.delete(tx); abortTransaction(tx); }
+    });
   });
 }
 
 // Capture before opening the network enumeration, not when its rows are saved.
 // The string metadata key cannot collide with the [owner, protocol] row key.
-export async function loadSnapshotGeneration(owner: string, protocol: string): Promise<number> {
-  await pendingClears.get(scopeKey(owner, protocol))?.catch(() => {});
-  const db = await openSnapshots();
-  try {
-    return await new Promise((resolve, reject) => {
-      const tx = db.transaction("snapshots", "readonly");
-      const request = tx.objectStore("snapshots").get(scopeKey(owner, protocol));
-      tx.oncomplete = () => resolve(request.result ?? 0);
-      tx.onabort = () => reject(tx.error);
-    });
-  } finally {
-    db.close();
-  }
-}
+export const loadSnapshotGeneration = Effect.fnUntraced(function* (owner: string, protocol: string) {
+  const scope = scopeKey(owner, protocol);
+  yield* Effect.forEach(pendingClears.get(scope) ?? [], Deferred.await, { discard: true });
+  const db = yield* openSnapshots;
+  const request = yield* snapshotTransaction(db, "readonly", (store) => store.get(scope));
+  return (request.result ?? 0) as number;
+}, Effect.scoped);
 
 // The caller must confirm owner with the backend before reading saved rows.
 // IndexedDB supplies origin isolation; the key adds user and protocol isolation.
-export async function loadSavedSessions(owner: string, protocol: string): Promise<Session[] | undefined> {
+export const loadSavedSessions = Effect.fnUntraced(function* (owner: string, protocol: string) {
   const epoch = snapshotEpoch(owner, protocol);
-  const db = await openSnapshots();
-  try {
-    if (epoch !== snapshotEpoch(owner, protocol)) {
-      return undefined;
-    }
-    return await new Promise((resolve, reject) => {
-      const tx = db.transaction("snapshots", "readonly");
-      const request = tx.objectStore("snapshots").get([owner, protocol]);
-      tx.oncomplete = () => resolve(epoch === snapshotEpoch(owner, protocol) ? request.result?.map((row: Session) => row.running ? { ...row, running: false } : row) : undefined);
-      tx.onabort = () => reject(tx.error);
-    });
-  } finally {
-    db.close();
-  }
-}
+  const db = yield* openSnapshots;
+  if (epoch !== snapshotEpoch(owner, protocol)) return undefined;
+  const request = yield* snapshotTransaction(db, "readonly", (store) => store.get([owner, protocol]));
+  return epoch === snapshotEpoch(owner, protocol) ? (request.result as Session[] | undefined)?.map((row) => row.running ? { ...row, running: false } : row) : undefined;
+}, Effect.scoped);
 
 // Only a successfully exhausted, summary-complete enumeration may be saved.
 // Resolve on transaction completion: request success alone is not a commit.
-export async function saveCompleteSessions(owner: string, protocol: string, rows: Session[], generation: number | undefined): Promise<void> {
+export const saveCompleteSessions = Effect.fnUntraced(function* (owner: string, protocol: string, rows: Session[], generation: number | undefined) {
   if (generation === undefined) return; // Storage was unavailable before enumeration.
   invalidatePendingSaves(owner, protocol);
   const epoch = snapshotEpoch(owner, protocol);
-  await pendingClears.get(scopeKey(owner, protocol))?.catch(() => {});
-  const db = await openSnapshots();
-  try {
-    if (epoch !== snapshotEpoch(owner, protocol)) {
-      return;
-    }
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction("snapshots", "readwrite");
-      pendingSaves.set(tx, scopeKey(owner, protocol));
-      tx.oncomplete = () => { pendingSaves.delete(tx); resolve(); };
-      tx.onabort = () => { pendingSaves.delete(tx); reject(tx.error); };
-      const store = tx.objectStore("snapshots");
-      const request = store.get(scopeKey(owner, protocol));
-      request.onsuccess = () => {
-        // Read/check/write share a transaction: a paused tab cannot overwrite
-        // a deletion even if its BroadcastChannel notification is still queued.
-        if ((request.result ?? 0) === generation) store.put(rows, [owner, protocol]);
-      };
-    });
-  } finally {
-    db.close();
-  }
-}
+  const scope = scopeKey(owner, protocol);
+  yield* Effect.forEach(pendingClears.get(scope) ?? [], Deferred.await, { discard: true });
+  const db = yield* openSnapshots;
+  if (epoch !== snapshotEpoch(owner, protocol)) return;
+  yield* snapshotTransaction(db, "readwrite", (store) => {
+    pendingSaves.set(store.transaction, scope);
+    const request = store.get(scope);
+    request.onsuccess = () => {
+      // Read/check/write share a transaction: a paused tab cannot overwrite
+      // a deletion even if its BroadcastChannel notification is still queued.
+      if ((request.result ?? 0) === generation) store.put(rows, [owner, protocol]);
+    };
+  });
+}, Effect.scoped);
 
 // History deletion retains the discoverable conversation and its routing data.
 // Invalidate first so a delayed save cannot resurrect the preview after this commit.
-export async function clearSavedSessionHistory(owner: string, protocol: string, id: string): Promise<void> {
+export const clearSavedSessionHistory = Effect.fnUntraced(function* (owner: string, protocol: string, id: string) {
   invalidatePendingSaves(owner, protocol);
   const scope = scopeKey(owner, protocol);
-  const clearing = Promise.resolve(pendingClears.get(scope)).catch(() => {}).then(async () => {
-    const db = await openSnapshots();
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const tx = db.transaction("snapshots", "readwrite");
-        tx.oncomplete = () => resolve();
-        tx.onabort = () => reject(tx.error);
-        const store = tx.objectStore("snapshots");
-        const generation = store.get(scope);
-        generation.onsuccess = () => store.put((generation.result ?? 0) + 1, scope);
-        const key = [owner, protocol];
-        const request = store.get(key);
-        request.onsuccess = () => {
-          const rows: Session[] | undefined = request.result;
-          if (rows !== undefined) {
-            store.put(stripSessionHistory(rows, id), key);
-          }
-        };
-      });
-    } finally {
-      db.close();
-    }
+  const { previous } = yield* Effect.acquireRelease(Effect.sync(() => {
+    const pending = pendingClears.get(scope) ?? new Set<Deferred.Deferred<void>>();
+    const previous = [...pending];
+    const clearing = Deferred.makeUnsafe<void>();
+    pending.add(clearing);
+    pendingClears.set(scope, pending);
+    return { pending, previous, clearing };
+  }), ({ pending, clearing }) => Effect.sync(() => {
+    pending.delete(clearing);
+    if (pending.size === 0) pendingClears.delete(scope);
+    Deferred.doneUnsafe(clearing, Effect.void);
+  }));
+  yield* Effect.forEach(previous, Deferred.await, { discard: true });
+  const db = yield* openSnapshots;
+  yield* snapshotTransaction(db, "readwrite", (store) => {
+    const generation = store.get(scope);
+    generation.onsuccess = () => store.put((generation.result ?? 0) + 1, scope);
+    const key = [owner, protocol];
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const rows: Session[] | undefined = request.result;
+      if (rows !== undefined) store.put(stripSessionHistory(rows, id), key);
+    };
   });
-  pendingClears.set(scope, clearing);
-  try {
-    await clearing;
+  yield* Effect.try(() => {
     const channel = new BroadcastChannel(SESSION_HISTORY_CHANNEL);
-    channel.postMessage({ owner, protocol, id });
-    channel.close();
-  } finally {
-    if (pendingClears.get(scope) === clearing) pendingClears.delete(scope);
-  }
-}
+    try { channel.postMessage({ owner, protocol, id }); }
+    finally { channel.close(); }
+  });
+}, Effect.scoped);
 
 export function mergeSessionRows(baseline: Session[], received: Session[]): Session[] {
   const seen = new Set(received.map((row) => row.id));
@@ -173,73 +176,61 @@ export function rowPreview(session: Session, loading: boolean): string {
   return session.preview || (loading ? MISSING_SUMMARY : "");
 }
 
-export type EnumerationResult = {
-  received: Session[];
-  upstreamSuccess: boolean;
-  summariesComplete: boolean;
-  exhausted: boolean;
-  // An owner mismatch or explicit authentication rejection requires live identity revalidation.
-  mismatch: boolean;
-};
-
-export async function readSessionEnumeration(
+export const readSessionEnumeration = Effect.fnUntraced(function* (
   owner: string,
-  batches: AsyncIterable<SessionBatch> | Promise<AsyncIterable<SessionBatch>>,
+  batches: Stream.Stream<SessionBatch, Error>,
   baseline: () => Session[],
   onProgress: (rows: Session[], summaries: ReadonlyMap<string, boolean>, summariesComplete: boolean) => void,
-  signal?: AbortSignal,
-): Promise<EnumerationResult> {
+) {
   const byID = new Map<string, Session>();
   const summaries = new Map<string, boolean>();
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timer: Fiber.Fiber<void> | undefined;
   let published = false;
   let dirty = false;
   let upstreamSuccess = false;
   let summariesComplete = true;
   let exhausted = false;
   let mismatch = false;
-  const cancel = () => clearTimeout(timer);
-  const flush = () => {
+  const flush = Effect.sync(() => {
     timer = undefined;
-    if (!dirty || signal?.aborted || mismatch) return;
+    if (!dirty || mismatch) return;
     dirty = false;
     published ||= byID.size > 0;
     onProgress(mergeSessionRows(baseline(), [...byID.values()]), new Map(summaries), summariesComplete);
     summaries.clear();
-  };
-  signal?.addEventListener("abort", cancel, { once: true });
-  try {
-    for await (const batch of await batches) {
-      if (signal?.aborted) break;
-      if (batch.owner !== owner) {
-        mismatch = true;
-        upstreamSuccess = summariesComplete = false;
-        break;
-      }
-      for (const row of batch.sessions) {
-        byID.set(row.id, row);
-        summaries.set(row.id, batch.summariesComplete);
-      }
-      upstreamSuccess = batch.upstreamSuccess;
-      summariesComplete &&= batch.summariesComplete;
-      dirty = true;
-      // First useful row is immediate; subsequent display work coalesces over
-      // 16 ms without awaiting the timer or slowing transport consumption.
-      // Full-list work remains per publication; incremental rendering is the
-      // next step if even frame-sized publications become too expensive.
-      if (!published && byID.size > 0) {
-        cancel();
-        flush();
-      } else if (timer === undefined) timer = setTimeout(flush, 16);
+  });
+  const reading = yield* Effect.forkScoped(Stream.runForEachWhile(batches, Effect.fnUntraced(function* (batch) {
+    if (batch.owner !== owner) {
+      mismatch = true;
+      upstreamSuccess = summariesComplete = false;
+      return false;
     }
-    exhausted = !mismatch && !signal?.aborted;
-  } catch (error) {
-    mismatch = error instanceof RPCError && error.code === 16;
-    // Retain the received prefix, but failed streams cannot promote a snapshot.
-  } finally {
-    cancel();
-    signal?.removeEventListener("abort", cancel);
-  }
-  flush();
+    for (const row of batch.sessions) {
+      byID.set(row.id, row);
+      summaries.set(row.id, batch.summariesComplete);
+    }
+    upstreamSuccess = batch.upstreamSuccess;
+    summariesComplete &&= batch.summariesComplete;
+    dirty = true;
+    // First useful row is immediate; subsequent display work coalesces over
+    // 16 ms without awaiting the timer or slowing transport consumption.
+    // Full-list work remains per publication; incremental rendering is the
+    // next step if even frame-sized publications become too expensive.
+    if (!published && byID.size > 0) {
+      if (timer) yield* Fiber.interrupt(timer);
+      yield* flush;
+    } else if (timer === undefined) timer = yield* Effect.forkScoped(Effect.sleep(16).pipe(Effect.andThen(flush)));
+    return true;
+  })).pipe(
+    Effect.tap(() => Effect.sync(() => { exhausted = !mismatch; })),
+    Effect.catch((error) => Effect.sync(() => {
+      // An owner mismatch or authentication rejection requires live identity revalidation.
+      mismatch = error instanceof RPCError && error.code === 16;
+      // Retain the received prefix, but failed streams cannot promote a snapshot.
+    })),
+  ));
+  // Cancel display work before waiting for potentially asynchronous transport cleanup.
+  yield* Fiber.join(reading).pipe(Effect.ensuring(Effect.suspend(() => timer ? Fiber.interrupt(timer) : Effect.void)));
+  yield* flush;
   return { received: [...byID.values()], upstreamSuccess, summariesComplete, exhausted, mismatch };
-}
+}, Effect.scoped);

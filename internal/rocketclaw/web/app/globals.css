@@ -2,6 +2,9 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+/* Effect bundles an unrelated API-reference UI; its classes are not SPA sources. */
+@source not "../node_modules/effect";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

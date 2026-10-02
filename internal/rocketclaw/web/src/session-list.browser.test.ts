@@ -9,10 +9,30 @@ const screenshots = path.resolve(import.meta.dir, "../../../../.tmp/web-screensh
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 
-test.skipIf(!playwright || !chromium)("saved sidebar snapshots isolate owners and commit atomically", async () => {
-  const build = await Bun.build({ entrypoints: ["./src/session-list.ts"], target: "browser" });
+async function storageScript() {
+  const build = await Bun.build({ entrypoints: ["storage-harness"], target: "browser", plugins: [{
+    name: "storage-harness",
+    setup(build) {
+      build.onResolve({ filter: /^storage-harness$/ }, () => ({ path: "storage-harness", namespace: "storage-harness" }));
+      build.onLoad({ filter: /.*/, namespace: "storage-harness" }, () => ({
+        loader: "ts", resolveDir: import.meta.dir,
+        contents: `
+          import { Effect, Fiber } from "effect";
+          import * as effects from ${JSON.stringify(path.resolve(import.meta.dir, "session-list.ts"))};
+          export { Effect, Fiber, effects };
+          export { invalidatePendingSaves } from ${JSON.stringify(path.resolve(import.meta.dir, "session-list.ts"))};
+          ${["loadSnapshotGeneration", "loadSavedSessions", "saveCompleteSessions", "clearSavedSessionHistory"].map((name) =>
+            `export const ${name} = (...args: Parameters<typeof effects.${name}>) => Effect.runPromise(effects.${name}(...args));`).join("\n")}
+        `,
+      }));
+    },
+  }] });
   expect(build.success).toBe(true);
-  const script = await build.outputs[0].text();
+  return build.outputs[0].text();
+}
+
+test.skipIf(!playwright || !chromium)("saved sidebar snapshots isolate owners and commit atomically", async () => {
+  const script = await storageScript();
   const { chromium: engine } = await import(playwright!);
   let browser;
   const server = Bun.serve({
@@ -52,15 +72,27 @@ test.skipIf(!playwright || !chromium)("saved sidebar snapshots isolate owners an
       } finally {
         IDBObjectStore.prototype.put = put;
       }
+      const open = IDBFactory.prototype.open;
+      IDBFactory.prototype.open = () => { throw new DOMException("Storage unavailable", "SecurityError"); };
+      let unavailable;
+      try {
+        unavailable = await Promise.all([
+          storage.effects.loadSnapshotGeneration("a", "v1"), storage.effects.loadSavedSessions("a", "v1"),
+          storage.effects.saveCompleteSessions("a", "v1", rows, 0), storage.effects.clearSavedSessionHistory("a", "v1", "one"),
+        ].map((effect) => storage.Effect.runPromise(effect.pipe(storage.Effect.catch(() => storage.Effect.succeed("unavailable"))))));
+      } finally {
+        IDBFactory.prototype.open = open;
+      }
       return {
         rejected,
         deletionRejected,
+        unavailable,
         generation: await storage.loadSnapshotGeneration("a", "v1"),
         ownerMiss: await storage.loadSavedSessions("b", "v1") === undefined,
         protocolMiss: await storage.loadSavedSessions("a", "v2") === undefined,
       };
     });
-    expect(initial).toEqual({ rejected: true, deletionRejected: true, generation: 0, ownerMiss: true, protocolMiss: true });
+    expect(initial).toEqual({ rejected: true, deletionRejected: true, unavailable: Array(4).fill("unavailable"), generation: 0, ownerMiss: true, protocolMiss: true });
     await page.reload();
     const restored = await page.evaluate(async () => {
       const path = "/session-list.js";
@@ -84,9 +116,7 @@ test.skipIf(!playwright || !chromium)("saved sidebar snapshots isolate owners an
 }, 30_000);
 
 test.skipIf(!playwright || !chromium)("pending saves, delayed hydration and owner switches cannot beat deletion or leak owners", async () => {
-  const build = await Bun.build({ entrypoints: ["./src/session-list.ts"], target: "browser" });
-  expect(build.success).toBe(true);
-  const script = await build.outputs[0].text();
+  const script = await storageScript();
   const { chromium: engine } = await import(playwright!);
   const server = Bun.serve({
     hostname: "127.0.0.1", port: 0,
@@ -163,25 +193,29 @@ test.skipIf(!playwright || !chromium)("pending saves, delayed hydration and owne
       switchGate.release();
       await pendingOwnerSave;
 
-      // Keep a real write transaction active while the owner is invalidated.
-      const put = IDBObjectStore.prototype.put;
-      const writing = Promise.withResolvers<void>();
-      let holdTransaction = true;
-      IDBObjectStore.prototype.put = function (...args) {
-        IDBObjectStore.prototype.put = put;
-        const request = put.apply(this, args);
-        const keepActive = () => {
-          writing.resolve();
-          if (holdTransaction) this.get(["owner", "protocol"]).onsuccess = keepActive;
+      // Keep real writes active through both owner invalidation and fiber interruption.
+      for (const cancel of ["invalidate", "interrupt"]) {
+        const put = IDBObjectStore.prototype.put;
+        const writing = Promise.withResolvers<void>();
+        let holdTransaction = true;
+        IDBObjectStore.prototype.put = function (...args) {
+          IDBObjectStore.prototype.put = put;
+          const request = put.apply(this, args);
+          const keepActive = () => {
+            writing.resolve();
+            if (holdTransaction) this.get(["owner", "protocol"]).onsuccess = keepActive;
+          };
+          request.addEventListener("success", keepActive);
+          return request;
         };
-        request.addEventListener("success", keepActive);
-        return request;
-      };
-      const activeSave = storage.saveCompleteSessions("owner", "protocol", [{ id: "synthetic", preview: "uncommitted owner preview" }], activeGeneration).catch(() => {});
-      await writing.promise;
-      storage.invalidatePendingSaves("owner", "protocol");
-      holdTransaction = false;
-      await activeSave;
+        const activeSave = storage.Effect.runFork(storage.effects.saveCompleteSessions("owner", "protocol", [{ id: "synthetic", preview: "uncommitted owner preview" }], activeGeneration));
+        await writing.promise;
+        if (cancel === "invalidate") storage.invalidatePendingSaves("owner", "protocol");
+        else await storage.Effect.runPromise(storage.Fiber.interrupt(activeSave));
+        holdTransaction = false;
+        await storage.Effect.runPromise(storage.Fiber.await(activeSave));
+        if ((await storage.loadSavedSessions("owner", "protocol"))[0].preview !== "") throw new Error("Cancelled write committed");
+      }
       const olderGate = holdOpen();
       const olderSave = storage.saveCompleteSessions("ordering", "protocol", [{ id: "row", preview: "older" }], 0);
       await olderGate.held;
@@ -189,6 +223,28 @@ test.skipIf(!playwright || !chromium)("pending saves, delayed hydration and owne
       olderGate.release();
       await olderSave;
       const newest = await storage.loadSavedSessions("ordering", "protocol");
+      // All storage effects must close handles returned after open is interrupted.
+      for (const operation of [
+        storage.effects.loadSnapshotGeneration("ordering", "protocol"), storage.effects.loadSavedSessions("ordering", "protocol"),
+        storage.effects.saveCompleteSessions("ordering", "protocol", [{ id: "row", preview: "cancelled" }], 0),
+        storage.effects.clearSavedSessionHistory("ordering", "protocol", "row"),
+      ]) {
+        const close = IDBDatabase.prototype.close;
+        const closed = Promise.withResolvers<void>();
+        IDBDatabase.prototype.close = function () { close.call(this); closed.resolve(); };
+        const gate = holdOpen();
+        try {
+          const fiber = storage.Effect.runFork(operation);
+          await gate.held;
+          await storage.Effect.runPromise(storage.Fiber.interrupt(fiber));
+          gate.release();
+          await closed.promise;
+        } finally {
+          gate.release();
+          IDBDatabase.prototype.close = close;
+        }
+      }
+      const afterInterruptions = await storage.loadSavedSessions("ordering", "protocol");
       const deleteGate = holdOpen();
       const pendingDelete = storage.clearSavedSessionHistory("ordering", "protocol", "row");
       await deleteGate.held;
@@ -200,6 +256,7 @@ test.skipIf(!playwright || !chromium)("pending saves, delayed hydration and owne
       await Promise.all([pendingDelete, postDeleteSave]);
       return {
         newest,
+        afterInterruptions,
         postDelete: await storage.loadSavedSessions("ordering", "protocol"),
         afterDelete: afterDelete[0].preview,
         afterOldSave: afterOldSave[0].preview,
@@ -211,6 +268,7 @@ test.skipIf(!playwright || !chromium)("pending saves, delayed hydration and owne
     });
     expect(result).toEqual({
       newest: [{ id: "row", preview: "newer" }],
+      afterInterruptions: [{ id: "row", preview: "newer" }],
       postDelete: [{ id: "row", preview: "after deletion" }],
       afterDelete: "",
       afterOldSave: "",
@@ -254,11 +312,12 @@ test.skipIf(!playwright || !chromium || !built)("actual App renders independent 
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "public-progress-test" });
       case "/api/Identity": return Response.json({ username: "alice" });
-      case "/api/History": return Response.json({ messages: input.revision === String(revision) ? [] : messages, revision: String(revision), reset: !input.revision, replacedKeys: input.revision === String(revision) ? [] : ["producer-turn"], removedKeys: [], entryKeys: ["producer-turn"], running, terminal: "" });
+      case "/api/History": return Response.json({ messages: input.revision === String(revision) ? [] : messages, origin: "", delegations: [], revision: String(revision), reset: !input.revision, replacedKeys: input.revision === String(revision) ? [] : ["producer-turn"], removedKeys: [], entryKeys: ["producer-turn"], running, terminal: "" });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main", model: "root/model" }], currentAgent: "main" });
       case "/api/ListConfig": return Response.json({ config: {} });
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/ListSkills": return Response.json({ skills: [] });
+      case "/api/ListCronJobs": return Response.json({ jobs: [] });
       case "/api/Prompt": expect(input.text).toBe("$stop"); running = false; revision++; return Response.json({ privateText: "" });
       default: return Response.json({});
     }
@@ -382,7 +441,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     const entryKeys = [...new Set(messages.map((message) => message.entryKey))];
     const replacedKeys = entryKeys.filter((key) => !revision || JSON.stringify(messages.filter((message) => message.entryKey === key)) !== JSON.stringify(previous.filter((message) => message.entryKey === key)));
     const removedKeys = [...new Set(previous.map((message) => message.entryKey))].filter((key) => !entryKeys.includes(key));
-    return Response.json({ messages: messages.filter((message) => replacedKeys.includes(message.entryKey)), origin, revision: JSON.stringify({ messages, running: ctrl.running }), reset: !revision, replacedKeys, removedKeys, entryKeys, running: ctrl.running, terminal: "" });
+    return Response.json({ messages: messages.filter((message) => replacedKeys.includes(message.entryKey)), origin, delegations: [], revision: JSON.stringify({ messages, running: ctrl.running }), reset: !revision, replacedKeys, removedKeys, entryKeys, running: ctrl.running, terminal: "" });
   };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(req) {
     const url = new URL(req.url);
@@ -1076,6 +1135,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await page.getByPlaceholder("Message or $command").fill("held in A");
     await page.getByRole("button", { name: "Send" }).click();
     await ctrl.promptStarted.promise;
+    // This fixture shares one History flag; B is idle while A's prompt is held.
+    ctrl.running = false;
     await page.getByRole("link").filter({ hasText: "will vanish" }).click();
     await page.waitForURL("**/s/Z29uZQ");
     await page.getByPlaceholder("Message or $command").fill("B draft");
@@ -1470,7 +1531,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     }
     const matrix = await context.newPage();
     const suggestionAgents = [{ name: "main", model: "gpt" }, ...Array.from({ length: 10 }, (_, i) => ({ name: `agent${i}` })), { name: "other", model: "gpt" }];
-    await matrix.route("**/api/ListAgents", (route: { fulfill(options: { json: unknown }): Promise<void> }) => route.fulfill({ json: { agents: suggestionAgents } }));
+    await matrix.route("**/api/ListAgents", (route: { fulfill(options: { json: unknown }): Promise<void> }) => route.fulfill({ json: { agents: suggestionAgents, currentAgent: "" } }));
     await matrix.goto(origin);
     await matrix.locator("#session-sidebar").getByText("Winner", { exact: true }).waitFor();
     const matrixDialog = matrix.getByRole("dialog", { name: "Go to session", exact: true });
@@ -1666,7 +1727,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     const catalogGate = Promise.withResolvers<void>();
     await pendingPage.route("**/api/ListAgents", async (route: { fulfill(options: { json: unknown }): Promise<void> }) => {
       await catalogGate.promise;
-      await route.fulfill({ json: { agents: suggestionAgents } });
+      await route.fulfill({ json: { agents: suggestionAgents, currentAgent: "" } });
     });
     await pendingPage.goto(origin);
     await shown(pendingPage.locator("#session-sidebar"), "matching active");
@@ -1687,7 +1748,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await pendingDialog.getByRole("button", { name: "agent:main", exact: true }).waitFor();
     await pendingPage.close();
     const settledPage = await context.newPage();
-    await settledPage.route("**/api/ListAgents", (route: { fulfill(options: { json: unknown }): Promise<void> }) => route.fulfill({ json: { agents: suggestionAgents } }));
+    await settledPage.route("**/api/ListAgents", (route: { fulfill(options: { json: unknown }): Promise<void> }) => route.fulfill({ json: { agents: suggestionAgents, currentAgent: "" } }));
     await settledPage.goto(origin);
     const settledSidebar = settledPage.locator("#session-sidebar");
     await shown(settledSidebar, "matching active");

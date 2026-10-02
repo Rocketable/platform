@@ -1,81 +1,126 @@
-import type { AgentChoices, ChatOrigin, ConfigView, CronJob, HistoryView, MessageMatch, PromptDelivery, QueueItem, SessionBatch, Skill, TranscriptEvent } from "./types";
+import { Data, Effect, Schema, Stream } from "effect";
+import { Sse } from "effect/encoding";
+import { AgentChoices, Attachment, ChatOrigin, ConfigView, CronJob, HistoryView, MessageMatch, PromptDelivery, QueueItem, SessionBatch, SessionEntryData, SessionEntryMeta, Skill, TranscriptEvent } from "./types";
 
-export class RPCError extends Error {
-  constructor(message: string, readonly code: number) { super(message); }
+const RPCErrorSchema = Schema.Struct({ message: Schema.String, code: Schema.Number });
+export class RPCError extends Data.TaggedError("RPCError")<typeof RPCErrorSchema.Type> {
+  constructor(message: string, code: number) { super({ message, code }); }
 }
 
-export async function rpc<T>(method: string, input: object = {}, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(`/api/${method}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input), signal });
-  const body = await response.json();
-  if (!response.ok) throw new RPCError(body.message, body.code);
+const responses = {
+  SearchMessages: Schema.Struct({ matches: Schema.mutable(Schema.Array(MessageMatch)) }),
+  Protocol: Schema.Struct({ protoSha256: Schema.String }),
+  Identity: Schema.Struct({ username: Schema.String }),
+  ListAgents: AgentChoices,
+  ListSkills: Schema.Struct({ skills: Schema.mutable(Schema.Array(Skill)) }),
+  ListCronJobs: Schema.Struct({ jobs: Schema.mutable(Schema.Array(CronJob)) }),
+  ListConfig: Schema.Struct({ config: ConfigView }),
+  History: Schema.Struct({ ...HistoryView.fields, origin: Schema.String }),
+  ListQueue: Schema.Struct({ items: Schema.mutable(Schema.Array(QueueItem)) }),
+  ForkSession: Schema.Struct({ id: Schema.String, prompt: TranscriptEvent }),
+  CreateSession: Schema.Struct({ id: Schema.String }),
+  Prompt: Schema.Struct({ privateText: Schema.String }),
+  RunCronJob: Schema.Struct({ id: Schema.String }),
+  Handoff: Schema.Struct({ document: Schema.String }),
+  ListSessionEntries: Schema.Struct({ entries: Schema.mutable(Schema.Array(SessionEntryMeta)) }),
+  LoadSessionEntries: Schema.Struct({ entries: Schema.mutable(Schema.Array(SessionEntryData)) }),
+  DeleteSessionEntries: Schema.Struct({ deleted: Schema.String }),
+  AnswerQuestion: Schema.Struct({}), SettleSession: Schema.Struct({}), UpdateSession: Schema.Struct({}),
+  RemoveQueueItem: Schema.Struct({}), SteerQueueItem: Schema.Struct({}), PopQueueItem: Schema.Struct({}), ReorderQueue: Schema.Struct({}),
+};
+
+const toError = (cause: unknown): Error => cause instanceof Error ? cause : new Error(String(cause));
+const failRPC = Effect.fnUntraced(function*(body: unknown) {
+  const error = yield* Schema.decodeUnknownEffect(RPCErrorSchema)(body);
+  return yield* Effect.fail(new RPCError(error.message, error.code));
+});
+
+const requestJson = Effect.fnUntraced(function*(url: string, init: RequestInit) {
+  // Keep the fetch signal alive through body consumption, not just headers.
+  const { ok, body } = yield* Effect.tryPromise({
+    try: async (signal) => {
+      const response = await fetch(url, { ...init, signal });
+      return { ok: response.ok, body: await response.json() as unknown };
+    },
+    catch: toError,
+  });
+  if (!ok) return yield* failRPC(body);
   return body;
+});
+
+export function rpc<M extends keyof typeof responses>(method: M, input?: object): Effect.Effect<(typeof responses)[M]["Type"], Error>;
+export function rpc(method: keyof typeof responses, input: object = {}): Effect.Effect<unknown, Error> {
+  const schema: Schema.Decoder<unknown> = responses[method];
+  return Effect.suspend(() => requestJson(`/api/${method}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(schema))));
 }
 
 // Completion belongs to the transport, not the terminal snapshot's flag.
 // Read through EOF so errors after the terminal snapshot cannot commit a cache.
-export async function* listSessions(signal?: AbortSignal, url = "/api/ListSessions"): AsyncGenerator<SessionBatch> {
-  const response = await fetch(url, { signal });
-  if (!response.ok) {
-    const body = await response.json();
-    throw new RPCError(body.message, body.code);
-  }
-  const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
-  let pending = "", complete = false;
-  try {
-    for (;;) {
-      signal?.throwIfAborted();
-      const { value, done } = await reader.read();
-      if (done) break;
-      pending += value;
-      let boundary: number;
-      while ((boundary = pending.indexOf("\n\n")) >= 0) {
-        const frame = pending.slice(0, boundary);
-        pending = pending.slice(boundary + 2);
-        let event = "message";
-        const data: string[] = [];
-        for (const line of frame.split("\n")) {
-          if (line.startsWith("event:")) event = line.slice(6).trim();
-          if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
-        }
-        if (!data.length) continue;
-        const body = JSON.parse(data.join("\n"));
-        if (event === "error") throw new RPCError(body.message, body.code);
-        if (event === "complete") complete = true;
-        else if (event === "message") yield body;
-      }
-    }
-    signal?.throwIfAborted();
-    if (!complete) throw new Error("Session stream ended without completion");
-  } finally {
-    await reader.cancel();
-    reader.releaseLock();
-  }
+export function listSessions(url = "/api/ListSessions"): Stream.Stream<SessionBatch, Error> {
+  return Stream.unwrap(Effect.gen(function*() {
+    const controller = yield* Effect.acquireRelease(Effect.sync(() => new AbortController()), (controller) => Effect.sync(() => controller.abort()));
+    const response = yield* Effect.tryPromise({ try: () => fetch(url, { signal: controller.signal }), catch: toError });
+    if (!response.ok) return yield* failRPC(yield* Effect.tryPromise({ try: () => response.json(), catch: toError }));
+    if (!response.body) return yield* Effect.fail(new Error("Session stream ended without completion"));
+    let complete = false;
+    return Stream.fromReadableStream({ evaluate: () => response.body!, onError: toError }).pipe(
+      Stream.decodeText(),
+      Stream.pipeThroughChannel(Sse.decode({ maxEventSize: Infinity })),
+      Stream.mapError(toError),
+      Stream.flatMap((event) => {
+        if (event.event === "error") return Stream.fromEffect(Schema.decodeUnknownEffect(Schema.fromJsonString(RPCErrorSchema))(event.data).pipe(Effect.flatMap((error) => Effect.fail(new RPCError(error.message, error.code)))));
+        if (event.event === "complete") return Stream.fromEffectDrain(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Struct({})))(event.data).pipe(Effect.tap(() => Effect.sync(() => { complete = true; }))));
+        if (event.event === "message") return Stream.fromEffect(Schema.decodeUnknownEffect(Schema.fromJsonString(SessionBatch))(event.data));
+        return Stream.empty;
+      }),
+      Stream.concat(Stream.fromEffectDrain(Effect.suspend(() => complete ? Effect.void : Effect.fail(new Error("Session stream ended without completion"))))),
+    );
+  }));
 }
 
 export const queries = {
-  searchMessages: (query: string) => ({ queryKey: ["searchMessages", query], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ matches: MessageMatch[] }>("SearchMessages", { query }, signal)).matches }),
-  protocol: () => ({ queryKey: ["protocol"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ protoSha256: string }>("Protocol", {}, signal)).protoSha256 }),
-  identity: () => ({ queryKey: ["identity"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ username: string }>("Identity", {}, signal)).username }),
-  agents: (input?: { conversationId: string }) => ({ queryKey: ["agents", input], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<AgentChoices>("ListAgents", input, signal) }),
-  skills: (input?: { agent: string }) => ({ queryKey: ["skills", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ skills: Skill[] }>("ListSkills", input, signal)).skills }),
-  cronJobs: () => ({ queryKey: ["cronJobs"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ jobs: CronJob[] }>("ListCronJobs", {}, signal)).jobs }),
-  config: () => ({ queryKey: ["config"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ config: ConfigView }>("ListConfig", {}, signal)).config }),
-  history: (input: { id: string; sourceConversationId?: string; originOnly?: boolean; revision?: string }) => ({ queryKey: ["history", input], queryFn: async ({ signal }: { signal?: AbortSignal }): Promise<HistoryView> => {
-    const body = await rpc<Omit<HistoryView, "origin"> & { origin: string }>("History", input, signal);
-    return { ...body, origin: body.origin ? JSON.parse(body.origin) as ChatOrigin : undefined };
-  } }),
-  queue: (input: { id: string }) => ({ queryKey: ["queue", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ items: QueueItem[] }>("ListQueue", input, signal)).items }),
+  searchMessages: (query: string) => rpc("SearchMessages", { query }).pipe(Effect.map((body) => body.matches)),
+  protocol: () => rpc("Protocol").pipe(Effect.map((body) => body.protoSha256)),
+  identity: () => rpc("Identity").pipe(Effect.map((body) => body.username)),
+  agents: (input?: { conversationId: string }) => rpc("ListAgents", input),
+  skills: (input?: { agent: string }) => rpc("ListSkills", input).pipe(Effect.map((body) => body.skills)),
+  cronJobs: () => rpc("ListCronJobs").pipe(Effect.map((body) => body.jobs)),
+  config: () => rpc("ListConfig").pipe(Effect.map((body) => body.config)),
+  history: Effect.fnUntraced(function*(input: { id: string; sourceConversationId?: string; originOnly?: boolean; revision?: string }): Effect.fn.Return<HistoryView, Error> {
+    const body = yield* rpc("History", input);
+    const origin = body.origin ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ChatOrigin))(body.origin) : undefined;
+    return { ...body, origin };
+  }),
+  queue: (input: { id: string }) => rpc("ListQueue", input).pipe(Effect.map((body) => body.items)),
 };
 
 export const mutations = {
-  forkSession: (input: { id: string; before?: string }) => rpc<{ id: string; prompt: TranscriptEvent }>("ForkSession", input),
+  forkSession: (input: { id: string; before?: string }) => rpc("ForkSession", input),
   popQueueItem: (input: { id: string; itemId: string }) => rpc("PopQueueItem", input),
-  createSession: async (input: { name?: string; agent?: string; sourceConversationId?: string }) => (await rpc<{ id: string }>("CreateSession", input)).id,
-  prompt: async (input: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string }) => (await rpc<{ privateText: string }>("Prompt", input)).privateText,
-  runCron: async (input: { stem: string }) => (await rpc<{ id: string }>("RunCronJob", input)).id,
+  createSession: (input: { name?: string; agent?: string; sourceConversationId?: string }) => rpc("CreateSession", input).pipe(Effect.map((body) => body.id)),
+  prompt: (input: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string }) => rpc("Prompt", input).pipe(Effect.map((body) => body.privateText)),
+  runCron: (input: { stem: string }) => rpc("RunCronJob", input).pipe(Effect.map((body) => body.id)),
   settleSession: (input: { id: string; settled: boolean }) => rpc("SettleSession", input),
   updateSession: (input: { id: string; pinned?: boolean; name?: string; snoozedUntil?: string }) => rpc("UpdateSession", input),
   removeQueueItem: (input: { id: string; itemId: string }) => rpc("RemoveQueueItem", input),
   steerQueueItem: (input: { id: string; itemId: string }) => rpc("SteerQueueItem", input),
   reorderQueue: (input: { id: string; itemIds: string[] }) => rpc("ReorderQueue", input),
 };
+
+export const uploadAttachment = (conversationId: string, file: File): Effect.Effect<Attachment, Error> => Effect.tryPromise({
+  try: async (signal) => {
+    const response = await fetch(`/api/UploadAttachment?${new URLSearchParams({ conversationId, name: file.name })}`, { method: "POST", body: file, signal });
+    if (!response.ok) throw new Error(`Upload failed: ${file.name}`);
+    return await response.json() as unknown;
+  },
+  catch: toError,
+}).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Attachment)));
+
+export const downloadAttachment = (file: Attachment): Effect.Effect<File, Error> => Effect.tryPromise({
+  try: async (signal) => {
+    const response = await fetch(`/api/DownloadAttachment?${new URLSearchParams({ conversationId: file.conversationId, id: file.id })}`, { signal });
+    if (!response.ok) throw new Error(`Could not restore ${file.name}`);
+    return new File([await response.blob()], file.name, { type: file.mimeType });
+  },
+  catch: toError,
+});

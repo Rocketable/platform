@@ -29,6 +29,59 @@ The frontend is a client-side React SPA. Bun builds static assets directly into
 CSS, and a self-hosted Inter font. `cmd/rocketclaw` embeds and serves that directory
 alongside the Go HTTP API. Production needs no Bun, Node, or Next server.
 
+This research branch ports the frontend data and async layer to **Effect 4.0.0**
+and `@effect/atom-react` 4.0.0. React still renders the UI. Effect atoms replace
+TanStack Query for shared requests, mutations, refreshes, and loading/error state.
+RPC responses use Effect Schema; finite SSE enumeration uses Effect Stream.
+IndexedDB transactions, clipboard work, attachment transfers, preloading, and
+composer workflows are Effects. Browser promises remain at platform and React
+event-handler boundaries.
+
+Sidebar refreshes use an interruptible scheduled fiber. Live history hints use a
+scoped EventSource and a capacity-one queue; delta reads remain serialized.
+Search keeps its 250 ms pause and one-second maximum wait. Prompt dispatch still
+unlocks the composer before the full turn finishes. Storage generations remain
+necessary: cancelling a fiber does not undo an already committed transaction.
+Effect's reactivity and React bindings are marked unstable in the 4.0.0 packages;
+both dependencies are pinned for this experiment.
+
+### Research findings
+
+The port uses the installed 4.0.0 sources and declarations as its API reference:
+`effect/src/reactivity/Atom.ts`, `AtomRegistry.ts`, `AsyncResult.ts`,
+`effect/src/encoding/Sse.ts`, and `@effect/atom-react/src/Hooks.ts` under
+`node_modules`. These sources expose behavior that a mechanical hook replacement
+would miss:
+
+- Request atoms share cached reads, but mutations need independent completions.
+  `Atom.fn` cancels the previous invocation by default. `useAction` runs each
+  Effect separately and uses an atom only for the latest invocation's UI state.
+- Cache retention and active polling have different lifetimes. Request sources
+  retain data for five minutes; derived subscriptions stop polling on unmount.
+  Polling waits for a request to settle and pauses while the document is hidden.
+- A terminal SSE event is not a successful snapshot until the response ends
+  cleanly. Scoped cancellation owns the reader and request; generation checks
+  still prevent a delayed IndexedDB save from undoing deletion.
+- Runtime schemas must match Go's emitted defaults, including nullable MCP
+  origin pairs and string-encoded int64 values. Browser fixtures use the same
+  wire shape as Go's `EmitDefaultValues` output.
+
+Measurements against `c02bd61c` with Bun 1.4.2, the production build, and
+`make cloc` (bytes are raw / Python `gzip.compress` default compression):
+
+| Metric | Baseline | Effect port | Change |
+| --- | ---: | ---: | ---: |
+| JS/TS source CLOC | 4,631 | 4,755 | +124 |
+| JS/TS test CLOC | 4,758 | 5,268 | +510 |
+| JavaScript bytes | 615,616 / 196,928 | 731,300 / 236,821 | +115,684 / +39,893 |
+| CSS bytes | 248,730 / 37,839 | 238,565 / 36,272 | −10,165 / −1,567 |
+
+The source stays below the 5,500-line budget. Gzipped JavaScript grows 20.3%;
+this experiment establishes no latency or memory improvement. Effect includes
+an unrelated API-reference UI, so Tailwind excludes its package from class
+discovery. Adoption still needs a judgment about the bundle cost, the unstable
+reactivity APIs, and the maintenance cost of owning query policies explicitly.
+
 See [Web conversation transport](../frontend/rpc/README.md)
 for startup commands, browser IP mappings and the transport contract. The Go
 handler takes identity from the browser connection; forwarded headers cannot

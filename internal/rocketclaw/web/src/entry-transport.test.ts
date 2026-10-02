@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Effect, Stream } from "effect";
 import path from "node:path";
 import { listSessions } from "./api";
 import type { Session, TranscriptEvent } from "./types";
@@ -20,13 +21,13 @@ test.skipIf(!process.env.ROCKETCLAW_TEST_HTTP_URL)("transcript and entry HTTP pr
   expect(await call("Protocol")).toEqual({ protoSha256: hash });
   expect(await call("Protocol", {}, true)).toEqual({ protoSha256: hash });
   expect(await call("Identity")).toEqual({ username: "alice" });
-  const batches = await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`));
+  const batches = await Effect.runPromise(Stream.runCollect(listSessions(`${url}/api/ListSessions`)));
   expect(batches.flatMap((batch) => batch.sessions.map((session) => session.id))).toEqual(["empty-web", id]);
   expect(batches.at(-1)).toEqual({ sessions: [], owner: "alice", upstreamSuccess: true, summariesComplete: true });
   const original = batches.flatMap((batch) => batch.sessions).find((session) => session.id === id)!;
   for (const details of [{ id, pinned: true }, { id, name: " Launch " }, { id, pinned: false }, { id, name: "" }]) {
     await call("UpdateSession", details);
-    const updated: Session[] = (await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`))).flatMap((batch) => batch.sessions);
+    const updated: Session[] = (await Effect.runPromise(Stream.runCollect(listSessions(`${url}/api/ListSessions`)))).flatMap((batch) => batch.sessions);
     const session = updated.find((session) => session.id === id)!;
     expect(session.preview).toBe(original.preview);
     expect(session.updatedAt).toBe(original.updatedAt);

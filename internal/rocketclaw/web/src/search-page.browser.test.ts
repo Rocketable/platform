@@ -14,7 +14,10 @@ for (const width of [1280, 390]) test.skipIf(!playwright || !chromium)(`saved se
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner, upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: owner });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-page" });
-    if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
+    if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }], currentAgent: "" });
+    if (url.pathname === "/api/ListSkills") return Response.json({ skills: [] });
+    if (url.pathname === "/api/ListCronJobs") return Response.json({ jobs: [] });
+    if (url.pathname === "/api/ListConfig") return Response.json({ config: {} });
     if (url.pathname === "/api/SearchMessages") return Response.json({ matches: [] });
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = Bun.file(path.join(dist, url.pathname));
@@ -158,15 +161,19 @@ for (const width of [1280, 390]) test.skipIf(!playwright || !chromium)(`search e
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-results" });
-    if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
+    if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }], currentAgent: "" });
+    if (url.pathname === "/api/ListSkills") return Response.json({ skills: [] });
+    if (url.pathname === "/api/ListCronJobs") return Response.json({ jobs: [] });
+    if (url.pathname === "/api/ListConfig") return Response.json({ config: {} });
+    if (url.pathname === "/api/ListQueue") return Response.json({ items: [] });
     if (url.pathname === "/api/History") {
       const { id } = await request.json() as { id: string };
-      return Response.json({ messages: [], origin: id === "fourth" ? JSON.stringify({ kind: "cron", sourcePath: "/notes/archive-key.md", stem: "review" }) : "", revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
+      return Response.json({ messages: [], origin: id === "fourth" ? JSON.stringify({ kind: "cron", sourcePath: "/notes/archive-key.md", stem: "review" }) : "", delegations: [], revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
     }
     if (url.pathname === "/api/SearchMessages") {
       const { query } = await request.json() as { query: string };
       searches.push(query);
-      return Response.json({ matches: query === "needle" ? [{ conversationId: "third", message: { messageId: "1:0", role: "user", text: "Context before NEEDLE then needle and after", complete: true } }, { conversationId: "third", message: { messageId: "1:1", role: "assistant", text: "A second needle response", complete: true } }, { conversationId: "first", message: { messageId: "2:0", role: "assistant", text: "Needle in excluded chat", complete: true } }] : [] });
+      return Response.json({ matches: query === "needle" ? [{ conversationId: "third", message: { messageId: "1:0", role: "user", text: "Context before NEEDLE then needle and after", complete: true, turnId: "", entryKey: "", itemId: "", inputId: "" } }, { conversationId: "third", message: { messageId: "1:1", role: "assistant", text: "A second needle response", complete: true, turnId: "", entryKey: "", itemId: "", inputId: "" } }, { conversationId: "first", message: { messageId: "2:0", role: "assistant", text: "Needle in excluded chat", complete: true, turnId: "", entryKey: "", itemId: "", inputId: "" } }] : [] });
     }
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = Bun.file(path.join(dist, url.pathname));
@@ -236,13 +243,17 @@ test.skipIf(!playwright || !chromium)("newer search replaces an in-flight messag
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "chat", name: "A chat", preview: "" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-race" });
-    if (url.pathname === "/api/ListAgents") return Response.json({ agents: [] });
+    if (url.pathname === "/api/ListAgents") return Response.json({ agents: [], currentAgent: "" });
+    if (url.pathname === "/api/ListSkills") return Response.json({ skills: [] });
+    if (url.pathname === "/api/ListCronJobs") return Response.json({ jobs: [] });
+    if (url.pathname === "/api/ListConfig") return Response.json({ config: {} });
+    if (url.pathname === "/api/History") return Response.json({ messages: [], origin: "", delegations: [], revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
     if (url.pathname === "/api/SearchMessages") {
       const { query } = await request.json() as { query: string };
       searches.push(query);
       if (query === "old") { started.resolve(); await delayed.promise; }
       if (query === "new" && fail) return Response.json({ message: "Try again", code: 13 }, { status: 500 });
-      return Response.json({ matches: [{ conversationId: "chat", message: { messageId: "1:0", role: "user", text: `Match ${query}`, complete: true } }] });
+      return Response.json({ matches: [{ conversationId: "chat", message: { messageId: "1:0", role: "user", text: `Match ${query}`, complete: true, turnId: "", entryKey: "", itemId: "", inputId: "" } }] });
     }
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = Bun.file(path.join(dist, url.pathname));
@@ -305,16 +316,20 @@ test.skipIf(!playwright || !chromium)("message matches jump after history loads 
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "one", name: "First chat" }, { id: "two", name: "Second chat" }], owner, upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: owner });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "jump" });
-    if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
+    if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }], currentAgent: "" });
+    if (url.pathname === "/api/ListSkills") return Response.json({ skills: [] });
+    if (url.pathname === "/api/ListCronJobs") return Response.json({ jobs: [] });
+    if (url.pathname === "/api/ListConfig") return Response.json({ config: {} });
+    if (url.pathname === "/api/ListQueue") return Response.json({ items: [] });
     if (url.pathname === "/api/SearchMessages") return Response.json({ matches: [
       { conversationId: "one", message: messages("one")[2] },
       { conversationId: "one", message: messages("one")[3] },
     ] });
     if (url.pathname === "/api/History") {
       const { id, originOnly } = await request.json() as { id: string; originOnly?: boolean };
-      if (originOnly) return Response.json({ messages: [], origin: "", revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
+      if (originOnly) return Response.json({ messages: [], origin: "", delegations: [], revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
       if (delayHistory && id === "one") await pending.promise;
-      return Response.json({ messages: messages(id), origin: "", revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(messages(id).map((message) => message.entryKey))], running: false, terminal: "" });
+      return Response.json({ messages: messages(id), origin: "", delegations: [], revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(messages(id).map((message) => message.entryKey))], running: false, terminal: "" });
     }
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = Bun.file(path.join(dist, url.pathname));

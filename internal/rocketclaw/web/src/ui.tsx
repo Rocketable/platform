@@ -1,11 +1,14 @@
 "use client";
 
-import { QueryClient, QueryClientProvider, useQuery, useQueries, useMutation } from "@tanstack/react-query";
+import { Effect, Fiber, Option, Queue, Schedule, Schema, Stream } from "effect";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
+import { histories, invalidate, queries, registry, useAction, useRemote } from "./state";
 import { Menu } from "@base-ui/react/menu";
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
-import { queries, mutations, listSessions, rpc } from "./api";
+import { queries as requests, mutations, listSessions, uploadAttachment, downloadAttachment } from "./api";
 import type { ChatOrigin, HistoryView, MessageMatch, PromptDelivery } from "./types";
 import { Bot, Check, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
@@ -42,7 +45,6 @@ import {
   stripSessionHistory,
 } from "@/session-list";
 
-const queryClient = new QueryClient();
 const tabReturnTo = { current: "/" };
 type SessionCommand = { mode: "fork" | "handoff" | "name" | "snooze" | "queue"; source: string; target?: MessageMatch };
 const SessionCommands = createContext<{ command?: SessionCommand; setCommand: Dispatch<SetStateAction<SessionCommand | undefined>>; composer: RefObject<((command: string) => void) | null> }>(null!);
@@ -325,10 +327,10 @@ function WarmTabs({ cron, agents, skills, config }: { cron: boolean; agents: boo
   }, [cron, agents, skills, config]);
   useEffect(() => {
     return runPreload(
-      () => queryClient.prefetchQuery(queries.agents()),
-      () => queryClient.prefetchQuery(queries.skills()),
-      () => queryClient.prefetchQuery(queries.cronJobs()),
-      () => queryClient.prefetchQuery(queries.config()),
+      AtomRegistry.getResult(registry, queries.agents()).pipe(Effect.ignore),
+      AtomRegistry.getResult(registry, queries.skills()).pipe(Effect.ignore),
+      AtomRegistry.getResult(registry, queries.cronJobs()).pipe(Effect.ignore),
+      AtomRegistry.getResult(registry, queries.config()).pipe(Effect.ignore),
       () => setWarm({ cron: true, agents: true, skills: true, config: true }),
     );
   }, []);
@@ -359,7 +361,7 @@ function WarmTabs({ cron, agents, skills, config }: { cron: boolean; agents: boo
 }
 
 function ProtocolGuard() {
-  const proto = useQuery({ ...queries.protocol(), refetchInterval: 2000 });
+  const proto = useRemote(queries.protocol());
   const seen = useRef("");
   useEffect(() => {
     const hash = proto.data ?? "";
@@ -399,25 +401,9 @@ const Sidebar = createContext<SidebarState>({
 });
 const SidebarInvalidation = createContext<() => void>(() => {});
 
-function delay(ms: number, signal: AbortSignal) {
-  return new Promise<void>((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-    const finish = () => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", finish);
-      resolve();
-    };
-    const timer = setTimeout(finish, ms);
-    signal.addEventListener("abort", finish, { once: true });
-  });
-}
-
 function SidebarOwner({ children }: { children: ReactNode }) {
-  const identity = useQuery({ ...queries.identity(), refetchInterval: 2000, retry: false });
-  const protocol = useQuery({ ...queries.protocol(), retry: false });
+  const identity = useRemote(queries.identity());
+  const protocol = useRemote(queries.protocol());
   const owner = identity.isSuccess ? identity.data : undefined;
   const identityRejected = identity.isError;
   const [identityGeneration, setIdentityGeneration] = useState(0);
@@ -456,16 +442,15 @@ function SidebarOwner({ children }: { children: ReactNode }) {
     const captured = gen.current;
     const currentOwner = owner;
     const currentProtocol = protocol.data;
-    let stopped = false;
-    void loadSavedSessions(currentOwner, currentProtocol).then((saved) => {
-      if (stopped || captured !== gen.current || ownerRef.current !== currentOwner || committed.current || saved === undefined) {
+    const hydration = Effect.runFork(loadSavedSessions(currentOwner, currentProtocol).pipe(Effect.tap((saved) => Effect.sync(() => {
+      if (captured !== gen.current || ownerRef.current !== currentOwner || committed.current || saved === undefined) {
         return;
       }
       const merged = mergeSessionRows(saved, rowsRef.current);
       rowsRef.current = merged;
       setView((current) => ({ ...current, rows: merged }));
-    }, () => {});
-    return () => { stopped = true; };
+    })), Effect.ignore));
+    return () => { Effect.runFork(Fiber.interrupt(hydration)); };
   }, [owner, protocol.data, identityRejected, identityGeneration]);
   useEffect(() => {
     if (owner === undefined || protocol.data === undefined || identityRejected) {
@@ -474,14 +459,12 @@ function SidebarOwner({ children }: { children: ReactNode }) {
     const captured = gen.current;
     const currentOwner = owner;
     const currentProtocol = protocol.data;
-    const ac = new AbortController();
-    const tick = async () => {
-      if (ac.signal.aborted || captured !== gen.current) return;
+    const tick = Effect.gen(function* () {
+      if (captured !== gen.current) return;
       setView((current) => ({ ...current, refreshing: true, enumerationComplete: false, summariesComplete: true }));
-      const snapshotGeneration = await loadSnapshotGeneration(currentOwner, currentProtocol).catch(() => undefined);
-      if (ac.signal.aborted || captured !== gen.current) return;
-      readSessionEnumeration(currentOwner, Promise.resolve(listSessions(ac.signal)), () => rowsRef.current, (merged, summaries, complete) => {
-        if (ac.signal.aborted || captured !== gen.current) {
+      const snapshotGeneration = yield* loadSnapshotGeneration(currentOwner, currentProtocol).pipe(Effect.catch(() => Effect.succeed(undefined)));
+      const result = yield* readSessionEnumeration(currentOwner, listSessions(), () => rowsRef.current, (merged, summaries, complete) => {
+        if (captured !== gen.current) {
           return;
         }
         rowsRef.current = merged;
@@ -493,30 +476,27 @@ function SidebarOwner({ children }: { children: ReactNode }) {
           }
           return { ...current, rows: merged, summariesComplete: complete, loadingIds: next };
         });
-      }, ac.signal).then((result) => {
-        if (ac.signal.aborted || captured !== gen.current) {
-          return;
-        }
-        if (result.mismatch) {
-          reset();
-          ownerRef.current = undefined;
-          // A fast same-owner refetch can hide the intermediate pending state.
-          void queryClient.resetQueries({ queryKey: ["identity"] }).then(() => setIdentityGeneration((value) => value + 1));
-        } else if (shouldCommitSnapshot(result)) {
-          committed.current = true;
-          rowsRef.current = result.received;
-          setView({ rows: result.received, enumerationComplete: true, summariesComplete: true, refreshing: false, loadingIds: new Set() });
-          void saveCompleteSessions(currentOwner, currentProtocol, result.received, snapshotGeneration).catch(() => {});
-        } else {
-          setView((current) => ({ ...current, enumerationComplete: result.exhausted && result.upstreamSuccess && !result.mismatch, refreshing: false }));
-        }
-      }).then(() => {
-        if (!ac.signal.aborted && captured === gen.current) void delay(2000, ac.signal).then(tick);
       });
-    };
-    tick();
+      if (captured !== gen.current) return;
+      if (result.mismatch) {
+        reset();
+        ownerRef.current = undefined;
+        // A fast same-owner refetch can hide the intermediate pending state.
+        registry.refresh(queries.identity());
+        yield* AtomRegistry.getResult(registry, queries.identity(), { suspendOnWaiting: true }).pipe(Effect.ignore);
+        setIdentityGeneration((value) => value + 1);
+      } else if (shouldCommitSnapshot(result)) {
+        committed.current = true;
+        rowsRef.current = result.received;
+        setView({ rows: result.received, enumerationComplete: true, summariesComplete: true, refreshing: false, loadingIds: new Set() });
+        yield* saveCompleteSessions(currentOwner, currentProtocol, result.received, snapshotGeneration).pipe(Effect.ignore);
+      } else {
+        setView((current) => ({ ...current, enumerationComplete: result.exhausted && result.upstreamSuccess && !result.mismatch, refreshing: false }));
+      }
+    });
+    const refresh = Effect.runFork(tick.pipe(Effect.repeat(Schedule.spaced(2000))));
     return () => {
-      ac.abort();
+      Effect.runFork(Fiber.interrupt(refresh));
       invalidatePendingSaves(currentOwner, currentProtocol);
     };
   }, [owner, protocol.data, identityRejected, identityGeneration, generation, reset]);
@@ -550,7 +530,7 @@ function SidebarOwner({ children }: { children: ReactNode }) {
 }
 
 type PendingFile = { id: string; file: File };
-type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; historyRead?: Promise<void>; historyAgain?: boolean; error: string; edit: number; submission: number };
+type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; historyRead?: Fiber.Fiber<void>; historyAgain?: boolean; error: string; edit: number; submission: number };
 
 function BottomNavigation({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -712,7 +692,7 @@ export function App() {
     setConversation({ id: route.id, created: "", key: created ? conversation.key : conversation.key + 1 });
   }
   return (
-      <QueryClientProvider client={queryClient}><TooltipProvider>
+      <RegistryContext.Provider value={registry}><TooltipProvider>
         <ProtocolGuard />
         <SidebarOwner>
           <SessionCommands value={commands}>
@@ -757,7 +737,7 @@ export function App() {
           </MobileSidebar>
          </SessionCommands>
         </SidebarOwner>
-      </TooltipProvider></QueryClientProvider>
+       </TooltipProvider></RegistryContext.Provider>
   );
 }
 
@@ -771,18 +751,18 @@ function ForkDialog({ source, drafts, onDraftChange }: { source: string; drafts:
   const { setCommand } = useContext(SessionCommands);
   const sidebar = useContext(Sidebar);
   const [query, setQuery] = useState("");
-  const history = useQuery(queries.history({ id: source }));
-  const fork = useMutation({ mutationFn: async (message?: TranscriptEvent) => {
-    const draft = await forkDraft(source, message);
+  const history = useRemote(queries.history({ id: source }));
+  const fork = useAction({ action: (message?: TranscriptEvent) => Effect.gen(function* () {
+    const draft = yield* forkDraft(source, message);
     drafts.set(draft.sessionId, draft);
     onDraftChange();
     sidebar.invalidateQueries();
     navigate(sessionPath(draft.sessionId));
     setCommand(undefined);
-  } });
+  }) });
   // OpenCode V2: packages/app/src/session/commands/fork-dialog.tsx lists user
   // messages newest first, forks BEFORE selection, and restores it for editing.
-  const items = [{ key: "full", label: "Full session", detail: "Copy all recorded history", choose: () => fork.mutate(undefined) }, ...(history.data?.messages ?? []).filter((message) => message.role === "user" && message.messageId && message.text.toLowerCase().includes(query.toLowerCase())).toReversed().map((message) => ({ key: message.messageId!, label: message.text, detail: "Continue before this message", choose: () => fork.mutate(message) }))];
+  const items = [{ key: "full", label: "Full session", detail: "Copy all recorded history", choose: () => fork.fire(undefined) }, ...(history.data?.messages ?? []).filter((message) => message.role === "user" && message.messageId && message.text.toLowerCase().includes(query.toLowerCase())).toReversed().map((message) => ({ key: message.messageId!, label: message.text, detail: "Continue before this message", choose: () => fork.fire(message) }))];
   const error = fork.error ?? history.error;
   return <Dialog open onOpenChange={(open) => { if (!open && !fork.isPending) setCommand(undefined); }}>
     <DialogContent className="top-4 translate-y-0 sm:max-w-lg" showCloseButton={!fork.isPending}>
@@ -801,36 +781,37 @@ function HandoffDialog({ command, drafts, onDraftChange }: { command: SessionCom
   const route = useRoute();
   const sidebar = useContext(Sidebar);
   const [query, setQuery] = useState("");
-  const search = useQuery({ ...queries.searchMessages(query.trim()), enabled: query.trim() !== "" });
-  const handoffRequest = { queryKey: ["handoff", command.source], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<{ document: string }>("Handoff", { id: command.source }, signal), retry: false, staleTime: Infinity, gcTime: 0 };
-  const handoff = useQuery(handoffRequest);
-  const action = useMutation({ mutationFn: async (kind: "copy" | "new" | "stash") => {
-    const { document } = await queryClient.fetchQuery(handoffRequest);
-    if (kind === "copy") await copyText(document, popup.current!);
+  const search = useRemote(queries.searchMessages(query.trim()), query.trim() !== "");
+  const handoffRequest = queries.handoff(command.source);
+  const handoff = useRemote(handoffRequest);
+  const action = useAction({ action: (kind: "copy" | "new" | "stash") => Effect.gen(function* () {
+    if (AsyncResult.isFailure(registry.get(handoffRequest))) registry.refresh(handoffRequest);
+    const { document } = yield* AtomRegistry.getResult(registry, handoffRequest, { suspendOnWaiting: true });
+    if (kind === "copy") yield* copyText(document, popup.current!);
     if (kind === "new") {
-      const id = await mutations.createSession({ agent: "main" });
+      const id = yield* mutations.createSession({ agent: "main" });
       const optimistic: Line = { id: crypto.getRandomValues(new Uint32Array(4)).join("-"), role: "user", text: document };
       const draft: ComposerDraft = { text: "", files: [], agent: "", sessionId: id, sending: false, busy: true, lines: [optimistic], error: "", edit: 0, submission: 0 };
       drafts.set(id, draft);
       onDraftChange();
       sidebar.invalidateQueries();
       navigate(sessionPath(id));
-      void mutations.prompt({ id, text: document, messageId: optimistic.id }).catch((err: Error) => {
+      Effect.runFork(mutations.prompt({ id, text: document, messageId: optimistic.id }).pipe(Effect.catch((err) => Effect.sync(() => {
         draft.text = [document, draft.text].filter(Boolean).join("\n\n");
         draft.lines = draft.lines.filter((line) => line.id !== optimistic.id);
         draft.error = err.message;
         if (draft.submission === 0) draft.busy = false;
         onDraftChange();
-      });
+      }))));
     }
     if (kind === "stash") {
-      await mutations.prompt({ id: command.target!.conversationId, text: document, delivery: "STASH" });
-      void queryClient.invalidateQueries({ queryKey: ["queue"] });
+      yield* mutations.prompt({ id: command.target!.conversationId, text: document, delivery: "STASH" });
+      invalidate("queue");
     }
     setCommand(undefined);
-  } });
+  }) });
   const target = command.target;
-  const preview = useQuery({ ...queries.history({ id: target?.conversationId ?? "" }), enabled: !!target });
+  const preview = useRemote(queries.history({ id: target?.conversationId ?? "" }), !!target);
   const items = (query.trim() ? search.data ?? [] : []).map((match) => ({ key: `${match.conversationId}:${match.message.messageId}`, label: match.message.text, session: sidebar.rows.find((row) => row.id === match.conversationId) ?? { id: match.conversationId }, choose: () => {
       setQuery("");
       setCommand({ ...command, target: match });
@@ -838,7 +819,7 @@ function HandoffDialog({ command, drafts, onDraftChange }: { command: SessionCom
     } }));
   const pending = action.isPending;
   const choices = ([{ key: "copy", label: "Copy handoff", progress: "Copying handoff…" }, { key: "new", label: "Start new session", progress: "Starting session…" }] as const).map(({ key, label, progress }) => ({
-    key, label: pending && action.variables === key ? progress : label, choose: () => action.mutate(key),
+    key, label: pending && action.variables === key ? progress : label, choose: () => action.fire(key),
   }));
   const error = [action.error, search.error, handoff.error, preview.error].find(Boolean);
   return <Dialog open modal={!target} onOpenChange={(open, details) => { if (!open && !pending && details.reason !== "outside-press") setCommand(undefined); }}>
@@ -858,21 +839,18 @@ function HandoffDialog({ command, drafts, onDraftChange }: { command: SessionCom
       </div>
       {target && <DialogFooter className="shrink-0 flex-row flex-wrap items-center justify-between sm:justify-between">
         {handoff.data ? <CodeBlock text={handoff.data.document} label="Handoff" compact /> : <p hidden={pending} role="status" className="flex items-center gap-2 text-xs text-muted-foreground">{handoff.isPending ? <><LoaderCircle className="size-4 animate-spin" />Preparing handoff…</> : "Handoff not ready"}</p>}
-        <Button className="ml-auto min-h-11" aria-label="Stash handoff here" disabled={[pending, !preview.data, preview.isError, route.id !== target.conversationId].some(Boolean)} onClick={() => action.mutate("stash")}>{pending && action.variables === "stash" ? "Stashing…" : "Stash"}</Button>
+        <Button className="ml-auto min-h-11" aria-label="Stash handoff here" disabled={[pending, !preview.data, preview.isError, route.id !== target.conversationId].some(Boolean)} onClick={() => action.fire("stash")}>{pending && action.variables === "stash" ? "Stashing…" : "Stash"}</Button>
       </DialogFooter>}
     </DialogContent>
   </Dialog>;
 }
 
-async function forkDraft(source: string, message?: TranscriptEvent): Promise<ComposerDraft> {
+const forkDraft = Effect.fnUntraced(function* (source: string, message?: TranscriptEvent): Effect.fn.Return<ComposerDraft, Error> {
   // Restore files before creating a session; a failed download must not leave a fork.
-  const files = await Promise.all((message?.attachments ?? []).map(async (file) => {
-    const response = await fetch(`/api/DownloadAttachment?${new URLSearchParams({ conversationId: file.conversationId, id: file.id })}`);
-    if (!response.ok) throw new Error(`Could not restore ${file.name}`);
-    return { id: crypto.getRandomValues(new Uint32Array(4)).join("-"), file: new File([await response.blob()], file.name, { type: file.mimeType }) };
-  }));
-  return mutations.forkSession({ id: source, before: message?.messageId }).then((result) => ({ text: result.prompt.text, files, agent: "", sessionId: result.id, sending: false, busy: false, lines: [], error: "", edit: 0, submission: 0 }));
-}
+  const files = yield* Effect.forEach(message?.attachments ?? [], (attachment) => downloadAttachment(attachment).pipe(Effect.map((file) => ({ id: crypto.getRandomValues(new Uint32Array(4)).join("-"), file }))), { concurrency: "unbounded" });
+  const result = yield* mutations.forkSession({ id: source, before: message?.messageId });
+  return { text: result.prompt.text, files, agent: "", sessionId: result.id, sending: false, busy: false, lines: [], error: "", edit: 0, submission: 0 };
+});
 
 function SessionCommandPicker({ items, query, setQuery, forking, disabled }: { items: { key: string; label: string; detail?: string; session?: Session; choose: () => void }[]; query: string; setQuery: (query: string) => void; forking: boolean; disabled: boolean }) {
   const [pick, setPick] = useState(0);
@@ -951,43 +929,30 @@ function originSearchText({ origin }: { origin?: ChatOrigin }) {
     : `External MCP External conversation: ${origin.externalConversationId} Agent: ${origin.agent} ${origin.pairs?.map(({ key, value }) => `${key}=${value}`).join(" ") ?? ""}`).toLowerCase();
 }
 
-async function loadSessionOrigins(ids: string[], owner: string | undefined, protocol: string | undefined, signal: AbortSignal) {
-  const values = new Map<string, string>();
-  let failed = false;
-  const key = ["sessionOrigins", owner, protocol, ids];
-  for (let start = 0; start < ids.length; start += 24) {
-    signal.throwIfAborted();
-    const batch = ids.slice(start, start + 24);
-    const results = await Promise.allSettled(batch.map((id) => queryClient.fetchQuery({
-      ...queries.history({ id, originOnly: true }),
-      queryKey: ["sessionOrigin", owner, protocol, id],
-      staleTime: 10_000,
-      retry: false,
+const sessionOrigins = Atom.family((key: string) => {
+  const [owner, protocol, ids] = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Tuple([Schema.NullOr(Schema.String), Schema.NullOr(Schema.String), Schema.Array(Schema.String)])))(key);
+  return Atom.make(Stream.suspend(() => {
+    const values = new Map<string, string>();
+    let failed = false;
+    return Stream.fromIterable(Array.from({ length: Math.max(1, Math.ceil(ids.length / 24)) }, (_, index) => index * 24)).pipe(Stream.mapEffect((start) => Effect.gen(function* () {
+      yield* Effect.forEach(ids.slice(start, start + 24), (id) => Effect.gen(function* () {
+        const atom = queries.origin(owner, protocol, id);
+        const result = registry.get(atom);
+        if (!result.waiting && (AsyncResult.isFailure(result) || AsyncResult.isSuccess(result) && Date.now() - result.timestamp >= 10_000)) registry.refresh(atom);
+        return yield* AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true });
+      }).pipe(
+        Effect.match({ onSuccess: (view) => { values.set(id, originSearchText(view)); }, onFailure: () => { failed = true; } }),
+      ), { concurrency: "unbounded" });
+      return { values: new Map(values), failed, complete: start + 24 >= ids.length };
     })));
-    results.forEach((result, index) => {
-      if (result.status === "fulfilled") values.set(batch[index], originSearchText(result.value));
-      else failed = true;
-    });
-    signal.throwIfAborted();
-    queryClient.setQueryData(key, { values: new Map(values), failed, complete: false });
-  }
-  return { values, failed, complete: true };
-}
+  })).pipe(Atom.swr({ staleTime: 10_000 }));
+});
 
 function useSessionOrigins(rows: Session[], enabled: boolean) {
-  const identity = useQuery(queries.identity());
-  const protocol = useQuery(queries.protocol());
+  const identity = useRemote(queries.identity());
+  const protocol = useRemote(queries.protocol());
   const ids = useMemo(() => rows.map(({ id }) => id).toSorted(), [rows]);
-  const query = useQuery<Awaited<ReturnType<typeof loadSessionOrigins>>>({
-    queryKey: ["sessionOrigins", identity.data, protocol.data, ids],
-    enabled,
-    staleTime: (entry) => entry.state.data?.complete ? 10_000 : 0,
-    retry: false,
-    queryFn: ({ signal }) => loadSessionOrigins(ids, identity.data, protocol.data, signal),
-  });
-  useEffect(() => {
-    if (!enabled) void queryClient.cancelQueries({ queryKey: ["sessionOrigins"] });
-  }, [enabled]);
+  const query = useRemote(sessionOrigins(JSON.stringify([identity.data, protocol.data, ids])), enabled);
   return { values: query.data?.values ?? new Map<string, string>(), pending: enabled && (query.isPending || query.isFetching || !query.data?.complete), failed: !!query.data?.failed || query.isError };
 }
 
@@ -999,7 +964,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, sidebarOpen, onToggleS
   const { setCommand, composer } = useContext(SessionCommands);
   const { id } = useRoute();
   const actions = useSessionActions(sidebar.rows.find((row) => row.id === id), () => setMode(undefined));
-  const choices = useQuery({ ...queries.agents({ conversationId: id }), enabled: id !== "" });
+  const choices = useRemote(queries.agents({ conversationId: id }), id !== "");
   const draft = drafts.get(id);
   const commands = id ? dollarCommands.filter(({ name }) => name !== "cron" && (name !== "stop" || (draft?.busy ?? sidebar.rows.find((row) => row.id === id)?.running)) && (name !== "agent" || !!choices.data?.agents.length)).map(({ name, label }) => ({ key: name, label: `${["fork", "handoff", "queue", "stop", "agent"].includes(name) ? "Session" : "Command"}: ${label}`, disabled: !draft || draft.sending, run: () => {
     if (name === "fork" || name === "handoff" || name === "queue") setCommand({ mode: name, source: id });
@@ -1029,15 +994,15 @@ function CommandPalette({ drafts, mode, setMode, newChat, sidebarOpen, onToggleS
     };
   }, [mode]);
   useLayoutEffect(() => { input.current?.focus(); }, []);
-  const agents = useQuery({ ...queries.agents(), staleTime: 60_000, enabled: mode === "sessions" });
+  const agents = useRemote(queries.agents(), mode === "sessions");
   const filters = sessionSearchTerms(query);
   const active = useRef<HTMLButtonElement>(null);
   const origins = useSessionOrigins(sidebar.rows, mode === "sessions" && filters.needle !== "");
-  const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000, enabled: mode === "commands" || mode === "cron" });
-  const runCron = useMutation({
-    mutationFn: mutations.runCron,
+  const jobs = useRemote(queries.cronJobs(), mode === "commands" || mode === "cron");
+  const runCron = useAction({
+    action: mutations.runCron,
     onSuccess: (id, input) => {
-      void queryClient.invalidateQueries({ queryKey: ["cronJobs"] });
+      invalidate("cronJobs");
       sidebar.invalidateQueries();
       if (id === "") return;
       notePendingCron(id, input.stem);
@@ -1045,7 +1010,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, sidebarOpen, onToggleS
       setMode(undefined);
     },
   });
-  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, sidebarOpen, onToggleSidebar, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.values, [...actions.items.map((item) => ({ ...item, label: `Session: ${item.label}` })), ...commands], filters, agentFilter, roomFilter);
+  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, sidebarOpen, onToggleSidebar, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.fire({ stem }), origins.values, [...actions.items.map((item) => ({ ...item, label: `Session: ${item.label}` })), ...commands], filters, agentFilter, roomFilter);
   const selected = items.length === 0 ? 0 : pick % items.length;
   const choose = (item: (typeof items)[number]) => {
     if (item.disabled) return;
@@ -1126,15 +1091,15 @@ function useSessionActions(session: Session | undefined, onSuccess?: () => void)
   const invalidate = useContext(SidebarInvalidation);
   const { setCommand } = useContext(SessionCommands);
   const saved = () => { invalidate(); onSuccess?.(); };
-  const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: saved });
-  const settle = useMutation({ mutationFn: mutations.settleSession, onSuccess: saved });
+  const update = useAction({ action: mutations.updateSession, onSuccess: saved });
+  const settle = useAction({ action: mutations.settleSession, onSuccess: saved });
   const id = session?.id ?? "";
   const items = session ? [
     ...(session.forkedFrom ? [{ key: "origin", label: "Open original conversation", icon: CornerUpLeft, run: () => navigate(sessionPath(session.forkedFrom!)) }] : []),
     { key: "name", label: "Name session", icon: TextCursorInput, run: () => setCommand({ mode: "name", source: id }) },
-    { key: "pin", label: session.pinned ? "Unpin session" : "Pin session", icon: Pin, pressed: !!session.pinned, keep: true, run: () => update.mutate({ id, pinned: !session.pinned }) },
+    { key: "pin", label: session.pinned ? "Unpin session" : "Pin session", icon: Pin, pressed: !!session.pinned, keep: true, run: () => update.fire({ id, pinned: !session.pinned }) },
     { key: "snooze", label: "Snooze session", icon: Clock, run: () => setCommand({ mode: "snooze", source: id }) },
-    { key: "settle", label: session.settled ? "Unsettle" : "Settle", icon: session.settled ? Undo2 : Check, keep: true, run: () => settle.mutate({ id, settled: !session.settled }) },
+    { key: "settle", label: session.settled ? "Unsettle" : "Settle", icon: session.settled ? Undo2 : Check, keep: true, run: () => settle.fire({ id, settled: !session.settled }) },
   ].map((item) => ({ ...item, disabled: update.isPending || settle.isPending })) : [];
   return { items, error: update.error ?? settle.error };
 }
@@ -1170,10 +1135,10 @@ function SessionRowActions({ session }: { session: Session }) {
 
 function SessionQueueDialog({ id }: { id: string }) {
   const { setCommand } = useContext(SessionCommands);
-  const queue = useQuery({ ...queries.queue({ id }), refetchOnMount: false });
+  const queue = useRemote(queries.queue({ id }));
   return <Dialog open onOpenChange={(open) => { if (!open) setCommand(undefined); }}><DialogContent>
     <DialogTitle>Session queue</DialogTitle><DialogDescription>Pending steers and later work. Viewing this list starts no turn.</DialogDescription>
-    {queue.error ? <p role="alert">{queue.error.message}</p> : queue.isPending ? <p role="status">Loading…</p> : <ul className="max-h-[50dvh] overflow-y-auto">{!queue.data.length ? <li>No pending work</li> : null}{queue.data.map((item) => <li key={item.id} className="border-b py-2"><p className="text-xs text-muted-foreground">{item.delivery === "STASH" ? "Stashed" : item.delivery === "STEER" ? "Pending steer" : "Queued"}</p><p className="whitespace-pre-wrap break-words">{item.text}</p><MessageAttachments attachments={item.attachments} conversationId={id} /></li>)}</ul>}
+    {queue.error ? <p role="alert">{queue.error.message}</p> : queue.isPending ? <p role="status">Loading…</p> : <ul className="max-h-[50dvh] overflow-y-auto">{!queue.data!.length ? <li>No pending work</li> : null}{queue.data!.map((item) => <li key={item.id} className="border-b py-2"><p className="text-xs text-muted-foreground">{item.delivery === "STASH" ? "Stashed" : item.delivery === "STEER" ? "Pending steer" : "Queued"}</p><p className="whitespace-pre-wrap break-words">{item.text}</p><MessageAttachments attachments={item.attachments} conversationId={id} /></li>)}</ul>}
   </DialogContent></Dialog>;
 }
 
@@ -1183,12 +1148,12 @@ function NameSessionDialog({ id, snooze }: { id: string; snooze: boolean }) {
   const { setCommand } = useContext(SessionCommands);
   const [value, setValue] = useState(snooze ? "" : session?.name ?? "");
   const nameId = useId();
-  const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: () => { sidebar.invalidateQueries(); setCommand(undefined); } });
+  const update = useAction({ action: mutations.updateSession, onSuccess: () => { sidebar.invalidateQueries(); setCommand(undefined); } });
   return <Dialog open onOpenChange={(open) => { if (!open) setCommand(undefined); }}>
         <DialogContent>
           <DialogTitle>{snooze ? "Snooze session" : "Name session"}</DialogTitle>
           <DialogDescription>{snooze ? "Hide until this local time. New messages bring the chat back early. Find it under Settled to Unsettle sooner." : "Shared with everyone who can see this session. Leave blank to show the last message."}</DialogDescription>
-          <form className="mt-4 flex flex-col gap-3" action={() => update.mutate({ id, ...(snooze ? { snoozedUntil: new Date(value).toISOString() } : { name: value }) })}>
+          <form className="mt-4 flex flex-col gap-3" action={() => update.fire({ id, ...(snooze ? { snoozedUntil: new Date(value).toISOString() } : { name: value }) })}>
             <FieldGroup>
               <Field data-invalid={!!update.error}>
                 <FieldLabel htmlFor={nameId}>{snooze ? "Return at (local time)" : "Session name"}</FieldLabel>
@@ -1227,9 +1192,9 @@ type SavedSearch = { id: string; name?: string; query: string; agentFilter: stri
 type SavedSearches = { tabs: SavedSearch[]; active: string };
 
 function SearchPage() {
-  const identity = useQuery(queries.identity());
+  const identity = useRemote(queries.identity());
   if (!identity.isSuccess) return null;
-  return <SearchTabs key={identity.data} owner={identity.data} />;
+  return <SearchTabs key={identity.data} owner={identity.data!} />;
 }
 
 function SearchTabs({ owner }: { owner: string }) {
@@ -1248,7 +1213,7 @@ function SearchTabs({ owner }: { owner: string }) {
   const input = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => { input.current?.focus(); }, []);
   const sidebar = useContext(Sidebar);
-  const agents = useQuery({ ...queries.agents(), staleTime: 60_000 });
+  const agents = useRemote(queries.agents());
   const selected = saved.tabs.findIndex((tab) => tab.id === saved.active);
   const tab = saved.tabs[selected];
   useLayoutEffect(() => {
@@ -1377,44 +1342,33 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
   const sidebar = useContext(Sidebar);
   const filters = sessionSearchTerms(tab.query);
   const searchKey = filters.needle;
-  const identity = useQuery(queries.identity());
-  const protocol = useQuery(queries.protocol());
-  const origins = useQueries({ queries: filters.needle ? rows.map(({ id }) => ({
-    ...queries.history({ id, originOnly: true }), queryKey: ["sessionOrigin", identity.data, protocol.data, id], staleTime: 10_000, retry: false, select: originSearchText,
-  })) : [] });
+  const origins = useSessionOrigins(rows, !!filters.needle);
   const [result, setResult] = useState<{ query: string; matches: MessageMatch[]; error?: string; pending: boolean }>({ query: "", matches: [], pending: false });
-  const request = useRef<AbortController>(null);
-  const version = useRef(0);
-  const pause = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const deadline = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const request = useRef<Fiber.Fiber<void>>(null);
+  const pause = useRef<Fiber.Fiber<void>>(null);
   const firstEdit = useRef(0);
   const submit = useCallback(() => {
-    clearTimeout(pause.current);
-    clearTimeout(deadline.current);
+    if (pause.current) Effect.runFork(Fiber.interrupt(pause.current));
     firstEdit.current = 0;
-    request.current?.abort();
-    const controller = new AbortController();
-    request.current = controller;
-    const current = ++version.current;
+    if (request.current) Effect.runFork(Fiber.interrupt(request.current));
     setResult({ query: searchKey, matches: [], pending: !!searchKey });
     if (!searchKey) return;
-    void rpc<{ matches: MessageMatch[] }>("SearchMessages", { query: searchKey }, controller.signal).then(({ matches }) => {
-      if (current === version.current) setResult({ query: searchKey, matches, pending: false });
-    }).catch((error: Error) => {
-      if (current === version.current && !controller.signal.aborted) setResult({ query: searchKey, matches: [], error: error.message, pending: false });
-    });
+    request.current = Effect.runFork(requests.searchMessages(searchKey).pipe(Effect.match({
+      onSuccess: (matches) => setResult({ query: searchKey, matches, pending: false }),
+      onFailure: (error) => setResult({ query: searchKey, matches: [], error: error.message, pending: false }),
+    })));
   }, [searchKey]);
   useEffect(() => {
     if (!firstEdit.current) firstEdit.current = Date.now();
-    pause.current = setTimeout(submit, 250);
-    deadline.current = setTimeout(submit, Math.max(0, 1000 - (Date.now() - firstEdit.current)));
-    return () => { clearTimeout(pause.current); clearTimeout(deadline.current); };
+    const timer = Effect.runFork(Effect.sleep(Math.min(250, Math.max(0, 1000 - (Date.now() - firstEdit.current)))).pipe(Effect.map(() => { pause.current = null; submit(); })));
+    pause.current = timer;
+    return () => { Effect.runFork(Fiber.interrupt(timer)); };
   }, [submit]);
-  useEffect(() => () => { request.current?.abort(); version.current++; }, []);
-  const pending = result.pending || result.query !== searchKey || origins.some((origin) => origin.isPending);
-  const originError = origins.some((origin) => origin.isError);
+  useEffect(() => () => { if (request.current) Effect.runFork(Fiber.interrupt(request.current)); }, []);
+  const pending = result.pending || result.query !== searchKey || origins.pending;
+  const originError = origins.failed;
   const current = !pending && !result.error;
-  const matching = rows.filter((row, index) => sessionMatchesSearch(row, filters, tab.agentFilter, tab.roomFilter, origins[index]?.data ?? ""));
+  const matching = rows.filter((row) => sessionMatchesSearch(row, filters, tab.agentFilter, tab.roomFilter, origins.values.get(row.id) ?? ""));
   const visible = new Set(rows.filter((row) => sessionMatchesSearch(row, { ...filters, needle: "" }, tab.agentFilter, tab.roomFilter, "")).map((row) => row.id));
   const messages = result.matches.filter((match) => visible.has(match.conversationId));
   const searching = !!tab.query.trim() || !!tab.agentFilter || !!tab.roomFilter;
@@ -1424,7 +1378,7 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
     </div>
     <div className="min-h-0 flex-1 overflow-y-auto text-sm" aria-label="Search results">
       <SearchStatus pending={pending} error={result.query === searchKey ? result.error : undefined} originError={originError} empty={searching && current && matching.length + messages.length === 0} incomplete={!searchIsAuthoritative(sidebar) || originError} retry={submit} />
-      {current && searching ? <SearchMatches matching={matching} messages={messages} rows={rows} origins={origins.map((origin) => origin.data ?? "")} needle={filters.needle} /> : null}
+      {current && searching ? <SearchMatches matching={matching} messages={messages} rows={rows} origins={rows.map((row) => origins.values.get(row.id) ?? "")} needle={filters.needle} /> : null}
       {!searching ? <p className="text-muted-foreground">Type to search messages and conversations.</p> : null}
     </div>
   </>;
@@ -1551,7 +1505,7 @@ const SessionRow = memo(function SessionRow({ session, active, loading, age }: {
 
 const SessionList = memo(function SessionList({ settledOnly = false }: { settledOnly?: boolean }) {
   const sidebar = useContext(Sidebar);
-  const agents = useQuery({ ...queries.agents(), staleTime: 60_000, enabled: settledOnly });
+  const agents = useRemote(queries.agents(), settledOnly);
   const route = useRoute();
   const [query, setQuery] = useState("");
   const [agentFilter, setAgentFilter] = useState("");
@@ -1710,7 +1664,7 @@ function MessageActions({ line, hasSandboxed }: { line: Line; hasSandboxed: bool
     <Button type="button" size="icon-xs" variant="ghost" aria-label="Copy message" title="Copy message" onClick={async () => {
       setError(false);
       try {
-        await copyText(line.text, document.body);
+        await Effect.runPromise(copyText(line.text, document.body));
         setCopied(line.text);
       } catch {
         setError(true);
@@ -1788,8 +1742,8 @@ function TranscriptLine({ line, conversationId, hasSandboxed }: { line: Line; co
 
 function useTranscriptPosition(conversationId: string, lines: Line[], turns: ReturnType<typeof transcriptTurns>) {
   const viewport = useRef<HTMLDivElement>(null);
-  const identity = useQuery(queries.identity());
-  const firstOwner = useRef<string | undefined>(identity.isSuccess ? identity.data : undefined);
+  const identity = useAtomValue(queries.identity(), (result) => AsyncResult.isSuccess(result) ? result.value : undefined);
+  const firstOwner = useRef(identity);
   const { scrollToMessage } = useMessageScroller();
   const target = useContext(SessionCommands).command?.target;
   const search = useSearch();
@@ -1798,17 +1752,17 @@ function useTranscriptPosition(conversationId: string, lines: Line[], turns: Ret
   const targetTurn = targetId ? turns.findIndex((turn) => turn.user.some((line) => line.messageId === targetId) || turn.replies.some((line) => line.messageId === targetId)) : -1;
   const seen = useCallback(() => {
     const element = viewport.current;
-    if (!element || !identity.isSuccess || !element.getClientRects().length) return;
-    if (firstOwner.current === undefined) firstOwner.current = identity.data;
-    if (firstOwner.current !== identity.data) return;
+    if (!element || identity === undefined || !element.getClientRects().length) return;
+    if (firstOwner.current === undefined) firstOwner.current = identity;
+    if (firstOwner.current !== identity) return;
     const bounds = element.getBoundingClientRect();
     const visible = [...element.querySelectorAll<HTMLElement>('[data-slot="message"][data-message-id]')].filter((node) => {
       const rect = node.getBoundingClientRect();
       return rect.bottom > bounds.top && rect.top < bounds.bottom;
     });
     const last = visible.at(-1)?.dataset.messageId;
-    if (last) localStorage.setItem(`last-seen:${identity.data}`, `${sessionPath(conversationId)}?message=${encodeURIComponent(last)}`);
-  }, [conversationId, identity.isSuccess, identity.data]);
+    if (last) localStorage.setItem(`last-seen:${identity}`, `${sessionPath(conversationId)}?message=${encodeURIComponent(last)}`);
+  }, [conversationId, identity]);
   useEffect(() => {
     const frame = requestAnimationFrame(() => requestAnimationFrame(seen));
     return () => cancelAnimationFrame(frame);
@@ -1950,35 +1904,34 @@ function applyHistoryDelta(draft: ComposerDraft, view: HistoryView) {
   return newlyConsumed;
 }
 
-function readHistoryDelta(id: string, draft: ComposerDraft, onDraftChange: () => void): Promise<void> {
+const readHistoryDelta = Effect.fnUntraced(function* (id: string, draft: ComposerDraft, onDraftChange: () => void) {
   draft.historyAgain = true;
-  if (draft.historyRead) return draft.historyRead;
-  draft.historyRead = (async () => {
+  if (draft.historyRead) return yield* Fiber.join(draft.historyRead);
+  draft.historyRead = Effect.runFork(Effect.gen(function* () {
     do {
       draft.historyAgain = false;
-      try {
-        const key = queries.history({ id }).queryKey;
-        const cached = queryClient.getQueryData<HistoryView>(key);
-        const view = await queries.history({ id, revision: cached ? draft.revision : undefined }).queryFn({});
+      const cached = registry.get(histories(id));
+      yield* requests.history({ id, revision: cached ? draft.revision : undefined }).pipe(Effect.match({ onSuccess: (view) => {
         if (!view.reset && view.revision === draft.revision
           && draft.busy === (view.running || draft.lines.some((line) => !line.entryKey && line.role === "user" && !line.complete))
           && draft.terminal === view.terminal && JSON.stringify(draft.origin) === JSON.stringify(view.origin)
           && JSON.stringify(cached?.delegations) === JSON.stringify(view.delegations)
-          && !draft.historyError) continue;
-        if (applyHistoryDelta(draft, view)) void queryClient.invalidateQueries({ queryKey: ["queue"] });
+          && !draft.historyError) return;
+        if (applyHistoryDelta(draft, view)) invalidate("queue");
         // Main's delegation panel reads a full durable parent view from this cache.
         const changed = new Set([...view.replacedKeys, ...view.removedKeys]);
         const groups = Map.groupBy([...(view.reset ? [] : cached?.messages ?? []).filter((message) => !changed.has(message.entryKey)), ...view.messages], (message) => message.entryKey);
-        queryClient.setQueryData<HistoryView>(key, { ...view, reset: true, replacedKeys: [], removedKeys: [], messages: view.entryKeys.flatMap((entry) => groups.get(entry) ?? []) });
-      } catch (err) {
+        registry.set(histories(id), { ...view, reset: true, replacedKeys: [], removedKeys: [], messages: view.entryKeys.flatMap((entry) => groups.get(entry) ?? []) });
+        onDraftChange();
+      }, onFailure: (err) => {
         // A history failure must not turn an accepted Prompt into a failed send.
-        draft.historyError = err instanceof Error ? err.message : "history failed";
-      }
-      onDraftChange();
+        draft.historyError = err.message;
+        onDraftChange();
+      } }));
     } while (draft.historyAgain);
-  })().finally(() => { draft.historyRead = undefined; });
-  return draft.historyRead;
-}
+  }).pipe(Effect.ensuring(Effect.sync(() => { draft.historyRead = undefined; }))));
+  yield* Fiber.join(draft.historyRead);
+});
 
 function historyLines(messages: TranscriptEvent[]): Line[] {
   const seen = new Map<string, number>();
@@ -1989,24 +1942,28 @@ function historyLines(messages: TranscriptEvent[]): Line[] {
 }
 
 function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () => void) {
-  const history = useQuery({ ...queries.history({ id }), enabled: false });
+  const history = useAtomValue(histories(id));
   const refreshHistory = useCallback(() => readHistoryDelta(draft.sessionId, draft, onDraftChange), [draft, onDraftChange]);
   const setBusy = useCallback((value: boolean) => { draft.busy = value; onDraftChange(); }, [draft, onDraftChange]);
   const setLines = useCallback((update: (current: Line[]) => Line[]) => { draft.lines = update(draft.lines); onDraftChange(); }, [draft, onDraftChange]);
   useEffect(() => {
     if (!id) return;
-    const stream = new EventSource(`/stream?${new URLSearchParams({ id })}`);
-    void refreshHistory();
-    stream.onopen = () => { void refreshHistory(); };
-    stream.onmessage = (event) => {
-      const change = JSON.parse(String(event.data)) as { conversationId: string; revision: string };
-      if (change.conversationId === id) void refreshHistory();
-    };
-    return () => {
-      stream.close();
-    };
+    const changes = Stream.callback<void>((queue) => Effect.acquireRelease(Effect.sync(() => {
+      const stream = new EventSource(`/stream?${new URLSearchParams({ id })}`);
+      const notify = () => { Queue.offerUnsafe(queue, undefined); };
+      notify();
+      stream.onopen = notify;
+      const decode = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct({ conversationId: Schema.String, revision: Schema.String })));
+      stream.onmessage = (event) => {
+        const change = decode(String(event.data));
+        if (Option.isSome(change) && change.value.conversationId === id) notify();
+      };
+      return stream;
+    }), (stream) => Effect.sync(() => stream.close())), { bufferSize: 1, strategy: "sliding" });
+    const listener = Effect.runFork(changes.pipe(Stream.runForEach(refreshHistory)));
+    return () => { Effect.runFork(Fiber.interrupt(listener)); };
   }, [id, refreshHistory]);
-  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !draft.revision, historyError: draft.historyError, origin: draft.origin, terminal: draft.terminal, delegations: history.data?.delegations, hasSandboxed: draft.lines.some((line) => line.origin === "sandboxed") };
+  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !draft.revision, historyError: draft.historyError, origin: draft.origin, terminal: draft.terminal, delegations: history?.delegations, hasSandboxed: draft.lines.some((line) => line.origin === "sandboxed") };
 }
 
 export function OriginCard({ origin }: { origin?: ChatOrigin }) {
@@ -2041,7 +1998,7 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
   const search = useSearch();
   const target = useContext(SessionCommands).command?.target;
   const previewing = target?.conversationId === id;
-  const preview = useQuery({ ...queries.history({ id }), enabled: previewing });
+  const preview = useRemote(queries.history({ id }), previewing);
   const previewLines = useMemo(() => previewing && preview.data ? historyLines(preview.data.messages) : undefined, [previewing, preview.data]);
   const [draft] = useState(() => {
     const value = drafts.get(id) ?? { text: "", files: [], agent: "", sessionId: id, sending: false, busy: false, lines: [], error: "", edit: 0, submission: 0 };
@@ -2084,13 +2041,14 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
 function DelegationPanel({ id }: { id: string }) {
   const child = new URLSearchParams(useSearch()).get("delegation") ?? "";
   const wide = useSyncExternalStore(subscribeWide, () => matchMedia("(min-width: 64rem)").matches);
-  const main = useQuery({ ...queries.history({ id }), enabled: false });
-  const history = useQuery({ ...queries.history({ id: child }), enabled: child !== "" });
+  const main = useAtomValue(histories(id));
+  const history = useRemote(queries.history({ id: child }), child !== "");
   if (!child) return null;
-  const first = main.data?.delegations.find((level) => child === level || child.startsWith(`${level}/`)) ?? child;
+  const first = main?.delegations.find((level) => child === level || child.startsWith(`${level}/`)) ?? child;
   const levels = [...child.matchAll(/\/|$/g)].map((match) => child.slice(0, match.index)).filter((level) => level.length >= first.length).map((level, index, all) => {
     const call = level.slice(level.lastIndexOf("/") + 1);
-    const row = historyLines(queryClient.getQueryData<HistoryView>(queries.history({ id: index ? all[index - 1] : id }).queryKey)?.messages ?? []).find((line) => line.toolName && line.toolCallId === call);
+    const parentView = index ? Option.getOrUndefined(AsyncResult.value(registry.get(queries.history({ id: all[index - 1] })))) : main;
+    const row = historyLines(parentView?.messages ?? []).find((line) => line.toolName && line.toolCallId === call);
     return { level, label: row ? toolTitle(row) : call };
   });
   const parent = levels.at(-2);
@@ -2120,7 +2078,7 @@ function DelegationPanel({ id }: { id: string }) {
   </Sheet>;
 }
 
-async function sendComposer(input: {
+const sendComposer = Effect.fnUntraced(function* (input: {
   draft: ComposerDraft;
   onDraftChange: () => void;
   text: string;
@@ -2131,14 +2089,14 @@ async function sendComposer(input: {
   selected: string;
   currentAgent: string;
   goSession: (id: string) => void;
-  prompt: { mutateAsync: (value: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string }) => Promise<string> };
-  create: { mutateAsync: (value: { agent?: string }) => Promise<string> };
+  prompt: typeof mutations.prompt;
+  create: typeof mutations.createSession;
   scrollToEnd: () => boolean;
   setBusy: (value: boolean) => void;
   setAgentOpen: (value: boolean) => void;
   setSendError: (value: string) => void;
   setLines: (update: (current: Line[]) => Line[]) => void;
-  refreshHistory: () => Promise<unknown>;
+  refreshHistory: () => Effect.Effect<unknown>;
 }) {
   const { draft } = input;
   const stashing = input.delivery === "STASH";
@@ -2159,10 +2117,10 @@ async function sendComposer(input: {
   input.scrollToEnd();
   input.setSendError("");
   const optimistic: Line = { id: crypto.getRandomValues(new Uint32Array(4)).join("-"), role: "user", text: input.text };
-  try {
+  yield* Effect.gen(function* () {
     let sessionId = input.sessionId;
     if (sessionId === "") {
-      sessionId = await input.create.mutateAsync({ agent: input.selected });
+      sessionId = yield* input.create({ agent: input.selected });
       input.goSession(sessionId);
     }
     optimistic.attachments = input.files.map(({ id, file }) => ({ id, name: file.name, mimeType: file.type, size: String(file.size), conversationId: sessionId, file }));
@@ -2170,14 +2128,10 @@ async function sendComposer(input: {
       draft.parked = [...(draft.parked ?? []), optimistic];
       input.onDraftChange();
     } else if (!enqueue) input.setLines((current) => [...current, optimistic]);
-    const attachments: AttachmentMeta[] = await Promise.all(input.files.map(async ({ file }) => {
-      const response = await fetch(`/api/UploadAttachment?${new URLSearchParams({ conversationId: sessionId, name: file.name })}`, { method: "POST", body: file });
-      if (!response.ok) throw new Error(`Upload failed: ${file.name}`);
-      return response.json();
-    }));
+    const attachments = yield* Effect.forEach(input.files, ({ file }) => uploadAttachment(sessionId, file), { concurrency: "unbounded" });
     if (!stashing && input.sessionId !== "" && input.selected !== "" && input.selected !== input.currentAgent) {
-      await input.prompt.mutateAsync({ id: sessionId, text: `$agent ${input.selected}` });
-      await queryClient.invalidateQueries({ queryKey: ["agents"] });
+      yield* input.prompt({ id: sessionId, text: `$agent ${input.selected}` });
+      invalidate("agents");
     }
     if (attachments.length) {
       optimistic.attachments = attachments.map((file, index) => ({ ...file, file: input.files[index].file }));
@@ -2188,24 +2142,24 @@ async function sendComposer(input: {
     draft.files = [];
     draft.agent = "";
     dispatchedEdit = ++draft.edit;
-    const response = input.prompt.mutateAsync({ id: sessionId, text: input.text, delivery: followUp, messageId: optimistic.id, ...(attachments.length ? { attachmentIds: attachments.map((file) => file.id) } : {}) });
+    const response = yield* input.prompt({ id: sessionId, text: input.text, delivery: followUp, messageId: optimistic.id, ...(attachments.length ? { attachmentIds: attachments.map((file) => file.id) } : {}) }).pipe(Effect.forkChild({ startImmediately: true }));
     draft.sending = false;
     input.onDraftChange();
     input.setAgentOpen(false);
-    const privateText = await response;
+    const privateText = yield* Fiber.join(response);
     optimistic.complete = true;
-    void queryClient.invalidateQueries({ queryKey: ["agents"] });
+    invalidate("agents");
     if (enqueue) {
-      await queryClient.invalidateQueries({ queryKey: ["queue"] });
+      invalidate("queue");
       return;
     }
-    await input.refreshHistory();
+    yield* input.refreshHistory();
     if (privateText) {
       const parked = draft.parked?.some((line) => line.id === optimistic.id);
       draft.parked = draft.parked?.filter((line) => line.id !== optimistic.id);
       input.setLines((current) => [...current, ...(parked ? [optimistic] : []), { id: `${optimistic.id}:reply`, role: "assistant", text: privateText, complete: true }]);
     }
-  } catch (err) {
+  }).pipe(Effect.catch((err) => Effect.sync(() => {
     draft.parked = draft.parked?.filter((line) => line.id !== optimistic.id);
     if (dispatchedEdit === undefined) draft.sending = false;
     else if (draft.edit === dispatchedEdit && draft.submission === submission) {
@@ -2218,15 +2172,15 @@ async function sendComposer(input: {
       input.setSendError(err instanceof Error ? err.message : "send failed");
       if (!stashing) input.setBusy(input.busy);
     }
-  }
-}
+  })));
+});
 
-async function promoteComposer(input: {
+const promoteComposer = Effect.fnUntraced(function* (input: {
   draft: ComposerDraft;
   id: string;
   itemId: string;
   busy: boolean;
-  steerQueueItem: { mutateAsync: (value: { id: string; itemId: string }) => Promise<unknown> };
+  steerQueueItem: typeof mutations.steerQueueItem;
   setBusy: (value: boolean) => void;
   setSendError: (value: string) => void;
 }) {
@@ -2238,22 +2192,20 @@ async function promoteComposer(input: {
     input.setBusy(true);
   }
   input.setSendError("");
-  try {
-    await input.steerQueueItem.mutateAsync({ id: input.id, itemId: input.itemId });
-  } catch (err) {
+  yield* input.steerQueueItem({ id: input.id, itemId: input.itemId }).pipe(Effect.catch((err) => Effect.sync(() => {
     if (input.draft.submission === submission) {
       input.setSendError(err instanceof Error ? err.message : "steer failed");
       input.setBusy(input.busy);
     }
-  }
-}
+  })));
+});
 
-async function stopComposer(input: {
+const stopComposer = Effect.fnUntraced(function* (input: {
   draft: ComposerDraft;
   id: string;
   busy: boolean;
-  prompt: { mutateAsync: (value: { id: string; text: string }) => Promise<unknown> };
-  refreshHistory: () => Promise<unknown>;
+  prompt: typeof mutations.prompt;
+  refreshHistory: () => Effect.Effect<unknown>;
   setSendError: (value: string) => void;
 }) {
   if (!input.busy || input.id === "") {
@@ -2261,13 +2213,10 @@ async function stopComposer(input: {
   }
   const submission = ++input.draft.submission;
   input.setSendError("");
-  try {
-    await input.prompt.mutateAsync({ id: input.id, text: "$stop" });
-    await input.refreshHistory();
-  } catch (err) {
+  yield* input.prompt({ id: input.id, text: "$stop" }).pipe(Effect.andThen(input.refreshHistory), Effect.catch((err) => Effect.sync(() => {
     if (input.draft.submission === submission) input.setSendError(err instanceof Error ? err.message : "stop failed");
-  }
-}
+  })));
+});
 
 function pendingInputs(draft: ComposerDraft, items: QueueItem[]) {
   const consumed = draft.consumed ?? new Set<string>();
@@ -2296,20 +2245,20 @@ function SessionComposer({
   busy: boolean;
   setBusy: (value: boolean) => void;
   setLines: (update: (current: Line[]) => Line[]) => void;
-  refreshHistory: () => Promise<unknown>;
+  refreshHistory: () => Effect.Effect<unknown>;
 }) {
   const [, setEditVersion] = useState(0);
   const { setCommand } = useContext(SessionCommands);
   const { scrollToEnd } = useMessageScroller();
-  const prompt = useMutation({ mutationFn: mutations.prompt, onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["queue"] }); } });
-  const agents = useQuery({ ...queries.agents({ conversationId: id }), refetchInterval: 2000 });
-  const queueQuery = useQuery({ ...queries.queue({ id }), enabled: id !== "", refetchInterval: 2000 });
-  const removeQueueItem = useMutation({ mutationFn: mutations.removeQueueItem, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["queue"] }) });
-  const steerQueueItem = useMutation({ mutationFn: mutations.steerQueueItem, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["queue"] }) });
-  const popQueueItem = useMutation({ mutationFn: mutations.popQueueItem, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["queue"] }) });
-  const reorderQueue = useMutation({ mutationFn: mutations.reorderQueue, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["queue"] }) });
+  const prompt: typeof mutations.prompt = (input) => mutations.prompt(input).pipe(Effect.tap(() => Effect.sync(() => invalidate("queue"))));
+  const agents = useRemote(queries.agents({ conversationId: id }));
+  const queueQuery = useRemote(queries.queue({ id }), id !== "");
+  const removeQueueItem = useAction({ action: mutations.removeQueueItem, onSuccess: () => invalidate("queue") });
+  const steerQueueItem: typeof mutations.steerQueueItem = (input) => mutations.steerQueueItem(input).pipe(Effect.tap(() => Effect.sync(() => invalidate("queue"))));
+  const popQueueItem = useAction({ action: mutations.popQueueItem, onSuccess: () => invalidate("queue") });
+  const reorderQueue = useAction({ action: mutations.reorderQueue, onSuccess: () => invalidate("queue") });
   const invalidateSidebar = useContext(SidebarInvalidation);
-  const create = useMutation({ mutationFn: mutations.createSession, onSuccess: invalidateSidebar });
+  const create: typeof mutations.createSession = (input) => mutations.createSession(input).pipe(Effect.tap(() => Effect.sync(invalidateSidebar)));
   const { text, files, sending, agent } = draft;
   const setText = (value: string) => { draft.text = value; draft.edit++; setEditVersion((version) => version + 1); };
   const setFiles = (value: PendingFile[]) => { draft.files = value; draft.edit++; onDraftChange(); };
@@ -2322,7 +2271,7 @@ function SessionComposer({
   const currentAgent = id === "" ? "main" : agents.data?.currentAgent ?? "";
   const catalog = agents.data?.agents ?? [];
   const selected = catalog.some((item) => item.name === agent) ? agent : currentAgent || catalog[0]?.name || "";
-  const skills = useQuery({ ...queries.skills({ agent: selected }), enabled: selected !== "", placeholderData: undefined });
+  const skills = useRemote(queries.skills({ agent: selected }), selected !== "");
   const matches = dollarOff ? [] : dollarMatches(text, skills.data ?? []);
   const pick = Math.max(0, matches.findIndex((item) => item.invocation === dollarPick));
   const applyDollar = (invocation: string) => {
@@ -2345,7 +2294,7 @@ function SessionComposer({
       setText("");
       return Promise.resolve();
     }
-    return sendComposer({
+    return Effect.runPromise(sendComposer({
       draft,
       onDraftChange,
       text: draft.text,
@@ -2368,10 +2317,10 @@ function SessionComposer({
       setSendError,
       setLines,
       refreshHistory,
-    });
+    }));
   };
-  const promoteQueued = (itemId: string) => promoteComposer({ draft, id, itemId, busy, steerQueueItem, setBusy, setSendError });
-  const stop = () => stopComposer({ draft, id, busy, prompt, refreshHistory, setSendError });
+  const promoteQueued = (itemId: string) => Effect.runPromise(promoteComposer({ draft, id, itemId, busy, steerQueueItem, setBusy, setSendError }));
+  const stop = () => Effect.runPromise(stopComposer({ draft, id, busy, prompt, refreshHistory, setSendError }));
   return (
     <>
       {sendError ? <p className="px-3 pb-2 text-sm text-destructive sm:px-5">{sendError}</p> : null}
@@ -2399,9 +2348,9 @@ function SessionComposer({
         send={send}
         stop={stop}
         steerQueued={promoteQueued}
-        popQueued={(itemId) => { setSendError(""); return popQueueItem.mutateAsync({ id, itemId }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "pop failed")); }}
-        removeQueued={(itemId) => void removeQueueItem.mutateAsync({ id, itemId }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "remove failed"))}
-        reorderQueued={(itemIds) => void reorderQueue.mutateAsync({ id, itemIds }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "reorder failed"))}
+        popQueued={(itemId) => { setSendError(""); return popQueueItem.execute({ id, itemId }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "pop failed")); }}
+        removeQueued={(itemId) => void removeQueueItem.execute({ id, itemId }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "remove failed"))}
+        reorderQueued={(itemIds) => void reorderQueue.execute({ id, itemIds }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "reorder failed"))}
       />
     </>
   );
@@ -2689,20 +2638,20 @@ function CronMarker({ label, tooltip, pct, ran, onClick }: { label: string; tool
 function CronChatLink({ job, className, children }: { job: CronJob; className: string; children: ReactNode }) {
   const route = useRoute();
   const sidebar = useContext(Sidebar);
-  const open = useMutation({ mutationFn: mutations.createSession, onSuccess: (id) => {
+  const open = useAction({ action: mutations.createSession, onSuccess: (id) => {
     sidebar.invalidateQueries();
-    void queryClient.invalidateQueries({ queryKey: ["cronJobs"] });
+    invalidate("cronJobs");
     route.goSession(id);
   } });
   return job.nextRun ? <Link href={sessionPath(job.nextRun)} className={className}>{children}</Link> : <>
-    <button type="button" className={className} disabled={open.isPending} onClick={() => open.mutate({ sourceConversationId: job.origin })}>{open.isPending ? "Opening chat…" : children}</button>
+    <button type="button" className={className} disabled={open.isPending} onClick={() => open.fire({ sourceConversationId: job.origin })}>{open.isPending ? "Opening chat…" : children}</button>
     {open.error ? <p role="alert" className="text-sm text-destructive">{open.error.message}</p> : null}
   </>;
 }
 
 function CronRunPreview({ preview, onClose }: { preview: CronJob; onClose: () => void }) {
   const conversationId = preview.nextRun || preview.origin!;
-  const history = useQuery(queries.history({ id: conversationId, sourceConversationId: preview.nextRun ? preview.origin : undefined }));
+  const history = useRemote(queries.history({ id: conversationId, sourceConversationId: preview.nextRun ? preview.origin : undefined }));
   const previewLines = useMemo(() => historyLines(history.data?.messages ?? []), [history.data]);
   const hasSandboxed = previewLines.some((line) => line.origin === "sandboxed");
   return (
@@ -2724,8 +2673,8 @@ function CronRunPreview({ preview, onClose }: { preview: CronJob; onClose: () =>
 
 function CronPage() {
   const route = useRoute();
-  const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000 });
-  const run = useMutation({ mutationFn: mutations.runCron, onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["cronJobs"] }); } });
+  const jobs = useRemote(queries.cronJobs());
+  const run = useAction({ action: mutations.runCron, onSuccess: (id, { stem }) => { invalidate("cronJobs"); if (id !== "") { notePendingCron(id, stem); route.goSession(id); } } });
   const [runQuery, setRunQuery] = useState("");
   const [confirmStem, setConfirmStem] = useState("");
   const confirmTrigger = useRef<HTMLButtonElement>(null);
@@ -2842,7 +2791,7 @@ function CronPage() {
             <div className="mt-6 flex justify-end gap-2">
               <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
               <Button onClick={() => {
-                run.mutate({ stem: confirmStem }, { onSuccess: (id) => { if (id !== "") { notePendingCron(id, confirmStem); route.goSession(id); } } });
+                run.fire({ stem: confirmStem });
                 setConfirmStem("");
               }}>Run</Button>
             </div>
@@ -2853,7 +2802,7 @@ function CronPage() {
 }
 
 function AgentsPage() {
-  const agents = useQuery({ ...queries.agents(), staleTime: 60_000 });
+  const agents = useRemote(queries.agents());
   const [open, setOpen] = useState<string | null>(null);
   const rows = agents.data?.agents ?? [];
   return (
@@ -2892,7 +2841,7 @@ function AgentsPage() {
 }
 
 function SkillsPage() {
-  const skills = useQuery({ ...queries.skills(), staleTime: 60_000 });
+  const skills = useRemote(queries.skills());
   const [open, setOpen] = useState<string | null>(null);
   const rows = skills.data ?? [];
   return (
@@ -2959,7 +2908,7 @@ function ConfigList({ items, empty }: { items: ConfigItem[]; empty: string }) {
 }
 
 function ConfigLoaded({ view }: { view: ConfigView }) {
-  const identity = useQuery(queries.identity());
+  const identity = useRemote(queries.identity());
   const overlays: ConfigItem[] = (view.overlays ?? []).map((overlay) => ({ key: overlay, label: overlay }));
   const models: ConfigItem[] = (view.models ?? []).map((model, index) => ({
     key: `${model.name ?? ""}-${index}`,
@@ -3003,7 +2952,7 @@ function ConfigLoaded({ view }: { view: ConfigView }) {
 }
 
 function ConfigPage() {
-  const config = useQuery({ ...queries.config(), staleTime: 60_000 });
+  const config = useRemote(queries.config());
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 overflow-y-auto p-4">
       <PageTitle>Config</PageTitle>

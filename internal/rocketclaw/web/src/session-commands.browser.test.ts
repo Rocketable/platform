@@ -48,9 +48,11 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main", model: "test" }], currentAgent: "main" });
       case "/api/ListSkills": return Response.json({ skills: [] });
+      case "/api/ListCronJobs": return Response.json({ jobs: [] });
+      case "/api/ListConfig": return Response.json({ config: {} });
       case "/api/History": {
         const messages = histories[input.id] ?? [];
-        return Response.json({ messages, origin: "", revision: JSON.stringify({ messages, running: running.has(input.id) }), reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(messages.map((message) => message.entryKey))], running: running.has(input.id), terminal: "" });
+        return Response.json({ messages, origin: "", delegations: [], revision: JSON.stringify({ messages, running: running.has(input.id) }), reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(messages.map((message) => message.entryKey))], running: running.has(input.id), terminal: "" });
       }
       case "/api/ListQueue": return Response.json({ items: queues[input.id] ?? [] });
       case "/api/UpdateSession":
@@ -320,13 +322,18 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
     await dialog.getByRole("alert").waitFor();
     expect(await dialog.getByRole("alert").textContent()).toBe("Handoff provider failed");
     expect(handoffs).toEqual(["source"]);
+    const retriedAction = page.waitForResponse("**/api/Handoff");
+    await dialog.getByRole("button", { name: "Copy handoff", exact: true }).click();
+    await retriedAction;
+    await dialog.getByRole("button", { name: "Copy handoff", exact: true }).waitFor();
+    expect(handoffs).toEqual(["source", "source"]);
     expect(searches).toEqual([]);
     for (const label of ["Copy handoff", "Start new session"]) expect(await dialog.getByRole("button", { name: label, exact: true }).count()).toBe(1);
     expect(await dialog.getByRole("button", { name: /Destination search needle/ }).count()).toBe(0);
     expect(prompts).toHaveLength(0);
     failHandoff = false;
     await dialog.getByRole("button", { name: "Retry handoff" }).click();
-    expect(handoffs).toEqual(["source", "source"]);
+    expect(handoffs).toEqual(["source", "source", "source"]);
     const aborted = page.waitForEvent("requestfailed", (request: { url: () => string }) => request.url().endsWith("/api/Handoff"));
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await aborted;
@@ -344,7 +351,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
     await dialog.waitFor({ state: "hidden" });
     await page.evaluate(() => Reflect.deleteProperty(navigator, "clipboard"));
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(handoffDocument);
-    expect(handoffs).toEqual(["source", "source", "source"]);
+    expect(handoffs).toEqual(["source", "source", "source", "source"]);
     expect(prompts).toHaveLength(0);
 
     await composer.fill("$handoff");
@@ -361,7 +368,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
     await dialog.getByText("Podcast editing notes with a very long conversation title", { exact: true }).waitFor();
     await page.locator("main").getByText("You are looking at the destination", { exact: true }).waitFor();
     await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>('button[aria-label="Stash handoff here"]')?.disabled);
-    expect(handoffs).toEqual(["source", "source", "source", "source"]);
+    expect(handoffs).toEqual(["source", "source", "source", "source", "source"]);
     expect(await composer.isVisible()).toBe(false);
     const bounds = await dialog.boundingBox();
     expect(bounds.height).toBeLessThan(height * 0.75);
@@ -383,7 +390,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
     expect(await expanded.locator("pre").textContent()).toBe(handoffDocument);
     await expanded.getByRole("button", { name: "Close", exact: true }).click();
     await expanded.waitFor({ state: "hidden" });
-    expect(handoffs).toEqual(["source", "source", "source", "source"]);
+    expect(handoffs).toEqual(["source", "source", "source", "source", "source"]);
     await dialog.getByRole("button", { name: "Stash handoff here" }).click();
     await dialog.getByRole("button", { name: "Stash handoff here" }).getByText("Stashing…", { exact: true }).waitFor();
     expect(await dialog.getByRole("button", { name: "Stash handoff here" }).isDisabled()).toBe(true);

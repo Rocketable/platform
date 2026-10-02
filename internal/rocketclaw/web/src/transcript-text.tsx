@@ -1,42 +1,53 @@
-import { useState } from "react";
+import { Effect } from "effect";
+import { useEffect, useRef, useState } from "react";
 import { Check, Copy, Maximize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogTrigger, DialogContent, DialogTitle } from "@/components/ui/dialog";
 
-export async function copyText(text: string, container: Element) {
+export const copyText = Effect.fnUntraced(function*(text: string, container: Element): Effect.fn.Return<void, Error> {
   if (navigator.clipboard) {
-    await navigator.clipboard.writeText(text);
+    yield* Effect.tryPromise({
+      try: () => navigator.clipboard.writeText(text),
+      catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
+    });
   } else {
     // RocketClaw also serves plain HTTP, where the Clipboard API is unavailable.
-    const input = document.createElement("textarea");
-    input.value = text;
-    input.style.position = "fixed";
-    input.style.opacity = "0";
-    const focus = document.activeElement as HTMLElement;
-    container.append(input);
-    try {
-      input.select();
-      if (!document.execCommand("copy")) throw new Error("Copy failed");
-    } finally {
-      input.remove();
-      focus.focus({ preventScroll: true });
-    }
+    yield* Effect.try({
+      try: () => {
+        const input = document.createElement("textarea");
+        input.value = text;
+        input.style.position = "fixed";
+        input.style.opacity = "0";
+        const focus = document.activeElement as HTMLElement;
+        container.append(input);
+        try {
+          input.select();
+          if (!document.execCommand("copy")) throw new Error("Copy failed");
+        } finally {
+          input.remove();
+          focus.focus({ preventScroll: true });
+        }
+      },
+      catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
+    });
   }
-}
+});
 
 export function CodeBlock({ text, label = "Code", compact = false }: { text: string; label?: string; compact?: boolean }) {
   const [copied, setCopied] = useState<string>();
   const [error, setError] = useState(false);
+  const stopCopy = useRef(() => {});
+  useEffect(() => () => stopCopy.current(), [text]);
   const actionProps = compact ? { variant: "outline", size: "default", className: "min-h-11" } as const : { variant: "ghost", size: "icon-sm" } as const;
-  const copy = <Button type="button" {...actionProps} aria-label={`Copy ${label}`} title={`Copy ${label}`} onClick={async (event) => {
+  const copy = <Button type="button" {...actionProps} aria-label={`Copy ${label}`} title={`Copy ${label}`} onClick={(event) => {
         const container = event.currentTarget.closest('[role="dialog"]') ?? document.body;
+        stopCopy.current();
+        setCopied(undefined);
         setError(false);
-        try {
-          await copyText(text, container);
-          setCopied(text);
-        } catch {
-          setError(true);
-        }
+        stopCopy.current = Effect.runCallback(copyText(text, container).pipe(Effect.match({
+          onFailure: () => setError(true),
+          onSuccess: () => setCopied(text),
+        })));
       }}>{copied === text && !error ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}<span hidden={!compact}>Copy</span></Button>;
   const status = <span role="status" className={error ? "text-xs text-destructive" : "sr-only"}>{error ? "Could not copy. Select and copy the text." : copied === text ? "Copied" : ""}</span>;
   return <Dialog>

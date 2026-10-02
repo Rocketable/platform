@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { Deferred, Effect, Exit, Fiber, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import { RPCError } from "./api";
 import type { Session, SessionBatch } from "./types";
 import {
@@ -18,10 +20,6 @@ const alice = (sessions: Session[], flags: Partial<SessionBatch> = {}): SessionB
   summariesComplete: true,
   ...flags,
 });
-
-async function* batchesOf(rows: SessionBatch[]) {
-  yield* rows;
-}
 
 describe("session list reconciliation", () => {
   test("keeps prior rows and replaces matching IDs in server prefix order", () => {
@@ -71,42 +69,39 @@ describe("session list reconciliation", () => {
   test("merges a prefix, ignores owner mismatch, and does not treat a late throw as exhaustion", async () => {
     const prior: Session[] = [{ id: "old", preview: "keep" }];
     const seen: Session[][] = [];
-    const result = await readSessionEnumeration(
+    const result = await Effect.runPromise(readSessionEnumeration(
       "alice",
-      batchesOf([alice([{ id: "new", preview: "fresh" }]), alice([{ id: "new", preview: "fresh" }], { owner: "bob", upstreamSuccess: true })]),
+      Stream.make(alice([{ id: "new", preview: "fresh" }]), alice([{ id: "new", preview: "fresh" }], { owner: "bob", upstreamSuccess: true })),
       () => prior,
       (rows) => seen.push(rows),
-    );
+    ));
     expect(seen).toEqual([[{ id: "new", preview: "fresh" }, { id: "old", preview: "keep" }]]);
     expect(result).toEqual({ received: [{ id: "new", preview: "fresh" }], upstreamSuccess: false, summariesComplete: false, exhausted: false, mismatch: true });
     expect(shouldCommitSnapshot(result)).toBe(false);
 
-    async function* lateFailure() {
-      yield alice([{ id: "one" }], { upstreamSuccess: true, summariesComplete: true });
-      throw new Error("cut");
-    }
-    const failed = await readSessionEnumeration("alice", lateFailure(), () => [], () => {});
+    const lateFailure = Stream.concat(Stream.make(alice([{ id: "one" }], { upstreamSuccess: true, summariesComplete: true })), Stream.fail(new Error("cut")));
+    const failed = await Effect.runPromise(readSessionEnumeration("alice", lateFailure, () => [], () => {}));
     expect(failed.exhausted).toBe(false);
     expect(failed.upstreamSuccess).toBe(true);
     expect(shouldCommitSnapshot(failed)).toBe(false);
 
     const denied = new RPCError("denied", 16);
-    for (const batches of [Promise.reject(denied), (async function* () { yield alice([{ id: "prefix" }]); throw denied; })()]) {
-      const rejected = await readSessionEnumeration("alice", batches, () => prior, () => {});
+    for (const batches of [Stream.fail(denied), Stream.concat(Stream.make(alice([{ id: "prefix" }])), Stream.fail(denied))]) {
+      const rejected = await Effect.runPromise(readSessionEnumeration("alice", batches, () => prior, () => {}));
       expect(rejected.mismatch).toBe(true);
       expect(shouldCommitSnapshot(rejected)).toBe(false);
     }
   });
 
   test("empty successful exhaustion is committable", async () => {
-    const result = await readSessionEnumeration("alice", batchesOf([alice([], { upstreamSuccess: true, summariesComplete: true })]), () => [{ id: "old" }], () => {});
+    const result = await Effect.runPromise(readSessionEnumeration("alice", Stream.make(alice([], { upstreamSuccess: true, summariesComplete: true })), () => [{ id: "old" }], () => {}));
     expect(result.received).toEqual([]);
     expect(shouldCommitSnapshot(result)).toBe(true);
   });
 
   test("merges repeated IDs and keeps an earlier missing summary non-authoritative", async () => {
     const observed: { summaries: [string, boolean][]; complete: boolean }[] = [];
-    const result = await readSessionEnumeration("alice", batchesOf([
+    const result = await Effect.runPromise(readSessionEnumeration("alice", Stream.make(
       alice([{ id: "legacy" }], { summariesComplete: false }),
       alice([{ id: "empty", preview: "" }]),
       alice([{ id: "empty", preview: "new message" }]),
@@ -114,7 +109,7 @@ describe("session list reconciliation", () => {
       alice([{ id: "replaced" }], { summariesComplete: false }),
       alice([{ id: "replaced", preview: "ready" }]),
       alice([], { upstreamSuccess: true, summariesComplete: false }),
-    ]), () => [], (_rows, summaries, complete) => observed.push({ summaries: [...summaries], complete }));
+    ), () => [], (_rows, summaries, complete) => observed.push({ summaries: [...summaries], complete })));
     expect(result.received).toEqual([{ id: "legacy" }, { id: "empty", preview: "new message" }, { id: "missing" }, { id: "replaced", preview: "ready" }]);
     expect(observed).toEqual([
       { summaries: [["legacy", false]], complete: false },
@@ -124,67 +119,88 @@ describe("session list reconciliation", () => {
   });
 
   test("publishes an immediate row and coalesced prefix before a held tail", async () => {
-    const tail = Promise.withResolvers<void>();
-    const consumed = Promise.withResolvers<void>();
-    const published = Promise.withResolvers<void>();
-    const rows = Array.from({ length: 446 }, (_, i) => ({ id: `row-${i}`, preview: `preview-${i}` }));
-    const expected = rows.map((row, i) => i === 1 || i === 3 ? { id: row.id } : i === 2 ? { ...row, preview: "replacement" } : row);
-    const loading = new Set<string>();
-    let baseline: Session[] = [];
-    let publications = 0;
-    async function* stream() {
-      yield alice([rows[0]]);
-      expect(baseline).toEqual([rows[0]]);
-      for (const row of rows.slice(1)) yield alice([row]);
-      yield alice([{ id: "row-1" }, { id: "row-2" }, { id: "row-3" }], { summariesComplete: false });
-      yield alice([{ id: "row-2", preview: "replacement" }]);
-      consumed.resolve();
-      await tail.promise;
-      yield alice([], { upstreamSuccess: true });
-    }
-    const reading = readSessionEnumeration("alice", stream(), () => baseline, (merged, summaries) => {
-      baseline = merged;
-      for (const [id, ready] of summaries) {
-        if (ready) loading.delete(id);
-        else loading.add(id);
-      }
-      publications += 1;
-      if (merged.length === rows.length + 1) published.resolve();
-    });
-    await consumed.promise;
-    // Saved hydration arriving between transport and display must survive the flush.
-    baseline = [...baseline, { id: "saved", preview: "keep" }];
-    try {
+    await Effect.runPromise(Effect.gen(function* () {
+      const tail = yield* Deferred.make<void>();
+      const consumed = yield* Deferred.make<void>();
+      const rows = Array.from({ length: 446 }, (_, i) => ({ id: `row-${i}`, preview: `preview-${i}` }));
+      const expected = rows.map((row, i) => i === 1 || i === 3 ? { id: row.id } : i === 2 ? { ...row, preview: "replacement" } : row);
+      const loading = new Set<string>();
+      let baseline: Session[] = [];
+      let publications = 0;
+      const stream = Stream.make(alice([rows[0]])).pipe(Stream.concat(Stream.suspend(() => {
+        expect(baseline).toEqual([rows[0]]);
+        return Stream.fromIterable([
+          ...rows.slice(1).map((row) => alice([row])),
+          alice([{ id: "row-1" }, { id: "row-2" }, { id: "row-3" }], { summariesComplete: false }),
+          alice([{ id: "row-2", preview: "replacement" }]),
+        ]);
+      })), Stream.concat(Stream.fromEffect(Effect.gen(function* () {
+        yield* Deferred.succeed(consumed, undefined);
+        yield* Deferred.await(tail);
+        return alice([], { upstreamSuccess: true });
+      }))));
+      const reading = yield* Effect.forkChild(readSessionEnumeration("alice", stream, () => baseline, (merged, summaries) => {
+        baseline = merged;
+        for (const [id, ready] of summaries) {
+          if (ready) loading.delete(id);
+          else loading.add(id);
+        }
+        publications += 1;
+      }));
+      yield* Deferred.await(consumed);
+      // Saved hydration arriving between transport and display must survive the flush.
+      baseline = [...baseline, { id: "saved", preview: "keep" }];
       expect(publications).toBe(1);
-      await published.promise;
+      yield* TestClock.adjust(15);
+      expect(publications).toBe(1);
+      yield* TestClock.adjust(1);
+      expect(publications).toBe(2);
       expect(baseline).toEqual([...expected, { id: "saved", preview: "keep" }]);
       expect([...loading]).toEqual(["row-1", "row-3"]);
-    } finally {
-      tail.resolve();
-    }
-    const result = await reading;
-    expect(result.received).toEqual(expected);
-    expect(result.exhausted).toBe(true);
-    expect(shouldCommitSnapshot(result)).toBe(false);
+      yield* Deferred.succeed(tail, undefined);
+      const result = yield* Fiber.join(reading);
+      expect(result.received).toEqual(expected);
+      expect(result.exhausted).toBe(true);
+      expect(shouldCommitSnapshot(result)).toBe(false);
+    }).pipe(Effect.provide(TestClock.layer())));
   });
 
-  test("flushes a failed prefix but cancels pending publication on abort or owner mismatch", async () => {
-    for (const ending of ["error", "abort", "mismatch"] as const) {
-      const ac = new AbortController();
-      const seen: Session[][] = [];
-      async function* stream() {
-        yield alice([{ id: "first" }]);
-        yield alice([{ id: "pending" }], { upstreamSuccess: true });
-        if (ending === "abort") ac.abort();
-        if (ending === "mismatch") yield alice([{ id: "foreign" }], { owner: "bob" });
-        else throw new Error("cut");
+  test("flushes a failed prefix but cancels pending publication on interruption or owner mismatch", async () => {
+    await Effect.runPromise(Effect.gen(function* () {
+      for (const ending of ["error", "interrupt", "mismatch", "denied"] as const) {
+        const consumed = yield* Deferred.make<void>();
+        const cleaning = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const seen: Session[][] = [];
+        const stream = Stream.make(alice([{ id: "first" }]), alice([{ id: "pending" }], { upstreamSuccess: true })).pipe(Stream.concat(
+          ending === "mismatch" ? Stream.make(alice([{ id: "foreign" }], { owner: "bob" })) : ending === "denied" ? Stream.fail(new RPCError("denied", 16)) : ending === "error" ? Stream.fail(new Error("cut")) :
+            Stream.fromEffect(Deferred.succeed(consumed, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.ensuring(Deferred.succeed(cleaning, undefined).pipe(Effect.andThen(Deferred.await(release)))),
+            )),
+        ));
+        const reading = yield* Effect.forkChild(readSessionEnumeration("alice", stream, () => [], (rows) => seen.push(rows)));
+        if (ending === "interrupt") {
+          yield* Deferred.await(consumed);
+          const stopping = yield* Effect.forkChild(Fiber.interrupt(reading));
+          yield* Deferred.await(cleaning);
+          yield* TestClock.adjust(25);
+          const duringCleanup = seen.length;
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(stopping);
+          expect(duringCleanup).toBe(1);
+        }
+        const result = yield* Fiber.await(reading);
+        expect(seen).toEqual(ending === "error" ? [[{ id: "first" }], [{ id: "first" }, { id: "pending" }]] : [[{ id: "first" }]]);
+        expect(Exit.hasInterrupts(result)).toBe(ending === "interrupt");
+        if (Exit.isSuccess(result)) {
+          expect(result.value.received).toEqual([{ id: "first" }, { id: "pending" }]);
+          expect(result.value.mismatch).toBe(ending === "mismatch" || ending === "denied");
+          expect(shouldCommitSnapshot(result.value)).toBe(false);
+        }
+        yield* TestClock.adjust(25);
+        expect(seen.length).toBe(ending === "error" ? 2 : 1);
       }
-      const result = await readSessionEnumeration("alice", stream(), () => [], (rows) => seen.push(rows), ac.signal);
-      expect(seen).toEqual(ending === "error" ? [[{ id: "first" }], [{ id: "first" }, { id: "pending" }]] : [[{ id: "first" }]]);
-      expect(result.received).toEqual([{ id: "first" }, { id: "pending" }]);
-      expect(shouldCommitSnapshot(result)).toBe(false);
-      await Bun.sleep(25);
-      expect(seen.length).toBe(ending === "error" ? 2 : 1);
-    }
+    }).pipe(Effect.provide(TestClock.layer())));
   });
 });

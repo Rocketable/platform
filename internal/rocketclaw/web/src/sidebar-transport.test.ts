@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
+import { Deferred, Effect, Stream } from "effect";
 import { listSessions } from "./api";
-import type { AgentChoices } from "./types";
+import type { AgentChoices, SessionBatch } from "./types";
 
 // Go holds the second row until this real HTTP client cancels enumeration.
 test.skipIf(!process.env.ROCKETCLAW_TEST_HTTP_URL)("first Go row and composer choices arrive before the blocked tail", async () => {
@@ -14,12 +15,12 @@ test.skipIf(!process.env.ROCKETCLAW_TEST_HTTP_URL)("first Go row and composer ch
   try {
     expect(await call("Identity")).toEqual({ username: "alice" });
     expect(await call("Protocol")).toEqual({ protoSha256: new Bun.CryptoHasher("sha256").update(await Bun.file(new URL("../proto/web.proto", import.meta.url)).arrayBuffer()).digest("hex") });
-    const iterator = listSessions(abort.signal, `${url}/api/ListSessions`);
-    expect(await iterator.next()).toMatchObject({ done: false, value: {
+    const first = Deferred.makeUnsafe<SessionBatch>();
+    const pending = Effect.runPromise(listSessions(`${url}/api/ListSessions`).pipe(Stream.runForEach((batch) => Deferred.succeed(first, batch))), { signal: abort.signal });
+    expect(await Effect.runPromise(Deferred.await(first))).toMatchObject({
       sessions: [{ id: "slack-thread:C1:1.1", title: "C1", agent: "main", settled: true, updatedAt: "1970-01-01T00:00:02.123456Z", allowedAgents: ["main"] }],
       owner: "alice", upstreamSuccess: false, summariesComplete: true,
-    } });
-    const pending = iterator.next();
+    });
     const choices: AgentChoices = await call("ListAgents", { conversationId: "slack-thread:C1:1.1" });
     expect(choices.currentAgent).toBe("main");
     expect(choices.agents.map((agent) => agent.name)).toEqual(["main"]);

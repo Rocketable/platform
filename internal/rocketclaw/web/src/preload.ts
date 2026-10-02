@@ -1,23 +1,24 @@
+import { Effect } from "effect";
+
 export function runPreload(
-  fetchAgents: () => Promise<unknown>,
-  fetchSkills: () => Promise<unknown>,
-  fetchCron: () => Promise<unknown>,
-  fetchConfig: () => Promise<unknown>,
+  fetchAgents: Effect.Effect<unknown>,
+  fetchSkills: Effect.Effect<unknown>,
+  fetchCron: Effect.Effect<unknown>,
+  fetchConfig: Effect.Effect<unknown>,
   onReady: () => void,
 ) {
-  let cancelled = false;
-  const preload = async () => {
-    await Promise.all([fetchAgents(), fetchSkills()]);
-    if (cancelled) return;
-    await fetchCron();
-    if (cancelled) return;
-    await fetchConfig();
-    if (!cancelled) onReady();
-  };
-  if (typeof requestIdleCallback === "function") {
-    const idle = requestIdleCallback(() => { void preload(); });
-    return () => { cancelled = true; cancelIdleCallback(idle); };
-  }
-  const timer = setTimeout(() => { void preload(); }, 0);
-  return () => { cancelled = true; clearTimeout(timer); };
+  return Effect.runCallback(Effect.gen(function*() {
+    yield* Effect.callback<void>((resume) => {
+      if (typeof requestIdleCallback === "function") {
+        const idle = requestIdleCallback(() => resume(Effect.void));
+        return Effect.sync(() => cancelIdleCallback(idle));
+      }
+      const timer = setTimeout(() => resume(Effect.void), 0);
+      return Effect.sync(() => clearTimeout(timer));
+    });
+    yield* Effect.all([fetchAgents, fetchSkills], { concurrency: "unbounded", discard: true });
+    yield* fetchCron;
+    yield* fetchConfig;
+    onReady();
+  }));
 }

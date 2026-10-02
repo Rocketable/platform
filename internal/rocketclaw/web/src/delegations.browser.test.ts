@@ -28,10 +28,12 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test.skipIf(!playwright
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListSkills": return Response.json({ skills: [] });
+      case "/api/ListCronJobs": return Response.json({ jobs: [] });
+      case "/api/ListConfig": return Response.json({ config: {} });
       case "/api/History": {
         const history = histories[input.id] ?? { messages: [], delegations: [] };
         const messages = history.messages.map((message, index) => ({ ...message, entryKey: input.id, itemId: `${input.id}:${index}` }));
-        return Response.json({ ...history, messages, revision: input.id, reset: true, replacedKeys: [], removedKeys: [], entryKeys: [input.id], running: false, terminal: "" });
+        return Response.json({ ...history, messages, origin: "", revision: input.id, reset: true, replacedKeys: [], removedKeys: [], entryKeys: [input.id], running: false, terminal: "" });
       }
       case "/api/ListQueue": return Response.json({ items: [] });
       default: return Response.json({});
