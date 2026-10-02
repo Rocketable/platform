@@ -119,7 +119,7 @@ func standaloneDefaultConfig() Config {
 		ReasoningEffort:  shared.ReasoningEffort("high"),
 		CompactThreshold: 200000,
 		ShellTempDir:     filepath.Join(".tmp", "shell-tmp"),
-		ChildRunLogger:   DiscardChildRunLog,
+		ChildSessions:    InertChildSessions{},
 		CheckpointSink:   InertCheckpointSink{},
 		ShellCommand:     DefaultShellCommand,
 		CustomTools: []Tool{{

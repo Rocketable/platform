@@ -44,7 +44,8 @@ type toolFactory struct {
 	spillRel                   string
 	autoApprovePermissions     bool
 	observability              ObservabilityConfig
-	childRunLogger             ChildRunLogger
+	childSessions              ChildSessions
+	childKey                   string
 
 	// inGuardrailRun reports whether this factory is executing a guardrail agent.
 	// When false, task calls apply target-agent guardrails. When true, nested task calls skip guardrail checks.

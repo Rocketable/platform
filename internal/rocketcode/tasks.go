@@ -213,6 +213,8 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
 
 	childFactory := *f
+	childFactory.childKey = f.childKey + "/" + metadata.callID
+
 	if f.recursionRemaining != nil {
 		remaining := *f.recursionRemaining - 1
 		childFactory.recursionRemaining = &remaining
@@ -292,7 +294,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	})
 
 	interrupts := make(chan os.Signal, 1)
-	err = child.Loop(ctx, input, func(func(SessionEntry, error) bool) {}, func(SessionEntry) error { return nil }, interrupts)
+	err = child.Loop(ctx, input, func(func(SessionEntry, error) bool) {}, childFactory.childSessionOut(ctx), interrupts)
 
 	if errWait := group.Wait(); errWait != nil {
 		return "", fmt.Errorf("collect task output: %w", errWait)
@@ -357,6 +359,16 @@ func (f *toolFactory) childSession(yield func(SessionEntry, error) bool) {
 	}
 }
 
+func (f *toolFactory) childSessionOut(ctx context.Context) func(SessionEntry) error {
+	return func(entry SessionEntry) error {
+		if err := f.childSessions.AppendChildEntry(ctx, f.childKey, &entry); err != nil {
+			return fmt.Errorf("append child session entry: %w", err)
+		}
+
+		return nil
+	}
+}
+
 func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage ChildRunStage, message, guardedAgent string, metadata toolCallMetadata, parentOutput chan<- ChatResponse) guardrailDecision {
 	agent := *guardrail
 	agent.Permission = f.shellTemp.effectivePermissions(agent.Permission)
@@ -371,6 +383,7 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 
 	childFactory := *f
 	childFactory.inGuardrailRun = true
+	childFactory.childKey = f.childKey + "/" + metadata.callID
 
 	modelTools, codeHosts := childFactory.assembleTools(&agent)
 	child := &looper{
@@ -412,8 +425,6 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 
 	group.Go(func() error {
 		for item := range output {
-			f.childRunLogger(&ChildRunEvent{Kind: ChildRunKindGuardrail, Stage: stage, Agent: agent.Name, Item: item})
-
 			if f.diagnostics {
 				emitGuardrailDiagnostic(parentOutput, guardedAgent, agent.Name, stage, metadata, item)
 			}
@@ -426,7 +437,7 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 		return nil
 	})
 
-	if err := child.Loop(ctx, input, f.childSession, func(SessionEntry) error { return nil }, make(chan os.Signal, 1)); err != nil {
+	if err := child.Loop(ctx, input, f.childSession, childFactory.childSessionOut(ctx), make(chan os.Signal, 1)); err != nil {
 		_ = group.Wait()
 		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail failed: " + err.Error()}
 	}

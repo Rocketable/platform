@@ -122,6 +122,12 @@ One model loop in RocketCode. It owns that loop's Spills.
 
 A RocketCode Turn is not the active-turn slot on a Managed Slack Thread. Slack occupancy often drives one RocketCode Turn, but the two lifetimes are not the same object.
 
+### Delegation History
+
+The session history of what one tool call delegated: its automatic permission reviews, guardrail checks, and Task subagent, each a finished turn. Its conversation ID is the producing conversation's ID plus `/<tool call ID>`; a delegation inside it adds another `/<tool call ID>`.
+
+A Delegation History has no Managed Slack Thread or web chat of its own. It is deleted and forked with its producing conversation.
+
 ## Process layout
 
 ### Backend

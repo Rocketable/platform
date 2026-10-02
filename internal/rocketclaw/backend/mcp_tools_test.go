@@ -80,7 +80,7 @@ func TestWorkflowPrepareOmitsMCPTools(t *testing.T) {
 	runtime, err := rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{
 		ShellTempDir:   filepath.Join(cfg.Workspace, filepath.FromSlash(shellRel)),
 		Diagnostics:    true,
-		ChildRunLogger: rocketcode.DiscardChildRunLog,
+		ChildSessions:  rocketcode.InertChildSessions{},
 		CheckpointSink: rocketcode.InertCheckpointSink{},
 		ShellCommand:   rocketcode.DefaultShellCommand,
 	}, root, agents, skills, "main", io.Discard)

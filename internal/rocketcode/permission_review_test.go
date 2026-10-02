@@ -38,9 +38,7 @@ func TestEmbeddedGuardianAgentUsesLowReasoningEffort(t *testing.T) {
 	require.Equal(t, "low", agent.ReasoningEffort)
 }
 
-func TestPermissionReviewLogsHiddenChildRunOutput(t *testing.T) {
-	var childRunEvents []ChildRunEvent
-
+func TestPermissionReviewEmitsDiagnosticsWithChildContext(t *testing.T) {
 	mock := mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
 		testReasoningOutputItem("review-reasoning", "", "considering risk"),
 		testMessageOutputItem("review-commentary", "commentary", "checking authorization"),
@@ -55,10 +53,8 @@ func TestPermissionReviewLogsHiddenChildRunOutput(t *testing.T) {
 		childContext: []SessionEntry{{Version: 1, ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"message","role":"developer","content":"This external MCP thread has metadata:\nROCKETCLAW_METADATA_TICKET_ID=\"123\""}`),
 		}}},
-		childRunLogger: func(event *ChildRunEvent) {
-			childRunEvents = append(childRunEvents, *event)
-		},
-		diagnostics: true,
+		childSessions: InertChildSessions{},
+		diagnostics:   true,
 	}
 	output := make(chan ChatResponse, 10)
 
@@ -72,11 +68,6 @@ func TestPermissionReviewLogsHiddenChildRunOutput(t *testing.T) {
 		subagentDiagnosticResponse(&SubagentDiagnostic{Name: "guardian", Label: "auto-approver", Subagent: &SubagentDiagnostic{Label: "assistant commentary", Text: "checking authorization"}}),
 		subagentDiagnosticResponse(&SubagentDiagnostic{Name: "guardian", Label: "auto-approver", Text: "allow: Low-risk action.", Subagent: &SubagentDiagnostic{Label: "result"}}),
 	}, drainBufferedResponses(output))
-	require.Equal(t, []ChildRunEvent{
-		{Kind: ChildRunKindPermissionReview, Stage: ChildRunStageToolPermission, Agent: "guardian", Item: reasoningSummary("considering risk")},
-		{Kind: ChildRunKindPermissionReview, Stage: ChildRunStageToolPermission, Agent: "guardian", Item: assistantCommentary("checking authorization")},
-		{Kind: ChildRunKindPermissionReview, Stage: ChildRunStageToolPermission, Agent: "guardian", Item: assistantMessage(`{"risk_level":"low","user_authorization":"medium","outcome":"allow","rationale":"Low-risk action."}`)},
-	}, childRunEvents)
 }
 
 func TestPermissionReviewUsesConfiguredAutoApproverModel(t *testing.T) {
@@ -89,7 +80,7 @@ func TestPermissionReviewUsesConfiguredAutoApproverModel(t *testing.T) {
 		agents:            Agents{Items: map[string]Agent{}},
 		skills:            Skills{Items: map[string]Skill{}},
 		baseTools:         map[string]looperTool{},
-		childRunLogger:    DiscardChildRunLog,
+		childSessions:     InertChildSessions{},
 	}
 
 	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, make(chan ChatResponse, 10))

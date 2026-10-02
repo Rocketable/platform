@@ -76,7 +76,7 @@ func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logge
 			}
 		}()
 
-		runtimeConfig := rocketcode.Config{AutoApproverModel: cfg.AutoApproverModel, ShellTempDir: filepath.Join(cfg.Workspace, filepath.FromSlash(shellTempRel)), SpillDir: rocketcodeSpillDir(cfg), Diagnostics: true, ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildRunLogger: rocketcode.DiscardChildRunLog, CheckpointSink: rocketcode.InertCheckpointSink{}, ShellCommand: rocketcode.DefaultShellCommand}
+		runtimeConfig := rocketcode.Config{AutoApproverModel: cfg.AutoApproverModel, ShellTempDir: filepath.Join(cfg.Workspace, filepath.FromSlash(shellTempRel)), SpillDir: rocketcodeSpillDir(cfg), Diagnostics: true, ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildSessions: rocketcode.InertChildSessions{}, CheckpointSink: rocketcode.InertCheckpointSink{}, ShellCommand: rocketcode.DefaultShellCommand}
 
 		runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, callAgents, skills, agent, io.Discard)
 		if err != nil {

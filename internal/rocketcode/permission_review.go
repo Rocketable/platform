@@ -46,6 +46,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 
 	childFactory := *f
 	childFactory.inPermissionReview = true
+	childFactory.childKey = f.childKey + "/" + request.CallID
 
 	modelTools, codeHosts := childFactory.assembleTools(&agent)
 	child := &looper{
@@ -100,8 +101,6 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 
 	group.Go(func() error {
 		for item := range output {
-			f.childRunLogger(&ChildRunEvent{Kind: ChildRunKindPermissionReview, Stage: ChildRunStageToolPermission, Agent: agent.Name, Item: item})
-
 			if f.diagnostics {
 				emitPermissionReviewDiagnostic(parentOutput, agent.Name, item)
 			}
@@ -114,7 +113,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 		return nil
 	})
 
-	if err := child.Loop(reviewCtx, input, f.childSession, func(SessionEntry) error { return nil }, make(chan os.Signal, 1)); err != nil {
+	if err := child.Loop(reviewCtx, input, f.childSession, childFactory.childSessionOut(reviewCtx), make(chan os.Signal, 1)); err != nil {
 		_ = group.Wait()
 
 		if reviewCtx.Err() == context.DeadlineExceeded {

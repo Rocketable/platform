@@ -322,6 +322,14 @@ Each turn has an inline **Thinking** disclosure, expanded by default, containing
 reasoning summaries and tool traces. Replies and successful verbatim-delivery
 reports appear as normal messages outside that disclosure. The chat has no
 database-entry inspection panel.
+A tool row whose call delegated work (an `auto` permission review, a guardrail
+check, or a Task subagent) shows **Open delegation**. It opens that Delegation
+History read-only beside the chat on wide screens and full screen on narrow
+ones, with breadcrumbs for nested delegations. The panel lives in the
+`delegation` query parameter, so Back, Forward, and reload keep it. A link at the
+end of each transcript goes back up one level. Only finished delegations are
+saved. On wide screens the session sidebar and the delegation panel can be
+resized by dragging their inner edge, and the width is remembered.
 Each tool call has one labeled, initially expanded disclosure containing its
 arguments and matching result. Loaded skill instructions fold with their skill
 call. Long results have a collapse control at the bottom as well as the header.

@@ -2006,7 +2006,7 @@ Prompt
 
 	shellTempDir := filepath.Join(workspace, "shell-tmp")
 	require.NoError(t, os.Mkdir(shellTempDir, 0o755))
-	_, err = rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{ShellTempDir: shellTempDir, ChildRunLogger: rocketcode.DiscardChildRunLog, CheckpointSink: rocketcode.InertCheckpointSink{}, ShellCommand: rocketcode.DefaultShellCommand}, root, agents, skills, "main", io.Discard)
+	_, err = rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{ShellTempDir: shellTempDir, ChildSessions: rocketcode.InertChildSessions{}, CheckpointSink: rocketcode.InertCheckpointSink{}, ShellCommand: rocketcode.DefaultShellCommand}, root, agents, skills, "main", io.Discard)
 	require.NoError(t, err)
 }
 
@@ -2225,30 +2225,6 @@ func TestBridgeScheduleMessageLogsPersistFailure(t *testing.T) {
 
 	require.Error(t, bridge.ScheduleMessage(time.Minute, "later", false))
 	assert.Contains(t, logs.String(), "scheduled message persist failed")
-}
-
-func TestBridgeLogsRocketCodeHiddenChildRunOutput(t *testing.T) {
-	var logs bytes.Buffer
-
-	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	bridge := &Bridge{log: logger, config: Config{ConversationID: "slack-thread:C123:111.222"}}
-
-	bridge.logRocketCodeChildRun(&rocketcode.ChildRunEvent{
-		Kind:  rocketcode.ChildRunKindGuardrail,
-		Stage: rocketcode.ChildRunStageResponse,
-		Agent: "safety",
-		Item:  rocketcode.ChatResponse{Kind: rocketcode.ChatResponseReasoningSummary, Text: "checking response"},
-	})
-
-	got := logs.String()
-	assert.Contains(t, got, "rocketcode hidden child run output")
-	assert.Contains(t, got, `"component":"rocketcode_child_run"`)
-	assert.Contains(t, got, `"conversation_id":"slack-thread:C123:111.222"`)
-	assert.Contains(t, got, `"child_run_kind":"guardrail"`)
-	assert.Contains(t, got, `"child_run_stage":"response"`)
-	assert.Contains(t, got, `"agent":"safety"`)
-	assert.Contains(t, got, `"item_kind":"reasoning_summary"`)
-	assert.Contains(t, got, `"text":"checking response"`)
 }
 
 func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testing.T) {

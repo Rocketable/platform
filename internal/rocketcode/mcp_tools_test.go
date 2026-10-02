@@ -216,7 +216,7 @@ func TestCustomToolsAreCodeModeOnlyInsideExecute(t *testing.T) {
 
 	output := make(chan ChatResponse, 8)
 	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
-	ctx := withToolCallContext(t.Context(), looper, output)
+	ctx := withToolCallContext(t.Context(), looper, output, "")
 	run := model[executeToolName]
 	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return ask_user_question(question=\"ship it?\")\n"}`), output, emptyToolCallMetadata())
 	require.NoError(t, err)
@@ -267,7 +267,7 @@ func TestCodeModeHostToolsIncludesBashWhenAllowed(t *testing.T) {
 		Tools:                  model,
 		CodeModeHosts:          hosts,
 	}
-	ctx := withToolCallContext(t.Context(), looper, nil)
+	ctx := withToolCallContext(t.Context(), looper, nil, "")
 	bound, _ := codeModeHostToolsFromContext(ctx)
 
 	var bashTool *struct {
@@ -313,7 +313,7 @@ func TestCodeModeHostsSurviveModelWithoutHosts(t *testing.T) {
 	model, hosts := factory.assembleTools(agent)
 
 	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts}
-	ctx := withToolCallContext(t.Context(), looper, nil)
+	ctx := withToolCallContext(t.Context(), looper, nil, "")
 
 	run := model[executeToolName]
 	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return read(filePath=\"a.txt\")\n"}`), nil, emptyToolCallMetadata())
@@ -339,7 +339,7 @@ func TestExecuteBashOutputSurvivesContainers(t *testing.T) {
 	factory := &toolFactory{baseTools: makeSandboxedTools(sfs, sss)}
 	model, hosts := factory.assembleTools(&Agent{Permission: permissions})
 	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts}
-	ctx := withToolCallContext(t.Context(), looper, nil)
+	ctx := withToolCallContext(t.Context(), looper, nil, "")
 
 	for _, test := range []struct{ name, expression, want string }{
 		{"direct", `bash(command=r'''printf first''')`, "first"},
@@ -377,7 +377,7 @@ func TestExecuteParseFailureDoesNotRunHost(t *testing.T) {
 	agent := &Agent{Permission: permissions}
 	model, hosts := factory.assembleTools(agent)
 	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts}
-	ctx := withToolCallContext(t.Context(), looper, nil)
+	ctx := withToolCallContext(t.Context(), looper, nil, "")
 
 	run := model[executeToolName]
 	_, err = run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return bash(command=r\"python3 - <<'PY'\nprint(\"hello\")\nPY\")\n"}`), nil, emptyToolCallMetadata())
@@ -406,7 +406,7 @@ func TestExecuteNestedToolEmitsThinkingDiagnostic(t *testing.T) {
 
 	output := make(chan ChatResponse, 8)
 	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
-	ctx := withToolCallContext(t.Context(), looper, output)
+	ctx := withToolCallContext(t.Context(), looper, output, "")
 
 	run := model[executeToolName]
 	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return read(filePath=\"a.txt\")\n"}`), output, emptyToolCallMetadata())
@@ -445,7 +445,7 @@ func TestExecuteNestedConcurrencyPrefixesThinkingDiagnostic(t *testing.T) {
 	model, hosts := factory.assembleTools(&Agent{Permission: permissions})
 	output := make(chan ChatResponse, 8)
 	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
-	ctx := withToolCallContext(t.Context(), looper, output)
+	ctx := withToolCallContext(t.Context(), looper, output, "")
 
 	run := model[executeToolName]
 	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return gather([lambda: read(filePath=\"a.txt\"), lambda: read(filePath=\"b.txt\")])\n"}`), output, emptyToolCallMetadata())
@@ -486,7 +486,7 @@ func TestExecuteNestedSearchEmitsThinkingDiagnostic(t *testing.T) {
 
 	output := make(chan ChatResponse, 8)
 	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
-	ctx := withToolCallContext(t.Context(), looper, output)
+	ctx := withToolCallContext(t.Context(), looper, output, "")
 
 	run := model[executeToolName]
 	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return search(query=\"context7\")\n"}`), output, emptyToolCallMetadata())
@@ -527,7 +527,7 @@ func TestExecuteNestedToolDiagnosticNotDroppedWhenOutputFull(t *testing.T) {
 	// Unbuffered channel: non-blocking emit would drop; nested emit must block until read.
 	output := make(chan ChatResponse)
 	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
-	ctx := withToolCallContext(t.Context(), looper, output)
+	ctx := withToolCallContext(t.Context(), looper, output, "")
 
 	done := make(chan struct{})
 
@@ -712,7 +712,7 @@ func TestExecuteSearchAndRun(t *testing.T) {
 		Permissions:            permissions,
 		AutoApprovePermissions: false,
 	}
-	ctx := withToolCallContext(t.Context(), looper, nil)
+	ctx := withToolCallContext(t.Context(), looper, nil, "")
 
 	run := tools[executeToolName]
 	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return search(query=\"\")\n"}`), nil, emptyToolCallMetadata())

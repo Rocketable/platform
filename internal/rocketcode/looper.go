@@ -102,6 +102,7 @@ type looperTool struct {
 }
 
 type toolCallMetadata struct {
+	callID        string
 	subagentIndex int
 	subagentTotal int
 }
@@ -192,6 +193,7 @@ type permissionReviewRequest struct {
 	Reviewer         string                                  `json:"reviewer"`
 	ReviewerEmbedded bool                                    `json:"reviewer_embedded"`
 	ReviewContext    []responses.ResponseInputItemUnionParam `json:"-"`
+	CallID           string                                  `json:"-"`
 }
 
 type permissionReviewRiskLevel string
@@ -1877,6 +1879,7 @@ func (l *looper) dispatchToolCalls(
 
 		if decision.review != nil {
 			decision.review.ReviewContext = slices.Clone(l.permissionReviewInput)
+			decision.review.CallID = item.CallID
 
 			reviewDecision := l.PermissionReviewer.reviewPermission(ctx, decision.review, output)
 			if reviewDecision.Outcome != permissionReviewOutcomeAllow {
@@ -1940,9 +1943,9 @@ func (l *looper) dispatchToolCalls(
 				err         error
 			)
 
-			metadata := toolCallMetadata{subagentIndex: call.subagentIndex, subagentTotal: call.subagentTotal}
+			metadata := toolCallMetadata{callID: call.callID, subagentIndex: call.subagentIndex, subagentTotal: call.subagentTotal}
 			callCtx, span := l.Observability.startToolSpan(groupCtx, call.name, call.callID, call.tool.Permission, call.args, metadata)
-			callCtx = withToolCallContext(callCtx, l, output)
+			callCtx = withToolCallContext(callCtx, l, output, call.callID)
 
 			if call.tool.CallReplay != nil {
 				result, replayInput, err = call.tool.CallReplay(callCtx, call.args, output, metadata)

@@ -266,6 +266,7 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 	defer func() { _ = root.Close() }()
 
 	calls := make(map[string]map[string]string)
+	shown := make(map[string]bool)
 
 	for i := range entries {
 		entry := &entries[i]
@@ -325,6 +326,7 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 
 				event.attribute(entry.Entry.AttributionAt(i), producer, request.Id)
 				event.MessageId = fmt.Sprintf("%d:%d", entry.ID, i)
+				shown[producer+"/"+event.ToolCallId] = event.ToolCallId != ""
 
 				response.Messages = append(response.Messages, event)
 				if event.Role == "assistant" {
@@ -339,6 +341,13 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 			response.Messages = append(response.Messages, event)
 		}
 	}
+
+	delegations, err := s.sessions.Delegations(ctx, append(slices.Collect(maps.Keys(calls)), request.Id))
+	if err != nil {
+		return nil, fmt.Errorf("read web delegations: %w", err)
+	}
+
+	response.Delegations = slices.DeleteFunc(delegations, func(id string) bool { return !shown[id] })
 
 	return response, nil
 }

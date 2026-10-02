@@ -33,6 +33,7 @@ message HistoryResponse {
   repeated TranscriptEvent messages = 1;
   // JSON object describing the chat's origin. Empty means no origin.
   string origin = 2;
+  repeated string delegations = 3;
 }
 
 message ListSessionsResponse {

@@ -1538,6 +1538,40 @@ func TestDeleteSessionDeletesOnlyTarget(t *testing.T) {
 	require.Equal(t, []protocol.SessionSummary{{ConversationID: "main"}, {ConversationID: "thread", LastMessage: "assistant", LastUpdated: time.Unix(1, 0).UTC()}}, summaries)
 }
 
+func TestHistoryRemovalIncludesDelegations(t *testing.T) {
+	cutoff := time.Unix(1_700_000_000, 0).UTC()
+
+	for _, remove := range []func(*SessionService, string) error{
+		func(s *SessionService, id string) error { _, err := s.DeleteSession(t.Context(), id); return err },
+		func(s *SessionService, _ string) error { _, err := s.PruneStateBefore(t.Context(), cutoff); return err },
+	} {
+		store := newTestSessionService(t)
+		id := protocol.SlackThreadConversationID("D_1", slackTestTS(cutoff.Add(-time.Hour)))
+		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "planner"}))
+		_, err := store.AppendEntryID(t.Context(), id, testSessionEntryAt(cutoff.Add(-time.Hour), id))
+		require.NoError(t, err)
+
+		decoy := protocol.SlackThreadConversationID("DX1", slackTestTS(cutoff.Add(-time.Hour))) + "/call-1"
+		histories := []string{id + "/call-1", id + "/call-1/call-2", decoy}
+
+		for _, history := range histories {
+			_, err := store.AppendEntryID(t.Context(), history, testSessionEntryAt(cutoff.Add(time.Hour), history))
+			require.NoError(t, err)
+		}
+
+		require.NoError(t, remove(store, id))
+
+		summaries, err := store.ListSessions(t.Context(), histories)
+		require.NoError(t, err)
+		require.Len(t, summaries, 1)
+		require.Equal(t, decoy, summaries[0].ConversationID)
+
+		entries, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM session_entries WHERE conversation_id = ANY($1)`, "delegation entries", histories)
+		require.NoError(t, err)
+		require.Equal(t, []string{decoy}, entries)
+	}
+}
+
 func TestDeleteSessionMissingIDReturnsZero(t *testing.T) {
 	service := newTestSessionService(t)
 	deleted, err := service.DeleteSession(context.Background(), "missing")
