@@ -134,7 +134,7 @@ for (const width of [1280, 390]) test.skipIf(!playwright || !chromium)(`saved se
     expect(await dialog.getByPlaceholder("Search sessions").inputValue()).toBe("");
     await page.keyboard.press("Escape");
     await page.keyboard.press("Control+Shift+p");
-    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Session: Search" }).click();
+    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
     await page.waitForURL("**/search");
   } finally {
     await browser.close();

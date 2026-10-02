@@ -14,12 +14,12 @@ const { dollarMatches } = await import(`data:text/javascript;base64,${Buffer.fro
 test("dollar picker lists commands before skills and distinguishes colliding invocations", () => {
   const skills = [{ name: "review", description: "Review changes" }, { name: "stop", description: "Inspect logs" }];
   expect(dollarMatches("$", skills).map((item: { invocation: string }) => item.invocation)).toEqual([
-    "$fork ", "$handoff ", "$goal ", "$stop ", "$cron ", "$workflow ", "$agent ", "$enqueue ", "$queue ", "$skill ", "$review ", "$skill stop ",
+    "$fork ", "$handoff ", "$goal ", "$stop ", "$cron ", "$workflow ", "$agent ", "$enqueue ", "$stash ", "$steer ", "$queue ", "$skill ", "$review ", "$skill stop ",
   ]);
-  expect(dollarMatches("$st", skills).map((item: { invocation: string }) => item.invocation)).toEqual(["$stop ", "$skill stop "]);
+  expect(dollarMatches("$st", skills).map((item: { invocation: string }) => item.invocation)).toEqual(["$stop ", "$stash ", "$steer ", "$skill stop "]);
   expect(dollarMatches("$st", [{ name: "Stop" }]).at(-1).invocation).toBe("$skill Stop ");
   expect(dollarMatches("$rev", skills)).toEqual([{ name: "review", hint: "[args]", desc: "Review changes", invocation: "$review " }]);
-  expect(dollarMatches("$st", [])).toEqual([{ name: "stop", label: "Stop turn", hint: "", desc: "End the active turn", invocation: "$stop " }]);
+  expect(dollarMatches("$stop", [])).toEqual([]);
   for (const text of ["$skill", "$skill ", "$SKILL "]) {
     expect(dollarMatches(text, skills).map((item: { invocation: string }) => item.invocation)).toEqual(["$skill review ", "$skill stop "]);
   }

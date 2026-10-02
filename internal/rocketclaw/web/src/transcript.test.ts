@@ -286,11 +286,22 @@ test("public call outcomes update their original disclosures independently witho
   expect(draft.lines).toEqual([]);
 });
 
-test("explicit enqueue keeps the composer idle and preserves the inner call for RPC", async () => {
-  const text = "$enqueue $skill stop inspect  the logs\nnext  ";
+for (const [prefix, delivery] of [["  $enqueue \t", "QUEUE"], ["  $stash \t", "STASH"], ["  $steer \t", "STEER"], ["\u0085$stash\u0085", "STASH"], ["\u0085$steer\u0085", "STEER"], ["\uFEFF$stash ", "literal"]]) for (const busy of [false, true]) test(`${JSON.stringify(prefix)} delivery=${delivery}, busy=${busy}`, async () => {
+  const text = `${prefix}\uFEFF$skill stop inspect  the logs\nnext  `;
+  const inner = delivery === "literal" ? text : "\uFEFF$skill stop inspect  the logs\nnext  ";
+  const followUp = delivery === "literal" ? busy ? "QUEUE" : "STEER" : delivery;
+  const draft = { text, files: [], agent: "", edit: 0, submission: 0, sending: false, parked: [] as Line[] };
+  let lines: Line[] = [];
+  const busyUpdates: boolean[] = [];
   queryClient.setQueryData(["queue", { id: "opaque" }], []);
-  await sendComposer({ draft: { text, files: [], agent: "", edit: 0, submission: 0, sending: false }, onDraftChange: () => {}, files: [], text, busy: false, sessionId: "opaque", selected: "main", currentAgent: "main", prompt: { mutateAsync: async (request: object) => { expect(request).toEqual({ id: "opaque", text, delivery: "STEER", messageId: expect.any(String) }); return ""; } }, scrollToEnd: () => true, setBusy: () => { throw new Error("enqueue must not start a busy turn"); }, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, setLines: () => {} });
-  expect(queryClient.getQueryState(["queue", { id: "opaque" }]).isInvalidated).toBe(true);
+  await sendComposer({ draft, onDraftChange: () => {}, files: [], text, busy, sessionId: "opaque", selected: "main", currentAgent: "main", prompt: { mutateAsync: async (request: object) => {
+    expect(request).toEqual({ id: "opaque", text, delivery: busy ? "QUEUE" : "STEER", messageId: expect.any(String) });
+    expect(lines.map((line) => line.text)).toEqual(followUp === "STEER" && !busy ? [inner] : []);
+    expect(draft.parked.map((line) => line.text)).toEqual(followUp === "STEER" && busy ? [inner] : []);
+    return "";
+  } }, scrollToEnd: () => true, setBusy: (value: boolean) => { busyUpdates.push(value); }, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, setLines: (update: (current: Line[]) => Line[]) => { lines = update(lines); }, refreshHistory: async () => {} });
+  expect(busyUpdates).toEqual(followUp === "STEER" && !busy ? [true] : []);
+  expect(queryClient.getQueryState(["queue", { id: "opaque" }]).isInvalidated).toBe(followUp !== "STEER");
 });
 
 test("composer renders exact input before Prompt completes and history failure does not undo acceptance", async () => {
@@ -363,10 +374,10 @@ test("identical active sends queue while steers park until History confirms thei
   expect(draft.parked.map((line) => line.id)).toEqual([requests[1].messageId]);
 });
 
-for (const busy of [false, true]) for (const failure of [false, true]) test(`stash is silent and preserves failed drafts: busy=${busy}, failure=${failure}`, async () => {
+for (const command of ["stop", "enqueue", "stash", "steer"]) for (const busy of [false, true]) for (const failure of [false, true]) test(`stash $${command} is silent and preserves failed drafts: busy=${busy}, failure=${failure}`, async () => {
   const file = new File(["contents"], "held.txt", { type: "text/plain" });
   const files = [{ id: "selected", file }];
-  const text = "  $stop\n";
+  const text = `  $${command}\n`;
   const draft = { text, files, agent: "", edit: 0, submission: 0, sending: false, parked: [] as Line[] };
   let lines: Line[] = [], error = "";
   const busyUpdates: boolean[] = [];

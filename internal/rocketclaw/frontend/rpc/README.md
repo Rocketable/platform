@@ -95,9 +95,13 @@ excluding denied and review-only permissions; an unavailable agent returns no
 skills. Omitting the filter retains the full skills-page catalog. The composer
 supplies its selected agent and lists commands before those skills. Choosing a
 skill inserts `$name `, or `$skill name ` for a built-in name collision, without
-sending. Outer `$enqueue` queues its inner text unchanged, including skill
-arguments, while `$stop` and `$agent` keep their built-in meanings. Normal Send
-during a turn queues; Cmd/Ctrl+Enter steers. Skills are loaded when consumed.
+sending. Web-only outer `$enqueue` queues automatic later work, `$stash` holds
+work until explicit send, and `$steer` sends now or into the active turn. These
+commands override the requested delivery and strip only the outer command and
+surrounding prefix whitespace, preserving inner text, spacing, and nested commands.
+Explicit `Prompt.delivery=STASH` treats the entire payload as literal text instead,
+including all three commands. Bare `$stop` and `$agent` keep their built-in meanings.
+Normal Send during a turn queues; Cmd/Ctrl+Enter steers. Skills are loaded when consumed.
 
 `ListCronJobs` uses the same started Cron manager as scheduled/Slack execution.
 It exposes parsed definitions and each schedule's next trigger within 24 hours,

@@ -1229,9 +1229,11 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 	}
 
 	text, delivery := request.Text, request.Delivery
-	if len(words) > 0 && words[0] == "$enqueue" {
-		text = strings.TrimLeftFunc(strings.TrimPrefix(strings.TrimLeftFunc(text, unicode.IsSpace), "$enqueue"), unicode.IsSpace)
-		delivery = PromptDelivery_QUEUE
+	if len(words) > 0 && slices.Contains([]string{"$enqueue", "$stash", "$steer"}, words[0]) {
+		text = strings.TrimLeftFunc(strings.TrimPrefix(strings.TrimLeftFunc(text, unicode.IsSpace), words[0]), unicode.IsSpace)
+		delivery = map[string]PromptDelivery{
+			"$enqueue": PromptDelivery_QUEUE, "$stash": PromptDelivery_STASH, "$steer": PromptDelivery_STEER,
+		}[words[0]]
 	}
 
 	kind := protocol.InboundKindSteer
