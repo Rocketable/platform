@@ -146,7 +146,7 @@ func TestObservabilityEmitsProviderDiagnosticSpanEvents(t *testing.T) {
 		require.Equal(t, "rocketcode.provider.diagnostic", events[0].Name)
 		require.ElementsMatch(t, []attribute.KeyValue{
 			attribute.String("rocketcode.provider_diagnostic.provider", "openai"),
-			attribute.String("rocketcode.provider_diagnostic.model", "gpt-5"),
+			attribute.String("rocketcode.provider_diagnostic.model", "gpt-6-luna"),
 			attribute.String("rocketcode.provider_diagnostic.phase", providerDiagnosticRetry),
 			attribute.Int("rocketcode.provider_diagnostic.http_status", http.StatusTooManyRequests),
 			attribute.String("rocketcode.provider_diagnostic.code", "too_many_requests"),

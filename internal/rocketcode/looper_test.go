@@ -246,9 +246,9 @@ func contextLengthExceededError() error {
 func testLooper(client responsesAPI) *looper {
 	var l looper
 
-	l.ProviderOrigin = ProviderOrigin{Provider: "openai", Model: openai.ChatModelGPT5}
+	l.ProviderOrigin = ProviderOrigin{Provider: "openai", Model: openai.ChatModelGPT6Luna}
 	l.Client = client
-	l.Model = openai.ChatModelGPT5
+	l.Model = openai.ChatModelGPT6Luna
 	l.PermissionReviewer = inertPermissionReviewer{}
 	l.CheckpointSink = InertCheckpointSink{}
 	l.observations = &turnObservations{sink: l.CheckpointSink}
@@ -259,7 +259,7 @@ func testLooper(client responsesAPI) *looper {
 func emptyTestLooper() *looper {
 	var l looper
 
-	l.ProviderOrigin = ProviderOrigin{Provider: "openai", Model: openai.ChatModelGPT5}
+	l.ProviderOrigin = ProviderOrigin{Provider: "openai", Model: openai.ChatModelGPT6Luna}
 	l.PermissionReviewer = inertPermissionReviewer{}
 	l.CheckpointSink = InertCheckpointSink{}
 	l.observations = &turnObservations{sink: l.CheckpointSink}
@@ -343,7 +343,7 @@ func providerDiagnosticResponse(diagnostic *ProviderDiagnostic) ChatResponse {
 	var response ChatResponse
 
 	diagnostic.Provider = "openai"
-	diagnostic.Model = openai.ChatModelGPT5
+	diagnostic.Model = openai.ChatModelGPT6Luna
 	response.Kind = ChatResponseAssistantTool
 	response.Provider = diagnostic
 
@@ -523,7 +523,7 @@ func TestLooperReloadsSessionWithCurrentRuntimeConfig(t *testing.T) {
 	require.Len(t, newParams(mock), 1)
 
 	call := newParams(mock)[0]
-	require.Equal(t, openai.ChatModelGPT5, call.Model)
+	require.Equal(t, openai.ChatModelGPT6Luna, call.Model)
 	require.Equal(t, "current system prompt", call.Instructions.Value)
 	require.False(t, call.Store.Value)
 	require.True(t, call.ParallelToolCalls.Value)
@@ -1913,7 +1913,7 @@ func TestPermissionReviewFailsClosedOnInvalidReviewerOutput(t *testing.T) {
 
 	factory := &toolFactory{
 		resolver:          testResolverForResponsesAPI(mock),
-		autoApproverModel: openai.ChatModelGPT5,
+		autoApproverModel: openai.ChatModelGPT6Luna,
 		agents:            Agents{Items: map[string]Agent{}},
 		skills:            Skills{Items: map[string]Skill{}},
 		baseTools:         map[string]looperTool{},

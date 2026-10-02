@@ -46,7 +46,7 @@ func TestPermissionReviewEmitsDiagnosticsWithChildContext(t *testing.T) {
 	}))
 	factory := &toolFactory{
 		resolver:          testResolverForResponsesAPI(mock),
-		autoApproverModel: openai.ChatModelGPT5,
+		autoApproverModel: openai.ChatModelGPT6Luna,
 		agents:            Agents{Items: map[string]Agent{}},
 		skills:            Skills{Items: map[string]Skill{}},
 		baseTools:         map[string]looperTool{},

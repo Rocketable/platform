@@ -285,10 +285,10 @@ func TestRecoveredReplayInputBuildsProviderParams(t *testing.T) {
 	require.NoError(t, err)
 
 	looper := emptyTestLooper()
-	looper.Model = openai.ChatModelGPT5
+	looper.Model = openai.ChatModelGPT6Luna
 	params := looper.buildParams(items)
 
-	require.Equal(t, openai.ChatModelGPT5, params.Model)
+	require.Equal(t, openai.ChatModelGPT6Luna, params.Model)
 	require.Len(t, params.Input.OfInputItemList, 4)
 	require.Equal(t, "function_call_output", *params.Input.OfInputItemList[2].GetType())
 	require.Equal(t, "developer", *params.Input.OfInputItemList[3].GetRole())
