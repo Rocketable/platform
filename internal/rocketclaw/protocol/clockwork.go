@@ -25,7 +25,7 @@ func Clone[T any](p *T) *T {
 func CloneOutboundMessage(message *OutboundMessage) *OutboundMessage {
 	return &OutboundMessage{
 		ConsumedID: message.ConsumedID, ConsumedText: message.ConsumedText, ConsumedRawText: message.ConsumedRawText, ConsumedSource: message.ConsumedSource, ConsumedHeader: message.ConsumedHeader,
-		Text: message.Text, ProgressText: message.ProgressText,
+		Text:           message.Text,
 		ConversationID: message.ConversationID, TurnID: message.TurnID,
 		ExternalConversationID: message.ExternalConversationID, Agent: message.Agent,
 		Model: message.Model, SourceConversationID: message.SourceConversationID, ReasoningEffort: Clone(message.ReasoningEffort),
@@ -33,6 +33,6 @@ func CloneOutboundMessage(message *OutboundMessage) *OutboundMessage {
 		SlackReply: Clone(message.SlackReply), Attachments: CloneOutboundAttachments(message.Attachments),
 		GoalTurn: message.GoalTurn, GoalComplete: message.GoalComplete, GoalActive: message.GoalActive,
 		GoalTurnNumber: message.GoalTurnNumber, GoalMaxTurns: message.GoalMaxTurns, WorkflowTerminal: message.WorkflowTerminal,
-		Cronjob: Clone(message.Cronjob), WorkflowAgent: Clone(message.WorkflowAgent), WorkflowPhase: Clone(message.WorkflowPhase),
+		Cronjob: Clone(message.Cronjob),
 	}
 }

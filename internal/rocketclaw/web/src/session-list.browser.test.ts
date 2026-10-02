@@ -228,6 +228,80 @@ test.skipIf(!playwright || !chromium)("pending saves, delayed hydration and owne
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 const built = existsSync(path.join(dist, "index.html"));
 
+test.skipIf(!playwright || !chromium || !built)("actual App renders independent public lifecycle and reconnect replacements at narrow widths", async () => {
+  // Build current sources in memory; leave the parent's shared embedded assets untouched.
+  const build = await Bun.build({ entrypoints: ["./src/main.tsx"], target: "browser", define: { "process.env.NODE_ENV": '"production"' } });
+  expect(build.success).toBe(true);
+  const script = await build.outputs[0].text();
+  const html = (await Bun.file(path.join(dist, "index.html")).text()).replace(/<script type="module" src="[^"]+"><\/script>/, '<script type="module" src="/current.js"></script>');
+  const { chromium: engine } = await import(playwright!);
+  let running = true;
+  let revision = 0;
+  let stream = Promise.withResolvers<ReadableStreamDefaultController>();
+  const event = (itemId: string, role: string, text: string, extra: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ entryKey: "producer-turn", itemId, role, text, inputId: "", turnId: "turn", complete: true, origin: "canonical", agent: "main", model: "root/model", ...extra });
+  const calls = ["A", "B", "C"].map((id) => event(id, "tool", "task\n{}", { toolName: "task", toolCallId: id, parentId: "producer/turn/response", state: "working", complete: false, agent: "canonical-child", model: "child/model" }));
+  let messages = [event("input", "user", "Public progress question", { inputId: "consumed" }), ...calls, event("text", "assistant", "Held partial suffix", { state: "working", complete: false })];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/current.js") return new Response(script, { headers: { "Content-Type": "text/javascript" } });
+    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { stream.resolve(controller); controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "public", agent: "main", title: "Public progress" }], owner: "alice", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (!url.pathname.startsWith("/api/")) {
+      if (url.pathname.startsWith("/assets/")) return new Response(Bun.file(path.join(dist, url.pathname)));
+      return new Response(html, { headers: { "Content-Type": "text/html" } });
+    }
+    const input = await request.json() as { revision?: string; text?: string };
+    switch (url.pathname) {
+      case "/api/Protocol": return Response.json({ protoSha256: "public-progress-test" });
+      case "/api/Identity": return Response.json({ username: "alice" });
+      case "/api/History": return Response.json({ messages: input.revision === String(revision) ? [] : messages, revision: String(revision), reset: !input.revision, replacedKeys: input.revision === String(revision) ? [] : ["producer-turn"], removedKeys: [], entryKeys: ["producer-turn"], running, terminal: "" });
+      case "/api/ListAgents": return Response.json({ agents: [{ name: "main", model: "root/model" }], currentAgent: "main" });
+      case "/api/ListConfig": return Response.json({ config: {} });
+      case "/api/ListQueue": return Response.json({ items: [] });
+      case "/api/ListSkills": return Response.json({ skills: [] });
+      case "/api/Prompt": expect(input.text).toBe("$stop"); running = false; revision++; return Response.json({ privateText: "" });
+      default: return Response.json({});
+    }
+  } });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage();
+    for (const width of [900, 375]) {
+      running = true; revision++;
+      messages = [event("input", "user", "Public progress question", { inputId: "consumed" }), ...calls, event("text", "assistant", "Held partial suffix", { state: "working", complete: false })];
+      stream = Promise.withResolvers();
+      await page.setViewportSize({ width, height: 700 });
+      await page.goto(`http://127.0.0.1:${server.port}/s/${Buffer.from("public").toString("base64url")}`);
+      const log = page.locator("#transcript-scroll");
+      await log.getByText("Held partial suffix", { exact: true }).waitFor();
+      expect(await log.locator('[data-slot="bubble-content"]').filter({ hasText: "Held partial suffix" }).count()).toBe(1);
+      expect(await log.locator('[data-slot="message"][data-message-id]').count()).toBe(0);
+      expect(await page.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
+      messages = [...messages, event("B:outcome", "tool", "B result", { toolCallId: "B", parentId: "producer/turn/response", state: "completed", agent: "canonical-child", model: "child/model" })]; revision++;
+      (await stream.promise).enqueue('data: {"conversationId":"public","revision":"hint"}\n\n');
+      await log.locator("summary").filter({ hasText: "completed" }).waitFor();
+      expect(await log.locator("summary").filter({ hasText: /^task/ }).evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.textContent?.trim()))).toEqual(["taskworking", "taskcompleted", "taskworking"]);
+      expect(await log.locator('[data-slot="message-footer"]').filter({ hasText: "canonical-child (child/model)" }).count()).toBe(3);
+      expect(await page.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
+      expect(await log.evaluate((element: HTMLElement) => element.scrollWidth <= element.clientWidth)).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      // No hint: reopening must fetch the missed replacement on its own.
+      messages = messages.map((message) => message.itemId === "text" ? { ...message, text: "Short", state: "completed", complete: true } : message); revision++;
+      stream = Promise.withResolvers();
+      await page.reload();
+      await log.getByText("Short", { exact: true }).waitFor();
+      expect(await log.getByText("Held partial suffix", { exact: true }).count()).toBe(0);
+      expect(await log.getByText("Short", { exact: true }).count()).toBe(1);
+      messages = messages.filter((message) => message.itemId !== "text"); revision++;
+      (await stream.promise).enqueue('data: {"conversationId":"public","revision":"duplicate"}\n\ndata: {"conversationId":"public","revision":"duplicate"}\n\n');
+      await log.getByText("Short", { exact: true }).waitFor({ state: "detached" });
+      expect(await log.locator("summary").filter({ hasText: /^task/ }).count()).toBe(3);
+      await page.getByRole("button", { name: "Stop", exact: true }).click();
+      await page.getByRole("button", { name: "Send", exact: true }).waitFor();
+    }
+  } finally { server.stop(true); await browser.close(); }
+}, 60_000);
+
 test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, isolates and keeps composer independent", async () => {
   const { chromium: engine } = await import(playwright!);
   let identityHold = Promise.withResolvers<void>();
@@ -265,11 +339,13 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     currentAgents: new Map<string, string>(),
     promptError: false,
     popError: false,
-    attachmentPrompts: [] as { id: string; text: string; delivery?: string; attachmentIds?: string[] }[],
+    attachmentPrompts: [] as { id: string; text: string; messageId: string; delivery?: string; attachmentIds?: string[] }[],
     promptStarted: Promise.withResolvers<void>(),
     holdCreate: false,
     createStarted: Promise.withResolvers<void>(),
     history: [] as TranscriptEvent[],
+    running: false,
+    lastInputId: "",
     settledRows: [] as Session[],
     settleCalls: [] as { id: string; settled: boolean }[],
     updateError: false,
@@ -301,6 +377,13 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
   ];
   let listResponse: ReadableStreamDefaultController;
   let transcriptStream = Promise.withResolvers<ReadableStreamDefaultController>();
+  const historyResponse = (messages: TranscriptEvent[], origin = "", revision = "") => {
+    const previous: TranscriptEvent[] = revision ? JSON.parse(revision).messages : [];
+    const entryKeys = [...new Set(messages.map((message) => message.entryKey))];
+    const replacedKeys = entryKeys.filter((key) => !revision || JSON.stringify(messages.filter((message) => message.entryKey === key)) !== JSON.stringify(previous.filter((message) => message.entryKey === key)));
+    const removedKeys = [...new Set(previous.map((message) => message.entryKey))].filter((key) => !entryKeys.includes(key));
+    return Response.json({ messages: messages.filter((message) => replacedKeys.includes(message.entryKey)), origin, revision: JSON.stringify({ messages, running: ctrl.running }), reset: !revision, replacedKeys, removedKeys, entryKeys, running: ctrl.running, terminal: "" });
+  };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(req) {
     const url = new URL(req.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) {
@@ -345,7 +428,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() && url.pathname !== "/" ? file : Bun.file(path.join(dist, "index.html")));
     }
-    const input = await req.json() as { id: string; originOnly?: boolean; itemId: string; messageId: string; name?: string; agent?: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; stem: string; sourceConversationId?: string; conversationId?: string; settled: boolean; pinned?: boolean; snoozedUntil?: string };
+    const input = await req.json() as { id: string; revision?: string; originOnly?: boolean; itemId: string; messageId: string; name?: string; agent?: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; stem: string; sourceConversationId?: string; conversationId?: string; settled: boolean; pinned?: boolean; snoozedUntil?: string };
     try {
       switch (url.pathname) {
         case "/api/Protocol": return Response.json({ protoSha256: ctrl.protocol });
@@ -377,8 +460,10 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
             ctrl.currentAgents.set(input.id, input.text.slice(7));
             return Response.json({ privateText: `Switched to ${input.text.slice(7)}` });
           }
-          if (input.text === "$stop") return Response.json({ privateText: "Stopped" });
+          if (input.text === "$stop") { ctrl.running = false; return Response.json({ privateText: "Stopped" }); }
           if (ctrl.promptError) throw new RPCError("Send failed; retry", 13);
+          ctrl.running = true;
+          ctrl.lastInputId = input.messageId;
           if (ctrl.holdInterventions) {
             const id = input.delivery === "QUEUE" ? `server-${input.messageId}` : input.messageId;
             ctrl.queue.push({ id, text: input.text, delivery: input.delivery });
@@ -387,7 +472,9 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
             ctrl.interventions.set(id, pending);
             return Response.json({ privateText: await pending.promise });
           }
-          return Response.json({ privateText: ctrl.holdPrompt ? await promptHold.promise : "" });
+          if (ctrl.holdPrompt) { const privateText = await promptHold.promise; ctrl.running = false; return Response.json({ privateText }); }
+          ctrl.running = false;
+          return Response.json({ privateText: "" });
         case "/api/ListCronJobs": return Response.json({ jobs });
         case "/api/RunCronJob": cronRunCalls++; return Response.json({ id: await cronHold.promise });
         case "/api/History":
@@ -397,17 +484,17 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
             if (input.id.startsWith("perf-") && input.id !== "perf-95") await manyOriginsHold.promise;
             if (input.id === "perf-95") await lastOriginHold.promise;
             if (ctrl.originError === input.id) throw new RPCError("origin unavailable", 13);
-            return Response.json({ messages: [], origin: origins[input.id] ? JSON.stringify(origins[input.id]) : "" });
+            return historyResponse([], origins[input.id] ? JSON.stringify(origins[input.id]) : "", input.revision);
           }
           if (input.id === "cron:silent-source" || input.id === "web:cron:silent-source") {
             cronHistory.push(input.id);
-            return Response.json({ messages: [{ role: "assistant", text: "Silent run trace", complete: true }] });
+            return historyResponse([{ role: "assistant", text: "Silent run trace", complete: true, turnId: "", entryKey: "silent", itemId: "silent:0", inputId: "" }], "", input.revision);
           }
           if (input.sourceConversationId) {
             cronHistory.push(input.sourceConversationId);
-            return Response.json({ messages: [{ role: "assistant", text: "Daily run report", complete: true, snapshot: false, turnId: "" }] });
+            return historyResponse([{ role: "assistant", text: "Daily run report", complete: true, turnId: "", entryKey: "daily", itemId: "daily:0", inputId: "" }], "", input.revision);
           }
-          return Response.json({ messages: ctrl.history });
+          return historyResponse(ctrl.history, "", input.revision);
         case "/api/ListAgents": return Response.json({ agents: input.conversationId === "web:cron:silent-source" ? [{ name: "other", model: "gpt" }] : [{ name: "other", model: "gpt" }, { name: "main", model: "gpt" }], currentAgent: input.conversationId ? ctrl.currentAgents.get(input.conversationId) ?? "main" : "" });
         case "/api/ListSkills": return Response.json({ skills: input.agent === "main" ? [{ name: "review", description: "Review changes" }, { name: "stop", description: "Inspect logs" }] : [] });
         case "/api/ListConfig": return Response.json({ config: { webAutoSettleAfter: "1h30m0s", tailscaleUser: "connected@example.com" } });
@@ -848,6 +935,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     // The original Prompt is still blocked while interventions use the same conversation.
     ctrl.holdPrompt = false;
     ctrl.holdInterventions = true;
+    ctrl.history = [{ entryKey: "intervention-run", itemId: "intervention-run:0", inputId: ctrl.lastInputId, role: "user", text: "hello\n\nwhile held", turnId: "intervention-run", complete: true }];
     const interventionIds: string[] = [];
     const chat = page.getByRole("region", { name: "Messages", exact: true });
     const parking = page.getByRole("region", { name: "Pending steers", exact: true });
@@ -872,9 +960,11 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     }
     expect(new Set(interventionIds).size).toBe(3);
     const stream = await transcriptStream.promise;
-    stream.enqueue(`data: ${JSON.stringify({ role: "assistant", turnId: "intervention-run", text: "Before steering", complete: false })}\n\n`);
+    ctrl.history.push({ entryKey: "intervention-run", itemId: "intervention-run:1", inputId: "", role: "assistant", turnId: "intervention-run", text: "Before steering", complete: false });
+    stream.enqueue(`data: ${JSON.stringify({ conversationId: "web-session:new", revision: "hint" })}\n\n`);
     for (const [index, id] of [interventionIds[2], interventionIds[1]].entries()) {
-      stream.enqueue(`data: ${JSON.stringify({ role: "user", messageId: id, text: "identical follow-up" })}\n\n`);
+      ctrl.history.push({ entryKey: "intervention-run", itemId: `intervention-run:${index + 2}`, inputId: id, role: "user", text: "identical follow-up", turnId: "intervention-run", complete: true });
+      stream.enqueue(`data: ${JSON.stringify({ conversationId: "web-session:new", revision: "hint" })}\n\n`);
       await chat.getByText("identical follow-up", { exact: true }).nth(index).waitFor();
       ctrl.interventions.get(id)!.resolve("");
     }
@@ -882,13 +972,15 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await chat.getByText("identical follow-up", { exact: true }).nth(1).waitFor();
     // A stale queue poll must not resurrect either consumed steer.
     expect(await page.locator("[data-queue-id]").count()).toBe(1);
-    stream.enqueue(`data: ${JSON.stringify({ role: "assistant", turnId: "intervention-run", text: "Before steering\nAfter steering", complete: false })}\n\n`);
+    ctrl.history.push({ entryKey: "intervention-run", itemId: "intervention-run:4", inputId: "", role: "assistant", turnId: "intervention-run", text: "After steering", complete: false });
+    stream.enqueue(`data: ${JSON.stringify({ conversationId: "web-session:new", revision: "hint" })}\n\n`);
     await chat.getByText("After steering", { exact: true }).waitFor();
     const queuedId = `server-${interventionIds[0]}`;
     await page.locator(`[data-queue-id="${queuedId}"]`).getByRole("button", { name: "Steer", exact: true }).click();
     await parking.getByText("identical follow-up", { exact: true }).waitFor();
     expect(await chat.getByText("identical follow-up", { exact: true }).count()).toBe(2);
-    stream.enqueue(`data: ${JSON.stringify({ role: "user", messageId: queuedId, text: "identical follow-up" })}\n\n`);
+    ctrl.history.push({ entryKey: "intervention-run", itemId: "intervention-run:5", inputId: queuedId, role: "user", text: "identical follow-up", turnId: "intervention-run", complete: true });
+    stream.enqueue(`data: ${JSON.stringify({ conversationId: "web-session:new", revision: "hint" })}\n\n`);
     await parking.waitFor({ state: "hidden" });
     await chat.getByText("identical follow-up", { exact: true }).nth(2).waitFor();
     const ordered = await chat.locator('[data-slot="bubble-content"]').allTextContents();
@@ -1890,7 +1982,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       { role: "assistant", text: `Reply ${i + 1}` },
       { role: "assistant", text: "Repeated reply" },
       { role: "assistant", text: "Repeated reply" },
-    ].map((item) => ({ ...item, turnId: "", complete: true, snapshot: false }))).flat();
+    ].map((item, index) => ({ ...item, entryKey: `turn-${i}`, itemId: `turn-${i}:${index}`, inputId: "", turnId: "", complete: true }))).flat();
+    ctrl.running = false;
     const transcriptPage = await browser.newPage();
     for (const width of [1280, 390]) {
       transcriptStream = Promise.withResolvers();
@@ -1923,7 +2016,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await preview.click();
       await transcriptPage.waitForFunction(() => document.querySelector("#transcript-scroll")!.scrollTop < 50);
       expect(await transcriptPage.getByRole("region", { name: "Turn 1", exact: true }).evaluate((el: HTMLElement) => el === document.activeElement)).toBe(true);
-      (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ role: "assistant", text: `Live reply ${width}`, turnId: "live", complete: false, snapshot: false })}\n\n`);
+      ctrl.history = [...ctrl.history.filter((message) => message.entryKey !== "live"), { entryKey: "live", itemId: "live:0", inputId: "", role: "assistant", text: `Live reply ${width}`, turnId: "live", complete: false }];
+      (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ conversationId: `jump-${width}`, revision: "hint" })}\n\n`);
       await transcriptPage.getByText(`Live reply ${width}`, { exact: true }).waitFor({ state: "attached" });
       expect(await scroll.evaluate((el: HTMLElement) => el.scrollTop)).toBeLessThan(50);
       await transcriptPage.getByRole("button", { name: "Scroll to latest", exact: true }).click();
@@ -1931,7 +2025,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
         const el = document.querySelector("#transcript-scroll")!;
         return el.scrollHeight - el.clientHeight - el.scrollTop < 2;
       });
-      (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ role: "assistant", text: `\nFollowing latest ${width}\n` + "More streamed text.\n".repeat(40), turnId: "live", complete: false, snapshot: false })}\n\n`);
+      ctrl.history[ctrl.history.length - 1] = { ...ctrl.history.at(-1)!, text: `\nFollowing latest ${width}\n` + "More streamed text.\n".repeat(40) };
+      (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ conversationId: `jump-${width}`, revision: "hint" })}\n\n`);
       await transcriptPage.getByText(`Following latest ${width}`, { exact: false }).waitFor({ state: "attached" });
       await transcriptPage.waitForFunction(() => {
         const el = document.querySelector("#transcript-scroll")!;
@@ -1953,9 +2048,10 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       { role: "tool", text: "bash\n{}", toolName: "bash", toolCallId: "bounded" },
       { role: "tool", text: codeText, toolCallId: "bounded" },
       { role: "assistant", text: "Before\n```sh\n" + codeText + "```\nAfter" },
-    ].map((item) => ({ ...item, turnId: "", complete: true, snapshot: false }));
+    ].map((item, index) => ({ ...item, entryKey: "code", itemId: `code:${index}`, inputId: "", turnId: "", complete: true }));
     await transcriptPage.context().grantPermissions(["clipboard-read", "clipboard-write"]);
     for (const width of [1280, 390]) {
+      ctrl.history = ctrl.history.filter((message) => message.entryKey !== "fenced-stream");
       transcriptStream = Promise.withResolvers();
       await transcriptPage.setViewportSize({ width, height: 600 });
       await transcriptPage.goto(`${origin}/s/${Buffer.from(`code-${width}`).toString("base64url")}`);
@@ -1999,7 +2095,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await tool.locator("summary").click();
       expect(await tool.locator("pre").isVisible()).toBe(true);
       // A partial streamed fence is rendered as code before its closing fence arrives.
-      (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ role: "assistant", text: "~~~py\n  streamed", turnId: "fenced-stream", complete: false, snapshot: true })}\n\n`);
+      ctrl.history = [...ctrl.history.filter((message) => message.entryKey !== "fenced-stream"), { entryKey: "fenced-stream", itemId: "fenced-stream:0", inputId: "", role: "assistant", text: "~~~py\n  streamed", turnId: "fenced-stream", complete: false }];
+      (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ conversationId: `code-${width}`, revision: "hint" })}\n\n`);
       await transcriptPage.locator('pre[aria-label="py"]').waitFor();
       expect(await transcriptPage.locator('pre[aria-label="py"]').textContent()).toBe("  streamed");
     }
@@ -2147,7 +2244,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await detailsPage.screenshot({ path: path.join(screenshots, `session-details-${width}.png`) });
       await detailsPage.close();
     }
-    ctrl.history = [{ role: "tool", text: "Delivered image", toolCallId: "result", turnId: "", complete: true, snapshot: false, attachments: [image] }];
+    ctrl.history = [{ entryKey: "files", itemId: "files:0", inputId: "", role: "tool", text: "Delivered image", toolCallId: "result", turnId: "", complete: true, attachments: [image] }];
     transcriptStream = Promise.withResolvers();
     const attachmentPage = await browser.newPage();
     // Direct HTTP deployments have getRandomValues, but not secure-context randomUUID.
@@ -2163,14 +2260,12 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect((await downloading).suggestedFilename()).toBe("history.png");
     const live = { ...image, id: "live-image", name: "live.png", originalUnverified: false };
     ctrl.history.push(
-      { role: "user", text: "queued message now consumed", turnId: "", complete: true, snapshot: false },
-      { role: "assistant", text: "reply to queued message", turnId: "", complete: true, snapshot: false },
-      { role: "user", text: "steering message consumed", turnId: "", complete: true, snapshot: false },
-      { role: "assistant", text: "", turnId: "", complete: true, snapshot: false, attachments: [live] },
+      { entryKey: "files", itemId: "files:1", inputId: "consumed-0", role: "user", text: "queued message now consumed", turnId: "", complete: true },
+      { entryKey: "files", itemId: "files:2", inputId: "", role: "assistant", text: "reply to queued message", turnId: "", complete: true },
+      { entryKey: "files", itemId: "files:3", inputId: "consumed-2", role: "user", text: "steering message consumed", turnId: "", complete: true },
+      { entryKey: "files", itemId: "files:4", inputId: "", role: "assistant", text: "", turnId: "", complete: true, attachments: [live] },
     );
-    for (const [index, message] of ctrl.history.slice(1).entries()) {
-      (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ ...message, turnId: `files-${index}`, ...(message.role === "user" ? { messageId: `consumed-${index}` } : {}) })}\n\n`);
-    }
+    (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ conversationId: "visible-files", revision: "hint" })}\n\n`);
     await attachmentPage.getByRole("region", { name: "Messages", exact: true }).getByText("queued message now consumed", { exact: true }).waitFor();
     const reconciled = await attachmentPage.getByRole("region", { name: "Messages", exact: true }).innerText();
     expect(reconciled.indexOf("queued message now consumed")).toBeLessThan(reconciled.indexOf("reply to queued message"));
@@ -2244,7 +2339,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await attachmentPage.getByRole("link", { name: "Download drop.bin", exact: true }).waitFor();
     expect(await attachmentPage.getByRole("link", { name: "Download keep.bin", exact: true }).evaluate(async (link: HTMLAnchorElement) => [...new Uint8Array(await (await fetch(link.href)).arrayBuffer())])).toEqual([0, 255, 1, 2]);
     expect(await attachmentPage.getByText("exact file draft", { exact: true }).count()).toBe(1);
-    ctrl.history.push({ role: "user", text: "  exact file draft\n", turnId: "", complete: true, snapshot: false, attachments: sentAttachments });
+    ctrl.history.push({ entryKey: "uploaded", itemId: "uploaded:0", inputId: ctrl.attachmentPrompts.at(-1)!.messageId, role: "user", text: "  exact file draft\n", turnId: "", complete: true, attachments: sentAttachments });
+    ctrl.running = true;
     await attachmentPage.locator("#session-sidebar").getByRole("link").filter({ hasText: "Most recent message" }).click();
     await attachmentPage.goBack();
     await attachmentPage.getByRole("link", { name: "Download keep.bin", exact: true }).waitFor();
@@ -2315,7 +2411,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await photoPage.waitForFunction(() => (document.querySelector('img[alt="photo.png"]') as HTMLImageElement)?.naturalWidth === 1, null, { timeout: 3000 });
     const localPhotoURL = await photoPage.getByRole("img", { name: "photo.png", exact: true }).getAttribute("src");
     expect(localPhotoURL.startsWith("blob:")).toBe(true);
-    ctrl.history = [{ role: "user", text: "What's this? \n", turnId: "", complete: true, snapshot: false, attachments: [sentPhoto] }];
+    ctrl.history = [{ entryKey: "photo", itemId: "photo:0", inputId: ctrl.attachmentPrompts.at(-1)!.messageId, role: "user", text: "What's this? \n", turnId: "", complete: true, attachments: [sentPhoto] }];
     await photoPage.locator("#session-sidebar").getByRole("link").filter({ hasText: "Most recent message" }).click();
     await photoPage.goBack();
     await photoPage.waitForFunction(() => (document.querySelector('img[alt="photo.png"]') as HTMLImageElement)?.src.includes("/api/DownloadAttachment"));
@@ -2334,7 +2430,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await photoPage.getByRole("button", { name: "Send", exact: true }).click();
     await ctrl.promptStarted.promise;
     const secondPhoto = uploadedFiles.find(({ meta }) => meta.id === ctrl.attachmentPrompts.at(-1)!.attachmentIds![0])!.meta;
-    ctrl.history.push({ ...ctrl.history[0], attachments: [secondPhoto] });
+    ctrl.history.push({ ...ctrl.history[0], entryKey: "second-photo", itemId: "second-photo:0", inputId: ctrl.attachmentPrompts.at(-1)!.messageId, attachments: [secondPhoto] });
     await photoPage.locator("#session-sidebar").getByRole("link").filter({ hasText: "Most recent message" }).click();
     await photoPage.goBack();
     await photoPage.waitForFunction(() => { const images = [...document.querySelectorAll<HTMLImageElement>('img[alt="photo.png"]')]; return images.length === 2 && images.every((image) => image.src.includes("/api/DownloadAttachment") && image.naturalWidth === 1); });
@@ -2377,6 +2473,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     // Held work is server-backed and silent; keyboard Pop only releases to the queue.
     ctrl.history = [];
     ctrl.queue = [];
+    ctrl.running = false;
     transcriptStream = Promise.withResolvers();
     const stashPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await stashPage.goto(`${origin}/s/${Buffer.from("stash-session").toString("base64url")}`);
@@ -2413,7 +2510,9 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await popRelease.promise;
       await route.continue();
     });
-    (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ role: "user", text: "Other queued work", messageId: "other-work", complete: false })}\n\n`);
+    ctrl.running = true;
+    ctrl.history.push({ entryKey: "other-work", itemId: "other-work:0", inputId: "other-work", role: "user", text: "Other queued work", turnId: "other-work", complete: false });
+    (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ conversationId: "stash-session", revision: "hint" })}\n\n`);
     await stashPage.getByRole("button", { name: "Stop", exact: true }).waitFor();
     await heldRow.getByRole("button", { name: "Pop", exact: true }).focus();
     await stashPage.keyboard.press("Enter");

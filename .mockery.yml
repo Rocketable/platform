@@ -20,8 +20,12 @@ packages:
   github.com/Rocketable/platform/internal/rocketclaw/backend:
     interfaces:
       FrontendAssembler:
-        config:
-          structname: frontendAssemblerMock
+        configs:
+          - structname: frontendAssemblerMock
+          - dir: '{{.ConfigDir}}/internal/rocketclaw/frontend/rpc'
+            pkgname: rpc
+            structname: mockFrontendAssembler
+            inpackage: false
       SlackFrontend:
         configs:
           - structname: slackFrontendMock
@@ -98,6 +102,12 @@ packages:
           pkgname: slackconnector
           structname: primaryTextRouterMock
           inpackage: false
+  github.com/Rocketable/platform/internal/rocketclaw/workflow:
+    interfaces:
+      AgentRunner:
+        config:
+          filename: agentrunner_mocks_test.go
+          structname: agentRunnerMock
   github.com/Rocketable/platform/internal/rocketcode:
     interfaces:
       CheckpointSink:

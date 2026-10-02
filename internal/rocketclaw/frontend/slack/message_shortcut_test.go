@@ -120,12 +120,12 @@ func TestHandleMessageShortcutManagedWithoutControlsExplains(t *testing.T) {
 	assert.Empty(t, rec.lastOpened().View.Blocks[0].Elements)
 }
 
-func TestHandleMessageShortcutThinkingOffersInterrupt(t *testing.T) {
+func TestHandleMessageShortcutPlaceholderOffersInterrupt(t *testing.T) {
 	rec := newMessageActionsRecorder(t)
 	router := newThreadRouterStub()
 	router.prepareHandled = true
 	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
-	connector.pending["k"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "999.1", AnswerTS: "999.2"}
+	connector.pending["k"] = slackReplyState{ChannelID: "C123", MessageTS: "999.1"}
 
 	connector.handleInteractive(t.Context(), newMessageShortcutEvent("U123", "999.1"))
 
@@ -139,7 +139,7 @@ func TestHandleMessageShortcutInterruptClickStopsTurn(t *testing.T) {
 	router := newThreadRouterStub()
 	router.stopResult = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "999.1", ThreadTS: "111.0"}
 	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
-	connector.pending["k"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "999.1", AnswerTS: "999.2"}
+	connector.pending["k"] = slackReplyState{ChannelID: "C123", MessageTS: "999.1"}
 
 	connector.handleInteractive(t.Context(), newMessageActionsButtonEvent(slackMessageActionInterrupt, &rocketclawActionsMetadata{ChannelID: "C123", MessageTS: "999.1", ThreadTS: "111.0"}))
 

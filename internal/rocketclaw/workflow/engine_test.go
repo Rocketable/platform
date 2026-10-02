@@ -28,10 +28,10 @@ def main(args):
 
 		var request AgentRequest
 
-		result, err := Run(t.Context(), definition, RunRequest{RunID: "run-1", Args: "question"}, func(_ context.Context, got AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
-			request = got
+		result, err := Run(t.Context(), definition, RunRequest{RunID: "run-1", Args: "question"}, &agentRunnerMock{RunFunc: func(_ context.Context, got *AgentRequest) (json.RawMessage, error) {
+			request = *got
 			return json.RawMessage(`"answer"`), nil
-		}, discardProgress, discardAgentProgress)
+		}})
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -53,13 +53,13 @@ def main(args):
     return [value["ok"], value["count"] + 1]
 `)
 
-		result, err := Run(t.Context(), definition, RunRequest{RunID: "structured"}, func(_ context.Context, request AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
+		result, err := Run(t.Context(), definition, RunRequest{RunID: "structured"}, &agentRunnerMock{RunFunc: func(_ context.Context, request *AgentRequest) (json.RawMessage, error) {
 			if request.Schema["type"] != "object" {
 				t.Fatalf("agent schema = %v, want object schema", request.Schema)
 			}
 
 			return json.RawMessage(`{"ok":true,"count":2}`), nil
-		}, discardProgress, discardAgentProgress)
+		}})
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -75,9 +75,9 @@ def main(args):
     return agent("structured", schema={"type": "object", "properties": {"count": {"type": "integer"}}, "required": ["count"]})
 `)
 
-		_, err := Run(t.Context(), definition, RunRequest{RunID: "mismatch"}, func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error) {
+		_, err := Run(t.Context(), definition, RunRequest{RunID: "mismatch"}, &agentRunnerMock{RunFunc: func(context.Context, *AgentRequest) (json.RawMessage, error) {
 			return json.RawMessage(`{"count":"two"}`), nil
-		}, discardProgress, discardAgentProgress)
+		}})
 		if err == nil || !strings.Contains(err.Error(), "count") {
 			t.Fatalf("Run() error = %v, want schema mismatch", err)
 		}
@@ -92,7 +92,7 @@ def main(args):
 `)
 		calls := 0
 
-		_, err := Run(t.Context(), definition, RunRequest{RunID: "immutable"}, func(_ context.Context, request AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
+		_, err := Run(t.Context(), definition, RunRequest{RunID: "immutable"}, &agentRunnerMock{RunFunc: func(_ context.Context, request *AgentRequest) (json.RawMessage, error) {
 			calls++
 			if request.Worker.Tools[0] != "read" {
 				t.Fatalf("agent %d tools = %v, want immutable read tool", calls, request.Worker.Tools)
@@ -101,7 +101,7 @@ def main(args):
 			request.Worker.Tools[0] = "changed"
 
 			return json.RawMessage(`"ok"`), nil
-		}, discardProgress, discardAgentProgress)
+		}})
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -113,13 +113,13 @@ w = worker(name="worker", instructions="work", tools=[])
 def main(args): return agent("prompt", worker=w)
 `)
 
-		_, err := Run(t.Context(), definition, RunRequest{RunID: "empty-tools"}, func(_ context.Context, request AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
+		_, err := Run(t.Context(), definition, RunRequest{RunID: "empty-tools"}, &agentRunnerMock{RunFunc: func(_ context.Context, request *AgentRequest) (json.RawMessage, error) {
 			if request.Worker.Tools == nil || len(request.Worker.Tools) != 0 {
 				t.Fatalf("worker tools = %#v, want non-nil empty slice", request.Worker.Tools)
 			}
 
 			return json.RawMessage(`"ok"`), nil
-		}, discardProgress, discardAgentProgress)
+		}})
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -138,7 +138,7 @@ def main(args): return agent("prompt", worker=w)
 		{name: "list tuple and dict", expression: `{"b": (2, None), "a": [True]}`, wantText: `{"a":[true],"b":[2,null]}`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := Run(t.Context(), engineDefinition(t, "def main(args):\n    return "+tt.expression+"\n"), RunRequest{RunID: tt.name}, inertAgent, discardProgress, discardAgentProgress)
+			result, err := Run(t.Context(), engineDefinition(t, "def main(args):\n    return "+tt.expression+"\n"), RunRequest{RunID: tt.name}, &agentRunnerMock{RunFunc: inertAgent})
 			if err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
@@ -150,24 +150,14 @@ def main(args): return agent("prompt", worker=w)
 	}
 
 	t.Run("declared implicit run starts on first agent call", func(t *testing.T) {
-		var updates []protocol.PhaseUpdate
-
-		_, err := Run(t.Context(), engineDefinitionWithPhases(t, []string{"run"}, `def main(args): return agent("prompt")`), RunRequest{RunID: "declared-run"}, inertAgent, func(_ context.Context, update protocol.PhaseUpdate) error {
-			updates = append(updates, update)
-			return nil
-		}, discardAgentProgress)
+		result, err := Run(t.Context(), engineDefinitionWithPhases(t, []string{"run"}, `def main(args): return agent("prompt")`), RunRequest{RunID: "declared-run"}, &agentRunnerMock{RunFunc: inertAgent})
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
 
-		statuses := make([]protocol.PhaseStatus, 0, len(updates))
-		for _, update := range updates {
-			statuses = append(statuses, update.Status)
-		}
-
-		want := []protocol.PhaseStatus{protocol.PhasePending, protocol.PhaseInProgress, protocol.PhaseInProgress, protocol.PhaseInProgress, protocol.PhaseComplete}
-		if !slices.Equal(statuses, want) {
-			t.Fatalf("run phase statuses = %v, want %v", statuses, want)
+		want := []protocol.PhaseUpdate{{PhaseID: "declared-run/phase/000000/run", Name: "run", Status: protocol.PhaseComplete, Scheduled: 1, Complete: 1}}
+		if !slices.Equal(result.Phases, want) {
+			t.Fatalf("Run().Phases = %+v, want %+v", result.Phases, want)
 		}
 	})
 }
@@ -187,7 +177,7 @@ func TestRunRejectsInvalidValues(t *testing.T) {
     return x`, want: "cycle"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Run(t.Context(), engineDefinition(t, tt.body), RunRequest{RunID: tt.name}, inertAgent, discardProgress, discardAgentProgress)
+			_, err := Run(t.Context(), engineDefinition(t, tt.body), RunRequest{RunID: tt.name}, &agentRunnerMock{RunFunc: inertAgent})
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("Run() error = %v, want containing %q", err, tt.want)
 			}
@@ -207,7 +197,7 @@ def main(args):
     return pipeline(["one"], audit)`, location: "test.star:3:17", function: "in audit"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Run(t.Context(), engineDefinition(t, tt.body), RunRequest{RunID: tt.name}, inertAgent, discardProgress, discardAgentProgress)
+			_, err := Run(t.Context(), engineDefinition(t, tt.body), RunRequest{RunID: tt.name}, &agentRunnerMock{RunFunc: inertAgent})
 			if err == nil {
 				t.Fatal("Run() error = nil, want Starlark evaluation error")
 			}
@@ -235,7 +225,7 @@ def main(args):
     return parallel([mutate, mutate])
 `)
 
-		_, err := Run(t.Context(), definition, RunRequest{RunID: "frozen-global"}, inertAgent, discardProgress, discardAgentProgress)
+		_, err := Run(t.Context(), definition, RunRequest{RunID: "frozen-global"}, &agentRunnerMock{RunFunc: inertAgent})
 		if err == nil || !strings.Contains(err.Error(), "frozen") {
 			t.Fatalf("Run() error = %v, want frozen module-global mutation rejection", err)
 		}
@@ -248,7 +238,7 @@ def main(args):
     return local
 `)
 
-		result, err := Run(t.Context(), definition, RunRequest{RunID: "local", Args: "kept"}, inertAgent, discardProgress, discardAgentProgress)
+		result, err := Run(t.Context(), definition, RunRequest{RunID: "local", Args: "kept"}, &agentRunnerMock{RunFunc: inertAgent})
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -266,14 +256,9 @@ def main(args):
     return phase("verify", lambda: agent("two"))
 `)
 
-	var updates []protocol.PhaseUpdate
-
-	result, err := Run(t.Context(), definition, RunRequest{RunID: "phase-run"}, func(_ context.Context, request AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
+	result, err := Run(t.Context(), definition, RunRequest{RunID: "phase-run"}, &agentRunnerMock{RunFunc: func(_ context.Context, request *AgentRequest) (json.RawMessage, error) {
 		return json.RawMessage(fmt.Sprintf("%q", request.Prompt)), nil
-	}, func(_ context.Context, update protocol.PhaseUpdate) error {
-		updates = append(updates, update)
-		return nil
-	}, discardAgentProgress)
+	}})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -282,86 +267,59 @@ def main(args):
 		t.Fatalf("Run().Text = %q, want two", result.Text)
 	}
 
-	if got := phaseStatuses(result.Phases); !slices.Equal(got, []protocol.PhaseStatus{protocol.PhaseComplete, protocol.PhaseComplete}) {
-		t.Fatalf("Run().Phases statuses = %v, want both complete", got)
+	want := []protocol.PhaseUpdate{
+		{PhaseID: "phase-run/phase/000000/discover", Name: "discover", Status: protocol.PhaseComplete, Scheduled: 1, Complete: 1},
+		{PhaseID: "phase-run/phase/000001/verify", Name: "verify", Status: protocol.PhaseComplete, Scheduled: 1, Complete: 1},
 	}
-
-	if len(updates) < 8 || updates[0].Status != "pending" || updates[1].Status != "pending" {
-		t.Fatalf("phase updates = %+v, want declared pending updates first", updates)
-	}
-
-	ids := make(map[string]string)
-	terminal := make(map[string]protocol.PhaseUpdate)
-
-	for _, update := range updates {
-		if previous := ids[update.Name]; previous != "" && previous != update.PhaseID {
-			t.Fatalf("phase %q IDs changed from %q to %q", update.Name, previous, update.PhaseID)
-		}
-
-		ids[update.Name] = update.PhaseID
-		if update.Status == "complete" {
-			terminal[update.Name] = update
-		}
-	}
-
-	for _, name := range definition.Phases {
-		update := terminal[name]
-		if update.Scheduled != 1 || update.Running != 0 || update.Complete != 1 {
-			t.Fatalf("terminal phase %q = %+v, want one complete call", name, update)
-		}
-	}
-
-	if ids["discover"] != "phase-run/phase/000000/discover" || ids["verify"] != "phase-run/phase/000001/verify" {
-		t.Fatalf("declared phase IDs = %v, want declaration indexes", ids)
+	if !slices.Equal(result.Phases, want) {
+		t.Fatalf("Run().Phases = %+v, want %+v", result.Phases, want)
 	}
 
 	for _, tt := range []struct {
 		name       string
-		runner     AgentRunFunc
+		runner     AgentRunner
 		wantStatus protocol.PhaseStatus
+		complete   int
 	}{
-		{name: "implicit complete", runner: inertAgent, wantStatus: protocol.PhaseComplete},
-		{name: "implicit error", runner: func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error) {
+		{name: "implicit complete", runner: &agentRunnerMock{RunFunc: inertAgent}, wantStatus: protocol.PhaseComplete, complete: 1},
+		{name: "implicit error", runner: &agentRunnerMock{RunFunc: func(context.Context, *AgentRequest) (json.RawMessage, error) {
 			return nil, errors.New("agent failed")
-		}, wantStatus: protocol.PhaseError},
+		}}, wantStatus: protocol.PhaseError},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			var updates []protocol.PhaseUpdate
+			result, _ := Run(t.Context(), engineDefinition(t, `def main(args): return agent("prompt")`), RunRequest{RunID: tt.name}, tt.runner)
 
-			_, _ = Run(t.Context(), engineDefinition(t, `def main(args): return agent("prompt")`), RunRequest{RunID: tt.name}, tt.runner, func(_ context.Context, update protocol.PhaseUpdate) error {
-				updates = append(updates, update)
-				return nil
-			}, discardAgentProgress)
-
-			last := updates[len(updates)-1]
-			if last.Name != "run" || last.Status != tt.wantStatus || last.Running != 0 {
-				t.Fatalf("last implicit phase update = %+v, want %s terminal update", last, tt.wantStatus)
+			want := []protocol.PhaseUpdate{{PhaseID: tt.name + "/phase/000000/run", Name: "run", Status: tt.wantStatus, Scheduled: 1, Complete: tt.complete}}
+			if !slices.Equal(result.Phases, want) {
+				t.Fatalf("Run().Phases = %+v, want %+v", result.Phases, want)
 			}
 		})
 	}
 
 	t.Run("explicit error clears running calls", func(t *testing.T) {
-		var updates []protocol.PhaseUpdate
+		result, _ := Run(t.Context(), engineDefinitionWithPhases(t, []string{"work"}, `def work():
+    agent("success")
+    return agent("fail")
+def main(args): return phase("work", work)`), RunRequest{RunID: "phase-error"}, &agentRunnerMock{RunFunc: func(_ context.Context, request *AgentRequest) (json.RawMessage, error) {
+			if request.Prompt == "success" {
+				return json.RawMessage(`"done"`), nil
+			}
 
-		_, _ = Run(t.Context(), engineDefinitionWithPhases(t, []string{"work"}, `def main(args): return phase("work", lambda: agent("prompt"))`), RunRequest{RunID: "phase-error"}, func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error) {
 			return nil, errors.New("agent failed")
-		}, func(_ context.Context, update protocol.PhaseUpdate) error {
-			updates = append(updates, update)
-			return nil
-		}, discardAgentProgress)
+		}})
 
-		last := updates[len(updates)-1]
-		if last.Status != "error" || last.Running != 0 {
-			t.Fatalf("last explicit phase update = %+v, want error with no running calls", last)
+		want := []protocol.PhaseUpdate{{PhaseID: "phase-error/phase/000000/work", Name: "work", Status: protocol.PhaseError, Scheduled: 2, Complete: 1}}
+		if !slices.Equal(result.Phases, want) {
+			t.Fatalf("Run().Phases = %+v, want %+v", result.Phases, want)
 		}
 	})
 
 	t.Run("later failure does not overwrite completed run phase", func(t *testing.T) {
 		result, err := Run(t.Context(), engineDefinitionWithPhases(t, []string{"run", "work"}, `def main(args):
     phase("run", lambda: None)
-    return phase("work", lambda: agent("fail"))`), RunRequest{RunID: "completed-run"}, func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error) {
+    return phase("work", lambda: agent("fail"))`), RunRequest{RunID: "completed-run"}, &agentRunnerMock{RunFunc: func(context.Context, *AgentRequest) (json.RawMessage, error) {
 			return nil, errors.New("failed")
-		}, discardProgress, discardAgentProgress)
+		}})
 		if err == nil {
 			t.Fatal("Run() error = nil, want later phase failure")
 		}
@@ -373,34 +331,15 @@ def main(args):
 
 	for _, tt := range []struct {
 		name, body string
-		runner     AgentRunFunc
+		runner     AgentRunner
 	}{
-		{name: "success", body: `def main(args): return None`, runner: inertAgent},
-		{name: "failure", body: `def main(args): return phase("work", lambda: agent("fail"))`, runner: func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error) {
+		{name: "success", body: `def main(args): return None`, runner: &agentRunnerMock{RunFunc: inertAgent}},
+		{name: "failure", body: `def main(args): return phase("work", lambda: agent("fail"))`, runner: &agentRunnerMock{RunFunc: func(context.Context, *AgentRequest) (json.RawMessage, error) {
 			return nil, errors.New("failed")
-		}},
+		}}},
 	} {
 		t.Run("untouched declared phases on "+tt.name, func(t *testing.T) {
-			var updates []protocol.PhaseUpdate
-
-			result, _ := Run(t.Context(), engineDefinitionWithPhases(t, []string{"run", "work", "other"}, tt.body), RunRequest{RunID: "pending-" + tt.name}, tt.runner, func(_ context.Context, update protocol.PhaseUpdate) error {
-				updates = append(updates, update)
-				return nil
-			}, discardAgentProgress)
-
-			for _, name := range []string{"run", "other"} {
-				last := protocol.PhaseUpdate{}
-
-				for _, update := range updates {
-					if update.Name == name {
-						last = update
-					}
-				}
-
-				if last.Status != protocol.PhaseSkipped {
-					t.Fatalf("untouched phase %q = %+v, want skipped", name, last)
-				}
-			}
+			result, _ := Run(t.Context(), engineDefinitionWithPhases(t, []string{"run", "work", "other"}, tt.body), RunRequest{RunID: "pending-" + tt.name}, tt.runner)
 
 			if got := phaseStatuses(result.Phases); !slices.Equal(got, []protocol.PhaseStatus{protocol.PhaseSkipped, map[string]protocol.PhaseStatus{"success": protocol.PhaseSkipped, "failure": protocol.PhaseError}[tt.name], protocol.PhaseSkipped}) {
 				t.Fatalf("Run().Phases statuses = %v, want final declared statuses", got)
@@ -409,32 +348,16 @@ def main(args):
 	}
 
 	t.Run("dynamic phases preserve encounter order", func(t *testing.T) {
-		var updates []protocol.PhaseUpdate
-
 		result, err := Run(t.Context(), engineDefinition(t, `
 def main(args):
     phase("verify", lambda: None)
     return phase("audit", lambda: None)
-`), RunRequest{RunID: "dynamic-order"}, inertAgent, func(_ context.Context, update protocol.PhaseUpdate) error {
-			updates = append(updates, update)
-			return nil
-		}, discardAgentProgress)
+`), RunRequest{RunID: "dynamic-order"}, &agentRunnerMock{RunFunc: inertAgent})
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
 
-		var ids []string
-
-		for _, update := range updates {
-			if update.Status == protocol.PhaseInProgress {
-				ids = append(ids, update.PhaseID)
-			}
-		}
-
 		want := []string{"dynamic-order/phase/000000/verify", "dynamic-order/phase/000001/audit"}
-		if !slices.Equal(ids, want) {
-			t.Fatalf("dynamic phase IDs = %v, want %v", ids, want)
-		}
 
 		resultIDs := make([]string, 0, len(result.Phases))
 		for _, phase := range result.Phases {
@@ -447,20 +370,18 @@ def main(args):
 	})
 
 	t.Run("implicit phase follows declared phases", func(t *testing.T) {
-		var ids []string
-
-		_, err := Run(t.Context(), engineDefinitionWithPhases(t, []string{"discover", "audit"}, `def main(args): return agent("prompt")`), RunRequest{RunID: "declared-order"}, inertAgent, func(_ context.Context, update protocol.PhaseUpdate) error {
-			if !slices.Contains(ids, update.PhaseID) {
-				ids = append(ids, update.PhaseID)
-			}
-
-			return nil
-		}, discardAgentProgress)
+		result, err := Run(t.Context(), engineDefinitionWithPhases(t, []string{"discover", "audit"}, `def main(args): return agent("prompt")`), RunRequest{RunID: "declared-order"}, &agentRunnerMock{RunFunc: inertAgent})
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
 
 		want := []string{"declared-order/phase/000000/discover", "declared-order/phase/000001/audit", "declared-order/phase/000002/run"}
+
+		ids := make([]string, 0, len(result.Phases))
+		for _, phase := range result.Phases {
+			ids = append(ids, phase.PhaseID)
+		}
+
 		if !slices.Equal(ids, want) {
 			t.Fatalf("phase IDs = %v, want %v", ids, want)
 		}
@@ -476,7 +397,7 @@ def main(args):
 
 		source.WriteString("    return None\n")
 
-		_, err := Run(t.Context(), engineDefinition(t, source.String()), RunRequest{RunID: "dynamic-100"}, inertAgent, discardProgress, discardAgentProgress)
+		_, err := Run(t.Context(), engineDefinition(t, source.String()), RunRequest{RunID: "dynamic-100"}, &agentRunnerMock{RunFunc: inertAgent})
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -492,7 +413,7 @@ def main(args):
 
 		source.WriteString("    return None\n")
 
-		_, err := Run(t.Context(), engineDefinition(t, source.String()), RunRequest{RunID: "dynamic-101"}, inertAgent, discardProgress, discardAgentProgress)
+		_, err := Run(t.Context(), engineDefinition(t, source.String()), RunRequest{RunID: "dynamic-101"}, &agentRunnerMock{RunFunc: inertAgent})
 		if err == nil || !strings.Contains(err.Error(), "at most 100 phases") {
 			t.Fatalf("Run() error = %v, want 100-phase limit", err)
 		}
@@ -504,21 +425,24 @@ def main(args):
 			phases[i] = fmt.Sprintf("phase-%d", i)
 		}
 
-		runnerCalls, progressCalls := 0, 0
+		runnerCalls := 0
 
-		_, err := Run(t.Context(), engineDefinitionWithPhases(t, phases, `def main(args): return agent("prompt")`), RunRequest{RunID: "declared-100"}, func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error) {
+		result, err := Run(t.Context(), engineDefinitionWithPhases(t, phases, `def main(args): return agent("prompt")`), RunRequest{RunID: "declared-100"}, &agentRunnerMock{RunFunc: func(context.Context, *AgentRequest) (json.RawMessage, error) {
 			runnerCalls++
 			return json.RawMessage(`"unexpected"`), nil
-		}, func(context.Context, protocol.PhaseUpdate) error {
-			progressCalls++
-			return nil
-		}, discardAgentProgress)
+		}})
 		if err == nil || !strings.Contains(err.Error(), "at most 100 phases") {
 			t.Fatalf("Run() error = %v, want 100-phase limit", err)
 		}
 
-		if runnerCalls != 0 || progressCalls != 200 {
-			t.Fatalf("runner calls = %d, progress calls = %d, want 0 and 200", runnerCalls, progressCalls)
+		if runnerCalls != 0 || len(result.Phases) != 100 {
+			t.Fatalf("runner calls = %d, phases = %d, want 0 and 100", runnerCalls, len(result.Phases))
+		}
+
+		for _, phase := range result.Phases {
+			if phase.Status != protocol.PhaseSkipped || phase.Scheduled != 0 || phase.Running != 0 || phase.Complete != 0 {
+				t.Fatalf("phase = %+v, want skipped with no calls", phase)
+			}
 		}
 	})
 
@@ -530,7 +454,7 @@ def main(args):
     audits = pipeline(`+items+`, audit)
     return "Verify and synthesize these audits:\\n%s" % (audits,)
 `)
-			if _, err := Run(t.Context(), definition, RunRequest{RunID: "format"}, inertAgent, discardProgress, discardAgentProgress); err != nil {
+			if _, err := Run(t.Context(), definition, RunRequest{RunID: "format"}, &agentRunnerMock{RunFunc: inertAgent}); err != nil {
 				t.Fatalf("Run() with items %s error = %v", items, err)
 			}
 		}
@@ -549,7 +473,7 @@ def main(args):
 				t.Fatalf("compileDefinition() error = %v", errCompile)
 			}
 
-			_, err := Run(t.Context(), definition, RunRequest{RunID: tt.name}, inertAgent, discardProgress, discardAgentProgress)
+			_, err := Run(t.Context(), definition, RunRequest{RunID: tt.name}, &agentRunnerMock{RunFunc: inertAgent})
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("Run() error = %v, want containing %q", err, tt.want)
 			}
@@ -559,7 +483,7 @@ def main(args):
 
 func TestRunFanout(t *testing.T) {
 	t.Run("parallel accepts a tuple", func(t *testing.T) {
-		result, err := Run(t.Context(), engineDefinition(t, `def main(args): return parallel((lambda: 1, lambda: 2))`), RunRequest{RunID: "tuple"}, inertAgent, discardProgress, discardAgentProgress)
+		result, err := Run(t.Context(), engineDefinition(t, `def main(args): return parallel((lambda: 1, lambda: 2))`), RunRequest{RunID: "tuple"}, &agentRunnerMock{RunFunc: inertAgent})
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -576,7 +500,7 @@ def main(args):
     return pipeline(a, lambda item: agent(item))
 `)
 
-		result, err := Run(t.Context(), definition, RunRequest{RunID: "order"}, func(ctx context.Context, request AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
+		result, err := Run(t.Context(), definition, RunRequest{RunID: "order"}, &agentRunnerMock{RunFunc: func(ctx context.Context, request *AgentRequest) (json.RawMessage, error) {
 			delay := map[string]time.Duration{"3": 3 * time.Millisecond, "2": 2 * time.Millisecond, "1": time.Millisecond}[request.Prompt]
 			select {
 			case <-ctx.Done():
@@ -584,7 +508,7 @@ def main(args):
 			case <-time.After(delay):
 				return json.RawMessage(fmt.Sprintf("%q", request.Prompt)), nil
 			}
-		}, discardProgress, discardAgentProgress)
+		}})
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -594,7 +518,7 @@ def main(args):
 		}
 	})
 
-	t.Run("parallel agent labels update serialized phase details", func(t *testing.T) {
+	t.Run("parallel agents preserve terminal phase counts", func(t *testing.T) {
 		definition := engineDefinition(t, `
 def main(args):
     return parallel([
@@ -603,36 +527,16 @@ def main(args):
     ])
 `)
 
-		var updates []protocol.PhaseUpdate
-
-		_, err := Run(t.Context(), definition, RunRequest{RunID: "labels"}, func(_ context.Context, request AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
+		result, err := Run(t.Context(), definition, RunRequest{RunID: "labels"}, &agentRunnerMock{RunFunc: func(_ context.Context, request *AgentRequest) (json.RawMessage, error) {
 			return json.RawMessage(fmt.Sprintf("%q", "private result "+request.Prompt)), nil
-		}, func(_ context.Context, update protocol.PhaseUpdate) error {
-			updates = append(updates, update)
-			return nil
-		}, discardAgentProgress)
+		}})
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
 
-		var scheduled []protocol.PhaseUpdate
-
-		maximum := 0
-
-		for _, update := range updates {
-			if update.Scheduled > maximum {
-				scheduled = append(scheduled, update)
-				maximum = update.Scheduled
-			}
-		}
-
-		if len(scheduled) != 2 || scheduled[0].Scheduled != 1 || scheduled[1].Scheduled != 2 {
-			t.Fatalf("scheduled phase updates = %+v, want exact counts 1 then 2", scheduled)
-		}
-
-		terminal := updates[len(updates)-1]
-		if terminal.Status != protocol.PhaseComplete || terminal.Scheduled != 2 || terminal.Running != 0 || terminal.Complete != 2 {
-			t.Fatalf("terminal phase update = %+v, want complete 2/0/2", terminal)
+		want := []protocol.PhaseUpdate{{PhaseID: "labels/phase/000000/run", Name: "run", Status: protocol.PhaseComplete, Scheduled: 2, Complete: 2}}
+		if !slices.Equal(result.Phases, want) {
+			t.Fatalf("Run().Phases = %+v, want %+v", result.Phases, want)
 		}
 	})
 
@@ -644,7 +548,7 @@ def main(args):
 		active, maximum := 0, 0
 		release := make(chan struct{})
 		started := make(chan struct{}, 32)
-		runner := func(ctx context.Context, _ AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
+		runner := &agentRunnerMock{RunFunc: func(ctx context.Context, _ *AgentRequest) (json.RawMessage, error) {
 			mu.Lock()
 			active++
 			maximum = max(maximum, active)
@@ -663,11 +567,11 @@ def main(args):
 			mu.Unlock()
 
 			return json.RawMessage(`""`), nil
-		}
+		}}
 		done := make(chan error, 1)
 
 		go func() {
-			_, err := Run(t.Context(), definition, RunRequest{RunID: "concurrency"}, runner, discardProgress, discardAgentProgress)
+			_, err := Run(t.Context(), definition, RunRequest{RunID: "concurrency"}, runner)
 			done <- err
 		}()
 
@@ -705,7 +609,7 @@ def main(args):
     return parallel([lambda: fan([])])`, want: "nested"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Run(t.Context(), engineDefinition(t, tt.source), RunRequest{RunID: tt.name}, inertAgent, discardProgress, discardAgentProgress)
+			_, err := Run(t.Context(), engineDefinition(t, tt.source), RunRequest{RunID: tt.name}, &agentRunnerMock{RunFunc: inertAgent})
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("Run() error = %v, want containing %q", err, tt.want)
 			}
@@ -742,10 +646,10 @@ def main(args):
 	t.Run("rejects huge range without runner calls", func(t *testing.T) {
 		runnerCalls := 0
 
-		_, err := Run(t.Context(), engineDefinition(t, `def main(args): return pipeline(range(1000000000000), lambda item: agent(str(item)))`), RunRequest{RunID: "huge-range"}, func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error) {
+		_, err := Run(t.Context(), engineDefinition(t, `def main(args): return pipeline(range(1000000000000), lambda item: agent(str(item)))`), RunRequest{RunID: "huge-range"}, &agentRunnerMock{RunFunc: func(context.Context, *AgentRequest) (json.RawMessage, error) {
 			runnerCalls++
 			return json.RawMessage(`"unexpected"`), nil
-		}, discardProgress, discardAgentProgress)
+		}})
 		if err == nil || !strings.Contains(err.Error(), "callback limit exceeded") {
 			t.Fatalf("Run() error = %v, want callback limit", err)
 		}
@@ -766,77 +670,21 @@ func TestRunCancellationAndInfrastructureErrors(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 
-		_, err := Run(ctx, definition, RunRequest{RunID: "pre-canceled"}, inertAgent, discardProgress, discardAgentProgress)
+		_, err := Run(ctx, definition, RunRequest{RunID: "pre-canceled"}, &agentRunnerMock{RunFunc: inertAgent})
 		if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "initialize workflow") {
 			t.Fatalf("Run() error = %v, want initialize workflow wrapping context canceled", err)
 		}
 	})
 
-	t.Run("initial progress failure skips every declared phase", func(t *testing.T) {
-		errProgress := errors.New("pending progress broke")
-		failed := false
-
-		result, err := Run(t.Context(), engineDefinitionWithPhases(t, []string{"one", "two"}, `def main(args): return None`), RunRequest{RunID: "pending-progress"}, inertAgent, func(_ context.Context, update protocol.PhaseUpdate) error {
-			if !failed && update.Status == protocol.PhasePending {
-				failed = true
-				return errProgress
-			}
-
-			return nil
-		}, discardAgentProgress)
-		if !errors.Is(err, errProgress) {
-			t.Fatalf("Run() error = %v, want pending progress failure", err)
-		}
-
-		if got := phaseStatuses(result.Phases); !slices.Equal(got, []protocol.PhaseStatus{protocol.PhaseSkipped, protocol.PhaseSkipped}) {
-			t.Fatalf("Run().Phases statuses = %v, want both skipped", got)
-		}
-	})
-
-	t.Run("phase entry progress failure still emits terminal error", func(t *testing.T) {
-		errEntry := errors.New("entry progress broke")
-		errTerminal := errors.New("terminal progress broke")
-
-		var updates []protocol.PhaseUpdate
-
-		_, err := Run(t.Context(), engineDefinitionWithPhases(t, []string{"work"}, `def main(args): return phase("work", lambda: None)`), RunRequest{RunID: "entry-progress"}, inertAgent, func(ctx context.Context, update protocol.PhaseUpdate) error {
-			updates = append(updates, update)
-			switch update.Status {
-			case protocol.PhaseInProgress:
-				return errEntry
-			case protocol.PhaseError:
-				if ctx.Err() != nil {
-					t.Fatalf("terminal progress context error = %v, want uncanceled", ctx.Err())
-				}
-
-				return errTerminal
-			case protocol.PhasePending, protocol.PhaseComplete, protocol.PhaseSkipped:
-				return nil
-			default:
-				return nil
-			}
-		}, discardAgentProgress)
-		if !errors.Is(err, errEntry) || !errors.Is(err, errTerminal) {
-			t.Fatalf("Run() error = %v, want entry and terminal progress failures", err)
-		}
-
-		if updates[len(updates)-1].Status != "error" {
-			t.Fatalf("last phase update = %+v, want terminal error", updates[len(updates)-1])
-		}
-	})
-
-	t.Run("runner failure emits terminal phase with uncanceled context", func(t *testing.T) {
+	t.Run("runner failure preserves terminal phase and cancels siblings", func(t *testing.T) {
 		errRunner := errors.New("runner broke")
-		errCanceledTerminal := errors.New("terminal received canceled context")
 		blocked := make(chan struct{})
 		canceled := make(chan struct{})
-		terminal := false
-		canceledTerminal := false
 		definition := engineDefinitionWithPhases(t, []string{"work"}, `def main(args):
     return phase("work", lambda: parallel([lambda: agent("block"), lambda: agent("fail")]))
 `)
 
-		_, err := Run(t.Context(), definition, RunRequest{RunID: "runner-phase"}, func(ctx context.Context, request AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
+		result, err := Run(t.Context(), definition, RunRequest{RunID: "runner-phase"}, &agentRunnerMock{RunFunc: func(ctx context.Context, request *AgentRequest) (json.RawMessage, error) {
 			if request.Prompt == "fail" {
 				<-blocked
 				return nil, errRunner
@@ -847,28 +695,14 @@ func TestRunCancellationAndInfrastructureErrors(t *testing.T) {
 			close(canceled)
 
 			return nil, context.Cause(ctx)
-		}, func(ctx context.Context, update protocol.PhaseUpdate) error {
-			if update.Status == "error" {
-				terminal = true
-
-				if ctx.Err() != nil {
-					canceledTerminal = true
-					return errCanceledTerminal
-				}
-			}
-
-			return nil
-		}, discardAgentProgress)
-		if !errors.Is(err, errRunner) || errors.Is(err, errCanceledTerminal) {
-			t.Fatalf("Run() error = %v, want original runner failure without canceled terminal context", err)
+		}})
+		if !errors.Is(err, errRunner) {
+			t.Fatalf("Run() error = %v, want original runner failure", err)
 		}
 
-		if !terminal {
-			t.Fatal("runner failure emitted no terminal phase update")
-		}
-
-		if canceledTerminal {
-			t.Fatal("runner failure passed canceled context to terminal phase update")
+		want := []protocol.PhaseUpdate{{PhaseID: "runner-phase/phase/000000/work", Name: "work", Status: protocol.PhaseError, Scheduled: 2}}
+		if !slices.Equal(result.Phases, want) {
+			t.Fatalf("Run().Phases = %+v, want %+v", result.Phases, want)
 		}
 
 		select {
@@ -884,12 +718,12 @@ func TestRunCancellationAndInfrastructureErrors(t *testing.T) {
 		done := make(chan error, 1)
 
 		go func() {
-			_, err := Run(ctx, engineDefinition(t, `def main(args): return agent("wait")`), RunRequest{RunID: "cancel-runner"}, func(ctx context.Context, _ AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
+			_, err := Run(ctx, engineDefinition(t, `def main(args): return agent("wait")`), RunRequest{RunID: "cancel-runner"}, &agentRunnerMock{RunFunc: func(ctx context.Context, _ *AgentRequest) (json.RawMessage, error) {
 				close(started)
 				<-ctx.Done()
 
 				return nil, context.Cause(ctx)
-			}, discardProgress, discardAgentProgress)
+			}})
 			done <- err
 		}()
 
@@ -904,7 +738,7 @@ func TestRunCancellationAndInfrastructureErrors(t *testing.T) {
 	t.Run("shared step budget", func(t *testing.T) {
 		_, err := Run(t.Context(), engineDefinition(t, `def spin():
     while True: pass
-def main(args): return parallel([spin, spin])`), RunRequest{RunID: "steps"}, inertAgent, discardProgress, discardAgentProgress)
+def main(args): return parallel([spin, spin])`), RunRequest{RunID: "steps"}, &agentRunnerMock{RunFunc: inertAgent})
 		if err == nil || !strings.Contains(err.Error(), "step") {
 			t.Fatalf("Run() error = %v, want shared step exhaustion", err)
 		}
@@ -921,230 +755,26 @@ def main(args): return parallel([spin, spin])`), RunRequest{RunID: "steps"}, ine
 			t.Fatalf("remaining steps = %d, want 0", e.remaining)
 		}
 	})
-
-	t.Run("progress failure cancels siblings", func(t *testing.T) {
-		canceled := make(chan struct{})
-
-		var once sync.Once
-
-		sawRunning := false
-
-		_, err := Run(t.Context(), engineDefinition(t, `def main(args): return parallel([lambda: agent("a"), lambda: agent("b")])`), RunRequest{RunID: "progress-failure"}, func(ctx context.Context, _ AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
-			<-ctx.Done()
-			once.Do(func() { close(canceled) })
-
-			return nil, context.Cause(ctx)
-		}, func(_ context.Context, update protocol.PhaseUpdate) error {
-			if sawRunning {
-				return errors.New("progress broke")
-			}
-
-			if update.Running > 0 {
-				sawRunning = true
-			}
-
-			return nil
-		}, discardAgentProgress)
-		if err == nil || !strings.Contains(err.Error(), "progress broke") {
-			t.Fatalf("Run() error = %v, want progress failure", err)
-		}
-
-		select {
-		case <-canceled:
-		case <-time.After(time.Second):
-			t.Fatal("progress failure did not cancel runners")
-		}
-	})
 }
 
-func TestAgentActivityLifecycle(t *testing.T) {
-	for _, tt := range []struct {
-		name, label, workerName, wantLabel string
-	}{
-		{name: "explicit label", label: "failure-trace", workerName: "trace-investigator", wantLabel: "failure-trace"},
-		{name: "worker fallback", workerName: "trace-investigator", wantLabel: "trace-investigator"},
-		{name: "phase call fallback", wantLabel: "investigate call 1"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			workerDeclaration, workerArgument := "", ""
-			if tt.workerName != "" {
-				workerDeclaration = fmt.Sprintf("w = worker(name=%q, instructions=\"work\")\n", tt.workerName)
-				workerArgument = ", worker=w"
-			}
-
-			labelArgument := ""
-			if tt.label != "" {
-				labelArgument = fmt.Sprintf(", label=%q", tt.label)
-			}
-
-			definition := engineDefinitionWithPhases(t, []string{"investigate"}, workerDeclaration+`def main(args):
-	return phase("investigate", lambda: agent("prompt"`+workerArgument+labelArgument+`))`)
-
-			var updates []protocol.AgentUpdate
-
-			result, err := Run(t.Context(), definition, RunRequest{RunID: "run"}, func(ctx context.Context, _ AgentRequest, thinking AgentThinkingFunc) (json.RawMessage, error) {
-				if err := thinking(ctx, "read: prompt.md"); err != nil {
-					return nil, err
-				}
-
-				if err := thinking(ctx, "grep: turn limit"); err != nil {
-					return nil, err
-				}
-
-				return json.RawMessage(`"result"`), nil
-			}, discardProgress, func(_ context.Context, update protocol.AgentUpdate) error {
-				updates = append(updates, update)
-				return nil
-			})
-			if err != nil {
-				t.Fatalf("Run() error = %v", err)
-			}
-
-			if result.Text != "result" {
-				t.Fatalf("Run().Text = %q, want result", result.Text)
-			}
-
-			want := []protocol.AgentUpdate{
-				{PhaseID: "run/phase/000000/investigate", Label: tt.wantLabel, Activity: "read: prompt.md"},
-				{PhaseID: "run/phase/000000/investigate", Label: tt.wantLabel, Activity: "grep: turn limit"},
-			}
-			if !slices.Equal(updates, want) {
-				t.Fatalf("agent updates = %+v, want %+v", updates, want)
-			}
-		})
-	}
-}
-
-func TestAgentActivityParallel(t *testing.T) {
-	definition := engineDefinition(t, `
-def main(args):
-    return parallel([
-        lambda: agent("first", label="alpha"),
-        lambda: agent("second", label="beta"),
-    ])
-`)
-
-	var updates []protocol.AgentUpdate
-
-	started := make(chan struct{}, 2)
-	release := make(chan struct{})
-
-	go func() {
-		<-started
-		<-started
-		close(release)
-	}()
-
-	var completedMu sync.Mutex
-
-	completedAgents := 0
-
-	_, err := Run(t.Context(), definition, RunRequest{RunID: "run"}, func(ctx context.Context, request AgentRequest, thinking AgentThinkingFunc) (json.RawMessage, error) {
-		started <- struct{}{}
-
-		<-release
-
-		if err := thinking(ctx, "working "+request.Prompt); err != nil {
-			return nil, err
-		}
-
-		completedMu.Lock()
-		completedAgents++
-		completedMu.Unlock()
-
-		return json.RawMessage(fmt.Sprintf("%q", request.Prompt)), nil
-	}, func(_ context.Context, update protocol.PhaseUpdate) error {
-		completedMu.Lock()
-		defer completedMu.Unlock()
-
-		if update.Complete > completedAgents {
-			return fmt.Errorf("phase completed %d calls after only %d agent completions", update.Complete, completedAgents)
-		}
-
-		return nil
-	}, func(_ context.Context, update protocol.AgentUpdate) error {
-		updates = append(updates, update)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-
-	latest := make(map[string]protocol.AgentUpdate)
-	for _, update := range updates {
-		latest[update.Label] = update
-	}
-
-	if got := latest["alpha"]; got.Activity != "working first" || got.PhaseID != "run/phase/000000/run" {
-		t.Fatalf("alpha update = %+v, want completed first worker", got)
-	}
-
-	if got := latest["beta"]; got.Activity != "working second" || got.PhaseID != "run/phase/000000/run" {
-		t.Fatalf("beta update = %+v, want completed second worker", got)
-	}
-}
-
-func TestAgentActivityProgressFailure(t *testing.T) {
-	errActivity := errors.New("activity unavailable")
-	runnerCalled := false
-
-	_, err := Run(t.Context(), engineDefinition(t, `def main(args): return agent("prompt")`), RunRequest{RunID: "run"}, func(ctx context.Context, _ AgentRequest, thinking AgentThinkingFunc) (json.RawMessage, error) {
-		runnerCalled = true
-
-		if err := thinking(ctx, "working"); err != nil {
-			return nil, err
-		}
-
-		return json.RawMessage(`"result"`), nil
-	}, discardProgress, func(context.Context, protocol.AgentUpdate) error {
-		return errActivity
-	})
-	if !errors.Is(err, errActivity) {
-		t.Fatalf("Run() error = %v, want activity failure", err)
-	}
-
-	if !runnerCalled {
-		t.Fatal("agent runner did not publish observable activity")
-	}
-}
-
-func TestAgentActivityValidationFailure(t *testing.T) {
+func TestAgentValidationFailurePreservesTerminalCounts(t *testing.T) {
 	definition := engineDefinitionWithPhases(t, []string{"verify"}, `
 def main(args):
     return phase("verify", lambda: agent("prompt", label="validator", schema={"type": "object", "properties": {"count": {"type": "integer"}}, "required": ["count"]}))
 `)
 
-	var (
-		agentUpdates []protocol.AgentUpdate
-		phaseUpdates []protocol.PhaseUpdate
-	)
-
-	_, err := Run(t.Context(), definition, RunRequest{RunID: "run"}, func(ctx context.Context, _ AgentRequest, thinking AgentThinkingFunc) (json.RawMessage, error) {
-		if err := thinking(ctx, "checking result"); err != nil {
-			return nil, err
-		}
-
+	result, err := Run(t.Context(), definition, RunRequest{RunID: "run"}, &agentRunnerMock{RunFunc: func(context.Context, *AgentRequest) (json.RawMessage, error) {
 		return json.RawMessage(`{"count":"invalid"}`), nil
-	}, func(_ context.Context, update protocol.PhaseUpdate) error {
-		phaseUpdates = append(phaseUpdates, update)
-		return nil
-	}, func(_ context.Context, update protocol.AgentUpdate) error {
-		agentUpdates = append(agentUpdates, update)
-		return nil
-	})
+	}})
 	if err == nil || !strings.Contains(err.Error(), "validate agent result") {
 		t.Fatalf("Run() error = %v, want validation failure", err)
 	}
 
-	wantAgentUpdates := []protocol.AgentUpdate{
-		{PhaseID: "run/phase/000000/verify", Label: "validator", Activity: "checking result"},
+	want := []protocol.PhaseUpdate{
+		{PhaseID: "run/phase/000000/verify", Name: "verify", Status: protocol.PhaseError, Scheduled: 1},
 	}
-	if !slices.Equal(agentUpdates, wantAgentUpdates) {
-		t.Fatalf("agent updates = %+v, want no post-validation lifecycle update", agentUpdates)
-	}
-
-	if len(phaseUpdates) == 0 || phaseUpdates[len(phaseUpdates)-1].Status != protocol.PhaseError || phaseUpdates[len(phaseUpdates)-1].Complete != 0 {
-		t.Fatalf("phase updates = %+v, want error with zero complete", phaseUpdates)
+	if !slices.Equal(result.Phases, want) {
+		t.Fatalf("Run().Phases = %+v, want %+v", result.Phases, want)
 	}
 }
 
@@ -1177,16 +807,8 @@ func engineDefinitionWithPhases(t *testing.T, phases []string, body string) *Def
 	return definition
 }
 
-func inertAgent(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error) {
+func inertAgent(context.Context, *AgentRequest) (json.RawMessage, error) {
 	return json.RawMessage(`""`), nil
-}
-
-func discardProgress(context.Context, protocol.PhaseUpdate) error {
-	return nil
-}
-
-func discardAgentProgress(context.Context, protocol.AgentUpdate) error {
-	return nil
 }
 
 func phaseStatuses(phases []protocol.PhaseUpdate) []protocol.PhaseStatus {

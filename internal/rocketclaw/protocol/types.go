@@ -201,7 +201,7 @@ type OutboundMessage struct {
 	ConsumedHeader                     string
 	ConsumedRawText                    string
 	ConsumedSource                     Source
-	Text, ProgressText                 string
+	Text                               string
 	ConversationID, TurnID             string
 	ExternalConversationID             string
 	Agent                              string
@@ -213,8 +213,6 @@ type OutboundMessage struct {
 	Attachments                        []OutboundAttachment
 	GoalTurn, GoalComplete, GoalActive bool
 	GoalTurnNumber, GoalMaxTurns       int
-	WorkflowAgent                      *AgentUpdate
-	WorkflowPhase                      *PhaseUpdate
 	WorkflowTerminal                   Terminal
 
 	deliveryInit, deliveredOnce sync.Once

@@ -39,7 +39,9 @@ func sessionEntryForProvider(entry *rocketcode.SessionEntry, provider string) (r
 	projected.ResponseID = ""
 	projected.ReplayInput = replay
 	projected.ReplayAttribution = ranges
-	projected.OutputTrace = nil
+	projected.OutputTrace = slices.DeleteFunc(slices.Clone(entry.OutputTrace), func(raw json.RawMessage) bool {
+		return len(rocketcode.PublicProgressFromTrace([]json.RawMessage{raw})) == 0
+	})
 
 	return projected, nil
 }
@@ -84,7 +86,9 @@ func activeTurnForProvider(checkpoint *rocketcode.ActiveTurnCheckpoint, provider
 	projected.ResponseID = ""
 	projected.ReplayInput = replay
 	projected.ReplayAttribution = ranges
-	projected.OutputTrace = nil
+	projected.OutputTrace = slices.DeleteFunc(slices.Clone(checkpoint.OutputTrace), func(raw json.RawMessage) bool {
+		return len(rocketcode.PublicProgressFromTrace([]json.RawMessage{raw})) == 0
+	})
 
 	calls := make([]rocketcode.FunctionCallCheckpoint, len(checkpoint.OpenFunctionCalls))
 	for i, call := range checkpoint.OpenFunctionCalls {
@@ -125,10 +129,19 @@ func replayForProvider(rawItems []json.RawMessage, attribution ...[]rocketcode.R
 			}
 
 			if keep {
-				if item.Header != "" {
-					message.OfMessage.SetExtraFields(map[string]any{"prompt_header": item.Header})
+				fields := make(map[string]any)
+
+				if item.Role != "assistant" {
+					item.ID = ""
 				}
 
+				for key, value := range map[string]string{"prompt_header": item.Header, "input_id": item.InputID, "id": item.ID} {
+					if value != "" {
+						fields[key] = value
+					}
+				}
+
+				message.OfMessage.SetExtraFields(fields)
 				items = append(items, message)
 			}
 		case "function_call":
@@ -215,7 +228,9 @@ func replayForProvider(rawItems []json.RawMessage, attribution ...[]rocketcode.R
 type replayMessage struct {
 	Role, Phase string
 	Content     json.RawMessage
+	ID          string `json:"id"`
 	Header      string `json:"prompt_header"`
+	InputID     string `json:"input_id"`
 }
 
 type replayFunctionCall struct {

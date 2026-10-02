@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +37,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // Server supplies concrete Web handlers. The host owns transport registration.
@@ -225,6 +227,14 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 	return nil
 }
 
+// historyRevision is a stateless inventory, not an event-log cursor. The database
+// returns readable payloads only for entries whose fingerprints have changed.
+type historyRevision struct {
+	ConversationID string            `json:"conversation_id"`
+	Source         string            `json:"source"`
+	Entries        map[string]string `json:"entries"`
+}
+
 func (s *Server) history(ctx context.Context, request *HistoryRequest) (*HistoryResponse, error) {
 	if _, err := s.principal(ctx); err != nil {
 		return nil, err
@@ -238,12 +248,19 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 		}
 	}
 
-	entries, err := s.sessions.ObserveEntries(ctx, request.Id)
+	var previous historyRevision
+
+	data, errToken := base64.RawURLEncoding.DecodeString(request.Revision)
+	if errToken != nil || json.Unmarshal(data, &previous) != nil || previous.ConversationID != request.Id || previous.Source != request.SourceConversationId {
+		previous = historyRevision{}
+	}
+
+	entries, err := s.sessions.ObserveTranscript(ctx, request.Id, previous.Entries)
 	if err != nil {
 		return nil, fmt.Errorf("read web history: %w", err)
 	}
 
-	response := &HistoryResponse{}
+	response := &HistoryResponse{Reset_: previous.Entries == nil}
 
 	if !cronTrace {
 		origin, err := s.chatOrigin(ctx, request.Id, entries)
@@ -266,7 +283,7 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 	defer func() { _ = root.Close() }()
 
 	calls := make(map[string]map[string]string)
-	shown := make(map[string]bool)
+	current := historyRevision{ConversationID: request.Id, Source: request.SourceConversationId, Entries: make(map[string]string)}
 
 	for i := range entries {
 		entry := &entries[i]
@@ -284,72 +301,308 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 			continue
 		}
 
-		items, err := rocketcode.ReplayInputToParams(entry.Entry.ReplayInput)
+		current.Entries[entry.Key] = entry.Revision
+		response.EntryKeys = append(response.EntryKeys, entry.Key)
+		response.Running = response.Running || entry.Active
+
+		response.Terminal = string(entry.Terminal)
+		if previous.Entries[entry.Key] == entry.Revision {
+			continue
+		}
+
+		response.ReplacedKeys = append(response.ReplacedKeys, entry.Key)
+
+		messages, err := s.transcriptEntry(ctx, root, entry, request.Id, calls[producer])
 		if err != nil {
-			return nil, fmt.Errorf("decode web history: %w", err)
+			return nil, err
 		}
 
-		deliveryText, deliveryIndex, err := backend.ReplayDeliveryText(items)
-		if err != nil {
-			return nil, fmt.Errorf("web history: %w", err)
-		}
+		response.Messages = append(response.Messages, messages...)
+	}
 
-		lastReply := ""
-
-		for i := range items {
-			attachments, err := s.sessions.ReplayAttachments(ctx, producer, root, entry.Entry.ReplayInput[i], calls[producer])
-			if err != nil {
-				return nil, fmt.Errorf("project history attachments: %w", err)
-			}
-
-			event, err := historyEvent(&items[i], entry.Entry.ReplayInput[i])
-			if err != nil {
-				return nil, err
-			}
-
-			if event != nil {
-				for j := range attachments {
-					event.Attachments = append(event.Attachments, attachmentMetadata(producer, &attachments[j]))
-				}
-
-				if event.Role == "user" {
-					header := event.Header
-
-					event, err = s.inputEvent(ctx, producer, event.Text)
-					if err != nil {
-						return nil, err
-					}
-
-					event.Complete = true
-					event.Header = header
-				}
-
-				event.attribute(entry.Entry.AttributionAt(i), producer, request.Id)
-				event.MessageId = fmt.Sprintf("%d:%d", entry.ID, i)
-				shown[producer+"/"+event.ToolCallId] = event.ToolCallId != ""
-
-				response.Messages = append(response.Messages, event)
-				if event.Role == "assistant" {
-					lastReply = event.Text
-				}
-			}
-		}
-
-		if strings.TrimSpace(deliveryText) != "" && deliveryText != lastReply {
-			event := &TranscriptEvent{Role: "assistant", Text: deliveryText, Complete: true, MessageId: fmt.Sprintf("%d:delivery", entry.ID)}
-			event.attribute(entry.Entry.AttributionAt(deliveryIndex), producer, request.Id)
-			response.Messages = append(response.Messages, event)
+	for _, key := range slices.Sorted(maps.Keys(previous.Entries)) {
+		if _, exists := current.Entries[key]; !exists {
+			response.RemovedKeys = append(response.RemovedKeys, key)
 		}
 	}
 
-	delegations, err := s.sessions.Delegations(ctx, append(slices.Collect(maps.Keys(calls)), request.Id))
+	data, _ = json.Marshal(current)
+	response.Revision = base64.RawURLEncoding.EncodeToString(data)
+
+	response.Delegations, err = s.sessions.Delegations(ctx, request.Id, request.SourceConversationId)
 	if err != nil {
 		return nil, fmt.Errorf("read web delegations: %w", err)
 	}
 
-	response.Delegations = slices.DeleteFunc(delegations, func(id string) bool { return !shown[id] })
-
 	return response, nil
+}
+
+func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *backend.ObservedSessionEntry, conversationID string, calls map[string]string) ([]*TranscriptEvent, error) {
+	items, err := rocketcode.ReplayInputToParams(entry.Entry.ReplayInput)
+	if err != nil {
+		return nil, fmt.Errorf("decode web history: %w", err)
+	}
+
+	deliveryText, deliveryIndex, err := backend.ReplayDeliveryText(items)
+	if err != nil {
+		return nil, fmt.Errorf("web history: %w", err)
+	}
+
+	producer := cmp.Or(entry.SourceConversationID, conversationID)
+	lastReply := ""
+	// Ponytail: replay/progress matching scans each turn; index identities if large turns make this costly.
+	progress := rocketcode.PublicProgressFromTrace(entry.Entry.OutputTrace)
+	replayText := make(map[string]bool)
+	replayResults := make(map[string]bool)
+	replayCalls := make(map[string]bool)
+
+	var messages []*TranscriptEvent
+
+	for i := range items {
+		var identity struct {
+			ID      string          `json:"id"`
+			Type    string          `json:"type"`
+			Role    string          `json:"role"`
+			Status  string          `json:"status"`
+			CallID  string          `json:"call_id"`
+			Content json.RawMessage `json:"content"`
+		}
+		if err := json.Unmarshal(entry.Entry.ReplayInput[i], &identity); err != nil {
+			return nil, fmt.Errorf("decode history identity: %w", err)
+		}
+
+		if identity.Role == "assistant" && identity.ID != "" {
+			replayText[identity.ID] = true // Even an empty authoritative item replaces its partial.
+		}
+
+		if identity.Type == "function_call_output" {
+			replayResults[identity.CallID] = true
+		}
+
+		if identity.Type == "function_call" {
+			replayCalls[identity.CallID] = true
+		}
+
+		callProgress := slices.IndexFunc(progress, func(item rocketcode.PublicProgress) bool {
+			return item.Kind != rocketcode.PublicProgressText && item.ID == identity.CallID
+		})
+		if identity.Type == "function_call_output" && callProgress >= 0 && (progress[callProgress].State == rocketcode.PublicProgressBlocked ||
+			progress[callProgress].Kind == rocketcode.PublicProgressDelegation && slices.Contains([]rocketcode.PublicProgressState{rocketcode.PublicProgressFailed, rocketcode.PublicProgressStopped}, progress[callProgress].State)) {
+			continue // Unapproved delegation/reviewer replay stays stored, never projected (including attachments).
+		}
+
+		attachments, err := s.sessions.ReplayAttachments(ctx, producer, root, entry.Entry.ReplayInput[i], calls)
+		if err != nil {
+			return nil, fmt.Errorf("project history attachments: %w", err)
+		}
+
+		event, err := historyEvent(&items[i], entry.Entry.ReplayInput[i])
+		if err != nil {
+			return nil, err
+		}
+
+		if event == nil {
+			continue
+		}
+
+		for j := range attachments {
+			event.Attachments = append(event.Attachments, attachmentMetadata(producer, &attachments[j]))
+		}
+
+		if event.Role == "user" {
+			header, inputID := event.Header, event.InputId
+
+			event, err = s.inputEvent(ctx, producer, event.Text)
+			if err != nil {
+				return nil, err
+			}
+
+			event.Header = header
+			event.InputId = inputID
+		}
+
+		event.attribute(entry.Entry.AttributionAt(i), producer, conversationID)
+		event.EntryKey, event.TurnId = entry.Key, entry.Entry.TurnID
+		event.ItemId = fmt.Sprintf("%s:%d", entry.Key, i)
+
+		if event.ToolCallId != "" {
+			event.ParentId = entry.Key
+		}
+
+		if callProgress >= 0 {
+			event.publicProgress(&progress[callProgress], entry.Key, string(entry.Terminal))
+
+			if identity.Type == "function_call_output" {
+				event.ItemId += ":outcome"
+			}
+		}
+
+		if entry.ID != 0 {
+			event.MessageId = fmt.Sprintf("%d:%d", entry.ID, i)
+		}
+
+		if event.Role == "assistant" {
+			lastReply = event.Text
+		}
+
+		texts, err := event.publicText(identity.Content, identity.ID, identity.Status, progress, entry)
+		if err != nil {
+			return nil, err
+		}
+
+		messages = append(messages, texts...)
+	}
+
+	messages = fallbackProgress(entry, progress, replayText, replayResults, replayCalls, conversationID, messages)
+	if strings.TrimSpace(deliveryText) != "" && deliveryText != lastReply {
+		event := &TranscriptEvent{Role: "assistant", Text: deliveryText, Complete: !entry.Active, EntryKey: entry.Key, ItemId: entry.Key + ":delivery", TurnId: entry.Entry.TurnID}
+		if entry.ID != 0 {
+			event.MessageId = fmt.Sprintf("%d:delivery", entry.ID)
+		}
+
+		event.attribute(entry.Entry.AttributionAt(deliveryIndex), producer, conversationID)
+		messages = append(messages, event)
+	}
+
+	return messages, nil
+}
+
+// publicText reconciles native content parts and locally flattened provider text.
+func (e *TranscriptEvent) publicText(content json.RawMessage, id, messageStatus string, progress []rocketcode.PublicProgress, entry *backend.ObservedSessionEntry) ([]*TranscriptEvent, error) {
+	if e.Role != "assistant" || id == "" || len(content) == 0 {
+		return []*TranscriptEvent{e}, nil
+	}
+
+	if content[0] == '"' {
+		if overlap := slices.IndexFunc(progress, func(item rocketcode.PublicProgress) bool {
+			index := strings.LastIndexByte(item.ID, '/')
+			return item.Kind == rocketcode.PublicProgressText && index >= 0 && item.ID[:index] == id
+		}); overlap >= 0 {
+			e.publicProgress(&progress[overlap], entry.Key, string(entry.Terminal))
+		}
+
+		return []*TranscriptEvent{e}, nil
+	}
+
+	if content[0] != '[' {
+		return []*TranscriptEvent{e}, nil
+	}
+
+	var parts []struct{ Type, Text string }
+	if err := json.Unmarshal(content, &parts); err != nil {
+		return nil, fmt.Errorf("decode history output text: %w", err)
+	}
+
+	var messages []*TranscriptEvent
+
+	for index, part := range parts {
+		if part.Type != "output_text" || strings.TrimSpace(part.Text) == "" {
+			continue
+		}
+
+		text := proto.CloneOf(e)
+		text.Text = part.Text
+		itemID := fmt.Sprintf("%s/%d", id, index)
+
+		text.ItemId = entry.Key + ":" + itemID
+		if overlap := slices.IndexFunc(progress, func(item rocketcode.PublicProgress) bool {
+			return item.Kind == rocketcode.PublicProgressText && item.ID == itemID
+		}); overlap >= 0 {
+			text.publicProgress(&progress[overlap], entry.Key, string(entry.Terminal))
+
+			if messageStatus == "completed" {
+				text.State, text.Complete = "completed", true
+			}
+		}
+
+		messages = append(messages, text)
+	}
+
+	return messages, nil
+}
+
+// fallbackProgress merges missing observations before their next surviving public identity.
+func fallbackProgress(entry *backend.ObservedSessionEntry, progress []rocketcode.PublicProgress, replayText, replayResults, replayCalls map[string]bool, conversationID string, messages []*TranscriptEvent) []*TranscriptEvent {
+	producer := cmp.Or(entry.SourceConversationID, conversationID)
+
+	for i, item := range progress {
+		switch {
+		case item.Kind == rocketcode.PublicProgressText:
+			id := item.ID
+			if index := strings.LastIndexByte(id, '/'); index >= 0 {
+				id = id[:index]
+			}
+
+			if replayText[id] || strings.TrimSpace(item.Text) == "" {
+				continue
+			}
+		case replayResults[item.ID] && item.State != rocketcode.PublicProgressBlocked &&
+			(item.Kind != rocketcode.PublicProgressDelegation || !slices.Contains([]rocketcode.PublicProgressState{rocketcode.PublicProgressFailed, rocketcode.PublicProgressStopped}, item.State)):
+			continue
+		case replayCalls[item.ID] && (item.State == rocketcode.PublicProgressWorking || item.State == rocketcode.PublicProgressReview):
+			continue // The existing call disclosure already carries this pending state.
+		}
+
+		event := &TranscriptEvent{Role: "tool", Text: string(item.State), EntryKey: entry.Key, TurnId: entry.Entry.TurnID}
+		if item.Kind == rocketcode.PublicProgressText {
+			event.Role, event.Text = "assistant", item.Text
+		} else if item.Kind == rocketcode.PublicProgressTool && item.Text != "" {
+			event.Text = item.Text
+		}
+
+		event.attribute(entry.Entry.AttributionAt(len(entry.Entry.ReplayInput)), producer, conversationID)
+		event.publicProgress(&item, entry.Key, string(entry.Terminal))
+
+		if item.Kind != rocketcode.PublicProgressText {
+			if item.Kind == rocketcode.PublicProgressDelegation || item.Text == "" {
+				event.Text = event.State
+			}
+
+			event.ItemId += ":outcome"
+		}
+
+		position := len(messages)
+		// Ponytail: O(progress² × rows) anchoring keeps no extra index; index
+		// identities if long compacted turns make this scan expensive.
+		for _, next := range progress[i+1:] {
+			id := entry.Key + ":" + next.ParentID + "/" + next.ID
+
+			if anchor := slices.IndexFunc(messages, func(message *TranscriptEvent) bool {
+				return message.ItemId == id || message.ItemId == id+":outcome"
+			}); anchor >= 0 {
+				position = anchor
+				break
+			}
+		}
+
+		messages = slices.Insert(messages, position, event)
+	}
+
+	return messages
+}
+
+// publicProgress supplies display identity and safe attribution, never command identity.
+func (e *TranscriptEvent) publicProgress(item *rocketcode.PublicProgress, key, terminal string) {
+	e.ParentId = key + ":" + item.ParentID
+	e.ItemId = e.ParentId + "/" + item.ID
+
+	e.State = string(item.State)
+	if terminal != "" && (item.State == rocketcode.PublicProgressWorking || item.State == rocketcode.PublicProgressReview) {
+		e.State = terminal
+	}
+
+	e.Complete = e.State != "working" && e.State != "review"
+	if item.Kind == rocketcode.PublicProgressText {
+		e.Complete = e.State == "completed"
+	} else {
+		e.ToolCallId = item.ID
+	}
+
+	if e.Agent != item.Agent || e.Model != item.Model {
+		e.ReasoningEffort = nil // Root settings do not describe a delegated producer.
+	}
+
+	e.Agent, e.Model = item.Agent, item.Model
 }
 
 func (e *TranscriptEvent) attribute(snapshot rocketcode.ReplayAttribution, source, destination string) {
@@ -458,12 +711,13 @@ func historyEvent(item *responses.ResponseInputItemUnionParam, raw json.RawMessa
 		return nil, nil
 	}
 
-	header := ""
+	header, inputID := "", ""
 	if item.OfMessage != nil && (role == "user" || role == "developer") {
 		header, _ = item.OfMessage.ExtraFields()["prompt_header"].(string)
+		inputID, _ = item.OfMessage.ExtraFields()["input_id"].(string)
 	}
 
-	return &TranscriptEvent{Role: role, Text: text, Header: header, Complete: true}, nil
+	return &TranscriptEvent{Role: role, Text: text, Header: header, InputId: inputID, Complete: true}, nil
 }
 
 func (s *Server) humanConversation(id string) (bool, error) {
@@ -1083,57 +1337,13 @@ func (s *Server) join(request *JoinRequest, stream grpc.ServerStream) error {
 		return err
 	}
 
-	for event := range s.backend.Subscribe(stream.Context()) {
-		message := event.Message
-
-		var err error
-
-		if message.ConversationID == request.Id {
-			if message.ConsumedID != "" {
-				var consumed *TranscriptEvent
-
-				consumed, err = s.inputEvent(stream.Context(), request.Id, message.ConsumedText)
-				if err == nil {
-					consumed.MessageId = message.ConsumedID
-					consumed.Header = message.ConsumedHeader
-					consumed.attribute(rocketcode.ReplayAttribution{Agent: message.Agent, Model: message.Model, ReasoningEffort: message.ReasoningEffort}, cmp.Or(message.SourceConversationID, request.Id), request.Id)
-					err = stream.SendMsg(consumed)
-				}
-			}
-
-			if err == nil && message.ProgressText != "" {
-				err = stream.SendMsg(&TranscriptEvent{Text: message.ProgressText, Role: "thinking", TurnId: message.TurnID})
-			}
-
-			if err == nil && (message.Text != "" || message.Complete || len(message.Attachments) > 0) {
-				response := &TranscriptEvent{Text: message.Text, Role: "assistant", Complete: message.Complete, TurnId: message.TurnID}
-				response.attribute(rocketcode.ReplayAttribution{Agent: message.Agent, Model: message.Model, ReasoningEffort: message.ReasoningEffort}, cmp.Or(message.SourceConversationID, request.Id), request.Id)
-
-				if len(message.Attachments) > 0 {
-					history, errHistory := s.history(stream.Context(), &HistoryRequest{Id: request.Id})
-
-					err = errHistory
-					if err == nil {
-						for _, item := range history.Messages {
-							for _, attachment := range item.Attachments {
-								if slices.ContainsFunc(message.Attachments, func(sent protocol.OutboundAttachment) bool { return sent.ID == attachment.Id }) {
-									response.Attachments = append(response.Attachments, attachment)
-								}
-							}
-						}
-					}
-				}
-
-				if err == nil {
-					err = stream.SendMsg(response)
-				}
-			}
+	for change, err := range s.sessions.Changes(stream.Context(), request.Id) {
+		if err != nil {
+			return fmt.Errorf("web conversation changes: %w", err)
 		}
 
-		event.Acknowledgement <- err
-
-		if err != nil {
-			return fmt.Errorf("web live event: %w", err)
+		if err := stream.SendMsg(&ConversationChange{ConversationId: change.ConversationID, Revision: change.Revision}); err != nil {
+			return fmt.Errorf("send web conversation change: %w", err)
 		}
 	}
 
@@ -1349,24 +1559,15 @@ func (s *Server) startingPairs(ctx context.Context, id string) ([]originPair, er
 		return nil, nil
 	}
 
-	entries, err := s.sessions.ObserveEntries(ctx, id)
+	pairs, err := s.sessions.OriginPairs(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("read starting metadata pairs: %w", err)
 	}
 
-	for i := range entries {
-		pairs, ok := backend.OriginPairsFromEntry(&entries[i].Entry)
-		if !ok {
-			continue
-		}
-
-		out := make([]originPair, 0, len(pairs))
-		for _, key := range slices.Sorted(maps.Keys(pairs)) {
-			out = append(out, originPair{Key: key, Value: pairs[key]})
-		}
-
-		return out, nil
+	out := make([]originPair, 0, len(pairs))
+	for _, key := range slices.Sorted(maps.Keys(pairs)) {
+		out = append(out, originPair{Key: key, Value: pairs[key]})
 	}
 
-	return nil, nil
+	return out, nil
 }

@@ -27,6 +27,8 @@ message HistoryRequest {
   string source_conversation_id = 2;
   // Return only the origin, without formatting or transmitting the transcript.
   bool origin_only = 3;
+  // Opaque inventory returned by the last applied History response.
+  string revision = 4;
 }
 
 message HistoryResponse {
@@ -34,6 +36,13 @@ message HistoryResponse {
   // JSON object describing the chat's origin. Empty means no origin.
   string origin = 2;
   repeated string delegations = 3;
+  string revision = 10;
+  bool reset = 4;
+  repeated string replaced_keys = 5;
+  repeated string removed_keys = 6;
+  repeated string entry_keys = 7;
+  bool running = 8;
+  string terminal = 9;
 }
 
 message ListSessionsResponse {
@@ -76,9 +85,15 @@ message JoinRequest {
   string id = 1;
 }
 
+// Wake-up hints only. History returns the revision actually read.
+message ConversationChange {
+  string conversation_id = 1;
+  string revision = 2;
+}
+
 message TranscriptEvent {
   string text = 1;
-  bool snapshot = 2;
+  reserved 2;
   string role = 3;
   bool complete = 4;
   string turn_id = 5;
@@ -91,9 +106,15 @@ message TranscriptEvent {
   optional string reasoning_effort = 12;
   string origin = 13;
   string header = 14;
+  string entry_key = 15;
+  string item_id = 16;
+  string input_id = 17;
+  // Fixed public lifecycle label; independent of the parent turn's running state.
+  string state = 18;
+  string parent_id = 19;
 }
 
-// Stream frames carry at most 256 KiB of data. History carries metadata only.
+// Attachment download frames carry at most 256 KiB. History carries metadata only.
 message Attachment {
   string id = 1;
   string name = 2;
@@ -306,7 +327,7 @@ service Web {
   rpc DownloadAttachment(Attachment) returns (stream Attachment);
   rpc ListSessions(ListSessionsRequest) returns (stream ListSessionsResponse);
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
-  rpc Join(JoinRequest) returns (stream TranscriptEvent);
+  rpc Join(JoinRequest) returns (stream ConversationChange);
   rpc Prompt(PromptRequest) returns (PromptResponse);
   rpc ListCronJobs(ListCronJobsRequest) returns (ListCronJobsResponse);
   rpc RunCronJob(RunCronJobRequest) returns (RunCronJobResponse);

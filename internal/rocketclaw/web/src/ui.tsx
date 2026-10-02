@@ -550,7 +550,7 @@ function SidebarOwner({ children }: { children: ReactNode }) {
 }
 
 type PendingFile = { id: string; file: File };
-type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; error: string; edit: number; submission: number };
+type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; historyRead?: Promise<void>; historyAgain?: boolean; error: string; edit: number; submission: number };
 
 function BottomNavigation({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -1575,7 +1575,7 @@ const SessionList = memo(function SessionList({ settledOnly = false }: { settled
   );
 });
 
-type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; turnId?: string; streamText?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin" | "header">;
+type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin" | "header" | "state" | "parentId">;
 type OriginFilter = { sandboxed: boolean; canonical: boolean };
 
 function lineId(role: Line["role"], text: string, seen: Map<string, number>) {
@@ -1583,15 +1583,6 @@ function lineId(role: Line["role"], text: string, seen: Map<string, number>) {
   const n = (seen.get(base) ?? 0) + 1;
   seen.set(base, n);
   return `${base}:${n}`;
-}
-
-function appendLine(current: Line[], role: Line["role"], text: string, tool: Pick<Line, "toolCallId" | "toolName" | "attachments"> = {}) {
-  const seen = new Map<string, number>();
-  for (const line of current) {
-    seen.set(`${line.role}:${line.text}`, (seen.get(`${line.role}:${line.text}`) ?? 0) + 1);
-  }
-  const rows = role === "thinking" ? text.split("\n").map((row) => row.trim()).filter(Boolean) : [text];
-  return [...current, ...rows.map((row) => ({ id: lineId(role, row, seen), text: row, role, ...(role === "thinking" ? {} : tool) }))];
 }
 
 function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true, canonical: true }) {
@@ -1613,7 +1604,8 @@ function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true
       || (line.origin === "sandboxed" && filter.sandboxed)
       || (line.origin === "canonical" && filter.canonical);
     if (!visible) continue;
-    const resultCall = line.role === "tool" ? calls.get(line.toolCallId ?? "") : undefined;
+    const callKey = `${line.parentId ?? line.entryKey ?? ""}/${line.toolCallId ?? ""}`;
+    const resultCall = line.role === "tool" ? calls.get(callKey) : undefined;
     const skillHeader = line.text.split("\n", 1)[0];
     const skillCall = line.role === "developer" ? skills.get(skillHeader) : undefined;
     if (line.role === "user") {
@@ -1623,9 +1615,13 @@ function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true
     } else if (line.role === "tool" && line.toolName) {
       const call = { ...line, toolParts: [] as Line[] };
       current.traces.push(call);
-      if (line.toolCallId) calls.set(line.toolCallId, call);
+      if (line.toolCallId) calls.set(callKey, call);
     } else if (resultCall) {
       resultCall.toolParts.push(line);
+      if (line.state) {
+        resultCall.state = line.state;
+        resultCall.complete = line.complete;
+      }
       if (resultCall.toolName === "skill" && line.text.startsWith("skill ") && line.text.endsWith(" loaded")) {
         skills.set(`<skill_content name=${JSON.stringify(line.text.slice(6, -7))}>`, resultCall);
       }
@@ -1690,7 +1686,7 @@ function MessageFooter({ line, hasSandboxed }: { line: Line; hasSandboxed: boole
   const model = `${line.model ?? ""}${line.reasoningEffort ? `#${line.reasoningEffort}` : ""}`;
   const attribution = [line.agent, model && (line.agent ? `(${model})` : model)].filter(Boolean).join(" ");
   const origin = hasSandboxed && ["sandboxed", "canonical"].includes(line.origin ?? "") ? line.origin : "";
-  const text = line.role === "assistant" ? [attribution, origin].filter(Boolean).join(" - ") : "";
+  const text = line.role === "assistant" || line.state ? [attribution, origin].filter(Boolean).join(" - ") : "";
   return text || line.header ? <div data-slot="message-footer" className="flex max-w-full items-center gap-1 break-words px-3 text-[11px] text-muted-foreground/85 group-has-data-[variant=ghost]/message:px-0">
     {text ? <span className="min-w-0">{text}</span> : null}
     {line.header ? <Dialog>
@@ -1733,21 +1729,23 @@ function TranscriptLine({ line, conversationId, hasSandboxed }: { line: Line; co
       </div>
     );
   }
+  const footer = (line.role === "tool" ? line.state : line.header) ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null;
   if (line.role === "tool") {
     const title = toolTitle(line);
     const delegation = use(Delegations)?.find((child) => child.slice(child.lastIndexOf("/") + 1) === line.toolCallId);
     const parts = [line, ...(line.toolParts ?? [])];
-    const text = parts.map((part, index) => {
-      const label = index === 0 ? line.toolName ? "Arguments" : "Result" : part.role === "developer" ? "Skill instructions" : "Result";
-      const body = index === 0 && line.toolName ? line.text.slice(line.toolName.length + 1) : part.text;
-      return `${label}\n${body}`;
-    }).join("\n\n");
+    const text = [
+      line.toolName ? `Arguments\n${line.text.slice(line.toolName.length + 1)}` : `Result\n${line.text}`,
+      ...parts.slice(1).map((part) => `${part.role === "developer" ? "Skill instructions" : "Result"}\n${part.text}`),
+    ].join("\n\n");
     return (
       <details open className="mb-3 min-w-0">
         <summary className="cursor-pointer px-3 py-2 text-xs font-medium" title={title}>
           <span className="ml-1 inline-block max-w-[calc(100%-1.5rem)] truncate align-middle font-mono">{title}</span>
+          {line.state ? <span aria-live="polite" className="ml-2 text-muted-foreground">{line.state}</span> : null}
         </summary>
         {delegation ? <Link href={delegationHref(delegation)} aria-label={`Open delegation: ${title}`} className="block w-fit px-3 pb-2 text-xs text-muted-foreground underline hover:text-foreground">Open delegation</Link> : null}
+        {footer}
         <CodeBlock label={title} text={text} />
         {parts.map((part) => (
           <div key={part.id}>
@@ -1768,16 +1766,17 @@ function TranscriptLine({ line, conversationId, hasSandboxed }: { line: Line; co
     return (
       <div className="min-w-0 px-1 pb-3">
         <CodeBlock label="Instructions" text={line.text} />
-        {line.header ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
+        {footer}
       </div>
     );
   }
+  const align = line.role === "user" ? "end" : undefined;
   return (
-    <Message data-message-id={line.id} align={line.role === "user" ? "end" : undefined} className="mb-4" tabIndex={0} onPointerDown={(event) => {
+    <Message data-message-id={line.messageId || undefined} align={align} className="mb-4" tabIndex={0} onPointerDown={(event) => {
       if (event.pointerType === "touch" && !(event.target as Element).closest("button, a, input, textarea, summary")) event.currentTarget.focus({ preventScroll: true });
     }}>
       <MessageContent>
-        <Bubble variant={line.role === "user" ? "secondary" : "ghost"} align={line.role === "user" ? "end" : undefined}>
+        <Bubble variant={line.role === "user" ? "secondary" : "ghost"} align={align}>
           <BubbleContent><TranscriptText text={line.text} /></BubbleContent>
           <MessageAttachments attachments={line.attachments} conversationId={conversationId} />
         </Bubble>
@@ -1796,7 +1795,7 @@ function useTranscriptPosition(conversationId: string, lines: Line[], turns: Ret
   const search = useSearch();
   const messageId = conversationId && location.pathname === sessionPath(conversationId) ? new URLSearchParams(search).get("message") : null;
   const targetId = messageId ?? (target?.conversationId === conversationId ? target.message.messageId : null);
-  const targetTurn = targetId ? turns.findIndex((turn) => turn.user.some((line) => line.id === targetId) || turn.replies.some((line) => line.id === targetId)) : -1;
+  const targetTurn = targetId ? turns.findIndex((turn) => turn.user.some((line) => line.messageId === targetId) || turn.replies.some((line) => line.messageId === targetId)) : -1;
   const seen = useCallback(() => {
     const element = viewport.current;
     if (!element || !identity.isSuccess || !element.getClientRects().length) return;
@@ -1831,6 +1830,7 @@ function TranscriptLog({
   conversationId,
   lines,
   thinking,
+  terminal,
   origin,
   filter,
   hasSandboxed,
@@ -1838,6 +1838,7 @@ function TranscriptLog({
   lines: Line[];
   conversationId: string;
   thinking: boolean;
+  terminal?: string;
   origin?: ChatOrigin;
   filter: OriginFilter;
   hasSandboxed: boolean;
@@ -1883,6 +1884,7 @@ function TranscriptLog({
               </MessageScrollerItem>
           ))}
           {thinking ? <MessageScrollerItem><p className="px-1 pb-4 text-sm text-muted-foreground">Thinking…</p></MessageScrollerItem> : null}
+          {terminal ? <MessageScrollerItem><p role="status" className="px-1 pb-4 text-sm text-muted-foreground">Turn {terminal}.</p></MessageScrollerItem> : null}
         </>
       )}
       </MessageScrollerContent>
@@ -1914,105 +1916,97 @@ function TranscriptLog({
   );
 }
 
-function nextLines(current: Line[], payload: TranscriptEvent): Line[] {
-  const metadata = Object.fromEntries(Object.entries(payload).filter(([key, value]) => ["agent", "model", "reasoningEffort", "origin", "header"].includes(key) && value !== undefined && (key === "reasoningEffort" || value !== "")));
-  if (payload.role === "user" && payload.messageId) {
-    if (current.some((line) => line.id === payload.messageId)) return Object.keys(metadata).length ? current.map((line) => line.id === payload.messageId ? { ...line, ...metadata } : line) : current;
-    return [...current, { ...metadata, id: payload.messageId, role: "user", text: payload.text, attachments: payload.attachments }];
+function applyHistoryDelta(draft: ComposerDraft, view: HistoryView) {
+  const consumed = draft.consumed ??= new Set<string>();
+  let newlyConsumed = false;
+  for (const message of view.messages) {
+    if (message.inputId && !consumed.has(message.inputId)) {
+      consumed.add(message.inputId);
+      newlyConsumed = true;
+    }
   }
-  const role = payload.role === "thinking" || payload.role === "user" || payload.role === "tool" || payload.role === "developer" ? payload.role : "assistant";
-  const boundary = current.findLastIndex((line) => line.role === "user");
-  const matches = (line: Line) => !!payload.turnId && line.turnId === payload.turnId && line.role === role;
-  const prefix = boundary < 0 ? "" : current.slice(0, boundary).findLast(matches)?.streamText ?? "";
-  const text = prefix && payload.text.startsWith(prefix) ? payload.text.slice(prefix.length).trimStart() : payload.text;
-  const index = current.findIndex((line, i) => i > boundary && matches(line));
-  const retained = index < 0 ? current : current.filter((line, i) => i <= boundary || !matches(line));
-  const attachments = [...new Map([...(current[index]?.attachments ?? []), ...(payload.attachments ?? [])].map((file) => [file.id, file])).values()];
-  if (text.trim() === "" && attachments.length === 0) return retained;
-  const added = appendLine(retained, role, text, { toolCallId: payload.toolCallId, toolName: payload.toolName, attachments });
-  const updated = added.slice(retained.length).map((line) => ({ ...current[index], ...line, ...metadata, turnId: payload.turnId, streamText: payload.text }));
-  const position = index < 0 ? retained.length : index;
-  return [...retained.slice(0, position), ...updated, ...retained.slice(position)];
+  draft.parked = draft.parked?.filter((line) => !consumed.has(line.inputId || line.id));
+  if (view.reset || newlyConsumed || view.replacedKeys.length || view.removedKeys.length) {
+    const reset = view.reset && !draft.revision;
+    const changed = new Set([...(view.reset ? view.entryKeys : view.replacedKeys), ...view.removedKeys]);
+    const groups = Map.groupBy([...draft.lines.filter((line) => !reset && line.entryKey && !changed.has(line.entryKey)), ...historyLines(view.messages)], (line) => line.entryKey!);
+    const retained = new Set(view.entryKeys);
+    let anchor = "";
+    for (const line of draft.lines) {
+      if (line.entryKey && retained.has(line.entryKey)) anchor = line.entryKey;
+      if (!reset && !line.entryKey && line.complete && !consumed.has(line.inputId || line.id)) {
+        if (!groups.has(anchor)) groups.set(anchor, []);
+        groups.get(anchor)!.push(line);
+      }
+    }
+    const pending = draft.lines.filter((line) => !line.entryKey && line.role === "user" && !line.complete && !consumed.has(line.inputId || line.id));
+    draft.lines = [...(groups.get("") ?? []), ...view.entryKeys.flatMap((key) => groups.get(key) ?? []), ...pending];
+  }
+  draft.busy = view.running || draft.lines.some((line) => !line.entryKey && line.role === "user" && !line.complete);
+  draft.terminal = view.terminal;
+  draft.origin = view.origin;
+  draft.revision = view.revision;
+  draft.historyError = "";
+  return newlyConsumed;
 }
 
-function applyStreamEvent(
-  payload: TranscriptEvent,
-  setBusy: (value: boolean) => void,
-  setLines: (update: (current: Line[]) => Line[]) => void,
-) {
-  if (payload.role === "user" && payload.messageId) {
-    setBusy(true);
-  } else if (payload.complete) {
-    setBusy(false);
-  }
-  setLines((current) => nextLines(current, payload));
-}
-
-async function readTranscriptHistory(draft: ComposerDraft, request: Promise<TranscriptEvent[]>, onDraftChange: () => void, preserveLive = false) {
-  const before = draft.lines;
-  const messages = await request;
-  // Recorded IDs differ from live IDs: history cannot safely merge a newer stream.
-  if (draft.lines !== before || draft.sending || preserveLive) {
-    // Attachment IDs can confirm stored files without guessing input identity.
-    const files = new Map(messages.flatMap((message) => message.attachments ?? []).map((file) => [file.id, file]));
-    if (files.size === 0) return messages;
-    draft.lines = draft.lines.map((line) => ({ ...line, attachments: line.attachments?.map((file) => files.get(file.id) ?? file) }));
-    onDraftChange();
-  } else {
-    draft.lines = historyLines(messages);
-    onDraftChange();
-  }
-  return messages;
+function readHistoryDelta(id: string, draft: ComposerDraft, onDraftChange: () => void): Promise<void> {
+  draft.historyAgain = true;
+  if (draft.historyRead) return draft.historyRead;
+  draft.historyRead = (async () => {
+    do {
+      draft.historyAgain = false;
+      try {
+        const key = queries.history({ id }).queryKey;
+        const cached = queryClient.getQueryData<HistoryView>(key);
+        const view = await queries.history({ id, revision: cached ? draft.revision : undefined }).queryFn({});
+        if (!view.reset && view.revision === draft.revision
+          && draft.busy === (view.running || draft.lines.some((line) => !line.entryKey && line.role === "user" && !line.complete))
+          && draft.terminal === view.terminal && JSON.stringify(draft.origin) === JSON.stringify(view.origin)
+          && JSON.stringify(cached?.delegations) === JSON.stringify(view.delegations)
+          && !draft.historyError) continue;
+        if (applyHistoryDelta(draft, view)) void queryClient.invalidateQueries({ queryKey: ["queue"] });
+        // Main's delegation panel reads a full durable parent view from this cache.
+        const changed = new Set([...view.replacedKeys, ...view.removedKeys]);
+        const groups = Map.groupBy([...(view.reset ? [] : cached?.messages ?? []).filter((message) => !changed.has(message.entryKey)), ...view.messages], (message) => message.entryKey);
+        queryClient.setQueryData<HistoryView>(key, { ...view, reset: true, replacedKeys: [], removedKeys: [], messages: view.entryKeys.flatMap((entry) => groups.get(entry) ?? []) });
+      } catch (err) {
+        // A history failure must not turn an accepted Prompt into a failed send.
+        draft.historyError = err instanceof Error ? err.message : "history failed";
+      }
+      onDraftChange();
+    } while (draft.historyAgain);
+  })().finally(() => { draft.historyRead = undefined; });
+  return draft.historyRead;
 }
 
 function historyLines(messages: TranscriptEvent[]): Line[] {
   const seen = new Map<string, number>();
   return messages.map((message) => {
     const role = message.role === "thinking" || message.role === "user" || message.role === "tool" || message.role === "developer" ? message.role : "assistant";
-    return { ...message, id: message.messageId || lineId(role, message.text, seen), role };
+    return { ...message, id: message.inputId || message.itemId || message.messageId || lineId(role, message.text, seen), role };
   });
 }
 
 function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () => void) {
-  const historyQuery = queries.history({ id });
-  const pendingCron = usePendingCron(id);
-  const history = useQuery({ ...historyQuery, queryFn: async ({ signal }) => {
-    const view = historyQuery.queryFn({ signal });
-    await readTranscriptHistory(draft, view.then((value) => value.messages), onDraftChange, draft.busy && draft.lines.length > 0);
-    return view;
-  }, enabled: id !== "", refetchOnWindowFocus: false, retry: false, refetchInterval: pendingCron ? 2000 : false });
-  const historyReady = history.data !== undefined;
-  const reconnectHistory = history.refetch;
-  // History errors belong to the query; a confirmed Prompt must not become a retry.
-  const refreshHistory = useCallback(() => readTranscriptHistory(draft, queryClient.fetchQuery(queries.history({ id })).then((view) => view.messages), onDraftChange).catch(() => {}), [id, draft, onDraftChange]);
+  const history = useQuery({ ...queries.history({ id }), enabled: false });
+  const refreshHistory = useCallback(() => readHistoryDelta(draft.sessionId, draft, onDraftChange), [draft, onDraftChange]);
   const setBusy = useCallback((value: boolean) => { draft.busy = value; onDraftChange(); }, [draft, onDraftChange]);
   const setLines = useCallback((update: (current: Line[]) => Line[]) => { draft.lines = update(draft.lines); onDraftChange(); }, [draft, onDraftChange]);
   useEffect(() => {
-    if (!id || !historyReady) return;
+    if (!id) return;
     const stream = new EventSource(`/stream?${new URLSearchParams({ id })}`);
-    let connected = false;
-    stream.onopen = () => {
-      if (connected) void reconnectHistory();
-      connected = true;
-    };
+    void refreshHistory();
+    stream.onopen = () => { void refreshHistory(); };
     stream.onmessage = (event) => {
-      const payload = JSON.parse(String(event.data)) as TranscriptEvent;
-      if (payload.role === "user" && payload.messageId) {
-        if (draft.consumed?.has(payload.messageId)) {
-          setLines((current) => nextLines(current, payload));
-          return;
-        }
-        (draft.consumed ??= new Set()).add(payload.messageId);
-        draft.parked = draft.parked?.filter((line) => line.id !== payload.messageId);
-        void queryClient.invalidateQueries({ queryKey: ["queue"] });
-      }
-      applyStreamEvent(payload, setBusy, setLines);
+      const change = JSON.parse(String(event.data)) as { conversationId: string; revision: string };
+      if (change.conversationId === id) void refreshHistory();
     };
     return () => {
       stream.close();
     };
-  }, [id, historyReady, reconnectHistory, draft, setBusy, setLines]);
-  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !history.data, historyError: history.error?.message, origin: history.data?.origin, delegations: history.data?.delegations, hasSandboxed: history.data?.messages.some((message) => message.origin === "sandboxed") || draft.lines.some((line) => line.origin === "sandboxed") };
+  }, [id, refreshHistory]);
+  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !draft.revision, historyError: draft.historyError, origin: draft.origin, terminal: draft.terminal, delegations: history.data?.delegations, hasSandboxed: draft.lines.some((line) => line.origin === "sandboxed") };
 }
 
 export function OriginCard({ origin }: { origin?: ChatOrigin }) {
@@ -2062,13 +2056,13 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
       route.goSession(draft.sessionId);
     }
   });
-  const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, delegations, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
+  const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, terminal, delegations, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
   const messageId = location.pathname === sessionPath(id) ? new URLSearchParams(search).get("message") : null;
-  const matchedOrigin = (previewLines ?? lines).find((line) => line.id === messageId)?.origin;
+  const matchedOrigin = (previewLines ?? lines).find((line) => line.messageId === messageId)?.origin;
   const visibleFilter = { sandboxed: filter.sandboxed || matchedOrigin === "sandboxed", canonical: filter.canonical || matchedOrigin === "canonical" };
   return (
     <>
-      <Delegations value={delegations}><TranscriptLog conversationId={id} lines={previewLines ?? lines} thinking={!previewing && busy && lines.at(-1)?.role !== "thinking"} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} /></Delegations>
+      <Delegations value={previewing ? preview.data?.delegations : delegations}><TranscriptLog conversationId={id} lines={previewLines ?? lines} thinking={!previewing && busy && lines.at(-1)?.role !== "thinking"} terminal={previewing ? undefined : terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} /></Delegations>
       {historyError ? <p role="alert" className="px-3 text-sm text-destructive">{historyError}</p> : null}
       {hasSandboxed ? <ButtonGroup aria-label="Show messages from" className="mx-auto my-2.5">
         {(["sandboxed", "canonical"] as const).map((choice) => (
@@ -2081,7 +2075,7 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
         ))}
       </ButtonGroup> : null}
       <fieldset disabled={opening || previewing} className={previewing ? "hidden" : "contents"}>
-        <SessionComposer id={id} draft={draft} drafts={drafts} onDraftChange={onDraftChange} busy={busy} setBusy={setBusy} lines={lines} setLines={setLines} refreshHistory={refreshHistory} />
+        <SessionComposer id={id} draft={draft} drafts={drafts} onDraftChange={onDraftChange} busy={busy} setBusy={setBusy} setLines={setLines} refreshHistory={refreshHistory} />
       </fieldset>
     </>
   );
@@ -2133,7 +2127,6 @@ async function sendComposer(input: {
   files: PendingFile[];
   delivery?: PromptDelivery;
   busy: boolean;
-  working: boolean;
   sessionId: string;
   selected: string;
   currentAgent: string;
@@ -2158,7 +2151,7 @@ async function sendComposer(input: {
   input.onDraftChange();
   const agent = draft.agent;
   let dispatchedEdit: number | undefined;
-  const followUp = input.delivery ?? (input.working ? "QUEUE" : "STEER");
+  const followUp = input.delivery ?? (input.busy ? "QUEUE" : "STEER");
   const enqueue = stashing || (followUp === "QUEUE" || /^\s*\$enqueue(?:\s|$)/.test(input.text)) && !stopping;
   if (!input.busy && !enqueue) {
     input.setBusy(true);
@@ -2173,7 +2166,7 @@ async function sendComposer(input: {
       input.goSession(sessionId);
     }
     optimistic.attachments = input.files.map(({ id, file }) => ({ id, name: file.name, mimeType: file.type, size: String(file.size), conversationId: sessionId, file }));
-    if (!enqueue && input.working && !stopping) {
+    if (!enqueue && input.busy && !stopping) {
       draft.parked = [...(draft.parked ?? []), optimistic];
       input.onDraftChange();
     } else if (!enqueue) input.setLines((current) => [...current, optimistic]);
@@ -2200,22 +2193,17 @@ async function sendComposer(input: {
     input.onDraftChange();
     input.setAgentOpen(false);
     const privateText = await response;
+    optimistic.complete = true;
     void queryClient.invalidateQueries({ queryKey: ["agents"] });
     if (enqueue) {
       await queryClient.invalidateQueries({ queryKey: ["queue"] });
       return;
     }
-    if (draft.parked?.some((line) => line.id === optimistic.id)) {
-      await input.refreshHistory();
-      draft.parked = draft.parked.filter((line) => line.id !== optimistic.id);
-      (draft.consumed ??= new Set()).add(optimistic.id);
-      input.onDraftChange();
-    }
+    await input.refreshHistory();
     if (privateText) {
-      input.setLines((current) => appendLine(current, "assistant", privateText));
-    }
-    if ((privateText || stopping) && draft.submission === submission) {
-      input.setBusy(false);
+      const parked = draft.parked?.some((line) => line.id === optimistic.id);
+      draft.parked = draft.parked?.filter((line) => line.id !== optimistic.id);
+      input.setLines((current) => [...current, ...(parked ? [optimistic] : []), { id: `${optimistic.id}:reply`, role: "assistant", text: privateText, complete: true }]);
     }
   } catch (err) {
     draft.parked = draft.parked?.filter((line) => line.id !== optimistic.id);
@@ -2265,7 +2253,7 @@ async function stopComposer(input: {
   id: string;
   busy: boolean;
   prompt: { mutateAsync: (value: { id: string; text: string }) => Promise<unknown> };
-  setBusy: (value: boolean) => void;
+  refreshHistory: () => Promise<unknown>;
   setSendError: (value: string) => void;
 }) {
   if (!input.busy || input.id === "") {
@@ -2275,14 +2263,14 @@ async function stopComposer(input: {
   input.setSendError("");
   try {
     await input.prompt.mutateAsync({ id: input.id, text: "$stop" });
-    if (input.draft.submission === submission) input.setBusy(false);
+    await input.refreshHistory();
   } catch (err) {
     if (input.draft.submission === submission) input.setSendError(err instanceof Error ? err.message : "stop failed");
   }
 }
 
 function pendingInputs(draft: ComposerDraft, items: QueueItem[]) {
-  const consumed = new Set([...(draft.consumed ?? []), ...draft.lines.map((line) => line.id)]);
+  const consumed = draft.consumed ?? new Set<string>();
   const waiting = items.filter((item) => !consumed.has(item.id));
   const parked = new Map<string, Line>(waiting.filter((item) => item.delivery === "STEER").map((item) => [item.id, { ...item, role: "user" }]));
   for (const line of draft.parked ?? []) {
@@ -2298,7 +2286,6 @@ function SessionComposer({
   onDraftChange,
   busy,
   setBusy,
-  lines,
   setLines,
   refreshHistory,
 }: {
@@ -2308,7 +2295,6 @@ function SessionComposer({
   onDraftChange: () => void;
   busy: boolean;
   setBusy: (value: boolean) => void;
-  lines: Line[];
   setLines: (update: (current: Line[]) => Line[]) => void;
   refreshHistory: () => Promise<unknown>;
 }) {
@@ -2344,10 +2330,9 @@ function SessionComposer({
     setDollarOff(invocation !== "$skill ");
     setAgentOpen(false);
   };
-  const working = busy || lines.at(-1)?.role === "thinking";
   const { queued, parked } = pendingInputs(draft, queueQuery.data ?? []);
   let placeholder = "Message a new session";
-  if (working) {
+  if (busy) {
     placeholder = "Queue a follow-up · ⌘⏎ steers";
   } else if (id) {
     placeholder = "Message or $command";
@@ -2367,7 +2352,6 @@ function SessionComposer({
       files: draft.files,
       delivery,
       busy,
-      working,
       sessionId: draft.sessionId,
       selected: id === "" ? selected : draft.agent,
       currentAgent,
@@ -2387,7 +2371,7 @@ function SessionComposer({
     });
   };
   const promoteQueued = (itemId: string) => promoteComposer({ draft, id, itemId, busy, steerQueueItem, setBusy, setSendError });
-  const stop = () => stopComposer({ draft, id, busy, prompt, setBusy, setSendError });
+  const stop = () => stopComposer({ draft, id, busy, prompt, refreshHistory, setSendError });
   return (
     <>
       {sendError ? <p className="px-3 pb-2 text-sm text-destructive sm:px-5">{sendError}</p> : null}
@@ -2410,7 +2394,7 @@ function SessionComposer({
         setDollarOff={setDollarOff}
         setDollarPick={setDollarPick}
         placeholder={placeholder}
-        busy={working}
+        busy={busy}
         queued={queued}
         send={send}
         stop={stop}
@@ -2719,7 +2703,7 @@ function CronChatLink({ job, className, children }: { job: CronJob; className: s
 function CronRunPreview({ preview, onClose }: { preview: CronJob; onClose: () => void }) {
   const conversationId = preview.nextRun || preview.origin!;
   const history = useQuery(queries.history({ id: conversationId, sourceConversationId: preview.nextRun ? preview.origin : undefined }));
-  const previewLines = useMemo(() => (history.data?.messages ?? []).reduce(nextLines, []), [history.data]);
+  const previewLines = useMemo(() => historyLines(history.data?.messages ?? []), [history.data]);
   const hasSandboxed = previewLines.some((line) => line.origin === "sandboxed");
   return (
     <section aria-label="Run preview" className="rounded-md border p-3">

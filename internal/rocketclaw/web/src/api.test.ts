@@ -1,7 +1,7 @@
 import { expect, test, spyOn } from "bun:test";
 import { listSessions, mutations, queries, rpc } from "./api";
 import { readSessionEnumeration, shouldCommitSnapshot } from "./session-list";
-import type { SessionBatch } from "./types";
+import type { HistoryView, SessionBatch } from "./types";
 
 const first: SessionBatch = { sessions: [{ id: "one", preview: "first" }], owner: "alice", upstreamSuccess: false, summariesComplete: true };
 const terminal: SessionBatch = { sessions: [], owner: "alice", upstreamSuccess: true, summariesComplete: true };
@@ -88,10 +88,12 @@ test("SSE preserves fragmented UTF-8, >4 MiB rows, empty results and HTTP authen
 
 test("protobuf envelopes retain exact input, selected agent, private text and int64 entry IDs", async () => {
   const requests: { path: string; input: object }[] = [];
+  const initialHistory: Omit<HistoryView, "origin"> & { origin: string } = { messages: [], origin: "", delegations: ["visible/call"], revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" };
+  const deltaHistory: typeof initialHistory = { ...initialHistory, origin: '{"kind":"cron"}', delegations: [], revision: "next", reset: false, replacedKeys: ["empty"], removedKeys: ["removed"], entryKeys: ["empty"], running: true, messages: [{ text: "partial", role: "assistant", complete: false, turnId: "turn", entryKey: "empty", itemId: "public-text", inputId: "", state: "working", parentId: "producer/turn", agent: "main", model: "work/model", origin: "canonical" }] };
   const responses: Record<string, object> = {
     ListAgents: { agents: [{ name: "main" }], currentAgent: "main" }, ListSkills: { skills: [{ name: "review" }] },
     Prompt: { privateText: "private\nreport" }, CreateSession: { id: "web-session:new" }, RunCronJob: { id: "cron:id" },
-    Protocol: { protoSha256: "hash" }, Identity: { username: "alice" }, ListQueue: { items: [] }, ListCronJobs: { jobs: [] }, ListConfig: { config: {} }, History: { messages: [], delegations: ["visible/call"] },
+    Protocol: { protoSha256: "hash" }, Identity: { username: "alice" }, ListQueue: { items: [] }, ListCronJobs: { jobs: [] }, ListConfig: { config: {} }, History: initialHistory,
     ListSessionEntries: { entries: [{ id: "9007199254740993", type: "turn" }] }, LoadSessionEntries: { entries: [{ id: "9007199254740993", json: "{}" }] }, DeleteSessionEntries: { deleted: "9007199254740993" },
   };
   const fetchMock = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (url: URL | RequestInfo, init?: RequestInit) => {
@@ -112,7 +114,12 @@ test("protobuf envelopes retain exact input, selected agent, private text and in
     expect(await queries.queue({ id: "visible" }).queryFn({ signal })).toEqual([]);
     expect(await queries.cronJobs().queryFn({ signal })).toEqual([]);
     expect(await queries.config().queryFn({ signal })).toEqual({});
-    expect(await queries.history({ id: "visible", sourceConversationId: "producer" }).queryFn({ signal })).toEqual({ messages: [], origin: undefined, delegations: ["visible/call"] });
+    expect(await queries.history({ id: "visible", sourceConversationId: "producer" }).queryFn({ signal })).toEqual({ ...initialHistory, origin: undefined });
+    responses.History = deltaHistory;
+    expect(await queries.history({ id: "visible", revision: "initial" }).queryFn({ signal })).toEqual({ ...deltaHistory, origin: { kind: "cron" } });
+    expect(requests.at(-1)).toEqual({ path: "/api/History", input: { id: "visible", revision: "initial" } });
+    await queries.history({ id: "visible" }).queryFn({ signal });
+    expect(requests.at(-1)).toEqual({ path: "/api/History", input: { id: "visible" } });
     for (const method of ["ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries"]) expect(await rpc<object>(method, { id: "cron:exact:日本語" })).toEqual(responses[method]);
     await mutations.updateSession({ id: "visible", pinned: false, name: "" });
     await mutations.settleSession({ id: "visible", settled: false });

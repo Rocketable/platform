@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"iter"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -1553,9 +1552,16 @@ func TestSessionEntries(t *testing.T) {
 		for i := range trace.Messages {
 			require.NotEmpty(t, history.Messages[i].MessageId)
 			trace.Messages[i].MessageId = history.Messages[i].MessageId // Copied rows have destination-local message IDs.
+			key, _, _ := strings.Cut(history.Messages[i].MessageId, ":")
+			trace.Messages[i].EntryKey = key
+			trace.Messages[i].ItemId = history.Messages[i].MessageId
+			trace.Messages[i].ParentId = history.Messages[i].ParentId // Call groups are destination-local too.
 		}
 
-		require.True(t, proto.Equal(trace, history))
+		require.Equal(t, trace.Origin, history.Origin)
+		require.Equal(t, trace.Messages, history.Messages)
+		require.True(t, history.Reset_)
+		require.NotEmpty(t, history.Revision)
 
 		for _, test := range []struct {
 			name, channel string
@@ -1902,38 +1908,30 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, file.Id, inputHistory.Messages[0].Attachments[0].Id)
 		require.Equal(t, imageFile.Id, inputHistory.Messages[0].Attachments[1].Id)
 
-		t.Run("consumed attachment input streams once with its identity", func(t *testing.T) {
-			subscribe := core.SubscribeFunc
-			defer func() { core.SubscribeFunc = subscribe }()
+		t.Run("attachment changes signal metadata without rendering or delivery acknowledgement", func(t *testing.T) {
+			joinCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
 
-			consumed := protocol.NewOutboundMessage(conversation, "")
-			consumed.ConsumedID, consumed.ConsumedText = "attachment-input", turns[len(turns)-1].Text
-			consumed.ConsumedHeader = `[Web principal="alice"]`
-			ack := make(chan error, 1)
-			core.SubscribeFunc = func(context.Context) iter.Seq[protocol.Event] {
-				return func(yield func(protocol.Event) bool) {
-					yield(protocol.Event{Message: consumed, Acknowledgement: ack})
-				}
-			}
-			stream, err := connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/Join")
+			stream, err := connection.NewStream(joinCtx, &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/Join")
 			require.NoError(t, err)
 			require.NoError(t, stream.SendMsg(&JoinRequest{Id: conversation}))
 			require.NoError(t, stream.CloseSend())
 
-			event := &TranscriptEvent{}
+			event := &ConversationChange{}
 			require.NoError(t, stream.RecvMsg(event))
-			require.Equal(t, "attachment-input", event.MessageId)
-			require.Equal(t, "user", event.Role)
-			require.Equal(t, exact, event.Text)
-			require.Equal(t, consumed.ConsumedHeader, event.Header)
-			require.Len(t, event.Attachments, 2)
-			require.Equal(t, file.Id, event.Attachments[0].Id)
-			require.Equal(t, imageFile.Id, event.Attachments[1].Id)
-			require.False(t, event.Complete)
-			require.ErrorIs(t, stream.RecvMsg(&TranscriptEvent{}), io.EOF)
-			require.NoError(t, <-ack)
+			require.Equal(t, conversation, event.ConversationId)
+			require.Equal(t, 2, event.ProtoReflect().Descriptor().Fields().Len(), "signals cannot carry renderable fields")
 
-			t.Run("attachment lookup failure aborts queue and stream", func(t *testing.T) {
+			_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = entry_json WHERE conversation_id = $1`, conversation)
+			require.NoError(t, err)
+			require.NoError(t, stream.RecvMsg(event))
+			require.NotEmpty(t, event.Revision)
+			delta, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation, Revision: inputHistory.Revision})
+			require.NoError(t, err)
+			require.Empty(t, delta.Messages)
+			require.False(t, delta.Reset_)
+
+			t.Run("attachment lookup failure is isolated from change signals", func(t *testing.T) {
 				_, err := db.ExecContext(ctx, `ALTER TABLE attachments RENAME TO unavailable_attachments`)
 
 				require.NoError(t, err)
@@ -1944,15 +1942,11 @@ func TestSessionEntries(t *testing.T) {
 
 				_, err = invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: conversation})
 				require.ErrorContains(t, err, "load input attachment metadata")
-				stream, err := connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/Join")
+				_, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation})
+				require.ErrorContains(t, err, "load input attachment metadata")
+				_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = entry_json WHERE conversation_id = $1`, conversation)
 				require.NoError(t, err)
-				require.NoError(t, stream.SendMsg(&JoinRequest{Id: conversation}))
-				require.NoError(t, stream.CloseSend())
-
-				event := &TranscriptEvent{}
-				require.ErrorContains(t, stream.RecvMsg(event), "load input attachment metadata")
-				require.Empty(t, event.MessageId, "failed attachment lookup must not acknowledge consumption to the browser")
-				require.ErrorContains(t, <-ack, "load input attachment metadata")
+				require.NoError(t, stream.RecvMsg(event))
 
 				remaining, err := reopened.ThreadQueueForConversation(conversation)
 				require.NoError(t, err)
@@ -2160,9 +2154,15 @@ func TestSessionEntries(t *testing.T) {
 		history, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation})
 		require.NoError(t, err)
 		require.Equal(t, []string{conversation + "/own", "private-X/private-file"}, history.Delegations)
+		unchanged, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation, Revision: history.Revision})
+		require.NoError(t, err)
+		require.Empty(t, unchanged.Messages)
+		require.Equal(t, history.Delegations, unchanged.Delegations, "unchanged parent entries still authorize their delegation links")
+
 		filtered, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation, SourceConversationId: "private-X"})
 		require.NoError(t, err)
 		require.Len(t, filtered.Messages, 2)
+		require.Equal(t, []string{"private-X/private-file"}, filtered.Delegations)
 		require.Equal(t, producerFile.ID, filtered.Messages[1].Attachments[0].Id)
 		require.Equal(t, "private-X", filtered.Messages[1].Attachments[0].ConversationId)
 

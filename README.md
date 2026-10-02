@@ -72,6 +72,18 @@ Web always starts at `0.0.0.0:3000`. To change its bind address, set
 No Web environment variables or socket setup are required. Browser access uses
 the configured `web_users` IP-to-username mapping, or Tailscale WhoIs when the IP has no mapping.
 
+Web reads the same persisted transcript during a turn and after a refresh,
+including recorded reasoning summaries and tool calls/results. Its live connection
+carries only conversation-change signals; each signal triggers a delta read that
+replaces changed entries and removes deleted ones. Reconnecting catches up from
+the last applied revision. Private producer output stays private until history sync
+commits; encrypted or unrecorded provider output is not reconstructed.
+
+Slack shows one in-progress placeholder, then the final answer and attachments.
+It does not stream partial answers, reasoning, tools, or workflow progress.
+Final Slack delivery acknowledgement still controls queue progression independently
+of Web reads.
+
 The compiled SPA in `internal/rocketclaw/internal/web/dist/` is committed with its
 frontend source changes, so Go-only builds need no Bun installation. When building
 from a checkout, `make -C internal/rocketclaw build` (also invoked by root
@@ -188,10 +200,10 @@ Queued calls retain their original invocation and attachments. Availability and 
 3. RocketClaw builds runtime assets from embedded defaults, configured git overlays, and local workspace overrides.
 4. A human message, `$workflow` command, cron job, scheduled prompt, or MCP request enters RocketClaw and invokes RocketCode with the selected agent.
 5. RocketCode runs model/tool turns under configured permissions.
-6. RocketClaw publishes progress, final responses, files, or reactions back through the originating connector.
+6. RocketClaw signals persisted transcript changes to Web and delivers final responses, files, or reactions through the originating connector.
 7. Conversation state, active-turn handoffs, scheduled work, queued messages, and routing metadata are persisted so restart recovery can refire interrupted turns and start saved unstarted messages without waiting for new input.
 
-Saved workflows run only as foreground managed turns. Each workflow launches fresh isolated custom workers, keeps intermediate values out of managed history, and persists a compact terminal summary of completed, failed, stopped, and skipped phases so later turns can explain what happened. Successful runs also record and deliver the final value. Slack shows phase progress and each worker's latest attributed activity with plan/task cards. Fan-out workers share one checkout, so parallel writers must own disjoint files. The state store does not persist resumable workflow progress: `$stop` ends the run, and daemon restart requires a new `$workflow` invocation.
+Saved workflows run only as foreground managed turns. Each workflow launches fresh isolated custom workers, keeps intermediate values out of managed history, and persists a compact terminal summary of completed, failed, stopped, and skipped phases so later turns can explain what happened. Successful runs also record and deliver the final value. Slack shows one in-progress placeholder and the final result, without phase or worker activity cards. Fan-out workers share one checkout, so parallel writers must own disjoint files. The state store does not persist resumable workflow progress: `$stop` ends the run, and daemon restart requires a new `$workflow` invocation.
 
 ## Repository Layout
 

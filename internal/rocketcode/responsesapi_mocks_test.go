@@ -25,7 +25,7 @@ var _ responsesAPI = &mockResponsesAPI{}
 //			CompactFunc: func(context1 context.Context, responseCompactParams *responses.ResponseCompactParams, requestOptions ...option.RequestOption) (*responses.CompactedResponse, error) {
 //				panic("mock out the Compact method")
 //			},
-//			NewFunc: func(context1 context.Context, responseNewParams *responses.ResponseNewParams, requestOptions ...option.RequestOption) (*responses.Response, error) {
+//			NewFunc: func(context1 context.Context, responseNewParams *responses.ResponseNewParams, responseObserverMoqParam responseObserver, requestOptions ...option.RequestOption) (*responses.Response, error) {
 //				panic("mock out the New method")
 //			},
 //		}
@@ -39,7 +39,7 @@ type mockResponsesAPI struct {
 	CompactFunc func(context1 context.Context, responseCompactParams *responses.ResponseCompactParams, requestOptions ...option.RequestOption) (*responses.CompactedResponse, error)
 
 	// NewFunc mocks the New method.
-	NewFunc func(context1 context.Context, responseNewParams *responses.ResponseNewParams, requestOptions ...option.RequestOption) (*responses.Response, error)
+	NewFunc func(context1 context.Context, responseNewParams *responses.ResponseNewParams, responseObserverMoqParam responseObserver, requestOptions ...option.RequestOption) (*responses.Response, error)
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -58,6 +58,8 @@ type mockResponsesAPI struct {
 			Context1 context.Context
 			// ResponseNewParams is the responseNewParams argument value.
 			ResponseNewParams *responses.ResponseNewParams
+			// ResponseObserverMoqParam is the responseObserverMoqParam argument value.
+			ResponseObserverMoqParam responseObserver
 			// RequestOptions is the requestOptions argument value.
 			RequestOptions []option.RequestOption
 		}
@@ -107,23 +109,25 @@ func (mock *mockResponsesAPI) CompactCalls() []struct {
 }
 
 // New calls NewFunc.
-func (mock *mockResponsesAPI) New(context1 context.Context, responseNewParams *responses.ResponseNewParams, requestOptions ...option.RequestOption) (*responses.Response, error) {
+func (mock *mockResponsesAPI) New(context1 context.Context, responseNewParams *responses.ResponseNewParams, responseObserverMoqParam responseObserver, requestOptions ...option.RequestOption) (*responses.Response, error) {
 	if mock.NewFunc == nil {
 		panic("mockResponsesAPI.NewFunc: method is nil but responsesAPI.New was just called")
 	}
 	callInfo := struct {
-		Context1          context.Context
-		ResponseNewParams *responses.ResponseNewParams
-		RequestOptions    []option.RequestOption
+		Context1                 context.Context
+		ResponseNewParams        *responses.ResponseNewParams
+		ResponseObserverMoqParam responseObserver
+		RequestOptions           []option.RequestOption
 	}{
-		Context1:          context1,
-		ResponseNewParams: responseNewParams,
-		RequestOptions:    requestOptions,
+		Context1:                 context1,
+		ResponseNewParams:        responseNewParams,
+		ResponseObserverMoqParam: responseObserverMoqParam,
+		RequestOptions:           requestOptions,
 	}
 	mock.lockNew.Lock()
 	mock.calls.New = append(mock.calls.New, callInfo)
 	mock.lockNew.Unlock()
-	return mock.NewFunc(context1, responseNewParams, requestOptions...)
+	return mock.NewFunc(context1, responseNewParams, responseObserverMoqParam, requestOptions...)
 }
 
 // NewCalls gets all the calls that were made to New.
@@ -131,14 +135,16 @@ func (mock *mockResponsesAPI) New(context1 context.Context, responseNewParams *r
 //
 //	len(mockedresponsesAPI.NewCalls())
 func (mock *mockResponsesAPI) NewCalls() []struct {
-	Context1          context.Context
-	ResponseNewParams *responses.ResponseNewParams
-	RequestOptions    []option.RequestOption
+	Context1                 context.Context
+	ResponseNewParams        *responses.ResponseNewParams
+	ResponseObserverMoqParam responseObserver
+	RequestOptions           []option.RequestOption
 } {
 	var calls []struct {
-		Context1          context.Context
-		ResponseNewParams *responses.ResponseNewParams
-		RequestOptions    []option.RequestOption
+		Context1                 context.Context
+		ResponseNewParams        *responses.ResponseNewParams
+		ResponseObserverMoqParam responseObserver
+		RequestOptions           []option.RequestOption
 	}
 	mock.lockNew.RLock()
 	calls = mock.calls.New

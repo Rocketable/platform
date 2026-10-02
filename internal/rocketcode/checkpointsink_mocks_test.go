@@ -6,6 +6,7 @@ package rocketcode
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 )
 
@@ -22,8 +23,14 @@ var _ CheckpointSink = &mockCheckpointSink{}
 //			ClearCompletedTurnFunc: func(context1 context.Context, s string) error {
 //				panic("mock out the ClearCompletedTurn method")
 //			},
+//			CloseActiveTurnFunc: func(context1 context.Context, s string, publicProgressState PublicProgressState) error {
+//				panic("mock out the CloseActiveTurn method")
+//			},
 //			RecordCompletedToolOutputFunc: func(context1 context.Context, activeTurnCheckpoint *ActiveTurnCheckpoint) error {
 //				panic("mock out the RecordCompletedToolOutput method")
+//			},
+//			RecordOutputTraceFunc: func(context1 context.Context, s string, rawMessages []json.RawMessage) error {
+//				panic("mock out the RecordOutputTrace method")
 //			},
 //			RecordProviderResponseFunc: func(context1 context.Context, activeTurnCheckpoint *ActiveTurnCheckpoint) error {
 //				panic("mock out the RecordProviderResponse method")
@@ -44,8 +51,14 @@ type mockCheckpointSink struct {
 	// ClearCompletedTurnFunc mocks the ClearCompletedTurn method.
 	ClearCompletedTurnFunc func(context1 context.Context, s string) error
 
+	// CloseActiveTurnFunc mocks the CloseActiveTurn method.
+	CloseActiveTurnFunc func(context1 context.Context, s string, publicProgressState PublicProgressState) error
+
 	// RecordCompletedToolOutputFunc mocks the RecordCompletedToolOutput method.
 	RecordCompletedToolOutputFunc func(context1 context.Context, activeTurnCheckpoint *ActiveTurnCheckpoint) error
+
+	// RecordOutputTraceFunc mocks the RecordOutputTrace method.
+	RecordOutputTraceFunc func(context1 context.Context, s string, rawMessages []json.RawMessage) error
 
 	// RecordProviderResponseFunc mocks the RecordProviderResponse method.
 	RecordProviderResponseFunc func(context1 context.Context, activeTurnCheckpoint *ActiveTurnCheckpoint) error
@@ -65,12 +78,30 @@ type mockCheckpointSink struct {
 			// S is the s argument value.
 			S string
 		}
+		// CloseActiveTurn holds details about calls to the CloseActiveTurn method.
+		CloseActiveTurn []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+			// PublicProgressState is the publicProgressState argument value.
+			PublicProgressState PublicProgressState
+		}
 		// RecordCompletedToolOutput holds details about calls to the RecordCompletedToolOutput method.
 		RecordCompletedToolOutput []struct {
 			// Context1 is the context1 argument value.
 			Context1 context.Context
 			// ActiveTurnCheckpoint is the activeTurnCheckpoint argument value.
 			ActiveTurnCheckpoint *ActiveTurnCheckpoint
+		}
+		// RecordOutputTrace holds details about calls to the RecordOutputTrace method.
+		RecordOutputTrace []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+			// RawMessages is the rawMessages argument value.
+			RawMessages []json.RawMessage
 		}
 		// RecordProviderResponse holds details about calls to the RecordProviderResponse method.
 		RecordProviderResponse []struct {
@@ -95,7 +126,9 @@ type mockCheckpointSink struct {
 		}
 	}
 	lockClearCompletedTurn        sync.RWMutex
+	lockCloseActiveTurn           sync.RWMutex
 	lockRecordCompletedToolOutput sync.RWMutex
+	lockRecordOutputTrace         sync.RWMutex
 	lockRecordProviderResponse    sync.RWMutex
 	lockRecordRecoveredReplay     sync.RWMutex
 	lockStartActiveTurn           sync.RWMutex
@@ -137,6 +170,46 @@ func (mock *mockCheckpointSink) ClearCompletedTurnCalls() []struct {
 	return calls
 }
 
+// CloseActiveTurn calls CloseActiveTurnFunc.
+func (mock *mockCheckpointSink) CloseActiveTurn(context1 context.Context, s string, publicProgressState PublicProgressState) error {
+	if mock.CloseActiveTurnFunc == nil {
+		panic("mockCheckpointSink.CloseActiveTurnFunc: method is nil but CheckpointSink.CloseActiveTurn was just called")
+	}
+	callInfo := struct {
+		Context1            context.Context
+		S                   string
+		PublicProgressState PublicProgressState
+	}{
+		Context1:            context1,
+		S:                   s,
+		PublicProgressState: publicProgressState,
+	}
+	mock.lockCloseActiveTurn.Lock()
+	mock.calls.CloseActiveTurn = append(mock.calls.CloseActiveTurn, callInfo)
+	mock.lockCloseActiveTurn.Unlock()
+	return mock.CloseActiveTurnFunc(context1, s, publicProgressState)
+}
+
+// CloseActiveTurnCalls gets all the calls that were made to CloseActiveTurn.
+// Check the length with:
+//
+//	len(mockedCheckpointSink.CloseActiveTurnCalls())
+func (mock *mockCheckpointSink) CloseActiveTurnCalls() []struct {
+	Context1            context.Context
+	S                   string
+	PublicProgressState PublicProgressState
+} {
+	var calls []struct {
+		Context1            context.Context
+		S                   string
+		PublicProgressState PublicProgressState
+	}
+	mock.lockCloseActiveTurn.RLock()
+	calls = mock.calls.CloseActiveTurn
+	mock.lockCloseActiveTurn.RUnlock()
+	return calls
+}
+
 // RecordCompletedToolOutput calls RecordCompletedToolOutputFunc.
 func (mock *mockCheckpointSink) RecordCompletedToolOutput(context1 context.Context, activeTurnCheckpoint *ActiveTurnCheckpoint) error {
 	if mock.RecordCompletedToolOutputFunc == nil {
@@ -170,6 +243,46 @@ func (mock *mockCheckpointSink) RecordCompletedToolOutputCalls() []struct {
 	mock.lockRecordCompletedToolOutput.RLock()
 	calls = mock.calls.RecordCompletedToolOutput
 	mock.lockRecordCompletedToolOutput.RUnlock()
+	return calls
+}
+
+// RecordOutputTrace calls RecordOutputTraceFunc.
+func (mock *mockCheckpointSink) RecordOutputTrace(context1 context.Context, s string, rawMessages []json.RawMessage) error {
+	if mock.RecordOutputTraceFunc == nil {
+		panic("mockCheckpointSink.RecordOutputTraceFunc: method is nil but CheckpointSink.RecordOutputTrace was just called")
+	}
+	callInfo := struct {
+		Context1    context.Context
+		S           string
+		RawMessages []json.RawMessage
+	}{
+		Context1:    context1,
+		S:           s,
+		RawMessages: rawMessages,
+	}
+	mock.lockRecordOutputTrace.Lock()
+	mock.calls.RecordOutputTrace = append(mock.calls.RecordOutputTrace, callInfo)
+	mock.lockRecordOutputTrace.Unlock()
+	return mock.RecordOutputTraceFunc(context1, s, rawMessages)
+}
+
+// RecordOutputTraceCalls gets all the calls that were made to RecordOutputTrace.
+// Check the length with:
+//
+//	len(mockedCheckpointSink.RecordOutputTraceCalls())
+func (mock *mockCheckpointSink) RecordOutputTraceCalls() []struct {
+	Context1    context.Context
+	S           string
+	RawMessages []json.RawMessage
+} {
+	var calls []struct {
+		Context1    context.Context
+		S           string
+		RawMessages []json.RawMessage
+	}
+	mock.lockRecordOutputTrace.RLock()
+	calls = mock.calls.RecordOutputTrace
+	mock.lockRecordOutputTrace.RUnlock()
 	return calls
 }
 

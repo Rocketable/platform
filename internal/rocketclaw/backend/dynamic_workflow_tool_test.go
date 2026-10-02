@@ -1,9 +1,7 @@
 package backend
 
 import (
-	"context"
 	"encoding/json"
-	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"io"
 	"log/slog"
 	"os"
@@ -11,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
@@ -61,19 +60,23 @@ func TestDynamicWorkflowToolSchemaAndCall(t *testing.T) {
 	var permissions rocketcode.PermissionSet
 	require.NoError(t, permissions.Allow("workflow", "audit"))
 
-	var gotName, gotArgs string
+	workspace := t.TempDir()
+	writeMainAgentSkills(t, workspace, "---\ndescription: Main\nmodel: gpt-5.5\n---\nPrompt\n")
+	writeWorkflowFixture(t, workspace, "audit", `meta = {"name": "audit", "description": "Audit routes", "phases": ["work"]}
+def main(args):
+    return phase("work", lambda: "audit:" + args)
+`)
+	writeWorkflowFixture(t, workspace, "secret", `meta = {"name": "secret", "description": "Secret"}
+def main(args): return None
+`)
+	root := openWorkspaceRoot(t, workspace)
+	definitions, err := workflow.Load(root, ".rocketclaw")
+	require.NoError(t, err)
+
+	bridge := &Bridge{runtime: &config.Config{Workspace: workspace}, log: slog.New(slog.DiscardHandler)}
 
 	output := make(chan rocketcode.ChatResponse, 4)
-	tool, ok := dynamicWorkflowTool(permissions, []protocol.WorkflowDescription{
-		{Name: "audit", Description: "Audit routes"},
-		{Name: "secret", Description: "Secret"},
-	}, func(_ context.Context, name, args string, out chan<- rocketcode.ChatResponse) (string, error) {
-		gotName, gotArgs = name, args
-
-		emitNestedWorkflowProgress(out, "workflow audit phase work: in-progress")
-
-		return "result-text", nil
-	})
+	tool, ok := bridge.dynamicWorkflowTool(permissions, "main", "turn-1", definitions)
 	require.True(t, ok)
 	assert.Equal(t, "workflow", tool.Permission)
 	assert.Equal(t, []string{"audit"}, tool.VisibilitySubjects)
@@ -89,19 +92,11 @@ func TestDynamicWorkflowToolSchemaAndCall(t *testing.T) {
 
 	result, err := tool.Call(t.Context(), json.RawMessage(`{"name":"audit","args":"path/to"}`), output)
 	require.NoError(t, err)
-	assert.Equal(t, "audit", gotName)
-	assert.Equal(t, "path/to", gotArgs)
-	assert.Equal(t, rocketcode.TextToolResult("result-text"), result)
-	require.Len(t, drainNestedWorkflowProgress(output), 1)
+	assert.Equal(t, rocketcode.TextToolResult("audit:path/to"), result)
+	require.Empty(t, output)
 
-	_, ok = dynamicWorkflowTool(rocketcode.PermissionSet{}, []protocol.WorkflowDescription{{Name: "audit", Description: "A"}}, nil)
+	_, ok = bridge.dynamicWorkflowTool(rocketcode.PermissionSet{}, "main", "turn-1", definitions)
 	assert.False(t, ok)
-}
-
-func TestEmitNestedWorkflowProgressNeverBlocks(t *testing.T) {
-	t.Parallel()
-	emitNestedWorkflowProgress(make(chan rocketcode.ChatResponse), "phase work: complete")
-	emitNestedWorkflowProgress(make(chan rocketcode.ChatResponse), "   ")
 }
 
 func TestRunNestedWorkflowAndMaybeTool(t *testing.T) {
@@ -119,7 +114,7 @@ def main(args):
 `)
 	writeWorkflowFixture(t, workspace, "audit-routes", `meta = {"name": "audit-routes", "description": "Audit"}
 def main(args):
-    return args
+    return phase("work", lambda: args)
 `)
 
 	root := openWorkspaceRoot(t, workspace)
@@ -129,21 +124,14 @@ def main(args):
 	definitions, err := workflow.Load(root, ".rocketclaw")
 	require.NoError(t, err)
 
-	_, err = bridge.runNestedWorkflow(t.Context(), "main", "turn-1", "missing", nil, "", make(chan rocketcode.ChatResponse, 1))
+	_, err = bridge.runNestedWorkflow(t.Context(), "main", "turn-1", "missing", nil, "")
 	require.ErrorContains(t, err, `workflow "missing" is not configured`)
 
-	output := make(chan rocketcode.ChatResponse, 32)
-	text, err := bridge.runNestedWorkflow(t.Context(), "main", "turn-echo", "echo", definitions["echo"], "hello-nested", output)
+	text, err := bridge.runNestedWorkflow(t.Context(), "main", "turn-echo", "echo", definitions["echo"], "hello-nested")
 	require.NoError(t, err)
 	assert.Equal(t, "hello-nested", text)
-	require.NotEmpty(t, drainNestedWorkflowProgress(output))
 
-	// Full channel must not fail the run.
-	text, err = bridge.runNestedWorkflow(t.Context(), "main", "turn-blocked", "echo", definitions["echo"], "still-ok", make(chan rocketcode.ChatResponse))
-	require.NoError(t, err)
-	assert.Equal(t, "still-ok", text)
-
-	text, err = bridge.runNestedWorkflow(t.Context(), "main", "turn-quiet", "quiet", definitions["quiet"], "", make(chan rocketcode.ChatResponse, 8))
+	text, err = bridge.runNestedWorkflow(t.Context(), "main", "turn-quiet", "quiet", definitions["quiet"], "")
 	require.NoError(t, err)
 	assert.Equal(t, nestedWorkflowSilentCompleteText, text)
 
@@ -153,9 +141,12 @@ def main(args):
 	tool, ok := bridge.maybeDynamicWorkflowTool(root, &rocketcode.Agent{Permission: workflowAllow}, "main", "turn-1")
 	require.True(t, ok)
 	assert.Equal(t, []string{"audit-routes"}, tool.VisibilitySubjects)
-	result, err := tool.Call(t.Context(), json.RawMessage(`{"name":"audit-routes","args":"src"}`), make(chan rocketcode.ChatResponse, 16))
+
+	output := make(chan rocketcode.ChatResponse, 16)
+	result, err := tool.Call(t.Context(), json.RawMessage(`{"name":"audit-routes","args":"src"}`), output)
 	require.NoError(t, err)
 	assert.Equal(t, rocketcode.TextToolResult("src"), result)
+	require.Empty(t, output)
 
 	var taskOnly rocketcode.PermissionSet
 	require.NoError(t, taskOnly.Allow("task", "*"))
@@ -211,7 +202,6 @@ def main(args):
 
 	runtime, err := rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{
 		ShellTempDir:   filepath.Join(cfg.Workspace, filepath.FromSlash(shellRel)),
-		Diagnostics:    true,
 		ChildSessions:  rocketcode.InertChildSessions{},
 		CheckpointSink: rocketcode.InertCheckpointSink{},
 		ShellCommand:   rocketcode.DefaultShellCommand,
@@ -220,17 +210,4 @@ def main(args):
 
 	_, hasDynamic := runtime.Tools[dynamicWorkflowToolName]
 	assert.False(t, hasDynamic)
-}
-
-func drainNestedWorkflowProgress(ch <-chan rocketcode.ChatResponse) []rocketcode.ChatResponse {
-	var items []rocketcode.ChatResponse
-
-	for {
-		select {
-		case item := <-ch:
-			items = append(items, item)
-		default:
-			return items
-		}
-	}
 }

@@ -161,7 +161,7 @@ func TestHandleMessageEventAdoptHistoryFetchFailureStillStarts(t *testing.T) {
 			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "random"}})
 		case "/conversations.replies":
 			writeJSON(t, w, map[string]any{"ok": false, "error": "internal_error"})
-		case "/chat.startStream", "/chat.postMessage", "/chat.update", "/chat.delete", "/reactions.add", "/reactions.remove", "/conversations.history":
+		case "/chat.postMessage", "/chat.update", "/chat.delete", "/reactions.add", "/reactions.remove", "/conversations.history":
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666", "messages": []map[string]any{}})
 		case "/users.info":
 			writeJSON(t, w, map[string]any{"ok": true})
@@ -264,7 +264,7 @@ func newAdhocSlackServer(t *testing.T, channelName string, replies []map[string]
 			writeJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{}})
 		case "/conversations.replies":
 			writeJSON(t, w, map[string]any{"ok": true, "messages": replies, "has_more": false})
-		case "/chat.startStream", "/chat.postMessage", "/chat.update":
+		case "/chat.postMessage", "/chat.update":
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
 		case "/chat.delete":
 			writeJSON(t, w, map[string]any{"ok": true})

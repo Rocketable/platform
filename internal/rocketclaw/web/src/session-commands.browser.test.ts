@@ -8,7 +8,7 @@ const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
 for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf(!playwright || !chromium)(`fork and handoff at ${width}px`, async () => {
   const { chromium: engine } = await import(playwright!);
-  const message = (messageId: string, role: string, text: string): TranscriptEvent => ({ messageId, role, text, complete: true, snapshot: false, turnId: "" });
+  const message = (messageId: string, role: string, text: string): TranscriptEvent => ({ messageId, entryKey: messageId.split(":")[0], itemId: `item:${messageId}`, inputId: "", role, text, complete: true, turnId: "" });
   const histories: Record<string, TranscriptEvent[]> = {
     source: [message("1:0", "user", "First request"), message("1:1", "assistant", "First answer"), message("2:0", "user", "Choose this prompt")],
     destination: [message("3:0", "user", "Destination search needle"), message("3:1", "assistant", "You are looking at the destination")],
@@ -29,6 +29,8 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
   const stashReady = Promise.withResolvers<void>();
   const newSessionReady = Promise.withResolvers<void>();
   const firstTurnReady = Promise.withResolvers<void>();
+  const stoppedTurn = Promise.withResolvers<void>();
+  const running = new Set<string>();
   let failHandoff = true;
   let failFirstTurn = false;
   const queues: Record<string, { id: string; text: string; delivery: PromptDelivery }[]> = {};
@@ -40,13 +42,16 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
     }
-    const input = await request.json() as { id: string; before?: string; text: string; delivery?: PromptDelivery; query: string } & Partial<Session>;
+    const input = await request.json() as { id: string; before?: string; text: string; messageId?: string; delivery?: PromptDelivery; query: string } & Partial<Session>;
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "session-commands" });
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main", model: "test" }], currentAgent: "main" });
       case "/api/ListSkills": return Response.json({ skills: [] });
-      case "/api/History": return Response.json({ messages: histories[input.id] ?? [] });
+      case "/api/History": {
+        const messages = histories[input.id] ?? [];
+        return Response.json({ messages, origin: "", revision: JSON.stringify({ messages, running: running.has(input.id) }), reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(messages.map((message) => message.entryKey))], running: running.has(input.id), terminal: "" });
+      }
       case "/api/ListQueue": return Response.json({ items: queues[input.id] ?? [] });
       case "/api/UpdateSession":
       case "/api/SettleSession":
@@ -68,13 +73,28 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
         return Response.json({ document: handoffDocument });
       case "/api/SearchMessages": searches.push(input.query); return Response.json({ matches: Object.entries(histories).flatMap(([conversationId, messages]) => messages.filter((item) => item.text.toLowerCase().includes(input.query.toLowerCase())).map((message) => ({ conversationId, message }))) });
       case "/api/CreateSession": await newSessionReady.promise; histories.created = []; return Response.json({ id: "created" });
-      case "/api/Prompt":
+      case "/api/Prompt": {
         prompts.push(input);
-        if (input.delivery === "STASH") await stashReady.promise;
+        if (input.delivery === "STASH" || input.delivery === "QUEUE") {
+          if (input.delivery === "STASH") await stashReady.promise;
+          (queues[input.id] ??= []).push({ id: "stashed", text: input.text, delivery: input.delivery });
+          return Response.json({ privateText: "" });
+        }
+        if (input.text === "$stop") {
+          running.delete(input.id);
+          stoppedTurn.resolve();
+          return Response.json({ privateText: "" });
+        }
+        running.add(input.id);
+        const accepted = { ...message(`${histories[input.id].length + 1}:0`, "user", input.text), inputId: input.messageId ?? "", complete: false };
+        histories[input.id].push(accepted);
         if (input.id === "created") await firstTurnReady.promise;
+        if (input.text === "start a turn") await stoppedTurn.promise;
+        running.delete(input.id);
+        accepted.complete = true;
         if (input.id === "created" && failFirstTurn) return Response.json({ message: "First turn failed", code: 13 }, { status: 500 });
-        (queues[input.id] ??= []).push({ id: "stashed", text: input.text, delivery: input.delivery! });
         return Response.json({ privateText: "" });
+      }
       default: return Response.json({});
     }
   } });
@@ -412,6 +432,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
     await page.waitForURL("**/s/" + btoa("created").replace(/=+$/, ""));
     await dialog.waitFor({ state: "hidden" });
     expect(await page.locator("main").getByText("# Handoff from source", { exact: false }).count()).toBeGreaterThan(0);
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
     const turn = page.waitForResponse((response: { url: () => string }) => response.url().endsWith("/api/Prompt"));
     firstTurnReady.resolve();
     await turn;

@@ -65,13 +65,13 @@ func TestSessionEntryForProviderDifferentProviderProjectsReplay(t *testing.T) {
 			json.RawMessage(`{"type":"compaction","encrypted_content":"provider-private-sentinel"}`),
 			json.RawMessage(`{"type":"provider_hosted","value":"provider-private-sentinel"}`),
 		},
-		OutputTrace: []json.RawMessage{json.RawMessage(`{"private":"provider-private-sentinel"}`)},
+		OutputTrace: []json.RawMessage{json.RawMessage(`{"private":"provider-private-sentinel"}`), json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"item/0","parent_id":"turn/response","kind":"text","state":"completed","text":"early-public"}}`)},
 	}
 
 	got, err := sessionEntryForProvider(&entry, "work")
 	require.NoError(t, err)
 	assert.Empty(t, got.ResponseID)
-	assert.Empty(t, got.OutputTrace)
+	assert.Equal(t, entry.OutputTrace[1:], got.OutputTrace)
 	assert.Equal(t, entry.Model, got.Model)
 
 	data, err := json.Marshal(got.ReplayInput)
@@ -113,9 +113,10 @@ func TestActiveTurnForProviderProjectsCompletedOutputsWithoutMutation(t *testing
 		DisplayModel: "openai/gpt",
 		ResponseID:   providerReplayPrivate,
 		ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"message","role":"assistant","id":"item","content":"final"}`),
 			json.RawMessage(`{"type":"function_call","id":"provider-private-sentinel","call_id":"portable-call","name":"read","arguments":"{}","status":"completed"}`),
 		},
-		OutputTrace:       []json.RawMessage{json.RawMessage(`{"private":"provider-private-sentinel"}`)},
+		OutputTrace:       []json.RawMessage{json.RawMessage(`{"private":"provider-private-sentinel"}`), json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"item/0","parent_id":"turn/response","kind":"text","state":"completed","text":"early-public"}}`)},
 		OpenFunctionCalls: []rocketcode.FunctionCallCheckpoint{{CallID: "open-call", Name: "bash", Arguments: json.RawMessage(`{"command":"printf portable"}`)}},
 		CompletedFunctionOutputs: []rocketcode.FunctionOutputCheckpoint{{CallID: "portable-call", Name: "read", ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"function_call_output","id":"provider-private-sentinel","call_id":"portable-call","status":"completed","output":"portable-tool-output"}`),
@@ -128,7 +129,12 @@ func TestActiveTurnForProviderProjectsCompletedOutputsWithoutMutation(t *testing
 	require.NoError(t, err)
 	assert.Equal(t, checkpoint.DisplayModel, got.DisplayModel)
 	assert.Empty(t, got.ResponseID)
-	assert.Empty(t, got.OutputTrace)
+	assert.Equal(t, checkpoint.OutputTrace[1:], got.OutputTrace)
+	require.Len(t, got.ReplayInput, 2)
+	require.JSONEq(t, `{"type":"message","role":"assistant","id":"item","content":"final"}`, string(got.ReplayInput[0]))
+	recovered, err := rocketcode.RecoveredReplayInput(&got)
+	require.NoError(t, err)
+	require.JSONEq(t, string(got.ReplayInput[0]), string(recovered[0]), "recovery must preserve the canonical identity matching item/0 without replacing final text with progress")
 	require.Len(t, got.CompletedFunctionOutputs, 1)
 	assert.Contains(t, string(got.CompletedFunctionOutputs[0].ReplayInput[0]), "portable-tool-output")
 	assert.NotContains(t, string(got.CompletedFunctionOutputs[0].ReplayInput[0]), providerReplayPrivate)
@@ -181,8 +187,23 @@ func TestReplayForProviderRejectsMalformedKnownReadableData(t *testing.T) {
 		{name: "compaction null summary", raw: `{"type":"compaction","summary":null}`, want: "compaction summary"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := replayForProvider([]json.RawMessage{json.RawMessage(test.raw)})
+			raw := []json.RawMessage{json.RawMessage(test.raw)}
+			_, err := replayForProvider(raw)
 			require.ErrorContains(t, err, test.want)
+
+			entry := rocketcode.SessionEntry{Model: "openai/model", ReplayInput: raw}
+			_, err = sessionEntryForProvider(&entry, "other")
+			require.ErrorContains(t, err, test.want)
+			require.Equal(t, raw, entry.ReplayInput)
+			checkpoint := rocketcode.ActiveTurnCheckpoint{DisplayModel: "openai/model", ReplayInput: raw}
+			_, err = activeTurnForProvider(&checkpoint, "other")
+			require.ErrorContains(t, err, test.want)
+			require.Equal(t, raw, checkpoint.ReplayInput)
+			checkpoint.ReplayInput = nil
+			checkpoint.CompletedFunctionOutputs = []rocketcode.FunctionOutputCheckpoint{{CallID: "completed", ReplayInput: raw}}
+			_, err = activeTurnForProvider(&checkpoint, "other")
+			require.ErrorContains(t, err, test.want)
+			require.Equal(t, raw, checkpoint.CompletedFunctionOutputs[0].ReplayInput)
 		})
 	}
 
@@ -288,7 +309,7 @@ func TestReplayForProviderValidatesRequiredKnownFields(t *testing.T) {
 }
 func TestRecoveredAttributionSurvivesProviderProjection(t *testing.T) {
 	var checkpoint rocketcode.ActiveTurnCheckpoint
-	require.NoError(t, json.Unmarshal([]byte(`{"display_model":"work/model-b","agent":"new","reasoning_effort":"low","replay_input":[{"type":"reasoning","encrypted_content":"opaque"},{"type":"message","role":"user","prompt_header":"[Slack]","content":"[Slack]\n\nold question"},{"type":"message","role":"assistant","content":"new answer"}],"replay_attribution":[{"start":0,"end":2,"agent":"old","model":"work/model-a","reasoning_effort":"high"}]}`), &checkpoint))
+	require.NoError(t, json.Unmarshal([]byte(`{"display_model":"work/model-b","agent":"new","reasoning_effort":"low","replay_input":[{"type":"reasoning","encrypted_content":"opaque"},{"type":"message","role":"user","input_id":"input-1","prompt_header":"[Slack]","content":"[Slack]\n\nold question"},{"type":"message","role":"assistant","content":"new answer"}],"replay_attribution":[{"start":0,"end":2,"agent":"old","model":"work/model-a","reasoning_effort":"high"}]}`), &checkpoint))
 	projected, err := activeTurnForProvider(&checkpoint, "other")
 	require.NoError(t, err)
 	data, err := json.Marshal(projected)
@@ -296,6 +317,7 @@ func TestRecoveredAttributionSurvivesProviderProjection(t *testing.T) {
 	require.Contains(t, string(data), `"replay_attribution":[{"start":0,"end":1,"agent":"old","model":"work/model-a","reasoning_effort":"high"}]`)
 	require.Len(t, projected.ReplayInput, 2)
 	require.Contains(t, string(projected.ReplayInput[0]), `"prompt_header":"[Slack]"`)
+	require.Contains(t, string(projected.ReplayInput[0]), `"input_id":"input-1"`)
 	old := projected.ReplayAttribution
 	resumed := withRecoveredReplay(&rocketcode.ActiveTurnCheckpoint{Agent: "latest", DisplayModel: "model-c", ReasoningEffort: new("medium"), ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"latest answer"}`)}}, projected.ReplayInput, append(old, rocketcode.ReplayAttribution{End: 2, Agent: projected.Agent, Model: projected.DisplayModel, ReasoningEffort: projected.ReasoningEffort}))
 	require.Equal(t, 1, projected.ReplayAttribution[0].End)

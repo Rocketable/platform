@@ -3,7 +3,8 @@
 Assistant replies show a smaller, muted footer with known
 `agent (provider/model#effort)` details; `#effort` is omitted when absent.
 On desktop, hover a message to see its footer and Copy button. On touch
-screens, tap a message instead. User messages show only Copy, without details.
+screens, tap a message instead. User messages show Copy and, when recorded, a
+message-header info button, but no agent or model label.
 Copy puts the message text on the clipboard.
 Only sessions with sandboxed messages append ` - origin` to the footer. The
 origin is `sandboxed` for messages produced by another conversation or a cron
@@ -15,7 +16,8 @@ These are execution-time snapshots, so changing the selected agent does not
 relabel saved messages. Missing historical values are omitted, and old bare
 model names are shown as recorded without an assumed provider. Optimistic
 inputs are enriched by message ID when their consuming runtime is ready.
-Tool groups and reasoning groups have no footer or Copy action.
+Tool progress shows its state and producer settings, without a Copy action.
+Reasoning groups have no footer or Copy action.
 When a session contains sandboxed messages, a slim button group above the
 composer highlights both `sandboxed` and `canonical` by default. Each button
 independently toggles its origin on or off, so both, either, or neither can be shown.
@@ -164,10 +166,10 @@ selection order and can be removed individually. Send accepts files without text
 Enter and **Send** queue later work while a turn is running. The **Steer** button
 immediately left of Send guides the active response; Cmd/Ctrl+Enter does the same.
 Steers wait in **Waiting to steer**, separate from both chat and the later-work
-queue. A server consumption event moves that input into chat at the point it was
-used, with its attachments. Identical texts remain separate inputs, tracked by
-message ID. Queue promotion keeps the server queue ID and follows the same
-consumption rule. Cumulative streamed replies continue after the consumed steer
+queue. A persisted input in a History delta moves that input into chat at the point
+it was used, with its attachments. Identical texts remain separate inputs, tracked
+by durable input ID. Queue promotion keeps the server queue ID and follows the
+same consumption rule. Replacing the active turn includes each consumed steer
 without repeating the earlier response.
 Use **Stash** to save the draft and its attachments without sending, whether the
 chat is idle or busy. Press **⌘ Option Enter** on macOS or **Ctrl Alt Enter** on
@@ -180,14 +182,23 @@ It may run immediately when idle. While busy, the released row offers **Steer**
 as usual. Stashed rows can be reordered or removed, but cannot steer directly.
 Failed Stash keeps the draft and files for retry. If Pop shows an error, check
 the refreshed queue: the message may already be queued if starting work failed.
-On reconnect, saved history replaces completed chat; pending steers remain separate.
-An active local transcript keeps its live IDs and stream segments. History confirms
-stored attachments by file ID, replacing local previews with download URLs. A history
-request that overlaps newer live changes cannot overwrite those changes. If a
-direct steer's consumption event was missed, its own successful Prompt completion
-reloads saved history and clears that pending ID. Recorded message IDs identify
-entry positions, separately from live IDs; the browser does not guess consumption
-by matching text.
+Live updates and refresh read the same persisted transcript. Reconnect fetches
+changes since the last applied revision; pending steers remain separate until their
+input IDs appear in history. Reads are serialized and overlapping signals coalesce.
+Changed entries replace their whole groups, deleted entries disappear, and unchanged
+groups retain their render IDs. History confirms stored attachments by file ID,
+replacing local previews with download URLs. Failed reads retain content and the
+last applied revision. Recorded message IDs identify saved entry positions,
+separately from render and input IDs; the browser never matches consumption by text.
+Public assistant text appears when the provider emits it, before the request ends.
+Tool and delegation status updates persist independently, without waiting for the
+slowest sibling. Their rows keep the original call order. Private child diagnostics,
+review reasons, and provisional tool arguments are not public progress.
+Final text replaces partial text exactly, including when the final text is empty.
+Stopped or failed turns retain their progress without becoming resumable work.
+Progress does not create command targets or move waiting steers into the model early.
+Slack still receives one in-progress placeholder and the final answer/attachments,
+not intermediate Web content.
 Steer is enabled while a
 response is running and the draft has content. Failed uploads or
 sends keep the draft and files for retry. Drafts remain in memory when switching
@@ -372,8 +383,9 @@ finite SSE fetch at `GET /api/ListSessions`. A terminal snapshot is not transpor
 completion: only `event: complete` followed by successful EOF permits a saved
 snapshot. Errors, cancellation, and EOF without that event fail enumeration.
 `POST /api/Protocol` returns `{ "protoSha256": "…" }`; polling reloads the page
-when the protocol changes. `GET /stream?id=<url-encoded-raw-id>` delivers live
-transcript events via EventSource.
+when the protocol changes. `GET /stream?id=<url-encoded-raw-id>` delivers only
+content-free conversation-change hints via EventSource. Each hint triggers a History
+delta read from the last applied revision; opening or reconnecting also catches up.
 
 - `POST /api/UploadAttachment?conversationId=<visible-id>&name=<filename>` takes the raw
   file as its body and returns JSON attachment metadata. Query values use normal
@@ -385,7 +397,8 @@ transcript events via EventSource.
   `id`, `text`, and `delivery`. The backend adds attachment references to the text.
 
 All JSON RPCs use PascalCase method names, camelCase protobuf fields, and
-protobuf response envelopes (for example `{ "messages": [] }` for History).
+protobuf response envelopes. History includes `messages`, `revision`, `reset`,
+`replacedKeys`, `removedKeys`, `entryKeys`, `running`, and `terminal`.
 Failures return `{ "code": <numeric-gRPC-code>, "message": "…" }`; authentication
 failures use HTTP 401 and code 16.
 

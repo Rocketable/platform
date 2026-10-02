@@ -305,6 +305,9 @@ func (s *SessionService) UpsertActiveTurn(ctx context.Context, checkpoint *harne
 		return fmt.Errorf("marshal active turn replay input: %w", err)
 	}
 
+	replayAttribution, _ := marshalActiveTurnJSON(checkpointState.ReplayAttribution)
+	reasoningEffort, _ := marshalActiveTurnJSON(checkpointState.ReasoningEffort)
+
 	outputTrace, err := marshalActiveTurnJSON(checkpointState.OutputTrace)
 	if err != nil {
 		return fmt.Errorf("marshal active turn output trace: %w", err)
@@ -325,9 +328,26 @@ func (s *SessionService) UpsertActiveTurn(ctx context.Context, checkpoint *harne
 		return fmt.Errorf("marshal active turn completed function outputs: %w", err)
 	}
 
-	_, err = s.db.ExecContext(ctx, `INSERT INTO active_turns (id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) ON CONFLICT(id) DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent, model = excluded.model, display_model = excluded.display_model, replay_input_json = excluded.replay_input_json, output_trace_json = excluded.output_trace_json, token_usage_json = excluded.token_usage_json, response_id = excluded.response_id, open_function_calls_json = excluded.open_function_calls_json, completed_function_outputs_json = excluded.completed_function_outputs_json, restart_notice_json = excluded.restart_notice_json, source_metadata_json = excluded.source_metadata_json, updated_at_unix_ns = excluded.updated_at_unix_ns`, checkpointState.TurnID, checkpointState.ConversationKey, checkpointState.Agent, checkpointState.Model, checkpointState.DisplayModel, replayInput, outputTrace, tokenUsage, checkpointState.ResponseID, openCalls, completedOutputs, "", metadata, timeUnixNano(now), timeUnixNano(now))
+	_, err = s.db.ExecContext(ctx, `INSERT INTO active_turns (id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns, replay_attribution_json, reasoning_effort_json, history_anchor_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, COALESCE((SELECT MAX(id) FROM session_entries WHERE conversation_id = $2), 0)) ON CONFLICT(id) DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent, model = excluded.model, display_model = excluded.display_model, replay_input_json = excluded.replay_input_json, output_trace_json = excluded.output_trace_json, token_usage_json = excluded.token_usage_json, response_id = excluded.response_id, open_function_calls_json = excluded.open_function_calls_json, completed_function_outputs_json = excluded.completed_function_outputs_json, restart_notice_json = excluded.restart_notice_json, source_metadata_json = excluded.source_metadata_json, updated_at_unix_ns = excluded.updated_at_unix_ns, replay_attribution_json = excluded.replay_attribution_json, reasoning_effort_json = excluded.reasoning_effort_json`, checkpointState.TurnID, checkpointState.ConversationKey, checkpointState.Agent, checkpointState.Model, checkpointState.DisplayModel, replayInput, outputTrace, tokenUsage, checkpointState.ResponseID, openCalls, completedOutputs, "", metadata, timeUnixNano(now), timeUnixNano(now), replayAttribution, reasoningEffort)
 	if err != nil {
 		return fmt.Errorf("upsert active turn: %w", err)
+	}
+
+	return nil
+}
+
+// recordActiveTurnOutputTrace updates only display trace, never replay or recovery
+// data. It cannot insert a row or change a terminal checkpoint.
+func (s *SessionService) recordActiveTurnOutputTrace(ctx context.Context, turnID string, trace []json.RawMessage) error {
+	outputTrace, err := marshalActiveTurnJSON(trace)
+	if err != nil {
+		return fmt.Errorf("marshal active turn output trace: %w", err)
+	}
+
+	_, err = s.db.ExecContext(ctx, `UPDATE active_turns SET output_trace_json = $2, updated_at_unix_ns = $3
+WHERE id = $1 AND terminal = '' AND output_trace_json::jsonb IS DISTINCT FROM $2::jsonb`, turnID, outputTrace, timeUnixNano(time.Now().UTC()))
+	if err != nil {
+		return fmt.Errorf("record active turn output trace: %w", err)
 	}
 
 	return nil
@@ -349,7 +369,7 @@ func (s *SessionService) ClearActiveTurn(ctx context.Context, turnID string) err
 
 // RecoverableActiveTurns returns remaining active-turn handoff rows for startup recovery.
 func (s *SessionService) RecoverableActiveTurns(ctx context.Context) ([]ActiveTurnState, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns, pending_steers_json FROM active_turns ORDER BY conversation_id, updated_at_unix_ns DESC, id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns, pending_steers_json, replay_attribution_json, reasoning_effort_json, terminal FROM active_turns WHERE terminal = '' ORDER BY conversation_id, updated_at_unix_ns DESC, id`)
 	if err != nil {
 		return nil, fmt.Errorf("query recoverable active turns: %w", err)
 	}
@@ -512,9 +532,11 @@ func scanActiveTurn(scanner rowScanner) (ActiveTurnState, error) {
 		createdAtUnixNano int64
 		updatedAtUnixNano int64
 		pendingSteers     string
+		replayAttribution string
+		reasoningEffort   string
 	)
 
-	if err := scanner.Scan(&turn.Checkpoint.TurnID, &turn.Checkpoint.ConversationKey, &turn.Checkpoint.Agent, &turn.Checkpoint.Model, &turn.Checkpoint.DisplayModel, &replayInput, &outputTrace, &tokenUsage, &turn.Checkpoint.ResponseID, &openCalls, &completedOutputs, &restartNotice, &sourceMetadata, &createdAtUnixNano, &updatedAtUnixNano, &pendingSteers); err != nil {
+	if err := scanner.Scan(&turn.Checkpoint.TurnID, &turn.Checkpoint.ConversationKey, &turn.Checkpoint.Agent, &turn.Checkpoint.Model, &turn.Checkpoint.DisplayModel, &replayInput, &outputTrace, &tokenUsage, &turn.Checkpoint.ResponseID, &openCalls, &completedOutputs, &restartNotice, &sourceMetadata, &createdAtUnixNano, &updatedAtUnixNano, &pendingSteers, &replayAttribution, &reasoningEffort, &turn.Terminal); err != nil {
 		return ActiveTurnState{}, fmt.Errorf("scan active turn: %w", err)
 	}
 
@@ -536,6 +558,8 @@ func scanActiveTurn(scanner rowScanner) (ActiveTurnState, error) {
 		{completedOutputs, &turn.Checkpoint.CompletedFunctionOutputs, "completed function outputs"},
 		{sourceMetadata, &turn.SourceMetadata, "source metadata"},
 		{pendingSteers, &turn.PendingSteers, "pending steers"},
+		{replayAttribution, &turn.Checkpoint.ReplayAttribution, "replay attribution"},
+		{reasoningEffort, &turn.Checkpoint.ReasoningEffort, "reasoning effort"},
 	} {
 		if err := json.Unmarshal([]byte(field.raw), field.dest); err != nil {
 			return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: field.name, err: err}

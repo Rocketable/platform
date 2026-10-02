@@ -138,8 +138,7 @@ func TestStartEventsAcknowledgesDeliveryFailureAfterAborting(t *testing.T) {
 	defer bus.Close()
 
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, inertThreadRouter{}, inertOneOffCronjobs{})
-	connector.replies["turn-1"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "thinking-1", AnswerTS: "answer-1"}
-	connector.thinking["turn-1"] = slackThinkingState{Text: "working"}
+	connector.replies["turn-1"] = slackReplyState{ChannelID: "C123", MessageTS: "answer-1"}
 	event := protocol.Event{
 		Message:         &protocol.OutboundMessage{ConversationID: "slack-thread:C123:111.0", TurnID: "turn-1", Agent: "main", Text: "answer", Complete: true},
 		Acknowledgement: make(chan error, 1),
@@ -152,14 +151,11 @@ func TestStartEventsAcknowledgesDeliveryFailureAfterAborting(t *testing.T) {
 	<-done
 	require.Len(t, event.Acknowledgement, 1)
 	require.ErrorContains(t, <-event.Acknowledgement, "update_failed")
-	assert.Equal(t, []string{"/chat.update", "/chat.delete", "/chat.delete", "/reactions.remove"}, paths)
-	require.Len(t, deleted, 2)
+	assert.Equal(t, []string{"/chat.update", "/chat.delete", "/reactions.remove"}, paths)
+	require.Len(t, deleted, 1)
 	assert.Equal(t, "C123", deleted[0].Get("channel"))
 	assert.Equal(t, "answer-1", deleted[0].Get("ts"))
-	assert.Equal(t, "C123", deleted[1].Get("channel"))
-	assert.Equal(t, "thinking-1", deleted[1].Get("ts"))
 	assert.NotContains(t, connector.replies, "turn-1")
-	assert.NotContains(t, connector.thinking, "turn-1")
 }
 
 func TestStartEventsAcknowledgesConsumedInputFailure(t *testing.T) {

@@ -8,22 +8,36 @@ that interrupted turn. Queue Prompt stashes waiting work through existing
 Backend queue operations and returns without waiting for that turn. `ListQueue`, `SteerQueueItem`, `RemoveQueueItem`, and `ReorderQueue` use
 existing Backend queue operations; promotion keeps the queued item's original
 principal and message ID. `ListQueue.delivery` distinguishes later work from pending
-steers. Join sends a user event with `message_id` when the backend builds the model
-prompt for activated work or drains a steer into the current turn. Direct steers retain the client's
-`Prompt.message_id`; queued messages use their server-assigned queue IDs. These
-events move waiting inputs into chat in consumption order without matching text.
-Inputs handled without a model prompt still emit a consumed event, without a header.
-Dropped items never run. Reorder writes persisted enqueue positions. Join streams only live
-events for the requested conversation; it does not replay stored history or
-return output through Prompt's private response field. Live events carry Backend
-turn IDs so incremental answers cannot replace a preceding turn. History returns
-the stored turn in order, including developer messages, thinking summaries, tool
+steers. Direct steers retain the client's `Prompt.message_id` as durable `input_id`;
+queued messages use their server-assigned queue IDs. History uses those IDs to move
+waiting inputs into chat in consumption order without matching text. Dropped items
+never run. Reorder writes persisted enqueue positions. Join sends only committed,
+content-free conversation-change hints; it does not replay history or return output
+through Prompt's private response field. History accepts the last applied `revision`
+and returns changed entries, removed keys, the complete ordered key inventory, and
+running/terminal state. Invalid or differently scoped revisions reset the view.
+Active checkpoints and saved turns share source-qualified turn keys; `item_id` is
+render identity, while `message_id` identifies saved entry positions for commands.
+History returns the recorded turn in order, including developer messages, thinking summaries, tool
 calls, tool results, and user/assistant text. Encrypted reasoning bodies stay
 stored and are not sent. History retains tool call IDs and names so Web can
 group each call with its result.
+Recognized public records in `OutputTrace` add replay-neutral assistant text and
+fixed tool/delegation lifecycle states. Unknown trace records are not rendered.
+Progress rows use producer-qualified item/call identities, never fabricated
+`message_id` or `input_id` values. Per-item completion is independent of the
+parent turn's running state. Authoritative replay replaces overlapping partial
+text, including empty final output; retained public records provide display
+fallback when compaction removes the corresponding replay.
+Blocked, failed, or stopped delegation metadata suppresses private or
+reviewer-bearing result text in Web,
+including saved history, without changing canonical provider replay. Private
+child diagnostics, review reasons, reasoning bodies, and provisional arguments
+never enter this public path. History reads neither acknowledge Slack delivery
+nor change queue/steer boundaries. Slack keeps placeholder-plus-final delivery.
 New messages save their exact generated bracket header alongside model-facing
 text as `prompt_header` in local replay. History and sidebar previews remove only
-that saved prefix from user/developer display text. History and Join expose it as
+that saved prefix from user/developer display text. History exposes it as
 `TranscriptEvent.header`; the Web message footer shows it through an info icon
 on hover or click. New text headers omit `media=Text`. Old messages are not
 backfilled or guessed from their text. Model-facing text still includes the generated
@@ -138,7 +152,7 @@ are denied, as are unmapped browser IPs. Deleting history revokes its references
 deleting a source also revokes its dangling synced copies. Queued references
 remain valid until removed or consumed.
 
-`History`, `Join`, and `ListQueue` carry repeated `attachments` metadata. The
+`History` and `ListQueue` carry repeated `attachments` metadata. The
 protobuf JSON shape (using protojson) is:
 
 ```json
@@ -229,8 +243,9 @@ For example, obtain the URL component with:
 bun -e 'console.log(Buffer.from(process.argv[1]).toString("base64url"))' 'slack-thread:C1:1.1'
 ```
 
-The `DeleteSessionEntries` RPC removes all entries for that exact conversation ID, not its conversation
-or goal record. Ordinary GC remains responsible for those records.
+The `DeleteSessionEntries` RPC removes saved entries and retained failed/stopped
+checkpoints for that exact conversation ID, not a live recovery checkpoint or its
+conversation or goal record. Ordinary GC remains responsible for those records.
 
 ## Identity boundary
 
@@ -238,8 +253,8 @@ or goal record. Ordinary GC remains responsible for those records.
 and `origin` fields.
 HTTP/SSE uses their protobuf JSON camelCase names. Absent reasoning is unknown;
 a present empty string means provider default. History resolves recovered replay
-ranges before the entry snapshot. Join carries the outbound execution snapshot,
-including message-ID-bound consumed-input enrichment. Saved copy locators survive
+ranges before the entry snapshot. Join carries no transcript content or execution
+attribution; clients read these through History. Saved copy locators survive
 source-row retention without exposing source or destination IDs in the transcript.
 
 RocketClaw accepts browser connections directly (for example over the private network).

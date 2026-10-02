@@ -8,7 +8,7 @@ const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
 for (const [width, height] of [[1280, 900], [390, 664]]) test.skipIf(!playwright || !chromium)(`delegation panel at ${width}px`, async () => {
   const { chromium: engine } = await import(playwright!);
-  const event = (role: string, text: string, tool: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ role, text, complete: true, snapshot: false, turnId: "", ...tool });
+  const event = (role: string, text: string, tool: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ role, text, complete: true, entryKey: "", itemId: "", inputId: "", turnId: "", ...tool });
   const histories: Record<string, { messages: TranscriptEvent[]; delegations: string[] }> = {
     chat: { messages: [event("user", "Run the review", { messageId: "1:0" }), event("tool", `task {"description":"Review"}`, { toolName: "task", toolCallId: "call-task" }), event("tool", `bash {"command":"ls"}`, { toolName: "bash", toolCallId: "call-plain" }), event("assistant", "Review finished")], delegations: ["chat/call-task"] },
     "chat/call-task": { messages: [event("user", "Review this"), event("tool", `execute {"code":"print(1)"}`, { toolName: "execute", toolCallId: "call-inner" }), event("assistant", "Child done")], delegations: ["chat/call-task/call-inner"] },
@@ -28,7 +28,11 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test.skipIf(!playwright
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListSkills": return Response.json({ skills: [] });
-      case "/api/History": return Response.json(histories[input.id] ?? { messages: [], delegations: [] });
+      case "/api/History": {
+        const history = histories[input.id] ?? { messages: [], delegations: [] };
+        const messages = history.messages.map((message, index) => ({ ...message, entryKey: input.id, itemId: `${input.id}:${index}` }));
+        return Response.json({ ...history, messages, revision: input.id, reset: true, replacedKeys: [], removedKeys: [], entryKeys: [input.id], running: false, terminal: "" });
+      }
       case "/api/ListQueue": return Response.json({ items: [] });
       default: return Response.json({});
     }
