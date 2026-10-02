@@ -125,22 +125,16 @@ test.skipIf(!process.env.ROCKETCLAW_TEST_HTTP_URL)("transcript and entry HTTP pr
         const trace = page.getByRole("region", { name: /^Turn \d+$/ }).filter({ hasText: "queued for verbatim delivery" }).locator(":scope > details");
         const tool = trace.locator("details").filter({ hasText: "Exact report" });
         const toolBody = tool.locator("pre").first();
-        expect(await toolBody.isVisible()).toBe(true);
-        await tool.locator("summary").click();
+        // The default Compact level folds each turn's activity into one closed summary row.
+        expect(await page.locator('[aria-label^="Turn "] > details[open]').count()).toBe(0);
+        expect(await trace.locator(":scope > summary").innerText()).toContain("Used 2 tools");
         expect(await toolBody.isVisible()).toBe(false);
-        expect(await tool.locator("summary").innerText()).toContain("Send report");
-        expect(await report.isVisible()).toBe(true);
-        expect(await trace.getAttribute("open")).not.toBeNull();
-        await trace.locator(":scope > summary").click();
-        expect(await trace.getAttribute("open")).toBeNull();
-        expect(await trace.locator("pre").filter({ hasText: "queued for verbatim delivery" }).isVisible()).toBe(false);
         expect(await report.isVisible()).toBe(true);
         expect(await report.count()).toBe(1);
         expect(await page.getByText("answer two", { exact: true }).isVisible()).toBe(true);
-        expect(await page.locator('[aria-label^="Turn "] > details[open]').count()).toBe(2);
         await trace.locator(":scope > summary").press("Enter");
         expect(await trace.getAttribute("open")).not.toBeNull();
-        expect(await trace.locator("pre").filter({ hasText: "queued for verbatim delivery" }).isVisible()).toBe(false);
+        expect(await tool.locator("summary").innerText()).toContain("Send report");
         expect(await toolBody.isVisible()).toBe(false);
         await tool.locator("summary").press("Enter");
         expect(await toolBody.isVisible()).toBe(true);

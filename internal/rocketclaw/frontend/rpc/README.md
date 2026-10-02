@@ -235,8 +235,9 @@ The normal RocketClaw command still starts its existing Slack/Cron runtime. The
 isolated transport tests below do not start Slack or touch runtime configuration.
 
 Open `/s/<base64url-conversation-id>` in the Web UI to read the conversation.
-Thinking and tool traces expand inline within each turn; replies and successful
-verbatim-delivery reports remain visible when the trace is collapsed.
+Thinking and tool traces appear inline within each turn as the browser's Timeline
+detail setting shapes them (Compact by default: one closed summary row); replies and
+successful verbatim-delivery reports always remain visible.
 For example, obtain the URL component with:
 
 ```sh
@@ -314,7 +315,8 @@ go test -count=1 -timeout=80s -v ./internal/rocketclaw/frontend/rpc
 ```
 
 The browser check starts its own Next server on an ephemeral port and checks
-inline thinking collapse and visible replies on desktop and at 390px width.
+the default closed activity summary row and visible replies on desktop and at
+390px width.
 It stops only that test process and saves `r22-web-desktop.png` and
 `r22-web-mobile.png` under the repository-local `TMPDIR`.
 

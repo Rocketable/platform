@@ -45,6 +45,9 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test.skipIf(!playwright
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat").replace(/=+$/, "")}?message=1%3A0`);
     const open = page.locator("main").getByRole("link", { name: /^Open delegation/ });
     await page.locator("main").getByText("Review finished", { exact: true }).waitFor();
+    // The default Compact level folds both calls into one closed summary row.
+    await page.locator("main summary").filter({ hasText: "Used 2 tools" }).click();
+    await page.locator('main summary[title="task"]').click();
     expect(await open.count()).toBe(1);
     const plain = page.locator('main details:has(> summary[title="bash · ls"])');
     await plain.waitFor();

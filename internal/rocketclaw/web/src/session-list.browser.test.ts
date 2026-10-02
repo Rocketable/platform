@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { Attachment, ChatOrigin, PromptDelivery, QueueItem, Session, SessionBatch, TranscriptEvent } from "./types";
 import { RPCError } from "./api";
+import { timelineLevels } from "./timeline-detail";
 
 const screenshots = path.resolve(import.meta.dir, "../../../../.tmp/web-screenshots");
 
@@ -266,6 +267,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App renders independent 
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage();
+    // Show each call on its own so the per-call lifecycle summaries stay visible.
+    await page.addInitScript((rows: string) => localStorage.setItem("timeline-detail", rows), JSON.stringify({ version: 1, rows: timelineLevels.find((level) => level.id === "everything")!.rows }));
     for (const width of [900, 375]) {
       running = true; revision++;
       messages = [event("input", "user", "Public progress question", { inputId: "consumed" }), ...calls, event("text", "assistant", "Held partial suffix", { state: "working", complete: false })];
@@ -1079,7 +1082,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await page.getByRole("link").filter({ hasText: "will vanish" }).click();
     await page.waitForURL("**/s/Z29uZQ");
     await page.getByPlaceholder("Message or $command").fill("B draft");
-    await hidden(page, "Thinking");
+    await hidden(page, "Working…");
     expect(await page.getByRole("button", { name: "Stop", exact: true }).count()).toBe(0);
     const promptResponse = page.waitForResponse("**/api/Prompt*");
     promptHold.resolve("private reply for A");
@@ -2038,7 +2041,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       expect(await last.evaluate((el: HTMLElement) => el === document.activeElement)).toBe(true);
       await transcriptPage.mouse.move(0, 0);
       await previewBox.waitFor({ state: "hidden" });
-      await last.locator("summary").click();
+      await last.locator("summary").first().click();
       await rail.getByRole("button", { name: "Turn 1: Prompt 1", exact: true }).click();
       await transcriptPage.waitForFunction(() => document.querySelector("#transcript-scroll")!.scrollTop < 50);
     }
@@ -2056,6 +2059,9 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await transcriptPage.setViewportSize({ width, height: 600 });
       await transcriptPage.goto(`${origin}/s/${Buffer.from(`code-${width}`).toString("base64url")}`);
       await transcriptPage.locator('pre[aria-label="sh"]').waitFor();
+      // The default Compact level folds the call into a closed summary row.
+      await transcriptPage.locator("summary").filter({ hasText: "Used 1 tool" }).click();
+      await transcriptPage.locator("summary").filter({ hasText: /^bash$/ }).click();
       expect(await transcriptPage.locator("#transcript-scroll pre").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["bash", "sh"]);
       for (const label of ["bash", "sh"]) {
         const panel = transcriptPage.locator(`pre[aria-label="${label}"]`);
@@ -2101,6 +2107,40 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       expect(await transcriptPage.locator('pre[aria-label="py"]').textContent()).toBe("  streamed");
     }
     await transcriptPage.close();
+    // Timeline detail: Compact by default, live updates keep an opened row open, and palette levels reshape and persist.
+    const step = (role: string, text: string, extra: Record<string, string> = {}) => ({ role, text, ...extra });
+    const detailItems = [
+      step("user", "Check the build"), step("thinking", "Planning the check"),
+      step("tool", `execute\n${JSON.stringify({ code: "bash(command=r'''make test''')" })}`, { toolName: "execute", toolCallId: "run" }), step("tool", "all tests passed", { toolCallId: "run" }),
+    ];
+    ctrl.history = detailItems.map((item, index) => ({ ...item, entryKey: "detail", itemId: `detail:${index}`, inputId: "", turnId: "", complete: true }));
+    transcriptStream = Promise.withResolvers();
+    const detailPage = await browser.newPage();
+    await detailPage.goto(`${origin}/s/${Buffer.from("timeline-detail").toString("base64url")}`);
+    const grouped = detailPage.locator("#transcript-scroll summary").filter({ hasText: /^Used \d tools? ▸$/ });
+    await grouped.waitFor();
+    expect(await grouped.textContent()).toBe("Used 1 tool ▸");
+    expect(await detailPage.evaluate(() => localStorage.getItem("timeline-detail"))).toBeNull();
+    await grouped.click();
+    ctrl.history = [...detailItems, step("tool", "skill\n{\"name\":\"release\"}", { toolName: "skill", toolCallId: "load" }), step("assistant", "Build is green")]
+      .map((item, index) => ({ ...item, entryKey: "detail", itemId: `detail:${index}`, inputId: "", turnId: "", complete: true }));
+    (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ conversationId: "timeline-detail", revision: "hint" })}\n\n`);
+    await detailPage.getByText("Build is green", { exact: true }).waitFor();
+    expect(await grouped.textContent()).toBe("Used 2 tools ▸");
+    expect(await grouped.evaluate((el: HTMLElement) => (el.parentElement as HTMLDetailsElement).open)).toBe(true);
+    const palette = async (name: string) => {
+      await detailPage.locator("footer").getByRole("button", { name: "Open command palette" }).click();
+      await detailPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name, exact: true }).click();
+    };
+    await palette("Timeline: Everything");
+    await detailPage.locator('pre[aria-label="Run · make test"]').waitFor();
+    expect(JSON.parse((await detailPage.evaluate(() => localStorage.getItem("timeline-detail")))!).rows.execute).toEqual({ placement: "separate", details: "expanded" });
+    await detailPage.reload();
+    await detailPage.locator('pre[aria-label="Run · make test"]').waitFor();
+    await palette("Timeline: Messages only");
+    await detailPage.getByText("Build is green", { exact: true }).waitFor();
+    expect(await detailPage.locator("#transcript-scroll summary").count()).toBe(0);
+    await detailPage.close();
     ctrl.history = [];
     for (const width of [1280, 390]) {
       ctrl.settledRows = [row("recent", "Most recent message"), row("named", "Original preview"), { ...row("settled-pin", "Settled pin preview"), pinned: true, settled: true }];

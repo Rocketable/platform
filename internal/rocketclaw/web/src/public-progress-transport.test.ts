@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { timelineLevels } from "./timeline-detail";
 
 const url = process.env.ROCKETCLAW_TEST_HTTP_URL;
 const id = process.env.ROCKETCLAW_PUBLIC_TEST_ID;
@@ -11,6 +12,8 @@ test.skipIf(!url || !id || !final || !playwright || !chromium)("real Go HTTP App
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 375, height: 700 } });
+    // Show each call on its own so the per-call lifecycle summaries stay visible.
+    await page.addInitScript((rows: string) => localStorage.setItem("timeline-detail", rows), JSON.stringify({ version: 1, rows: timelineLevels.find((level) => level.id === "everything")!.rows }));
     await page.goto(`${url}/s/${Buffer.from(id!).toString("base64url")}`);
     if (final === "calls") {
       const log = page.locator("#transcript-scroll");
