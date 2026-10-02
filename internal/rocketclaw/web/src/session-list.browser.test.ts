@@ -348,6 +348,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     createStarted: Promise.withResolvers<void>(),
     history: [] as TranscriptEvent[],
     running: false,
+    // Like the server, a held Prompt makes only its own conversation report running.
+    prompting: new Set<string>(),
     lastInputId: "",
     settledRows: [] as Session[],
     settleCalls: [] as { id: string; settled: boolean }[],
@@ -380,12 +382,13 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
   ];
   let listResponse: ReadableStreamDefaultController;
   let transcriptStream = Promise.withResolvers<ReadableStreamDefaultController>();
-  const historyResponse = (messages: TranscriptEvent[], origin = "", revision = "") => {
+  const historyResponse = (id: string, messages: TranscriptEvent[], origin = "", revision = "") => {
+    const running = ctrl.running || ctrl.prompting.has(id);
     const previous: TranscriptEvent[] = revision ? JSON.parse(revision).messages : [];
     const entryKeys = [...new Set(messages.map((message) => message.entryKey))];
     const replacedKeys = entryKeys.filter((key) => !revision || JSON.stringify(messages.filter((message) => message.entryKey === key)) !== JSON.stringify(previous.filter((message) => message.entryKey === key)));
     const removedKeys = [...new Set(previous.map((message) => message.entryKey))].filter((key) => !entryKeys.includes(key));
-    return Response.json({ messages: messages.filter((message) => replacedKeys.includes(message.entryKey)), origin, revision: JSON.stringify({ messages, running: ctrl.running }), reset: !revision, replacedKeys, removedKeys, entryKeys, running: ctrl.running, terminal: "" });
+    return Response.json({ messages: messages.filter((message) => replacedKeys.includes(message.entryKey)), origin, revision: JSON.stringify({ messages, running }), reset: !revision, replacedKeys, removedKeys, entryKeys, running, terminal: "" });
   };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(req) {
     const url = new URL(req.url);
@@ -463,9 +466,9 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
             ctrl.currentAgents.set(input.id, input.text.slice(7));
             return Response.json({ privateText: `Switched to ${input.text.slice(7)}` });
           }
-          if (input.text === "$stop") { ctrl.running = false; return Response.json({ privateText: "Stopped" }); }
+          if (input.text === "$stop") { ctrl.running = false; ctrl.prompting.delete(input.id); return Response.json({ privateText: "Stopped" }); }
           if (ctrl.promptError) throw new RPCError("Send failed; retry", 13);
-          ctrl.running = true;
+          ctrl.prompting.add(input.id);
           ctrl.lastInputId = input.messageId;
           if (ctrl.holdInterventions) {
             const id = input.delivery === "QUEUE" ? `server-${input.messageId}` : input.messageId;
@@ -475,8 +478,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
             ctrl.interventions.set(id, pending);
             return Response.json({ privateText: await pending.promise });
           }
-          if (ctrl.holdPrompt) { const privateText = await promptHold.promise; ctrl.running = false; return Response.json({ privateText }); }
-          ctrl.running = false;
+          if (ctrl.holdPrompt) { const privateText = await promptHold.promise; ctrl.prompting.delete(input.id); return Response.json({ privateText }); }
+          ctrl.prompting.delete(input.id);
           return Response.json({ privateText: "" });
         case "/api/ListCronJobs": return Response.json({ jobs });
         case "/api/RunCronJob": cronRunCalls++; return Response.json({ id: await cronHold.promise });
@@ -487,17 +490,17 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
             if (input.id.startsWith("perf-") && input.id !== "perf-95") await manyOriginsHold.promise;
             if (input.id === "perf-95") await lastOriginHold.promise;
             if (ctrl.originError === input.id) throw new RPCError("origin unavailable", 13);
-            return historyResponse([], origins[input.id] ? JSON.stringify(origins[input.id]) : "", input.revision);
+            return historyResponse(input.id, [], origins[input.id] ? JSON.stringify(origins[input.id]) : "", input.revision);
           }
           if (input.id === "cron:silent-source" || input.id === "web:cron:silent-source") {
             cronHistory.push(input.id);
-            return historyResponse([{ role: "assistant", text: "Silent run trace", complete: true, turnId: "", entryKey: "silent", itemId: "silent:0", inputId: "" }], "", input.revision);
+            return historyResponse(input.id, [{ role: "assistant", text: "Silent run trace", complete: true, turnId: "", entryKey: "silent", itemId: "silent:0", inputId: "" }], "", input.revision);
           }
           if (input.sourceConversationId) {
             cronHistory.push(input.sourceConversationId);
-            return historyResponse([{ role: "assistant", text: "Daily run report", complete: true, turnId: "", entryKey: "daily", itemId: "daily:0", inputId: "" }], "", input.revision);
+            return historyResponse(input.id, [{ role: "assistant", text: "Daily run report", complete: true, turnId: "", entryKey: "daily", itemId: "daily:0", inputId: "" }], "", input.revision);
           }
-          return historyResponse(ctrl.history, "", input.revision);
+          return historyResponse(input.id, ctrl.history, "", input.revision);
         case "/api/ListAgents": return Response.json({ agents: input.conversationId === "web:cron:silent-source" ? [{ name: "other", model: "gpt" }] : [{ name: "other", model: "gpt" }, { name: "main", model: "gpt" }], currentAgent: input.conversationId ? ctrl.currentAgents.get(input.conversationId) ?? "main" : "" });
         case "/api/ListSkills": return Response.json({ skills: input.agent === "main" ? [{ name: "review", description: "Review changes" }, { name: "stop", description: "Inspect logs" }] : [] });
         case "/api/ListConfig": return Response.json({ config: { webAutoSettleAfter: "1h30m0s", tailscaleUser: "connected@example.com" } });
@@ -910,6 +913,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await page.locator("textarea").fill("");
     for (const width of [1280, 390]) {
       await page.setViewportSize({ width, height: 844 });
+      // The layout settles a frame after a resize; measure the word only after that.
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const word = await page.locator('#transcript-scroll [data-slot="bubble-content"] div').first().evaluate((element: HTMLElement) => {
         const range = document.createRange();
         range.setStart(element.firstChild!, 0);
