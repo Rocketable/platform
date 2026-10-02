@@ -189,36 +189,42 @@ test("pending delivery classification uses consumed input IDs, not render or sto
 });
 
 test("thinking rows top-align the robot beside multiline text", () => {
-  const row = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "TranscriptLine")!;
+  const row = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "TraceLine")!;
   expect((row as ts.FunctionDeclaration).body!.statements[0].getText(source)).toContain("flex items-start gap-1.5");
 });
 
-test("thinking traces group inside each turn and stay separate from replies", () => {
-  const lines = historyLines([event("first", "u1", "user", "first"), event("first", "t1", "thinking", "planning"), event("first", "tool1", "tool", "execute"), event("first", "a1", "assistant", "done"), event("second", "u2", "user", "second"), event("second", "t2", "thinking", "again")]);
-  expect(transcriptTurns(lines)).toEqual([{ user: [lines[0]], traces: [lines[1], lines[2]], replies: [lines[3]] }, { user: [lines[4]], traces: [lines[5]], replies: [] }]);
+test("the in-progress status shows whenever the session is busy, whatever the newest line", () => {
+  const text = (name: string) => source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name)!.getText(source);
+  expect(text("Transcript")).toContain("working={!previewing && busy}");
+  expect(text("TranscriptLog")).toContain('{working ? <MessageScrollerItem><p role="status"');
+  expect(text("TranscriptLog")).not.toContain(">Thinking <");
+});
+
+test("turns keep activity and replies in the order they happened", () => {
+  const lines = historyLines([event("first", "u1", "user", "first"), event("first", "t1", "thinking", "planning"), event("first", "a0", "assistant", "interim"), event("first", "tool1", "tool", "execute"), event("first", "a1", "assistant", "done"), event("second", "u2", "user", "second"), event("second", "t2", "thinking", "again")]);
+  expect(transcriptTurns(lines)).toEqual([{ user: [lines[0]], items: [lines[1], lines[2], lines[3], lines[4]] }, { user: [lines[5]], items: [lines[6]] }]);
 });
 
 test("origin choices hide only matching transcript messages without changing turn order", () => {
   const lines: Line[] = [{ id: "u1", role: "user", text: "ask", origin: "canonical" }, { id: "t1", role: "tool", text: "work", origin: "sandboxed" }, { id: "a1", role: "assistant", text: "reply", origin: "canonical" }, { id: "u2", role: "user", text: "old input" }, { id: "a2", role: "assistant", text: "copied", origin: "sandboxed" }, { id: "u3", role: "user", text: "unknown origin", origin: "neither" }];
-  const ids = (filter: { sandboxed: boolean; canonical: boolean }) => transcriptTurns(lines, filter).map((turn: { user: Line[]; traces: Line[]; replies: Line[] }) => [...turn.user, ...turn.traces, ...turn.replies].map((line) => line.id));
+  const ids = (filter: { sandboxed: boolean; canonical: boolean }) => transcriptTurns(lines, filter).map((turn: { user: Line[]; items: Line[] }) => [...turn.user, ...turn.items].map((line) => line.id));
   expect(ids({ sandboxed: true, canonical: true }).flat()).toEqual(["u1", "t1", "a1", "u2", "a2", "u3"]);
   expect(ids({ sandboxed: true, canonical: false })).toEqual([["t1"], ["a2"]]);
   expect(ids({ sandboxed: false, canonical: true })).toEqual([["u1", "a1"]]);
   expect(ids({ sandboxed: false, canonical: false })).toEqual([]);
   const tools = [{ id: "call", role: "tool", toolName: "execute", toolCallId: "run", text: "execute\n{}", origin: "sandboxed" }, { id: "result", role: "tool", toolCallId: "run", text: "output", origin: "canonical" }];
-  expect(transcriptTurns(tools, { sandboxed: false, canonical: true })[0].traces.map((line: Line) => line.id)).toEqual(["result"]);
-  expect(transcriptTurns(tools, { sandboxed: true, canonical: false })[0].traces[0].toolParts).toEqual([]);
+  expect(transcriptTurns(tools, { sandboxed: false, canonical: true })[0].items.map((line: Line) => line.id)).toEqual(["result"]);
+  expect(transcriptTurns(tools, { sandboxed: true, canonical: false })[0].items[0].toolParts).toEqual([]);
 });
 
 test("tool disclosures match parallel results by ID and include only their loaded skill", () => {
   const events = [event("turn", "0", "tool", 'execute\n{"code":"./scripts/loop-platform-deps.sh"}', { toolCallId: "run", toolName: "execute" }), event("turn", "1", "tool", 'skill\n{"name":"processes"}', { toolCallId: "skill", toolName: "skill" }), event("turn", "2", "tool", "skill processes loaded", { toolCallId: "skill" }), event("turn", "3", "developer", '<skill_content name="processes">\nall instructions\n</skill_content>'), event("turn", "4", "tool", "complete output\n".repeat(5000), { toolCallId: "run" }), event("turn", "5", "developer", "unrelated instructions"), event("turn", "6", "tool", "orphan output", { toolCallId: "missing" }), event("turn", "7", "assistant", "visible report")];
   const [turn] = transcriptTurns(historyLines(events));
-  expect(turn.traces.map((line: Line) => line.text)).toEqual([events[0].text, events[1].text, events[5].text, events[6].text]);
-  expect(turn.traces[0].toolParts.map((line: Line) => line.text)).toEqual([events[4].text]);
-  expect(turn.traces[1].toolParts.map((line: Line) => line.text)).toEqual([events[2].text, events[3].text]);
-  expect(turn.replies.map((line: Line) => line.text)).toEqual(["visible report"]);
-  expect(toolTitle(turn.traces[0])).toBe("Run · ./scripts/loop-platform-deps.sh");
-  expect(toolTitle(turn.traces[1])).toBe("Skill · processes");
+  expect(turn.items.map((line: Line) => line.text)).toEqual([events[0].text, events[1].text, events[5].text, events[6].text, "visible report"]);
+  expect(turn.items[0].toolParts.map((line: Line) => line.text)).toEqual([events[4].text]);
+  expect(turn.items[1].toolParts.map((line: Line) => line.text)).toEqual([events[2].text, events[3].text]);
+  expect(toolTitle(turn.items[0])).toBe("Run · ./scripts/loop-platform-deps.sh");
+  expect(toolTitle(turn.items[1])).toBe("Skill · processes");
   expect(toolTitle({ toolName: "execute", text: `execute\n${JSON.stringify({ code: 'def main():\n  return bash(command=r"""set +e\n./scripts/loop-platform-deps.sh\n""")' })}` })).toBe("Run · ./scripts/loop-platform-deps.sh");
   expect(toolTitle({ toolName: "execute", text: `execute\n${JSON.stringify({ code: 'def main():\n  return read(filePath="scripts/loop-platform-deps.sh")' })}` })).toBe("Read · scripts/loop-platform-deps.sh");
 });
@@ -228,7 +234,7 @@ test("public call outcomes update their original disclosures independently witho
   const draft = { lines: [] as Line[], busy: false };
   const result = event("turn", "B:outcome", "tool", "B result", { toolCallId: "B", parentId: "producer/turn/response", state: "completed" });
   applyHistoryDelta(draft, view([...calls, result], { running: true }));
-  const traces = transcriptTurns(draft.lines)[0].traces;
+  const traces = transcriptTurns(draft.lines)[0].items;
   expect(traces.map((line: Line) => line.id)).toEqual(["A", "B", "C"]);
   expect(traces.map((line: { state: string }) => line.state)).toEqual(["working", "completed", "working"]);
   expect(traces[1].complete).toBe(true);
@@ -236,8 +242,8 @@ test("public call outcomes update their original disclosures independently witho
   expect(draft.busy).toBe(true);
   const next = event("turn", "next-B", "tool", "task\n{}", { toolCallId: "B", toolName: "task", parentId: "producer/turn/next", state: "working", complete: false });
   const [turn] = transcriptTurns(historyLines([...calls, next, result]));
-  expect(turn.traces[1].toolParts.map((line: Line) => line.text)).toEqual(["B result"]);
-  expect(turn.traces[3].toolParts).toEqual([]);
+  expect(turn.items[1].toolParts.map((line: Line) => line.text)).toEqual(["B result"]);
+  expect(turn.items[3].toolParts).toEqual([]);
   applyHistoryDelta(draft, view([event("turn", "text", "assistant", "partial", { state: "working", complete: false })], { reset: false, replacedKeys: ["turn"], running: true }));
   applyHistoryDelta(draft, view([event("turn", "text", "assistant", "short", { state: "completed" })], { reset: false, replacedKeys: ["turn"] }));
   expect(draft.lines.map((line) => [line.id, line.text])).toEqual([["text", "short"]]);

@@ -130,7 +130,8 @@ sidebar loading stays independent. Incomplete enumeration or origin lookups show
 loading feedback rather than a definitive empty result. Failed origin lookups
 show an error while usable row matches remain selectable.
 The command button and Cmd/Ctrl+Shift+P open the command palette: new session,
-run cron, pages, and sidebar. Command rows have visible category prefixes such
+run cron, pages, Timeline detail levels (`Timeline: Messages only` through
+`Timeline: Everything`), and sidebar. Command rows have visible category prefixes such
 as `Session: Name session` and `Page: Agents`, with compact spacing and touch-sized targets on mobile.
 For the current session it also offers **Open original conversation** (when forked),
 **Name session**, **Pin/Unpin**, **Snooze session**, **Settle/Unsettle**, **Fork session**,
@@ -267,6 +268,12 @@ and Escape does too unless a dialog or tooltip is open. New chat, search, and th
 buttons form a centered group in the footer, available even when the sidebar is
 closed.
 The theme toggle floats in the upper-right corner of the page and switches light, dark, and system. Config has a select for the color theme. The choices are Neutral, Harbor, Grove, Ember, Violet, Rose, Sand, Lagoon, Slate, Copper, Ink, Signal, Go - Playground, and Go - Sources. Ink and Signal are high contrast. The Go themes adapt Mike Gleason jr Couturier's light themes, with local dark variations. The choice is stored in the browser, not on the server. See [theme sources and licenses](../../../THEMES.md) for attribution and reuse terms.
+Config's Timeline section has the **Timeline detail** card, following OpenCode v2. A
+five-stop slider picks Messages only, Quiet, Compact, Detailed, or Everything, and an
+Advanced table sets visibility, Group, and Collapse per category; settings that match
+no level read as Custom. A browser that never chose shows Compact. The setting is saved
+in this browser under `timeline-detail`, applies to every open timeline at once,
+including other tabs, and is not sent to the server.
 The down-arrow appears above the chat composer when away from the latest message.
 It scrolls to the latest message and resumes following live replies. Reading earlier
 messages keeps automatic scrolling paused.
@@ -329,9 +336,18 @@ Previews include only history from the selected run. Removed definitions keep
 their recorded runs visible. A play icon beside each cron name opens an in-app confirmation dialog
 before running. It shows a spinner until
 execution finishes, then opens the resulting chat.
-Each turn has an inline **Thinking** disclosure, expanded by default, containing
-reasoning summaries and tool traces. Replies and successful verbatim-delivery
-reports appear as normal messages outside that disclosure. The chat has no
+Each turn shows its activity and replies in the order they happened. How much
+activity appears is the browser's **Timeline detail** setting (see Config). Activity
+falls into six categories: Execute (`execute` calls), Thinking (reasoning summaries),
+Subagents (`task`), Skills (`skill` with its loaded instructions), Notices (developer
+messages), and Other tools. Each category is shown on its own, grouped, or hidden.
+Neighbouring grouped items of any category merge into one closed summary row such as
+"Used 3 tools", "Thoughts", or "Updates"; a reply or a separately shown item ends the
+row. Collapse decides whether Execute calls and reasoning start open. Opening or
+closing an item survives live updates of the same turn. Replies always appear. A
+failed call (a result starting with `tool call failed`, `denied` or `aborted`) appears
+on its own when its category is hidden, and a call that delivers files always appears
+on its own. While a turn runs, **Working…** shows at every level. The chat has no
 database-entry inspection panel.
 A tool row whose call delegated work (an `auto` permission review, a guardrail
 check, or a Task subagent) shows **Open delegation**. It opens that Delegation
@@ -341,9 +357,10 @@ ones, with breadcrumbs for nested delegations. The panel lives in the
 end of each transcript goes back up one level. Only finished delegations are
 saved. On wide screens the session sidebar and the delegation panel can be
 resized by dragging their inner edge, and the width is remembered.
-Each tool call has one labeled, initially expanded disclosure containing its
-arguments and matching result. Loaded skill instructions fold with their skill
-call. Long results have a collapse control at the bottom as well as the header.
+Each tool call has one labeled disclosure containing its arguments and matching
+result. Loaded skill instructions fold with their skill call. Long results have a
+collapse control at the bottom as well as the header. Cron run previews and the
+delegation panel keep every disclosure open.
 The transcript has a visible scrollbar and a side rail with one jump marker per
 turn. Hovering or focusing the rail opens a scrollable box of message previews;
 clicking a preview or its marker jumps to that turn. The box overlays the chat

@@ -14,6 +14,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
 import { CodeBlock, TranscriptText, copyText } from "./transcript-text";
+import { projectTimeline, setTimelineRows, timelineLevels, useTimelineDetail } from "./timeline-detail";
+import { TimelineDetailCard } from "./timeline-detail-card";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -921,6 +923,7 @@ function paletteRows(
     { key: "search", label: "Session: Search", detail: "", run: () => navigate("/search") },
     { key: "run-cron", label: "Cron: Run cron", detail: "", keep: true, run: openCron },
     ...(["settled", "cron", "agents", "skills", "config"] as const).map((key) => ({ key, label: `Page: ${key[0].toUpperCase() + key.slice(1)}`, run: () => navigate(`/${key}`) })),
+    ...timelineLevels.map(({ id, label, rows }) => ({ key: `timeline-${id}`, label: `Timeline: ${label}`, run: () => setTimelineRows(rows) })),
     { key: "sidebar", label: `Sidebar: ${sidebarOpen ? "Hide sidebar" : "Show sidebar"}`, detail: "", run: onToggleSidebar },
   ].filter((item) => needle === "" || item.label.toLowerCase().includes(needle));
 }
@@ -1586,14 +1589,14 @@ function lineId(role: Line["role"], text: string, seen: Map<string, number>) {
 }
 
 function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true, canonical: true }) {
-  const turns: { user: Line[]; traces: Line[]; replies: Line[] }[] = [];
-  let current = { user: [] as Line[], traces: [] as Line[], replies: [] as Line[] };
+  const turns: { user: Line[]; items: Line[] }[] = [];
+  let current = { user: [] as Line[], items: [] as Line[] };
   const calls = new Map<string, Line & { toolParts: Line[] }>();
   const skills = new Map<string, Line & { toolParts: Line[] }>();
   const flush = () => {
-    if (current.user.length > 0 || current.traces.length > 0 || current.replies.length > 0) {
+    if (current.user.length > 0 || current.items.length > 0) {
       turns.push(current);
-      current = { user: [], traces: [], replies: [] };
+      current = { user: [], items: [] };
       calls.clear();
       skills.clear();
     }
@@ -1610,11 +1613,9 @@ function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true
     const skillCall = line.role === "developer" ? skills.get(skillHeader) : undefined;
     if (line.role === "user") {
       current.user.push(line);
-    } else if (line.role === "assistant") {
-      current.replies.push(line);
     } else if (line.role === "tool" && line.toolName) {
       const call = { ...line, toolParts: [] as Line[] };
-      current.traces.push(call);
+      current.items.push(call);
       if (line.toolCallId) calls.set(callKey, call);
     } else if (resultCall) {
       resultCall.toolParts.push(line);
@@ -1629,7 +1630,7 @@ function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true
       skillCall.toolParts.push(line);
       skills.delete(skillHeader);
     } else {
-      current.traces.push(line);
+      current.items.push(line);
     }
   }
   flush();
@@ -1720,16 +1721,29 @@ function MessageActions({ line, hasSandboxed }: { line: Line; hasSandboxed: bool
   </div>;
 }
 
-function TranscriptLine({ line, conversationId, hasSandboxed }: { line: Line; conversationId: string; hasSandboxed: boolean }) {
-  if (line.role === "thinking") {
-    return (
-      <div className="flex items-start gap-1.5 px-1 py-0.5 text-[12px] leading-5 text-muted-foreground">
-        <Bot className="size-3.5 shrink-0 opacity-80" />
-        <span className="min-w-0 whitespace-pre-wrap break-words">{line.text}</span>
-      </div>
-    );
-  }
-  const footer = (line.role === "tool" ? line.state : line.header) ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null;
+// Without `open`, a line keeps the always-open look that cron and steer previews use.
+function TraceLine({ line, hasSandboxed, open }: { line: Line; hasSandboxed: boolean; open?: boolean }) {
+  const body = line.role === "thinking" ? (
+    <div className="flex items-start gap-1.5 px-1 py-0.5 text-[12px] leading-5 text-muted-foreground">
+      <Bot className="size-3.5 shrink-0 opacity-80" />
+      <span className="min-w-0 whitespace-pre-wrap break-words">{line.text}</span>
+    </div>
+  ) : (
+    <div className="min-w-0 px-1 pb-3">
+      <CodeBlock label="Instructions" text={line.text} />
+      {line.header ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
+    </div>
+  );
+  return open === undefined ? body : (
+    <details open={open} className="min-w-0">
+      <summary className="cursor-pointer px-1 py-1 text-xs text-muted-foreground hover:text-foreground">{line.role === "thinking" ? "Thinking" : "Instructions"}</summary>
+      {body}
+    </details>
+  );
+}
+
+function TranscriptLine({ line, conversationId, hasSandboxed, open }: { line: Line; conversationId: string; hasSandboxed: boolean; open?: boolean }) {
+  if (["thinking", "developer"].includes(line.role)) return <TraceLine line={line} hasSandboxed={hasSandboxed} open={open} />;
   if (line.role === "tool") {
     const title = toolTitle(line);
     const delegation = use(Delegations)?.find((child) => child.slice(child.lastIndexOf("/") + 1) === line.toolCallId);
@@ -1739,13 +1753,13 @@ function TranscriptLine({ line, conversationId, hasSandboxed }: { line: Line; co
       ...parts.slice(1).map((part) => `${part.role === "developer" ? "Skill instructions" : "Result"}\n${part.text}`),
     ].join("\n\n");
     return (
-      <details open className="mb-3 min-w-0">
+      <details open={open ?? true} className="mb-3 min-w-0">
         <summary className="cursor-pointer px-3 py-2 text-xs font-medium" title={title}>
           <span className="ml-1 inline-block max-w-[calc(100%-1.5rem)] truncate align-middle font-mono">{title}</span>
           {line.state ? <span aria-live="polite" className="ml-2 text-muted-foreground">{line.state}</span> : null}
         </summary>
         {delegation ? <Link href={delegationHref(delegation)} aria-label={`Open delegation: ${title}`} className="block w-fit px-3 pb-2 text-xs text-muted-foreground underline hover:text-foreground">Open delegation</Link> : null}
-        {footer}
+        {line.state ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
         <CodeBlock label={title} text={text} />
         {parts.map((part) => (
           <div key={part.id}>
@@ -1760,14 +1774,6 @@ function TranscriptLine({ line, conversationId, hasSandboxed }: { line: Line; co
           summary.focus({ preventScroll: true });
         }}>Collapse tool ↑</button>
       </details>
-    );
-  }
-  if (line.role === "developer") {
-    return (
-      <div className="min-w-0 px-1 pb-3">
-        <CodeBlock label="Instructions" text={line.text} />
-        {footer}
-      </div>
     );
   }
   const align = line.role === "user" ? "end" : undefined;
@@ -1795,7 +1801,7 @@ function useTranscriptPosition(conversationId: string, lines: Line[], turns: Ret
   const search = useSearch();
   const messageId = conversationId && location.pathname === sessionPath(conversationId) ? new URLSearchParams(search).get("message") : null;
   const targetId = messageId ?? (target?.conversationId === conversationId ? target.message.messageId : null);
-  const targetTurn = targetId ? turns.findIndex((turn) => turn.user.some((line) => line.messageId === targetId) || turn.replies.some((line) => line.messageId === targetId)) : -1;
+  const targetTurn = targetId ? turns.findIndex((turn) => turn.user.some((line) => line.messageId === targetId) || turn.items.some((line) => line.role === "assistant" && line.messageId === targetId)) : -1;
   const seen = useCallback(() => {
     const element = viewport.current;
     if (!element || !identity.isSuccess || !element.getClientRects().length) return;
@@ -1829,7 +1835,7 @@ function useTranscriptPosition(conversationId: string, lines: Line[], turns: Ret
 function TranscriptLog({
   conversationId,
   lines,
-  thinking,
+  working,
   terminal,
   origin,
   filter,
@@ -1837,13 +1843,14 @@ function TranscriptLog({
 }: {
   lines: Line[];
   conversationId: string;
-  thinking: boolean;
+  working: boolean;
   terminal?: string;
   origin?: ChatOrigin;
   filter: OriginFilter;
   hasSandboxed: boolean;
 }) {
   const turns = transcriptTurns(lines, filter);
+  const detail = useTimelineDetail();
   const { viewport, seen, scrollToMessage } = useTranscriptPosition(conversationId, lines, turns);
   const turnNodes = useRef<(HTMLElement | null)[]>([]);
   const running = usePendingCron(conversationId);
@@ -1861,29 +1868,28 @@ function TranscriptLog({
       <div className="min-h-full pl-3 pr-8 pt-3 pb-4 sm:pl-5 sm:pr-10 sm:pt-4">
       <MessageScrollerContent className="mx-auto w-full min-w-0 max-w-3xl">
       {origin && (origin.kind === "cron" || origin.kind === "external_mcp") ? <MessageScrollerItem messageId="origin"><OriginCard origin={origin} /></MessageScrollerItem> : null}
-      {turns.length === 0 && !thinking ? (
+      {turns.length === 0 && !working ? (
         <MessageScrollerItem className="flex flex-1 items-center justify-center">
           <p role="status" className="text-sm text-muted-foreground">{emptyMessage}</p>
         </MessageScrollerItem>
       ) : (
         <>
           {turns.map((turn, index) => (
-              <MessageScrollerItem key={turn.user[0]?.id ?? turn.traces[0]?.id ?? turn.replies[0]?.id} messageId={`turn-${index}`} ref={(node) => { turnNodes.current[index] = node; }} role="region" aria-label={`Turn ${index + 1}`} tabIndex={-1}>
+              <MessageScrollerItem key={turn.user[0]?.id ?? turn.items[0]?.id} messageId={`turn-${index}`} ref={(node) => { turnNodes.current[index] = node; }} role="region" aria-label={`Turn ${index + 1}`} tabIndex={-1}>
                 {turn.user.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
-                {turn.traces.length > 0 ? (
-                  <details open className="group pb-3">
+                {projectTimeline(turn.items, detail).map((row) => row.kind === "line" ? <TranscriptLine key={row.line.id} line={row.line} open={row.open} conversationId={conversationId} hasSandboxed={hasSandboxed} /> : (
+                  <details key={row.key} className="group pb-3">
                     <summary className="flex w-fit cursor-pointer list-none items-center gap-1 px-1 py-2 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
-                      Thinking <span aria-hidden="true" className="transition-transform group-open:rotate-90">▸</span>
+                      {row.label} <span aria-hidden="true" className="transition-transform group-open:rotate-90">▸</span>
                     </summary>
                     <div className="ml-1 border-l pl-3">
-                      {turn.traces.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
+                      {row.members.map(({ line, open }) => <TranscriptLine key={line.id} line={line} open={open} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
                     </div>
                   </details>
-                ) : null}
-                {turn.replies.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
+                ))}
               </MessageScrollerItem>
           ))}
-          {thinking ? <MessageScrollerItem><p className="px-1 pb-4 text-sm text-muted-foreground">Thinking…</p></MessageScrollerItem> : null}
+          {working ? <MessageScrollerItem><p role="status" className="px-1 pb-4 text-sm text-muted-foreground">Working…</p></MessageScrollerItem> : null}
           {terminal ? <MessageScrollerItem><p role="status" className="px-1 pb-4 text-sm text-muted-foreground">Turn {terminal}.</p></MessageScrollerItem> : null}
         </>
       )}
@@ -1894,16 +1900,16 @@ function TranscriptLog({
       <nav aria-label="Conversation turns" className="group/rail absolute top-12 bottom-0 right-[6px] flex w-8 items-center justify-end py-3">
         <div role="group" aria-label="Message previews" className="absolute right-full top-1/2 hidden max-h-[calc(100%-1.5rem)] w-[min(20rem,calc(100vw-4rem))] -translate-y-1/2 overflow-y-auto overscroll-contain rounded-md border bg-popover p-1 text-popover-foreground shadow-lg group-hover/rail:block group-focus-within/rail:block">
           {turns.map((turn, index) => {
-            const preview = (turn.user[0]?.text ?? turn.replies[0]?.text ?? "Thinking").replace(/\s+/g, " ").slice(0, 120);
-            return <button key={turn.user[0]?.id ?? turn.traces[0]?.id ?? turn.replies[0]?.id} type="button" aria-label={`Jump to turn ${index + 1}: ${preview}`} className="block w-full rounded-sm px-3 py-2 text-left text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring" onClick={() => jumpToTurn(index)}><span className="line-clamp-2 break-words">{index + 1}. {preview}</span></button>;
+            const preview = (turn.user[0]?.text ?? turn.items.find((line) => line.role === "assistant")?.text ?? "Activity").replace(/\s+/g, " ").slice(0, 120);
+            return <button key={turn.user[0]?.id ?? turn.items[0]?.id} type="button" aria-label={`Jump to turn ${index + 1}: ${preview}`} className="block w-full rounded-sm px-3 py-2 text-left text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring" onClick={() => jumpToTurn(index)}><span className="line-clamp-2 break-words">{index + 1}. {preview}</span></button>;
           })}
         </div>
         <div className="max-h-full w-8 overflow-y-auto">
           {turns.map((turn, index) => {
-            const preview = (turn.user[0]?.text ?? turn.replies[0]?.text ?? "Thinking").replace(/\s+/g, " ").slice(0, 120);
+            const preview = (turn.user[0]?.text ?? turn.items.find((line) => line.role === "assistant")?.text ?? "Activity").replace(/\s+/g, " ").slice(0, 120);
             const label = `Turn ${index + 1}: ${preview}`;
             return (
-              <button key={turn.user[0]?.id ?? turn.traces[0]?.id ?? turn.replies[0]?.id} type="button" aria-label={label} className="group flex min-h-6 w-full items-center justify-end rounded-sm text-left text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={() => jumpToTurn(index)}>
+              <button key={turn.user[0]?.id ?? turn.items[0]?.id} type="button" aria-label={label} className="group flex min-h-6 w-full items-center justify-end rounded-sm text-left text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={() => jumpToTurn(index)}>
                 <span aria-hidden="true" className="flex w-6 shrink-0 items-center justify-center"><span className="h-0.5 w-2 rounded-full bg-current transition-[width] group-hover:w-4 group-focus-visible:w-4" /></span>
               </button>
             );
@@ -2062,7 +2068,7 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
   const visibleFilter = { sandboxed: filter.sandboxed || matchedOrigin === "sandboxed", canonical: filter.canonical || matchedOrigin === "canonical" };
   return (
     <>
-      <Delegations value={previewing ? preview.data?.delegations : delegations}><TranscriptLog conversationId={id} lines={previewLines ?? lines} thinking={!previewing && busy && lines.at(-1)?.role !== "thinking"} terminal={previewing ? undefined : terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} /></Delegations>
+      <Delegations value={previewing ? preview.data?.delegations : delegations}><TranscriptLog conversationId={id} lines={previewLines ?? lines} working={!previewing && busy} terminal={previewing ? undefined : terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} /></Delegations>
       {historyError ? <p role="alert" className="px-3 text-sm text-destructive">{historyError}</p> : null}
       {hasSandboxed ? <ButtonGroup aria-label="Show messages from" className="mx-auto my-2.5">
         {(["sandboxed", "canonical"] as const).map((choice) => (
@@ -2110,7 +2116,7 @@ function DelegationPanel({ id }: { id: string }) {
       {history.error ? <p role="alert" className="text-sm text-destructive">{history.error.message}</p> : null}
       {history.data?.messages.length === 0 ? <p role="status" className="text-sm text-muted-foreground">No saved transcript</p> : null}
       <Delegations value={history.data?.delegations}>
-        {transcriptTurns(lines).flatMap((turn) => [...turn.user, ...turn.traces, ...turn.replies]).map((line) => <TranscriptLine key={line.id} line={line} conversationId={child} hasSandboxed={sandboxed} />)}
+        {transcriptTurns(lines).flatMap((turn) => [...turn.user, ...turn.items]).map((line) => <TranscriptLine key={line.id} line={line} conversationId={child} hasSandboxed={sandboxed} />)}
       </Delegations>
       {history.isSuccess ? <Link href={delegationHref(parent?.level)} className="block w-fit text-xs text-muted-foreground underline hover:text-foreground">{parent ? `Back to ${parent.label}` : "Back to conversation"}</Link> : null}
     </div></ScrollArea>
@@ -3012,6 +3018,9 @@ function ConfigPage() {
           <span className="text-sm text-muted-foreground">Theme</span>
           <PaletteChooser />
         </div>
+      </ConfigSection>
+      <ConfigSection title="Timeline">
+        <TimelineDetailCard />
       </ConfigSection>
       {config.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
       {config.error ? <p className="text-sm text-destructive">{config.error.message}</p> : null}
