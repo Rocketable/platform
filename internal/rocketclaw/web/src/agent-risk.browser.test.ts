@@ -39,7 +39,7 @@ test.skipIf(!playwright || !chromium)("agent risk follows selection locally acro
       case "/api/ListConfig": return Response.json({ config: {} });
       case "/api/ListCronJobs": return Response.json({ jobs: [] });
       case "/api/ListQueue": return Response.json({ items: [] });
-      case "/api/History": return Response.json({ messages: history, origin: "", revision: "saved", reset: true, replacedKeys: [], removedKeys: [], entryKeys: history.map((item) => item.entryKey), running: false, terminal: "" });
+      case "/api/History": return Response.json({ messages: history, origin: "", revision: "saved", reset: true, replacedKeys: [], removedKeys: [], entryKeys: history.map((item) => item.entryKey), running: false, terminal: "completed" });
       case "/api/Prompt":
         mutations.push({ id: input.id, text: input.text });
         if (input.text.startsWith("$agent ")) current[input.id] = input.text.slice(7);
@@ -56,6 +56,7 @@ test.skipIf(!playwright || !chromium)("agent risk follows selection locally acro
     const pane = page.locator(".conversation-pane");
     const composer = page.locator("textarea");
     await page.getByRole("combobox", { name: "Choose agent" }).waitFor();
+    await page.waitForFunction(() => document.querySelector(".conversation-pane")?.getAttribute("data-agent-risk") === "warning");
     expect(await pane.getAttribute("data-agent-risk")).toBe("warning");
     holdCatalog = true;
     const choose = async (name: string) => {
@@ -76,8 +77,10 @@ test.skipIf(!playwright || !chromium)("agent risk follows selection locally acro
       const p = getComputedStyle(node), c = getComputedStyle(card);
       const text = getComputedStyle(node.querySelector("textarea")!);
       const placeholder = getComputedStyle(node.querySelector("textarea")!, "::placeholder");
+      const muted = getComputedStyle(node.querySelector('#transcript-scroll p[role="status"]')!);
+      const risk = node.getAttribute("data-agent-risk") as "primary" | "warning" | "danger" | null;
       const surface = p.backgroundColor === "rgba(0, 0, 0, 0)" ? p.getPropertyValue("--background") : p.backgroundColor;
-      return { pane: p.backgroundColor, card: c.backgroundColor, border: c.borderColor, outline: c.outlineColor, paneText: contrast(p.color, surface), cardText: contrast(text.color, c.backgroundColor), placeholderText: contrast(placeholder.color, c.backgroundColor), focus: contrast(c.outlineColor, surface), body: getComputedStyle(document.body).backgroundColor, sidebar: getComputedStyle(document.querySelector("#session-sidebar")!).backgroundColor, theme: localStorage.getItem("theme"), palette: localStorage.getItem("palette") };
+      return { pane: p.backgroundColor, card: c.backgroundColor, border: c.borderColor, outline: c.outlineColor, outlineStyle: c.outlineStyle, outlineWidth: parseFloat(c.outlineWidth), riskColor: risk ? rgb(p.getPropertyValue("--agent-risk-color")) : null, expectedRiskColor: risk ? rgb(p.getPropertyValue({ primary: "--primary", warning: "--warning", danger: "--destructive" }[risk])) : null, mutedText: contrast(muted.color, surface), paneText: contrast(p.color, surface), cardText: contrast(text.color, c.backgroundColor), placeholderText: contrast(placeholder.color, c.backgroundColor), focus: contrast(c.outlineColor, surface), body: getComputedStyle(document.body).backgroundColor, sidebar: getComputedStyle(document.querySelector("#session-sidebar")!).backgroundColor, theme: localStorage.getItem("theme"), palette: localStorage.getItem("palette") };
     });
     await choose("main");
     const ordinary = await styles();
@@ -127,6 +130,8 @@ test.skipIf(!playwright || !chromium)("agent risk follows selection locally acro
         await choose(name);
         await composer.focus();
         const value = await styles();
+        expect(value.riskColor).toEqual(value.expectedRiskColor);
+        expect(value.mutedText).toBeGreaterThanOrEqual(4.5);
         expect(value.paneText).toBeGreaterThanOrEqual(4.5);
         expect(value.cardText).toBeGreaterThanOrEqual(4.5);
         expect(value.placeholderText).toBeGreaterThanOrEqual(4.5);
@@ -136,6 +141,8 @@ test.skipIf(!playwright || !chromium)("agent risk follows selection locally acro
           expect(value.pane).not.toBe(base.pane);
           expect(value.card).not.toBe(base.card);
           expect(value.focus).toBeGreaterThanOrEqual(3);
+          expect(value.outlineStyle).not.toBe("none");
+          expect(value.outlineWidth).toBeGreaterThan(0);
         }
         matrix.push({ palette: palette.id, mode, risk: name, computed: value });
       }
@@ -153,6 +160,10 @@ test.skipIf(!playwright || !chromium)("agent risk follows selection locally acro
     await page.setViewportSize({ width: 390, height: 664 });
     await choose("warning");
     await composer.focus();
+    const mobile = await styles();
+    expect(mobile.outlineStyle).not.toBe("none");
+    expect(mobile.outlineWidth).toBeGreaterThan(0);
+    expect(mobile.focus).toBeGreaterThanOrEqual(3);
     expect(await composer.evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(await pane.evaluate((node: HTMLElement) => node.getBoundingClientRect().bottom <= innerHeight)).toBe(true);

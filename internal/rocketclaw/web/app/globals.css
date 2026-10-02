@@ -137,7 +137,7 @@
 
 .conversation-pane[data-agent-risk] {
   --agent-risk-cue: color-mix(in oklab, var(--agent-risk-color) 60%, var(--foreground));
-  background-color: color-mix(in oklab, var(--agent-risk-color) 4%, var(--background));
+  background-color: color-mix(in oklab, var(--agent-risk-color) 2%, var(--background));
 }
 
 .conversation-pane[data-agent-risk] .composer-surface {
