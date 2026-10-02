@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -228,7 +230,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 			require.NoError(t, err, "%s", output)
 			t.Log(string(output))
 
-			entries, err := rt.Sessions.ObserveTranscript(ctx, id, nil)
+			entries, err := rt.Sessions.ObserveTranscript(ctx, id, 0, 0, nil)
 			require.NoError(t, err)
 			require.Len(t, entries, 1)
 			require.False(t, entries[0].Active)
@@ -346,6 +348,98 @@ func TestHistoryReadsActiveReplay(t *testing.T) {
 		require.True(t, reset.Reset_)
 		require.Empty(t, reset.Messages)
 	}
+}
+
+func TestHistoryFollowsNewestEntries(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
+	server := &Server{sessions: sessions, cfg: cfg, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+
+	var keys []string
+
+	appendTurn := func(text string, items ...json.RawMessage) int64 {
+		id, err := sessions.AppendEntryID(ctx, "chat", &rocketcode.SessionEntry{Type: "turn", ReplayInput: append([]json.RawMessage{
+			json.RawMessage(`{"type":"message","role":"user","content":"` + text + `"}`),
+			json.RawMessage(`{"type":"message","role":"assistant","content":"reply"}`),
+		}, items...)})
+		require.NoError(t, err)
+
+		keys = append(keys, strconv.FormatInt(id, 10))
+
+		return id
+	}
+	ids := []int64{appendTurn("one", json.RawMessage(`{"type":"function_call","call_id":"early","name":"task","arguments":"{}"}`)), appendTurn("two"), appendTurn("three"), appendTurn("four")}
+	_, err = sessions.AppendEntryID(ctx, "chat/early", &rocketcode.SessionEntry{Type: "turn"})
+	require.NoError(t, err)
+
+	tail, err := server.history(ctx, &HistoryRequest{Id: "chat", Limit: 2})
+	require.NoError(t, err)
+	require.True(t, tail.Reset_)
+	require.Equal(t, keys[2:], tail.EntryKeys)
+	require.Equal(t, "three", tail.Messages[0].Text)
+	require.Equal(t, ids[2], tail.GetStart())
+	require.True(t, tail.GetMore())
+	require.Empty(t, tail.Delegations, "delegations come from the returned entries only")
+
+	appendTurn("five")
+
+	delta, err := server.history(ctx, &HistoryRequest{Id: "chat", Limit: 2, Revision: tail.Revision})
+	require.NoError(t, err)
+	require.False(t, delta.Reset_)
+	require.Equal(t, keys[2:], delta.EntryKeys, "an open view keeps following the entries it already shows")
+	require.Equal(t, keys[4:], delta.ReplacedKeys)
+	require.Equal(t, ids[2], delta.GetStart())
+
+	page, err := server.history(ctx, &HistoryRequest{Id: "chat", Limit: 2, Before: delta.GetStart()})
+	require.NoError(t, err)
+	require.Equal(t, keys[:2], page.EntryKeys)
+	require.Equal(t, "one", page.Messages[0].Text)
+	require.Equal(t, ids[0], page.GetStart())
+	require.False(t, page.GetMore())
+	require.Empty(t, page.Revision, "settled pages are not followed")
+	require.Equal(t, []string{"chat/early"}, page.Delegations)
+
+	jump, err := server.history(ctx, &HistoryRequest{Id: "chat", Before: delta.GetStart(), From: ids[1]})
+	require.NoError(t, err)
+	require.Equal(t, keys[1:2], jump.EntryKeys)
+	require.Equal(t, ids[1], jump.GetStart())
+	require.True(t, jump.GetMore())
+
+	_, err = sessions.DeleteSession(ctx, "chat")
+	require.NoError(t, err)
+	appendTurn("again")
+
+	restarted, err := server.history(ctx, &HistoryRequest{Id: "chat", Limit: 2, Revision: delta.Revision})
+	require.NoError(t, err)
+	require.True(t, restarted.Reset_, "clearing older history restarts the view")
+	require.Equal(t, keys[5:], restarted.EntryKeys)
+	require.False(t, restarted.GetMore())
+
+	// An unreadable creating entry fails the read instead of silently dropping the origin.
+	_, err = sessions.DeleteSession(ctx, "chat")
+	require.NoError(t, err)
+	db, err := sql.Open("pgx", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	_, err = db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('chat', '{"output_trace":1}', '')`)
+	require.NoError(t, err)
+	appendTurn("readable")
+
+	_, err = server.history(ctx, &HistoryRequest{Id: "chat", Limit: 1})
+	require.ErrorContains(t, err, "read origin entry")
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	_, err = server.history(canceled, &HistoryRequest{Id: "cron:chat", Limit: 1})
+	require.ErrorContains(t, err, "read web history page")
 }
 
 func TestHistoryPublicProgress(t *testing.T) {

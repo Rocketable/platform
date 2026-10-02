@@ -4,13 +4,13 @@ import type { HistoryView, TranscriptEvent } from "./types";
 
 // Execute the retained UI's actual private functions without exporting non-components.
 const source = ts.createSourceFile("ui.tsx", await Bun.file(new URL("./ui.tsx", import.meta.url)).text(), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = ["applyHistoryDelta", "readHistoryDelta", "sendComposer", "promoteComposer", "stopComposer", "historyLines", "pendingInputs", "lineId", "isStopCommand", "transcriptTurns", "toolTitle"];
-const functions = source.statements.filter((node) => ts.isFunctionDeclaration(node) && names.includes(node.name?.text ?? "")).map((node) => node.getText(source)).join("\n");
-const javascript = ts.transpileModule(`import { QueryClient } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nimport { queries } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};\nconst queryClient = new QueryClient();\n${functions}\nexport { ${names.filter((name) => !["lineId", "isStopCommand"].includes(name)).join(", ")}, queryClient };`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
-const { applyHistoryDelta, readHistoryDelta, sendComposer, promoteComposer, stopComposer, historyLines, pendingInputs, transcriptTurns, toolTitle, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
+const names = ["historyPage", "applyHistoryDelta", "readHistoryDelta", "readEarlierHistory", "sendComposer", "promoteComposer", "stopComposer", "historyLines", "pendingInputs", "lineId", "isStopCommand", "transcriptTurns", "toolTitle"];
+const functions = source.statements.filter((node) => (ts.isFunctionDeclaration(node) ? names.includes(node.name?.text ?? "") : ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) => names.includes(declaration.name.getText(source))))).map((node) => node.getText(source)).join("\n");
+const javascript = ts.transpileModule(`import { QueryClient } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nimport { queries } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};\nconst queryClient = new QueryClient();\n${functions}\nexport { ${names.filter((name) => !["historyPage", "lineId", "isStopCommand"].includes(name)).join(", ")}, queryClient };`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
+const { applyHistoryDelta, readHistoryDelta, readEarlierHistory, sendComposer, promoteComposer, stopComposer, historyLines, pendingInputs, transcriptTurns, toolTitle, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 type Line = { id: string; role: string; text: string; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; origin?: string };
 const event = (entryKey: string, itemId: string, role: string, text: string, extra: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ entryKey, itemId, inputId: "", role, text, turnId: "", complete: true, ...extra });
-const view = (messages: TranscriptEvent[], extra: Partial<HistoryView> = {}): HistoryView => ({ messages, delegations: [], revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(messages.map((message) => message.entryKey))], running: false, terminal: "", ...extra });
+const view = (messages: TranscriptEvent[], extra: Partial<HistoryView> = {}): HistoryView => ({ messages, delegations: [], revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(messages.map((message) => message.entryKey))], running: false, terminal: "", start: "0", more: false, ...extra });
 
 test("history deltas replace whole groups, remove groups, and keep canonical inventory order", () => {
   const draft = { lines: historyLines([
@@ -77,7 +77,7 @@ test("serialized reads coalesce signals and reconnects, use only applied revisio
   const kept = event("kept", "kept:0", "tool", 'execute\n{"code":"print(1)"}', { toolName: "execute", toolCallId: "call", agent: "main" });
   const first = Promise.withResolvers<Response>();
   const second = Promise.withResolvers<Response>();
-  const requests: { id: string; revision?: string }[] = [];
+  const requests: { id: string; revision?: string; limit?: number }[] = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = Object.assign(async (_url: URL | RequestInfo, init?: RequestInit) => {
     requests.push(JSON.parse(init!.body as string));
@@ -93,14 +93,14 @@ test("serialized reads coalesce signals and reconnects, use only applied revisio
   try {
     const loading = refreshHistory();
     for (let i = 0; i < 10; i++) expect(refreshHistory()).toBe(loading);
-    expect(requests).toEqual([{ id: "session" }]);
+    expect(requests).toEqual([{ id: "session", limit: 50 }]);
     // This response began before Prompt rendered its uncommitted input.
     draft.lines.push({ id: "local", role: "user", text: "same" });
     first.resolve(Response.json({ ...view([kept, event("turn", "turn:0", "user", "same", { inputId: "used" })], { revision: "applied", running: true }), origin: JSON.stringify({ kind: "cron" }) }));
     await first.promise;
     // Wait for the real read to enter its second request, not for a timer.
     while (requests.length < 2) await Promise.resolve();
-    expect(requests[1]).toEqual({ id: "session", revision: "applied" });
+    expect(requests[1]).toEqual({ id: "session", revision: "applied", limit: 50 });
     expect(draft.lines.map((line) => line.id)).toEqual(["kept:0", "used", "local"]);
     expect(queryClient.getQueryState(["queue", { id: "session" }]).isInvalidated).toBe(true);
     expect(draft.busy).toBe(true);
@@ -120,7 +120,7 @@ test("serialized reads coalesce signals and reconnects, use only applied revisio
     draft.lines.find((line) => line.id === "local")!.complete = true;
     const unchanged = draft.lines;
     await refreshHistory();
-    expect(requests.slice(2)).toEqual([{ id: "session", revision: "newest" }, { id: "session", revision: "newest" }]);
+    expect(requests.slice(2)).toEqual([{ id: "session", revision: "newest", limit: 50 }, { id: "session", revision: "newest", limit: 50 }]);
     expect(draft.revision).toBe("recovered");
     expect(draft.historyError).toBe("");
     expect(draft.busy).toBe(false);
@@ -136,7 +136,7 @@ test("serialized reads coalesce signals and reconnects, use only applied revisio
     queryClient.removeQueries({ queryKey: ["history", { id: "session" }], exact: true });
     expect(queryClient.getQueryData(["history", { id: "session" }])).toBeUndefined();
     await refreshHistory();
-    expect(requests[6]).toEqual({ id: "session" });
+    expect(requests[6]).toEqual({ id: "session", limit: 50 });
     expect(draft.lines.map((line) => line.text)).toEqual([kept.text, "$agent", "Agent: main", "same", "later"]);
     const restored = queryClient.getQueryData(["history", { id: "session" }]);
     expect(restored.messages).toEqual([kept, event("later", "later:0", "assistant", "later")]);
@@ -145,9 +145,44 @@ test("serialized reads coalesce signals and reconnects, use only applied revisio
     // An authoritative reset with a retained cursor replaces public groups, not local commands.
     await refreshHistory();
     await refreshHistory();
-    expect(requests.slice(7)).toEqual([{ id: "session", revision: "reopened" }, { id: "session", revision: "reopened" }]);
+    expect(requests.slice(7)).toEqual([{ id: "session", revision: "reopened", limit: 50 }, { id: "session", revision: "reopened", limit: 50 }]);
     expect(draft.lines.map((line) => line.text)).toEqual(["$agent", "Agent: main", "same", "final"]);
     expect(queryClient.getQueryData(["history", { id: "session" }]).messages).toEqual([event("later", "later:0", "assistant", "final")]);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("earlier pages prepend before followed entries until a reset restarts the view", async () => {
+  const draft: { lines: Line[]; busy: boolean; revision?: string; start?: string; more?: boolean; delegations?: string[]; historyError?: string } = { lines: [], busy: false };
+  applyHistoryDelta(draft, view([event("5", "5:0", "user", "five")], { revision: "tail", start: "5", more: true }));
+  const pages = [Promise.withResolvers<Response>(), Promise.withResolvers<Response>()];
+  const requests: object[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = Object.assign(async (_url: URL | RequestInfo, init?: RequestInit) => {
+    requests.push(JSON.parse(init!.body as string));
+    return pages[requests.length - 1].promise;
+  }, { preconnect: originalFetch.preconnect });
+  let changes = 0;
+  try {
+    const loading = readEarlierHistory("session", draft, () => { changes++; });
+    expect(readEarlierHistory("session", draft, () => {})).toBe(loading);
+    pages[0].resolve(Response.json({ ...view([event("3", "3:0", "user", "three"), event("4", "4:0", "user", "four"), event("5", "5:0", "user", "five")], { start: "3", more: true, delegations: ["session/early"] }), origin: "" }));
+    await loading;
+    expect(requests).toEqual([{ id: "session", before: "5", limit: 50 }]);
+    expect(draft.lines.map((line) => line.text)).toEqual(["three", "four", "five"]);
+    expect([draft.start, draft.more, changes, draft.delegations]).toEqual(["3", true, 1, ["session/early"]]);
+    applyHistoryDelta(draft, view([event("6", "6:0", "user", "six")], { reset: false, revision: "next", replacedKeys: ["6"], entryKeys: ["5", "6"], start: "5", more: true }));
+    expect(draft.lines.map((line) => line.text)).toEqual(["three", "four", "five", "six"]);
+    expect(draft.start).toBe("3");
+    // A linked older message loads everything from it; a reset meanwhile discards that page.
+    const linked = readEarlierHistory("session", draft, () => { changes++; }, "1");
+    applyHistoryDelta(draft, view([event("9", "9:0", "user", "nine")], { revision: "restarted", start: "9", more: false }));
+    pages[1].resolve(Response.json({ ...view([event("1", "1:0", "user", "one")], { start: "1", more: false }), origin: "" }));
+    await linked;
+    expect(requests.at(-1)).toEqual({ id: "session", before: "3", from: "1" });
+    expect(draft.lines.map((line) => line.text)).toEqual(["nine"]);
+    expect([draft.start, draft.more, draft.delegations]).toEqual(["9", false, undefined]);
+    await readEarlierHistory("session", draft, () => { changes++; });
+    expect(requests).toHaveLength(2);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -202,7 +237,7 @@ test("the in-progress status shows whenever the session is busy, whatever the ne
 
 test("turns keep activity and replies in the order they happened", () => {
   const lines = historyLines([event("first", "u1", "user", "first"), event("first", "t1", "thinking", "planning"), event("first", "a0", "assistant", "interim"), event("first", "tool1", "tool", "execute"), event("first", "a1", "assistant", "done"), event("second", "u2", "user", "second"), event("second", "t2", "thinking", "again")]);
-  expect(transcriptTurns(lines)).toEqual([{ user: [lines[0]], items: [lines[1], lines[2], lines[3], lines[4]] }, { user: [lines[5]], items: [lines[6]] }]);
+  expect(transcriptTurns(lines)).toEqual([{ user: [lines[0]], items: [lines[1], lines[2], lines[3], lines[4]], lines: lines.slice(0, 5) }, { user: [lines[5]], items: [lines[6]], lines: lines.slice(5) }]);
 });
 
 test("origin choices hide only matching transcript messages without changing turn order", () => {

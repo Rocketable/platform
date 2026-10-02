@@ -16,6 +16,13 @@ content-free conversation-change hints; it does not replay history or return out
 through Prompt's private response field. History accepts the last applied `revision`
 and returns changed entries, removed keys, the complete ordered key inventory, and
 running/terminal state. Invalid or differently scoped revisions reset the view.
+A positive `limit` returns only the newest `limit` saved entries plus running turns,
+and its revision follows only those entries, so a read's cost depends on the entries
+shown, not on the whole chat. `start` is where the returned entries begin and `more` says older ones
+exist. A positive `before` reads a settled, unfollowed page of older entries: the
+newest `limit` of them, or every entry from `from` onward. If older history is
+cleared, the next limited read resets. A chat's origin still comes from its first
+entry when that entry is not returned.
 Active checkpoints and saved turns share source-qualified turn keys; `item_id` is
 render identity, while `message_id` identifies saved entry positions for commands.
 History returns the recorded turn in order, including developer messages, thinking summaries, tool

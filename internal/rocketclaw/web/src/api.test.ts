@@ -88,7 +88,7 @@ test("SSE preserves fragmented UTF-8, >4 MiB rows, empty results and HTTP authen
 
 test("protobuf envelopes retain exact input, selected agent, private text and int64 entry IDs", async () => {
   const requests: { path: string; input: object }[] = [];
-  const initialHistory: Omit<HistoryView, "origin"> & { origin: string } = { messages: [], origin: "", delegations: ["visible/call"], revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" };
+  const initialHistory: Omit<HistoryView, "origin"> & { origin: string } = { messages: [], origin: "", delegations: ["visible/call"], revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "", start: "0", more: false };
   const deltaHistory: typeof initialHistory = { ...initialHistory, origin: '{"kind":"cron"}', delegations: [], revision: "next", reset: false, replacedKeys: ["empty"], removedKeys: ["removed"], entryKeys: ["empty"], running: true, messages: [{ text: "partial", role: "assistant", complete: false, turnId: "turn", entryKey: "empty", itemId: "public-text", inputId: "", state: "working", parentId: "producer/turn", agent: "main", model: "work/model", origin: "canonical" }] };
   const responses: Record<string, object> = {
     ListAgents: { agents: [{ name: "main" }], currentAgent: "main" }, ListSkills: { skills: [{ name: "review" }] },
@@ -120,6 +120,8 @@ test("protobuf envelopes retain exact input, selected agent, private text and in
     expect(requests.at(-1)).toEqual({ path: "/api/History", input: { id: "visible", revision: "initial" } });
     await queries.history({ id: "visible" }).queryFn({ signal });
     expect(requests.at(-1)).toEqual({ path: "/api/History", input: { id: "visible" } });
+    await queries.history({ id: "visible", before: "9007199254740993", limit: 50 }).queryFn({ signal });
+    expect(requests.at(-1)).toEqual({ path: "/api/History", input: { id: "visible", before: "9007199254740993", limit: 50 } });
     for (const method of ["ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries"]) expect(await rpc<object>(method, { id: "cron:exact:日本語" })).toEqual(responses[method]);
     await mutations.updateSession({ id: "visible", pinned: false, name: "" });
     await mutations.settleSession({ id: "visible", settled: false });

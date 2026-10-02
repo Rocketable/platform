@@ -3936,7 +3936,7 @@ Request: $ARGUMENTS
 					require.NoError(t, err)
 					require.Contains(t, result.text, "not available to the active agent")
 					require.Empty(t, requestBody.Input, "agent changed after enqueue must be checked before the provider")
-					entries, err := service.ObserveTranscript(t.Context(), conversationID, nil)
+					entries, err := service.ObserveTranscript(t.Context(), conversationID, 0, 0, nil)
 					require.NoError(t, err)
 					require.Equal(t, protocol.TerminalFailed, entries[len(entries)-1].Terminal)
 					require.False(t, entries[len(entries)-1].Active)
@@ -3963,7 +3963,7 @@ Request: $ARGUMENTS
 	require.Contains(t, result.text, `subject "missing-skill"`)
 	require.Empty(t, requestBody.Input)
 	require.Zero(t, result.sessionEntryID)
-	entries, err := service.ObserveTranscript(t.Context(), msg.ConversationID, nil)
+	entries, err := service.ObserveTranscript(t.Context(), msg.ConversationID, 0, 0, nil)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, protocol.TerminalFailed, entries[0].Terminal)
@@ -3999,7 +3999,7 @@ Request: $ARGUMENTS
 	require.NoError(t, err)
 	require.Len(t, requestBody.Input, 1, "next provider input excludes failed preparation")
 	require.NotContains(t, string(requestBody.Input[0].Content), "missing-skill")
-	entries, err = service.ObserveTranscript(t.Context(), msg.ConversationID, nil)
+	entries, err = service.ObserveTranscript(t.Context(), msg.ConversationID, 0, 0, nil)
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 	require.Equal(t, protocol.TerminalFailed, entries[0].Terminal, "later work must retain the original terminal failure")
@@ -4141,7 +4141,7 @@ func TestRunTurnPreservesNamedProviderRecoveryBytesForSameProvider(t *testing.T)
 
 		requestBody = string(body)
 
-		entries, err := service.ObserveTranscript(r.Context(), protocol.SlackThreadConversationID("C123", "111.222"), nil)
+		entries, err := service.ObserveTranscript(r.Context(), protocol.SlackThreadConversationID("C123", "111.222"), 0, 0, nil)
 		if assert.NoError(t, err) && assert.Len(t, entries, 1) {
 			progress := rocketcode.PublicProgressFromTrace(entries[0].Entry.OutputTrace)
 			assert.Equal(t, []rocketcode.PublicProgress{{ID: "item/0", ParentID: "old-turn/old-response", Kind: rocketcode.PublicProgressText, State: rocketcode.PublicProgressStopped, Text: "early-public", Agent: "old-agent", Model: "work/old-model"}}, progress, "recovery must seed before the first upsert")
@@ -4259,7 +4259,7 @@ func TestRunTurnWritesActiveTurnBeforeProviderAndClearsAfterSessionAppend(t *tes
 		_, err, ok := nextChange()
 		require.True(t, ok)
 		require.NoError(t, err)
-		entries, err := service.ObserveTranscript(t.Context(), conversationID, nil)
+		entries, err := service.ObserveTranscript(t.Context(), conversationID, 0, 0, nil)
 		require.NoError(t, err)
 
 		if len(entries) == 1 && len(rocketcode.PublicProgressFromTrace(entries[0].Entry.OutputTrace)) > 0 {
@@ -4267,7 +4267,7 @@ func TestRunTurnWritesActiveTurnBeforeProviderAndClearsAfterSessionAppend(t *tes
 			require.Equal(t, "early-public", progress[0].Text)
 			require.Equal(t, rocketcode.PublicProgressWorking, progress[0].State)
 			require.True(t, entries[0].Active)
-			reopened, err := service.ObserveTranscript(t.Context(), conversationID, nil)
+			reopened, err := service.ObserveTranscript(t.Context(), conversationID, 0, 0, nil)
 			require.NoError(t, err)
 			require.Equal(t, entries, reopened, "reopen observes the committed text without another signal")
 
@@ -4695,7 +4695,7 @@ func TestRecoveredActiveTurnInterruptionPreservesStoppedTerminalAndReleasesStart
 	close(releaseRequest)
 	require.NoError(t, group.Wait())
 
-	entries, err := service.ObserveTranscript(t.Context(), conversationID, nil)
+	entries, err := service.ObserveTranscript(t.Context(), conversationID, 0, 0, nil)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "old-turn", entries[0].Entry.TurnID)

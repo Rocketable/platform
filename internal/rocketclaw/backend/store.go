@@ -1035,22 +1035,25 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 }
 
 // Delegations returns saved direct child histories referenced by this transcript,
-// including unchanged entries omitted from a delta's readable payloads.
-func (s *SessionService) Delegations(ctx context.Context, conversationID, sourceConversationID string) ([]string, error) {
+// including unchanged entries omitted from a delta's readable payloads. Only saved
+// entries in [from, before) count; zero before means no upper bound and includes
+// checkpoints, matching ObserveTranscript.
+func (s *SessionService) Delegations(ctx context.Context, conversationID, sourceConversationID string, from, before int64) ([]string, error) {
 	return queryStrings(ctx, s.db, `WITH parents AS (
     SELECT COALESCE(e.entry_json->>'sync_source_conversation_id', source.conversation_id, e.conversation_id) AS producer,
         e.entry_json::jsonb->'replay_input' AS replay
     FROM session_entries e LEFT JOIN session_entries source ON source.id = (e.entry_json->>'sync_source_entry_id')::bigint
-    WHERE e.conversation_id = $1 AND (NOT e.entry_json::jsonb ? 'sync_source_entry_id' OR source.id IS NOT NULL OR e.entry_json::jsonb ? 'sync_source_conversation_id')
+    WHERE e.conversation_id = $1 AND e.id >= $3 AND ($4::bigint = 0 OR e.id < $4)
+        AND (NOT e.entry_json::jsonb ? 'sync_source_entry_id' OR source.id IS NOT NULL OR e.entry_json::jsonb ? 'sync_source_conversation_id')
     UNION ALL
-    SELECT conversation_id, replay_input_json::jsonb FROM active_turns WHERE conversation_id = $1
+    SELECT conversation_id, replay_input_json::jsonb FROM active_turns WHERE conversation_id = $1 AND $4::bigint = 0
 )
 SELECT DISTINCT child.conversation_id FROM parents p
 CROSS JOIN LATERAL jsonb_array_elements(NULLIF(p.replay, 'null'::jsonb)) item
 JOIN session_entries child ON child.conversation_id = p.producer || '/' || (item->>'call_id')
 WHERE item->>'type' = 'function_call' AND strpos(item->>'call_id', '/') = 0
     AND ($2 = '' OR p.producer = $2)
-ORDER BY child.conversation_id`, "delegation histories", conversationID, sourceConversationID)
+ORDER BY child.conversation_id`, "delegation histories", conversationID, sourceConversationID, from, before)
 }
 
 // ListSessions returns summaries for the requested stored rocketcode sessions.

@@ -83,14 +83,17 @@ func (s *SessionService) Changes(ctx context.Context, conversationID string) ite
 	}
 }
 
-// ObserveTranscript returns the complete ordered inventory from one database
-// snapshot, with payloads only for keys whose fingerprints differ from revisions.
+// ObserveTranscript returns the ordered inventory from one database snapshot,
+// with payloads only for keys whose fingerprints differ from revisions.
 // Nil revisions requests all payloads. A saved logical turn supersedes its checkpoint.
 // Turn keys are producer-scoped and stable across checkpoint completion.
 // Checkpoints stay after the saved row visible when first persisted, preserving ID order.
+// Rows are limited to positions in [from, before); zero before means no upper
+// bound and also includes every running checkpoint. Positive before reads a
+// settled page, so running checkpoints are excluded.
 // Source attribution matches ObserveEntries; authorization belongs to the caller.
 // Fingerprints describe readable content, not the transaction IDs yielded by Changes.
-func (s *SessionService) ObserveTranscript(ctx context.Context, conversationID string, revisions map[string]string) ([]ObservedSessionEntry, error) {
+func (s *SessionService) ObserveTranscript(ctx context.Context, conversationID string, from, before int64, revisions map[string]string) ([]ObservedSessionEntry, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
 		return nil, errors.New("conversation ID is required")
@@ -99,7 +102,8 @@ func (s *SessionService) ObserveTranscript(ctx context.Context, conversationID s
 	manifest, _ := json.Marshal(revisions)
 
 	entries, err := queryRows(ctx, s.db, `WITH saved AS (
-    SELECT id, entry_json::text AS entry_json, entry_json::jsonb AS entry FROM session_entries WHERE conversation_id = $1
+    SELECT id, entry_json::text AS entry_json, entry_json::jsonb AS entry FROM session_entries
+    WHERE conversation_id = $1 AND id >= $3 AND ($4::bigint = 0 OR id < $4)
 ), attributed AS (
     SELECT destination.id, destination.entry_json, destination.entry,
         COALESCE(destination.entry->>'sync_source_conversation_id', source.conversation_id, '') AS source_conversation_id,
@@ -119,7 +123,10 @@ func (s *SessionService) ObserveTranscript(ctx context.Context, conversationID s
         'response_id', a.response_id
     )::text, '', FALSE, a.terminal = '', a.terminal, a.created_at_unix_ns, a.id, 1, a.history_anchor_id
     FROM active_turns a
-    WHERE a.conversation_id = $1 AND NOT EXISTS (
+    WHERE a.conversation_id = $1
+        AND CASE WHEN $4::bigint = 0 THEN a.terminal = '' OR a.history_anchor_id >= $3
+            ELSE a.terminal <> '' AND a.history_anchor_id >= $3 AND a.history_anchor_id < $4 END
+        AND NOT EXISTS (
         SELECT 1 FROM attributed WHERE entry->>'turn_id' = a.id AND (NOT synced OR source_conversation_id = $1)
     )
 ), fingerprinted AS (
@@ -152,12 +159,26 @@ FROM fingerprinted ORDER BY position, checkpoint, checkpoint_timestamp, turn_id`
 		}
 
 		return entry, nil
-	}, conversationID, string(manifest))
+	}, conversationID, string(manifest), from, before)
 	if err != nil {
 		return nil, err
 	}
 
 	return entries, nil
+}
+
+// TranscriptPage returns the saved-entry ID that starts the newest limit
+// entries before (zero for no bound), or zero when fewer exist, and the
+// conversation's oldest saved-entry ID, which changes only when history is cleared.
+func (s *SessionService) TranscriptPage(ctx context.Context, conversationID string, before int64, limit int) (start, oldest int64, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT
+    COALESCE((SELECT id FROM session_entries WHERE conversation_id = $1 AND ($2::bigint = 0 OR id < $2) ORDER BY id DESC OFFSET $3 LIMIT 1), 0),
+    COALESCE((SELECT MIN(id) FROM session_entries WHERE conversation_id = $1), 0)`, conversationID, before, limit-1).Scan(&start, &oldest)
+	if err != nil {
+		return 0, 0, fmt.Errorf("read transcript page: %w", err)
+	}
+
+	return start, oldest, nil
 }
 
 // SetActiveTurnTerminal retains a failed or stopped checkpoint for observation
