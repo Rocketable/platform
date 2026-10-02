@@ -7,6 +7,7 @@ import (
 	"errors"
 	"iter"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -26,7 +27,7 @@ func TestObserveTranscript(t *testing.T) {
 		OutputTrace:       []json.RawMessage{json.RawMessage(`{"id":"trace"}`)}, TokenUsage: &harness.TokenUsage{TotalTokens: 5}, ResponseID: "response-1",
 	}
 	require.NoError(t, s.UpsertActiveTurn(ctx, checkpoint, nil))
-	entries, err := s.ObserveTranscript(ctx, "main", nil)
+	entries, err := s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Zero(t, entries[0].ID)
@@ -55,7 +56,7 @@ func TestObserveTranscript(t *testing.T) {
 	legacy := testSessionEntry("hello", "partial")
 	legacyID, err := s.AppendEntryID(ctx, "main", legacy)
 	require.NoError(t, err)
-	entries, err = s.ObserveTranscript(ctx, "main", nil)
+	entries, err = s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 	require.True(t, entries[0].Active)
@@ -70,13 +71,13 @@ func TestObserveTranscript(t *testing.T) {
 
 	id, err := appendSessionEntryDB(ctx, tx, "main", saved)
 	require.NoError(t, err)
-	uncommitted, err := s.ObserveTranscript(ctx, "main", nil)
+	uncommitted, err := s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
 	require.Len(t, uncommitted, 2)
 	require.True(t, uncommitted[0].Active, "uncommitted saved state must not leak into the snapshot")
 	require.NoError(t, tx.Commit())
 
-	entries, err = s.ObserveTranscript(ctx, "main", nil)
+	entries, err = s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
 	require.Len(t, entries, 2, "save/clear overlap must not duplicate a logical turn")
 	require.Equal(t, id, entries[1].ID)
@@ -91,7 +92,7 @@ func TestObserveTranscript(t *testing.T) {
 SELECT 'main', (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id, 'sync_source_conversation_id', conversation_id))::json, entry_timestamp
 FROM session_entries WHERE id = $1`, producerID)
 	require.NoError(t, err)
-	withProducer, err := s.ObserveTranscript(ctx, "main", nil)
+	withProducer, err := s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
 	require.Len(t, withProducer, 3)
 	require.Equal(t, "turn:producer:turn-1", withProducer[2].Key)
@@ -107,7 +108,7 @@ FROM session_entries WHERE id = $1`, producerID)
 	require.NoError(t, s.SetActiveTurnTerminal(ctx, checkpoint.TurnID, protocol.TerminalFailed))
 	checkpoint.TurnID = "new-turn"
 	require.NoError(t, s.UpsertActiveTurn(ctx, checkpoint, nil))
-	entries, err = s.ObserveTranscript(ctx, "main", nil)
+	entries, err = s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
 	require.Len(t, entries, 4)
 	require.Equal(t, "failed-turn", entries[2].Entry.TurnID)
@@ -126,7 +127,7 @@ FROM session_entries WHERE id = $1`, producerID)
 		manifest[entry.Key] = entry.Revision
 	}
 
-	unchanged, err := s.ObserveTranscript(ctx, "main", manifest)
+	unchanged, err := s.ObserveTranscript(ctx, "main", 0, 0, manifest)
 	require.NoError(t, err)
 	require.Len(t, unchanged, len(entries))
 
@@ -138,14 +139,14 @@ FROM session_entries WHERE id = $1`, producerID)
 
 	checkpoint.ResponseID = "edited-response"
 	require.NoError(t, s.UpsertActiveTurn(ctx, checkpoint, nil))
-	edited, err := s.ObserveTranscript(ctx, "main", manifest)
+	edited, err := s.ObserveTranscript(ctx, "main", 0, 0, manifest)
 	require.NoError(t, err)
 	require.Len(t, edited, 4)
 	require.Equal(t, "edited-response", edited[3].Entry.ResponseID)
 	require.NotEqual(t, manifest[edited[3].Key], edited[3].Revision)
 	require.Equal(t, harness.SessionEntry{}, edited[2].Entry)
 	require.NoError(t, s.ClearActiveTurn(ctx, checkpoint.TurnID))
-	remaining, err := s.ObserveTranscript(ctx, "main", manifest)
+	remaining, err := s.ObserveTranscript(ctx, "main", 0, 0, manifest)
 	require.NoError(t, err)
 	require.Len(t, remaining, 3)
 
@@ -161,7 +162,7 @@ FROM session_entries WHERE id = $1`, producerID)
 
 	checkpoint.TurnID = "failed-turn"
 	require.NoError(t, s.UpsertActiveTurn(ctx, checkpoint, nil))
-	afterCompletion, err := s.ObserveTranscript(ctx, "main", manifest)
+	afterCompletion, err := s.ObserveTranscript(ctx, "main", 0, 0, manifest)
 	require.NoError(t, err)
 	require.Len(t, afterCompletion, 4)
 	require.Equal(t, "turn:main:failed-turn", afterCompletion[2].Key, "a later saved turn must not move the retained failure to the tail")
@@ -172,11 +173,11 @@ FROM session_entries WHERE id = $1`, producerID)
 	require.NoError(t, err)
 	require.Empty(t, turns)
 
-	empty, err := s.ObserveTranscript(ctx, "unknown", nil)
+	empty, err := s.ObserveTranscript(ctx, "unknown", 0, 0, nil)
 	require.NoError(t, err)
 	require.Empty(t, empty)
 
-	_, err = s.ObserveTranscript(ctx, " \t", nil)
+	_, err = s.ObserveTranscript(ctx, " \t", 0, 0, nil)
 	require.ErrorContains(t, err, "conversation ID is required")
 
 	checkpoint.TurnID = "still-active"
@@ -185,11 +186,77 @@ FROM session_entries WHERE id = $1`, producerID)
 	require.NoError(t, err)
 	require.EqualValues(t, 3, deleted)
 
-	remaining, err = s.ObserveTranscript(ctx, "main", nil)
+	remaining, err = s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
 	require.Len(t, remaining, 1, "history deletion removes retained terminal detail, not live recovery state")
 	require.True(t, remaining[0].Active)
 	require.Equal(t, "still-active", remaining[0].Entry.TurnID)
+}
+
+func TestTranscriptPages(t *testing.T) {
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	ids := make([]int64, 5)
+	appendRow := func(i int) {
+		var err error
+
+		ids[i], err = s.AppendEntryID(ctx, "main", testSessionEntry("prompt", "reply"))
+		require.NoError(t, err)
+	}
+	keys := func(entries []ObservedSessionEntry) []string {
+		keys := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			keys = append(keys, entry.Key)
+		}
+
+		return keys
+	}
+	text := func(id int64) string { return strconv.FormatInt(id, 10) }
+
+	appendRow(0)
+
+	running := &harness.ActiveTurnCheckpoint{TurnID: "running", ConversationKey: "main", ReplayInput: testSessionEntry("hello", "partial").ReplayInput}
+	require.NoError(t, s.UpsertActiveTurn(ctx, running, nil))
+	appendRow(1)
+
+	failed := &harness.ActiveTurnCheckpoint{TurnID: "failed", ConversationKey: "main", ReplayInput: testSessionEntry("hello", "partial").ReplayInput}
+	require.NoError(t, s.UpsertActiveTurn(ctx, failed, nil))
+	require.NoError(t, s.SetActiveTurnTerminal(ctx, failed.TurnID, protocol.TerminalFailed))
+
+	for i := 2; i < len(ids); i++ {
+		appendRow(i)
+	}
+
+	start, oldest, err := s.TranscriptPage(ctx, "main", 0, 2)
+	require.NoError(t, err)
+	require.Equal(t, [2]int64{ids[3], ids[0]}, [2]int64{start, oldest})
+	tail, err := s.ObserveTranscript(ctx, "main", start, 0, nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"turn:main:running", text(ids[3]), text(ids[4])}, keys(tail), "the tail keeps running turns even when they started earlier")
+
+	start, _, err = s.TranscriptPage(ctx, "main", ids[3], 2)
+	require.NoError(t, err)
+	require.Equal(t, ids[1], start)
+	page, err := s.ObserveTranscript(ctx, "main", start, ids[3], nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{text(ids[1]), "turn:main:failed", text(ids[2])}, keys(page), "settled pages keep finished checkpoints in place")
+
+	start, _, err = s.TranscriptPage(ctx, "main", ids[1], 2)
+	require.NoError(t, err)
+	require.Zero(t, start, "fewer remaining entries than the limit start at the beginning")
+	page, err = s.ObserveTranscript(ctx, "main", start, ids[1], nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{text(ids[0])}, keys(page))
+
+	start, oldest, err = s.TranscriptPage(ctx, "unknown", 0, 50)
+	require.NoError(t, err)
+	require.Equal(t, [2]int64{0, 0}, [2]int64{start, oldest})
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	_, _, err = s.TranscriptPage(canceled, "main", 0, 50)
+	require.ErrorContains(t, err, "read transcript page")
 }
 
 func TestTranscriptChanges(t *testing.T) {
@@ -444,7 +511,7 @@ func TestTranscriptObservationReportsUnavailableStorage(t *testing.T) {
 	}
 
 	require.NoError(t, s.Stop())
-	_, err := s.ObserveTranscript(t.Context(), "main", nil)
+	_, err := s.ObserveTranscript(t.Context(), "main", 0, 0, nil)
 	require.ErrorContains(t, err, "database is closed")
 	_, err = s.OriginPairs(t.Context(), "main")
 	require.ErrorContains(t, err, "read origin metadata")
@@ -492,7 +559,7 @@ func TestActiveTurnOutputTracePersistence(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, `{"conversationId":"main","revision":"`+change.Revision+`"}`, string(raw), "notifications contain metadata only")
 
-	entries, err := s.ObserveTranscript(ctx, "main", nil)
+	entries, err := s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, []harness.PublicProgress{{ID: "response-1/item-1", Kind: harness.PublicProgressText, State: harness.PublicProgressWorking, Text: "hello", Agent: "main", Model: "model"}}, harness.PublicProgressFromTrace(entries[0].Entry.OutputTrace))
@@ -515,13 +582,13 @@ func TestActiveTurnOutputTracePersistence(t *testing.T) {
 		require.JSONEq(t, string(raw), string(turns[0].Checkpoint.OutputTrace[i]))
 	}
 
-	entries, err = s.ObserveTranscript(ctx, "main", nil)
+	entries, err = s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
 	require.True(t, entries[0].Active)
 	require.Empty(t, entries[0].Terminal)
 
 	require.NoError(t, sink.RecordOutputTrace(ctx, checkpoint.TurnID, trace))
-	unchanged, err := s.ObserveTranscript(ctx, "main", map[string]string{entries[0].Key: entries[0].Revision})
+	unchanged, err := s.ObserveTranscript(ctx, "main", 0, 0, map[string]string{entries[0].Key: entries[0].Revision})
 	require.NoError(t, err)
 	require.Equal(t, harness.SessionEntry{}, unchanged[0].Entry)
 	require.NoError(t, sink.CloseActiveTurn(ctx, checkpoint.TurnID, harness.PublicProgressStopped))
@@ -533,13 +600,13 @@ func TestActiveTurnOutputTracePersistence(t *testing.T) {
 	require.True(t, ok)
 	require.NoError(t, err)
 	require.NoError(t, sink.RecordOutputTrace(ctx, checkpoint.TurnID, nil))
-	entries, err = s.ObserveTranscript(ctx, "main", nil)
+	entries, err = s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
 	require.Equal(t, protocol.TerminalStopped, entries[0].Terminal)
 	require.Len(t, entries[0].Entry.OutputTrace, 2, "late writes cannot alter terminal progress")
 	require.NoError(t, sink.ClearCompletedTurn(ctx, checkpoint.TurnID))
 	require.NoError(t, sink.RecordOutputTrace(ctx, checkpoint.TurnID, trace))
-	entries, err = s.ObserveTranscript(ctx, "main", nil)
+	entries, err = s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
 	require.Empty(t, entries, "trace-only writes cannot recreate a cleared checkpoint")
 	require.ErrorContains(t, s.recordActiveTurnOutputTrace(ctx, checkpoint.TurnID, []json.RawMessage{json.RawMessage(`{`)}), "marshal active turn output trace")
@@ -549,7 +616,7 @@ func TestTranscriptObservationReportsUnreadableStoredEntries(t *testing.T) {
 	s := newTestSessionService(t)
 	_, err := s.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', json_build_object('type', $1::text, 'output_trace', 1), '')`, externalMCPOriginPairsEntryType)
 	require.NoError(t, err)
-	_, err = s.ObserveTranscript(t.Context(), "main", nil)
+	_, err = s.ObserveTranscript(t.Context(), "main", 0, 0, nil)
 	require.ErrorContains(t, err, "decode transcript entry")
 	_, err = s.OriginPairs(t.Context(), "main")
 	require.ErrorContains(t, err, "decode origin metadata")

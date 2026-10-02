@@ -245,7 +245,14 @@ type HistoryRequest struct {
 	// Return only the origin, without formatting or transmitting the transcript.
 	OriginOnly bool `protobuf:"varint,3,opt,name=origin_only,json=originOnly,proto3" json:"origin_only,omitempty"`
 	// Opaque inventory returned by the last applied History response.
-	Revision      string `protobuf:"bytes,4,opt,name=revision,proto3" json:"revision,omitempty"`
+	Revision string `protobuf:"bytes,4,opt,name=revision,proto3" json:"revision,omitempty"`
+	// Positive limit returns only the newest limit saved entries plus running
+	// turns, and follows only those entries in revision.
+	Limit int32 `protobuf:"varint,5,opt,name=limit,proto3" json:"limit,omitempty"`
+	// Positive before reads a settled page of entries older than this saved-entry
+	// ID: the newest limit of them, or all from saved-entry ID from onward.
+	Before        int64 `protobuf:"varint,6,opt,name=before,proto3" json:"before,omitempty"`
+	From          int64 `protobuf:"varint,7,opt,name=from,proto3" json:"from,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -308,19 +315,44 @@ func (x *HistoryRequest) GetRevision() string {
 	return ""
 }
 
+func (x *HistoryRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *HistoryRequest) GetBefore() int64 {
+	if x != nil {
+		return x.Before
+	}
+	return 0
+}
+
+func (x *HistoryRequest) GetFrom() int64 {
+	if x != nil {
+		return x.From
+	}
+	return 0
+}
+
 type HistoryResponse struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Messages []*TranscriptEvent     `protobuf:"bytes,1,rep,name=messages,proto3" json:"messages,omitempty"`
 	// JSON object describing the chat's origin. Empty means no origin.
-	Origin        string   `protobuf:"bytes,2,opt,name=origin,proto3" json:"origin,omitempty"`
-	Delegations   []string `protobuf:"bytes,3,rep,name=delegations,proto3" json:"delegations,omitempty"`
-	Revision      string   `protobuf:"bytes,10,opt,name=revision,proto3" json:"revision,omitempty"`
-	Reset_        bool     `protobuf:"varint,4,opt,name=reset,proto3" json:"reset,omitempty"`
-	ReplacedKeys  []string `protobuf:"bytes,5,rep,name=replaced_keys,json=replacedKeys,proto3" json:"replaced_keys,omitempty"`
-	RemovedKeys   []string `protobuf:"bytes,6,rep,name=removed_keys,json=removedKeys,proto3" json:"removed_keys,omitempty"`
-	EntryKeys     []string `protobuf:"bytes,7,rep,name=entry_keys,json=entryKeys,proto3" json:"entry_keys,omitempty"`
-	Running       bool     `protobuf:"varint,8,opt,name=running,proto3" json:"running,omitempty"`
-	Terminal      string   `protobuf:"bytes,9,opt,name=terminal,proto3" json:"terminal,omitempty"`
+	Origin       string   `protobuf:"bytes,2,opt,name=origin,proto3" json:"origin,omitempty"`
+	Delegations  []string `protobuf:"bytes,3,rep,name=delegations,proto3" json:"delegations,omitempty"`
+	Revision     string   `protobuf:"bytes,10,opt,name=revision,proto3" json:"revision,omitempty"`
+	Reset_       bool     `protobuf:"varint,4,opt,name=reset,proto3" json:"reset,omitempty"`
+	ReplacedKeys []string `protobuf:"bytes,5,rep,name=replaced_keys,json=replacedKeys,proto3" json:"replaced_keys,omitempty"`
+	RemovedKeys  []string `protobuf:"bytes,6,rep,name=removed_keys,json=removedKeys,proto3" json:"removed_keys,omitempty"`
+	EntryKeys    []string `protobuf:"bytes,7,rep,name=entry_keys,json=entryKeys,proto3" json:"entry_keys,omitempty"`
+	Running      bool     `protobuf:"varint,8,opt,name=running,proto3" json:"running,omitempty"`
+	Terminal     string   `protobuf:"bytes,9,opt,name=terminal,proto3" json:"terminal,omitempty"`
+	// Saved-entry ID where these entries begin; zero means the beginning.
+	Start int64 `protobuf:"varint,11,opt,name=start,proto3" json:"start,omitempty"`
+	// Older saved entries exist before start.
+	More          bool `protobuf:"varint,12,opt,name=more,proto3" json:"more,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -423,6 +455,20 @@ func (x *HistoryResponse) GetTerminal() string {
 		return x.Terminal
 	}
 	return ""
+}
+
+func (x *HistoryResponse) GetStart() int64 {
+	if x != nil {
+		return x.Start
+	}
+	return 0
+}
+
+func (x *HistoryResponse) GetMore() bool {
+	if x != nil {
+		return x.More
+	}
+	return false
 }
 
 type ListSessionsResponse struct {
@@ -3433,13 +3479,16 @@ const file_web_proto_rawDesc = "" +
 	" \x01(\tR\x04name\x12#\n" +
 	"\rsnoozed_until\x18\f \x01(\tR\fsnoozedUntil\x12\x1f\n" +
 	"\vforked_from\x18\r \x01(\tR\n" +
-	"forkedFromJ\x04\b\v\x10\f\"\x93\x01\n" +
+	"forkedFromJ\x04\b\v\x10\f\"\xd5\x01\n" +
 	"\x0eHistoryRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x124\n" +
 	"\x16source_conversation_id\x18\x02 \x01(\tR\x14sourceConversationId\x12\x1f\n" +
 	"\vorigin_only\x18\x03 \x01(\bR\n" +
 	"originOnly\x12\x1a\n" +
-	"\brevision\x18\x04 \x01(\tR\brevision\"\xcc\x02\n" +
+	"\brevision\x18\x04 \x01(\tR\brevision\x12\x14\n" +
+	"\x05limit\x18\x05 \x01(\x05R\x05limit\x12\x16\n" +
+	"\x06before\x18\x06 \x01(\x03R\x06before\x12\x12\n" +
+	"\x04from\x18\a \x01(\x03R\x04from\"\xf6\x02\n" +
 	"\x0fHistoryResponse\x120\n" +
 	"\bmessages\x18\x01 \x03(\v2\x14.rpc.TranscriptEventR\bmessages\x12\x16\n" +
 	"\x06origin\x18\x02 \x01(\tR\x06origin\x12 \n" +
@@ -3452,7 +3501,9 @@ const file_web_proto_rawDesc = "" +
 	"\n" +
 	"entry_keys\x18\a \x03(\tR\tentryKeys\x12\x18\n" +
 	"\arunning\x18\b \x01(\bR\arunning\x12\x1a\n" +
-	"\bterminal\x18\t \x01(\tR\bterminal\"\xb0\x01\n" +
+	"\bterminal\x18\t \x01(\tR\bterminal\x12\x14\n" +
+	"\x05start\x18\v \x01(\x03R\x05start\x12\x12\n" +
+	"\x04more\x18\f \x01(\bR\x04more\"\xb0\x01\n" +
 	"\x14ListSessionsResponse\x12(\n" +
 	"\bsessions\x18\x01 \x03(\v2\f.rpc.SessionR\bsessions\x12\x14\n" +
 	"\x05owner\x18\x02 \x01(\tR\x05owner\x12)\n" +

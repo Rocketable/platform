@@ -1563,6 +1563,13 @@ func TestSessionEntries(t *testing.T) {
 		require.True(t, history.Reset_)
 		require.NotEmpty(t, history.Revision)
 
+		_, err = sessions.AppendEntryID(ctx, webID, &rocketcode.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"later"}`)}})
+		require.NoError(t, err)
+		latest, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: webID, Limit: 1})
+		require.NoError(t, err)
+		require.True(t, latest.More)
+		require.Equal(t, trace.Origin, latest.Origin, "the creating entry decides the origin outside the newest entries")
+
 		for _, test := range []struct {
 			name, channel string
 			agents, want  []string

@@ -14,7 +14,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
 import { CodeBlock, TranscriptText, copyText } from "./transcript-text";
-import { projectTimeline, setTimelineRows, timelineLevels, useTimelineDetail } from "./timeline-detail";
+import { projectTimeline, setTimelineRows, timelineLevels, useTimelineDetail, type TimelineRows } from "./timeline-detail";
 import { TimelineDetailCard } from "./timeline-detail-card";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
@@ -552,7 +552,7 @@ function SidebarOwner({ children }: { children: ReactNode }) {
 }
 
 type PendingFile = { id: string; file: File };
-type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; historyRead?: Promise<void>; historyAgain?: boolean; error: string; edit: number; submission: number };
+type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; error: string; edit: number; submission: number };
 
 function BottomNavigation({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -1589,14 +1589,14 @@ function lineId(role: Line["role"], text: string, seen: Map<string, number>) {
 }
 
 function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true, canonical: true }) {
-  const turns: { user: Line[]; items: Line[] }[] = [];
-  let current = { user: [] as Line[], items: [] as Line[] };
+  const turns: { user: Line[]; items: Line[]; lines: Line[] }[] = [];
+  let current = { user: [] as Line[], items: [] as Line[], lines: [] as Line[] };
   const calls = new Map<string, Line & { toolParts: Line[] }>();
   const skills = new Map<string, Line & { toolParts: Line[] }>();
   const flush = () => {
     if (current.user.length > 0 || current.items.length > 0) {
       turns.push(current);
-      current = { user: [], items: [] };
+      current = { user: [], items: [], lines: [] };
       calls.clear();
       skills.clear();
     }
@@ -1607,6 +1607,7 @@ function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true
       || (line.origin === "sandboxed" && filter.sandboxed)
       || (line.origin === "canonical" && filter.canonical);
     if (!visible) continue;
+    current.lines.push(line);
     const callKey = `${line.parentId ?? line.entryKey ?? ""}/${line.toolCallId ?? ""}`;
     const resultCall = line.role === "tool" ? calls.get(callKey) : undefined;
     const skillHeader = line.text.split("\n", 1)[0];
@@ -1792,7 +1793,13 @@ function TranscriptLine({ line, conversationId, hasSandboxed, open }: { line: Li
   );
 }
 
-function useTranscriptPosition(conversationId: string, lines: Line[], turns: ReturnType<typeof transcriptTurns>) {
+type Turn = ReturnType<typeof transcriptTurns>[number];
+
+function turnKey(turn: Turn) {
+  return turn.user[0]?.id ?? turn.items[0]?.id;
+}
+
+function useTranscriptPosition(conversationId: string, lines: Line[], turns: Turn[]) {
   const viewport = useRef<HTMLDivElement>(null);
   const identity = useQuery(queries.identity());
   const firstOwner = useRef<string | undefined>(identity.isSuccess ? identity.data : undefined);
@@ -1802,6 +1809,7 @@ function useTranscriptPosition(conversationId: string, lines: Line[], turns: Ret
   const messageId = conversationId && location.pathname === sessionPath(conversationId) ? new URLSearchParams(search).get("message") : null;
   const targetId = messageId ?? (target?.conversationId === conversationId ? target.message.messageId : null);
   const targetTurn = targetId ? turns.findIndex((turn) => turn.user.some((line) => line.messageId === targetId) || turn.items.some((line) => line.role === "assistant" && line.messageId === targetId)) : -1;
+  const targetKey = targetTurn < 0 ? undefined : turnKey(turns[targetTurn]);
   const seen = useCallback(() => {
     const element = viewport.current;
     if (!element || !identity.isSuccess || !element.getClientRects().length) return;
@@ -1820,17 +1828,37 @@ function useTranscriptPosition(conversationId: string, lines: Line[], turns: Ret
     return () => cancelAnimationFrame(frame);
   }, [lines, seen]);
   useEffect(() => {
-    if (targetTurn < 0) return;
-    scrollToMessage(`turn-${targetTurn}`, { align: "center", behavior: "instant" });
+    if (!targetKey) return;
+    scrollToMessage(`turn-${targetKey}`, { align: "center", behavior: "instant" });
     const frame = requestAnimationFrame(() => {
       const line = [...(viewport.current?.querySelectorAll<HTMLElement>("[data-message-id]") ?? [])].find((node) => node.dataset.messageId === targetId);
       line?.scrollIntoView({ block: "center", behavior: "instant" });
       seen();
     });
     return () => cancelAnimationFrame(frame);
-  }, [targetTurn, targetId, scrollToMessage, seen, viewport]);
+  }, [targetKey, targetId, scrollToMessage, seen, viewport]);
   return { viewport, seen, scrollToMessage };
 }
+
+// Finished turns keep their line objects between updates, so only changed turns and the live one re-render.
+const TranscriptTurn = memo(function TranscriptTurn({ turn, index, detail, conversationId, hasSandboxed }: { turn: Turn; index: number; live: boolean; detail: TimelineRows; conversationId: string; hasSandboxed: boolean }) {
+  return (
+    <MessageScrollerItem messageId={`turn-${turnKey(turn)}`} data-turn-key={turnKey(turn)} role="region" aria-label={`Turn ${index + 1}`} tabIndex={-1}>
+      {turn.user.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
+      {projectTimeline(turn.items, detail).map((row) => row.kind === "line" ? <TranscriptLine key={row.line.id} line={row.line} open={row.open} conversationId={conversationId} hasSandboxed={hasSandboxed} /> : (
+        <details key={row.key} className="group pb-3">
+          <summary className="flex w-fit cursor-pointer list-none items-center gap-1 px-1 py-2 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+            {row.label} <span aria-hidden="true" className="transition-transform group-open:rotate-90">▸</span>
+          </summary>
+          <div className="ml-1 border-l pl-3">
+            {row.members.map(({ line, open }) => <TranscriptLine key={line.id} line={line} open={open} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
+          </div>
+        </details>
+      ))}
+    </MessageScrollerItem>
+  );
+}, (previous, next) => !next.live && previous.index === next.index && previous.detail === next.detail && previous.conversationId === next.conversationId && previous.hasSandboxed === next.hasSandboxed
+  && previous.turn.lines.length === next.turn.lines.length && previous.turn.lines.every((line, index) => line === next.turn.lines[index]));
 
 function TranscriptLog({
   conversationId,
@@ -1840,6 +1868,8 @@ function TranscriptLog({
   origin,
   filter,
   hasSandboxed,
+  more,
+  loadEarlier,
 }: {
   lines: Line[];
   conversationId: string;
@@ -1848,23 +1878,49 @@ function TranscriptLog({
   origin?: ChatOrigin;
   filter: OriginFilter;
   hasSandboxed: boolean;
+  more: boolean;
+  loadEarlier: () => Promise<void>;
 }) {
   const turns = transcriptTurns(lines, filter);
   const detail = useTimelineDetail();
   const { viewport, seen, scrollToMessage } = useTranscriptPosition(conversationId, lines, turns);
-  const turnNodes = useRef<(HTMLElement | null)[]>([]);
+  const anchor = useRef<{ key: string; top: number }>(undefined);
+  const [loading, setLoading] = useState(false);
+  // Scrolling near the top loads one earlier page and keeps the turns on screen still.
+  const earlier = useCallback(() => {
+    const first = viewport.current?.querySelector<HTMLElement>("[data-turn-key]");
+    if (first) anchor.current = { key: first.dataset.turnKey!, top: first.getBoundingClientRect().top };
+    setLoading(true);
+    void loadEarlier().finally(() => {
+      setLoading(false);
+      requestAnimationFrame(() => { anchor.current = undefined; });
+    });
+  }, [loadEarlier, viewport]);
+  useLayoutEffect(() => {
+    const saved = anchor.current;
+    const node = saved && [...viewport.current?.querySelectorAll<HTMLElement>("[data-turn-key]") ?? []].find((item) => item.dataset.turnKey === saved.key);
+    if (node) viewport.current!.scrollTop += node.getBoundingClientRect().top - saved.top;
+  }, [lines, loading, viewport]);
+  const nearTop = useCallback(() => {
+    const element = viewport.current;
+    if (more && element && element.scrollTop < element.clientHeight) earlier();
+  }, [more, earlier, viewport]);
+  useEffect(() => {
+    const frame = requestAnimationFrame(nearTop);
+    return () => cancelAnimationFrame(frame);
+  }, [lines, nearTop]);
   const running = usePendingCron(conversationId);
   const emptyMessage = lines.length === 0
     ? (running ? `${running} is running` : "Send a message to start the conversation.")
     : "No messages for selected origins.";
   useEffect(() => { if (running && lines.length > 0) notePendingCron(conversationId, ""); }, [running, lines.length, conversationId]);
-  const jumpToTurn = (index: number) => {
-    scrollToMessage(`turn-${index}`, { align: "start", behavior: "instant" });
-    turnNodes.current[index]?.focus({ preventScroll: true });
+  const jumpToTurn = (turn: Turn) => {
+    scrollToMessage(`turn-${turnKey(turn)}`, { align: "start", behavior: "instant" });
+    viewport.current?.querySelector<HTMLElement>(`[data-turn-key="${CSS.escape(turnKey(turn))}"]`)?.focus({ preventScroll: true });
   };
   return (
     <MessageScroller className="flex-1">
-    <MessageScrollerViewport ref={viewport} id="transcript-scroll" onScroll={seen} className="overflow-x-hidden [overflow-anchor:none]">
+    <MessageScrollerViewport ref={viewport} id="transcript-scroll" onScroll={() => { seen(); nearTop(); }} className="overflow-x-hidden [overflow-anchor:none]">
       <div className="min-h-full pl-3 pr-8 pt-3 pb-4 sm:pl-5 sm:pr-10 sm:pt-4">
       <MessageScrollerContent className="mx-auto w-full min-w-0 max-w-3xl">
       {origin && (origin.kind === "cron" || origin.kind === "external_mcp") ? <MessageScrollerItem messageId="origin"><OriginCard origin={origin} /></MessageScrollerItem> : null}
@@ -1874,21 +1930,8 @@ function TranscriptLog({
         </MessageScrollerItem>
       ) : (
         <>
-          {turns.map((turn, index) => (
-              <MessageScrollerItem key={turn.user[0]?.id ?? turn.items[0]?.id} messageId={`turn-${index}`} ref={(node) => { turnNodes.current[index] = node; }} role="region" aria-label={`Turn ${index + 1}`} tabIndex={-1}>
-                {turn.user.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
-                {projectTimeline(turn.items, detail).map((row) => row.kind === "line" ? <TranscriptLine key={row.line.id} line={row.line} open={row.open} conversationId={conversationId} hasSandboxed={hasSandboxed} /> : (
-                  <details key={row.key} className="group pb-3">
-                    <summary className="flex w-fit cursor-pointer list-none items-center gap-1 px-1 py-2 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
-                      {row.label} <span aria-hidden="true" className="transition-transform group-open:rotate-90">▸</span>
-                    </summary>
-                    <div className="ml-1 border-l pl-3">
-                      {row.members.map(({ line, open }) => <TranscriptLine key={line.id} line={line} open={open} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
-                    </div>
-                  </details>
-                ))}
-              </MessageScrollerItem>
-          ))}
+          {loading ? <MessageScrollerItem><p role="status" className="px-1 text-sm text-muted-foreground">Loading earlier messages…</p></MessageScrollerItem> : null}
+          {turns.map((turn, index) => <TranscriptTurn key={turnKey(turn)} turn={turn} index={index} live={index === turns.length - 1} detail={detail} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
           {working ? <MessageScrollerItem><p role="status" className="px-1 pb-4 text-sm text-muted-foreground">Working…</p></MessageScrollerItem> : null}
           {terminal ? <MessageScrollerItem><p role="status" className="px-1 pb-4 text-sm text-muted-foreground">Turn {terminal}.</p></MessageScrollerItem> : null}
         </>
@@ -1901,7 +1944,7 @@ function TranscriptLog({
         <div role="group" aria-label="Message previews" className="absolute right-full top-1/2 hidden max-h-[calc(100%-1.5rem)] w-[min(20rem,calc(100vw-4rem))] -translate-y-1/2 overflow-y-auto overscroll-contain rounded-md border bg-popover p-1 text-popover-foreground shadow-lg group-hover/rail:block group-focus-within/rail:block">
           {turns.map((turn, index) => {
             const preview = (turn.user[0]?.text ?? turn.items.find((line) => line.role === "assistant")?.text ?? "Activity").replace(/\s+/g, " ").slice(0, 120);
-            return <button key={turn.user[0]?.id ?? turn.items[0]?.id} type="button" aria-label={`Jump to turn ${index + 1}: ${preview}`} className="block w-full rounded-sm px-3 py-2 text-left text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring" onClick={() => jumpToTurn(index)}><span className="line-clamp-2 break-words">{index + 1}. {preview}</span></button>;
+            return <button key={turnKey(turn)} type="button" aria-label={`Jump to turn ${index + 1}: ${preview}`} className="block w-full rounded-sm px-3 py-2 text-left text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring" onClick={() => jumpToTurn(turn)}><span className="line-clamp-2 break-words">{index + 1}. {preview}</span></button>;
           })}
         </div>
         <div className="max-h-full w-8 overflow-y-auto">
@@ -1909,7 +1952,7 @@ function TranscriptLog({
             const preview = (turn.user[0]?.text ?? turn.items.find((line) => line.role === "assistant")?.text ?? "Activity").replace(/\s+/g, " ").slice(0, 120);
             const label = `Turn ${index + 1}: ${preview}`;
             return (
-              <button key={turn.user[0]?.id ?? turn.items[0]?.id} type="button" aria-label={label} className="group flex min-h-6 w-full items-center justify-end rounded-sm text-left text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={() => jumpToTurn(index)}>
+              <button key={turnKey(turn)} type="button" aria-label={label} className="group flex min-h-6 w-full items-center justify-end rounded-sm text-left text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={() => jumpToTurn(turn)}>
                 <span aria-hidden="true" className="flex w-6 shrink-0 items-center justify-center"><span className="h-0.5 w-2 rounded-full bg-current transition-[width] group-hover:w-4 group-focus-visible:w-4" /></span>
               </button>
             );
@@ -1936,7 +1979,10 @@ function applyHistoryDelta(draft: ComposerDraft, view: HistoryView) {
     const reset = view.reset && !draft.revision;
     const changed = new Set([...(view.reset ? view.entryKeys : view.replacedKeys), ...view.removedKeys]);
     const groups = Map.groupBy([...draft.lines.filter((line) => !reset && line.entryKey && !changed.has(line.entryKey)), ...historyLines(view.messages)], (line) => line.entryKey!);
-    const retained = new Set(view.entryKeys);
+    // Earlier pages are not followed; they stay until removed or a reset restarts the view.
+    const followed = new Set([...view.entryKeys, ...view.removedKeys]);
+    const keys = [...new Set(draft.lines.flatMap((line) => !view.reset && line.entryKey && !followed.has(line.entryKey) ? [line.entryKey] : [])), ...view.entryKeys];
+    const retained = new Set(keys);
     let anchor = "";
     for (const line of draft.lines) {
       if (line.entryKey && retained.has(line.entryKey)) anchor = line.entryKey;
@@ -1946,7 +1992,12 @@ function applyHistoryDelta(draft: ComposerDraft, view: HistoryView) {
       }
     }
     const pending = draft.lines.filter((line) => !line.entryKey && line.role === "user" && !line.complete && !consumed.has(line.inputId || line.id));
-    draft.lines = [...(groups.get("") ?? []), ...view.entryKeys.flatMap((key) => groups.get(key) ?? []), ...pending];
+    draft.lines = [...(groups.get("") ?? []), ...keys.flatMap((key) => groups.get(key) ?? []), ...pending];
+  }
+  if (view.reset || draft.start === undefined) {
+    draft.start = view.start;
+    draft.more = view.more;
+    draft.delegations = undefined;
   }
   draft.busy = view.running || draft.lines.some((line) => !line.entryKey && line.role === "user" && !line.complete);
   draft.terminal = view.terminal;
@@ -1965,7 +2016,7 @@ function readHistoryDelta(id: string, draft: ComposerDraft, onDraftChange: () =>
       try {
         const key = queries.history({ id }).queryKey;
         const cached = queryClient.getQueryData<HistoryView>(key);
-        const view = await queries.history({ id, revision: cached ? draft.revision : undefined }).queryFn({});
+        const view = await queries.history({ id, revision: cached ? draft.revision : undefined, limit: historyPage }).queryFn({});
         if (!view.reset && view.revision === draft.revision
           && draft.busy === (view.running || draft.lines.some((line) => !line.entryKey && line.role === "user" && !line.complete))
           && draft.terminal === view.terminal && JSON.stringify(draft.origin) === JSON.stringify(view.origin)
@@ -1986,6 +2037,29 @@ function readHistoryDelta(id: string, draft: ComposerDraft, onDraftChange: () =>
   return draft.historyRead;
 }
 
+const historyPage = 50;
+
+// Prepends one settled page: the previous historyPage entries, or every entry from a linked message onward.
+function readEarlierHistory(id: string, draft: ComposerDraft, onDraftChange: () => void, from?: string): Promise<void> {
+  const before = draft.start;
+  if (draft.earlier || !draft.more || !before) return draft.earlier ?? Promise.resolve();
+  draft.earlier = (async () => {
+    try {
+      const view = await queries.history({ id, before, ...(from ? { from } : { limit: historyPage }) }).queryFn({});
+      if (draft.start !== before) return; // A reset replaced the view while this page was loading.
+      const known = new Set(draft.lines.map((line) => line.entryKey));
+      draft.lines = [...historyLines(view.messages).filter((line) => !known.has(line.entryKey)), ...draft.lines];
+      draft.start = view.start;
+      draft.more = view.more;
+      draft.delegations = [...new Set([...(draft.delegations ?? []), ...view.delegations])];
+    } catch (err) {
+      draft.historyError = err instanceof Error ? err.message : "history failed";
+    }
+    onDraftChange();
+  })().finally(() => { draft.earlier = undefined; });
+  return draft.earlier;
+}
+
 function historyLines(messages: TranscriptEvent[]): Line[] {
   const seen = new Map<string, number>();
   return messages.map((message) => {
@@ -1997,6 +2071,9 @@ function historyLines(messages: TranscriptEvent[]): Line[] {
 function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () => void) {
   const history = useQuery({ ...queries.history({ id }), enabled: false });
   const refreshHistory = useCallback(() => readHistoryDelta(draft.sessionId, draft, onDraftChange), [draft, onDraftChange]);
+  const loadEarlier = useCallback((from?: string) => readEarlierHistory(draft.sessionId, draft, onDraftChange, from), [draft, onDraftChange]);
+  const followed = history.data?.delegations, earlier = draft.delegations;
+  const delegations = useMemo(() => earlier ? [...new Set([...(followed ?? []), ...earlier])] : followed, [followed, earlier]);
   const setBusy = useCallback((value: boolean) => { draft.busy = value; onDraftChange(); }, [draft, onDraftChange]);
   const setLines = useCallback((update: (current: Line[]) => Line[]) => { draft.lines = update(draft.lines); onDraftChange(); }, [draft, onDraftChange]);
   useEffect(() => {
@@ -2012,7 +2089,7 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
       stream.close();
     };
   }, [id, refreshHistory]);
-  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !draft.revision, historyError: draft.historyError, origin: draft.origin, terminal: draft.terminal, delegations: history.data?.delegations, hasSandboxed: draft.lines.some((line) => line.origin === "sandboxed") };
+  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !draft.revision, historyError: draft.historyError, origin: draft.origin, terminal: draft.terminal, delegations, more: draft.more ?? false, start: draft.start, loadEarlier, hasSandboxed: draft.lines.some((line) => line.origin === "sandboxed") };
 }
 
 export function OriginCard({ origin }: { origin?: ChatOrigin }) {
@@ -2062,13 +2139,18 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
       route.goSession(draft.sessionId);
     }
   });
-  const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, terminal, delegations, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
+  const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, terminal, delegations, more, start, loadEarlier, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
   const messageId = location.pathname === sessionPath(id) ? new URLSearchParams(search).get("message") : null;
   const matchedOrigin = (previewLines ?? lines).find((line) => line.messageId === messageId)?.origin;
+  // A linked message older than the loaded entries loads every entry from it onward.
+  const linkedEntry = messageId?.split(":")[0];
+  useEffect(() => {
+    if (!previewing && more && linkedEntry && /^\d+$/.test(linkedEntry) && Number(linkedEntry) < Number(start)) void loadEarlier(linkedEntry);
+  }, [previewing, more, linkedEntry, start, loadEarlier]);
   const visibleFilter = { sandboxed: filter.sandboxed || matchedOrigin === "sandboxed", canonical: filter.canonical || matchedOrigin === "canonical" };
   return (
     <>
-      <Delegations value={previewing ? preview.data?.delegations : delegations}><TranscriptLog conversationId={id} lines={previewLines ?? lines} working={!previewing && busy} terminal={previewing ? undefined : terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} /></Delegations>
+      <Delegations value={previewing ? preview.data?.delegations : delegations}><TranscriptLog conversationId={id} lines={previewLines ?? lines} working={!previewing && busy} terminal={previewing ? undefined : terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} more={!previewing && more} loadEarlier={loadEarlier} /></Delegations>
       {historyError ? <p role="alert" className="px-3 text-sm text-destructive">{historyError}</p> : null}
       {hasSandboxed ? <ButtonGroup aria-label="Show messages from" className="mx-auto my-2.5">
         {(["sandboxed", "canonical"] as const).map((choice) => (

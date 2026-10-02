@@ -183,8 +183,11 @@ It may run immediately when idle. While busy, the released row offers **Steer**
 as usual. Stashed rows can be reordered or removed, but cannot steer directly.
 Failed Stash keeps the draft and files for retry. If Pop shows an error, check
 the refreshed queue: the message may already be queued if starting work failed.
-Live updates and refresh read the same persisted transcript. Reconnect fetches
-changes since the last applied revision; pending steers remain separate until their
+Live updates and refresh read the same persisted transcript. A chat opens with
+its newest 50 turns. Scrolling near the top loads the 50 before them without moving
+what is on screen, and a link to an older message loads everything from that
+message onward. Live updates follow only the turns loaded at open, and finished
+turns are not redrawn. Reconnect fetches changes since the last applied revision; pending steers remain separate until their
 input IDs appear in history. Reads are serialized and overlapping signals coalesce.
 Changed entries replace their whole groups, deleted entries disappear, and unchanged
 groups retain their render IDs. History confirms stored attachments by file ID,
@@ -362,7 +365,7 @@ result. Loaded skill instructions fold with their skill call. Long results have 
 collapse control at the bottom as well as the header. Cron run previews and the
 delegation panel keep every disclosure open.
 The transcript has a visible scrollbar and a side rail with one jump marker per
-turn. Hovering or focusing the rail opens a scrollable box of message previews;
+loaded turn. Hovering or focusing the rail opens a scrollable box of message previews;
 clicking a preview or its marker jumps to that turn. The box overlays the chat
 without moving it, and scrolling the box does not scroll the transcript.
 Each marker is labeled with its prompt; selecting it pauses automatic
@@ -415,7 +418,8 @@ delta read from the last applied revision; opening or reconnecting also catches 
 
 All JSON RPCs use PascalCase method names, camelCase protobuf fields, and
 protobuf response envelopes. History includes `messages`, `revision`, `reset`,
-`replacedKeys`, `removedKeys`, `entryKeys`, `running`, and `terminal`.
+`replacedKeys`, `removedKeys`, `entryKeys`, `running`, `terminal`, `start`, and `more`.
+The chat sends `limit`, and older pages send `before` with `limit` or `from`.
 Failures return `{ "code": <numeric-gRPC-code>, "message": "…" }`; authentication
 failures use HTTP 401 and code 16.
 

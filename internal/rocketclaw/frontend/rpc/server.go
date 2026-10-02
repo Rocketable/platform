@@ -229,10 +229,44 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 
 // historyRevision is a stateless inventory, not an event-log cursor. The database
 // returns readable payloads only for entries whose fingerprints have changed.
+// A limited view follows entries from From onward; Oldest changes only when
+// history is cleared, which restarts the view.
 type historyRevision struct {
 	ConversationID string            `json:"conversation_id"`
 	Source         string            `json:"source"`
 	Entries        map[string]string `json:"entries"`
+	From           int64             `json:"from,omitempty"`
+	Oldest         int64             `json:"oldest,omitempty"`
+}
+
+// historyRange returns the saved-entry range a History read covers and the
+// conversation's oldest saved-entry ID, clearing previous when it cannot be followed.
+func (s *Server) historyRange(ctx context.Context, request *HistoryRequest, previous *historyRevision) (from, oldest int64, err error) {
+	from = request.GetFrom()
+	if request.GetLimit() > 0 || request.GetBefore() > 0 {
+		start, first, err := s.sessions.TranscriptPage(ctx, request.Id, request.GetBefore(), max(int(request.GetLimit()), 1))
+		if err != nil {
+			return 0, 0, fmt.Errorf("read web history page: %w", err)
+		}
+
+		switch {
+		case request.GetLimit() == 0: // An explicit page range starts at From.
+		case request.GetBefore() == 0 && previous.Entries != nil && previous.Oldest == first:
+			// Ponytail: an open view follows every entry added since it opened; reopening
+			// shrinks it back to the newest limit. Slide From forward if tabs stay open for very long.
+			from = previous.From
+		default:
+			from = start
+		}
+
+		oldest = first
+	}
+
+	if request.GetBefore() > 0 || previous.Oldest != oldest {
+		*previous = historyRevision{}
+	}
+
+	return from, oldest, nil
 }
 
 func (s *Server) history(ctx context.Context, request *HistoryRequest) (*HistoryResponse, error) {
@@ -255,20 +289,23 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 		previous = historyRevision{}
 	}
 
-	entries, err := s.sessions.ObserveTranscript(ctx, request.Id, previous.Entries)
+	from, oldest, err := s.historyRange(ctx, request, &previous)
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := s.sessions.ObserveTranscript(ctx, request.Id, from, request.GetBefore(), previous.Entries)
 	if err != nil {
 		return nil, fmt.Errorf("read web history: %w", err)
 	}
 
-	response := &HistoryResponse{Reset_: previous.Entries == nil}
+	response := &HistoryResponse{Reset_: previous.Entries == nil, Start: from, More: from > oldest}
 
-	if !cronTrace {
-		origin, err := s.chatOrigin(ctx, request.Id, entries)
+	if !cronTrace && request.GetBefore() == 0 {
+		response.Origin, err = s.chatOrigin(ctx, request.Id, entries, from, oldest)
 		if err != nil {
 			return nil, err
 		}
-
-		response.Origin = origin
 	}
 
 	if request.OriginOnly {
@@ -283,7 +320,7 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 	defer func() { _ = root.Close() }()
 
 	calls := make(map[string]map[string]string)
-	current := historyRevision{ConversationID: request.Id, Source: request.SourceConversationId, Entries: make(map[string]string)}
+	current := historyRevision{ConversationID: request.Id, Source: request.SourceConversationId, Entries: make(map[string]string), From: from, Oldest: oldest}
 
 	for i := range entries {
 		entry := &entries[i]
@@ -320,6 +357,15 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 		response.Messages = append(response.Messages, messages...)
 	}
 
+	response.Delegations, err = s.sessions.Delegations(ctx, request.Id, request.SourceConversationId, from, request.GetBefore())
+	if err != nil {
+		return nil, fmt.Errorf("read web delegations: %w", err)
+	}
+
+	if request.GetBefore() > 0 {
+		return response, nil // Settled pages are read once, not followed.
+	}
+
 	for _, key := range slices.Sorted(maps.Keys(previous.Entries)) {
 		if _, exists := current.Entries[key]; !exists {
 			response.RemovedKeys = append(response.RemovedKeys, key)
@@ -328,11 +374,6 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 
 	data, _ = json.Marshal(current)
 	response.Revision = base64.RawURLEncoding.EncodeToString(data)
-
-	response.Delegations, err = s.sessions.Delegations(ctx, request.Id, request.SourceConversationId)
-	if err != nil {
-		return nil, fmt.Errorf("read web delegations: %w", err)
-	}
 
 	return response, nil
 }
@@ -1462,7 +1503,9 @@ type externalMCPOrigin struct {
 	Pairs                  []originPair `json:"pairs"`
 }
 
-func (s *Server) chatOrigin(ctx context.Context, id string, entries []backend.ObservedSessionEntry) (string, error) {
+// chatOrigin reads the origin from entries starting at saved-entry ID from. The
+// creating entry, oldest, decides the origin even when entries start after it.
+func (s *Server) chatOrigin(ctx context.Context, id string, entries []backend.ObservedSessionEntry, from, oldest int64) (string, error) {
 	thread, _, err := s.sessions.Thread(id)
 	if err != nil {
 		return "", fmt.Errorf("read origin thread: %w", err)
@@ -1471,6 +1514,15 @@ func (s *Server) chatOrigin(ctx context.Context, id string, entries []backend.Ob
 	externalID, binding, paired, err := s.sessions.ExternalMCPSessionByConversationID(id)
 	if err != nil {
 		return "", fmt.Errorf("read origin external MCP binding: %w", err)
+	}
+
+	if from > oldest {
+		first, err := s.sessions.ObserveTranscript(ctx, id, oldest, oldest+1, nil)
+		if err != nil {
+			return "", fmt.Errorf("read origin entry: %w", err)
+		}
+
+		entries = slices.Concat(first, entries)
 	}
 
 	locator, cronOn := creatingCronLocator(id, thread.CreatedBy, entries)
