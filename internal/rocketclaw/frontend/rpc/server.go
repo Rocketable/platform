@@ -1075,7 +1075,15 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 		}
 
 		agent := definitions.Items[name]
-		response.Agents = append(response.Agents, &Agent{Name: name, Model: agent.Model, Reasoning: agent.ReasoningEffort, Description: agent.Description, Verbosity: agent.Verbosity, Prompt: agent.Prompt})
+
+		entry := &Agent{Name: name, Model: agent.Model, Reasoning: agent.ReasoningEffort, Description: agent.Description, Verbosity: agent.Verbosity, Prompt: agent.Prompt}
+		if web, ok := agent.Frontmatter["web"].(map[string]any); ok {
+			if level, ok := web["riskLevel"].(string); ok && slices.Contains([]string{"primary", "warning", "danger"}, level) {
+				entry.RiskLevel = &level
+			}
+		}
+
+		response.Agents = append(response.Agents, entry)
 	}
 
 	return response, nil

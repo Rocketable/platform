@@ -40,6 +40,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -1230,6 +1231,31 @@ func TestSessionEntries(t *testing.T) {
 
 	for i, name := range []string{"main", "planner", "selected"} {
 		require.Equal(t, name, catalog.Agents[i].Name)
+	}
+
+	for _, tc := range []struct{ metadata, want string }{
+		{"web: {riskLevel: primary}", "primary"},
+		{"web: {riskLevel: warning}", "warning"},
+		{"web: {riskLevel: danger}", "danger"},
+		{"", ""}, {"web: null", ""}, {"web: danger", ""},
+		{"web: {riskLevel: 7}", ""}, {"web: {riskLevel: unknown}", ""}, {"web: {riskLevel: Danger}", ""},
+	} {
+		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\nmodel: gpt-5.5\n"+tc.metadata+"\n---\nHelp."), 0o600))
+
+		catalog, err := invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{})
+		require.NoError(t, err)
+		require.Len(t, catalog.Agents, 3)
+		require.Equal(t, "gpt-5.5", catalog.Agents[0].Model)
+		require.Equal(t, "Help.", catalog.Agents[0].Prompt)
+		require.Equal(t, tc.want, catalog.Agents[0].GetRiskLevel(), tc.metadata)
+		body, err := (protojson.MarshalOptions{EmitDefaultValues: true}).Marshal(catalog.Agents[0])
+		require.NoError(t, err)
+
+		if tc.want == "" {
+			require.NotContains(t, string(body), "riskLevel", tc.metadata)
+		} else {
+			require.Contains(t, string(body), `"riskLevel"`, tc.metadata)
+		}
 	}
 
 	created, err := invoke[CreateSessionResponse](ctx, connection, "CreateSession", &CreateSessionRequest{Agent: "planner"})

@@ -1592,6 +1592,7 @@ type Agent struct {
 	Prompt        string                 `protobuf:"bytes,6,opt,name=prompt,proto3" json:"prompt,omitempty"`
 	Permissions   string                 `protobuf:"bytes,7,opt,name=permissions,proto3" json:"permissions,omitempty"`
 	Origin        string                 `protobuf:"bytes,8,opt,name=origin,proto3" json:"origin,omitempty"`
+	RiskLevel     *string                `protobuf:"bytes,9,opt,name=risk_level,json=riskLevel,proto3,oneof" json:"risk_level,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1678,6 +1679,13 @@ func (x *Agent) GetPermissions() string {
 func (x *Agent) GetOrigin() string {
 	if x != nil {
 		return x.Origin
+	}
+	return ""
+}
+
+func (x *Agent) GetRiskLevel() string {
+	if x != nil && x.RiskLevel != nil {
+		return *x.RiskLevel
 	}
 	return ""
 }
@@ -3589,7 +3597,7 @@ const file_web_proto_rawDesc = "" +
 	"\achannel\x18\b \x01(\tR\achannel\x12\x1a\n" +
 	"\bupcoming\x18\t \x03(\tR\bupcoming\x12\x16\n" +
 	"\x06origin\x18\n" +
-	" \x01(\tR\x06origin\"\xe1\x01\n" +
+	" \x01(\tR\x06origin\"\x94\x02\n" +
 	"\x05Agent\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05model\x18\x02 \x01(\tR\x05model\x12\x1c\n" +
@@ -3598,7 +3606,10 @@ const file_web_proto_rawDesc = "" +
 	"\tverbosity\x18\x05 \x01(\tR\tverbosity\x12\x16\n" +
 	"\x06prompt\x18\x06 \x01(\tR\x06prompt\x12 \n" +
 	"\vpermissions\x18\a \x01(\tR\vpermissions\x12\x16\n" +
-	"\x06origin\x18\b \x01(\tR\x06origin\"<\n" +
+	"\x06origin\x18\b \x01(\tR\x06origin\x12\"\n" +
+	"\n" +
+	"risk_level\x18\t \x01(\tH\x00R\triskLevel\x88\x01\x01B\r\n" +
+	"\v_risk_level\"<\n" +
 	"\x11ListAgentsRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\"]\n" +
 	"\x12ListAgentsResponse\x12\"\n" +
@@ -3904,6 +3915,7 @@ func file_web_proto_init() {
 		return
 	}
 	file_web_proto_msgTypes[16].OneofWrappers = []any{}
+	file_web_proto_msgTypes[21].OneofWrappers = []any{}
 	file_web_proto_msgTypes[40].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

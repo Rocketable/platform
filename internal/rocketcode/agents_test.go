@@ -31,6 +31,8 @@ permission:
   edit: deny
 temperature: 0.1
 hidden: true
+web:
+  riskLevel: danger
 ---
 
 You are in review mode.
@@ -70,6 +72,7 @@ ignored
 		require.Equal(t, PermissionSet{Buckets: []PermissionBucket{{Name: "edit", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}}}}}, review.Permission)
 		require.InDelta(t, 0.1, review.Frontmatter["temperature"], 0.0001)
 		require.Equal(t, true, review.Frontmatter["hidden"])
+		require.Equal(t, map[string]any{"riskLevel": "danger"}, review.Frontmatter["web"])
 
 		plan := result.Agents.Items["plan"]
 		require.Nil(t, plan.MaxRecursion)

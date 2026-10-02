@@ -91,7 +91,7 @@ test("protobuf envelopes retain exact input, selected agent, private text and in
   const initialHistory: Omit<HistoryView, "origin"> & { origin: string } = { messages: [], origin: "", delegations: ["visible/call"], revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "", start: "0", more: false };
   const deltaHistory: typeof initialHistory = { ...initialHistory, origin: '{"kind":"cron"}', delegations: [], revision: "next", reset: false, replacedKeys: ["empty"], removedKeys: ["removed"], entryKeys: ["empty"], running: true, messages: [{ text: "partial", role: "assistant", complete: false, turnId: "turn", entryKey: "empty", itemId: "public-text", inputId: "", state: "working", parentId: "producer/turn", agent: "main", model: "work/model", origin: "canonical" }] };
   const responses: Record<string, object> = {
-    ListAgents: { agents: [{ name: "main" }], currentAgent: "main" }, ListSkills: { skills: [{ name: "review" }] },
+    ListAgents: { agents: [{ name: "main", riskLevel: "danger" }], currentAgent: "main" }, ListSkills: { skills: [{ name: "review" }] },
     Prompt: { privateText: "private\nreport" }, CreateSession: { id: "web-session:new" }, RunCronJob: { id: "cron:id" },
     Protocol: { protoSha256: "hash" }, Identity: { username: "alice" }, ListQueue: { items: [] }, ListCronJobs: { jobs: [] }, ListConfig: { config: {} }, History: initialHistory,
     ListSessionEntries: { entries: [{ id: "9007199254740993", type: "turn" }] }, LoadSessionEntries: { entries: [{ id: "9007199254740993", json: "{}" }] }, DeleteSessionEntries: { deleted: "9007199254740993" },
@@ -103,7 +103,7 @@ test("protobuf envelopes retain exact input, selected agent, private text and in
   }, { preconnect: fetch.preconnect }));
   const signal = new AbortController().signal;
   try {
-    expect(await queries.agents({ conversationId: "visible" }).queryFn({ signal })).toEqual({ agents: [{ name: "main" }], currentAgent: "main" });
+    expect(await queries.agents({ conversationId: "visible" }).queryFn({ signal })).toEqual({ agents: [{ name: "main", riskLevel: "danger" }], currentAgent: "main" });
     expect(await queries.skills({ agent: "main" }).queryFn({ signal })).toEqual([{ name: "review" }]);
     await queries.skills().queryFn({ signal });
     expect(await mutations.prompt({ id: "visible", text: "  exact\n", delivery: "QUEUE", attachmentIds: ["second", "first"] })).toBe("private\nreport");
