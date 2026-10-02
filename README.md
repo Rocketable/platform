@@ -72,6 +72,19 @@ Web always starts at `0.0.0.0:3000`. To change its bind address, set
 No Web environment variables or socket setup are required. Browser access uses
 the configured `web_users` IP-to-username mapping, or Tailscale WhoIs when the IP has no mapping.
 
+An agent's Markdown YAML frontmatter can tint its selected Web conversation:
+
+```yaml
+web:
+  riskLevel: danger
+```
+
+Supported values are `primary` (the chosen theme's primary color), `warning`
+(amber), and `danger` (red). The pane and composer follow the selected agent,
+palette, and light/dark/system mode. Omitted or unsupported settings keep the
+ordinary appearance. This is a visual cue only: it does not assess risk or change
+permissions, approvals, model/reasoning choices, prompts, or routing.
+
 Web reads the same persisted transcript during a turn and after a refresh,
 including recorded reasoning summaries and tool calls/results. Its live connection
 carries only conversation-change signals; each signal triggers a delta read that

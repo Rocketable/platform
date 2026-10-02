@@ -287,6 +287,21 @@ and Escape does too unless a dialog or tooltip is open. New chat, search, and th
 buttons form a centered group in the footer, available even when the sidebar is
 closed.
 The theme toggle floats in the upper-right corner of the page and switches light, dark, and system. Config has a select for the color theme. The choices are Neutral, Harbor, Grove, Ember, Violet, Rose, Sand, Lagoon, Slate, Copper, Ink, Signal, Go - Playground, and Go - Sources. Ink and Signal are high contrast. The Go themes adapt Mike Gleason jr Couturier's light themes, with local dark variations. The choice is stored in the browser, not on the server. See [theme sources and licenses](../../../THEMES.md) for attribution and reuse terms.
+
+Agent Markdown frontmatter can select a conversation-local color cue:
+
+```yaml
+web:
+  riskLevel: danger
+```
+
+Use `primary` for the selected palette's primary color, `warning` for amber, or
+`danger` for red. The transcript pane and composer change as soon as an agent is
+picked, including retained drafts and saved-session selections, and honor light,
+dark, and system mode. Navigation and portal menus keep the ordinary theme.
+Omitted, malformed, or unsupported settings leave the appearance unchanged.
+These colors are visual only, not a risk assessment or security mechanism;
+permissions, approvals, model/reasoning choices, and message handling are unchanged.
 Config's Timeline section has the **Timeline detail** card, following OpenCode v2. A
 five-stop slider picks Messages only, Quiet, Compact, Detailed, or Everything, and an
 Advanced table sets visibility, Group, and Collapse per category; settings that match
