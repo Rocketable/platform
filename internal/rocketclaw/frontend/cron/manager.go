@@ -556,8 +556,7 @@ func cronTraceConversationID(prefix, relativePath string, ts time.Time) string {
 	return prefix + relativePath + ":" + ts.UTC().Format("20060102T150405.000000000Z") + ":" + rand.Text()
 }
 
-func (m *Manager) preparePrompt(body string) string {
-	prompt := body
+func (m *Manager) preparePrompt(prompt string) string {
 	if strings.Contains(prompt, backend.RawRunExposedToolName) {
 		return prompt
 	}
@@ -566,11 +565,7 @@ func (m *Manager) preparePrompt(body string) string {
 		return humanVisibleEmptyCallInstruction
 	}
 
-	if strings.HasSuffix(prompt, "\n") {
-		return prompt + "\n" + humanVisibleEmptyCallInstruction
-	}
-
-	return prompt + "\n\n" + humanVisibleEmptyCallInstruction
+	return strings.TrimSuffix(prompt, "\n") + "\n\n" + humanVisibleEmptyCallInstruction
 }
 
 func (m *Manager) logLoadedDefinitions(definitions []definition) {

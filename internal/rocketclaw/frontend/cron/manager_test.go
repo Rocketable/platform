@@ -689,6 +689,8 @@ func TestPreparePromptInstructionCases(t *testing.T) {
 		{name: "already mentions tool", body: "Call " + backend.RawRunExposedToolName, want: "Call " + backend.RawRunExposedToolName},
 		{name: "empty", body: "", want: humanVisibleEmptyCallInstruction},
 		{name: "trailing newline", body: "Body\n", want: "Body\n\n" + humanVisibleEmptyCallInstruction},
+		{name: "trailing blank line", body: "Body\n\n", want: "Body\n\n\n" + humanVisibleEmptyCallInstruction},
+		{name: "newline only", body: "\n", want: "\n\n" + humanVisibleEmptyCallInstruction},
 		{name: "plain", body: "Body", want: "Body\n\n" + humanVisibleEmptyCallInstruction},
 	}
 
