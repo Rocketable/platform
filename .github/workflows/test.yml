@@ -52,4 +52,14 @@ jobs:
           bun-version: "1.4.0"
       - name: Install cloc, jq, and ripgrep
         run: sudo apt-get update && sudo apt-get install -y cloc jq ripgrep
+      - name: Install Playwright and Chromium for browser tests
+        run: |
+          dir="$RUNNER_TEMP/playwright"
+          mkdir -p "$dir"
+          cd "$dir"
+          bun add playwright-core@1.63.0
+          ./node_modules/.bin/playwright-core install --with-deps chromium
+          echo "ROCKETCLAW_PLAYWRIGHT_MODULE=$dir/node_modules/playwright-core" >> "$GITHUB_ENV"
+          echo "ROCKETCLAW_CHROMIUM=$(bun -e 'console.log(require("playwright-core").chromium.executablePath())')" >> "$GITHUB_ENV"
       - run: make test
+      - run: make -C internal/rocketclaw/web test

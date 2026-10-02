@@ -4,6 +4,8 @@ import path from "node:path";
 import type { Attachment, ChatOrigin, PromptDelivery, QueueItem, Session, SessionBatch, TranscriptEvent } from "./types";
 import { RPCError } from "./api";
 
+const screenshots = path.resolve(import.meta.dir, "../../../../.tmp/web-screenshots");
+
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 
@@ -434,7 +436,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
   } });
   const port = server.port;
   const origin = `http://127.0.0.1:${port}`;
-  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  const browser = await engine.launch({ executablePath: chromium, headless: true, args: ["--disable-features=OverscrollHistoryNavigation"] });
   const shown = async (page: { getByText: (text: string, opts?: { exact?: boolean }) => { waitFor: (opts: { state: "visible" | "hidden"; timeout?: number }) => Promise<void>; count: () => Promise<number> } }, text: string) => {
     await page.getByText(text, { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
   };
@@ -642,6 +644,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await page.waitForURL(`${origin}/s/${Buffer.from("kept").toString("base64url")}`);
     await page.getByPlaceholder("Message or $command").waitFor();
     expect(historyRequests.some((request) => request.id === "kept" && !request.originOnly)).toBe(true);
+    await transcriptStream.promise;
     await navigation.getByRole("button", { name: "New session", exact: true }).click();
     await page.waitForURL(origin + "/");
     transcriptStream = Promise.withResolvers<ReadableStreamDefaultController>();
@@ -790,7 +793,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect(ctrl.prompt).toEqual(["web-session:new:hello\n\nwhile held"]);
     await page.waitForURL("**/s/d2ViLXNlc3Npb246bmV3");
     await page.getByPlaceholder("Queue a follow-up · ⌘⏎ steers").waitFor();
-    expect(await page.locator("textarea").isEnabled()).toBe(true);
+    await page.locator("textarea:enabled").waitFor();
     expect(await page.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
     // Selecting chat text offers quoting without replacing the native context menu.
     await page.locator("textarea").fill("My draft");
@@ -858,7 +861,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
         expect(steerBox!.height).toBeGreaterThanOrEqual(44);
         expect(steerBox!.x + steerBox!.width).toBeLessThanOrEqual(sendBox!.x);
         expect(steerBox!.y).toBe(sendBox!.y);
-        await page.screenshot({ path: path.join(process.env.TMPDIR!, "chat-steer-mobile.png") });
+        await page.screenshot({ path: path.join(screenshots, "chat-steer-mobile.png") });
         await page.getByRole("button", { name: "Steer", exact: true }).last().click();
       }
       const request = (await intervention).postDataJSON();
@@ -1441,7 +1444,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect(await matrixDialog.locator('li > button [data-slot="session-title"]').allTextContents()).toEqual(["Winner"]);
     for (const width of [1280, 390, 320]) {
       await matrix.setViewportSize({ width, height: 844 });
-      await matrixDialog.screenshot({ path: path.join(process.env.TMPDIR!, `unified-search-${width}.png`) });
+      await matrixDialog.screenshot({ path: path.join(screenshots, `unified-search-${width}.png`) });
       expect(await matrixDialog.evaluate((node: HTMLElement) => node.scrollWidth <= node.clientWidth)).toBe(true);
       expect((await matrixSearch.boundingBox())!.width).toBeGreaterThanOrEqual(96);
     }
@@ -2025,9 +2028,9 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
         await detailsPage.getByRole("option", { name: "main gpt", exact: true }).waitFor();
         expect((await detailsPage.locator('[data-slot="select-content"]').boundingBox())!.width).toBeGreaterThan(selectorBox.width);
         expect(await detailsPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-        await detailsPage.screenshot({ path: path.join(process.env.TMPDIR!, "chat-agent-320.png") });
+        await detailsPage.screenshot({ path: path.join(screenshots, "chat-agent-320.png") });
         await detailsPage.keyboard.press("Escape");
-        await detailsPage.screenshot({ path: path.join(process.env.TMPDIR!, "chat-composer-320.png") });
+        await detailsPage.screenshot({ path: path.join(screenshots, "chat-composer-320.png") });
         await detailsPage.setViewportSize({ width, height: 844 });
       }
       if (width === 390) await detailsPage.getByRole("button", { name: "Sessions", exact: true }).click();
@@ -2042,7 +2045,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await chooseRowAction(namedRow, "Snooze session");
       const snoozeDialog = detailsPage.getByRole("dialog", { name: "Snooze session", exact: true });
       await snoozeDialog.getByLabel("Return at (local time)").fill("2027-01-02T09:30");
-      await detailsPage.screenshot({ path: path.join(process.env.TMPDIR!, `snooze-${width}.png`) });
+      await detailsPage.screenshot({ path: path.join(screenshots, `snooze-${width}.png`) });
       await snoozeDialog.getByRole("button", { name: "Snooze", exact: true }).click();
       await snoozeDialog.waitFor({ state: "hidden" });
       await namedRow.waitFor({ state: "hidden" });
@@ -2080,6 +2083,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await namedRow.getByRole("button", { name: "Session actions" }).click();
       await detailsPage.getByRole("menuitem", { name: "Unpin session", exact: true }).waitFor();
       await detailsPage.keyboard.press("Escape");
+      await detailsPage.getByRole("menu").waitFor({ state: "hidden" });
       expect(await sidebar.locator('li a[href^="/s/"]').first().innerText()).toContain("Original preview");
       expect(new URL(detailsPage.url()).pathname).toBe(`/s/${Buffer.from("named").toString("base64url")}`);
       if (width === 390) await detailsPage.keyboard.press("Escape");
@@ -2140,7 +2144,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await dialog.getByRole("button", { name: "Save", exact: true }).click();
       await dialog.waitFor({ state: "hidden" });
       await sidebar.getByText("Original preview", { exact: true }).waitFor();
-      await detailsPage.screenshot({ path: path.join(process.env.TMPDIR!, `session-details-${width}.png`) });
+      await detailsPage.screenshot({ path: path.join(screenshots, `session-details-${width}.png`) });
       await detailsPage.close();
     }
     ctrl.history = [{ role: "tool", text: "Delivered image", toolCallId: "result", turnId: "", complete: true, snapshot: false, attachments: [image] }];
