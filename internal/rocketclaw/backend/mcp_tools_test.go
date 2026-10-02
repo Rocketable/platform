@@ -43,16 +43,19 @@ func TestRocketcodeConfigIncludesMCPServers(t *testing.T) {
 		MCPServers: map[string]config.MCPServerConfig{
 			"demo": {URL: "http://127.0.0.1:9"},
 		},
+		SystemOne: config.SystemOneConfig{TypeSafeAI: config.TypeSafeAIConfig{APIKey: "k", Model: "jev-1.13.0", APIBaseURL: "https://api.typesafe.ai/v1"}},
 	}
 	bridge := NewConversation(cfg, nil, &Config{ConversationID: "c", Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
 	rc := bridge.rocketcodeConfig(t.TempDir(), nil, nil)
 	require.Len(t, rc.MCPServers, 1)
 	assert.Equal(t, "http://127.0.0.1:9", rc.MCPServers["demo"].URL)
 	assert.Equal(t, cfg.Workspace, rc.MCPWorkspace)
+	assert.Equal(t, rocketcode.SystemOne{APIKey: "k", Model: "jev-1.13.0", BaseURL: "https://api.typesafe.ai/v1"}, rc.SystemOne)
 
 	empty := NewConversation(&config.Config{Workspace: t.TempDir()}, nil, &Config{ConversationID: "c2", Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
 	emptyRC := empty.rocketcodeConfig(t.TempDir(), nil, nil)
 	assert.Nil(t, emptyRC.MCPServers)
+	assert.Zero(t, emptyRC.SystemOne)
 }
 
 func TestWorkflowPrepareOmitsMCPTools(t *testing.T) {

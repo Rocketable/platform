@@ -59,6 +59,7 @@ Built-in permission buckets:
 - `workflow`: workflow stems for `rocketclaw_dynamic_workflow`
 - `read` / `edit` / `glob` / `grep` / `webfetch` / `bash`: same subjects as before; unlock nested builtins inside Code Mode `execute` (not separate top-level tools)
 - `mcp`: outbound MCP as `server.tool` or wildcards such as `demo.*`; unlocks Code Mode `execute` MCP builtins when a matching configured `mcp_servers` name is granted
+- `systemone`: subject-less on/off grant for the `systemone` execute command. Grants should be `allow`, because `auto` puts the permission reviewer before every call and a reviewer denial stops the whole script (cancelling sibling map/gather calls). Every call sends script-built state to the configured third party, so grant it only to agents whose `read` scope covers data the human accepts sending there. Example threshold instruction: escalate when `needs_human` is at least 0.5.
 - `rocketclaw.code_mode_approve`: optional whole-script Code Mode approval before `execute` runs; `allow` by default, independent of other RocketClaw rules and nested tool grants
 
 For edit-only agents, an `edit` allow also permits reading the same path unless a `read` rule matched first. Do not add a top-level deny that would block this fallback.

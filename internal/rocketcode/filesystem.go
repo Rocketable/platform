@@ -79,33 +79,9 @@ func (sfs *sandboxedFileSystem) ReadResult(filename string, offset int) ToolResu
 		return TextToolResult("offset must be greater than or equal to 1")
 	}
 
-	if isDeniedEnvPath(filename) {
-		return TextToolResult(deniedEnvAccessMessage(filename))
-	}
-
-	name, err := normalizeRootName(sfs.root, filename)
+	content, err := readFileBytes(sfs, filename)
 	if err != nil {
 		return TextToolResult(err.Error())
-	}
-
-	if err := rejectSymlink(sfs, name); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return TextToolResult(err.Error())
-	}
-
-	file, err := sfs.root.Open(name)
-	if err != nil {
-		return TextToolResult("File not found: " + filename)
-	}
-
-	content, err := io.ReadAll(file)
-	errClose := file.Close()
-
-	if err != nil {
-		return TextToolResult("failed to read file: " + filename)
-	}
-
-	if errClose != nil {
-		return TextToolResult("failed to read file: " + filename)
 	}
 
 	mimeType := sniffAttachmentMIME(content, mimeFromFilename(filename))
@@ -150,6 +126,54 @@ func (sfs *sandboxedFileSystem) ReadResult(filename string, offset int) ToolResu
 	output.WriteString("\n</content>")
 
 	return TextToolResult(output.String())
+}
+
+func plainRead(sfs *sandboxedFileSystem, filename string, offset int) (string, error) {
+	sfs.mu.Lock()
+	defer sfs.mu.Unlock()
+
+	if offset != 0 && offset != 1 {
+		return "", fmt.Errorf("plain read does not support offset %d", offset)
+	}
+
+	content, err := readFileBytes(sfs, filename)
+	if err != nil {
+		return "", err
+	}
+
+	mimeType := sniffAttachmentMIME(content, mimeFromFilename(filename))
+	if isSupportedAttachmentMIME(mimeType) || !utf8.Valid(content) {
+		return "", fmt.Errorf("plain read supports text files only: %s", filename)
+	}
+
+	return string(content), nil
+}
+
+func readFileBytes(sfs *sandboxedFileSystem, filename string) ([]byte, error) {
+	if isDeniedEnvPath(filename) {
+		return nil, errors.New(deniedEnvAccessMessage(filename))
+	}
+
+	name, err := normalizeRootName(sfs.root, filename)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := rejectSymlink(sfs, name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+
+	file, err := sfs.root.Open(name)
+	if err != nil {
+		return nil, errors.New("File not found: " + filename)
+	}
+
+	content, err := io.ReadAll(file)
+	if errClose := file.Close(); err != nil || errClose != nil {
+		return nil, errors.New("failed to read file: " + filename)
+	}
+
+	return content, nil
 }
 
 func readLines(content []byte, offset int) (readResult, error) {

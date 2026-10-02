@@ -1101,6 +1101,7 @@ func TestSessionEntries(t *testing.T) {
 	cfg.OpenAI.APIKey, cfg.OpenAI.RocketCodeAuth = "secret-provider-key", "secret-auth-path"
 	cfg.Slack.BotToken, cfg.Slack.AppToken = "secret-bot-token", "secret-app-token"
 	cfg.Instrumentation.APIKey = "secret-telemetry-key"
+	cfg.SystemOne.TypeSafeAI.APIKey = "secret-systemone-key"
 	cfg.Environment = []string{"TOKEN=secret-environment"}
 	cfg.MCPServers = map[string]config.MCPServerConfig{
 		"zeta":  {URL: "https://secret-endpoint", Headers: map[string]string{"Authorization": "secret-header"}},

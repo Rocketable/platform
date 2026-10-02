@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation: Native System One tool for RocketClaw agents</title>
+<style>
+  :root {
+    --bg: #fbfbf9; --fg: #1d1f21; --muted: #5a5f66; --line: #d9dbd6;
+    --card: #ffffff; --accent: #2f5d8a; --accent-soft: #e6eef6; --accent-text: #1f4466;
+    --warn-soft: #f7efe1; --warn-text: #6b4a12; --code-bg: #f1f2ee; --svg-bg: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17191c; --fg: #e4e6e8; --muted: #a2a8b0; --line: #34383d;
+      --card: #1f2226; --accent: #8db4dc; --accent-soft: #24313f; --accent-text: #c3d9ee;
+      --warn-soft: #3a3021; --warn-text: #ecd3a4; --code-bg: #262a2f; --svg-bg: #1f2226;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  main { max-width: 920px; margin-inline: auto; padding: 2rem 1.25rem 3rem; }
+  p, li, dd { max-width: 72ch; }
+  h1 { font-size: 1.7rem; line-height: 1.25; margin: .2rem 0 .6rem; }
+  h2 { font-size: 1.35rem; margin: 2.4rem 0 .8rem; padding-bottom: .3rem; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 1.12rem; margin: 0 0 .5rem; }
+  h4 { font-size: .95rem; margin: 1.1rem 0 .3rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  strong { color: inherit; }
+  a { color: var(--accent); }
+  code { font: .88em/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: .08em .3em; border-radius: 4px; }
+  pre { background: var(--code-bg); padding: .8rem 1rem; border-radius: 6px; overflow-x: auto; font-size: .85rem; line-height: 1.45; margin: .5rem 0; }
+  pre code { background: none; padding: 0; }
+  .eyebrow { font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0; }
+  .meta { display: grid; grid-template-columns: max-content 1fr; gap: .2rem 1rem; margin: .8rem 0 0; font-size: .92rem; }
+  .meta dt { color: var(--muted); }
+  .meta dd { margin: 0; }
+  .stats { display: flex; flex-wrap: wrap; gap: .6rem; margin: 1.2rem 0 0; padding: 0; list-style: none; }
+  .stats li { background: var(--accent-soft); color: var(--accent-text); border-radius: 999px; padding: .25rem .8rem; font-size: .85rem; }
+  .callout { background: var(--accent-soft); color: var(--accent-text); border-radius: 8px; padding: .9rem 1.1rem; margin: 1rem 0; }
+  .callout.warn { background: var(--warn-soft); color: var(--warn-text); }
+  .callout p { margin: .3rem 0; }
+  .callout code { background: transparent; }
+  .jump { columns: 2; column-gap: 2rem; padding-left: 1.2rem; font-size: .95rem; }
+  @media (max-width: 640px) { .jump { columns: 1; } }
+  article.idea { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1.2rem 1.3rem; margin: 1.2rem 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin: .1rem 0 .7rem; padding: 0; list-style: none; }
+  .chips li { border: 1px solid var(--line); border-radius: 999px; padding: .1rem .65rem; font-size: .8rem; background: var(--bg); }
+  .chips li.id { background: var(--accent-soft); color: var(--accent-text); border-color: transparent; font-weight: 600; }
+  .chips li.later { background: var(--warn-soft); color: var(--warn-text); border-color: transparent; }
+  .fields { display: grid; grid-template-columns: max-content 1fr; gap: .2rem .9rem; font-size: .92rem; margin: .4rem 0 .8rem; }
+  .fields dt { color: var(--muted); }
+  .fields dd { margin: 0; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; margin: .6rem 0; }
+  th, td { border: 1px solid var(--line); padding: .4rem .6rem; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+  figure { margin: .8rem 0; }
+  figure svg { width: 100%; height: auto; background: var(--svg-bg); border: 1px solid var(--line); border-radius: 8px; }
+  figcaption { font-size: .85rem; color: var(--muted); margin-top: .3rem; }
+  svg text { font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--fg); }
+  svg text.small { font-size: 11.5px; fill: var(--muted); }
+  svg text.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+  svg .box { fill: var(--card); stroke: var(--line); stroke-width: 1.5; }
+  svg .box.hl { fill: var(--accent-soft); stroke: var(--accent); }
+  svg .arrow { stroke: var(--accent); stroke-width: 1.6; fill: none; }
+  svg .arrow.back { stroke: var(--muted); stroke-dasharray: 5 4; }
+  footer.composition-signal { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--line); font-size: .8rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <p class="eyebrow">Ideation</p>
+  <h1>Ideation: Native System One tool for RocketClaw agents</h1>
+  <dl class="meta">
+    <dt>date</dt><dd><time datetime="2026-10-02">2026-10-02</time></dd>
+    <dt>topic</dt><dd><code>systemone-tool</code></dd>
+    <dt>focus</dt><dd>Give RocketClaw agents (<code>cmd/rocketclaw</code>) a native <code>systemone</code> command inside <code>execute</code>, alongside read/apply_patch/grep/glob, that calls System One decision models, with TypeSafe's Jev API as the reference contract.</dd>
+    <dt>mode</dt><dd>repo-grounded</dd>
+  </dl>
+  <ul class="stats">
+    <li>46 raw ideas</li>
+    <li>22 after merging</li>
+    <li>7 survivors</li>
+    <li>5 axes, all covered</li>
+    <li>Revised after review: <code>systemone</code> is an execute command</li>
+  </ul>
+</header>
+
+<section id="grounding-context">
+<h2>Grounding Context</h2>
+<p class="eyebrow">Codebase Context</p>
+
+<h4>Decisions already made with the user</h4>
+<ul>
+  <li><strong><code>systemone</code> is a command inside <code>execute</code></strong>, like <code>read</code>, <code>apply_patch</code>, <code>grep</code> and <code>glob</code>. The model reaches it through Starlark code, not as a top-level function call. (Settled in review; the first draft of this report missed it.)</li>
+  <li>TypeSafe's wire format is the standard: <code>state</code> plus Noul, Choice and Score questions. Other vendors adapt to it, so the feature is named after the concept, not the vendor.</li>
+  <li>Jev's weak spots are a known, accepted risk: injection, numbers, very literal reading, broad questions and large state. Ideas may reduce them but don't treat them as blockers.</li>
+  <li>The support is our own and native. No MCP server, no reuse of <code>webfetch</code>/<code>bash</code>/<code>curl</code>, no vendor SDK.</li>
+  <li>Decisions RocketClaw makes itself are a later phase and must not widen the first version. That covers the permission reviewer, guardrails, background "show the human?" and skill suggestion.</li>
+</ul>
+
+<h4>What the code says</h4>
+<ul>
+  <li><strong>System One can't be a model provider.</strong> The agent loop only speaks the OpenAI Responses API, and <code>ModelResolver.Resolve</code> returns an <code>*openai.Client</code>. A model that only returns probabilities fits as a command.</li>
+  <li><strong>Inside <code>execute</code>, commands are flexible.</strong>
+    <ul>
+      <li>Keyword arguments are Starlark values. They are converted to JSON and checked by a full JSON Schema validator (<code>codemode.go:240-325</code>), not by OpenAI's strict mode.</li>
+      <li><code>functionTool</code> only sets top-level <code>required</code> and <code>additionalProperties</code> (<code>tools.go:630-651</code>), and <code>codeModeHostRequiredFields</code> picks the truly required fields per command (<code>mcp_tools.go:849-866</code>). Nested schemas can therefore use keys the caller chooses, and <code>oneOf</code>.</li>
+      <li>A command can return a real Starlark value through <code>CallValue</code>, as <code>bash</code> does (<code>codemode.go:210-226</code>, <code>mcp_tools.go:779-791</code>).</li>
+    </ul>
+  </li>
+  <li><strong>Fan-out is built in.</strong> <code>map(items, fn, concurrency=16)</code>, <code>gather</code>, <code>race</code> and <code>race_first</code> run calls in parallel: 16 by default, at most 64 (<code>codemode/fanout.go:15-20, 67-70</code>).</li>
+  <li><strong>Where built-ins reach.</strong>
+    <ul>
+      <li>Built-ins like <code>read</code>/<code>grep</code> are execute-only (<code>CodeModeOnlyHostTool</code>, <code>tools.go:94-101</code>).</li>
+      <li>Every nested call goes through the same allow/deny/auto gate (<code>permission_gate.go</code>).</li>
+      <li>Workflow workers get all runtime tools (<code>raw_run.go:86-89</code>). Handoff deliberately gets none (<code>handoff.go:45</code>).</li>
+    </ul>
+  </li>
+  <li><strong>Configuration.</strong> <code>providers.&lt;name&gt;</code> holds <code>{api_key, api_base_url}</code>, and models are written as <code>provider/model</code>. Any config string can be an AWS Secrets Manager reference. Secrets must stay out of error messages and the web config view.</li>
+  <li><strong>Permissions.</strong> Rules default to deny. <code>auto</code> rules go to a 90-second child-agent reviewer that fails closed. The <code>rc005</code> lint rule only checks <code>websearch</code>/<code>webfetch</code> combined with write access.</li>
+  <li><strong>Line budgets.</strong> <code>internal/rocketclaw</code> (with <code>cmd/rocketclaw</code>) has 22,350 lines; <code>internal/rocketcode</code> has 10,500.</li>
+</ul>
+
+<h4>Prior art</h4>
+<ul>
+  <li><strong>OpenCode V2 (experimental).</strong> It has a provider-neutral "Evaluation" layer whose System One route targets <code>&lt;base&gt;/systemone</code>. TypeSafe, OpenRouter and OpenCode Zen all serve that format. It also includes a recorded real Jev 1.13 response. It is not yet exposed to agents.</li>
+  <li><strong>Community MCP servers.</strong> At least four expose Jev to coding agents. Lessons from them:
+    <ul>
+      <li>Thresholds live in code.</li>
+      <li>Files are read server-side, so agents never paste text.</li>
+      <li>Model versions are pinned.</li>
+      <li>The tool never emits "allow".</li>
+      <li>"A check an agent can decline to call is not a check", so mandatory checks belong in the harness.</li>
+    </ul>
+  </li>
+  <li><strong>Injection research.</strong>
+    <ul>
+      <li>Check Point broke a Jev-based app; labelling the document "untrusted" didn't help.</li>
+      <li>An independent NTU study found 0.2% high-confidence hijacks over a closed 3-action set, and showed that returning probabilities to the attacker helps the attack.</li>
+      <li>jev-sec-bench found Jev slightly under-confident (ECE 0.059).</li>
+    </ul>
+  </li>
+</ul>
+
+<h4>Key sources</h4>
+<ul>
+  <li><a href="https://github.com/Rocketable/platform/blob/main/internal/rocketcode/codemode/codemode.go"><code>internal/rocketcode/codemode/codemode.go</code></a>: execute command binding and JSON Schema validation</li>
+  <li><a href="https://github.com/Rocketable/platform/blob/main/internal/rocketcode/codemode/fanout.go"><code>internal/rocketcode/codemode/fanout.go</code></a>: <code>map</code>, <code>gather</code>, <code>race</code></li>
+  <li><a href="https://github.com/Rocketable/platform/blob/main/internal/rocketcode/mcp_tools.go"><code>internal/rocketcode/mcp_tools.go</code></a>: execute host-command schemas, the <code>bash</code> struct result</li>
+  <li><a href="https://github.com/Rocketable/platform/blob/main/internal/rocketcode/tools.go"><code>internal/rocketcode/tools.go</code></a>: built-ins, <code>functionTool</code>, <code>CodeModeOnlyHostTool</code></li>
+  <li><a href="https://github.com/Rocketable/platform/blob/main/internal/rocketclaw/backend/model_resolver.go"><code>internal/rocketclaw/backend/model_resolver.go</code></a>: provider resolution</li>
+  <li><a href="https://github.com/Rocketable/platform/blob/main/internal/rocketcode/permission_review.go"><code>internal/rocketcode/permission_review.go</code></a>: the 90 s reviewer</li>
+  <li><a href="https://github.com/Rocketable/platform/blob/main/internal/rocketclaw/agentlint/agentlint.go"><code>internal/rocketclaw/agentlint/agentlint.go</code></a>: <code>rc005</code></li>
+  <li><a href="https://docs.typesafe.ai/api">TypeSafe API reference</a>, <a href="https://docs.typesafe.ai/model-jaggedness/jev-1.13">Jev 1.13 known failure modes</a></li>
+  <li><a href="https://the-decoder.com/openai-expands-codex-and-its-api-at-devday-with-security-scans-a-decisions-api-and-ultrafast/">The Decoder: OpenAI Decisions API (preview, no public schema)</a></li>
+  <li><a href="https://github.com/Brainwires/jevwire">Brainwires/jevwire</a>, <a href="https://blog.checkpoint.com/ai-security/jev-is-not-a-language-model-but-it-breaks-like-one-prompt-injection-against-a-typed-decision-model">Check Point injection study</a>, <a href="https://arxiv.org/html/2609.28613">NTU InjecAgent study</a></li>
+</ul>
+</section>
+
+<section id="topic-axes">
+<h2>Topic Axes</h2>
+<ol>
+  <li><strong>Call contract:</strong> the command's arguments, how questions and state are expressed, what it returns, and its description.</li>
+  <li><strong>Wiring and placement:</strong> which package owns it, config and credential reuse, swapping endpoints, and which agent loops can reach it.</li>
+  <li><strong>Trust and safety:</strong> the permission default, the egress lint, untrusted state, what happens on failure, and thresholds owned by code.</li>
+  <li><strong>What agents use it for:</strong> concrete agent workflows that benefit from a fast typed judgment.</li>
+  <li><strong>Decisions RocketClaw makes itself (later phase):</strong> the reviewer, guardrails, show-the-human and skill suggestion.</li>
+</ol>
+</section>
+
+<section id="ranked-ideas">
+<h2>Ranked Ideas</h2>
+
+<div class="callout">
+  <p><strong>How the survivors fit together.</strong> Ideas 1–5 form one coherent first version:</p>
+  <ol>
+    <li>Reuse the provider config and HTTP client RocketClaw already has.</li>
+    <li>Make <code>systemone(...)</code> take TypeSafe's request exactly as documented.</li>
+    <li>Ship it as an execute-only built-in next to <code>read</code>/<code>grep</code>, where the script builds the state and fans out with <code>map</code>.</li>
+    <li>Return the typed answer as a Starlark value, so the script owns the thresholds.</li>
+    <li>Treat the risk as data leaving the host.</li>
+  </ol>
+  <p>Idea 6 is a follow-up fork. Idea 7 is the one later-phase idea that survived critique.</p>
+</div>
+
+<ul class="jump">
+  <li><a href="#i1">1. Reuse the existing provider config and HTTP client</a></li>
+  <li><a href="#i2">2. <code>systemone(...)</code> takes TypeSafe's request exactly as documented</a></li>
+  <li><a href="#i3">3. Execute-only built-in next to read/grep; the script builds the state</a></li>
+  <li><a href="#i4">4. Return a typed Starlark value; the script owns the thresholds</a></li>
+  <li><a href="#i5">5. Treat it as data leaving the host: own permission bucket, deny by default</a></li>
+  <li><a href="#i6">6. Human-written named checks (follow-up fork)</a></li>
+  <li><a href="#i7">7. Later phase: a "second reader" for silent background runs</a></li>
+</ul>
+
+<article class="idea" id="i1">
+  <h3>1. Reuse the existing provider config and HTTP client</h3>
+  <ul class="chips"><li class="id">Idea 1</li><li>Wiring and placement</li><li>Confidence 85%</li><li>Complexity Low</li></ul>
+  <h4>Description</h4>
+  <p>Don't write a new HTTP client, credential type or config section. The operator adds a normal provider entry, <code>providers.typesafe = {api_key, api_base_url: "https://api.typesafe.ai/v1"}</code>, and one setting, <code>systemone_model: "typesafe/jev-1.13.0"</code>, shaped like <code>auto_approver_model</code>. The command resolves that string through the existing model resolver. It then calls the general-purpose <code>client.Post(ctx, "systemone", req, &amp;resp)</code> on the <code>*openai.Client</code> it gets back. Base URL, bearer key, AWS secret references, provider-error logging and retries all come for free.</p>
+  <p>Switching to OpenRouter (<code>openrouter/typesafe/jev-1.13</code>) or OpenCode Zen is a config edit. The version pin lives in the model string, so threshold tuning isn't silently invalidated when <code>jev-latest</code> moves.</p>
+  <figure>
+    <svg viewBox="0 0 860 210" role="img" aria-labelledby="f1t">
+      <title id="f1t">Config to resolver to client to any of three System One hosts</title>
+      <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2f5d8a"/></marker></defs>
+      <rect class="box" x="10" y="75" width="170" height="56" rx="8"/>
+      <text x="22" y="99">providers.typesafe</text>
+      <text class="small" x="22" y="118">api_key, api_base_url</text>
+      <rect class="box" x="215" y="75" width="170" height="56" rx="8"/>
+      <text x="227" y="99">modelResolver.Resolve</text>
+      <text class="small" x="227" y="118">"typesafe/jev-1.13.0"</text>
+      <rect class="box hl" x="420" y="75" width="170" height="56" rx="8"/>
+      <text x="432" y="99">*openai.Client</text>
+      <text class="small" x="432" y="118">auth · retries · logging</text>
+      <line class="arrow" x1="180" y1="103" x2="212" y2="103" marker-end="url(#ah)"/>
+      <line class="arrow" x1="385" y1="103" x2="417" y2="103" marker-end="url(#ah)"/>
+      <rect class="box" x="660" y="15" width="190" height="44" rx="8"/>
+      <text class="mono" x="672" y="42">api.typesafe.ai/v1</text>
+      <rect class="box" x="660" y="81" width="190" height="44" rx="8"/>
+      <text class="mono" x="672" y="108">openrouter.ai/api/v1</text>
+      <rect class="box" x="660" y="147" width="190" height="44" rx="8"/>
+      <text class="mono" x="672" y="174">opencode.ai/zen/v1</text>
+      <path class="arrow" d="M590,95 C625,95 625,37 657,37" marker-end="url(#ah)"/>
+      <line class="arrow" x1="590" y1="103" x2="657" y2="103" marker-end="url(#ah)"/>
+      <path class="arrow" d="M590,111 C625,111 625,169 657,169" marker-end="url(#ah)"/>
+      <text class="mono" x="300" y="158">client.Post("systemone", req, &amp;resp)</text>
+    </svg>
+    <figcaption>Only the provider entry changes between hosts. Everything left of the hosts already exists and is already tested.</figcaption>
+  </figure>
+  <dl class="fields">
+    <dt>Axis</dt><dd>Wiring and placement</dd>
+    <dt>Basis</dt><dd><code>direct:</code>
+      <ul>
+        <li>openai-go v3 <code>client.go:195</code>: <code>func (r *Client) Post(ctx context.Context, path string, params any, res any, opts ...option.RequestOption) error</code>.</li>
+        <li><code>requestconfig.go:285</code>: <code>MaxRetries: 2</code>. It retries 408/409/429/5xx and honors <code>Retry-After</code>/<code>Retry-After-Ms</code>, which matches TypeSafe's own SDK policy.</li>
+        <li><code>WithBaseURL</code> adds the trailing slash, so <code>…/v1/</code> + <code>systemone</code> joins correctly.</li>
+        <li><code>model_resolver.go:84-91</code> sets the key and base URL. <code>model_resolver.go:48</code> splits <code>provider/model</code> on the first slash only.</li>
+      </ul>
+      <code>external:</code> OpenRouter and OpenCode Zen serve <code>/systemone</code> (OpenCode V2 recorded fixtures). All five ideation agents proposed this independently.</dd>
+    <dt>Rationale</dt><dd>It answers "configurable endpoint or TypeSafe only?" with a config entry instead of a feature. It reuses the secret handling that is already tested: no secret in errors, and none in the web config view. Almost no lines go against the budget.</dd>
+    <dt>Downsides</dt><dd>
+      <ul>
+        <li><code>OpenAIConfig</code> fields such as <code>rocketcode_auth</code> and <code>autocompaction_threshold</code> mean nothing here.</li>
+        <li>A provider with <code>rocketcode_auth: chatgpt</code> takes a different client path (<code>model_resolver.go:75-82</code>), so config validation must reject it for this setting.</li>
+        <li>There is no default request timeout beyond the context, so the call needs a cap; TypeSafe's SDK uses 30 s.</li>
+        <li>Vendor error bodies come back verbatim in <code>apierror.Error()</code>, so don't pass them straight into the script.</li>
+        <li>The new setting needs normalization, docs and tests, like <code>auto_approver_model</code>.</li>
+        <li>The rocketcode resolver interface hands out an <code>*openai.Client</code>, so the built-in can call <code>Post</code> without new plumbing.</li>
+      </ul>
+    </dd>
+    <dt>Confidence</dt><dd>85%</dd>
+    <dt>Complexity</dt><dd>Low</dd>
+  </dl>
+</article>
+
+<article class="idea" id="i2">
+  <h3>2. <code>systemone(...)</code> takes TypeSafe's request exactly as documented</h3>
+  <ul class="chips"><li class="id">Idea 2</li><li>Call contract</li><li>Confidence 85%</li><li>Complexity Low</li></ul>
+  <h4>Description</h4>
+  <p>Because the command lives inside <code>execute</code>, there's no strict-schema problem to work around. The command takes two keyword arguments:</p>
+  <ul>
+    <li><code>state</code>: a string, dict or list</li>
+    <li><code>questions</code>: a dict keyed by names the agent chooses, each a Noul, Choice or Score exactly as in TypeSafe's API reference</li>
+  </ul>
+  <p>Structured <code>instructions</code> and <code>criteria</code> objects work too, including data fields referenced in backticks such as <code>`spec`</code>. The command doesn't take a <code>model</code> argument; the operator's <code>systemone_model</code> (idea 1) decides.</p>
+  <p>Its execute schema is a real JSON Schema:</p>
+  <ul>
+    <li><code>questions</code> uses <code>additionalProperties</code> with a <code>oneOf</code> over the three types.</li>
+    <li>The 255-option and 10-level limits are written into the schema.</li>
+    <li>Only <code>state</code> and <code>questions</code> are required.</li>
+  </ul>
+  <p>Mistakes are caught by the validator execute already runs, before any HTTP call.</p>
+<pre><code>def main():
+    r = systemone(
+        state={"diff": read(filePath="changes.diff"),
+               "spec": read(filePath="docs/billing-spec.md")},
+        questions={
+            "touches_billing": {"type": "noul",
+                "instructions": "Does `diff` change how invoices are charged?"},
+            "spec_verdict": {"type": "choice",
+                "instructions": "Does `spec` support the change in `diff`?",
+                "criteria": {"supports": None, "contradicts": None, "says_nothing": None}},
+        },
+    )
+    a = r["answers"]
+    if a["touches_billing"]["noul"] &lt; 0.5:
+        return "no billing impact"
+    return "billing change; spec " + a["spec_verdict"]["choice"]</code></pre>
+  <dl class="fields">
+    <dt>Axis</dt><dd>Call contract</dd>
+    <dt>Basis</dt><dd><code>direct:</code>
+      <ul>
+        <li><code>codemode.go:246-253</code>: keyword arguments go through <code>kwargsToMap</code>, then <code>validateArgs(schema, callArgs)</code>. That is a full JSON Schema validation (<code>schema.Resolve(nil)</code> … <code>resolved.Validate(instance)</code>, lines 295-325).</li>
+        <li><code>tools.go:630-651</code>: <code>functionTool</code> only sets top-level <code>required</code>/<code>additionalProperties</code>.</li>
+        <li><code>mcp_tools.go:849-866</code>: <code>codeModeHostRequiredFields</code> picks the required fields per command (for example <code>glob</code>, <code>grep</code> → <code>pattern</code>).</li>
+      </ul>
+      <code>external:</code> the TypeSafe API reference (question shapes, 255/10 limits, structured instructions with backtick references).</dd>
+    <dt>Rationale</dt><dd>It keeps TypeSafe's format as the standard with no translation layer and no lost features. The agent can follow TypeSafe's own docs and examples word for word, and agent-written code can build questions in loops (one Noul per file, per option, per argument).</dd>
+    <dt>Downsides</dt><dd>
+      <ul>
+        <li>The agent has to write good questions. Broad questions are Jev's worst case; see idea 6 for a fix.</li>
+        <li>The <code>oneOf</code> schema adds about a screenful of schema code, and its validation errors are less friendly than a hand-written message.</li>
+        <li>No "none of these" option is added automatically. The agent has to include one when abstention matters, and the description should say so.</li>
+      </ul>
+    </dd>
+    <dt>Confidence</dt><dd>85%</dd>
+    <dt>Complexity</dt><dd>Low</dd>
+  </dl>
+</article>
+
+<article class="idea" id="i3">
+  <h3>3. Execute-only built-in next to read/grep; the script builds the state</h3>
+  <ul class="chips"><li class="id">Idea 3</li><li>Wiring and placement</li><li>Confidence 80%</li><li>Complexity Medium</li></ul>
+  <h4>Description</h4>
+  <p>Make <code>systemone</code> a rocketcode built-in, add it to <code>CodeModeOnlyHostTool</code> next to <code>read</code>, <code>apply_patch</code>, <code>grep</code> and <code>glob</code>, and configure it through one <code>Config.SystemOneModel</code> field resolved by the model resolver every loop already holds. When the field is unset, an explicit inert command takes its place and the agent doesn't see it.</p>
+  <p>Three things then come for free:</p>
+  <ul>
+    <li><strong>State without copy-paste.</strong> The script builds <code>state</code> from <code>read(...)</code>, <code>grep(...)</code> and spill files. File contents never pass through the model's output tokens, and <code>read</code>'s own permission rules (including the <code>.env</code> protection) already decide what can be read.</li>
+    <li><strong>Fan-out.</strong> <code>map(paths, fn, concurrency=16)</code> judges many items in parallel (up to 64), so there's no need for a batch API.</li>
+    <li><strong>Reach.</strong> Root agents, task subagents and workflow workers all get it. Handoff stays tool-free on purpose.</li>
+  </ul>
+<pre><code>def main():
+    out = glob(pattern="docs/runbooks/*.md")
+    if out == "No files found":
+        return out
+    paths = out.splitlines()
+    q = {"fits": {"type": "noul",
+                  "instructions": "Does this runbook cover a failed payout?"}}
+    rs = map(paths, lambda p: systemone(state=read(filePath=p), questions=q), concurrency=16)
+    hits = [paths[i] for i in range(len(paths)) if rs[i]["answers"]["fits"]["noul"] &gt;= 0.8]
+    return "\n".join(hits)</code></pre>
+  <dl class="fields">
+    <dt>Axis</dt><dd>Wiring and placement</dd>
+    <dt>Basis</dt><dd><code>direct:</code>
+      <ul>
+        <li><code>tools.go:94-101</code>: <code>CodeModeOnlyHostTool</code> lists <code>read, apply_patch, glob, grep, webfetch, bash</code>.</li>
+        <li><code>fanout.go:67-70</code>: <code>gather</code>, <code>map</code>, <code>race</code>, <code>race_first</code>.</li>
+        <li><code>fanout.go:17-19</code>: <code>DefaultConcurrency = 16</code>, <code>MaxConcurrency = 64</code>.</li>
+        <li><code>tools.go:207-219</code>: <code>read</code> uses <code>sfs.readPermissionSubject</code>.</li>
+        <li><code>raw_run.go:86-89</code>: workflow workers get all runtime tools.</li>
+        <li><code>handoff.go:45</code>: <code>RestrictTools([]string{})</code>.</li>
+      </ul>
+      <code>external:</code> jevwire reads files server-side so agents never paste text. Its author measured 38 files, about 108k input tokens, $0.0045, under 1 s.</dd>
+    <dt>Rationale</dt><dd>It matches how you described the feature. It also settles several open questions in one move: built-in or custom tool, whether workflows get it, how state avoids copy-paste, and how to judge many items. Nothing new is needed for any of them.</dd>
+    <dt>Downsides</dt><dd>
+      <ul>
+        <li>The code lands in the smaller budget (rocketcode, 10,500 lines) and in the general-purpose loop package.</li>
+        <li>It adds a field to <code>rocketcode.Config</code>.</li>
+        <li>With <code>map</code>, every nested call is still permission-checked. If an agent's rule for <code>systemone</code> is <code>auto</code>, each branch could wait for the 90-second reviewer, so in practice the rule should be <code>allow</code> or <code>deny</code>.</li>
+        <li>The 32k state limit needs a clear error.</li>
+        <li><code>read</code> returns text formatted for the model, not raw content: <code>&lt;path&gt;</code>/<code>&lt;content&gt;</code> tags, a <code>1: </code> prefix on every line, and an end-of-file note (<code>filesystem.go:135-150</code>). State built from it carries that formatting, and Jev handles numbers poorly. Brainstorming should decide between three options: accept it, strip it in the script, or give scripts a way to get raw text.</li>
+      </ul>
+    </dd>
+    <dt>Confidence</dt><dd>80%</dd>
+    <dt>Complexity</dt><dd>Medium</dd>
+  </dl>
+</article>
+
+<article class="idea" id="i4">
+  <h3>4. Return a typed Starlark value; the script owns the thresholds</h3>
+  <ul class="chips"><li class="id">Idea 4</li><li>Call contract</li><li>Confidence 75%</li><li>Complexity Low</li></ul>
+  <h4>Description</h4>
+  <p>Give the command a <code>CallValue</code>, the way <code>bash</code> returns a struct. The result is TypeSafe's response as Starlark values: <code>r["answers"][id]</code> with <code>noul</code>, <code>choice</code>, <code>probabilities</code>, <code>confidence</code>, <code>score</code> and <code>legend</code>, plus <code>model</code> and <code>usage</code>. Probabilities stay inside the script; the model only sees what <code>main()</code> returns.</p>
+  <p>This covers what the first draft tried to do with a Go-side band table. The comparisons Jev's docs say belong in code now happen in the agent's code. There's no extra threshold machinery in Go, and context stays small because the script can return one line per decision.</p>
+  <dl class="fields">
+    <dt>Axis</dt><dd>Call contract</dd>
+    <dt>Basis</dt><dd><code>direct:</code>
+      <ul>
+        <li><code>codemode.go:210-214</code>: <code>if tool.CallValue != nil { return tool.CallValue(ctx, args) }</code>.</li>
+        <li><code>mcp_tools.go:779-791</code>: <code>bash</code> returns a struct through <code>result.Data</code>.</li>
+        <li><code>attachments.go:58-63</code>: <code>Data</code> is meant for code-mode bindings.</li>
+        <li>Only <code>execute</code>'s final output is clipped and spilled, so returning a compact string is the script's job.</li>
+      </ul>
+      <code>external:</code> jevwire says "thresholds, gating, arithmetic in code". TypeSafe's how-to-build guide routes on <code>confidence</code> in code.</dd>
+    <dt>Rationale</dt><dd>It gives the agent the full answer to compute with, and keeps the model's context small. It is also the natural partner to idea 2: TypeSafe's format goes in, TypeSafe's format comes out.</dd>
+    <dt>Downsides</dt><dd>
+      <ul>
+        <li>The thresholds are whatever the agent writes, not reviewed constants; see idea 6.</li>
+        <li>Today the <code>Data</code>→Starlark path is special-cased for <code>bash</code>. A built-in can set its own <code>CallValue</code>, but the shared path may need a small change.</li>
+        <li>A prompt-injected state can still sway a single answer. The agent's code should combine several narrow questions rather than trust one.</li>
+      </ul>
+    </dd>
+    <dt>Confidence</dt><dd>75%</dd>
+    <dt>Complexity</dt><dd>Low</dd>
+  </dl>
+</article>
+
+<article class="idea" id="i5">
+  <h3>5. Treat it as data leaving the host: own permission bucket, deny by default</h3>
+  <ul class="chips"><li class="id">Idea 5</li><li>Trust and safety</li><li>Confidence 75%</li><li>Complexity Low</li></ul>
+  <h4>Description</h4>
+  <p>Unlike <code>webfetch</code>, System One can't bring attacker-written text back. Its answers are labels drawn from options the agent wrote, plus numbers. The operator fixes the destination in config, not the agent. So the real risk only goes outward: workspace data sent to a third party.</p>
+  <p>That gives a short policy:</p>
+  <ul>
+    <li>A dedicated <code>systemone</code> permission bucket.</li>
+    <li>Off the default-allowed list, so access is deny-by-default and granted with one explicit line per agent.</li>
+    <li>What can be read is still governed by <code>read</code>'s own rules, because the script reads through <code>read</code>.</li>
+    <li>No change to the <code>rc005</code> lint, which guards against untrusted content flowing in.</li>
+  </ul>
+  <figure>
+    <svg viewBox="0 0 760 170" role="img" aria-labelledby="f5t">
+      <title id="f5t">Outbound state is built from permission-checked reads; inbound answers are closed-set labels</title>
+      <defs>
+        <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2f5d8a"/></marker>
+        <marker id="ah3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5a5f66"/></marker>
+      </defs>
+      <rect class="box hl" x="15" y="35" width="200" height="100" rx="10"/>
+      <text x="35" y="78">execute script</text>
+      <text class="small" x="35" y="98">read/grep, permissions</text>
+      <rect class="box" x="545" y="35" width="200" height="100" rx="10"/>
+      <text x="565" y="78">System One endpoint</text>
+      <text class="small" x="565" y="98">set by operator config</text>
+      <line class="arrow" x1="215" y1="60" x2="542" y2="60" marker-end="url(#ah2)"/>
+      <text x="260" y="50">out: state built from reads</text>
+      <line class="arrow back" x1="545" y1="112" x2="218" y2="112" marker-end="url(#ah3)"/>
+      <text x="245" y="132">back: labels the agent wrote + numbers</text>
+    </svg>
+    <figcaption>The outbound side is where permission rules apply. The return channel can only carry options the agent supplied.</figcaption>
+  </figure>
+  <dl class="fields">
+    <dt>Axis</dt><dd>Trust and safety</dd>
+    <dt>Basis</dt><dd><code>direct:</code>
+      <ul>
+        <li><code>agentlint.go:305</code> triggers only when <code>websearch</code> or <code>webfetch</code> is allowed together with write access ("can write external content to …").</li>
+        <li><code>guardian.go:64/70</code>: third-party destinations are not pre-approved, and sending workspace data outside is "high or critical" risk.</li>
+        <li><code>permission_gate.go:31-62</code>: nested execute calls are re-checked.</li>
+        <li>The workflow-bucket plan set the precedent that new capabilities get their own bucket.</li>
+      </ul>
+      <code>reasoned:</code> with at most 255 options, each answer carries at most 8 bits, all chosen from agent-written text.</dd>
+    <dt>Rationale</dt><dd>It settles "default-allowed or explicit, and does the lint change?" with a stated argument rather than copying <code>webfetch</code>'s risk profile out of habit. It adds no lint code.</dd>
+    <dt>Downsides</dt><dd>
+      <ul>
+        <li>The "labels only" argument breaks if the agent builds options from untrusted state, for example scraped page titles.</li>
+        <li>Operators have one more bucket to learn.</li>
+        <li>An <code>auto</code> rule would put the 90-second reviewer in front of every call inside a fan-out.</li>
+        <li>Allowing it by default was considered and rejected, because it conflicts with the guardian's stance on third-party destinations.</li>
+      </ul>
+    </dd>
+    <dt>Confidence</dt><dd>75%</dd>
+    <dt>Complexity</dt><dd>Low</dd>
+  </dl>
+</article>
+
+<article class="idea" id="i6">
+  <h3>6. Human-written named checks (follow-up fork)</h3>
+  <ul class="chips"><li class="id">Idea 6</li><li>What agents use it for</li><li>Confidence 50%</li><li>Complexity Medium</li></ul>
+  <h4>Description</h4>
+  <p>For decisions that repeat, such as "is this destructive?", "which skill?" or "does this evidence support the claim?", keep reviewed question sets and thresholds in workspace files. A script could then call something like <code>systemone(check="supports-claim", state=...)</code> instead of writing the questions itself. Free-form <code>questions</code> stay the default. Checks are an optional, reviewed layer on top.</p>
+  <dl class="fields">
+    <dt>Axis</dt><dd>What agents use it for</dd>
+    <dt>Basis</dt><dd><code>direct:</code> <code>dynamic_workflow_tool.go:88-107</code> lists allowed names through <code>VisibilitySubjects</code> and uses the name as the permission subject. That precedent fits checks too. <code>external:</code> TypeSafe's own agent skill warns "agents aren't great at writing questions" and keeps questions and thresholds in one reviewed file. blakestone-x/jev-mcp keeps "all thresholds in one questions.py".</dd>
+    <dt>Rationale</dt><dd>Question quality is Jev's biggest accuracy lever. Free-form questions inside <code>execute</code> make this more important, not less, because agents will write them in loops.</dd>
+    <dt>Downsides</dt><dd>It needs a file format and loader, which costs lines. It isn't needed until a decision actually repeats; a skill containing example questions may be enough at first.</dd>
+    <dt>Confidence</dt><dd>50%</dd>
+    <dt>Complexity</dt><dd>Medium</dd>
+  </dl>
+</article>
+
+<article class="idea" id="i7">
+  <h3>7. Later phase: a "second reader" for silent background runs</h3>
+  <ul class="chips"><li class="id">Idea 7</li><li class="later">Later phase</li><li>Decisions RocketClaw makes itself</li><li>Confidence 35%</li><li>Complexity Low</li></ul>
+  <h4>Description</h4>
+  <p>A background run sometimes ends by choosing to stay silent. In that case, the harness asks one yes/no question about the run's final output: "does this contain something the human asked to be told about?" If the answer is yes, it reuses the existing re-prompt loop once: "a second reader flagged this; decide again". The agent still owns what gets sent. System One never sends or suppresses anything, so the worst an injection can do is cause one extra re-prompt.</p>
+  <dl class="fields">
+    <dt>Axis</dt><dd>Decisions RocketClaw makes itself (later phase)</dd>
+    <dt>Basis</dt><dd><code>direct:</code> <code>bridge.go:990-993</code> already re-prompts until a decision is made. <code>raw_run.go:224-233</code> exposes the empty-payload outcome. <code>external:</code> jevwire's rule that harness checks never emit "allow", applied here to delivery. Breast screening's rule that a second reader can only add a recall.</dd>
+    <dt>Rationale</dt><dd>Missed alerts from scheduled agents are quiet and costly. This check costs about 100 ms and can't make the system less safe. It reuses the first version's client unchanged.</dd>
+    <dt>Downsides</dt><dd>There is no evidence yet that the current mechanism misses anything. It adds a call to every silent run. It only makes sense after the first version ships.</dd>
+    <dt>Confidence</dt><dd>35%</dd>
+    <dt>Complexity</dt><dd>Low</dd>
+  </dl>
+</article>
+</section>
+
+<section id="rejection-summary">
+<h2>Rejection Summary</h2>
+<table>
+  <thead><tr><th>#</th><th>Idea</th><th>Reason Rejected</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Strict-safe flat question list with host-assigned ids (was idea 2 in the first draft)</td><td>It solved a problem <code>execute</code> doesn't have. Execute validates with full JSON Schema, so TypeSafe's keyed format works directly (now idea 2).</td></tr>
+    <tr><td>2</td><td>Host appends a "none of these" option to every Choice</td><td>The agent controls the criteria inside execute. Abstention is taught in the description instead of forced.</td></tr>
+    <tr><td>3</td><td>A <code>paths</code> parameter so the host reads files</td><td>Not needed. The script builds state from <code>read(...)</code>, and <code>read</code>'s permission rules already apply.</td></tr>
+    <tr><td>4</td><td>Go-side confidence bands, hiding probabilities from the model</td><td>Replaced by idea 4. Probabilities stay inside the script, and the model sees only what <code>main()</code> returns.</td></tr>
+    <tr><td>5</td><td>Batch many states with the same questions</td><td>Not needed. <code>map(items, fn, concurrency=16)</code> already fans out, up to 64 in parallel.</td></tr>
+    <tr><td>6</td><td>Workflow <code>judge()</code> Starlark builtin</td><td>Covered by idea 3, since workflow workers get rocketcode built-ins. A second surface in the workflow engine isn't needed for the first version.</td></tr>
+    <tr><td>7</td><td>Separate path for repairable errors</td><td>Execute's schema validation already reports malformed arguments before any call. Vendor 422s are rare after that.</td></tr>
+    <tr><td>8</td><td>Shared <code>Decider</code> interface for future consumers</td><td>Speculative: the first version has one consumer. Tests can use <code>httptest</code>, so an abstraction for single-use code isn't justified.</td></tr>
+    <tr><td>9</td><td>Description examples tested against the recorded fixture</td><td>A planning detail, not a design direction. The fixture also lives outside this repo.</td></tr>
+    <tr><td>10</td><td>A free injection-screen question added to every call</td><td>A screen inside the same request can be hijacked along with the decision. It would flag constantly on coding content that addresses AI. It is also a harness guardrail, which is later phase.</td></tr>
+    <tr><td>11</td><td>Slack <code>#triage</code> cron recipe</td><td>A demo recipe, not a design choice. It also depends on a harness-owned decision.</td></tr>
+    <tr><td>12</td><td>RocketClaw custom tool instead of a built-in</td><td>Custom tools also reach execute, but they stay model-facing, workflow runs don't get them, and a direct file read would bypass <code>read</code>'s rules. That doesn't match "a command inside execute".</td></tr>
+    <tr><td>13</td><td>Later phase: deny-only fast lane before the 90 s reviewer</td><td>It speeds up only denials, while the slow, common case (allows) still pays for the LLM reviewer. An attacker could also force denials.</td></tr>
+    <tr><td>14</td><td>Later phase: replace show-the-human with a yes/no question</td><td>It breaks the "full exact message" contract. The additive variant survived as idea 7.</td></tr>
+    <tr><td>15</td><td>Later phase: skill suggestion on every turn</td><td>Hints in the system prompt on every turn would break prompt caching for the conversation. The vendor numbers are vendor-run and effectively single-turn.</td></tr>
+    <tr><td>16</td><td>Allow System One by default</td><td>Conflicts with the guardian's rule that third-party destinations aren't pre-approved.</td></tr>
+    <tr><td>17</td><td>Generalize <code>rc005</code> into an egress list</td><td>Not needed. The inbound-contamination rule doesn't apply to closed-set answers.</td></tr>
+  </tbody>
+</table>
+<div class="callout warn">
+  <p><strong>Revision note.</strong> The first draft treated <code>systemone</code> as a top-level, strict-schema tool. Several ideas were shaped around problems execute doesn't have: a flattened question list, a host-added "none" option, a <code>paths</code> parameter, Go-side bands and batching. The checker's objection that Starlark calls run one at a time was also wrong, because <code>map</code>/<code>gather</code> fan out in parallel. This version is rebuilt on the confirmed execute behavior in <code>codemode.go</code> and <code>fanout.go</code>.</p>
+</div>
+</section>
+
+<footer class="composition-signal">Composed <time datetime="2026-10-02">2026-10-02</time> (revised after review) from the user's request to add a System One command to <code>cmd/rocketclaw</code>'s execute environment, with references <a href="https://docs.typesafe.ai/api">docs.typesafe.ai/api</a> and the Hugging Face "OpenAI Decisions API" guide (treated as low-reliability).</footer>
+</main>
+</body>
+</html>

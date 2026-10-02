@@ -786,6 +786,85 @@ func TestLoadExternalMCPUsersRejectsInvalidInputs(t *testing.T) {
 	require.ErrorContains(t, err, "read external MCP users file")
 }
 
+func TestLoadSystemOne(t *testing.T) {
+	t.Run("absent", func(t *testing.T) {
+		cfg := loadTestConfig(t, `{
+		  "workspace": ".",
+		  "openai": {"api_key": "test-key"},
+		  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}
+		}`)
+		assert.Zero(t, cfg.SystemOne)
+	})
+
+	t.Run("default base url", func(t *testing.T) {
+		cfg := loadTestConfig(t, `{
+		  "workspace": ".",
+		  "openai": {"api_key": "test-key"},
+		  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
+		  "systemone": {"typesafeai": {"api_key": " k ", "model": " jev-1.13.0 "}}
+		}`)
+		assert.Equal(t, TypeSafeAIConfig{APIKey: "k", Model: "jev-1.13.0", APIBaseURL: "https://api.typesafe.ai/v1"}, cfg.SystemOne.TypeSafeAI)
+	})
+}
+
+func TestLoadSystemOneAPIKeyFromAWS(t *testing.T) {
+	local := `{
+	  "workspace": ".",
+	  "openai": {"api_key": "test-key"},
+	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
+	  "systemone": {"typesafeai": {"api_key": {"aws":{"arn":"` + otherARN + `","key":"token"}}, "model": "jev-1.13.0"}}
+	}`
+	cfg := loadSecretConfig(t, local, "", mapSecrets{otherARN: `{"token":"fetched-systemone-key"}`})
+	assert.Equal(t, "fetched-systemone-key", cfg.SystemOne.TypeSafeAI.APIKey)
+	assert.Equal(t, "https://api.typesafe.ai/v1", cfg.SystemOne.TypeSafeAI.APIBaseURL)
+}
+
+func TestValidateSystemOne(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		update  func(*Config)
+		wantErr string
+	}{
+		{
+			name: "missing api_key",
+			update: func(c *Config) {
+				c.SystemOne.TypeSafeAI.Model = "jev-1.13.0"
+			},
+			wantErr: "systemone.typesafeai.api_key is required",
+		},
+		{
+			name: "missing model",
+			update: func(c *Config) {
+				c.SystemOne.TypeSafeAI.APIKey = "secret-systemone-key"
+			},
+			wantErr: "systemone.typesafeai.model is required",
+		},
+		{
+			name: "http non-loopback",
+			update: func(c *Config) {
+				c.SystemOne.TypeSafeAI = TypeSafeAIConfig{APIKey: "k", Model: "jev-1.13.0", APIBaseURL: "http://example.com"}
+			},
+			wantErr: "systemone.typesafeai.api_base_url http is only allowed for loopback hosts",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			tt.update(cfg)
+
+			err := cfg.Validate()
+			require.EqualError(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestValidateSystemOneHTTPLoopback(t *testing.T) {
+	cfg := validConfig()
+	cfg.SystemOne.TypeSafeAI = TypeSafeAIConfig{APIKey: "k", Model: "jev-1.13.0", APIBaseURL: "http://127.0.0.1:8080"}
+
+	require.NoError(t, cfg.Validate())
+	assert.Equal(t, "http://127.0.0.1:8080", cfg.SystemOne.TypeSafeAI.APIBaseURL)
+}
+
 func TestValidateAllowsChatGPTAuthWithoutAPIKey(t *testing.T) {
 	cfg := validConfig()
 	cfg.OpenAI.APIKey = ""

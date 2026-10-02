@@ -36,8 +36,21 @@ type Config struct {
 	Slack             SlackConfig                `json:"slack"`
 	OpenAI            OpenAIConfig               `json:"openai"`
 	Providers         map[string]OpenAIConfig    `json:"providers,omitempty"`
+	SystemOne         SystemOneConfig            `json:"systemone,omitzero"`
 	AutoApproverModel string                     `json:"auto_approver_model"`
 	Instrumentation   InstrumentationConfig      `json:"instrumentation"`
+}
+
+// SystemOneConfig configures System One execute commands.
+type SystemOneConfig struct {
+	TypeSafeAI TypeSafeAIConfig `json:"typesafeai,omitzero"`
+}
+
+// TypeSafeAIConfig configures the TypeSafe System One endpoint.
+type TypeSafeAIConfig struct {
+	APIKey     string `json:"api_key"`
+	Model      string `json:"model"`
+	APIBaseURL string `json:"api_base_url"`
 }
 
 // DefaultRuntimeDir is the generated runtime directory for rocketclaw configs.
@@ -385,6 +398,10 @@ func (c *Config) Validate() error {
 		c.Providers[name] = provider
 	}
 
+	if err := normalizeTypeSafeAIConfig(&c.SystemOne.TypeSafeAI); err != nil {
+		return err
+	}
+
 	var err error
 
 	c.AutoApproverModel, err = normalizeOpenAIModel("auto_approver_model", c.AutoApproverModel)
@@ -469,6 +486,42 @@ func normalizeOpenAIModel(field, model string) (string, error) {
 	}
 
 	return model, nil
+}
+
+func normalizeTypeSafeAIConfig(cfg *TypeSafeAIConfig) error {
+	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
+	cfg.Model = strings.TrimSpace(cfg.Model)
+	cfg.APIBaseURL = strings.TrimSpace(cfg.APIBaseURL)
+
+	if *cfg == (TypeSafeAIConfig{}) {
+		return nil
+	}
+
+	if cfg.APIKey == "" {
+		return errors.New("systemone.typesafeai.api_key is required")
+	}
+
+	if cfg.Model == "" {
+		return errors.New("systemone.typesafeai.model is required")
+	}
+
+	cfg.APIBaseURL = cmp.Or(cfg.APIBaseURL, "https://api.typesafe.ai/v1")
+
+	parsed, err := url.Parse(cfg.APIBaseURL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return errors.New("systemone.typesafeai.api_base_url must be an http or https URL")
+	}
+
+	if parsed.Scheme == "http" {
+		host := parsed.Hostname()
+
+		ip, errAddr := netip.ParseAddr(host)
+		if !strings.EqualFold(host, "localhost") && (errAddr != nil || !ip.IsLoopback()) {
+			return errors.New("systemone.typesafeai.api_base_url http is only allowed for loopback hosts")
+		}
+	}
+
+	return nil
 }
 
 func normalizeOpenAIConfig(field string, cfg *OpenAIConfig) error {

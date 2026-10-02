@@ -45,7 +45,7 @@ func TestRawRunDecisionToolStoresPayload(t *testing.T) {
 
 func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: '{{ model \"active\" }}'\npermission:\n  read: {\"*\": allow}\n  edit: allow\n  glob: allow\n  grep: allow\n  bash: {\"*\": allow}\n  webfetch: {\"*\": allow}\n  websearch: allow\n  skill: {\"demo\": allow}\n  task: {\"*\": allow}\n  rocketclaw: {\"rocketclaw_reload\": allow}\n---\nMain prompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: '{{ model \"active\" }}'\npermission:\n  read: {\"*\": allow}\n  edit: allow\n  glob: allow\n  grep: allow\n  bash: {\"*\": allow}\n  webfetch: {\"*\": allow}\n  websearch: allow\n  skill: {\"demo\": allow}\n  task: {\"*\": allow}\n  rocketclaw: {\"rocketclaw_reload\": allow}\n  systemone: allow\n---\nMain prompt\n")
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
@@ -96,7 +96,7 @@ func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 		require.NoError(t, provider.Shutdown(context.Background()))
 	})
 
-	cfg := &config.Config{Workspace: workspace, Models: map[string]string{"active": "active-model", "fast": "fast-model", "nested": `{{ model "fast" }}`}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, Instrumentation: config.InstrumentationConfig{Enabled: true, HideInputs: true, HideOutputs: true}}
+	cfg := &config.Config{Workspace: workspace, Models: map[string]string{"active": "active-model", "fast": "fast-model", "nested": `{{ model "fast" }}`}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, Instrumentation: config.InstrumentationConfig{Enabled: true, HideInputs: true, HideOutputs: true}, SystemOne: config.SystemOneConfig{TypeSafeAI: config.TypeSafeAIConfig{APIKey: "k", Model: "jev-1.13.0", APIBaseURL: "https://api.typesafe.ai/v1"}}}
 	run, err := newWorkflowAgentRunner(cfg, "main", slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, run.Close()) })
@@ -133,6 +133,8 @@ func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 	require.NotContains(t, fmt.Sprint(first["tools"]), "rocketclaw_")
 	require.Contains(t, fmt.Sprint(first["tools"]), `name:execute`)
 	require.NotContains(t, fmt.Sprint(first["tools"]), `name:read`)
+	require.NotContains(t, fmt.Sprint(first["tools"]), `name:systemone`)
+	require.Contains(t, fmt.Sprint(first), "systemone(")
 
 	require.Equal(t, "fast-model", structured["model"])
 	require.Contains(t, fmt.Sprint(structured["instructions"]), "Worker !`printf unsafe`")

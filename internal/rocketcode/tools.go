@@ -59,6 +59,7 @@ type readToolParams struct {
 	FilePath string `json:"filePath"`
 	Filename string `json:"filename"`
 	Offset   int    `json:"offset"`
+	Plain    bool   `json:"plain"`
 }
 
 type applyPatchToolParams struct {
@@ -94,7 +95,7 @@ func newSandboxedTools(root *os.Root, shellTemp shellTempConfig, shellEnv []stri
 // only inside execute (not as a top-level model tool).
 func CodeModeOnlyHostTool(name string) bool {
 	switch name {
-	case "read", "apply_patch", "glob", "grep", "webfetch", "bash":
+	case "read", "apply_patch", "glob", "grep", "webfetch", "bash", "systemone":
 		return true
 	default:
 		return false
@@ -209,6 +210,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 			Definition: *functionTool("read", "Read a file from the workspace", map[string]any{
 				"filePath": map[string]any{"type": "string"},
 				"offset":   map[string]any{"type": "integer"},
+				"plain":    map[string]any{"type": "boolean"},
 			}),
 			Permission: "read",
 			Subjects: func(raw json.RawMessage) ([]string, error) {
@@ -223,6 +225,15 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 				var params readToolParams
 				if err := decodeToolParams(raw, &params); err != nil {
 					return ToolResult{}, err
+				}
+
+				if params.Plain {
+					text, err := plainRead(sfs, readToolPath(params), params.Offset)
+					if err != nil {
+						return ToolResult{}, err
+					}
+
+					return TextToolResult(text), nil
 				}
 
 				return sfs.ReadResult(readToolPath(params), max(params.Offset, 1)), nil

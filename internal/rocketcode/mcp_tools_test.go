@@ -321,6 +321,65 @@ func TestCodeModeHostsSurviveModelWithoutHosts(t *testing.T) {
 	assert.Contains(t, result.Output, "hello")
 }
 
+func TestExecuteReadPlain(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = root.Close() })
+
+	require.NoError(t, root.WriteFile("a.txt", []byte("hello\nworld\n"), 0o600))
+	require.NoError(t, root.WriteFile("empty.txt", []byte{}, 0o600))
+	require.NoError(t, root.WriteFile(".env", []byte("SECRET=value"), 0o600))
+	require.NoError(t, root.WriteFile("image.png", []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, 0o600))
+	require.NoError(t, root.WriteFile("target.txt", []byte("hidden"), 0o600))
+	require.NoError(t, root.Symlink("target.txt", "link.txt"))
+	require.NoError(t, root.WriteFile("secret.txt", []byte("nope"), 0o600))
+
+	var permissions PermissionSet
+	require.NoError(t, permissions.Allow("read", "*"))
+	require.NoError(t, permissions.Deny("read", "secret.txt"))
+
+	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
+	factory := &toolFactory{baseTools: makeSandboxedTools(sfs, nil)}
+	model, hosts := factory.assembleTools(&Agent{Permission: permissions})
+	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts}
+	ctx := withToolCallContext(t.Context(), looper, nil, "")
+	run := model[executeToolName]
+
+	for _, tc := range []struct {
+		name, expr, want, wantErr string
+	}{
+		{"exact bytes", `read(filePath="a.txt", plain=True)`, "hello\nworld\n", ""},
+		{"empty file", `read(filePath="empty.txt", plain=True)`, "", ""},
+		{"env denied", `read(filePath=".env", plain=True)`, "", deniedEnvAccessMessage(".env")},
+		{"missing file", `read(filePath="missing.txt", plain=True)`, "", "File not found: missing.txt"},
+		{"symlink", `read(filePath="link.txt", plain=True)`, "", "symlink access denied: link.txt"},
+		{"png", `read(filePath="image.png", plain=True)`, "", "plain read supports text files only"},
+		{"offset", `read(filePath="a.txt", plain=True, offset=2)`, "", "plain read does not support offset 2"},
+		{"deny rule", `read(filePath="secret.txt", plain=True)`, "", `permission "read"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, errMarshal := json.Marshal(struct {
+				Code string `json:"code"`
+			}{"def main():\n    return " + tc.expr + "\n"})
+			require.NoError(t, errMarshal)
+
+			result, errCall := run.Call(ctx, raw, nil, emptyToolCallMetadata())
+			if tc.wantErr != "" {
+				require.Error(t, errCall)
+				require.Contains(t, errCall.Error(), tc.wantErr)
+
+				return
+			}
+
+			require.NoError(t, errCall)
+			require.Equal(t, tc.want, result.Output)
+		})
+	}
+}
+
 func TestExecuteBashOutputSurvivesContainers(t *testing.T) {
 	t.Parallel()
 

@@ -775,12 +775,14 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 
 				return attachmentOutputMessage(result), nil
 			},
-		}
-		if toolName == "bash" {
-			bound.CallValue = func(ctx context.Context, args map[string]any) (starlark.Value, error) {
+			CallValue: func(ctx context.Context, args map[string]any) (starlark.Value, error) {
 				result, errCall := callTool(ctx, args)
 				if errCall != nil {
 					return nil, errCall
+				}
+
+				if data, ok := result.Data.(starlark.Value); ok {
+					return data, nil
 				}
 
 				if bashResult, ok := result.Data.(BashResult); ok {
@@ -788,7 +790,7 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 				}
 
 				return starlark.String(attachmentOutputMessage(result)), nil
-			}
+			},
 		}
 
 		host = append(host, bound)
@@ -859,6 +861,8 @@ func codeModeHostRequiredFields(name string, params map[string]any) []string {
 	case "read":
 		// filePath or filename accepted by Call; neither forced here.
 		return nil
+	case "systemone":
+		return []string{"state", "questions"}
 	default:
 		return schemaRequiredStrings(params["required"])
 	}

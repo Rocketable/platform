@@ -94,6 +94,12 @@ The token count at which a turn asks its Provider to compact conversation histor
 
 Each Provider can set its own Autocompaction Threshold. Unset means the runtime default. A child turn uses a different threshold only when it resolves a different Provider.
 
+### System One Model
+
+A decision model that takes state plus typed questions (Noul for yes/no, Choice, Score) and returns probabilities instead of text. TypeSafe's wire format is the reference.
+
+A System One Model is not a Provider: it never serves a turn. It is configured in its own `systemone` section and reached through the `systemone` command inside Execute.
+
 ## RocketCode
 
 ### Code Mode

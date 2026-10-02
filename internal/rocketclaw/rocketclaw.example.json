@@ -80,6 +80,13 @@
       "rocketcode_auth": "api_key"
     }
   },
+  "systemone": {
+    "typesafeai": {
+      "api_key": "set-me",
+      "model": "jev-1.13.0",
+      "api_base_url": "https://api.typesafe.ai/v1"
+    }
+  },
   "auto_approver_model": "",
   "instrumentation": {
     "enabled": false,

@@ -56,6 +56,8 @@ type Config struct {
 	ShellCommand ShellCommandFunc
 	MCPServers   map[string]mcpclient.ServerConfig
 	MCPWorkspace string
+	// SystemOne is the TypeSafe endpoint. The zero value means not configured.
+	SystemOne SystemOne
 }
 
 // ChildRunStage identifies the operation being reviewed by a hidden child run.
@@ -371,6 +373,7 @@ func NewWithModelResolver(
 	}
 
 	maps.Copy(baseTools, customTools)
+	addSystemOneTool(baseTools, config.SystemOne)
 
 	mcpRegistry, err := newMCPRegistry(config.MCPWorkspace, config.MCPServers)
 	if err != nil {
