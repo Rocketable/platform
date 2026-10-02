@@ -378,7 +378,7 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			bridge := &Bridge{runtime: cfg, config: Config{ConversationID: "external_mcp:private", ManagedConversationID: "managed:other", ExternalConversationID: "public-id", SessionService: service, RequestReload: testNoopRestart}, log: slog.New(slog.DiscardHandler)}
 			runtimeConfig := bridge.rocketcodeConfig(filepath.Join(workspace, "shell"), nil, nil)
 			runtimeConfig.CheckpointSink = rocketcode.InertCheckpointSink{}
-			runtimeConfig.ChildRunLogger = rocketcode.DiscardChildRunLog
+			runtimeConfig.ChildSessions = rocketcode.InertChildSessions{}
 			runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
 			require.NoError(t, err)
 

@@ -103,6 +103,9 @@ packages:
       CheckpointSink:
         config:
           structname: mockCheckpointSink
+      ChildSessions:
+        config:
+          structname: mockChildSessions
       permissionReviewer:
         config:
           structname: mockPermissionReviewer

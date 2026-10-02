@@ -31,6 +31,7 @@ const (
 	restartNotificationDeveloperMessage = "The rocketclaw server has been restarted."
 	runLockName                         = "rocketclaw-run"
 	runLockTable                        = "rocketclaw_locks"
+	historyWithDelegations              = `(conversation_id = $1 OR conversation_id COLLATE "C" >= $1 || '/' AND conversation_id COLLATE "C" < $1 || '0')`
 )
 
 // GoalStatusActive and related constants are persisted goal-loop statuses.
@@ -412,8 +413,8 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 		}
 
 		for _, statement := range []string{
-			`DELETE FROM session_entries WHERE conversation_id = $1`,
-			`DELETE FROM session_summaries WHERE conversation_id = $1`,
+			`DELETE FROM session_entries WHERE ` + historyWithDelegations,
+			`DELETE FROM session_summaries WHERE ` + historyWithDelegations,
 			`DELETE FROM active_turns WHERE conversation_id = $1`,
 			`DELETE FROM scheduled_messages WHERE conversation_id = $1`,
 			`DELETE FROM thread_queue WHERE conversation_id = $1`,
@@ -1004,9 +1005,13 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 		return 0, err
 	}
 
-	rows, err := execRows(ctx, tx, "delete rocketcode session", "count deleted rocketcode session rows", `DELETE FROM session_entries WHERE conversation_id = $1`, conversationID)
+	rows, err := execRows(ctx, tx, "delete rocketcode session", "count deleted rocketcode session rows", `DELETE FROM session_entries WHERE `+historyWithDelegations, conversationID)
 	if err != nil {
 		return 0, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM session_summaries WHERE `+historyWithDelegations, conversationID); err != nil {
+		return 0, fmt.Errorf("delete rocketcode session summaries: %w", err)
 	}
 
 	if err := saveSessionSummary(ctx, tx, protocol.SessionSummary{ConversationID: conversationID}); err != nil {
@@ -1018,6 +1023,13 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 	}
 
 	return rows, nil
+}
+
+// Delegations returns the direct "<producer>/<call ID>" delegation histories of producers.
+func (s *SessionService) Delegations(ctx context.Context, producers []string) ([]string, error) {
+	return queryStrings(ctx, s.db, `SELECT DISTINCT e.conversation_id FROM unnest($1::text[]) p(id)
+JOIN session_entries e ON e.conversation_id COLLATE "C" >= p.id || '/' AND e.conversation_id COLLATE "C" < p.id || '0'
+WHERE strpos(substr(e.conversation_id, length(p.id) + 2), '/') = 0 ORDER BY e.conversation_id`, "delegation histories", producers)
 }
 
 // ListSessions returns summaries for the requested stored rocketcode sessions.
@@ -1849,11 +1861,11 @@ func deleteSessionEntries(ctx context.Context, db stateStoreDB, conversationIDs 
 			return 0, err
 		}
 
-		if _, err := db.ExecContext(ctx, `DELETE FROM session_summaries WHERE conversation_id = $1`, conversationID); err != nil {
+		if _, err := db.ExecContext(ctx, `DELETE FROM session_summaries WHERE `+historyWithDelegations, conversationID); err != nil {
 			return 0, fmt.Errorf("delete stale session summary: %w", err)
 		}
 
-		rows, err := execRows(ctx, db, "delete stale session entries", "count stale session entries", `DELETE FROM session_entries WHERE conversation_id = $1`, conversationID)
+		rows, err := execRows(ctx, db, "delete stale session entries", "count stale session entries", `DELETE FROM session_entries WHERE `+historyWithDelegations, conversationID)
 		if err != nil {
 			return 0, err
 		}

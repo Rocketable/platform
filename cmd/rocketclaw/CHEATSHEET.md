@@ -297,7 +297,7 @@ Permission actions:
 | `auto` | Ask RocketCode's embedded `guardian` automatic reviewer. RocketClaw enables automatic review. Review failure, invalid JSON, or denial blocks the call. |
 | `auto(agent-name)` | Ask the named loaded custom reviewer agent. Do not create an agent named `guardian`; that name is reserved. Custom reviewer agents should normally set `reasoningEffort: low` because each automatic permission review has 90 seconds to return a valid decision. |
 
-Guardrails and approval reviewers are separate mechanisms. `guardrail` reviews inter-agent delegation and child responses; `auto` and `auto(agent-name)` review tool execution permission.
+Guardrails and approval reviewers are separate mechanisms. `guardrail` reviews inter-agent delegation and child responses; `auto` and `auto(agent-name)` review tool execution permission. Finished guardrail checks, automatic reviews, and Task subagents are saved, and the web chat opens them from the tool row that started them.
 
 Permission buckets:
 

@@ -363,8 +363,6 @@ func TestTaskTool(t *testing.T) {
 	})
 
 	t.Run("guardrail response rejection bubbles reason", func(t *testing.T) {
-		var childRunEvents []ChildRunEvent
-
 		mock := mockResponses(
 			responseWithMessage("delegation-gate", `{"approved":true,"reason":""}`),
 			responseWithTaskMessages(),
@@ -375,9 +373,6 @@ func TestTaskTool(t *testing.T) {
 			"safety": testAgentWithPrompt("safety", "guard carefully"),
 		}})
 		factory.diagnostics = true
-		factory.childRunLogger = func(event *ChildRunEvent) {
-			childRunEvents = append(childRunEvents, *event)
-		}
 		output := make(chan ChatResponse, 10)
 
 		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, output)
@@ -389,10 +384,6 @@ func TestTaskTool(t *testing.T) {
 			subagentDiagnosticResponse(testReviewSubagentDiagnostic("delegation", 1, 1, "started: Review")),
 			subagentDiagnosticResponse(testGuardrailResultDiagnostic(ChildRunStageResponse, "reject: do not share")),
 		}, drainBufferedResponses(output))
-		require.Equal(t, []ChildRunEvent{
-			{Kind: ChildRunKindGuardrail, Stage: ChildRunStageDelegation, Agent: "safety", Item: assistantMessage(`{"approved":true,"reason":""}`)},
-			{Kind: ChildRunKindGuardrail, Stage: ChildRunStageResponse, Agent: "safety", Item: assistantMessage(`{"approved":false,"reason":"do not share"}`)},
-		}, childRunEvents)
 	})
 
 	t.Run("guardrail invalid JSON fails closed", func(t *testing.T) {
@@ -804,6 +795,74 @@ func TestLooperNumbersSiblingTaskDiagnostics(t *testing.T) {
 	}, collectResponses(output))
 }
 
+func TestChildRunsAppendUnderToolCallKeys(t *testing.T) {
+	allow := `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`
+	approve := `{"approved":true,"reason":""}`
+	mock := mockResponses(
+		responseWithFunctionCalls("root", []responses.ResponseFunctionToolCall{
+			testFunctionCall("tool-1", "call-probe", "probe", `{}`),
+			testFunctionCall("tool-2", "call-task", "task", `{"description":"Review","prompt":"look","subagent_type":"review"}`),
+		}),
+		responseWithMessage("probe-review", allow),
+		responseWithMessage("probe-nested-review", allow),
+		responseWithMessage("delegation-gate", approve),
+		responseWithFunctionCalls("child", []responses.ResponseFunctionToolCall{testFunctionCall("tool-3", "call-inner", "probe", `{}`)}),
+		responseWithMessage("inner-review", allow),
+		responseWithMessage("inner-nested-review", allow),
+		responseWithMessage("child-final", "child done"),
+		responseWithMessage("response-gate", approve),
+		responseWithMessage("root-final", "done"),
+	)
+	auto := PermissionBucket{Name: "probe", Rules: []PermissionRule{{Pattern: "*", Action: permissionAuto}}}
+	factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		"review": {Name: "review", Model: "gpt-5.4", Guardrail: "safety", Permission: PermissionSet{Buckets: []PermissionBucket{auto}}},
+		"safety": testAgent("safety"),
+	}})
+	sessions := &mockChildSessions{AppendChildEntryFunc: func(context.Context, string, *SessionEntry) error { return nil }}
+	factory.childSessions = sessions
+	factory.autoApprovePermissions = true
+	probe := testLooperTool("probe")
+	probe.Permission = "probe"
+	probe.Subjects = func(json.RawMessage) ([]string, error) { return []string{"top"}, nil }
+	probe.Call = func(ctx context.Context, _ json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
+		return TextToolResult("probed"), CheckNestedPermission(ctx, "probe", "probe", "nested", map[string]any{})
+	}
+	factory.baseTools["probe"] = probe
+	looper := testLooper(mock)
+	looper.agent = Agent{Name: "main"}
+	looper.AutoApprovePermissions = true
+	looper.PermissionReviewer = factory
+	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{auto, {Name: "task", Rules: []PermissionRule{{Pattern: "review", Action: permissionAllow}}}}}
+	looper.Tools = map[string]looperTool{"task": factory.taskTool(), "probe": probe}
+	looper.ParallelToolCalls = 1
+	output := make(chan ChatResponse, 20)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "start", output)
+
+	close(input)
+
+	require.NoError(t, looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1)))
+	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
+
+	calls := sessions.AppendChildEntryCalls()
+	got := make([]string, 0, len(calls))
+
+	for _, call := range calls {
+		got = append(got, call.Key+" "+call.Entry.Agent)
+	}
+
+	require.Equal(t, []string{
+		"/call-probe guardian",
+		"/call-probe guardian",
+		"/call-task safety",
+		"/call-task/call-inner guardian",
+		"/call-task/call-inner guardian",
+		"/call-task review",
+		"/call-task safety",
+	}, got)
+}
+
 func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
 	var bashTool looperTool
 
@@ -823,7 +882,7 @@ func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
 		"bash": bashTool,
 		"read": readTool,
 	}
-	factory.childRunLogger = DiscardChildRunLog
+	factory.childSessions = InertChildSessions{}
 
 	return &factory
 }

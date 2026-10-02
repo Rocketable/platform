@@ -133,6 +133,14 @@ func (s *SessionService) ForkConversation(ctx context.Context, source string, de
 		}
 	}
 
+	if _, err := tx.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
+SELECT $1 || substr(e.conversation_id, length(p.id) + 1), e.entry_json, e.entry_timestamp
+FROM (SELECT DISTINCT unnest($2::text[]) AS id) p
+JOIN session_entries e ON e.conversation_id COLLATE "C" >= p.id || '/' AND e.conversation_id COLLATE "C" < p.id || '0'
+ORDER BY e.id`, destination.ID, producers); err != nil {
+		return "", fmt.Errorf("copy fork delegations: %w", err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return "", fmt.Errorf("commit fork: %w", err)
 	}

@@ -13,10 +13,11 @@ type toolCallContextKey struct{}
 type toolCallContext struct {
 	looper *looper
 	output chan<- ChatResponse
+	callID string
 }
 
-func withToolCallContext(ctx context.Context, l *looper, output chan<- ChatResponse) context.Context {
-	return context.WithValue(ctx, toolCallContextKey{}, toolCallContext{looper: l, output: output})
+func withToolCallContext(ctx context.Context, l *looper, output chan<- ChatResponse, callID string) context.Context {
+	return context.WithValue(ctx, toolCallContextKey{}, toolCallContext{looper: l, output: output, callID: callID})
 }
 
 func toolCallContextFrom(ctx context.Context) (toolCallContext, bool) {
@@ -52,6 +53,7 @@ func CheckNestedToolCall(ctx context.Context, toolName string, tool *looperTool,
 	}
 
 	decision.review.ReviewContext = slices.Clone(tc.looper.permissionReviewInput)
+	decision.review.CallID = tc.callID
 
 	reviewDecision := tc.looper.PermissionReviewer.reviewPermission(ctx, decision.review, tc.output)
 	if reviewDecision.Outcome != permissionReviewOutcomeAllow {

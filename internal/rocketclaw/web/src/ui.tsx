@@ -6,10 +6,11 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, Dia
 import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions, rpc } from "./api";
-import type { ChatOrigin, MessageMatch, PromptDelivery } from "./types";
+import type { ChatOrigin, HistoryView, MessageMatch, PromptDelivery } from "./types";
 import { Bot, Check, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
-import { createContext, memo, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject } from "react";
+import { createContext, memo, use, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps } from "react";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
 import { CodeBlock, TranscriptText, copyText } from "./transcript-text";
@@ -48,6 +49,21 @@ const SessionCommands = createContext<{ command?: SessionCommand; setCommand: Di
 
 function sessionPath(id: string) {
   return `/s/${encodeSessionId(id)}`;
+}
+
+const Delegations = createContext<string[] | undefined>(undefined);
+
+function delegationHref(id?: string) {
+  const params = new URLSearchParams(location.search);
+  if (id) params.set("delegation", id);
+  else params.delete("delegation");
+  return `${location.pathname}${params.size ? `?${params}` : ""}`;
+}
+
+function subscribeWide(listener: () => void) {
+  const media = matchMedia("(min-width: 64rem)");
+  media.addEventListener("change", listener);
+  return () => media.removeEventListener("change", listener);
 }
 
 function slackSession(id: string) {
@@ -608,6 +624,36 @@ function MobileSidebar({ children, chat }: { children: ReactNode; chat: boolean 
   </div>;
 }
 
+function ResizableAside({ side, className, children, ...props }: ComponentProps<"aside"> & { side: "sidebar" | "delegation" }) {
+  const wide = useSyncExternalStore(subscribeWide, () => matchMedia("(min-width: 64rem)").matches);
+  const [edge, label, fallback, min, max] = side === "sidebar" ? [1, "Resize sidebar", wide ? 288 : 256, 192, 512] : [-1, "Resize delegation panel", 384, 288, Math.round(innerWidth * 0.6)];
+  const clamp = (value: number) => Math.round(Math.min(Math.max(value, min), max));
+  const [stored, setStored] = useState(() => Number(localStorage.getItem(`${side}-width`)));
+  const width = clamp(stored || fallback);
+  const resize = (value: number) => {
+    const room = document.querySelector("main")!.getBoundingClientRect().width - 26 * parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const next = clamp(Math.min(value, width + room));
+    setStored(next);
+    localStorage.setItem(`${side}-width`, String(next));
+  };
+  return <aside {...props} className={cn("relative", className)} style={{ width, minWidth: min }}>
+    {children}
+    <div role="separator" aria-orientation="vertical" aria-label={label} aria-valuenow={width} aria-valuemin={min} aria-valuemax={max} tabIndex={0}
+      className={cn("absolute inset-y-0 z-10 w-1.5 cursor-col-resize touch-none outline-none hover:bg-border focus-visible:bg-ring", edge > 0 ? "-right-0.75" : "-left-0.75")}
+      onPointerDown={(event) => event.currentTarget.setPointerCapture(event.pointerId)}
+      onPointerMove={(event) => {
+        if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+        const rect = event.currentTarget.parentElement!.getBoundingClientRect();
+        resize(edge > 0 ? event.clientX - rect.left : rect.right - event.clientX);
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        resize(width + (event.key === "ArrowRight" ? 16 : -16) * edge);
+      }} />
+  </aside>;
+}
+
 export function App() {
   const [command, setCommand] = useState<SessionCommand>();
   const composer = useRef<((command: string) => void) | null>(null);
@@ -693,10 +739,10 @@ export function App() {
             </BottomNavigation>
             <div className="fixed top-2 right-2 z-40 rounded-md bg-background shadow-sm"><ThemeToggle /></div>
           <div className="flex min-h-0 min-w-0 flex-1">
-            <aside id="session-sidebar" className={cn("hidden w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground lg:w-72", sidebarOpen && "md:flex")}>
+            <ResizableAside side="sidebar" id="session-sidebar" className={cn("hidden flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground", sidebarOpen && "md:flex")}>
               <SessionList />
-            </aside>
-            <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col", command?.target && "pt-[min(75dvh,30rem)]")} data-sidebar-swipe="open">
+            </ResizableAside>
+            <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]", command?.target && "pt-[min(75dvh,30rem)]")} data-sidebar-swipe="open">
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
               {route.settled ? <SessionList settledOnly /> : null}
               {route.search ? <SearchPage /> : null}
@@ -706,6 +752,7 @@ export function App() {
                 </MessageScrollerProvider>
               </TabPane>
              </main>
+             {showChat ? <DelegationPanel id={route.id} /> : null}
            </div>
           </MobileSidebar>
          </SessionCommands>
@@ -1521,9 +1568,9 @@ const SessionList = memo(function SessionList({ settledOnly = false }: { settled
         <SessionSearch rows={rows} catalog={catalog} query={query} setQuery={setQuery} agentFilter={agentFilter} setAgentFilter={setAgentFilter} roomFilter={roomFilter} setRoomFilter={setRoomFilter} />
       </div> : null}
       {filtered.length === 0 && (settledOnly || searching) ? <p role="status" className="px-3 pb-1 text-xs text-muted-foreground">{searchIsAuthoritative(sidebar) ? searching ? "No matches" : "No settled chats" : "loading..."}</p> : null}
-      <ul className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
+      <ScrollArea className="min-h-0 flex-1"><ul className="flex flex-col px-2 pb-2">
         {filtered.map((session) => <SessionRow key={session.id} session={session} active={route.id === session.id} loading={sidebar.loadingIds.has(session.id)} age={relativeTime(session.updatedAt ?? "")} />)}
-      </ul>
+      </ul></ScrollArea>
     </div>
   );
 });
@@ -1688,6 +1735,7 @@ function TranscriptLine({ line, conversationId, hasSandboxed }: { line: Line; co
   }
   if (line.role === "tool") {
     const title = toolTitle(line);
+    const delegation = use(Delegations)?.find((child) => child.slice(child.lastIndexOf("/") + 1) === line.toolCallId);
     const parts = [line, ...(line.toolParts ?? [])];
     const text = parts.map((part, index) => {
       const label = index === 0 ? line.toolName ? "Arguments" : "Result" : part.role === "developer" ? "Skill instructions" : "Result";
@@ -1699,6 +1747,7 @@ function TranscriptLine({ line, conversationId, hasSandboxed }: { line: Line; co
         <summary className="cursor-pointer px-3 py-2 text-xs font-medium" title={title}>
           <span className="ml-1 inline-block max-w-[calc(100%-1.5rem)] truncate align-middle font-mono">{title}</span>
         </summary>
+        {delegation ? <Link href={delegationHref(delegation)} aria-label={`Open delegation: ${title}`} className="block w-fit px-3 pb-2 text-xs text-muted-foreground underline hover:text-foreground">Open delegation</Link> : null}
         <CodeBlock label={title} text={text} />
         {parts.map((part) => (
           <div key={part.id}>
@@ -1963,7 +2012,7 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
       stream.close();
     };
   }, [id, historyReady, reconnectHistory, draft, setBusy, setLines]);
-  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !history.data, historyError: history.error?.message, origin: history.data?.origin, hasSandboxed: history.data?.messages.some((message) => message.origin === "sandboxed") || draft.lines.some((line) => line.origin === "sandboxed") };
+  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !history.data, historyError: history.error?.message, origin: history.data?.origin, delegations: history.data?.delegations, hasSandboxed: history.data?.messages.some((message) => message.origin === "sandboxed") || draft.lines.some((line) => line.origin === "sandboxed") };
 }
 
 export function OriginCard({ origin }: { origin?: ChatOrigin }) {
@@ -2013,13 +2062,13 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
       route.goSession(draft.sessionId);
     }
   });
-  const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
+  const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, delegations, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
   const messageId = location.pathname === sessionPath(id) ? new URLSearchParams(search).get("message") : null;
   const matchedOrigin = (previewLines ?? lines).find((line) => line.id === messageId)?.origin;
   const visibleFilter = { sandboxed: filter.sandboxed || matchedOrigin === "sandboxed", canonical: filter.canonical || matchedOrigin === "canonical" };
   return (
     <>
-      <TranscriptLog conversationId={id} lines={previewLines ?? lines} thinking={!previewing && busy && lines.at(-1)?.role !== "thinking"} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} />
+      <Delegations value={delegations}><TranscriptLog conversationId={id} lines={previewLines ?? lines} thinking={!previewing && busy && lines.at(-1)?.role !== "thinking"} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} /></Delegations>
       {historyError ? <p role="alert" className="px-3 text-sm text-destructive">{historyError}</p> : null}
       {hasSandboxed ? <ButtonGroup aria-label="Show messages from" className="mx-auto my-2.5">
         {(["sandboxed", "canonical"] as const).map((choice) => (
@@ -2036,6 +2085,45 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
       </fieldset>
     </>
   );
+}
+
+function DelegationPanel({ id }: { id: string }) {
+  const child = new URLSearchParams(useSearch()).get("delegation") ?? "";
+  const wide = useSyncExternalStore(subscribeWide, () => matchMedia("(min-width: 64rem)").matches);
+  const main = useQuery({ ...queries.history({ id }), enabled: false });
+  const history = useQuery({ ...queries.history({ id: child }), enabled: child !== "" });
+  if (!child) return null;
+  const first = main.data?.delegations.find((level) => child === level || child.startsWith(`${level}/`)) ?? child;
+  const levels = [...child.matchAll(/\/|$/g)].map((match) => child.slice(0, match.index)).filter((level) => level.length >= first.length).map((level, index, all) => {
+    const call = level.slice(level.lastIndexOf("/") + 1);
+    const row = historyLines(queryClient.getQueryData<HistoryView>(queries.history({ id: index ? all[index - 1] : id }).queryKey)?.messages ?? []).find((line) => line.toolName && line.toolCallId === call);
+    return { level, label: row ? toolTitle(row) : call };
+  });
+  const parent = levels.at(-2);
+  const lines = historyLines(history.data?.messages ?? []);
+  const sandboxed = lines.some((line) => line.origin === "sandboxed");
+  const close = () => navigate(delegationHref());
+  const body = <>
+    <header className="flex shrink-0 items-center gap-1 border-b p-2 text-xs lg:pr-12">
+      <nav aria-label="Delegation breadcrumbs" className="flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap">
+        <Link href={delegationHref()} className="shrink-0 hover:underline">Conversation</Link>
+        {levels.map(({ level, label }, index) => <span key={level} className="flex min-w-0 items-center gap-1"><span aria-hidden="true">/</span>{index === levels.length - 1 ? <span aria-current="page" title={label} className="min-w-0 truncate font-medium">{label}</span> : <Link href={delegationHref(level)} title={label} className="min-w-0 truncate hover:underline">{label}</Link>}</span>)}
+      </nav>
+      <Button variant="ghost" size="icon-sm" aria-label="Close delegation" onClick={close}><X /></Button>
+    </header>
+    <ScrollArea className="min-h-0 flex-1"><div className="p-3">
+      {history.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading delegation…</p> : null}
+      {history.error ? <p role="alert" className="text-sm text-destructive">{history.error.message}</p> : null}
+      {history.data?.messages.length === 0 ? <p role="status" className="text-sm text-muted-foreground">No saved transcript</p> : null}
+      <Delegations value={history.data?.delegations}>
+        {transcriptTurns(lines).flatMap((turn) => [...turn.user, ...turn.traces, ...turn.replies]).map((line) => <TranscriptLine key={line.id} line={line} conversationId={child} hasSandboxed={sandboxed} />)}
+      </Delegations>
+      {history.isSuccess ? <Link href={delegationHref(parent?.level)} className="block w-fit text-xs text-muted-foreground underline hover:text-foreground">{parent ? `Back to ${parent.label}` : "Back to conversation"}</Link> : null}
+    </div></ScrollArea>
+  </>;
+  return wide ? <ResizableAside side="delegation" aria-label="Delegation" className="flex flex-col border-l bg-background">{body}</ResizableAside> : <Sheet open onOpenChange={(open) => { if (!open) close(); }}>
+    <SheetContent side="right" showCloseButton={false} className="data-[side=right]:w-full data-[side=right]:sm:max-w-none"><SheetTitle className="sr-only">Delegation</SheetTitle>{body}</SheetContent>
+  </Sheet>;
 }
 
 async function sendComposer(input: {

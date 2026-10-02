@@ -2147,6 +2147,19 @@ func TestSessionEntries(t *testing.T) {
 		require.NoError(t, err)
 		_, err = db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) SELECT $1, (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id))::json, entry_timestamp FROM session_entries WHERE id=$2`, conversation, sourceID)
 		require.NoError(t, err)
+		_, err = sessions.AppendEntryID(ctx, conversation, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"function_call","call_id":"own","name":"task","arguments":"{}"}`),
+		}})
+		require.NoError(t, err)
+
+		for _, delegation := range []string{conversation + "/own", conversation + "/own/nested", conversation + "/unshown", "private-X/private-file", "private-X/unmirrored", "private-Xother/decoy"} {
+			_, err = sessions.AppendEntryID(ctx, delegation, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now()})
+			require.NoError(t, err)
+		}
+
+		history, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation})
+		require.NoError(t, err)
+		require.Equal(t, []string{conversation + "/own", "private-X/private-file"}, history.Delegations)
 		filtered, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation, SourceConversationId: "private-X"})
 		require.NoError(t, err)
 		require.Len(t, filtered.Messages, 2)

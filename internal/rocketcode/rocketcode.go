@@ -44,7 +44,7 @@ type Config struct {
 	SpillDir               string
 	AutoApprovePermissions bool
 	Observability          ObservabilityConfig
-	ChildRunLogger         ChildRunLogger
+	ChildSessions          ChildSessions
 	CheckpointSink         CheckpointSink
 	CustomTools            []Tool
 	ShellEnv               map[string]string
@@ -58,16 +58,6 @@ type Config struct {
 	MCPWorkspace string
 }
 
-// ChildRunKind identifies a hidden child-run category.
-type ChildRunKind string
-
-const (
-	// ChildRunKindGuardrail identifies an inter-agent guardrail child run.
-	ChildRunKindGuardrail ChildRunKind = "guardrail"
-	// ChildRunKindPermissionReview identifies an automatic permission reviewer child run.
-	ChildRunKindPermissionReview ChildRunKind = "permission_review"
-)
-
 // ChildRunStage identifies the operation being reviewed by a hidden child run.
 type ChildRunStage string
 
@@ -76,23 +66,20 @@ const (
 	ChildRunStageDelegation ChildRunStage = "delegation"
 	// ChildRunStageResponse identifies guardrail review after a child response.
 	ChildRunStageResponse ChildRunStage = "response"
-	// ChildRunStageToolPermission identifies automatic tool permission review.
-	ChildRunStageToolPermission ChildRunStage = "tool_permission"
 )
 
-// ChildRunEvent contains server/operator-only hidden child-run output.
-type ChildRunEvent struct {
-	Kind  ChildRunKind
-	Stage ChildRunStage
-	Agent string
-	Item  ChatResponse
+// ChildSessions stores finished Task, guardrail, and permission review turns.
+type ChildSessions interface {
+	AppendChildEntry(ctx context.Context, key string, entry *SessionEntry) error
 }
 
-// ChildRunLogger consumes server/operator-only hidden child-run output.
-type ChildRunLogger func(*ChildRunEvent)
+// InertChildSessions discards child session entries.
+type InertChildSessions struct{}
 
-// DiscardChildRunLog ignores hidden child-run output.
-func DiscardChildRunLog(*ChildRunEvent) {}
+// AppendChildEntry discards one child session entry.
+func (InertChildSessions) AppendChildEntry(context.Context, string, *SessionEntry) error {
+	return nil
+}
 
 // ObservabilityConfig controls OpenInference-compatible tracing for RocketCode.
 type ObservabilityConfig struct {
@@ -316,8 +303,8 @@ func NewWithModelResolver(
 		return nil, errors.New("diagnosticsWriter is required when diagnostics are enabled")
 	}
 
-	if config.ChildRunLogger == nil {
-		return nil, errors.New("child run logger is required")
+	if config.ChildSessions == nil {
+		return nil, errors.New("child sessions are required")
 	}
 
 	if config.CheckpointSink == nil {
@@ -413,7 +400,7 @@ func NewWithModelResolver(
 		spillRel:                   spillRel,
 		autoApprovePermissions:     config.AutoApprovePermissions,
 		observability:              config.Observability,
-		childRunLogger:             config.ChildRunLogger,
+		childSessions:              config.ChildSessions,
 		mcpRegistry:                mcpRegistry,
 	}
 	modelTools, codeHosts := factory.assembleTools(agentForTools)

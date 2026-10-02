@@ -30,6 +30,11 @@ func TestForkConversation(t *testing.T) {
 	}}
 	id, err := sessions.AppendEntryID(t.Context(), "source", &entry)
 	require.NoError(t, err)
+
+	for _, delegation := range []string{"source/call-1", "source/call-1/call-2"} {
+		_, err = sessions.AppendEntryID(t.Context(), delegation, testSessionEntry(delegation, "child"))
+		require.NoError(t, err)
+	}
 	// OpenCode V2: packages/app/src/session/commands/fork-dialog.tsx passes
 	// before: message.id and restores that user message to the composer.
 	for _, tt := range []struct {
@@ -58,6 +63,13 @@ func TestForkConversation(t *testing.T) {
 			}
 
 			require.Len(t, items, tt.items)
+
+			for _, delegation := range []string{"/call-1", "/call-1/call-2"} {
+				copied, err := sessions.ObserveEntries(t.Context(), tt.name+delegation)
+				require.NoError(t, err)
+				require.Len(t, copied, 1)
+			}
+
 			require.NotContains(t, prompt, "[Slack]")
 			require.NotContains(t, prompt, "[Web]")
 

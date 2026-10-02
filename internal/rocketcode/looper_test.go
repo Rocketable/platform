@@ -1761,7 +1761,7 @@ func TestPermissionReviewFailsClosedOnInvalidReviewerOutput(t *testing.T) {
 		agents:            Agents{Items: map[string]Agent{}},
 		skills:            Skills{Items: map[string]Skill{}},
 		baseTools:         map[string]looperTool{},
-		childRunLogger:    DiscardChildRunLog,
+		childSessions:     InertChildSessions{},
 	}
 
 	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, make(chan ChatResponse, 10))
