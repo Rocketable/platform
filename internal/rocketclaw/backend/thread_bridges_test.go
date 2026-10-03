@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -758,28 +759,32 @@ func TestThreadBridgeManagerRecoversActiveTurnInThreadLocalConversation(t *testi
 }
 
 func TestRecoverActiveTurnEnqueuesPrivateMCPOnDestinationBridge(t *testing.T) {
-	store := newWorkspaceSessionService(t)
-	managedConversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	privateConversationID := "external_mcp:planner:private"
-	require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, SlackChannel: "#ops"}))
+	synctest.Test(t, func(t *testing.T) {
+		store := newWorkspaceSessionService(t)
+		managedConversationID := protocol.SlackThreadConversationID("C123", "111.222")
+		privateConversationID := "external_mcp:planner:private"
+		require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, SlackChannel: "#ops"}))
 
-	workspace := t.TempDir()
-	runtime := &config.Config{Workspace: workspace}
-	manager := newThreadBridgeManager(runtime, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
-		cfg.SessionService = store
-		cfg.StartNewThread = testNoopStartNewThread
+		workspace := t.TempDir()
+		runtime := &config.Config{Workspace: workspace}
+		manager := newThreadBridgeManager(runtime, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
+			cfg.SessionService = store
+			cfg.StartNewThread = testNoopStartNewThread
 
-		return NewConversation(runtime, nil, &cfg, slog.New(slog.DiscardHandler))
+			return NewConversation(runtime, nil, &cfg, slog.New(slog.DiscardHandler))
+		})
+
+		t.Cleanup(func() { require.NoError(t, manager.Stop()) })
+
+		require.NoError(t, manager.RecoverActiveTurn(t.Context(), &ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{ConversationKey: privateConversationID, TurnID: "turn-mcp", Agent: "planner", ReplayInput: []json.RawMessage{json.RawMessage("{")}}}))
+		_, privateOK := manager.bridges[privateConversationID]
+		_, managedOK := manager.bridges[managedConversationID]
+
+		require.True(t, privateOK)
+		require.True(t, managedOK)
+		// Bridge.Stop does not wait for the recovered turn, so finish it before cleanup closes the store.
+		synctest.Wait()
 	})
-
-	t.Cleanup(func() { require.NoError(t, manager.Stop()) })
-
-	require.NoError(t, manager.RecoverActiveTurn(t.Context(), &ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{ConversationKey: privateConversationID, TurnID: "turn-mcp", Agent: "planner", ReplayInput: []json.RawMessage{json.RawMessage("{")}}}))
-	_, privateOK := manager.bridges[privateConversationID]
-	_, managedOK := manager.bridges[managedConversationID]
-
-	require.True(t, privateOK)
-	require.True(t, managedOK)
 }
 
 func TestThreadBridgeManagerRecoversPrivateExternalMCPTurn(t *testing.T) {
