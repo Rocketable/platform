@@ -1281,7 +1281,11 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await ownerStarted.promise;
     await shown(page, "alice held preview");
     const oldRequest = await ownerRequest;
-    const oldResponse = page.waitForEvent("requestfailed", { predicate: (request: unknown) => request === oldRequest });
+    // Wait for Alice's stream to end however it ends. The test's own timeout bounds this, not a 30s
+    // waitForEvent timer started many steps before the tail is released.
+    const oldResponse = new Promise<void>((resolve) => {
+      for (const event of ["requestfinished", "requestfailed"]) page.on(event, (request: unknown) => { if (request === oldRequest) resolve(); });
+    });
     blocked = Promise.withResolvers();
     ctrl.username = "bob";
     await page.evaluate(() => {
