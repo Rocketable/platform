@@ -133,6 +133,8 @@ test("a level shows its description and keeps Advanced closed", () => {
   expect(html).toContain("Group all activity with details collapsed.");
   expect(html).toMatch(/<details>\s*<summary[^>]*>Advanced/);
   expect(html.match(/data-slot="slider-thumb"/g)).toHaveLength(1);
+  expect(html.match(/data-slot="slider-tick"/g)).toHaveLength(5);
+  expect(html.match(/data-slot="slider-tick" data-selected=""/g)).toHaveLength(3);
 });
 
 test("Custom rows open Advanced and offer group and collapse only where they apply", () => {
