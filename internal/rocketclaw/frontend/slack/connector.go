@@ -2133,7 +2133,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 
 	content := protocol.InboundContent{Text: ev.Text}
 	if len(ev.Files) > 0 {
-		content.Attachments, content.TextAttachments, content.HadAttachments, content.HadNonImageAttachments, content.AttachmentWarnings = c.downloadSlackAttachments(ctx, ev.Files)
+		content.Attachments, content.TextAttachments, content.AttachmentPresence, content.AttachmentWarnings = c.downloadSlackAttachments(ctx, ev.Files)
 	}
 
 	c.addSlackForward(ctx, &content, forward)
@@ -2666,7 +2666,7 @@ func (c *Connector) handleRootEnqueueOrQueue(ctx context.Context, ev *slackevent
 		}
 
 		content := protocol.InboundContent{Text: args}
-		content.Attachments, content.TextAttachments, content.HadAttachments, content.HadNonImageAttachments, content.AttachmentWarnings = c.downloadSlackAttachments(ctx, ev.Files)
+		content.Attachments, content.TextAttachments, content.AttachmentPresence, content.AttachmentWarnings = c.downloadSlackAttachments(ctx, ev.Files)
 		c.addSlackForward(ctx, &content, forward)
 		c.handleEnqueueCommand(ctx, agent, &content, ev.User, replyTarget)
 
@@ -3049,7 +3049,7 @@ func newSlackInboundMessage(text string, content *protocol.InboundContent, reply
 	contentCopy := *content
 	contentCopy.Text = text
 
-	inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, "", &contentCopy, true)
+	inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &contentCopy, true)
 	if principal = strings.TrimSpace(principal); principal != "" {
 		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
 	}
@@ -3484,7 +3484,7 @@ func (c *Connector) addSlackForward(ctx context.Context, content *protocol.Inbou
 		}
 	}
 
-	attachments, textAttachments, _, _, warnings := c.downloadSlackAttachments(ctx, files)
+	attachments, textAttachments, _, warnings := c.downloadSlackAttachments(ctx, files)
 
 	var fileNotes []string
 	for i := range attachments {
@@ -3496,8 +3496,12 @@ func (c *Connector) addSlackForward(ctx context.Context, content *protocol.Inbou
 	}
 
 	content.TextAttachments = append(content.TextAttachments, renderSlackForward(forward, messages, fileNotes))
+
 	content.Attachments = append(content.Attachments, attachments...)
-	content.HadAttachments = content.HadAttachments || len(attachments) > 0
+	if len(attachments) > 0 {
+		content.AttachmentPresence = protocol.AttachmentPresenceImages
+	}
+
 	content.AttachmentWarnings = append(content.AttachmentWarnings, warnings...)
 }
 
@@ -3608,7 +3612,7 @@ func (c *Connector) inboundContentForMessageEvent(ctx context.Context, ev *slack
 
 	files := slackMessageEventFiles(ev)
 	if len(files) > 0 {
-		content.Attachments, content.TextAttachments, content.HadAttachments, content.HadNonImageAttachments, content.AttachmentWarnings = c.downloadSlackAttachments(ctx, files)
+		content.Attachments, content.TextAttachments, content.AttachmentPresence, content.AttachmentWarnings = c.downloadSlackAttachments(ctx, files)
 	}
 
 	c.addSlackForward(ctx, &content, forward)
@@ -3616,7 +3620,7 @@ func (c *Connector) inboundContentForMessageEvent(ctx context.Context, ev *slack
 	return content
 }
 
-func (c *Connector) downloadSlackAttachments(ctx context.Context, files []slack.File) (attachments []protocol.InboundAttachment, textAttachments []string, hadAttachments, hadNonImageAttachments bool, warnings []string) {
+func (c *Connector) downloadSlackAttachments(ctx context.Context, files []slack.File) (attachments []protocol.InboundAttachment, textAttachments []string, presence protocol.AttachmentPresence, warnings []string) {
 	for i := range files {
 		file := &files[i]
 
@@ -3647,14 +3651,16 @@ func (c *Connector) downloadSlackAttachments(ctx context.Context, files []slack.
 				continue
 			}
 
-			hadNonImageAttachments = true
+			if presence == protocol.AttachmentPresenceNone {
+				presence = protocol.AttachmentPresenceUnsupported
+			}
 
 			warnings = append(warnings, "Skipped Slack attachment "+slackFileDescriptor(file)+" because it is not an image.")
 
 			continue
 		}
 
-		hadAttachments = true
+		presence = protocol.AttachmentPresenceImages
 
 		data, warning := c.downloadSlackFileOrSkip(ctx, file, maxSlackImageDownloadBytes, "attachment", "it exceeded the Slack attachment download limit")
 		if warning != "" {
@@ -3676,7 +3682,7 @@ func (c *Connector) downloadSlackAttachments(ctx context.Context, files []slack.
 		})
 	}
 
-	return attachments, textAttachments, hadAttachments, hadNonImageAttachments, warnings
+	return attachments, textAttachments, presence, warnings
 }
 
 func slackMessageEventText(ev *slackevents.MessageEvent) string {

@@ -487,7 +487,6 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, protocol.InboundKindSteer, inbound.Kind)
 		require.Equal(t, protocol.SourceWeb, inbound.Source)
 		require.Equal(t, "unrecorded", inbound.ConversationID)
-		require.Equal(t, "alice", inbound.Label)
 		require.True(t, inbound.Human)
 		require.Equal(t, tt.want, inbound.Text)
 		require.Equal(t, tt.want, inbound.Metadata[protocol.InboundRawTextMetadataKey])
@@ -896,7 +895,6 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, protocol.InboundKindCancel, turns[len(turns)-1].Kind)
 	require.Equal(t, id, turns[len(turns)-1].ConversationID)
-	require.Equal(t, "alice", turns[len(turns)-1].Label)
 
 	// Discovery starts from recorded conversations, never orphaned entry rows.
 	for _, hidden := range []string{"private-X", "cron:cron/daily.md:20000102T030405.000000006Z:a", "one-off-cron:cron/daily.md:20000102T030405.000000006Z:b"} {
@@ -2719,7 +2717,7 @@ func testSocketPath(t *testing.T) string {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
 
-	socketPath, err := filepath.Abs(filepath.Join(dir, "web.sock"))
+	socketPath, err := filepath.Abs(filepath.Join(dir, "s"))
 	require.NoError(t, err)
 
 	return socketPath

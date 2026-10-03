@@ -112,7 +112,8 @@ func (m *threadBridgeManager) StartActiveGoals(recovering map[string]bool) error
 			return fmt.Errorf("start active goal bridge: %w", err)
 		}
 
-		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "goal_continuation", "Continue the active goal loop.", false)
+		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "Continue the active goal loop.", false)
+		inbound.GoalAction = protocol.GoalActionContinue
 		inbound.ConversationID = conversationID
 		inbound.SlackReply = &protocol.SlackReplyTarget{RecipientTeamID: goals[conversationID].SlackRecipientTeamID, RecipientUserID: goals[conversationID].SlackRecipientUserID}
 
@@ -297,7 +298,8 @@ func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *protocol.
 		return protocol.StartNewThreadResult{}, err
 	}
 
-	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "rocketclaw_start_new_thread", req.Prompt, false)
+	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, req.Prompt, false)
+	inbound.PreserveWhitespace = true
 	inbound.ConversationID = conversationID
 	inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: strings.TrimSpace(rootTarget.ChannelID), MessageTS: strings.TrimSpace(rootTarget.MessageID), ThreadTS: strings.TrimSpace(rootTarget.ThreadID)}
 
@@ -345,7 +347,7 @@ func (m *threadBridgeManager) StartGoalInThread(ctx context.Context, agent, obje
 		return fmt.Errorf("persist goal: %w", err)
 	}
 
-	inbound.Label = "goal"
+	inbound.GoalAction = protocol.GoalActionKickoff
 	inbound.ConversationID = conversationID
 
 	return m.submitInbound(ctx, managed, inbound, "goal thread start")
@@ -406,7 +408,7 @@ func (m *threadBridgeManager) StartWorkflowInThread(ctx context.Context, agent, 
 		return err
 	}
 
-	inbound.Label, inbound.ConversationID = "workflow", conversationID
+	inbound.ConversationID = conversationID
 	inbound.Text = strings.TrimSpace("$workflow " + name + " " + args)
 
 	inbound.Workflow = &protocol.WorkflowInvocation{Name: name, Args: args}
@@ -598,7 +600,7 @@ func (m *threadBridgeManager) promoteQueueItem(ctx context.Context, conversation
 	if inbound == nil {
 		content := item.Content
 		content.Text = item.Message
-		inbound = protocol.NewInboundMessageFromContent(item.Source, cmp.Or(item.Kind, protocol.InboundKindEnqueue), item.Principal, &content, true)
+		inbound = protocol.NewInboundMessageFromContent(item.Source, cmp.Or(item.Kind, protocol.InboundKindEnqueue), &content, true)
 		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = item.Principal
 		inbound.Metadata["web_message_id"] = id
 

@@ -86,7 +86,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			bridge := assembledRT.threads.bridges[threadID].(*Bridge)
 			inputs := bridge.config.SteerDrain.Drain(ctx, 0)
 			require.Equal(t, []rocketcode.PromptInput{{Text: "steer"}}, inputs)
-			require.NoError(t, bridge.config.EnqueueActivation.Activate(ctx, &protocol.ThreadQueueItem{ID: "q1"}, protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindEnqueue, "", "later", true)))
+			require.NoError(t, bridge.config.EnqueueActivation.Activate(ctx, &protocol.ThreadQueueItem{ID: "q1"}, protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindEnqueue, "later", true)))
 			msg, err := bridge.config.RequestRestart("test restart")
 			require.NoError(t, err)
 			require.Equal(t, "restart requested; runtime cancellation started", msg)

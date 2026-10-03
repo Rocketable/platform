@@ -45,7 +45,7 @@ func (r *cronRunner) Run(ctx context.Context, agent, prompt string, progress *ba
 	if err := r.backend.CreateConversation(ctx, protocol.Conversation{ID: progress.ConversationID, Agent: agent, CreatedBy: "cron"}); err != nil {
 		return protocol.CronRunResult{}, err
 	}
-	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", prompt, false)
+	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, prompt, false)
 	inbound.ConversationID, inbound.SyncDestination = progress.ConversationID, destination
 	inbound.RequireOutputDecision = true
 	inbound.Cronjob = progress.Cronjob

@@ -267,7 +267,7 @@ func externalMCPInboundContent(attachments []externalmcp.SessionAttachment) (pro
 }
 
 func submitExternalMCPInput(ctx context.Context, turns frontend.Backend, usedAgent, conversationID string, content *protocol.InboundContent, metadata map[string]string, principal string, reply *protocol.InboundMessage, externalConversationID string) (externalmcp.SessionResult, bool, error) {
-	inbound := protocol.NewInboundMessageFromContent(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "", content, true)
+	inbound := protocol.NewInboundMessageFromContent(protocol.SourceExternalMCP, protocol.InboundKindPrompt, content, true)
 
 	inbound.Metadata = maps.Clone(metadata)
 	delete(inbound.Metadata, protocol.InboundOriginMetadataKey)
