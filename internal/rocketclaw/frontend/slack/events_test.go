@@ -24,10 +24,7 @@ func TestStartEventsRoutesAndAcknowledgesSubscription(t *testing.T) {
 	server := newSlackStackTestServer(t, &posted, &reactions)
 	defer server.Close()
 
-	bus := newTestBus()
-	defer bus.Close()
-
-	connector := newTestConnectorWithOptions(server.URL, bus, nil, inertThreadRouter{}, inertOneOffCronjobs{})
+	connector := newTestConnectorWithOptions(server.URL, nil, inertThreadRouter{})
 	messages := []*protocol.OutboundMessage{
 		{ConversationID: "web:private", Text: "not for Slack", Complete: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "CWRONG", MessageTS: "9.9"}},
 		{ConversationID: "slack-thread:C123:111.0", Agent: "main", Text: "first answer", Complete: true},
@@ -71,10 +68,7 @@ func TestStartEventsKeepsScheduledCronPrivateAndRepliesToOneOff(t *testing.T) {
 	server := newSlackStackTestServer(t, &posted, &reactions)
 	defer server.Close()
 
-	bus := newTestBus()
-	defer bus.Close()
-
-	connector := newTestConnectorWithOptions(server.URL, bus, nil, inertThreadRouter{}, inertOneOffCronjobs{})
+	connector := newTestConnectorWithOptions(server.URL, nil, inertThreadRouter{})
 	oneOff := &protocol.OutboundMessage{
 		ConversationID: "slack-thread:C123:111.0",
 		Text:           "one-off body",
@@ -134,10 +128,7 @@ func TestStartEventsAcknowledgesDeliveryFailureAfterAborting(t *testing.T) {
 	}))
 	defer server.Close()
 
-	bus := newTestBus()
-	defer bus.Close()
-
-	connector := newTestConnectorWithOptions(server.URL, bus, nil, inertThreadRouter{}, inertOneOffCronjobs{})
+	connector := newTestConnectorWithOptions(server.URL, nil, inertThreadRouter{})
 	connector.replies["turn-1"] = slackReplyState{ChannelID: "C123", MessageTS: "answer-1"}
 	event := protocol.Event{
 		Message:         &protocol.OutboundMessage{ConversationID: "slack-thread:C123:111.0", TurnID: "turn-1", Agent: "main", Text: "answer", Complete: true},

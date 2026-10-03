@@ -65,17 +65,3 @@ func (inertThreadRouter) ScheduledMessages(protocol.TextConversationTarget) (map
 func (inertThreadRouter) ThreadBusy(protocol.TextConversationTarget) bool {
 	return false
 }
-
-type inertOneOffCronjobs struct{}
-
-func (inertOneOffCronjobs) LoadOneOffCronjob(string) (protocol.OneOffCronjob, error) {
-	return protocol.OneOffCronjob{}, errors.New("on-demand cronjobs are not configured")
-}
-
-func (inertOneOffCronjobs) ListCronjobs(string) ([]string, error) {
-	return nil, errors.New("on-demand cronjobs are not configured")
-}
-
-func (inertOneOffCronjobs) RunOneOffCronjob(context.Context, *protocol.OneOffCronjob) (protocol.CronRunResult, error) {
-	return protocol.CronRunResult{}, errors.New("on-demand cronjobs are not configured")
-}

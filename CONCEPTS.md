@@ -34,7 +34,7 @@ A Slack Steer is marked with hourglass until injection. It does not create anoth
 
 ### Enqueued Slack Message
 
-A later-turn prompt stashed on a Managed Slack Thread via `$enqueue`, via External MCP `session_prompt` while that paired thread has an active turn, or via a human reply while an on-demand `$cron` is still running on that thread. A `$cron` follow-up is not a Slack Steer and does not start a turn until the one-off finishes.
+A later-turn prompt stashed on a Managed Slack Thread via `$enqueue`, or via External MCP `session_prompt` while that paired thread has an active turn.
 
 A Slack `$enqueue` is marked with envelope until it is popped. An External MCP stash has no in-thread envelope; it is visible in `$queue` until pop. Pop posts an incoming-envelope Slack Blocks card, then reserves one in-progress placeholder. Enqueued Slack Messages persist across restart. After restart, saved rows that never started run as separate turns without another incoming message.
 
@@ -49,10 +49,6 @@ The durable, conversation-local stack of Enqueued Slack Messages, shown and mana
 Historical name for a mid-turn Slack message held until the active turn completed, then submitted as the next turn.
 
 Replaced by Slack Steer and Enqueued Slack Message.
-
-### Slack Message Menu
-
-A single Slack `...` menu shortcut, RocketClaw Actions, that opens a modal whose buttons match the live controls for that message (the same work as emoji reactions). Unauthorized clicks are silent. A message outside a RocketClaw conversation, or a managed-thread message with no live control, gets a short close-only explanation.
 
 ## Prompt Provenance
 
