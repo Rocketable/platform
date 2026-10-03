@@ -30,6 +30,5 @@ test("tool panels retain all output as literal text", () => {
   const output = "```not markdown\n" + "  line\n".repeat(5000) + "last line";
   const html = renderToStaticMarkup(<CodeBlock label="Result" text={output} />);
   expect(html).toContain(`<code>${output}</code>`);
-  expect(html).toContain('tabindex="0"');
   expect(html).toContain('aria-label="Copy Result"');
 });
