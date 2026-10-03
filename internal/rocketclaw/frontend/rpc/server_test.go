@@ -2719,7 +2719,7 @@ func testSocketPath(t *testing.T) string {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
 
-	socketPath, err := filepath.Abs(filepath.Join(dir, "web.sock"))
+	socketPath, err := filepath.Abs(filepath.Join(dir, "s"))
 	require.NoError(t, err)
 
 	return socketPath

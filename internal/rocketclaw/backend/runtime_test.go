@@ -905,7 +905,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 
 		manager.bridges[conversationID] = bridge
 		for _, id := range []string{"before", "attachment", "after"} {
-			require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Source: protocol.SourceWeb, Principal: "web author", Content: protocol.InboundContent{TextAttachments: []string{"$docs-helper attachment-only"}}}))
+			require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Source: protocol.SourceWeb, Principal: "goal_continuation", Content: protocol.InboundContent{TextAttachments: []string{"$docs-helper attachment-only"}}}))
 		}
 
 		promoted, err := manager.PromoteThreadQueueItem(t.Context(), target, "attachment")
@@ -916,9 +916,12 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 			inputs := bridge.drainSteers(t.Context(), rocketcode.TurnPhaseToolLoop)
 			require.Len(t, inputs, 1)
 			require.Nil(t, inputs[0].DirectSkill)
+			require.Contains(t, inputs[0].Text, "goal_continuation")
 			require.Contains(t, inputs[0].Text, "$docs-helper attachment-only")
 		} else {
 			inbound := (<-bridge.requestCh).inbound
+			require.Equal(t, "enqueued_message", inbound.Label)
+			require.Equal(t, "goal_continuation", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
 			require.Nil(t, inboundDirectSkill(inbound))
 			require.Empty(t, inbound.Metadata[protocol.InboundRawTextMetadataKey])
 			require.Contains(t, inbound.Text, "$docs-helper attachment-only")
