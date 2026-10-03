@@ -79,14 +79,6 @@ func seedRoot(t *testing.T, root *os.Root, seed map[string][]byte, setup func(*t
 	}
 }
 
-func requireRootSymlink(t *testing.T, root *os.Root, oldname, newname string) {
-	t.Helper()
-
-	if err := root.Symlink(oldname, newname); err != nil {
-		t.Skipf("symlink not available: %v", err)
-	}
-}
-
 func runOpenCodeOracle(t *testing.T, dir, patchText string) oracleResult {
 	t.Helper()
 
@@ -201,10 +193,10 @@ func TestTSandboxedFileSystem(t *testing.T) {
 	require.NoError(t, root.WriteFile("offset.txt", []byte("line1\nline2\nline3"), 0o644))
 	require.NoError(t, root.WriteFile(".env", []byte("SECRET=value"), 0o644))
 	require.NoError(t, root.WriteFile(".env.example", []byte("SECRET=example"), 0o644))
-	requireRootSymlink(t, root, ".env", "safe-env-link.txt")
+	require.NoError(t, root.Symlink(".env", "safe-env-link.txt"))
 	require.NoError(t, root.Mkdir("secret", 0o755))
 	require.NoError(t, root.WriteFile("secret/value.txt", []byte("hidden"), 0o644))
-	requireRootSymlink(t, root, "secret", "linked-secret")
+	require.NoError(t, root.Symlink("secret", "linked-secret"))
 	require.NoError(t, root.WriteFile("image.png", []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, 0o644))
 	require.NoError(t, root.WriteFile("doc.pdf", []byte("%PDF-1.7\n"), 0o644))
 
@@ -340,8 +332,8 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 	require.NoError(t, root.WriteFile("glob/.env", []byte("secret"), 0o644))
 	require.NoError(t, root.WriteFile("glob/.env.local", []byte("secret"), 0o644))
 	require.NoError(t, root.WriteFile("glob/.env.example", []byte("example"), 0o644))
-	requireRootSymlink(t, root, "new.txt", "glob/link.txt")
-	requireRootSymlink(t, root, "nested", "glob/linkdir")
+	require.NoError(t, root.Symlink("new.txt", "glob/link.txt"))
+	require.NoError(t, root.Symlink("nested", "glob/linkdir"))
 	require.NoError(t, root.WriteFile("ripgreprc", []byte("--bad-flag\n"), 0o644))
 
 	older := time.Unix(1_700_000_000, 0)
@@ -454,7 +446,7 @@ func TestSandboxedFileSystemGrep(t *testing.T) {
 	require.NoError(t, root.WriteFile("grep/skip.md", []byte("needle markdown"), 0o644))
 	require.NoError(t, root.WriteFile("grep/.env", []byte("secret needle"), 0o644))
 	require.NoError(t, root.WriteFile("grep/.env.example", []byte("example needle"), 0o644))
-	requireRootSymlink(t, root, ".env", "grep/link.txt")
+	require.NoError(t, root.Symlink(".env", "grep/link.txt"))
 	require.NoError(t, root.WriteFile("grep-ripgreprc", []byte("--bad-flag\n"), 0o644))
 
 	older := time.Unix(1_700_100_000, 0)
@@ -602,7 +594,7 @@ func TestApplyPatchSymlinkDenied(t *testing.T) {
 	root, err := os.OpenRoot(dir)
 	require.NoError(t, err)
 	require.NoError(t, root.WriteFile(".env", []byte("SECRET=old\n"), 0o644))
-	requireRootSymlink(t, root, ".env", "safe.txt")
+	require.NoError(t, root.Symlink(".env", "safe.txt"))
 	require.NoError(t, root.Close())
 
 	result := runGoApplyPatch(t, dir, "*** Begin Patch\n*** Update File: safe.txt\n@@\n-SECRET=old\n+SECRET=new\n*** End Patch")

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -28,7 +29,6 @@ import (
 
 const (
 	clientID, issuer, codexBaseURL, dummyAPIKey = "app_EMoamEEZ73f0CkXaXp7hrann", "https://auth.openai.com", "https://chatgpt.com/backend-api/codex", "rocketclaw-oauth-dummy-key"
-	defaultLoginPort                            = 1455
 	originator, codexUserAgent                  = "codex_cli_rs", "codex_cli_rs/0.0.0 (RocketClaw)"
 	refreshSkew                                 = 120 * time.Second
 )
@@ -265,7 +265,20 @@ func syncDirectory(path string) error {
 }
 
 // AcquireBrowserToken completes the local browser OAuth flow without persisting the token.
+// The OAuth client's registered redirect URI fixes the callback port.
 func AcquireBrowserToken(ctx context.Context, out io.Writer) (Token, error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:1455")
+	if err != nil {
+		return Token{}, fmt.Errorf("OAuth callback: %w", err)
+	}
+
+	return acquireBrowserToken(ctx, out, listener)
+}
+
+// acquireBrowserToken serves the OAuth callback on listener and closes it before returning.
+func acquireBrowserToken(ctx context.Context, out io.Writer, listener net.Listener) (Token, error) {
+	defer func() { _ = listener.Close() }()
+
 	pkce, err := generatePKCE()
 	if err != nil {
 		return Token{}, err
@@ -278,8 +291,8 @@ func AcquireBrowserToken(ctx context.Context, out io.Writer) (Token, error) {
 
 	codeCh := make(chan string, 1)
 	errCh := make(chan error, 1)
-	server := &http.Server{Addr: fmt.Sprintf("127.0.0.1:%d", defaultLoginPort)}
-	redirectURI := fmt.Sprintf("http://localhost:%d/auth/callback", defaultLoginPort)
+	server := new(http.Server)
+	redirectURI := fmt.Sprintf("http://localhost:%d/auth/callback", listener.Addr().(*net.TCPAddr).Port)
 	server.Handler = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != "/auth/callback" {
 			http.NotFound(w, req)
@@ -322,7 +335,7 @@ func AcquireBrowserToken(ctx context.Context, out io.Writer) (Token, error) {
 	})
 
 	go func() {
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()

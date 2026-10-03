@@ -5,7 +5,7 @@ const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
-test.skipIf(!playwright || !chromium)("long chats open at the newest turns, load earlier ones near the top, and load linked older messages", async () => {
+test("long chats open at the newest turns, load earlier ones near the top, and load linked older messages", async () => {
   const { chromium: engine } = await import(playwright!);
   const turns = 120;
   const entry = (n: number) => [

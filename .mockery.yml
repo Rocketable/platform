@@ -122,3 +122,11 @@ packages:
       responsesAPI:
         config:
           structname: mockResponsesAPI
+  google.golang.org/grpc:
+    interfaces:
+      ServerStream:
+        config:
+          dir: '{{.ConfigDir}}/internal/rocketclaw/frontend/rpc'
+          pkgname: rpc
+          structname: mockServerStream
+          inpackage: false

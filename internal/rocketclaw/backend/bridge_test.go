@@ -2848,7 +2848,8 @@ func TestSubmitEnqueuedItemPreservesSource(t *testing.T) {
 	bridge.config.EnqueueActivation = EnqueueActivation{Fn: func(_ context.Context, _ *protocol.ThreadQueueItem, inbound *protocol.InboundMessage) error {
 		activated <- inbound
 
-		cancel()
+		// Stopping, unlike canceling ctx, keeps pickLaterWork from requeueing the restored item.
+		assert.NoError(t, bridge.Stop())
 
 		return errActivation
 	}}
@@ -2945,45 +2946,49 @@ func TestBridgeDeletesScheduledMessageWhenTurnStarts(t *testing.T) {
 }
 
 func TestBridgeKeepsRecurringScheduledMessageAfterSuccessfulHandling(t *testing.T) {
-	workspace := t.TempDir()
-	service := newTestSessionServiceAt(t, workspace)
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, service.PutScheduledMessage("schedule-1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "later", DueAt: time.Now().UTC(), Recurring: true, Interval: time.Minute}))
+	synctest.Test(t, func(t *testing.T) {
+		workspace := t.TempDir()
+		service := newTestSessionServiceAt(t, workspace)
+		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+		require.NoError(t, service.PutScheduledMessage("schedule-1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "later", DueAt: time.Now().UTC(), Recurring: true, Interval: time.Minute}))
 
-	bus := newTestBus()
-	defer bus.Close()
+		bus := newTestBus()
+		defer bus.Close()
 
-	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
-	bridge.requestCh = make(chan bridgeRequest, 1)
-	bridge.stopCh = make(chan struct{})
+		bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
+		bridge.requestCh = make(chan bridgeRequest, 1)
+		bridge.stopCh = make(chan struct{})
 
-	go bridge.loop(t.Context())
+		go bridge.loop(t.Context())
 
-	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "scheduled_message", "later", false)
-	inbound.ConversationID = conversationID
-	inbound.HadNonImageAttachments = true
-	responseCh := inbound.EnableResponseWait()
-	require.NoError(t, bridge.enqueue(context.Background(), &bridgeRequest{inbound: inbound, scheduledMessageID: "schedule-1", scheduledMessageRecurring: true}, "submit scheduled message"))
+		inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "scheduled_message", "later", false)
+		inbound.ConversationID = conversationID
+		inbound.HadNonImageAttachments = true
+		responseCh := inbound.EnableResponseWait()
+		require.NoError(t, bridge.enqueue(context.Background(), &bridgeRequest{inbound: inbound, scheduledMessageID: "schedule-1", scheduledMessageRecurring: true}, "submit scheduled message"))
 
-	outbound := readRocketCodeOutbound(t, bus)
-	assert.Equal(t, unsupportedFileFallback, outbound.Text)
-	outbound.MarkDelivered(nil)
+		outbound := readRocketCodeOutbound(t, bus)
+		assert.Equal(t, unsupportedFileFallback, outbound.Text)
+		outbound.MarkDelivered(nil)
 
-	select {
-	case response := <-responseCh:
-		require.NoError(t, response.Err)
-	case <-time.After(time.Second):
-		t.Fatal("scheduled message response was not completed")
-	}
+		select {
+		case response := <-responseCh:
+			require.NoError(t, response.Err)
+		case <-time.After(time.Second):
+			t.Fatal("scheduled message response was not completed")
+		}
 
-	require.Eventually(t, func() bool {
-		messages, err := service.ScheduledMessages()
-		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			messages, err := service.ScheduledMessages()
+			require.NoError(t, err)
 
-		_, ok := messages["schedule-1"]
+			_, ok := messages["schedule-1"]
 
-		return ok
-	}, time.Second, time.Millisecond)
+			return ok
+		}, time.Second, time.Millisecond)
+		// Let the loop finish its later-work pass before the test context is canceled.
+		synctest.Wait()
+	})
 }
 
 func TestBridgeStopDisarmsScheduledMessage(t *testing.T) {

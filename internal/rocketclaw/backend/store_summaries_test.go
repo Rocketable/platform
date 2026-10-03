@@ -89,6 +89,9 @@ func TestSessionSummaryBackfillProgressFailureAndResume(t *testing.T) {
 
 	require.NoError(t, lockSessionHistory(t.Context(), tx, "b-empty"))
 
+	var holder int
+	require.NoError(t, tx.QueryRowContext(t.Context(), `SELECT pg_backend_pid()`).Scan(&holder))
+
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -100,13 +103,14 @@ func TestSessionSummaryBackfillProgressFailureAndResume(t *testing.T) {
 
 		return nil
 	})
+	// Cancel only once the backfill, past a-private, waits on b-empty's history lock.
 	require.Eventually(t, func() bool {
-		var committed bool
+		var blocked bool
 
-		err := service.db.QueryRowContext(t.Context(), `SELECT EXISTS (SELECT 1 FROM session_summaries WHERE conversation_id = 'a-private')`).Scan(&committed)
+		err := service.db.QueryRowContext(t.Context(), `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))`, holder).Scan(&blocked)
 		require.NoError(t, err)
 
-		return committed
+		return blocked
 	}, 5*time.Second, time.Millisecond)
 	cancel()
 	require.Error(t, group.Wait())

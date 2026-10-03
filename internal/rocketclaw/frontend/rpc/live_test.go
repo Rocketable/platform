@@ -35,201 +35,194 @@ import (
 )
 
 func TestPublicProgressRealBrowser(t *testing.T) {
-	if os.Getenv("ROCKETCLAW_PLAYWRIGHT_MODULE") == "" || os.Getenv("ROCKETCLAW_CHROMIUM") == "" {
-		t.Skip("owned browser binaries are required")
-	}
+	finals := []string{"short", "empty", "stop", "calls"}
+	env := make([]string, 0, len(finals))
+	checks := make([]func(), 0, len(finals))
 
-	for _, final := range []string{"short", "empty", "stop", "calls"} {
-		t.Run(final, func(t *testing.T) {
-			dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-			require.NoError(t, err)
+	for _, final := range finals {
+		dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+		require.NoError(t, err)
 
-			releaseProvider := make(chan struct{})
+		releaseProvider := make(chan struct{})
 
-			release := sync.OnceFunc(func() { close(releaseProvider) })
-			defer release()
+		release := sync.OnceFunc(func() { close(releaseProvider) })
+		t.Cleanup(release)
 
-			provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
-				if !assert.NoError(t, err) {
-					return
-				}
-				defer func() { _ = conn.Close() }()
+		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+			if !assert.NoError(t, err) {
+				return
+			}
+			defer func() { _ = conn.Close() }()
 
-				_, _, err = conn.ReadMessage()
-				if !assert.NoError(t, err) {
-					return
-				}
-
-				for _, event := range []string{
-					`{"type":"response.created","response":{"id":"resp"}}`,
-					`{"type":"response.reasoning_text.delta","delta":"REASONING_PRIVATE_SENTINEL"}`,
-					`{"type":"response.function_call_arguments.delta","item_id":"provisional","delta":"ARGUMENT_PRIVATE_SENTINEL"}`,
-					`{"type":"response.output_text.delta","item_id":"msg","content_index":0,"delta":"Held public partial suffix"}`,
-				} {
-					if !assert.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(event))) {
-						return
-					}
-				}
-
-				<-releaseProvider
-
-				if final == "stop" {
-					return
-				}
-
-				text := "Short"
-				if final == "empty" {
-					text = ""
-				}
-
-				assert.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"resp","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"`+text+`","annotations":[]}]}]}}`)))
-			}))
-			t.Cleanup(provider.Close)
-			cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}, OpenAI: config.OpenAIConfig{APIKey: "owned-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}}
-			root, err := os.OpenRoot(cfg.Workspace)
-
-			require.NoError(t, err)
-			defer func() { require.NoError(t, root.Close()) }()
-
-			require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
-			require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\ndescription: Owned browser fixture\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nReply plainly.\n"), 0o600))
-
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-
-			ready := make(chan *backend.Runtime)
-			assembly := &mockFrontendAssembler{
-				AssembleFunc: func(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
-					ready <- rt
-					return nil, rt.RunCtx.Done(), nil, nil // The public assembler contract permits absent Slack.
-				},
-				ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil },
+			_, _, err = conn.ReadMessage()
+			if !assert.NoError(t, err) {
+				return
 			}
 
-			var running errgroup.Group
-			running.Go(func() error {
-				return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly)
-			})
+			for _, event := range []string{
+				`{"type":"response.created","response":{"id":"resp"}}`,
+				`{"type":"response.reasoning_text.delta","delta":"REASONING_PRIVATE_SENTINEL"}`,
+				`{"type":"response.function_call_arguments.delta","item_id":"provisional","delta":"ARGUMENT_PRIVATE_SENTINEL"}`,
+				`{"type":"response.output_text.delta","item_id":"msg","content_index":0,"delta":"Held public partial suffix"}`,
+			} {
+				if !assert.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(event))) {
+					return
+				}
+			}
 
-			defer func() {
+			<-releaseProvider
+
+			if final == "stop" {
+				return
+			}
+
+			text := "Short"
+			if final == "empty" {
+				text = ""
+			}
+
+			assert.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"resp","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"`+text+`","annotations":[]}]}]}}`)))
+		}))
+		t.Cleanup(provider.Close)
+		cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}, OpenAI: config.OpenAIConfig{APIKey: "owned-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}}
+		root, err := os.OpenRoot(cfg.Workspace)
+
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+		require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
+		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\ndescription: Owned browser fixture\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nReply plainly.\n"), 0o600))
+
+		ctx, cancel := context.WithCancel(t.Context())
+		t.Cleanup(cancel)
+
+		ready := make(chan *backend.Runtime)
+		assembly := &mockFrontendAssembler{
+			AssembleFunc: func(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+				ready <- rt
+				return nil, rt.RunCtx.Done(), nil, nil // The public assembler contract permits absent Slack.
+			},
+			ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil },
+		}
+
+		var running errgroup.Group
+		running.Go(func() error {
+			return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly)
+		})
+
+		t.Cleanup(func() {
+			release()
+			cancel()
+			require.NoError(t, running.Wait())
+		})
+
+		rt := <-ready
+		id := "owned-public-" + final
+		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main", CreatedBy: "alice"}))
+		checkpoint := &rocketcode.ActiveTurnCheckpoint{TurnID: "calls", ConversationKey: id, Agent: "main", DisplayModel: "root/model"}
+
+		if final == "calls" {
+			// Producer timing is covered by RocketCode's held-worker tests; these
+			// committed checkpoints exercise real signal/fetch/browser reconciliation.
+			for _, call := range []string{"A", "B", "C"} {
+				checkpoint.ReplayInput = append(checkpoint.ReplayInput, json.RawMessage(`{"type":"function_call","call_id":"`+call+`","name":"task","arguments":"{}"}`))
+				checkpoint.OutputTrace = append(checkpoint.OutputTrace, json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"`+call+`","parent_id":"calls/response","kind":"delegation","state":"working","agent":"child","model":"child/model"}}`))
+			}
+
+			require.NoError(t, rt.Sessions.UpsertActiveTurn(ctx, checkpoint, nil))
+		}
+
+		listener, err := Listen(testSocketPath(t))
+		require.NoError(t, err)
+
+		transport := grpc.NewServer()
+		New(rt, rt.Sessions, cfg, &mockChannels{}, &mockCronJobs{JobsFunc: func() ([]cronfrontend.Job, error) {
+			return nil, nil
+		}}).Register(transport)
+
+		var serving errgroup.Group
+		serving.Go(func() error {
+			if err := transport.Serve(listener); err != nil {
+				return fmt.Errorf("serve public progress RPC: %w", err)
+			}
+
+			return nil
+		})
+		t.Cleanup(func() {
+			transport.Stop()
+			require.NoError(t, serving.Wait())
+		})
+
+		connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, connection.Close()) })
+		bundle := filepath.Join(t.TempDir(), "current.js")
+		build := exec.CommandContext(ctx, "bun", "build", "./src/main.tsx", "--target=browser", "--define", `process.env.NODE_ENV="production"`, "--outfile="+bundle)
+		build.Dir = "../../web"
+		output, err := build.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+		html, err := os.ReadFile("../../internal/web/dist/index.html")
+		require.NoError(t, err)
+
+		html = regexp.MustCompile(`<script type="module" src="[^"]+"></script>`).ReplaceAll(html, []byte(`<script type="module" src="/current.js"></script>`))
+		handler := NewHTTPHandler(connection)
+		httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Path == "/current.js":
+				http.ServeFile(w, r, bundle)
+			case r.URL.Path == "/test/release":
 				release()
-				cancel()
-				require.NoError(t, running.Wait())
-			}()
+			case strings.HasPrefix(r.URL.Path, "/test/calls/"):
+				call := strings.TrimPrefix(r.URL.Path, "/test/calls/")
 
-			rt := <-ready
-			id := "owned-public-" + final
-			require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main", CreatedBy: "alice"}))
-			checkpoint := &rocketcode.ActiveTurnCheckpoint{TurnID: "calls", ConversationKey: id, Agent: "main", DisplayModel: "root/model"}
+				progress := rocketcode.PublicProgressFromTrace(checkpoint.OutputTrace)
+				for i := range progress {
+					if progress[i].ID != call {
+						continue
+					}
 
-			if final == "calls" {
-				// Producer timing is covered by RocketCode's held-worker tests; these
-				// committed checkpoints exercise real signal/fetch/browser reconciliation.
-				for _, call := range []string{"A", "B", "C"} {
-					checkpoint.ReplayInput = append(checkpoint.ReplayInput, json.RawMessage(`{"type":"function_call","call_id":"`+call+`","name":"task","arguments":"{}"}`))
-					checkpoint.OutputTrace = append(checkpoint.OutputTrace, json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"`+call+`","parent_id":"calls/response","kind":"delegation","state":"working","agent":"child","model":"child/model"}}`))
+					progress[i].State = rocketcode.PublicProgressCompleted
+					if call == "C" {
+						progress[i].State = rocketcode.PublicProgressBlocked
+					}
+
+					raw, err := json.Marshal(struct {
+						Type     string                    `json:"type"`
+						Progress rocketcode.PublicProgress `json:"progress"`
+					}{"rocketcode_public_progress", progress[i]})
+					assert.NoError(t, err)
+
+					checkpoint.OutputTrace[i] = raw
 				}
 
-				require.NoError(t, rt.Sessions.UpsertActiveTurn(ctx, checkpoint, nil))
+				if call == "A" {
+					for _, output := range []string{"A", "B", "C"} {
+						text := output + " result"
+						if output == "C" {
+							text = "REVIEWER_PRIVATE_SENTINEL"
+						}
+
+						checkpoint.ReplayInput = append(checkpoint.ReplayInput, json.RawMessage(`{"type":"function_call_output","call_id":"`+output+`","output":"`+text+`"}`))
+					}
+
+					_, err := rt.Sessions.AppendEntryID(ctx, id, &rocketcode.SessionEntry{Type: "turn", TurnID: checkpoint.TurnID, Agent: checkpoint.Agent, Model: checkpoint.DisplayModel, ReplayInput: checkpoint.ReplayInput, OutputTrace: checkpoint.OutputTrace})
+					assert.NoError(t, err)
+					assert.NoError(t, rt.Sessions.ClearActiveTurn(ctx, checkpoint.TurnID))
+				} else {
+					assert.NoError(t, rt.Sessions.UpsertActiveTurn(ctx, checkpoint, nil))
+				}
+			case r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/s/"):
+				w.Header().Set("Content-Type", "text/html")
+				_, _ = w.Write(html)
+			default:
+				handler.ServeHTTP(w, r)
 			}
+		}))
+		t.Cleanup(httpServer.Close)
 
-			listener, err := Listen(testSocketPath(t))
-			require.NoError(t, err)
-
-			transport := grpc.NewServer()
-			New(rt, rt.Sessions, cfg, &mockChannels{}, &mockCronJobs{JobsFunc: func() ([]cronfrontend.Job, error) {
-				return nil, nil
-			}}).Register(transport)
-
-			var serving errgroup.Group
-			serving.Go(func() error {
-				if err := transport.Serve(listener); err != nil {
-					return fmt.Errorf("serve public progress RPC: %w", err)
-				}
-
-				return nil
-			})
-			t.Cleanup(func() {
-				transport.Stop()
-				require.NoError(t, serving.Wait())
-			})
-
-			connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, connection.Close()) })
-			bundle := filepath.Join(t.TempDir(), "current.js")
-			build := exec.CommandContext(ctx, "bun", "build", "./src/main.tsx", "--target=browser", "--define", `process.env.NODE_ENV="production"`, "--outfile="+bundle)
-			build.Dir = "../../web"
-			output, err := build.CombinedOutput()
-			require.NoError(t, err, "%s", output)
-			html, err := os.ReadFile("../../internal/web/dist/index.html")
-			require.NoError(t, err)
-
-			html = regexp.MustCompile(`<script type="module" src="[^"]+"></script>`).ReplaceAll(html, []byte(`<script type="module" src="/current.js"></script>`))
-			handler := NewHTTPHandler(connection)
-			httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch {
-				case r.URL.Path == "/current.js":
-					http.ServeFile(w, r, bundle)
-				case r.URL.Path == "/test/release":
-					release()
-				case strings.HasPrefix(r.URL.Path, "/test/calls/"):
-					call := strings.TrimPrefix(r.URL.Path, "/test/calls/")
-
-					progress := rocketcode.PublicProgressFromTrace(checkpoint.OutputTrace)
-					for i := range progress {
-						if progress[i].ID != call {
-							continue
-						}
-
-						progress[i].State = rocketcode.PublicProgressCompleted
-						if call == "C" {
-							progress[i].State = rocketcode.PublicProgressBlocked
-						}
-
-						raw, err := json.Marshal(struct {
-							Type     string                    `json:"type"`
-							Progress rocketcode.PublicProgress `json:"progress"`
-						}{"rocketcode_public_progress", progress[i]})
-						assert.NoError(t, err)
-
-						checkpoint.OutputTrace[i] = raw
-					}
-
-					if call == "A" {
-						for _, output := range []string{"A", "B", "C"} {
-							text := output + " result"
-							if output == "C" {
-								text = "REVIEWER_PRIVATE_SENTINEL"
-							}
-
-							checkpoint.ReplayInput = append(checkpoint.ReplayInput, json.RawMessage(`{"type":"function_call_output","call_id":"`+output+`","output":"`+text+`"}`))
-						}
-
-						_, err := rt.Sessions.AppendEntryID(ctx, id, &rocketcode.SessionEntry{Type: "turn", TurnID: checkpoint.TurnID, Agent: checkpoint.Agent, Model: checkpoint.DisplayModel, ReplayInput: checkpoint.ReplayInput, OutputTrace: checkpoint.OutputTrace})
-						assert.NoError(t, err)
-						assert.NoError(t, rt.Sessions.ClearActiveTurn(ctx, checkpoint.TurnID))
-					} else {
-						assert.NoError(t, rt.Sessions.UpsertActiveTurn(ctx, checkpoint, nil))
-					}
-				case r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/s/"):
-					w.Header().Set("Content-Type", "text/html")
-					_, _ = w.Write(html)
-				default:
-					handler.ServeHTTP(w, r)
-				}
-			}))
-			t.Cleanup(httpServer.Close)
-
-			browser := exec.CommandContext(ctx, "bun", "test", "src/public-progress-transport.test.ts")
-			browser.Dir = "../../web"
-
-			browser.Env = append(os.Environ(), "ROCKETCLAW_TEST_HTTP_URL="+httpServer.URL, "ROCKETCLAW_PUBLIC_TEST_ID="+id, "ROCKETCLAW_PUBLIC_TEST_FINAL="+final)
-			output, err = browser.CombinedOutput()
-			require.NoError(t, err, "%s", output)
-			t.Log(string(output))
-
+		env = append(env, "ROCKETCLAW_PUBLIC_TEST_URL_"+final+"="+httpServer.URL)
+		checks = append(checks, func() {
 			entries, err := rt.Sessions.ObserveTranscript(ctx, id, 0, 0, nil)
 			require.NoError(t, err)
 			require.Len(t, entries, 1)
@@ -247,6 +240,12 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 			require.NoError(t, err)
 			require.Empty(t, recoverable)
 		})
+	}
+
+	runWebTest(t, "src/public-progress-transport.test.ts", env...)
+
+	for _, check := range checks {
+		check()
 	}
 }
 

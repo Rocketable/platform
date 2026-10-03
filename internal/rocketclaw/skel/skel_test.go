@@ -332,9 +332,8 @@ func TestOverlaySkipsFilteredFiles(t *testing.T) {
 }
 
 func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git is required for overlay test")
-	}
+	_, err := exec.LookPath("git")
+	require.NoError(t, err, "git is required for overlay test")
 
 	tmp := t.TempDir()
 	repo := filepath.Join(tmp, "repo")
@@ -428,9 +427,8 @@ func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
 }
 
 func TestSyncInWithOverlaysAppliesConfiguredOverlaysInConfigOrder(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git is required for overlay test")
-	}
+	_, err := exec.LookPath("git")
+	require.NoError(t, err, "git is required for overlay test")
 
 	tmp := t.TempDir()
 	makeRepo := func(name, content string) string {
@@ -459,9 +457,8 @@ func TestSyncInWithOverlaysAppliesConfiguredOverlaysInConfigOrder(t *testing.T) 
 }
 
 func TestSyncInWithOverlaysTreatsGuardrailAsNormalAgent(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git is required for overlay test")
-	}
+	_, err := exec.LookPath("git")
+	require.NoError(t, err, "git is required for overlay test")
 
 	tmp := t.TempDir()
 	repo := filepath.Join(tmp, "repo")
@@ -749,9 +746,8 @@ func TestReplaceRuntimeAssetsAfterValidationLeavesLiveAssetsUnchangedOnValidatio
 }
 
 func TestReplaceRuntimeAssetsAfterValidationCommitsFreshOverlayAndRefreshesScripts(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git is required for overlay test")
-	}
+	_, err := exec.LookPath("git")
+	require.NoError(t, err, "git is required for overlay test")
 
 	tmp := t.TempDir()
 	repo := filepath.Join(tmp, "repo")

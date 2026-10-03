@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -1167,13 +1168,7 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	httpServer := startHTTPTestServer(t, connection)
 
-	proxy := exec.CommandContext(t.Context(), "bun", "test", "src/entry-transport.test.ts")
-	proxy.Dir = "../../web"
-
-	proxy.Env = append(os.Environ(), "ROCKETCLAW_TEST_HTTP_URL="+httpServer.URL, "ROCKETCLAW_ENTRY_TEST_ID="+id, "ROCKETCLAW_HISTORY_TEST_ID=empty-web", "ROCKETCLAW_VIEW_TEST_WORKSPACE="+cfg.Workspace)
-	output, err := proxy.CombinedOutput()
-	require.NoError(t, err, "%s", output)
-	t.Log(string(output))
+	runWebTest(t, "src/entry-transport.test.ts", "ROCKETCLAW_ENTRY_TEST_URL="+httpServer.URL, "ROCKETCLAW_ENTRY_TEST_ID="+id, "ROCKETCLAW_HISTORY_TEST_ID=empty-web", "ROCKETCLAW_VIEW_TEST_WORKSPACE="+cfg.Workspace)
 
 	const webHeader = `[Web principal="alice" additional_instructions="Reply plainly."]`
 	for i, tc := range []struct{ input, want, header string }{
@@ -1464,6 +1459,31 @@ func TestSessionEntries(t *testing.T) {
 	require.ErrorContains(t, err, "decode delivery report")
 	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', (SELECT entry_json::jsonb->'replay_input' FROM session_entries WHERE id = $1))::json WHERE id = $2`, observed[2].ID, observed[3].ID)
 	require.NoError(t, err)
+
+	// Unreadable stored history fails these reads instead of returning partial results.
+	var stored string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT entry_json::text FROM session_entries WHERE id = $1`, observed[3].ID).Scan(&stored))
+	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{timestamp}', 'false')::json WHERE id = $1`, observed[3].ID)
+	require.NoError(t, err)
+	_, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+	require.ErrorContains(t, err, "read cron history provenance")
+	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = $1::json WHERE id = $2`, stored, observed[3].ID)
+	require.NoError(t, err)
+
+	// The transcript skips an active turn its saved entry replaces; the delegation read still parses it.
+	corrupt := "cron:corrupt-delegations"
+	_, err = sessions.AppendEntryID(ctx, corrupt, &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "corrupt-turn", Timestamp: time.Now()})
+	require.NoError(t, err)
+	require.NoError(t, sessions.UpsertActiveTurn(ctx, &rocketcode.ActiveTurnCheckpoint{TurnID: "corrupt-turn", ConversationKey: corrupt, Agent: "main"}, nil))
+	_, err = db.ExecContext(ctx, `UPDATE active_turns SET replay_input_json = '{}' WHERE id = 'corrupt-turn'`)
+	require.NoError(t, err)
+	_, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: corrupt})
+	require.ErrorContains(t, err, "read web delegations")
+
+	for _, table := range []string{"active_turns", "session_entries", "session_summaries"} {
+		_, err = db.ExecContext(ctx, "DELETE FROM "+table+" WHERE conversation_id = $1", corrupt)
+		require.NoError(t, err)
+	}
 
 	jobs, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
@@ -1990,6 +2010,16 @@ func TestSessionEntries(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, queue, remaining, "failed rendering must preserve waiting work")
 			})
+		})
+
+		t.Run("a failed change send ends Join", func(t *testing.T) {
+			stream := &mockServerStream{
+				ContextFunc: func() context.Context {
+					return metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
+				},
+				SendMsgFunc: func(any) error { return errors.New("client gone") },
+			}
+			require.ErrorContains(t, server.join(&JoinRequest{Id: conversation}, stream), "send web conversation change")
 		})
 
 		for _, test := range []struct{ text, want string }{
@@ -2640,6 +2670,34 @@ func invoke[Response any](ctx context.Context, connection *grpc.ClientConn, meth
 	}
 
 	return response, nil
+}
+
+// runWebTest runs a Web test against this test's Go server. With ROCKETCLAW_WEB_TEST_SERVER_DIR set, CI runs
+// the whole Web suite itself: the test publishes its server variables there and serves until interrupted.
+func runWebTest(t *testing.T, file string, env ...string) {
+	t.Helper()
+
+	if dir := os.Getenv("ROCKETCLAW_WEB_TEST_SERVER_DIR"); dir != "" {
+		ctx, stop := signal.NotifyContext(t.Context(), os.Interrupt)
+		defer stop()
+
+		t.Parallel()
+
+		published := filepath.Join(dir, t.Name()+".env")
+		require.NoError(t, os.WriteFile(published+".tmp", []byte(strings.Join(env, "\n")+"\n"), 0o600))
+		require.NoError(t, os.Rename(published+".tmp", published))
+		<-ctx.Done()
+
+		return
+	}
+
+	web := exec.CommandContext(t.Context(), "bun", "test", file)
+	web.Dir = "../../web"
+
+	web.Env = append(os.Environ(), env...)
+	output, err := web.CombinedOutput()
+	require.NoError(t, err, "%s", output)
+	t.Log(string(output))
 }
 
 func testSocketPath(t *testing.T) string {

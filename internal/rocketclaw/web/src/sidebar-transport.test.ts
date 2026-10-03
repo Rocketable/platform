@@ -3,8 +3,8 @@ import { listSessions } from "./api";
 import type { AgentChoices } from "./types";
 
 // Go holds the second row until this real HTTP client cancels enumeration.
-test.skipIf(!process.env.ROCKETCLAW_TEST_HTTP_URL)("first Go row and composer choices arrive before the blocked tail", async () => {
-  const url = process.env.ROCKETCLAW_TEST_HTTP_URL!;
+test("first Go row and composer choices arrive before the blocked tail", async () => {
+  const url = process.env.ROCKETCLAW_SIDEBAR_TEST_URL!;
   const abort = new AbortController();
   const call = async (method: string, input = {}) => {
     const response = await fetch(`${url}/api/${method}`, { method: "POST", body: JSON.stringify(input) });

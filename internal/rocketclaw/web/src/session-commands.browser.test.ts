@@ -6,7 +6,7 @@ const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
-for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf(!playwright || !chromium)(`fork and handoff at ${width}px`, async () => {
+for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork and handoff at ${width}px`, async () => {
   const { chromium: engine } = await import(playwright!);
   const message = (messageId: string, role: string, text: string): TranscriptEvent => ({ messageId, entryKey: messageId.split(":")[0], itemId: `item:${messageId}`, inputId: "", role, text, complete: true, turnId: "" });
   const histories: Record<string, TranscriptEvent[]> = {

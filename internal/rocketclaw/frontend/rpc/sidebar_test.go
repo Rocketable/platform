@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/netip"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -159,13 +158,7 @@ func TestSidebarHTTPStreamsBeforeGoTailAndCancels(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 	httpServer := startHTTPTestServer(t, connection)
 
-	proxy := exec.CommandContext(t.Context(), "bun", "test", "src/sidebar-transport.test.ts")
-	proxy.Dir = "../../web"
-
-	proxy.Env = append(os.Environ(), "ROCKETCLAW_TEST_HTTP_URL="+httpServer.URL, "ROCKETCLAW_SIDEBAR_TEST=1")
-	output, err := proxy.CombinedOutput()
-	require.NoError(t, err, "%s", output)
-	t.Log(string(output))
+	runWebTest(t, "src/sidebar-transport.test.ts", "ROCKETCLAW_SIDEBAR_TEST_URL="+httpServer.URL)
 
 	select {
 	case <-cancelled:

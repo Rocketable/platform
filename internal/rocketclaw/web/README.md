@@ -74,9 +74,11 @@ The UI uses the shadcn `b0` preset with Base Nova components, configured in
 owns streaming follow and turn jumps. The turn rail uses its `scrollToMessage`
 API, and sending a message resumes following through `scrollToEnd`.
 
-The build includes TypeScript checks. The entry, live and sidebar HTTP integration
-tests use `ROCKETCLAW_TEST_HTTP_URL`, supplied by the Go test harness running
-`rpc.NewHTTPHandler`. They skip when that URL is absent. Use the isolated
+The build includes TypeScript checks. The entry, sidebar and public-progress HTTP integration
+tests fail unless their Go test servers are running. `go test` in
+`frontend/rpc` runs each of them against its own server. CI starts those servers
+with `ROCKETCLAW_WEB_TEST_SERVER_DIR` before `bun test`; see
+`.github/workflows/test.yml`. Use the isolated
 PostgreSQL and browser-test instructions in the transport README to exercise
 those paths. Keep temporary test artifacts under the repository's `.tmp/`.
 
@@ -395,13 +397,6 @@ the installed Playwright module and Chromium executable after `bun run build`:
 export ROCKETCLAW_PLAYWRIGHT_MODULE='/absolute/path/to/playwright-core/index.mjs'
 export ROCKETCLAW_CHROMIUM='/absolute/path/to/chromium'
 bun test src/session-list.browser.test.ts
-```
-
-With those browser paths set and a current build running, verify every theme
-selection and its persistence across reloads:
-
-```sh
-ROCKETCLAW_THEME_TEST_URL=http://127.0.0.1:3000/config bun test src/palette.test.ts
 ```
 
 They check a 17 MiB snapshot across reload, user/protocol isolation, transaction

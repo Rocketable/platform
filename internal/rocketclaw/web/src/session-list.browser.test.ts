@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { existsSync } from "node:fs";
 import path from "node:path";
 import type { Attachment, ChatOrigin, PromptDelivery, QueueItem, Session, SessionBatch, TranscriptEvent } from "./types";
 import { RPCError } from "./api";
@@ -10,7 +9,7 @@ const screenshots = path.resolve(import.meta.dir, "../../../../.tmp/web-screensh
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 
-test.skipIf(!playwright || !chromium)("saved sidebar snapshots isolate owners and commit atomically", async () => {
+test("saved sidebar snapshots isolate owners and commit atomically", async () => {
   const build = await Bun.build({ entrypoints: ["./src/session-list.ts"], target: "browser" });
   expect(build.success).toBe(true);
   const script = await build.outputs[0].text();
@@ -84,7 +83,7 @@ test.skipIf(!playwright || !chromium)("saved sidebar snapshots isolate owners an
   }
 }, 30_000);
 
-test.skipIf(!playwright || !chromium)("pending saves, delayed hydration and owner switches cannot beat deletion or leak owners", async () => {
+test("pending saves, delayed hydration and owner switches cannot beat deletion or leak owners", async () => {
   const build = await Bun.build({ entrypoints: ["./src/session-list.ts"], target: "browser" });
   expect(build.success).toBe(true);
   const script = await build.outputs[0].text();
@@ -227,9 +226,8 @@ test.skipIf(!playwright || !chromium)("pending saves, delayed hydration and owne
 }, 30_000);
 
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
-const built = existsSync(path.join(dist, "index.html"));
 
-test.skipIf(!playwright || !chromium || !built)("actual App renders independent public lifecycle and reconnect replacements at narrow widths", async () => {
+test("actual App renders independent public lifecycle and reconnect replacements at narrow widths", async () => {
   // Build current sources in memory; leave the parent's shared embedded assets untouched.
   const build = await Bun.build({ entrypoints: ["./src/main.tsx"], target: "browser", define: { "process.env.NODE_ENV": '"production"' } });
   expect(build.success).toBe(true);
@@ -305,7 +303,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App renders independent 
   } finally { server.stop(true); await browser.close(); }
 }, 60_000);
 
-test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, isolates and keeps composer independent", async () => {
+test("actual App restores, merges, isolates and keeps composer independent", async () => {
   const { chromium: engine } = await import(playwright!);
   let identityHold = Promise.withResolvers<void>();
   let promptHold = Promise.withResolvers<string>();
@@ -1281,7 +1279,11 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await ownerStarted.promise;
     await shown(page, "alice held preview");
     const oldRequest = await ownerRequest;
-    const oldResponse = page.waitForEvent("requestfailed", { predicate: (request: unknown) => request === oldRequest });
+    // Wait for Alice's stream to end however it ends. The test's own timeout bounds this, not a 30s
+    // waitForEvent timer started many steps before the tail is released.
+    const oldResponse = new Promise<void>((resolve) => {
+      for (const event of ["requestfinished", "requestfailed"]) page.on(event, (request: unknown) => { if (request === oldRequest) resolve(); });
+    });
     blocked = Promise.withResolvers();
     ctrl.username = "bob";
     await page.evaluate(() => {

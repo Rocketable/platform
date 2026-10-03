@@ -525,7 +525,7 @@ func TestNewDoesNotAllowReadingFilesThroughSymlinkedSkillRoot(t *testing.T) {
 		"skill-source/linked/asset.txt": []byte("asset"),
 	}, func(t *testing.T, root *os.Root) {
 		t.Helper()
-		requireRootSymlink(t, root, "skill-source", "skills-link")
+		require.NoError(t, root.Symlink("skill-source", "skills-link"))
 	})
 
 	// os.DirFS intentionally follows the host symlink so construction can reject its root.

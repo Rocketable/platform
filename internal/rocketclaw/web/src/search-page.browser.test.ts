@@ -5,7 +5,7 @@ const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
-for (const width of [1280, 390]) test.skipIf(!playwright || !chromium)(`saved search tabs at ${width}px`, async () => {
+for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async () => {
   const { chromium: engine } = await import(playwright!);
   let owner = "alice";
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async (request) => {
@@ -142,7 +142,7 @@ for (const width of [1280, 390]) test.skipIf(!playwright || !chromium)(`saved se
   }
 }, 30_000);
 
-for (const width of [1280, 390]) test.skipIf(!playwright || !chromium)(`search editor groups clickable message matches at ${width}px, and Enter reloads`, async () => {
+for (const width of [1280, 390]) test(`search editor groups clickable message matches at ${width}px, and Enter reloads`, async () => {
   const { chromium: engine } = await import(playwright!);
   const searches: string[] = [];
   const rows = [
@@ -224,7 +224,7 @@ for (const width of [1280, 390]) test.skipIf(!playwright || !chromium)(`search e
   }
 }, 30_000);
 
-test.skipIf(!playwright || !chromium)("newer search replaces an in-flight message search and retries errors", async () => {
+test("newer search replaces an in-flight message search and retries errors", async () => {
   const { chromium: engine } = await import(playwright!);
   const started = Promise.withResolvers<void>();
   const delayed = Promise.withResolvers<void>();
@@ -290,7 +290,7 @@ test.skipIf(!playwright || !chromium)("newer search replaces an in-flight messag
   }
 }, 30_000);
 
-test.skipIf(!playwright || !chromium)("message matches jump after history loads and last close returns to the last visible message", async () => {
+test("message matches jump after history loads and last close returns to the last visible message", async () => {
   const { chromium: engine } = await import(playwright!);
   const messages = (prefix: string) => Array.from({ length: 18 }, (_, i) => [
     { role: "user", messageId: `${prefix}-u${i}`, entryKey: `${prefix}-t${i}`, itemId: `${prefix}-item-u${i}`, inputId: `${prefix}-input${i}`, turnId: `${prefix}-t${i}`, text: `${prefix} user ${i}`, complete: true, origin: prefix === "one" && i === 1 ? "sandboxed" : "canonical" },

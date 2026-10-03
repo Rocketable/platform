@@ -6,7 +6,7 @@ const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
-for (const [width, height] of [[1280, 900], [390, 664]]) test.skipIf(!playwright || !chromium)(`delegation panel at ${width}px`, async () => {
+for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel at ${width}px`, async () => {
   const { chromium: engine } = await import(playwright!);
   const event = (role: string, text: string, tool: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ role, text, complete: true, entryKey: "", itemId: "", inputId: "", turnId: "", ...tool });
   const histories: Record<string, { messages: TranscriptEvent[]; delegations: string[] }> = {

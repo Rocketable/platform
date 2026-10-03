@@ -62,4 +62,24 @@ jobs:
           echo "ROCKETCLAW_PLAYWRIGHT_MODULE=$dir/node_modules/playwright-core" >> "$GITHUB_ENV"
           echo "ROCKETCLAW_CHROMIUM=$(bun -e 'console.log(require("playwright-core").chromium.executablePath())')" >> "$GITHUB_ENV"
       - run: make test
-      - run: make -C internal/rocketclaw/web test
+      - name: Web tests against Go test servers
+        run: |
+          dir="$RUNNER_TEMP/web-test-servers"
+          mkdir -p "$dir"
+          go test -c -o "$dir/rpc.test" ./internal/rocketclaw/frontend/rpc
+          (cd internal/rocketclaw/frontend/rpc && ROCKETCLAW_WEB_TEST_SERVER_DIR="$dir" exec "$dir/rpc.test" -test.v -test.timeout 30m -test.run '^(TestPublicProgressRealBrowser|TestSessionEntries|TestSidebarHTTPStreamsBeforeGoTailAndCancels)$') > "$dir/servers.log" 2>&1 &
+          servers=$!
+          until [ "$(ls "$dir"/*.env 2>/dev/null | wc -l)" -eq 3 ]; do
+            kill -0 "$servers" 2>/dev/null || { cat "$dir/servers.log"; exit 1; }
+            sleep 1
+          done
+          set -a
+          for f in "$dir"/*.env; do . "$f"; done
+          set +a
+          web=0
+          make -C internal/rocketclaw/web test || web=$?
+          kill -INT "$servers"
+          go=0
+          wait "$servers" || go=$?
+          cat "$dir/servers.log"
+          [ "$web" -eq 0 ] && [ "$go" -eq 0 ]
