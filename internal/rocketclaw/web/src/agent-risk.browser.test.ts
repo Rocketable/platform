@@ -109,7 +109,7 @@ test.skipIf(!playwright || !chromium)("agent risk follows selection locally acro
     expect(mutations).toEqual([{ id: "source", text: "$agent danger" }, { id: "source", text: "retained draft" }]);
 
     await page.keyboard.press("Meta+Shift+p");
-    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Page: Config", exact: true }).click();
+    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByRole("combobox", { name: "Color theme" }).click();
     await page.getByRole("option", { name: "Lagoon", exact: true }).click();
     await page.getByRole("button", { name: "Theme system", exact: true }).click();
