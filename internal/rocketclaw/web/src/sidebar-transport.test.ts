@@ -12,7 +12,7 @@ test("first Go row and composer choices arrive before the blocked tail", async (
     return response.json();
   };
   try {
-    expect(await call("Identity")).toEqual({ username: "alice" });
+    expect(await call("Identity")).toEqual({ username: "alice", principal: "alice" });
     expect(await call("Protocol")).toEqual({ protoSha256: new Bun.CryptoHasher("sha256").update(await Bun.file(new URL("../proto/web.proto", import.meta.url)).arrayBuffer()).digest("hex") });
     const iterator = listSessions(abort.signal, `${url}/api/ListSessions`);
     expect(await iterator.next()).toMatchObject({ done: false, value: {

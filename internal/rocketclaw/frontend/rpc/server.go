@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -64,8 +65,9 @@ type messageSearchFlight struct {
 }
 
 type tailscaleUser struct {
-	username string
-	expires  time.Time
+	username  string
+	principal string
+	expires   time.Time
 }
 
 // ChannelAgentChoices supplies live policy for actions and stored facts for display.
@@ -147,7 +149,7 @@ func (s *Server) DeleteSessionEntries(ctx context.Context, request *SessionEntri
 func (s *Server) listSessions(stream grpc.ServerStream) error {
 	ctx := stream.Context()
 
-	owner, err := s.principal(ctx)
+	owner, _, err := s.principal(ctx)
 	if err != nil {
 		return err
 	}
@@ -270,7 +272,7 @@ func (s *Server) historyRange(ctx context.Context, request *HistoryRequest, prev
 }
 
 func (s *Server) history(ctx context.Context, request *HistoryRequest) (*HistoryResponse, error) {
-	if _, err := s.principal(ctx); err != nil {
+	if _, _, err := s.principal(ctx); err != nil {
 		return nil, err
 	}
 
@@ -451,7 +453,7 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 		}
 
 		if event.Role == "user" {
-			header, inputID := event.Header, event.InputId
+			header, inputID, principal := event.Header, event.InputId, event.Principal
 
 			event, err = s.inputEvent(ctx, producer, event.Text)
 			if err != nil {
@@ -460,6 +462,7 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 
 			event.Header = header
 			event.InputId = inputID
+			event.Principal = principal
 		}
 
 		event.attribute(entry.Entry.AttributionAt(i), producer, conversationID)
@@ -758,7 +761,50 @@ func historyEvent(item *responses.ResponseInputItemUnionParam, raw json.RawMessa
 		inputID, _ = item.OfMessage.ExtraFields()["input_id"].(string)
 	}
 
-	return &TranscriptEvent{Role: role, Text: text, Header: header, InputId: inputID, Complete: true}, nil
+	return &TranscriptEvent{Role: role, Text: text, Header: header, Principal: headerPrincipal(header), InputId: inputID, Complete: true}, nil
+}
+
+// headerPrincipal reads top-level attributes from backend/bridge.go's provenanceHeader grammar.
+func headerPrincipal(header string) string {
+	inside, ok := strings.CutPrefix(header, "[")
+	if !ok || !strings.HasSuffix(inside, "]") {
+		return ""
+	}
+
+	_, attributes, _ := strings.Cut(strings.TrimSuffix(inside, "]"), " ")
+	for attributes != "" {
+		name, value, ok := strings.Cut(attributes, "=")
+		if !ok {
+			return ""
+		}
+
+		if strings.HasPrefix(value, `"`) {
+			quoted, err := strconv.QuotedPrefix(value)
+			if err != nil {
+				return ""
+			}
+
+			attributes = value[len(quoted):]
+			if attributes != "" && !strings.HasPrefix(attributes, " ") {
+				return ""
+			}
+
+			if name == "principal" {
+				principal, err := strconv.Unquote(quoted)
+				if err != nil {
+					return ""
+				}
+
+				return principal
+			}
+		} else {
+			_, attributes, _ = strings.Cut(value, " ")
+		}
+
+		attributes = strings.TrimPrefix(attributes, " ")
+	}
+
+	return ""
 }
 
 func (s *Server) humanConversation(id string) (bool, error) {
@@ -776,7 +822,7 @@ func (s *Server) humanConversation(id string) (bool, error) {
 }
 
 func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error) {
-	if _, err := s.principal(ctx); err != nil {
+	if _, _, err := s.principal(ctx); err != nil {
 		return nil, err
 	}
 
@@ -883,7 +929,7 @@ func cronHistory(entries []backend.ObservedSessionEntry, destination string) []*
 }
 
 func (s *Server) runCronJob(ctx context.Context, request *RunCronJobRequest) (*RunCronJobResponse, error) {
-	principal, err := s.principal(ctx)
+	principal, _, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -963,7 +1009,7 @@ func (s *Server) updateSession(ctx context.Context, request *UpdateSessionReques
 }
 
 func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
-	if _, err := s.principal(ctx); err != nil {
+	if _, _, err := s.principal(ctx); err != nil {
 		return nil, err
 	}
 
@@ -981,7 +1027,7 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 	}
 	ip := netip.MustParseAddr(metadata.ValueFromIncomingContext(ctx, "rocketclaw-principal")[0])
 
-	username, errWhoIs := s.tailscaleUsername(ctx, ip)
+	username, _, errWhoIs := s.tailscaleUsername(ctx, ip)
 	if errWhoIs == nil {
 		view.TailscaleUser = username
 	}
@@ -998,7 +1044,7 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 }
 
 func (s *Server) listSkills(ctx context.Context, request *ListSkillsRequest) (*ListSkillsResponse, error) {
-	if _, err := s.principal(ctx); err != nil {
+	if _, _, err := s.principal(ctx); err != nil {
 		return nil, err
 	}
 
@@ -1032,7 +1078,7 @@ func (s *Server) listSkills(ctx context.Context, request *ListSkillsRequest) (*L
 }
 
 func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse, error) {
-	if _, err := s.principal(ctx); err != nil {
+	if _, _, err := s.principal(ctx); err != nil {
 		return nil, err
 	}
 
@@ -1120,7 +1166,7 @@ func (s *Server) agentChoices(ctx context.Context, id string) ([]string, error) 
 }
 
 func (s *Server) createSession(ctx context.Context, request *CreateSessionRequest) (*CreateSessionResponse, error) {
-	principal, err := s.principal(ctx)
+	principal, _, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1172,7 +1218,7 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 }
 
 func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptResponse, error) {
-	principal, err := s.principal(ctx)
+	_, principal, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1302,7 +1348,7 @@ func (s *Server) listQueue(ctx context.Context, request *ListQueueRequest) (*Lis
 			protocol.InboundKindHeld:  PromptDelivery_STASH,
 		}[items[i].Kind]
 
-		response.Items = append(response.Items, &QueueItem{Id: items[i].ID, Text: input.Text, Attachments: input.Attachments, Delivery: delivery})
+		response.Items = append(response.Items, &QueueItem{Id: items[i].ID, Text: input.Text, Attachments: input.Attachments, Delivery: delivery, Principal: items[i].Principal})
 	}
 
 	return response, nil
@@ -1355,7 +1401,7 @@ func (s *Server) reorderQueue(ctx context.Context, request *ReorderQueueRequest)
 }
 
 func (s *Server) visibleConversation(ctx context.Context, id string) error {
-	if _, err := s.principal(ctx); err != nil {
+	if _, _, err := s.principal(ctx); err != nil {
 		return err
 	}
 
@@ -1393,25 +1439,25 @@ func (s *Server) join(request *JoinRequest, stream grpc.ServerStream) error {
 	return nil
 }
 
-func (s *Server) principal(ctx context.Context) (string, error) {
+func (s *Server) principal(ctx context.Context) (username, principal string, err error) {
 	values := metadata.ValueFromIncomingContext(ctx, "rocketclaw-principal")
 	if len(values) != 1 {
-		return "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "browser IP is required"))
+		return "", "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "browser IP is required"))
 	}
 
 	ip, err := netip.ParseAddr(values[0])
 	if err != nil {
-		return "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "invalid browser IP"))
+		return "", "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "invalid browser IP"))
 	}
 
 	if username := s.usernames[ip]; username != "" {
-		return username, nil
+		return username, username, nil
 	}
 
 	return s.tailscaleUsername(ctx, ip)
 }
 
-func (s *Server) tailscaleUsername(ctx context.Context, ip netip.Addr) (string, error) {
+func (s *Server) tailscaleUsername(ctx context.Context, ip netip.Addr) (username, principal string, err error) {
 	ip = ip.Unmap()
 	// Cache misses serialize across IPs; use per-IP coordination if lookup contention grows.
 	s.tailscaleMu.Lock()
@@ -1419,35 +1465,40 @@ func (s *Server) tailscaleUsername(ctx context.Context, ip netip.Addr) (string, 
 
 	now := time.Now()
 	if user := s.tailscaleUsers[ip]; now.Before(user.expires) {
-		return user.username, nil
+		return user.username, user.principal, nil
 	}
 
 	maps.DeleteFunc(s.tailscaleUsers, func(_ netip.Addr, user tailscaleUser) bool { return !now.Before(user.expires) })
 
 	output, err := exec.CommandContext(ctx, "tailscale", "whois", "--json", ip.String()).Output()
 	if err != nil {
-		return "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "Tailscale could not identify browser IP"))
+		return "", "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "Tailscale could not identify browser IP"))
 	}
 
 	var identity struct {
 		Node        struct{ Tags []string }
-		UserProfile struct{ LoginName string }
+		UserProfile struct{ LoginName, DisplayName string }
 	}
 	if err := json.Unmarshal(output, &identity); err != nil {
-		return "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "invalid Tailscale identity response"))
+		return "", "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "invalid Tailscale identity response"))
 	}
 
 	if len(identity.Node.Tags) > 0 || identity.UserProfile.LoginName == "" {
-		return "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "browser IP has no Tailscale user"))
+		return "", "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "browser IP has no Tailscale user"))
 	}
 
 	if s.tailscaleUsers == nil {
 		s.tailscaleUsers = make(map[netip.Addr]tailscaleUser)
 	}
 
-	s.tailscaleUsers[ip] = tailscaleUser{username: identity.UserProfile.LoginName, expires: time.Now().Add(5 * time.Minute)}
+	principal = identity.UserProfile.DisplayName
+	if strings.TrimSpace(principal) == "" {
+		principal = identity.UserProfile.LoginName
+	}
 
-	return identity.UserProfile.LoginName, nil
+	s.tailscaleUsers[ip] = tailscaleUser{username: identity.UserProfile.LoginName, principal: principal, expires: time.Now().Add(5 * time.Minute)}
+
+	return identity.UserProfile.LoginName, principal, nil
 }
 
 func (s *Server) entries(ctx context.Context, id string) ([]backend.ObservedSessionEntry, error) {

@@ -1101,6 +1101,7 @@ type TranscriptEvent struct {
 	// Fixed public lifecycle label; independent of the parent turn's running state.
 	State         string `protobuf:"bytes,18,opt,name=state,proto3" json:"state,omitempty"`
 	ParentId      string `protobuf:"bytes,19,opt,name=parent_id,json=parentId,proto3" json:"parent_id,omitempty"`
+	Principal     string `protobuf:"bytes,20,opt,name=principal,proto3" json:"principal,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1257,6 +1258,13 @@ func (x *TranscriptEvent) GetState() string {
 func (x *TranscriptEvent) GetParentId() string {
 	if x != nil {
 		return x.ParentId
+	}
+	return ""
+}
+
+func (x *TranscriptEvent) GetPrincipal() string {
+	if x != nil {
+		return x.Principal
 	}
 	return ""
 }
@@ -2808,6 +2816,7 @@ type QueueItem struct {
 	Text          string                 `protobuf:"bytes,2,opt,name=text,proto3" json:"text,omitempty"`
 	Attachments   []*Attachment          `protobuf:"bytes,3,rep,name=attachments,proto3" json:"attachments,omitempty"`
 	Delivery      PromptDelivery         `protobuf:"varint,4,opt,name=delivery,proto3,enum=rpc.PromptDelivery" json:"delivery,omitempty"`
+	Principal     string                 `protobuf:"bytes,5,opt,name=principal,proto3" json:"principal,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2868,6 +2877,13 @@ func (x *QueueItem) GetDelivery() PromptDelivery {
 		return x.Delivery
 	}
 	return PromptDelivery_STEER
+}
+
+func (x *QueueItem) GetPrincipal() string {
+	if x != nil {
+		return x.Principal
+	}
+	return ""
 }
 
 type ListQueueRequest struct {
@@ -3425,6 +3441,7 @@ func (*IdentityRequest) Descriptor() ([]byte, []int) {
 type IdentityResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
+	Principal     string                 `protobuf:"bytes,2,opt,name=principal,proto3" json:"principal,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3462,6 +3479,13 @@ func (*IdentityResponse) Descriptor() ([]byte, []int) {
 func (x *IdentityResponse) GetUsername() string {
 	if x != nil {
 		return x.Username
+	}
+	return ""
+}
+
+func (x *IdentityResponse) GetPrincipal() string {
+	if x != nil {
+		return x.Principal
 	}
 	return ""
 }
@@ -3545,7 +3569,7 @@ const file_web_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"Y\n" +
 	"\x12ConversationChange\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x1a\n" +
-	"\brevision\x18\x02 \x01(\tR\brevision\"\xaa\x04\n" +
+	"\brevision\x18\x02 \x01(\tR\brevision\"\xc8\x04\n" +
 	"\x0fTranscriptEvent\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x12\n" +
 	"\x04role\x18\x03 \x01(\tR\x04role\x12\x1a\n" +
@@ -3567,7 +3591,8 @@ const file_web_proto_rawDesc = "" +
 	"\aitem_id\x18\x10 \x01(\tR\x06itemId\x12\x19\n" +
 	"\binput_id\x18\x11 \x01(\tR\ainputId\x12\x14\n" +
 	"\x05state\x18\x12 \x01(\tR\x05state\x12\x1b\n" +
-	"\tparent_id\x18\x13 \x01(\tR\bparentIdB\x13\n" +
+	"\tparent_id\x18\x13 \x01(\tR\bparentId\x12\x1c\n" +
+	"\tprincipal\x18\x14 \x01(\tR\tprincipalB\x13\n" +
 	"\x11_reasoning_effortJ\x04\b\x02\x10\x03\"\xcf\x01\n" +
 	"\n" +
 	"Attachment\x12\x0e\n" +
@@ -3677,12 +3702,13 @@ const file_web_proto_rawDesc = "" +
 	"\x15UpdateSessionResponse\"\x11\n" +
 	"\x0fProtocolRequest\"5\n" +
 	"\x10ProtocolResponse\x12!\n" +
-	"\fproto_sha256\x18\x01 \x01(\tR\vprotoSha256\"\x93\x01\n" +
+	"\fproto_sha256\x18\x01 \x01(\tR\vprotoSha256\"\xb1\x01\n" +
 	"\tQueueItem\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\x121\n" +
 	"\vattachments\x18\x03 \x03(\v2\x0f.rpc.AttachmentR\vattachments\x12/\n" +
-	"\bdelivery\x18\x04 \x01(\x0e2\x13.rpc.PromptDeliveryR\bdelivery\"\"\n" +
+	"\bdelivery\x18\x04 \x01(\x0e2\x13.rpc.PromptDeliveryR\bdelivery\x12\x1c\n" +
+	"\tprincipal\x18\x05 \x01(\tR\tprincipal\"\"\n" +
 	"\x10ListQueueRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"9\n" +
 	"\x11ListQueueResponse\x12$\n" +
@@ -3709,9 +3735,10 @@ const file_web_proto_rawDesc = "" +
 	"\aentries\x18\x01 \x03(\v2\x15.rpc.SessionEntryDataR\aentries\"8\n" +
 	"\x1cDeleteSessionEntriesResponse\x12\x18\n" +
 	"\adeleted\x18\x01 \x01(\x03R\adeleted\"\x11\n" +
-	"\x0fIdentityRequest\".\n" +
+	"\x0fIdentityRequest\"L\n" +
 	"\x10IdentityResponse\x12\x1a\n" +
-	"\busername\x18\x01 \x01(\tR\busername*1\n" +
+	"\busername\x18\x01 \x01(\tR\busername\x12\x1c\n" +
+	"\tprincipal\x18\x02 \x01(\tR\tprincipal*1\n" +
 	"\x0ePromptDelivery\x12\t\n" +
 	"\x05STEER\x10\x00\x12\t\n" +
 	"\x05QUEUE\x10\x01\x12\t\n" +
