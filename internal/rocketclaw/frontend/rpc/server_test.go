@@ -1465,6 +1465,31 @@ func TestSessionEntries(t *testing.T) {
 	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', (SELECT entry_json::jsonb->'replay_input' FROM session_entries WHERE id = $1))::json WHERE id = $2`, observed[2].ID, observed[3].ID)
 	require.NoError(t, err)
 
+	// Unreadable stored history fails these reads instead of returning partial results.
+	var stored string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT entry_json::text FROM session_entries WHERE id = $1`, observed[3].ID).Scan(&stored))
+	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{timestamp}', 'false')::json WHERE id = $1`, observed[3].ID)
+	require.NoError(t, err)
+	_, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+	require.ErrorContains(t, err, "read cron history provenance")
+	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = $1::json WHERE id = $2`, stored, observed[3].ID)
+	require.NoError(t, err)
+
+	// The transcript skips an active turn its saved entry replaces; the delegation read still parses it.
+	corrupt := "cron:corrupt-delegations"
+	_, err = sessions.AppendEntryID(ctx, corrupt, &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "corrupt-turn", Timestamp: time.Now()})
+	require.NoError(t, err)
+	require.NoError(t, sessions.UpsertActiveTurn(ctx, &rocketcode.ActiveTurnCheckpoint{TurnID: "corrupt-turn", ConversationKey: corrupt, Agent: "main"}, nil))
+	_, err = db.ExecContext(ctx, `UPDATE active_turns SET replay_input_json = '{}' WHERE id = 'corrupt-turn'`)
+	require.NoError(t, err)
+	_, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: corrupt})
+	require.ErrorContains(t, err, "read web delegations")
+
+	for _, table := range []string{"active_turns", "session_entries", "session_summaries"} {
+		_, err = db.ExecContext(ctx, "DELETE FROM "+table+" WHERE conversation_id = $1", corrupt)
+		require.NoError(t, err)
+	}
+
 	jobs, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
 	require.Len(t, jobs.Jobs, 4) // Two definitions and two runs, not four copied entries.
