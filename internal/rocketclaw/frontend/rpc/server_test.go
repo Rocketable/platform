@@ -273,6 +273,13 @@ func TestSessionEntries(t *testing.T) {
 
 	var turns []*protocol.InboundMessage
 
+	workflows := []protocol.WorkflowDescription{{Name: "audit", Description: "Audit routes"}, {Name: "ship", Description: "Ship it"}}
+
+	var (
+		goals        []protocol.GoalRequest
+		goalInbounds []*protocol.InboundMessage
+	)
+
 	core := &mockBackend{
 		SubscribeFunc:          rt.Subscribe,
 		CreateConversationFunc: rt.CreateConversation,
@@ -290,6 +297,16 @@ func TestSessionEntries(t *testing.T) {
 			return nil
 		},
 		SwitchConversationAgentFunc: sessions.SetThreadAgentIfExists,
+		WorkflowDescriptionsFunc:    func() ([]protocol.WorkflowDescription, error) { return workflows, nil },
+		StartGoalFunc: func(_ context.Context, inbound *protocol.InboundMessage, goal protocol.GoalRequest) error {
+			if goal.Objective == "busy" {
+				return fmt.Errorf("persist goal: %w", protocol.ErrGoalAlreadyActive)
+			}
+
+			goals, goalInbounds = append(goals, goal), append(goalInbounds, inbound)
+
+			return nil
+		},
 		PopQueueItemFunc: func(_ context.Context, conversationID, itemID string) (bool, error) {
 			items, err := sessions.ThreadQueueForConversation(conversationID)
 			if err != nil {
@@ -539,6 +556,7 @@ func TestSessionEntries(t *testing.T) {
 		{"\u2003$steer\t$enqueue inspect  the logs\nnext  ", "$enqueue inspect  the logs\nnext  ", PromptDelivery_QUEUE},
 		{"\u0085$steer\u0085\uFEFFkeep literal", "\uFEFFkeep literal", PromptDelivery_QUEUE},
 		{"\uFEFF$stash keep literal", "\uFEFF$stash keep literal", PromptDelivery_STEER},
+		{"$workflow audit  src", "$workflow audit  src", PromptDelivery_STEER},
 	} {
 		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: "unrecorded", Text: tt.text, Delivery: tt.delivery, MessageId: "direct-message"})
 		require.ErrorContains(t, err, `conversation "unrecorded" is not recorded`)
@@ -795,6 +813,50 @@ func TestSessionEntries(t *testing.T) {
 		require.Len(t, turns, before)
 		require.Empty(t, core.SwitchConversationAgentCalls())
 		require.Empty(t, promoted)
+	})
+
+	t.Run("goal starts through the shared backend", func(t *testing.T) {
+		before := len(turns)
+
+		help, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "$goal", Delivery: PromptDelivery_STEER})
+		require.NoError(t, err)
+		require.Equal(t, protocol.GoalCommandHelp, help.PrivateText)
+
+		rejected, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "$goal maxTurns: nope ship", Delivery: PromptDelivery_STEER})
+		require.NoError(t, err)
+		require.Contains(t, rejected.PrivateText, "`maxTurns:`")
+
+		started, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: " $Goal maxTurns: 2 ship it", Delivery: PromptDelivery_QUEUE, MessageId: "goal-message"})
+		require.NoError(t, err)
+		require.Empty(t, started.PrivateText)
+		require.Equal(t, []protocol.GoalRequest{{Objective: "ship it", MaxTurns: 2}}, goals)
+		require.Len(t, goalInbounds, 1)
+		require.Equal(t, protocol.InboundKindPrompt, goalInbounds[0].Kind)
+		require.Equal(t, protocol.SourceWeb, goalInbounds[0].Source)
+		require.Equal(t, id, goalInbounds[0].ConversationID)
+		require.Equal(t, "ship it", goalInbounds[0].Text)
+		require.Equal(t, "alice", goalInbounds[0].Metadata[protocol.InboundPrincipalMetadataKey])
+		require.Equal(t, "goal-message", goalInbounds[0].Metadata["web_message_id"])
+
+		busy, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "$goal busy", Delivery: PromptDelivery_STEER})
+		require.NoError(t, err)
+		require.Equal(t, "A goal is already in progress in this conversation. Stop it before starting another.", busy.PrivateText)
+		require.Len(t, goals, 1)
+		require.Len(t, turns, before)
+	})
+
+	t.Run("bare workflow lists saved workflows privately", func(t *testing.T) {
+		before := len(turns)
+
+		listed, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: " $Workflow \n", Delivery: PromptDelivery_STEER})
+		require.NoError(t, err)
+		require.Equal(t, "audit - Audit routes\nship - Ship it", listed.PrivateText)
+
+		workflows = nil
+		listed, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "$workflow", Delivery: PromptDelivery_STEER})
+		require.NoError(t, err)
+		require.Equal(t, "No workflows are configured.", listed.PrivateText)
+		require.Len(t, turns, before)
 	})
 
 	require.NoError(t, sessions.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{
@@ -1152,6 +1214,17 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, emptySkills.Skills)
 
+	emptyWorkflows, err := invoke[ListWorkflowsResponse](ctx, connection, "ListWorkflows", &ListWorkflowsRequest{})
+	require.NoError(t, err)
+	require.Empty(t, emptyWorkflows.Workflows)
+
+	workflows = []protocol.WorkflowDescription{{Name: "audit", Description: "Audit routes"}}
+	listedWorkflows, err := invoke[ListWorkflowsResponse](ctx, connection, "ListWorkflows", &ListWorkflowsRequest{})
+	require.NoError(t, err)
+	require.Len(t, listedWorkflows.Workflows, 1)
+	require.Equal(t, "audit", listedWorkflows.Workflows[0].GetName())
+	require.Equal(t, "Audit routes", listedWorkflows.Workflows[0].GetDescription())
+
 	emptyConfig, err := invoke[ListConfigResponse](ctx, connection, "ListConfig", &ListConfigRequest{})
 	require.NoError(t, err)
 	require.Empty(t, emptyConfig.Config.Models)
@@ -1159,7 +1232,7 @@ func TestSessionEntries(t *testing.T) {
 	require.Empty(t, emptyConfig.Config.McpServers)
 	require.Equal(t, "168h0m0s", emptyConfig.Config.GetWebAutoSettleAfter())
 
-	for _, method := range []string{"ListConfig", "ListSkills"} {
+	for _, method := range []string{"ListConfig", "ListSkills", "ListWorkflows"} {
 		_, err = invoke[ListConfigResponse](t.Context(), connection, method, &ListConfigRequest{})
 		require.Equal(t, codes.Unauthenticated, status.Code(err))
 	}

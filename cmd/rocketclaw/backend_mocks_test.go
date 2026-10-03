@@ -47,6 +47,9 @@ var _ frontend.Backend = &BackendMock{}
 //			RunTurnFunc: func(context1 context.Context, inboundMessage *protocol.InboundMessage) error {
 //				panic("mock out the RunTurn method")
 //			},
+//			StartGoalFunc: func(context1 context.Context, inboundMessage *protocol.InboundMessage, goalRequest protocol.GoalRequest) error {
+//				panic("mock out the StartGoal method")
+//			},
 //			StashQueueItemFunc: func(context1 context.Context, s string, threadQueueItem *protocol.ThreadQueueItem) error {
 //				panic("mock out the StashQueueItem method")
 //			},
@@ -58,6 +61,9 @@ var _ frontend.Backend = &BackendMock{}
 //			},
 //			SyncConversationFunc: func(context1 context.Context, s string, s1 string) error {
 //				panic("mock out the SyncConversation method")
+//			},
+//			WorkflowDescriptionsFunc: func() ([]protocol.WorkflowDescription, error) {
+//				panic("mock out the WorkflowDescriptions method")
 //			},
 //		}
 //
@@ -90,6 +96,9 @@ type BackendMock struct {
 	// RunTurnFunc mocks the RunTurn method.
 	RunTurnFunc func(context1 context.Context, inboundMessage *protocol.InboundMessage) error
 
+	// StartGoalFunc mocks the StartGoal method.
+	StartGoalFunc func(context1 context.Context, inboundMessage *protocol.InboundMessage, goalRequest protocol.GoalRequest) error
+
 	// StashQueueItemFunc mocks the StashQueueItem method.
 	StashQueueItemFunc func(context1 context.Context, s string, threadQueueItem *protocol.ThreadQueueItem) error
 
@@ -101,6 +110,9 @@ type BackendMock struct {
 
 	// SyncConversationFunc mocks the SyncConversation method.
 	SyncConversationFunc func(context1 context.Context, s string, s1 string) error
+
+	// WorkflowDescriptionsFunc mocks the WorkflowDescriptions method.
+	WorkflowDescriptionsFunc func() ([]protocol.WorkflowDescription, error)
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -162,6 +174,15 @@ type BackendMock struct {
 			// InboundMessage is the inboundMessage argument value.
 			InboundMessage *protocol.InboundMessage
 		}
+		// StartGoal holds details about calls to the StartGoal method.
+		StartGoal []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// InboundMessage is the inboundMessage argument value.
+			InboundMessage *protocol.InboundMessage
+			// GoalRequest is the goalRequest argument value.
+			GoalRequest protocol.GoalRequest
+		}
 		// StashQueueItem holds details about calls to the StashQueueItem method.
 		StashQueueItem []struct {
 			// Context1 is the context1 argument value.
@@ -192,6 +213,9 @@ type BackendMock struct {
 			// S1 is the s1 argument value.
 			S1 string
 		}
+		// WorkflowDescriptions holds details about calls to the WorkflowDescriptions method.
+		WorkflowDescriptions []struct {
+		}
 	}
 	lockCreateConversation      sync.RWMutex
 	lockDeleteQueueItem         sync.RWMutex
@@ -201,10 +225,12 @@ type BackendMock struct {
 	lockQueueItems              sync.RWMutex
 	lockReorderQueueItems       sync.RWMutex
 	lockRunTurn                 sync.RWMutex
+	lockStartGoal               sync.RWMutex
 	lockStashQueueItem          sync.RWMutex
 	lockSubscribe               sync.RWMutex
 	lockSwitchConversationAgent sync.RWMutex
 	lockSyncConversation        sync.RWMutex
+	lockWorkflowDescriptions    sync.RWMutex
 }
 
 // CreateConversation calls CreateConversationFunc.
@@ -499,6 +525,46 @@ func (mock *BackendMock) RunTurnCalls() []struct {
 	return calls
 }
 
+// StartGoal calls StartGoalFunc.
+func (mock *BackendMock) StartGoal(context1 context.Context, inboundMessage *protocol.InboundMessage, goalRequest protocol.GoalRequest) error {
+	if mock.StartGoalFunc == nil {
+		panic("BackendMock.StartGoalFunc: method is nil but Backend.StartGoal was just called")
+	}
+	callInfo := struct {
+		Context1       context.Context
+		InboundMessage *protocol.InboundMessage
+		GoalRequest    protocol.GoalRequest
+	}{
+		Context1:       context1,
+		InboundMessage: inboundMessage,
+		GoalRequest:    goalRequest,
+	}
+	mock.lockStartGoal.Lock()
+	mock.calls.StartGoal = append(mock.calls.StartGoal, callInfo)
+	mock.lockStartGoal.Unlock()
+	return mock.StartGoalFunc(context1, inboundMessage, goalRequest)
+}
+
+// StartGoalCalls gets all the calls that were made to StartGoal.
+// Check the length with:
+//
+//	len(mockedBackend.StartGoalCalls())
+func (mock *BackendMock) StartGoalCalls() []struct {
+	Context1       context.Context
+	InboundMessage *protocol.InboundMessage
+	GoalRequest    protocol.GoalRequest
+} {
+	var calls []struct {
+		Context1       context.Context
+		InboundMessage *protocol.InboundMessage
+		GoalRequest    protocol.GoalRequest
+	}
+	mock.lockStartGoal.RLock()
+	calls = mock.calls.StartGoal
+	mock.lockStartGoal.RUnlock()
+	return calls
+}
+
 // StashQueueItem calls StashQueueItemFunc.
 func (mock *BackendMock) StashQueueItem(context1 context.Context, s string, threadQueueItem *protocol.ThreadQueueItem) error {
 	if mock.StashQueueItemFunc == nil {
@@ -644,5 +710,32 @@ func (mock *BackendMock) SyncConversationCalls() []struct {
 	mock.lockSyncConversation.RLock()
 	calls = mock.calls.SyncConversation
 	mock.lockSyncConversation.RUnlock()
+	return calls
+}
+
+// WorkflowDescriptions calls WorkflowDescriptionsFunc.
+func (mock *BackendMock) WorkflowDescriptions() ([]protocol.WorkflowDescription, error) {
+	if mock.WorkflowDescriptionsFunc == nil {
+		panic("BackendMock.WorkflowDescriptionsFunc: method is nil but Backend.WorkflowDescriptions was just called")
+	}
+	callInfo := struct {
+	}{}
+	mock.lockWorkflowDescriptions.Lock()
+	mock.calls.WorkflowDescriptions = append(mock.calls.WorkflowDescriptions, callInfo)
+	mock.lockWorkflowDescriptions.Unlock()
+	return mock.WorkflowDescriptionsFunc()
+}
+
+// WorkflowDescriptionsCalls gets all the calls that were made to WorkflowDescriptions.
+// Check the length with:
+//
+//	len(mockedBackend.WorkflowDescriptionsCalls())
+func (mock *BackendMock) WorkflowDescriptionsCalls() []struct {
+} {
+	var calls []struct {
+	}
+	mock.lockWorkflowDescriptions.RLock()
+	calls = mock.calls.WorkflowDescriptions
+	mock.lockWorkflowDescriptions.RUnlock()
 	return calls
 }

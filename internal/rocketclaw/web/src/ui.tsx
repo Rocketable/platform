@@ -135,7 +135,16 @@ const dollarCommands = [
   { name: "skill", label: "Invoke skill", hint: "<name> [args]", desc: "Invoke a skill by name" },
 ];
 
-function dollarMatches(text: string, skills: { name: string; description?: string }[]) {
+function dollarMatches(text: string, skills: { name: string; description?: string }[], workflows: { name: string; description?: string }[]) {
+  const workflowQuery = /^\$workflow(?:[\t ]+([^\s]*))?$/i.exec(text);
+  if (workflowQuery) {
+    return workflows.flatMap((workflow) => workflow.name.toLowerCase().startsWith((workflowQuery[1] ?? "").toLowerCase()) ? [{
+      name: workflow.name,
+      hint: "[args]",
+      desc: workflow.description ?? "",
+      invocation: `$workflow ${workflow.name} `,
+    }] : []);
+  }
   const skillQuery = /^\$skill(?:[\t ]+([^\s]*))?$/i.exec(text);
   if (skillQuery) {
     return skills.flatMap((skill) => skill.name.toLowerCase().startsWith((skillQuery[1] ?? "").toLowerCase()) ? [{
@@ -2474,11 +2483,12 @@ function SessionComposer({
   const catalog = agents.data?.agents ?? [];
   const selected = catalog.some((item) => item.name === agent) ? agent : currentAgent || catalog[0]?.name || "";
   const skills = useQuery({ ...queries.skills({ agent: selected }), enabled: selected !== "", placeholderData: undefined });
-  const matches = dollarOff ? [] : dollarMatches(text, skills.data ?? []);
+  const workflows = useQuery({ ...queries.workflows(), staleTime: 60_000 });
+  const matches = dollarOff ? [] : dollarMatches(text, skills.data ?? [], workflows.data ?? []);
   const pick = Math.max(0, matches.findIndex((item) => item.invocation === dollarPick));
   const applyDollar = (invocation: string) => {
     setText(invocation);
-    setDollarOff(invocation !== "$skill ");
+    setDollarOff(invocation !== "$skill " && invocation !== "$workflow ");
     setAgentOpen(false);
   };
   const { queued, parked } = pendingInputs(draft, queueQuery.data ?? []);

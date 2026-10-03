@@ -15,17 +15,8 @@ func (inertThreadRouter) StartThread(_ context.Context, _ string, _ protocol.Tex
 func (inertThreadRouter) StartGoalInThread(_ context.Context, _, _, _ string, _ int, _ protocol.TextConversationTarget, _ *protocol.InboundMessage) error {
 	return errors.New("slack thread routing is not configured")
 }
-func (inertThreadRouter) StartWorkflowInThread(context.Context, string, string, string, protocol.TextConversationTarget, *protocol.InboundMessage) error {
-	return errors.New("slack thread routing is not configured")
-}
-func (inertThreadRouter) WorkflowDescriptions() ([]protocol.WorkflowDescription, error) {
-	return nil, errors.New("slack thread routing is not configured")
-}
 func (inertThreadRouter) SkillDescriptions(string) ([]protocol.SkillDescription, error) {
 	return nil, errors.New("slack thread routing is not configured")
-}
-func (inertThreadRouter) ReserveWorkflowTurn(protocol.TextConversationTarget) (release func(), reserved bool, err error) {
-	return func() {}, true, nil
 }
 func (inertThreadRouter) InterruptThread(target protocol.TextConversationTarget) (*protocol.InboundMessage, error) {
 	_ = target
@@ -64,18 +55,4 @@ func (inertThreadRouter) ScheduledMessages(protocol.TextConversationTarget) (map
 }
 func (inertThreadRouter) ThreadBusy(protocol.TextConversationTarget) bool {
 	return false
-}
-
-type inertOneOffCronjobs struct{}
-
-func (inertOneOffCronjobs) LoadOneOffCronjob(string) (protocol.OneOffCronjob, error) {
-	return protocol.OneOffCronjob{}, errors.New("on-demand cronjobs are not configured")
-}
-
-func (inertOneOffCronjobs) ListCronjobs(string) ([]string, error) {
-	return nil, errors.New("on-demand cronjobs are not configured")
-}
-
-func (inertOneOffCronjobs) RunOneOffCronjob(context.Context, *protocol.OneOffCronjob) (protocol.CronRunResult, error) {
-	return protocol.CronRunResult{}, errors.New("on-demand cronjobs are not configured")
 }

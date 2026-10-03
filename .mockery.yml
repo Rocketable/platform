@@ -88,9 +88,6 @@ packages:
             inpackage: false
   github.com/Rocketable/platform/internal/rocketclaw/frontend/slack:
     interfaces:
-      oneOffCronjobRunner:
-        config:
-          structname: oneOffCronjobsMock
       channelFactsStore:
         config:
           structname: channelFactsStoreMock

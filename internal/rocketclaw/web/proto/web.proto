@@ -202,6 +202,17 @@ message ListSkillsResponse {
   repeated Skill skills = 1;
 }
 
+message Workflow {
+  string name = 1;
+  string description = 2;
+}
+
+message ListWorkflowsRequest {}
+
+message ListWorkflowsResponse {
+  repeated Workflow workflows = 1;
+}
+
 message ListCronJobsRequest {}
 
 message ListCronJobsResponse {
@@ -352,6 +363,7 @@ service Web {
   rpc Handoff(HandoffRequest) returns (HandoffResponse);
   rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
   rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);
+  rpc ListWorkflows(ListWorkflowsRequest) returns (ListWorkflowsResponse);
   rpc ListConfig(ListConfigRequest) returns (ListConfigResponse);
   rpc SettleSession(SettleSessionRequest) returns (SettleSessionResponse);
   rpc UpdateSession(UpdateSessionRequest) returns (UpdateSessionResponse);

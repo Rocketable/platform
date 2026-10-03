@@ -36,9 +36,6 @@ var _ protocol.PrimaryTextRouter = &primaryTextRouterMock{}
 //			RegisterThreadFunc: func(target protocol.TextConversationTarget, agent string) (bool, error) {
 //				panic("mock out the RegisterThread method")
 //			},
-//			ReserveWorkflowTurnFunc: func(target protocol.TextConversationTarget) (func(), bool, error) {
-//				panic("mock out the ReserveWorkflowTurn method")
-//			},
 //			ScheduledMessagesFunc: func(target protocol.TextConversationTarget) (map[string]protocol.ScheduledMessageState, error) {
 //				panic("mock out the ScheduledMessages method")
 //			},
@@ -50,9 +47,6 @@ var _ protocol.PrimaryTextRouter = &primaryTextRouterMock{}
 //			},
 //			StartThreadFunc: func(ctx context.Context, agent string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) error {
 //				panic("mock out the StartThread method")
-//			},
-//			StartWorkflowInThreadFunc: func(ctx context.Context, agent string, name string, args string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) error {
-//				panic("mock out the StartWorkflowInThread method")
 //			},
 //			StashThreadQueueItemFunc: func(ctx context.Context, target protocol.TextConversationTarget, item *protocol.ThreadQueueItem) error {
 //				panic("mock out the StashThreadQueueItem method")
@@ -71,9 +65,6 @@ var _ protocol.PrimaryTextRouter = &primaryTextRouterMock{}
 //			},
 //			ThreadQueueItemsFunc: func(target protocol.TextConversationTarget) ([]protocol.ThreadQueueItem, error) {
 //				panic("mock out the ThreadQueueItems method")
-//			},
-//			WorkflowDescriptionsFunc: func() ([]protocol.WorkflowDescription, error) {
-//				panic("mock out the WorkflowDescriptions method")
 //			},
 //		}
 //
@@ -97,9 +88,6 @@ type primaryTextRouterMock struct {
 	// RegisterThreadFunc mocks the RegisterThread method.
 	RegisterThreadFunc func(target protocol.TextConversationTarget, agent string) (bool, error)
 
-	// ReserveWorkflowTurnFunc mocks the ReserveWorkflowTurn method.
-	ReserveWorkflowTurnFunc func(target protocol.TextConversationTarget) (func(), bool, error)
-
 	// ScheduledMessagesFunc mocks the ScheduledMessages method.
 	ScheduledMessagesFunc func(target protocol.TextConversationTarget) (map[string]protocol.ScheduledMessageState, error)
 
@@ -111,9 +99,6 @@ type primaryTextRouterMock struct {
 
 	// StartThreadFunc mocks the StartThread method.
 	StartThreadFunc func(ctx context.Context, agent string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) error
-
-	// StartWorkflowInThreadFunc mocks the StartWorkflowInThread method.
-	StartWorkflowInThreadFunc func(ctx context.Context, agent string, name string, args string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) error
 
 	// StashThreadQueueItemFunc mocks the StashThreadQueueItem method.
 	StashThreadQueueItemFunc func(ctx context.Context, target protocol.TextConversationTarget, item *protocol.ThreadQueueItem) error
@@ -132,9 +117,6 @@ type primaryTextRouterMock struct {
 
 	// ThreadQueueItemsFunc mocks the ThreadQueueItems method.
 	ThreadQueueItemsFunc func(target protocol.TextConversationTarget) ([]protocol.ThreadQueueItem, error)
-
-	// WorkflowDescriptionsFunc mocks the WorkflowDescriptions method.
-	WorkflowDescriptionsFunc func() ([]protocol.WorkflowDescription, error)
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -173,11 +155,6 @@ type primaryTextRouterMock struct {
 			// Agent is the agent argument value.
 			Agent string
 		}
-		// ReserveWorkflowTurn holds details about calls to the ReserveWorkflowTurn method.
-		ReserveWorkflowTurn []struct {
-			// Target is the target argument value.
-			Target protocol.TextConversationTarget
-		}
 		// ScheduledMessages holds details about calls to the ScheduledMessages method.
 		ScheduledMessages []struct {
 			// Target is the target argument value.
@@ -211,21 +188,6 @@ type primaryTextRouterMock struct {
 			Ctx context.Context
 			// Agent is the agent argument value.
 			Agent string
-			// Target is the target argument value.
-			Target protocol.TextConversationTarget
-			// Inbound is the inbound argument value.
-			Inbound *protocol.InboundMessage
-		}
-		// StartWorkflowInThread holds details about calls to the StartWorkflowInThread method.
-		StartWorkflowInThread []struct {
-			// Ctx is the ctx argument value.
-			Ctx context.Context
-			// Agent is the agent argument value.
-			Agent string
-			// Name is the name argument value.
-			Name string
-			// Args is the args argument value.
-			Args string
 			// Target is the target argument value.
 			Target protocol.TextConversationTarget
 			// Inbound is the inbound argument value.
@@ -271,28 +233,22 @@ type primaryTextRouterMock struct {
 			// Target is the target argument value.
 			Target protocol.TextConversationTarget
 		}
-		// WorkflowDescriptions holds details about calls to the WorkflowDescriptions method.
-		WorkflowDescriptions []struct {
-		}
 	}
 	lockDeleteThreadQueueItem  sync.RWMutex
 	lockInterruptConversation  sync.RWMutex
 	lockInterruptThread        sync.RWMutex
 	lockPromoteThreadQueueItem sync.RWMutex
 	lockRegisterThread         sync.RWMutex
-	lockReserveWorkflowTurn    sync.RWMutex
 	lockScheduledMessages      sync.RWMutex
 	lockSkillDescriptions      sync.RWMutex
 	lockStartGoalInThread      sync.RWMutex
 	lockStartThread            sync.RWMutex
-	lockStartWorkflowInThread  sync.RWMutex
 	lockStashThreadQueueItem   sync.RWMutex
 	lockSubmitThreadReply      sync.RWMutex
 	lockSwitchThreadAgent      sync.RWMutex
 	lockThreadAgent            sync.RWMutex
 	lockThreadBusy             sync.RWMutex
 	lockThreadQueueItems       sync.RWMutex
-	lockWorkflowDescriptions   sync.RWMutex
 }
 
 // DeleteThreadQueueItem calls DeleteThreadQueueItemFunc.
@@ -475,38 +431,6 @@ func (mock *primaryTextRouterMock) RegisterThreadCalls() []struct {
 	return calls
 }
 
-// ReserveWorkflowTurn calls ReserveWorkflowTurnFunc.
-func (mock *primaryTextRouterMock) ReserveWorkflowTurn(target protocol.TextConversationTarget) (func(), bool, error) {
-	if mock.ReserveWorkflowTurnFunc == nil {
-		panic("primaryTextRouterMock.ReserveWorkflowTurnFunc: method is nil but PrimaryTextRouter.ReserveWorkflowTurn was just called")
-	}
-	callInfo := struct {
-		Target protocol.TextConversationTarget
-	}{
-		Target: target,
-	}
-	mock.lockReserveWorkflowTurn.Lock()
-	mock.calls.ReserveWorkflowTurn = append(mock.calls.ReserveWorkflowTurn, callInfo)
-	mock.lockReserveWorkflowTurn.Unlock()
-	return mock.ReserveWorkflowTurnFunc(target)
-}
-
-// ReserveWorkflowTurnCalls gets all the calls that were made to ReserveWorkflowTurn.
-// Check the length with:
-//
-//	len(mockedPrimaryTextRouter.ReserveWorkflowTurnCalls())
-func (mock *primaryTextRouterMock) ReserveWorkflowTurnCalls() []struct {
-	Target protocol.TextConversationTarget
-} {
-	var calls []struct {
-		Target protocol.TextConversationTarget
-	}
-	mock.lockReserveWorkflowTurn.RLock()
-	calls = mock.calls.ReserveWorkflowTurn
-	mock.lockReserveWorkflowTurn.RUnlock()
-	return calls
-}
-
 // ScheduledMessages calls ScheduledMessagesFunc.
 func (mock *primaryTextRouterMock) ScheduledMessages(target protocol.TextConversationTarget) (map[string]protocol.ScheduledMessageState, error) {
 	if mock.ScheduledMessagesFunc == nil {
@@ -668,58 +592,6 @@ func (mock *primaryTextRouterMock) StartThreadCalls() []struct {
 	mock.lockStartThread.RLock()
 	calls = mock.calls.StartThread
 	mock.lockStartThread.RUnlock()
-	return calls
-}
-
-// StartWorkflowInThread calls StartWorkflowInThreadFunc.
-func (mock *primaryTextRouterMock) StartWorkflowInThread(ctx context.Context, agent string, name string, args string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) error {
-	if mock.StartWorkflowInThreadFunc == nil {
-		panic("primaryTextRouterMock.StartWorkflowInThreadFunc: method is nil but PrimaryTextRouter.StartWorkflowInThread was just called")
-	}
-	callInfo := struct {
-		Ctx     context.Context
-		Agent   string
-		Name    string
-		Args    string
-		Target  protocol.TextConversationTarget
-		Inbound *protocol.InboundMessage
-	}{
-		Ctx:     ctx,
-		Agent:   agent,
-		Name:    name,
-		Args:    args,
-		Target:  target,
-		Inbound: inbound,
-	}
-	mock.lockStartWorkflowInThread.Lock()
-	mock.calls.StartWorkflowInThread = append(mock.calls.StartWorkflowInThread, callInfo)
-	mock.lockStartWorkflowInThread.Unlock()
-	return mock.StartWorkflowInThreadFunc(ctx, agent, name, args, target, inbound)
-}
-
-// StartWorkflowInThreadCalls gets all the calls that were made to StartWorkflowInThread.
-// Check the length with:
-//
-//	len(mockedPrimaryTextRouter.StartWorkflowInThreadCalls())
-func (mock *primaryTextRouterMock) StartWorkflowInThreadCalls() []struct {
-	Ctx     context.Context
-	Agent   string
-	Name    string
-	Args    string
-	Target  protocol.TextConversationTarget
-	Inbound *protocol.InboundMessage
-} {
-	var calls []struct {
-		Ctx     context.Context
-		Agent   string
-		Name    string
-		Args    string
-		Target  protocol.TextConversationTarget
-		Inbound *protocol.InboundMessage
-	}
-	mock.lockStartWorkflowInThread.RLock()
-	calls = mock.calls.StartWorkflowInThread
-	mock.lockStartWorkflowInThread.RUnlock()
 	return calls
 }
 
@@ -932,32 +804,5 @@ func (mock *primaryTextRouterMock) ThreadQueueItemsCalls() []struct {
 	mock.lockThreadQueueItems.RLock()
 	calls = mock.calls.ThreadQueueItems
 	mock.lockThreadQueueItems.RUnlock()
-	return calls
-}
-
-// WorkflowDescriptions calls WorkflowDescriptionsFunc.
-func (mock *primaryTextRouterMock) WorkflowDescriptions() ([]protocol.WorkflowDescription, error) {
-	if mock.WorkflowDescriptionsFunc == nil {
-		panic("primaryTextRouterMock.WorkflowDescriptionsFunc: method is nil but PrimaryTextRouter.WorkflowDescriptions was just called")
-	}
-	callInfo := struct {
-	}{}
-	mock.lockWorkflowDescriptions.Lock()
-	mock.calls.WorkflowDescriptions = append(mock.calls.WorkflowDescriptions, callInfo)
-	mock.lockWorkflowDescriptions.Unlock()
-	return mock.WorkflowDescriptionsFunc()
-}
-
-// WorkflowDescriptionsCalls gets all the calls that were made to WorkflowDescriptions.
-// Check the length with:
-//
-//	len(mockedPrimaryTextRouter.WorkflowDescriptionsCalls())
-func (mock *primaryTextRouterMock) WorkflowDescriptionsCalls() []struct {
-} {
-	var calls []struct {
-	}
-	mock.lockWorkflowDescriptions.RLock()
-	calls = mock.calls.WorkflowDescriptions
-	mock.lockWorkflowDescriptions.RUnlock()
 	return calls
 }

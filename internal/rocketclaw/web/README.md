@@ -176,6 +176,13 @@ Existing draft text and attachments are kept; nothing is sent until you submit.
 In web, `$enqueue <text>` queues automatic later work, `$stash <text>` holds work
 until explicitly sent, and `$steer <text>` sends now or guides the running turn.
 Only the outer delivery command is removed; inner commands and text are preserved.
+`$workflow <name> [args]` runs a saved workflow as its own turn: right away when
+idle, after the active turn when steered, and as later work when queued. Bare
+`$workflow` privately lists the saved workflows, and typing `$workflow ` in the
+composer suggests them by name. `$goal <objective>` starts a goal
+loop on the conversation, with the same `maxTurns:` and `checkScript:` options as
+Slack; its first turn runs right away when idle, otherwise after the active turn.
+Bare `$goal` privately shows usage, and `$stop` ends the goal.
 The Stash button and shortcut still hold the entire draft literally, including
 any `$command` text. Slack's command language is unchanged.
 Run cron opens a new session immediately. The job still runs privately, and the chat fills in when it finishes.

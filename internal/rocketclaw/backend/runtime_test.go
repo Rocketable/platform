@@ -1019,6 +1019,49 @@ func TestRuntimeRunTurnRejectsUnrecordedConversationAndSyncDestination(t *testin
 	require.ErrorContains(t, rt.RunTurn(t.Context(), inbound), `conversation "missing-y" is not recorded`)
 }
 
+func TestRuntimeStartGoalRecordsGoalAndQueuesKickoff(t *testing.T) {
+	store := newTestSessionService(t)
+	conversationID := "web:goal"
+	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+
+	cfg := &config.Config{Workspace: filepath.Join(t.TempDir(), "missing")}
+	bridge := &Bridge{config: Config{ConversationID: conversationID, Agent: "main", SessionService: store}, requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
+	manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	manager.bridges = map[string]directBridge{conversationID: bridge}
+	rt := &Runtime{threads: manager, Sessions: store, Cfg: cfg}
+
+	webGoal := func() *protocol.InboundMessage {
+		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "ship it"}, true)
+		inbound.ConversationID = conversationID
+
+		return inbound
+	}
+
+	require.ErrorContains(t, rt.StartGoal(t.Context(), webGoal(), protocol.GoalRequest{Objective: "ship it", CheckScript: "make test", MaxTurns: 3}), "validate goal check script")
+
+	_, exists, err := store.Goal(conversationID)
+	require.NoError(t, err)
+	require.False(t, exists)
+
+	require.NoError(t, rt.StartGoal(t.Context(), webGoal(), protocol.GoalRequest{Objective: "ship it", MaxTurns: 3}))
+
+	goal, exists, err := store.Goal(conversationID)
+	require.NoError(t, err)
+	require.True(t, exists)
+	assert.Equal(t, GoalStatusActive, goal.Status)
+	assert.Equal(t, "ship it", goal.Objective)
+	assert.Equal(t, 3, goal.MaxTurns)
+	require.Len(t, bridge.requestCh, 1)
+	kickoff := (<-bridge.requestCh).inbound
+	assert.Equal(t, protocol.GoalActionKickoff, kickoff.GoalAction)
+	assert.Equal(t, "ship it", kickoff.Text)
+
+	require.ErrorIs(t, rt.StartGoal(t.Context(), webGoal(), protocol.GoalRequest{Objective: "again"}), protocol.ErrGoalAlreadyActive)
+	assert.Empty(t, bridge.requestCh)
+
+	require.ErrorContains(t, rt.StartGoal(t.Context(), &protocol.InboundMessage{ConversationID: "web:missing"}, protocol.GoalRequest{Objective: "x"}), `conversation "web:missing" is not recorded`)
+}
+
 func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 	store := newTestSessionService(t)
 	target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
@@ -1058,11 +1101,6 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 	scheduled, err := manager.ScheduledMessages(target)
 	require.NoError(t, err)
 	require.Empty(t, scheduled)
-
-	release, reserved, err := manager.ReserveWorkflowTurn(target)
-	require.NoError(t, err)
-	require.True(t, reserved)
-	release()
 }
 
 func TestRuntimeHeldQueueManualRelease(t *testing.T) {

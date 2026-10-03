@@ -277,28 +277,6 @@ func (m *Manager) Jobs() ([]Job, error) {
 	return jobs, nil
 }
 
-// ListCronjobs returns top-level cron stems whose configured channel matches channel.
-func (m *Manager) ListCronjobs(channel string) ([]string, error) {
-	channel = strings.TrimSpace(channel)
-
-	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir)
-	if err != nil {
-		return nil, err
-	}
-
-	names := make([]string, 0)
-
-	for _, definition := range definitions {
-		if definition.textChannel != channel {
-			continue
-		}
-
-		names = append(names, strings.TrimSuffix(strings.TrimPrefix(definition.relativePath, "cron/"), ".md"))
-	}
-
-	return names, nil
-}
-
 // RunOneOffCronjob waits for a loaded producer and its required Sync.
 func (m *Manager) RunOneOffCronjob(ctx context.Context, job *protocol.OneOffCronjob) (protocol.CronRunResult, error) {
 	raw := new(backend.RawRunProgress)

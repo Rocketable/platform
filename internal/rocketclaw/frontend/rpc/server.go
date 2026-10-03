@@ -1043,6 +1043,25 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 	return &ListConfigResponse{Config: view}, nil
 }
 
+// listWorkflows lists the saved workflows for the web $workflow picker.
+func (s *Server) listWorkflows(ctx context.Context) (*ListWorkflowsResponse, error) {
+	if _, _, err := s.principal(ctx); err != nil {
+		return nil, err
+	}
+
+	descriptions, err := s.backend.WorkflowDescriptions()
+	if err != nil {
+		return nil, fmt.Errorf("list web workflows: %w", err)
+	}
+
+	response := &ListWorkflowsResponse{}
+	for _, description := range descriptions {
+		response.Workflows = append(response.Workflows, &Workflow{Name: description.Name, Description: description.Description})
+	}
+
+	return response, nil
+}
+
 func (s *Server) listSkills(ctx context.Context, request *ListSkillsRequest) (*ListSkillsResponse, error) {
 	if _, _, err := s.principal(ctx); err != nil {
 		return nil, err
@@ -1274,7 +1293,17 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		return &PromptResponse{PrivateText: "Agent: " + words[1]}, nil
 	}
 
-	text, delivery := request.Text, request.Delivery
+	if len(words) == 1 && strings.EqualFold(words[0], "$workflow") {
+		return s.workflowListReply()
+	}
+
+	goal, text, rejection := webGoal(request.Text, words)
+	if rejection != "" {
+		return &PromptResponse{PrivateText: rejection}, nil
+	}
+
+	delivery := request.Delivery
+
 	if len(words) > 0 && slices.Contains([]string{"$enqueue", "$stash", "$steer"}, words[0]) {
 		text = strings.TrimLeftFunc(strings.TrimPrefix(strings.TrimLeftFunc(text, unicode.IsSpace), words[0]), unicode.IsSpace)
 		delivery = map[string]PromptDelivery{
@@ -1292,6 +1321,10 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		kind = protocol.InboundKindHeld
 	default:
 		return nil, fmt.Errorf("web prompt: %w", status.Error(codes.InvalidArgument, "unknown prompt delivery"))
+	}
+
+	if goal.Objective != "" {
+		kind = protocol.InboundKindPrompt
 	}
 
 	content, err := s.uploadContent(ctx, request.Id, text, request.AttachmentIds)
@@ -1317,7 +1350,52 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 	inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
 
 	inbound.Metadata["web_message_id"] = cmp.Or(request.MessageId, rand.Text())
-	if err := s.backend.RunTurn(ctx, inbound); err != nil {
+
+	return s.submitPrompt(ctx, inbound, goal)
+}
+
+// webGoal parses a web $goal command. It returns the goal with its objective as
+// the prompt text, or the zero goal and text unchanged when the prompt is not a
+// $goal. A parsed goal always has an objective.
+func webGoal(text string, words []string) (goal protocol.GoalRequest, prompt, rejection string) {
+	if len(words) == 0 || !strings.EqualFold(words[0], "$goal") {
+		return goal, text, ""
+	}
+
+	goal, rejection = protocol.ParseGoalRequest(strings.TrimPrefix(strings.TrimLeftFunc(text, unicode.IsSpace), words[0]))
+
+	return goal, goal.Objective, rejection
+}
+
+// workflowListReply answers a bare $workflow privately with the saved workflows.
+func (s *Server) workflowListReply() (*PromptResponse, error) {
+	descriptions, err := s.backend.WorkflowDescriptions()
+	if err != nil {
+		return nil, fmt.Errorf("list web workflows: %w", err)
+	}
+
+	lines := make([]string, 0, len(descriptions))
+	for _, description := range descriptions {
+		lines = append(lines, description.Name+" - "+description.Description)
+	}
+
+	return &PromptResponse{PrivateText: cmp.Or(strings.Join(lines, "\n"), "No workflows are configured.")}, nil
+}
+
+// submitPrompt starts a parsed $goal, or runs any other prompt as a turn.
+func (s *Server) submitPrompt(ctx context.Context, inbound *protocol.InboundMessage, goal protocol.GoalRequest) (*PromptResponse, error) {
+	var err error
+	if goal.Objective != "" {
+		err = s.backend.StartGoal(ctx, inbound, goal)
+	} else {
+		err = s.backend.RunTurn(ctx, inbound)
+	}
+
+	if errors.Is(err, protocol.ErrGoalAlreadyActive) {
+		return &PromptResponse{PrivateText: "A goal is already in progress in this conversation. Stop it before starting another."}, nil
+	}
+
+	if err != nil {
 		return nil, fmt.Errorf("web prompt: %w", err)
 	}
 

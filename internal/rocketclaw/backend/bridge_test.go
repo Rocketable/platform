@@ -2136,6 +2136,55 @@ func TestParseDirectSkillTrigger(t *testing.T) {
 	}
 }
 
+func TestInboundWorkflowReadsWebCommands(t *testing.T) {
+	web := func(kind protocol.InboundKind, text string) *protocol.InboundMessage {
+		return protocol.NewInboundMessageFromContent(protocol.SourceWeb, kind, &protocol.InboundContent{Text: text, TextAttachments: []string{"attached"}}, true)
+	}
+
+	for text, want := range map[string]protocol.WorkflowInvocation{
+		"$workflow audit":                        {Name: "audit"},
+		"  $Workflow audit   src/routes  extra ": {Name: "audit", Args: "src/routes  extra"},
+		"$workflow\taudit\nsrc":                  {Name: "audit", Args: "src"},
+		"$workflow":                              {},
+		"$workflow   ":                           {},
+		"$workflows audit":                       {},
+		"please $workflow audit":                 {},
+		"audit":                                  {},
+	} {
+		assert.Equal(t, want, inboundWorkflow(web(protocol.InboundKindSteer, text)), text)
+	}
+
+	for _, kind := range []protocol.InboundKind{protocol.InboundKindPrompt, protocol.InboundKindSteer, protocol.InboundKindEnqueue} {
+		assert.Equal(t, protocol.WorkflowInvocation{Name: "audit", Args: "src"}, inboundWorkflow(web(kind, "$workflow audit src")), kind)
+	}
+
+	assert.Zero(t, inboundWorkflow(web(protocol.InboundKindCancel, "$workflow audit")))
+
+	automated := web(protocol.InboundKindSteer, "$workflow audit")
+	automated.Human = false
+	assert.Zero(t, inboundWorkflow(automated))
+
+	for _, source := range []protocol.Source{protocol.SourceSlack, protocol.SourceSystem, protocol.SourceExternalMCP} {
+		msg := protocol.NewInboundMessageFromContent(source, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$workflow audit"}, true)
+		assert.Zero(t, inboundWorkflow(msg), source)
+	}
+}
+
+func TestBridgeQueuesWebWorkflowInsteadOfSteering(t *testing.T) {
+	bridge := &Bridge{stopCh: make(chan struct{}), inputOpen: true, requestCh: make(chan bridgeRequest, 1)}
+
+	workflowInbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$workflow audit src"}, true)
+	require.NoError(t, bridge.enqueue(t.Context(), &bridgeRequest{inbound: workflowInbound}, "test"))
+	assert.Empty(t, bridge.steers)
+	require.Len(t, bridge.requestCh, 1)
+	assert.Equal(t, protocol.WorkflowInvocation{Name: "audit", Args: "src"}, (<-bridge.requestCh).inbound.Workflow)
+
+	steer := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "keep going"}, true)
+	require.NoError(t, bridge.enqueue(t.Context(), &bridgeRequest{inbound: steer}, "test"))
+	assert.Len(t, bridge.steers, 1)
+	assert.Empty(t, bridge.requestCh)
+}
+
 func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
 	assert.Equal(t, "[ExternalMCP principal=\"Alice [ops]=lead\" additional_instructions=\"line \\\"one\\\"\\nnext\"]", provenanceHeader(promptProvenance{origin: "ExternalMCP", media: "Text", principal: " Alice [ops]=lead ", additionalInstructions: "line \"one\"\nnext"}))
 	assert.Equal(t, `[Slack principal="a\"b\\c"]`, provenanceHeader(promptProvenance{origin: "Slack", media: "Text", principal: "a\"b\\c"}))
@@ -2257,7 +2306,7 @@ func TestBridgeInterruptCancelsTurnWaitingForPairedSession(t *testing.T) {
 	})
 }
 
-func TestBridgeSuccessfulManagedWorkflowReleasesPairedReservation(t *testing.T) {
+func TestBridgeSuccessfulManagedWorkflowReleasesPairedTurn(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		workspace := t.TempDir()
 		writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[customer, internal]]\n---\nMain prompt\n")
@@ -2306,9 +2355,6 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedReservation(t *testing.T) 
 		service := newTestSessionServiceAt(t, workspace)
 		pairID, privateID := protocol.SlackThreadConversationID("C123", "111.222"), "external_mcp:private"
 		require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{PrivateConversationID: privateID, ManagedConversationID: pairID}))
-		releaseWorkflow, reserved, err := service.ReserveWorkflowTurn(pairID)
-		require.NoError(t, err)
-		require.True(t, reserved)
 
 		bus := newTestBus()
 		t.Cleanup(bus.Close)
@@ -2345,7 +2391,7 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedReservation(t *testing.T) 
 		}()
 
 		inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow audit", true)
-		inbound.Workflow = &protocol.WorkflowInvocation{Name: "audit"}
+		inbound.Workflow = protocol.WorkflowInvocation{Name: "audit"}
 		response := inbound.EnableResponseWait()
 		require.NoError(t, bridge.Submit(t.Context(), inbound))
 		require.NoError(t, (<-response).Err)
@@ -2384,18 +2430,8 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedReservation(t *testing.T) 
 
 		synctest.Wait()
 
-		if !privateAcquired {
-			releaseWorkflow()
-			synctest.Wait()
-			t.Fatal("private turn remained blocked after managed workflow completed")
-		}
-
+		require.True(t, privateAcquired, "private turn remained blocked after managed workflow completed")
 		unlockPrivate()
-
-		releaseWorkflow, reserved, err = service.ReserveWorkflowTurn(pairID)
-		require.NoError(t, err)
-		assert.True(t, reserved)
-		releaseWorkflow()
 	})
 }
 
@@ -2434,7 +2470,7 @@ func TestBridgeFailedManagedWorkflowPersistsRunSummary(t *testing.T) {
 		}()
 
 		inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow fail", true)
-		inbound.Workflow = &protocol.WorkflowInvocation{Name: "fail"}
+		inbound.Workflow = protocol.WorkflowInvocation{Name: "fail"}
 		response := inbound.EnableResponseWait()
 		require.NoError(t, bridge.Submit(t.Context(), inbound))
 		require.NoError(t, (<-response).Err)
@@ -2493,7 +2529,7 @@ func TestBridgeFailedWorkerErrorIsNotPersisted(t *testing.T) {
 	}()
 
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow fail-worker", true)
-	inbound.Workflow = &protocol.WorkflowInvocation{Name: "fail-worker"}
+	inbound.Workflow = protocol.WorkflowInvocation{Name: "fail-worker"}
 	response := inbound.EnableResponseWait()
 	require.NoError(t, bridge.Submit(t.Context(), inbound))
 	require.NoError(t, (<-response).Err)
@@ -2554,7 +2590,7 @@ func TestBridgeStoppedManagedWorkflowPersistsRunSummary(t *testing.T) {
 	}()
 
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow stop", true)
-	inbound.Workflow = &protocol.WorkflowInvocation{Name: "stop"}
+	inbound.Workflow = protocol.WorkflowInvocation{Name: "stop"}
 	response := inbound.EnableResponseWait()
 	require.NoError(t, bridge.Submit(t.Context(), inbound))
 	<-requestArrived
@@ -2639,7 +2675,7 @@ func TestWorkflowRunSummaryIsVisibleWithoutIntermediateOutput(t *testing.T) {
 	}()
 
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow private", true)
-	inbound.Workflow = &protocol.WorkflowInvocation{Name: "private"}
+	inbound.Workflow = protocol.WorkflowInvocation{Name: "private"}
 	response := inbound.EnableResponseWait()
 	require.NoError(t, bridge.Submit(t.Context(), inbound))
 	require.NoError(t, (<-response).Err)
@@ -2673,37 +2709,38 @@ func TestWorkflowRunSummaryIsVisibleWithoutIntermediateOutput(t *testing.T) {
 
 func TestBridgeInterruptPreservesWaitingWorkflowReservation(t *testing.T) {
 	service := newTestSessionService(t)
-	pairID, privateID := protocol.SlackThreadConversationID("C123", "111.222"), "external_mcp:private"
-	require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{PrivateConversationID: privateID, ManagedConversationID: pairID}))
-	release, reserved, err := service.ReserveWorkflowTurn(pairID)
-	require.NoError(t, err)
-	require.True(t, reserved)
-	t.Cleanup(release)
+	pairID := protocol.SlackThreadConversationID("C123", "111.222")
+	service.reserveTurnPair(pairID, pairID)
+	t.Cleanup(func() { service.completeTurnPairReservation(pairID, pairID) })
 
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow audit", true)
-	inbound.Workflow = &protocol.WorkflowInvocation{}
+	inbound.Workflow = protocol.WorkflowInvocation{Name: "audit"}
 
 	bridge := &Bridge{requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{}), config: Config{ConversationID: pairID, ManagedConversationID: pairID, SessionService: service}}
 	bridge.requestCh <- bridgeRequest{inbound: inbound}
 
 	bridge.InterruptActiveTurn()
 
-	releaseAgain, reserved, err := service.ReserveWorkflowTurn(pairID)
-	require.NoError(t, err)
-	assert.False(t, reserved)
+	assert.Equal(t, pairID, turnPairReservation(service, pairID))
 	assert.Len(t, bridge.requestCh, 1)
-	releaseAgain()
+}
+
+func turnPairReservation(service *SessionService, pairID string) string {
+	service.turnGatesMu.Lock()
+	defer service.turnGatesMu.Unlock()
+
+	if gate := service.turnGates[pairID]; gate != nil {
+		return gate.reservedFor
+	}
+
+	return ""
 }
 
 func TestBridgePairLockFailureReleasesWorkflowReservation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
-		pairID, privateID := protocol.SlackThreadConversationID("C123", "111.222"), "external_mcp:private"
-		require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{PrivateConversationID: privateID, ManagedConversationID: pairID}))
-		release, reserved, err := service.ReserveWorkflowTurn(pairID)
-		require.NoError(t, err)
-		require.True(t, reserved)
-		t.Cleanup(release)
+		pairID := protocol.SlackThreadConversationID("C123", "111.222")
+		service.reserveTurnPair(pairID, pairID)
 
 		unlock, err := service.lockTurnPair(t.Context(), pairID, pairID)
 		require.NoError(t, err)
@@ -2713,7 +2750,7 @@ func TestBridgePairLockFailureReleasesWorkflowReservation(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
 
 		inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow audit", true)
-		inbound.Workflow = &protocol.WorkflowInvocation{}
+		inbound.Workflow = protocol.WorkflowInvocation{Name: "audit"}
 		response := inbound.EnableResponseWait()
 		require.NoError(t, bridge.Submit(t.Context(), inbound))
 		synctest.Wait()
@@ -2723,10 +2760,7 @@ func TestBridgePairLockFailureReleasesWorkflowReservation(t *testing.T) {
 		unlock()
 		synctest.Wait()
 
-		releaseAgain, reserved, err := service.ReserveWorkflowTurn(pairID)
-		require.NoError(t, err)
-		assert.True(t, reserved)
-		releaseAgain()
+		assert.Empty(t, turnPairReservation(service, pairID))
 	})
 }
 
@@ -2742,19 +2776,13 @@ func TestBridgeRequestReservationOwnershipPreservesManagedRecovery(t *testing.T)
 	require.NoError(t, err)
 	unlocked()
 
-	require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{PrivateConversationID: privateID, ManagedConversationID: pairID}))
-	release, reserved, err := service.ReserveWorkflowTurn(pairID)
-	require.NoError(t, err)
-	require.True(t, reserved)
-	t.Cleanup(release)
+	service.reserveTurnPair(pairID, pairID)
+	t.Cleanup(func() { service.completeTurnPairReservation(pairID, pairID) })
 
 	managed := &Bridge{config: Config{ConversationID: pairID, ManagedConversationID: pairID, SessionService: service}}
 	managed.completeRequestTurnPairReservation(&bridgeRequest{activeTurn: new(ActiveTurnState)})
 
-	releaseAgain, reserved, err := service.ReserveWorkflowTurn(pairID)
-	require.NoError(t, err)
-	assert.False(t, reserved)
-	releaseAgain()
+	assert.Equal(t, pairID, turnPairReservation(service, pairID))
 }
 
 func TestBridgeScheduleMessageUsesOwningSlackThread(t *testing.T) {
@@ -5200,7 +5228,7 @@ func TestWorkflowFinalOutboundPreservesMetadata(t *testing.T) {
 	require.NoError(t, store.BeginGoal("thread-1", "ship it", "", 3, "", ""))
 	bridge := &Bridge{config: Config{ConversationID: "thread-1", ExternalConversationID: "public-1", Agent: "main", SessionService: store}}
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow audit", true)
-	inbound.Workflow = new(protocol.WorkflowInvocation)
+	inbound.Workflow = protocol.WorkflowInvocation{Name: "audit"}
 	inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.1", RecipientTeamID: "T123", RecipientUserID: "U456"}
 
 	outbound := bridge.newOutboundMessage(inbound, "turn-1", "finished", true)

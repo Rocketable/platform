@@ -14,4 +14,5 @@ export type AgentChoices = { agents: Agent[]; currentAgent: string };
 export type CronJob = { stem: string; status: string; lastRun: string; nextRun: string; schedule?: string; body?: string; agent?: string; channel?: string; upcoming?: string[]; origin?: string };
 export type Agent = { name: string; model?: string; reasoning?: string; description?: string; verbosity?: string; prompt?: string; permissions?: string; origin?: string };
 export type Skill = { name: string; description?: string; license?: string; compatibility?: string; content?: string; origin?: string };
+export type Workflow = { name: string; description?: string };
 export type ConfigView = { workspace?: string; overlays?: string[]; models?: { name?: string; model?: string }[]; slackChannels?: { channel?: string; agents?: string[] }[]; mcpServers?: string[]; loggingLevel?: string; autoApproverModel?: string; instrumentationEnabled?: boolean; mcpExternal?: boolean; webAutoSettleAfter?: string; tailscaleUser?: string };
