@@ -79,7 +79,13 @@ func loginDeviceIn(ctx context.Context, workspace, runtimeDir, provider string, 
 }
 
 func loginBrowserIn(ctx context.Context, workspace, runtimeDir, provider string, out io.Writer) (string, error) {
-	token, err := AcquireBrowserToken(ctx, out)
+	// Each login listens on its own port so test runs cannot collide on the registered one.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", fmt.Errorf("listen for OAuth callback: %w", err)
+	}
+
+	token, err := acquireBrowserToken(ctx, out, listener)
 
 	return persistOAuthToken(workspace, runtimeDir, provider, token, err)
 }
@@ -473,8 +479,6 @@ func TestAcquireDeviceTokenDoesNotSave(t *testing.T) {
 
 func TestAcquireTokenReportsOutputErrors(t *testing.T) {
 	t.Run("browser URL", func(t *testing.T) {
-		requireLoginBrowserPortAvailable(t)
-
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
@@ -496,8 +500,6 @@ func TestAcquireTokenReportsOutputErrors(t *testing.T) {
 }
 
 func TestLoginBrowserCompletesCallbackAndSavesToken(t *testing.T) {
-	requireLoginBrowserPortAvailable(t)
-
 	workspace := t.TempDir()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -530,8 +532,8 @@ func TestLoginBrowserCompletesCallbackAndSavesToken(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	state, done := startLoginBrowser(ctx, t, workspace)
-	body := sendLoginBrowserCallback(ctx, t, done, url.Values{"state": {state}, "code": {"code-123"}})
+	state, redirect, done := startLoginBrowser(ctx, t, workspace)
+	body := sendLoginBrowserCallback(ctx, t, done, redirect, url.Values{"state": {state}, "code": {"code-123"}})
 	require.Equal(t, "Authorization successful. You can close this window.", body)
 
 	select {
@@ -549,7 +551,7 @@ func TestLoginBrowserCompletesCallbackAndSavesToken(t *testing.T) {
 	case form := <-formCh:
 		require.Equal(t, "authorization_code", form.Get("grant_type"))
 		require.Equal(t, "code-123", form.Get("code"))
-		require.Equal(t, fmt.Sprintf("http://localhost:%d/auth/callback", defaultLoginPort), form.Get("redirect_uri"))
+		require.Equal(t, redirect, form.Get("redirect_uri"))
 		require.Equal(t, clientID, form.Get("client_id"))
 		require.NotEmpty(t, form.Get("code_verifier"))
 	case <-ctx.Done():
@@ -602,8 +604,6 @@ func TestLoginBrowserReportsCallbackErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			requireLoginBrowserPortAvailable(t)
-
 			http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				return nil, fmt.Errorf("unexpected token request to %s", req.URL)
 			})
@@ -613,8 +613,8 @@ func TestLoginBrowserReportsCallbackErrors(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			state, done := startLoginBrowser(ctx, t, workspace)
-			body := sendLoginBrowserCallback(ctx, t, done, tt.query(state))
+			state, redirect, done := startLoginBrowser(ctx, t, workspace)
+			body := sendLoginBrowserCallback(ctx, t, done, redirect, tt.query(state))
 			require.Equal(t, tt.body, body)
 
 			select {
@@ -2175,7 +2175,7 @@ func requestWithPathAndBody(path, body string) *http.Request {
 	return req
 }
 
-func startLoginBrowser(ctx context.Context, t *testing.T, workspace string) (state string, done <-chan loginBrowserResult) {
+func startLoginBrowser(ctx context.Context, t *testing.T, workspace string) (state, redirect string, done <-chan loginBrowserResult) {
 	t.Helper()
 
 	output := make(loginOutput, 8)
@@ -2201,7 +2201,7 @@ func startLoginBrowser(ctx context.Context, t *testing.T, workspace string) (sta
 			}
 
 			if state := u.Query().Get("state"); state != "" {
-				return state, doneCh
+				return state, u.Query().Get("redirect_uri"), doneCh
 			}
 		case got := <-doneCh:
 			t.Fatalf("LoginBrowser() returned before printing auth URL: path=%q err=%v", got.path, got.err)
@@ -2211,11 +2211,14 @@ func startLoginBrowser(ctx context.Context, t *testing.T, workspace string) (sta
 	}
 }
 
-func sendLoginBrowserCallback(ctx context.Context, t *testing.T, done <-chan loginBrowserResult, query url.Values) string {
+func sendLoginBrowserCallback(ctx context.Context, t *testing.T, done <-chan loginBrowserResult, redirect string, query url.Values) string {
 	t.Helper()
 
+	redirectURL, err := url.Parse(redirect)
+	require.NoError(t, err)
+
 	client := http.Client{Transport: http.DefaultTransport}
-	callbackURL := url.URL{Scheme: "http", Host: fmt.Sprintf("127.0.0.1:%d", defaultLoginPort), Path: "/auth/callback", RawQuery: query.Encode()}
+	callbackURL := url.URL{Scheme: "http", Host: "127.0.0.1:" + redirectURL.Port(), Path: redirectURL.Path, RawQuery: query.Encode()}
 
 	for {
 		select {
@@ -2247,29 +2250,6 @@ func sendLoginBrowserCallback(ctx context.Context, t *testing.T, done <-chan log
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-}
-
-func requireLoginBrowserPortAvailable(t *testing.T) {
-	t.Helper()
-
-	addr := fmt.Sprintf("127.0.0.1:%d", defaultLoginPort)
-	deadline := time.Now().Add(time.Second)
-
-	var err error
-
-	for time.Now().Before(deadline) {
-		var listener net.Listener
-
-		listener, err = net.Listen("tcp", addr)
-		if err == nil {
-			require.NoError(t, listener.Close())
-			return
-		}
-
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	require.NoError(t, err)
 }
 
 func testJWT(payload map[string]any) string {
