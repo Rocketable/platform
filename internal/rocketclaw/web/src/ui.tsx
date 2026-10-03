@@ -1905,8 +1905,8 @@ function TranscriptLog({
   }, [lines, loading, viewport]);
   const nearTop = useCallback(() => {
     const element = viewport.current;
-    if (more && element && element.scrollTop < element.clientHeight) earlier();
-  }, [more, earlier, viewport]);
+    if (more && !loading && element && element.scrollTop < element.clientHeight) earlier();
+  }, [more, loading, earlier, viewport]);
   useEffect(() => {
     const frame = requestAnimationFrame(nearTop);
     return () => cancelAnimationFrame(frame);
