@@ -1,4 +1,4 @@
-import type { AgentChoices, ChatOrigin, ConfigView, CronJob, HistoryView, MessageMatch, PromptDelivery, QueueItem, SessionBatch, Skill, TranscriptEvent } from "./types";
+import type { AgentChoices, ChatOrigin, ConfigView, CronJob, HistoryView, MessageMatch, PromptDelivery, QueueItem, SessionBatch, Skill, TranscriptEvent, Workflow } from "./types";
 
 export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
@@ -58,6 +58,7 @@ export const queries = {
   identity: () => ({ queryKey: ["identity"], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<{ username: string; principal?: string }>("Identity", {}, signal) }),
   agents: (input?: { conversationId: string }) => ({ queryKey: ["agents", input], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<AgentChoices>("ListAgents", input, signal) }),
   skills: (input?: { agent: string }) => ({ queryKey: ["skills", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ skills: Skill[] }>("ListSkills", input, signal)).skills }),
+  workflows: () => ({ queryKey: ["workflows"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ workflows: Workflow[] }>("ListWorkflows", {}, signal)).workflows }),
   cronJobs: () => ({ queryKey: ["cronJobs"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ jobs: CronJob[] }>("ListCronJobs", {}, signal)).jobs }),
   config: () => ({ queryKey: ["config"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ config: ConfigView }>("ListConfig", {}, signal)).config }),
   history: (input: { id: string; sourceConversationId?: string; originOnly?: boolean; revision?: string; limit?: number; before?: string; from?: string }) => ({ queryKey: ["history", input], queryFn: async ({ signal }: { signal?: AbortSignal }): Promise<HistoryView> => {

@@ -86,7 +86,7 @@ func TestThreadBridgeManagerSkillDescriptions(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestThreadBridgeManagerListsAndStartsWorkflowWithPersistedAgent(t *testing.T) {
+func TestRuntimeWorkflowDescriptionsListsSavedWorkflows(t *testing.T) {
 	workspace := t.TempDir()
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
@@ -94,27 +94,12 @@ func TestThreadBridgeManagerListsAndStartsWorkflowWithPersistedAgent(t *testing.
 	require.NoError(t, root.WriteFile(".rocketclaw/workflows/audit.star", []byte("meta = {\"name\": \"audit\", \"description\": \"Audit routes\"}\ndef main(args): return args\n"), 0o600))
 	require.NoError(t, root.Close())
 
-	store := newWorkspaceSessionService(t)
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "planner"}))
-
-	bridge := newDirectBridgeMock()
-	startedAgent := ""
-	manager := newThreadBridgeManager(&config.Config{Workspace: workspace}, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge { startedAgent = cfg.Agent; return bridge })
-
-	descriptions, err := manager.WorkflowDescriptions()
+	descriptions, err := (&Runtime{Cfg: &config.Config{Workspace: workspace}}).WorkflowDescriptions()
 	require.NoError(t, err)
 	assert.Equal(t, []protocol.WorkflowDescription{{Name: "audit", Description: "Audit routes"}}, descriptions)
 
-	inbound := newThreadInboundMessage("$workflow audit src", "222.333", "111.222")
-	require.NoError(t, manager.StartWorkflowInThread(t.Context(), "main", "audit", "src", slackTarget("C123", "111.222"), inbound))
-	require.Len(t, submittedMessages(bridge), 1)
-	assert.Equal(t, "planner", startedAgent)
-	assert.Equal(t, "audit", submittedMessages(bridge)[0].Workflow.Name)
-	assert.Equal(t, "src", submittedMessages(bridge)[0].Workflow.Args)
-	err = manager.StartWorkflowInThread(t.Context(), "main", "missing", "", slackTarget("C123", "111.222"), inbound)
-	require.ErrorContains(t, err, `workflow "missing" is not configured`)
-	require.Len(t, submittedMessages(bridge), 1)
+	_, err = (&Runtime{Cfg: &config.Config{Workspace: filepath.Join(workspace, "missing")}}).WorkflowDescriptions()
+	require.ErrorContains(t, err, "open workflow root")
 }
 
 func TestWorkflowValidationKeepsLiveAssetsOnInvalidReload(t *testing.T) {

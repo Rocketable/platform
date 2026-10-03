@@ -137,11 +137,6 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			require.NoError(t, err)
 			require.Empty(t, scheduled)
 
-			release, reserved, err := rt.TextRouter.ReserveWorkflowTurn(target)
-			require.NoError(t, err)
-			require.True(t, reserved)
-			release()
-
 			bridge := rt.threads.bridges[threadID].(*Bridge)
 			reloaded, err := bridge.config.RequestReload("test reload")
 			require.NoError(t, err)

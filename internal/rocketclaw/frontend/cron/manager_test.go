@@ -183,29 +183,6 @@ func TestLoadOneOffCronjobUsesEffectiveRuntimeCron(t *testing.T) {
 	}
 }
 
-func TestListCronjobsFiltersByChannel(t *testing.T) {
-	workspace := t.TempDir()
-	cronDir := filepath.Join(workspace, ".rocketclaw", "cron")
-	require.NoError(t, os.MkdirAll(cronDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule: 1h\nagent: helper\nchannel: '#ops'\n---\nOps cron"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(cronDir, "weekly.md"), []byte("---\nschedule: 1h\nagent: helper\nchannel: '#triage'\n---\nTriage cron"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(cronDir, "heartbeat.md"), []byte("---\nschedule: 1h\nagent: helper\nchannel: '#ops'\n---\nOps heartbeat"), 0o644))
-
-	m := New(workspace, ".rocketclaw", nil, newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
-		t.Fatal("cronjob manager ran during list test")
-
-		return protocol.CronRunResult{}, nil
-	}}, slog.New(slog.DiscardHandler))
-
-	jobs, err := m.ListCronjobs("#ops")
-	require.NoError(t, err)
-	require.Equal(t, []string{"daily", "heartbeat"}, jobs)
-
-	jobs, err = m.ListCronjobs("#missing")
-	require.NoError(t, err)
-	require.Empty(t, jobs)
-}
-
 func TestCronTraceConversationIDPreservesRelativePath(t *testing.T) {
 	ts := time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC)
 

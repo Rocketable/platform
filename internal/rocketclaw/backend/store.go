@@ -1248,41 +1248,6 @@ func (s *SessionService) Stop() error {
 	return nil
 }
 
-// ReserveWorkflowTurn reserves paired turn ownership for a managed workflow.
-func (s *SessionService) ReserveWorkflowTurn(conversationID string) (release func(), reserved bool, err error) {
-	conversationID = strings.TrimSpace(conversationID)
-
-	_, session, paired, err := s.ExternalMCPSessionByConversationID(conversationID)
-	if err != nil {
-		return inertTurnRelease, false, err
-	}
-
-	if !paired || conversationID != session.ManagedConversationID {
-		return inertTurnRelease, true, nil
-	}
-
-	s.turnGatesMu.Lock()
-	defer s.turnGatesMu.Unlock()
-
-	gate := s.turnGates[conversationID]
-	if gate != nil && (gate.reservedFor != "" || gate.refs > 0 || len(gate.token) == 0) {
-		return inertTurnRelease, false, nil
-	}
-
-	if gate == nil {
-		gate = &sessionTurnGate{token: make(chan struct{}, 1)}
-		gate.token <- struct{}{}
-
-		s.turnGates[conversationID] = gate
-	}
-
-	gate.reservedFor, gate.reserved = conversationID, make(chan struct{})
-
-	return func() { s.completeTurnPairReservation(conversationID, conversationID) }, true, nil
-}
-
-func inertTurnRelease() {}
-
 // PutMCPWaiter records an MCP turn waiting on a later-work queue row.
 func (s *SessionService) PutMCPWaiter(id string, inbound *protocol.InboundMessage) {
 	s.waitersMu.Lock()

@@ -441,7 +441,7 @@ func (b *Bridge) Stop() error {
 	close(b.stopCh)
 	b.stopped = true
 	cancel, activeCancel := b.waitingTurnCancel, b.activeTurnCancel
-	b.activeTurnInterrupted = b.activeTurnInterrupted || b.activeReply != nil && b.activeReply.Workflow != nil
+	b.activeTurnInterrupted = b.activeTurnInterrupted || b.activeReply != nil && b.activeReply.Workflow.Name != ""
 	b.mu.Unlock()
 
 	if cancel != nil {
@@ -520,10 +520,14 @@ func (b *Bridge) agentSnapshot() string {
 }
 
 func (b *Bridge) enqueue(ctx context.Context, request *bridgeRequest, operation string) error {
+	if request.inbound != nil && request.inbound.Workflow.Name == "" {
+		request.inbound.Workflow = inboundWorkflow(request.inbound)
+	}
+
 	b.mu.Lock()
 
 	stopCh, stopped := b.stopCh, b.stopped
-	if !stopped && request.inbound != nil && request.inbound.Kind == protocol.InboundKindSteer && request.inbound.Human && b.inputOpen {
+	if !stopped && request.inbound != nil && request.inbound.Workflow.Name == "" && request.inbound.Kind == protocol.InboundKindSteer && request.inbound.Human && b.inputOpen {
 		if request.queueItemID == "" {
 			request.queueItemID = cmp.Or(request.inbound.Metadata["web_message_id"], rand.Text())
 		}
@@ -834,7 +838,7 @@ func (b *Bridge) submitDueScheduled(ctx context.Context, id string, armed *proto
 }
 
 func (b *Bridge) completeRequestTurnPairReservation(request *bridgeRequest) {
-	if b.config.ManagedConversationID == "" || (b.config.ConversationID == b.config.ManagedConversationID && (request.inbound == nil || request.inbound.Workflow == nil)) {
+	if b.config.ManagedConversationID == "" || (b.config.ConversationID == b.config.ManagedConversationID && (request.inbound == nil || request.inbound.Workflow.Name == "")) {
 		return
 	}
 
@@ -1048,7 +1052,7 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 	}
 
 	var errTurn error
-	if msg.Workflow != nil {
+	if msg.Workflow.Name != "" {
 		result, errTurn = b.runWorkflow(ctx, msg, turnID)
 	} else {
 		result, errTurn = b.runTurn(ctx, msg, turnID)
@@ -2472,7 +2476,7 @@ func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID, text s
 	}
 
 	if msg != nil {
-		if msg.Workflow == nil {
+		if msg.Workflow.Name == "" {
 			goal, goalOK, err := b.config.SessionService.Goal(b.config.ConversationID)
 			accounted := msg.GoalAction != protocol.GoalActionNone
 			statusActive := err == nil && goalOK && strings.TrimSpace(goal.Status) == GoalStatusActive
@@ -2664,6 +2668,41 @@ func inboundDirectSkill(msg *protocol.InboundMessage) *rocketcode.PromptInputDir
 	}
 
 	return parseDirectSkillTrigger(text)
+}
+
+// inboundWorkflow reads a web `$workflow <name> [args]` command; any other
+// message yields the zero invocation. A workflow cannot join a running turn,
+// so the caller never treats it as a steer.
+func inboundWorkflow(msg *protocol.InboundMessage) protocol.WorkflowInvocation {
+	if !msg.Human || msg.Source != protocol.SourceWeb ||
+		(msg.Kind != protocol.InboundKindPrompt && msg.Kind != protocol.InboundKindSteer && msg.Kind != protocol.InboundKindEnqueue) {
+		return protocol.WorkflowInvocation{}
+	}
+
+	text, ok := msg.Metadata[protocol.InboundRawTextMetadataKey]
+	if !ok {
+		text = msg.Text
+	}
+
+	command, rest := splitFirstWord(strings.TrimLeftFunc(text, unicode.IsSpace))
+	if !strings.EqualFold(command, "$workflow") {
+		return protocol.WorkflowInvocation{}
+	}
+
+	name, args := splitFirstWord(strings.TrimSpace(rest))
+	if name == "" {
+		return protocol.WorkflowInvocation{}
+	}
+
+	return protocol.WorkflowInvocation{Name: name, Args: strings.TrimSpace(args)}
+}
+
+func splitFirstWord(text string) (word, rest string) {
+	if i := strings.IndexFunc(text, unicode.IsSpace); i >= 0 {
+		return text[:i], text[i:]
+	}
+
+	return text, ""
 }
 
 func parseDirectSkillTrigger(text string) *rocketcode.PromptInputDirectSkill {

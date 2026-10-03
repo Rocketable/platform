@@ -68,9 +68,6 @@ type SkillDescription struct {
 type PrimaryTextRouter interface {
 	StartThread(ctx context.Context, agent string, target TextConversationTarget, inbound *InboundMessage) error
 	StartGoalInThread(ctx context.Context, agent, objective, checkScript string, maxTurns int, target TextConversationTarget, inbound *InboundMessage) error
-	StartWorkflowInThread(ctx context.Context, agent, name, args string, target TextConversationTarget, inbound *InboundMessage) error
-	ReserveWorkflowTurn(target TextConversationTarget) (release func(), reserved bool, err error)
-	WorkflowDescriptions() ([]WorkflowDescription, error)
 	SkillDescriptions(agent string) ([]SkillDescription, error)
 	InterruptConversation(conversationID string) *InboundMessage
 	InterruptThread(target TextConversationTarget) (*InboundMessage, error)

@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
@@ -319,6 +321,45 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 	case <-completion.done:
 		return completion.err
 	}
+}
+
+// StartGoal records an active goal on a recorded conversation and submits its
+// first turn without waiting for the goal loop.
+func (r *Runtime) StartGoal(ctx context.Context, inbound *protocol.InboundMessage, goal protocol.GoalRequest) error {
+	bridge, err := r.recordedBridge(inbound.ConversationID)
+	if err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(goal.CheckScript) != "" {
+		if err := ValidateGoalCheckScriptStart(r.Cfg, bridge.agentSnapshot(), goal.CheckScript); err != nil {
+			return fmt.Errorf("validate goal check script: %w", err)
+		}
+	}
+
+	if err := r.Sessions.BeginGoal(inbound.ConversationID, goal.Objective, goal.CheckScript, goal.MaxTurns, "", ""); err != nil {
+		return fmt.Errorf("persist goal: %w", err)
+	}
+
+	inbound.GoalAction = protocol.GoalActionKickoff
+
+	return bridge.Submit(ctx, inbound)
+}
+
+// WorkflowDescriptions lists the saved workflows a human can start with $workflow.
+func (r *Runtime) WorkflowDescriptions() (descriptions []protocol.WorkflowDescription, err error) {
+	root, err := os.OpenRoot(r.Cfg.Workspace)
+	if err != nil {
+		return nil, fmt.Errorf("open workflow root: %w", err)
+	}
+	defer func() { err = errors.Join(err, root.Close()) }()
+
+	definitions, err := workflow.Load(root, r.Cfg.RuntimeDirName())
+	if err != nil {
+		return nil, fmt.Errorf("load workflow definitions: %w", err)
+	}
+
+	return workflow.Descriptions(definitions), nil
 }
 
 // QueueItems returns persisted waiting work plus uninjected active steers.

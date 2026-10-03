@@ -7,14 +7,12 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"os"
 	"slices"
 	"strings"
 	"sync"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 )
 
 type directBridge interface {
@@ -227,17 +225,6 @@ func (m *threadBridgeManager) ThreadAgent(target protocol.TextConversationTarget
 	return agent, true, nil
 }
 
-func (m *threadBridgeManager) ReserveWorkflowTurn(target protocol.TextConversationTarget) (release func(), reserved bool, err error) {
-	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
-
-	release, reserved, err = m.store.ReserveWorkflowTurn(conversationID)
-	if err != nil {
-		err = fmt.Errorf("reserve workflow turn: %w", err)
-	}
-
-	return release, reserved, err
-}
-
 func (m *threadBridgeManager) StartThread(ctx context.Context, agent string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) error {
 	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
 	if conversationID == "" {
@@ -370,50 +357,6 @@ func (m *threadBridgeManager) SkillDescriptions(name string) ([]protocol.SkillDe
 	}
 
 	return descriptions, nil
-}
-
-func (m *threadBridgeManager) WorkflowDescriptions() ([]protocol.WorkflowDescription, error) {
-	definitions, err := m.loadWorkflowDefinitions()
-	if err != nil {
-		return nil, err
-	}
-
-	return workflow.Descriptions(definitions), nil
-}
-
-func (m *threadBridgeManager) StartWorkflowInThread(ctx context.Context, agent, name, args string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) error {
-	definitions, err := m.loadWorkflowDefinitions()
-	if err != nil {
-		return err
-	}
-
-	definition := definitions[name]
-	if definition == nil {
-		return fmt.Errorf("workflow %q is not configured", name)
-	}
-
-	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
-
-	thread, _, err := m.store.Thread(conversationID)
-	if err != nil {
-		return fmt.Errorf("load workflow thread state: %w", err)
-	}
-
-	if storedAgent := strings.TrimSpace(thread.Agent); storedAgent != "" {
-		agent = storedAgent
-	}
-
-	managed, err := m.ensureStartedThread(&threadStart{conversationID: conversationID, agent: agent, persistErr: "persist workflow thread bridge"})
-	if err != nil {
-		return err
-	}
-
-	inbound.ConversationID = conversationID
-	inbound.Text = strings.TrimSpace("$workflow " + name + " " + args)
-
-	inbound.Workflow = &protocol.WorkflowInvocation{Name: name, Args: args}
-
-	return m.submitInbound(ctx, managed, inbound, "workflow thread start")
 }
 
 func (m *threadBridgeManager) InterruptThread(target protocol.TextConversationTarget) (*protocol.InboundMessage, error) {
@@ -698,21 +641,6 @@ func (m *threadBridgeManager) submitInbound(ctx context.Context, managed directB
 	}
 
 	return nil
-}
-
-func (m *threadBridgeManager) loadWorkflowDefinitions() (definitions map[string]*workflow.Definition, err error) {
-	root, err := os.OpenRoot(m.runtime.Workspace)
-	if err != nil {
-		return nil, fmt.Errorf("open workflow root: %w", err)
-	}
-	defer func() { err = errors.Join(err, root.Close()) }()
-
-	definitions, err = workflow.Load(root, m.runtime.RuntimeDirName())
-	if err != nil {
-		return nil, fmt.Errorf("load workflow definitions: %w", err)
-	}
-
-	return definitions, nil
 }
 
 func (m *threadBridgeManager) ensureStartedThread(start *threadStart) (directBridge, error) {

@@ -150,8 +150,8 @@ type InboundMessage struct {
 	ConversationID string
 	// Metadata carries source-supplied context; the Inbound*MetadataKey keys are RocketClaw's trusted provenance and routing hints.
 	Metadata map[string]string
-	// Workflow, when set, starts the named workflow instead of an ordinary model turn.
-	Workflow *WorkflowInvocation
+	// Workflow, when it names a workflow, starts that workflow instead of an ordinary model turn.
+	Workflow WorkflowInvocation
 	// SyncDestination, when set, is a conversation that receives this turn: the turn waits in its queue,
 	// runs in ConversationID, and then its new history and final reply are copied into SyncDestination.
 	SyncDestination string
