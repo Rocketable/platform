@@ -1895,15 +1895,13 @@ function TranscriptLog({
     const first = viewport.current?.querySelector<HTMLElement>("[data-turn-key]");
     if (first) anchor.current = { key: first.dataset.turnKey!, top: first.getBoundingClientRect().top };
     setLoading(true);
-    void loadEarlier().finally(() => {
-      setLoading(false);
-      requestAnimationFrame(() => { anchor.current = undefined; });
-    });
+    void loadEarlier().finally(() => { setLoading(false); });
   }, [loadEarlier, viewport]);
   useLayoutEffect(() => {
     const saved = anchor.current;
     const node = saved && [...viewport.current?.querySelectorAll<HTMLElement>("[data-turn-key]") ?? []].find((item) => item.dataset.turnKey === saved.key);
     if (node) viewport.current!.scrollTop += node.getBoundingClientRect().top - saved.top;
+    if (!loading) anchor.current = undefined;
   }, [lines, loading, viewport]);
   const nearTop = useCallback(() => {
     const element = viewport.current;
@@ -1924,7 +1922,7 @@ function TranscriptLog({
   };
   return (
     <MessageScroller className="flex-1">
-    <MessageScrollerViewport ref={viewport} id="transcript-scroll" onScroll={() => { seen(); nearTop(); }} className="overflow-x-hidden [overflow-anchor:none]">
+    <MessageScrollerViewport ref={viewport} id="transcript-scroll" preserveScrollOnPrepend={false} onScroll={() => { seen(); nearTop(); }} className="overflow-x-hidden [overflow-anchor:none]">
       <div className="min-h-full pl-3 pr-8 pt-3 pb-4 sm:pl-5 sm:pr-10 sm:pt-4">
       <MessageScrollerContent className="mx-auto w-full min-w-0 max-w-3xl">
       {origin && (origin.kind === "cron" || origin.kind === "external_mcp") ? <MessageScrollerItem messageId="origin"><OriginCard origin={origin} /></MessageScrollerItem> : null}

@@ -35,6 +35,8 @@ test.skipIf(!playwright || !chromium)("long chats open at the newest turns, load
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 650 } });
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 8 });
     await page.goto(`http://127.0.0.1:${server.port}/s/bG9uZw`);
     await page.getByText(`assistant ${turns}`).waitFor();
     expect(await page.locator('[data-slot="message"][data-message-id]').count()).toBe(100);
