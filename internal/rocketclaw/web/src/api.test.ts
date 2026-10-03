@@ -93,7 +93,7 @@ test("protobuf envelopes retain exact input, selected agent, private text and in
   const responses: Record<string, object> = {
     ListAgents: { agents: [{ name: "main" }], currentAgent: "main" }, ListSkills: { skills: [{ name: "review" }] },
     Prompt: { privateText: "private\nreport" }, CreateSession: { id: "web-session:new" }, RunCronJob: { id: "cron:id" },
-    Protocol: { protoSha256: "hash" }, Identity: { username: "alice" }, ListQueue: { items: [] }, ListCronJobs: { jobs: [] }, ListConfig: { config: {} }, History: initialHistory,
+    Protocol: { protoSha256: "hash" }, Identity: { username: "alice", principal: "Alice Smith" }, ListQueue: { items: [] }, ListCronJobs: { jobs: [] }, ListConfig: { config: {} }, History: initialHistory,
     ListSessionEntries: { entries: [{ id: "9007199254740993", type: "turn" }] }, LoadSessionEntries: { entries: [{ id: "9007199254740993", json: "{}" }] }, DeleteSessionEntries: { deleted: "9007199254740993" },
   };
   const fetchMock = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (url: URL | RequestInfo, init?: RequestInit) => {
@@ -110,7 +110,7 @@ test("protobuf envelopes retain exact input, selected agent, private text and in
     expect(await mutations.createSession({ agent: "main" })).toBe("web-session:new");
     expect(await mutations.runCron({ stem: "daily" })).toBe("cron:id");
     expect(await queries.protocol().queryFn({ signal })).toBe("hash");
-    expect(await queries.identity().queryFn({ signal })).toBe("alice");
+    expect(await queries.identity().queryFn({ signal })).toEqual({ username: "alice", principal: "Alice Smith" });
     expect(await queries.queue({ id: "visible" }).queryFn({ signal })).toEqual([]);
     expect(await queries.cronJobs().queryFn({ signal })).toEqual([]);
     expect(await queries.config().queryFn({ signal })).toEqual({});

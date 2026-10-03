@@ -8,7 +8,7 @@ const names = ["historyPage", "applyHistoryDelta", "readHistoryDelta", "readEarl
 const functions = source.statements.filter((node) => (ts.isFunctionDeclaration(node) ? names.includes(node.name?.text ?? "") : ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) => names.includes(declaration.name.getText(source))))).map((node) => node.getText(source)).join("\n");
 const javascript = ts.transpileModule(`import { QueryClient } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nimport { queries } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};\nconst queryClient = new QueryClient();\n${functions}\nexport { ${names.filter((name) => !["historyPage", "lineId", "isStopCommand"].includes(name)).join(", ")}, queryClient };`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
 const { applyHistoryDelta, readHistoryDelta, readEarlierHistory, sendComposer, promoteComposer, stopComposer, historyLines, pendingInputs, transcriptTurns, toolTitle, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
-type Line = { id: string; role: string; text: string; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; origin?: string };
+type Line = { id: string; role: string; text: string; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; origin?: string; principal?: string };
 const event = (entryKey: string, itemId: string, role: string, text: string, extra: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ entryKey, itemId, inputId: "", role, text, turnId: "", complete: true, ...extra });
 const view = (messages: TranscriptEvent[], extra: Partial<HistoryView> = {}): HistoryView => ({ messages, delegations: [], revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(messages.map((message) => message.entryKey))], running: false, terminal: "", start: "0", more: false, ...extra });
 
@@ -41,7 +41,7 @@ test("history deltas replace whole groups, remove groups, and keep canonical inv
 
 test("active items become stored without changing render identity or losing message links and attribution", () => {
   const attachments = [{ id: "file", name: "report.png", mimeType: "image/png", conversationId: "private" }];
-  const metadata = { agent: "planner", model: "work/model-a", reasoningEffort: "", header: "[exact <header>\nsecond line]", origin: "sandboxed", attachments };
+  const metadata = { principal: "Bob Smith", agent: "planner", model: "work/model-a", reasoningEffort: "", header: "[exact <header>\nsecond line]", origin: "sandboxed", attachments };
   const active = [event("turn", "turn:0", "user", "same", { inputId: "input", ...metadata, messageId: "" }), event("turn", "turn:1", "assistant", "", { ...metadata, messageId: "" })];
   const draft = { lines: [] as Line[], busy: false };
   applyHistoryDelta(draft, view(active, { running: true }));
@@ -216,11 +216,13 @@ test("actual stream handlers use metadata only as a hint, including on the first
 });
 
 test("pending delivery classification uses consumed input IDs, not render or stored-message IDs", () => {
-  const draft = { lines: [{ id: "waiting", messageId: "held", role: "user", text: "same" }], consumed: new Set(["used"]), parked: [{ id: "local", role: "user", text: "same" }] };
-  const items = [{ id: "used", text: "same", delivery: "STEER" }, { id: "waiting", text: "same", delivery: "STEER" }, { id: "held", text: "same", delivery: "STASH" }, { id: "later", text: "same", delivery: "QUEUE" }];
+  const draft = { lines: [{ id: "waiting", messageId: "held", role: "user", text: "same" }], consumed: new Set(["used"]), parked: [{ id: "waiting", role: "user", text: "same", principal: "Alice Smith" }, { id: "local", role: "user", text: "same", principal: "Alice Smith" }] };
+  const items = [{ id: "used", text: "same", delivery: "STEER" }, { id: "waiting", text: "same", delivery: "STEER", principal: "Bob Smith" }, { id: "held", text: "same", delivery: "STASH", principal: "Bob Smith" }, { id: "later", text: "same", delivery: "QUEUE" }];
   const pending = pendingInputs(draft, items);
   expect(pending.parked.map((line: Line) => line.id)).toEqual(["waiting", "local"]);
   expect(pending.queued.map((line: Line) => line.id)).toEqual(["held", "later"]);
+  expect(pending.parked.map((line: { principal?: string }) => line.principal)).toEqual(["Bob Smith", "Alice Smith"]);
+  expect(pending.queued.map((line: { principal?: string }) => line.principal)).toEqual(["Bob Smith", undefined]);
 });
 
 test("thinking rows top-align the robot beside multiline text", () => {
@@ -321,6 +323,7 @@ test("composer renders exact input before Prompt completes and history failure d
     expect(requests[0]).toEqual({ id: "opaque", text: "  exact human input\n", delivery: "STEER", messageId: expect.any(String) });
     expect(draft.lines.at(-1)).toMatchObject({ id: requests[0].messageId, text: requests[0].text });
     expect(draft.lines.at(-1)?.complete).toBeUndefined();
+    expect(draft.lines.at(-1)?.principal).toBeUndefined(); // No identity means no guessed provisional author.
     idle.resolve(Response.json({ ...view([], { reset: false, entryKeys: ["prior"] }), origin: "" }));
     await loading;
     expect(draft.busy).toBe(true);
@@ -433,9 +436,9 @@ test("uploaded steer attachments stay parked until History confirms the consumed
   const originalFetch = globalThis.fetch;
   globalThis.fetch = Object.assign(async () => Response.json(attachment), { preconnect: originalFetch.preconnect });
   try {
-    await sendComposer({ draft, files: draft.files, text: "", delivery: "STEER", busy: true, sessionId: "opaque", selected: "", currentAgent: "main", onDraftChange: () => {}, scrollToEnd: () => true, setBusy: () => {}, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, setLines: (update: (lines: Line[]) => Line[]) => { draft.lines = update(draft.lines); }, refreshHistory: async () => {}, prompt: { mutateAsync: async (request: { messageId: string; attachmentIds: string[] }) => { expect(request.attachmentIds).toEqual(["uploaded"]); expect(draft.lines).toEqual([]); expect(draft.parked[0].attachments[0]).toMatchObject(attachment); applyHistoryDelta(draft, view([event("turn", "turn:0", "user", "", { inputId: request.messageId, attachments: [attachment] })], { running: true })); return ""; } } });
+    await sendComposer({ draft, files: draft.files, text: "", delivery: "STEER", principal: "Alice Smith", busy: true, sessionId: "opaque", selected: "", currentAgent: "main", onDraftChange: () => {}, scrollToEnd: () => true, setBusy: () => {}, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, setLines: (update: (lines: Line[]) => Line[]) => { draft.lines = update(draft.lines); }, refreshHistory: async () => {}, prompt: { mutateAsync: async (request: { messageId: string; attachmentIds: string[] }) => { expect(request.attachmentIds).toEqual(["uploaded"]); expect(draft.lines).toEqual([]); expect(draft.parked[0].principal).toBe("Alice Smith"); expect(draft.parked[0].attachments[0]).toMatchObject(attachment); applyHistoryDelta(draft, view([event("turn", "turn:0", "user", "", { inputId: request.messageId, attachments: [attachment], principal: "Recorded Alice" })], { running: true })); return ""; } } });
     expect(draft.lines).toHaveLength(1);
-    expect(draft.lines[0]).toMatchObject({ role: "user", text: "", attachments: [attachment] });
+    expect(draft.lines[0]).toMatchObject({ role: "user", text: "", attachments: [attachment], principal: "Recorded Alice" });
     expect(draft.parked).toEqual([]);
   } finally { globalThis.fetch = originalFetch; }
 });

@@ -47,7 +47,7 @@ func (s *Server) forkSession(ctx context.Context, request *ForkSessionRequest) (
 		return nil, fmt.Errorf("web fork: %w", status.Error(codes.FailedPrecondition, "session agent is no longer available"))
 	}
 
-	principal, err := s.principal(ctx)
+	principal, _, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +68,7 @@ func (s *Server) forkSession(ctx context.Context, request *ForkSessionRequest) (
 }
 
 func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequest) (*SearchMessagesResponse, error) {
-	if _, err := s.principal(ctx); err != nil {
+	if _, _, err := s.principal(ctx); err != nil {
 		return nil, err
 	}
 

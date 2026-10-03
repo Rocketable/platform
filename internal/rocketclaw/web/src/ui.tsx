@@ -251,7 +251,10 @@ function QueuePanel({
             >
               <GripVertical className="h-3.5 w-3.5" />
             </button>
-            <span className="min-w-0 flex-1 truncate text-sm">{item.delivery === "STASH" ? "Stashed · " : "Queued · "}{item.text}</span>
+            <div className="min-w-0 flex-1">
+              <MessageAuthor principal={item.principal} />
+              <span className="block truncate text-sm">{item.delivery === "STASH" ? "Stashed · " : "Queued · "}{item.text}</span>
+            </div>
             <MessageAttachments attachments={item.attachments} conversationId={conversationId} />
             <Button
               type="button"
@@ -422,7 +425,7 @@ function delay(ms: number, signal: AbortSignal) {
 function SidebarOwner({ children }: { children: ReactNode }) {
   const identity = useQuery({ ...queries.identity(), refetchInterval: 2000, retry: false });
   const protocol = useQuery({ ...queries.protocol(), retry: false });
-  const owner = identity.isSuccess ? identity.data : undefined;
+  const owner = identity.isSuccess ? identity.data.username : undefined;
   const identityRejected = identity.isError;
   const [identityGeneration, setIdentityGeneration] = useState(0);
   const [generation, setGeneration] = useState(0);
@@ -799,6 +802,7 @@ function ForkDialog({ source, drafts, onDraftChange }: { source: string; drafts:
 }
 
 function HandoffDialog({ command, drafts, onDraftChange }: { command: SessionCommand; drafts: Map<string, ComposerDraft>; onDraftChange: () => void }) {
+  const identity = useQuery(queries.identity());
   const { setCommand } = useContext(SessionCommands);
   const popup = useRef<HTMLDivElement>(null);
   const route = useRoute();
@@ -808,11 +812,12 @@ function HandoffDialog({ command, drafts, onDraftChange }: { command: SessionCom
   const handoffRequest = { queryKey: ["handoff", command.source], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<{ document: string }>("Handoff", { id: command.source }, signal), retry: false, staleTime: Infinity, gcTime: 0 };
   const handoff = useQuery(handoffRequest);
   const action = useMutation({ mutationFn: async (kind: "copy" | "new" | "stash") => {
+    const principal = identity.isSuccess && !identity.isFetching ? identity.data.principal : undefined;
     const { document } = await queryClient.fetchQuery(handoffRequest);
     if (kind === "copy") await copyText(document, popup.current!);
     if (kind === "new") {
       const id = await mutations.createSession({ agent: "main" });
-      const optimistic: Line = { id: crypto.getRandomValues(new Uint32Array(4)).join("-"), role: "user", text: document };
+      const optimistic: Line = { id: crypto.getRandomValues(new Uint32Array(4)).join("-"), role: "user", text: document, principal };
       const draft: ComposerDraft = { text: "", files: [], agent: "", sessionId: id, sending: false, busy: true, lines: [optimistic], error: "", edit: 0, submission: 0 };
       drafts.set(id, draft);
       onDraftChange();
@@ -985,11 +990,11 @@ function useSessionOrigins(rows: Session[], enabled: boolean) {
   const protocol = useQuery(queries.protocol());
   const ids = useMemo(() => rows.map(({ id }) => id).toSorted(), [rows]);
   const query = useQuery<Awaited<ReturnType<typeof loadSessionOrigins>>>({
-    queryKey: ["sessionOrigins", identity.data, protocol.data, ids],
+    queryKey: ["sessionOrigins", identity.data?.username, protocol.data, ids],
     enabled,
     staleTime: (entry) => entry.state.data?.complete ? 10_000 : 0,
     retry: false,
-    queryFn: ({ signal }) => loadSessionOrigins(ids, identity.data, protocol.data, signal),
+    queryFn: ({ signal }) => loadSessionOrigins(ids, identity.data?.username, protocol.data, signal),
   });
   useEffect(() => {
     if (!enabled) void queryClient.cancelQueries({ queryKey: ["sessionOrigins"] });
@@ -1251,7 +1256,7 @@ type SavedSearches = { tabs: SavedSearch[]; active: string };
 function SearchPage() {
   const identity = useQuery(queries.identity());
   if (!identity.isSuccess) return null;
-  return <SearchTabs key={identity.data} owner={identity.data} />;
+  return <SearchTabs key={identity.data.username} owner={identity.data.username} />;
 }
 
 function SearchTabs({ owner }: { owner: string }) {
@@ -1402,7 +1407,7 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
   const identity = useQuery(queries.identity());
   const protocol = useQuery(queries.protocol());
   const origins = useQueries({ queries: filters.needle ? rows.map(({ id }) => ({
-    ...queries.history({ id, originOnly: true }), queryKey: ["sessionOrigin", identity.data, protocol.data, id], staleTime: 10_000, retry: false, select: originSearchText,
+    ...queries.history({ id, originOnly: true }), queryKey: ["sessionOrigin", identity.data?.username, protocol.data, id], staleTime: 10_000, retry: false, select: originSearchText,
   })) : [] });
   const [result, setResult] = useState<{ query: string; matches: MessageMatch[]; error?: string; pending: boolean }>({ query: "", matches: [], pending: false });
   const request = useRef<AbortController>(null);
@@ -1626,7 +1631,7 @@ const SessionList = memo(function SessionList({ settledOnly = false }: { settled
   );
 });
 
-type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin" | "header" | "state" | "parentId">;
+type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin" | "header" | "principal" | "state" | "parentId">;
 type OriginFilter = { sandboxed: boolean; canonical: boolean };
 
 function lineId(role: Line["role"], text: string, seen: Map<string, number>) {
@@ -1791,6 +1796,10 @@ function TraceLine({ line, hasSandboxed, open }: { line: Line; hasSandboxed: boo
   );
 }
 
+function MessageAuthor({ principal, role = "user" }: { principal?: string; role?: Line["role"] }) {
+  return role === "user" && principal ? <span data-slot="message-author" className="mb-1 block whitespace-pre-wrap wrap-anywhere text-xs text-muted-foreground">{principal}</span> : null;
+}
+
 function TranscriptLine({ line, conversationId, hasSandboxed, open }: { line: Line; conversationId: string; hasSandboxed: boolean; open?: boolean }) {
   if (["thinking", "developer"].includes(line.role)) return <TraceLine line={line} hasSandboxed={hasSandboxed} open={open} />;
   if (line.role === "tool") {
@@ -1832,7 +1841,10 @@ function TranscriptLine({ line, conversationId, hasSandboxed, open }: { line: Li
     }}>
       <MessageContent>
         <Bubble variant={line.role === "user" ? "secondary" : "ghost"} align={align}>
-          <BubbleContent><TranscriptText text={line.text} /></BubbleContent>
+          <BubbleContent>
+            <MessageAuthor principal={line.principal} role={line.role} />
+            <TranscriptText text={line.text} />
+          </BubbleContent>
           <MessageAttachments attachments={line.attachments} conversationId={conversationId} />
         </Bubble>
         <MessageActions line={line} hasSandboxed={hasSandboxed} />
@@ -1850,7 +1862,7 @@ function turnKey(turn: Turn) {
 function useTranscriptPosition(conversationId: string, lines: Line[], turns: Turn[]) {
   const viewport = useRef<HTMLDivElement>(null);
   const identity = useQuery(queries.identity());
-  const firstOwner = useRef<string | undefined>(identity.isSuccess ? identity.data : undefined);
+  const firstOwner = useRef<string | undefined>(identity.isSuccess ? identity.data.username : undefined);
   const { scrollToMessage } = useMessageScroller();
   const target = useContext(SessionCommands).command?.target;
   const search = useSearch();
@@ -1861,15 +1873,15 @@ function useTranscriptPosition(conversationId: string, lines: Line[], turns: Tur
   const seen = useCallback(() => {
     const element = viewport.current;
     if (!element || !identity.isSuccess || !element.getClientRects().length) return;
-    if (firstOwner.current === undefined) firstOwner.current = identity.data;
-    if (firstOwner.current !== identity.data) return;
+    if (firstOwner.current === undefined) firstOwner.current = identity.data.username;
+    if (firstOwner.current !== identity.data.username) return;
     const bounds = element.getBoundingClientRect();
     const visible = [...element.querySelectorAll<HTMLElement>('[data-slot="message"][data-message-id]')].filter((node) => {
       const rect = node.getBoundingClientRect();
       return rect.bottom > bounds.top && rect.top < bounds.bottom;
     });
     const last = visible.at(-1)?.dataset.messageId;
-    if (last) localStorage.setItem(`last-seen:${identity.data}`, `${sessionPath(conversationId)}?message=${encodeURIComponent(last)}`);
+    if (last) localStorage.setItem(`last-seen:${identity.data.username}`, `${sessionPath(conversationId)}?message=${encodeURIComponent(last)}`);
   }, [conversationId, identity.isSuccess, identity.data]);
   useEffect(() => {
     const frame = requestAnimationFrame(() => requestAnimationFrame(seen));
@@ -2260,6 +2272,7 @@ async function sendComposer(input: {
   text: string;
   files: PendingFile[];
   delivery?: PromptDelivery;
+  principal?: string;
   busy: boolean;
   sessionId: string;
   selected: string;
@@ -2295,7 +2308,7 @@ async function sendComposer(input: {
   }
   input.scrollToEnd();
   input.setSendError("");
-  const optimistic: Line = { id: crypto.getRandomValues(new Uint32Array(4)).join("-"), role: "user", text: command ? input.text.slice(command[0].length) : input.text };
+  const optimistic: Line = { id: crypto.getRandomValues(new Uint32Array(4)).join("-"), role: "user", text: command ? input.text.slice(command[0].length) : input.text, principal: input.principal };
   try {
     let sessionId = input.sessionId;
     if (sessionId === "") {
@@ -2411,7 +2424,7 @@ function pendingInputs(draft: ComposerDraft, items: QueueItem[]) {
   const waiting = items.filter((item) => !consumed.has(item.id));
   const parked = new Map<string, Line>(waiting.filter((item) => item.delivery === "STEER").map((item) => [item.id, { ...item, role: "user" }]));
   for (const line of draft.parked ?? []) {
-    if (!consumed.has(line.id)) parked.set(line.id, line);
+    if (!consumed.has(line.id) && !parked.has(line.id)) parked.set(line.id, line);
   }
   return { parked: [...parked.values()], queued: waiting.filter((item) => item.delivery !== "STEER") };
 }
@@ -2435,6 +2448,7 @@ function SessionComposer({
   setLines: (update: (current: Line[]) => Line[]) => void;
   refreshHistory: () => Promise<unknown>;
 }) {
+  const identity = useQuery(queries.identity());
   const [, setEditVersion] = useState(0);
   const { setCommand } = useContext(SessionCommands);
   const { scrollToEnd } = useMessageScroller();
@@ -2488,6 +2502,7 @@ function SessionComposer({
       text: draft.text,
       files: draft.files,
       delivery,
+      principal: identity.isSuccess && !identity.isFetching ? identity.data.principal : undefined,
       busy,
       sessionId: draft.sessionId,
       selected: id === "" ? selected : draft.agent,
@@ -3122,7 +3137,7 @@ function ConfigLoaded({ view }: { view: ConfigView }) {
         <ConfigList items={models} empty="No models" />
       </ConfigSection>
       <ConfigSection title="Web">
-        <ConfigRow label="Configured user" value={identity.data ?? ""} />
+        <ConfigRow label="Configured user" value={identity.data?.username ?? ""} />
         <ConfigRow label="Tailscale user" value={view.tailscaleUser || "Unavailable"} />
         <ConfigRow label="web.auto_settle_after" value={view.webAutoSettleAfter ?? ""} />
       </ConfigSection>

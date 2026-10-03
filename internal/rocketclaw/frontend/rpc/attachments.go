@@ -25,7 +25,7 @@ func attachmentMetadata(conversationID string, attachment *protocol.OutboundAtta
 
 func (s *Server) uploadAttachment(stream grpc.ServerStream) error {
 	ctx := stream.Context()
-	if _, err := s.principal(ctx); err != nil {
+	if _, _, err := s.principal(ctx); err != nil {
 		return err
 	}
 

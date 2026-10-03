@@ -48,12 +48,15 @@ func TestTailscaleBrowserIdentity(t *testing.T) {
 	t.Setenv("PATH", dir)
 
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "100.64.0.1"))
-	for _, tt := range []struct{ name, output, want string }{
-		{"identified", `{"UserProfile":{"LoginName":"connected@example.com"}}`, "connected@example.com"},
-		{"no user", `{"UserProfile":{}}`, ""},
-		{"tagged node", `{"Node":{"Tags":["tag:server"]},"UserProfile":{"LoginName":"tagged-devices"}}`, ""},
-		{"invalid response", `not json`, ""},
-		{"unavailable", "", ""},
+	for _, tt := range []struct{ name, output, want, wantPrincipal string }{
+		{"identified", `{"UserProfile":{"LoginName":"connected@example.com","DisplayName":"Connected Person"}}`, "connected@example.com", "Connected Person"},
+		{"spaced display", `{"UserProfile":{"LoginName":"connected@example.com","DisplayName":" Connected Person "}}`, "connected@example.com", " Connected Person "},
+		{"missing display", `{"UserProfile":{"LoginName":"connected@example.com"}}`, "connected@example.com", "connected@example.com"},
+		{"blank display", `{"UserProfile":{"LoginName":"connected@example.com","DisplayName":"  "}}`, "connected@example.com", "connected@example.com"},
+		{"no user", `{"UserProfile":{}}`, "", ""},
+		{"tagged node", `{"Node":{"Tags":["tag:server"]},"UserProfile":{"LoginName":"tagged-devices"}}`, "", ""},
+		{"invalid response", `not json`, "", ""},
+		{"unavailable", "", "", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			// Exercise the real command boundary with a controlled executable.
@@ -65,9 +68,10 @@ func TestTailscaleBrowserIdentity(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "tailscale"), []byte(script), 0o700))
 
 			server := &Server{cfg: &config.Config{}, usernames: map[netip.Addr]string{netip.MustParseAddr("100.64.0.1"): "configured-user"}}
-			username, err := server.principal(ctx)
+			username, principal, err := server.principal(ctx)
 			require.NoError(t, err)
 			require.Equal(t, "configured-user", username)
+			require.Equal(t, "configured-user", principal)
 
 			_, err = server.listConfig(ctx)
 			require.NoError(t, err)
@@ -82,9 +86,11 @@ func TestTailscaleBrowserIdentity(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tt.want, view.Config.TailscaleUser)
 
-			username, err = server.principal(ctx)
+			username, principal, err = server.principal(ctx)
 			require.NoError(t, err)
 			require.Equal(t, tt.want, username)
+
+			require.Equal(t, tt.wantPrincipal, principal)
 			_, err = server.listConfig(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "100.64.0.2")))
 			require.Equal(t, codes.Unauthenticated, status.Code(err))
 		})
@@ -96,7 +102,7 @@ func TestTailscaleIdentityCache(t *testing.T) {
 	t.Setenv("PATH", dir)
 	command := filepath.Join(dir, "tailscale")
 	calls := filepath.Join(dir, "calls")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + calls + "'\nprintf '%s' '{\"UserProfile\":{\"LoginName\":\"alice\"}}'\n"
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + calls + "'\nprintf '%s' '{\"UserProfile\":{\"LoginName\":\"alice\",\"DisplayName\":\"Alice Smith\"}}'\n"
 	require.NoError(t, os.WriteFile(command, []byte(script), 0o700))
 
 	synctest.Test(t, func(t *testing.T) {
@@ -106,7 +112,7 @@ func TestTailscaleIdentityCache(t *testing.T) {
 		var requests errgroup.Group
 		for range 8 {
 			requests.Go(func() error {
-				username, err := server.principal(ctx)
+				username, _, err := server.principal(ctx)
 				if err != nil {
 					return err
 				}
@@ -125,15 +131,16 @@ func TestTailscaleIdentityCache(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "alice", view.Config.TailscaleUser)
 
-		username, err := server.principal(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "::ffff:100.64.0.1")))
+		username, principal, err := server.principal(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "::ffff:100.64.0.1")))
 		require.NoError(t, err)
 		require.Equal(t, "alice", username)
+		require.Equal(t, "Alice Smith", principal)
 
 		data, err := os.ReadFile(calls)
 		require.NoError(t, err)
 		require.Equal(t, "whois --json 100.64.0.1\n", string(data))
 
-		_, err = server.principal(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "100.64.0.2")))
+		_, _, err = server.principal(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "100.64.0.2")))
 		require.NoError(t, err)
 		data, err = os.ReadFile(calls)
 		require.NoError(t, err)
@@ -142,17 +149,17 @@ func TestTailscaleIdentityCache(t *testing.T) {
 		require.NoError(t, os.WriteFile(command, []byte("#!/bin/sh\nexit 1\n"), 0o700))
 		time.Sleep(5*time.Minute - time.Nanosecond)
 
-		username, err = server.principal(ctx)
+		username, _, err = server.principal(ctx)
 		require.NoError(t, err)
 		require.Equal(t, "alice", username)
 		time.Sleep(time.Nanosecond)
 
-		_, err = server.principal(ctx)
+		_, _, err = server.principal(ctx)
 		require.Equal(t, codes.Unauthenticated, status.Code(err))
 
 		require.NoError(t, os.WriteFile(command, []byte(strings.ReplaceAll(script, "alice", "bob")), 0o700))
 
-		username, err = server.principal(ctx)
+		username, _, err = server.principal(ctx)
 		require.NoError(t, err)
 		require.Equal(t, "bob", username)
 	})
@@ -433,6 +440,60 @@ func TestSessionEntries(t *testing.T) {
 	identity, err := invoke[IdentityResponse](ctx, connection, "Identity", &IdentityRequest{})
 	require.NoError(t, err)
 	require.Equal(t, "alice", identity.Username)
+	require.Equal(t, "alice", identity.GetPrincipal())
+	t.Run("display attribution preserves login ownership and routing", func(t *testing.T) {
+		before := len(turns)
+
+		t.Cleanup(func() { turns = turns[:before] })
+		dir := t.TempDir()
+		t.Setenv("PATH", dir)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "tailscale"), []byte("#!/bin/sh\nprintf '%s' '{\"UserProfile\":{\"LoginName\":\"alice@example.com\",\"DisplayName\":\"Alice Smith\"}}'\n"), 0o700))
+		browser := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "100.64.0.1"))
+		identity, err := invoke[IdentityResponse](browser, connection, "Identity", &IdentityRequest{})
+		require.NoError(t, err)
+		require.Equal(t, "alice@example.com", identity.Username)
+		require.Equal(t, "Alice Smith", identity.GetPrincipal())
+
+		view, err := invoke[ListConfigResponse](browser, connection, "ListConfig", &ListConfigRequest{})
+		require.NoError(t, err)
+		require.Equal(t, "alice@example.com", view.Config.TailscaleUser)
+
+		created, err := invoke[CreateSessionResponse](browser, connection, "CreateSession", &CreateSessionRequest{Agent: "main"})
+		require.NoError(t, err)
+		thread, _, err := sessions.Thread(created.Id)
+		require.NoError(t, err)
+		require.Equal(t, backend.ThreadCreator("alice@example.com"), thread.CreatedBy)
+
+		for _, delivery := range []PromptDelivery{PromptDelivery_QUEUE, PromptDelivery_STASH} {
+			_, err := invoke[PromptResponse](browser, connection, "Prompt", &PromptRequest{Id: created.Id, Text: "hello", Delivery: delivery})
+			require.NoError(t, err)
+		}
+
+		stored, err := sessions.ThreadQueueForConversation(created.Id)
+		require.NoError(t, err)
+		require.Len(t, stored, 2)
+
+		queued, err := invoke[ListQueueResponse](browser, connection, "ListQueue", &ListQueueRequest{Id: created.Id})
+		require.NoError(t, err)
+		require.Len(t, queued.Items, 2)
+
+		for i, item := range queued.Items {
+			require.Equal(t, stored[i].ID, item.Id)
+			require.Equal(t, "Alice Smith", item.GetPrincipal())
+		}
+
+		for _, item := range stored {
+			require.Equal(t, "Alice Smith", item.Principal)
+			require.NoError(t, sessions.DeleteThreadQueueItem(item.ID))
+		}
+
+		_, err = invoke[PromptResponse](browser, connection, "Prompt", &PromptRequest{Id: "unrecorded", Text: "hello"})
+		require.ErrorContains(t, err, "not recorded")
+
+		inbound := turns[len(turns)-1]
+		require.Equal(t, "alice@example.com", inbound.Label)
+		require.Equal(t, "Alice Smith", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+	})
 
 	for _, values := range [][]string{nil, {"alice"}, {"192.0.2.2"}, {"192.0.2.1", "192.0.2.1"}} {
 		denied := metadata.NewOutgoingContext(t.Context(), metadata.MD{"rocketclaw-principal": values})
@@ -683,7 +744,7 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 	_, err = invoke[DeleteSessionEntriesResponse](ctx, connection, "DeleteSessionEntries", &SessionEntriesRequest{})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
-	principal, err := server.principal(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1")))
+	principal, _, err := server.principal(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1")))
 	require.NoError(t, err)
 	require.Equal(t, "alice", principal)
 	negotiated, err := invoke[ProtocolResponse](t.Context(), connection, "Protocol", &ProtocolRequest{})
@@ -743,23 +804,23 @@ func TestSessionEntries(t *testing.T) {
 	}))
 	queued, err := invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: id})
 	require.NoError(t, err)
-	require.Equal(t, []*QueueItem{{Id: "q1", Text: "queued later", Delivery: PromptDelivery_QUEUE}}, queued.Items)
+	require.Equal(t, []*QueueItem{{Id: "q1", Text: "queued later", Delivery: PromptDelivery_QUEUE, Principal: "alice"}}, queued.Items)
 	t.Run("pending steers retain delivery and queue order", func(t *testing.T) {
 		list := core.QueueItemsFunc
 		defer func() { core.QueueItemsFunc = list }()
 
 		core.QueueItemsFunc = func(string) ([]protocol.ThreadQueueItem, error) {
 			return []protocol.ThreadQueueItem{
-				{ID: "later-first", Kind: protocol.InboundKindEnqueue, Message: "first later message"},
-				{ID: "steering", Kind: protocol.InboundKindSteer, Message: "guide the current response"},
+				{ID: "later-first", Kind: protocol.InboundKindEnqueue, Message: "first later message", Principal: "Bob Smith"},
+				{ID: "steering", Kind: protocol.InboundKindSteer, Message: "guide the current response", Principal: "Bob Smith"},
 				{ID: "later-second", Kind: protocol.InboundKindEnqueue, Message: "second later message"},
 			}, nil
 		}
 		queued, err := invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: id})
 		require.NoError(t, err)
 		require.Equal(t, []*QueueItem{
-			{Id: "later-first", Text: "first later message", Delivery: PromptDelivery_QUEUE},
-			{Id: "steering", Text: "guide the current response", Delivery: PromptDelivery_STEER},
+			{Id: "later-first", Text: "first later message", Delivery: PromptDelivery_QUEUE, Principal: "Bob Smith"},
+			{Id: "steering", Text: "guide the current response", Delivery: PromptDelivery_STEER, Principal: "Bob Smith"},
 			{Id: "later-second", Text: "second later message", Delivery: PromptDelivery_QUEUE},
 		}, queued.Items)
 	})
@@ -793,14 +854,14 @@ func TestSessionEntries(t *testing.T) {
 
 	queued, err = invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: id})
 	require.NoError(t, err)
-	require.Equal(t, []*QueueItem{{Id: "q1", Text: "queued later", Delivery: PromptDelivery_QUEUE}, {Id: "q3", Text: "third", Delivery: PromptDelivery_QUEUE}, {Id: "q2", Text: "second", Delivery: PromptDelivery_QUEUE}}, queued.Items)
+	require.Equal(t, []*QueueItem{{Id: "q1", Text: "queued later", Delivery: PromptDelivery_QUEUE, Principal: "alice"}, {Id: "q3", Text: "third", Delivery: PromptDelivery_QUEUE, Principal: "alice"}, {Id: "q2", Text: "second", Delivery: PromptDelivery_QUEUE, Principal: "alice"}}, queued.Items)
 
 	_, err = invoke[QueueItemResponse](ctx, connection, "RemoveQueueItem", &QueueItemRequest{Id: id, ItemId: "q2"})
 	require.NoError(t, err)
 
 	queued, err = invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: id})
 	require.NoError(t, err)
-	require.Equal(t, []*QueueItem{{Id: "q1", Text: "queued later", Delivery: PromptDelivery_QUEUE}, {Id: "q3", Text: "third", Delivery: PromptDelivery_QUEUE}}, queued.Items)
+	require.Equal(t, []*QueueItem{{Id: "q1", Text: "queued later", Delivery: PromptDelivery_QUEUE, Principal: "alice"}, {Id: "q3", Text: "third", Delivery: PromptDelivery_QUEUE, Principal: "alice"}}, queued.Items)
 
 	_, err = invoke[QueueItemResponse](ctx, connection, "RemoveQueueItem", &QueueItemRequest{Id: id, ItemId: "missing"})
 	require.Equal(t, codes.NotFound, status.Code(err))
@@ -880,7 +941,7 @@ func TestSessionEntries(t *testing.T) {
 			index := slices.IndexFunc(storedQueue, func(item protocol.ThreadQueueItem) bool { return item.Message == tt.want })
 			require.GreaterOrEqual(t, index, 0)
 			storedPrompt := storedQueue[index]
-			require.Contains(t, queued.Items, &QueueItem{Id: storedPrompt.ID, Text: tt.want, Delivery: tt.wantDelivery})
+			require.Contains(t, queued.Items, &QueueItem{Id: storedPrompt.ID, Text: tt.want, Delivery: tt.wantDelivery, Principal: "alice"})
 
 			require.Equal(t, tt.want, storedPrompt.Content.Text)
 			require.Equal(t, tt.kind, storedPrompt.Kind)
@@ -1004,6 +1065,7 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, "report", history.Messages[9].ToolCallId)
 	require.Empty(t, history.Messages[9].ToolName)
 	require.Equal(t, `[Web principal="alice" additional_instructions="Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."]`, history.Messages[6].Header)
+	require.Equal(t, "alice", history.Messages[6].GetPrincipal())
 
 	for i, message := range history.Messages {
 		require.Equal(t, "canonical", message.Origin)
@@ -1183,12 +1245,21 @@ func TestSessionEntries(t *testing.T) {
 	runWebTest(t, "src/entry-transport.test.ts", "ROCKETCLAW_ENTRY_TEST_URL="+httpServer.URL, "ROCKETCLAW_ENTRY_TEST_ID="+id, "ROCKETCLAW_HISTORY_TEST_ID=empty-web", "ROCKETCLAW_VIEW_TEST_WORKSPACE="+cfg.Workspace)
 
 	const webHeader = `[Web principal="alice" additional_instructions="Reply plainly."]`
-	for i, tc := range []struct{ input, want, header string }{
-		{webHeader + "\n\n[literal]\n\nkeep my brackets", "[literal]\n\nkeep my brackets", webHeader},
-		{"[Web media=Text principal=alice]\n\nnot a generated header", "[Web media=Text principal=alice]\n\nnot a generated header", ""},
-		{webHeader + "\n\n" + webHeader + "\n\nquoted header", webHeader + "\n\nquoted header", webHeader},
-		{webHeader + "\n\nold message", webHeader + "\n\nold message", ""},
-		{"[Slack principal=\"bob\"]\n\nSlack body", "Slack body", `[Slack principal="bob"]`},
+	for i, tc := range []struct{ input, want, header, principal string }{
+		{webHeader + "\n\n[literal]\n\nkeep my brackets", "[literal]\n\nkeep my brackets", webHeader, "alice"},
+		{"[Web media=Text principal=alice]\n\nnot a generated header", "[Web media=Text principal=alice]\n\nnot a generated header", "", ""},
+		{webHeader + "\n\n" + webHeader + "\n\nquoted header", webHeader + "\n\nquoted header", webHeader, "alice"},
+		{webHeader + "\n\nold message", webHeader + "\n\nold message", "", ""},
+		{"[Slack principal=\"bob\"]\n\nSlack body", "Slack body", `[Slack principal="bob"]`, "bob"},
+		{"body", "body", `[Web media=Image principal="Bob Smith Ω \"quote\" \\ path\t\x41\u0042" additional_instructions="Reply plainly."]`, "Bob Smith Ω \"quote\" \\ path\tAB"},
+		{"body", "body", `[Web additional_instructions="principal=\"not an author\""]`, ""},
+		{"body", "body", `[Web additional_instructions="principal=\"not an author\"" principal="Bob Smith"]`, "Bob Smith"},
+		{"body", "body", `[Web principal="bad\q"]`, ""},
+		{"body", "body", `[Web principal="unfinished]`, ""},
+		{"body", "body", `[Web principal="Bob"junk]`, ""},
+		{"body", "body", `[Web principal=unquoted]`, ""},
+		{"body", "body", `[Web broken]`, ""},
+		{"body", "body", `[Web principal="Bob"`, ""},
 	} {
 		message := responses.ResponseInputItemUnionParam{OfMessage: &responses.EasyInputMessageParam{Role: "user", Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(tc.input)}, Type: "message"}}
 		if tc.header != "" {
@@ -1206,6 +1277,7 @@ func TestSessionEntries(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, tc.want, history.Messages[len(history.Messages)-2].Text)
 		require.Equal(t, tc.header, history.Messages[len(history.Messages)-2].Header)
+		require.Equal(t, tc.principal, history.Messages[len(history.Messages)-2].Principal)
 		require.Equal(t, webHeader+"assistant unchanged", history.Messages[len(history.Messages)-1].Text)
 
 		listed, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
@@ -1954,7 +2026,7 @@ func TestSessionEntries(t *testing.T) {
 			defer func() { core.QueueItemsFunc = list }()
 
 			core.QueueItemsFunc = func(string) ([]protocol.ThreadQueueItem, error) {
-				return []protocol.ThreadQueueItem{{ID: "attachment-input", Kind: protocol.InboundKindSteer, Message: turns[len(turns)-1].Text}}, nil
+				return []protocol.ThreadQueueItem{{ID: "attachment-input", Kind: protocol.InboundKindSteer, Message: turns[len(turns)-1].Text, Principal: "Bob Smith"}}, nil
 			}
 			pending, err := invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: conversation})
 			require.NoError(t, err)
@@ -1962,19 +2034,24 @@ func TestSessionEntries(t *testing.T) {
 			require.Equal(t, "attachment-input", pending.Items[0].Id)
 			require.Equal(t, PromptDelivery_STEER, pending.Items[0].Delivery)
 			require.Equal(t, exact, pending.Items[0].Text)
+			require.Equal(t, "Bob Smith", pending.Items[0].Principal)
 			require.Len(t, pending.Items[0].Attachments, 2)
 			require.Equal(t, file.Id, pending.Items[0].Attachments[0].Id)
 			require.Equal(t, imageFile.Id, pending.Items[0].Attachments[1].Id)
 		})
 
+		const attachmentHeader = `[Web principal="Bob Smith" additional_instructions="Reply plainly."]`
+
 		_, err = sessions.AppendEntryID(ctx, conversation, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
-			json.RawMessage(fmt.Sprintf(`{"type":"message","role":"user","content":%q}`, turns[len(turns)-1].Text)),
+			json.RawMessage(fmt.Sprintf(`{"type":"message","role":"user","content":%q,"prompt_header":%q}`, turns[len(turns)-1].Text, attachmentHeader)),
 		}})
 		require.NoError(t, err)
 		inputHistory, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation})
 		require.NoError(t, err)
 		require.Len(t, inputHistory.Messages[0].Attachments, 2)
 		require.Equal(t, exact, inputHistory.Messages[0].Text)
+		require.Equal(t, "Bob Smith", inputHistory.Messages[0].Principal)
+		require.Equal(t, attachmentHeader, inputHistory.Messages[0].Header)
 		require.Equal(t, file.Id, inputHistory.Messages[0].Attachments[0].Id)
 		require.Equal(t, imageFile.Id, inputHistory.Messages[0].Attachments[1].Id)
 

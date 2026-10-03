@@ -326,6 +326,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
   let blocked = Promise.withResolvers<void>();
   const ctrl = {
     username: "alice",
+    principal: "Alice Smith",
     protocol: "test-protocol",
     identityError: false,
     listCalls: 0,
@@ -439,7 +440,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         case "/api/Identity":
           if (ctrl.identityError) throw new RPCError("unauthenticated", 16);
           await identityHold.promise;
-          return Response.json({ username: ctrl.username });
+          return Response.json({ username: ctrl.username, principal: ctrl.principal });
+        case "/api/Handoff": return Response.json({ document: "Handoff document" });
         case "/api/CreateSession":
           if (input.sourceConversationId) {
             cronOpens.push(input.sourceConversationId);
@@ -457,7 +459,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
           ctrl.promptStarted.resolve();
           if (input.delivery === "STASH") {
             if (ctrl.promptError) throw new RPCError("Stash failed; retry", 13);
-            ctrl.queue.push({ id: input.messageId, text: input.text, delivery: "STASH", attachments: input.attachmentIds?.map((id) => uploadedFiles.find(({ meta }) => meta.id === id)!.meta) });
+            ctrl.queue.push({ id: input.messageId, text: input.text, delivery: "STASH", principal: ctrl.principal, attachments: input.attachmentIds?.map((id) => uploadedFiles.find(({ meta }) => meta.id === id)!.meta) });
             return Response.json({ privateText: "" });
           }
           if (input.text.startsWith("$agent ")) {
@@ -470,7 +472,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
           ctrl.lastInputId = input.messageId;
           if (ctrl.holdInterventions) {
             const id = input.delivery === "QUEUE" ? `server-${input.messageId}` : input.messageId;
-            ctrl.queue.push({ id, text: input.text, delivery: input.delivery });
+            ctrl.queue.push({ id, text: input.text, delivery: input.delivery, principal: ctrl.principal });
             if (input.delivery === "QUEUE") return Response.json({ privateText: "" });
             const pending = Promise.withResolvers<string>();
             ctrl.interventions.set(id, pending);
@@ -880,6 +882,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await page.getByRole("button", { name: "Send" }).click();
     await ctrl.promptStarted.promise;
     expect(ctrl.prompt).toEqual(["web-session:new:hello\n\nwhile held"]);
+    expect(await page.locator('[data-slot="bubble-content"] [data-slot="message-author"]').textContent()).toBe("Alice Smith");
     await page.waitForURL("**/s/d2ViLXNlc3Npb246bmV3");
     await page.getByPlaceholder("Queue a follow-up · ⌘⏎ steers").waitFor();
     await page.locator("textarea:enabled").waitFor();
@@ -888,7 +891,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await page.locator("textarea").fill("My draft");
     const selectedQuote: string = await page.locator("#transcript-scroll").evaluate((element: HTMLElement) => {
       const range = document.createRange();
-      range.selectNodeContents(element.querySelector('[aria-label="Turn 1"]')!);
+      range.selectNodeContents(element.querySelector('[aria-label="Turn 1"] [data-slot="bubble-content"] div')!);
       const selection = window.getSelection()!;
       selection.removeAllRanges();
       selection.addRange(range);
@@ -2626,6 +2629,99 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await stashPage.getByRole("region", { name: "Messages", exact: true }).getByText("busy stash", { exact: true }).count()).toBe(0);
     expect(await stashPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await stashPage.close();
+
+    // Alice reads Bob's recorded authors, never her current identity, in every delivery surface.
+    const bob = 'Bob Smith Ω <img src=x onerror="alert(1)"> ' + "LongName".repeat(18);
+    const rawHeader = String.raw`[Web principal=${JSON.stringify(bob)} additional_instructions="principal=\"not the author\""]`;
+    ctrl.username = "alice";
+    ctrl.yieldBatches = complete(ctrl.settledRows);
+    ctrl.history = [
+      { entryKey: "authors", itemId: "authors:0", inputId: "bob-history", role: "user", text: "Bob's saved message", principal: bob, header: rawHeader, turnId: "authors", complete: true },
+      { entryKey: "authors", itemId: "authors:1", inputId: "legacy", role: "user", text: "[Web principal=\"not metadata\"]", turnId: "authors", complete: true },
+      { entryKey: "authors", itemId: "authors:2", inputId: "", role: "assistant", text: "Assistant unchanged", principal: bob, agent: "main", model: "gpt", turnId: "authors", complete: true },
+    ];
+    ctrl.queue = [{ id: "bob-queue", text: "Bob's queued message", delivery: "QUEUE", principal: bob }, { id: "bob-stash", text: "Bob's stashed message", delivery: "STASH", principal: bob }];
+    ctrl.running = false;
+    transcriptStream = Promise.withResolvers();
+    const authorPage = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    await authorPage.goto(`${origin}/s/${Buffer.from("author-session").toString("base64url")}`);
+    const authorChat = authorPage.getByRole("region", { name: "Messages", exact: true });
+    const savedBubble = authorChat.locator('[data-slot="bubble-content"]').filter({ hasText: "Bob's saved message" });
+    await savedBubble.locator('[data-slot="message-author"]').waitFor({ state: "visible" });
+    expect(await savedBubble.locator('[data-slot="message-author"]').textContent()).toBe(bob);
+    expect(await savedBubble.locator("img").count()).toBe(0);
+    expect(await authorChat.locator('[data-slot="bubble-content"]').filter({ hasText: "not metadata" }).locator('[data-slot="message-author"]').count()).toBe(0);
+    expect(await authorChat.locator('[data-slot="bubble-content"]').filter({ hasText: "Assistant unchanged" }).locator('[data-slot="message-author"]').count()).toBe(0);
+    await savedBubble.hover();
+    await savedBubble.locator("..").locator("..").getByRole("button", { name: "Show message header" }).click();
+    expect(await authorPage.getByRole("dialog", { name: "Message header", exact: true }).locator('[data-slot="dialog-description"]').textContent()).toBe(rawHeader);
+    await authorPage.keyboard.press("Escape");
+    for (const width of [1280, 320]) {
+      await authorPage.setViewportSize({ width, height: 844 });
+      await savedBubble.locator('[data-slot="message-author"]').scrollIntoViewIfNeeded();
+      await authorPage.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      expect(await savedBubble.locator('[data-slot="message-author"]').evaluate((node: HTMLElement) => {
+        const label = node.getBoundingClientRect();
+        const body = node.nextElementSibling!.getBoundingClientRect();
+        return label.bottom <= body.top && node.scrollWidth <= node.clientWidth && label.right <= innerWidth;
+      })).toBe(true);
+      await authorPage.screenshot({ path: path.join(screenshots, `human-author-${width}.png`) });
+    }
+    for (const id of ["bob-queue", "bob-stash"]) {
+      await authorPage.locator(`[data-queue-id="${id}"] [data-slot="message-author"]`).waitFor();
+      expect(await authorPage.locator(`[data-queue-id="${id}"] [data-slot="message-author"]`).textContent()).toBe(bob);
+    }
+    await authorPage.locator('[data-queue-id="bob-stash"]').getByRole("button", { name: "Pop", exact: true }).click();
+    await authorPage.locator('[data-queue-id="bob-stash"]').getByRole("button", { name: "Send", exact: true }).click();
+    const authorParking = authorPage.getByRole("region", { name: "Pending steers", exact: true });
+    await authorParking.locator('[data-slot="message-author"]').waitFor();
+    expect(await authorParking.locator('[data-slot="message-author"]').textContent()).toBe(bob);
+    ctrl.history.push({ entryKey: "live-author", itemId: "live-author:0", inputId: "bob-stash", role: "user", text: "Bob's stashed message", principal: bob, header: rawHeader, turnId: "live-author", complete: true, attachments: [image] });
+    ctrl.queue = ctrl.queue.filter((item) => item.id !== "bob-stash");
+    (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ conversationId: "author-session", revision: "hint" })}\n\n`);
+    await authorParking.waitFor({ state: "hidden" });
+    await authorChat.getByRole("img", { name: "history.png", exact: true }).waitFor();
+    expect(await authorChat.locator('[data-slot="message-author"]').allTextContents()).toEqual([bob, bob]);
+    transcriptStream = Promise.withResolvers();
+    await authorPage.reload();
+    await authorChat.getByRole("img", { name: "history.png", exact: true }).waitFor();
+    expect(await authorChat.locator('[data-slot="message-author"]').allTextContents()).toEqual([bob, bob]);
+    expect(await authorPage.locator('[data-queue-id="bob-queue"] [data-slot="message-author"]').textContent()).toBe(bob);
+
+    // An identity refresh cannot supply a provisional author; recorded authors remain visible.
+    const refreshing = Promise.withResolvers<void>();
+    const refreshStarted = Promise.withResolvers<void>();
+    await authorPage.route("**/api/Identity", async (route: { continue(): Promise<void> }) => { refreshStarted.resolve(); await refreshing.promise; await route.continue(); });
+    await refreshStarted.promise;
+    ctrl.holdPrompt = true;
+    promptHold = Promise.withResolvers();
+    ctrl.promptStarted = Promise.withResolvers();
+    await authorPage.locator("textarea").fill("Unlabeled while identity refreshes");
+    await authorPage.getByLabel("Send", { exact: true }).click();
+    await ctrl.promptStarted.promise;
+    expect(await authorChat.locator('[data-slot="bubble-content"]').filter({ hasText: "Unlabeled while identity refreshes" }).locator('[data-slot="message-author"]').count()).toBe(0);
+    const identityRefreshed = authorPage.waitForResponse("**/api/Identity");
+    refreshing.resolve();
+    await identityRefreshed;
+    await authorPage.unroute("**/api/Identity");
+    promptHold.resolve("");
+    ctrl.holdPrompt = false;
+    await authorPage.locator("textarea").fill("$handoff");
+    await authorPage.getByLabel("Send", { exact: true }).click();
+    const handoffDialog = authorPage.getByRole("dialog", { name: "Session handoff", exact: true });
+    await handoffDialog.getByRole("button", { name: "Start new session", exact: true }).waitFor();
+    ctrl.history = [];
+    ctrl.queue = [];
+    ctrl.holdPrompt = true;
+    promptHold = Promise.withResolvers();
+    await handoffDialog.getByRole("button", { name: "Start new session", exact: true }).click();
+    await authorPage.waitForURL("**/s/d2ViLXNlc3Npb246bmV3");
+    const handoffBubble = authorPage.locator('[data-slot="bubble-content"]').filter({ hasText: "Handoff document" });
+    await handoffBubble.locator('[data-slot="message-author"]').waitFor();
+    expect(await handoffBubble.locator('[data-slot="message-author"]').textContent()).toBe("Alice Smith");
+    promptHold.resolve("");
+    ctrl.holdPrompt = false;
+    await authorPage.close();
   } finally {
     blocked.resolve();
     identityHold.resolve();

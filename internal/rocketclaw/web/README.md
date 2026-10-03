@@ -5,6 +5,14 @@ Assistant replies show a smaller, muted footer with known
 On desktop, hover a message to see its footer and Copy button. On touch
 screens, tap a message instead. User messages show Copy and, when recorded, a
 message-header info button, but no agent or model label.
+Human messages also show their recorded author as a small, always-visible label
+above the text inside the bubble. Queued/stashed rows and pending steers retain
+their own author across viewers, reloads, and promotion. The info control keeps
+the exact raw prompt header. Historical messages without author metadata stay
+unlabeled; text that looks like a header is not treated as attribution.
+New composer and handoff previews snapshot the server-resolved author only when
+identity is ready, not refreshing. Recorded history or queue data replaces that
+preview by input ID; the current viewer never supplies an author for saved messages.
 Copy puts the message text on the clipboard.
 Only sessions with sandboxed messages append ` - origin` to the footer. The
 origin is `sandboxed` for messages produced by another conversation or a cron
@@ -62,8 +70,13 @@ The Config page shows the configured Web username and the connected device's
 Tailscale user login. RocketClaw runs `tailscale whois --json` on the browser's
 connection IP; the `tailscale` executable must be on its PATH and able to reach
 the local Tailscale service. Missing or unsuccessful lookups display
-“Unavailable”. This is display-only: configured IP-to-user mappings still
-control access, and a Tailscale identity does not grant access on its own.
+"Unavailable". Explicit `web_users` mappings take precedence for admission and
+message attribution; unmapped browsers are admitted by their Tailscale login.
+New messages use `UserProfile.DisplayName`, falling back to the admitted login
+when the display name is missing or blank. Ownership, routing, and Config's
+Tailscale display remain login-based. Failed lookups, missing logins, and tagged
+devices without a manual mapping are denied. Successful WHOIS results are cached
+for five minutes.
 
 Oxlint runs `@shadcn/lint` with `no-restyle` enabled, including inside the UI
 components. Use component variants for styling and `className` for layout;
