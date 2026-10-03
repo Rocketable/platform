@@ -2017,6 +2017,16 @@ func TestSessionEntries(t *testing.T) {
 			})
 		})
 
+		t.Run("a failed change send ends Join", func(t *testing.T) {
+			stream := &mockServerStream{
+				ContextFunc: func() context.Context {
+					return metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
+				},
+				SendMsgFunc: func(any) error { return errors.New("client gone") },
+			}
+			require.ErrorContains(t, server.join(&JoinRequest{Id: conversation}, stream), "send web conversation change")
+		})
+
 		for _, test := range []struct{ text, want string }{
 			{"attachment:" + file.Id + " is literal prose  \n", "attachment:" + file.Id + " is literal prose  \n"},
 			{"literal\n\n" + queue[0].Content.TextAttachments[0] + "\nkeep this", "literal\n\n" + queue[0].Content.TextAttachments[0] + "\nkeep this"},
