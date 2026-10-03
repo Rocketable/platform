@@ -2514,7 +2514,7 @@ function ModEnterKeys({ mac }: { mac: boolean }) {
 }
 
 function SelectionQuote({ text, setText, messageInput, sending }: { text: string; setText: (value: string) => void; messageInput: React.RefObject<HTMLTextAreaElement | null>; sending: boolean }) {
-  const [quote, setQuote] = useState<{ text: string; left: number; top: number }>();
+  const [quote, setQuote] = useState<{ left: number; top: number }>();
   useEffect(() => {
     const clear = () => setQuote(undefined);
     const select = () => {
@@ -2524,7 +2524,7 @@ function SelectionQuote({ text, setText, messageInput, sending }: { text: string
       const range = selection.getRangeAt(0);
       if (!transcript?.contains(range.startContainer) || !transcript.contains(range.endContainer)) return clear();
       const rect = range.getBoundingClientRect();
-      setQuote({ text: selection.toString(), left: Math.max(8, Math.min(rect.left, window.innerWidth - 88)), top: Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 44)) });
+      setQuote({ left: Math.max(8, Math.min(rect.left, window.innerWidth - 88)), top: Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 44)) });
     };
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") clear(); };
     document.addEventListener("selectionchange", select);
@@ -2540,7 +2540,8 @@ function SelectionQuote({ text, setText, messageInput, sending }: { text: string
   }, [sending]);
   return quote && !sending ? <div className="fixed z-50" style={{ left: quote.left, top: quote.top }}>
     <Button type="button" size="sm" onMouseDown={(event) => { if (event.button === 0) event.preventDefault(); }} onClick={() => {
-      const value = (text ? text + "\n\n" : "") + quote.text.replace(/\r\n?/g, "\n").split("\n").map((line) => `> ${line}`).join("\n") + "\n\n";
+      // Read the selection now: a click can arrive before the last selectionchange has rendered.
+      const value = (text ? text + "\n\n" : "") + window.getSelection()!.toString().replace(/\r\n?/g, "\n").split("\n").map((line) => `> ${line}`).join("\n") + "\n\n";
       flushSync(() => { setText(value); setQuote(undefined); });
       window.getSelection()?.removeAllRanges();
       messageInput.current!.focus();
