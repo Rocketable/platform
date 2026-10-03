@@ -19,7 +19,7 @@ test("transcript and entry HTTP proxy reach Go and reject an unmapped connection
   const hash = new Bun.CryptoHasher("sha256").update(await Bun.file(new URL("../proto/web.proto", import.meta.url)).arrayBuffer()).digest("hex");
   expect(await call("Protocol")).toEqual({ protoSha256: hash });
   expect(await call("Protocol", {}, true)).toEqual({ protoSha256: hash });
-  expect(await call("Identity")).toEqual({ username: "alice" });
+  expect(await call("Identity")).toEqual({ username: "alice", principal: "alice" });
   const batches = await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`));
   expect(batches.flatMap((batch) => batch.sessions.map((session) => session.id))).toEqual(["empty-web", id]);
   expect(batches.at(-1)).toEqual({ sessions: [], owner: "alice", upstreamSuccess: true, summariesComplete: true });
@@ -36,6 +36,8 @@ test("transcript and entry HTTP proxy reach Go and reject an unmapped connection
   const history: { messages: TranscriptEvent[] } = await call("History", { id: process.env.ROCKETCLAW_HISTORY_TEST_ID! });
   expect(history.messages[1]).toMatchObject({ model: "legacy-model", agent: "", origin: "canonical" });
   expect(history.messages[1].reasoningEffort).toBeUndefined();
+  expect(history.messages[1].principal).toBe("");
+  expect(history.messages[6].principal).toBe("alice");
   expect(history.messages.at(-1)).toMatchObject({ agent: "planner", model: "work/model-a", reasoningEffort: "", origin: "canonical" });
   const copied = await call("History", { id });
   expect(copied.messages.at(-1)).toMatchObject({ agent: "producer", reasoningEffort: "high", origin: "sandboxed" });
@@ -107,6 +109,8 @@ test("transcript and entry HTTP proxy reach Go and reject an unmapped connection
       expect(await userFooters.getByRole("button", { name: "Show message header", includeHidden: true }).count()).toBe(1);
       expect(await userFooters.locator(":scope > span").count()).toBe(0);
       const user = page.locator('[data-slot="message"][data-align="end"]').filter({ hasText: "human two" });
+      expect(await user.locator('[data-slot="bubble-content"] [data-slot="message-author"]').textContent()).toBe("alice");
+      expect(await user.locator('[data-slot="message-author"]').isVisible()).toBe(true);
       const userCopy = user.getByRole("button", { name: "Copy message" });
       expect(await userCopy.isVisible()).toBe(false);
       if (width === 390) await user.locator('[data-slot="bubble-content"]').tap();

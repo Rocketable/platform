@@ -55,7 +55,7 @@ export async function* listSessions(signal?: AbortSignal, url = "/api/ListSessio
 export const queries = {
   searchMessages: (query: string) => ({ queryKey: ["searchMessages", query], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ matches: MessageMatch[] }>("SearchMessages", { query }, signal)).matches }),
   protocol: () => ({ queryKey: ["protocol"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ protoSha256: string }>("Protocol", {}, signal)).protoSha256 }),
-  identity: () => ({ queryKey: ["identity"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ username: string }>("Identity", {}, signal)).username }),
+  identity: () => ({ queryKey: ["identity"], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<{ username: string; principal?: string }>("Identity", {}, signal) }),
   agents: (input?: { conversationId: string }) => ({ queryKey: ["agents", input], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<AgentChoices>("ListAgents", input, signal) }),
   skills: (input?: { agent: string }) => ({ queryKey: ["skills", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ skills: Skill[] }>("ListSkills", input, signal)).skills }),
   cronJobs: () => ({ queryKey: ["cronJobs"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ jobs: CronJob[] }>("ListCronJobs", {}, signal)).jobs }),

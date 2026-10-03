@@ -103,12 +103,12 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 	case "ListAgents":
 		return s.listAgents(ctx, request.(*ListAgentsRequest).ConversationId)
 	case "Identity":
-		username, err := s.principal(ctx)
+		username, principal, err := s.principal(ctx)
 		if err != nil {
 			return nil, err
 		}
 
-		return &IdentityResponse{Username: username}, nil
+		return &IdentityResponse{Username: username, Principal: principal}, nil
 	case "CreateSession":
 		return s.createSession(ctx, request.(*CreateSessionRequest))
 	case "History":

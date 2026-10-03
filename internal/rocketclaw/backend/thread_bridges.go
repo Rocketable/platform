@@ -598,7 +598,7 @@ func (m *threadBridgeManager) promoteQueueItem(ctx context.Context, conversation
 	if inbound == nil {
 		content := item.Content
 		content.Text = item.Message
-		inbound = protocol.NewInboundMessageFromContent(item.Source, cmp.Or(item.Kind, protocol.InboundKindEnqueue), item.Principal, &content, true)
+		inbound = protocol.NewInboundMessageFromContent(item.Source, cmp.Or(item.Kind, protocol.InboundKindEnqueue), "enqueued_message", &content, true)
 		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = item.Principal
 		inbound.Metadata["web_message_id"] = id
 

@@ -124,6 +124,7 @@ message TranscriptEvent {
   // Fixed public lifecycle label; independent of the parent turn's running state.
   string state = 18;
   string parent_id = 19;
+  string principal = 20;
 }
 
 // Attachment download frames carry at most 256 KiB. History carries metadata only.
@@ -281,6 +282,7 @@ message QueueItem {
   string text = 2;
   repeated Attachment attachments = 3;
   PromptDelivery delivery = 4;
+  string principal = 5;
 }
 
 message ListQueueRequest {
@@ -332,7 +334,7 @@ message DeleteSessionEntriesResponse {
 
 message IdentityRequest {}
 
-message IdentityResponse { string username = 1; }
+message IdentityResponse { string username = 1; string principal = 2; }
 
 service Web {
   rpc UploadAttachment(stream Attachment) returns (Attachment);
