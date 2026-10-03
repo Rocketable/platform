@@ -15,7 +15,7 @@ description: Use when creating, updating, renaming, reviewing, or troubleshootin
 
 ## Contract
 
-Define literal `meta` with matching non-empty `name` and `description`, plus an optional unique phase list. Define `def main(args)` with one required argument. `args` is the trimmed text after `$workflow <name>`.
+Define literal `meta` with matching non-empty `name` and `description`, plus an optional unique phase list. Define `def main(args)` with one required argument. `args` is the trimmed argument text the workflow was started with.
 
 ## Quick Reference
 
