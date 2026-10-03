@@ -2071,6 +2071,9 @@ function historyLines(messages: TranscriptEvent[]): Line[] {
 }
 
 function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () => void) {
+  const { data: { agents: catalog, currentAgent: savedAgent } = { agents: [], currentAgent: "" } } = useQuery({ ...queries.agents({ conversationId: id }), refetchInterval: 2000 });
+  const currentAgent = id === "" ? "main" : savedAgent;
+  const selected = catalog.some((item) => item.name === draft.agent) ? draft.agent : currentAgent || catalog[0]?.name || "";
   const history = useQuery({ ...queries.history({ id }), enabled: false });
   const refreshHistory = useCallback(() => readHistoryDelta(draft.sessionId, draft, onDraftChange), [draft, onDraftChange]);
   const loadEarlier = useCallback((from?: string) => readEarlierHistory(draft.sessionId, draft, onDraftChange, from), [draft, onDraftChange]);
@@ -2091,7 +2094,7 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
       stream.close();
     };
   }, [id, refreshHistory]);
-  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !draft.revision, historyError: draft.historyError, origin: draft.origin, terminal: draft.terminal, delegations, more: draft.more ?? false, start: draft.start, loadEarlier, hasSandboxed: draft.lines.some((line) => line.origin === "sandboxed") };
+  return { currentAgent, catalog, selected, busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !draft.revision, historyError: draft.historyError, origin: draft.origin, terminal: draft.terminal, delegations, more: draft.more ?? false, start: draft.start, loadEarlier, hasSandboxed: draft.lines.some((line) => line.origin === "sandboxed") };
 }
 
 export function OriginCard({ origin }: { origin?: ChatOrigin }) {
@@ -2141,7 +2144,7 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
       route.goSession(draft.sessionId);
     }
   });
-  const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, terminal, delegations, more, start, loadEarlier, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
+  const { currentAgent, catalog, selected, busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, terminal, delegations, more, start, loadEarlier, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
   const visibleLines = previewLines ?? lines;
   const view = previewing ? { delegations: preview.data?.delegations, terminal: undefined } : { delegations, terminal };
   const messageId = location.pathname === sessionPath(id) ? new URLSearchParams(search).get("message") : null;
@@ -2152,10 +2155,6 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
     if (!previewing && more && linkedEntry && /^\d+$/.test(linkedEntry) && Number(linkedEntry) < Number(start)) void loadEarlier(linkedEntry);
   }, [previewing, more, linkedEntry, start, loadEarlier]);
   const visibleFilter = { sandboxed: filter.sandboxed || matchedOrigin === "sandboxed", canonical: filter.canonical || matchedOrigin === "canonical" };
-  const { data: { agents: catalog, currentAgent: savedAgent } = { agents: [], currentAgent: "" } } = useQuery({ ...queries.agents({ conversationId: id }), refetchInterval: 2000 });
-  const currentAgent = id === "" ? "main" : savedAgent;
-  const { agent } = draft;
-  const selected = catalog.some((item) => item.name === agent) ? agent : currentAgent || catalog[0]?.name || "";
   return (
     <div className="conversation-pane flex min-h-0 flex-1 flex-col" data-agent-risk={catalog.find((item) => item.name === selected)?.riskLevel}>
       <Delegations value={view.delegations}><TranscriptLog conversationId={id} lines={visibleLines} working={!previewing && busy} terminal={view.terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} more={!previewing && more} loadEarlier={loadEarlier} /></Delegations>
