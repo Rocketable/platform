@@ -251,9 +251,9 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 			}
 		}()
 
-		producer := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "producer", "", false)
+		producer := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
 		producer.ConversationID, producer.SyncDestination = "X", "Y"
-		producer.HadAttachments, producer.HadNonImageAttachments = true, true
+		producer.AttachmentPresence = protocol.AttachmentPresenceImages
 		producer.SlackReply = &protocol.SlackReplyTarget{MessageTS: "producer"}
 		require.NoError(t, rt.RunTurn(ctx, producer))
 		source := rt.threads.bridges["X"].(*Bridge)
@@ -279,9 +279,9 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 
 		var waiting errgroup.Group
 		waiting.Go(func() error {
-			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindEnqueue, "human", "", true)
+			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindEnqueue, "", true)
 			inbound.ConversationID = "Y"
-			inbound.HadAttachments, inbound.HadNonImageAttachments = true, true
+			inbound.AttachmentPresence = protocol.AttachmentPresenceImages
 			inbound.SlackReply = &protocol.SlackReplyTarget{MessageTS: "human"}
 
 			err := rt.RunTurn(ctx, inbound)
@@ -414,9 +414,9 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 
 		// These attachment-fallback turns exercise runtime routing, not provider
 		// continuation. Seed the Y-only reply because fallback does not record it.
-		reply := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "human", "", true)
+		reply := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", true)
 		reply.ConversationID = "Y"
-		reply.HadAttachments, reply.HadNonImageAttachments = true, true
+		reply.AttachmentPresence = protocol.AttachmentPresenceImages
 		reply.SlackReply = &protocol.SlackReplyTarget{MessageTS: "reply"}
 		require.NoError(t, rt.RunTurn(ctx, reply))
 
@@ -428,9 +428,9 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, destinationEntries, 7)
 
-		continuation := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "producer", "", false)
+		continuation := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
 		continuation.ConversationID, continuation.SyncDestination = "X", "Y"
-		continuation.HadAttachments, continuation.HadNonImageAttachments = true, true
+		continuation.AttachmentPresence = protocol.AttachmentPresenceImages
 		continuation.SlackReply = &protocol.SlackReplyTarget{MessageTS: "continuation"}
 		require.NoError(t, rt.RunTurn(ctx, continuation))
 		synctest.Wait()
@@ -524,33 +524,33 @@ func TestRuntimePersistedEnqueueAndProducerArrivalOrder(t *testing.T) {
 					return nil
 				})
 
-				producer := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "producer", "", false)
+				producer := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
 
 				producer.ConversationID, producer.SyncDestination = "X", destination
-				producer.HadAttachments, producer.HadNonImageAttachments = true, true
+				producer.AttachmentPresence = protocol.AttachmentPresenceImages
 				producer.SlackReply = &protocol.SlackReplyTarget{ChannelID: target.ChannelID, ThreadTS: target.ThreadID, MessageTS: "producer"}
 				require.NoError(t, rt.RunTurn(ctx, producer))
 
 				var waiting errgroup.Group
 				waiting.Go(func() error {
-					steer := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindSteer, "", "", true)
+					steer := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindSteer, "", true)
 
 					steer.ConversationID = destination
-					steer.HadAttachments, steer.HadNonImageAttachments = true, true
+					steer.AttachmentPresence = protocol.AttachmentPresenceImages
 					steer.SlackReply = &protocol.SlackReplyTarget{ChannelID: target.ChannelID, ThreadTS: target.ThreadID, MessageTS: "steer"}
 
 					return rt.RunTurn(ctx, steer)
 				})
 				synctest.Wait()
 
-				competing := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "competing", "", false)
+				competing := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
 				competing.ConversationID, competing.SyncDestination = tt.producerID, destination
-				competing.HadAttachments, competing.HadNonImageAttachments = true, true
+				competing.AttachmentPresence = protocol.AttachmentPresenceImages
 				competing.SlackReply = &protocol.SlackReplyTarget{ChannelID: target.ChannelID, ThreadTS: target.ThreadID, MessageTS: "competing"}
 
 				for _, enqueue := range []bool{tt.enqueueFirst, !tt.enqueueFirst} {
 					if enqueue {
-						content := protocol.InboundContent{HadAttachments: true, HadNonImageAttachments: true}
+						content := protocol.InboundContent{AttachmentPresence: protocol.AttachmentPresenceImages}
 						require.NoError(t, rt.threads.StashThreadQueueItem(ctx, target, &protocol.ThreadQueueItem{ID: "enqueue", Kind: protocol.InboundKindEnqueue, Source: protocol.SourceSlack, Content: content, Principal: "original author", StashAt: time.Now(), SlackChannel: target.ChannelID, SlackTS: "enqueue", SlackReply: &protocol.SlackReplyTarget{ChannelID: target.ChannelID, MessageTS: "enqueue", ThreadTS: target.ThreadID}}))
 					} else {
 						waiting.Go(func() error {
@@ -685,7 +685,7 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 		)
 
 		for i, text := range []string{"idle", "active", "late first", "late second"} {
-			inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindSteer, "", text, true)
+			inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindSteer, text, true)
 			inbound.ConversationID = "Y"
 			inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C1", ThreadTS: "root", MessageTS: text}
 
@@ -740,7 +740,7 @@ func TestBridgeDrainSteersPreservesAcquiredContent(t *testing.T) {
 	bridge := &Bridge{inputOpen: true, requestCh: make(chan bridgeRequest, 2)}
 
 	for _, text := range []string{"first", "second"} {
-		inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindSteer, "", &protocol.InboundContent{Text: "$docs-helper " + text, TextAttachments: []string{"attachment text"}, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte(text)}}}, true)
+		inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$docs-helper " + text, TextAttachments: []string{"attachment text"}, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte(text)}}}, true)
 		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = "U1"
 		require.NoError(t, bridge.Submit(t.Context(), inbound))
 	}
@@ -761,7 +761,7 @@ func TestBridgeDrainSteersPreservesAcquiredContent(t *testing.T) {
 	require.Empty(t, drain.Drain(t.Context(), rocketcode.TurnPhaseFinalAnswer))
 	require.False(t, bridge.inputOpen)
 
-	late := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindSteer, "", &protocol.InboundContent{Text: "late", Attachments: []protocol.InboundAttachment{{Name: "late.png", MIMEType: "image/png", Data: []byte("late")}}}, true)
+	late := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindSteer, &protocol.InboundContent{Text: "late", Attachments: []protocol.InboundAttachment{{Name: "late.png", MIMEType: "image/png", Data: []byte("late")}}}, true)
 	late.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "U2"}
 	require.NoError(t, bridge.Submit(t.Context(), late))
 	require.Empty(t, drain.Drain(t.Context(), rocketcode.TurnPhaseFinalAnswer))
@@ -778,7 +778,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 	bridge.activeCompletion = active
 
 	for _, text := range []string{"first", "drop", "last"} {
-		inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindSteer, "", &protocol.InboundContent{Text: text, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte(text)}}}, true)
+		inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindSteer, &protocol.InboundContent{Text: text, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte(text)}}}, true)
 		inbound.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: text + " author"}
 		inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: target.ChannelID, ThreadTS: target.ThreadID, MessageTS: text}
 		require.NoError(t, bridge.Submit(t.Context(), inbound))
@@ -836,7 +836,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
 
 	content := protocol.InboundContent{Text: "$skill stop \"typed args\"  Next", TextAttachments: []string{"acquired text file", "acquired forwarded thread"}, Attachments: []protocol.InboundAttachment{{Name: "original.png", MIMEType: "image/png", Data: []byte("original")}}}
-	queued := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindEnqueue, "", &content, true)
+	queued := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindEnqueue, &content, true)
 	queued.Metadata[protocol.InboundPrincipalMetadataKey] = "original author"
 	queued.SlackReply = &protocol.SlackReplyTarget{ChannelID: target.ChannelID, ThreadTS: target.ThreadID, MessageTS: "promoted", RecipientTeamID: "T1", RecipientUserID: "U1"}
 	require.NoError(t, manager.StashThreadQueueItem(t.Context(), target, &protocol.ThreadQueueItem{ID: "q1", Message: content.Text, Content: content, Source: queued.Source, SlackReply: queued.SlackReply, Principal: "original author", SlackChannel: target.ChannelID, SlackTS: "promoted"}))
@@ -905,7 +905,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 
 		manager.bridges[conversationID] = bridge
 		for _, id := range []string{"before", "attachment", "after"} {
-			require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Source: protocol.SourceWeb, Principal: "web author", Content: protocol.InboundContent{TextAttachments: []string{"$docs-helper attachment-only"}}}))
+			require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Source: protocol.SourceWeb, Principal: "goal_continuation", Content: protocol.InboundContent{TextAttachments: []string{"$docs-helper attachment-only"}}}))
 		}
 
 		promoted, err := manager.PromoteThreadQueueItem(t.Context(), target, "attachment")
@@ -916,9 +916,11 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 			inputs := bridge.drainSteers(t.Context(), rocketcode.TurnPhaseToolLoop)
 			require.Len(t, inputs, 1)
 			require.Nil(t, inputs[0].DirectSkill)
+			require.Contains(t, inputs[0].Text, "goal_continuation")
 			require.Contains(t, inputs[0].Text, "$docs-helper attachment-only")
 		} else {
 			inbound := (<-bridge.requestCh).inbound
+			require.Equal(t, "goal_continuation", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
 			require.Nil(t, inboundDirectSkill(inbound))
 			require.Empty(t, inbound.Metadata[protocol.InboundRawTextMetadataKey])
 			require.Contains(t, inbound.Text, "$docs-helper attachment-only")
@@ -982,7 +984,7 @@ func TestRuntimeRunTurnCancelPublishesEmptyComplete(t *testing.T) {
 		return nil
 	})
 
-	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindCancel, "", "", true)
+	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindCancel, "", true)
 	inbound.ConversationID = conversationID
 	require.NoError(t, rt.RunTurn(t.Context(), inbound))
 	require.NoError(t, listeners.Wait())
@@ -994,7 +996,7 @@ func TestRuntimeRunTurnCancelPublishesEmptyComplete(t *testing.T) {
 	done := make(chan struct{})
 	close(done)
 	bridge.activeCompletion = &turnCompletion{done: done, err: context.Canceled}
-	canceled := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindCancel, "", "", true)
+	canceled := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindCancel, "", true)
 	canceled.ConversationID = conversationID
 	require.ErrorIs(t, rt.RunTurn(t.Context(), canceled), context.Canceled)
 }
@@ -1006,7 +1008,7 @@ func TestRuntimeRunTurnRejectsUnrecordedConversationAndSyncDestination(t *testin
 		return &Bridge{config: cfg, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 	})
 	rt := &Runtime{threads: manager, Sessions: store}
-	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "", "hello", true)
+	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "hello", true)
 	inbound.ConversationID = "missing"
 	require.ErrorContains(t, rt.RunTurn(t.Context(), inbound), `conversation "missing" is not recorded`)
 
@@ -1146,7 +1148,6 @@ func TestRuntimeHeldQueueManualRelease(t *testing.T) {
 	request := <-bridge.requestCh
 	require.Equal(t, held.ID, request.queueItemID)
 	require.Equal(t, protocol.InboundKindEnqueue, request.inbound.Kind)
-	require.Equal(t, "enqueued_message", request.inbound.Label)
 	require.Equal(t, held.ID, request.inbound.Metadata["web_message_id"])
 	require.Equal(t, held.Message, request.inbound.Text)
 	require.Equal(t, held.Content.Attachments, request.inbound.Attachments)

@@ -1191,7 +1191,7 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 			return nil, fmt.Errorf("web stop: %w", status.Error(codes.InvalidArgument, "stop takes no arguments"))
 		}
 
-		inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindCancel, principal, "", true)
+		inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindCancel, "", true)
 		inbound.ConversationID = request.Id
 
 		inbound.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: principal}
@@ -1265,7 +1265,7 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		return &PromptResponse{}, nil
 	}
 
-	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, kind, principal, &content, true)
+	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, kind, &content, true)
 	inbound.ConversationID = request.Id
 
 	inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal

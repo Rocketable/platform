@@ -71,7 +71,7 @@ func TestSubmitExternalMCPInputWaitsForOwnQueuedTurnResult(t *testing.T) {
 		}
 	}()
 
-	recovered := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "", "recovered", false)
+	recovered := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "recovered", false)
 	queue <- recovered
 
 	require.Equal(t, "recovered", <-started)

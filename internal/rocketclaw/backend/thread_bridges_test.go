@@ -312,7 +312,7 @@ func TestThreadBridgeManagerStartsGoalInExistingThreadWithPersistedAgent(t *test
 	inbound.SlackReply.RecipientUserID = "U456"
 	require.NoError(t, manager.StartGoalInThread(t.Context(), "", "ship it", "", 5, slackTarget("D123", "111.222"), inbound))
 	require.Len(t, submittedMessages(bridge), 1)
-	assert.Equal(t, "goal", submittedMessages(bridge)[0].Label)
+	assert.Equal(t, protocol.GoalActionKickoff, submittedMessages(bridge)[0].GoalAction)
 
 	goal, ok, err := store.Goal(conversationID)
 	require.NoError(t, err)
@@ -337,7 +337,7 @@ func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
 
 	require.NoError(t, manager.StartActiveGoals(map[string]bool{}))
 	require.Len(t, submittedMessages(bridge), 1)
-	assert.Equal(t, "goal_continuation", submittedMessages(bridge)[0].Label)
+	assert.Equal(t, protocol.GoalActionContinue, submittedMessages(bridge)[0].GoalAction)
 	assert.Equal(t, "Continue the active goal loop.", submittedMessages(bridge)[0].Text)
 	assert.Equal(t, conversationID, submittedMessages(bridge)[0].ConversationID)
 	assert.Equal(t, &protocol.SlackReplyTarget{RecipientTeamID: "T123", RecipientUserID: "U456"}, submittedMessages(bridge)[0].SlackReply)
@@ -541,7 +541,7 @@ func TestThreadBridgeManagerRejectsMissingSlackThreadTarget(t *testing.T) {
 	_, err := manager.RegisterThread(slackTarget("", ""), "main")
 	require.ErrorContains(t, err, "text thread target is required")
 
-	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "", "hello", true)
+	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "hello", true)
 	err = manager.StartThread(t.Context(), "main", slackTarget("", ""), inbound)
 	require.ErrorContains(t, err, "slack thread target is required")
 
@@ -633,6 +633,7 @@ func TestThreadBridgeManagerStartNewThreadUsesFreshThreadLocalConversation(t *te
 	require.Len(t, submittedMessages(bridge), 1)
 	require.Len(t, submittedMessages(bridge), 1)
 	assert.Equal(t, " literal $(date) ", submittedMessages(bridge)[0].Text)
+	assert.Contains(t, buildPrompt(submittedMessages(bridge)[0], nil), "\n\n literal $(date) ")
 	assert.Equal(t, conversationID, submittedMessages(bridge)[0].ConversationID)
 	assert.Equal(t, "System", submittedMessages(bridge)[0].Metadata[protocol.InboundOriginMetadataKey])
 	assert.Equal(t, "Text", submittedMessages(bridge)[0].Metadata[protocol.InboundMediaMetadataKey])
@@ -871,7 +872,7 @@ func newDirectBridgeMock() *directBridgeMock {
 		return nil
 	}
 	mock.RecoverActiveTurnFunc = func(ctx context.Context, turn *ActiveTurnState) error {
-		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "recovered_turn", turn.Checkpoint.TurnID, false)
+		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, turn.Checkpoint.TurnID, false)
 		return mock.Submit(ctx, inbound)
 	}
 	mock.InterruptActiveTurnFunc = func() *protocol.InboundMessage { return nil }
@@ -893,7 +894,7 @@ func submittedMessages(bridge *directBridgeMock) []*protocol.InboundMessage {
 }
 
 func newThreadInboundMessage(text, messageTS, threadTS string) *protocol.InboundMessage {
-	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "", text, true)
+	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, text, true)
 	inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: messageTS, ThreadTS: threadTS}
 
 	return inbound

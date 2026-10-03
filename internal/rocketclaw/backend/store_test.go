@@ -616,10 +616,10 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 	conversationID := "slack-thread:D123:111.222"
 	dueAt := time.Date(2000, 1, 2, 16, 0, 0, 0, time.UTC)
 	content := protocol.InboundContent{
-		Text:            "write tests",
-		TextAttachments: []string{"Slack text file attachment data.csv:\na,b", "Forwarded Slack thread:\noriginal author: original text"},
-		Attachments:     []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("acquired image")}},
-		HadAttachments:  true, HadNonImageAttachments: true,
+		Text:               "write tests",
+		TextAttachments:    []string{"Slack text file attachment data.csv:\na,b", "Forwarded Slack thread:\noriginal author: original text"},
+		Attachments:        []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("acquired image")}},
+		AttachmentPresence: protocol.AttachmentPresenceImages,
 		AttachmentWarnings: []string{"original warning"},
 	}
 	reply := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.333", ThreadTS: "111.222", RecipientTeamID: "T1", RecipientUserID: "U1"}
@@ -644,8 +644,7 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 	assert.Equal(t, "write tests\n\nSlack text file attachment data.csv:\na,b\n\nForwarded Slack thread:\noriginal author: original text", inbound.Text)
 	assert.Equal(t, content.Attachments, inbound.Attachments)
 	assert.Equal(t, content.AttachmentWarnings, inbound.AttachmentWarnings)
-	assert.True(t, inbound.HadAttachments)
-	assert.False(t, inbound.HadNonImageAttachments)
+	assert.Equal(t, protocol.AttachmentPresenceImages, inbound.AttachmentPresence)
 	assert.Equal(t, protocol.SourceSlack, inbound.Source)
 	assert.Equal(t, reply, inbound.SlackReply)
 	assert.Equal(t, "U1", inbound.Metadata[protocol.InboundPrincipalMetadataKey])

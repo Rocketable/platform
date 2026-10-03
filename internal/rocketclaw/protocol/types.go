@@ -45,6 +45,30 @@ const (
 	InboundKindCancel InboundKind = "cancel"
 )
 
+// AttachmentPresence records which attachments the source message carried, whether or not they reached the model.
+type AttachmentPresence string
+
+// Attachment presences; images win when a message carries both images and unsupported files.
+const (
+	// AttachmentPresenceNone means the source message carried no attachments the model could miss.
+	AttachmentPresenceNone AttachmentPresence = ""
+	// AttachmentPresenceUnsupported means the source message carried only files the model cannot read as images or text.
+	AttachmentPresenceUnsupported AttachmentPresence = "unsupported"
+	// AttachmentPresenceImages means the source message carried images, even when none survived download.
+	AttachmentPresenceImages AttachmentPresence = "images"
+)
+
+// GoalAction identifies goal-loop work that consumes the goal's turn budget.
+// Its zero value denotes ordinary work, including human re-steering.
+type GoalAction string
+
+// Goal actions distinguish budget-neutral input from kickoff and continuation work.
+const (
+	GoalActionNone     GoalAction = ""
+	GoalActionKickoff  GoalAction = "goal"
+	GoalActionContinue GoalAction = "goal_continuation"
+)
+
 // Source identifies where an inbound or outbound message originated.
 type Source string
 
@@ -71,12 +95,11 @@ type InboundAttachment struct {
 
 // InboundContent carries source-acquired inbound text and attachments before message routing details are applied.
 type InboundContent struct {
-	Text                   string
-	TextAttachments        []string
-	Attachments            []InboundAttachment
-	HadAttachments         bool
-	HadNonImageAttachments bool
-	AttachmentWarnings     []string
+	Text               string
+	TextAttachments    []string
+	Attachments        []InboundAttachment
+	AttachmentPresence AttachmentPresence
+	AttachmentWarnings []string
 }
 
 // OutboundAttachment carries a human-visible file attachment to output sinks.
@@ -101,19 +124,41 @@ type ExternalMCPRelay struct {
 
 // InboundMessage is a message headed into its conversation prompt queue.
 type InboundMessage struct {
-	Source                                                  Source
-	Label, Text                                             string
-	Attachments                                             []InboundAttachment
-	SlackReply                                              *SlackReplyTarget
-	HadAttachments, HadNonImageAttachments, Human, GoalTurn bool
-	AttachmentWarnings                                      []string
-	Kind                                                    InboundKind
-	ConversationID                                          string
-	Metadata                                                map[string]string
-	Workflow                                                *WorkflowInvocation
-	SyncDestination                                         string
-	RequireOutputDecision                                   bool
-	Cronjob                                                 *CronjobMessage
+	// Source is the surface that produced the message.
+	Source Source
+	// Text is the prompt body, with any text attachments appended after the typed text.
+	Text string
+	// Attachments are inline files, such as images, sent to the model alongside Text.
+	Attachments []InboundAttachment
+	// SlackReply is the Slack message that receives the reply; nil when the reply has no Slack target.
+	SlackReply *SlackReplyTarget
+	// AttachmentPresence records which attachments the source message carried, so the model can be told about ones it did not receive.
+	AttachmentPresence AttachmentPresence
+	// Human reports that a person wrote the message, rather than RocketClaw itself.
+	Human bool
+	// GoalTurn marks a turn that runs while a goal is active, including human input that does not spend the goal's turn budget.
+	GoalTurn bool
+	// AttachmentWarnings explain to the model, in plain text, why attachments were skipped.
+	AttachmentWarnings []string
+	// Kind says how the message enters the conversation's input queue.
+	Kind InboundKind
+	// GoalAction marks goal kickoff or continuation work that spends the goal's turn budget.
+	GoalAction GoalAction
+	// PreserveWhitespace keeps Text unchanged when framing the prompt instead of trimming it.
+	PreserveWhitespace bool
+	// ConversationID is the conversation that runs the turn; empty until the message is routed.
+	ConversationID string
+	// Metadata carries source-supplied context; the Inbound*MetadataKey keys are RocketClaw's trusted provenance and routing hints.
+	Metadata map[string]string
+	// Workflow, when set, starts the named workflow instead of an ordinary model turn.
+	Workflow *WorkflowInvocation
+	// SyncDestination, when set, is a conversation that receives this turn: the turn waits in its queue,
+	// runs in ConversationID, and then its new history and final reply are copied into SyncDestination.
+	SyncDestination string
+	// RequireOutputDecision runs the turn with cron tools and repeats it until the model decides whether to publish its output.
+	RequireOutputDecision bool
+	// Cronjob identifies the cron job that produced the message; nil for other messages.
+	Cronjob *CronjobMessage
 
 	responseInit, responseOnce sync.Once
 	responseCh                 chan InboundResponse
@@ -221,9 +266,9 @@ type OutboundMessage struct {
 }
 
 // NewInboundMessage constructs an unrouted inbound message.
-func NewInboundMessage(source Source, kind InboundKind, label, text string, human bool) *InboundMessage {
+func NewInboundMessage(source Source, kind InboundKind, text string, human bool) *InboundMessage {
 	return &InboundMessage{
-		Source: source, Label: label, Text: text, Human: human, Kind: kind,
+		Source: source, Text: text, Human: human, Kind: kind,
 	}
 }
 
@@ -237,7 +282,7 @@ func SetInboundAllowedAgents(inbound *InboundMessage, agents []string) {
 }
 
 // NewInboundMessageFromContent constructs an unrouted inbound message from normalized source content.
-func NewInboundMessageFromContent(source Source, kind InboundKind, label string, content *InboundContent, human bool) *InboundMessage {
+func NewInboundMessageFromContent(source Source, kind InboundKind, content *InboundContent, human bool) *InboundMessage {
 	text := content.Text
 	if len(content.TextAttachments) > 0 {
 		attachmentText := strings.Join(content.TextAttachments, "\n\n")
@@ -248,7 +293,7 @@ func NewInboundMessageFromContent(source Source, kind InboundKind, label string,
 		}
 	}
 
-	inbound := NewInboundMessage(source, kind, label, text, human)
+	inbound := NewInboundMessage(source, kind, text, human)
 
 	inbound.Metadata = map[string]string{InboundRawTextMetadataKey: content.Text}
 	if len(content.Attachments) > 0 {
@@ -262,8 +307,13 @@ func NewInboundMessageFromContent(source Source, kind InboundKind, label string,
 		}
 	}
 
-	inbound.HadAttachments = content.HadAttachments || len(content.Attachments) > 0
-	inbound.HadNonImageAttachments = content.HadNonImageAttachments && len(content.TextAttachments) == 0
+	inbound.AttachmentPresence = content.AttachmentPresence
+	if len(content.Attachments) > 0 {
+		inbound.AttachmentPresence = AttachmentPresenceImages
+	} else if inbound.AttachmentPresence == AttachmentPresenceUnsupported && len(content.TextAttachments) > 0 {
+		inbound.AttachmentPresence = AttachmentPresenceNone
+	}
+
 	inbound.AttachmentWarnings = append([]string(nil), content.AttachmentWarnings...)
 
 	return inbound
