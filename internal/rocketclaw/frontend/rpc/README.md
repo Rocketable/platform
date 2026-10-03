@@ -49,6 +49,11 @@ that saved prefix from user/developer display text. History exposes it as
 on hover or click. New text headers omit `media=Text`. Old messages are not
 backfilled or guessed from their text. Model-facing text still includes the generated
 header; local header metadata is never sent to the provider. Assistant text is unchanged.
+`TranscriptEvent.principal` decodes only the stored header's top-level quoted
+principal, including on attachment-bearing inputs. `QueueItem.principal` copies
+the item's recorded author. Web shows it above human text inside the existing
+bubble and above queue-row text, without replacing it with the viewer's identity.
+Missing or malformed stored principals stay unlabeled; raw headers remain intact.
 Previews use the latest nonempty user or assistant message, including the same
 successful delivery report shown in History. Migration `011_last_message_summaries.sql`
 invalidates the derived user-only previews for the existing background backfill.
@@ -290,6 +295,11 @@ another HTTP reverse proxy in front of it: that would identify the proxy rather
 than the browser. Go snapshots configured `web_users` IP-to-username mappings at
 startup. An explicit mapping takes precedence; otherwise Go runs `tailscale whois
 --json` for the browser IP and uses `UserProfile.LoginName` as its identity.
+New prompts instead record `UserProfile.DisplayName` as their principal, with the
+login as the fallback for a missing or blank display name. A manual mapping uses
+its configured name for both. Admission, conversation ownership, inbound routing,
+and Config's Tailscale user stay login-based. `Identity.username` remains the login;
+the separate `Identity.principal` is used only for new composer/handoff previews.
 Successful lookups are cached per IP for five minutes and shared with the Config
 page. Concurrent misses are serialized; expired entries must be looked up again,
 and a failed refresh denies access rather than using the stale identity.
