@@ -1167,7 +1167,13 @@ func openFunctionCallCheckpoints(items []responses.ResponseOutputItemUnion) []Fu
 			continue
 		}
 
-		openCalls = append(openCalls, FunctionCallCheckpoint{CallID: item.CallID, Name: item.Name, Arguments: json.RawMessage(item.Arguments.OfString)})
+		call := FunctionCallCheckpoint{CallID: item.CallID, Name: item.Name}
+		// Replay retains the original string; invalid arguments must reach tool error handling.
+		if arguments := json.RawMessage(item.Arguments.OfString); json.Valid(arguments) {
+			call.Arguments = arguments
+		}
+
+		openCalls = append(openCalls, call)
 	}
 
 	return openCalls

@@ -159,6 +159,33 @@ func TestActiveTurnCheckpointJSONRoundTrip(t *testing.T) {
 	require.NotContains(t, string(data), "status")
 }
 
+func TestCheckpointMalformedFunctionArguments(t *testing.T) {
+	for _, arguments := range []string{`{"filePath":`, "", " "} {
+		t.Run(arguments, func(t *testing.T) {
+			response := responseWithFunctionCalls("resp-1", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "read", arguments)})
+			item, ok := responseOutputToReplayInput(&response.Output[0])
+			require.True(t, ok)
+
+			replay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{item})
+			require.NoError(t, err)
+
+			checkpoint := ActiveTurnCheckpoint{ReplayInput: replay, OpenFunctionCalls: openFunctionCallCheckpoints(response.Output)}
+			data, err := json.Marshal(checkpoint)
+			require.NoError(t, err)
+
+			var saved ActiveTurnCheckpoint
+			require.NoError(t, json.Unmarshal(data, &saved))
+			require.Equal(t, []FunctionCallCheckpoint{{CallID: "call-1", Name: "read"}}, saved.OpenFunctionCalls)
+			recovered, err := RecoveredReplayInput(&saved)
+			require.NoError(t, err)
+			items, err := ReplayInputToParams(recovered)
+			require.NoError(t, err)
+			require.Equal(t, arguments, items[0].OfFunctionCall.Arguments)
+			require.Equal(t, "call-1", items[1].OfFunctionCallOutput.CallID.Value)
+		})
+	}
+}
+
 func TestSteerCheckpointPreservesCallMetadata(t *testing.T) {
 	errPersist := errors.New("checkpoint write failed")
 	for _, tt := range []struct {
