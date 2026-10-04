@@ -107,8 +107,6 @@ func initializeSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) (
 
 // applySessionMigration keeps each migration's schema and ledger row atomic.
 func applySessionMigration(ctx context.Context, conn *sql.Conn, migration *migrate.Migration) error {
-	// Use pgx so cancellation cannot start database/sql's automatic rollback
-	// concurrently with initialization's connection discard.
 	err := conn.Raw(func(raw any) error {
 		tx, err := raw.(*stdlib.Conn).Conn().Begin(ctx)
 		if err != nil {

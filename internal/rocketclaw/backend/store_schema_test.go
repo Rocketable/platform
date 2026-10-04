@@ -52,7 +52,7 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 
 				return store.Stop()
 			})
-			// Block the ledger insert after DDL so cancellation must roll back both.
+
 			var pid int
 
 			require.Eventually(t, func() bool {
@@ -93,8 +93,6 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			}
 
 			if outcome == "cancel" || outcome == "connection loss" {
-				// The second startup may now hold uncommitted DDL; neither startup
-				// may have committed the schema change without its ledger row.
 				var columns int
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_attribute WHERE attrelid='thread_queue'::regclass AND attname='kind' AND NOT attisdropped`).Scan(&columns))
 				require.Zero(t, columns)
