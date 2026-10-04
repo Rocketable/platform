@@ -1031,11 +1031,7 @@ func (c *Connector) finishResponse(ctx context.Context, msg *protocol.OutboundMe
 
 	c.clearReplyState(msg.TurnID)
 
-	if msg.SlackReply != nil && strings.TrimSpace(msg.SlackReply.ChannelID) != "" && strings.TrimSpace(msg.SlackReply.MessageTS) != "" {
-		if err := c.api.RemoveReactionContext(ctx, slackRobotReaction, slack.NewRefToMessage(msg.SlackReply.ChannelID, msg.SlackReply.MessageTS)); err != nil {
-			c.log.Warn("remove Slack robot reaction", "channel", msg.SlackReply.ChannelID, "message_ts", msg.SlackReply.MessageTS, "error", err)
-		}
-	}
+	c.removeReaction(ctx, msg.SlackReply, slackRobotReaction, "remove Slack robot reaction")
 
 	if strings.TrimSpace(msg.TurnID) != "" {
 		if threadKey := slackThreadStackKey(msg.SlackReply); threadKey != "" {
