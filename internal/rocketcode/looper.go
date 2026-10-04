@@ -1167,7 +1167,7 @@ func openFunctionCallCheckpoints(items []responses.ResponseOutputItemUnion) []Fu
 			continue
 		}
 
-		openCalls = append(openCalls, FunctionCallCheckpoint{CallID: item.CallID, Name: item.Name, Arguments: json.RawMessage(item.Arguments.OfString)})
+		openCalls = append(openCalls, FunctionCallCheckpoint{CallID: item.CallID, Name: item.Name})
 	}
 
 	return openCalls

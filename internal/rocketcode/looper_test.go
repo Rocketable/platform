@@ -1178,7 +1178,9 @@ func TestCheckpointProviderResponseOpenCallsBeforeToolDispatch(t *testing.T) {
 		require.Len(t, provider.OpenFunctionCalls, 1)
 		require.Equal(t, "call-1", provider.OpenFunctionCalls[0].CallID)
 		require.Equal(t, "read", provider.OpenFunctionCalls[0].Name)
-		require.JSONEq(t, `{"filePath":"README.md"}`, string(provider.OpenFunctionCalls[0].Arguments))
+		replay, err := ReplayInputToParams(provider.ReplayInput)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"filePath":"README.md"}`, replay[len(replay)-1].OfFunctionCall.Arguments)
 
 		return TextToolResult("contents"), nil
 	}

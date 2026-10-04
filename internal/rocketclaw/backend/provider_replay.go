@@ -90,13 +90,7 @@ func activeTurnForProvider(checkpoint *rocketcode.ActiveTurnCheckpoint, provider
 		return len(rocketcode.PublicProgressFromTrace([]json.RawMessage{raw})) == 0
 	})
 
-	calls := make([]rocketcode.FunctionCallCheckpoint, len(checkpoint.OpenFunctionCalls))
-	for i, call := range checkpoint.OpenFunctionCalls {
-		calls[i] = call
-		calls[i].Arguments = json.RawMessage(append([]byte(nil), call.Arguments...))
-	}
-
-	projected.OpenFunctionCalls = calls
+	projected.OpenFunctionCalls = slices.Clone(checkpoint.OpenFunctionCalls)
 	projected.CompletedFunctionOutputs = outputs
 
 	return projected, nil

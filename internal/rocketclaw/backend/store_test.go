@@ -910,9 +910,8 @@ func TestSessionServiceActiveTurnLifecycle(t *testing.T) {
 		ReasoningEffort:   new("high"),
 		ReplayAttribution: []harness.ReplayAttribution{{Start: 0, End: 1, Agent: "previous", Model: "previous-model", ReasoningEffort: new("low")}},
 		OpenFunctionCalls: []harness.FunctionCallCheckpoint{{
-			CallID:    "call-1",
-			Name:      "read",
-			Arguments: json.RawMessage(`{"filePath":"README.md"}`),
+			CallID: "call-1",
+			Name:   "read",
 		}},
 	}
 

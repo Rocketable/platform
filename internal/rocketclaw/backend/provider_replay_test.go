@@ -117,7 +117,7 @@ func TestActiveTurnForProviderProjectsCompletedOutputsWithoutMutation(t *testing
 			json.RawMessage(`{"type":"function_call","id":"provider-private-sentinel","call_id":"portable-call","name":"read","arguments":"{}","status":"completed"}`),
 		},
 		OutputTrace:       []json.RawMessage{json.RawMessage(`{"private":"provider-private-sentinel"}`), json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"item/0","parent_id":"turn/response","kind":"text","state":"completed","text":"early-public"}}`)},
-		OpenFunctionCalls: []rocketcode.FunctionCallCheckpoint{{CallID: "open-call", Name: "bash", Arguments: json.RawMessage(`{"command":"printf portable"}`)}},
+		OpenFunctionCalls: []rocketcode.FunctionCallCheckpoint{{CallID: "open-call", Name: "bash"}},
 		CompletedFunctionOutputs: []rocketcode.FunctionOutputCheckpoint{{CallID: "portable-call", Name: "read", ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"function_call_output","id":"provider-private-sentinel","call_id":"portable-call","status":"completed","output":"portable-tool-output"}`),
 		}}},

@@ -45,11 +45,10 @@ func (e *SessionEntry) attributionRanges(offset int) []ReplayAttribution {
 	return ranges
 }
 
-// FunctionCallCheckpoint contains replay-safe data for a model-emitted function call.
+// FunctionCallCheckpoint identifies a model-emitted call whose arguments are in ReplayInput.
 type FunctionCallCheckpoint struct {
-	CallID    string          `json:"call_id"`
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments,omitempty"`
+	CallID string `json:"call_id"`
+	Name   string `json:"name"`
 }
 
 // FunctionOutputCheckpoint contains replay-safe data for a completed function-call output.

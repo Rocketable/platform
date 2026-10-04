@@ -128,9 +128,8 @@ func TestActiveTurnCheckpointJSONRoundTrip(t *testing.T) {
 		TokenUsage:      &TokenUsage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
 		ResponseID:      "resp-1",
 		OpenFunctionCalls: []FunctionCallCheckpoint{{
-			CallID:    "call-1",
-			Name:      "read",
-			Arguments: json.RawMessage(`{"filePath":"README.md"}`),
+			CallID: "call-1",
+			Name:   "read",
 		}},
 		CompletedFunctionOutputs: []FunctionOutputCheckpoint{{
 			CallID:      "call-2",
@@ -154,9 +153,33 @@ func TestActiveTurnCheckpointJSONRoundTrip(t *testing.T) {
 	require.Equal(t, checkpoint.TokenUsage, got.TokenUsage)
 	require.JSONEq(t, string(checkpoint.ReplayInput[0]), string(got.ReplayInput[0]))
 	require.JSONEq(t, string(checkpoint.OutputTrace[0]), string(got.OutputTrace[0]))
-	require.JSONEq(t, string(checkpoint.OpenFunctionCalls[0].Arguments), string(got.OpenFunctionCalls[0].Arguments))
+	require.Equal(t, checkpoint.OpenFunctionCalls, got.OpenFunctionCalls)
 	require.JSONEq(t, string(checkpoint.CompletedFunctionOutputs[0].ReplayInput[0]), string(got.CompletedFunctionOutputs[0].ReplayInput[0]))
 	require.NotContains(t, string(data), "status")
+}
+
+func TestProviderCheckpointPreservesMalformedArgumentsInReplay(t *testing.T) {
+	for _, arguments := range []string{`{"code":"unfinished`, ""} {
+		t.Run(arguments, func(t *testing.T) {
+			resp := responseWithFunctionCalls("resp-1", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "execute", arguments)})
+			looper := emptyTestLooper()
+			record := SessionEntry{TurnID: "turn-1"}
+
+			var items []responses.ResponseInputItemUnionParam
+			require.NoError(t, looper.appendProviderReplay(&record, &items, resp))
+			checkpoint := looper.activeTurnCheckpoint(&record, openFunctionCallCheckpoints(resp.Output), nil)
+			data, err := json.Marshal(checkpoint.OpenFunctionCalls)
+			require.NoError(t, err)
+			require.JSONEq(t, `[{"call_id":"call-1","name":"execute"}]`, string(data))
+
+			recovered, err := RecoveredReplayInput(&checkpoint)
+			require.NoError(t, err)
+			replay, err := ReplayInputToParams(recovered)
+			require.NoError(t, err)
+			require.Equal(t, arguments, replay[0].OfFunctionCall.Arguments)
+			require.Equal(t, "call-1", replay[1].OfFunctionCallOutput.CallID.Value)
+		})
+	}
 }
 
 func TestSteerCheckpointPreservesCallMetadata(t *testing.T) {
