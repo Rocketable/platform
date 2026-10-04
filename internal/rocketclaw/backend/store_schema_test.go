@@ -37,7 +37,7 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 
 			defer func() { _ = barrier.Rollback() }()
 
-			_, err = barrier.ExecContext(t.Context(), `LOCK TABLE thread_queue IN ACCESS EXCLUSIVE MODE`)
+			_, err = barrier.ExecContext(t.Context(), `LOCK TABLE pg_migrations IN SHARE MODE`)
 			require.NoError(t, err)
 
 			ctx, cancel := context.WithCancel(t.Context())
@@ -52,11 +52,11 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 
 				return store.Stop()
 			})
-			// PostgreSQL proves the first startup reached DDL, not merely a goroutine.
+			// Block the ledger insert after DDL so cancellation must roll back both.
 			var pid int
 
 			require.Eventually(t, func() bool {
-				return db.QueryRowContext(t.Context(), `SELECT a.pid FROM pg_stat_activity a JOIN pg_locks l ON a.pid=l.pid WHERE l.relation='thread_queue'::regclass AND NOT l.granted AND a.query LIKE '%ADD COLUMN%'`).Scan(&pid) == nil
+				return db.QueryRowContext(t.Context(), `SELECT a.pid FROM pg_stat_activity a JOIN pg_locks l ON a.pid=l.pid WHERE l.relation='pg_migrations'::regclass AND NOT l.granted AND a.query LIKE 'INSERT INTO pg_migrations%'`).Scan(&pid) == nil
 			}, 5*time.Second, time.Millisecond)
 
 			ctxSecond, cancelSecond := context.WithCancel(t.Context())
@@ -90,6 +90,16 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 				_, err = db.ExecContext(t.Context(), `SELECT pg_terminate_backend($1)`, pid)
 				require.NoError(t, err)
 				require.Error(t, first.Wait())
+			}
+
+			if outcome == "cancel" || outcome == "connection loss" {
+				// The second startup may now hold uncommitted DDL; neither startup
+				// may have committed the schema change without its ledger row.
+				var columns int
+				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_attribute WHERE attrelid='thread_queue'::regclass AND attname='kind' AND NOT attisdropped`).Scan(&columns))
+				require.Zero(t, columns)
+				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&n))
+				require.Equal(t, 5, n)
 			}
 
 			require.NoError(t, barrier.Rollback())

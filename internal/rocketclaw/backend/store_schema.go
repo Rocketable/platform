@@ -11,6 +11,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/jackc/pgx/v5/stdlib"
 	migrate "github.com/rubenv/sql-migrate"
 )
 
@@ -106,24 +107,33 @@ func initializeSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) (
 
 // applySessionMigration keeps each migration's schema and ledger row atomic.
 func applySessionMigration(ctx context.Context, conn *sql.Conn, migration *migrate.Migration) error {
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin migration: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	for _, query := range migration.Up {
-		if _, err := tx.ExecContext(ctx, query); err != nil {
-			return fmt.Errorf("execute migration: %w", err)
+	// Use pgx so cancellation cannot start database/sql's automatic rollback
+	// concurrently with initialization's connection discard.
+	err := conn.Raw(func(raw any) error {
+		tx, err := raw.(*stdlib.Conn).Conn().Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("begin migration: %w", err)
 		}
-	}
+		defer func() { _ = tx.Rollback(ctx) }()
 
-	if _, err := tx.ExecContext(ctx, `INSERT INTO pg_migrations (id, applied_at) VALUES ($1, $2)`, migration.Id, time.Now()); err != nil {
-		return fmt.Errorf("record migration: %w", err)
-	}
+		for _, query := range migration.Up {
+			if _, err := tx.Exec(ctx, query); err != nil {
+				return fmt.Errorf("execute migration: %w", err)
+			}
+		}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit migration: %w", err)
+		if _, err := tx.Exec(ctx, `INSERT INTO pg_migrations (id, applied_at) VALUES ($1, $2)`, migration.Id, time.Now()); err != nil {
+			return fmt.Errorf("record migration: %w", err)
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit migration: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("apply migration: %w", err)
 	}
 
 	return nil
