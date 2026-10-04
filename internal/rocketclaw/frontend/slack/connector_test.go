@@ -272,25 +272,31 @@ func TestRemoveReactionSkipsInvalidTargetsAndIgnoresNoReaction(t *testing.T) {
 		calls = append(calls, cloneValues(r.PostForm))
 
 		if len(calls) == 1 {
-			writeJSON(t, w, map[string]any{"ok": false, "error": "no_reaction"})
+			assert.NoError(t, json.NewEncoder(w).Encode(slack.SlackResponse{Error: "no_reaction"}))
 			return
 		}
 
-		writeJSON(t, w, map[string]any{"ok": false, "error": "ratelimited"})
+		assert.NoError(t, json.NewEncoder(w).Encode(slack.SlackResponse{Error: "ratelimited"}))
 	}))
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
+
+	var logs bytes.Buffer
+
+	connector.log = slog.New(slog.NewTextHandler(&logs, nil))
 	connector.removeReaction(t.Context(), nil, "eyes", "remove reaction")
 	connector.removeReaction(t.Context(), &protocol.SlackReplyTarget{ChannelID: " ", MessageTS: "111.222"}, "eyes", "remove reaction")
 	connector.removeReaction(t.Context(), &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: " "}, "eyes", "remove reaction")
 	assert.Empty(t, calls)
 
-	connector.removeReaction(t.Context(), &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222"}, "eyes", "remove reaction")
+	require.NoError(t, connector.SendResponse(t.Context(), &protocol.OutboundMessage{Complete: true, TurnID: "turn-1", SlackReply: &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222"}}))
+	assert.Empty(t, logs.String(), "an already absent robot reaction is successful response cleanup")
 	connector.removeReaction(t.Context(), &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "333.444"}, "robot_face", "remove reaction")
+	assert.Contains(t, logs.String(), "ratelimited")
 
 	require.Len(t, calls, 2)
-	assert.Equal(t, "eyes", calls[0].Get("name"))
+	assert.Equal(t, slackRobotReaction, calls[0].Get("name"))
 	assert.Equal(t, "111.222", calls[0].Get("timestamp"))
 	assert.Equal(t, "robot_face", calls[1].Get("name"))
 	assert.Equal(t, "333.444", calls[1].Get("timestamp"))
