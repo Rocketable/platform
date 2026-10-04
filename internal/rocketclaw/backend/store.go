@@ -604,15 +604,11 @@ func (s *SessionService) SyncCronSchedules(schedules []CronScheduleState, now ti
 		return err
 	}
 
-	var stale []string
-
 	for _, scheduleID := range ids {
-		if _, ok := seen[scheduleID]; !ok {
-			stale = append(stale, scheduleID)
+		if _, ok := seen[scheduleID]; ok {
+			continue
 		}
-	}
 
-	for _, scheduleID := range stale {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM cron_schedules WHERE schedule_id = $1`, scheduleID); err != nil {
 			return fmt.Errorf("delete stale cron schedule: %w", err)
 		}
