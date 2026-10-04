@@ -10,6 +10,46 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestResponseOutputReplayText(t *testing.T) {
+	for _, tt := range []struct {
+		name, input, want string
+	}{
+		{
+			name:  "message parts",
+			input: `{"type":"message","id":"msg","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":" first\n"},{"type":"refusal","refusal":"refused"},{"type":"output_text","text":"世界 "}]}`,
+			want:  `{"type":"message","id":"msg","role":"assistant","phase":"final_answer","content":" first\n世界 "}`,
+		},
+		{
+			name:  "empty message",
+			input: `{"type":"message","id":"msg"}`,
+			want:  `{"type":"message","id":"msg","role":"assistant","content":""}`,
+		},
+		{
+			name:  "compaction content",
+			input: `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":[{"type":"output_text","text":" first\n"},{"type":"refusal","refusal":"refused"},{"type":"output_text","text":"世界 "}]}`,
+			want:  `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":" first\n世界 "}`,
+		},
+		{
+			name:  "empty summary uses content",
+			input: `{"type":"compaction_summary","id":"cmp","encrypted_content":"sealed","summary":[{"text":""}],"content":[{"type":"output_text","text":"fallback"}]}`,
+			want:  `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":"fallback"}`,
+		},
+		{
+			name:  "summary takes precedence",
+			input: `{"type":"compaction","id":"cmp","encrypted_content":"sealed","summary":[{"text":"summary"},{"text":"later"}],"content":[{"type":"output_text","text":"fallback"}]}`,
+			want:  `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":"summary"}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var item responses.ResponseOutputItemUnion
+			require.NoError(t, json.Unmarshal([]byte(tt.input), &item))
+			got, ok := responseOutputToReplayInput(&item)
+			require.True(t, ok)
+			require.JSONEq(t, tt.want, marshalReplayJSON(t, got))
+		})
+	}
+}
+
 func TestReplayInputPreservesCompactionPayload(t *testing.T) {
 	raw := []json.RawMessage{json.RawMessage(`{"content":"summary","summary":{"text":"summary"},"recent":[{"id":"msg-1"}],"encrypted_content":"encrypted","id":"cmp-1","type":"compaction"}`)}
 
