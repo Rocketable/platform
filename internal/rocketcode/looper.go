@@ -2318,21 +2318,13 @@ func loadSession(entries iter.Seq2[SessionEntry, error]) ([]responses.ResponseIn
 func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion) (responses.ResponseInputItemUnionParam, bool) {
 	switch item.Type {
 	case "message":
-		parts := make([]string, 0, len(item.Content))
-		for i := range item.Content {
-			content := item.Content[i]
-			if content.Type == "output_text" {
-				parts = append(parts, content.Text)
-			}
-		}
-
 		role := strings.TrimSpace(item.Role)
 		if role == "" {
 			role = "assistant"
 		}
 
 		assistant := responses.EasyInputMessageParam{
-			Content: easyInputStringContent(strings.Join(parts, "")),
+			Content: easyInputStringContent(responseItemText(item)),
 			Role:    responses.EasyInputMessageRole(role),
 			Type:    "message",
 		}
@@ -2357,15 +2349,7 @@ func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion) (respo
 		}
 
 		if summary == "" {
-			parts := make([]string, 0, len(item.Content))
-			for i := range item.Content {
-				content := item.Content[i]
-				if content.Type == "output_text" {
-					parts = append(parts, content.Text)
-				}
-			}
-
-			summary = strings.Join(parts, "")
+			summary = responseItemText(item)
 		}
 
 		return compactionReplayInput(item.ID, item.EncryptedContent, summary), true
@@ -2381,6 +2365,19 @@ func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion) (respo
 	default:
 		return responses.ResponseInputItemUnionParam{}, false
 	}
+}
+
+func responseItemText(item *responses.ResponseOutputItemUnion) string {
+	var text strings.Builder
+
+	for i := range item.Content {
+		content := &item.Content[i]
+		if content.Type == "output_text" {
+			text.WriteString(content.Text)
+		}
+	}
+
+	return text.String()
 }
 
 func reasoningReplayInput(id, summary, encryptedContent string) responses.ResponseInputItemUnionParam {
