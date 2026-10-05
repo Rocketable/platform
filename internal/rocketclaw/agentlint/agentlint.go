@@ -75,7 +75,9 @@ func Lint(runtimeRoot string, cfg *config.Config) (Result, error) {
 	findings = append(findings, lintDelegationEscalation(infos)...)
 	findings = append(findings, lintGuardrailReferences(infos)...)
 	findings = append(findings, lintReasoningEffort(infos)...)
-	findings = filterSuppressed(findings, infos)
+	findings = slices.DeleteFunc(findings, func(finding Finding) bool {
+		return suppressed(&finding, infos)
+	})
 	slices.SortFunc(findings, func(a, b Finding) int {
 		if n := strings.Compare(a.Code, b.Code); n != 0 {
 			return n
@@ -481,19 +483,6 @@ func normalizeSubject(subject string) string {
 func cleanSubject(subject string) string {
 	subject = strings.TrimPrefix(filepath.ToSlash(subject), "./")
 	return strings.TrimPrefix(subject, "/")
-}
-
-func filterSuppressed(findings []Finding, infos map[string]*agentInfo) []Finding {
-	filtered := findings[:0]
-	for i := range findings {
-		if suppressed(&findings[i], infos) {
-			continue
-		}
-
-		filtered = append(filtered, findings[i])
-	}
-
-	return filtered
 }
 
 func suppressed(finding *Finding, infos map[string]*agentInfo) bool {
