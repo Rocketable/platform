@@ -2,6 +2,8 @@ package rocketcode
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -221,6 +223,7 @@ func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool)
 				},
 			}),
 			Permission:         "rocketclaw",
+			resumable:          true,
 			VisibilitySubjects: []string{codeModeApproveSubject},
 			Subjects:           func(json.RawMessage) ([]string, error) { return []string{codeModeApproveSubject}, nil },
 			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
@@ -337,7 +340,14 @@ func callExecute(ctx context.Context, registry *mcpclient.Registry, permissions 
 			return ToolResult{}, errList
 		}
 
-		mcpCall = session.CallTool
+		mcpCall = func(ctx context.Context, server, name string, args map[string]any) (string, error) {
+			result, err := recordHostCall(ctx, server+"."+name, args, false, func(ctx context.Context) (ToolResult, error) {
+				out, err := session.CallTool(ctx, server, name, args)
+				return TextToolResult(out), err
+			})
+
+			return result.Output, err
+		}
 	}
 
 	host, hostMap := codeModeHostToolsFromContext(ctx)
@@ -757,11 +767,13 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 				raw = json.RawMessage(`{}`)
 			}
 
-			if err := CheckNestedToolCall(ctx, toolName, &toolCopy, raw); err != nil {
-				return ToolResult{}, err
-			}
+			return recordHostCall(ctx, toolName, args, toolCopy.resumable, func(ctx context.Context) (ToolResult, error) {
+				if err := CheckNestedToolCall(ctx, toolName, &toolCopy, raw); err != nil {
+					return ToolResult{}, err
+				}
 
-			return toolCopy.Call(ctx, raw, output, toolCallMetadata{})
+				return toolCopy.Call(ctx, raw, output, toolCallMetadata{})
+			})
 		}
 
 		bound := codemode.HostTool{
@@ -795,6 +807,73 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 	}
 
 	return host, hosts
+}
+
+var errHostCallInterrupted = errors.New("tool call aborted because the runtime stopped before the call completed; side effects may have partially occurred, so inspect the current environment before deciding whether to retry or continue")
+
+// recordHostCall returns a Code Mode call's recorded result, or runs and journals it. A recording
+// for a different tool or arguments runs live; a started, unfinished non-resumable call is interrupted.
+// A non-resumable call runs through shutdown, so its result is recorded before the turn stops.
+func recordHostCall(ctx context.Context, name string, args map[string]any, resumable bool, run func(context.Context) (ToolResult, error)) (ToolResult, error) {
+	tc, ok := toolCallContextFrom(ctx)
+	if !ok {
+		return run(ctx)
+	}
+
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return ToolResult{}, fmt.Errorf("marshal %s args: %w", name, err)
+	}
+
+	sum := sha256.Sum256(raw)
+	key := ToolCallKey(ctx)
+	want := hostCallStep{Name: name, Hash: hex.EncodeToString(sum[:])}
+
+	var step hostCallStep
+
+	found, err := loadStep(ctx, tc.looper.Journal, key, &step)
+	if err != nil {
+		return ToolResult{}, err
+	}
+
+	if found && step.Name == want.Name && step.Hash == want.Hash {
+		switch {
+		case step.Err != "":
+			return ToolResult{}, errors.New(step.Err)
+		case step.Done:
+			result := TextToolResult(step.Output)
+			if step.Bash != nil {
+				result.Data = *step.Bash
+			}
+
+			return result, nil
+		case !resumable:
+			return ToolResult{}, errHostCallInterrupted
+		}
+	}
+
+	if err := saveStep(ctx, tc.looper.Journal, key, &want); err != nil {
+		return ToolResult{}, err
+	}
+
+	runCtx, stop := callContext(ctx, resumable)
+	defer stop()
+
+	result, errRun := run(runCtx)
+	if errRun != nil && runCtx.Err() != nil {
+		return result, errRun
+	}
+
+	want.Done, want.Output = true, attachmentOutputMessage(result)
+	if bash, ok := result.Data.(BashResult); ok {
+		want.Bash = &bash
+	}
+
+	if errRun != nil {
+		want.Err = errRun.Error()
+	}
+
+	return result, errors.Join(errRun, saveStep(ctx, tc.looper.Journal, key, &want))
 }
 
 // emitNestedExecuteToolDiagnostic reports a nested code-mode tool call into thinking traces.

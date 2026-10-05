@@ -1,6 +1,7 @@
 ---
 title: Saved Queue Rows Never Started After Restart
 date: 2026-09-20
+last_updated: 2026-10-05
 category: docs/solutions/logic-errors/
 module: internal/rocketclaw/backend
 problem_type: logic_error
@@ -38,9 +39,11 @@ Deleting the old backlog and waiting for new activity would drop saved work. A s
 
 ## Solution
 
-Keep queued conversations through retention, then discover distinct `thread_queue.conversation_id` values once after frontend attachment and recoveries are submitted. Each recorded conversation reuses the existing worker and later-work rules. Pending work is blocked only for recoveries selected at this startup, not for every leftover checkpoint.
+Keep queued conversations through retention, then discover distinct `thread_queue.conversation_id` values once at startup, after Slack is attached and conversations with an unfinished turn have been started. Each recorded conversation reuses the existing worker and later-work rules.
 
-```1598:1602:internal/rocketclaw/backend/store.go
+Since 2026-10-05 (step-journal change, pending) there is no separate recovery phase. An interrupted turn is an `active_turns` row that is not `done`; each bridge loop runs its conversation's oldest such row before anything else (`headTurn`), and `StartActiveTurns` wakes those workers before `StartQueuedConversations`. A turn that failed or was stopped is kept with phase `done` for the transcript, so it never holds back later queue rows.
+
+```1572:1576:internal/rocketclaw/backend/store.go
 func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, conversationID string, cutoff time.Time) (bool, error) {
 	queued, err := conversationExists(ctx, db, `thread_queue`, `conversation_id`, conversationID)
 	if err != nil || queued {
@@ -48,7 +51,7 @@ func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, convers
 	}
 ```
 
-```430:442:internal/rocketclaw/backend/thread_bridges.go
+```456:469:internal/rocketclaw/backend/thread_bridges.go
 func (m *threadBridgeManager) StartQueuedConversations() error {
 	conversationIDs, err := m.store.queuedConversationIDs(context.Background())
 	if err != nil {
@@ -64,13 +67,13 @@ func (m *threadBridgeManager) StartQueuedConversations() error {
 }
 ```
 
-Private External MCP recovery runs on the destination worker with the private conversation as producer. After that recovery finishes or is abandoned, both sides pick later work. Schedule deletion and park-link clearing share one transaction so a failed delete cannot unpark waiting rows.
+A private External MCP turn's row runs on its destination worker (the row's `SyncDestination`) with the private conversation as producer; after it finishes, both sides pick later work. Schedule deletion and park-link clearing share one transaction so a failed delete cannot unpark waiting rows.
 
 The code change is pending in [PR #68](https://github.com/Rocketable/platform/pull/68). Production cleanup of Wallace's six historical rows remains operator work and is not part of the fix.
 
 ## Why This Works
 
-The leftover was an unclaimed Thread Queue row after save-before-start, not a missing checkpoint. Retention had to keep that row. Startup had to find conversations that had no other trigger. Ordinary later-work selection already knows goal, schedule, and park order, so discovery only needs to wake each conversation once. Blocking only selected recoveries lets a failed live turn still release later messages.
+The leftover was an unclaimed Thread Queue row after save-before-start, not a missing checkpoint. Retention had to keep that row. Startup had to find conversations that had no other trigger. Ordinary later-work selection already knows goal, schedule, and park order, so discovery only needs to wake each conversation once. Treating only rows that are not `done` as the queue head lets a failed live turn still release later messages.
 
 ## Prevention
 
@@ -79,4 +82,4 @@ Keep a real-store startup test that seeds queued rows with no other work, assert
 ## Related Issues
 
 - [PR #68](https://github.com/Rocketable/platform/pull/68) (pending): recover saved queues on startup
-- Investigation: `internal/rocketclaw/docs/investigations/2026-09-20-wallace-stranded-mcp-queue.md`
+- Investigation: `docs/investigations/2026-09-20-wallace-stranded-mcp-queue.md`

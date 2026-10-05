@@ -123,8 +123,8 @@ func TestSessionTagToolsBridge(t *testing.T) {
 			defer func() { require.NoError(t, root.Close()) }()
 
 			bridge := &Bridge{runtime: cfg, config: Config{ConversationID: "external_mcp:owning", SessionService: service, RequestReload: testNoopRestart}, log: slog.New(slog.DiscardHandler)}
-			runtimeConfig := bridge.rocketcodeConfig(workspace, nil, nil)
-			runtimeConfig.CheckpointSink = rocketcode.InertCheckpointSink{}
+			runtimeConfig := bridge.rocketcodeConfig(workspace, nil)
+			runtimeConfig.Journal = rocketcode.InertJournal{}
 			runtimeConfig.ChildSessions = rocketcode.InertChildSessions{}
 			runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
 			require.NoError(t, err)
@@ -306,8 +306,8 @@ func TestSessionTagChildAuthority(t *testing.T) {
 				defer func() { require.NoError(t, root.Close()) }()
 
 				bridge := &Bridge{runtime: cfg, config: Config{ConversationID: "owning", SessionService: service, RequestReload: testNoopRestart}, log: slog.New(slog.DiscardHandler)}
-				runtimeConfig := bridge.rocketcodeConfig(workspace, nil, nil)
-				runtimeConfig.CheckpointSink = rocketcode.InertCheckpointSink{}
+				runtimeConfig := bridge.rocketcodeConfig(workspace, nil)
+				runtimeConfig.Journal = rocketcode.InertJournal{}
 				runtimeConfig.ChildSessions = rocketcode.InertChildSessions{}
 				runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
 				require.NoError(t, err)
@@ -687,8 +687,8 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			require.NoError(t, root.MkdirAll("shell", 0o700))
 
 			bridge := &Bridge{runtime: cfg, config: Config{ConversationID: "external_mcp:private", ManagedConversationID: "managed:other", ExternalConversationID: "public-id", SessionService: service, RequestReload: testNoopRestart}, log: slog.New(slog.DiscardHandler)}
-			runtimeConfig := bridge.rocketcodeConfig(filepath.Join(workspace, "shell"), nil, nil)
-			runtimeConfig.CheckpointSink = rocketcode.InertCheckpointSink{}
+			runtimeConfig := bridge.rocketcodeConfig(filepath.Join(workspace, "shell"), nil)
+			runtimeConfig.Journal = rocketcode.InertJournal{}
 			runtimeConfig.ChildSessions = rocketcode.InertChildSessions{}
 			runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
 			require.NoError(t, err)

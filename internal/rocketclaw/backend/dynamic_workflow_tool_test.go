@@ -78,9 +78,10 @@ def main(args): return None
 	bridge := &Bridge{runtime: &config.Config{Workspace: workspace}, log: slog.New(slog.DiscardHandler)}
 
 	output := make(chan rocketcode.ChatResponse, 4)
-	tool, ok := bridge.dynamicWorkflowTool(permissions, "main", "turn-1", definitions)
+	tool, ok := bridge.dynamicWorkflowTool(permissions, "main", definitions)
 	require.True(t, ok)
 	assert.Equal(t, "workflow", tool.Permission)
+	assert.True(t, tool.Resumable)
 	assert.Equal(t, []string{"audit"}, tool.VisibilitySubjects)
 	assert.Contains(t, tool.Description, "audit")
 	assert.NotContains(t, tool.Description, "secret")
@@ -97,7 +98,7 @@ def main(args): return None
 	assert.Equal(t, rocketcode.TextToolResult("audit:path/to"), result)
 	require.Empty(t, output)
 
-	_, ok = bridge.dynamicWorkflowTool(rocketcode.PermissionSet{}, "main", "turn-1", definitions)
+	_, ok = bridge.dynamicWorkflowTool(rocketcode.PermissionSet{}, "main", definitions)
 	assert.False(t, ok)
 }
 
@@ -126,21 +127,21 @@ def main(args):
 	definitions, err := workflow.Load(root, ".rocketclaw")
 	require.NoError(t, err)
 
-	_, err = bridge.runNestedWorkflow(t.Context(), "main", "turn-1", "missing", nil, "")
+	_, err = bridge.runNestedWorkflow(t.Context(), "main", "missing", nil, "")
 	require.ErrorContains(t, err, `workflow "missing" is not configured`)
 
-	text, err := bridge.runNestedWorkflow(t.Context(), "main", "turn-echo", "echo", definitions["echo"], "hello-nested")
+	text, err := bridge.runNestedWorkflow(t.Context(), "main", "echo", definitions["echo"], "hello-nested")
 	require.NoError(t, err)
 	assert.Equal(t, "hello-nested", text)
 
-	text, err = bridge.runNestedWorkflow(t.Context(), "main", "turn-quiet", "quiet", definitions["quiet"], "")
+	text, err = bridge.runNestedWorkflow(t.Context(), "main", "quiet", definitions["quiet"], "")
 	require.NoError(t, err)
 	assert.Equal(t, nestedWorkflowSilentCompleteText, text)
 
 	// maybeDynamicWorkflowTool: workflow allow → tool; task-only → omit; Call works.
 	var workflowAllow rocketcode.PermissionSet
 	require.NoError(t, workflowAllow.Allow("workflow", "audit-routes"))
-	tool, ok := bridge.maybeDynamicWorkflowTool(root, &rocketcode.Agent{Permission: workflowAllow}, "main", "turn-1")
+	tool, ok := bridge.maybeDynamicWorkflowTool(root, &rocketcode.Agent{Permission: workflowAllow}, "main")
 	require.True(t, ok)
 	assert.Equal(t, []string{"audit-routes"}, tool.VisibilitySubjects)
 
@@ -152,7 +153,7 @@ def main(args):
 
 	var taskOnly rocketcode.PermissionSet
 	require.NoError(t, taskOnly.Allow("task", "*"))
-	_, ok = bridge.maybeDynamicWorkflowTool(root, &rocketcode.Agent{Permission: taskOnly}, "main", "turn-1")
+	_, ok = bridge.maybeDynamicWorkflowTool(root, &rocketcode.Agent{Permission: taskOnly}, "main")
 	assert.False(t, ok)
 
 	// Load failure omits tool.
@@ -163,7 +164,7 @@ def main(args):
 
 	var star rocketcode.PermissionSet
 	require.NoError(t, star.Allow("workflow", "*"))
-	_, ok = (&Bridge{runtime: &config.Config{Workspace: bad}, log: slog.New(slog.DiscardHandler)}).maybeDynamicWorkflowTool(badRoot, &rocketcode.Agent{Permission: star}, "main", "turn-1")
+	_, ok = (&Bridge{runtime: &config.Config{Workspace: bad}, log: slog.New(slog.DiscardHandler)}).maybeDynamicWorkflowTool(badRoot, &rocketcode.Agent{Permission: star}, "main")
 	assert.False(t, ok)
 }
 
@@ -205,9 +206,13 @@ func TestNestedWorkflowSessionTags(t *testing.T) {
 	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: "external_mcp:owning", SessionService: service}, log: slog.New(slog.DiscardHandler)}
 	definitions, err := workflow.Load(root, ".rocketclaw")
 	require.NoError(t, err)
-	_, err = bridge.runNestedWorkflow(t.Context(), "main", "turn", "tag", definitions["tag"], "")
-	require.NoError(t, err)
-	require.Equal(t, 2, requests)
+
+	for range 2 {
+		_, err = bridge.runNestedWorkflow(t.Context(), "main", "tag", definitions["tag"], "")
+		require.NoError(t, err)
+		require.Equal(t, 2, requests, "a rerun returns the finished worker's recorded result")
+	}
+
 	tags, err := sessionTags(t.Context(), service.db, "external_mcp:owning")
 	require.NoError(t, err)
 	require.Equal(t, []string{"customer"}, tags)
@@ -249,10 +254,10 @@ def main(args):
 	require.NoError(t, root.Mkdir(shellRel, 0o700))
 
 	runtime, err := rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{
-		ShellTempDir:   filepath.Join(cfg.Workspace, filepath.FromSlash(shellRel)),
-		ChildSessions:  rocketcode.InertChildSessions{},
-		CheckpointSink: rocketcode.InertCheckpointSink{},
-		ShellCommand:   rocketcode.DefaultShellCommand,
+		ShellTempDir:  filepath.Join(cfg.Workspace, filepath.FromSlash(shellRel)),
+		ChildSessions: rocketcode.InertChildSessions{},
+		Journal:       rocketcode.InertJournal{},
+		ShellCommand:  rocketcode.DefaultShellCommand,
 	}, root, agents, skills, "main", io.Discard)
 	require.NoError(t, err)
 

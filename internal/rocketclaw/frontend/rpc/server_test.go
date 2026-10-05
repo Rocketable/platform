@@ -248,6 +248,7 @@ func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
 func TestSessionEntries(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
+	seeded := openTestTurns(t, dsn)
 	storageConfig := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
 	sessions, err := backend.NewSessionServiceIn(t.Context(), storageConfig, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
@@ -1189,12 +1190,12 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, "Exact report\nwith details", listedSessions.Sessions[0].Preview)
 	require.False(t, listedSessions.Sessions[0].Running)
 
-	err = sessions.UpsertActiveTurn(ctx, &rocketcode.ActiveTurnCheckpoint{TurnID: "sidebar-turn", ConversationKey: "empty-web"}, nil)
+	err = seeded.UpsertActiveTurn(ctx, &testCheckpoint{TurnID: "sidebar-turn", ConversationKey: "empty-web"})
 	require.NoError(t, err)
 	listedSessions, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
 	require.True(t, listedSessions.Sessions[0].Running)
-	require.NoError(t, sessions.ClearActiveTurn(ctx, "sidebar-turn"))
+	require.NoError(t, seeded.ClearActiveTurn(ctx, "sidebar-turn"))
 	listedSessions, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
 	require.False(t, listedSessions.Sessions[0].Running)
@@ -1628,8 +1629,8 @@ func TestSessionEntries(t *testing.T) {
 	corrupt := "cron:corrupt-delegations"
 	_, err = sessions.AppendEntryID(ctx, corrupt, &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "corrupt-turn", Timestamp: time.Now()})
 	require.NoError(t, err)
-	require.NoError(t, sessions.UpsertActiveTurn(ctx, &rocketcode.ActiveTurnCheckpoint{TurnID: "corrupt-turn", ConversationKey: corrupt, Agent: "main"}, nil))
-	_, err = db.ExecContext(ctx, `UPDATE active_turns SET replay_input_json = '{}' WHERE id = 'corrupt-turn'`)
+	require.NoError(t, seeded.UpsertActiveTurn(ctx, &testCheckpoint{TurnID: "corrupt-turn", ConversationKey: corrupt, Agent: "main"}))
+	_, err = db.ExecContext(ctx, `UPDATE turn_steps SET value = '{"record":{"replay_input":{}}}' WHERE key = 'corrupt-turn'`)
 	require.NoError(t, err)
 	_, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: corrupt})
 	require.ErrorContains(t, err, "read web delegations")

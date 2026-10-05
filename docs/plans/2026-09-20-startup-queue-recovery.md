@@ -38,7 +38,7 @@ The person who sent the message can receive no answer until another event starts
 
 The investigation reproduced that startup state at `549038341ed3da3c91e338bf6270e3c7b84720c6`.
 It also established that the older MCP queue-owner mismatch is absent from that revision.
-See `internal/rocketclaw/docs/investigations/2026-09-20-wallace-stranded-mcp-queue.md` for the evidence and its limits.
+See `docs/investigations/2026-09-20-wallace-stranded-mcp-queue.md` for the evidence and its limits.
 
 ### Key Decisions
 

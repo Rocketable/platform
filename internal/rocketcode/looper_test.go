@@ -204,16 +204,51 @@ func compactParams(mock *mockResponsesAPI) []responses.ResponseCompactParams {
 	return out
 }
 
-func recordingCheckpointSink() *mockCheckpointSink {
-	return &mockCheckpointSink{
-		RecordOutputTraceFunc:         func(context.Context, string, []json.RawMessage) error { return nil },
-		CloseActiveTurnFunc:           func(context.Context, string, PublicProgressState) error { return nil },
-		ClearCompletedTurnFunc:        func(context.Context, string) error { return nil },
-		RecordCompletedToolOutputFunc: func(context.Context, *ActiveTurnCheckpoint) error { return nil },
-		RecordProviderResponseFunc:    func(context.Context, *ActiveTurnCheckpoint) error { return nil },
-		RecordRecoveredReplayFunc:     func(context.Context, *ActiveTurnCheckpoint) error { return nil },
-		StartActiveTurnFunc:           func(context.Context, *ActiveTurnCheckpoint) error { return nil },
+// recordingJournal keeps journaled steps in memory so tests can resume from them.
+func recordingJournal() *mockJournal {
+	var mu sync.Mutex
+
+	steps := map[string]json.RawMessage{}
+
+	return &mockJournal{
+		LoadFunc: func(_ context.Context, key string) (json.RawMessage, bool, error) {
+			mu.Lock()
+			defer mu.Unlock()
+
+			value, ok := steps[key]
+
+			return value, ok, nil
+		},
+		SaveFunc: func(_ context.Context, key string, value json.RawMessage) error {
+			mu.Lock()
+			defer mu.Unlock()
+
+			steps[key] = slices.Clone(value)
+
+			return nil
+		},
+		SaveTraceFunc: func(context.Context, string, []json.RawMessage) error { return nil },
 	}
+}
+
+// turnSaves decodes every root turn step the journal saved, in order.
+func turnSaves(t *testing.T, journal *mockJournal) []turnStep {
+	t.Helper()
+
+	var saves []turnStep
+
+	for _, call := range journal.SaveCalls() {
+		if strings.Contains(call.Key, "/") {
+			continue
+		}
+
+		var step turnStep
+		require.NoError(t, json.Unmarshal(call.Value, &step))
+
+		saves = append(saves, step)
+	}
+
+	return saves
 }
 
 func permissionReviewerWith(decision permissionReviewDecision) *mockPermissionReviewer {
@@ -250,8 +285,8 @@ func testLooper(client responsesAPI) *looper {
 	l.Client = client
 	l.Model = openai.ChatModelGPT6Luna
 	l.PermissionReviewer = inertPermissionReviewer{}
-	l.CheckpointSink = InertCheckpointSink{}
-	l.observations = &turnObservations{sink: l.CheckpointSink}
+	l.Journal = InertJournal{}
+	l.observations = &turnObservations{journal: l.Journal}
 
 	return &l
 }
@@ -261,8 +296,8 @@ func emptyTestLooper() *looper {
 
 	l.ProviderOrigin = ProviderOrigin{Provider: "openai", Model: openai.ChatModelGPT6Luna}
 	l.PermissionReviewer = inertPermissionReviewer{}
-	l.CheckpointSink = InertCheckpointSink{}
-	l.observations = &turnObservations{sink: l.CheckpointSink}
+	l.Journal = InertJournal{}
+	l.observations = &turnObservations{journal: l.Journal}
 
 	return &l
 }
@@ -594,7 +629,7 @@ func TestLooperPromptInputShellCommandExpansion(t *testing.T) {
 			looper.expandInputPrompts = tc.enabled
 			looper.promptExpansion = testPromptExpansionEnvironment(t)
 			output := make(chan ChatResponse, 10)
-			turn, _, interrupted, err := looper.runTurn(context.Background(), output, nil, nil, nil, new(testPromptInput(PromptInputRoleUser, "before !`printf hello` after", nil)), nil)
+			turn, _, interrupted, err := looper.runTurn(context.Background(), output, nil, nil, nil, new(testPromptInput(PromptInputRoleUser, "before !`printf hello` after", nil)))
 
 			require.NoError(t, err)
 			require.False(t, interrupted)
@@ -811,8 +846,8 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 	}
 	looper := testLooper(mock)
 	looper.agent.Name, looper.DisplayModel, looper.ReasoningEffort = "new", "work/model-b", "low"
-	sink := recordingCheckpointSink()
-	looper.CheckpointSink = sink
+	sink := recordingJournal()
+	looper.Journal = sink
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
@@ -846,11 +881,8 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 	require.Contains(t, string(saved[0].ReplayInput[0]), `"type":"compaction"`)
 	require.Len(t, saved[0].ReplayInput, 6)
 
-	checkpoint := sink.RecordProviderResponseCalls()[0].ActiveTurnCheckpoint
-	for _, entry := range []SessionEntry{saved[0], {
-		Agent: checkpoint.Agent, Model: checkpoint.DisplayModel, ReasoningEffort: checkpoint.ReasoningEffort,
-		ReplayAttribution: checkpoint.ReplayAttribution,
-	}} {
+	compacted := turnSaves(t, sink)[1].Record
+	for _, entry := range []SessionEntry{saved[0], compacted} {
 		require.Equal(t, "work/model-a", entry.AttributionAt(1).Model)
 		require.Equal(t, new("high"), entry.AttributionAt(2).ReasoningEffort)
 		require.Empty(t, entry.AttributionAt(3).Agent)
@@ -1134,20 +1166,20 @@ func TestLooperPermissionReviewUsesPrunedHistory(t *testing.T) {
 	require.Contains(t, got, "post-compaction question")
 }
 
-func TestCheckpointBeforeFirstProviderCall(t *testing.T) {
-	sink := recordingCheckpointSink()
+func TestJournalTurnBeforeFirstProviderCall(t *testing.T) {
+	sink := recordingJournal()
 	mock := mockResponseFunc(func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
-		starts := sink.StartActiveTurnCalls()
+		starts := turnSaves(t, sink)
 		require.Len(t, starts, 1)
-		require.NotEmpty(t, starts[0].ActiveTurnCheckpoint.TurnID)
-		require.Contains(t, marshalJSON(t, starts[0].ActiveTurnCheckpoint), `"reasoning_effort":"high"`)
-		require.JSONEq(t, `{"content":"hello","role":"user","type":"message"}`, string(starts[0].ActiveTurnCheckpoint.ReplayInput[0]))
+		require.NotEmpty(t, starts[0].Record.TurnID)
+		require.Contains(t, marshalJSON(t, starts[0].Record), `"reasoning_effort":"high"`)
+		require.JSONEq(t, `{"content":"hello","role":"user","type":"message"}`, string(starts[0].Record.ReplayInput[0]))
 
 		return responseWithMessage("resp-final", "done"), nil
 	})
 	looper := testLooper(mock)
 	looper.ReasoningEffort = "high"
-	looper.CheckpointSink = sink
+	looper.Journal = sink
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
@@ -1160,25 +1192,27 @@ func TestCheckpointBeforeFirstProviderCall(t *testing.T) {
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
 }
 
-func TestCheckpointProviderResponseOpenCallsBeforeToolDispatch(t *testing.T) {
-	sink := recordingCheckpointSink()
+func TestJournalProviderResponseBeforeToolDispatch(t *testing.T) {
+	sink := recordingJournal()
 	mock := mockResponses(
 		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "read", `{"filePath":"README.md"}`)}),
 		responseWithMessage("resp-final", "done"),
 	)
 	looper := testLooper(mock)
-	looper.CheckpointSink = sink
+	looper.Journal = sink
 	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
 	tool := testLooperTool("read")
 	tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
-		providers := sink.RecordProviderResponseCalls()
-		require.NotEmpty(t, providers)
-		provider := providers[0].ActiveTurnCheckpoint
-		require.Equal(t, "resp-tool", provider.ResponseID)
-		require.Len(t, provider.OpenFunctionCalls, 1)
-		require.Equal(t, "call-1", provider.OpenFunctionCalls[0].CallID)
-		require.Equal(t, "read", provider.OpenFunctionCalls[0].Name)
-		require.JSONEq(t, `{"filePath":"README.md"}`, string(provider.OpenFunctionCalls[0].Arguments))
+		saves := turnSaves(t, sink)
+		require.Len(t, saves, 2)
+		require.Equal(t, "resp-tool", saves[1].Record.ResponseID)
+
+		var pending responses.Response
+		require.NoError(t, pending.UnmarshalJSON(saves[1].Response))
+		require.Equal(t, "call-1", pending.Output[0].CallID)
+		require.Equal(t, "read", pending.Output[0].Name)
+		require.JSONEq(t, `{"filePath":"README.md"}`, pending.Output[0].Arguments.OfString)
+		require.Len(t, sink.SaveCalls(), 3, "the call's started marker is journaled before it runs")
 
 		return TextToolResult("contents"), nil
 	}
@@ -1195,8 +1229,8 @@ func TestCheckpointProviderResponseOpenCallsBeforeToolDispatch(t *testing.T) {
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
 }
 
-func TestCheckpointAfterCompactionRecoveryBeforeProviderRetry(t *testing.T) {
-	sink := recordingCheckpointSink()
+func TestJournalAfterCompactionRecoveryBeforeProviderRetry(t *testing.T) {
+	sink := recordingJournal()
 	providerCalls := 0
 	mock := mockResponseFunc(func(_ context.Context, params *responses.ResponseNewParams) (*responses.Response, error) {
 		require.NotContains(t, marshalJSON(t, params.Input.OfInputItemList), "prompt_header")
@@ -1207,9 +1241,7 @@ func TestCheckpointAfterCompactionRecoveryBeforeProviderRetry(t *testing.T) {
 			return nil, contextLengthExceededError()
 		}
 
-		providers := sink.RecordProviderResponseCalls()
-		require.NotEmpty(t, providers)
-		compacted := providers[0].ActiveTurnCheckpoint
+		compacted := turnSaves(t, sink)[1].Record
 		require.Len(t, compacted.ReplayInput, 2)
 		require.Contains(t, string(compacted.ReplayInput[0]), `"type":"compaction"`)
 		require.Contains(t, string(compacted.ReplayInput[1]), `"content":"[Web]\n\nnew prompt"`)
@@ -1237,7 +1269,7 @@ func TestCheckpointAfterCompactionRecoveryBeforeProviderRetry(t *testing.T) {
 		return resp, err
 	}
 	looper := testLooper(mock)
-	looper.CheckpointSink = sink
+	looper.Journal = sink
 	output := make(chan ChatResponse, 10)
 	replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
 		testInputMessage(responses.EasyInputMessageRole("user"), "old prompt", ""),
@@ -1254,9 +1286,10 @@ func TestCheckpointAfterCompactionRecoveryBeforeProviderRetry(t *testing.T) {
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
 	require.Equal(t, 2, providerCalls)
 
-	writes := sink.RecordOutputTraceCalls()
-	require.Empty(t, PublicProgressFromTrace(writes[1].RawMessages), "compaction retry removes the previous attempt")
-	progress := PublicProgressFromTrace(sink.RecordProviderResponseCalls()[1].ActiveTurnCheckpoint.OutputTrace)
+	writes := sink.SaveTraceCalls()
+	require.Empty(t, PublicProgressFromTrace(writes[1].Trace), "compaction retry removes the previous attempt")
+	saves := turnSaves(t, sink)
+	progress := PublicProgressFromTrace(saves[len(saves)-1].Trace)
 	require.Len(t, progress, 1)
 	require.Equal(t, "done", progress[0].Text)
 }
@@ -1351,20 +1384,22 @@ func TestLooperDispatchesToolCalls(t *testing.T) {
 	require.Equal(t, "message", *history[6].GetType())
 }
 
-func TestLooperCheckpointsCompletedToolOutputBeforeContinuation(t *testing.T) {
-	sink := recordingCheckpointSink()
+func TestLooperJournalsCompletedToolOutputBeforeContinuation(t *testing.T) {
+	sink := recordingJournal()
 	mock := mockResponses()
 	mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ responseObserver, _ ...option.RequestOption) (*responses.Response, error) {
 		if len(newParams(mock)) == 1 {
 			return responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "first", `{"step":1}`)}), nil
 		}
 
-		require.NotEmpty(t, sink.RecordCompletedToolOutputCalls(), "tool output checkpoint should be durable before continuation request")
+		saves := turnSaves(t, sink)
+		require.Contains(t, marshalJSON(t, saves[len(saves)-1].Record.ReplayInput), `"function_call_output"`, "tool output must be durable before the continuation request")
+		require.Empty(t, saves[len(saves)-1].Response, "a turn whose calls finished carries no pending response")
 
 		return responseWithMessage("resp-final", "done"), nil
 	}
 	looper := testLooper(mock)
-	looper.CheckpointSink = sink
+	looper.Journal = sink
 	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "first", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
 	tool := testLooperTool("first")
 	tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
@@ -1382,21 +1417,17 @@ func TestLooperCheckpointsCompletedToolOutputBeforeContinuation(t *testing.T) {
 
 	require.NoError(t, err)
 
-	toolCalls := sink.RecordCompletedToolOutputCalls()
-	require.NotEmpty(t, toolCalls)
-	last := *toolCalls[len(toolCalls)-1].ActiveTurnCheckpoint
-	require.Empty(t, last.OpenFunctionCalls)
-	require.Len(t, last.CompletedFunctionOutputs, 1)
-	require.Equal(t, "call-1", last.CompletedFunctionOutputs[0].CallID)
-	require.Equal(t, "first", last.CompletedFunctionOutputs[0].Name)
-	require.Contains(t, marshalJSON(t, last.ReplayInput), `"function_call_output"`)
+	raw, ok, err := sink.Load(t.Context(), turnSaves(t, sink)[0].Record.TurnID+"/call/call-1")
+	require.NoError(t, err)
+	require.True(t, ok, "the call's own result is journaled independently of the turn")
+	require.Contains(t, string(raw), "first-result")
 }
 
-func TestLooperClearsCheckpointAfterCompletedSessionEntry(t *testing.T) {
-	sink := recordingCheckpointSink()
+func TestLooperClosesObservationsAfterCompletedSessionEntry(t *testing.T) {
+	sink := recordingJournal()
 	mock := mockResponses(responseWithMessage("resp-final", "done"))
 	looper := testLooper(mock)
-	looper.CheckpointSink = sink
+	looper.Journal = sink
 	progress := PublicProgress{ID: "resp-final/item-1", Kind: PublicProgressText, State: PublicProgressWorking, Text: "partial", Agent: "main", Model: "model"}
 	mock.NewFunc = func(ctx context.Context, _ *responses.ResponseNewParams, _ responseObserver, _ ...option.RequestOption) (*responses.Response, error) {
 		require.NoError(t, looper.observations.observe(ctx, &progress))
@@ -1415,8 +1446,7 @@ func TestLooperClearsCheckpointAfterCompletedSessionEntry(t *testing.T) {
 	)
 
 	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-		require.Empty(t, sink.ClearCompletedTurnCalls(), "checkpoint should not clear before session entry is durable")
-		require.Equal(t, sink.StartActiveTurnCalls()[0].ActiveTurnCheckpoint.TurnID, entry.TurnID)
+		require.Equal(t, turnSaves(t, sink)[0].Record.TurnID, entry.TurnID)
 		require.Contains(t, marshalJSON(t, entry), `"turn_id":"`+entry.TurnID+`"`)
 		require.Equal(t, []PublicProgress{progress}, PublicProgressFromTrace(entry.OutputTrace))
 
@@ -1433,12 +1463,8 @@ func TestLooperClearsCheckpointAfterCompletedSessionEntry(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NoError(t, lateWorker.Wait())
-	require.Len(t, sink.RecordOutputTraceCalls(), 1, "a late worker cannot write after session append/clear")
+	require.Len(t, sink.SaveTraceCalls(), 1, "a late worker cannot write after session append")
 	require.Len(t, saved, 1)
-
-	cleared := sink.ClearCompletedTurnCalls()
-	require.Len(t, cleared, 1)
-	require.Equal(t, saved[0].TurnID, cleared[0].S)
 }
 
 func TestLooperReportsToolErrorsInBand(t *testing.T) {
@@ -1550,10 +1576,10 @@ func TestToolProgressPermissionAndPersistenceFailure(t *testing.T) {
 		t.Run(outcome, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				deny := outcome == "denied"
-				sink := recordingCheckpointSink()
+				sink := recordingJournal()
 				l := emptyTestLooper()
-				l.CheckpointSink = sink
-				l.observations = &turnObservations{sink: sink, turnID: "test-turn"}
+				l.Journal = sink
+				l.observations = &turnObservations{journal: sink, turnID: "test-turn"}
 				started := make(chan struct{})
 				joined := false
 				errDisk := errors.New("local write sentinel")
@@ -1583,7 +1609,7 @@ func TestToolProgressPermissionAndPersistenceFailure(t *testing.T) {
 				}
 
 				l.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "slow", Rules: []PermissionRule{{Pattern: "*", Action: action}}}, {Name: "fast", Rules: []PermissionRule{{Pattern: "*", Action: action}}}}}
-				sink.RecordOutputTraceFunc = func(_ context.Context, _ string, trace []json.RawMessage) error {
+				sink.SaveTraceFunc = func(_ context.Context, _ string, trace []json.RawMessage) error {
 					for _, item := range PublicProgressFromTrace(trace) {
 						if outcome == "write-error" && item.ID == "fast" && item.State == PublicProgressCompleted {
 							return errDisk
@@ -1629,17 +1655,17 @@ func TestToolProgressPermissionAndPersistenceFailure(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, outputs, 2)
 
-				writes := sink.RecordOutputTraceCalls()
+				writes := sink.SaveTraceCalls()
 				require.NotEmpty(t, writes)
 
 				for _, write := range writes {
-					for _, item := range PublicProgressFromTrace(write.RawMessages) {
+					for _, item := range PublicProgressFromTrace(write.Trace) {
 						require.NotEqual(t, PublicProgressWorking, item.State)
 						require.NotEqual(t, PublicProgressCompleted, item.State)
 					}
 				}
 
-				progress := PublicProgressFromTrace(writes[len(writes)-1].RawMessages)
+				progress := PublicProgressFromTrace(writes[len(writes)-1].Trace)
 				require.Len(t, progress, 2)
 				require.Equal(t, PublicProgressBlocked, progress[0].State)
 				require.Equal(t, PublicProgressBlocked, progress[1].State)
@@ -2104,33 +2130,24 @@ Use this skill for docs.
 }
 
 func TestLooperDirectSkillRejectsBeforeModelRequest(t *testing.T) {
-	for _, failure := range []string{"none", "start", "trace", "close"} {
+	for _, failure := range []string{"none", "start", "trace"} {
 		t.Run(failure, func(t *testing.T) {
 			mock := mockResponses(responseWithMessage("resp-final", "should not run"))
 			looper := testLooper(mock)
 			looper.Tools = map[string]looperTool{"skill": testLooperTool("skill")}
 			output := make(chan ChatResponse, 10)
-			sink := recordingCheckpointSink()
-			looper.CheckpointSink = sink
+			sink := recordingJournal()
+			looper.Journal = sink
 			errDisk := errors.New("local persistence sentinel")
 
 			if failure == "start" {
-				sink.StartActiveTurnFunc = func(context.Context, *ActiveTurnCheckpoint) error { return errDisk }
+				sink.SaveFunc = func(context.Context, string, json.RawMessage) error { return errDisk }
 			}
 
 			if failure == "trace" {
-				sink.RecordOutputTraceFunc = func(context.Context, string, []json.RawMessage) error { return errDisk }
+				sink.SaveTraceFunc = func(context.Context, string, []json.RawMessage) error { return errDisk }
 			}
 
-			sink.CloseActiveTurnFunc = func(context.Context, string, PublicProgressState) error {
-				require.Empty(t, output, "terminal persistence precedes outbound delivery")
-
-				if failure == "close" {
-					return errDisk
-				}
-
-				return nil
-			}
 			saves := 0
 
 			input := make(chan PromptInput, 1)
@@ -2179,8 +2196,8 @@ Use this skill for docs.
 			looper.Tools = map[string]looperTool{"skill": factory.skillTool()}
 			looper.expandInputPrompts = true
 			looper.promptExpansion = factory.promptExpansion
-			sink := recordingCheckpointSink()
-			looper.CheckpointSink = sink
+			sink := recordingJournal()
+			looper.Journal = sink
 			output := make(chan ChatResponse, 10)
 			saves := 0
 
@@ -2223,21 +2240,17 @@ Use this skill for docs.
 				message = got[0].Text
 
 				require.Empty(t, newParams(mock))
-				require.Len(t, sink.StartActiveTurnCalls(), 1)
-				checkpoint := sink.StartActiveTurnCalls()[0].ActiveTurnCheckpoint
-				require.NotEmpty(t, checkpoint.TurnID)
-				require.Len(t, checkpoint.ReplayInput, 1)
-				require.JSONEq(t, marshalJSON(t, promptInputMessage(&call)), string(checkpoint.ReplayInput[0]))
-				require.Len(t, sink.RecordOutputTraceCalls(), 1)
-				require.Equal(t, checkpoint.TurnID, sink.RecordOutputTraceCalls()[0].S)
-				require.Equal(t, []PublicProgress{{ID: "input-error", Kind: PublicProgressText, State: PublicProgressFailed, Text: message, Agent: looper.agent.Name, Model: looper.DisplayModel}}, PublicProgressFromTrace(sink.RecordOutputTraceCalls()[0].RawMessages))
-				require.Len(t, sink.CloseActiveTurnCalls(), 1)
-				require.Equal(t, checkpoint.TurnID, sink.CloseActiveTurnCalls()[0].S)
-				require.Equal(t, PublicProgressFailed, sink.CloseActiveTurnCalls()[0].PublicProgressState)
+				starts := turnSaves(t, sink)
+				require.Len(t, starts, 1)
+				require.NotEmpty(t, starts[0].Record.TurnID)
+				require.Len(t, starts[0].Record.ReplayInput, 1)
+				require.JSONEq(t, marshalJSON(t, promptInputMessage(&call)), string(starts[0].Record.ReplayInput[0]))
+				require.Len(t, sink.SaveTraceCalls(), 1)
+				require.Equal(t, starts[0].Record.TurnID, sink.SaveTraceCalls()[0].TurnID)
+				require.Equal(t, []PublicProgress{{ID: "input-error", Kind: PublicProgressText, State: PublicProgressFailed, Text: message, Agent: looper.agent.Name, Model: looper.DisplayModel}}, PublicProgressFromTrace(sink.SaveTraceCalls()[0].Trace))
 				require.True(t, looper.observations.closed)
 				require.NoError(t, looper.observations.observe(t.Context(), &PublicProgress{ID: "late", Kind: PublicProgressText, State: PublicProgressWorking}))
-				require.Len(t, sink.RecordOutputTraceCalls(), 1, "closed owner must not resurrect failed progress")
-				require.Empty(t, sink.ClearCompletedTurnCalls())
+				require.Len(t, sink.SaveTraceCalls(), 1, "closed owner must not resurrect failed progress")
 			}
 
 			_, err = factory.promptExpansion.root.Stat("executed")
@@ -2276,8 +2289,8 @@ func TestLooperMixedSkillSteersDoNotSilentlyLoseAcceptedWork(t *testing.T) {
 	looper := testLooper(mock)
 	looper.Permissions = agentWithSkillPermission().Permission
 	looper.Tools = map[string]looperTool{"skill": factory.skillTool()}
-	sink := recordingCheckpointSink()
-	looper.CheckpointSink = sink
+	sink := recordingJournal()
+	looper.Journal = sink
 	steers := []PromptInput{
 		{Text: "$docs-helper first", DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "first"}},
 		{Text: "$missing-skill", DirectSkill: &PromptInputDirectSkill{Name: "missing-skill"}},
@@ -2313,11 +2326,9 @@ func TestLooperMixedSkillSteersDoNotSilentlyLoseAcceptedWork(t *testing.T) {
 	require.Len(t, newParams(mock), 1, "failed batch must not reach a continuation request")
 	require.Empty(t, collectResponses(output), "caller owns turn-failure delivery")
 	require.Empty(t, saved, "failed turn must not be persisted as completed")
-	require.Empty(t, sink.ClearCompletedTurnCalls(), "failed turn must retain its checkpoint")
-	require.Empty(t, sink.RecordRecoveredReplayCalls())
-	checkpoints := sink.RecordProviderResponseCalls()
-	require.Len(t, checkpoints, 1)
-	require.JSONEq(t, `[{"content":"start","role":"user","type":"message"},{"content":"original answer","id":"resp-final-msg","role":"assistant","type":"message"}]`, marshalJSON(t, checkpoints[0].ActiveTurnCheckpoint.ReplayInput))
+	journaled := turnSaves(t, sink)
+	require.Len(t, journaled, 2)
+	require.JSONEq(t, `[{"content":"start","role":"user","type":"message"},{"content":"original answer","id":"resp-final-msg","role":"assistant","type":"message"}]`, marshalJSON(t, journaled[1].Record.ReplayInput))
 }
 
 func TestLooperEmitsToolDiagnosticsWhenEnabled(t *testing.T) {
@@ -2520,8 +2531,8 @@ func TestLooperOmitsInterruptedTurnsFromSession(t *testing.T) {
 		return nil, ctx.Err()
 	})
 	looper := testLooper(mock)
-	sink := recordingCheckpointSink()
-	looper.CheckpointSink = sink
+	sink := recordingJournal()
+	looper.Journal = sink
 	interrupts := make(chan os.Signal, 1)
 
 	var saved []SessionEntry
@@ -2554,95 +2565,192 @@ func TestLooperOmitsInterruptedTurnsFromSession(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, turns)
 
-	recovered := sink.RecordRecoveredReplayCalls()
-	require.NotEmpty(t, recovered)
-	interrupted := recovered[len(recovered)-1].ActiveTurnCheckpoint
-	require.Len(t, interrupted.ReplayInput, 2)
-	require.Contains(t, string(interrupted.ReplayInput[1]), recoveryReplayMessageText)
-	require.Len(t, sink.CloseActiveTurnCalls(), 1)
-	require.Equal(t, PublicProgressStopped, sink.CloseActiveTurnCalls()[0].PublicProgressState)
+	journaled := turnSaves(t, sink)
+	require.Len(t, journaled[len(journaled)-1].Record.ReplayInput, 1, "an interrupted turn adds no restart text")
 }
 
-func TestLooperContextCancellationDuringProviderCallMarksInterruptedCheckpoint(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	started := make(chan struct{})
-	mock := mockResponseFunc(func(ctx context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
-		close(started)
-		<-ctx.Done()
-
-		return nil, ctx.Err()
-	})
-	looper := testLooper(mock)
-	sink := recordingCheckpointSink()
-	looper.CheckpointSink = sink
-	output := make(chan ChatResponse, 10)
+// runJournaledTurn runs one prompt with a stable turn ID against journal, returning the error and responses.
+func runJournaledTurn(ctx context.Context, looper *looper, journal *mockJournal, text string) ([]ChatResponse, error) {
+	looper.Journal = journal
+	output := make(chan ChatResponse, 20)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "will cancel", output)
+	prompt := testPromptInput(PromptInputRoleUser, text, output)
+
+	prompt.TurnID = "turn-1"
+	input <- prompt
 
 	close(input)
 
-	var group errgroup.Group
-	group.Go(func() error {
-		return looper.Loop(ctx, input, emptySession(), discardSession, make(chan os.Signal, 1))
-	})
-	<-started
-	cancel()
+	err := looper.Loop(ctx, input, emptySession(), discardSession, make(chan os.Signal, 1))
 
-	err := group.Wait()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "request response")
-
-	recovered := sink.RecordRecoveredReplayCalls()
-	require.NotEmpty(t, recovered)
-	interrupted := recovered[len(recovered)-1].ActiveTurnCheckpoint
-	require.Contains(t, marshalJSON(t, interrupted.ReplayInput), recoveryReplayMessageText)
-	require.Len(t, sink.CloseActiveTurnCalls(), 1)
-	require.Empty(t, sink.CloseActiveTurnCalls()[0].PublicProgressState, "shutdown retains restart recovery")
+	return collectResponses(output), err
 }
 
-func TestLooperCancellationDuringToolDispatchMarksInterruptedCheckpoint(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	mock := mockResponses(responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "task", `{"description":"work"}`)}))
-	looper := testLooper(mock)
-	sink := recordingCheckpointSink()
-	looper.CheckpointSink = sink
-	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
-	tool := testLooperTool("task")
-	tool.Call = func(ctx context.Context, _ json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
+func TestLooperResumesCancelledProviderCallWithoutRestartText(t *testing.T) {
+	journal := recordingJournal()
+	ctx, cancel := context.WithCancel(t.Context())
+	cut := testLooper(mockResponseFunc(func(context.Context, *responses.ResponseNewParams) (*responses.Response, error) {
 		cancel()
-		<-ctx.Done()
+		return nil, context.Canceled
+	}))
+	_, err := runJournaledTurn(ctx, cut, journal, "question")
+	require.ErrorContains(t, err, "request response")
 
-		return ToolResult{}, ctx.Err()
+	mock := mockResponses(responseWithMessage("resp-final", "answer"))
+	got, err := runJournaledTurn(t.Context(), testLooper(mock), journal, "question")
+	require.NoError(t, err)
+	require.Equal(t, []ChatResponse{assistantMessage("answer")}, got)
+	require.Len(t, newParams(mock), 1)
+
+	sent := marshalJSON(t, newParams(mock)[0].Input.OfInputItemList)
+	require.Equal(t, 1, strings.Count(sent, "question"), "the resumed turn keeps one copy of its prompt")
+	require.NotContains(t, sent, "restart")
+	require.NotContains(t, sent, "interrupted")
+}
+
+// A resumed turn's embedder re-offers every steer it accepted; only those not yet in the turn are injected.
+func TestLooperResumedTurnInjectsEachSteerOnce(t *testing.T) {
+	journal := recordingJournal()
+	ctx, cancel := context.WithCancel(t.Context())
+	cut := testLooper(mockResponseFunc(func(_ context.Context, params *responses.ResponseNewParams) (*responses.Response, error) {
+		if len(params.Input.OfInputItemList) == 1 {
+			return responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "lookup", `{}`)}), nil
+		}
+
+		cancel()
+
+		return nil, context.Canceled
+	}))
+	tool := testLooperTool("lookup")
+	tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+		return TextToolResult("looked-up"), nil
 	}
-	looper.Tools = map[string]looperTool{"task": tool}
-	output := make(chan ChatResponse, 10)
-
-	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "delegate", output)
-
-	close(input)
-
-	saved := []SessionEntry{}
-	err := looper.Loop(ctx, input, emptySession(), func(entry SessionEntry) error {
-		saved = append(saved, entry)
-
-		return nil
-	}, make(chan os.Signal, 1))
-
+	cut.Tools, cut.Permissions = map[string]looperTool{"lookup": tool}, PermissionSet{Buckets: []PermissionBucket{{Name: "lookup", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
+	cut.SteerDrain = SteerDrain{Fn: func(context.Context, TurnPhase) []PromptInput {
+		return []PromptInput{{ID: "steer-1", Text: "injected before the cut"}}
+	}}
+	_, err := runJournaledTurn(ctx, cut, journal, "work")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "dispatch tool calls")
-	require.Empty(t, saved)
 
-	recovered := sink.RecordRecoveredReplayCalls()
-	require.NotEmpty(t, recovered)
-	interrupted := recovered[len(recovered)-1].ActiveTurnCheckpoint
-	require.Len(t, interrupted.OpenFunctionCalls, 1)
-	require.Equal(t, "call-1", interrupted.OpenFunctionCalls[0].CallID)
-	require.Contains(t, marshalJSON(t, interrupted.ReplayInput), taskAbortedToolOutputText)
-	require.Contains(t, marshalJSON(t, interrupted.ReplayInput), recoveryReplayMessageText)
+	mock := mockResponses(responseWithMessage("resp-1", "first"), responseWithMessage("resp-2", "done"))
+	resumed := testLooper(mock)
+	offered := false
+	resumed.SteerDrain = SteerDrain{Fn: func(context.Context, TurnPhase) []PromptInput {
+		if offered {
+			return nil
+		}
+
+		offered = true
+
+		return []PromptInput{{ID: "steer-1", Text: "injected before the cut"}, {ID: "steer-2", Text: "drained but not journaled"}}
+	}}
+	_, err = runJournaledTurn(t.Context(), resumed, journal, "work")
+	require.NoError(t, err)
+	require.Len(t, newParams(mock), 2)
+
+	sent := marshalJSON(t, newParams(mock)[1].Input.OfInputItemList)
+	require.Equal(t, 1, strings.Count(sent, "injected before the cut"))
+	require.Equal(t, 1, strings.Count(sent, "drained but not journaled"))
+}
+
+func TestLooperResumesFromRecordedCallResults(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		cause       error
+		interrupted int
+	}{
+		{"shutdown lets running calls finish", ErrShutdown, 0},
+		{"other cancellation cuts running calls off", context.Canceled, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			journal := recordingJournal()
+			calls := map[string]int{}
+
+			var mu sync.Mutex
+
+			ctx, cancel := context.WithCancelCause(t.Context())
+			tools := func() map[string]looperTool {
+				finished := testLooperTool("finished")
+				finished.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+					mu.Lock()
+					defer mu.Unlock()
+
+					calls["finished"]++
+
+					return TextToolResult("finished-result"), nil
+				}
+				draining := testLooperTool("draining")
+				draining.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+					mu.Lock()
+					defer mu.Unlock()
+
+					calls["draining"]++
+
+					cancel(tc.cause)
+
+					return TextToolResult("draining-result"), nil
+				}
+				running := testLooperTool("running")
+				running.Call = func(ctx context.Context, _ json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
+					mu.Lock()
+					defer mu.Unlock()
+
+					calls["running"]++
+
+					if ctx.Err() != nil {
+						return ToolResult{}, ctx.Err()
+					}
+
+					return TextToolResult("running-result"), nil
+				}
+
+				return map[string]looperTool{"finished": finished, "draining": draining, "running": running}
+			}
+			allow := []PermissionRule{{Pattern: "*", Action: permissionAllow}}
+			permissions := PermissionSet{Buckets: []PermissionBucket{{Name: "finished", Rules: allow}, {Name: "draining", Rules: allow}, {Name: "running", Rules: allow}}}
+			batch := responseWithFunctionCalls("resp-tools", []responses.ResponseFunctionToolCall{
+				testFunctionCall("tool-1", "call-1", "finished", `{}`),
+				testFunctionCall("tool-2", "call-2", "draining", `{}`),
+				testFunctionCall("tool-3", "call-3", "running", `{}`),
+			})
+
+			cut := testLooper(mockResponses(batch))
+			cut.Tools, cut.Permissions, cut.ParallelToolCalls = tools(), permissions, 1
+			_, err := runJournaledTurn(ctx, cut, journal, "work")
+			require.Error(t, err)
+			require.Equal(t, map[string]int{"finished": 1, "draining": 1, "running": 1}, calls)
+
+			mock := mockResponses(responseWithMessage("resp-final", "done"))
+			resumed := testLooper(mock)
+			resumed.Tools, resumed.Permissions = tools(), permissions
+			got, err := runJournaledTurn(t.Context(), resumed, journal, "work")
+			require.NoError(t, err)
+			require.Equal(t, []ChatResponse{assistantMessage("done")}, got)
+			require.Equal(t, map[string]int{"finished": 1, "draining": 1, "running": 1}, calls, "no recorded or started call runs again")
+
+			sent := marshalJSON(t, newParams(mock)[0].Input.OfInputItemList)
+			require.Contains(t, sent, "finished-result")
+			require.Contains(t, sent, "draining-result", "a call that completed during cancellation keeps its real output")
+			require.Equal(t, tc.interrupted, strings.Count(sent, genericAbortedToolOutputText))
+			require.Equal(t, tc.interrupted == 0, strings.Contains(sent, "running-result"), "shutdown lets the running call finish and keep its output")
+		})
+	}
+}
+
+func TestLooperResumedFinalAnswerSkipsModelCall(t *testing.T) {
+	journal := recordingJournal()
+	_, err := runJournaledTurn(t.Context(), testLooper(mockResponses(responseWithMessage("resp-final", "answer"))), journal, "question")
+	require.NoError(t, err)
+
+	steps := turnSaves(t, journal)
+	require.NotEmpty(t, steps[len(steps)-1].Response)
+
+	mock := mockResponses()
+	got, err := runJournaledTurn(t.Context(), testLooper(mock), journal, "question")
+	require.NoError(t, err)
+	require.Equal(t, []ChatResponse{assistantMessage("answer")}, got)
+	require.Empty(t, newParams(mock), "a recorded final answer finishes without calling the model")
 }
 
 func TestLooperPrintsCommentaryResponses(t *testing.T) {
@@ -2668,7 +2776,7 @@ func TestLooperRetriesRateLimitExceededFailedResponse(t *testing.T) {
 			failedResponseWithCode("resp-rate", responses.ResponseErrorCodeRateLimitExceeded, "too many requests"),
 			responseWithMessage("resp-ok", "done"),
 		)
-		sink := recordingCheckpointSink()
+		sink := recordingJournal()
 		newResponse := mock.NewFunc
 		mock.NewFunc = func(ctx context.Context, params *responses.ResponseNewParams, observer responseObserver, opts ...option.RequestOption) (*responses.Response, error) {
 			resp, err := newResponse(ctx, params, observer, opts...)
@@ -2685,7 +2793,7 @@ func TestLooperRetriesRateLimitExceededFailedResponse(t *testing.T) {
 			return resp, err
 		}
 		looper := testLooper(mock)
-		looper.CheckpointSink = sink
+		looper.Journal = sink
 		looper.Diagnostics = true
 		output := make(chan ChatResponse, 10)
 
@@ -2699,9 +2807,9 @@ func TestLooperRetriesRateLimitExceededFailedResponse(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, newParams(mock), 2)
 
-		writes := sink.RecordOutputTraceCalls()
-		require.Empty(t, PublicProgressFromTrace(writes[2].RawMessages), "looper retry removes failed public attempt")
-		progress := PublicProgressFromTrace(writes[len(writes)-1].RawMessages)
+		writes := sink.SaveTraceCalls()
+		require.Empty(t, PublicProgressFromTrace(writes[2].Trace), "looper retry removes failed public attempt")
+		progress := PublicProgressFromTrace(writes[len(writes)-1].Trace)
 		require.Len(t, progress, 1)
 		require.Equal(t, "done", progress[0].Text)
 
@@ -2895,7 +3003,7 @@ func TestLooperLoopRequiresPromptResponseChannel(t *testing.T) {
 }
 
 func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
-	sink := recordingCheckpointSink()
+	sink := recordingJournal()
 	providerCalls := 0
 	mock := mockResponseFunc(func(_ context.Context, params *responses.ResponseNewParams) (*responses.Response, error) {
 		providerCalls++
@@ -2903,21 +3011,18 @@ func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
 			return responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "lookup", `{}`)}), nil
 		}
 
-		checkpoints := sink.RecordProviderResponseCalls()
-		require.Len(t, checkpoints, 2, "accepted steer must be durable before continuation request")
-		checkpoint := checkpoints[1].ActiveTurnCheckpoint
-		require.Len(t, checkpoint.ReplayInput, 4)
-		require.JSONEq(t, `{"content":"don't touch the database","role":"user","type":"message","input_id":"steer-1"}`, string(checkpoint.ReplayInput[3]))
-		require.Empty(t, checkpoint.OpenFunctionCalls)
-		require.Len(t, checkpoint.CompletedFunctionOutputs, 1)
-		require.Equal(t, "call-1", checkpoint.CompletedFunctionOutputs[0].CallID)
-		require.JSONEq(t, string(checkpoint.ReplayInput[2]), marshalJSON(t, params.Input.OfInputItemList[2]))
+		saves := turnSaves(t, sink)
+		checkpoint := saves[len(saves)-1]
+		require.Empty(t, checkpoint.Response, "accepted steer must be durable before continuation request")
+		require.Len(t, checkpoint.Record.ReplayInput, 4)
+		require.JSONEq(t, `{"content":"don't touch the database","role":"user","type":"message","input_id":"steer-1"}`, string(checkpoint.Record.ReplayInput[3]))
+		require.JSONEq(t, string(checkpoint.Record.ReplayInput[2]), marshalJSON(t, params.Input.OfInputItemList[2]))
 		require.NotContains(t, marshalJSON(t, params.Input.OfInputItemList), "input_id")
 
 		return responseWithMessage("resp-final", "done"), nil
 	})
 	looper := testLooper(mock)
-	looper.CheckpointSink = sink
+	looper.Journal = sink
 	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "lookup", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
 	tool := testLooperTool("lookup")
 	tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
@@ -2946,7 +3051,7 @@ func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
 	require.Contains(t, marshalJSON(t, newParams(mock)[1].Input.OfInputItemList), `"role":"user"`)
 	require.Contains(t, marshalJSON(t, newParams(mock)[1].Input.OfInputItemList), `"content":"don't touch the database"`)
 	require.Equal(t, TurnPhaseFinalAnswer, looper.Phase())
-	require.Len(t, sink.RecordProviderResponseCalls(), 3, "empty steer drain must not write a checkpoint")
+	require.Len(t, turnSaves(t, sink), 4, "start, two provider responses, and one tool batch")
 }
 
 func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
@@ -3065,8 +3170,8 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 		)
 		looper := testLooper(mock)
 		looper.ParallelToolCalls = 3
-		sink := recordingCheckpointSink()
-		looper.CheckpointSink = sink
+		sink := recordingJournal()
+		looper.Journal = sink
 		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{
 			{Name: "first", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
 			{Name: "second", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
@@ -3123,14 +3228,14 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 
 			synctest.Wait()
 
-			writes := sink.RecordOutputTraceCalls()
+			writes := sink.SaveTraceCalls()
 			require.NotEmpty(t, writes, "individual completion must persist before A releases")
-			progress := PublicProgressFromTrace(writes[len(writes)-1].RawMessages)
+			progress := PublicProgressFromTrace(writes[len(writes)-1].Trace)
 			require.Len(t, progress, 3)
 			require.Equal(t, []string{"call-A", "call-B", "call-C"}, []string{progress[0].ID, progress[1].ID, progress[2].ID})
 			require.Equal(t, PublicProgressWorking, progress[0].State)
 			require.Equal(t, PublicProgressCompleted, progress[index].State)
-			require.Empty(t, sink.RecordCompletedToolOutputCalls(), "replay stays behind the join")
+			require.Len(t, turnSaves(t, sink), 2, "turn items stay behind the join while each call journals its own result")
 			require.Len(t, newParams(mock), 1)
 		}
 
@@ -3181,7 +3286,7 @@ func TestLooperInjectsSteersWhenNoTools(t *testing.T) {
 		`{"content":"and skip lint","role":"user","type":"message"}`,
 	}
 
-	sink := recordingCheckpointSink()
+	sink := recordingJournal()
 	providerCalls := 0
 	mock := mockResponseFunc(func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
 		providerCalls++
@@ -3189,18 +3294,19 @@ func TestLooperInjectsSteersWhenNoTools(t *testing.T) {
 			return responseWithMessage("resp-first", "4"), nil
 		}
 
-		checkpoints := sink.RecordProviderResponseCalls()
-		require.Len(t, checkpoints, 2, "accepted steers must be durable before continuation request")
-		require.Len(t, checkpoints[1].ActiveTurnCheckpoint.ReplayInput, 5)
+		saves := turnSaves(t, sink)
+		checkpoint := saves[len(saves)-1]
+		require.Empty(t, checkpoint.Response, "accepted steers must be durable before continuation request")
+		require.Len(t, checkpoint.Record.ReplayInput, 5)
 
 		for i, expected := range want {
-			require.JSONEq(t, expected, string(checkpoints[1].ActiveTurnCheckpoint.ReplayInput[2+i]))
+			require.JSONEq(t, expected, string(checkpoint.Record.ReplayInput[2+i]))
 		}
 
 		return responseWithMessage("resp-final", "done"), nil
 	})
 	looper := testLooper(mock)
-	looper.CheckpointSink = sink
+	looper.Journal = sink
 	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []PromptInput {
 		phases = append(phases, phase)
 		if phase != TurnPhaseFinalAnswer || len(phases) > 1 {
@@ -3357,13 +3463,23 @@ func compactedResponse(id, encryptedContent string) *responses.CompactedResponse
 	return &compacted
 }
 
+// testResponse carries provider JSON like a decoded API response, so journaled turns can resume from it.
 func testResponse(id string, output []responses.ResponseOutputItemUnion) *responses.Response {
-	var response responses.Response
+	response := responses.Response{ID: id, Output: output}
 
-	response.ID = id
-	response.Output = output
+	raw, err := json.Marshal(testSDKResponseBody(&response))
+	if err != nil {
+		panic(err)
+	}
 
-	return &response
+	var decoded responses.Response
+	if err := decoded.UnmarshalJSON(raw); err != nil {
+		panic(err)
+	}
+
+	decoded.Output = output
+
+	return &decoded
 }
 
 func testOutputText(text string) responses.ResponseOutputMessageContentUnion {

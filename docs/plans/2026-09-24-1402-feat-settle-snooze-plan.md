@@ -56,7 +56,7 @@ Read state and settlement overlap as attention-management actions. The requested
 ### Key Technical Decisions
 
 - KTD1. Store one optional snooze deadline on managed conversations and evaluate it through `SidebarSessions`; use the existing refresh loop rather than a scheduler. `SetConversationSettled`, `appendSessionEntry`, and external-history synchronization already own the related state transitions.
-- KTD2. Evolve the existing session-update RPC for snooze and remove its unread field. Reserve removed protobuf tags, regenerate bindings, and add a forward database migration that drops the obsolete column/index. Preserve applied migration identities: `internal/rocketclaw/docs/solutions/runtime-errors/deployment-binary-missing-live-migrations.md` documents why removing old migration files breaks deployed databases.
+- KTD2. Evolve the existing session-update RPC for snooze and remove its unread field. Reserve removed protobuf tags, regenerate bindings, and add a forward database migration that drops the obsolete column/index. Preserve applied migration identities: `docs/solutions/runtime-errors/deployment-binary-missing-live-migrations.md` documents why removing old migration files breaks deployed databases.
 - KTD3. Use the deadline as the inactivity baseline after expiry so an old chat receives a fresh auto-settlement window. Explicit settlement cancels snooze; snooze clears explicit settlement. New activity and manual Unsettle clear the deadline in the same database update as settlement.
 
 ### Assumptions

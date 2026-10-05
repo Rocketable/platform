@@ -591,12 +591,12 @@ func TestSidebarSessionsAutoSettleAndReopen(t *testing.T) {
 	require.NoError(t, err)
 	_, err = service.SetConversationSettled(ctx, "manual", true)
 	require.NoError(t, err)
-	require.NoError(t, service.UpsertActiveTurn(ctx, &harness.ActiveTurnCheckpoint{TurnID: "active", ConversationKey: "running", Agent: "main", Model: "test"}, nil))
+	seedActiveTurn(t, service, "running", "active", nil)
 
 	for _, terminal := range []protocol.Terminal{protocol.TerminalFailed, protocol.TerminalStopped} {
 		id := string(terminal)
-		require.NoError(t, service.UpsertActiveTurn(ctx, &harness.ActiveTurnCheckpoint{TurnID: id, ConversationKey: id, Agent: "main", Model: "test"}, nil))
-		require.NoError(t, service.SetActiveTurnTerminal(ctx, id, terminal))
+		seedActiveTurn(t, service, id, id, nil)
+		endTestTurn(t, service, id, id, terminal)
 	}
 
 	got := make(map[string]bool)
@@ -814,7 +814,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	}
 
 	for _, turnID := range []string{"active-first", "active-second"} {
-		require.NoError(t, service.UpsertActiveTurn(t.Context(), &harness.ActiveTurnCheckpoint{TurnID: turnID, ConversationKey: "a", Agent: "main", Model: "test"}, nil))
+		seedActiveTurn(t, service, "a", turnID, nil)
 	}
 
 	_, err := service.AppendEntryID(t.Context(), "zero", &harness.SessionEntry{})

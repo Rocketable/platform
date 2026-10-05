@@ -11,9 +11,6 @@ inpackage: true
 packages:
   github.com/Rocketable/platform/cmd/rocketclaw:
     interfaces:
-      cronRootSender:
-        config:
-          structname: cronRootSenderMock
       mcpRelay:
         config:
           structname: mcpRelayMock
@@ -33,12 +30,6 @@ packages:
             pkgname: main
             structname: SlackFrontendMock
             inpackage: false
-      startupRecoveryStore:
-        config:
-          structname: startupRecoveryStoreMock
-      startupSteerSurface:
-        config:
-          structname: startupSteerSurfaceMock
       directBridge:
         config:
           structname: directBridgeMock
@@ -93,6 +84,12 @@ packages:
           structname: channelFactsStoreMock
   github.com/Rocketable/platform/internal/rocketclaw/protocol:
     interfaces:
+      OutboundPublisher:
+        config:
+          dir: '{{.ConfigDir}}/internal/rocketclaw/backend'
+          pkgname: backend
+          structname: outboundPublisherMock
+          inpackage: false
       PrimaryTextRouter:
         config:
           dir: '{{.ConfigDir}}/internal/rocketclaw/frontend/slack'
@@ -107,9 +104,9 @@ packages:
           structname: agentRunnerMock
   github.com/Rocketable/platform/internal/rocketcode:
     interfaces:
-      CheckpointSink:
+      Journal:
         config:
-          structname: mockCheckpointSink
+          structname: mockJournal
       ChildSessions:
         config:
           structname: mockChildSessions

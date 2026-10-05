@@ -103,7 +103,6 @@ type Connector struct {
 	poppedQueue      map[string]struct{}
 	queueCards       map[string]string
 	questions        map[string]*slackPendingQuestion
-	pendingSteers    protocol.PendingSteersSink
 	observations     map[string]channelObservation
 
 	facts       channelFactsStore
@@ -121,11 +120,15 @@ type channelFactsStore interface {
 	ChannelFact(ctx context.Context, workspaceID, channelID string) (string, bool, error)
 	RecordChannelFact(ctx context.Context, workspaceID, channelID, name string, observedAt time.Time) error
 	SlackChannelIDs(ctx context.Context) ([]string, error)
+	// Turn steps record Slack surfaces under a conversation's turns so a resumed turn re-attaches to them.
+	LoadTurnStep(ctx context.Context, conversationID, key string) (json.RawMessage, bool, error)
+	SaveTurnStep(ctx context.Context, conversationID, key string, value json.RawMessage) error
 }
 
 type slackPendingQuestion struct {
-	target protocol.TextConversationTarget
-	ch     chan protocol.AskUserQuestionAnswer
+	conversationID string
+	target         protocol.TextConversationTarget
+	ch             chan protocol.AskUserQuestionAnswer
 }
 
 type slackReplyState struct {
@@ -217,19 +220,23 @@ func (c *Connector) SidebarChannelAgentChoices(ctx context.Context, channelID st
 	return name, slices.Clone(c.socialModeAgents("@")), nil
 }
 
-// Start authenticates with Slack and begins consuming protocol.
-func (c *Connector) Start(ctx context.Context) error {
-	inboundCtx, inboundStop := context.WithCancel(ctx)
-
+// Authenticate identifies the bot and workspace before other frontends use the connector.
+func (c *Connector) Authenticate() error {
 	auth, err := c.api.AuthTest()
 	if err != nil {
-		inboundStop()
 		return fmt.Errorf("slack auth test failed: %w", err)
 	}
 
 	c.botUserID = auth.UserID
 	c.teamID = auth.TeamID
 	c.workspaceURL = strings.TrimRight(auth.URL, "/")
+
+	return nil
+}
+
+// Start begins consuming Slack input; call it after Authenticate.
+func (c *Connector) Start(ctx context.Context) error {
+	inboundCtx, inboundStop := context.WithCancel(ctx)
 
 	c.mu.Lock()
 	c.inboundStop = inboundStop
@@ -241,44 +248,6 @@ func (c *Connector) Start(ctx context.Context) error {
 	c.factsGroup.Go(func() error { return c.refreshChannelFacts(inboundCtx) })
 
 	return nil
-}
-
-// SetPendingSteersSink copies live pending Slack Steers onto the active-turn row.
-func (c *Connector) SetPendingSteersSink(sink protocol.PendingSteersSink) {
-	c.pendingSteers = sink
-}
-
-// DiscardPendingSteers drops uninjected Slack Steers with the interruption reaction.
-func (c *Connector) DiscardPendingSteers(ctx context.Context, steers []protocol.PendingSteer) {
-	for i := range steers {
-		reply := &protocol.SlackReplyTarget{ChannelID: steers[i].SlackChannel, MessageTS: steers[i].SlackTS, ThreadTS: steers[i].SlackThreadTS}
-		c.removeReaction(ctx, reply, slackBufferedReaction, "remove discarded Slack steer hourglass")
-		c.addReaction(ctx, reply, slackInterruptionReaction, "add discarded Slack interruption reaction")
-	}
-}
-
-// RestorePendingSteers loads persisted Slack Steers onto the connector before a recovered turn can drain.
-func (c *Connector) RestorePendingSteers(conversationID string, steers []protocol.PendingSteer) {
-	channelID, threadTS, ok := protocol.SlackThreadTarget(conversationID)
-	if !ok {
-		return
-	}
-
-	key := slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: channelID, ThreadTS: threadTS})
-
-	pending := make([]slackBufferedMessage, 0, len(steers))
-	for i := range steers {
-		steer := steers[i]
-		pending = append(pending, slackBufferedMessage{
-			Text:      steer.Text,
-			Principal: steer.Principal,
-			Reply:     &protocol.SlackReplyTarget{ChannelID: steer.SlackChannel, MessageTS: steer.SlackTS, ThreadTS: steer.SlackThreadTS},
-		})
-	}
-
-	c.mu.Lock()
-	c.stacks[key] = pending
-	c.mu.Unlock()
 }
 
 // ActivateEnqueue posts the 📨 consume card, then one in-progress placeholder.
@@ -325,10 +294,6 @@ func (c *Connector) DrainSteers(ctx context.Context, conversationID string) []st
 		return nil
 	}
 
-	if len(pending) > 0 {
-		c.persistPendingSteers(key)
-	}
-
 	texts := make([]string, 0, len(pending))
 	for i := range pending {
 		c.removeReaction(ctx, pending[i].Reply, slackBufferedReaction, "remove Slack steer hourglass")
@@ -367,20 +332,57 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 		return nil
 	}
 
-	slots, ok := c.responseSlots(msg)
 	if !msg.Complete {
-		if !ok {
-			var err error
+		if _, live := c.replyState(msg.TurnID); live {
+			return nil
+		}
 
-			slots, err = c.createReplyPlaceholder(ctx, msg.SlackReply, slackImmediatePlaceholder)
-			if err != nil {
+		key := protocol.ReplyStepKey(msg.TurnID)
+
+		recorded, found, err := c.facts.LoadTurnStep(ctx, msg.ConversationID, key)
+		if err != nil {
+			return fmt.Errorf("load recorded Slack reply placeholder: %w", err)
+		}
+
+		var slots slackReplyState
+		if found {
+			if err := json.Unmarshal(recorded, &slots); err != nil {
+				return fmt.Errorf("decode recorded Slack reply placeholder: %w", err)
+			}
+
+			c.setReplyState(msg.TurnID, &slots)
+
+			return nil
+		}
+
+		slots, ok := c.responseSlots(msg)
+		if !ok {
+			if slots, err = c.createReplyPlaceholder(ctx, msg.SlackReply, slackImmediatePlaceholder); err != nil {
 				return err
 			}
 
 			c.setReplyState(msg.TurnID, &slots)
 		}
 
+		data, err := json.Marshal(slots)
+		if err != nil {
+			return fmt.Errorf("encode Slack reply placeholder: %w", err)
+		}
+
+		if err := c.facts.SaveTurnStep(ctx, msg.ConversationID, key, data); err != nil {
+			return fmt.Errorf("record Slack reply placeholder: %w", err)
+		}
+
 		return nil
+	}
+
+	slots, ok := c.responseSlots(msg)
+	if !ok && msg.ReplyState != nil {
+		if err := json.Unmarshal(msg.ReplyState, &slots); err != nil {
+			return fmt.Errorf("decode stored Slack reply placeholder: %w", err)
+		}
+
+		ok = true
 	}
 
 	setMCPAttachmentOnlyResponseText(msg)
@@ -507,17 +509,24 @@ func (c *Connector) SendCronjobRoot(ctx context.Context, msg *protocol.OutboundM
 
 	fallbackText, blocks, overflow := cronjobMessageLayout(*msg.Cronjob, msg.Text)
 
-	channelID, threadTS, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(blocks...))
+	key := msg.TurnID + "/cron-root"
+	blocks[0].(*slack.HeaderBlock).BlockID = key
+
+	root, posted, err := c.postOnce(ctx, msg.ConversationID, key, key, channelID, "", slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(blocks...))
 	if err != nil {
 		return protocol.TextConversationTarget{}, fmt.Errorf("post Slack cronjob root: %w", err)
 	}
 
-	root := protocol.TextConversationTarget{ChannelID: channelID, MessageID: threadTS, ThreadID: threadTS}
-	if err := c.postResponseChunks(ctx, channelID, threadTS, overflow, nil); err != nil {
+	root.ThreadID = root.MessageID
+	if !posted {
+		return root, nil
+	}
+
+	if err := c.postResponseChunks(ctx, root.ChannelID, root.ThreadID, overflow, nil); err != nil {
 		return root, err
 	}
 
-	return root, c.uploadResponseAttachments(ctx, channelID, threadTS, msg.Attachments)
+	return root, c.uploadResponseAttachments(ctx, root.ChannelID, root.ThreadID, msg.Attachments)
 }
 
 // StartNewThreadRoot posts the root message for a model-created Slack conversation.
@@ -578,17 +587,28 @@ func (c *Connector) AskUserQuestion(ctx context.Context, req *protocol.AskUserQu
 	elements = append(elements, slack.NewButtonBlockElement(slackQuestionCustomActionID, slackQuestionCustomActionID, slack.NewTextBlockObject(slack.PlainTextType, "Custom response", false, false)))
 	blocks = append(blocks, slack.NewActionBlock(req.ID, elements...))
 
+	if recorded, answered, err := c.facts.LoadTurnStep(ctx, req.ConversationID, req.ID+"/answer"); err != nil || answered {
+		var answer protocol.AskUserQuestionAnswer
+		if err == nil {
+			err = json.Unmarshal(recorded, &answer)
+		}
+
+		if err != nil {
+			return protocol.AskUserQuestionAnswer{}, fmt.Errorf("load recorded Slack answer: %w", err)
+		}
+
+		return answer, nil
+	}
+
+	p := &slackPendingQuestion{conversationID: req.ConversationID, ch: make(chan protocol.AskUserQuestionAnswer, 1)}
 	channelID, threadTS := slackReplyDestination(req.SlackReply)
 
-	postedChannelID, ts, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(text, false), slack.MsgOptionTS(threadTS), slack.MsgOptionBlocks(blocks...))
+	target, _, err := c.postOnce(ctx, req.ConversationID, req.ID+"/question", req.ID, channelID, threadTS, slack.MsgOptionText(text, false), slack.MsgOptionBlocks(blocks...))
 	if err != nil {
 		return protocol.AskUserQuestionAnswer{}, fmt.Errorf("post Slack question: %w", err)
 	}
 
-	p := &slackPendingQuestion{
-		target: protocol.TextConversationTarget{ChannelID: postedChannelID, MessageID: ts, ThreadID: threadTS},
-		ch:     make(chan protocol.AskUserQuestionAnswer, 1),
-	}
+	p.target = target
 
 	c.mu.Lock()
 	c.questions[req.ID] = p
@@ -602,8 +622,10 @@ func (c *Connector) AskUserQuestion(ctx context.Context, req *protocol.AskUserQu
 
 		return answer, nil
 	case <-ctx.Done():
-		if pending := c.takeQuestion(req.ID); pending != nil {
-			c.deleteQuestionMessage(context.WithoutCancel(ctx), pending.target)
+		if !errors.Is(context.Cause(ctx), protocol.ErrBridgeStopped) {
+			if pending := c.takeQuestion(req.ID); pending != nil {
+				c.deleteQuestionMessage(context.WithoutCancel(ctx), pending.target)
+			}
 		}
 
 		return protocol.AskUserQuestionAnswer{}, fmt.Errorf("wait for human answer: %w", ctx.Err())
@@ -841,10 +863,144 @@ func (c *Connector) refreshChannelFacts(ctx context.Context) error {
 	return nil
 }
 
+// slackPosting is recorded before a journaled step posts its Slack message, so a
+// step cut off mid-post finds that message instead of posting it again.
+type slackPosting struct {
+	ChannelID string `json:"channel_id"`
+	ThreadTS  string `json:"thread_ts,omitempty"`
+	Oldest    string `json:"oldest"`
+}
+
+// postOnce posts the message for the journaled step key at most once, and reports
+// whether it posted now. The message must carry blockID: a post cut off before its
+// target was recorded is found by that block ID instead of being repeated.
+func (c *Connector) postOnce(ctx context.Context, conversationID, key, blockID, channelID, threadTS string, options ...slack.MsgOption) (protocol.TextConversationTarget, bool, error) {
+	var target protocol.TextConversationTarget
+
+	recorded, found, err := c.facts.LoadTurnStep(ctx, conversationID, key)
+	if err != nil {
+		return target, false, fmt.Errorf("load recorded Slack post: %w", err)
+	}
+
+	if found {
+		if err := json.Unmarshal(recorded, &target); err != nil {
+			return target, false, fmt.Errorf("decode recorded Slack post: %w", err)
+		}
+
+		return target, false, nil
+	}
+
+	var posting slackPosting
+
+	marker, marked, err := c.facts.LoadTurnStep(ctx, conversationID, key+"/posting")
+	if err != nil {
+		return target, false, fmt.Errorf("load Slack posting marker: %w", err)
+	}
+
+	if marked {
+		if err := json.Unmarshal(marker, &posting); err != nil {
+			return target, false, fmt.Errorf("decode Slack posting marker: %w", err)
+		}
+
+		if ts, err := c.findPosted(ctx, &posting, blockID); err != nil || ts != "" {
+			target = protocol.TextConversationTarget{ChannelID: posting.ChannelID, MessageID: ts, ThreadID: posting.ThreadTS}
+			if err == nil {
+				c.recordPost(ctx, conversationID, key, &target)
+			}
+
+			return target, false, err
+		}
+	}
+
+	posting = slackPosting{ChannelID: channelID, ThreadTS: threadTS, Oldest: fmt.Sprintf("%.6f", float64(time.Now().UnixMicro())/1e6)}
+	if marker, err = json.Marshal(posting); err == nil {
+		err = c.facts.SaveTurnStep(ctx, conversationID, key+"/posting", marker)
+	}
+
+	if err != nil {
+		return target, false, fmt.Errorf("record Slack posting marker: %w", err)
+	}
+
+	if threadTS != "" {
+		options = append(options, slack.MsgOptionTS(threadTS))
+	}
+
+	postedChannelID, ts, err := c.api.PostMessageContext(ctx, channelID, options...)
+	if err != nil {
+		return target, false, fmt.Errorf("post Slack message: %w", err)
+	}
+
+	target = protocol.TextConversationTarget{ChannelID: postedChannelID, MessageID: ts, ThreadID: threadTS}
+	c.recordPost(ctx, conversationID, key, &target)
+
+	return target, true, nil
+}
+
+// recordPost saves a posted message's target. A failure is only logged: the
+// message is already posted, and the posting marker finds it again on replay.
+func (c *Connector) recordPost(ctx context.Context, conversationID, key string, target *protocol.TextConversationTarget) {
+	data, err := json.Marshal(target)
+	if err == nil {
+		err = c.facts.SaveTurnStep(context.WithoutCancel(ctx), conversationID, key, data)
+	}
+
+	if err != nil {
+		c.log.Error("record Slack post", "conversation_id", conversationID, "key", key, "error", err)
+	}
+}
+
+// findPosted returns the timestamp of a message carrying blockID that posting
+// sent, searching its thread or, for a channel root, the channel since Oldest.
+func (c *Connector) findPosted(ctx context.Context, posting *slackPosting, blockID string) (string, error) {
+	cursor := ""
+
+	for {
+		var (
+			messages []slack.Message
+			more     bool
+			err      error
+		)
+
+		if posting.ThreadTS != "" {
+			messages, more, cursor, err = c.api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{ChannelID: posting.ChannelID, Timestamp: posting.ThreadTS, Cursor: cursor})
+		} else {
+			var history *slack.GetConversationHistoryResponse
+
+			history, err = c.api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{ChannelID: posting.ChannelID, Oldest: posting.Oldest, Inclusive: true, Cursor: cursor})
+			if err == nil {
+				messages, more, cursor = history.Messages, history.HasMore, history.ResponseMetaData.NextCursor
+			}
+		}
+
+		if err != nil {
+			return "", fmt.Errorf("find posted Slack message: %w", err)
+		}
+
+		for i := range messages {
+			if slices.ContainsFunc(messages[i].Blocks.BlockSet, func(block slack.Block) bool { return block.ID() == blockID }) {
+				return messages[i].Timestamp, nil
+			}
+		}
+
+		if !more || cursor == "" {
+			return "", nil
+		}
+	}
+}
+
 func (c *Connector) completeQuestion(ctx context.Context, id string, answer protocol.AskUserQuestionAnswer) bool {
 	p := c.takeQuestion(id)
 	if p == nil {
 		return false
+	}
+
+	data, err := json.Marshal(answer)
+	if err == nil {
+		err = c.facts.SaveTurnStep(context.WithoutCancel(ctx), p.conversationID, id+"/answer", data)
+	}
+
+	if err != nil {
+		c.log.Error("record Slack answer", "conversation_id", p.conversationID, "question_id", id, "error", err)
 	}
 
 	c.deleteQuestionMessage(ctx, p.target)
@@ -1135,7 +1291,6 @@ func (c *Connector) bufferSlackStack(ctx context.Context, key, text string, repl
 
 	if active {
 		c.addReaction(ctx, replyTarget, slackBufferedReaction, "add Slack buffered reaction")
-		c.persistPendingSteers(key)
 	}
 
 	return active
@@ -2376,38 +2531,6 @@ func (c *Connector) postSlackDollarCommandHelp(ctx context.Context, channelID, t
 	return reply, nil
 }
 
-func (c *Connector) persistPendingSteers(key string) {
-	_, rest, ok := strings.Cut(key, "\x00")
-	if !ok {
-		return
-	}
-
-	channelID, threadTS, ok := strings.Cut(rest, "\x00")
-	if !ok {
-		return
-	}
-
-	conversationID := protocol.SlackThreadConversationID(channelID, threadTS)
-
-	c.mu.Lock()
-	pending := c.stacks[key]
-	c.mu.Unlock()
-
-	steers := make([]protocol.PendingSteer, 0, len(pending))
-	for i := range pending {
-		steer := protocol.PendingSteer{Text: pending[i].Text, Principal: pending[i].Principal}
-		if pending[i].Reply != nil {
-			steer.SlackChannel = pending[i].Reply.ChannelID
-			steer.SlackTS = pending[i].Reply.MessageTS
-			steer.SlackThreadTS = pending[i].Reply.ThreadTS
-		}
-
-		steers = append(steers, steer)
-	}
-
-	c.pendingSteers.Persist(conversationID, steers)
-}
-
 func (c *Connector) handleEnqueueCommand(ctx context.Context, agent string, content *protocol.InboundContent, userID string, replyTarget *protocol.SlackReplyTarget) {
 	principal := c.slackPrincipal(ctx, userID)
 
@@ -2976,7 +3099,6 @@ func (c *Connector) stopSlackThread(ctx context.Context, channelID, threadTS str
 
 	key := slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: channelID, ThreadTS: threadTS})
 	buffered := c.finishSlackStack(key)
-	c.persistPendingSteers(key)
 
 	for i := range buffered {
 		c.removeReaction(ctx, buffered[i].Reply, slackBufferedReaction, "remove discarded Slack buffered reaction")

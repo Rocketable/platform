@@ -32,6 +32,8 @@ const (
 type PromptInput struct {
 	// ID identifies this input in local durable replay, not provider requests.
 	ID string `json:"id,omitempty"`
+	// TurnID, when set, is the turn's stable identity and journal key across restarts.
+	TurnID string `json:"turn_id,omitempty"`
 	// Role defaults to PromptInputRoleUser when empty.
 	Role PromptInputRole `json:"role,omitempty"`
 	Text string          `json:"text"`

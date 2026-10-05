@@ -17,12 +17,10 @@ type SlackFrontend interface {
 	Start(context.Context) error
 	Stop(context.Context) error
 	StartNewThreadRoot(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error)
+	SendCronjobRoot(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error)
 	AskUserQuestion(context.Context, *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error)
 	DrainSteers(context.Context, string) []string
 	ActivateEnqueue(context.Context, *protocol.ThreadQueueItem, *protocol.InboundMessage) error
-	SetPendingSteersSink(protocol.PendingSteersSink)
-	RestorePendingSteers(string, []protocol.PendingSteer)
-	DiscardPendingSteers(context.Context, []protocol.PendingSteer)
 }
 
 // Runtime is the backend after construction, before frontends.
@@ -119,4 +117,8 @@ func (r *Runtime) PublishOutbound(ctx context.Context, message *protocol.Outboun
 func (r *Runtime) AttachSlack(slack SlackFrontend) {
 	*r.slackAsker = protocol.InteractiveUserQuestionAsker(slack.AskUserQuestion)
 	*r.startThreadRoot = slack.StartNewThreadRoot
+
+	r.threads.mu.Lock()
+	r.threads.cronRoots = slack
+	r.threads.mu.Unlock()
 }

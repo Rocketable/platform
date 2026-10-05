@@ -518,7 +518,7 @@ func TestRocketCodeReadsAllowedSkillFilesFromConfiguredRuntimeDirectory(t *testi
 			require.NoError(t, err)
 
 			client := openai.NewClient()
-			runtime, err := rocketcode.New(&client, &rocketcode.Config{ShellTempDir: workspace, ChildSessions: rocketcode.InertChildSessions{}, CheckpointSink: rocketcode.InertCheckpointSink{}, ShellCommand: rocketcode.DefaultShellCommand}, root, agents, skills, "main", nil)
+			runtime, err := rocketcode.New(&client, &rocketcode.Config{ShellTempDir: workspace, ChildSessions: rocketcode.InertChildSessions{}, Journal: rocketcode.InertJournal{}, ShellCommand: rocketcode.DefaultShellCommand}, root, agents, skills, "main", nil)
 			require.NoError(t, err)
 
 			action, _ := runtime.Permissions.Evaluate("read", filepath.ToSlash(filepath.Join(skillDir, "asset.txt")))
@@ -543,7 +543,7 @@ func TestRocketCodeInterpolatesPermissionPatternsFromShellEnv(t *testing.T) {
 	require.Equal(t, ".tmp/${ROCKETCLAW_METADATA_FRUIT}/note.txt", agents.Items["main"].Permission.Buckets[0].Rules[1].Pattern)
 
 	client := openai.NewClient()
-	runtime, err := rocketcode.New(&client, &rocketcode.Config{ShellTempDir: workspace, ChildSessions: rocketcode.InertChildSessions{}, CheckpointSink: rocketcode.InertCheckpointSink{}, ShellCommand: rocketcode.DefaultShellCommand, ShellEnv: map[string]string{"ROCKETCLAW_METADATA_FRUIT": "banana"}}, root, agents, skills, "main", nil)
+	runtime, err := rocketcode.New(&client, &rocketcode.Config{ShellTempDir: workspace, ChildSessions: rocketcode.InertChildSessions{}, Journal: rocketcode.InertJournal{}, ShellCommand: rocketcode.DefaultShellCommand, ShellEnv: map[string]string{"ROCKETCLAW_METADATA_FRUIT": "banana"}}, root, agents, skills, "main", nil)
 	require.NoError(t, err)
 
 	action, _ := runtime.Permissions.Evaluate("edit", ".tmp/banana/note.txt")

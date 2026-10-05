@@ -44,6 +44,8 @@ func TestSpillExecuteOutput(t *testing.T) {
 	sfs := &sandboxedFileSystem{root: root}
 	readTool := makeSandboxedTools(sfs, nil)["read"]
 	loop := &looper{
+		Journal:         InertJournal{},
+		observations:    &turnObservations{journal: InertJournal{}},
 		promptExpansion: promptExpansionEnvironment{root: root},
 		spillRel:        defaultSpillRel,
 		sandboxRead:     readTool,
@@ -101,6 +103,17 @@ func TestSpillExecuteOutput(t *testing.T) {
 	_, err = root.Stat(".rocketcode/spill/turn-1/output-3.txt")
 	require.ErrorIs(t, err, os.ErrNotExist)
 
+	resumed := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, promptExpansion: promptExpansionEnvironment{root: root}, spillRel: defaultSpillRel, sandboxRead: readTool, Permissions: PermissionSet{}, CodeModeHosts: map[string]looperTool{}}
+	resumed.beginTurnSpills("turn-1")
+
+	action, matched = resumed.Permissions.Evaluate("read", ".rocketcode/spill/turn-1/output-2.txt")
+	require.True(t, matched)
+	require.Equal(t, PermissionAllow, action)
+
+	third, err := resumed.spillExecuteOutput(many.String() + "more\n")
+	require.NoError(t, err)
+	require.Contains(t, third, "output-3.txt", "a resumed turn never overwrites a referenced spill")
+
 	loop.endTurnSpills()
 
 	_, err = root.Stat(".rocketcode/spill/turn-1/output-1.txt")
@@ -114,6 +127,8 @@ func TestSpillExecuteOutputWriteFailure(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	loop := &looper{
+		Journal:         InertJournal{},
+		observations:    &turnObservations{journal: InertJournal{}},
 		promptExpansion: promptExpansionEnvironment{root: root},
 		spillRel:        "blocked/spill",
 	}

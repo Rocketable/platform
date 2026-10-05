@@ -3,6 +3,7 @@ package protocol
 
 import (
 	"context"
+	"slices"
 )
 
 // OutboundPublisher sends one outbound message into connector delivery.
@@ -33,6 +34,6 @@ func CloneOutboundMessage(message *OutboundMessage) *OutboundMessage {
 		SlackReply: Clone(message.SlackReply), Attachments: CloneOutboundAttachments(message.Attachments),
 		GoalTurn: message.GoalTurn, GoalComplete: message.GoalComplete, GoalActive: message.GoalActive,
 		GoalTurnNumber: message.GoalTurnNumber, GoalMaxTurns: message.GoalMaxTurns, WorkflowTerminal: message.WorkflowTerminal,
-		Cronjob: Clone(message.Cronjob),
+		Cronjob: Clone(message.Cronjob), ReplyState: slices.Clone(message.ReplyState),
 	}
 }

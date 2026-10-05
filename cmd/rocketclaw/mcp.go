@@ -302,7 +302,7 @@ func submitExternalMCPInput(ctx context.Context, turns frontend.Backend, usedAge
 	errRun := turns.RunTurn(ctx, inbound)
 	errSync := turns.SyncConversation(context.WithoutCancel(ctx), conversationID, inbound.SyncDestination)
 	if err := errors.Join(errRun, errSync); err != nil {
-		return externalmcp.SessionResult{}, false, fmt.Errorf("submit external MCP input to agent %q: %w", usedAgent, err)
+		return externalmcp.SessionResult{}, errors.Is(errRun, protocol.ErrBridgeStopped), fmt.Errorf("submit external MCP input to agent %q: %w", usedAgent, err)
 	}
 
 	select {

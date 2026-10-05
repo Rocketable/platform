@@ -27,17 +27,11 @@ var _ SlackFrontend = &slackFrontendMock{}
 //			AskUserQuestionFunc: func(context1 context.Context, askUserQuestionRequest *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
 //				panic("mock out the AskUserQuestion method")
 //			},
-//			DiscardPendingSteersFunc: func(context1 context.Context, pendingSteers []protocol.PendingSteer)  {
-//				panic("mock out the DiscardPendingSteers method")
-//			},
 //			DrainSteersFunc: func(context1 context.Context, s string) []string {
 //				panic("mock out the DrainSteers method")
 //			},
-//			RestorePendingSteersFunc: func(s string, pendingSteers []protocol.PendingSteer)  {
-//				panic("mock out the RestorePendingSteers method")
-//			},
-//			SetPendingSteersSinkFunc: func(pendingSteersSink protocol.PendingSteersSink)  {
-//				panic("mock out the SetPendingSteersSink method")
+//			SendCronjobRootFunc: func(context1 context.Context, outboundMessage *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
+//				panic("mock out the SendCronjobRoot method")
 //			},
 //			StartFunc: func(context1 context.Context) error {
 //				panic("mock out the Start method")
@@ -61,17 +55,11 @@ type slackFrontendMock struct {
 	// AskUserQuestionFunc mocks the AskUserQuestion method.
 	AskUserQuestionFunc func(context1 context.Context, askUserQuestionRequest *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error)
 
-	// DiscardPendingSteersFunc mocks the DiscardPendingSteers method.
-	DiscardPendingSteersFunc func(context1 context.Context, pendingSteers []protocol.PendingSteer)
-
 	// DrainSteersFunc mocks the DrainSteers method.
 	DrainSteersFunc func(context1 context.Context, s string) []string
 
-	// RestorePendingSteersFunc mocks the RestorePendingSteers method.
-	RestorePendingSteersFunc func(s string, pendingSteers []protocol.PendingSteer)
-
-	// SetPendingSteersSinkFunc mocks the SetPendingSteersSink method.
-	SetPendingSteersSinkFunc func(pendingSteersSink protocol.PendingSteersSink)
+	// SendCronjobRootFunc mocks the SendCronjobRoot method.
+	SendCronjobRootFunc func(context1 context.Context, outboundMessage *protocol.OutboundMessage) (protocol.TextConversationTarget, error)
 
 	// StartFunc mocks the Start method.
 	StartFunc func(context1 context.Context) error
@@ -100,13 +88,6 @@ type slackFrontendMock struct {
 			// AskUserQuestionRequest is the askUserQuestionRequest argument value.
 			AskUserQuestionRequest *protocol.AskUserQuestionRequest
 		}
-		// DiscardPendingSteers holds details about calls to the DiscardPendingSteers method.
-		DiscardPendingSteers []struct {
-			// Context1 is the context1 argument value.
-			Context1 context.Context
-			// PendingSteers is the pendingSteers argument value.
-			PendingSteers []protocol.PendingSteer
-		}
 		// DrainSteers holds details about calls to the DrainSteers method.
 		DrainSteers []struct {
 			// Context1 is the context1 argument value.
@@ -114,17 +95,12 @@ type slackFrontendMock struct {
 			// S is the s argument value.
 			S string
 		}
-		// RestorePendingSteers holds details about calls to the RestorePendingSteers method.
-		RestorePendingSteers []struct {
-			// S is the s argument value.
-			S string
-			// PendingSteers is the pendingSteers argument value.
-			PendingSteers []protocol.PendingSteer
-		}
-		// SetPendingSteersSink holds details about calls to the SetPendingSteersSink method.
-		SetPendingSteersSink []struct {
-			// PendingSteersSink is the pendingSteersSink argument value.
-			PendingSteersSink protocol.PendingSteersSink
+		// SendCronjobRoot holds details about calls to the SendCronjobRoot method.
+		SendCronjobRoot []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// OutboundMessage is the outboundMessage argument value.
+			OutboundMessage *protocol.OutboundMessage
 		}
 		// Start holds details about calls to the Start method.
 		Start []struct {
@@ -144,15 +120,13 @@ type slackFrontendMock struct {
 			Context1 context.Context
 		}
 	}
-	lockActivateEnqueue      sync.RWMutex
-	lockAskUserQuestion      sync.RWMutex
-	lockDiscardPendingSteers sync.RWMutex
-	lockDrainSteers          sync.RWMutex
-	lockRestorePendingSteers sync.RWMutex
-	lockSetPendingSteersSink sync.RWMutex
-	lockStart                sync.RWMutex
-	lockStartNewThreadRoot   sync.RWMutex
-	lockStop                 sync.RWMutex
+	lockActivateEnqueue    sync.RWMutex
+	lockAskUserQuestion    sync.RWMutex
+	lockDrainSteers        sync.RWMutex
+	lockSendCronjobRoot    sync.RWMutex
+	lockStart              sync.RWMutex
+	lockStartNewThreadRoot sync.RWMutex
+	lockStop               sync.RWMutex
 }
 
 // ActivateEnqueue calls ActivateEnqueueFunc.
@@ -231,42 +205,6 @@ func (mock *slackFrontendMock) AskUserQuestionCalls() []struct {
 	return calls
 }
 
-// DiscardPendingSteers calls DiscardPendingSteersFunc.
-func (mock *slackFrontendMock) DiscardPendingSteers(context1 context.Context, pendingSteers []protocol.PendingSteer) {
-	if mock.DiscardPendingSteersFunc == nil {
-		panic("slackFrontendMock.DiscardPendingSteersFunc: method is nil but SlackFrontend.DiscardPendingSteers was just called")
-	}
-	callInfo := struct {
-		Context1      context.Context
-		PendingSteers []protocol.PendingSteer
-	}{
-		Context1:      context1,
-		PendingSteers: pendingSteers,
-	}
-	mock.lockDiscardPendingSteers.Lock()
-	mock.calls.DiscardPendingSteers = append(mock.calls.DiscardPendingSteers, callInfo)
-	mock.lockDiscardPendingSteers.Unlock()
-	mock.DiscardPendingSteersFunc(context1, pendingSteers)
-}
-
-// DiscardPendingSteersCalls gets all the calls that were made to DiscardPendingSteers.
-// Check the length with:
-//
-//	len(mockedSlackFrontend.DiscardPendingSteersCalls())
-func (mock *slackFrontendMock) DiscardPendingSteersCalls() []struct {
-	Context1      context.Context
-	PendingSteers []protocol.PendingSteer
-} {
-	var calls []struct {
-		Context1      context.Context
-		PendingSteers []protocol.PendingSteer
-	}
-	mock.lockDiscardPendingSteers.RLock()
-	calls = mock.calls.DiscardPendingSteers
-	mock.lockDiscardPendingSteers.RUnlock()
-	return calls
-}
-
 // DrainSteers calls DrainSteersFunc.
 func (mock *slackFrontendMock) DrainSteers(context1 context.Context, s string) []string {
 	if mock.DrainSteersFunc == nil {
@@ -303,71 +241,39 @@ func (mock *slackFrontendMock) DrainSteersCalls() []struct {
 	return calls
 }
 
-// RestorePendingSteers calls RestorePendingSteersFunc.
-func (mock *slackFrontendMock) RestorePendingSteers(s string, pendingSteers []protocol.PendingSteer) {
-	if mock.RestorePendingSteersFunc == nil {
-		panic("slackFrontendMock.RestorePendingSteersFunc: method is nil but SlackFrontend.RestorePendingSteers was just called")
+// SendCronjobRoot calls SendCronjobRootFunc.
+func (mock *slackFrontendMock) SendCronjobRoot(context1 context.Context, outboundMessage *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
+	if mock.SendCronjobRootFunc == nil {
+		panic("slackFrontendMock.SendCronjobRootFunc: method is nil but SlackFrontend.SendCronjobRoot was just called")
 	}
 	callInfo := struct {
-		S             string
-		PendingSteers []protocol.PendingSteer
+		Context1        context.Context
+		OutboundMessage *protocol.OutboundMessage
 	}{
-		S:             s,
-		PendingSteers: pendingSteers,
+		Context1:        context1,
+		OutboundMessage: outboundMessage,
 	}
-	mock.lockRestorePendingSteers.Lock()
-	mock.calls.RestorePendingSteers = append(mock.calls.RestorePendingSteers, callInfo)
-	mock.lockRestorePendingSteers.Unlock()
-	mock.RestorePendingSteersFunc(s, pendingSteers)
+	mock.lockSendCronjobRoot.Lock()
+	mock.calls.SendCronjobRoot = append(mock.calls.SendCronjobRoot, callInfo)
+	mock.lockSendCronjobRoot.Unlock()
+	return mock.SendCronjobRootFunc(context1, outboundMessage)
 }
 
-// RestorePendingSteersCalls gets all the calls that were made to RestorePendingSteers.
+// SendCronjobRootCalls gets all the calls that were made to SendCronjobRoot.
 // Check the length with:
 //
-//	len(mockedSlackFrontend.RestorePendingSteersCalls())
-func (mock *slackFrontendMock) RestorePendingSteersCalls() []struct {
-	S             string
-	PendingSteers []protocol.PendingSteer
+//	len(mockedSlackFrontend.SendCronjobRootCalls())
+func (mock *slackFrontendMock) SendCronjobRootCalls() []struct {
+	Context1        context.Context
+	OutboundMessage *protocol.OutboundMessage
 } {
 	var calls []struct {
-		S             string
-		PendingSteers []protocol.PendingSteer
+		Context1        context.Context
+		OutboundMessage *protocol.OutboundMessage
 	}
-	mock.lockRestorePendingSteers.RLock()
-	calls = mock.calls.RestorePendingSteers
-	mock.lockRestorePendingSteers.RUnlock()
-	return calls
-}
-
-// SetPendingSteersSink calls SetPendingSteersSinkFunc.
-func (mock *slackFrontendMock) SetPendingSteersSink(pendingSteersSink protocol.PendingSteersSink) {
-	if mock.SetPendingSteersSinkFunc == nil {
-		panic("slackFrontendMock.SetPendingSteersSinkFunc: method is nil but SlackFrontend.SetPendingSteersSink was just called")
-	}
-	callInfo := struct {
-		PendingSteersSink protocol.PendingSteersSink
-	}{
-		PendingSteersSink: pendingSteersSink,
-	}
-	mock.lockSetPendingSteersSink.Lock()
-	mock.calls.SetPendingSteersSink = append(mock.calls.SetPendingSteersSink, callInfo)
-	mock.lockSetPendingSteersSink.Unlock()
-	mock.SetPendingSteersSinkFunc(pendingSteersSink)
-}
-
-// SetPendingSteersSinkCalls gets all the calls that were made to SetPendingSteersSink.
-// Check the length with:
-//
-//	len(mockedSlackFrontend.SetPendingSteersSinkCalls())
-func (mock *slackFrontendMock) SetPendingSteersSinkCalls() []struct {
-	PendingSteersSink protocol.PendingSteersSink
-} {
-	var calls []struct {
-		PendingSteersSink protocol.PendingSteersSink
-	}
-	mock.lockSetPendingSteersSink.RLock()
-	calls = mock.calls.SetPendingSteersSink
-	mock.lockSetPendingSteersSink.RUnlock()
+	mock.lockSendCronjobRoot.RLock()
+	calls = mock.calls.SendCronjobRoot
+	mock.lockSendCronjobRoot.RUnlock()
 	return calls
 }
 

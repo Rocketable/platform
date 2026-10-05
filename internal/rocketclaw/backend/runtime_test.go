@@ -220,7 +220,9 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 			cfg.SessionService = store
 			return NewConversation(rt.Cfg, rt, &cfg, rt.Log)
 		})
-		defer func() { require.NoError(t, rt.threads.Stop()) }()
+
+		shutdown := runTestManager(t, rt.threads)
+		defer func() { require.NoError(t, shutdown()) }()
 
 		for _, id := range []string{"X", "Y"} {
 			require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}))
@@ -496,7 +498,9 @@ func TestRuntimePersistedEnqueueAndProducerArrivalOrder(t *testing.T) {
 					cfg.SessionService = store
 					return NewConversation(rt.Cfg, rt, &cfg, rt.Log)
 				})
-				defer func() { require.NoError(t, rt.threads.Stop()) }()
+
+				shutdown := runTestManager(t, rt.threads)
+				defer func() { require.NoError(t, shutdown()) }()
 
 				target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
 				destination := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
@@ -659,7 +663,9 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 
 			return NewConversation(rt.Cfg, rt, &cfg, rt.Log)
 		})
-		defer func() { require.NoError(t, rt.threads.Stop()) }()
+
+		shutdown := runTestManager(t, rt.threads)
+		defer func() { require.NoError(t, shutdown()) }()
 
 		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "Y", Agent: "main"}))
 
@@ -737,7 +743,7 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 }
 
 func TestBridgeDrainSteersPreservesAcquiredContent(t *testing.T) {
-	bridge := &Bridge{inputOpen: true, requestCh: make(chan bridgeRequest, 2)}
+	bridge := &Bridge{inputOpen: true, requestCh: make(chan bridgeRequest, 2), config: Config{SessionService: newTestSessionService(t)}}
 
 	for _, text := range []string{"first", "second"} {
 		inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$docs-helper " + text, TextAttachments: []string{"attachment text"}, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte(text)}}}, true)
@@ -940,25 +946,6 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 	}
 }
 
-type stubSlack struct{}
-
-func (stubSlack) Start(context.Context) error { return nil }
-func (stubSlack) Stop(context.Context) error  { return nil }
-func (stubSlack) StartNewThreadRoot(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error) {
-	return protocol.StartNewThreadRootResult{}, nil
-}
-func (stubSlack) AskUserQuestion(context.Context, *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
-	return protocol.AskUserQuestionAnswer{}, nil
-}
-func (stubSlack) DrainSteers(context.Context, string) []string { return nil }
-func (stubSlack) ActivateEnqueue(context.Context, *protocol.ThreadQueueItem, *protocol.InboundMessage) error {
-	return nil
-}
-func (stubSlack) SetPendingSteersSink(protocol.PendingSteersSink)      {}
-func (stubSlack) RestorePendingSteers(string, []protocol.PendingSteer) {}
-func (stubSlack) DiscardPendingSteers(context.Context, []protocol.PendingSteer) {
-}
-
 func TestRuntimeRunTurnCancelPublishesEmptyComplete(t *testing.T) {
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.0")
@@ -966,6 +953,7 @@ func TestRuntimeRunTurnCancelPublishesEmptyComplete(t *testing.T) {
 
 	bridge := &Bridge{config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	runTestManager(t, manager)
 	rt := &Runtime{threads: manager, Sessions: store}
 	events := rt.Subscribe(t.Context())
 
@@ -1007,6 +995,7 @@ func TestRuntimeRunTurnRejectsUnrecordedConversationAndSyncDestination(t *testin
 		cfg.SessionService = store
 		return &Bridge{config: cfg, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 	})
+	runTestManager(t, manager)
 	rt := &Runtime{threads: manager, Sessions: store}
 	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "hello", true)
 	inbound.ConversationID = "missing"
@@ -1027,6 +1016,7 @@ func TestRuntimeStartGoalRecordsGoalAndQueuesKickoff(t *testing.T) {
 	cfg := &config.Config{Workspace: filepath.Join(t.TempDir(), "missing")}
 	bridge := &Bridge{config: Config{ConversationID: conversationID, Agent: "main", SessionService: store}, requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
 	manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	runTestManager(t, manager)
 	manager.bridges = map[string]directBridge{conversationID: bridge}
 	rt := &Runtime{threads: manager, Sessions: store, Cfg: cfg}
 
@@ -1070,6 +1060,7 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 
 	bridge := &Bridge{config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{})}
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	runTestManager(t, manager)
 	manager.bridges = map[string]directBridge{conversationID: bridge}
 	rt := &Runtime{threads: manager, Sessions: store}
 
@@ -1111,6 +1102,7 @@ func TestRuntimeHeldQueueManualRelease(t *testing.T) {
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
 	bridge := &Bridge{config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{})}
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	runTestManager(t, manager)
 	manager.bridges = map[string]directBridge{conversationID: bridge}
 	rt := &Runtime{threads: manager, Sessions: store}
 	held := &protocol.ThreadQueueItem{ID: "held", Kind: protocol.InboundKindHeld, Message: "/keep this", Principal: "alice", Source: protocol.SourceWeb, Content: protocol.InboundContent{Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("image")}}}}
@@ -1205,15 +1197,20 @@ func TestAttachSlack(t *testing.T) {
 	manager := newThreadBridgeManager(new(config.Config), nil, slog.New(slog.DiscardHandler), func(Config) directBridge {
 		return nil
 	})
+	runTestManager(t, manager)
 
 	var (
 		asker protocol.UserQuestionAsker
 		root  func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error)
 	)
 
+	slack := &slackFrontendMock{StartNewThreadRootFunc: func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error) {
+		return protocol.StartNewThreadRootResult{}, nil
+	}}
 	rt := &Runtime{threads: manager, slackAsker: &asker, startThreadRoot: &root}
-	rt.AttachSlack(stubSlack{})
+	rt.AttachSlack(slack)
 	require.True(t, asker.ExposeTool())
+	require.Same(t, slack, manager.cronRoots)
 	got, err := root(t.Context(), &protocol.StartNewThreadRequest{})
 	require.NoError(t, err)
 	require.Equal(t, protocol.StartNewThreadRootResult{}, got)

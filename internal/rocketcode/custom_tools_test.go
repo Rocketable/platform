@@ -397,7 +397,7 @@ func testLooperWithTools(tools map[string]looperTool) *looper {
 
 	l.Tools = tools
 	l.PermissionReviewer = inertPermissionReviewer{}
-	l.observations = &turnObservations{sink: InertCheckpointSink{}}
+	l.observations = &turnObservations{journal: InertJournal{}}
 
 	return &l
 }

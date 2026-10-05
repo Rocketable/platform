@@ -272,7 +272,7 @@ Review every writer named in U1 again after generation/lint changes. Verify queu
 ## Sources
 
 - `internal/rocketclaw/backend/store.go`, `backend/conversations.go` within that component, and `internal/rocketclaw/backend/bridge.go`: current projection, mutation inventory and canonical display interpretation.
-- `internal/rocketclaw/docs/plans/2026-07-26-durable-workflow-run-summaries.md`: workflow records participate in replay; sidebar summaries must remain outside replay.
+- `docs/plans/2026-07-26-durable-workflow-run-summaries.md`: workflow records participate in replay; sidebar summaries must remain outside replay.
 - `CONCEPTS.md`: Managed Slack Thread, `@` Channel Entry, Principal and State Store vocabulary.
 - [PR #47](https://github.com/Rocketable/platform/pull/47): baseline scope and measurement provenance.
 - [Slack rename events](https://docs.slack.dev/reference/events/channel_rename), [private-channel rename events](https://docs.slack.dev/reference/events/group_rename), [Socket Mode lifecycle](https://docs.slack.dev/apis/events-api/using-socket-mode), [rate limits](https://docs.slack.dev/apis/web-api/rate-limits): KTD3's event and refresh constraints. Rename subscriptions need `channels:read`/`groups:read`; verify installation scopes before rollout.

@@ -259,7 +259,7 @@ func newKwargsValueBuiltin(name string, schema map[string]any, observe ToolCallO
 
 		observe(ctx, threadPath(thread), name, callArgs)
 
-		return call(ctx, callArgs)
+		return call(context.WithValue(ctx, callKeyContext{}, nextKey(thread)), callArgs)
 	})
 }
 

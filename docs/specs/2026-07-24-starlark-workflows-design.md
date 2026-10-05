@@ -77,7 +77,7 @@ Infrastructure errors cancel sibling work and fail the run. Model conclusions su
 
 ## Lifecycle
 
-Workflow execution is in memory and foreground-only. The bridge serializes it with ordinary managed turns and `$stop` cancels it terminally. Daemon shutdown or crash ends the run; after restart the human invokes the workflow again. No call cache or resumable workflow state is added to SQLite.
+Workflow execution is foreground-only. The bridge serializes it with ordinary managed turns, and `$stop` cancels it terminally. Daemon shutdown leaves the run waiting. After restart the run replays: each completed worker returns its recorded result from the conversation step journal, and an in-flight worker resumes from its own recorded steps. A workflow an agent starts with `rocketclaw_dynamic_workflow` replays the same way, keyed under that tool call (superseded by `docs/plans/2026-10-04-2254-feat-durable-conversation-work-plan.md`).
 
 Every started workflow persists one compact terminal summary containing its complete, error, stopped, and skipped phase outcomes. Later turns receive that summary as developer context. Successful entries also retain the normal paired user command and assistant result before final delivery. Intermediate worker prompts, values, tools, and reasoning never enter managed history.
 
@@ -96,7 +96,6 @@ The embedded skeleton includes `.rocketclaw/skills/main-create-or-update-workflo
 - Automatic or ultracode workflow generation.
 - Saving ephemeral runs.
 - Manual pause/resume or resume after `$stop`.
-- Durable workflow recovery after daemon restart.
 - Per-agent Slack cards or worker transcripts.
 - Isolated Jujutsu workspaces and merge-back.
 - Standalone workflow CLI or dashboard.

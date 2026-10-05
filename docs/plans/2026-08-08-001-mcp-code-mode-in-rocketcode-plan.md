@@ -111,7 +111,7 @@ rocketclaw.json mcp_servers
 - `internal/rocketcode/looper.go` permissionDecision + review
 - `internal/rocketcode/custom_tools.go` Tool shape
 - Existing `internal/rocketclaw/codemode` + `mcpclient` as move source
-- Prior plan: `internal/rocketclaw/docs/plans/2026-08-08-001-mcp-code-mode-plan.md` product KTDs
+- Prior plan: `docs/plans/2026-08-08-001-mcp-code-mode-plan.md` product KTDs
 
 ### Sequencing
 

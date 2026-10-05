@@ -147,7 +147,7 @@ sequenceDiagram
 - `internal/rocketclaw/backend/store.go`: `ObserveEntries`, `appendExternalMCPEntry`, and `externalMCPManagedEntry` define persisted copy and history behavior.
 - `internal/rocketclaw/frontend/rpc/server.go`: History replaces user events and synthesizes delivery text; Join separately constructs outbound transcript events.
 - `internal/rocketclaw/web/src/transcript.test.ts`: exercises actual private transcript functions, including the stale-history/live-stream guard. Extend this pattern.
-- `internal/rocketclaw/docs/investigations/2026-09-20-wallace-stranded-mcp-queue.md`: paired delivery and later-work ordering must be verified separately from persisted history.
+- `docs/investigations/2026-09-20-wallace-stranded-mcp-queue.md`: paired delivery and later-work ordering must be verified separately from persisted history.
 
 ---
 

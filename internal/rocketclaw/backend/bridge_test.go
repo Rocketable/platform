@@ -3,6 +3,7 @@ package backend
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +14,6 @@ import (
 	"io"
 	"iter"
 	"log/slog"
-	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -38,7 +38,11 @@ import (
 
 type discardPublisher struct{}
 
-func (discardPublisher) PublishOutbound(context.Context, *protocol.OutboundMessage) error { return nil }
+// PublishOutbound completes delivery at once, as Runtime.PublishOutbound does with no consumers.
+func (discardPublisher) PublishOutbound(_ context.Context, message *protocol.OutboundMessage) error {
+	message.MarkDelivered(nil)
+	return nil
+}
 
 type testBus struct {
 	outbound chan *protocol.OutboundMessage
@@ -94,7 +98,7 @@ func TestBridgeSwitchAgentTrimsAndStoresAgent(t *testing.T) {
 
 func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 	bus := newTestBus()
-	bridge := &Bridge{bus: bus, config: Config{ConversationID: "web-conversation"}, inputOpen: true, requestCh: make(chan bridgeRequest, 1)}
+	bridge := &Bridge{bus: bus, config: Config{ConversationID: "web-conversation", SessionService: newTestSessionService(t)}, inputOpen: true, requestCh: make(chan bridgeRequest, 1)}
 	content := protocol.InboundContent{Text: "same text"}
 	initial := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &content, true)
 	initial.Metadata["web_message_id"] = "initial"
@@ -159,7 +163,9 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 	bus.Close()
 
 	bridge.inputOpen = true
-	require.NoError(t, bridge.Submit(t.Context(), initial))
+	disconnected := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &content, true)
+	disconnected.Metadata["web_message_id"] = "steer-disconnected"
+	require.NoError(t, bridge.Submit(t.Context(), disconnected))
 	inputs = bridge.drainSteers(t.Context(), rocketcode.TurnPhaseFinalAnswer)
 	require.Len(t, inputs, 1)
 	require.Equal(t, buildPrompt(initial, nil), inputs[0].Text)
@@ -241,7 +247,7 @@ func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
 
 func TestBridgeConsumedInputKeepsRawWebText(t *testing.T) {
 	bus := newTestBus()
-	bridge := &Bridge{bus: bus, config: Config{ConversationID: "slack-thread:C123:111.0"}}
+	bridge := &Bridge{bus: bus, config: Config{ConversationID: "slack-thread:C123:111.0", SessionService: newTestSessionService(t)}}
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{
 		Text: "hello", TextAttachments: []string{`attachment:id "file.txt" (workspace path "artifacts/uploads/id/file.txt")`},
 	}, true)
@@ -255,7 +261,7 @@ func TestBridgeConsumedInputKeepsRawWebText(t *testing.T) {
 }
 
 func TestRestartToolScopesDescriptionToRuntimeConfig(t *testing.T) {
-	tool := restartTool(testNoopRestart, testNoopRestartRecorder)
+	tool := restartTool(testNoopRestart)
 
 	assert.Contains(t, tool.Description, "explicitly requested runtime configuration change")
 	assert.Contains(t, tool.Description, "rocketclaw.json")
@@ -279,15 +285,11 @@ func TestRestartToolCallsConfiguredRestart(t *testing.T) {
 	tool := restartTool(func(reason string) (string, error) {
 		order = append(order, "restart:"+reason)
 		return "custom restart output", nil
-	}, func(context.Context) error {
-		order = append(order, "record")
-
-		return nil
 	})
 
 	result, err := tool.Call(t.Context(), []byte(`{"reason":"rocketclaw.json changed and runtime config must reload"}`), nil)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"record", "restart:rocketclaw.json changed and runtime config must reload"}, order)
+	assert.Equal(t, []string{"restart:rocketclaw.json changed and runtime config must reload"}, order)
 	assert.Equal(t, "custom restart output", result.Output)
 }
 
@@ -425,7 +427,7 @@ func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "ship it", false)
 	msg.GoalAction = protocol.GoalActionKickoff
 	msg.ConversationID = "thread-1"
-	require.NoError(t, bridge.finishGoalTurn(t.Context(), &bridgeRequest{inbound: msg}))
+	finishTestGoalTurn(t, bridge, msg)
 
 	goal, ok, err := bridge.config.SessionService.Goal("thread-1")
 	require.NoError(t, err)
@@ -439,7 +441,7 @@ func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
 	msg = protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "continue", false)
 	msg.GoalAction = protocol.GoalActionContinue
 	msg.ConversationID = "thread-1"
-	require.NoError(t, bridge.finishGoalTurn(t.Context(), &bridgeRequest{inbound: msg}))
+	finishTestGoalTurn(t, bridge, msg)
 	goal, ok, err = bridge.config.SessionService.Goal("thread-1")
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -453,7 +455,7 @@ func TestFinishGoalTurnHumanResteeringDoesNotConsumeBudget(t *testing.T) {
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "try this angle", false)
 	msg.ConversationID = "thread-1"
 	msg.SlackReply = &protocol.SlackReplyTarget{RecipientTeamID: "resteer-team", RecipientUserID: "resteer-user"}
-	require.NoError(t, bridge.finishGoalTurn(t.Context(), &bridgeRequest{inbound: msg}))
+	finishTestGoalTurn(t, bridge, msg)
 
 	goal, ok, err := bridge.config.SessionService.Goal("thread-1")
 	require.NoError(t, err)
@@ -466,144 +468,6 @@ func TestFinishGoalTurnHumanResteeringDoesNotConsumeBudget(t *testing.T) {
 	assert.Equal(t, protocol.GoalActionContinue, continuation.GoalAction)
 	assert.Equal(t, "starter-team", continuation.SlackReply.RecipientTeamID)
 	assert.Equal(t, "starter-user", continuation.SlackReply.RecipientUserID)
-}
-
-func TestRecoveredGoalTurnPreservesAccountingSemantics(t *testing.T) {
-	for _, tt := range []struct {
-		name       string
-		metadata   map[string]string
-		wantTurns  int
-		wantQueued bool
-	}{
-		{
-			name:       "kickoff counts",
-			metadata:   map[string]string{activeTurnGoalTurnKey: "true", activeTurnGoalAccountingKey: "goal"},
-			wantTurns:  1,
-			wantQueued: true,
-		},
-		{
-			name:       "continuation counts",
-			metadata:   map[string]string{activeTurnGoalTurnKey: "true", activeTurnGoalAccountingKey: "goal_continuation"},
-			wantTurns:  1,
-			wantQueued: true,
-		},
-		{
-			name:       "human re-steer is budget-neutral",
-			metadata:   map[string]string{activeTurnGoalTurnKey: "true"},
-			wantTurns:  0,
-			wantQueued: true,
-		},
-		{
-			name:       "legacy missing metadata does not over-count",
-			metadata:   nil,
-			wantTurns:  0,
-			wantQueued: true,
-		},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			bridge := newGoalAccountingTestBridge(t)
-			require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "ship it", "", 3, "", ""))
-
-			turn := ActiveTurnState{SourceMetadata: tt.metadata}
-			require.NoError(t, bridge.finishGoalTurn(t.Context(), &bridgeRequest{inbound: recoveredGoalTurnMessage(&turn, nil)}))
-
-			goal, ok, err := bridge.config.SessionService.Goal("thread-1")
-			require.NoError(t, err)
-			require.True(t, ok)
-			assert.Equal(t, tt.wantTurns, goal.TurnsUsed)
-			assert.Equal(t, tt.wantQueued, len(bridge.requestCh) == 1)
-		})
-	}
-}
-
-func TestActiveTurnSourceMetadataRecordsGoalAccounting(t *testing.T) {
-	bridge := newGoalAccountingTestBridge(t)
-	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "ship it", "", 3, "", ""))
-
-	kickoff := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "ship it", true)
-	kickoff.GoalAction = protocol.GoalActionKickoff
-	kickoff.ConversationID = "thread-1"
-	metadata := bridge.activeTurnSourceMetadata(kickoff)
-	assert.Equal(t, "true", metadata[activeTurnGoalTurnKey])
-	assert.Equal(t, "goal", metadata[activeTurnGoalAccountingKey])
-
-	resteer := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "try this angle", true)
-	resteer.ConversationID = "thread-1"
-	metadata = bridge.activeTurnSourceMetadata(resteer)
-	assert.Equal(t, "true", metadata[activeTurnGoalTurnKey])
-	assert.Empty(t, metadata[activeTurnGoalAccountingKey])
-}
-
-func TestRecoveredExternalMCPActiveTurnSecondCheckpointPreservesSourceMetadata(t *testing.T) {
-	store := newTestSessionService(t)
-	bridge := &Bridge{config: Config{ConversationID: "external_mcp:planner:private", SessionService: store}}
-	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "recover", false)
-	msg.ConversationID = "external_mcp:planner:private"
-	msg.Metadata = map[string]string{
-		"source":                          string(protocol.SourceExternalMCP),
-		"external_conversation_id":        "public-1",
-		"later-key":                       "fresh",
-		protocol.InboundOriginMetadataKey: "System",
-		protocol.InboundMediaMetadataKey:  "Text",
-		recoveredTurnMetadataKey:          "true",
-	}
-
-	metadata := bridge.activeTurnSourceMetadata(msg)
-	sink := activeTurnCheckpointSink{bridge: &Bridge{}, store: store, conversationID: "external_mcp:planner:private", sourceMetadata: metadata}
-	checkpoint := &rocketcode.ActiveTurnCheckpoint{TurnID: "turn-1", Agent: "planner", Model: "gpt-5.5", DisplayModel: "gpt-5.5"}
-	require.NoError(t, sink.StartActiveTurn(context.Background(), checkpoint))
-	checkpoint.ResponseID = "resp-1"
-	require.NoError(t, sink.RecordProviderResponse(context.Background(), checkpoint))
-
-	turns, err := store.RecoverableActiveTurns(context.Background())
-	require.NoError(t, err)
-	require.Len(t, turns, 1)
-	assert.Equal(t, string(protocol.SourceExternalMCP), turns[0].SourceMetadata["source"])
-	assert.Equal(t, "public-1", turns[0].SourceMetadata["external_conversation_id"])
-	assert.Equal(t, "fresh", turns[0].SourceMetadata["later-key"])
-	assert.Empty(t, turns[0].SourceMetadata[protocol.InboundOriginMetadataKey])
-	assert.Empty(t, turns[0].SourceMetadata[protocol.InboundMediaMetadataKey])
-	assert.Empty(t, turns[0].SourceMetadata[recoveredTurnMetadataKey])
-}
-
-func TestRecoveredGoalActiveTurnSecondCheckpointPreservesAccountingLabel(t *testing.T) {
-	for _, tt := range []struct {
-		name      string
-		metadata  map[string]string
-		wantLabel string
-	}{
-		{name: "kickoff", metadata: map[string]string{activeTurnGoalTurnKey: "true", activeTurnGoalAccountingKey: "goal"}, wantLabel: "goal"},
-		{name: "continuation", metadata: map[string]string{activeTurnGoalTurnKey: "true", activeTurnGoalAccountingKey: "goal_continuation"}, wantLabel: "goal_continuation"},
-		{name: "human re-steer", metadata: map[string]string{activeTurnGoalTurnKey: "true"}},
-		{name: "legacy missing label", metadata: nil},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			store := newTestSessionService(t)
-			bridge := &Bridge{config: Config{ConversationID: "thread-1", SessionService: store}}
-			msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "recover", false)
-			msg.ConversationID = "thread-1"
-
-			msg.Metadata = maps.Clone(tt.metadata)
-			if msg.Metadata == nil {
-				msg.Metadata = map[string]string{}
-			}
-
-			msg.Metadata[recoveredTurnMetadataKey] = "true"
-
-			metadata := bridge.activeTurnSourceMetadata(msg)
-			sink := activeTurnCheckpointSink{bridge: &Bridge{}, store: store, conversationID: "thread-1", sourceMetadata: metadata}
-			checkpoint := &rocketcode.ActiveTurnCheckpoint{TurnID: "turn-1", Agent: "planner", Model: "gpt-5.5", DisplayModel: "gpt-5.5"}
-			require.NoError(t, sink.StartActiveTurn(context.Background(), checkpoint))
-			checkpoint.ResponseID = "resp-1"
-			require.NoError(t, sink.RecordProviderResponse(context.Background(), checkpoint))
-
-			turns, err := store.RecoverableActiveTurns(context.Background())
-			require.NoError(t, err)
-			require.Len(t, turns, 1)
-			assert.Equal(t, tt.metadata[activeTurnGoalTurnKey], turns[0].SourceMetadata[activeTurnGoalTurnKey])
-			assert.Equal(t, tt.wantLabel, turns[0].SourceMetadata[activeTurnGoalAccountingKey])
-		})
-	}
 }
 
 func TestGoalSteeringPromptRequiresProgressSummaryAndNote(t *testing.T) {
@@ -708,7 +572,7 @@ func TestPickLaterWorkStartsParkedQueueAfterScheduledCancel(t *testing.T) {
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "Ship README", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, ParkAfter: "s1", SlackChannel: "C123", SlackTS: "111.222"}))
 	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "scheduled", DueAt: time.Now().UTC().Add(time.Hour)}))
-	require.NoError(t, store.DeleteScheduledMessage("s1"))
+	require.NoError(t, (stateDAO{db: store.db}).deleteScheduledMessage(t.Context(), "s1"))
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 
@@ -724,31 +588,6 @@ func TestActivateInboundReturnsStartedScheduleDeleteError(t *testing.T) {
 	admitted, err := bridge.activateInbound(t.Context(), &bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "later", false), scheduledMessageID: "s1"})
 	require.Error(t, err)
 	assert.False(t, admitted)
-}
-
-func TestPickLaterWorkSkipsWhenStartupRecoveryPending(t *testing.T) {
-	store := newTestSessionService(t)
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "waiting", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, SlackChannel: "C123", SlackTS: "111.222"}))
-	store.holdStartupRecovery("turn-1", conversationID, conversationID)
-
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
-	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
-	assert.Empty(t, bridge.requestCh)
-
-	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindEnqueue, "waiting", true)
-	admitted, err := bridge.activateInbound(t.Context(), &bridgeRequest{inbound: inbound, queueItemID: "q1"})
-	require.NoError(t, err)
-	assert.False(t, admitted)
-
-	items, err := store.ThreadQueueForConversation(conversationID)
-	require.NoError(t, err)
-	require.Len(t, items, 1)
-
-	store.releaseStartupRecovery("turn-1")
-	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
-	require.Len(t, bridge.requestCh, 1)
-	assert.Equal(t, "waiting", (<-bridge.requestCh).inbound.Text)
 }
 
 func TestPickLaterWorkSkipsWhenGoalStillActive(t *testing.T) {
@@ -806,7 +645,6 @@ func TestPickLaterWorkAfterStopGoalStartsLaterWork(t *testing.T) {
 
 func TestEnqueueActivationZeroValueIsInert(t *testing.T) {
 	require.NoError(t, (EnqueueActivation{}).Activate(t.Context(), &protocol.ThreadQueueItem{}, nil))
-	(protocol.PendingSteersSink{}).Persist("slack-thread:C123:111.222", nil)
 }
 
 func TestPickLaterWorkClaimsDueRecurringSchedule(t *testing.T) {
@@ -840,7 +678,7 @@ func TestPickLaterWorkDoesNothingWhenIdleAndEmpty(t *testing.T) {
 	assert.Len(t, bridge.requestCh, 1)
 	close(bridge.stopCh)
 	bridge.stopped = true
-	require.ErrorIs(t, bridge.PickLaterWork(t.Context()), errBridgeStopped)
+	require.ErrorIs(t, bridge.PickLaterWork(t.Context()), protocol.ErrBridgeStopped)
 }
 
 func TestPickLaterWorkDoesNotClaimScheduledWhenTurnBusy(t *testing.T) {
@@ -882,57 +720,6 @@ func TestInterruptActiveWorkflowCancelsWithoutSignalChannel(t *testing.T) {
 	assert.True(t, bridge.activeTurnInterrupted)
 }
 
-func TestActiveTurnCheckpointSinkMapsLifecycleToSessionService(t *testing.T) {
-	store := newTestSessionService(t)
-	sink := activeTurnCheckpointSink{
-		bridge:         &Bridge{},
-		store:          store,
-		conversationID: "external_mcp:planner:private",
-		sourceMetadata: map[string]string{"source": "external_mcp", "external_conversation_id": "public-1"},
-	}
-	checkpoint := &rocketcode.ActiveTurnCheckpoint{TurnID: "turn-1", Agent: "planner", Model: "gpt-5.5", DisplayModel: "gpt-5.5"}
-
-	require.NoError(t, sink.StartActiveTurn(context.Background(), checkpoint))
-	checkpoint.ResponseID = "resp-1"
-	require.NoError(t, sink.RecordProviderResponse(context.Background(), checkpoint))
-	require.NoError(t, sink.RecordRecoveredReplay(context.Background(), checkpoint))
-
-	turns, err := store.RecoverableActiveTurns(context.Background())
-	require.NoError(t, err)
-	require.Len(t, turns, 1)
-	assert.Equal(t, "external_mcp:planner:private", turns[0].Checkpoint.ConversationKey)
-	assert.Equal(t, "public-1", turns[0].SourceMetadata["external_conversation_id"])
-	assert.Equal(t, "resp-1", turns[0].Checkpoint.ResponseID)
-
-	require.NoError(t, sink.ClearCompletedTurn(context.Background(), "turn-1"))
-	turns, err = store.RecoverableActiveTurns(context.Background())
-	require.NoError(t, err)
-	assert.Empty(t, turns)
-}
-
-func TestRecoveredActiveTurnCheckpointSinkPreservesRecoveredReplay(t *testing.T) {
-	recoveredReplay := []json.RawMessage{json.RawMessage(`{"type":"message","role":"developer","content":"interrupted transcript"}`)}
-	sink := &captureCheckpointSink{}
-	checkpoint := &rocketcode.ActiveTurnCheckpoint{
-		TurnID:      "turn-2",
-		ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"continue"}`)},
-	}
-	require.NoError(t, sink.RecordProviderResponse(context.Background(), withRecoveredReplay(checkpoint, recoveredReplay, nil)))
-
-	require.Len(t, sink.checkpoints, 1)
-	assert.JSONEq(t, `{"type":"message","role":"developer","content":"interrupted transcript"}`, string(sink.checkpoints[0].ReplayInput[0]))
-	assert.JSONEq(t, `{"type":"message","role":"user","content":"continue"}`, string(sink.checkpoints[0].ReplayInput[1]))
-	assert.JSONEq(t, `{"type":"message","role":"user","content":"continue"}`, string(checkpoint.ReplayInput[0]))
-
-	require.NoError(t, sink.RecordCompletedToolOutput(context.Background(), withRecoveredReplay(sink.checkpoints[0], recoveredReplay, nil)))
-	require.Len(t, sink.checkpoints, 2)
-	assert.Len(t, sink.checkpoints[1].ReplayInput, 2)
-}
-
-type captureCheckpointSink struct {
-	checkpoints []*rocketcode.ActiveTurnCheckpoint
-}
-
 type lockedBuffer struct {
 	mu sync.Mutex
 	b  bytes.Buffer
@@ -952,30 +739,6 @@ func (b *lockedBuffer) String() string {
 	defer b.mu.Unlock()
 
 	return b.b.String()
-}
-
-func (s *captureCheckpointSink) StartActiveTurn(_ context.Context, checkpoint *rocketcode.ActiveTurnCheckpoint) error {
-	s.checkpoints = append(s.checkpoints, checkpoint)
-	return nil
-}
-
-func (s *captureCheckpointSink) RecordProviderResponse(_ context.Context, checkpoint *rocketcode.ActiveTurnCheckpoint) error {
-	s.checkpoints = append(s.checkpoints, checkpoint)
-	return nil
-}
-
-func (s *captureCheckpointSink) RecordCompletedToolOutput(_ context.Context, checkpoint *rocketcode.ActiveTurnCheckpoint) error {
-	s.checkpoints = append(s.checkpoints, checkpoint)
-	return nil
-}
-
-func (s *captureCheckpointSink) RecordRecoveredReplay(_ context.Context, checkpoint *rocketcode.ActiveTurnCheckpoint) error {
-	s.checkpoints = append(s.checkpoints, checkpoint)
-	return nil
-}
-
-func (s *captureCheckpointSink) ClearCompletedTurn(context.Context, string) error {
-	return nil
 }
 
 func newGoalAccountingTestBridge(t *testing.T) *Bridge {
@@ -1010,7 +773,7 @@ func newGoalCheckTestBridge(t *testing.T, agent, script string) *Bridge {
 }
 
 func TestRestartToolAcceptsEmptyOutputAndPropagatesErrors(t *testing.T) {
-	tool := restartTool(testNoopRestart, testNoopRestartRecorder)
+	tool := restartTool(testNoopRestart)
 	result, err := tool.Call(t.Context(), []byte(`{"reason":"cron changed"}`), nil)
 	require.NoError(t, err)
 	assert.Empty(t, result.Output)
@@ -1021,16 +784,72 @@ func TestRestartToolAcceptsEmptyOutputAndPropagatesErrors(t *testing.T) {
 	_, err = tool.Call(t.Context(), []byte(`{`), nil)
 	require.ErrorContains(t, err, "parse restart request")
 
-	tool = restartTool(testNoopRestart, func(context.Context) error { return assert.AnError })
-	_, err = tool.Call(t.Context(), []byte(`{"reason":"cron changed"}`), nil)
-	require.ErrorIs(t, err, assert.AnError)
-
-	tool = restartTool(func(string) (string, error) { return "", assert.AnError }, testNoopRestartRecorder)
+	tool = restartTool(func(string) (string, error) { return "", assert.AnError })
 	_, err = tool.Call(t.Context(), []byte(`{"reason":"cron changed"}`), nil)
 	assert.ErrorIs(t, err, assert.AnError)
 }
 
 func testNoopRestart(string) (string, error) { return "", nil }
+
+// finishTestGoalTurn finishes a turn for msg as handleInbound does: accounting in the finish transaction, then continuation.
+func finishTestGoalTurn(t *testing.T, b *Bridge, msg *protocol.InboundMessage) {
+	t.Helper()
+
+	turnID := "turn-" + rand.Text()
+	require.NoError(t, startTurnDB(t.Context(), b.config.SessionService.db, turnID, b.config.ConversationID, msg))
+	_, err := b.config.SessionService.finishTurn(t.Context(), turnID, &turnFinish{store: newSessionStore(b.config.ConversationID, b.config.SessionService), accountGoal: msg.GoalAction != protocol.GoalActionNone, outbound: protocol.NewOutboundMessage(b.config.ConversationID, "")})
+	require.NoError(t, err)
+	require.NoError(t, b.finishGoalTurn(t.Context(), &bridgeRequest{inbound: msg}))
+}
+
+// runTestTurn runs one turn and appends its staged history as a request finish does.
+func runTestTurn(ctx context.Context, b *Bridge, msg *protocol.InboundMessage, turnID string) (runResult, error) {
+	finish := turnFinish{store: newSessionStore(b.config.ConversationID, b.config.SessionService)}
+	b.mu.Lock()
+	b.activeTurnID = turnID
+	b.mu.Unlock()
+	result, err := b.runTurn(ctx, msg, turnID, turnID, &finish)
+
+	for i := range finish.entries {
+		if _, errAppend := finish.store.appendDB(context.WithoutCancel(ctx), b.config.SessionService.db, &finish.entries[i]); errAppend != nil {
+			return result, errAppend
+		}
+	}
+
+	return result, err
+}
+
+// startTestBridge arms schedules and starts the request loop as Run does.
+func startTestBridge(ctx context.Context, b *Bridge) error {
+	if b.requestCh == nil {
+		b.requestCh, b.stopCh = make(chan bridgeRequest, defaultQueueSize), make(chan struct{})
+	}
+
+	if err := b.armPendingScheduledMessages(); err != nil {
+		return err
+	}
+
+	go b.loop(ctx)
+
+	return nil
+}
+
+// handleTestInbound takes a request as the bridge loop does, then handles it.
+func handleTestInbound(ctx context.Context, b *Bridge, request *bridgeRequest) error {
+	if _, err := b.activateInbound(ctx, request); err != nil {
+		return err
+	}
+
+	return b.handleInbound(ctx, request)
+}
+
+func publishTestFinal(ctx context.Context, b *Bridge, inbound *protocol.InboundMessage, result *runResult) error {
+	if err := startTurnDB(ctx, b.config.SessionService.db, result.turnID, b.config.ConversationID, inbound); err != nil {
+		return err
+	}
+
+	return b.finish(ctx, &bridgeRequest{inbound: inbound, turnID: result.turnID}, &turnFinish{store: newSessionStore(b.config.ConversationID, b.config.SessionService)}, result, "")
+}
 
 func workflowSummaryPayloadFromEntry(t *testing.T, entry *rocketcode.SessionEntry) string {
 	t.Helper()
@@ -1063,8 +882,6 @@ func testNoopStartNewThread(context.Context, *protocol.StartNewThreadRequest) (p
 	return protocol.StartNewThreadResult{}, errors.New("start new thread is inert in this test")
 }
 
-func testNoopRestartRecorder(context.Context) error { return nil }
-
 func TestPublishFinalPreservesTurnID(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()
@@ -1079,7 +896,7 @@ func TestPublishFinalPreservesTurnID(t *testing.T) {
 
 	var group errgroup.Group
 
-	group.Go(func() error { return bridge.publishFinal(context.Background(), inbound, result) })
+	group.Go(func() error { return publishTestFinal(context.Background(), bridge, inbound, &result) })
 
 	final := readRocketCodeOutbound(t, bus)
 	assert.Equal(t, "turn-1", final.TurnID)
@@ -1102,7 +919,7 @@ func TestPublishFinalMarksCurrentGoalCompletion(t *testing.T) {
 	result := runResult{turnID: "turn-1", text: "done", goalCompleted: true}
 
 	var group errgroup.Group
-	group.Go(func() error { return bridge.publishFinal(context.Background(), inbound, result) })
+	group.Go(func() error { return publishTestFinal(context.Background(), bridge, inbound, &result) })
 
 	outbound := readRocketCodeOutbound(t, bus)
 	assert.True(t, outbound.GoalComplete)
@@ -1128,7 +945,7 @@ func TestPublishFinalDoesNotReuseCompletedGoal(t *testing.T) {
 	result := runResult{turnID: "turn-2", text: "normal reply"}
 
 	var group errgroup.Group
-	group.Go(func() error { return bridge.publishFinal(context.Background(), inbound, result) })
+	group.Go(func() error { return publishTestFinal(context.Background(), bridge, inbound, &result) })
 
 	outbound := readRocketCodeOutbound(t, bus)
 	assert.False(t, outbound.GoalComplete)
@@ -1156,7 +973,7 @@ func TestPublishFinalCarriesMainResponseAttachments(t *testing.T) {
 
 			bridge.inputOpen = true
 
-			group.Go(func() error { return bridge.publishFinal(t.Context(), inbound, result) })
+			group.Go(func() error { return publishTestFinal(t.Context(), bridge, inbound, &result) })
 
 			outbound := readRocketCodeOutbound(t, bus)
 			assert.True(t, outbound.Complete)
@@ -1197,7 +1014,7 @@ func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
 	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
 	continuation := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "continue", false)
 	continuation.GoalAction = protocol.GoalActionContinue
-	require.NoError(t, bridge.handleInbound(t.Context(), &bridgeRequest{inbound: continuation}))
+	require.NoError(t, handleTestInbound(t.Context(), bridge, &bridgeRequest{inbound: continuation}))
 	assert.Empty(t, (<-continuation.EnableResponseWait()).Text, "explicit continuation skips when no goal is active")
 
 	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "hello", true)
@@ -1205,7 +1022,7 @@ func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
 	inbound.ConversationID = conversationID
 
 	var group errgroup.Group
-	group.Go(func() error { return bridge.handleInbound(context.Background(), &bridgeRequest{inbound: inbound}) })
+	group.Go(func() error { return handleTestInbound(context.Background(), bridge, &bridgeRequest{inbound: inbound}) })
 
 	consumed := readRocketCodeOutbound(t, bus)
 	require.Equal(t, "failed-input", consumed.ConsumedID)
@@ -1228,7 +1045,7 @@ func TestRocketCodeConfigEnablesDiagnostics(t *testing.T) {
 	bridge := &Bridge{runtime: &config.Config{AutoApproverModel: "gpt-5.4-mini"}, config: Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", RequestRestart: testNoopRestart, RequestReload: func(string) (string, error) {
 		return "rocketclaw runtime assets reloaded", nil
 	}, SessionService: newTestSessionService(t)}}
-	cfg := bridge.rocketcodeConfig(t.TempDir(), nil, nil, rocketcode.Tool{Name: attachFilesToolName})
+	cfg := bridge.rocketcodeConfig(t.TempDir(), nil, rocketcode.Tool{Name: attachFilesToolName})
 
 	toolNames := make([]string, 0, len(cfg.CustomTools))
 	for i := range cfg.CustomTools {
@@ -1249,7 +1066,7 @@ func TestRocketCodeConfigEnablesDiagnostics(t *testing.T) {
 	assert.Contains(t, toolNames, listSessionsToolName)
 	assert.Contains(t, toolNames, getSessionToolName)
 	assert.Contains(t, toolNames, currentSessionIDToolName)
-	assert.Equal(t, map[string]string{"A": "B"}, bridge.rocketcodeConfig(t.TempDir(), map[string]string{"A": "B"}, nil).ShellEnv)
+	assert.Equal(t, map[string]string{"A": "B"}, bridge.rocketcodeConfig(t.TempDir(), map[string]string{"A": "B"}).ShellEnv)
 }
 
 func TestAppendOverlayPromptToAgentIncludesConfiguredOverlayPrompt(t *testing.T) {
@@ -1280,19 +1097,39 @@ func TestNewConversationKeepsInjectedSessionService(t *testing.T) {
 	assert.Same(t, service, bridge.config.SessionService)
 }
 
-func TestBridgeSubmitReturnsErrorAfterStop(t *testing.T) {
+// A submission during shutdown is stored in the Thread Queue with its full
+// inbound, so it survives the process exit and starts after the restart.
+func TestBridgeSubmitAfterStopStoresRequestDurably(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()
 
+	service := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	bridge := NewConversation(&config.Config{Workspace: t.TempDir()}, bus, &Config{ConversationID: conversationID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
-	require.NoError(t, bridge.Start(context.Background()))
+	bridge := NewConversation(&config.Config{Workspace: t.TempDir()}, bus, &Config{ConversationID: conversationID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
+	require.NoError(t, startTestBridge(context.Background(), bridge))
 	require.NoError(t, bridge.Stop())
 
-	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "hello", true)
-	inbound.ConversationID = conversationID
-	err := bridge.Submit(context.Background(), inbound)
-	require.ErrorIs(t, err, errBridgeStopped)
+	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindSteer, "hello", true)
+	inbound.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "U1"}
+	inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.333", ThreadTS: "111.222"}
+	require.NoError(t, bridge.Submit(context.Background(), inbound))
+
+	continuation := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "continue", false)
+	continuation.GoalAction = protocol.GoalActionContinue
+	require.ErrorIs(t, bridge.Submit(context.Background(), continuation), protocol.ErrBridgeStopped, "goal continuations restart from the goal itself")
+
+	items, err := service.ThreadQueueForConversation(conversationID)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.NotNil(t, items[0].Inbound)
+	assert.Equal(t, "hello", items[0].Inbound.Text)
+	assert.Equal(t, protocol.InboundKindSteer, items[0].Inbound.Kind)
+	assert.Equal(t, inbound.SlackReply, items[0].Inbound.SlackReply)
+	assert.Equal(t, conversationID, items[0].Inbound.ConversationID)
+
+	visible, err := (&threadBridgeManager{store: service, bridges: map[string]directBridge{}}).queueItems(conversationID)
+	require.NoError(t, err)
+	assert.Len(t, visible, 1, "stored human input stays visible in $queue")
 }
 
 func TestBridgeStartReportsStateLoadError(t *testing.T) {
@@ -1303,7 +1140,7 @@ func TestBridgeStartReportsStateLoadError(t *testing.T) {
 	defer bus.Close()
 
 	bridge := NewConversation(&config.Config{Workspace: t.TempDir()}, bus, &Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
-	err := bridge.Start(context.Background())
+	err := startTestBridge(context.Background(), bridge)
 	require.ErrorContains(t, err, "load scheduled messages")
 }
 
@@ -1318,7 +1155,7 @@ func TestBridgeEnqueueReturnsContextOrStopErrors(t *testing.T) {
 	bridge = &Bridge{requestCh: make(chan bridgeRequest), stopCh: make(chan struct{})}
 	close(bridge.stopCh)
 	err = bridge.enqueue(context.Background(), &bridgeRequest{}, "submit test")
-	require.ErrorIs(t, err, errBridgeStopped)
+	require.ErrorIs(t, err, protocol.ErrBridgeStopped)
 }
 
 func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
@@ -1410,7 +1247,7 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 	inbound.ConversationID = conversationID
 
 	var group errgroup.Group
-	group.Go(func() error { return bridge.handleInbound(context.Background(), &bridgeRequest{inbound: inbound}) })
+	group.Go(func() error { return handleTestInbound(context.Background(), bridge, &bridgeRequest{inbound: inbound}) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -1444,7 +1281,7 @@ func TestBridgeStopAfterStartContextCanceledIsIdempotent(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	bridge := NewConversation(&config.Config{Workspace: t.TempDir()}, bus, &Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
-	require.NoError(t, bridge.Start(ctx))
+	require.NoError(t, startTestBridge(ctx, bridge))
 
 	cancel()
 
@@ -1542,7 +1379,7 @@ func TestAttachFilesToolReadsWorkspacePath(t *testing.T) {
 	data := bytes.Repeat([]byte("report body"), 400000)
 	require.NoError(t, root.WriteFile("reports/latest.txt", data, 0o644))
 
-	attachments := new(outboundAttachmentCollector)
+	attachments := &outboundAttachmentCollector{key: "turn-1/attachments"}
 	sessions := newTestSessionService(t)
 	tool := attachments.Tool(root, sessions, "attachment-test")
 	parameters := tool.Parameters
@@ -1559,6 +1396,14 @@ func TestAttachFilesToolReadsWorkspacePath(t *testing.T) {
 	got := attachments.Attachments()
 	require.Len(t, got, 1)
 	require.Contains(t, result.Output, got[0].ID)
+
+	recorded, found, err := sessions.LoadTurnStep(t.Context(), "attachment-test", "turn-1/attachments")
+	require.NoError(t, err)
+	require.True(t, found)
+
+	var resumed []protocol.OutboundAttachment
+	require.NoError(t, json.Unmarshal(recorded, &resumed))
+	assert.Equal(t, got, resumed, "a resumed turn keeps attachments queued before a restart")
 	require.NoError(t, root.WriteFile("reports/latest.txt", []byte("changed"), 0o644))
 	stored, err := sessions.LoadAttachment(t.Context(), "attachment-test", got[0].ID, false)
 	require.NoError(t, err)
@@ -1650,7 +1495,7 @@ func TestAttachmentFallbackAndImageAttachments(t *testing.T) {
 	inbound.Metadata = map[string]string{"web_message_id": "attachment-input"}
 
 	var group errgroup.Group
-	group.Go(func() error { return bridge.handleInbound(t.Context(), &bridgeRequest{inbound: inbound}) })
+	group.Go(func() error { return handleTestInbound(t.Context(), bridge, &bridgeRequest{inbound: inbound}) })
 
 	consumed := readRocketCodeOutbound(t, bus)
 	require.Equal(t, "attachment-input", consumed.ConsumedID)
@@ -1984,7 +1829,7 @@ Prompt
 
 	shellTempDir := filepath.Join(workspace, "shell-tmp")
 	require.NoError(t, os.Mkdir(shellTempDir, 0o755))
-	_, err = rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{ShellTempDir: shellTempDir, ChildSessions: rocketcode.InertChildSessions{}, CheckpointSink: rocketcode.InertCheckpointSink{}, ShellCommand: rocketcode.DefaultShellCommand}, root, agents, skills, "main", io.Discard)
+	_, err = rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{ShellTempDir: shellTempDir, ChildSessions: rocketcode.InertChildSessions{}, Journal: rocketcode.InertJournal{}, ShellCommand: rocketcode.DefaultShellCommand}, root, agents, skills, "main", io.Discard)
 	require.NoError(t, err)
 }
 
@@ -2171,7 +2016,7 @@ func TestInboundWorkflowReadsWebCommands(t *testing.T) {
 }
 
 func TestBridgeQueuesWebWorkflowInsteadOfSteering(t *testing.T) {
-	bridge := &Bridge{stopCh: make(chan struct{}), inputOpen: true, requestCh: make(chan bridgeRequest, 1)}
+	bridge := &Bridge{stopCh: make(chan struct{}), inputOpen: true, requestCh: make(chan bridgeRequest, 1), config: Config{SessionService: newTestSessionService(t)}}
 
 	workflowInbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$workflow audit src"}, true)
 	require.NoError(t, bridge.enqueue(t.Context(), &bridgeRequest{inbound: workflowInbound}, "test"))
@@ -2288,7 +2133,7 @@ func TestBridgeInterruptCancelsTurnWaitingForPairedSession(t *testing.T) {
 		service.reserveTurnPair(pairID, privateID)
 
 		bridge := &Bridge{runtime: &config.Config{}, config: Config{ConversationID: pairID, Agent: "main", ManagedConversationID: pairID, SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
-		require.NoError(t, bridge.Start(t.Context()))
+		require.NoError(t, startTestBridge(t.Context(), bridge))
 		t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
 
 		inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "wait", true)
@@ -2359,7 +2204,7 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedTurn(t *testing.T) {
 		bus := newTestBus()
 		t.Cleanup(bus.Close)
 		bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus: bus, config: Config{ConversationID: pairID, ManagedConversationID: pairID, Agent: "main", SessionService: service}}
-		require.NoError(t, bridge.Start(t.Context()))
+		require.NoError(t, startTestBridge(t.Context(), bridge))
 		t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
 
 		delivered := make(chan struct{})
@@ -2453,7 +2298,7 @@ func TestBridgeFailedManagedWorkflowPersistsRunSummary(t *testing.T) {
 		bus := newTestBus()
 		t.Cleanup(bus.Close)
 		bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: &config.Config{Workspace: workspace}, bus: bus, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}}
-		require.NoError(t, bridge.Start(t.Context()))
+		require.NoError(t, startTestBridge(t.Context(), bridge))
 		t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
 
 		delivered := make(chan struct{})
@@ -2512,7 +2357,7 @@ func TestBridgeFailedWorkerErrorIsNotPersisted(t *testing.T) {
 	bus := newTestBus()
 	t.Cleanup(bus.Close)
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus: bus, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}}
-	require.NoError(t, bridge.Start(t.Context()))
+	require.NoError(t, startTestBridge(t.Context(), bridge))
 	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
 
 	delivered := make(chan struct{})
@@ -2573,7 +2418,7 @@ func TestBridgeStoppedManagedWorkflowPersistsRunSummary(t *testing.T) {
 	bus := newTestBus()
 	t.Cleanup(bus.Close)
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus: bus, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}}
-	require.NoError(t, bridge.Start(t.Context()))
+	require.NoError(t, startTestBridge(t.Context(), bridge))
 	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
 
 	delivered := make(chan struct{})
@@ -2659,7 +2504,7 @@ func TestWorkflowRunSummaryIsVisibleWithoutIntermediateOutput(t *testing.T) {
 	bus := newTestBus()
 	t.Cleanup(bus.Close)
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus: bus, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}}
-	require.NoError(t, bridge.Start(t.Context()))
+	require.NoError(t, startTestBridge(t.Context(), bridge))
 	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
 
 	completed := make(chan string, 2)
@@ -2746,7 +2591,7 @@ func TestBridgePairLockFailureReleasesWorkflowReservation(t *testing.T) {
 		require.NoError(t, err)
 
 		bridge := &Bridge{runtime: &config.Config{}, config: Config{ConversationID: pairID, ManagedConversationID: pairID, SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
-		require.NoError(t, bridge.Start(t.Context()))
+		require.NoError(t, startTestBridge(t.Context(), bridge))
 		t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
 
 		inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow audit", true)
@@ -2762,27 +2607,6 @@ func TestBridgePairLockFailureReleasesWorkflowReservation(t *testing.T) {
 
 		assert.Empty(t, turnPairReservation(service, pairID))
 	})
-}
-
-func TestBridgeRequestReservationOwnershipPreservesManagedRecovery(t *testing.T) {
-	service := newTestSessionService(t)
-	pairID, privateID := protocol.SlackThreadConversationID("C123", "111.222"), "external_mcp:private"
-
-	service.reserveTurnPair(pairID, privateID)
-	private := &Bridge{config: Config{ConversationID: privateID, ManagedConversationID: pairID, SessionService: service}}
-	private.completeRequestTurnPairReservation(&bridgeRequest{activeTurn: new(ActiveTurnState)})
-
-	unlocked, err := service.lockTurnPair(t.Context(), pairID, pairID)
-	require.NoError(t, err)
-	unlocked()
-
-	service.reserveTurnPair(pairID, pairID)
-	t.Cleanup(func() { service.completeTurnPairReservation(pairID, pairID) })
-
-	managed := &Bridge{config: Config{ConversationID: pairID, ManagedConversationID: pairID, SessionService: service}}
-	managed.completeRequestTurnPairReservation(&bridgeRequest{activeTurn: new(ActiveTurnState)})
-
-	assert.Equal(t, pairID, turnPairReservation(service, pairID))
 }
 
 func TestBridgeScheduleMessageUsesOwningSlackThread(t *testing.T) {
@@ -2900,8 +2724,7 @@ func TestSubmitEnqueuedItemPreservesSource(t *testing.T) {
 
 	waiting := protocol.NewInboundMessageFromContent(protocol.SourceExternalMCP, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "source text", Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("image")}}}, true)
 	waiting.Metadata = map[string]string{"external_conversation_id": "external-1", protocol.InboundPrincipalMetadataKey: "U3"}
-	bridge.config.SessionService.PutMCPWaiter("q3", waiting)
-	item = &protocol.ThreadQueueItem{ID: "q3", ConversationID: bridge.config.ConversationID, Message: "queue display", Principal: "U3"}
+	item = &protocol.ThreadQueueItem{ID: "q3", ConversationID: bridge.config.ConversationID, Message: "queue display", Principal: "U3", Inbound: waiting}
 	require.NoError(t, bridge.config.SessionService.PutThreadQueueItem(item.ID, item))
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -3245,7 +3068,7 @@ func TestBridgeRestoresScheduledMessageAfterRestart(t *testing.T) {
 		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 
 		first := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: conversationID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.DiscardHandler))
-		require.NoError(t, first.Start(t.Context()))
+		require.NoError(t, startTestBridge(t.Context(), first))
 		require.NoError(t, first.ScheduleMessage(5*time.Second, "later", false))
 		require.NoError(t, first.Stop())
 
@@ -3303,64 +3126,10 @@ func TestBridgeStartLogsRestoredScheduledMessage(t *testing.T) {
 	bus := newTestBus()
 	t.Cleanup(bus.Close)
 	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: conversationID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.NewJSONHandler(&logs, nil)))
-	require.NoError(t, bridge.Start(t.Context()))
+	require.NoError(t, startTestBridge(t.Context(), bridge))
 	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
 
 	assert.Contains(t, logs.String(), "scheduled message restored")
-}
-
-func TestBridgeRearmsScheduledMessagesAfterRecoveredTurnFailure(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		workspace := t.TempDir()
-		store, err := NewSessionService(workspace)
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, store.Stop()) })
-
-		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-
-		require.NoError(t, store.PutScheduledMessage("schedule-1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "later", DueAt: time.Now().UTC().Add(5 * time.Second)}))
-
-		var logs lockedBuffer
-
-		bus := newTestBus()
-		t.Cleanup(bus.Close)
-		bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: conversationID, Agent: "main", RecoveringActiveTurn: true, StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.NewJSONHandler(&logs, nil)))
-		require.NoError(t, bridge.Start(t.Context()))
-		t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
-		synctest.Wait()
-		assert.NotContains(t, logs.String(), "scheduled message restored")
-
-		require.NoError(t, bridge.RecoverActiveTurn(context.Background(), &ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", ConversationKey: conversationID, Agent: "main", ReplayInput: []json.RawMessage{json.RawMessage("{")}}}))
-		synctest.Wait()
-		assert.Contains(t, logs.String(), "handle recovered active turn")
-		assert.Contains(t, logs.String(), "scheduled message restored")
-
-		time.Sleep(5 * time.Second)
-		synctest.Wait()
-		assert.Contains(t, logs.String(), "scheduled message enqueued")
-	})
-}
-
-func TestHandleRecoveredRequestReleasesPairedStartupHold(t *testing.T) {
-	store := newTestSessionService(t)
-	destID := protocol.SlackThreadConversationID("C123", "111.222")
-	privateID := "external_mcp:planner:private"
-	store.holdStartupRecovery("old-turn", privateID, destID)
-	require.True(t, store.startupRecoveryBlocks(destID))
-
-	workspace := t.TempDir()
-	private := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: privateID, Agent: "planner", RecoveringActiveTurn: true, AgentAfterRecovery: "planner", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.DiscardHandler))
-	dest := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: destID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.DiscardHandler))
-	dest.handleRecoveredRequest(t.Context(), &bridgeRequest{producer: private, activeTurn: &ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", ConversationKey: privateID, Agent: "planner", ReplayInput: []json.RawMessage{json.RawMessage("{")}}}})
-	assert.False(t, store.startupRecoveryBlocks(privateID))
-	assert.False(t, store.startupRecoveryBlocks(destID))
-
-	store.holdStartupRecovery("old-turn", privateID, destID)
-
-	canceled, cancel := context.WithCancel(t.Context())
-	cancel()
-	dest.handleRecoveredRequest(canceled, &bridgeRequest{producer: private, activeTurn: &ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", ConversationKey: privateID, Agent: "planner", ReplayInput: []json.RawMessage{json.RawMessage("{")}}}})
-	assert.True(t, store.startupRecoveryBlocks(destID))
 }
 
 func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
@@ -3603,7 +3372,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	msg.ConversationID = bridge.config.ConversationID
 	msg.Metadata = map[string]string{"z": "last", "a": "first"}
 
-	result, err := bridge.runTurn(context.Background(), msg, "turn-1")
+	result, err := runTestTurn(context.Background(), bridge, msg, "turn-1")
 	require.NoError(t, err)
 	require.NoError(t, errRequest)
 	assert.Equal(t, "ok", result.text)
@@ -3613,7 +3382,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	assert.Equal(t, "user", requestBody.Input[1].Role)
 
 	msg.Metadata = map[string]string{"a": "ignored", "later-key": "fresh"}
-	_, err = bridge.runTurn(context.Background(), msg, "turn-2")
+	_, err = runTestTurn(context.Background(), bridge, msg, "turn-2")
 	require.NoError(t, err)
 
 	developerMessages := []string{}
@@ -3633,7 +3402,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	assert.Equal(t, "first|fresh|last", requestBody.Input[len(requestBody.Input)-1].Output)
 
 	msg.Metadata = map[string]string{"a": "ignored"}
-	_, err = bridge.runTurn(context.Background(), msg, "turn-3")
+	_, err = runTestTurn(context.Background(), bridge, msg, "turn-3")
 	require.NoError(t, err)
 
 	for i := range requestBody.Input {
@@ -3683,180 +3452,12 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	managedBridge := &Bridge{runtime: bridge.runtime, config: Config{ConversationID: managedConversationID, Agent: "planner", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
 	managedMsg := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "check metadata", true)
 	managedMsg.ConversationID = managedConversationID
-	_, err = managedBridge.runTurn(context.Background(), managedMsg, "turn-managed")
+	_, err = runTestTurn(context.Background(), managedBridge, managedMsg, "turn-managed")
 	require.NoError(t, err)
 	require.NotEmpty(t, requestBody.Input)
 	assert.Equal(t, "first||last", requestBody.Input[len(requestBody.Input)-1].Output)
 	require.Len(t, reviewMetadata, 2)
 	assert.Equal(t, []string{developerMessages[0]}, reviewMetadata[1])
-}
-
-func TestRunTurnPreservesRecoveredExternalMCPReplayWithTransientMetadata(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-
-	service, err := NewSessionService(workspace)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, service.Stop()) })
-
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	metadataReplay, err := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", externalMCPMetadataEnv(conversationID, map[string]string{"a": "first"})))
-	require.NoError(t, err)
-	_, err = service.AppendEntryID(context.Background(), conversationID, &rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Unix(1, 0).UTC(), ReplayInput: metadataReplay})
-	require.NoError(t, err)
-
-	recoveredReplay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfMessage: &responses.EasyInputMessageParam{Role: responses.EasyInputMessageRoleUser, Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String("interrupted external turn")}, Type: "message"}}})
-	require.NoError(t, err)
-
-	var (
-		requestBody struct {
-			Input []struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
-			} `json:"input"`
-		}
-		errRequest error
-	)
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/responses" {
-			errRequest = assert.AnError
-
-			http.NotFound(w, r)
-
-			return
-		}
-
-		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
-			errRequest = err
-			http.Error(w, err.Error(), http.StatusBadRequest)
-
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"recovered","annotations":[]}]}]}`))
-	}))
-	t.Cleanup(server.Close)
-
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: conversationID, Agent: "planner", ExternalConversationID: "public-1", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
-	msg := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "Continue from the recovered restart handoff.", false)
-	msg.ConversationID = conversationID
-	msg.Metadata = map[string]string{"later-key": "fresh"}
-
-	_, err = bridge.runTurn(context.Background(), msg, "turn-1", rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", DisplayModel: "gpt-5.5", ReplayInput: recoveredReplay})
-	require.NoError(t, err)
-	require.NoError(t, errRequest)
-
-	var input strings.Builder
-	for i := range requestBody.Input {
-		input.WriteString(requestBody.Input[i].Content)
-		input.WriteByte('\n')
-	}
-
-	requestInput := input.String()
-	threadMetadata := strings.Index(requestInput, "This external MCP thread has metadata:")
-	recoveredTurn := strings.Index(requestInput, "interrupted external turn")
-	transientMetadata := strings.Index(requestInput, "This external MCP turn has additional metadata:")
-	require.NotEqual(t, -1, threadMetadata, "provider request missing stored metadata: %s", requestInput)
-	require.NotEqual(t, -1, recoveredTurn, "provider request missing recovered replay: %s", requestInput)
-	require.NotEqual(t, -1, transientMetadata, "provider request missing transient metadata: %s", requestInput)
-	assert.Less(t, threadMetadata, recoveredTurn)
-	assert.Less(t, recoveredTurn, transientMetadata)
-}
-
-func TestRecoveredExternalMCPActiveTurnUsesStoredSourceMetadata(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-5.5\npermission:\n  bash:\n    \"*\": allow\n---\nPrompt\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-
-	service, err := NewSessionService(workspace)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, service.Stop()) })
-
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	metadataReplay, err := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", externalMCPMetadataEnv(conversationID, map[string]string{"a": "first"})))
-	require.NoError(t, err)
-	_, err = service.AppendEntryID(context.Background(), conversationID, &rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Unix(1, 0).UTC(), ReplayInput: metadataReplay})
-	require.NoError(t, err)
-
-	recoveredReplay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfMessage: &responses.EasyInputMessageParam{Role: responses.EasyInputMessageRoleUser, Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String("interrupted external turn")}, Type: "message"}}})
-	require.NoError(t, err)
-
-	var (
-		requestBody struct {
-			Input []struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
-				Output  any    `json:"output"`
-			} `json:"input"`
-		}
-		errRequest error
-		requests   int
-	)
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/responses" {
-			errRequest = assert.AnError
-
-			http.NotFound(w, r)
-
-			return
-		}
-
-		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
-			errRequest = err
-			http.Error(w, err.Error(), http.StatusBadRequest)
-
-			return
-		}
-
-		requests++
-
-		w.Header().Set("Content-Type", "application/json")
-
-		if requests == 1 {
-			writeRawRunFunctionCall(t, w, "resp_2", "execute", executeBashScript(`printf '%s|%s' "$ROCKETCLAW_METADATA_A" "$ROCKETCLAW_METADATA_LATER_KEY"`))
-
-			return
-		}
-
-		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"recovered","annotations":[]}]}]}`))
-	}))
-	t.Cleanup(server.Close)
-
-	bus := newTestBus()
-	t.Cleanup(bus.Close)
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: conversationID, Agent: "planner", ExternalConversationID: "public-1", SessionService: service}, bus: bus, log: slog.New(slog.DiscardHandler)}
-	turn := ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", ConversationKey: conversationID, Agent: "planner", Model: "gpt-5.5", DisplayModel: "gpt-5.5", ReplayInput: recoveredReplay}, SourceMetadata: map[string]string{"later-key": "fresh"}}
-
-	var group errgroup.Group
-	group.Go(func() error { return bridge.handleRecoveredActiveTurn(context.Background(), &turn) })
-
-	for {
-		outbound := readRocketCodeOutbound(t, bus)
-		outbound.MarkDelivered(nil)
-
-		if outbound.Complete {
-			break
-		}
-	}
-
-	require.NoError(t, group.Wait())
-	require.NoError(t, errRequest)
-
-	developerMessages := []string{}
-
-	for i := range requestBody.Input {
-		if requestBody.Input[i].Role == "developer" {
-			developerMessages = append(developerMessages, requestBody.Input[i].Content)
-		}
-	}
-
-	assert.Contains(t, developerMessages, "This external MCP turn has additional metadata:\nROCKETCLAW_METADATA_LATER_KEY=\"fresh\"")
-	require.NotEmpty(t, requestBody.Input)
-	assert.Equal(t, "first|fresh", requestBody.Input[len(requestBody.Input)-1].Output)
 }
 
 func TestRunTurnTranslatesDollarToDirectSkill(t *testing.T) {
@@ -3958,7 +3559,7 @@ Request: $ARGUMENTS
 
 				require.NoError(t, root.WriteFile("state", []byte("fresh"), 0o600))
 
-				result, err := bridge.runTurn(context.Background(), msg, "turn-1")
+				result, err := runTestTurn(context.Background(), bridge, msg, "turn-1")
 
 				require.NoError(t, err)
 				require.NoError(t, errRequest)
@@ -4001,16 +3602,10 @@ Request: $ARGUMENTS
 					requestBody.Input = nil
 
 					require.NoError(t, root.WriteFile("calls", nil, 0o600))
-					result, err := bridge.runTurn(t.Context(), (<-bridge.requestCh).inbound, "denied-turn")
+					result, err := runTestTurn(t.Context(), bridge, (<-bridge.requestCh).inbound, "denied-turn")
 					require.NoError(t, err)
 					require.Contains(t, result.text, "not available to the active agent")
 					require.Empty(t, requestBody.Input, "agent changed after enqueue must be checked before the provider")
-					entries, err := service.ObserveTranscript(t.Context(), conversationID, 0, 0, nil)
-					require.NoError(t, err)
-					require.Equal(t, protocol.TerminalFailed, entries[len(entries)-1].Terminal)
-					require.False(t, entries[len(entries)-1].Active)
-					progress := rocketcode.PublicProgressFromTrace(entries[len(entries)-1].Entry.OutputTrace)
-					require.Equal(t, []rocketcode.PublicProgress{{ID: "input-error", Kind: rocketcode.PublicProgressText, State: rocketcode.PublicProgressFailed, Text: result.text, Agent: "denied", Model: "openai/gpt-5.5"}}, progress)
 
 					calls, err := root.ReadFile("calls")
 					require.NoError(t, err)
@@ -4027,34 +3622,16 @@ Request: $ARGUMENTS
 	msg.ConversationID = bridge.config.ConversationID
 	msg.Metadata = map[string]string{"web_message_id": "original-input"}
 	requestBody.Input = nil
-	result, err := bridge.runTurn(t.Context(), msg, "missing-turn")
+	result, err := runTestTurn(t.Context(), bridge, msg, "missing-turn")
 	require.NoError(t, err)
 	require.Contains(t, result.text, `subject "missing-skill"`)
 	require.Empty(t, requestBody.Input)
-	require.Zero(t, result.sessionEntryID)
-	entries, err := service.ObserveTranscript(t.Context(), msg.ConversationID, 0, 0, nil)
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	require.Equal(t, protocol.TerminalFailed, entries[0].Terminal)
-	require.False(t, entries[0].Active)
-
-	var original struct {
-		ID      string `json:"input_id"`
-		Content string `json:"content"`
-	}
-	require.NoError(t, json.Unmarshal(entries[0].Entry.ReplayInput[0], &original))
-	require.Equal(t, "original-input", original.ID)
-	require.Contains(t, original.Content, "$skill missing-skill")
-	require.Equal(t, []rocketcode.PublicProgress{{ID: "input-error", Kind: rocketcode.PublicProgressText, State: rocketcode.PublicProgressFailed, Text: result.text, Agent: "main", Model: "openai/gpt-5.5"}}, rocketcode.PublicProgressFromTrace(entries[0].Entry.OutputTrace))
-	turns, err := service.RecoverableActiveTurns(t.Context())
-	require.NoError(t, err)
-	require.Empty(t, turns)
 	saved, err := service.ObserveEntries(t.Context(), msg.ConversationID)
 	require.NoError(t, err)
 	require.Empty(t, saved, "failed preparation must not append a replay turn")
 
 	var delivery errgroup.Group
-	delivery.Go(func() error { return bridge.publishFinal(t.Context(), msg, result) })
+	delivery.Go(func() error { return publishTestFinal(t.Context(), bridge, msg, &result) })
 	require.Equal(t, "original-input", readRocketCodeOutbound(t, bus).ConsumedID)
 	require.False(t, readRocketCodeOutbound(t, bus).Complete)
 	final := readRocketCodeOutbound(t, bus)
@@ -4064,14 +3641,10 @@ Request: $ARGUMENTS
 	require.NoError(t, delivery.Wait())
 
 	msg.Text = "next request"
-	_, err = bridge.runTurn(t.Context(), msg, "next-turn")
+	_, err = runTestTurn(t.Context(), bridge, msg, "next-turn")
 	require.NoError(t, err)
 	require.Len(t, requestBody.Input, 1, "next provider input excludes failed preparation")
 	require.NotContains(t, string(requestBody.Input[0].Content), "missing-skill")
-	entries, err = service.ObserveTranscript(t.Context(), msg.ConversationID, 0, 0, nil)
-	require.NoError(t, err)
-	require.Len(t, entries, 2)
-	require.Equal(t, protocol.TerminalFailed, entries[0].Terminal, "later work must retain the original terminal failure")
 }
 
 func TestRunTurnProjectsDifferentProviderHistoryBeforeRequest(t *testing.T) {
@@ -4106,7 +3679,7 @@ func TestRunTurnProjectsDifferentProviderHistoryBeforeRequest(t *testing.T) {
 	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: server.URL}}}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "hello", true)
 	msg.ConversationID = conversationID
-	_, err = bridge.runTurn(t.Context(), msg, "turn-1")
+	_, err = runTestTurn(t.Context(), bridge, msg, "turn-1")
 	require.NoError(t, err)
 	assert.Contains(t, requestBody, providerReplayReadable)
 	assert.NotContains(t, requestBody, providerReplayPrivate)
@@ -4116,134 +3689,7 @@ func TestRunTurnProjectsDifferentProviderHistoryBeforeRequest(t *testing.T) {
 	assert.Contains(t, string(entries[0].Entry.ReplayInput[0]), providerReplayPrivate)
 }
 
-func TestRecoveredActiveTurnProjectsDifferentProviderReplayBeforeRequest(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: work/gpt\npermission: {}\n---\nPrompt\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-	service, err := NewSessionService(workspace)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, service.Stop()) })
-
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	checkpoint := rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", ConversationKey: conversationID, Agent: "main", Model: "gpt", DisplayModel: "openai/gpt", ResponseID: providerReplayPrivate, ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"portable-readable","id":"provider-private-sentinel"}`)}, OutputTrace: []json.RawMessage{json.RawMessage(`{"private":"provider-private-sentinel"}`), json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"item/0","parent_id":"old-turn/old-response","kind":"text","state":"working","text":"early-public","agent":"main","model":"openai/gpt"}}`)}}
-	checkpoint.ReasoningEffort = new("high")
-	want, err := json.Marshal(checkpoint)
-	require.NoError(t, err)
-
-	var requestBody string
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if !assert.NoError(t, err) {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-
-			return
-		}
-
-		requestBody = string(body)
-
-		w.Header().Set("Content-Type", "application/json")
-		writeRawRunMessage(t, w, "response", "message", "recovered")
-	}))
-	t.Cleanup(server.Close)
-
-	bus := newTestBus()
-	t.Cleanup(bus.Close)
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: server.URL}}}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: bus, log: slog.New(slog.DiscardHandler)}
-
-	errRecovered := make(chan error, 1)
-	go func() {
-		errRecovered <- bridge.handleRecoveredActiveTurn(t.Context(), &ActiveTurnState{Checkpoint: checkpoint})
-	}()
-
-	for {
-		outbound := readRocketCodeOutbound(t, bus)
-		outbound.MarkDelivered(nil)
-
-		if outbound.Complete {
-			break
-		}
-	}
-
-	require.NoError(t, <-errRecovered)
-	assert.Contains(t, requestBody, providerReplayReadable)
-	assert.NotContains(t, requestBody, providerReplayPrivate)
-	entries, err := service.ObserveEntries(t.Context(), conversationID)
-	require.NoError(t, err)
-	require.NotEmpty(t, entries)
-	saved := entries[len(entries)-1].Entry
-	require.Equal(t, "openai/gpt", saved.AttributionAt(0).Model)
-	require.Equal(t, new("high"), saved.AttributionAt(0).ReasoningEffort)
-	require.Equal(t, "work/gpt", saved.Model)
-	require.NotNil(t, saved.ReasoningEffort)
-	require.NotContains(t, requestBody, "replay_attribution")
-	require.NotContains(t, requestBody, "early-public")
-
-	progress := rocketcode.PublicProgressFromTrace(saved.OutputTrace)
-	require.Equal(t, []rocketcode.PublicProgress{{ID: "item/0", ParentID: "old-turn/old-response", Kind: rocketcode.PublicProgressText, State: rocketcode.PublicProgressStopped, Text: "early-public", Agent: "main", Model: "openai/gpt"}}, progress)
-
-	traceJSON, err := json.Marshal(saved.OutputTrace)
-	require.NoError(t, err)
-	require.NotContains(t, string(traceJSON), providerReplayPrivate)
-
-	after, err := json.Marshal(checkpoint)
-	require.NoError(t, err)
-	assert.Equal(t, want, after)
-}
-
-func TestRunTurnPreservesNamedProviderRecoveryBytesForSameProvider(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: work/new-model\npermission: {}\n---\nPrompt\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-	service, err := NewSessionService(workspace)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, service.Stop()) })
-
-	var requestBody string
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if !assert.NoError(t, err) {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		requestBody = string(body)
-
-		entries, err := service.ObserveTranscript(r.Context(), protocol.SlackThreadConversationID("C123", "111.222"), 0, 0, nil)
-		if assert.NoError(t, err) && assert.Len(t, entries, 1) {
-			progress := rocketcode.PublicProgressFromTrace(entries[0].Entry.OutputTrace)
-			assert.Equal(t, []rocketcode.PublicProgress{{ID: "item/0", ParentID: "old-turn/old-response", Kind: rocketcode.PublicProgressText, State: rocketcode.PublicProgressStopped, Text: "early-public", Agent: "old-agent", Model: "work/old-model"}}, progress, "recovery must seed before the first upsert")
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		writeRawRunMessage(t, w, "response", "message", "recovered")
-	}))
-	t.Cleanup(server.Close)
-
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: server.URL}}}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
-	checkpoint := rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", DisplayModel: "work/old-model", ReplayInput: []json.RawMessage{
-		json.RawMessage(`{"type":"message","role":"user","content":"native-readable"}`),
-		json.RawMessage(`{"type":"function_call","id":"provider-private-sentinel","call_id":"native-call","name":"read","arguments":"{}","status":"completed"}`),
-	}}
-	checkpoint.OutputTrace = []json.RawMessage{json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"item/0","parent_id":"old-turn/old-response","kind":"text","state":"working","text":"early-public","agent":"old-agent","model":"work/old-model"}}`)}
-	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "continue", false)
-	msg.ConversationID = conversationID
-
-	_, err = bridge.runTurn(t.Context(), msg, "turn-1", checkpoint)
-	require.NoError(t, err)
-	assert.Contains(t, requestBody, "native-readable")
-	assert.Contains(t, requestBody, providerReplayPrivate)
-	assert.NotContains(t, requestBody, "early-public")
-	entries, err := service.ObserveEntries(t.Context(), conversationID)
-	require.NoError(t, err)
-	require.NotEmpty(t, entries)
-	progress := rocketcode.PublicProgressFromTrace(entries[len(entries)-1].Entry.OutputTrace)
-	require.Equal(t, []rocketcode.PublicProgress{{ID: "item/0", ParentID: "old-turn/old-response", Kind: rocketcode.PublicProgressText, State: rocketcode.PublicProgressStopped, Text: "early-public", Agent: "old-agent", Model: "work/old-model"}}, progress)
-}
-
-func TestRunTurnWritesActiveTurnBeforeProviderAndClearsAfterSessionAppend(t *testing.T) {
+func TestHandleInboundJournalsTurnAndClearsRowWithHistoryAppend(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -4278,15 +3724,10 @@ func TestRunTurnWritesActiveTurnBeforeProviderAndClearsAfterSessionAppend(t *tes
 			return
 		}
 
-		turns, err := service.RecoverableActiveTurns(r.Context())
-		if !assert.NoError(t, err) {
-			return
-		}
-
-		if assert.Len(t, turns, 1) {
-			assert.Equal(t, conversationID, turns[0].Checkpoint.ConversationKey)
-			assert.NotEmpty(t, turns[0].Checkpoint.ReplayInput)
-		}
+		active, err := service.HasActiveTurn(r.Context(), conversationID)
+		assert.NoError(t, err)
+		assert.True(t, active, "the row exists before the provider is called")
+		assert.NotEmpty(t, testTurnStepKeys(t, service, conversationID), "the turn is journaled before the provider is called")
 
 		for _, event := range []string{
 			`{"type":"response.created","response":{"id":"resp_1"}}`,
@@ -4307,16 +3748,9 @@ func TestRunTurnWritesActiveTurnBeforeProviderAndClearsAfterSessionAppend(t *tes
 	msg.ConversationID = conversationID
 	msg.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}
 
-	var (
-		result  runResult
-		running errgroup.Group
-	)
+	var running errgroup.Group
 	running.Go(func() error {
-		var err error
-
-		result, err = bridge.runTurn(t.Context(), msg, "turn-1")
-
-		return err
+		return handleTestInbound(t.Context(), bridge, &bridgeRequest{inbound: msg})
 	})
 
 	defer func() {
@@ -4346,7 +3780,7 @@ func TestRunTurnWritesActiveTurnBeforeProviderAndClearsAfterSessionAppend(t *tes
 
 	release()
 	require.NoError(t, running.Wait())
-	assert.Equal(t, "ok", result.text)
+	assert.Equal(t, "ok", (<-msg.EnableResponseWait()).Text)
 
 	entries, err := service.ObserveEntries(context.Background(), conversationID)
 	require.NoError(t, err)
@@ -4356,12 +3790,13 @@ func TestRunTurnWritesActiveTurnBeforeProviderAndClearsAfterSessionAppend(t *tes
 	require.Equal(t, "ok", progress[0].Text)
 	require.Equal(t, rocketcode.PublicProgressCompleted, progress[0].State)
 
-	turns, err := service.RecoverableActiveTurns(context.Background())
+	active, err := service.HasActiveTurn(context.Background(), conversationID)
 	require.NoError(t, err)
-	assert.Empty(t, turns)
+	assert.False(t, active, "a delivered turn leaves no row")
+	assert.Empty(t, testTurnStepKeys(t, service, conversationID), "the finish transaction clears the journal")
 }
 
-func TestInterruptActiveTurnClearsRecoverableCheckpoint(t *testing.T) {
+func TestInterruptActiveTurnEndsRowAsStopped(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -4383,7 +3818,7 @@ func TestInterruptActiveTurnClearsRecoverableCheckpoint(t *testing.T) {
 	bus := newTestBus()
 	t.Cleanup(bus.Close)
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus: bus, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}}
-	require.NoError(t, bridge.Start(t.Context()))
+	require.NoError(t, startTestBridge(t.Context(), bridge))
 	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
 
 	delivered := make(chan struct{})
@@ -4404,413 +3839,24 @@ func TestInterruptActiveTurnClearsRecoverableCheckpoint(t *testing.T) {
 	require.NoError(t, bridge.Submit(t.Context(), inbound))
 	<-requestArrived
 
-	turns, err := service.RecoverableActiveTurns(t.Context())
+	active, err := service.HasActiveTurn(t.Context(), conversationID)
 	require.NoError(t, err)
-	require.Len(t, turns, 1)
+	require.True(t, active)
 
 	bridge.InterruptActiveTurn()
 	close(releaseRequest)
 	require.NoError(t, (<-response).Err)
 	<-delivered
 
-	turns, err = service.RecoverableActiveTurns(t.Context())
-	require.NoError(t, err)
-	assert.Empty(t, turns)
-}
-
-func TestRecoveredActiveTurnPersistsDurableSessionEntry(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-
-	service, err := NewSessionService(workspace)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, service.Stop()) })
-
-	replay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
-		{OfMessage: &responses.EasyInputMessageParam{Role: responses.EasyInputMessageRoleUser, Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String("interrupted")}, Type: "message"}},
-		{OfFunctionCall: &responses.ResponseFunctionToolCallParam{Arguments: `{"filePath":"README.md"}`, CallID: "call-1", Name: "read", ID: openai.String("fc-1"), Type: "function_call"}},
-	})
-	require.NoError(t, err)
-
-	var requestBody string
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		data, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-
-			return
-		}
-
-		requestBody = string(data)
-
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"recovered","annotations":[]}]}]}`))
-	}))
-	t.Cleanup(server.Close)
-
-	bus := newTestBus()
-	t.Cleanup(bus.Close)
-
-	outboundCtx, stopOutbound := context.WithCancel(context.Background())
-
-	delivered := make(chan struct{})
-	go func() {
-		defer close(delivered)
-
-		for outbound := range bus.Outbound(outboundCtx) {
-			if outbound.Complete {
-				outbound.MarkDelivered(nil)
-				return
-			}
-		}
-	}()
-
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: bus, log: slog.New(slog.DiscardHandler)}
-	turn := ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", ConversationKey: conversationID, Agent: "main", Model: "gpt-5.5", DisplayModel: "gpt-5.5", ReplayInput: replay, OpenFunctionCalls: []rocketcode.FunctionCallCheckpoint{{CallID: "call-1", Name: "read"}}}}
-	require.NoError(t, bridge.handleRecoveredActiveTurn(context.Background(), &turn))
-	stopOutbound()
-	<-delivered
-
-	entries, err := service.ObserveEntries(context.Background(), conversationID)
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	assert.Contains(t, string(entries[0].Entry.ReplayInput[0]), "interrupted")
-	assert.Contains(t, requestBody, "tool call aborted")
-	assert.Contains(t, requestBody, "previous runtime was interrupted")
-}
-
-func TestRecoveredActiveGoalTurnUsesPersistedSlackRecipient(t *testing.T) {
-	for _, tt := range []struct {
-		name                string
-		recipientTeamID     string
-		recipientUserID     string
-		wantRecipientTeamID string
-		wantRecipientUserID string
-	}{
-		{name: "persisted recipient", recipientTeamID: "T123", recipientUserID: "U456", wantRecipientTeamID: "T123", wantRecipientUserID: "U456"},
-		{name: "legacy empty recipient"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			workspace := t.TempDir()
-			writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
-			require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-
-			service, err := NewSessionService(workspace)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, service.Stop()) })
-
-			conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-			require.NoError(t, service.BeginGoal(conversationID, "ship it", "", 3, tt.recipientTeamID, tt.recipientUserID))
-
-			replay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfMessage: &responses.EasyInputMessageParam{Role: responses.EasyInputMessageRoleUser, Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String("interrupted")}, Type: "message"}}})
-			require.NoError(t, err)
-
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"recovered","annotations":[]}]}]}`))
-			}))
-			t.Cleanup(server.Close)
-
-			bus := newTestBus()
-			t.Cleanup(bus.Close)
-
-			bridge := &Bridge{
-				runtime:   &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}},
-				config:    Config{ConversationID: conversationID, Agent: "main", SessionService: service},
-				bus:       bus,
-				log:       slog.New(slog.DiscardHandler),
-				requestCh: make(chan bridgeRequest, 1),
-			}
-			turn := ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", ConversationKey: conversationID, Agent: "main", Model: "gpt-5.5", DisplayModel: "gpt-5.5", ReplayInput: replay}}
-
-			errRecovered := make(chan error, 1)
-			go func() { errRecovered <- bridge.handleRecoveredActiveTurn(t.Context(), &turn) }()
-
-			for i := range 2 {
-				outbound := readRocketCodeOutbound(t, bus)
-				require.NotNil(t, outbound.SlackReply)
-				assert.Equal(t, tt.wantRecipientTeamID, outbound.SlackReply.RecipientTeamID)
-				assert.Equal(t, tt.wantRecipientUserID, outbound.SlackReply.RecipientUserID)
-				assert.Equal(t, i == 1, outbound.Complete)
-
-				if i == 0 {
-					assert.Empty(t, outbound.Text)
-					assert.Empty(t, outbound.Attachments)
-					assert.Nil(t, outbound.ReasoningEffort)
-				} else {
-					assert.Equal(t, "recovered", outbound.Text)
-				}
-
-				outbound.MarkDelivered(nil)
-			}
-
-			require.NoError(t, <-errRecovered)
-			require.Empty(t, bus.outbound)
-		})
-	}
-}
-
-func TestRecoveredActiveTurnIncludesPriorCompletedHistory(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-
-	service, err := NewSessionService(workspace)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, service.Stop()) })
-
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-
-	priorReplay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
-		{OfMessage: &responses.EasyInputMessageParam{Role: responses.EasyInputMessageRoleUser, Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String("prior question")}, Type: "message"}},
-		{OfMessage: &responses.EasyInputMessageParam{Role: responses.EasyInputMessageRoleAssistant, Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String("prior answer")}, Type: "message"}},
-	})
-	require.NoError(t, err)
-	_, err = service.AppendEntryID(context.Background(), conversationID, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), Model: "gpt-5.5", ReplayInput: priorReplay})
-	require.NoError(t, err)
-
-	recoveredReplay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfMessage: &responses.EasyInputMessageParam{Role: responses.EasyInputMessageRoleUser, Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String("interrupted turn")}, Type: "message"}}})
-	require.NoError(t, err)
-
-	var requestInput string
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/responses" {
-			http.NotFound(w, r)
-
-			return
-		}
-
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-
-			return
-		}
-
-		requestInput = string(body)
-
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"recovered","annotations":[]}]}]}`))
-	}))
-	t.Cleanup(server.Close)
-
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
-	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "Continue from the recovered restart handoff.", false)
-	msg.ConversationID = conversationID
-	msg.Metadata = map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text", recoveredTurnMetadataKey: "true"}
-
-	_, err = bridge.runTurn(context.Background(), msg, "turn-1", rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", DisplayModel: "gpt-5.5", ReplayInput: recoveredReplay})
-	require.NoError(t, err)
-
-	priorQuestion := strings.Index(requestInput, "prior question")
-	priorAnswer := strings.Index(requestInput, "prior answer")
-	interruptedTurn := strings.Index(requestInput, "interrupted turn")
-	require.NotEqual(t, -1, priorQuestion, "provider request missing prior completed user history: %s", requestInput)
-	require.NotEqual(t, -1, priorAnswer, "provider request missing prior completed assistant history: %s", requestInput)
-	require.NotEqual(t, -1, interruptedTurn, "provider request missing recovered active turn replay: %s", requestInput)
-	assert.Less(t, priorQuestion, interruptedTurn)
-	assert.Less(t, priorAnswer, interruptedTurn)
-
-	entries, err := service.ObserveEntries(context.Background(), conversationID)
-	require.NoError(t, err)
-	require.Len(t, entries, 2)
-
-	var savedReplay strings.Builder
-	for _, raw := range entries[1].Entry.ReplayInput {
-		savedReplay.Write(raw)
-		savedReplay.WriteByte('\n')
-	}
-
-	assert.Contains(t, savedReplay.String(), "interrupted turn")
-	assert.NotContains(t, savedReplay.String(), "prior question")
-	assert.NotContains(t, savedReplay.String(), "prior answer")
-}
-
-func TestRecoveredActiveTurnCancellationBeforeReplacementLeavesOriginalRowUntouched(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-
-	service, err := NewSessionService(workspace)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, service.Stop()) })
-
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-
-	replay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfMessage: &responses.EasyInputMessageParam{Role: responses.EasyInputMessageRoleUser, Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String("interrupted")}, Type: "message"}}})
-	require.NoError(t, err)
-	require.NoError(t, service.UpsertActiveTurn(context.Background(), &rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", ConversationKey: conversationID, Agent: "main", Model: "gpt-5.5", DisplayModel: "gpt-5.5", ReplayInput: replay}, nil))
-
-	bus := newTestBus()
-	t.Cleanup(bus.Close)
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: bus, log: slog.New(slog.DiscardHandler)}
-	turn := ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", ConversationKey: conversationID, Agent: "main", Model: "gpt-5.5", DisplayModel: "gpt-5.5", ReplayInput: replay}}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	err = bridge.handleRecoveredActiveTurn(ctx, &turn)
-	require.ErrorIs(t, err, context.Canceled)
-
-	turns, err := service.RecoverableActiveTurns(context.Background())
-	require.NoError(t, err)
-	require.Len(t, turns, 1)
-	assert.Equal(t, "old-turn", turns[0].Checkpoint.TurnID)
-}
-
-func TestRecoveredActiveTurnPermanentFailureClearsFreshRecoveryRow(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-
-	service, err := NewSessionService(workspace)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, service.Stop()) })
-
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-
-	replay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfMessage: &responses.EasyInputMessageParam{Role: responses.EasyInputMessageRoleUser, Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String("interrupted")}, Type: "message"}}})
-	require.NoError(t, err)
-	require.NoError(t, service.UpsertActiveTurn(context.Background(), &rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", ConversationKey: conversationID, Agent: "main", Model: "gpt-5.5", DisplayModel: "gpt-5.5", ReplayInput: replay}, nil))
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "provider failed", http.StatusInternalServerError)
-	}))
-	t.Cleanup(server.Close)
-
-	publisher := newTestBus()
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: publisher, log: slog.New(slog.DiscardHandler)}
-	t.Cleanup(publisher.Close)
-
-	turn := ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", ConversationKey: conversationID, Agent: "main", Model: "gpt-5.5", DisplayModel: "gpt-5.5", ReplayInput: replay}}
-	err = bridge.handleRecoveredActiveTurn(context.Background(), &turn)
-	require.Error(t, err)
-
-	turns, err := service.RecoverableActiveTurns(context.Background())
-	require.NoError(t, err)
-	assert.Empty(t, turns)
-
-	turn.Checkpoint.TurnID = "cannot-fail"
-	require.NoError(t, service.UpsertActiveTurn(t.Context(), &turn.Checkpoint, nil))
-	_, err = service.db.ExecContext(t.Context(), `CREATE FUNCTION reject_terminal_write() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN IF NEW.terminal <> '' THEN RAISE EXCEPTION 'terminal persistence sentinel'; END IF; RETURN NEW; END $$;
-CREATE TRIGGER reject_terminal_write BEFORE UPDATE ON active_turns FOR EACH ROW EXECUTE FUNCTION reject_terminal_write()`)
-	require.NoError(t, err)
-	err = bridge.handleRecoveredActiveTurn(t.Context(), &turn)
-	errAPI, ok := errors.AsType[*openai.Error](err)
-	require.True(t, ok, "ordinary provider error must survive terminal persistence failure")
-	require.Equal(t, http.StatusInternalServerError, errAPI.StatusCode)
-	require.ErrorContains(t, err, "terminal persistence sentinel")
-	require.ErrorContains(t, err, `record failed recovered active turn "cannot-fail"`)
-
-	for len(publisher.outbound) > 0 {
-		require.False(t, (<-publisher.outbound).Complete, "failed terminal persistence cannot deliver a final answer")
-	}
-}
-
-func TestRecoveredActiveTurnInterruptionPreservesStoppedTerminalAndReleasesStartupHold(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
-	root, err := os.OpenRoot(workspace)
-	require.NoError(t, err)
-	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
-	require.NoError(t, root.Close())
-
-	service := newTestSessionServiceAt(t, workspace)
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	replay, err := replayInputForMessage("user", "interrupted")
-	require.NoError(t, err)
-
-	turn := ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", ConversationKey: conversationID, Agent: "main", Model: "gpt-5.5", DisplayModel: "gpt-5.5", ReplayInput: replay}}
-	require.NoError(t, service.UpsertActiveTurn(t.Context(), &turn.Checkpoint, nil))
-	require.NoError(t, service.BeginGoal(conversationID, "ship it", "", 3, "T123", "U456"))
-	service.holdStartupRecovery("old-turn", conversationID, conversationID)
-	require.True(t, service.startupRecoveryBlocks(conversationID))
-
-	requestArrived := make(chan chan struct{}, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
-		releaseRequest := make(chan struct{})
-		requestArrived <- releaseRequest
-
-		select {
-		case <-request.Context().Done():
-		case <-releaseRequest:
-		}
-	}))
-	t.Cleanup(server.Close)
-
-	bus := newTestBus()
-	t.Cleanup(bus.Close)
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: bus, log: slog.New(slog.DiscardHandler)}
-
-	var group errgroup.Group
-	group.Go(func() error {
-		bridge.handleRecoveredRequest(t.Context(), &bridgeRequest{activeTurn: &turn})
-		return nil
-	})
-
-	releaseRequest := <-requestArrived
-
-	start := readRocketCodeOutbound(t, bus)
-	require.False(t, start.Complete)
-	require.Empty(t, start.Text)
-	require.Empty(t, start.Attachments)
-	require.Nil(t, start.ReasoningEffort)
-	require.Equal(t, "U456", start.SlackReply.RecipientUserID)
-	bridge.InterruptActiveTurn()
-	close(releaseRequest)
-	require.NoError(t, group.Wait())
+	require.Eventually(t, func() bool {
+		active, err := service.HasActiveTurn(t.Context(), conversationID)
+		return err == nil && !active
+	}, 5*time.Second, 10*time.Millisecond)
 
 	entries, err := service.ObserveTranscript(t.Context(), conversationID, 0, 0, nil)
 	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	assert.Equal(t, "old-turn", entries[0].Entry.TurnID)
+	require.Len(t, entries, 1, "the stopped turn stays visible in the transcript")
 	assert.Equal(t, protocol.TerminalStopped, entries[0].Terminal)
-	assert.False(t, entries[0].Active)
-
-	goal, ok, err := service.Goal(conversationID)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, GoalStatusStopped, goal.Status)
-	assert.False(t, service.startupRecoveryBlocks(conversationID))
-	assert.Empty(t, bus.outbound, "interruption must not publish partial activity")
-
-	// A failed terminal write must remain an error through the bridge, not a successful Stop.
-	turn.Checkpoint.TurnID = "cannot-stop"
-	require.NoError(t, service.UpsertActiveTurn(t.Context(), &turn.Checkpoint, nil))
-
-	var errHandled error
-
-	group = errgroup.Group{}
-	group.Go(func() error {
-		errHandled = bridge.handleRecoveredActiveTurn(t.Context(), &turn)
-		return nil
-	})
-
-	defer func() {
-		bridge.InterruptActiveTurn()
-		require.NoError(t, group.Wait())
-	}()
-
-	releaseRequest = <-requestArrived
-	_, err = service.db.ExecContext(t.Context(), `CREATE FUNCTION reject_terminal_write() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN IF NEW.terminal <> '' THEN RAISE EXCEPTION 'terminal persistence sentinel'; END IF; RETURN NEW; END $$;
-CREATE TRIGGER reject_terminal_write BEFORE UPDATE ON active_turns FOR EACH ROW EXECUTE FUNCTION reject_terminal_write()`)
-	require.NoError(t, err)
-	bridge.InterruptActiveTurn()
-	close(releaseRequest)
-	require.NoError(t, group.Wait())
-
-	_, closure := errors.AsType[activeTurnClosureError](errHandled)
-	require.True(t, closure, "terminal-write failure must not be reported as ordinary interruption")
-	require.ErrorContains(t, errHandled, "terminal persistence sentinel")
-
-	for len(bus.outbound) > 0 {
-		require.False(t, (<-bus.outbound).Complete, "failed Stop cannot deliver a final answer")
-	}
 }
 
 func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
@@ -4887,12 +3933,12 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 
 	var group errgroup.Group
 	group.Go(func() error {
-		result, err := bridge.runTurn(t.Context(), request.inbound, "turn-1")
+		result, err := runTestTurn(t.Context(), bridge, request.inbound, "turn-1")
 		if err != nil {
 			return err
 		}
 
-		return bridge.publishFinal(t.Context(), request.inbound, result)
+		return publishTestFinal(t.Context(), bridge, request.inbound, &result)
 	})
 	<-entered
 
@@ -5025,7 +4071,7 @@ func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {
 	msg.GoalAction = protocol.GoalActionContinue
 	msg.ConversationID = "thread-1"
 
-	_, err = bridge.runTurn(context.Background(), msg, "turn-1")
+	_, err = runTestTurn(context.Background(), bridge, msg, "turn-1")
 	require.NoError(t, err)
 	require.NoError(t, errRequest)
 	require.NotEmpty(t, requestBody.Input)
@@ -5084,7 +4130,7 @@ func TestRunTurnSkipsActiveGoalDeveloperMessageWithoutNote(t *testing.T) {
 	msg.GoalAction = protocol.GoalActionContinue
 	msg.ConversationID = "thread-1"
 
-	_, err = bridge.runTurn(context.Background(), msg, "turn-1")
+	_, err = runTestTurn(context.Background(), bridge, msg, "turn-1")
 	require.NoError(t, err)
 	require.NoError(t, errRequest)
 	require.NotEmpty(t, requestBody.Input)

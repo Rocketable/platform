@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Approved design: `internal/rocketclaw/docs/specs/2026-07-28-multi-provider-model-resolution-design.md`.
+- Approved design: `docs/specs/2026-07-28-multi-provider-model-resolution-design.md`.
 - RocketCode receives only `ModelResolver`; provider configuration and credentials stay in RocketClaw.
 - Every root or child looper resolves once and then uses one `*openai.Client` for that run.
 - Provider equality means configured provider-name equality only.

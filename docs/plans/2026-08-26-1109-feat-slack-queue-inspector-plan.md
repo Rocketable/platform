@@ -309,7 +309,7 @@ U1 then U2 then U3.
   - `internal/rocketclaw/slackconnector/connector.go`
   - `internal/rocketclaw/slackconnector/connector_test.go`
   - `cmd/rocketclaw/CHEATSHEET.md`
-  - `internal/rocketclaw/docs/specs/2026-07-24-slack-dollar-commands-design.md`
+  - `docs/specs/2026-07-24-slack-dollar-commands-design.md`
 - **Approach:**
   1. Rewrite `slackQueueCard` as one list from the U1 builder. No section headers. When cell per KTD4. Row glyphs per KTD4. Vacant: one None row, Reset all stays.
   2. `moveQueueItem` walks the mixed list. Adjacent swap may park after or before a peg. Scheduled rows never swap.

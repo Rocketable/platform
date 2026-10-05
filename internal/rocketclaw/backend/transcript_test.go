@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"iter"
 	"slices"
 	"strconv"
@@ -20,13 +20,13 @@ import (
 func TestObserveTranscript(t *testing.T) {
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	checkpoint := &harness.ActiveTurnCheckpoint{
+	checkpoint := &testCheckpoint{
 		TurnID: "turn-1", ConversationKey: "main", Agent: "planner", Model: "provider-model", DisplayModel: "display-model",
 		ReasoningEffort: new("high"), ReplayInput: testSessionEntry("hello", "partial").ReplayInput,
 		ReplayAttribution: []harness.ReplayAttribution{{Start: 0, End: 1, Agent: "previous", Model: "previous-model", ReasoningEffort: new("low")}},
 		OutputTrace:       []json.RawMessage{json.RawMessage(`{"id":"trace"}`)}, TokenUsage: &harness.TokenUsage{TotalTokens: 5}, ResponseID: "response-1",
 	}
-	require.NoError(t, s.UpsertActiveTurn(ctx, checkpoint, nil))
+	require.NoError(t, upsertTestTurn(ctx, s, checkpoint))
 	entries, err := s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -101,13 +101,13 @@ FROM session_entries WHERE id = $1`, producerID)
 
 	_, err = s.db.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = 'main' AND entry_json::jsonb ? 'sync_source_entry_id'`)
 	require.NoError(t, err)
-	require.NoError(t, s.ClearActiveTurn(ctx, checkpoint.TurnID))
+	require.NoError(t, clearTestTurn(ctx, s, checkpoint.TurnID))
 
 	checkpoint.TurnID = "failed-turn"
-	require.NoError(t, s.UpsertActiveTurn(ctx, checkpoint, nil))
-	require.NoError(t, s.SetActiveTurnTerminal(ctx, checkpoint.TurnID, protocol.TerminalFailed))
+	require.NoError(t, upsertTestTurn(ctx, s, checkpoint))
+	require.NoError(t, terminateTestTurn(ctx, s, checkpoint.TurnID, protocol.TerminalFailed))
 	checkpoint.TurnID = "new-turn"
-	require.NoError(t, s.UpsertActiveTurn(ctx, checkpoint, nil))
+	require.NoError(t, upsertTestTurn(ctx, s, checkpoint))
 	entries, err = s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
 	require.Len(t, entries, 4)
@@ -117,10 +117,7 @@ FROM session_entries WHERE id = $1`, producerID)
 	require.Equal(t, "new-turn", entries[3].Entry.TurnID)
 	require.True(t, entries[3].Active)
 
-	turns, err := s.RecoverableActiveTurns(ctx)
-	require.NoError(t, err)
-	require.Len(t, turns, 1)
-	require.Equal(t, "new-turn", turns[0].Checkpoint.TurnID)
+	require.Equal(t, []string{"new-turn"}, runningTestTurns(t, s))
 
 	manifest := make(map[string]string, len(entries))
 	for _, entry := range entries {
@@ -138,14 +135,14 @@ FROM session_entries WHERE id = $1`, producerID)
 	}
 
 	checkpoint.ResponseID = "edited-response"
-	require.NoError(t, s.UpsertActiveTurn(ctx, checkpoint, nil))
+	require.NoError(t, upsertTestTurn(ctx, s, checkpoint))
 	edited, err := s.ObserveTranscript(ctx, "main", 0, 0, manifest)
 	require.NoError(t, err)
 	require.Len(t, edited, 4)
 	require.Equal(t, "edited-response", edited[3].Entry.ResponseID)
 	require.NotEqual(t, manifest[edited[3].Key], edited[3].Revision)
 	require.Equal(t, harness.SessionEntry{}, edited[2].Entry)
-	require.NoError(t, s.ClearActiveTurn(ctx, checkpoint.TurnID))
+	require.NoError(t, clearTestTurn(ctx, s, checkpoint.TurnID))
 	remaining, err := s.ObserveTranscript(ctx, "main", 0, 0, manifest)
 	require.NoError(t, err)
 	require.Len(t, remaining, 3)
@@ -161,7 +158,7 @@ FROM session_entries WHERE id = $1`, producerID)
 	require.NoError(t, err)
 
 	checkpoint.TurnID = "failed-turn"
-	require.NoError(t, s.UpsertActiveTurn(ctx, checkpoint, nil))
+	require.NoError(t, upsertTestTurn(ctx, s, checkpoint))
 	afterCompletion, err := s.ObserveTranscript(ctx, "main", 0, 0, manifest)
 	require.NoError(t, err)
 	require.Len(t, afterCompletion, 4)
@@ -169,9 +166,7 @@ FROM session_entries WHERE id = $1`, producerID)
 	require.Equal(t, laterID, afterCompletion[3].ID)
 	require.Equal(t, *later, afterCompletion[3].Entry)
 
-	turns, err = s.RecoverableActiveTurns(ctx)
-	require.NoError(t, err)
-	require.Empty(t, turns)
+	require.Empty(t, runningTestTurns(t, s))
 
 	empty, err := s.ObserveTranscript(ctx, "unknown", 0, 0, nil)
 	require.NoError(t, err)
@@ -181,7 +176,7 @@ FROM session_entries WHERE id = $1`, producerID)
 	require.ErrorContains(t, err, "conversation ID is required")
 
 	checkpoint.TurnID = "still-active"
-	require.NoError(t, s.UpsertActiveTurn(ctx, checkpoint, nil))
+	require.NoError(t, upsertTestTurn(ctx, s, checkpoint))
 	deleted, err := s.DeleteSession(ctx, "main")
 	require.NoError(t, err)
 	require.EqualValues(t, 3, deleted)
@@ -215,13 +210,13 @@ func TestTranscriptPages(t *testing.T) {
 
 	appendRow(0)
 
-	running := &harness.ActiveTurnCheckpoint{TurnID: "running", ConversationKey: "main", ReplayInput: testSessionEntry("hello", "partial").ReplayInput}
-	require.NoError(t, s.UpsertActiveTurn(ctx, running, nil))
+	running := &testCheckpoint{TurnID: "running", ConversationKey: "main", ReplayInput: testSessionEntry("hello", "partial").ReplayInput}
+	require.NoError(t, upsertTestTurn(ctx, s, running))
 	appendRow(1)
 
-	failed := &harness.ActiveTurnCheckpoint{TurnID: "failed", ConversationKey: "main", ReplayInput: testSessionEntry("hello", "partial").ReplayInput}
-	require.NoError(t, s.UpsertActiveTurn(ctx, failed, nil))
-	require.NoError(t, s.SetActiveTurnTerminal(ctx, failed.TurnID, protocol.TerminalFailed))
+	failed := &testCheckpoint{TurnID: "failed", ConversationKey: "main", ReplayInput: testSessionEntry("hello", "partial").ReplayInput}
+	require.NoError(t, upsertTestTurn(ctx, s, failed))
+	require.NoError(t, terminateTestTurn(ctx, s, failed.TurnID, protocol.TerminalFailed))
 
 	for i := 2; i < len(ids); i++ {
 		appendRow(i)
@@ -391,18 +386,18 @@ func TestTranscriptChanges(t *testing.T) {
 	require.Equal(t, "main", change.ConversationID)
 	require.Equal(t, revision, change.Revision, "another schema's same-ID notification must not leak")
 
-	checkpoint := &harness.ActiveTurnCheckpoint{TurnID: "active", ConversationKey: "main"}
-	require.NoError(t, s.UpsertActiveTurn(ctx, checkpoint, nil))
+	checkpoint := &testCheckpoint{TurnID: "active", ConversationKey: "main"}
+	require.NoError(t, upsertTestTurn(ctx, s, checkpoint))
 
 	_, err, ok = next()
 	require.True(t, ok)
 	require.NoError(t, err)
-	require.NoError(t, s.SetActiveTurnTerminal(ctx, checkpoint.TurnID, protocol.TerminalFailed))
+	require.NoError(t, terminateTestTurn(ctx, s, checkpoint.TurnID, protocol.TerminalFailed))
 
 	_, err, ok = next()
 	require.True(t, ok)
 	require.NoError(t, err)
-	require.NoError(t, s.ClearActiveTurn(ctx, checkpoint.TurnID))
+	require.NoError(t, clearTestTurn(ctx, s, checkpoint.TurnID))
 
 	_, err, ok = next()
 	require.True(t, ok)
@@ -515,13 +510,14 @@ func TestTranscriptObservationReportsUnavailableStorage(t *testing.T) {
 	require.ErrorContains(t, err, "database is closed")
 	_, err = s.OriginPairs(t.Context(), "main")
 	require.ErrorContains(t, err, "read origin metadata")
-	require.ErrorContains(t, s.SetActiveTurnTerminal(t.Context(), "turn", protocol.TerminalFailed), "set active turn terminal")
-	require.ErrorContains(t, s.recordActiveTurnOutputTrace(t.Context(), "turn", nil), "record active turn output trace")
-	sink := activeTurnCheckpointSink{bridge: &Bridge{activeTurnInterrupted: true}, store: s}
-	errClose := sink.CloseActiveTurn(t.Context(), "turn", harness.PublicProgressFailed)
-	require.ErrorContains(t, errClose, "database is closed")
-	_, ok := errors.AsType[activeTurnClosureError](errClose)
-	require.True(t, ok, "explicit stop must still propagate terminal write failures")
+
+	journal := conversationJournal{store: s, conversationID: "main"}
+	require.ErrorContains(t, journal.SaveTrace(t.Context(), "turn", nil), "save turn trace")
+	require.ErrorContains(t, journal.Save(t.Context(), "turn", json.RawMessage(`{}`)), "save turn step")
+	_, _, err = journal.Load(t.Context(), "turn")
+	require.ErrorContains(t, err, "load turn step")
+	_, err = s.finishTurn(t.Context(), "turn", &turnFinish{store: newSessionStore("main", s), outbound: protocol.NewOutboundMessage("main", "")})
+	require.ErrorContains(t, err, "begin turn finish")
 
 	count := 0
 	for _, err := range s.Changes(t.Context(), "main") {
@@ -536,10 +532,10 @@ func TestTranscriptObservationReportsUnavailableStorage(t *testing.T) {
 func TestActiveTurnOutputTracePersistence(t *testing.T) {
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	sink := activeTurnCheckpointSink{bridge: &Bridge{}, store: s, conversationID: "main"}
-	checkpoint := &harness.ActiveTurnCheckpoint{TurnID: "turn-1", ReplayInput: testSessionEntry("hello", "").ReplayInput,
+	journal := conversationJournal{store: s, conversationID: "main"}
+	checkpoint := &testCheckpoint{TurnID: "turn-1", ConversationKey: "main", ReplayInput: testSessionEntry("hello", "").ReplayInput,
 		OutputTrace: []json.RawMessage{json.RawMessage(`{"type":"reasoning","text":"PRIVATE"}`)}}
-	require.NoError(t, sink.StartActiveTurn(ctx, checkpoint))
+	require.NoError(t, upsertTestTurn(ctx, s, checkpoint))
 
 	next, stop := iter.Pull2(s.Changes(ctx, "main"))
 	defer stop()
@@ -549,7 +545,7 @@ func TestActiveTurnOutputTracePersistence(t *testing.T) {
 	require.NoError(t, err)
 
 	trace := append(slices.Clone(checkpoint.OutputTrace), json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"response-1/item-1","kind":"text","state":"working","text":"hello","agent":"main","model":"model"}}`))
-	require.NoError(t, sink.RecordOutputTrace(ctx, checkpoint.TurnID, trace))
+	require.NoError(t, journal.SaveTrace(ctx, checkpoint.TurnID+"/retry/1", trace), "retry turns report progress on the request row")
 
 	change, err, ok := next()
 	require.True(t, ok)
@@ -562,54 +558,104 @@ func TestActiveTurnOutputTracePersistence(t *testing.T) {
 	entries, err := s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
-	require.Equal(t, []harness.PublicProgress{{ID: "response-1/item-1", Kind: harness.PublicProgressText, State: harness.PublicProgressWorking, Text: "hello", Agent: "main", Model: "model"}}, harness.PublicProgressFromTrace(entries[0].Entry.OutputTrace))
-
-	turns, err := s.RecoverableActiveTurns(ctx)
-	require.NoError(t, err)
-	require.Len(t, turns, 1)
-	require.Equal(t, checkpoint.ReplayInput, turns[0].Checkpoint.ReplayInput)
-	require.JSONEq(t, string(trace[0]), string(turns[0].Checkpoint.OutputTrace[0]), "private legacy data is preserved, not projected")
-
-	require.NoError(t, sink.CloseActiveTurn(ctx, checkpoint.TurnID, ""))
-	turns, err = s.RecoverableActiveTurns(ctx)
-	require.NoError(t, err)
-	require.Len(t, turns, 1, "shutdown must preserve restart recovery")
-	require.Empty(t, turns[0].Terminal)
-	require.Equal(t, checkpoint.ReplayInput, turns[0].Checkpoint.ReplayInput)
-	require.Len(t, turns[0].Checkpoint.OutputTrace, len(trace))
-
-	for i, raw := range trace {
-		require.JSONEq(t, string(raw), string(turns[0].Checkpoint.OutputTrace[i]))
-	}
-
-	entries, err = s.ObserveTranscript(ctx, "main", 0, 0, nil)
-	require.NoError(t, err)
 	require.True(t, entries[0].Active)
-	require.Empty(t, entries[0].Terminal)
+	require.Equal(t, []harness.PublicProgress{{ID: "response-1/item-1", Kind: harness.PublicProgressText, State: harness.PublicProgressWorking, Text: "hello", Agent: "main", Model: "model"}}, harness.PublicProgressFromTrace(entries[0].Entry.OutputTrace))
+	require.Len(t, entries[0].Entry.ReplayInput, len(checkpoint.ReplayInput), "the transcript reads the journaled turn record")
 
-	require.NoError(t, sink.RecordOutputTrace(ctx, checkpoint.TurnID, trace))
+	require.NoError(t, journal.SaveTrace(ctx, checkpoint.TurnID, trace))
 	unchanged, err := s.ObserveTranscript(ctx, "main", 0, 0, map[string]string{entries[0].Key: entries[0].Revision})
 	require.NoError(t, err)
 	require.Equal(t, harness.SessionEntry{}, unchanged[0].Entry)
-	require.NoError(t, sink.CloseActiveTurn(ctx, checkpoint.TurnID, harness.PublicProgressStopped))
-	turns, err = s.RecoverableActiveTurns(ctx)
-	require.NoError(t, err)
-	require.Empty(t, turns, "explicit Stop must not be recoverable")
+	require.NoError(t, terminateTestTurn(ctx, s, checkpoint.TurnID, protocol.TerminalStopped))
+	require.Empty(t, runningTestTurns(t, s), "a stopped turn never resumes")
 
 	_, err, ok = next()
 	require.True(t, ok)
 	require.NoError(t, err)
-	require.NoError(t, sink.RecordOutputTrace(ctx, checkpoint.TurnID, nil))
+	require.NoError(t, journal.SaveTrace(ctx, checkpoint.TurnID, nil))
 	entries, err = s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
 	require.Equal(t, protocol.TerminalStopped, entries[0].Terminal)
 	require.Len(t, entries[0].Entry.OutputTrace, 2, "late writes cannot alter terminal progress")
-	require.NoError(t, sink.ClearCompletedTurn(ctx, checkpoint.TurnID))
-	require.NoError(t, sink.RecordOutputTrace(ctx, checkpoint.TurnID, trace))
+	require.Len(t, entries[0].Entry.ReplayInput, len(checkpoint.ReplayInput), "a stopped turn keeps its record for the transcript")
+	require.NoError(t, clearTestTurn(ctx, s, checkpoint.TurnID))
+	require.NoError(t, journal.SaveTrace(ctx, checkpoint.TurnID, trace))
 	entries, err = s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
-	require.Empty(t, entries, "trace-only writes cannot recreate a cleared checkpoint")
-	require.ErrorContains(t, s.recordActiveTurnOutputTrace(ctx, checkpoint.TurnID, []json.RawMessage{json.RawMessage(`{`)}), "marshal active turn output trace")
+	require.Empty(t, entries, "trace-only writes cannot recreate a cleared row")
+}
+
+// testCheckpoint seeds a running turn as a taken request records it: the row
+// holds live trace and the journal root step holds the turn's record.
+type testCheckpoint struct {
+	TurnID, ConversationKey, Agent, Model, DisplayModel string
+	ReasoningEffort                                     *string
+	ReplayInput                                         []json.RawMessage
+	ReplayAttribution                                   []harness.ReplayAttribution
+	OutputTrace                                         []json.RawMessage
+	TokenUsage                                          *harness.TokenUsage
+	ResponseID                                          string
+}
+
+func upsertTestTurn(ctx context.Context, s *SessionService, c *testCheckpoint) error {
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM active_turns WHERE id = $1)`, c.TurnID).Scan(&exists); err != nil {
+		return fmt.Errorf("seed test turn: %w", err)
+	}
+
+	if !exists {
+		inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "seed", true)
+		if err := startTurnDB(ctx, s.db, c.TurnID, c.ConversationKey, inbound); err != nil {
+			return fmt.Errorf("seed test turn: %w", err)
+		}
+	}
+
+	record := harness.SessionEntry{Version: 1, Type: "turn", TurnID: c.TurnID, Agent: c.Agent, Model: c.DisplayModel, ReasoningEffort: c.ReasoningEffort, ReplayAttribution: c.ReplayAttribution, TokenUsage: c.TokenUsage, ReplayInput: c.ReplayInput, ResponseID: c.ResponseID}
+
+	data, err := json.Marshal(struct {
+		Record harness.SessionEntry `json:"record"`
+	}{record})
+	if err != nil {
+		return fmt.Errorf("seed test turn: %w", err)
+	}
+
+	journal := conversationJournal{store: s, conversationID: c.ConversationKey}
+	if err := journal.Save(ctx, c.TurnID, data); err != nil {
+		return fmt.Errorf("seed test turn: %w", err)
+	}
+
+	return journal.SaveTrace(ctx, c.TurnID, c.OutputTrace)
+}
+
+func clearTestTurn(ctx context.Context, s *SessionService, turnID string) error {
+	_, err := s.db.ExecContext(ctx, `WITH turn AS (DELETE FROM active_turns WHERE id = $1 RETURNING conversation_id) DELETE FROM turn_steps WHERE key = $1 AND conversation_id IN (SELECT conversation_id FROM turn)`, turnID)
+	if err != nil {
+		return fmt.Errorf("seed test turn: %w", err)
+	}
+
+	return nil
+}
+
+func terminateTestTurn(ctx context.Context, s *SessionService, turnID string, terminal protocol.Terminal) error {
+	var conversationID string
+	if err := s.db.QueryRowContext(ctx, `SELECT conversation_id FROM active_turns WHERE id = $1`, turnID).Scan(&conversationID); err != nil {
+		return fmt.Errorf("seed test turn: %w", err)
+	}
+
+	if _, err := s.finishTurn(ctx, turnID, &turnFinish{store: newSessionStore(conversationID, s), outbound: protocol.NewOutboundMessage(conversationID, ""), terminal: terminal}); err != nil {
+		return fmt.Errorf("seed test turn: %w", err)
+	}
+
+	return s.closeTurn(ctx, turnID)
+}
+
+func runningTestTurns(t *testing.T, s *SessionService) []string {
+	t.Helper()
+
+	ids, err := queryStrings(t.Context(), s.db, `SELECT id FROM active_turns WHERE phase <> $1 ORDER BY id`, "running test turns", turnDone)
+	require.NoError(t, err)
+
+	return ids
 }
 
 func TestTranscriptObservationReportsUnreadableStoredEntries(t *testing.T) {

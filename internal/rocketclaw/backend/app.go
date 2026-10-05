@@ -8,7 +8,6 @@ import (
 	"maps"
 	"os"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +21,10 @@ import (
 
 // ErrRestartRequested indicates rocketclaw should exit so a supervisor can restart it.
 var ErrRestartRequested = errors.New("restart requested")
+
+// errShutdown stops conversation work: bridges leave it for the next start, and
+// RocketCode turns stop once their running calls finish.
+var errShutdown = fmt.Errorf("%w: %w", protocol.ErrBridgeStopped, rocketcode.ErrShutdown)
 
 type namedStopper struct {
 	name string
@@ -40,6 +43,8 @@ type FrontendAssembler interface {
 
 type lockedRun struct {
 	cancel     context.CancelFunc
+	detach     func() bool
+	signal     <-chan struct{}
 	cfg        *config.Config
 	configPath string
 	logger     *slog.Logger
@@ -49,8 +54,10 @@ type lockedRun struct {
 
 // Run starts rocketclaw and blocks until the context is canceled or a fatal error occurs.
 func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, assemble FrontendAssembler) error {
-	runCtx, cancel := context.WithCancel(ctx)
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
+
+	detach := context.AfterFunc(ctx, cancel)
 
 	stopInstrumentation, err := configureInstrumentation(runCtx, cfg.Instrumentation)
 	if err != nil {
@@ -87,6 +94,8 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	return holdRunLock(runCtx, rocketcodeSessions.db, &lockedRun{
 		cancel:     cancel,
+		detach:     detach,
+		signal:     ctx.Done(),
 		cfg:        cfg,
 		configPath: configPath,
 		logger:     logger,
@@ -96,8 +105,13 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 }
 
 func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same runtime wiring as Run, held under pglock.Do.
-	cancel, cfg, configPath, logger, rocketcodeSessions := s.cancel, s.cfg, s.configPath, s.logger, s.sessions
+	s.detach()
+
+	cfg, configPath, logger, rocketcodeSessions := s.cfg, s.configPath, s.logger, s.sessions
 	rt := new(Runtime)
+	workCtx, cancelWork := context.WithCancelCause(runCtx)
+
+	defer cancelWork(errShutdown)
 
 	var (
 		shutdownOnce     sync.Once
@@ -116,10 +130,6 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		logger.Warn("prune stale rocketclaw state", "error", err)
 	} else if stats.Threads+stats.ExternalMCPSessions > 0 || stats.SessionRows > 0 {
 		logger.Info("pruned stale rocketclaw state", "threads", stats.Threads, "external_mcp_sessions", stats.ExternalMCPSessions, "session_rows", stats.SessionRows)
-	}
-
-	if err := rocketcodeSessions.ApplyPendingRestartNotifications(runCtx); err != nil {
-		return fmt.Errorf("apply pending restart notifications: %w", err)
 	}
 
 	backfillCtx, cancelBackfill := context.WithCancel(runCtx)
@@ -174,8 +184,8 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 				close(restartRequested)
 			}
 
-			logger.Warn("shutdown requested; canceling rocketclaw runtime", "reason", reason, "restart", restart)
-			cancel()
+			logger.Warn("shutdown requested; canceling rocketclaw work", "reason", reason, "restart", restart)
+			cancelWork(errShutdown)
 		})
 
 		return started
@@ -230,39 +240,6 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		"mcp_external_enabled", cfg.MCPExternal.Enabled,
 	)
 
-	recoveringConversations := map[string]bool{}
-
-	var (
-		recoveredTurns []ActiveTurnState
-		cannotResume   []cannotResumeItem
-	)
-
-	if err := recoverStartupActiveTurns(runCtx, rocketcodeSessions, func(turn *ActiveTurnState) error {
-		conversationID := strings.TrimSpace(turn.Checkpoint.ConversationKey)
-		destinationID := conversationID
-
-		_, session, ok, err := rocketcodeSessions.ExternalMCPSessionByConversationID(conversationID)
-		if err != nil {
-			return err
-		}
-
-		if ok && session.PrivateConversationID == conversationID && session.ManagedConversationID != "" {
-			destinationID = session.ManagedConversationID
-			recoveringConversations[destinationID] = true
-		}
-
-		recoveringConversations[conversationID] = true
-		rocketcodeSessions.holdStartupRecovery(turn.Checkpoint.TurnID, conversationID, destinationID)
-
-		recoveredTurns = append(recoveredTurns, *turn)
-
-		return nil
-	}, func(conversationID string, steers []protocol.PendingSteer) {
-		cannotResume = append(cannotResume, cannotResumeItem{conversationID: conversationID, steers: steers})
-	}, logger); err != nil {
-		return err
-	}
-
 	// Starts as No; set to Slack after the connector exists. Factory reads the current value per bridge.
 	slackUserQuestionAsker := protocol.NoUserQuestionAsker()
 	drainSlack := func(context.Context, string) []string { return nil }
@@ -271,7 +248,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		Config.RequestRestart = requestRestart
 		Config.RequestReload = requestReload
 		// ensureStartedThread defaults to NoUserQuestionAsker; Slack-origin overrides with current slack asker.
-		if Config.ExternalConversationID == "" && !Config.RecoveringActiveTurn {
+		if Config.ExternalConversationID == "" {
 			Config.UserQuestionAsker = slackUserQuestionAsker
 		}
 
@@ -296,22 +273,31 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		Config.StartNewThread = startNewThread
 		Config.SessionService = rocketcodeSessions
 
-		return NewConversation(cfg, rt, &Config, logger)
+		bridge := NewConversation(cfg, rt, &Config, logger)
+		bridge.threads = threadBridges
+
+		return bridge
 	})
+
+	var bridgeLoops errgroup.Group
+
+	bridgeLoops.Go(func() error { return threadBridges.Run(workCtx) })
 
 	defer func() {
 		logger.Info("shutting down rocketclaw runtime")
 		startShutdown("runtime cleanup", false)
+
+		if err := bridgeLoops.Wait(); err != nil {
+			logger.Warn("stop thread bridges", "error", err)
+		}
+
+		s.cancel()
 
 		cleanupCtx := context.Background()
 		for _, sink := range stops {
 			if err := sink.stop(cleanupCtx); err != nil {
 				logger.Warn("stop connector", "connector", sink.name, "error", err)
 			}
-		}
-
-		if err := threadBridges.Stop(); err != nil {
-			logger.Warn("stop thread bridges", "error", err)
 		}
 	}()
 
@@ -336,69 +322,33 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		slackSink = slack
 		drainSlack = slack.DrainSteers
 		rt.AttachSlack(slack)
-		slack.SetPendingSteersSink(protocol.PendingSteersSink{Set: rocketcodeSessions.SetPendingSteers})
+
+		if err := slack.Start(runCtx); err != nil {
+			return fmt.Errorf("start Slack connector: %w", err)
+		}
 	}
 
-	if err := threadBridges.StartPendingScheduledMessages(recoveringConversations); err != nil {
+	if err := threadBridges.StartActiveTurns(runCtx); err != nil {
 		return err
 	}
 
-	if err := threadBridges.StartActiveGoals(recoveringConversations); err != nil {
+	if err := threadBridges.StartPendingScheduledMessages(); err != nil {
 		return err
 	}
 
-	if slackSink != nil {
-		if err := applyStartupSteerRecovery(runCtx, slackSink, threadBridges.PickLaterWork, recoveredTurns, cannotResume); err != nil {
-			return err
-		}
-
-		for i := range recoveredTurns {
-			turn := &recoveredTurns[i]
-
-			conversationID := strings.TrimSpace(turn.Checkpoint.ConversationKey)
-
-			err = threadBridges.RecoverActiveTurn(runCtx, turn)
-			if err != nil {
-				if activeTurnRecoveryPreserveError(err) {
-					return err
-				}
-
-				rocketcodeSessions.releaseStartupRecovery(turn.Checkpoint.TurnID)
-
-				if errRelease := rocketcodeSessions.ReleaseExternalMCPRecovery(conversationID); errRelease != nil {
-					return fmt.Errorf("release failed paired startup recovery: %w", errRelease)
-				}
-
-				reason := fmt.Sprintf("enqueue startup active turn recovery: %v", err)
-
-				if errClear := cannotResumeActiveTurn(runCtx, rocketcodeSessions, turn, func(string, []protocol.PendingSteer) {}); errClear != nil {
-					return fmt.Errorf("delete failed startup active turn enqueue: %w", errClear)
-				}
-
-				if errPick := applyStartupSteerRecovery(runCtx, slackSink, threadBridges.PickLaterWork, nil, []cannotResumeItem{{conversationID: conversationID, steers: turn.PendingSteers}}); errPick != nil {
-					logger.Error("pick later work after failed startup active turn enqueue", "conversation_id", conversationID, "error", errPick)
-				}
-
-				logger.Warn("deleted failed startup active turn after enqueue error", "conversation_id", conversationID, "turn_id", turn.Checkpoint.TurnID, "error", err, "reason", reason)
-
-				continue
-			}
-
-			logger.Info("startup active turn recovery enqueued", "conversation_id", conversationID, "turn_id", turn.Checkpoint.TurnID)
-		}
+	if err := threadBridges.StartActiveGoals(); err != nil {
+		return err
 	}
 
 	if err := threadBridges.StartQueuedConversations(); err != nil {
 		return err
 	}
 
-	go func() {
-		<-runCtx.Done()
-		startShutdown("runtime context canceled", false)
-	}()
-
-	if copyDone != nil {
-		<-copyDone
+	select {
+	case <-s.signal:
+		startShutdown("shutdown signal", false)
+	case <-workCtx.Done():
+	case <-copyDone:
 	}
 
 	select {

@@ -491,32 +491,6 @@ func TestSessionServiceTurnPairReservationPrioritizesPrivateTurn(t *testing.T) {
 	})
 }
 
-func TestSessionServiceReleasesAbandonedExternalMCPRecovery(t *testing.T) {
-	service := newTestSessionService(t)
-	pairID, privateID := protocol.SlackThreadConversationID("C1", "1.1"), "external_mcp:private"
-	require.NoError(t, service.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateID, ManagedConversationID: pairID, SlackChannel: "#ops"}))
-	_, err := service.appendExternalMCPEntry(t.Context(), privateID, pairID, testSessionEntry("first", "answer"), nil)
-	require.NoError(t, err)
-	observed, err := service.ObserveEntries(t.Context(), pairID)
-	require.NoError(t, err)
-	require.Len(t, observed, 1)
-	require.True(t, observed[0].Synced)
-	require.Equal(t, privateID, observed[0].SourceConversationID)
-
-	require.NoError(t, service.ReserveExternalMCPRecovery(privateID))
-	require.NoError(t, service.ReleaseExternalMCPRecovery(privateID))
-
-	unlock, err := service.lockTurnPair(t.Context(), pairID, pairID)
-	require.NoError(t, err)
-	unlock()
-}
-
-func TestDeleteScheduledMessageReportsClosedStore(t *testing.T) {
-	store := newTestSessionService(t)
-	require.NoError(t, store.Stop())
-	require.ErrorContains(t, store.DeleteScheduledMessage("s1"), "begin scheduled message delete")
-}
-
 func TestSessionServiceScheduledMessages(t *testing.T) {
 	store := newTestSessionService(t)
 	dueAt := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -592,7 +566,7 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 	assert.Equal(t, "q1", rows[1].Queue.ID)
 	assert.Equal(t, "q2", rows[2].Queue.ID)
 
-	require.NoError(t, store.DeleteScheduledMessage("missing"))
+	require.NoError(t, (stateDAO{db: store.db}).deleteScheduledMessage(t.Context(), "missing"))
 	require.NoError(t, store.ResetScheduledMessages(conversationID))
 
 	items, err = store.ThreadQueueForConversation(conversationID)
@@ -696,14 +670,14 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 24, n)
+	assert.Equal(t, 25, n)
 	require.Error(t, first.db.QueryRowContext(t.Context(), `SELECT 1 FROM store_bootstrap`).Scan(&n))
 
 	second, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop()) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 24, n)
+	assert.Equal(t, 25, n)
 }
 
 func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
@@ -749,7 +723,7 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 
 				var count int
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-				require.Equal(t, 24, count)
+				require.Equal(t, 25, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations WHERE applied_at='2026-01-01Z'`).Scan(&count))
 				require.Equal(t, prefix, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM session_tags`).Scan(&count))
@@ -758,12 +732,14 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 				for _, query := range []string{
 					`SELECT count(*) FROM managed_conversations WHERE conversation_id='synthetic' AND agent='main' AND created_by='owner' AND NOT settled AND NOT pinned AND snoozed_until IS NULL AND name='' AND forked_from='' AND settled_override AND bumped_at_unix_ns=123`,
 					`SELECT count(*) FROM session_entries WHERE conversation_id='synthetic' AND entry_json::text='{"text":"synthetichistory","literal":"\\u0000","mixed":"\\","nested":[""],"key":"value"}' AND entry_timestamp='2026-09-09T12:00:00.123456Z'`,
-					`SELECT count(*) FROM active_turns WHERE id='checkpoint' AND history_anchor_id=(SELECT MAX(id) FROM session_entries WHERE conversation_id='synthetic') AND replay_attribution_json='[]' AND reasoning_effort_json='null' AND terminal=''`,
 					`SELECT count(*) FROM thread_queue WHERE queue_item_id='q' AND message='queued' AND principal='owner' AND stash_at_unix_ns=456 AND position=7 AND content='{}'`,
 				} {
 					require.NoError(t, db.QueryRowContext(t.Context(), query).Scan(&count))
 					require.Equal(t, 1, count)
 				}
+
+				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM active_turns`).Scan(&count))
+				require.Zero(t, count, "the clean cutover drops in-flight turns from the old version")
 
 				if prefix >= 16 {
 					require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM session_summaries WHERE conversation_id = 'synthetic'`).Scan(&count))
@@ -798,7 +774,7 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 24, n)
+	assert.Equal(t, 25, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
 }
 
@@ -850,12 +826,7 @@ func TestSessionServiceSettledPersistence(t *testing.T) {
 	_, err = store.AppendEntryID(t.Context(), "opaque", entry)
 	require.NoError(t, err)
 
-	checkpoint := &harness.ActiveTurnCheckpoint{TurnID: "active", ConversationKey: "opaque", Agent: "planner", Model: "gpt-5.5"}
-	require.NoError(t, store.UpsertActiveTurn(t.Context(), checkpoint, nil))
-	turnsBefore, err := store.RecoverableActiveTurns(t.Context())
-	require.NoError(t, err)
-	require.Len(t, turnsBefore, 1)
-	activeBefore := turnsBefore[0]
+	seedActiveTurn(t, store, "opaque", "active", nil)
 	entriesBefore, err := store.ObserveEntries(t.Context(), "opaque")
 	require.NoError(t, err)
 
@@ -874,10 +845,9 @@ func TestSessionServiceSettledPersistence(t *testing.T) {
 		entries, err := store.ObserveEntries(t.Context(), "opaque")
 		require.NoError(t, err)
 		require.Equal(t, entriesBefore, entries)
-		turns, err := store.RecoverableActiveTurns(t.Context())
+		active, err := store.HasActiveTurn(t.Context(), "opaque")
 		require.NoError(t, err)
-		require.Len(t, turns, 1)
-		require.Equal(t, activeBefore, turns[0])
+		require.True(t, active)
 	}
 
 	other, found, err := store.Thread("unrelated")
@@ -893,144 +863,6 @@ func TestSessionServiceSettledPersistence(t *testing.T) {
 	require.Equal(t, 2, count)
 	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations WHERE id = '008_managed_conversation_settled.sql'`).Scan(&count))
 	require.Equal(t, 1, count)
-}
-
-func TestSessionServiceActiveTurnLifecycle(t *testing.T) {
-	store := newTestSessionService(t)
-	checkpoint := &harness.ActiveTurnCheckpoint{
-		TurnID:            " turn-1 ",
-		ConversationKey:   " conversation-1 ",
-		Agent:             " planner ",
-		Model:             " gpt-5.5 ",
-		DisplayModel:      " GPT-5.5 ",
-		ReplayInput:       []json.RawMessage{json.RawMessage(`{"type":"message","role":"user"}`)},
-		OutputTrace:       []json.RawMessage{json.RawMessage(`{"id":"output-1"}`)},
-		TokenUsage:        &harness.TokenUsage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5},
-		ResponseID:        " resp-1 ",
-		ReasoningEffort:   new("high"),
-		ReplayAttribution: []harness.ReplayAttribution{{Start: 0, End: 1, Agent: "previous", Model: "previous-model", ReasoningEffort: new("low")}},
-		OpenFunctionCalls: []harness.FunctionCallCheckpoint{{
-			CallID:    "call-1",
-			Name:      "read",
-			Arguments: json.RawMessage(`{"filePath":"README.md"}`),
-		}},
-	}
-
-	require.NoError(t, store.UpsertActiveTurn(context.Background(), checkpoint, nil))
-
-	checkpoint.ResponseID = "resp-2"
-	checkpoint.OpenFunctionCalls = nil
-	checkpoint.CompletedFunctionOutputs = []harness.FunctionOutputCheckpoint{{CallID: "call-1", Name: "read", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"function_call_output"}`)}}}
-	require.NoError(t, store.UpsertActiveTurn(context.Background(), checkpoint, nil))
-
-	turns, err := store.RecoverableActiveTurns(context.Background())
-	require.NoError(t, err)
-	require.Len(t, turns, 1)
-	assert.Equal(t, "turn-1", turns[0].Checkpoint.TurnID)
-	assert.Equal(t, "conversation-1", turns[0].Checkpoint.ConversationKey)
-	assert.Equal(t, "planner", turns[0].Checkpoint.Agent)
-	assert.Equal(t, "gpt-5.5", turns[0].Checkpoint.Model)
-	assert.Equal(t, "GPT-5.5", turns[0].Checkpoint.DisplayModel)
-	assert.Equal(t, "resp-2", turns[0].Checkpoint.ResponseID)
-	assert.Equal(t, checkpoint.ReplayInput, turns[0].Checkpoint.ReplayInput)
-	assert.Equal(t, checkpoint.ReplayAttribution, turns[0].Checkpoint.ReplayAttribution)
-	assert.Equal(t, checkpoint.ReasoningEffort, turns[0].Checkpoint.ReasoningEffort)
-	assert.Equal(t, checkpoint.CompletedFunctionOutputs, turns[0].Checkpoint.CompletedFunctionOutputs)
-
-	require.NoError(t, store.ClearActiveTurn(context.Background(), " turn-1 "))
-	turns, err = store.RecoverableActiveTurns(context.Background())
-	require.NoError(t, err)
-	assert.Empty(t, turns)
-}
-
-func TestSessionServiceActiveTurnPersistsThroughCentralizedOpener(t *testing.T) {
-	workspace := t.TempDir()
-	store, err := NewSessionService(workspace)
-	require.NoError(t, err)
-
-	checkpoint := &harness.ActiveTurnCheckpoint{
-		TurnID:          "turn-1",
-		ConversationKey: "conversation-1",
-		Agent:           "planner",
-		Model:           "gpt-5.5",
-		DisplayModel:    "gpt-5.5",
-		ReplayInput:     []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"hello"}`)},
-	}
-
-	require.NoError(t, store.UpsertActiveTurn(context.Background(), checkpoint, nil))
-	require.NoError(t, store.Stop())
-
-	reopened := newTestSessionServiceAt(t, workspace)
-	turns, err := reopened.RecoverableActiveTurns(context.Background())
-	require.NoError(t, err)
-	require.Len(t, turns, 1)
-	assert.Equal(t, "turn-1", turns[0].Checkpoint.TurnID)
-	assert.Equal(t, "conversation-1", turns[0].Checkpoint.ConversationKey)
-}
-
-func TestSessionServiceRecoverableActiveTurnsReturnsEveryRemainingRow(t *testing.T) {
-	store := newTestSessionService(t)
-
-	for _, turnID := range []string{"turn-1", "turn-2", "turn-3"} {
-		checkpoint := &harness.ActiveTurnCheckpoint{TurnID: turnID, ConversationKey: "conversation-" + turnID, Agent: "planner", Model: "gpt-5.5", DisplayModel: "gpt-5.5"}
-		require.NoError(t, store.UpsertActiveTurn(context.Background(), checkpoint, nil))
-	}
-
-	turns, err := store.RecoverableActiveTurns(context.Background())
-	require.NoError(t, err)
-
-	turnIDs := make([]string, 0, len(turns))
-	for _, turn := range turns {
-		turnIDs = append(turnIDs, turn.Checkpoint.TurnID)
-	}
-
-	assert.ElementsMatch(t, []string{"turn-1", "turn-2", "turn-3"}, turnIDs)
-}
-
-func TestSessionServiceRecoverableActiveTurnsDeletesCorruptRows(t *testing.T) {
-	store := newTestSessionService(t)
-	valid := &harness.ActiveTurnCheckpoint{TurnID: "turn-valid", ConversationKey: "conversation-valid", Agent: "planner", Model: "gpt-5.5", DisplayModel: "gpt-5.5"}
-	require.NoError(t, store.UpsertActiveTurn(context.Background(), valid, nil))
-	_, err := store.db.ExecContext(context.Background(), `INSERT INTO active_turns (id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`, "turn-notice", "conversation-notice", "planner", "gpt-5.5", "gpt-5.5", `null`, `null`, `null`, "", `null`, `null`, "restarted", "", int64(0), int64(0))
-	require.NoError(t, err)
-
-	insertCorrupt := func(id, replay, output, usage, openCalls, completed, metadata string) {
-		t.Helper()
-
-		_, err := store.db.ExecContext(context.Background(), `INSERT INTO active_turns (id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`, id, "conversation-corrupt", "planner", "gpt-5.5", "gpt-5.5", replay, output, usage, "", openCalls, completed, "", metadata, int64(1), int64(1))
-		require.NoError(t, err)
-	}
-	insertCorrupt("turn-corrupt", `{`, `null`, `null`, `null`, `null`, `{}`)
-	insertCorrupt("turn-output", `null`, `{`, `null`, `null`, `null`, `{}`)
-	insertCorrupt("turn-usage", `null`, `null`, `{`, `null`, `null`, `{}`)
-	insertCorrupt("turn-open", `null`, `null`, `null`, `{`, `null`, `{}`)
-	insertCorrupt("turn-completed", `null`, `null`, `null`, `null`, `{`, `{}`)
-	insertCorrupt("turn-metadata", `null`, `null`, `null`, `null`, `null`, `{`)
-
-	turns, err := store.RecoverableActiveTurns(context.Background())
-	require.NoError(t, err)
-	require.Len(t, turns, 2)
-
-	byID := map[string]ActiveTurnState{}
-	for _, turn := range turns {
-		byID[turn.Checkpoint.TurnID] = turn
-	}
-
-	assert.Contains(t, byID, "turn-valid")
-	assert.Equal(t, "restarted", byID["turn-notice"].SourceMetadata["restart_notice_json"])
-	assert.True(t, byID["turn-notice"].CreatedAt.IsZero())
-
-	var count int
-	require.NoError(t, store.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM active_turns WHERE id LIKE 'turn-%'`).Scan(&count))
-	assert.Equal(t, 2, count)
-}
-
-func TestSessionServiceRecoverableActiveTurnsReportsDBFailures(t *testing.T) {
-	store := newTestSessionService(t)
-	require.NoError(t, store.Stop())
-
-	_, err := store.RecoverableActiveTurns(context.Background())
-	require.ErrorContains(t, err, "query recoverable active turns")
 }
 
 func TestSessionServiceSyncCronSchedulesInsertsUpdatesAndDeletes(t *testing.T) {
@@ -1241,41 +1073,6 @@ func TestSessionServiceProgressGoalKeepsGoalActiveAndRecordsNote(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, GoalStatusActive, goal.Status)
 	assert.Equal(t, "next step", goal.Note)
-}
-
-func TestSessionServiceAppliesPendingRestartNotificationsOnce(t *testing.T) {
-	store := newTestSessionService(t)
-
-	requesters := []string{"main", "thread", "spaced"}
-	for _, conversationID := range append(requesters, "unmarked") {
-		_, err := store.AppendEntryID(context.Background(), conversationID, testSessionEntry(conversationID, "assistant"))
-		require.NoError(t, err)
-	}
-
-	require.ErrorContains(t, store.MarkRestartRequester(context.Background(), " "), "restart requester conversation ID is required")
-	require.NoError(t, store.MarkRestartRequester(context.Background(), "main"))
-	require.NoError(t, store.MarkRestartRequester(context.Background(), "thread"))
-	require.NoError(t, store.MarkRestartRequester(context.Background(), " spaced "))
-	require.NoError(t, store.MarkRestartRequester(context.Background(), "main"))
-	require.NoError(t, store.ApplyPendingRestartNotifications(context.Background()))
-	require.NoError(t, store.ApplyPendingRestartNotifications(context.Background()))
-
-	for _, conversationID := range requesters {
-		entries, err := store.ObserveEntries(context.Background(), conversationID)
-		require.NoError(t, err)
-		require.Len(t, entries, 2)
-		messages, err := replayInputMessages(entries[1].Entry.ReplayInput)
-		require.NoError(t, err)
-		assert.Equal(t, []replayInputMessage{{role: "developer", text: restartNotificationDeveloperMessage}}, messages)
-		summaries, err := store.ListSessions(t.Context(), []string{conversationID})
-		require.NoError(t, err)
-		require.Len(t, summaries, 1)
-		assert.Equal(t, entries[1].Entry.Timestamp.UTC().Truncate(time.Microsecond), summaries[0].LastUpdated)
-	}
-
-	entries, err := store.ObserveEntries(context.Background(), "unmarked")
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
 }
 
 func TestSessionStoreLoadsLargeImageTurn(t *testing.T) {
@@ -1751,54 +1548,6 @@ func TestSessionServicePersistsExternalMCPSessionMapping(t *testing.T) {
 	}
 }
 
-func TestSessionServicePersistsActiveTurnSourceMetadata(t *testing.T) {
-	store := newTestSessionService(t)
-	checkpoint := &harness.ActiveTurnCheckpoint{
-		TurnID:          "turn-1",
-		ConversationKey: "external_mcp:planner:private",
-		Agent:           "planner",
-		Model:           "gpt-5.5",
-		DisplayModel:    "gpt-5.5",
-		ReplayInput:     []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"hello"}`)},
-	}
-
-	require.NoError(t, store.UpsertActiveTurn(context.Background(), checkpoint, map[string]string{"source": "external_mcp", "external_conversation_id": "public-1"}))
-
-	turns, err := store.RecoverableActiveTurns(context.Background())
-	require.NoError(t, err)
-	require.Len(t, turns, 1)
-	state := turns[0]
-	assert.Equal(t, "external_mcp:planner:private", state.Checkpoint.ConversationKey)
-	assert.Equal(t, "public-1", state.SourceMetadata["external_conversation_id"])
-	assert.Equal(t, "external_mcp", state.SourceMetadata["source"])
-
-	require.NoError(t, store.ClearActiveTurn(context.Background(), "turn-1"))
-	turns, err = store.RecoverableActiveTurns(context.Background())
-	require.NoError(t, err)
-	assert.Empty(t, turns)
-}
-
-func TestSessionServicePersistsPendingSteersOnActiveTurn(t *testing.T) {
-	store := newTestSessionService(t)
-	checkpoint := &harness.ActiveTurnCheckpoint{TurnID: "turn-1", ConversationKey: "slack-thread:C123:111.222", Agent: "main", Model: "gpt-5.5", DisplayModel: "gpt-5.5"}
-	require.NoError(t, store.UpsertActiveTurn(context.Background(), checkpoint, map[string]string{"source": "slack"}))
-
-	steers := []protocol.PendingSteer{{Text: "don't touch the database", Principal: "U1", SlackChannel: "C123", SlackTS: "222.333", SlackThreadTS: "111.222"}}
-	require.NoError(t, store.SetPendingSteers("slack-thread:C123:111.222", steers))
-
-	turns, err := store.RecoverableActiveTurns(context.Background())
-	require.NoError(t, err)
-	require.Len(t, turns, 1)
-	assert.Equal(t, steers, turns[0].PendingSteers)
-	assert.Equal(t, "slack", turns[0].SourceMetadata["source"])
-
-	require.NoError(t, store.ClearActiveTurn(context.Background(), "turn-1"))
-	turns, err = store.RecoverableActiveTurns(context.Background())
-	require.NoError(t, err)
-	assert.Empty(t, turns)
-	require.ErrorContains(t, store.SetPendingSteers(" ", nil), "conversation ID is required")
-}
-
 func TestSessionServiceRejectsBlankKeys(t *testing.T) {
 	store := newTestSessionService(t)
 
@@ -1814,10 +1563,6 @@ func TestSessionServiceRejectsBlankKeys(t *testing.T) {
 
 	_, err = store.UpdateGoalStatus("thread-1", "nope", "")
 	require.EqualError(t, err, `unsupported goal status "nope"`)
-	require.EqualError(t, store.ClearActiveTurn(t.Context(), " "), "active turn ID is required")
-	require.EqualError(t, store.UpsertActiveTurn(t.Context(), nil, nil), "active turn checkpoint is required")
-	require.EqualError(t, store.UpsertActiveTurn(t.Context(), &harness.ActiveTurnCheckpoint{}, nil), "active turn ID is required")
-	require.EqualError(t, store.UpsertActiveTurn(t.Context(), &harness.ActiveTurnCheckpoint{TurnID: "turn-1"}, nil), "active turn conversation ID is required")
 	_, err = store.ObserveEntries(t.Context(), " ")
 	require.EqualError(t, err, "conversation ID is required")
 }
@@ -1848,8 +1593,7 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 
 	require.NoError(t, store.UpsertThread("empty-recorded", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
 	require.NoError(t, store.UpsertThread("empty-running", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
-	_, err := store.db.ExecContext(t.Context(), `INSERT INTO active_turns (id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns) VALUES ('running', 'empty-running', '', '', '', '[]', '[]', 'null', '', '[]', '[]', '', '{}', 1, 1)`)
-	require.NoError(t, err)
+	seedActiveTurn(t, store, "empty-running", "running", &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "running"})
 	require.NoError(t, store.UpsertThread(activeOldThread, ThreadState{Agent: "selected", CreatedBy: ThreadCreatedByCron}))
 
 	for conversationID, ts := range map[string]time.Time{
@@ -1868,9 +1612,7 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	require.NoError(t, store.MarkRestartRequester(context.Background(), oldThread))
-	require.NoError(t, store.MarkRestartRequester(context.Background(), activeOldThread))
-	require.NoError(t, store.MarkRestartRequester(context.Background(), oldThread))
+	seedActiveTurn(t, store, oldThread, "stale-turn", &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "stale-turn"})
 
 	orphanGoal := protocol.SlackThreadConversationID("DGOAL", slackTestTS(oldTime))
 	require.NoError(t, store.BeginGoal(orphanGoal, "stale goal", "", 1, "", ""))
@@ -1908,9 +1650,10 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	assert.Contains(t, threadIDs, boundaryThread)
 	assert.Contains(t, threadIDs, "slack-thread:D123:not-a-time")
 
-	restartNotifications := pendingRestartNotifications(t, store.db)
-	assert.NotContains(t, restartNotifications, oldThread)
-	assert.Contains(t, restartNotifications, activeOldThread)
+	active, err := store.HasActiveTurn(t.Context(), oldThread)
+	require.NoError(t, err)
+	assert.False(t, active)
+	assert.Empty(t, testTurnStepKeys(t, store, oldThread))
 
 	for _, conversationID := range []string{oldThread, "external_mcp:cron:orphan", "cron:daily:old", "one-off-cron:daily:old", "slack-thread:DORPHAN:1.000"} {
 		entries, err := store.ObserveEntries(context.Background(), conversationID)
@@ -2002,9 +1745,6 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 	_, ok, err = store.Thread(privateID)
 	require.NoError(t, err)
 	assert.True(t, ok)
-	turns, err := store.RecoverableActiveTurns(t.Context())
-	require.NoError(t, err)
-	assert.Empty(t, turns)
 	entries, err := store.ObserveEntries(t.Context(), orphanID)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1)
@@ -2043,7 +1783,7 @@ func TestSessionServicePrunesStaleExternalConversationWithActiveTurn(t *testing.
 		require.NoError(t, err)
 	}
 
-	require.NoError(t, store.UpsertActiveTurn(t.Context(), &harness.ActiveTurnCheckpoint{TurnID: "active-mcp", ConversationKey: privateConversationID, Agent: "planner", Model: "model", DisplayModel: "model"}, map[string]string{"source": "external_mcp"}))
+	seedActiveTurn(t, store, privateConversationID, "active-mcp", &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "active-mcp"})
 
 	stats, err := store.PruneStateBefore(t.Context(), cutoff)
 	require.NoError(t, err)
@@ -2055,9 +1795,10 @@ func TestSessionServicePrunesStaleExternalConversationWithActiveTurn(t *testing.
 	_, ok, err = store.Thread(managedConversationID)
 	require.NoError(t, err)
 	assert.False(t, ok)
-	turns, err := store.RecoverableActiveTurns(t.Context())
+	active, err := store.HasActiveTurn(t.Context(), privateConversationID)
 	require.NoError(t, err)
-	assert.Empty(t, turns)
+	assert.False(t, active)
+	assert.Empty(t, testTurnStepKeys(t, store, privateConversationID))
 }
 
 func TestSessionServicePrunesExternalConversationOnlyWhenAllHistoriesAreStale(t *testing.T) {
@@ -2143,27 +1884,6 @@ func collectEntries(t *testing.T, seq iter.Seq2[harness.SessionEntry, error]) []
 	})
 }
 
-func pendingRestartNotifications(t *testing.T, db stateStoreDB) map[string]bool {
-	t.Helper()
-
-	rows, err := db.QueryContext(context.Background(), `SELECT conversation_id FROM pending_restart_notifications`)
-
-	require.NoError(t, err)
-	defer func() { require.NoError(t, rows.Close()) }()
-
-	notifications := make(map[string]bool)
-
-	for rows.Next() {
-		var conversationID string
-		require.NoError(t, rows.Scan(&conversationID))
-		notifications[conversationID] = true
-	}
-
-	require.NoError(t, rows.Err())
-
-	return notifications
-}
-
 type errStore struct {
 	result  sql.Result
 	errExec error
@@ -2201,6 +1921,41 @@ func (r errResult) LastInsertId() (int64, error) {
 
 func (r errResult) RowsAffected() (int64, error) {
 	return 0, r.errRows
+}
+
+func testTurnStepKeys(t *testing.T, service *SessionService, conversationID string) []string {
+	t.Helper()
+
+	keys, err := queryStrings(t.Context(), service.db, `SELECT key FROM turn_steps WHERE conversation_id = $1 ORDER BY key`, "turn step keys", conversationID)
+	require.NoError(t, err)
+
+	return keys
+}
+
+// seedActiveTurn records a running row and, when record is set, its root journal step.
+func seedActiveTurn(t *testing.T, service *SessionService, conversationID, turnID string, record *harness.SessionEntry) {
+	t.Helper()
+
+	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "seed", true)
+	inbound.ConversationID = conversationID
+	require.NoError(t, startTurnDB(t.Context(), service.db, turnID, conversationID, inbound))
+
+	if record != nil {
+		data, err := json.Marshal(struct {
+			Record *harness.SessionEntry `json:"record"`
+		}{record})
+		require.NoError(t, err)
+		require.NoError(t, conversationJournal{store: service, conversationID: conversationID}.Save(t.Context(), turnID, data))
+	}
+}
+
+// endTestTurn finishes a seeded row as $stop or a failure does and closes it after delivery.
+func endTestTurn(t *testing.T, service *SessionService, conversationID, turnID string, terminal protocol.Terminal) {
+	t.Helper()
+
+	_, err := service.finishTurn(t.Context(), turnID, &turnFinish{store: newSessionStore(conversationID, service), outbound: protocol.NewOutboundMessage(conversationID, ""), terminal: terminal})
+	require.NoError(t, err)
+	require.NoError(t, service.closeTurn(t.Context(), turnID))
 }
 
 func newTestSessionService(t *testing.T) *SessionService {

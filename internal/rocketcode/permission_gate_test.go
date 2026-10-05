@@ -21,7 +21,7 @@ func TestToolCallAgent(t *testing.T) {
 	require.False(t, ok)
 
 	agent := Agent{Name: "child", Frontmatter: map[string]any{"permissions": "retained"}}
-	ctx := withToolCallContext(t.Context(), &looper{agent: agent}, nil, "call")
+	ctx := withToolCallContext(t.Context(), &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, agent: agent}, nil, "call")
 	got, ok := ToolCallAgent(ctx)
 	require.True(t, ok)
 	require.Equal(t, agent, got)
@@ -33,7 +33,7 @@ func TestCheckNestedPermissionAllow(t *testing.T) {
 	var permissions PermissionSet
 	require.NoError(t, permissions.Allow("mcp", "demo.echo"))
 
-	looper := &looper{Permissions: permissions}
+	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions}
 	ctx := withToolCallContext(t.Context(), looper, nil, "")
 
 	err := CheckNestedPermission(ctx, "execute", "mcp", "demo.echo", map[string]any{"message": "hi"})
@@ -46,7 +46,7 @@ func TestCheckNestedPermissionAutoWithoutAutoApproveDenies(t *testing.T) {
 	var permissions PermissionSet
 	require.NoError(t, permissions.Set("mcp", "demo.echo", PermissionAuto))
 
-	looper := &looper{Permissions: permissions, AutoApprovePermissions: false}
+	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, AutoApprovePermissions: false}
 	ctx := withToolCallContext(t.Context(), looper, nil, "")
 
 	err := CheckNestedPermission(ctx, "execute", "mcp", "demo.echo", map[string]any{"message": "hi"})
@@ -60,7 +60,7 @@ func TestCheckNestedPermissionDeny(t *testing.T) {
 	var permissions PermissionSet
 	require.NoError(t, permissions.Deny("mcp", "demo.danger"))
 
-	looper := &looper{Permissions: permissions}
+	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions}
 	ctx := withToolCallContext(t.Context(), looper, nil, "")
 
 	err := CheckNestedPermission(ctx, "execute", "mcp", "demo.danger", nil)
@@ -75,6 +75,8 @@ func TestCheckNestedPermissionAutoWithReviewerAllow(t *testing.T) {
 	require.NoError(t, permissions.Set("mcp", "demo.echo", PermissionAuto))
 
 	looper := &looper{
+		Journal:                InertJournal{},
+		observations:           &turnObservations{journal: InertJournal{}},
 		Permissions:            permissions,
 		AutoApprovePermissions: true,
 		PermissionReviewer: &mockPermissionReviewer{reviewPermissionFunc: func(context.Context, *permissionReviewRequest, chan<- ChatResponse) permissionReviewDecision {

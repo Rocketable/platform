@@ -42,6 +42,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 	for _, final := range finals {
 		dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 		require.NoError(t, err)
+		seeded := openTestTurns(t, dsn)
 
 		releaseProvider := make(chan struct{})
 
@@ -120,7 +121,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 		rt := <-ready
 		id := "owned-public-" + final
 		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main", CreatedBy: "alice"}))
-		checkpoint := &rocketcode.ActiveTurnCheckpoint{TurnID: "calls", ConversationKey: id, Agent: "main", DisplayModel: "root/model"}
+		checkpoint := &testCheckpoint{TurnID: "calls", ConversationKey: id, Agent: "main", DisplayModel: "root/model"}
 
 		if final == "calls" {
 			// Producer timing is covered by RocketCode's held-worker tests; these
@@ -130,7 +131,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 				checkpoint.OutputTrace = append(checkpoint.OutputTrace, json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"`+call+`","parent_id":"calls/response","kind":"delegation","state":"working","agent":"child","model":"child/model"}}`))
 			}
 
-			require.NoError(t, rt.Sessions.UpsertActiveTurn(ctx, checkpoint, nil))
+			require.NoError(t, seeded.UpsertActiveTurn(ctx, checkpoint))
 		}
 
 		listener, err := Listen(testSocketPath(t))
@@ -208,9 +209,9 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 
 					_, err := rt.Sessions.AppendEntryID(ctx, id, &rocketcode.SessionEntry{Type: "turn", TurnID: checkpoint.TurnID, Agent: checkpoint.Agent, Model: checkpoint.DisplayModel, ReplayInput: checkpoint.ReplayInput, OutputTrace: checkpoint.OutputTrace})
 					assert.NoError(t, err)
-					assert.NoError(t, rt.Sessions.ClearActiveTurn(ctx, checkpoint.TurnID))
+					assert.NoError(t, seeded.ClearActiveTurn(ctx, checkpoint.TurnID))
 				} else {
-					assert.NoError(t, rt.Sessions.UpsertActiveTurn(ctx, checkpoint, nil))
+					assert.NoError(t, seeded.UpsertActiveTurn(ctx, checkpoint))
 				}
 			case r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/s/"):
 				w.Header().Set("Content-Type", "text/html")
@@ -236,7 +237,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 				require.Equal(t, checkpoint.ReplayInput, entries[0].Entry.ReplayInput, "canonical outputs retain original A/B/C order and rejected content")
 			}
 
-			recoverable, err := rt.Sessions.RecoverableActiveTurns(ctx)
+			recoverable, err := seeded.RecoverableActiveTurns(ctx)
 			require.NoError(t, err)
 			require.Empty(t, recoverable)
 		})
@@ -252,18 +253,20 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 func TestHistoryReadsActiveReplay(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
+	seeded := openTestTurns(t, dsn)
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
-	checkpoint := &rocketcode.ActiveTurnCheckpoint{TurnID: "turn-1", ConversationKey: "chat", Agent: "main", Model: "model", ReplayInput: []json.RawMessage{
+	checkpoint := &testCheckpoint{TurnID: "turn-1", ConversationKey: "chat", Agent: "main", Model: "model", ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","input_id":"input-1","prompt_header":"[Web principal=\"alice\"]","content":"[Web principal=\"alice\"]\n\nquestion"}`),
 		json.RawMessage(`{"type":"reasoning","summary":[{"text":"Recorded summary"}],"encrypted_content":"secret"}`),
 		json.RawMessage(`{"type":"function_call","call_id":"call-1","name":"execute","arguments":"{\"code\":\"read()\"}"}`),
 		json.RawMessage(`{"type":"function_call_output","call_id":"call-1","output":"readable result"}`),
 	}}
-	require.NoError(t, sessions.UpsertActiveTurn(t.Context(), checkpoint, nil))
+	require.NoError(t, seeded.UpsertActiveTurn(t.Context(), checkpoint))
+
 	server := &Server{sessions: sessions, cfg: cfg, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 	view, err := server.history(ctx, &HistoryRequest{Id: "chat"})
@@ -292,7 +295,7 @@ func TestHistoryReadsActiveReplay(t *testing.T) {
 	require.Equal(t, view.Revision, unchanged.Revision)
 
 	checkpoint.ReplayInput = append(checkpoint.ReplayInput, json.RawMessage(`{"type":"message","role":"assistant","content":"final answer"}`))
-	require.NoError(t, sessions.UpsertActiveTurn(ctx, checkpoint, nil))
+	require.NoError(t, seeded.UpsertActiveTurn(ctx, checkpoint))
 	changed, err := server.history(ctx, &HistoryRequest{Id: "chat", Revision: view.Revision})
 	require.NoError(t, err)
 	require.Equal(t, view.EntryKeys, changed.ReplacedKeys)
@@ -309,7 +312,7 @@ func TestHistoryReadsActiveReplay(t *testing.T) {
 	require.Equal(t, changed.EntryKeys, finished.EntryKeys)
 	require.Equal(t, changed.Messages[0].ItemId, finished.Messages[0].ItemId)
 	require.NotEmpty(t, finished.Messages[0].MessageId, "stored commands retain database entry identity")
-	require.NoError(t, sessions.ClearActiveTurn(ctx, checkpoint.TurnID))
+	require.NoError(t, seeded.ClearActiveTurn(ctx, checkpoint.TurnID))
 	cleared, err := server.history(ctx, &HistoryRequest{Id: "chat", Revision: finished.Revision})
 	require.NoError(t, err)
 	require.Equal(t, finished.Revision, cleared.Revision)
@@ -324,8 +327,8 @@ func TestHistoryReadsActiveReplay(t *testing.T) {
 	require.Empty(t, removed.Messages)
 
 	checkpoint.TurnID = "failed-turn"
-	require.NoError(t, sessions.UpsertActiveTurn(ctx, checkpoint, nil))
-	require.NoError(t, sessions.SetActiveTurnTerminal(ctx, checkpoint.TurnID, "failed"))
+	require.NoError(t, seeded.UpsertActiveTurn(ctx, checkpoint))
+	require.NoError(t, seeded.SetActiveTurnTerminal(ctx, checkpoint.TurnID, "failed"))
 	failed, err := server.history(ctx, &HistoryRequest{Id: "chat", Revision: removed.Revision})
 	require.NoError(t, err)
 	require.False(t, failed.Running)
@@ -444,6 +447,7 @@ func TestHistoryFollowsNewestEntries(t *testing.T) {
 func TestHistoryPublicProgress(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
+	seeded := openTestTurns(t, dsn)
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
@@ -451,7 +455,7 @@ func TestHistoryPublicProgress(t *testing.T) {
 	require.NoError(t, sessions.UpsertThread("public", backend.ThreadState{Agent: "main"}))
 	server := &Server{sessions: sessions, cfg: cfg, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
-	checkpoint := &rocketcode.ActiveTurnCheckpoint{TurnID: "turn", ConversationKey: "public", Agent: "main", DisplayModel: "root/model", ReasoningEffort: new("high"), ReplayInput: []json.RawMessage{
+	checkpoint := &testCheckpoint{TurnID: "turn", ConversationKey: "public", Agent: "main", DisplayModel: "root/model", ReasoningEffort: new("high"), ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","input_id":"input","content":"ask"}`),
 		json.RawMessage(`{"type":"function_call","call_id":"A","name":"task","arguments":"{}"}`),
 		json.RawMessage(`{"type":"function_call","call_id":"B","name":"execute","arguments":"{}"}`),
@@ -464,7 +468,7 @@ func TestHistoryPublicProgress(t *testing.T) {
 		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"C","parent_id":"turn/response","kind":"delegation","state":"blocked","agent":"canonical-child","model":"child/model"}}`),
 		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"unknown","kind":"private","state":"working","text":"PRIVATE CHILD SENTINEL"}}`),
 	}}
-	require.NoError(t, sessions.UpsertActiveTurn(ctx, checkpoint, nil))
+	require.NoError(t, seeded.UpsertActiveTurn(ctx, checkpoint))
 	held, err := server.history(ctx, &HistoryRequest{Id: "public"})
 	require.NoError(t, err)
 	require.True(t, held.Running)
@@ -501,7 +505,7 @@ func TestHistoryPublicProgress(t *testing.T) {
 	checkpoint.ReplayInput = append(checkpoint.ReplayInput,
 		json.RawMessage(`{"type":"function_call_output","call_id":"B","output":"B result"}`),
 		json.RawMessage(`{"type":"function_call_output","call_id":"C","output":"REVIEWER SENTINEL"}`))
-	require.NoError(t, sessions.UpsertActiveTurn(ctx, checkpoint, nil))
+	require.NoError(t, seeded.UpsertActiveTurn(ctx, checkpoint))
 	joined, err := server.history(ctx, &HistoryRequest{Id: "public", Revision: held.Revision})
 	require.NoError(t, err)
 	encoded, err = json.Marshal(joined)
@@ -530,7 +534,7 @@ func TestHistoryPublicProgress(t *testing.T) {
 			require.NoError(t, err)
 
 			checkpoint.ReplayInput = append(checkpoint.ReplayInput, raw)
-			require.NoError(t, sessions.UpsertActiveTurn(ctx, checkpoint, nil))
+			require.NoError(t, seeded.UpsertActiveTurn(ctx, checkpoint))
 			view, err := server.history(ctx, &HistoryRequest{Id: "public"})
 			require.NoError(t, err)
 
@@ -556,7 +560,7 @@ func TestHistoryPublicProgress(t *testing.T) {
 		json.RawMessage(`{"type":"message","id":"opaque/segment","role":"assistant","status":"completed","content":[{"type":"refusal","refusal":"PRIVATE REFUSAL SENTINEL"},{"type":"output_text","text":" \n"},{"type":"output_text","text":"same"},{"type":"output_text","text":"same"}]}`),
 		json.RawMessage(`{"type":"message","id":"another","role":"assistant","status":"completed","content":[{"type":"output_text","text":"same"}]}`))
 	checkpoint.OutputTrace = append(checkpoint.OutputTrace, json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"opaque/segment/2","parent_id":"turn/response","kind":"text","state":"working","text":"same stale partial","agent":"main","model":"root/model"}}`))
-	require.NoError(t, sessions.UpsertActiveTurn(ctx, checkpoint, nil))
+	require.NoError(t, seeded.UpsertActiveTurn(ctx, checkpoint))
 	view, err := server.history(ctx, &HistoryRequest{Id: "public"})
 	require.NoError(t, err)
 
@@ -610,7 +614,7 @@ func TestHistoryPublicProgress(t *testing.T) {
 			require.Equal(t, replies[i].ReasoningEffort, message.ReasoningEffort)
 		}
 
-		require.NoError(t, sessions.ClearActiveTurn(ctx, checkpoint.TurnID))
+		require.NoError(t, seeded.ClearActiveTurn(ctx, checkpoint.TurnID))
 	}
 
 	stored, err := sessions.ObserveEntries(ctx, "public")
@@ -637,22 +641,22 @@ func TestHistoryPublicProgress(t *testing.T) {
 			rawResult, err := json.Marshal(result)
 			require.NoError(t, err)
 
-			turn := &rocketcode.ActiveTurnCheckpoint{TurnID: id, ConversationKey: id, Agent: "main", ReplayInput: []json.RawMessage{
+			turn := &testCheckpoint{TurnID: id, ConversationKey: id, Agent: "main", ReplayInput: []json.RawMessage{
 				json.RawMessage(`{"type":"function_call","call_id":"child","name":"task","arguments":"{}"}`),
 			}, OutputTrace: []json.RawMessage{json.RawMessage(`{"type":"rocketcode_public_progress","progress":` + string(progress) + `}`)}}
-			require.NoError(t, sessions.UpsertActiveTurn(ctx, turn, nil))
+			require.NoError(t, seeded.UpsertActiveTurn(ctx, turn))
 			turn.ReplayInput = append(turn.ReplayInput, json.RawMessage(`{"type":"function_call_output","call_id":"child","output":`+string(rawResult)+`}`))
 			saved := &rocketcode.SessionEntry{Type: "turn", TurnID: id, Agent: "main", ReplayInput: turn.ReplayInput, OutputTrace: turn.OutputTrace}
 
 			for _, stage := range []string{"joined", "saved", "reopened"} {
 				switch stage {
 				case "joined":
-					require.NoError(t, sessions.UpsertActiveTurn(ctx, turn, nil))
+					require.NoError(t, seeded.UpsertActiveTurn(ctx, turn))
 				case "saved":
 					_, err := sessions.AppendEntryID(ctx, id, saved)
 					require.NoError(t, err)
 				case "reopened":
-					require.NoError(t, sessions.ClearActiveTurn(ctx, id))
+					require.NoError(t, seeded.ClearActiveTurn(ctx, id))
 				}
 
 				view, err := server.history(ctx, &HistoryRequest{Id: id})
@@ -691,7 +695,7 @@ func TestHistoryPublicProgress(t *testing.T) {
 		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"repeat","parent_id":"compacted/new","kind":"delegation","state":"blocked","agent":"child","model":"child/model"}}`),
 		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"current/0","parent_id":"compacted/current","kind":"text","state":"completed","text":"current canonical answer with stale suffix","agent":"main","model":"root/model"}}`),
 	}
-	require.NoError(t, sessions.UpsertActiveTurn(ctx, checkpoint, nil))
+	require.NoError(t, seeded.UpsertActiveTurn(ctx, checkpoint))
 	view, err = server.history(ctx, &HistoryRequest{Id: "public"})
 	require.NoError(t, err)
 
@@ -732,7 +736,7 @@ func TestHistoryPublicProgress(t *testing.T) {
 		require.NoError(t, err)
 		require.NotContains(t, string(encoded), "PRIVATE CHILD SENTINEL")
 		require.NotContains(t, string(encoded), "stale suffix")
-		require.NoError(t, sessions.ClearActiveTurn(ctx, checkpoint.TurnID))
+		require.NoError(t, seeded.ClearActiveTurn(ctx, checkpoint.TurnID))
 	}
 
 	checkpoint.TurnID = "terminal-compacted"
@@ -741,8 +745,8 @@ func TestHistoryPublicProgress(t *testing.T) {
 
 	checkpoint.OutputTrace[0] = json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"kept/0","parent_id":"compacted/response","kind":"text","state":"working","text":"unfinished public fallback","agent":"main","model":"root/model"}}`)
 	for _, terminal := range []protocol.Terminal{protocol.TerminalFailed, protocol.TerminalStopped} {
-		require.NoError(t, sessions.UpsertActiveTurn(ctx, checkpoint, nil))
-		require.NoError(t, sessions.SetActiveTurnTerminal(ctx, checkpoint.TurnID, terminal))
+		require.NoError(t, seeded.UpsertActiveTurn(ctx, checkpoint))
+		require.NoError(t, seeded.SetActiveTurnTerminal(ctx, checkpoint.TurnID, terminal))
 		view, err = server.history(ctx, &HistoryRequest{Id: "public"})
 		require.NoError(t, err)
 

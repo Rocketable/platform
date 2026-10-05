@@ -37,6 +37,7 @@ func (f *toolFactory) taskTool() looperTool {
 			"command":       map[string]any{"type": "string"},
 		}),
 		Permission: "task",
+		resumable:  true,
 		Subjects: func(raw json.RawMessage) ([]string, error) {
 			var params taskParams
 			if err := json.Unmarshal(raw, &params); err != nil {
@@ -175,6 +176,15 @@ func (f *toolFactory) childSystemPrompt(agent *Agent, modelTools, codeHosts map[
 	)
 }
 
+// taskChildJournal journals a Task child under its parent call; outside a tool call there is nothing to resume.
+func taskChildJournal(ctx context.Context) TracelessJournal {
+	if parent, ok := toolCallContextFrom(ctx); ok {
+		return TracelessJournal{Parent: parent.looper.Journal}
+	}
+
+	return TracelessJournal{Parent: InertJournal{}}
+}
+
 func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata toolCallMetadata, parentOutput chan<- ChatResponse) (string, error) {
 	if f.recursionRemaining != nil && *f.recursionRemaining == 0 {
 		return "", errors.New("maxRecursion limit reached: task delegation is unavailable")
@@ -263,7 +273,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		AutoApprovePermissions: f.autoApprovePermissions,
 		PermissionReviewer:     &childFactory,
 		Observability:          f.observability,
-		CheckpointSink:         InertCheckpointSink{},
+		Journal:                taskChildJournal(ctx),
 	}
 	childFactory.configureSpill(child)
 
@@ -277,7 +287,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	output := make(chan ChatResponse)
 
 	input := make(chan PromptInput, 1)
-	input <- PromptInput{Role: PromptInputRoleUser, Text: params.Prompt, Responses: output}
+	input <- PromptInput{TurnID: ToolCallKey(ctx) + "/task", Role: PromptInputRoleUser, Text: params.Prompt, Responses: output}
 
 	close(input)
 
@@ -438,7 +448,7 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 		PermissionReviewer:     &childFactory,
 		InPermissionReview:     f.inPermissionReview,
 		Observability:          f.observability,
-		CheckpointSink:         InertCheckpointSink{},
+		Journal:                InertJournal{},
 	}
 	childFactory.configureSpill(child)
 
