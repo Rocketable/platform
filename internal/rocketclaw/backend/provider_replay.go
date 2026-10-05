@@ -116,6 +116,8 @@ func replayForProvider(rawItems []json.RawMessage, attribution ...[]rocketcode.R
 			return nil, fmt.Errorf("decode replay item %d type: %w", i, err)
 		}
 
+		var summaryTexts []string
+
 		switch kind.Type {
 		case "message":
 			var item replayMessage
@@ -176,13 +178,7 @@ func replayForProvider(rawItems []json.RawMessage, attribution ...[]rocketcode.R
 				return nil, fmt.Errorf("decode replay item %d reasoning summary: %w", i, err)
 			}
 
-			for _, text := range texts {
-				if strings.TrimSpace(text) != "" {
-					message := responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRoleAssistant)
-					message.OfMessage.Type = "message"
-					items = append(items, message)
-				}
-			}
+			summaryTexts = texts
 		case "compaction", "compaction_summary":
 			var item replayCompaction
 			if err := json.Unmarshal(raw, &item); err != nil {
@@ -200,15 +196,15 @@ func replayForProvider(rawItems []json.RawMessage, attribution ...[]rocketcode.R
 				if err != nil {
 					return nil, fmt.Errorf("decode replay item %d compaction summary: %w", i, err)
 				}
-
-				texts = nonblankText(texts)
 			}
 
-			for _, text := range texts {
-				message := responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRoleAssistant)
-				message.OfMessage.Type = "message"
-				items = append(items, message)
-			}
+			summaryTexts = texts
+		}
+
+		for _, text := range nonblankText(summaryTexts) {
+			message := responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRoleAssistant)
+			message.OfMessage.Type = "message"
+			items = append(items, message)
 		}
 	}
 

@@ -153,14 +153,18 @@ func TestReplayForProviderDropsUnknownBeforePayloadDecode(t *testing.T) {
 }
 
 func TestReplayForProviderReadsExactSummaryShapesAndPrefersCompactionContent(t *testing.T) {
+	ranges := []rocketcode.ReplayAttribution{{Start: 2, End: 3}}
 	replay, err := replayForProvider([]json.RawMessage{
 		json.RawMessage(`{"type":"reasoning","summary":"summary-string"}`),
 		json.RawMessage(`{"type":"reasoning","summary":{"text":"summary-object"}}`),
-		json.RawMessage(`{"type":"reasoning","summary":[{"text":"summary-array-one"},{"text":"summary-array-two"}]}`),
+		json.RawMessage(`{"type":"reasoning","summary":[{"text":"summary-array-one"},{"text":" \n"},{"text":"summary-array-two"}]}`),
 		json.RawMessage(`{"type":"compaction","content":{"text":"compaction-content"},"summary":"must-not-appear"}`),
 		json.RawMessage(`{"type":"compaction","summary":{"text":"compaction-fallback"}}`),
-	})
+		json.RawMessage(`{"type":"compaction_summary","content":[{"text":" "},{"text":" padded content "}],"summary":"unused"}`),
+		json.RawMessage(`{"type":"compaction_summary","content":" ","summary":[{"text":""},{"text":" padded fallback "},{"text":"\t"}]}`),
+	}, ranges)
 	require.NoError(t, err)
+	assert.Equal(t, []rocketcode.ReplayAttribution{{Start: 2, End: 4}}, ranges)
 
 	items, err := rocketcode.ReplayInputToParams(replay)
 	require.NoError(t, err)
@@ -170,7 +174,7 @@ func TestReplayForProviderReadsExactSummaryShapesAndPrefersCompactionContent(t *
 		got[i] = items[i].OfMessage.Content.OfString.Value
 	}
 
-	assert.Equal(t, []string{"summary-string", "summary-object", "summary-array-one", "summary-array-two", "compaction-content", "compaction-fallback"}, got)
+	assert.Equal(t, []string{"summary-string", "summary-object", "summary-array-one", "summary-array-two", "compaction-content", "compaction-fallback", " padded content ", " padded fallback "}, got)
 }
 
 func TestReplayForProviderRejectsMalformedKnownReadableData(t *testing.T) {
