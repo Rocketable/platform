@@ -469,12 +469,8 @@ func commandPath(pattern string) string {
 		return pattern
 	}
 
-	if fields[0] == "bash" || fields[0] == "sh" {
-		if len(fields) > 1 {
-			return fields[1]
-		}
-
-		return fields[0]
+	if len(fields) > 1 && (fields[0] == "bash" || fields[0] == "sh") {
+		return fields[1]
 	}
 
 	return fields[0]

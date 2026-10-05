@@ -14,6 +14,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCommandPath(t *testing.T) {
+	for _, tt := range []struct {
+		pattern string
+		want    string
+	}{
+		{"", ""},
+		{" \t", " \t"},
+		{"scripts/run.sh *", "scripts/run.sh"},
+		{" bash ", "bash"},
+		{"sh", "sh"},
+		{"bash scripts/run.sh *", "scripts/run.sh"},
+		{"\tsh\u2003scripts/run.sh arg", "scripts/run.sh"},
+		{"/bin/bash scripts/run.sh", "/bin/bash"},
+	} {
+		t.Run(tt.pattern, func(t *testing.T) {
+			assert.Equal(t, tt.want, commandPath(tt.pattern))
+		})
+	}
+}
+
 func TestLintFindings(t *testing.T) {
 	runtimeRoot := t.TempDir()
 	writeAgent(t, runtimeRoot, "writer.md", `---
