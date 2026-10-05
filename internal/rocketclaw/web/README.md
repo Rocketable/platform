@@ -14,6 +14,9 @@ New composer and handoff previews snapshot the server-resolved author only when
 identity is ready, not refreshing. Recorded history or queue data replaces that
 preview by input ID; the current viewer never supplies an author for saved messages.
 Copy puts the message text on the clipboard.
+Code blocks and tool output scroll sideways by default. Their wrap button, also in
+the expanded view, wraps long lines for every block at once; this browser
+remembers the choice across reloads.
 Only sessions with sandboxed messages append ` - origin` to the footer. The
 origin is `sandboxed` for messages produced by another conversation or a cron
 run, and `canonical` otherwise. New turns store the
@@ -198,8 +201,15 @@ rows; their composer buttons appear only on desktop.
 Safe-area padding is preserved. On very narrow screens, navigation buttons scroll
 horizontally instead of overlapping.
 
-Use the agent selector in the composer to change agents. New Web threads select
-`main` by default; existing threads retain their agent.
+Use the agent selector in the composer to change agents. Type in its search box to
+filter agents by name or model; Enter picks the first match. On touch screens the
+search box waits for a tap, so the keyboard does not cover the list. New Web threads select
+`main` by default, or the first listed agent when `main` is not listed; existing
+threads retain their agent. When a thread's agent is no longer listed, for example
+because its Slack channel does not allow it, the selector shows the channel's first configured
+agent (or the first listed agent elsewhere), and your next message, a popped stash, or queued work you send from the
+queue switches the thread to it first.
+Stash, `$stop`, and a typed `$agent` do not switch.
 New chat opens a fresh Home composer and creates a session only on the first send.
 It clears the draft and resets the agent to `main`; returning from other pages
 preserves the current draft and selected agent.

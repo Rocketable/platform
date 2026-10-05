@@ -2156,6 +2156,27 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ conversationId: `code-${width}`, revision: "hint" })}\n\n`);
       await transcriptPage.locator('pre[aria-label="py"]').waitFor();
       expect(await transcriptPage.locator('pre[aria-label="py"]').textContent()).toBe("  streamed");
+      // One remembered wrap setting applies to every block, inline and expanded, long tokens included.
+      const fits = (label: string) => transcriptPage.locator(`#transcript-scroll pre[aria-label="${label}"]`).evaluate((el: HTMLElement) => el.parentElement!.scrollWidth <= el.parentElement!.clientWidth);
+      expect([await fits("bash"), await fits("sh")]).toEqual([false, false]);
+      await transcriptPage.getByRole("button", { name: "Wrap sh", exact: true }).click();
+      expect(await transcriptPage.getByRole("button", { name: "Wrap bash", exact: true }).getAttribute("aria-pressed")).toBe("true");
+      expect([await fits("bash"), await fits("sh")]).toEqual([true, true]);
+      transcriptStream = Promise.withResolvers();
+      await transcriptPage.reload();
+      await transcriptPage.locator('pre[aria-label="sh"]').waitFor();
+      expect(await fits("sh")).toBe(true);
+      expect(await transcriptPage.getByRole("button", { name: "Wrap sh", exact: true }).getAttribute("aria-pressed")).toBe("true");
+      await transcriptPage.getByRole("button", { name: "Expand sh", exact: true }).click();
+      const expanded = transcriptPage.getByRole("dialog", { name: "sh", exact: true });
+      const expandedFits = () => expanded.locator("pre").evaluate((el: HTMLElement) => el.parentElement!.scrollWidth <= el.parentElement!.clientWidth);
+      expect(await expandedFits()).toBe(true);
+      await expanded.getByRole("button", { name: "Wrap sh", exact: true }).click();
+      expect(await expandedFits()).toBe(false);
+      await transcriptPage.keyboard.press("Escape");
+      await expanded.waitFor({ state: "hidden" });
+      expect(await fits("sh")).toBe(false);
+      expect(await transcriptPage.evaluate(() => localStorage.getItem("code-wrap"))).toBe("false");
     }
     await transcriptPage.close();
     // Timeline detail: Compact by default, live updates keep an opened row open, and palette levels reshape and persist.
@@ -2199,6 +2220,45 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(JSON.parse((await detailPage.evaluate(() => localStorage.getItem("timeline-detail")))!).rows).toEqual(timelineLevels.at(-1)!.rows);
     await detailPage.close();
     ctrl.history = [];
+    // Agent search matches names or models; Enter picks the first match and closing clears the search.
+    const searchPage = await browser.newPage({ viewport: { width: 1280, height: 844 } });
+    await searchPage.route("**/api/ListAgents", (route: { fulfill(options: { json: unknown }): Promise<void> }) => route.fulfill({ json: { agents: [{ name: "other", model: "gpt" }, { name: "main", model: "root/model", reasoning: "high" }], currentAgent: "other" } }));
+    await searchPage.goto(`${origin}/s/${Buffer.from("named").toString("base64url")}`);
+    const agentPicker = searchPage.getByRole("combobox", { name: "Choose agent" });
+    await agentPicker.filter({ hasText: "other" }).waitFor();
+    await agentPicker.click();
+    const agentSearch = searchPage.getByLabel("Search agents");
+    const agentOptions = searchPage.getByRole("option");
+    await agentSearch.fill("ROOT");
+    await agentOptions.filter({ hasText: "main" }).waitFor();
+    expect(await agentOptions.allInnerTexts()).toEqual(["main\nroot/model · high"]);
+    await agentSearch.fill("oth");
+    await agentOptions.filter({ hasText: "other" }).waitFor();
+    expect(await agentOptions.count()).toBe(1);
+    await agentSearch.fill("zzz");
+    await searchPage.getByText("No matching agents", { exact: true }).waitFor();
+    expect(await agentOptions.count()).toBe(0);
+    await searchPage.keyboard.press("Escape");
+    await agentSearch.waitFor({ state: "hidden" });
+    await agentPicker.click();
+    await agentOptions.nth(1).waitFor();
+    expect(await agentSearch.inputValue()).toBe("");
+    // The agents refetch every 2s; an open, filtered picker keeps its search and highlight.
+    await agentSearch.fill("o");
+    await agentOptions.nth(1).waitFor();
+    await searchPage.waitForTimeout(2500);
+    expect(await agentSearch.inputValue()).toBe("o");
+    expect(await agentOptions.count()).toBe(2);
+    await agentSearch.press("ArrowDown");
+    await agentSearch.press("Enter");
+    await agentPicker.filter({ hasText: "main" }).waitFor();
+    await agentSearch.waitFor({ state: "hidden" });
+    await agentPicker.click();
+    await agentSearch.fill("OTH");
+    await agentSearch.press("Enter");
+    await agentPicker.filter({ hasText: "other" }).waitFor();
+    await agentSearch.waitFor({ state: "hidden" });
+    await searchPage.close();
     for (const width of [1280, 390]) {
       ctrl.settledRows = [row("recent", "Most recent message"), row("named", "Original preview"), { ...row("settled-pin", "Settled pin preview"), pinned: true, settled: true }];
       ctrl.yieldBatches = complete(ctrl.settledRows);
@@ -2220,7 +2280,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         expect(Math.abs(selectorBox.y - sendBox.y)).toBeLessThan(2);
         await selector.click();
         await detailsPage.getByRole("option", { name: "main gpt", exact: true }).waitFor();
-        expect((await detailsPage.locator('[data-slot="select-content"]').boundingBox())!.width).toBeGreaterThan(selectorBox.width);
+        expect((await detailsPage.locator('[data-slot="combobox-content"]').boundingBox())!.width).toBeGreaterThan(selectorBox.width);
         expect(await detailsPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         await detailsPage.screenshot({ path: path.join(screenshots, "chat-agent-320.png") });
         await detailsPage.keyboard.press("Escape");
@@ -2631,6 +2691,78 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await stashPage.getByRole("region", { name: "Messages", exact: true }).getByText("busy stash", { exact: true }).count()).toBe(0);
     expect(await stashPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await stashPage.close();
+
+    // A session whose agent is no longer listed shows, and moves to, the first listed agent.
+    type PromptResponse = { url: () => string; request: () => { postDataJSON: () => { text: string } } };
+    ctrl.history = [];
+    ctrl.queue = [];
+    ctrl.running = false;
+    ctrl.currentAgents.set("retired-session", "retired");
+    transcriptStream = Promise.withResolvers();
+    const retiredPage = await browser.newPage({ viewport: { width: 1280, height: 844 } });
+    const retiredPrompts = () => ctrl.prompt.filter((text) => text.startsWith("retired-session:"));
+    await retiredPage.goto(`${origin}/s/${Buffer.from("retired-session").toString("base64url")}`);
+    await retiredPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
+    await retiredPage.locator("textarea").fill("held hello");
+    await retiredPage.getByRole("button", { name: "Stash", exact: true }).click();
+    const popped = retiredPage.waitForResponse((response: PromptResponse) => response.url().endsWith("/api/PopQueueItem"));
+    await retiredPage.locator("[data-queue-id]").getByRole("button", { name: "Pop", exact: true }).click();
+    await popped;
+    expect(retiredPrompts()).toEqual(["retired-session:held hello", "retired-session:$agent other"]);
+    ctrl.queue = [];
+    ctrl.currentAgents.set("retired-session", "retired");
+    transcriptStream = Promise.withResolvers();
+    await retiredPage.reload();
+    await retiredPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
+    await retiredPage.route("**/api/Prompt", (route: { request(): { postDataJSON(): { text: string } }; fulfill(options: object): Promise<void>; continue(): Promise<void> }) => route.request().postDataJSON().text.startsWith("$agent ")
+      ? route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ message: "agent is not currently allowed", code: 3 }) })
+      : route.continue());
+    await retiredPage.locator("textarea").fill("hello");
+    await retiredPage.locator("textarea").press("Enter");
+    await shown(retiredPage, "agent is not currently allowed");
+    expect(await retiredPage.locator("textarea").inputValue()).toBe("hello");
+    expect(retiredPrompts()).toEqual(["retired-session:held hello", "retired-session:$agent other"]);
+    // A rejected switch keeps the stash held instead of popping it to the unlisted agent.
+    ctrl.queue = [{ id: "kept-stash", text: "kept stash", delivery: "STASH", principal: ctrl.principal }];
+    const keptRow = retiredPage.locator('[data-queue-id="kept-stash"]');
+    await keptRow.getByRole("button", { name: "Pop", exact: true }).click();
+    await keptRow.getByRole("button", { name: "Pop", exact: true }).waitFor();
+    await shown(retiredPage, "agent is not currently allowed");
+    expect(ctrl.queue[0].delivery).toBe("STASH");
+    ctrl.queue = [];
+    await retiredPage.unroute("**/api/Prompt");
+    const helloSent = retiredPage.waitForResponse((response: PromptResponse) => response.url().endsWith("/api/Prompt") && response.request().postDataJSON().text === "hello");
+    await retiredPage.locator("textarea").press("Enter");
+    await helloSent;
+    expect(retiredPrompts().slice(2)).toEqual(["retired-session:$agent other", "retired-session:hello"]);
+    expect(ctrl.currentAgents.get("retired-session")).toBe("other");
+    // Sending already-queued work also switches the unlisted agent first.
+    ctrl.currentAgents.set("retired-session", "retired");
+    ctrl.queue = [{ id: "queued-work", text: "queued work", delivery: "QUEUE", principal: ctrl.principal }];
+    transcriptStream = Promise.withResolvers();
+    await retiredPage.reload();
+    await retiredPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
+    const steered = retiredPage.waitForResponse((response: PromptResponse) => response.url().endsWith("/api/SteerQueueItem"));
+    await retiredPage.locator('[data-queue-id="queued-work"]').getByRole("button", { name: "Send", exact: true }).click();
+    await steered;
+    expect(retiredPrompts().at(-1)).toBe("retired-session:$agent other");
+    expect(ctrl.queue[0].delivery).toBe("STEER");
+    ctrl.queue = [];
+    // An unrecorded agent is not a mismatch, and a new chat without `main` starts on the first listed agent.
+    ctrl.currentAgents.set("blank-session", "");
+    transcriptStream = Promise.withResolvers();
+    await retiredPage.goto(`${origin}/s/${Buffer.from("blank-session").toString("base64url")}`);
+    await retiredPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
+    const blankSent = retiredPage.waitForResponse((response: PromptResponse) => response.url().endsWith("/api/Prompt") && response.request().postDataJSON().text === "hi");
+    await retiredPage.locator("textarea").fill("hi");
+    await retiredPage.locator("textarea").press("Enter");
+    await blankSent;
+    expect(ctrl.prompt.filter((text) => text.startsWith("blank-session:"))).toEqual(["blank-session:hi"]);
+    await retiredPage.route("**/api/ListAgents", (route: { fulfill(options: { json: unknown }): Promise<void> }) => route.fulfill({ json: { agents: [{ name: "other", model: "gpt" }], currentAgent: "" } }));
+    transcriptStream = Promise.withResolvers();
+    await retiredPage.goto(`${origin}/`);
+    await retiredPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
+    await retiredPage.close();
 
     // Alice reads Bob's recorded authors, never her current identity, in every delivery surface.
     const bob = 'Bob Smith Ω <img src=x onerror="alert(1)"> ' + "LongName".repeat(18);

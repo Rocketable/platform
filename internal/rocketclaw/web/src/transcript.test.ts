@@ -4,10 +4,10 @@ import type { HistoryView, TranscriptEvent } from "./types";
 
 // Execute the retained UI's actual private functions without exporting non-components.
 const source = ts.createSourceFile("ui.tsx", await Bun.file(new URL("./ui.tsx", import.meta.url)).text(), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = ["historyPage", "applyHistoryDelta", "readHistoryDelta", "readEarlierHistory", "sendComposer", "promoteComposer", "stopComposer", "historyLines", "pendingInputs", "lineId", "isStopCommand", "transcriptTurns", "toolTitle"];
+const names = ["historyPage", "applyHistoryDelta", "readHistoryDelta", "readEarlierHistory", "sendComposer", "promoteComposer", "popComposer", "switchQueueAgent", "stopComposer", "historyLines", "pendingInputs", "lineId", "isStopCommand", "transcriptTurns", "toolTitle"];
 const functions = source.statements.filter((node) => (ts.isFunctionDeclaration(node) ? names.includes(node.name?.text ?? "") : ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) => names.includes(declaration.name.getText(source))))).map((node) => node.getText(source)).join("\n");
-const javascript = ts.transpileModule(`import { QueryClient } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nimport { queries } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};\nconst queryClient = new QueryClient();\n${functions}\nexport { ${names.filter((name) => !["historyPage", "lineId", "isStopCommand"].includes(name)).join(", ")}, queryClient };`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
-const { applyHistoryDelta, readHistoryDelta, readEarlierHistory, sendComposer, promoteComposer, stopComposer, historyLines, pendingInputs, transcriptTurns, toolTitle, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
+const javascript = ts.transpileModule(`import { QueryClient } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nimport { queries } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};\nconst queryClient = new QueryClient();\n${functions}\nexport { ${names.filter((name) => !["historyPage", "lineId", "isStopCommand", "switchQueueAgent"].includes(name)).join(", ")}, queryClient };`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
+const { applyHistoryDelta, readHistoryDelta, readEarlierHistory, sendComposer, promoteComposer, popComposer, stopComposer, historyLines, pendingInputs, transcriptTurns, toolTitle, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 type Line = { id: string; role: string; text: string; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; origin?: string; principal?: string };
 const event = (entryKey: string, itemId: string, role: string, text: string, extra: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ entryKey, itemId, inputId: "", role, text, turnId: "", complete: true, ...extra });
 const view = (messages: TranscriptEvent[], extra: Partial<HistoryView> = {}): HistoryView => ({ messages, delegations: [], revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(messages.map((message) => message.entryKey))], running: false, terminal: "", start: "0", more: false, ...extra });
@@ -306,6 +306,19 @@ for (const [prefix, delivery] of [["  $enqueue \t", "QUEUE"], ["  $stash \t", "S
   expect(queryClient.getQueryState(["queue", { id: "opaque" }]).isInvalidated).toBe(followUp !== "STEER");
 });
 
+for (const [text, delivery, sent] of [
+  ["hello", undefined, ["$agent other", "hello"]],
+  ["hello", "STASH", ["hello"]],
+  ["$stop", undefined, ["$stop"]],
+  [" $agent planner", undefined, [" $agent planner"]],
+  ["$steer $agent planner", undefined, ["$steer $agent planner"]],
+] as const) test(`agent switch precedes only ordinary sends: ${JSON.stringify(text)} ${delivery ?? ""}`, async () => {
+  const draft = { text, files: [], agent: "", edit: 0, submission: 0, sending: false, parked: [] as Line[], lines: [] as Line[] };
+  const texts: string[] = [];
+  await sendComposer({ draft, onDraftChange: () => {}, text, files: [], delivery, busy: false, sessionId: "opaque", selected: "other", currentAgent: "retired", prompt: { mutateAsync: async (request: { text: string }) => { texts.push(request.text); return ""; } }, scrollToEnd: () => true, setBusy: () => {}, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, setLines: (update: (lines: Line[]) => Line[]) => { draft.lines = update(draft.lines); }, refreshHistory: async () => {} });
+  expect(texts).toEqual([...sent]);
+});
+
 test("composer renders exact input before Prompt completes and history failure does not undo acceptance", async () => {
   const draft = { text: "  exact human input\n", files: [], agent: "", edit: 0, submission: 0, sending: false, lines: historyLines([event("prior", "prior", "assistant", "prior answer")]) as Line[], busy: false, historyError: "" };
   const originalFetch = globalThis.fetch;
@@ -402,11 +415,31 @@ test("promotion keeps chat unchanged until History confirms consumption", async 
   const completion = Promise.withResolvers<void>();
   const calls: string[] = [];
   let busy = false;
-  const promotion = promoteComposer({ draft: { submission: 0 }, id: "session", itemId: "server-queue-id", busy, steerQueueItem: { mutateAsync: async (request: { itemId: string }) => { calls.push(request.itemId); await completion.promise; } }, setBusy: (value: boolean) => { busy = value; }, setSendError: (error: string) => { expect(error).toBe(""); } });
-  expect(calls).toEqual(["server-queue-id"]);
+  const promotion = promoteComposer({ draft: { submission: 0, sending: false }, onDraftChange: () => {}, id: "session", itemId: "server-queue-id", busy, selected: "main", currentAgent: "main", prompt: { mutateAsync: async () => "" }, steerQueueItem: { mutateAsync: async (request: { itemId: string }) => { calls.push(request.itemId); await completion.promise; } }, setBusy: (value: boolean) => { busy = value; }, setSendError: (error: string) => { expect(error).toBe(""); } });
   expect(busy).toBe(true);
+  await Bun.sleep(0);
+  expect(calls).toEqual(["server-queue-id"]);
   completion.resolve(); await promotion;
   expect(historyLines([event("turn", "turn:0", "user", "same", { inputId: calls[0] })]).map((line: Line) => line.id)).toEqual(["server-queue-id"]);
+});
+
+for (const action of ["pop", "promote"] as const) test(`queue ${action} switches an unlisted agent first, once at a time`, async () => {
+  for (const failure of [false, true]) {
+    const calls: string[] = [];
+    let error = "";
+    const prompt = { mutateAsync: async (request: { text: string }) => { calls.push(request.text); if (failure) throw new Error("agent is not currently allowed"); return ""; } };
+    const queued = { mutateAsync: async (request: { itemId: string }) => { calls.push(`${action}:${request.itemId}`); } };
+    const run = (draft: { submission: number; sending: boolean }) => action === "pop"
+      ? popComposer({ draft, onDraftChange: () => {}, id: "session", itemId: "held", selected: "other", currentAgent: "retired", prompt, popQueueItem: queued, setSendError: (value: string) => { error = value; } })
+      : promoteComposer({ draft, onDraftChange: () => {}, id: "session", itemId: "held", busy: false, selected: "other", currentAgent: "retired", prompt, steerQueueItem: queued, setBusy: () => {}, setSendError: (value: string) => { error = value; } });
+    await run({ submission: 0, sending: true });
+    expect(calls).toEqual([]);
+    const draft = { submission: 0, sending: false };
+    await run(draft);
+    expect(calls).toEqual(failure ? ["$agent other"] : ["$agent other", `${action}:held`]);
+    expect(error).toBe(failure ? "agent is not currently allowed" : "");
+    expect(draft.sending).toBe(false);
+  }
 });
 
 test("stopping leaves busy status to History, which may already contain a running next turn", async () => {

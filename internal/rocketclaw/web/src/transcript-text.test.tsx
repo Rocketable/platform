@@ -32,3 +32,10 @@ test("tool panels retain all output as literal text", () => {
   expect(html).toContain(`<code>${output}</code>`);
   expect(html).toContain('aria-label="Copy Result"');
 });
+
+test("code blocks start unwrapped without browser storage and compact blocks keep the toggle in the dialog", () => {
+  const html = renderToStaticMarkup(<CodeBlock label="Result" text="output" />);
+  expect(html).toMatch(/aria-label="Wrap Result"[^>]*aria-pressed="false"|aria-pressed="false"[^>]*aria-label="Wrap Result"/);
+  expect(html).toContain("whitespace-pre ");
+  expect(renderToStaticMarkup(<CodeBlock label="Handoff" text="document" compact />)).not.toContain("Wrap Handoff");
+});
