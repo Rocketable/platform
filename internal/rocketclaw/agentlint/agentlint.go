@@ -299,19 +299,12 @@ func lintCapabilities(infos map[string]*agentInfo) []Finding {
 		}
 	}
 
-	externalWriters := []capability{}
-
-	for name, info := range infos {
-		if len(allowPatterns(info.agent.Permission, "websearch")) > 0 || len(allowPatterns(info.agent.Permission, "webfetch")) > 0 {
-			for _, write := range writes {
-				if write.agent == name {
-					externalWriters = append(externalWriters, write)
-				}
-			}
+	for _, write := range writes {
+		permission := infos[write.agent].agent.Permission
+		if len(allowPatterns(permission, "websearch")) == 0 && len(allowPatterns(permission, "webfetch")) == 0 {
+			continue
 		}
-	}
 
-	for _, write := range externalWriters {
 		for _, read := range reads {
 			if write.agent != read.agent && pathsOverlap(write.pattern, read.pattern) {
 				findings = append(findings, Finding{Code: rc005, Severity: "error", Path: write.file + " -> " + read.file, Message: fmt.Sprintf("%s can write external content to %s that %s can read", write.agent, cleanSubject(write.pattern), read.agent), keys: []string{write.bucket, write.pattern, read.bucket, read.pattern}})

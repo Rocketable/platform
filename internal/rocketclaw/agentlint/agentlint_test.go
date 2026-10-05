@@ -41,6 +41,7 @@ description: writer
 permission:
   edit:
     "scripts/helper.sh": allow
+    "BROWSING_NOTES.md": allow
   task:
     "executor": allow
 ---
@@ -53,15 +54,6 @@ permission:
     "scripts/helper.sh *": allow
 ---
 executor
-`)
-	writeAgent(t, runtimeRoot, "browser.md", `---
-description: browser
-permission:
-  webfetch: allow
-  edit:
-    "BROWSING_NOTES.md": allow
----
-browser
 `)
 	writeAgent(t, runtimeRoot, "reader.md", `---
 description: reader
@@ -112,9 +104,37 @@ reasoningEffort: xhigh
 expensive
 `)
 
-	result, err := Lint(runtimeRoot, new(config.Config))
-	require.NoError(t, err)
-	assertFindingCodes(t, result.Findings, rc001, rc002, rc003, rc004, rc005, rc006, rc007, rc008)
+	for _, external := range []string{"webfetch: allow", "websearch: allow", "webfetch: allow\n  websearch: allow"} {
+		t.Run(external, func(t *testing.T) {
+			writeAgent(t, runtimeRoot, "browser.md", fmt.Sprintf(`---
+description: browser
+permission:
+  %s
+  read:
+    "BROWSING_NOTES.md": allow
+  edit:
+    "BROWSING_NOTES.md": allow
+---
+browser
+`, external))
+			result, err := Lint(runtimeRoot, new(config.Config))
+			require.NoError(t, err)
+			assertFindingCodes(t, result.Findings, rc001, rc002, rc003, rc004, rc005, rc006, rc007, rc008)
+
+			var externalContent []Finding
+
+			for _, finding := range result.Findings {
+				if finding.Code == rc005 {
+					externalContent = append(externalContent, finding)
+				}
+			}
+
+			assert.Equal(t, []Finding{
+				{Code: rc005, Severity: "error", Path: "agents/browser.md -> agents/reader.md", Message: "browser can write external content to BROWSING_NOTES.md that reader can read", keys: []string{"edit", "BROWSING_NOTES.md", "read", "BROWSING_NOTES.md"}},
+				{Code: rc005, Severity: "error", Path: "agents/browser.md -> agents/writer.md", Message: "browser can write external content to BROWSING_NOTES.md that writer can read", keys: []string{"edit", "BROWSING_NOTES.md", "edit", "BROWSING_NOTES.md"}},
+			}, externalContent)
+		})
+	}
 }
 
 func TestLintSuppressions(t *testing.T) {
