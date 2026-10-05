@@ -1134,12 +1134,13 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 		return nil, fmt.Errorf("web channel choices: %w", err)
 	}
 
-	for _, name := range slices.Sorted(maps.Keys(definitions.Items)) {
-		if !slices.Contains(allowed, name) {
+	// Keep the allowed order: Slack channels list their default agent first.
+	for _, name := range allowed {
+		agent, ok := definitions.Items[name]
+		if !ok {
 			continue
 		}
 
-		agent := definitions.Items[name]
 		response.Agents = append(response.Agents, &Agent{Name: name, Model: agent.Model, Reasoning: agent.ReasoningEffort, Description: agent.Description, Verbosity: agent.Verbosity, Prompt: agent.Prompt})
 	}
 

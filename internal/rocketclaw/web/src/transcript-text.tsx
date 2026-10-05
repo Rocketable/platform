@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Check, Copy, Maximize2 } from "lucide-react";
+import { useState, useSyncExternalStore } from "react";
+import { Check, Copy, Maximize2, WrapText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogTrigger, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
@@ -25,7 +25,30 @@ export async function copyText(text: string, container: Element) {
   }
 }
 
+// One browser-wide wrap preference, shared by every mounted block like the timeline detail store.
+const WRAP_KEY = "code-wrap";
+const wrapListeners = new Set<() => void>();
+let wrapped: boolean | undefined;
+
+function publishWrap(next: boolean) {
+  wrapped = next;
+  for (const listener of wrapListeners) listener();
+}
+
+function onWrapStorage(event: StorageEvent) {
+  if (event.key === WRAP_KEY) publishWrap(event.newValue === "true");
+}
+
+function subscribeWrap(listener: () => void) {
+  wrapListeners.add(listener);
+  window.addEventListener("storage", onWrapStorage);
+  return () => {
+    wrapListeners.delete(listener);
+  };
+}
+
 export function CodeBlock({ text, label = "Code", compact = false }: { text: string; label?: string; compact?: boolean }) {
+  const wrap = useSyncExternalStore(subscribeWrap, () => wrapped ??= localStorage.getItem(WRAP_KEY) === "true", () => false);
   const [copied, setCopied] = useState<string>();
   const [error, setError] = useState(false);
   const actionProps = compact ? { variant: "outline", size: "default", className: "min-h-11" } as const : { variant: "ghost", size: "icon-sm" } as const;
@@ -40,18 +63,25 @@ export function CodeBlock({ text, label = "Code", compact = false }: { text: str
         }
       }}>{copied === text && !error ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}<span hidden={!compact}>Copy</span></Button>;
   const status = <span role="status" className={error ? "text-xs text-destructive" : "sr-only"}>{error ? "Could not copy. Select and copy the text." : copied === text ? "Copied" : ""}</span>;
+  const wrapToggle = <Button type="button" {...actionProps} variant={wrap ? "secondary" : actionProps.variant} aria-label={`Wrap ${label}`} title={`Wrap ${label}`} aria-pressed={wrap} onClick={() => {
+        localStorage.setItem(WRAP_KEY, String(!wrap));
+        publishWrap(!wrap);
+      }}><WrapText data-icon="inline-start" /><span hidden={!compact}>Wrap</span></Button>;
+  const pre = <pre aria-label={label} className={`${wrap ? "whitespace-pre-wrap wrap-anywhere" : "whitespace-pre"} p-3 font-mono text-xs leading-5`}><code>{text}</code></pre>;
+  const scrollBar = wrap ? null : <ScrollBar orientation="horizontal" />;
   return <Dialog>
     <div className={compact ? "flex min-w-0 items-center gap-2" : "my-2 min-w-0 max-w-full overflow-hidden rounded-md border bg-muted/30"}>
     <div className={compact ? "flex flex-wrap items-center gap-2" : "flex items-center justify-between gap-2 border-b px-3 py-1"}>
       <span hidden={compact} className="mr-auto truncate text-xs text-muted-foreground">{label}</span>
+      {compact ? null : wrapToggle}
       <DialogTrigger render={<Button type="button" {...actionProps} aria-label={`Expand ${label}`} title={`Expand ${label}`} />}><Maximize2 data-icon="inline-start" /><span hidden={!compact}>Preview</span></DialogTrigger>
       {copy}{status}
     </div>
-    <ScrollArea hidden={compact} className="flex max-h-64 flex-col"><pre aria-label={label} className="p-3 font-mono text-xs leading-5 whitespace-pre"><code>{text}</code></pre><ScrollBar orientation="horizontal" /></ScrollArea>
+    <ScrollArea hidden={compact} className="flex max-h-64 flex-col">{pre}{scrollBar}</ScrollArea>
     </div>
     <DialogContent className="flex h-[calc(100dvh-2rem)] min-w-0 flex-col sm:max-w-[calc(100%-2rem)]" aria-describedby={undefined}>
-      <div className="flex min-w-0 items-center gap-2 pr-10"><div className="mr-auto min-w-0 break-words"><DialogTitle>{label}</DialogTitle></div>{copy}{status}</div>
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border bg-muted/30"><ScrollArea className="flex min-h-0 flex-1 flex-col"><pre aria-label={label} className="p-3 font-mono text-xs leading-5 whitespace-pre"><code>{text}</code></pre><ScrollBar orientation="horizontal" /></ScrollArea></div>
+      <div className="flex min-w-0 items-center gap-2 pr-10"><div className="mr-auto min-w-0 break-words"><DialogTitle>{label}</DialogTitle></div>{wrapToggle}{copy}{status}</div>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border bg-muted/30"><ScrollArea className="flex min-h-0 flex-1 flex-col">{pre}{scrollBar}</ScrollArea></div>
     </DialogContent>
   </Dialog>;
 }

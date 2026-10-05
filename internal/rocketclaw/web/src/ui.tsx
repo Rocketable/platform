@@ -2,12 +2,13 @@
 
 import { QueryClient, QueryClientProvider, useQuery, useQueries, useMutation } from "@tanstack/react-query";
 import { Menu } from "@base-ui/react/menu";
+import { Combobox } from "@base-ui/react/combobox";
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions, rpc } from "./api";
 import type { ChatOrigin, HistoryView, MessageMatch, PromptDelivery } from "./types";
-import { Bot, Check, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
+import { Bot, Check, ChevronDown, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -24,10 +25,9 @@ import { Message, MessageContent } from "@/components/ui/message";
 import { MessageScrollerProvider, MessageScroller, MessageScrollerViewport, MessageScrollerContent, MessageScrollerItem, MessageScrollerButton, useMessageScroller } from "@/components/ui/message-scroller";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import type { Attachment as AttachmentMeta, ConfigView, CronJob, QueueItem, Session, TranscriptEvent } from "@/types";
+import type { Agent, Attachment as AttachmentMeta, ConfigView, CronJob, QueueItem, Session, TranscriptEvent } from "@/types";
 import { runPreload } from "@/preload";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
 import {
@@ -193,6 +193,7 @@ function QueuePanel({
   conversationId,
   items,
   busy,
+  sending,
   onSteer,
   onPop,
   onRemove,
@@ -201,6 +202,7 @@ function QueuePanel({
   conversationId: string;
   items: QueueItem[];
   busy: boolean;
+  sending: boolean;
   onSteer: (id: string, text: string) => void;
   onPop: (id: string) => Promise<unknown>;
   onRemove: (id: string) => void;
@@ -269,7 +271,7 @@ function QueuePanel({
               type="button"
               variant="ghost"
               size="sm"
-              disabled={item.delivery === "STASH" && poppingId !== ""}
+              disabled={sending || (item.delivery === "STASH" && poppingId !== "")}
               onClick={async () => {
                 if (item.delivery !== "STASH") {
                   onSteer(item.id, item.text);
@@ -2334,7 +2336,7 @@ async function sendComposer(input: {
       if (!response.ok) throw new Error(`Upload failed: ${file.name}`);
       return response.json();
     }));
-    if (!stashing && input.sessionId !== "" && input.selected !== "" && input.selected !== input.currentAgent) {
+    if (!stashing && !stopping && !/^\p{White_Space}*\$agent(?=\p{White_Space}|$)/u.test(optimistic.text) && input.sessionId !== "" && input.currentAgent !== "" && input.selected !== "" && input.selected !== input.currentAgent) {
       await input.prompt.mutateAsync({ id: sessionId, text: `$agent ${input.selected}` });
       await queryClient.invalidateQueries({ queryKey: ["agents"] });
     }
@@ -2380,16 +2382,38 @@ async function sendComposer(input: {
   }
 }
 
-async function promoteComposer(input: {
-  draft: ComposerDraft;
+type QueueAgentSwitch = {
+  draft: Pick<ComposerDraft, "sending">;
+  onDraftChange: () => void;
   id: string;
+  selected: string;
+  currentAgent: string;
+  prompt: { mutateAsync: (value: { id: string; text: string }) => Promise<string> };
+};
+
+// Queue actions switch an unlisted agent first, holding the draft's sending flag so a send cannot switch at the same time.
+async function switchQueueAgent(input: QueueAgentSwitch) {
+  if (input.currentAgent === "" || input.selected === "" || input.selected === input.currentAgent) return;
+  input.draft.sending = true;
+  input.onDraftChange();
+  try {
+    await input.prompt.mutateAsync({ id: input.id, text: `$agent ${input.selected}` });
+    await queryClient.invalidateQueries({ queryKey: ["agents"] });
+  } finally {
+    input.draft.sending = false;
+    input.onDraftChange();
+  }
+}
+
+async function promoteComposer(input: QueueAgentSwitch & {
+  draft: Pick<ComposerDraft, "sending" | "submission">;
   itemId: string;
   busy: boolean;
   steerQueueItem: { mutateAsync: (value: { id: string; itemId: string }) => Promise<unknown> };
   setBusy: (value: boolean) => void;
   setSendError: (value: string) => void;
 }) {
-  if (input.id === "") {
+  if (input.id === "" || input.draft.sending) {
     return;
   }
   const submission = ++input.draft.submission;
@@ -2398,12 +2422,28 @@ async function promoteComposer(input: {
   }
   input.setSendError("");
   try {
+    await switchQueueAgent(input);
     await input.steerQueueItem.mutateAsync({ id: input.id, itemId: input.itemId });
   } catch (err) {
     if (input.draft.submission === submission) {
       input.setSendError(err instanceof Error ? err.message : "steer failed");
       input.setBusy(input.busy);
     }
+  }
+}
+
+async function popComposer(input: QueueAgentSwitch & {
+  itemId: string;
+  popQueueItem: { mutateAsync: (value: { id: string; itemId: string }) => Promise<unknown> };
+  setSendError: (value: string) => void;
+}) {
+  if (input.draft.sending) return;
+  input.setSendError("");
+  try {
+    await switchQueueAgent(input);
+    await input.popQueueItem.mutateAsync({ id: input.id, itemId: input.itemId });
+  } catch (err) {
+    input.setSendError(err instanceof Error ? err.message : "pop failed");
   }
 }
 
@@ -2481,7 +2521,8 @@ function SessionComposer({
   const setSendError = (value: string) => { draft.error = value; onDraftChange(); };
   const currentAgent = id === "" ? "main" : agents.data?.currentAgent ?? "";
   const catalog = agents.data?.agents ?? [];
-  const selected = catalog.some((item) => item.name === agent) ? agent : currentAgent || catalog[0]?.name || "";
+  // Sends switch to the shown agent, so an unlisted current agent moves to the first listed one.
+  const selected = [agent, currentAgent].find((name) => catalog.some((item) => item.name === name)) ?? catalog[0]?.name ?? currentAgent;
   const skills = useQuery({ ...queries.skills({ agent: selected }), enabled: selected !== "", placeholderData: undefined });
   const workflows = useQuery({ ...queries.workflows(), staleTime: 60_000 });
   const matches = dollarOff ? [] : dollarMatches(text, skills.data ?? [], workflows.data ?? []);
@@ -2515,7 +2556,7 @@ function SessionComposer({
       principal: identity.isSuccess && !identity.isFetching ? identity.data.principal : undefined,
       busy,
       sessionId: draft.sessionId,
-      selected: id === "" ? selected : draft.agent,
+      selected,
       currentAgent,
       goSession: (sessionId) => {
         draft.sessionId = sessionId;
@@ -2532,7 +2573,7 @@ function SessionComposer({
       refreshHistory,
     });
   };
-  const promoteQueued = (itemId: string) => promoteComposer({ draft, id, itemId, busy, steerQueueItem, setBusy, setSendError });
+  const promoteQueued = (itemId: string) => promoteComposer({ draft, onDraftChange, id, itemId, busy, selected, currentAgent, prompt, steerQueueItem, setBusy, setSendError });
   const stop = () => stopComposer({ draft, id, busy, prompt, refreshHistory, setSendError });
   return (
     <>
@@ -2561,7 +2602,7 @@ function SessionComposer({
         send={send}
         stop={stop}
         steerQueued={promoteQueued}
-        popQueued={(itemId) => { setSendError(""); return popQueueItem.mutateAsync({ id, itemId }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "pop failed")); }}
+        popQueued={(itemId) => popComposer({ draft, onDraftChange, id, itemId, selected, currentAgent, prompt, popQueueItem, setSendError })}
         removeQueued={(itemId) => void removeQueueItem.mutateAsync({ id, itemId }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "remove failed"))}
         reorderQueued={(itemIds) => void reorderQueue.mutateAsync({ id, itemIds }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "reorder failed"))}
       />
@@ -2678,8 +2719,9 @@ function Composer({
   const messageInput = useRef<HTMLTextAreaElement>(null);
   const { composer } = useContext(SessionCommands);
   useImperativeHandle(composer, () => (command) => {
+    // The agent picker keeps focus so desktop typing searches agents.
+    if (command === "agent") return setAgentOpen(true);
     if (command === "stop") void stop();
-    else if (command === "agent") setAgentOpen(true);
     else applyDollar(`$${command} ${text}`);
     messageInput.current?.focus();
   });
@@ -2715,7 +2757,7 @@ function Composer({
             ))}
           </ul>
         ) : null}
-        <QueuePanel conversationId={sessionId} items={queued} busy={busy} onSteer={(id, itemText) => void steerQueued(id, itemText)} onPop={popQueued} onRemove={removeQueued} onReorder={reorderQueued} />
+        <QueuePanel conversationId={sessionId} items={queued} busy={busy} sending={sending} onSteer={(id, itemText) => void steerQueued(id, itemText)} onPop={popQueued} onRemove={removeQueued} onReorder={reorderQueued} />
         <ComposerAttachments files={files} setFiles={setFiles} sending={sending} fileInput={fileInput}>
           <Textarea
             ref={messageInput}
@@ -2771,12 +2813,7 @@ function Composer({
           <div className="flex items-center gap-1 px-1 sm:gap-2">
             <div className="flex min-w-0 flex-1 items-center gap-1">
               <Tooltip><TooltipTrigger render={<Button type="button" variant="ghost" size="icon" className="size-11 sm:size-8" disabled={sending} />} aria-label="Add files" onClick={() => fileInput.current?.click()}><Plus /></TooltipTrigger><TooltipContent>Add files</TooltipContent></Tooltip>
-              <Select items={catalog.map((item) => ({ value: item.name, label: item.name }))} value={selected} onValueChange={(value) => { if (value !== null) setAgent(value); }} open={agentOpen} onOpenChange={setAgentOpen} disabled={sending || catalog.length === 0}>
-                <SelectTrigger aria-label="Choose agent" title={selected} className="min-h-11 min-w-0 max-w-36 sm:min-h-8"><Bot /><SelectValue className="min-w-0 overflow-hidden" placeholder="Choose agent" /></SelectTrigger>
-                <SelectContent side="top" align="start" alignItemWithTrigger={false} className="w-[min(28rem,calc(100vw-2rem))]">
-                  <SelectGroup>{catalog.map((item) => <SelectItem key={item.name} value={item.name} className="min-h-11 sm:min-h-8"><span className="flex min-w-0 max-w-[min(24rem,calc(100vw-5rem))] flex-col whitespace-normal"><span className="break-all">{item.name}</span><span className="break-all text-xs text-muted-foreground">{[item.model, item.reasoning].filter(Boolean).join(" · ")}</span></span></SelectItem>)}</SelectGroup>
-                </SelectContent>
-              </Select>
+              <AgentPicker catalog={catalog} selected={selected} setAgent={setAgent} open={agentOpen} setOpen={setAgentOpen} disabled={sending || catalog.length === 0} />
                <div className="hidden md:contents"><SessionHeaderActions id={sessionId} /></div>
             </div>
             <div className="flex shrink-0 items-center justify-end gap-1">
@@ -2795,6 +2832,21 @@ function Composer({
         </ComposerAttachments>
       </div>
     </div>
+  );
+}
+
+function AgentPicker({ catalog, selected, setAgent, open, setOpen, disabled }: { catalog: Agent[]; selected: string; setAgent: (name: string) => void; open: boolean; setOpen: (open: boolean) => void; disabled: boolean }) {
+  return (
+    <Combobox.Root items={catalog} value={catalog.find((item) => item.name === selected) ?? null} onValueChange={(item) => { if (item) setAgent(item.name); }} itemToStringLabel={(item) => item.name} filter={(item, query) => `${item.name} ${item.model ?? ""}`.toLowerCase().includes(query.toLowerCase())} autoHighlight open={open} onOpenChange={setOpen} disabled={disabled}>
+      <Combobox.Trigger aria-label="Choose agent" title={selected} className="flex min-h-11 w-fit min-w-0 max-w-36 items-center gap-1.5 rounded-lg border border-input bg-transparent py-2 pr-2 pl-2.5 text-sm whitespace-nowrap outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 sm:h-8 sm:min-h-8 dark:bg-input/30 dark:hover:bg-input/50 [&_svg]:size-4 [&_svg]:shrink-0"><Bot /><span className={cn("min-w-0 flex-1 overflow-hidden text-left", !selected && "text-muted-foreground")}>{selected || "Choose agent"}</span><ChevronDown className="text-muted-foreground" /></Combobox.Trigger>
+      <Combobox.Portal><Combobox.Positioner side="top" align="start" sideOffset={4} className="isolate z-50">
+        <Combobox.Popup data-slot="combobox-content" initialFocus={() => !window.matchMedia("(pointer: coarse)").matches} className="flex max-h-(--available-height) w-[min(28rem,calc(100vw-2rem))] flex-col gap-1 overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10">
+          <Combobox.Input render={<Input />} aria-label="Search agents" placeholder="Search agents" />
+          <Combobox.Empty className="px-2 py-2 text-sm text-muted-foreground empty:p-0">No matching agents</Combobox.Empty>
+          <Combobox.List className="min-h-0 overflow-y-auto">{(item: Agent) => <Combobox.Item key={item.name} value={item} className="flex min-h-11 cursor-default items-center gap-1.5 rounded-md py-1 pr-2 pl-1.5 text-sm outline-hidden select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground sm:min-h-8"><span className="flex min-w-0 flex-1 flex-col whitespace-normal"><span className="break-all">{item.name}</span><span className="break-all text-xs text-muted-foreground">{[item.model, item.reasoning].filter(Boolean).join(" · ")}</span></span><Combobox.ItemIndicator><Check className="size-4" /></Combobox.ItemIndicator></Combobox.Item>}</Combobox.List>
+        </Combobox.Popup>
+      </Combobox.Positioner></Combobox.Portal>
+    </Combobox.Root>
   );
 }
 

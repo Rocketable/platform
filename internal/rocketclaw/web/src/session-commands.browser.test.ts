@@ -258,7 +258,12 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await commandSearch.fill("Choose agent");
     await commands.getByRole("button", { name: "Sessions: Choose agent" }).click();
     await page.getByRole("option", { name: /main/ }).waitFor();
+    // Desktop types straight into the search; touch keeps the keyboard closed.
+    await page.waitForTimeout(300);
+    expect(await page.getByRole("option", { name: /main/ }).isVisible()).toBe(true);
+    expect(await page.evaluate(() => document.activeElement?.getAttribute("aria-label") === "Search agents")).toBe(width >= 640);
     await page.keyboard.press("Escape");
+    await page.getByRole("option", { name: /main/ }).waitFor({ state: "hidden" });
     await page.keyboard.press("Meta+Shift+p");
     await commandSearch.fill("Fork session");
     await commands.getByRole("button", { name: "Sessions: Fork session" }).click();

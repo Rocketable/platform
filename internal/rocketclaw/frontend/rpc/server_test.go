@@ -406,7 +406,7 @@ func TestSessionEntries(t *testing.T) {
 
 		require.Equal(t, "C1", channel)
 
-		return channelTitle, []string{"main", "planner"}, nil
+		return channelTitle, []string{"planner", "main"}, nil
 	}
 	cronRunner := &mockCronRunner{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		require.Equal(t, "planner", agent)
@@ -1480,7 +1480,7 @@ func TestSessionEntries(t *testing.T) {
 	choices, err := invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
 	require.NoError(t, err)
 	require.Equal(t, "planner", choices.CurrentAgent)
-	require.Equal(t, []string{"main", "planner"}, []string{choices.Agents[0].Name, choices.Agents[1].Name})
+	require.Equal(t, []string{"planner", "main"}, []string{choices.Agents[0].Name, choices.Agents[1].Name}, "Slack channels list agents in their configured order")
 	require.Len(t, channels.ChannelAgentChoicesCalls(), channelCalls)
 	require.NoError(t, root.Remove(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md")))
 
@@ -1780,7 +1780,7 @@ func TestSessionEntries(t *testing.T) {
 			name, channel string
 			agents, want  []string
 		}{
-			{"current config", "#ops", []string{"selected", "main"}, []string{"main", "selected"}},
+			{"current config", "#ops", []string{"selected", "main"}, []string{"selected", "main"}},
 			{"config changed", "#ops", []string{"planner"}, []string{"planner"}},
 			{"no loaded channel agents", "#ops", []string{"missing"}, []string{"main", "planner", "selected"}},
 			{"unmapped channel", "#unknown", []string{"planner"}, []string{"main", "planner", "selected"}},
