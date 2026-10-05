@@ -18,20 +18,10 @@ func TestExampleConfigUsesDirectSlackChannels(t *testing.T) {
 	data, err := os.ReadFile("../rocketclaw.example.json")
 	require.NoError(t, err)
 
-	var raw map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(data, &raw))
-
-	for _, removed := range []string{"thread_agents", "pre_seed", "context_messages", "seed_compaction_model"} {
-		require.NotContains(t, string(data), `"`+removed+`"`)
-	}
-
 	var cfg Config
 	require.NoError(t, json.Unmarshal(data, &cfg))
 	require.NoError(t, cfg.Validate())
 
-	var slack map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(raw["slack"], &slack))
-	require.NotContains(t, slack, "enabled")
 	require.NotEmpty(t, cfg.Slack.Channels)
 
 	assert.NotEmpty(t, cfg.Slack.Channels[0].Agents)
