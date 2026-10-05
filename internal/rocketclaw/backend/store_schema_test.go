@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"log/slog"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,27 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
+
+func TestHistoryDeletionUsesConversationRangeIndexes(t *testing.T) {
+	store := newTestSessionService(t)
+	_, err := store.db.ExecContext(t.Context(), `
+INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
+SELECT 'history-' || n, '{}', '2000-01-01T00:00:00Z' FROM generate_series(1, 4096) n;
+INSERT INTO session_summaries (conversation_id, preview, last_updated)
+SELECT conversation_id, ''::bytea, '2000-01-01Z'::timestamptz + id * interval '1 second' FROM session_entries;
+ANALYZE session_entries;
+ANALYZE session_summaries;`)
+	require.NoError(t, err)
+
+	for _, table := range []string{"session_entries", "session_summaries"} {
+		t.Run(table, func(t *testing.T) {
+			plan, err := queryStrings(t.Context(), store.db, `EXPLAIN DELETE FROM `+table+` WHERE `+historyWithDelegations, "history deletion plan", "history-2048")
+			require.NoError(t, err)
+			require.Contains(t, strings.Join(plan, "\n"), table+"_conversation_id_c")
+			require.NotContains(t, strings.Join(plan, "\n"), "Seq Scan")
+		})
+	}
+}
 
 func TestSessionMigrationsSerializeStartup(t *testing.T) {
 	for _, outcome := range []string{"success", "cancel", "cancel waiting", "connection loss"} {
@@ -111,7 +133,7 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			}
 
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&n))
-			require.Equal(t, 21, n)
+			require.Equal(t, 22, n)
 			// No migration lock may survive startup and poison later pool users.
 			require.Eventually(t, func() bool {
 				var locks int
@@ -176,7 +198,7 @@ func TestSessionMigrationsSerializeLedgerCreation(t *testing.T) {
 
 			var count int
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-			require.Equal(t, 21, count)
+			require.Equal(t, 22, count)
 		})
 	}
 }
@@ -230,7 +252,7 @@ func TestSessionMigrationRollbackAndCatchup(t *testing.T) {
 
 	var n int
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM pg_migrations`).Scan(&n))
-	require.Equal(t, 19, n)
+	require.Equal(t, 20, n)
 
 	var missing sql.NullString
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT to_regclass('slack_channel_facts')::text`).Scan(&missing))
