@@ -39,6 +39,21 @@ ANALYZE session_summaries;`)
 	}
 }
 
+func TestTranscriptChangeUsesSyncSourceIndex(t *testing.T) {
+	store := newTestSessionService(t)
+	_, err := store.db.ExecContext(t.Context(), `
+INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
+SELECT 'history-' || n, json_build_object('sync_source_entry_id', n), '' FROM generate_series(1, 4096) n;
+ANALYZE session_entries;`)
+	require.NoError(t, err)
+
+	plan, err := queryStrings(t.Context(), store.db, `EXPLAIN SELECT DISTINCT conversation_id FROM session_entries
+WHERE entry_json::jsonb->>'sync_source_entry_id' = $1`, "transcript change plan", "2048")
+	require.NoError(t, err)
+	require.Contains(t, strings.Join(plan, "\n"), "session_entries_sync_source_id")
+	require.NotContains(t, strings.Join(plan, "\n"), "Seq Scan")
+}
+
 func TestSessionMigrationsSerializeStartup(t *testing.T) {
 	for _, outcome := range []string{"success", "cancel", "cancel waiting", "connection loss"} {
 		t.Run(outcome, func(t *testing.T) {
@@ -133,7 +148,7 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			}
 
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&n))
-			require.Equal(t, 22, n)
+			require.Equal(t, 23, n)
 			// No migration lock may survive startup and poison later pool users.
 			require.Eventually(t, func() bool {
 				var locks int
@@ -198,7 +213,7 @@ func TestSessionMigrationsSerializeLedgerCreation(t *testing.T) {
 
 			var count int
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-			require.Equal(t, 22, count)
+			require.Equal(t, 23, count)
 		})
 	}
 }
@@ -252,7 +267,7 @@ func TestSessionMigrationRollbackAndCatchup(t *testing.T) {
 
 	var n int
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM pg_migrations`).Scan(&n))
-	require.Equal(t, 20, n)
+	require.Equal(t, 21, n)
 
 	var missing sql.NullString
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT to_regclass('slack_channel_facts')::text`).Scan(&missing))
