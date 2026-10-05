@@ -696,14 +696,14 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 23, n)
+	assert.Equal(t, 24, n)
 	require.Error(t, first.db.QueryRowContext(t.Context(), `SELECT 1 FROM store_bootstrap`).Scan(&n))
 
 	second, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop()) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 23, n)
+	assert.Equal(t, 24, n)
 }
 
 func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
@@ -749,7 +749,7 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 
 				var count int
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-				require.Equal(t, 23, count)
+				require.Equal(t, 24, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations WHERE applied_at='2026-01-01Z'`).Scan(&count))
 				require.Equal(t, prefix, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM session_tags`).Scan(&count))
@@ -798,7 +798,7 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 23, n)
+	assert.Equal(t, 24, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
 }
 
@@ -1847,6 +1847,9 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	}
 
 	require.NoError(t, store.UpsertThread("empty-recorded", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
+	require.NoError(t, store.UpsertThread("empty-running", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
+	_, err := store.db.ExecContext(t.Context(), `INSERT INTO active_turns (id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns) VALUES ('running', 'empty-running', '', '', '', '[]', '[]', 'null', '', '[]', '[]', '', '{}', 1, 1)`)
+	require.NoError(t, err)
 	require.NoError(t, store.UpsertThread(activeOldThread, ThreadState{Agent: "selected", CreatedBy: ThreadCreatedByCron}))
 
 	for conversationID, ts := range map[string]time.Time{
@@ -1894,6 +1897,7 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, threadIDs, oldThread)
 	assert.NotContains(t, threadIDs, "empty-recorded")
+	assert.Contains(t, threadIDs, "empty-running")
 
 	thread, ok, err := store.Thread(activeOldThread)
 	require.NoError(t, err)

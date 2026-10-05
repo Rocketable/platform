@@ -190,7 +190,7 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			}
 
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&n))
-			require.Equal(t, 23, n)
+			require.Equal(t, 24, n)
 			// No migration lock may survive startup and poison later pool users.
 			require.Eventually(t, func() bool {
 				var locks int
@@ -255,7 +255,7 @@ func TestSessionMigrationsSerializeLedgerCreation(t *testing.T) {
 
 			var count int
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-			require.Equal(t, 23, count)
+			require.Equal(t, 24, count)
 		})
 	}
 }
@@ -309,7 +309,7 @@ func TestSessionMigrationRollbackAndCatchup(t *testing.T) {
 
 	var n int
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM pg_migrations`).Scan(&n))
-	require.Equal(t, 21, n)
+	require.Equal(t, 22, n)
 
 	var missing sql.NullString
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT to_regclass('slack_channel_facts')::text`).Scan(&missing))

@@ -391,6 +391,12 @@ func (m *OutboundMessage) WaitDelivered(ctx context.Context) error {
 	select {
 	case <-ch:
 		return m.deliveryErr
+	default:
+	}
+
+	select {
+	case <-ch:
+		return m.deliveryErr
 	case <-ctx.Done():
 		return fmt.Errorf("wait for outbound delivery: %w", ctx.Err())
 	}
