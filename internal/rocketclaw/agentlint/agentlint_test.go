@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -151,7 +150,10 @@ same
 `)
 	writeAgent(t, runtimeRoot, "guarded.md", `---
 description: guarded
-guardrail: missing-safety #nolint RC007: defined by pending overlay
+guardrail: missing-safety #nolint: defined by pending overlay
+permission:
+  task:
+    "*": allow #nolint RC003: bounded by the caller
 ---
 guarded
 `)
@@ -165,11 +167,9 @@ expensive
 	result, err := Lint(runtimeRoot, new(config.Config))
 	require.NoError(t, err)
 
-	for _, finding := range result.Findings {
-		assert.NotEqual(t, rc001, finding.Code)
-		assert.NotEqual(t, rc007, finding.Code)
-		assert.NotEqual(t, rc008, finding.Code)
-	}
+	assert.Equal(t, []Finding{
+		{Code: rc002, Severity: "error", Path: "agents/same.md", Message: "same can read scripts/call.sh and execute constrained command scripts/call.sh *", keys: []string{"edit", "scripts/call.sh", "bash", "scripts/call.sh *"}},
+	}, result.Findings)
 }
 
 func TestLintReasoningEffortXHighError(t *testing.T) {
@@ -206,17 +206,11 @@ same
 	result, err := Lint(runtimeRoot, new(config.Config))
 	require.NoError(t, err)
 
-	foundUnsuppressed := false
-
-	for _, finding := range result.Findings {
-		if finding.Code == rc001 && strings.Contains(finding.Message, "open-risk.sh") {
-			foundUnsuppressed = true
-		}
-
-		assert.False(t, finding.Code == rc001 && strings.Contains(finding.Message, "allowed-risk.sh"))
-	}
-
-	assert.True(t, foundUnsuppressed)
+	assert.Equal(t, []Finding{
+		{Code: rc001, Severity: "error", Path: "agents/same.md", Message: "same can edit scripts/open-risk.sh and execute scripts/open-risk.sh *", keys: []string{"edit", "scripts/open-risk.sh", "bash", "scripts/open-risk.sh *"}},
+		{Code: rc002, Severity: "error", Path: "agents/same.md", Message: "same can read scripts/allowed-risk.sh and execute constrained command scripts/allowed-risk.sh *", keys: []string{"edit", "scripts/allowed-risk.sh", "bash", "scripts/allowed-risk.sh *"}},
+		{Code: rc002, Severity: "error", Path: "agents/same.md", Message: "same can read scripts/open-risk.sh and execute constrained command scripts/open-risk.sh *", keys: []string{"edit", "scripts/open-risk.sh", "bash", "scripts/open-risk.sh *"}},
+	}, result.Findings)
 }
 
 func TestLintReportsBadSuppressions(t *testing.T) {
