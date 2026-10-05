@@ -19,8 +19,9 @@ import (
 )
 
 type sandboxedFileSystem struct {
-	mu   sync.Mutex
-	root *os.Root
+	mu       sync.Mutex
+	root     *os.Root
+	spillRel string
 }
 
 type readResult struct {
@@ -79,8 +80,8 @@ func (sfs *sandboxedFileSystem) ReadResult(filename string, offset int) ToolResu
 		return TextToolResult("offset must be greater than or equal to 1")
 	}
 
-	if isDeniedEnvPath(filename) {
-		return TextToolResult(deniedEnvAccessMessage(filename))
+	if denied := sfs.deniedPath(filename); denied != "" {
+		return TextToolResult(denied)
 	}
 
 	name, err := normalizeRootName(sfs.root, filename)
@@ -244,8 +245,8 @@ func previewApplyPatchLocked(sfs *sandboxedFileSystem, patchText string) (previe
 			return applyPatchPreview{}, "apply_patch verification failed: " + err.Error()
 		}
 
-		if isDeniedEnvPath(cleanPath) {
-			return applyPatchPreview{}, "apply_patch verification failed: " + deniedEnvAccessMessage(cleanPath)
+		if denied := sfs.deniedPath(cleanPath); denied != "" {
+			return applyPatchPreview{}, "apply_patch verification failed: " + denied
 		}
 
 		switch hunk.typ {
@@ -284,8 +285,8 @@ func previewApplyPatchLocked(sfs *sandboxedFileSystem, patchText string) (previe
 					return applyPatchPreview{}, "apply_patch verification failed: " + err.Error()
 				}
 
-				if isDeniedEnvPath(movePath) {
-					return applyPatchPreview{}, "apply_patch verification failed: " + deniedEnvAccessMessage(movePath)
+				if denied := sfs.deniedPath(movePath); denied != "" {
+					return applyPatchPreview{}, "apply_patch verification failed: " + denied
 				}
 			}
 
@@ -755,6 +756,9 @@ func (sfs *sandboxedFileSystem) Glob(ctx context.Context, pattern, path string) 
 	searchRoot := sfs.root
 
 	hostRoot := sfs.root.Name()
+	if denied := sfs.deniedPath(searchPath); denied != "" {
+		return denied
+	}
 
 	if searchPath != "" {
 		var err error
@@ -813,7 +817,7 @@ func (sfs *sandboxedFileSystem) Glob(ctx context.Context, pattern, path string) 
 
 	results := make([]globMatch, 0, len(matches))
 	for _, match := range matches {
-		if isDeniedEnvPath(match) {
+		if sfs.deniedPath(filepath.Join(hostRoot, match)) != "" {
 			continue
 		}
 
@@ -894,7 +898,7 @@ func (sfs *sandboxedFileSystem) Grep(ctx context.Context, pattern, searchPath, i
 	if len(files) == 1 && files[0] == "." {
 		var errText string
 
-		files, errText = allowedRipgrepFiles(ctx, target.hostRoot, include)
+		files, errText = sfs.allowedRipgrepFiles(ctx, target.hostRoot, include)
 		if errText != "" {
 			return errText
 		}
@@ -919,6 +923,18 @@ func (sfs *sandboxedFileSystem) Grep(ctx context.Context, pattern, searchPath, i
 	}
 
 	return formatGrepOutput(matches, partial)
+}
+
+func (sfs *sandboxedFileSystem) deniedPath(name string) string {
+	if isDeniedEnvPath(name) {
+		return deniedEnvAccessMessage(name)
+	}
+
+	if isExecuteSpillPath(sfs.root, sfs.spillRel, name) {
+		return deniedSpillAccess
+	}
+
+	return ""
 }
 
 func normalizeRootName(root *os.Root, name string) (string, error) {
@@ -970,8 +986,8 @@ func (sfs *sandboxedFileSystem) resolveGrepTarget(searchPath string) (grepTarget
 		return grepTarget{}, err
 	}
 
-	if isDeniedEnvPath(searchPath) {
-		return grepTarget{}, errors.New(deniedEnvAccessMessage(searchPath))
+	if denied := sfs.deniedPath(searchPath); denied != "" {
+		return grepTarget{}, errors.New(denied)
 	}
 
 	if err := rejectSymlink(sfs, searchPath); err != nil {
@@ -1016,7 +1032,7 @@ func (sfs *sandboxedFileSystem) resolveGrepTarget(searchPath string) (grepTarget
 	return target, nil
 }
 
-func allowedRipgrepFiles(ctx context.Context, hostRoot, include string) (files []string, errText string) {
+func (sfs *sandboxedFileSystem) allowedRipgrepFiles(ctx context.Context, hostRoot, include string) (files []string, errText string) {
 	args := []string{"--no-config", "--files", "--hidden", "--no-follow", "--path-separator=/", "--glob=!.git/*"}
 	if include != "" {
 		args = append(args, "--glob="+include)
@@ -1053,7 +1069,7 @@ func allowedRipgrepFiles(ctx context.Context, hostRoot, include string) (files [
 
 	allowed := make([]string, 0, len(listed))
 	for _, file := range listed {
-		if isDeniedEnvPath(file) {
+		if sfs.deniedPath(filepath.Join(hostRoot, file)) != "" {
 			continue
 		}
 

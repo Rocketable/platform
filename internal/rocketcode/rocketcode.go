@@ -359,7 +359,7 @@ func NewWithModelResolver(
 	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, string(config.ReasoningEffort)))
 	agentForTools := &activeAgent
 	activeAgent.Permission = shellTemp.effectivePermissions(activeAgent.Permission)
-	baseTools := newSandboxedTools(root, shellTemp, shellEnv, config.ShellCommand)
+	baseTools := newSandboxedTools(root, spillRel, shellTemp, shellEnv, config.ShellCommand)
 
 	customTools, err := customLooperTools(config.CustomTools, baseTools)
 	if err != nil {
@@ -434,7 +434,6 @@ func NewWithModelResolver(
 		expandInputPrompts:     config.ExpandPromptShellCommands.InputPrompts,
 		promptExpansion:        promptExpansion,
 		spillRel:               spillRel,
-		sandboxRead:            baseTools["read"],
 	}
 
 	if config.Diagnostics {

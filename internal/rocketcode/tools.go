@@ -83,9 +83,10 @@ type webFetchToolParams struct {
 	TimeoutSecond int    `json:"timeout_s"`
 }
 
-func newSandboxedTools(root *os.Root, shellTemp shellTempConfig, shellEnv []string, shellCommand ShellCommandFunc) map[string]looperTool {
-	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
+func newSandboxedTools(root *os.Root, spillRel string, shellTemp shellTempConfig, shellEnv []string, shellCommand ShellCommandFunc) map[string]looperTool {
+	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root, spillRel: spillRel}
 	sss := newSandboxedShellSystem(root, &shellTemp, shellEnv, shellCommand)
+	sss.spillRel = spillRel
 
 	return makeSandboxedTools(sfs, sss)
 }
@@ -147,7 +148,7 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 	maps.Copy(tools, scoped.mcpToolsFor(agent, codeHosts))
 
 	for name := range tools {
-		if name == executeToolName {
+		if name == executeToolName || name == loadExecuteResultToolName {
 			// Code-mode tools gate inclusion themselves; nested calls enforce real permissions.
 			continue
 		}
@@ -175,7 +176,6 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 
 func (f *toolFactory) configureSpill(loop *looper) {
 	loop.spillRel = f.spillRel
-	loop.sandboxRead = f.baseTools["read"]
 	loop.promptExpansion = f.promptExpansion
 }
 

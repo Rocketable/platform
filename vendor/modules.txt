@@ -648,7 +648,10 @@ modernc.org/sqlite/lib
 modernc.org/sqlite/vtab
 # mvdan.cc/sh/v3 v3.14.1
 ## explicit; go 1.26.0
+mvdan.cc/sh/v3/expand
 mvdan.cc/sh/v3/fileutil
+mvdan.cc/sh/v3/internal
+mvdan.cc/sh/v3/pattern
 mvdan.cc/sh/v3/syntax
 # sigs.k8s.io/yaml v1.6.0
 ## explicit; go 1.22

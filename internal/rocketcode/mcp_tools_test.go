@@ -66,6 +66,20 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 
 	model, hosts := factory.assembleTools(agent)
 	require.Contains(t, model, executeToolName)
+	require.Contains(t, model, loadExecuteResultToolName)
+	require.NotContains(t, hosts, loadExecuteResultToolName)
+	loader := model[loadExecuteResultToolName].Definition
+	require.True(t, loader.Strict.Value)
+	require.Equal(t, false, loader.Parameters["additionalProperties"])
+	require.Equal(t, []string{"limit", "line_numbers", "result_id", "start_line"}, loader.Parameters["required"])
+	propsLoader := loader.Parameters["properties"].(map[string]any)
+	require.Len(t, propsLoader, 4)
+	require.Contains(t, loader.Description.Value, "omitted tail cannot be fetched")
+
+	for _, entry := range buildCodeModeSearchIndex(hosts, nil) {
+		require.NotEqual(t, loadExecuteResultToolName, entry.item.Path)
+	}
+
 	assert.NotContains(t, model, "read")
 	assert.NotContains(t, model, "bash")
 	assert.Contains(t, hosts, "read")
@@ -144,7 +158,7 @@ func TestExecuteAvailableWithHostToolsOnly(t *testing.T) {
 	agent := &Agent{Permission: permissions}
 	model, hosts := factory.assembleTools(agent)
 	require.Contains(t, model, executeToolName)
-	require.Len(t, model, 1) // execute only among tools when only read grant (no skill/task/websearch without grants)
+	require.Len(t, model, 2) // Execute and loader; no skill/task/websearch without grants.
 	// websearch may appear if base has it and hasActionableRule - websearch needs grant
 	assert.NotContains(t, model, "read")
 	assert.Contains(t, hosts, "read")
@@ -323,6 +337,28 @@ func TestCodeModeHostsSurviveModelWithoutHosts(t *testing.T) {
 	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return read(filePath=\"a.txt\")\n"}`), nil, emptyToolCallMetadata())
 	require.NoError(t, err)
 	assert.Contains(t, result.Output, "hello")
+
+	full := strings.Repeat("line\n", 2100)
+	require.NoError(t, root.WriteFile("large.txt", []byte(full), 0o600))
+	looper.promptExpansion = promptExpansionEnvironment{root: root}
+	looper.spillRel = defaultSpillRel
+	looper.restoreTurnExecuteResults("turn")
+	t.Cleanup(looper.deleteTurnExecuteResults)
+
+	result, err = run.Call(ctx, json.RawMessage(`{"code":"def main():\n    text = read(filePath=\"large.txt\")\n    if \"2100: line\" not in text:\n        fail(\"host output clipped\")\n    return \"full host content\"\n"}`), nil, emptyToolCallMetadata())
+	require.NoError(t, err)
+	require.Equal(t, "full host content", result.Output)
+	require.Empty(t, looper.spillResults)
+
+	for _, code := range []string{"def main():\n    return read(filePath=\"large.txt\")\n", "def main():\n    return \"line\\n\" * 2100\n"} {
+		raw, err := json.Marshal(executeParams{Code: code})
+		require.NoError(t, err)
+		result, err = run.Call(ctx, raw, nil, emptyToolCallMetadata())
+		require.NoError(t, err)
+		require.Contains(t, result.Output, "load_execute_result")
+	}
+
+	require.Len(t, looper.spillResults, 2)
 }
 
 func TestExecuteBashOutputSurvivesContainers(t *testing.T) {
@@ -570,7 +606,7 @@ func TestExecuteAllowServerWildcard(t *testing.T) {
 	require.NoError(t, permissions.Allow("mcp", "demo.*"))
 
 	tools := (&toolFactory{mcpRegistry: reg}).mcpToolsFor(&Agent{Permission: permissions}, nil)
-	require.Len(t, tools, 1)
+	require.Len(t, tools, 2)
 	assert.Equal(t, executeToolName, tools[executeToolName].Definition.Name)
 	assert.Equal(t, []string{"code_mode_approve"}, tools[executeToolName].VisibilitySubjects)
 
@@ -603,6 +639,113 @@ func TestExecuteExactToolGrant(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, decision.review)
 	require.Equal(t, "rocketclaw", decision.review.Permission)
+}
+
+func TestLoadExecuteResultDispatchWithoutRead(t *testing.T) {
+	root, err := os.OpenRoot(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	full := strings.Repeat("line\n", 2100)
+	url := startRocketCodeMCPHTTPServer(t, func(server *mcp.Server) {
+		mcp.AddTool(server, &mcp.Tool{Name: "output"}, func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: full}}}, nil, nil
+		})
+	})
+	reg, err := mcpclient.New(root.Name(), map[string]mcpclient.ServerConfig{"demo": {URL: url}})
+	require.NoError(t, err)
+	permissions := parsePermissionYAML(t, "mcp: {'demo.*': allow}\nrocketclaw: {'*': auto}")
+	factory := &toolFactory{mcpRegistry: reg, baseTools: makeSandboxedTools(&sandboxedFileSystem{root: root}, nil), spillRel: defaultSpillRel, promptExpansion: promptExpansionEnvironment{root: root}}
+	loop := testLooper(mockResponses())
+	loop.agent = Agent{Name: "main", Permission: permissions}
+	loop.Permissions = permissions
+	loop.Tools, loop.CodeModeHosts = factory.assembleTools(&loop.agent)
+	factory.configureSpill(loop)
+	loop.restoreTurnExecuteResults("turn-1")
+	t.Cleanup(loop.deleteTurnExecuteResults)
+
+	reviewer := permissionReviewerWith(permissionReviewDecision{Outcome: permissionReviewOutcomeDeny})
+	loop.PermissionReviewer = reviewer
+	loop.AutoApprovePermissions = true
+
+	results, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", executeToolName, `{"code":"def main():\n    text = demo_output()\n    if len(text.splitlines()) != 2100:\n        fail(\"host output clipped\")\n    return text\n"}`)}), nil, nil)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Contains(t, results[0].Result.Output, "load_execute_result")
+	_, footer, ok := strings.Cut(results[0].Result.Output, "result_id=\"")
+	require.True(t, ok)
+	id, _, ok := strings.Cut(footer, "\"")
+	require.True(t, ok)
+
+	pageArgs := fmt.Sprintf(`{"result_id":%q,"start_line":2001,"limit":10,"line_numbers":true}`, id)
+	loop.Diagnostics = true
+
+	for range 2 {
+		output := make(chan ChatResponse, 10)
+		results, _, err = loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("page", []responses.ResponseFunctionToolCall{testFunctionCall("page", "page-call", "load_execute_result", pageArgs)}), nil, output)
+		require.NoError(t, err)
+
+		var want strings.Builder
+		for i := 2001; i <= 2010; i++ {
+			fmt.Fprintf(&want, "%d: line\n", i)
+		}
+
+		want.WriteString("\n[next_start_line=2011]\n")
+		require.Equal(t, want.String(), results[0].Result.Output)
+		close(output)
+
+		for _, response := range collectResponses(output) {
+			if response.Tool != nil {
+				require.Equal(t, loadExecuteResultToolName, response.Tool.Name)
+			}
+		}
+	}
+
+	require.Equal(t, permissions, loop.Permissions)
+	require.Empty(t, loop.CodeModeHosts)
+	require.Empty(t, reviewedRequests(reviewer))
+	require.Len(t, loop.spillResults, 1)
+
+	read := factory.baseTools["read"]
+	decision, err := loop.permissionDecision("read", &read, json.RawMessage(`{"filePath":"secret.txt"}`))
+	require.NoError(t, err)
+	require.True(t, decision.denied)
+
+	for _, args := range []string{`{"result_id":"missing"}`, `{"result_id":"../../etc/passwd"}`, `{"result_id":1}`} {
+		results, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("invalid", []responses.ResponseFunctionToolCall{testFunctionCall("invalid", "invalid-call", loadExecuteResultToolName, args)}), nil, nil)
+		require.NoError(t, err)
+		require.Contains(t, results[0].Result.Output, "check permission")
+	}
+
+	require.Empty(t, reviewedRequests(reviewer))
+
+	loader := loop.Tools[loadExecuteResultToolName]
+	sibling := testLooper(mockResponses())
+	factory.configureSpill(sibling)
+	sibling.restoreTurnExecuteResults("sibling")
+	t.Cleanup(sibling.deleteTurnExecuteResults)
+	ctx := withToolCallContext(t.Context(), sibling, nil, "")
+	_, err = loader.Call(ctx, json.RawMessage(pageArgs), nil, emptyToolCallMetadata())
+	require.EqualError(t, err, "unknown or expired execute result")
+	_, err = sibling.saveExecuteResult(strings.Repeat("own\n", 2100))
+	require.NoError(t, err)
+
+	for siblingID := range sibling.spillResults {
+		raw, err := json.Marshal(loadExecuteResultParams{ResultID: siblingID, Limit: 1})
+		require.NoError(t, err)
+		page, err := loader.Call(ctx, raw, nil, emptyToolCallMetadata())
+		require.NoError(t, err)
+		require.Equal(t, "own\n\n[next_start_line=2]\n", page.Output)
+	}
+
+	files, err := root.Open(defaultSpillRel + "/turn-1")
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, files.Close()) }()
+
+	names, err := files.Readdirnames(-1)
+	require.NoError(t, err)
+	require.Len(t, names, 1)
 }
 
 func TestExecuteWholeScriptApproval(t *testing.T) {
@@ -804,10 +947,12 @@ func TestToolsForIncludesExecuteWhenConfigured(t *testing.T) {
 
 	tools := factory.toolsFor(&Agent{Permission: permissions})
 	require.Contains(t, tools, executeToolName)
+	require.Contains(t, tools, loadExecuteResultToolName)
 	assert.NotContains(t, tools, "read")
 
 	tools = factory.toolsFor(&Agent{})
 	require.NotContains(t, tools, executeToolName)
+	require.NotContains(t, tools, loadExecuteResultToolName)
 }
 
 func startRocketCodeMCPHTTPServer(t *testing.T, register func(*mcp.Server)) string {

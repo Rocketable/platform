@@ -283,6 +283,16 @@ RocketClaw is configured with `rocketclaw.json` in the working directory. Runtim
 
 Generated runtime state should not be treated as source code.
 
+Execute keeps full host-tool results inside Starlark, but clips oversized returns to a 2000-line / 50 KiB head. Its footer supplies an opaque `result_id`, not a file path. Call `load_execute_result` at the top level (not inside Starlark), for example:
+
+```json
+{"result_id":"<ID from Execute>","start_line":2001,"limit":10,"line_numbers":true}
+```
+
+Pages are bounded to 2000 source lines and 50 KiB including numbering and footer. `start_line` is 1-based; 0 means 1. `limit=0` means 2000; larger limits are capped at 2000. Negative values are invalid. Follow `next_start_line` until `EOF`. A line too large for a fresh page returns a UTF-8-safe prefix with an omission marker and advances to the next line; the omitted tail cannot be fetched with this line-only tool, but full storage stays intact. Loading needs no filesystem read grant and creates no new spill. IDs belong only to the current RocketCode Turn and expire on terminal success, error, or interrupt. Restarting the same unfinished journaled turn preserves its original IDs without changing filesystem permissions. `Config.SpillDir` placement is unchanged.
+
+The loader reads only regular files and rejects symlinks in the stored path. Workspace read/edit tools reject the configured spill directory, and file searches exclude its contents. Bash rejects explicit spill paths in arguments, redirections, and `workdir`, even with broad allow rules. These checks do not isolate Bash from the filesystem: scripts and variables can construct paths indirectly. `load_execute_result` is reserved; custom tools cannot register that name.
+
 Fresh RocketClaw stores apply embedded SQL migrations on first open. Startup does not import SQLite and does not migrate historical SQLite formats.
 Concurrent startups serialize schema upgrades on one database connection. Cancellation stops migration work; each migration commits its schema changes and ledger entry together, so earlier successful migrations survive a later failure.
 Only one RocketClaw process runs against a database at a time. Additional processes
