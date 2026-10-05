@@ -722,12 +722,7 @@ func resetRuntimeDirectory(target string, logger *slog.Logger, preserveOverlays 
 	}
 
 	for _, entry := range entries {
-		if _, ok := preserved[entry.Name()]; ok {
-			logger.Debug("preserved rocketclaw target entry", "path", filepath.Join(target, entry.Name()))
-			continue
-		}
-
-		if strings.HasPrefix(entry.Name(), ".auth.json-") {
+		if _, ok := preserved[entry.Name()]; ok || strings.HasPrefix(entry.Name(), ".auth.json-") {
 			logger.Debug("preserved rocketclaw target entry", "path", filepath.Join(target, entry.Name()))
 			continue
 		}
