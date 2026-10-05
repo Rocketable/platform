@@ -98,7 +98,7 @@ func TestBridgeSwitchAgentTrimsAndStoresAgent(t *testing.T) {
 
 func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 	bus := newTestBus()
-	bridge := &Bridge{bus: bus, config: Config{ConversationID: "web-conversation", SessionService: newTestSessionService(t)}, inputOpen: true, requestCh: make(chan bridgeRequest, 1)}
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), bus: bus, config: Config{ConversationID: "web-conversation", SessionService: newTestSessionService(t)}, inputOpen: true, requestCh: make(chan bridgeRequest, 1)}
 	content := protocol.InboundContent{Text: "same text"}
 	initial := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &content, true)
 	initial.Metadata["web_message_id"] = "initial"
@@ -181,9 +181,9 @@ func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
 
 	bus := newTestBus()
-	bridge := &Bridge{bus: bus, config: Config{ConversationID: conversationID, SessionService: store}, inputOpen: true, requestCh: make(chan bridgeRequest, 1)}
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), bus: bus, config: Config{ConversationID: conversationID, SessionService: store}, inputOpen: true, requestCh: make(chan bridgeRequest, 1)}
 
-	manager := &threadBridgeManager{store: store, bridges: map[string]directBridge{conversationID: bridge}}
+	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{conversationID: bridge}}
 	for i, id := range []string{"queue-first", "queue-second"} {
 		require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{
 			ConversationID: conversationID, Source: protocol.SourceWeb, Kind: protocol.InboundKindEnqueue,
@@ -1242,7 +1242,10 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 	defer bus.Close()
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	bridge := NewConversation(&config.Config{Workspace: workspace, Models: map[string]string{"main": "main-model", "helper": "child/helper-model", "guardrail": "guard/guardrail-model"}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, Providers: map[string]config.OpenAIConfig{"child": {APIBaseURL: childServer.URL}, "guard": {APIBaseURL: guardServer.URL}}}, bus, &Config{ConversationID: conversationID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
+
+	var logs lockedBuffer
+
+	bridge := NewConversation(&config.Config{Workspace: workspace, Models: map[string]string{"main": "main-model", "helper": "child/helper-model", "guardrail": "guard/guardrail-model"}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, Providers: map[string]config.OpenAIConfig{"child": {APIBaseURL: childServer.URL}, "guard": {APIBaseURL: guardServer.URL}}}, bus, &Config{ConversationID: conversationID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.NewJSONHandler(&logs, nil)))
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "hello", true)
 	inbound.ConversationID = conversationID
 
@@ -1267,6 +1270,23 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 	require.NotNil(t, outbound)
 	require.Equal(t, "persistent done", outbound.Text)
 	require.NoError(t, group.Wait())
+
+	decoder := json.NewDecoder(strings.NewReader(logs.String()))
+	for decoder.More() {
+		var event struct {
+			Event string `json:"event"`
+			Kind  string `json:"kind"`
+		}
+		require.NoError(t, decoder.Decode(&event))
+
+		if event.Event == "first_response_item" {
+			assert.NotEqual(t, rocketcode.ChatResponseAssistantMessage, event.Kind)
+		}
+	}
+
+	assert.Contains(t, logs.String(), `"event":"first_assistant_text"`)
+	assert.Contains(t, logs.String(), `"event":"operation_snapshot"`)
+	assert.NotContains(t, logs.String(), "delegated prompt")
 	require.Equal(t, 5, requests)
 
 	entries, err := service.ObserveEntries(context.Background(), conversationID)
@@ -2016,7 +2036,7 @@ func TestInboundWorkflowReadsWebCommands(t *testing.T) {
 }
 
 func TestBridgeQueuesWebWorkflowInsteadOfSteering(t *testing.T) {
-	bridge := &Bridge{stopCh: make(chan struct{}), inputOpen: true, requestCh: make(chan bridgeRequest, 1), config: Config{SessionService: newTestSessionService(t)}}
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), stopCh: make(chan struct{}), inputOpen: true, requestCh: make(chan bridgeRequest, 1), config: Config{SessionService: newTestSessionService(t)}}
 
 	workflowInbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$workflow audit src"}, true)
 	require.NoError(t, bridge.enqueue(t.Context(), &bridgeRequest{inbound: workflowInbound}, "test"))
@@ -2676,6 +2696,7 @@ func TestBridgeDeletesScheduledMessageAfterSuccessfulHandling(t *testing.T) {
 
 func TestSubmitEnqueuedItemPreservesSource(t *testing.T) {
 	bridge := &Bridge{
+		log:       slog.New(slog.DiscardHandler),
 		requestCh: make(chan bridgeRequest, 1),
 		stopCh:    make(chan struct{}),
 		config:    Config{ConversationID: protocol.SlackThreadConversationID("C123", "111.0"), SessionService: newTestSessionService(t)},
@@ -3165,9 +3186,10 @@ func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
 	_, err = client.Responses.New(context.Background(), params)
 	require.Error(t, err)
 	assert.Contains(t, logs.String(), "provider request failed")
-	assert.Contains(t, logs.String(), `"path":"/responses"`)
 	assert.Contains(t, logs.String(), `"status":429`)
-	assert.Contains(t, logs.String(), `"error":"provider returned status 429"`)
+	assert.Contains(t, logs.String(), `"event":"provider_sdk_attempt"`)
+	assert.Contains(t, logs.String(), `"outcome":"http_error"`)
+	assert.Contains(t, logs.String(), `"duration_ms":`)
 	assert.Contains(t, logs.String(), `"conversation_id":"main"`)
 	assert.Contains(t, logs.String(), `"turn_id":"turn-1"`)
 	assert.Contains(t, logs.String(), `"agent":"main"`)
@@ -3188,7 +3210,9 @@ func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
 
 	_, _ = client.Responses.New(context.Background(), params)
 
-	assert.NotContains(t, logs.String(), "provider request completed")
+	assert.Contains(t, logs.String(), "provider request completed")
+	assert.Contains(t, logs.String(), `"status":200`)
+	assert.Contains(t, logs.String(), `"outcome":"success"`)
 }
 
 func TestAskUserQuestionToolAllowsEmptyOptions(t *testing.T) {
@@ -3528,7 +3552,7 @@ Request: $ARGUMENTS
 				if kind == protocol.InboundKindEnqueue {
 					item := protocol.ThreadQueueItem{ID: "queued", ConversationID: conversationID, Source: source, Message: invocation, Principal: "Alice", Content: protocol.InboundContent{Text: invocation, TextAttachments: []string{"attachment-only argument"}}}
 					require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
-					manager := &threadBridgeManager{store: service, bridges: map[string]directBridge{conversationID: bridge}}
+					manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: service, bridges: map[string]directBridge{conversationID: bridge}}
 					require.NoError(t, service.PutThreadQueueItem("removed", &item))
 					removed, err := manager.deleteQueueItem(t.Context(), conversationID, "removed")
 					require.NoError(t, err)
@@ -3917,7 +3941,10 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 
 	bus := newTestBus()
 	t.Cleanup(bus.Close)
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: server.URL}}}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: bus, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 1), inputOpen: true}
+
+	var logs lockedBuffer
+
+	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: server.URL}}}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: bus, log: slog.New(slog.NewJSONHandler(&logs, nil)), requestCh: make(chan bridgeRequest, 1), inputOpen: true}
 	queued := protocol.ThreadQueueItem{ID: "queued-input", ConversationID: conversationID, Source: protocol.SourceWeb, Kind: protocol.InboundKindEnqueue, Message: "hello", Principal: "Alice"}
 	require.NoError(t, service.PutThreadQueueItem(queued.ID, &queued))
 	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &queued))
@@ -3993,6 +4020,14 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 	require.True(t, consumedSteer)
 	require.True(t, assistant)
 	require.NoError(t, group.Wait())
+
+	for _, event := range []string{"queue_admitted", "queue_started", "steer_admitted", "steer_injected", "first_response_item", "first_assistant_text", "generation_finished", "delivery_acknowledged"} {
+		require.Contains(t, logs.String(), `"event":"`+event+`"`)
+	}
+
+	require.NotContains(t, logs.String(), "also explain")
+	require.Less(t, strings.Index(logs.String(), `"event":"first_response_item"`), strings.Index(logs.String(), `"event":"first_assistant_text"`))
+	require.Less(t, strings.Index(logs.String(), `"event":"generation_finished"`), strings.Index(logs.String(), `"event":"delivery_acknowledged"`))
 	require.Equal(t, "reviewer", bridge.pendingOutput.Agent)
 	require.Equal(t, "work/model-b", bridge.pendingOutput.Model)
 	require.Equal(t, new("low"), bridge.pendingOutput.ReasoningEffort)

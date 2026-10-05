@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"log/slog"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -511,7 +513,7 @@ func TestTranscriptObservationReportsUnavailableStorage(t *testing.T) {
 	_, err = s.OriginPairs(t.Context(), "main")
 	require.ErrorContains(t, err, "read origin metadata")
 
-	journal := conversationJournal{store: s, conversationID: "main"}
+	journal := conversationJournal{store: s, conversationID: "main", log: slog.New(slog.DiscardHandler)}
 	require.ErrorContains(t, journal.SaveTrace(t.Context(), "turn", nil), "save turn trace")
 	require.ErrorContains(t, journal.Save(t.Context(), "turn", json.RawMessage(`{}`)), "save turn step")
 	_, _, err = journal.Load(t.Context(), "turn")
@@ -532,7 +534,10 @@ func TestTranscriptObservationReportsUnavailableStorage(t *testing.T) {
 func TestActiveTurnOutputTracePersistence(t *testing.T) {
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	journal := conversationJournal{store: s, conversationID: "main"}
+
+	var logs lockedBuffer
+
+	journal := conversationJournal{store: s, conversationID: "main", log: slog.New(slog.NewJSONHandler(&logs, nil))}
 	checkpoint := &testCheckpoint{TurnID: "turn-1", ConversationKey: "main", ReplayInput: testSessionEntry("hello", "").ReplayInput,
 		OutputTrace: []json.RawMessage{json.RawMessage(`{"type":"reasoning","text":"PRIVATE"}`)}}
 	require.NoError(t, upsertTestTurn(ctx, s, checkpoint))
@@ -546,6 +551,7 @@ func TestActiveTurnOutputTracePersistence(t *testing.T) {
 
 	trace := append(slices.Clone(checkpoint.OutputTrace), json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"response-1/item-1","kind":"text","state":"working","text":"hello","agent":"main","model":"model"}}`))
 	require.NoError(t, journal.SaveTrace(ctx, checkpoint.TurnID+"/retry/1", trace), "retry turns report progress on the request row")
+	require.NotContains(t, logs.String(), `"event":"operation_snapshot"`, "text is not a tool operation")
 
 	change, err, ok := next()
 	require.True(t, ok)
@@ -583,6 +589,20 @@ func TestActiveTurnOutputTracePersistence(t *testing.T) {
 	entries, err = s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
 	require.Empty(t, entries, "trace-only writes cannot recreate a cleared row")
+
+	trace = []json.RawMessage{
+		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"call-a","kind":"tool","state":"working","text":"private-arguments"}}`),
+		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"call-b","parent_id":"call-a","kind":"tool","state":"completed","text":"private-result"}}`),
+	}
+	require.NoError(t, journal.SaveTrace(ctx, checkpoint.TurnID, trace))
+	require.Equal(t, 2, strings.Count(logs.String(), `"event":"operation_snapshot"`))
+
+	for _, field := range []string{`"operation_id":"call-a"`, `"operation_id":"call-b"`, `"state":"working"`, `"state":"completed"`, `"boundary":"journal_observation"`, `"observation_elapsed_ms":`} {
+		require.Contains(t, logs.String(), field)
+	}
+
+	require.NotContains(t, logs.String(), "private-")
+	require.NotContains(t, logs.String(), `"duration_ms":`)
 }
 
 // testCheckpoint seeds a running turn as a taken request records it: the row
@@ -619,7 +639,7 @@ func upsertTestTurn(ctx context.Context, s *SessionService, c *testCheckpoint) e
 		return fmt.Errorf("seed test turn: %w", err)
 	}
 
-	journal := conversationJournal{store: s, conversationID: c.ConversationKey}
+	journal := conversationJournal{store: s, conversationID: c.ConversationKey, log: slog.New(slog.DiscardHandler)}
 	if err := journal.Save(ctx, c.TurnID, data); err != nil {
 		return fmt.Errorf("seed test turn: %w", err)
 	}

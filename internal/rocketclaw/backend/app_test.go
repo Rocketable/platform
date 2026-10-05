@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"cirello.io/pglock"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -153,6 +154,23 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			}, nil
 		},
 	}
+	// A canceled workspace-lock wait must also join the pre-lock health reporter.
+	seed, err = NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	client, err := pglock.UnsafeNew(seed.db, pglock.WithCustomTable(runLockTable), pglock.WithHeartbeatFrequency(0))
+	require.NoError(t, err)
+	require.NoError(t, client.TryCreateTable())
+	lock, err := client.Acquire(runLockName, pglock.FailIfLocked())
+	require.NoError(t, err)
+	ctxLock, cancelLock := context.WithTimeout(t.Context(), time.Second)
+	err = Run(ctxLock, cfg, configPath, slog.New(slog.DiscardHandler), assembler)
+
+	cancelLock()
+	require.ErrorIs(t, err, pglock.ErrNotAcquired)
+	require.Empty(t, assembler.AssembleCalls())
+	require.NoError(t, lock.Close())
+	require.NoError(t, seed.Stop())
+
 	require.ErrorIs(t, Run(ctx, cfg, configPath, slog.New(slog.DiscardHandler), assembler), ErrRestartRequested)
 	require.Equal(t, []string{"validated", "validated", "assembled", "slack started", "slack stopped", "extra stopped"}, order)
 

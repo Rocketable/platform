@@ -532,7 +532,7 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 	assert.Equal(t, protocol.SourceSlack, items[0].Source)
 	assert.Equal(t, reply, items[0].SlackReply)
 
-	bridge := &Bridge{requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{}), config: Config{ConversationID: conversationID, SessionService: store}}
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{}), config: Config{ConversationID: conversationID, SessionService: store}}
 	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &items[0]))
 	inbound := (<-bridge.requestCh).inbound
 	assert.Equal(t, "write tests\n\nSlack text file attachment data.csv:\na,b\n\nForwarded Slack thread:\noriginal author: original text", inbound.Text)
@@ -1945,7 +1945,7 @@ func seedActiveTurn(t *testing.T, service *SessionService, conversationID, turnI
 			Record *harness.SessionEntry `json:"record"`
 		}{record})
 		require.NoError(t, err)
-		require.NoError(t, conversationJournal{store: service, conversationID: conversationID}.Save(t.Context(), turnID, data))
+		require.NoError(t, conversationJournal{store: service, conversationID: conversationID, log: slog.New(slog.DiscardHandler)}.Save(t.Context(), turnID, data))
 	}
 }
 

@@ -11,11 +11,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -432,7 +434,7 @@ func AcquireDeviceToken(ctx context.Context, out io.Writer) (Token, error) {
 }
 
 // NewChatGPTClientIn creates an OpenAI client that sends Responses API requests to ChatGPT Codex using runtimeDir auth.
-func NewChatGPTClientIn(workspace, runtimeDir, provider string, opts ...option.RequestOption) (*openai.Client, error) {
+func NewChatGPTClientIn(workspace, runtimeDir, provider string, logger *slog.Logger, opts ...option.RequestOption) (*openai.Client, error) {
 	if _, err := LoadTokenIn(workspace, runtimeDir, provider); err != nil {
 		return nil, err
 	}
@@ -442,7 +444,7 @@ func NewChatGPTClientIn(workspace, runtimeDir, provider string, opts ...option.R
 	client := openai.NewClient(append([]option.RequestOption{
 		option.WithAPIKey(dummyAPIKey),
 		option.WithBaseURL(codexBaseURL),
-		option.WithHTTPClient(&http.Client{Transport: &transport{base: http.DefaultTransport, workspace: workspace, runtimeDir: runtimeDir, provider: provider, sessionID: sessionID}}),
+		option.WithHTTPClient(&http.Client{Transport: &transport{base: http.DefaultTransport, log: logger, workspace: workspace, runtimeDir: runtimeDir, provider: provider, sessionID: sessionID}}),
 		option.WithHeader("originator", originator),
 		option.WithHeader("User-Agent", codexUserAgent),
 	}, opts...)...)
@@ -452,6 +454,7 @@ func NewChatGPTClientIn(workspace, runtimeDir, provider string, opts ...option.R
 
 type transport struct {
 	base                            http.RoundTripper
+	log                             *slog.Logger
 	workspace, runtimeDir, provider string
 	mu                              sync.Mutex
 	sessionID                       string
@@ -520,9 +523,9 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	activeReq := cloned
 
-	resp, err := t.base.RoundTrip(cloned)
+	resp, err := t.roundTrip(cloned, "initial")
 	if err != nil {
-		return nil, fmt.Errorf("send OpenAI request: %w", err)
+		return nil, err
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized {
@@ -555,9 +558,9 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		retry.Body = retryBody
 		setCodexHeaders(retry, token, sessionID)
 
-		resp, err = t.base.RoundTrip(retry)
+		resp, err = t.roundTrip(retry, "authorization_retry")
 		if err != nil {
-			return nil, fmt.Errorf("send OpenAI request: %w", err)
+			return nil, err
 		}
 
 		activeReq = retry
@@ -596,6 +599,38 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	} else if codexCompact && resp.StatusCode == http.StatusOK && resp.Header.Get("Content-Type") == "" {
 		resp.Header.Set("Content-Type", "application/json")
+	}
+
+	return resp, nil
+}
+
+// roundTrip measures a physical HTTP attempt, before stream conversion or compaction.
+func (t *transport) roundTrip(req *http.Request, reason string) (*http.Response, error) {
+	startedAt := time.Now()
+	resp, err := t.base.RoundTrip(req)
+	duration := time.Since(startedAt)
+
+	status := 0
+	if resp != nil {
+		status = resp.StatusCode
+	}
+
+	outcome := "success"
+	if err != nil {
+		outcome = "transport_error"
+	} else if status < 200 || status >= 300 {
+		outcome = "http_error"
+	}
+
+	retryCount, _ := strconv.Atoi(req.Header.Get("X-Stainless-Retry-Count"))
+	t.log.Info("Codex HTTP attempt returned", "event", "provider_http_attempt", "boundary", "http_headers", "reason", reason, "retry_count", retryCount, "status", status, "outcome", outcome, "duration_ms", duration.Milliseconds(), "error_type", fmt.Sprintf("%T", err))
+
+	if err != nil {
+		if reason == "compaction" {
+			return resp, fmt.Errorf("send Codex compact request: %w", err)
+		}
+
+		return resp, fmt.Errorf("send OpenAI request: %w", err)
 	}
 
 	return resp, nil
@@ -987,9 +1022,9 @@ func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Req
 	retry.ContentLength = int64(len(data))
 	retry.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }
 
-	resp, err := t.base.RoundTrip(retry)
+	resp, err := t.roundTrip(retry, "compacted_retry")
 	if err != nil {
-		return nil, true, fmt.Errorf("send OpenAI request: %w", err)
+		return nil, true, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -1047,9 +1082,9 @@ func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (it
 	compactReq.ContentLength = int64(len(data))
 	compactReq.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }
 
-	compactResp, err := t.base.RoundTrip(compactReq)
+	compactResp, err := t.roundTrip(compactReq, "compaction")
 	if err != nil {
-		return nil, false, fmt.Errorf("send Codex compact request: %w", err)
+		return nil, false, err
 	}
 
 	defer func() { _ = compactResp.Body.Close() }()

@@ -743,7 +743,7 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 }
 
 func TestBridgeDrainSteersPreservesAcquiredContent(t *testing.T) {
-	bridge := &Bridge{inputOpen: true, requestCh: make(chan bridgeRequest, 2), config: Config{SessionService: newTestSessionService(t)}}
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), inputOpen: true, requestCh: make(chan bridgeRequest, 2), config: Config{SessionService: newTestSessionService(t)}}
 
 	for _, text := range []string{"first", "second"} {
 		inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$docs-helper " + text, TextAttachments: []string{"attachment text"}, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte(text)}}}, true)
@@ -778,8 +778,8 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 	store := newTestSessionService(t)
 	target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
 	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
-	bridge := &Bridge{bus: discardPublisher{}, config: Config{ConversationID: conversationID, SessionService: store}, inputOpen: true, requestCh: make(chan bridgeRequest, 2)}
-	manager := &threadBridgeManager{store: store, bridges: map[string]directBridge{conversationID: bridge}}
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), bus: discardPublisher{}, config: Config{ConversationID: conversationID, SessionService: store}, inputOpen: true, requestCh: make(chan bridgeRequest, 2)}
+	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{conversationID: bridge}}
 	active := &turnCompletion{done: make(chan struct{})}
 	bridge.activeCompletion = active
 
@@ -907,7 +907,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 	})
 
 	for _, inputOpen := range []bool{true, false} {
-		bridge = &Bridge{bus: discardPublisher{}, config: Config{ConversationID: conversationID, SessionService: store}, inputOpen: inputOpen, requestCh: make(chan bridgeRequest, 1)}
+		bridge = &Bridge{log: slog.New(slog.DiscardHandler), bus: discardPublisher{}, config: Config{ConversationID: conversationID, SessionService: store}, inputOpen: inputOpen, requestCh: make(chan bridgeRequest, 1)}
 
 		manager.bridges[conversationID] = bridge
 		for _, id := range []string{"before", "attachment", "after"} {
@@ -951,7 +951,7 @@ func TestRuntimeRunTurnCancelPublishesEmptyComplete(t *testing.T) {
 	conversationID := protocol.SlackThreadConversationID("C123", "111.0")
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
 
-	bridge := &Bridge{config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
 	runTestManager(t, manager)
 	rt := &Runtime{threads: manager, Sessions: store}
@@ -993,7 +993,7 @@ func TestRuntimeRunTurnRejectsUnrecordedConversationAndSyncDestination(t *testin
 	store := newTestSessionService(t)
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
 		cfg.SessionService = store
-		return &Bridge{config: cfg, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+		return &Bridge{log: slog.New(slog.DiscardHandler), config: cfg, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 	})
 	runTestManager(t, manager)
 	rt := &Runtime{threads: manager, Sessions: store}
@@ -1014,7 +1014,7 @@ func TestRuntimeStartGoalRecordsGoalAndQueuesKickoff(t *testing.T) {
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
 
 	cfg := &config.Config{Workspace: filepath.Join(t.TempDir(), "missing")}
-	bridge := &Bridge{config: Config{ConversationID: conversationID, Agent: "main", SessionService: store}, requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, Agent: "main", SessionService: store}, requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
 	manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
 	runTestManager(t, manager)
 	manager.bridges = map[string]directBridge{conversationID: bridge}
@@ -1058,7 +1058,7 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
 
-	bridge := &Bridge{config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{})}
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{})}
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
 	runTestManager(t, manager)
 	manager.bridges = map[string]directBridge{conversationID: bridge}
@@ -1100,8 +1100,12 @@ func TestRuntimeHeldQueueManualRelease(t *testing.T) {
 
 	const conversationID = "web-held"
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
-	bridge := &Bridge{config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{})}
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+
+	var logs lockedBuffer
+
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	bridge := &Bridge{log: logger, config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{})}
+	manager := newThreadBridgeManager(nil, store, logger, func(Config) directBridge { return bridge })
 	runTestManager(t, manager)
 	manager.bridges = map[string]directBridge{conversationID: bridge}
 	rt := &Runtime{threads: manager, Sessions: store}
@@ -1191,6 +1195,11 @@ func TestRuntimeHeldQueueManualRelease(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, promoted)
 	require.Equal(t, protocol.InboundKindSteer, (<-bridge.requestCh).inbound.Kind)
+	require.Contains(t, logs.String(), `"event":"queue_persisted"`)
+	require.Contains(t, logs.String(), `"event":"queue_removed"`)
+	require.Contains(t, logs.String(), `"event":"queue_promoted"`)
+	require.Contains(t, logs.String(), `"blocker":"active_or_queued_request"`)
+	require.NotContains(t, logs.String(), held.Message)
 }
 
 func TestAttachSlack(t *testing.T) {

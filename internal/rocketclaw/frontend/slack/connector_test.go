@@ -2778,6 +2778,10 @@ func TestAskUserQuestionCancelDeletesUnansweredQuestion(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
+
+	var logs bytes.Buffer
+
+	connector.log = slog.New(slog.NewJSONHandler(&logs, nil))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 
@@ -2804,6 +2808,11 @@ func TestAskUserQuestionCancelDeletesUnansweredQuestion(t *testing.T) {
 	_, stillPending := connector.questions["question-cancel"]
 	connector.mu.Unlock()
 	assert.False(t, stillPending)
+	assert.Contains(t, logs.String(), `"event":"question_wait_started"`)
+	assert.Contains(t, logs.String(), `"event":"question_wait_finished"`)
+	assert.Contains(t, logs.String(), `"answered":false`)
+	assert.Contains(t, logs.String(), `"duration_ms":`)
+	assert.NotContains(t, logs.String(), "Choose?")
 }
 
 // AE7: shutdown leaves a pending question open, and after a restart the same
@@ -3486,6 +3495,10 @@ func TestSendResponseDoesNotFailWhenAttachmentUploadFails(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
+
+	var logs bytes.Buffer
+
+	connector.log = slog.New(slog.NewJSONHandler(&logs, nil))
 	msg := protocol.NewOutboundMessage("test", "final payload")
 	msg.Complete = true
 	msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "D123", ThreadTS: "111.222"}
@@ -3495,6 +3508,13 @@ func TestSendResponseDoesNotFailWhenAttachmentUploadFails(t *testing.T) {
 	require.Len(t, posted, 1)
 	assert.Equal(t, "final payload", posted[0].Get("text"))
 	assert.Equal(t, "111.222", posted[0].Get("thread_ts"))
+	assert.Contains(t, logs.String(), `"event":"slack_text_delivery"`)
+	assert.Contains(t, logs.String(), `"outcome":"accepted"`)
+	assert.Contains(t, logs.String(), `"event":"slack_attachment_delivery"`)
+	assert.Contains(t, logs.String(), `"outcome":"failed"`)
+	assert.Contains(t, logs.String(), `"duration_ms":`)
+	assert.NotContains(t, logs.String(), "final payload")
+	assert.NotContains(t, logs.String(), "example-com.png")
 }
 
 func TestSendResponseCronjobKeepsRenderedTextWhenAttachmentUploadFails(t *testing.T) {
@@ -3615,12 +3635,27 @@ func TestSendResponseSilentCronDoesNotPost(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
+
+	var logs bytes.Buffer
+
+	connector.log = slog.New(slog.NewJSONHandler(&logs, nil))
 	msg := protocol.NewOutboundMessage("slack-thread:C123:111.0", "")
 	msg.Complete = true
 	msg.TurnID = "turn-1"
 	msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "planner", RanAt: "2000-01-02T03:04:05Z"}
 	msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.0", ThreadTS: "111.0"}
-	require.NoError(t, connector.SendResponse(context.Background(), msg))
+
+	for _, test := range []struct {
+		terminal protocol.Terminal
+		outcome  string
+	}{{"", "intentional_silence"}, {protocol.TerminalStopped, "stopped"}, {protocol.TerminalFailed, "generation_failed"}} {
+		logs.Reset()
+
+		msg.WorkflowTerminal = test.terminal
+		require.NoError(t, connector.SendResponse(context.Background(), msg))
+		assert.Contains(t, logs.String(), `"outcome":"`+test.outcome+`"`)
+		assert.NotContains(t, logs.String(), `"event":"slack_text_delivery"`)
+	}
 
 	assert.Empty(t, posted)
 	assert.Empty(t, updated)

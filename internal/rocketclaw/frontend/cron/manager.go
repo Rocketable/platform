@@ -299,7 +299,18 @@ func (m *Manager) RunOneOffCronjob(ctx context.Context, job *protocol.OneOffCron
 
 	runCtx := context.WithoutCancel(ctx)
 
+	startedAt := time.Now()
 	result, err := m.run.Run(runCtx, job.Agent, job.Prompt, raw)
+
+	outcome := "completed"
+	if err != nil {
+		outcome = "failed"
+	} else if result.ConversationID == "" {
+		outcome = "intentional_silence"
+	}
+
+	m.log.Info("one-off cronjob returned", "event", "cron_completed", "outcome", outcome, "conversation_id", raw.ConversationID, "destination_conversation_id", result.ConversationID, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
+
 	if err != nil {
 		return result, fmt.Errorf("run one-off cronjob: %w", err)
 	}
@@ -510,24 +521,30 @@ func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 	ranAt := startedAt.Format(time.RFC3339)
 	prompt := m.preparePrompt(definition.body)
 	log := m.log.With("file", definition.relativePath, "agent", definition.agent, "ran_at", ranAt)
-	log.Info("starting cronjob", "prompt_len", len(prompt))
 
 	progress := &backend.RawRunProgress{
 		ConversationID: cronTraceConversationID(cronTracePrefix, definition.relativePath, startedAt),
 		TextChannel:    definition.textChannel,
 		Cronjob:        &protocol.CronjobMessage{RelativePath: definition.relativePath, Agent: definition.agent, RanAt: ranAt},
 	}
+	log = log.With("conversation_id", progress.ConversationID)
+	log.Info("starting cronjob", "event", "cron_started", "prompt_len", len(prompt))
 
-	_, err := m.run.Run(context.WithoutCancel(ctx), definition.agent, prompt, progress)
+	started := time.Now()
+	result, err := m.run.Run(context.WithoutCancel(ctx), definition.agent, prompt, progress)
+
+	outcome := "completed"
 	if err != nil {
-		if ctx.Err() == nil {
-			log.Error("cronjob failed", "human_visible", false, "error", err)
-		}
-
-		return
+		outcome = "failed"
+	} else if result.ConversationID == "" {
+		outcome = "intentional_silence"
 	}
 
-	log.Info("completed cronjob")
+	log.Info("completed cronjob", "event", "cron_completed", "outcome", outcome, "destination_conversation_id", result.ConversationID, "duration_ms", time.Since(started).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
+
+	if err != nil && ctx.Err() == nil {
+		log.Error("cronjob failed", "human_visible", false, "error_type", fmt.Sprintf("%T", err))
+	}
 }
 
 func cronTraceConversationID(prefix, relativePath string, ts time.Time) string {

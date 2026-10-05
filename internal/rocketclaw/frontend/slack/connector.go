@@ -298,6 +298,7 @@ func (c *Connector) DrainSteers(ctx context.Context, conversationID string) []st
 	for i := range pending {
 		c.removeReaction(ctx, pending[i].Reply, slackBufferedReaction, "remove Slack steer hourglass")
 		texts = append(texts, pending[i].Text)
+		c.log.Info("Slack steer injected", "event", "steer_injected", "conversation_id", conversationID, "channel", pending[i].Reply.ChannelID, "message_ts", pending[i].Reply.MessageTS, "thread_ts", pending[i].Reply.ThreadTS)
 	}
 
 	return texts
@@ -320,7 +321,7 @@ func (c *Connector) Stop(context.Context) error {
 }
 
 // SendResponse keeps one in-progress placeholder until the final answer arrives.
-func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMessage) error {
+func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMessage) (err error) {
 	c.responseMu.Lock()
 	defer c.responseMu.Unlock()
 
@@ -376,6 +377,12 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 		return nil
 	}
 
+	startedAt := time.Now()
+
+	defer func() {
+		c.logDelivery(msg, startedAt, err)
+	}()
+
 	slots, ok := c.responseSlots(msg)
 	if !ok && msg.ReplyState != nil {
 		if err := json.Unmarshal(msg.ReplyState, &slots); err != nil {
@@ -409,10 +416,14 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 		}
 	}
 
+	if msg.Text != "" {
+		c.log.Info("Slack text accepted", "event", "slack_text_delivery", "outcome", "accepted", "conversation_id", msg.ConversationID, "turn_id", msg.TurnID, "channel", msg.SlackReply.ChannelID, "thread_ts", msg.SlackReply.ThreadTS, "duration_ms", time.Since(startedAt).Milliseconds())
+	}
+
 	if len(msg.Attachments) > 0 {
 		channelID, threadTS := slackReplyDestination(msg.SlackReply)
 		if err := c.uploadResponseAttachments(ctx, channelID, threadTS, msg.Attachments); err != nil {
-			c.log.Warn("upload Slack response attachments", "error", err)
+			c.log.Warn("upload Slack response attachments", "error_type", fmt.Sprintf("%T", err))
 		}
 	}
 
@@ -614,14 +625,22 @@ func (c *Connector) AskUserQuestion(ctx context.Context, req *protocol.AskUserQu
 	c.questions[req.ID] = p
 	c.mu.Unlock()
 
+	startedAt := time.Now()
+
+	c.log.Info("waiting for human answer", "event", "question_wait_started", "question_id", req.ID, "channel", channelID, "thread_ts", threadTS)
+
 	select {
 	case answer, ok := <-p.ch:
+		c.log.Info("human answer wait returned", "event", "question_wait_finished", "question_id", req.ID, "channel", channelID, "thread_ts", threadTS, "duration_ms", time.Since(startedAt).Milliseconds(), "answered", ok)
+
 		if !ok {
 			return protocol.AskUserQuestionAnswer{}, errors.New("ask_user_question canceled")
 		}
 
 		return answer, nil
 	case <-ctx.Done():
+		c.log.Info("human answer wait returned", "event", "question_wait_finished", "question_id", req.ID, "channel", channelID, "thread_ts", threadTS, "duration_ms", time.Since(startedAt).Milliseconds(), "answered", false, "error_type", fmt.Sprintf("%T", ctx.Err()))
+
 		if !errors.Is(context.Cause(ctx), protocol.ErrBridgeStopped) {
 			if pending := c.takeQuestion(req.ID); pending != nil {
 				c.deleteQuestionMessage(context.WithoutCancel(ctx), pending.target)
@@ -761,6 +780,26 @@ func (c *Connector) SendExternalMCPRelay(ctx context.Context, channelID, threadT
 	relayReady = true
 
 	return replyTarget, nil
+}
+
+// logDelivery owns outcome formatting separately from the reply-recovery flow.
+func (c *Connector) logDelivery(msg *protocol.OutboundMessage, startedAt time.Time, err error) {
+	outcome := "acknowledged"
+
+	switch {
+	case err != nil:
+		outcome = "failed"
+	case msg.WorkflowTerminal == protocol.TerminalStopped:
+		outcome = "stopped"
+	case msg.WorkflowTerminal == protocol.TerminalFailed:
+		outcome = "generation_failed"
+	case msg.Cronjob != nil && strings.TrimSpace(msg.Text) == "" && len(msg.Attachments) == 0:
+		outcome = "intentional_silence"
+	case msg.Text == "" && len(msg.Attachments) == 0:
+		outcome = "empty"
+	}
+
+	c.log.Info("Slack delivery returned", "event", "slack_delivery", "conversation_id", msg.ConversationID, "turn_id", msg.TurnID, "channel", msg.SlackReply.ChannelID, "thread_ts", msg.SlackReply.ThreadTS, "outcome", outcome, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
 }
 
 func (c *Connector) recordChannelFact(ctx context.Context, channelID, name string, observedAt time.Time) {
@@ -1138,6 +1177,7 @@ func (c *Connector) sendCronjobResponse(ctx context.Context, msg *protocol.Outbo
 		overflow = nil
 	}
 
+	startedAt := time.Now()
 	channelID, threadTS, posted, err := c.sendTitledResponse(ctx, msg, slots, hasSlots, fallbackText, blocks, overflow, "cronjob")
 
 	rootState := slackReplyState{}
@@ -1161,9 +1201,11 @@ func (c *Connector) sendCronjobResponse(ctx context.Context, msg *protocol.Outbo
 		return err
 	}
 
+	c.log.Info("Slack cronjob text accepted", "event", "slack_text_delivery", "outcome", "accepted", "conversation_id", msg.ConversationID, "turn_id", msg.TurnID, "channel", channelID, "thread_ts", threadTS, "duration_ms", time.Since(startedAt).Milliseconds())
+
 	if len(msg.Attachments) > 0 {
 		if err := c.uploadResponseAttachments(ctx, channelID, threadTS, msg.Attachments); err != nil {
-			c.log.Warn("upload Slack cronjob response attachments", "error", err)
+			c.log.Warn("upload Slack cronjob response attachments", "error_type", fmt.Sprintf("%T", err))
 		}
 	}
 
@@ -1209,7 +1251,16 @@ func (c *Connector) uploadResponseAttachments(ctx context.Context, channelID, th
 			name = "attachment"
 		}
 
+		startedAt := time.Now()
 		_, err := c.api.UploadFileContext(ctx, slack.UploadFileParameters{Reader: bytes.NewReader(attachment.Data), FileSize: len(attachment.Data), Filename: name, Title: name, Channel: channelID, ThreadTimestamp: threadTS})
+
+		outcome := "accepted"
+		if err != nil {
+			outcome = "failed"
+		}
+
+		c.log.Info("Slack attachment upload returned", "event", "slack_attachment_delivery", "outcome", outcome, "channel", channelID, "thread_ts", threadTS, "attachment_id", attachment.ID, "attachment_index", i, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
+
 		if err != nil {
 			return fmt.Errorf("upload Slack attachment %q: %w", name, err)
 		}
@@ -1291,6 +1342,7 @@ func (c *Connector) bufferSlackStack(ctx context.Context, key, text string, repl
 
 	if active {
 		c.addReaction(ctx, replyTarget, slackBufferedReaction, "add Slack buffered reaction")
+		c.log.Info("Slack steer admitted", "event", "steer_admitted", "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS, "thread_ts", replyTarget.ThreadTS)
 	}
 
 	return active
@@ -3092,6 +3144,7 @@ func (c *Connector) stopSlackThread(ctx context.Context, channelID, threadTS str
 	for i := range buffered {
 		c.removeReaction(ctx, buffered[i].Reply, slackBufferedReaction, "remove discarded Slack buffered reaction")
 		c.addReaction(ctx, buffered[i].Reply, slackInterruptionReaction, "add discarded Slack interruption reaction")
+		c.log.Info("Slack steer removed", "event", "steer_removed", "channel", channelID, "thread_ts", threadTS, "message_ts", buffered[i].Reply.MessageTS, "reason", "thread_stopped")
 	}
 
 	if marker != nil && marker.SlackReply != nil {

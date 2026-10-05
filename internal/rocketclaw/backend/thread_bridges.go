@@ -654,6 +654,13 @@ func (m *threadBridgeManager) promoteQueueItem(ctx context.Context, conversation
 		return false, errors.Join(err, m.store.PutThreadQueueItem(id, &item))
 	}
 
+	log := m.log
+	if !item.StashAt.IsZero() {
+		log = log.With("queue_age_ms", time.Since(item.StashAt).Milliseconds())
+	}
+
+	log.Info("queue item promoted", "event", "queue_promoted", "conversation_id", conversationID, "queue_item_id", id)
+
 	return true, nil
 }
 
@@ -675,6 +682,7 @@ func (m *threadBridgeManager) deleteQueueItem(ctx context.Context, conversationI
 				close(request.completion.done)
 				bridge.mu.Unlock()
 				request.inbound.CompleteResponseWithAttachments("", nil, context.Canceled)
+				m.log.Info("steer removed", "event", "steer_removed", "conversation_id", conversationID, "queue_item_id", id)
 
 				return true, nil
 			}
@@ -686,6 +694,8 @@ func (m *threadBridgeManager) deleteQueueItem(ctx context.Context, conversationI
 	if err != nil || removed == 0 {
 		return false, err
 	}
+
+	m.log.Info("queue item removed", "event", "queue_removed", "conversation_id", conversationID, "queue_item_id", id)
 
 	return true, m.PickLaterWork(ctx, conversationID)
 }
@@ -703,9 +713,13 @@ func (m *threadBridgeManager) stashQueueItem(ctx context.Context, conversationID
 	}))
 	item.ParkAfter = ""
 
+	startedAt := time.Now()
 	if err := m.store.PutThreadQueueItem(item.ID, item); err != nil {
+		m.log.Error("queue persistence failed", "event", "queue_persist_failed", "conversation_id", conversationID, "queue_item_id", item.ID, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
 		return fmt.Errorf("stash thread queue item: %w", err)
 	}
+
+	m.log.Info("queue item persisted", "event", "queue_persisted", "conversation_id", conversationID, "queue_item_id", item.ID, "kind", item.Kind, "position", item.Position, "stash_at", item.StashAt, "duration_ms", time.Since(startedAt).Milliseconds())
 
 	if item.Kind == protocol.InboundKindHeld {
 		return nil

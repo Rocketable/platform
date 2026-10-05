@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"runtime/metrics"
 	"slices"
 	"sync"
 	"time"
@@ -90,6 +91,28 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		if err := rocketcodeSessions.Stop(); err != nil {
 			logger.Warn("stop rocketcode session service", "error", err)
 		}
+	}()
+
+	samples := []metrics.Sample{
+		{Name: "/gc/heap/allocs:bytes"},
+		{Name: "/memory/classes/heap/objects:bytes"},
+		{Name: "/cpu/classes/gc/total:cpu-seconds"},
+		{Name: "/sched/goroutines:goroutines"},
+		{Name: "/sched/latencies:seconds"},
+	}
+	baseline := sampleHealth(samples, rocketcodeSessions.db.Stats())
+	healthCtx, cancelHealth := context.WithCancel(runCtx)
+
+	var health errgroup.Group
+	health.Go(func() error {
+		reportHealth(healthCtx, rocketcodeSessions.db, logger, samples, &baseline)
+		return nil
+	})
+
+	defer func() {
+		cancelHealth()
+
+		_ = health.Wait()
 	}()
 
 	return holdRunLock(runCtx, rocketcodeSessions.db, &lockedRun{

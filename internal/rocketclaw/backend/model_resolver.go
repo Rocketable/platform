@@ -73,7 +73,7 @@ func (r *modelResolver) Resolve(model string) (*openai.Client, rocketcode.Provid
 
 	options := r.options(origin)
 	if providerConfig.RocketCodeAuth == "chatgpt" {
-		client, err := oai.NewChatGPTClientIn(r.workspace, r.runtimeDir, provider, options...)
+		client, err := oai.NewChatGPTClientIn(r.workspace, r.runtimeDir, provider, r.log.With("provider", provider, "model", apiModel), options...)
 		if err != nil {
 			return nil, rocketcode.ProviderOrigin{}, fmt.Errorf("create ChatGPT OAuth client for provider %q: %w", provider, err)
 		}
@@ -94,7 +94,7 @@ func (r *modelResolver) Resolve(model string) (*openai.Client, rocketcode.Provid
 }
 
 func (r *modelResolver) options(origin rocketcode.ProviderOrigin) []option.RequestOption {
-	if !r.log.Enabled(context.Background(), slog.LevelError) {
+	if !r.log.Enabled(context.Background(), slog.LevelInfo) && !r.log.Enabled(context.Background(), slog.LevelError) {
 		return nil
 	}
 
@@ -107,16 +107,16 @@ func (r *modelResolver) options(origin rocketcode.ProviderOrigin) []option.Reque
 			status = resp.StatusCode
 		}
 
-		errLog := err
-		if status != http.StatusOK || err != nil {
-			if errLog == nil {
-				errLog = fmt.Errorf("provider returned status %d", status)
-			}
+		boundary := "http_headers"
+		if r.providers[origin.Provider].RocketCodeAuth == "chatgpt" {
+			// Codex adapts streams and performs physical retries below SDK middleware.
+			boundary = "sdk_return"
+		}
 
-			attrs := append(providerLogAttrs(req, resp, status, time.Since(startedAt), errLog), "provider", origin.Provider, "model", origin.Model)
+		attrs := append(providerLogAttrs(req, resp, status, time.Since(startedAt), err, boundary), "provider", origin.Provider, "model", origin.Model)
+		if status < 200 || status >= 300 || err != nil {
 			r.log.Error("provider request failed", attrs...)
-		} else if time.Since(startedAt) > time.Minute {
-			attrs := append(providerLogAttrs(req, resp, status, time.Since(startedAt), errLog), "provider", origin.Provider, "model", origin.Model)
+		} else {
 			r.log.Info("provider request completed", attrs...)
 		}
 
