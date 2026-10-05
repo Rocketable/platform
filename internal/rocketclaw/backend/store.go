@@ -1708,6 +1708,7 @@ empty_managed_conversations AS (
     FROM managed_conversations m
     LEFT JOIN conversations_with_history h ON h.conversation_id = m.conversation_id
     WHERE m.conversation_id = $1 AND h.conversation_id IS NULL
+        AND NOT EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = m.conversation_id)
 )
 SELECT COUNT(*) > 0 FROM empty_managed_conversations`, conversationID).Scan(&emptyManaged); err != nil {
 			return false, fmt.Errorf("read empty managed conversation: %w", err)
