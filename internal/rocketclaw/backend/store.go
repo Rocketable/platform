@@ -1487,7 +1487,8 @@ func (s *SessionService) externalMCPMetadataEntry(ctx context.Context, conversat
 		raw   string
 	)
 
-	err := s.db.QueryRowContext(ctx, `SELECT id, entry_json FROM session_entries WHERE conversation_id = $1 AND entry_json::jsonb->>'type' = $2 ORDER BY id DESC LIMIT 1`, strings.TrimSpace(conversationID), externalMCPMetadataEntryType).Scan(&entry.ID, &raw)
+	// Keep the fixed type literal so generic plans can use the metadata-only index.
+	err := s.db.QueryRowContext(ctx, `SELECT id, entry_json FROM session_entries WHERE conversation_id = $1 AND entry_json::jsonb->>'type' = 'mcp_external_metadata' ORDER BY id DESC LIMIT 1`, strings.TrimSpace(conversationID)).Scan(&entry.ID, &raw)
 	if err == sql.ErrNoRows {
 		return ObservedSessionEntry{}, false, nil
 	}

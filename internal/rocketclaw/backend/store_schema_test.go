@@ -18,6 +18,48 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+func TestExternalMCPMetadataLookupUsesIndex(t *testing.T) {
+	store := newTestSessionService(t)
+	store.db.SetMaxOpenConns(1)
+
+	ctx := t.Context()
+	_, err := store.db.ExecContext(ctx, `
+INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES
+    ('with-metadata', '{"type":"mcp_external_metadata","version":1}', '2000-01-01T00:00:00Z'),
+    ('with-metadata', '{"type":"mcp_external_metadata","version":2}', '2000-01-01T00:00:00Z'),
+    ('other', '{"type":"mcp_external_metadata","version":3}', '2000-01-01T00:00:00Z');
+INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
+SELECT conversation_id, '{"type":"turn"}', '2000-01-01T00:00:00Z'
+FROM (VALUES ('with-metadata'), ('without-metadata')) c(conversation_id), generate_series(1, 4096);
+ANALYZE session_entries;
+SET plan_cache_mode = force_generic_plan;`)
+	require.NoError(t, err)
+
+	for _, conversationID := range []string{"with-metadata", "without-metadata", "missing"} {
+		entry, found, err := store.externalMCPMetadataEntry(ctx, conversationID)
+		require.NoError(t, err)
+		require.Equal(t, conversationID == "with-metadata", found)
+
+		if found {
+			require.Equal(t, 2, entry.Entry.Version)
+			require.Equal(t, externalMCPMetadataEntryType, entry.Entry.Type)
+		}
+	}
+
+	// Explain the actual prepared lookup, not a separately maintained query.
+	queries, err := queryStrings(ctx, store.db, `SELECT format('EXPLAIN EXECUTE %I(%s)', name,
+    (SELECT string_agg('NULL', ',') FROM unnest(parameter_types)))
+FROM pg_prepared_statements WHERE statement LIKE 'SELECT id, entry_json FROM session_entries%'`, "metadata lookup statement")
+	require.NoError(t, err)
+	require.Len(t, queries, 1)
+	plan, err := queryStrings(ctx, store.db, queries[0], "metadata lookup plan")
+	require.NoError(t, err)
+	require.Contains(t, strings.Join(plan, "\n"), "session_entries_mcp_metadata")
+	require.NotContains(t, strings.Join(plan, "\n"), "Filter:")
+	require.NotContains(t, strings.Join(plan, "\n"), "Sort")
+	t.Log(strings.Join(plan, "\n"))
+}
+
 func TestHistoryDeletionUsesConversationRangeIndexes(t *testing.T) {
 	store := newTestSessionService(t)
 	_, err := store.db.ExecContext(t.Context(), `
