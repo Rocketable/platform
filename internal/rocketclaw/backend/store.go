@@ -1269,14 +1269,7 @@ func (s *SessionService) lockTurnPair(ctx context.Context, pairID, conversationI
 
 	s.turnGatesMu.Lock()
 
-	gate := s.turnGates[pairID]
-	if gate == nil {
-		gate = &sessionTurnGate{token: make(chan struct{}, 1)}
-		gate.token <- struct{}{}
-
-		s.turnGates[pairID] = gate
-	}
-
+	gate := s.turnGateLocked(pairID)
 	gate.refs++
 	reserved := gate.reserved
 	waitForReservation := gate.reservedFor != "" && gate.reservedFor != conversationID
@@ -1312,6 +1305,15 @@ func (s *SessionService) reserveTurnPair(pairID, conversationID string) {
 	s.turnGatesMu.Lock()
 	defer s.turnGatesMu.Unlock()
 
+	gate := s.turnGateLocked(pairID)
+	if gate.reservedFor == "" {
+		gate.reservedFor = conversationID
+		gate.reserved = make(chan struct{})
+	}
+}
+
+// turnGateLocked returns or creates a gate while the caller holds turnGatesMu.
+func (s *SessionService) turnGateLocked(pairID string) *sessionTurnGate {
 	gate := s.turnGates[pairID]
 	if gate == nil {
 		gate = &sessionTurnGate{token: make(chan struct{}, 1)}
@@ -1320,10 +1322,7 @@ func (s *SessionService) reserveTurnPair(pairID, conversationID string) {
 		s.turnGates[pairID] = gate
 	}
 
-	if gate.reservedFor == "" {
-		gate.reservedFor = conversationID
-		gate.reserved = make(chan struct{})
-	}
+	return gate
 }
 
 func (s *SessionService) completeTurnPairReservation(pairID, conversationID string) {
