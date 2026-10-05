@@ -419,6 +419,139 @@ read:
 	require.Equal(t, PermissionDeny, action)
 }
 
+func TestExecuteSpillStorageIsPrivate(t *testing.T) {
+	for _, spillRel := range []string{defaultSpillRel, "private output/spill"} {
+		t.Run(spillRel, func(t *testing.T) {
+			root, err := os.OpenRoot(t.TempDir())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, root.Close()) })
+			config := testWorkspaceConfig(t, root.Name())
+			config.SpillDir = filepath.Join(root.Name(), spillRel)
+			client := openai.NewClient()
+			agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, "read: {'*': allow}\nedit: {'*': allow}\nbash: {'*': allow}\nglob: {'*': allow}\ngrep: {'*': allow}")}
+			loop, err := New(&client, config, root, Agents{Items: map[string]Agent{"main": agent}}, Skills{Items: map[string]Skill{}}, "main", nil)
+			require.NoError(t, err)
+			loop.restoreTurnExecuteResults("turn")
+			t.Cleanup(loop.deleteTurnExecuteResults)
+
+			full := strings.Repeat("private-result\n", 2100)
+			_, err = loop.saveExecuteResult(full)
+			require.NoError(t, err)
+			require.NoError(t, root.WriteFile("ordinary.txt", []byte("ordinary\n"), 0o600))
+
+			ctx := withToolCallContext(t.Context(), loop, nil, "")
+			for id, stored := range loop.spillResults {
+				paths := []string{stored, filepath.Join(root.Name(), stored), filepath.Dir(stored) + "/../turn/" + filepath.Base(stored)}
+				if _, err := root.Stat(strings.ToUpper(spillRel)); err == nil {
+					paths = append(paths, strings.ToUpper(spillRel)+"/turn/"+filepath.Base(stored))
+				}
+				// Host stat is needed to detect aliases of the workspace prefix itself.
+				if info, err := os.Stat(strings.ToUpper(root.Name())); err == nil {
+					original, err := root.Stat(".")
+					require.NoError(t, err)
+
+					if os.SameFile(original, info) {
+						paths = append(paths, filepath.Join(strings.ToUpper(root.Name()), stored))
+					}
+				}
+
+				for _, path := range paths {
+					literal := strings.ReplaceAll(path, " ", `\ `)
+
+					partial := strings.Replace(literal, "/spill", `/""spill`, 1)
+					for _, input := range []struct {
+						name   string
+						params any
+					}{
+						{"read", readToolParams{FilePath: path}},
+						{"glob", globToolParams{Pattern: "*", Path: filepath.Dir(path)}},
+						{"grep", grepToolParams{Pattern: "private-result", Path: path}},
+						{"apply_patch", applyPatchToolParams{PatchText: "*** Begin Patch\n*** Delete File: " + path + "\n*** End Patch"}},
+						{"apply_patch", applyPatchToolParams{PatchText: "*** Begin Patch\n*** Add File: " + path + "\n+overwritten\n*** End Patch"}},
+						{"apply_patch", applyPatchToolParams{PatchText: "*** Begin Patch\n*** Update File: " + path + "\n@@\n-private-result\n+overwritten\n*** End Patch"}},
+						{"apply_patch", applyPatchToolParams{PatchText: "*** Begin Patch\n*** Update File: ordinary.txt\n*** Move to: " + path + "\n@@\n-ordinary\n+overwritten\n*** End Patch"}},
+						{"bash", bashParams{Command: fmt.Sprintf("cat %q", path)}},
+						{"bash", bashParams{Command: "cat " + partial}},
+						{"bash", bashParams{Command: "cat " + literal}},
+						{"bash", bashParams{Command: "cat $'" + path + "'"}},
+						{"bash", bashParams{Command: "printf overwritten > " + literal}},
+						{"bash", bashParams{Command: "printf -- --file=" + partial}},
+						{"bash", bashParams{Command: "printf overwritten > " + partial}},
+						{"bash", bashParams{Command: "cat < " + partial}},
+						{"bash", bashParams{Command: fmt.Sprintf("printf %%s %q", path)}},
+						{"bash", bashParams{Command: fmt.Sprintf("printf -- %q", "--file="+path)}},
+						{"bash", bashParams{Command: fmt.Sprintf("printf -- --file=%q", path)}},
+						{"bash", bashParams{Command: fmt.Sprintf("printf overwritten > %q", path)}},
+						{"bash", bashParams{Command: fmt.Sprintf("cat < %q", path)}},
+						{"bash", bashParams{Command: "pwd", Workdir: filepath.Dir(path)}},
+						{"bash", bashParams{Command: fmt.Sprintf("cat %q", filepath.Base(path)), Workdir: filepath.Dir(path)}},
+					} {
+						raw, err := json.Marshal(input.params)
+						require.NoError(t, err)
+
+						tool := loop.CodeModeHosts[input.name]
+						result, err := tool.Call(ctx, raw, nil, emptyToolCallMetadata())
+						require.NoError(t, err)
+
+						if filepath.IsAbs(path) && !strings.HasPrefix(path, root.Name()+"/") {
+							// Root aliases may be rejected by an earlier path boundary.
+							require.Regexp(t, "execute output storage is private|path escapes root|bash command denied: external path access is blocked", result.Output, "%s(%s)", input.name, raw)
+						} else {
+							require.Contains(t, result.Output, deniedSpillAccess, "%s(%s)", input.name, raw)
+						}
+					}
+				}
+
+				grep := loop.CodeModeHosts["grep"]
+				result, err := grep.Call(ctx, json.RawMessage(`{"pattern":"private-result"}`), nil, emptyToolCallMetadata())
+				require.NoError(t, err)
+				require.Equal(t, "No files found", result.Output)
+
+				glob := loop.CodeModeHosts["glob"]
+				result, err = glob.Call(ctx, json.RawMessage(`{"pattern":"**/*.txt"}`), nil, emptyToolCallMetadata())
+				require.NoError(t, err)
+				require.NotContains(t, result.Output, spillRel)
+				require.Contains(t, result.Output, "ordinary.txt")
+				require.NoError(t, root.MkdirAll(spillRel+"-other", 0o700))
+				ordinary := spillRel + "-other/file.txt"
+				require.NoError(t, root.WriteFile(ordinary, []byte("ordinary"), 0o600))
+				ordinaryPaths := []string{ordinary}
+
+				if _, err := root.Stat(strings.ToUpper(spillRel)); os.IsNotExist(err) {
+					require.NoError(t, root.MkdirAll(strings.ToUpper(spillRel), 0o700))
+					distinct := strings.ToUpper(spillRel) + "/ordinary.txt"
+					require.NoError(t, root.WriteFile(distinct, []byte("ordinary"), 0o600))
+					ordinaryPaths = append(ordinaryPaths, distinct)
+				}
+
+				for _, ordinary := range ordinaryPaths {
+					read := loop.CodeModeHosts["read"]
+					args, err := json.Marshal(readToolParams{FilePath: ordinary})
+					require.NoError(t, err)
+					result, err = read.Call(ctx, args, nil, emptyToolCallMetadata())
+					require.NoError(t, err)
+					require.Contains(t, result.Output, "1: ordinary")
+
+					bash := loop.CodeModeHosts["bash"]
+					args, err = json.Marshal(bashParams{Command: fmt.Sprintf("cat %q", ordinary)})
+					require.NoError(t, err)
+					result, err = bash.Call(ctx, args, nil, emptyToolCallMetadata())
+					require.NoError(t, err)
+					require.Equal(t, "ordinary", result.Output)
+				}
+
+				page, err := loop.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: id, Limit: 1})
+				require.NoError(t, err)
+				require.Equal(t, "private-result\n\n[next_start_line=2]\n", page.Output)
+
+				raw, err := root.ReadFile(stored)
+				require.NoError(t, err)
+				require.Equal(t, full, string(raw))
+			}
+		})
+	}
+}
+
 func TestRuntimeRestrictTools(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
@@ -426,7 +559,7 @@ func TestRuntimeRestrictTools(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	client := openai.NewClient()
-	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {demo: allow}`)}
+	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, "skill: {demo: allow}\nread: {'*': allow}")}
 	skills := LoadSkills(fstest.MapFS{"demo/SKILL.md": mapFile("---\nname: demo\ndescription: Demo\n---\n")}, "/virtual/skills").Skills
 
 	newRuntime := func(t *testing.T) *Runtime {
@@ -449,6 +582,13 @@ func TestRuntimeRestrictTools(t *testing.T) {
 		runtime := newRuntime(t)
 		require.Contains(t, runtime.Tools, "skill")
 		require.Contains(t, runtime.Tools, "find_skills")
+		require.Contains(t, runtime.Tools, loadExecuteResultToolName)
+		require.NoError(t, runtime.RestrictTools([]string{"skill", executeToolName}))
+		runtime.restoreTurnExecuteResults("restricted")
+		_, err := runtime.saveExecuteResult(strings.Repeat("line\n", 2100))
+		require.NoError(t, err)
+		runtime.deleteTurnExecuteResults()
+		require.NotContains(t, runtime.Tools, loadExecuteResultToolName)
 		require.NoError(t, runtime.RestrictTools([]string{"skill"}))
 		require.Equal(t, []string{"skill"}, slices.Sorted(maps.Keys(runtime.Tools)))
 		require.NoError(t, runtime.RestrictTools([]string{}))

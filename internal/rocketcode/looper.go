@@ -197,13 +197,13 @@ type looper struct {
 	expandInputPrompts     bool
 	promptExpansion        promptExpansionEnvironment
 	spillRel               string
-	sandboxRead            looperTool
-	spillMu                sync.Mutex
-	spillTurnID            string
-	spillSeq               int
-	spillPaths             []string
-	phaseMu                sync.Mutex
-	turnPhase              TurnPhase
+
+	spillMu      sync.Mutex
+	spillTurnID  string
+	spillResults map[string]string
+
+	phaseMu   sync.Mutex
+	turnPhase TurnPhase
 }
 
 func (l *looper) Phase() TurnPhase {
@@ -780,11 +780,11 @@ func (l *looper) runTurn(
 	observations.turnID = record.TurnID
 	observations.trace = slices.Clone(step.Trace)
 
-	l.beginTurnSpills(record.TurnID)
+	l.restoreTurnExecuteResults(record.TurnID)
 
 	defer func() {
 		if ctx.Err() == nil {
-			l.endTurnSpills()
+			l.deleteTurnExecuteResults()
 		}
 	}()
 
@@ -2213,6 +2213,23 @@ func (d *doomLoopTrap) trapped(name string, args json.RawMessage) bool {
 }
 
 func (l *looper) permissionDecision(toolName string, tool *looperTool, args json.RawMessage) (toolPermissionDecision, error) {
+	if toolName == loadExecuteResultToolName {
+		var params loadExecuteResultParams
+		if err := decodeToolParams(args, &params); err != nil {
+			return toolPermissionDecision{}, err
+		}
+
+		l.spillMu.Lock()
+		_, ok := l.spillResults[params.ResultID]
+		l.spillMu.Unlock()
+
+		if !ok {
+			return toolPermissionDecision{}, errors.New("unknown or expired execute result")
+		}
+
+		return toolPermissionDecision{}, nil
+	}
+
 	permission := tool.Permission
 	if permission == "" {
 		permission = toolName

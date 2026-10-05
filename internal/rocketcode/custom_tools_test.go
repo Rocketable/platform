@@ -322,6 +322,7 @@ func TestCustomToolValidation(t *testing.T) {
 		{name: "duplicate", tools: []Tool{testCustomTool("github_create_issue", validCall), testCustomTool("github_create_issue", validCall)}, reserved: nil, want: "duplicated"},
 		{name: "built-in collision", tools: []Tool{testCustomTool("read", validCall)}, reserved: map[string]looperTool{"read": testLooperTool("read")}, want: "collides"},
 		{name: "dynamic collision", tools: []Tool{testCustomTool("task", validCall)}, reserved: nil, want: "collides"},
+		{name: "execute result collision", tools: []Tool{testCustomTool(loadExecuteResultToolName, validCall)}, reserved: nil, want: "collides"},
 		{name: "invalid properties", tools: []Tool{testCustomToolWithParameters("github_create_issue", map[string]any{"properties": "bad"}, validCall)}, reserved: nil, want: "parameters.properties"},
 	}
 

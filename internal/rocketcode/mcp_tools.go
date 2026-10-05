@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	executeToolName        = "execute"
-	searchBuiltinName      = "search"
-	mcpPermissionBucket    = "mcp"
-	codeModeApproveSubject = "code_mode_approve"
+	executeToolName           = "execute"
+	loadExecuteResultToolName = "load_execute_result"
+	searchBuiltinName         = "search"
+	mcpPermissionBucket       = "mcp"
+	codeModeApproveSubject    = "code_mode_approve"
 	// executeNestedToolPrefix marks nested code-mode tool diagnostics for thinking UI.
 	executeNestedToolPrefix = executeToolName + " → "
 	codeModeRawStringRule   = `Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. execute code is a JSON string — JSON still wraps it in "...". Inside that string, bash(command=...) takes r'''...''' only, not Starlark "..." or '...'. r"..." is raw but single-line; a real newline needs r'''...'''. Example execute argument: {"code":"def main():\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\n"}. $ is valid inside a closed Starlark string, not interpolation. bash(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun.`
@@ -119,6 +120,7 @@ func executeDescription() string {
 		fmt.Sprintf("Example: gather([lambda: read(filePath=\"a\"), lambda: read(filePath=\"b\")], concurrency=%d)", defN),
 		"Use search(query=\"\", namespace=\"\", offset=0, limit=10) inside the script to discover tools and concurrency builtins (path, description, signature).",
 		"A short Code Mode catalog is also in the system prompt; search when you need more detail or MCP schemas.",
+		"Oversized returns include a turn-scoped result_id. Recover pages with the top-level load_execute_result tool, not inside Starlark.",
 	}, "\n")
 }
 
@@ -132,6 +134,7 @@ func codeModeSystemPrompt(hosts map[string]looperTool, servers []string) string 
 		"## Code Mode",
 		"",
 		"Use the execute tool with a short Starlark script (def main() returning a string).",
+		"For oversized returns, call load_execute_result at the top level with the result_id from Execute. It is not a Starlark host tool; IDs expire at turn end.",
 		"No import/from, threads, concurrent.futures, or stdlib.",
 		codeModeRawStringRule,
 		"Inside the script, call tools with keyword arguments only.",
@@ -215,6 +218,24 @@ func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool)
 	serversCopy := slices.Clone(servers)
 
 	return map[string]looperTool{
+		loadExecuteResultToolName: {
+			Definition: *functionTool(loadExecuteResultToolName, "Load a page of a full oversized Execute result from this turn. Top-level only, not callable in Starlark. No filesystem read permission is needed. Pages contain at most 2000 source lines and 50 KiB including numbering and footer. A line too large for a fresh page returns a UTF-8-safe prefix with an omission marker and advances to the next line; its omitted tail cannot be fetched with this line-only tool. IDs expire when the turn ends. Follow next_start_line or stop at EOF.", map[string]any{
+				"result_id":    map[string]any{"type": "string", "description": "Opaque result ID from Execute's overflow footer."},
+				"start_line":   map[string]any{"type": "integer", "description": "1-based starting source line; 0 means 1. Negative values are invalid."},
+				"limit":        map[string]any{"type": "integer", "description": "Maximum source lines; 0 means 2000, positive values capped at 2000. Negative values are invalid."},
+				"line_numbers": map[string]any{"type": "boolean", "description": "Prefix each returned line with its original 1-based line number."},
+			}),
+			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
+				var params loadExecuteResultParams
+				if err := decodeToolParams(raw, &params); err != nil {
+					return ToolResult{}, err
+				}
+
+				tc, _ := toolCallContextFrom(ctx)
+
+				return tc.looper.loadExecuteResult(ctx, params)
+			},
+		},
 		executeToolName: {
 			Definition: *functionTool(executeToolName, executeDescription(), map[string]any{
 				"code": map[string]any{
@@ -375,9 +396,9 @@ func callExecute(ctx context.Context, registry *mcpclient.Registry, permissions 
 	}
 
 	if tc, ok := toolCallContextFrom(ctx); ok && tc.looper != nil {
-		clipped, errSpill := tc.looper.spillExecuteOutput(out)
-		if errSpill != nil {
-			return ToolResult{}, errSpill
+		clipped, errSave := tc.looper.saveExecuteResult(out)
+		if errSave != nil {
+			return ToolResult{}, errSave
 		}
 
 		out = clipped

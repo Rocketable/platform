@@ -32,10 +32,11 @@ func customLooperTools(customTools []Tool, reserved map[string]looperTool) (map[
 	tools := make(map[string]looperTool, len(customTools))
 
 	reservedNames := map[string]struct{}{
-		"find_skills":   {},
-		"skill":         {},
-		"task":          {},
-		executeToolName: {},
+		"find_skills":             {},
+		"skill":                   {},
+		"task":                    {},
+		executeToolName:           {},
+		loadExecuteResultToolName: {},
 	}
 	for name := range reserved {
 		reservedNames[name] = struct{}{}

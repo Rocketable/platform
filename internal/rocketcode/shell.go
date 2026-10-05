@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -54,6 +55,7 @@ func (r BashResult) String() string {
 type sandboxedShellSystem struct {
 	mu           sync.Mutex
 	root         *os.Root
+	spillRel     string
 	shellTemp    shellTempConfig
 	env          []string
 	shellCommand ShellCommandFunc
@@ -150,6 +152,10 @@ func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams)
 		params.Workdir, err = normalizeRootName(sss.root, workdir)
 		if err != nil {
 			return bashFailure(fmt.Errorf("resolve workdir %q: %w", workdir, err).Error())
+		}
+
+		if isExecuteSpillPath(sss.root, sss.spillRel, params.Workdir) {
+			return bashFailure(deniedSpillAccess)
 		}
 
 		info, err := sss.root.Stat(params.Workdir)
@@ -270,6 +276,35 @@ func (sss *sandboxedShellSystem) deniedBashPath(command, hostDir string) string 
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if denied != "" {
 			return false
+		}
+
+		// Ponytail: only explicit paths are blocked; scripts can construct paths.
+		// OS-level isolation is needed if indirect access must also be blocked.
+		if word, ok := node.(*syntax.Word); ok {
+			for part := range syntax.Preorder(word) {
+				switch part.(type) {
+				case *syntax.Word, *syntax.Lit, *syntax.SglQuoted, *syntax.DblQuoted:
+				default:
+					return true
+				}
+			}
+
+			fields, err := expand.Fields(&expand.Config{}, word)
+			if err != nil {
+				denied = err.Error()
+				return false
+			}
+
+			for _, arg := range fields {
+				if strings.HasPrefix(arg, "-") && strings.Contains(arg, "=") {
+					_, arg, _ = strings.Cut(arg, "=")
+				}
+
+				if isExecuteSpillPath(sss.root, sss.spillRel, resolveBashPath(hostDir, arg)) {
+					denied = deniedSpillAccess
+					return false
+				}
+			}
 		}
 
 		call, ok := node.(*syntax.CallExpr)

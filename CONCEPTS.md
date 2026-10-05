@@ -110,7 +110,7 @@ A sandbox capability the Code Mode script can call directly, as opposed to a mod
 
 A turn-scoped file that holds the full Execute result when that result is too large to send to the model.
 
-A Spill is granted as an exact-file read for the rest of that RocketCode Turn and is deleted when the turn ends. Re-reading a Spill must reuse the file this turn already booked, not infer a path from the spill directory.
+A Spill has an opaque result ID registered only with its owning RocketCode Turn. The model retrieves bounded pages through the top-level `load_execute_result` tool, without gaining filesystem read access. The ID expires and the file is deleted when the turn ends.
 
 ### RocketCode Turn
 
@@ -165,7 +165,7 @@ An interrupted turn resumes from its last recorded step. Completed steps return 
 - Frontends and the backend import Protocol. Frontends do not import the backend.
 - The process assembler constructs the backend and the frontends.
 - A turn uses the Autocompaction Threshold of the Provider that serves its model.
-- Code Mode exposes Execute and Host Tools; an oversized Execute result becomes a Spill owned by that RocketCode Turn.
+- Code Mode exposes Execute and Host Tools; an oversized Execute result becomes a Spill owned by that RocketCode Turn, recovered through the top-level `load_execute_result` tool.
 
 ## Flagged ambiguities
 

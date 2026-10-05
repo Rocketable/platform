@@ -615,6 +615,120 @@ func TestLooperSendsAndReplaysDeveloperPromptInput(t *testing.T) {
 	require.JSONEq(t, `{"content":"keep this rule","role":"developer","type":"message"}`, marshalJSON(t, history[0]))
 }
 
+func TestLooperExecuteResultTurnExit(t *testing.T) {
+	for _, exit := range []string{"success", "model error", "cancellation", "shutdown", "interrupt"} {
+		t.Run(exit, func(t *testing.T) {
+			root, err := os.OpenRoot(t.TempDir())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+			ctx, cancel := context.WithCancelCause(t.Context())
+			defer cancel(nil)
+
+			interrupts := make(chan os.Signal, 1)
+
+			var id, path string
+
+			loop := testLooper(mockResponses())
+			journal := recordingJournal()
+			loop.Journal = journal
+			loop.agent = Agent{Name: "main", Permission: parsePermissionYAML(t, "read: {'*': deny}\nglob: {'*': allow}\nrocketclaw: {'*': allow}")}
+			loop.Permissions = loop.agent.Permission
+			factory := &toolFactory{baseTools: makeSandboxedTools(&sandboxedFileSystem{root: root}, nil), spillRel: defaultSpillRel, promptExpansion: promptExpansionEnvironment{root: root}}
+			loop.Tools, loop.CodeModeHosts = factory.assembleTools(&loop.agent)
+			factory.configureSpill(loop)
+
+			calls := 0
+			loop.Client = mockResponseFunc(func(ctx context.Context, params *responses.ResponseNewParams) (*responses.Response, error) {
+				calls++
+				if calls == 1 {
+					return responseWithFunctionCalls("execute", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", executeToolName, `{"code":"def main():\n    return \"line\\n\" * 2100\n"}`)}), nil
+				}
+
+				require.Contains(t, marshalJSON(t, params.Input.OfInputItemList), "result_id=")
+				require.Len(t, loop.spillResults, 1)
+
+				for resultID, resultPath := range loop.spillResults {
+					id, path = resultID, resultPath
+				}
+
+				raw, err := root.ReadFile(path)
+				require.NoError(t, err)
+				require.Equal(t, strings.Repeat("line\n", 2100), string(raw))
+
+				switch exit {
+				case "success":
+					return responseWithMessage("final", "done"), nil
+				case "model error":
+					return nil, errors.New("provider failed")
+				case "cancellation":
+					cancel(context.Canceled)
+				case "shutdown":
+					cancel(ErrShutdown)
+				case "interrupt":
+					interrupts <- os.Interrupt
+				}
+
+				<-ctx.Done()
+
+				return nil, ctx.Err()
+			})
+
+			input := testPromptInput(PromptInputRoleUser, "large output", nil)
+			input.TurnID = "turn-1"
+
+			_, _, interrupted, err := loop.runTurn(ctx, make(chan ChatResponse, 10), interrupts, nil, nil, &input)
+			if exit == "model error" || exit == "cancellation" || exit == "shutdown" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			require.Equal(t, exit == "interrupt", interrupted)
+			require.NotEmpty(t, id)
+
+			if exit == "cancellation" || exit == "shutdown" {
+				resumed := testLooper(mockResponses())
+				resumed.Journal, resumed.agent, resumed.Permissions = journal, loop.agent, loop.agent.Permission
+				resumed.Tools, resumed.CodeModeHosts = factory.assembleTools(&resumed.agent)
+				factory.configureSpill(resumed)
+
+				calls := 0
+				resumed.Client = mockResponseFunc(func(_ context.Context, params *responses.ResponseNewParams) (*responses.Response, error) {
+					calls++
+					if calls == 1 {
+						require.Contains(t, marshalJSON(t, params.Input.OfInputItemList), "result_id=\\\""+id+"\\\"")
+						return responseWithFunctionCalls("load", []responses.ResponseFunctionToolCall{testFunctionCall("loader", "load-call", loadExecuteResultToolName, fmt.Sprintf(`{"result_id":%q,"start_line":2100}`, id))}), nil
+					}
+
+					last := params.Input.OfInputItemList[len(params.Input.OfInputItemList)-1]
+					require.Equal(t, "line\n\n[EOF]\n", last.OfFunctionCallOutput.Output.OfString.Value)
+					require.Equal(t, map[string]string{id: path}, resumed.spillResults)
+					require.Equal(t, loop.agent.Permission, resumed.Permissions)
+					require.NotContains(t, resumed.CodeModeHosts, "read")
+
+					return responseWithMessage("done", "done"), nil
+				})
+				_, _, _, err = resumed.runTurn(t.Context(), make(chan ChatResponse, 10), interrupts, nil, nil, &input)
+				require.NoError(t, err)
+				require.Equal(t, 2, calls)
+
+				loop = resumed
+			}
+
+			require.Empty(t, loop.spillResults)
+
+			_, err = root.Stat(path)
+			require.ErrorIs(t, err, os.ErrNotExist)
+			_, err = loop.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: id})
+			require.EqualError(t, err, "unknown or expired execute result")
+			loop.restoreTurnExecuteResults("turn-1")
+			_, err = loop.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: id})
+			require.EqualError(t, err, "unknown or expired execute result")
+		})
+	}
+}
+
 func TestLooperPromptInputShellCommandExpansion(t *testing.T) {
 	for _, tc := range []struct {
 		enabled bool
