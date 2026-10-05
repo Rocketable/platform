@@ -367,11 +367,9 @@ func CloneOutboundAttachments(attachments []OutboundAttachment) []OutboundAttach
 		return nil
 	}
 
-	cloned := make([]OutboundAttachment, 0, len(attachments))
-	for i := range attachments {
-		attachment := attachments[i]
-		attachment.Data = append([]byte(nil), attachment.Data...)
-		cloned = append(cloned, attachment)
+	cloned := slices.Clip(slices.Clone(attachments))
+	for i := range cloned {
+		cloned[i].Data = append([]byte(nil), cloned[i].Data...)
 	}
 
 	return cloned
