@@ -953,7 +953,10 @@ func (s *SessionService) Delegations(ctx context.Context, conversationID, source
 )
 SELECT DISTINCT child.conversation_id FROM parents p
 CROSS JOIN LATERAL jsonb_array_elements(NULLIF(p.replay, 'null'::jsonb)) item
-JOIN session_entries child ON child.conversation_id = p.producer || '/' || (item->>'call_id')
+CROSS JOIN LATERAL (
+    SELECT conversation_id FROM session_entries
+    WHERE conversation_id = p.producer || '/' || (item->>'call_id') LIMIT 1
+) child
 WHERE item->>'type' = 'function_call' AND strpos(item->>'call_id', '/') = 0
     AND ($2 = '' OR p.producer = $2)
 ORDER BY child.conversation_id`, "delegation histories", conversationID, sourceConversationID, from, before)

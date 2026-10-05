@@ -18,6 +18,40 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+func TestDelegationLookupStopsAtFirstChildEntry(t *testing.T) {
+	store := newTestSessionService(t)
+	store.db.SetMaxOpenConns(1)
+
+	ctx := t.Context()
+	_, err := store.db.ExecContext(ctx, `
+INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES
+    ('parent-history', '{"replay_input":[{"type":"function_call","call_id":"cobalt"},{"type":"function_call","call_id":"amber"},{"type":"function_call","call_id":"missing"}]}', '2000-01-01T00:00:00Z');
+INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
+SELECT conversation_id, '{}', '2000-01-01T00:00:00Z'
+FROM (VALUES ('parent-history/amber'), ('parent-history/cobalt')) c(conversation_id), generate_series(1, 4096);
+INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
+SELECT 'unrelated-history-' || n, '{}', '2000-01-01T00:00:00Z' FROM generate_series(1, 4096) n;
+ANALYZE session_entries;
+SET plan_cache_mode = force_generic_plan;
+SELECT pg_stat_force_next_flush();`)
+	require.NoError(t, err)
+
+	const historyReads = `SELECT pg_stat_get_tuples_returned('session_entries'::regclass)
+    + COALESCE(SUM(pg_stat_get_tuples_returned(indexrelid)), 0)
+FROM pg_index WHERE indrelid = 'session_entries'::regclass`
+
+	var before, after int64
+	require.NoError(t, store.db.QueryRowContext(ctx, historyReads).Scan(&before))
+	ids, err := store.Delegations(ctx, "parent-history", "", 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, []string{"parent-history/amber", "parent-history/cobalt"}, ids)
+
+	_, err = store.db.ExecContext(ctx, `SELECT pg_stat_force_next_flush()`)
+	require.NoError(t, err)
+	require.NoError(t, store.db.QueryRowContext(ctx, historyReads).Scan(&after))
+	require.Equal(t, int64(3), after-before, "read the parent and only one indexed entry per child history")
+}
+
 func TestExternalMCPMetadataLookupUsesIndex(t *testing.T) {
 	store := newTestSessionService(t)
 	store.db.SetMaxOpenConns(1)
