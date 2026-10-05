@@ -388,6 +388,8 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>('button[aria-label="Stash handoff here"]')?.disabled);
     expect(handoffs).toEqual(["source", "source", "source", "source"]);
     expect(await composer.isVisible()).toBe(false);
+    // The dialog's entrance scale also changes its buttons' measured bounds.
+    await dialog.evaluate((element: HTMLElement) => Promise.all(element.getAnimations().map((animation) => animation.finished)));
     const bounds = await dialog.boundingBox();
     expect(bounds.height).toBeLessThan(height * 0.75);
     expect(await dialog.evaluate((element: HTMLElement) => element.scrollWidth <= element.clientWidth)).toBe(true);
