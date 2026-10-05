@@ -516,6 +516,52 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 	}
 }
 
+func TestSidebarSessionsHistoryChecksUseIndexedLookups(t *testing.T) {
+	service := newTestSessionService(t)
+	service.db.SetMaxOpenConns(1)
+
+	ctx := t.Context()
+	_, err := service.db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
+SELECT 'history-only-' || n, '{}', '' FROM generate_series(1, 4096) n`)
+	require.NoError(t, err)
+
+	for _, id := range []string{"visible", "empty"} {
+		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
+	}
+
+	for range 2 {
+		_, err = service.AppendEntryID(ctx, "visible", testSessionEntry("question", "answer"))
+		require.NoError(t, err)
+	}
+
+	_, err = service.db.ExecContext(ctx, `ANALYZE session_entries; ANALYZE managed_conversations`)
+	require.NoError(t, err)
+	_, err = service.db.ExecContext(ctx, `SELECT pg_stat_force_next_flush()`)
+	require.NoError(t, err)
+
+	const historyReads = `SELECT pg_stat_get_tuples_returned('session_entries'::regclass)
+    + COALESCE(SUM(pg_stat_get_tuples_returned(indexrelid)), 0)
+FROM pg_index WHERE indrelid = 'session_entries'::regclass`
+
+	var before, after int64
+	require.NoError(t, service.db.QueryRowContext(ctx, historyReads).Scan(&before))
+
+	var ids []string
+
+	for row, err := range service.SidebarSessions(ctx, time.Time{}) {
+		require.NoError(t, err)
+
+		ids = append(ids, row.Conversation.ID)
+	}
+
+	require.Equal(t, []string{"visible"}, ids)
+
+	_, err = service.db.ExecContext(ctx, `SELECT pg_stat_force_next_flush()`)
+	require.NoError(t, err)
+	require.NoError(t, service.db.QueryRowContext(ctx, historyReads).Scan(&after))
+	require.Equal(t, int64(1), after-before, "sidebar history checks must stop at the first indexed entry")
+}
+
 func TestSidebarSessionsAutoSettleAndReopen(t *testing.T) {
 	service := newTestSessionService(t)
 	ctx := t.Context()

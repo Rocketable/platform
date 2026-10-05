@@ -1090,11 +1090,7 @@ type SidebarSession struct {
 // Breaking iteration or cancelling ctx closes the database rows.
 func (s *SessionService) SidebarSessions(ctx context.Context, autoSettleBefore time.Time) iter.Seq2[SidebarSession, error] {
 	return func(yield func(SidebarSession, error) bool) {
-		rows, err := s.db.QueryContext(ctx, `WITH conversations_with_history AS (
-    SELECT DISTINCT conversation_id
-    FROM session_entries
-),
-running_conversations AS (
+		rows, err := s.db.QueryContext(ctx, `WITH running_conversations AS (
     SELECT DISTINCT conversation_id
     FROM active_turns
     WHERE terminal = ''
@@ -1106,7 +1102,10 @@ private_conversations AS (
 eligible_conversations AS (
     SELECT c.*, r.conversation_id IS NOT NULL AS running
     FROM managed_conversations c
-    JOIN conversations_with_history h ON h.conversation_id = c.conversation_id
+    -- Keep the history check per conversation and stop at its first entry.
+    CROSS JOIN LATERAL (
+        SELECT 1 FROM session_entries e WHERE e.conversation_id = c.conversation_id LIMIT 1
+    ) h
     LEFT JOIN running_conversations r ON r.conversation_id = c.conversation_id
     LEFT JOIN private_conversations p ON p.conversation_id = c.conversation_id
     WHERE c.conversation_id NOT LIKE 'cron:%'
