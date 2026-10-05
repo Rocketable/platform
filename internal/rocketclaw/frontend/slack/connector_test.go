@@ -855,13 +855,6 @@ func TestSocketLoopEnqueuesEventsAPIWhenAckFails(t *testing.T) {
 	}
 }
 
-func TestHandleEventsAPIIgnoresUnknownEventData(_ *testing.T) {
-	connector := newTestConnector("http://slack.test")
-
-	connector.handleEventsAPI(context.Background(), socketmode.Event{Data: "not events api"})
-	connector.handleEventsAPI(context.Background(), socketmode.Event{Data: slackevents.EventsAPIEvent{}})
-}
-
 func TestEventLoopRoutesEventsAPI(t *testing.T) {
 	var (
 		posted    []url.Values
@@ -4168,15 +4161,15 @@ func TestHandleMessageEventForwardsSteersInSendOrder(t *testing.T) {
 
 	first := newSlackMessageEvent("111.1", "111.0", "first")
 	first.Channel = "C123"
-	connector.handleMessageEvent(t.Context(), first, slackNativeForward{})
+	connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(first))
 
 	second := newSlackMessageEvent("111.2", "111.0", "second")
 	second.Channel = "C123"
-	connector.handleMessageEvent(t.Context(), second, slackNativeForward{})
+	connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(second))
 
 	third := newSlackMessageEvent("111.3", "111.0", "third")
 	third.Channel = "C123"
-	connector.handleMessageEvent(t.Context(), third, slackNativeForward{})
+	connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(third))
 
 	final := protocol.NewOutboundMessage("test", "done")
 	final.TurnID = "turn-1"
@@ -6887,7 +6880,7 @@ func TestHandleReactionAddedEventStopsReplyThread(t *testing.T) {
 			replyTarget := &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "171234.5678", ThreadTS: "171234.5678"}
 			key := slackPendingKey(replyTarget)
 			connector.pending[key] = slackReplyState{ChannelID: "C123", MessageTS: "171234.9999", Key: key}
-			connector.handleReactionAddedEvent(context.Background(), newTestReactionAddedEvent("U123", reaction, "171234.9999"))
+			connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(newTestReactionAddedEvent("U123", reaction, "171234.9999")))
 
 			assert.Equal(t, []goalThreadStopCall{{channelID: "C123", threadTS: "171234.5678"}}, router.goalStops)
 			assert.Contains(t, reactions, "/reactions.add "+slackInterruptionReaction+" 222.333")

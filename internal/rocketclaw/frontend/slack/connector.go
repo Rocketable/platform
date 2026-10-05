@@ -1581,27 +1581,16 @@ func (c *Connector) handleEventsAPI(ctx context.Context, event socketmode.Event)
 
 	forward, _ := nativeSlackForward(payload)
 
-	if ev, ok := eventsAPIEvent.InnerEvent.Data.(*slackevents.ChannelRenameEvent); ok {
+	switch ev := eventsAPIEvent.InnerEvent.Data.(type) {
+	case *slackevents.ChannelRenameEvent:
 		c.queueChannelFact(ev.Channel.ID, ev.Channel.Name, time.Now())
-		return
-	}
-
-	if ev, ok := eventsAPIEvent.InnerEvent.Data.(*slackevents.GroupRenameEvent); ok {
+	case *slackevents.GroupRenameEvent:
 		c.queueChannelFact(ev.Channel.ID, ev.Channel.Name, time.Now())
-		return
-	}
-
-	if ev, ok := eventsAPIEvent.InnerEvent.Data.(*slackevents.MessageEvent); ok {
+	case *slackevents.MessageEvent:
 		c.handleMessageEvent(ctx, ev, forward)
-		return
-	}
-
-	if ev, ok := eventsAPIEvent.InnerEvent.Data.(*slackevents.AppMentionEvent); ok {
+	case *slackevents.AppMentionEvent:
 		c.handleAppMentionEvent(ctx, ev, forward)
-		return
-	}
-
-	if ev, ok := eventsAPIEvent.InnerEvent.Data.(*slackevents.ReactionAddedEvent); ok {
+	case *slackevents.ReactionAddedEvent:
 		c.handleReactionAddedEvent(ctx, ev)
 	}
 }
