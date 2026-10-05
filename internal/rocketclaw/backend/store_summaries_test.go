@@ -72,6 +72,45 @@ func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
 	}
 }
 
+func TestSessionSummaryBackfillBatchesDiscovery(t *testing.T) {
+	service := newTestSessionService(t)
+	// Flush the same connection's scan statistics without timing-based waits.
+	service.db.SetMaxOpenConns(1)
+
+	const backlog = 8
+	for i := range backlog {
+		insertSessionEntryWithoutSummary(t, service, fmt.Sprintf("history-%d", i), testSessionEntry("question", "answer"))
+	}
+	// A history arriving after discovery must still be picked up by the next batch.
+	_, err := service.db.ExecContext(t.Context(), `CREATE FUNCTION add_late_history() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('a-late-history', '{}', 'invalid');
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER add_late_history AFTER INSERT ON session_summaries
+FOR EACH ROW WHEN (NEW.conversation_id = 'history-0') EXECUTE FUNCTION add_late_history();`)
+	require.NoError(t, err)
+	_, err = service.db.ExecContext(t.Context(), `SELECT pg_stat_force_next_flush()`)
+	require.NoError(t, err)
+
+	var before, after int64
+	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT pg_stat_get_numscans('managed_conversations'::regclass)`).Scan(&before))
+
+	require.NoError(t, service.backfillSessionSummaries(t.Context()))
+	_, err = service.db.ExecContext(t.Context(), `SELECT pg_stat_force_next_flush()`)
+	require.NoError(t, err)
+	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT pg_stat_get_numscans('managed_conversations'::regclass)`).Scan(&after))
+	// Membership rechecks use the primary key; discovery needs three table scans:
+	// the initial backlog, the late arrival, and the final empty check.
+	require.Equal(t, int64(3), after-before)
+
+	var summaries, answers int
+	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT count(*), count(*) FILTER (WHERE preview = 'answer'::bytea) FROM session_summaries`).Scan(&summaries, &answers))
+	require.Equal(t, backlog+1, summaries)
+	require.Equal(t, backlog, answers)
+}
+
 func TestSessionSummaryBackfillProgressFailureAndResume(t *testing.T) {
 	workspace := t.TempDir()
 	service := newTestSessionServiceAt(t, workspace)

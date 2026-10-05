@@ -154,22 +154,22 @@ ON CONFLICT (conversation_id) DO UPDATE SET preview = EXCLUDED.preview, last_upd
 
 func (s *SessionService) backfillSessionSummaries(ctx context.Context) error {
 	for {
-		var conversationID string
-
-		err := s.db.QueryRowContext(ctx, `SELECT conversation_id FROM
+		conversationIDs, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM
 (SELECT conversation_id FROM managed_conversations UNION SELECT conversation_id FROM session_entries) c
 WHERE NOT EXISTS (SELECT 1 FROM session_summaries s WHERE s.conversation_id = c.conversation_id)
-ORDER BY conversation_id COLLATE "C" LIMIT 1`).Scan(&conversationID)
-		if errors.Is(err, sql.ErrNoRows) {
+ORDER BY conversation_id COLLATE "C"`, "missing session summaries")
+		if err != nil {
+			return err
+		}
+
+		if len(conversationIDs) == 0 {
 			return nil
 		}
 
-		if err != nil {
-			return fmt.Errorf("find missing session summary: %w", err)
-		}
-
-		if err := s.backfillSessionSummary(ctx, conversationID); err != nil {
-			return err
+		for _, conversationID := range conversationIDs {
+			if err := s.backfillSessionSummary(ctx, conversationID); err != nil {
+				return err
+			}
 		}
 	}
 }
