@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -307,6 +308,7 @@ type turnFinish struct {
 type conversationJournal struct {
 	store          *SessionService
 	conversationID string
+	log            *slog.Logger
 }
 
 // LoadTurnStep returns one recorded step of a conversation's turns.
@@ -342,7 +344,19 @@ func (j conversationJournal) Save(ctx context.Context, key string, value json.Ra
 
 // SaveTrace records live progress on the request's row; retry turn IDs share it,
 // and late writes cannot alter a stopped or failed turn.
-func (j conversationJournal) SaveTrace(ctx context.Context, turnID string, trace []json.RawMessage) error {
+func (j conversationJournal) SaveTrace(ctx context.Context, turnID string, trace []json.RawMessage) (err error) {
+	startedAt := time.Now()
+
+	defer func() {
+		// These are repeated snapshots, not tool starts/finishes or execution durations.
+		// Ponytail: full snapshots repeat prior operations; a delta API needs separate approval.
+		for _, progress := range harness.PublicProgressFromTrace(trace) {
+			if progress.Kind != harness.PublicProgressText {
+				j.log.Info("operation observed", "event", "operation_snapshot", "conversation_id", j.conversationID, "turn_id", turnID, "operation_id", progress.ID, "parent_id", progress.ParentID, "kind", progress.Kind, "state", progress.State, "boundary", "journal_observation", "observation_elapsed_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
+			}
+		}
+	}()
+
 	rowID, _, _ := strings.Cut(turnID, "/")
 
 	data, err := json.Marshal(trace)

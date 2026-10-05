@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"strings"
 	"testing"
@@ -13,8 +14,41 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
+
+func TestPublicWebDoesNotExposeDiagnostics(t *testing.T) {
+	// No RPC calls are needed for SPA routes; use a real, unconnected client.
+	connection, err := grpc.NewClient("passthrough:///unused", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+
+	handler := rpc.NewHTTPHandler(connection)
+
+	for _, prefix := range []string{"/debug/pprof/", "/s/debug/pprof/"} {
+		for _, path := range []string{"", "heap", "allocs", "goroutine", "profile?seconds=1", "trace?seconds=0.01", "cmdline", "symbol", "block", "mutex", "unknown"} {
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, prefix+path, http.NoBody)
+			request.RemoteAddr = "127.0.0.1:12345"
+			handler.ServeHTTP(response, request)
+			// SPA success is not evidence of a profiling endpoint: inspect the content.
+			if strings.HasPrefix(prefix, "/s/") {
+				require.Equal(t, http.StatusOK, response.Code, prefix+path)
+				require.Contains(t, response.Body.String(), "/assets/main-", prefix+path)
+			} else {
+				require.Equal(t, http.StatusNotFound, response.Code, prefix+path)
+			}
+
+			require.NotContains(t, response.Body.String(), "Types of profiles available", path)
+			require.NotContains(t, response.Body.String(), "goroutine profile:", path)
+			require.NotEqual(t, "application/octet-stream", response.Header().Get("Content-Type"), path)
+			require.Empty(t, response.Header().Get("Content-Disposition"), path)
+		}
+	}
+}
 
 func TestWebRPC(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()

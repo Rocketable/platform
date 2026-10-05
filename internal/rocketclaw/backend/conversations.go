@@ -418,6 +418,7 @@ func (b *Bridge) drainSteers(ctx context.Context, phase rocketcode.TurnPhase) []
 		b.publishConsumed(ctx, request.inbound, header)
 		directSkill := inboundDirectSkill(request.inbound)
 		inputs = append(inputs, rocketcode.PromptInput{ID: request.queueItemID, Text: prompt, Header: header, Attachments: attachmentsFromInbound(request.inbound.Attachments), DirectSkill: directSkill})
+		b.log.Info("steer injected", "event", "steer_injected", "conversation_id", b.config.ConversationID, "queue_item_id", request.queueItemID, "phase", phase)
 	}
 
 	return inputs

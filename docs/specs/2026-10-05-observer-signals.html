@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RocketClaw: useful logs and a private diagnostic URL</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { max-width: 48rem; margin: 2rem auto; padding: 0 1rem 2rem; font: 17px/1.6 system-ui, sans-serif; }
+    h1 { font-size: 1.8rem; line-height: 1.25; }
+    h2 { font-size: 1.25rem; margin-top: 2rem; }
+    li { margin-bottom: .65rem; }
+    code { font-size: .88em; overflow-wrap: anywhere; }
+    pre { padding: 1rem; border: 1px solid; border-radius: .3rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+    footer { margin-top: 2rem; font-size: .9rem; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>RocketClaw: useful logs and a private diagnostic URL</h1>
+  <p><strong>The proposal:</strong> print useful measurements in the existing logs, and offer a private URL for deeper inspection. RocketClaw writes no diagnostic files: no saved profiles, trace files, or incident folders.</p>
+
+  <h2>1. Print a small health report periodically</h2>
+  <p>Start with one report per minute as a proposed cadence, then check its cost and log volume.</p>
+  <ul>
+    <li><strong>Memory:</strong> Go heap usage and allocation rate, plus time spent freeing unused memory.</li>
+    <li><strong>Work:</strong> goroutine count and scheduling delays. These are clues, not proof that work is stuck or leaking.</li>
+    <li><strong>Database connections:</strong> busy, idle, and total connections; count and duration of waits for a connection. This does not measure SQL query time.</li>
+  </ul>
+  <p>Use <code>runtime/metrics</code> and the existing pool's <code>sql.DB.Stats</code>. Include the sampling interval and process-start identity; calculate rates from changes between samples. Runtime memory is not total operating-system memory usage. Routine reports stay at INFO, not WARN merely because a number is large.</p>
+
+  <h2>2. Add measurements to the events we already log</h2>
+  <ul>
+    <li><strong>Provider calls:</strong> provider, model, HTTP status, elapsed time, and attempt outcome—including successes. An unsuccessful retry attempt is not automatically a failed turn; HTTP return time is not full generation time.</li>
+    <li><strong>Turns and tools:</strong> existing identities, observed operation, duration, and outcome. Distinguish first response item, first assistant text, human-question waits, and final delivery. Record parallel operations separately.</li>
+    <li><strong>Queues and steers:</strong> accepted, persisted, handed to the agent, started, or explicitly removed; log queue age, due time, and the real blocker. Old work may be deliberately parked.</li>
+    <li><strong>Delivery and background work:</strong> generated, text accepted, attachment failed, intentionally silent, stopped, or failed; include elapsed time. Preserve current acknowledgement and retry behavior.</li>
+    <li><strong>Startup:</strong> actual revision when available, Go version, and process-start identity. A merged fix does not establish which binary is running.</li>
+  </ul>
+  <p>Keep the existing text logs. Use consistent event names and key/value fields, existing identities, and milliseconds for durations. Do not print prompts, message bodies, tool arguments, credentials, or full request URLs.</p>
+  <pre aria-label="Invented example log fields">event=delivery_finished turn_id=example-turn duration_ms=240 text_outcome=accepted attachment_outcome=failed</pre>
+  <p>That example is invented. Extend existing events rather than add another system to track the same work.</p>
+
+  <h2>3. Offer a private pprof URL</h2>
+  <p>Yes—<code>net/http/pprof</code> is the Go facility for this. An opt-in listener such as <code>http://127.0.0.1:6060/debug/pprof/</code> would let a trusted tool inspect memory allocation sites, goroutine stacks, or request a short CPU profile or execution trace.</p>
+  <p>Register only the needed handlers on a dedicated server. Keep it separate from the normal Web interface, which currently defaults to listening on all network interfaces. Bind diagnostics to loopback, leave it off unless enabled, and do not expose it through the public Web server.</p>
+  <p>RocketClaw sends diagnostic data straight back in the HTTP response; it does not save it to disk. A requesting tool may save its own copy. CPU profiles and ordinary execution traces record work after the request begins; they cannot reconstruct an incident that already ended. No automatic recording, disk-backed flight recorder, or always-on CPU/block/mutex profiling is proposed.</p>
+
+  <h2>What the observation loop needs</h2>
+  <p>Read the regular health reports as well as warnings and errors, and use event fields to follow the affected operation. Use the running build identity—not merge time—to determine whether a fix is present.</p>
+  <p><strong>Live profiling is allowed.</strong> The observation loop may inspect memory and goroutine profiles and request short CPU profiles or execution traces through the private diagnostic URL. Its rules must explicitly permit those requests: CPU and trace recording temporarily turn on measurement and add overhead. This does not permit restarts, configuration changes, database writes, or diagnostic file writes by RocketClaw. Keep responses private and any local scratch copies under the observer repository's <code>.tmp/</code>.</p>
+
+  <h2>Where the changes belong</h2>
+  <p><code>cmd/rocketclaw</code> owns the diagnostic listener and startup identity. The backend owns the periodic report and turn/queue/provider event fields. Slack and cron code report their own delivery and completion outcomes. Keep existing OpenTelemetry support; this proposal needs no new monitoring service or dependency.</p>
+  <p>Before shipping: test that the fields describe success, failure, intentional waits, and silence correctly; check that diagnostics cannot be reached through the public Web handler; measure sampling/profile overhead; and verify no diagnostic files are created.</p>
+  <footer>Proposal only, revised 2026-10-05. No application changes or production access. README impact considered: no edit needed for this proposal; implementation would document the diagnostic URL and settings. Reference: <a href="https://pkg.go.dev/net/http/pprof">Go HTTP profiling</a>.</footer>
+</main>
+</body>
+</html>

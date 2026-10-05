@@ -95,6 +95,68 @@ from a checkout, `make -C internal/rocketclaw build` (also invoked by root
 Bun before compiling `bin/rocketclaw`. Commit the rebuilt `dist/` files alongside
 changes in `internal/rocketclaw/web/`.
 
+#### Health logs and private profiling
+
+At INFO level, `rocketclaw health` reports once a minute after the database pool
+opens, including while waiting for the run lock. `process_start` identifies one
+process lifetime; startup logs include the Go version and available embedded
+`build_revision`/`build_dirty` metadata. A missing revision is not a known commit.
+
+| Field | Meaning |
+| --- | --- |
+| `sample_interval_seconds` | Actual elapsed interval used for counter deltas/rates |
+| `go_heap_objects_bytes` | Go heap object memory, **not** process RSS |
+| `go_alloc_bytes_per_second` | Allocated bytes per second over that interval |
+| `go_gc_cpu_seconds_interval` | Estimated GC CPU-seconds, **not** wall-clock pause time |
+| `go_goroutines` | Current goroutine count |
+| `go_scheduler_observations_interval`, `go_scheduler_p99_upper_seconds` | New scheduling-delay observations and approximate p99 bucket upper bound; no p99 when there are no new observations |
+| `db_pool_in_use`, `db_pool_idle`, `db_pool_open` | Database connection counts |
+| `db_pool_wait_count_interval`, `db_pool_wait_duration_ms_interval` | Pool-connection waits, **not** SQL query durations |
+
+Provider events distinguish physical HTTP attempts (including retries) from
+Codex SDK-envelope returns: do not count both as separate network attempts.
+HTTP return timing is not full generation time. Tool/progress observation elapsed
+times describe when RocketClaw observed a state, not exact tool execution duration.
+Use existing conversation, turn, and operation IDs to follow work; these scalar
+logs do not reconstruct historical profiles or traces.
+
+Start with `rocketclaw run --pprof` to enable Go profiling at the fixed
+`127.0.0.1:6060` address. It is off by default, is not saved in config, and is
+separate from public Web. An occupied port fails startup; a later serving failure
+is logged without stopping agent work or retrying. All standard pprof endpoints
+are available, including cmdline, symbol, block, mutex, CPU profiles, and traces.
+Block and mutex profiling still require enabling collection separately.
+The diagnostic server does not serve gRPC debug requests or events.
+
+For an authorized remote inspection, keep forwarding private:
+
+```sh
+ssh -N -L 127.0.0.1:6060:127.0.0.1:6060 trusted-host
+```
+
+On the requester's machine, run short captures **one at a time** and keep downloads
+private under that repository's `.tmp/` (never publish them):
+
+```sh
+mkdir -p .tmp/private-profiles
+chmod 700 .tmp/private-profiles
+umask 077
+export TMPDIR="$PWD/.tmp/private-profiles" PPROF_TMPDIR="$PWD/.tmp/private-profiles"
+curl --fail -o .tmp/private-profiles/heap.pprof 'http://127.0.0.1:6060/debug/pprof/heap'
+curl --fail -o .tmp/private-profiles/cpu.pprof 'http://127.0.0.1:6060/debug/pprof/profile?seconds=30'
+curl --fail -o .tmp/private-profiles/trace.out 'http://127.0.0.1:6060/debug/pprof/trace?seconds=5'
+go tool pprof .tmp/private-profiles/heap.pprof
+go tool pprof .tmp/private-profiles/cpu.pprof
+go tool trace -http=127.0.0.1:0 .tmp/private-profiles/trace.out
+```
+
+RocketClaw streams diagnostics over HTTP and writes no diagnostic files. Profiles
+and especially traces add temporary CPU/memory overhead and can reveal private
+runtime details. Loopback is not authentication: local processes can access this
+port. Do not expose it through public listeners, proxies, or tunnels. CPU and
+trace capture use Go's native durations, conflicts, and request cancellation;
+there are no application recording limits or always-on CPU/block/mutex captures.
+
 Slack native forwarded-thread expansion requires the bot scopes `channels:read` and `channels:history`; reinstall the Slack app after adding scopes. See `cmd/rocketclaw/CHEATSHEET.md`. RocketClaw expands only source channels Slack confirms are public and that the bot can already read. It never auto-joins a channel. Private, inaccessible, malformed, or partially unreadable source threads retain only Slack's forwarded preview.
 
 Slack configuration uses direct `slack.channels` mappings. Each mapping names a channel, an ordered non-empty `agents` list, and its authorized `allowed_user_ids`. An ordinary authorized app mention in a configured channel starts a fresh managed thread whose initiating message is its first turn. An `@` channel row is not a Slack channel; it supplies agents and an allowlist for hails in any other joined public channel, private channel, or group DM. A hail in an unmanaged thread takes that thread over and includes prior messages. 1:1 DMs never start this way. The bot still never auto-joins. A root `$agent` mention opens the native agent selector; selecting an agent registers a ready thread for that agent so the next human reply is the first turn. A root `$agent <name>` mention can also select a configured agent directly: without a message it registers a ready thread, while a following message starts the selected agent with that message as its first turn. A command-help mention is another exception: RocketClaw posts permanent help as the first thread reply without adding either message to agent history. Later replies use only that thread's persisted history.

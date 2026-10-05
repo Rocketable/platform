@@ -466,6 +466,7 @@ func (b *Bridge) enqueue(ctx context.Context, request *bridgeRequest, operation 
 		b.steers = append(b.steers, *request)
 		b.saveSteersLocked(ctx)
 		b.mu.Unlock()
+		b.log.Info("steer admitted", "event", "steer_admitted", "conversation_id", b.config.ConversationID, "queue_item_id", request.queueItemID)
 
 		return nil
 	}
@@ -634,7 +635,7 @@ func (b *Bridge) storeQueued() {
 }
 
 func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
-	b.log.Info("bridge dequeued request", "conversation_id", b.config.ConversationID, "has_inbound", request.inbound != nil, "turn_id", request.turnID, "scheduled_message_id", request.scheduledMessageID, "queue_len", len(b.requestCh))
+	b.log.Info("bridge dequeued request", "event", "request_dequeued", "conversation_id", b.config.ConversationID, "has_inbound", request.inbound != nil, "turn_id", request.turnID, "scheduled_message_id", request.scheduledMessageID, "queue_item_id", request.queueItemID, "queue_len", len(b.requestCh))
 	b.setHandling(true)
 	b.mu.Lock()
 	b.activeCompletion = request.completion
@@ -737,7 +738,7 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 	}
 
 	if errHandle != nil {
-		b.log.Error("handle inbound rocketcode message", "error", errHandle)
+		b.log.Error("handle inbound rocketcode message", "error_type", fmt.Sprintf("%T", errHandle))
 	}
 
 	if request.completion != nil {
@@ -787,6 +788,7 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 	if request.queueItemID != "" && request.producer == nil {
 		goal, active, err := b.config.SessionService.Goal(b.config.ConversationID)
 		if err != nil || active && goal.Status == GoalStatusActive {
+			b.log.Info("queue activation unavailable", "event", "queue_blocked", "conversation_id", b.config.ConversationID, "queue_item_id", request.queueItemID, "goal_active", active && goal.Status == GoalStatusActive, "error_type", fmt.Sprintf("%T", err))
 			return false, err
 		}
 	}
@@ -799,9 +801,14 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	var queuedItem protocol.ThreadQueueItem
+
 	if request.queueItemID != "" {
-		queuedItem, claimed, err := (stateDAO{db: tx}).claimThreadQueueItem(ctx, owner.config.ConversationID, request.queueItemID)
+		var claimed bool
+
+		queuedItem, claimed, err = (stateDAO{db: tx}).claimThreadQueueItem(ctx, owner.config.ConversationID, request.queueItemID)
 		if err != nil || !claimed {
+			b.log.Info("queue claim unavailable", "event", "queue_claim_unavailable", "conversation_id", owner.config.ConversationID, "queue_item_id", request.queueItemID, "error_type", fmt.Sprintf("%T", err))
 			return false, err
 		}
 
@@ -826,6 +833,14 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 	}
 
 	request.turnID = turnID
+	if request.queueItemID != "" {
+		log := b.log
+		if !queuedItem.StashAt.IsZero() {
+			log = log.With("queue_age_ms", time.Since(queuedItem.StashAt).Milliseconds())
+		}
+
+		log.Info("queue item started", "event", "queue_started", "boundary", "activation", "conversation_id", owner.config.ConversationID, "turn_id", turnID, "queue_item_id", queuedItem.ID, "stash_at", queuedItem.StashAt)
+	}
 
 	return true, nil
 }
@@ -840,10 +855,12 @@ func (b *Bridge) pickLaterWork(ctx context.Context, fromTimer bool) error {
 	}
 
 	if fromTimer && (handling || len(b.requestCh) > 0) {
+		b.log.Info("later work blocked", "event", "queue_blocked", "conversation_id", b.config.ConversationID, "blocker", "active_or_queued_request")
 		return nil
 	}
 
 	if !fromTimer && len(b.requestCh) > 0 {
+		b.log.Info("later work blocked", "event", "queue_blocked", "conversation_id", b.config.ConversationID, "blocker", "queued_request")
 		return nil
 	}
 
@@ -853,6 +870,7 @@ func (b *Bridge) pickLaterWork(ctx context.Context, fromTimer bool) error {
 	}
 
 	if ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
+		b.log.Info("later work blocked", "event", "queue_blocked", "conversation_id", b.config.ConversationID, "blocker", "goal")
 		return nil
 	}
 
@@ -879,6 +897,7 @@ func (b *Bridge) pickLaterWork(ctx context.Context, fromTimer bool) error {
 	}
 
 	if head.Scheduled.DueAt.After(now) {
+		b.log.Info("later work not due", "event", "queue_blocked", "conversation_id", b.config.ConversationID, "scheduled_message_id", head.ScheduledID, "blocker", "not_due", "due_at", head.Scheduled.DueAt, "remaining_ms", head.Scheduled.DueAt.Sub(now).Milliseconds())
 		return nil
 	}
 
@@ -918,7 +937,17 @@ func (b *Bridge) submitEnqueuedItem(ctx context.Context, item *protocol.ThreadQu
 		inbound.SlackReply = new(*item.SlackReply)
 	}
 
-	return b.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: item.ID}, "submit enqueued message")
+	startedAt := time.Now()
+	err := b.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: item.ID}, "submit enqueued message")
+
+	log := b.log
+	if !item.StashAt.IsZero() {
+		log = log.With("queue_age_ms", time.Since(item.StashAt).Milliseconds())
+	}
+
+	log.Info("queue item admission returned", "event", "queue_admitted", "conversation_id", b.config.ConversationID, "queue_item_id", item.ID, "admitted", err == nil, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
+
+	return err
 }
 
 func (b *Bridge) submitDueScheduled(ctx context.Context, id string, armed *protocol.ScheduledMessageState, now time.Time) error {
@@ -943,7 +972,7 @@ func (b *Bridge) submitDueScheduled(ctx context.Context, id string, armed *proto
 		b.armScheduledMessage(id, &stored)
 	}
 
-	b.log.Info("scheduled message enqueued", "scheduled_message_id", id, "conversation_id", armed.ConversationID, "recurring", stored.Recurring, "queue_len", len(b.requestCh))
+	b.log.Info("scheduled message enqueued", "event", "schedule_admitted", "scheduled_message_id", id, "conversation_id", armed.ConversationID, "due_at", armed.DueAt, "overdue_ms", now.Sub(armed.DueAt).Milliseconds(), "recurring", stored.Recurring, "queue_len", len(b.requestCh))
 
 	return nil
 }
@@ -1034,10 +1063,17 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 
 	normalizeInboundAttachments(msg)
 
-	b.log.Info("starting rocketcode turn", "conversation_id", b.config.ConversationID, "turn_id", turnID, "source", msg.Source, "kind", msg.Kind, "text_len", len([]rune(msg.Text)), "attachment_count", len(msg.Attachments), "slack_channel", slackChannel, "slack_message_ts", slackMessageTS, "slack_thread_ts", slackThreadTS)
+	b.log.Info("starting rocketcode turn", "event", "turn_started", "conversation_id", b.config.ConversationID, "turn_id", turnID, "queue_item_id", request.queueItemID, "scheduled_message_id", request.scheduledMessageID, "source", msg.Source, "kind", msg.Kind, "text_len", len([]rune(msg.Text)), "attachment_count", len(msg.Attachments), "slack_channel", slackChannel, "slack_message_ts", slackMessageTS, "slack_thread_ts", slackThreadTS)
 
 	defer func() {
-		b.log.Info("finished rocketcode turn", "conversation_id", b.config.ConversationID, "turn_id", turnID, "duration_ms", time.Since(started).Milliseconds(), "text_len", len([]rune(result.text)), "error", errLog)
+		outcome := "completed"
+		if errors.Is(errLog, errTurnInterrupted) && err == nil {
+			outcome = "stopped"
+		} else if errLog != nil {
+			outcome = "failed"
+		}
+
+		b.log.Info("finished rocketcode turn", "event", "turn_finished", "outcome", outcome, "conversation_id", b.config.ConversationID, "turn_id", turnID, "duration_ms", time.Since(started).Milliseconds(), "text_len", len([]rune(result.text)), "error_type", fmt.Sprintf("%T", errLog))
 	}()
 
 	if fallback := attachmentFallback(msg); fallback != "" {
@@ -1075,7 +1111,7 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 			return errPublish
 		}
 
-		b.log.Error("run rocketcode turn", "error", errTurn)
+		b.log.Error("run rocketcode turn", "error_type", fmt.Sprintf("%T", errTurn))
 
 		result = runResult{turnID: turnID, text: internalErrorResponse + "\n\n" + errTurn.Error(), workflowTerminal: result.workflowTerminal}
 		errLog = errors.Join(errTurn, b.finish(ctx, request, &finish, &result, protocol.TerminalFailed))
@@ -1135,14 +1171,20 @@ func (b *Bridge) deliver(ctx context.Context, request *bridgeRequest, outbound *
 	}
 	b.mu.Unlock()
 
+	startedAt := time.Now()
 	if err := b.bus.PublishOutbound(context.WithoutCancel(ctx), outbound); err != nil {
+		b.log.Info("final delivery publication failed", "event", "delivery_acknowledged", "boundary", "bus_publish", "conversation_id", b.config.ConversationID, "turn_id", request.turnID, "acknowledged", false, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
 		msg.CompleteResponseWithAttachments("", nil, err)
+
 		return fmt.Errorf("publish final outbound message: %w", err)
 	}
 
-	if err := outbound.WaitDelivered(ctx); err != nil {
-		msg.CompleteResponseWithAttachments(outbound.Text, outbound.Attachments, err)
-		return fmt.Errorf("wait for final outbound delivery: %w", err)
+	errDelivered := outbound.WaitDelivered(ctx)
+	b.log.Info("final delivery acknowledgement returned", "event", "delivery_acknowledged", "boundary", "frontend_ack", "conversation_id", b.config.ConversationID, "turn_id", request.turnID, "acknowledged", errDelivered == nil, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", errDelivered))
+
+	if errDelivered != nil {
+		msg.CompleteResponseWithAttachments(outbound.Text, outbound.Attachments, errDelivered)
+		return fmt.Errorf("wait for final outbound delivery: %w", errDelivered)
 	}
 
 	if outbound.Cronjob != nil && msg.SyncDestination == "" && (strings.TrimSpace(outbound.Text) != "" || len(outbound.Attachments) > 0) {
@@ -1207,7 +1249,7 @@ func (b *Bridge) runWorkflow(ctx context.Context, msg *protocol.InboundMessage, 
 		return result, fmt.Errorf("workflow %q is not configured", msg.Workflow.Name)
 	}
 
-	runner, err := newWorkflowAgentRunner(b.runtime, b.agentSnapshot(), rocketcode.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID}}, b.log, sessionTagTools(b.config.SessionService, b.config.ConversationID)...)
+	runner, err := newWorkflowAgentRunner(b.runtime, b.agentSnapshot(), rocketcode.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, b.config.ConversationID)...)
 	if err != nil {
 		return result, fmt.Errorf("prepare workflow agent runner: %w", err)
 	}
@@ -1662,10 +1704,11 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	b.log.Info("starting rocketcode looper", "conversation_id", b.config.ConversationID, "turn_id", turnID, "agent", agentName)
 
+	looperStarted := time.Now()
+
 	group.Go(func() error { return looper.Loop(turnCtx, input, sessionIn, staged.out, interrupts) })
 
-	looperStarted := time.Now()
-	firstOutput := false
+	firstOutput, firstText := false, false
 
 	firstOutputTimer := time.AfterFunc(30*time.Second, func() {
 		b.log.Warn("rocketcode turn has no first output yet", "conversation_id", b.config.ConversationID, "turn_id", turnID, "elapsed_ms", time.Since(looperStarted).Milliseconds(), "entry_count", len(observed), "replay_item_count", replayItemCount, "history_bytes", historyBytes, "compaction_count", compactionCount)
@@ -1677,10 +1720,16 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 			firstOutput = true
 
 			firstOutputTimer.Stop()
-			b.log.Info("received first rocketcode response item", "conversation_id", b.config.ConversationID, "turn_id", turnID, "kind", item.Kind, "elapsed_ms", time.Since(looperStarted).Milliseconds())
+			b.log.Info("received first rocketcode response item", "event", "first_response_item", "conversation_id", b.config.ConversationID, "turn_id", turnID, "kind", item.Kind, "duration_ms", time.Since(looperStarted).Milliseconds())
 		}
 
 		if item.Kind == rocketcode.ChatResponseAssistantMessage {
+			if !firstText && item.Text != "" {
+				firstText = true
+
+				b.log.Info("received first assistant text", "event", "first_assistant_text", "conversation_id", b.config.ConversationID, "turn_id", turnID, "duration_ms", time.Since(looperStarted).Milliseconds())
+			}
+
 			result.text = appendText(result.text, item.Text)
 		}
 	}
@@ -1694,17 +1743,15 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	finish.store = store
 	finish.entries = append(finish.entries, staged.entries...)
 
+	b.log.Info("rocketcode looper returned", "event", "generation_finished", "conversation_id", b.config.ConversationID, "turn_id", turnID, "duration_ms", time.Since(looperStarted).Milliseconds(), "interrupted", interrupted, "failed", err != nil, "error_type", fmt.Sprintf("%T", err))
+
 	if interrupted {
 		return result, errTurnInterrupted
 	}
 
 	if err != nil {
-		b.log.Info("rocketcode looper returned", "conversation_id", b.config.ConversationID, "turn_id", turnID, "duration_ms", time.Since(looperStarted).Milliseconds(), "error", err)
-
 		return result, fmt.Errorf("run rocketcode turn: %w", err)
 	}
-
-	b.log.Info("rocketcode looper returned", "conversation_id", b.config.ConversationID, "turn_id", turnID, "duration_ms", time.Since(looperStarted).Milliseconds(), "error", nil)
 
 	if len(staged.entries) > 0 {
 		result.responseID = staged.entries[len(staged.entries)-1].ResponseID
@@ -1713,6 +1760,8 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	result.attachments = attachments.Attachments()
 	if payload, ok := decision.Decision(staged.entries); ok {
 		result.text, result.outputDecided = payload, true
+		b.log.Info("background output decided", "event", "output_decided", "conversation_id", b.config.ConversationID, "turn_id", turnID, "intentional_silence", strings.TrimSpace(payload) == "")
+
 		if strings.TrimSpace(payload) == "" {
 			result.attachments = nil
 		}
@@ -1730,8 +1779,26 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	return result, nil
 }
 
-func providerLogAttrs(req *http.Request, resp *http.Response, status int, duration time.Duration, err error) []any {
-	attrs := []any{"method", req.Method, "path", req.URL.Path, "status", status, "duration", duration, "error", err}
+func providerLogAttrs(req *http.Request, resp *http.Response, status int, duration time.Duration, err error, boundary string) []any {
+	retryCount, _ := strconv.Atoi(req.Header.Get("X-Stainless-Retry-Count"))
+
+	outcome := "success"
+	if err != nil {
+		outcome = "transport_error"
+	} else if status < 200 || status >= 300 {
+		outcome = "http_error"
+	}
+
+	event := "provider_sdk_attempt"
+	if boundary == "sdk_return" {
+		event = "provider_sdk_return"
+
+		if err != nil {
+			outcome = "sdk_error"
+		}
+	}
+
+	attrs := []any{"event", event, "boundary", boundary, "method", req.Method, "status", status, "duration_ms", duration.Milliseconds(), "retry_count", retryCount, "outcome", outcome, "error_type", fmt.Sprintf("%T", err)}
 	if resp == nil {
 		return attrs
 	}
@@ -1743,20 +1810,13 @@ func providerLogAttrs(req *http.Request, resp *http.Response, status int, durati
 		}
 	}
 
-	if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
-		attrs = append(attrs, "retry_after", retryAfter)
-	}
-
-	if retryAfterMillis := resp.Header.Get("Retry-After-Ms"); retryAfterMillis != "" {
-		attrs = append(attrs, "retry_after_ms", retryAfterMillis)
-	}
-
-	if resetRequests := resp.Header.Get("X-Ratelimit-Reset-Requests"); resetRequests != "" {
-		attrs = append(attrs, "ratelimit_reset_requests", resetRequests)
-	}
-
-	if resetTokens := resp.Header.Get("X-Ratelimit-Reset-Tokens"); resetTokens != "" {
-		attrs = append(attrs, "ratelimit_reset_tokens", resetTokens)
+	for _, header := range []struct{ name, field string }{
+		{"Retry-After", "retry_after"}, {"Retry-After-Ms", "retry_after_ms"},
+		{"X-Ratelimit-Reset-Requests", "ratelimit_reset_requests"}, {"X-Ratelimit-Reset-Tokens", "ratelimit_reset_tokens"},
+	} {
+		if value := resp.Header.Get(header.name); value != "" {
+			attrs = append(attrs, header.field, value)
+		}
 	}
 
 	return attrs
@@ -1802,7 +1862,7 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 
 	tools = append(tools, customTools...)
 
-	return rocketcode.Config{Model: "", AutoApproverModel: b.runtime.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(b.runtime), Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: b.runtime.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: b.runtime.Instrumentation.HideInputs, HideOutputs: b.runtime.Instrumentation.HideOutputs}}, ChildSessions: childSessions{store: b.config.SessionService, conversationID: b.config.ConversationID}, Journal: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(b.runtime.MCPServers), MCPWorkspace: b.runtime.Workspace}
+	return rocketcode.Config{Model: "", AutoApproverModel: b.runtime.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(b.runtime), Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: b.runtime.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: b.runtime.Instrumentation.HideInputs, HideOutputs: b.runtime.Instrumentation.HideOutputs}}, ChildSessions: childSessions{store: b.config.SessionService, conversationID: b.config.ConversationID}, Journal: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(b.runtime.MCPServers), MCPWorkspace: b.runtime.Workspace}
 }
 
 func toMCPClientServers(servers map[string]config.MCPServerConfig) map[string]mcpclient.ServerConfig {

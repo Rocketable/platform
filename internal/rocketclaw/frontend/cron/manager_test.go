@@ -1,6 +1,7 @@
 package cronfrontend
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -195,12 +196,16 @@ func TestCronTraceConversationIDPreservesRelativePath(t *testing.T) {
 }
 
 func TestRunOneOffCronjobSetsTraceConversationID(t *testing.T) {
-	var sources []string
+	var (
+		sources     []string
+		logs        bytes.Buffer
+		destination string
+	)
 
 	m := New(t.TempDir(), ".", nil, newCronScheduleStore(t), &runnerMock{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		require.Equal(t, "helper", agent)
 		require.Equal(t, "Body", prompt)
-		require.Equal(t, "slack-thread:C1:1.2", progress.SyncDestination)
+		require.Equal(t, destination, progress.SyncDestination)
 		require.Equal(t, &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "helper", RanAt: "2000-01-02T03:04:05Z"}, progress.Cronjob)
 
 		sources = append(sources, progress.ConversationID)
@@ -212,17 +217,21 @@ func TestRunOneOffCronjobSetsTraceConversationID(t *testing.T) {
 			t.Fatalf("TextChannel = %q; want #ops", progress.TextChannel)
 		}
 
-		return protocol.CronRunResult{}, nil
-	}}, slog.New(slog.DiscardHandler))
+		return protocol.CronRunResult{ConversationID: progress.SyncDestination}, nil
+	}}, slog.New(slog.NewJSONHandler(&logs, nil)))
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC) }
 
-	for range 2 {
-		_, err := m.RunOneOffCronjob(t.Context(), &protocol.OneOffCronjob{Agent: "helper", Prompt: "Body", RelativePath: "cron/daily.md", TextChannel: "#ops", ConversationID: "slack-thread:C1:1.2"})
+	for _, destination = range []string{"slack-thread:C1:1.2", ""} {
+		_, err := m.RunOneOffCronjob(t.Context(), &protocol.OneOffCronjob{Agent: "helper", Prompt: "Body", RelativePath: "cron/daily.md", TextChannel: "#ops", ConversationID: destination})
 		require.NoError(t, err)
 	}
 
 	require.Len(t, sources, 2)
 	require.NotEqual(t, sources[0], sources[1])
+	require.Equal(t, 2, strings.Count(logs.String(), `"event":"cron_completed"`))
+	require.Equal(t, 1, strings.Count(logs.String(), `"outcome":"completed"`))
+	require.Equal(t, 1, strings.Count(logs.String(), `"outcome":"intentional_silence"`))
+	require.Contains(t, logs.String(), `"duration_ms":`)
 }
 
 func TestRunOneOffCronjobRejectsStoppedManager(t *testing.T) {
@@ -243,6 +252,8 @@ func TestRunOneOffCronjobRejectsStoppedManager(t *testing.T) {
 }
 
 func TestExecuteJobSetsTraceConversationID(t *testing.T) {
+	var logs bytes.Buffer
+
 	m := New(t.TempDir(), ".", nil, newCronScheduleStore(t), &runnerMock{RunFunc: func(_ context.Context, _, _ string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		if !strings.HasPrefix(progress.ConversationID, "cron:cron/daily.md:20000102T030405.000000006Z:") {
 			t.Fatalf("ConversationID = %q; want scheduled trace ID", progress.ConversationID)
@@ -253,10 +264,29 @@ func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 		}
 
 		return protocol.CronRunResult{}, nil
-	}}, slog.New(slog.DiscardHandler))
+	}}, slog.New(slog.NewJSONHandler(&logs, nil)))
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC) }
 
 	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", textChannel: "#ops", body: "Body"})
+	require.Contains(t, logs.String(), `"event":"cron_completed"`)
+	require.Contains(t, logs.String(), `"outcome":"intentional_silence"`)
+	require.Contains(t, logs.String(), `"duration_ms":`)
+	logs.Reset()
+
+	m.run = &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+		return protocol.CronRunResult{ConversationID: "destination"}, nil
+	}}
+	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", textChannel: "#ops", body: "Body"})
+	require.Contains(t, logs.String(), `"outcome":"completed"`)
+	require.Contains(t, logs.String(), `"destination_conversation_id":"destination"`)
+	logs.Reset()
+
+	m.run = &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+		return protocol.CronRunResult{}, errors.New("secret-bearing-error")
+	}}
+	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", textChannel: "#ops", body: "Body"})
+	require.Contains(t, logs.String(), `"outcome":"failed"`)
+	require.NotContains(t, logs.String(), "secret-bearing-error")
 }
 
 func TestLoadDefinitionsWithoutCronDirectory(t *testing.T) {
