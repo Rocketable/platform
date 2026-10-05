@@ -1,7 +1,11 @@
 package backend
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -58,12 +62,6 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	seed, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
-	recoveryID := protocol.SlackThreadConversationID("C888", "888.0")
-	require.NoError(t, seed.UpsertThread(recoveryID, ThreadState{Agent: "main"}))
-	require.NoError(t, seed.UpsertActiveTurn(ctx, &rocketcode.ActiveTurnCheckpoint{TurnID: "recover-1", ConversationKey: recoveryID, Agent: "main", Model: "gpt-5.5", DisplayModel: "gpt-5.5", ReplayInput: startupRecoveryReplayInput(t)}, nil))
-	require.NoError(t, seed.UpsertActiveTurn(ctx, &rocketcode.ActiveTurnCheckpoint{TurnID: "cron", ConversationKey: "cron:daily"}, nil))
-	require.NoError(t, seed.UpsertActiveTurn(ctx, &rocketcode.ActiveTurnCheckpoint{TurnID: "oneoff", ConversationKey: "one-off-cron:job"}, nil))
-	require.NoError(t, seed.UpsertActiveTurn(ctx, &rocketcode.ActiveTurnCheckpoint{TurnID: "unknown", ConversationKey: protocol.SlackThreadConversationID("C9", "9.9")}, nil))
 	require.NoError(t, seed.Stop())
 
 	var (
@@ -73,30 +71,19 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	)
 
 	slack := &slackFrontendMock{
-		DrainSteersFunc:          func(context.Context, string) []string { return []string{"steer"} },
-		RestorePendingSteersFunc: func(string, []protocol.PendingSteer) {},
-		DiscardPendingSteersFunc: func(context.Context, []protocol.PendingSteer) {},
+		StartFunc: func(context.Context) error {
+			order = append(order, "slack started")
+			return nil
+		},
+		DrainSteersFunc: func(context.Context, string) []string { return []string{"steer"} },
 		ActivateEnqueueFunc: func(context.Context, *protocol.ThreadQueueItem, *protocol.InboundMessage) error {
 			return nil
 		},
-		SetPendingSteersSinkFunc: func(sink protocol.PendingSteersSink) {
-			require.NotNil(t, sink.Set)
-			require.NoError(t, ctx.Err())
-
-			bridge := assembledRT.threads.bridges[threadID].(*Bridge)
-			inputs := bridge.config.SteerDrain.Drain(ctx, 0)
-			require.Equal(t, []rocketcode.PromptInput{{Text: "steer"}}, inputs)
-			require.NoError(t, bridge.config.EnqueueActivation.Activate(ctx, &protocol.ThreadQueueItem{ID: "q1"}, protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindEnqueue, "later", true)))
-			msg, err := bridge.config.RequestRestart("test restart")
-			require.NoError(t, err)
-			require.Equal(t, "restart requested; runtime cancellation started", msg)
-			cancel()
-
-			order = append(order, "attached")
-		},
 		StopFunc: func(cleanupCtx context.Context) error {
 			require.NoError(t, cleanupCtx.Err())
-			require.ErrorIs(t, ctx.Err(), context.Canceled)
+			require.NoError(t, ctx.Err(), "restart shuts down without the caller's signal")
+			require.True(t, assembledRT.threads.stopping, "bridges stop before frontends")
+			require.ErrorIs(t, assembledRT.RunCtx.Err(), context.Canceled, "the run lock context ends after bridges and before frontends")
 
 			order = append(order, "slack stopped")
 
@@ -145,6 +132,11 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			_, err = bridge.config.StartNewThread(rt.RunCtx, &protocol.StartNewThreadRequest{Source: protocol.SourceWeb})
 			require.ErrorContains(t, err, "not available for web turns")
 
+			msg, err := bridge.config.RequestRestart("test restart")
+			require.NoError(t, err)
+			require.Equal(t, "restart requested; runtime cancellation started", msg)
+			require.NoError(t, rt.RunCtx.Err(), "restart cancels work, not the run lock")
+
 			order = append(order, "assembled")
 
 			return slack, rt.RunCtx.Done(), []func(context.Context) error{
@@ -162,7 +154,11 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 		},
 	}
 	require.ErrorIs(t, Run(ctx, cfg, configPath, slog.New(slog.DiscardHandler), assembler), ErrRestartRequested)
-	require.Equal(t, []string{"validated", "validated", "assembled", "attached", "slack stopped", "extra stopped"}, order)
+	require.Equal(t, []string{"validated", "validated", "assembled", "slack started", "slack stopped", "extra stopped"}, order)
+
+	bridge := assembledRT.threads.bridges[threadID].(*Bridge)
+	require.Equal(t, []rocketcode.PromptInput{{Text: "steer"}}, bridge.config.SteerDrain.Drain(t.Context(), 0), "Slack steers drain once Slack is attached")
+	require.NoError(t, bridge.config.EnqueueActivation.Activate(t.Context(), &protocol.ThreadQueueItem{ID: "q1"}, protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindEnqueue, "later", true)))
 
 	for _, resource := range resources {
 		_, err := resource.Stat()
@@ -224,14 +220,12 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 				}()
 
 				return &slackFrontendMock{
-					DrainSteersFunc:          func(context.Context, string) []string { return nil },
-					RestorePendingSteersFunc: func(string, []protocol.PendingSteer) {},
-					DiscardPendingSteersFunc: func(context.Context, []protocol.PendingSteer) {},
+					StartFunc:       func(context.Context) error { return nil },
+					DrainSteersFunc: func(context.Context, string) []string { return nil },
 					ActivateEnqueueFunc: func(context.Context, *protocol.ThreadQueueItem, *protocol.InboundMessage) error {
 						return nil
 					},
-					SetPendingSteersSinkFunc: func(protocol.PendingSteersSink) {},
-					StopFunc:                 func(context.Context) error { return nil },
+					StopFunc: func(context.Context) error { return nil },
 				}, copyDone, nil, nil
 			},
 		}
@@ -273,43 +267,6 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 
 	require.Equal(t, []string{"answer", "answer"}, runQueuedStartup(t, 20*time.Second))
 	require.Empty(t, runQueuedStartup(t, time.Second))
-}
-
-func TestRunHoldsPairedStartupRecoveryBeforeAssemble(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Pair recovery\nmodel: gpt-5.5\npermission: {}\n---\nRespond concisely.\n")
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.json"), []byte(`{}`), 0o600))
-
-	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-	require.NoError(t, err)
-
-	managedID := protocol.SlackThreadConversationID("C1", "1.1")
-	privateID := "external_mcp:planner:private"
-	seed, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
-	require.NoError(t, err)
-	require.NoError(t, seed.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateID, ManagedConversationID: managedID, SlackChannel: "#ops"}))
-
-	for _, conversationID := range []string{privateID, managedID} {
-		_, err = seed.AppendEntryID(t.Context(), conversationID, testSessionEntryAt(time.Now().UTC(), conversationID))
-		require.NoError(t, err)
-	}
-
-	require.NoError(t, seed.UpsertActiveTurn(t.Context(), &rocketcode.ActiveTurnCheckpoint{TurnID: "pair-turn", ConversationKey: privateID, Agent: "planner", Model: "gpt-5.5", DisplayModel: "gpt-5.5", ReplayInput: startupRecoveryReplayInput(t)}, nil))
-	require.NoError(t, seed.Stop())
-
-	held := false
-	copyDone := make(chan struct{})
-	close(copyDone)
-
-	assembler := &frontendAssemblerMock{
-		ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil },
-		AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
-			held = rt.Sessions.startupRecoveryBlocks(managedID) && rt.Sessions.startupRecoveryBlocks(privateID)
-			return nil, copyDone, nil, nil
-		},
-	}
-	require.NoError(t, Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "@"}}}}, filepath.Join(workspace, "rocketclaw.json"), slog.New(slog.DiscardHandler), assembler))
-	require.True(t, held)
 }
 
 func TestConfigureInstrumentationStartsAndStopsExporter(t *testing.T) {
@@ -380,4 +337,170 @@ func TestKeyedConversationLocksAllowIndependentIDs(t *testing.T) {
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
+}
+
+// AE1, Risk "Lock lease": shutdown waits for a running bash command with the run
+// lock context, and so its heartbeat, still alive, and stops frontends only after.
+func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "waiter.md"), []byte("---\ndescription: Waiter\nmode: primary\nmodel: gpt-5.5\npermission:\n  bash:\n    \"*\": allow\n---\nPrompt\n"), 0o600))
+	started, finished := filepath.Join(workspace, "started"), filepath.Join(workspace, "done")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		code, err := json.Marshal(struct {
+			Code string `json:"code"`
+		}{"def main():\n    return bash(command=r'''touch " + started + " && sleep 2 && touch " + finished + "''')\n"})
+		assert.NoError(t, err)
+
+		output := fmt.Sprintf(`{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_b","name":"execute","arguments":%q}`, code)
+
+		if strings.Contains(string(body), "function_call_output") {
+			output = `{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}`
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[` + output + `]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
+
+	ctx, signal := context.WithCancel(t.Context())
+	defer signal()
+
+	runCtx := make(chan context.Context, 1)
+
+	slack := &slackFrontendMock{
+		StartFunc:       func(context.Context) error { return nil },
+		DrainSteersFunc: func(context.Context, string) []string { return nil },
+		StopFunc: func(context.Context) error {
+			assert.FileExists(t, finished, "frontends stop only after bash finishes")
+			return nil
+		},
+	}
+	assembler := &frontendAssemblerMock{
+		ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil },
+		AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+			runCtx <- rt.RunCtx
+
+			target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
+			_, err := rt.TextRouter.RegisterThread(target, "waiter")
+			require.NoError(t, err)
+
+			msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "wait for it", true)
+			msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.0", ThreadTS: "111.0"}
+			_, err = rt.TextRouter.SubmitThreadReply(rt.RunCtx, target, msg)
+			require.NoError(t, err)
+
+			return slack, nil, []func(context.Context) error{slack.Stop}, nil
+		},
+	}
+
+	var logs bytes.Buffer
+
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, cfg, "", slog.New(slog.NewTextHandler(&logs, nil)), assembler) }()
+
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(started)
+		return err == nil
+	}, 10*time.Second, 10*time.Millisecond)
+	signal()
+
+	lock := <-runCtx
+
+	for {
+		if _, err := os.Stat(finished); err == nil {
+			break
+		}
+
+		require.NoError(t, lock.Err(), "the run lock stays held while bash runs")
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("shutdown did not finish after bash")
+	}
+
+	assert.Len(t, slack.StopCalls(), 1)
+	assert.Contains(t, logs.String(), `msg="shutdown waiting for running tool calls" component=thread_bridges conversation_id=slack-thread:C123:111.0`)
+}
+
+// Slack starts accepting input only after it is attached, so a Slack message that
+// arrives as soon as the connector starts still gets ask_user_question.
+func TestSlackMessageAtStartupCanAskUserQuestion(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n"), 0o600))
+
+	bodies := make(chan string, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies <- string(body)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
+
+	ctx, signal := context.WithCancel(t.Context())
+	defer signal()
+
+	var assembled *Runtime
+
+	slack := &slackFrontendMock{
+		DrainSteersFunc: func(context.Context, string) []string { return nil },
+		StopFunc:        func(context.Context) error { return nil },
+	}
+	slack.StartFunc = func(context.Context) error {
+		target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
+		if _, err := assembled.TextRouter.RegisterThread(target, "main"); err != nil {
+			return fmt.Errorf("register startup thread: %w", err)
+		}
+
+		msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "first message", true)
+		msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.0", ThreadTS: "111.0"}
+
+		if _, err := assembled.TextRouter.SubmitThreadReply(assembled.RunCtx, target, msg); err != nil {
+			return fmt.Errorf("submit startup message: %w", err)
+		}
+
+		return nil
+	}
+	assembler := &frontendAssemblerMock{
+		ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil },
+		AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+			assembled = rt
+			return slack, nil, []func(context.Context) error{slack.Stop}, nil
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembler) }()
+
+	select {
+	case body := <-bodies:
+		assert.Contains(t, body, `"name":"ask_user_question"`)
+	case err := <-done:
+		t.Fatalf("Run returned before the startup message ran: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the startup Slack message never ran")
+	}
+
+	assert.Len(t, slack.StartCalls(), 1)
+	signal()
+	require.NoError(t, <-done)
 }

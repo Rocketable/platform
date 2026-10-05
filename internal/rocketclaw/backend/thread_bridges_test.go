@@ -2,23 +2,22 @@ package backend
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
-	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
 func TestRunRejectsUnresolvedAgentModelAtStartup(t *testing.T) {
@@ -136,6 +135,7 @@ func TestThreadBridgeManagerCreatesSeparateBridgesPerThreadAndPersistsThem(t *te
 		created = append(created, cfg)
 		return newDirectBridgeMock()
 	})
+	runTestManager(t, manager)
 
 	require.NoError(t, manager.StartThread(t.Context(), "main", slackTarget("D123", "111.222"), newThreadInboundMessage("first", "111.222", "111.222")))
 	require.NoError(t, manager.StartThread(t.Context(), "factory", slackTarget("D123", "333.444"), newThreadInboundMessage("second", "333.444", "333.444")))
@@ -157,7 +157,7 @@ func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
 		{ConversationID: protocol.SlackThreadConversationID("D123", "333.444"), Agent: "helper", StartNewThread: inertStartNewThread, SessionService: store},
 	} {
 		bridge := NewConversation(&config.Config{Workspace: workspace}, nil, &cfg, slog.New(slog.DiscardHandler))
-		require.NoError(t, bridge.Start(t.Context()))
+		require.NoError(t, startTestBridge(t.Context(), bridge))
 		require.NoError(t, bridge.ScheduleMessage(time.Hour, "later", false))
 		require.NoError(t, bridge.Stop())
 	}
@@ -167,33 +167,14 @@ func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
 		created = append(created, cfg)
 		return newDirectBridgeMock()
 	})
+	runTestManager(t, manager)
 
-	require.NoError(t, manager.StartPendingScheduledMessages(map[string]bool{}))
+	require.NoError(t, manager.StartPendingScheduledMessages())
 	require.Len(t, created, 2)
 	assert.ElementsMatch(t, []Config{
 		{ConversationID: protocol.SlackThreadConversationID("D123", "111.222"), Agent: "planner", UserQuestionAsker: protocol.NoUserQuestionAsker()},
 		{ConversationID: protocol.SlackThreadConversationID("D123", "333.444"), Agent: "helper", UserQuestionAsker: protocol.NoUserQuestionAsker()},
 	}, created)
-}
-
-func TestThreadBridgeManagerSkipsScheduledMessageBridgeDuringActiveTurnRecovery(t *testing.T) {
-	workspace := t.TempDir()
-	store := newWorkspaceSessionService(t)
-	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
-	bridge := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: conversationID, Agent: "planner", StartNewThread: inertStartNewThread, SessionService: store}, slog.New(slog.DiscardHandler))
-	require.NoError(t, bridge.Start(t.Context()))
-	require.NoError(t, bridge.ScheduleMessage(time.Hour, "later", false))
-	require.NoError(t, bridge.Stop())
-
-	created := 0
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge {
-		created++
-
-		return newDirectBridgeMock()
-	})
-
-	require.NoError(t, manager.StartPendingScheduledMessages(map[string]bool{conversationID: true}))
-	assert.Zero(t, created)
 }
 
 func TestThreadBridgeManagerDoesNotStartThreadWhenStoreIsUnavailable(t *testing.T) {
@@ -207,11 +188,40 @@ func TestThreadBridgeManagerDoesNotStartThreadWhenStoreIsUnavailable(t *testing.
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge {
 		return bridge
 	})
+	runTestManager(t, manager)
 
 	err = manager.StartThread(t.Context(), "main", slackTarget("D123", "111.222"), newThreadInboundMessage("first", "111.222", "111.222"))
 	require.ErrorContains(t, err, "read managed conversation")
 	assert.Empty(t, bridge.StopCalls())
 	assert.Empty(t, submittedMessages(bridge))
+}
+
+// A thread whose record cannot be persisted keeps no bridge: the new bridge is
+// stopped and forgotten, so a retry starts a fresh one.
+func TestThreadBridgeManagerDropsBridgeWhenThreadIsNotPersisted(t *testing.T) {
+	store := newWorkspaceSessionService(t)
+	bridges := make([]*directBridgeMock, 0, 2)
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge {
+		bridge := newDirectBridgeMock()
+		bridges = append(bridges, bridge)
+
+		return bridge
+	})
+	runTestManager(t, manager)
+
+	_, err := store.db.ExecContext(t.Context(), `ALTER TABLE managed_conversations ADD CONSTRAINT reject_thread CHECK (conversation_id <> 'slack-thread:D123:111.222') NOT VALID`)
+	require.NoError(t, err)
+	err = manager.StartThread(t.Context(), "main", slackTarget("D123", "111.222"), newThreadInboundMessage("first", "111.222", "111.222"))
+	require.ErrorContains(t, err, "persist Slack thread bridge")
+	require.Len(t, bridges, 1)
+	assert.Len(t, bridges[0].StopCalls(), 1)
+	assert.Empty(t, submittedMessages(bridges[0]))
+
+	_, err = store.db.ExecContext(t.Context(), `ALTER TABLE managed_conversations DROP CONSTRAINT reject_thread`)
+	require.NoError(t, err)
+	require.NoError(t, manager.StartThread(t.Context(), "main", slackTarget("D123", "111.222"), newThreadInboundMessage("retry", "111.222", "111.222")))
+	require.Len(t, bridges, 2, "the retry starts a fresh bridge")
+	assert.Len(t, submittedMessages(bridges[1]), 1)
 }
 
 func TestThreadBridgeManagerSwitchesThreadAgent(t *testing.T) {
@@ -236,6 +246,7 @@ func TestThreadBridgeManagerSwitchesThreadAgent(t *testing.T) {
 	store := newWorkspaceSessionService(t)
 	bridge := newDirectBridgeMock()
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	runTestManager(t, manager)
 
 	replyTarget := slackTarget("D123", "111.222")
 	require.NoError(t, manager.StartThread(t.Context(), "main", replyTarget, newThreadInboundMessage("first", "111.222", "111.222")))
@@ -260,6 +271,7 @@ func TestThreadBridgeManagerReadsThreadAgent(t *testing.T) {
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: " planner "}))
 
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return newDirectBridgeMock() })
+	runTestManager(t, manager)
 
 	agent, handled, err := manager.ThreadAgent(slackTarget("D123", "111.222"))
 	require.NoError(t, err)
@@ -291,6 +303,7 @@ func TestThreadBridgeManagerStartsGoalInExistingThreadWithPersistedAgent(t *test
 
 		return bridge
 	})
+	runTestManager(t, manager)
 
 	inbound := newThreadInboundMessage("ship it", "222.333", "111.222")
 	inbound.SlackReply.RecipientTeamID = "T123"
@@ -319,8 +332,9 @@ func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
 
 		return bridge
 	})
+	runTestManager(t, manager)
 
-	require.NoError(t, manager.StartActiveGoals(map[string]bool{}))
+	require.NoError(t, manager.StartActiveGoals())
 	require.Len(t, submittedMessages(bridge), 1)
 	assert.Equal(t, protocol.GoalActionContinue, submittedMessages(bridge)[0].GoalAction)
 	assert.Equal(t, "Continue the active goal loop.", submittedMessages(bridge)[0].Text)
@@ -328,16 +342,19 @@ func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
 	assert.Equal(t, &protocol.SlackReplyTarget{RecipientTeamID: "T123", RecipientUserID: "U456"}, submittedMessages(bridge)[0].SlackReply)
 }
 
-func TestThreadBridgeManagerSkipsActiveGoalContinuationDuringActiveTurnRecovery(t *testing.T) {
+// A resumed turn continues its goal itself when it finishes; a startup kick would double it.
+func TestThreadBridgeManagerSkipsActiveGoalContinuationForResumedTurn(t *testing.T) {
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "planner"}))
 	require.NoError(t, store.BeginGoal(conversationID, "ship it", "", 5, "", ""))
+	seedActiveTurn(t, store, conversationID, "turn-resumed", nil)
 
 	bridge := newDirectBridgeMock()
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	runTestManager(t, manager)
 
-	require.NoError(t, manager.StartActiveGoals(map[string]bool{conversationID: true}))
+	require.NoError(t, manager.StartActiveGoals())
 	assert.Empty(t, submittedMessages(bridge))
 }
 
@@ -348,6 +365,7 @@ func TestThreadBridgeManagerRejectsDuplicateActiveGoal(t *testing.T) {
 
 	bridge := newDirectBridgeMock()
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	runTestManager(t, manager)
 
 	err := manager.StartGoalInThread(t.Context(), "main", "second", "", 5, slackTarget("D123", "111.222"), newThreadInboundMessage("second", "222.333", "111.222"))
 	require.ErrorIs(t, err, protocol.ErrGoalAlreadyActive)
@@ -363,6 +381,7 @@ func TestThreadBridgeManagerAllowsGoalAfterCompletedGoal(t *testing.T) {
 
 	bridge := newDirectBridgeMock()
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	runTestManager(t, manager)
 	require.NoError(t, manager.StartGoalInThread(t.Context(), "main", "second", "", 5, slackTarget("D123", "111.222"), newThreadInboundMessage("second", "222.333", "111.222")))
 
 	goal, ok, err := store.Goal(conversationID)
@@ -379,6 +398,7 @@ func TestThreadBridgeManagerPickLaterWorkUsesLiveBridge(t *testing.T) {
 
 	bridge := newDirectBridgeMock()
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	runTestManager(t, manager)
 	require.NoError(t, manager.PickLaterWork(t.Context(), conversationID))
 	require.Len(t, bridge.PickLaterWorkCalls(), 1)
 	require.NoError(t, manager.PickLaterWork(t.Context(), ""))
@@ -394,6 +414,7 @@ func TestStartQueuedConversationsReportsLaterWorkErrors(t *testing.T) {
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge {
 		return newDirectBridgeMock()
 	})
+	runTestManager(t, manager)
 	require.ErrorContains(t, manager.StartQueuedConversations(), "text thread agent is required")
 }
 
@@ -419,6 +440,7 @@ func TestStartQueuedConversationsWakesEachRecordedConversationOnce(t *testing.T)
 
 		return bridge
 	})
+	runTestManager(t, manager)
 
 	require.NoError(t, manager.StartQueuedConversations())
 	require.Equal(t, map[string]int{first: 1, second: 1}, woke)
@@ -455,6 +477,8 @@ func TestThreadBridgeManagerRegistersThreadWithoutSubmitting(t *testing.T) {
 	store := newWorkspaceSessionService(t)
 	bridge := newDirectBridgeMock()
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	runTestManager(t, manager)
+
 	target := slackTarget("C123", "111.222")
 
 	created, err := manager.RegisterThread(target, "planner")
@@ -491,6 +515,8 @@ func TestThreadBridgeManagerRegistersThreadWithoutSubmitting(t *testing.T) {
 func TestThreadBridgeManagerStashListAndDeleteQueue(t *testing.T) {
 	store := newWorkspaceSessionService(t)
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return newDirectBridgeMock() })
+	runTestManager(t, manager)
+
 	target := slackTarget("C123", "111.222")
 	other := slackTarget("C123", "333.444")
 
@@ -523,6 +549,7 @@ func TestThreadBridgeManagerStashListAndDeleteQueue(t *testing.T) {
 
 func TestThreadBridgeManagerRejectsMissingSlackThreadTarget(t *testing.T) {
 	manager := newThreadBridgeManager(nil, newWorkspaceSessionService(t), slog.New(slog.DiscardHandler), func(Config) directBridge { return newDirectBridgeMock() })
+	runTestManager(t, manager)
 	_, err := manager.RegisterThread(slackTarget("", ""), "main")
 	require.ErrorContains(t, err, "text thread target is required")
 
@@ -542,6 +569,7 @@ func TestThreadBridgeManagerSubmitsPersistedThreadReply(t *testing.T) {
 
 	bridge := newDirectBridgeMock()
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	runTestManager(t, manager)
 
 	_, handled, err := manager.ThreadAgent(slackTarget("D123", "111.222"))
 	require.NoError(t, err)
@@ -564,6 +592,7 @@ func TestThreadBridgeManagerDisablesStartNewThreadForCronThreadReply(t *testing.
 
 	bridge := newDirectBridgeMock()
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	runTestManager(t, manager)
 
 	inbound := newThreadInboundMessage("follow up", "222.333", "")
 	handled, err := manager.SubmitThreadReply(context.Background(), slackTarget("D123", "111.222"), inbound)
@@ -580,6 +609,7 @@ func TestThreadBridgeManagerDisablesStartNewThreadForCronThreadGoalStart(t *test
 
 	bridge := newDirectBridgeMock()
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	runTestManager(t, manager)
 
 	inbound := newThreadInboundMessage("goal", "222.333", "")
 	err := manager.StartGoalInThread(context.Background(), "planner", "goal", "", 3, slackTarget("D123", "111.222"), inbound)
@@ -602,6 +632,7 @@ func TestThreadBridgeManagerStartNewThreadUsesFreshThreadLocalConversation(t *te
 		created = cfg
 		return bridge
 	})
+	runTestManager(t, manager)
 
 	rootCalls := 0
 	result, err := manager.StartNewThread(t.Context(), &protocol.StartNewThreadRequest{Source: protocol.SourceSlack, CurrentAgent: "main", Title: "Child", Prompt: " literal $(date) ", SlackReply: &protocol.SlackReplyTarget{ChannelID: "C1", MessageTS: "1", ThreadTS: "1"}}, func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error) {
@@ -634,6 +665,7 @@ func TestThreadBridgeManagerStartNewThreadAcceptsSystemSourceWithChannel(t *test
 	store := newWorkspaceSessionService(t)
 	bridge := newDirectBridgeMock()
 	manager := newThreadBridgeManager(&config.Config{Workspace: workspace}, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	runTestManager(t, manager)
 
 	rootCalls := 0
 	result, err := manager.StartNewThread(t.Context(), &protocol.StartNewThreadRequest{Source: protocol.SourceSystem, CurrentAgent: "main", AllowedAgents: []string{"main"}, Title: "Nightly", Prompt: "run suite", SlackReply: &protocol.SlackReplyTarget{ChannelID: "#ops"}}, func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error) {
@@ -664,6 +696,7 @@ func TestThreadBridgeManagerStartNewThreadRejectsLockedAgentAndUnavailableSource
 
 	store := newWorkspaceSessionService(t)
 	manager := newThreadBridgeManager(&config.Config{Workspace: workspace}, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return newDirectBridgeMock() })
+	runTestManager(t, manager)
 
 	root := func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error) {
 		t.Fatal("createRoot should not run")
@@ -688,6 +721,7 @@ func TestThreadBridgeManagerIgnoresUnmanagedThreadTargets(t *testing.T) {
 
 		return newDirectBridgeMock()
 	})
+	runTestManager(t, manager)
 
 	for _, tt := range []struct {
 		name string
@@ -730,94 +764,6 @@ func TestThreadBridgeManagerIgnoresUnmanagedThreadTargets(t *testing.T) {
 	assert.Zero(t, created)
 }
 
-func TestThreadBridgeManagerRecoversActiveTurnInThreadLocalConversation(t *testing.T) {
-	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
-	bridge := newDirectBridgeMock()
-	manager := newThreadBridgeManager(nil, newWorkspaceSessionService(t), slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
-		assert.Equal(t, Config{ConversationID: conversationID, Agent: "planner", RecoveringActiveTurn: true, UserQuestionAsker: protocol.NoUserQuestionAsker()}, cfg)
-		return bridge
-	})
-	turn := &ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{ConversationKey: conversationID, TurnID: "turn-1", Agent: "planner"}}
-
-	require.NoError(t, manager.RecoverActiveTurn(t.Context(), turn))
-	require.Len(t, submittedMessages(bridge), 1)
-	assert.Equal(t, "turn-1", submittedMessages(bridge)[0].Text)
-}
-
-func TestRecoverActiveTurnEnqueuesPrivateMCPOnDestinationBridge(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		store := newWorkspaceSessionService(t)
-		managedConversationID := protocol.SlackThreadConversationID("C123", "111.222")
-		privateConversationID := "external_mcp:planner:private"
-		require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, SlackChannel: "#ops"}))
-
-		workspace := t.TempDir()
-		runtime := &config.Config{Workspace: workspace}
-		manager := newThreadBridgeManager(runtime, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
-			cfg.SessionService = store
-			cfg.StartNewThread = testNoopStartNewThread
-
-			return NewConversation(runtime, nil, &cfg, slog.New(slog.DiscardHandler))
-		})
-
-		t.Cleanup(func() { require.NoError(t, manager.Stop()) })
-
-		require.NoError(t, manager.RecoverActiveTurn(t.Context(), &ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{ConversationKey: privateConversationID, TurnID: "turn-mcp", Agent: "planner", ReplayInput: []json.RawMessage{json.RawMessage("{")}}}))
-		_, privateOK := manager.bridges[privateConversationID]
-		_, managedOK := manager.bridges[managedConversationID]
-
-		require.True(t, privateOK)
-		require.True(t, managedOK)
-		// Bridge.Stop does not wait for the recovered turn, so finish it before cleanup closes the store.
-		synctest.Wait()
-	})
-}
-
-func TestThreadBridgeManagerRecoversPrivateExternalMCPTurn(t *testing.T) {
-	store := newWorkspaceSessionService(t)
-	managedConversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	privateConversationID := "external_mcp:planner:private"
-	require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, SlackChannel: "#ops"}))
-
-	bridge := newDirectBridgeMock()
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
-		switch cfg.ConversationID {
-		case privateConversationID:
-			assert.Equal(t, Config{ConversationID: privateConversationID, Agent: "planner", RecoveringActiveTurn: true, UserQuestionAsker: protocol.NoUserQuestionAsker()}, cfg)
-		case managedConversationID:
-			assert.Equal(t, managedConversationID, cfg.ConversationID)
-			assert.False(t, cfg.RecoveringActiveTurn)
-		default:
-			t.Fatalf("unexpected conversation %q", cfg.ConversationID)
-		}
-
-		return bridge
-	})
-	turn := &ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{ConversationKey: privateConversationID, TurnID: "turn-mcp", Agent: "planner"}}
-
-	require.NoError(t, manager.RecoverActiveTurn(t.Context(), turn))
-	require.Len(t, submittedMessages(bridge), 1)
-	assert.Equal(t, "turn-mcp", submittedMessages(bridge)[0].Text)
-}
-
-func TestThreadBridgeManagerRestoresManagedAgentAfterRecovery(t *testing.T) {
-	store := newWorkspaceSessionService(t)
-	managedConversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	privateConversationID := "external_mcp:planner:private"
-	require.NoError(t, store.RegisterExternalMCPConversation("public-1", "alpha", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, SlackChannel: "#ops"}))
-	updated, err := store.SetThreadAgentIfExists(managedConversationID, "supercow")
-	require.NoError(t, err)
-	require.True(t, updated)
-
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
-		assert.Equal(t, Config{ConversationID: managedConversationID, Agent: "alpha", AgentAfterRecovery: "supercow", RecoveringActiveTurn: true, UserQuestionAsker: protocol.NoUserQuestionAsker()}, cfg)
-		return newDirectBridgeMock()
-	})
-	turn := &ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{ConversationKey: managedConversationID, TurnID: "turn-managed", Agent: "alpha"}}
-
-	require.NoError(t, manager.RecoverActiveTurn(t.Context(), turn))
-}
-
 func TestThreadBridgeManagerStopStopsActiveBridges(t *testing.T) {
 	store := newWorkspaceSessionService(t)
 	bridges := make([]*directBridgeMock, 0, 2)
@@ -827,39 +773,54 @@ func TestThreadBridgeManagerStopStopsActiveBridges(t *testing.T) {
 
 		return bridge
 	})
+	shutdown := runTestManager(t, manager)
 
 	require.NoError(t, manager.StartThread(context.Background(), "main", slackTarget("D123", "111.222"), newThreadInboundMessage("first", "111.222", "111.222")))
 	require.NoError(t, manager.StartThread(context.Background(), "main", slackTarget("D123", "333.444"), newThreadInboundMessage("second", "333.444", "333.444")))
-	require.NoError(t, manager.Stop())
+	require.NoError(t, shutdown())
 
 	require.Len(t, bridges, 2)
 	require.Len(t, bridges[0].StopCalls(), 1)
 	require.Len(t, bridges[1].StopCalls(), 1)
+
+	require.NoError(t, manager.StartThread(context.Background(), "main", slackTarget("D123", "555.666"), newThreadInboundMessage("late", "555.666", "555.666")))
+	require.Len(t, bridges, 3)
+	assert.Len(t, bridges[2].StopCalls(), 1)
+	assert.Empty(t, bridges[2].RunCalls())
+	assert.Len(t, bridges[2].SubmitCalls(), 1)
+}
+
+// runTestManager runs manager's bridge loops the way app.go does and returns the
+// shutdown that cancels them and waits for every loop; test cleanup also runs it.
+func runTestManager(t *testing.T, manager *threadBridgeManager) func() error {
+	t.Helper()
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+
+	var run errgroup.Group
+
+	run.Go(func() error { return manager.Run(ctx) })
+
+	shutdown := sync.OnceValue(func() error {
+		cancel(errShutdown)
+
+		return run.Wait()
+	})
+
+	t.Cleanup(func() { assert.NoError(t, shutdown()) })
+
+	return shutdown
 }
 
 func newDirectBridgeMock() *directBridgeMock {
 	mock := &directBridgeMock{}
 
-	var startedDone <-chan struct{}
-
-	mock.StartFunc = func(ctx context.Context) error {
-		startedDone = ctx.Done()
+	mock.RunFunc = func(ctx context.Context) error {
+		<-ctx.Done()
 		return nil
 	}
 	mock.StopFunc = func() error { return nil }
-	mock.SubmitFunc = func(_ context.Context, _ *protocol.InboundMessage) error {
-		select {
-		case <-startedDone:
-			return context.Canceled
-		default:
-		}
-
-		return nil
-	}
-	mock.RecoverActiveTurnFunc = func(ctx context.Context, turn *ActiveTurnState) error {
-		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, turn.Checkpoint.TurnID, false)
-		return mock.Submit(ctx, inbound)
-	}
+	mock.SubmitFunc = func(context.Context, *protocol.InboundMessage) error { return nil }
 	mock.InterruptActiveTurnFunc = func() *protocol.InboundMessage { return nil }
 	mock.SwitchAgentFunc = func(string) {}
 	mock.PickLaterWorkFunc = func(context.Context) error { return nil }

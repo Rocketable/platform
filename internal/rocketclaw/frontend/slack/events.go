@@ -53,13 +53,11 @@ func (c *Connector) StartEvents(ctx context.Context, backend frontend.Backend) <
 				continue
 			}
 
-			if message.ConversationID != "" {
-				channelID, threadTS, ok := protocol.SlackThreadTarget(message.ConversationID)
-				if !ok {
-					event.Acknowledgement <- nil
-					continue
-				}
+			channelID, threadTS, ok := protocol.SlackThreadTarget(message.ConversationID)
 
+			switch {
+			case message.ConversationID == "":
+			case ok:
 				if message.SlackReply == nil {
 					message.SlackReply = &protocol.SlackReplyTarget{}
 					if message.Cronjob == nil {
@@ -68,6 +66,9 @@ func (c *Connector) StartEvents(ctx context.Context, backend frontend.Backend) <
 				}
 
 				message.SlackReply.ChannelID, message.SlackReply.ThreadTS = channelID, threadTS
+			case message.ExternalConversationID == "" || message.SlackReply == nil || message.SlackReply.ChannelID == "" || message.Complete:
+				event.Acknowledgement <- nil
+				continue
 			}
 
 			err := c.SendResponse(ctx, message)

@@ -6,6 +6,7 @@ package slackconnector
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"time"
 )
@@ -23,8 +24,14 @@ var _ channelFactsStore = &channelFactsStoreMock{}
 //			ChannelFactFunc: func(ctx context.Context, workspaceID string, channelID string) (string, bool, error) {
 //				panic("mock out the ChannelFact method")
 //			},
+//			LoadTurnStepFunc: func(ctx context.Context, conversationID string, key string) (json.RawMessage, bool, error) {
+//				panic("mock out the LoadTurnStep method")
+//			},
 //			RecordChannelFactFunc: func(ctx context.Context, workspaceID string, channelID string, name string, observedAt time.Time) error {
 //				panic("mock out the RecordChannelFact method")
+//			},
+//			SaveTurnStepFunc: func(ctx context.Context, conversationID string, key string, value json.RawMessage) error {
+//				panic("mock out the SaveTurnStep method")
 //			},
 //			SlackChannelIDsFunc: func(ctx context.Context) ([]string, error) {
 //				panic("mock out the SlackChannelIDs method")
@@ -39,8 +46,14 @@ type channelFactsStoreMock struct {
 	// ChannelFactFunc mocks the ChannelFact method.
 	ChannelFactFunc func(ctx context.Context, workspaceID string, channelID string) (string, bool, error)
 
+	// LoadTurnStepFunc mocks the LoadTurnStep method.
+	LoadTurnStepFunc func(ctx context.Context, conversationID string, key string) (json.RawMessage, bool, error)
+
 	// RecordChannelFactFunc mocks the RecordChannelFact method.
 	RecordChannelFactFunc func(ctx context.Context, workspaceID string, channelID string, name string, observedAt time.Time) error
+
+	// SaveTurnStepFunc mocks the SaveTurnStep method.
+	SaveTurnStepFunc func(ctx context.Context, conversationID string, key string, value json.RawMessage) error
 
 	// SlackChannelIDsFunc mocks the SlackChannelIDs method.
 	SlackChannelIDsFunc func(ctx context.Context) ([]string, error)
@@ -56,6 +69,15 @@ type channelFactsStoreMock struct {
 			// ChannelID is the channelID argument value.
 			ChannelID string
 		}
+		// LoadTurnStep holds details about calls to the LoadTurnStep method.
+		LoadTurnStep []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// ConversationID is the conversationID argument value.
+			ConversationID string
+			// Key is the key argument value.
+			Key string
+		}
 		// RecordChannelFact holds details about calls to the RecordChannelFact method.
 		RecordChannelFact []struct {
 			// Ctx is the ctx argument value.
@@ -69,6 +91,17 @@ type channelFactsStoreMock struct {
 			// ObservedAt is the observedAt argument value.
 			ObservedAt time.Time
 		}
+		// SaveTurnStep holds details about calls to the SaveTurnStep method.
+		SaveTurnStep []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// ConversationID is the conversationID argument value.
+			ConversationID string
+			// Key is the key argument value.
+			Key string
+			// Value is the value argument value.
+			Value json.RawMessage
+		}
 		// SlackChannelIDs holds details about calls to the SlackChannelIDs method.
 		SlackChannelIDs []struct {
 			// Ctx is the ctx argument value.
@@ -76,7 +109,9 @@ type channelFactsStoreMock struct {
 		}
 	}
 	lockChannelFact       sync.RWMutex
+	lockLoadTurnStep      sync.RWMutex
 	lockRecordChannelFact sync.RWMutex
+	lockSaveTurnStep      sync.RWMutex
 	lockSlackChannelIDs   sync.RWMutex
 }
 
@@ -117,6 +152,46 @@ func (mock *channelFactsStoreMock) ChannelFactCalls() []struct {
 	mock.lockChannelFact.RLock()
 	calls = mock.calls.ChannelFact
 	mock.lockChannelFact.RUnlock()
+	return calls
+}
+
+// LoadTurnStep calls LoadTurnStepFunc.
+func (mock *channelFactsStoreMock) LoadTurnStep(ctx context.Context, conversationID string, key string) (json.RawMessage, bool, error) {
+	if mock.LoadTurnStepFunc == nil {
+		panic("channelFactsStoreMock.LoadTurnStepFunc: method is nil but channelFactsStore.LoadTurnStep was just called")
+	}
+	callInfo := struct {
+		Ctx            context.Context
+		ConversationID string
+		Key            string
+	}{
+		Ctx:            ctx,
+		ConversationID: conversationID,
+		Key:            key,
+	}
+	mock.lockLoadTurnStep.Lock()
+	mock.calls.LoadTurnStep = append(mock.calls.LoadTurnStep, callInfo)
+	mock.lockLoadTurnStep.Unlock()
+	return mock.LoadTurnStepFunc(ctx, conversationID, key)
+}
+
+// LoadTurnStepCalls gets all the calls that were made to LoadTurnStep.
+// Check the length with:
+//
+//	len(mockedchannelFactsStore.LoadTurnStepCalls())
+func (mock *channelFactsStoreMock) LoadTurnStepCalls() []struct {
+	Ctx            context.Context
+	ConversationID string
+	Key            string
+} {
+	var calls []struct {
+		Ctx            context.Context
+		ConversationID string
+		Key            string
+	}
+	mock.lockLoadTurnStep.RLock()
+	calls = mock.calls.LoadTurnStep
+	mock.lockLoadTurnStep.RUnlock()
 	return calls
 }
 
@@ -165,6 +240,50 @@ func (mock *channelFactsStoreMock) RecordChannelFactCalls() []struct {
 	mock.lockRecordChannelFact.RLock()
 	calls = mock.calls.RecordChannelFact
 	mock.lockRecordChannelFact.RUnlock()
+	return calls
+}
+
+// SaveTurnStep calls SaveTurnStepFunc.
+func (mock *channelFactsStoreMock) SaveTurnStep(ctx context.Context, conversationID string, key string, value json.RawMessage) error {
+	if mock.SaveTurnStepFunc == nil {
+		panic("channelFactsStoreMock.SaveTurnStepFunc: method is nil but channelFactsStore.SaveTurnStep was just called")
+	}
+	callInfo := struct {
+		Ctx            context.Context
+		ConversationID string
+		Key            string
+		Value          json.RawMessage
+	}{
+		Ctx:            ctx,
+		ConversationID: conversationID,
+		Key:            key,
+		Value:          value,
+	}
+	mock.lockSaveTurnStep.Lock()
+	mock.calls.SaveTurnStep = append(mock.calls.SaveTurnStep, callInfo)
+	mock.lockSaveTurnStep.Unlock()
+	return mock.SaveTurnStepFunc(ctx, conversationID, key, value)
+}
+
+// SaveTurnStepCalls gets all the calls that were made to SaveTurnStep.
+// Check the length with:
+//
+//	len(mockedchannelFactsStore.SaveTurnStepCalls())
+func (mock *channelFactsStoreMock) SaveTurnStepCalls() []struct {
+	Ctx            context.Context
+	ConversationID string
+	Key            string
+	Value          json.RawMessage
+} {
+	var calls []struct {
+		Ctx            context.Context
+		ConversationID string
+		Key            string
+		Value          json.RawMessage
+	}
+	mock.lockSaveTurnStep.RLock()
+	calls = mock.calls.SaveTurnStep
+	mock.lockSaveTurnStep.RUnlock()
 	return calls
 }
 

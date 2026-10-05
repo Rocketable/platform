@@ -22,6 +22,8 @@ type Tool struct {
 	VisibilitySubjects []string
 	Subjects           func(json.RawMessage) ([]string, error)
 	Call               func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error)
+	// Resumable calls interrupted by a restart run again instead of being reported interrupted.
+	Resumable bool
 }
 
 var customToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -106,7 +108,7 @@ func customLooperTool(tool *Tool) (looperTool, error) {
 	definition.Parameters = parameters
 	definition.Strict = openai.Bool(true)
 
-	return looperTool{Definition: definition, Call: call, Permission: permission, Subjects: subjects, VisibilitySubjects: visibilitySubjects, codeModeOnly: true}, nil
+	return looperTool{Definition: definition, Call: call, Permission: permission, Subjects: subjects, VisibilitySubjects: visibilitySubjects, codeModeOnly: true, resumable: tool.Resumable}, nil
 }
 
 func customToolParameters(parameters map[string]any) (map[string]any, error) {

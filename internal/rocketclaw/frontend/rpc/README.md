@@ -23,7 +23,7 @@ exist. A positive `before` reads a settled, unfollowed page of older entries: th
 newest `limit` of them, or every entry from `from` onward. If older history is
 cleared, the next limited read resets. A chat's origin still comes from its first
 entry when that entry is not returned.
-Active checkpoints and saved turns share source-qualified turn keys; `item_id` is
+In-progress turns and saved turns share source-qualified turn keys; `item_id` is
 render identity, while `message_id` identifies saved entry positions for commands.
 History returns the recorded turn in order, including developer messages, thinking summaries, tool
 calls, tool results, and user/assistant text. Encrypted reasoning bodies stay
@@ -57,7 +57,7 @@ Missing or malformed stored principals stay unlabeled; raw headers remain intact
 Previews use the latest nonempty user or assistant message, including the same
 successful delivery report shown in History. Migration `011_last_message_summaries.sql`
 invalidates the derived user-only previews for the existing background backfill.
-Session `running` reads the active turn checkpoint, independently of settled status.
+Session `running` is true while the conversation has an unfinished turn, independently of settled status.
 
 `Session.tags` (additive protobuf field 14) carries the owning conversation's
 durable, lexically sorted active tag names in `ListSessions`. Missing metadata
@@ -269,7 +269,7 @@ bun -e 'console.log(Buffer.from(process.argv[1]).toString("base64url"))' 'slack-
 ```
 
 The `DeleteSessionEntries` RPC removes saved entries and retained failed/stopped
-checkpoints for that exact conversation ID, not a live recovery checkpoint or its
+turns for that exact conversation ID, not an unfinished turn or its
 conversation or goal record, and retains its session tags. Ordinary GC remains
 responsible for those records; permanent session pruning removes tag metadata too.
 
@@ -278,7 +278,7 @@ responsible for those records; permanent session pruning removes tag metadata to
 `TranscriptEvent` carries additive `agent`, `model`, optional `reasoning_effort`,
 and `origin` fields.
 HTTP/SSE uses their protobuf JSON camelCase names. Absent reasoning is unknown;
-a present empty string means provider default. History resolves recovered replay
+a present empty string means provider default. History resolves replay attribution
 ranges before the entry snapshot. Join carries no transcript content or execution
 attribution; clients read these through History. Saved copy locators survive
 source-row retention without exposing source or destination IDs in the transcript.

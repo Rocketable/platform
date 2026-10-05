@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"runtime"
 	"slices"
 	"strings"
@@ -518,6 +519,36 @@ def main(args):
 		}
 	})
 
+	t.Run("agents get distinct replay-stable keys under their fan-out branch", func(t *testing.T) {
+		definition := engineDefinition(t, `
+def main(args):
+    agent("a")
+    parallel([lambda: agent("b"), lambda: [agent("c"), agent("d")]])
+    return pipeline(["e", "f"], lambda item: agent(item))
+`)
+		want := map[string]string{"a": "run/workflow/0", "b": "run/workflow/1/0/0", "c": "run/workflow/1/1/0", "d": "run/workflow/1/1/1", "e": "run/workflow/2/0/0", "f": "run/workflow/2/1/0"}
+
+		for range 2 {
+			var mu sync.Mutex
+
+			keys := map[string]string{}
+
+			if _, err := Run(t.Context(), definition, RunRequest{RunID: "run"}, &agentRunnerMock{RunFunc: func(_ context.Context, request *AgentRequest) (json.RawMessage, error) {
+				mu.Lock()
+				keys[request.Prompt] = request.Key
+				mu.Unlock()
+
+				return json.RawMessage(`""`), nil
+			}}); err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+
+			if !maps.Equal(keys, want) {
+				t.Fatalf("agent keys = %v, want %v", keys, want)
+			}
+		}
+	})
+
 	t.Run("parallel agents preserve terminal phase counts", func(t *testing.T) {
 		definition := engineDefinition(t, `
 def main(args):
@@ -746,7 +777,7 @@ def main(args): return parallel([spin, spin])`), RunRequest{RunID: "steps"}, &ag
 
 	t.Run("exhausted shared step budget cannot underflow", func(t *testing.T) {
 		e := &engine{active: make(map[*starlark.Thread]uint64)}
-		thread, stop := e.thread(t.Context(), "exhausted", "", false)
+		thread, stop := e.thread(t.Context(), "exhausted", "", "", false)
 		_, _ = engineDefinition(t, `def main(args): return None`).program.Init(thread, e.builtins())
 
 		stop()

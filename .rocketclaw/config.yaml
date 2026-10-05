@@ -126,7 +126,7 @@ pr_teaching_archive: true      # true | false (default: false; full-workflow run
 # the peer cannot honor skips the pass with a stated reason -- never substituted.
 
 # cross_model_review_mode: off   # auto | off (default: auto)
-cross_model_peer: opencode2      # codex | claude | grok | cursor | composer | opencode | opencode2
+# cross_model_peer: opencode2      # codex | claude | grok | cursor | composer | opencode | opencode2
 cross_model_model: "xai/grok-4.6#high"  # model alias or full id for the resolved peer target (no default)
 # cross_model_effort: xhigh        # reasoning effort for the resolved peer target (no default)
 

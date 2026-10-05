@@ -27,11 +27,8 @@ var _ directBridge = &directBridgeMock{}
 //			PickLaterWorkFunc: func(ctx context.Context) error {
 //				panic("mock out the PickLaterWork method")
 //			},
-//			RecoverActiveTurnFunc: func(ctx context.Context, turn *ActiveTurnState) error {
-//				panic("mock out the RecoverActiveTurn method")
-//			},
-//			StartFunc: func(ctx context.Context) error {
-//				panic("mock out the Start method")
+//			RunFunc: func(ctx context.Context) error {
+//				panic("mock out the Run method")
 //			},
 //			StopFunc: func() error {
 //				panic("mock out the Stop method")
@@ -55,11 +52,8 @@ type directBridgeMock struct {
 	// PickLaterWorkFunc mocks the PickLaterWork method.
 	PickLaterWorkFunc func(ctx context.Context) error
 
-	// RecoverActiveTurnFunc mocks the RecoverActiveTurn method.
-	RecoverActiveTurnFunc func(ctx context.Context, turn *ActiveTurnState) error
-
-	// StartFunc mocks the Start method.
-	StartFunc func(ctx context.Context) error
+	// RunFunc mocks the Run method.
+	RunFunc func(ctx context.Context) error
 
 	// StopFunc mocks the Stop method.
 	StopFunc func() error
@@ -80,15 +74,8 @@ type directBridgeMock struct {
 			// Ctx is the ctx argument value.
 			Ctx context.Context
 		}
-		// RecoverActiveTurn holds details about calls to the RecoverActiveTurn method.
-		RecoverActiveTurn []struct {
-			// Ctx is the ctx argument value.
-			Ctx context.Context
-			// Turn is the turn argument value.
-			Turn *ActiveTurnState
-		}
-		// Start holds details about calls to the Start method.
-		Start []struct {
+		// Run holds details about calls to the Run method.
+		Run []struct {
 			// Ctx is the ctx argument value.
 			Ctx context.Context
 		}
@@ -110,8 +97,7 @@ type directBridgeMock struct {
 	}
 	lockInterruptActiveTurn sync.RWMutex
 	lockPickLaterWork       sync.RWMutex
-	lockRecoverActiveTurn   sync.RWMutex
-	lockStart               sync.RWMutex
+	lockRun                 sync.RWMutex
 	lockStop                sync.RWMutex
 	lockSubmit              sync.RWMutex
 	lockSwitchAgent         sync.RWMutex
@@ -176,71 +162,35 @@ func (mock *directBridgeMock) PickLaterWorkCalls() []struct {
 	return calls
 }
 
-// RecoverActiveTurn calls RecoverActiveTurnFunc.
-func (mock *directBridgeMock) RecoverActiveTurn(ctx context.Context, turn *ActiveTurnState) error {
-	if mock.RecoverActiveTurnFunc == nil {
-		panic("directBridgeMock.RecoverActiveTurnFunc: method is nil but directBridge.RecoverActiveTurn was just called")
-	}
-	callInfo := struct {
-		Ctx  context.Context
-		Turn *ActiveTurnState
-	}{
-		Ctx:  ctx,
-		Turn: turn,
-	}
-	mock.lockRecoverActiveTurn.Lock()
-	mock.calls.RecoverActiveTurn = append(mock.calls.RecoverActiveTurn, callInfo)
-	mock.lockRecoverActiveTurn.Unlock()
-	return mock.RecoverActiveTurnFunc(ctx, turn)
-}
-
-// RecoverActiveTurnCalls gets all the calls that were made to RecoverActiveTurn.
-// Check the length with:
-//
-//	len(mockeddirectBridge.RecoverActiveTurnCalls())
-func (mock *directBridgeMock) RecoverActiveTurnCalls() []struct {
-	Ctx  context.Context
-	Turn *ActiveTurnState
-} {
-	var calls []struct {
-		Ctx  context.Context
-		Turn *ActiveTurnState
-	}
-	mock.lockRecoverActiveTurn.RLock()
-	calls = mock.calls.RecoverActiveTurn
-	mock.lockRecoverActiveTurn.RUnlock()
-	return calls
-}
-
-// Start calls StartFunc.
-func (mock *directBridgeMock) Start(ctx context.Context) error {
-	if mock.StartFunc == nil {
-		panic("directBridgeMock.StartFunc: method is nil but directBridge.Start was just called")
+// Run calls RunFunc.
+func (mock *directBridgeMock) Run(ctx context.Context) error {
+	if mock.RunFunc == nil {
+		panic("directBridgeMock.RunFunc: method is nil but directBridge.Run was just called")
 	}
 	callInfo := struct {
 		Ctx context.Context
 	}{
 		Ctx: ctx,
 	}
-	mock.lockStart.Lock()
-	mock.calls.Start = append(mock.calls.Start, callInfo)
-	mock.lockStart.Unlock()
-	return mock.StartFunc(ctx)
+	mock.lockRun.Lock()
+	mock.calls.Run = append(mock.calls.Run, callInfo)
+	mock.lockRun.Unlock()
+	return mock.RunFunc(ctx)
 }
 
-// StartCalls gets all the calls that were made to Start.
+// RunCalls gets all the calls that were made to Run.
 // Check the length with:
 //
-//	len(mockeddirectBridge.StartCalls())
-func (mock *directBridgeMock) StartCalls() []struct {
+//	len(mockeddirectBridge.RunCalls())
+func (mock *directBridgeMock) RunCalls() []struct {
 	Ctx context.Context
 } {
 	var calls []struct {
 		Ctx context.Context
 	}
-	mock.lockStart.RLock()
-	calls = mock.calls.Start
-	mock.lockStart.RUnlock()
+	mock.lockRun.RLock()
+	calls = mock.calls.Run
+	mock.lockRun.RUnlock()
 	return calls
 }
 

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+
+	"github.com/Rocketable/platform/internal/rocketcode/codemode"
 )
 
 type toolCallContextKey struct{}
@@ -25,6 +27,22 @@ func toolCallContextFrom(ctx context.Context) (toolCallContext, bool) {
 	tc, ok := value.(toolCallContext)
 
 	return tc, ok && tc.looper != nil
+}
+
+// ToolCallKey returns the current tool call's journal key, stable across restarts; empty outside a call.
+// Inside a Code Mode script each host call has its own key under the script's call.
+func ToolCallKey(ctx context.Context) string {
+	tc, ok := toolCallContextFrom(ctx)
+	if !ok {
+		return ""
+	}
+
+	key := tc.looper.observations.turnID + "/call/" + tc.callID
+	if host := codemode.CallKey(ctx); host != "" {
+		key += "/host/" + host
+	}
+
+	return key
 }
 
 // ToolCallAgent returns the active caller's definition inside a tool call.

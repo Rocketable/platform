@@ -60,48 +60,6 @@ func sessionEntriesForProvider(entries iter.Seq2[rocketcode.SessionEntry, error]
 	}
 }
 
-func activeTurnForProvider(checkpoint *rocketcode.ActiveTurnCheckpoint, provider string) (rocketcode.ActiveTurnCheckpoint, error) {
-	if providerForModel(checkpoint.DisplayModel) == provider {
-		return *checkpoint, nil
-	}
-
-	ranges := slices.Clone(checkpoint.ReplayAttribution)
-
-	replay, err := replayForProvider(checkpoint.ReplayInput, ranges)
-	if err != nil {
-		return rocketcode.ActiveTurnCheckpoint{}, err
-	}
-
-	outputs := make([]rocketcode.FunctionOutputCheckpoint, len(checkpoint.CompletedFunctionOutputs))
-	for i, output := range checkpoint.CompletedFunctionOutputs {
-		outputs[i] = output
-
-		outputs[i].ReplayInput, err = replayForProvider(output.ReplayInput)
-		if err != nil {
-			return rocketcode.ActiveTurnCheckpoint{}, err
-		}
-	}
-
-	projected := *checkpoint
-	projected.ResponseID = ""
-	projected.ReplayInput = replay
-	projected.ReplayAttribution = ranges
-	projected.OutputTrace = slices.DeleteFunc(slices.Clone(checkpoint.OutputTrace), func(raw json.RawMessage) bool {
-		return len(rocketcode.PublicProgressFromTrace([]json.RawMessage{raw})) == 0
-	})
-
-	calls := make([]rocketcode.FunctionCallCheckpoint, len(checkpoint.OpenFunctionCalls))
-	for i, call := range checkpoint.OpenFunctionCalls {
-		calls[i] = call
-		calls[i].Arguments = json.RawMessage(append([]byte(nil), call.Arguments...))
-	}
-
-	projected.OpenFunctionCalls = calls
-	projected.CompletedFunctionOutputs = outputs
-
-	return projected, nil
-}
-
 func replayForProvider(rawItems []json.RawMessage, attribution ...[]rocketcode.ReplayAttribution) ([]json.RawMessage, error) {
 	items := make([]responses.ResponseInputItemUnionParam, 0, len(rawItems))
 

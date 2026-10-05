@@ -15,7 +15,7 @@ See [LICENSE](LICENSE) for the full license terms.
 ## Core Capabilities
 
 - Run workspace-aware AI agents with local instructions, agent definitions, skills, attachments, subagents, custom tools, file access, shell commands, web fetches, and explicit permission rules.
-- Keep agent work durable through PostgreSQL-backed sessions, replay, active-turn checkpoints, connector routing, scheduled messages, restart recovery, and conversation-local goal loops.
+- Keep agent work durable through PostgreSQL-backed sessions, a per-conversation step journal, connector routing, scheduled messages, and conversation-local goal loops, so a restart resumes in-progress work without repeating finished steps.
 - Connect agents to team workflows through Slack, cron jobs, scheduled prompts, and an external MCP HTTP endpoint.
 - Run checked-in Starlark workflows as foreground managed turns with isolated custom workers and Slack phase and worker activity progress.
 - Route model requests through independently configured default and named OpenAI-compatible providers while preserving one local agent/tool model.
@@ -256,9 +256,9 @@ Queued calls retain their original invocation and attachments. Availability and 
 4. A human message, `$workflow` command, cron job, scheduled prompt, or MCP request enters RocketClaw and invokes RocketCode with the selected agent.
 5. RocketCode runs model/tool turns under configured permissions.
 6. RocketClaw signals persisted transcript changes to Web and delivers final responses, files, or reactions through the originating connector.
-7. Conversation state, active-turn handoffs, scheduled work, queued messages, and routing metadata are persisted so restart recovery can refire interrupted turns and start saved unstarted messages without waiting for new input.
+7. Conversation state, every completed step of in-progress turns, scheduled work, queued messages, and routing metadata are persisted. Shutdown stops each turn at its next step: tool calls already running, including bash, finish and are recorded first, while subagents, Code Mode scripts, and workflows stop between their own steps. A second stop signal exits at once. After a restart, each conversation continues its interrupted turn from the last recorded step, then starts saved unstarted messages, without waiting for new input.
 
-Saved workflows run only as foreground managed turns. Each workflow launches fresh isolated custom workers, keeps intermediate values out of managed history, and persists a compact terminal summary of completed, failed, stopped, and skipped phases so later turns can explain what happened. Successful runs also record and deliver the final value. Slack shows one in-progress placeholder and the final result, without phase or worker activity cards. Fan-out workers share one checkout, so parallel writers must own disjoint files. The state store does not persist resumable workflow progress: `$stop` ends the run, and daemon restart requires a new `$workflow` invocation.
+Saved workflows run only as foreground managed turns. Each workflow launches fresh isolated custom workers, keeps intermediate values out of managed history, and persists a compact terminal summary of completed, failed, stopped, and skipped phases so later turns can explain what happened. Successful runs also record and deliver the final value. Slack shows one in-progress placeholder and the final result, without phase or worker activity cards. Fan-out workers share one checkout, so parallel writers must own disjoint files. `$stop` ends the run. A daemon restart resumes the run without repeating completed workers.
 
 ## Repository Layout
 
@@ -274,7 +274,7 @@ Saved workflows run only as foreground managed turns. Each workflow launches fre
 
 RocketClaw is configured with `rocketclaw.json` in the working directory. Runtime state is local to the selected workspace:
 
-- `database_url` in `rocketclaw.json` or `femtoclaw.json`: PostgreSQL store for private MCP and managed Slack sessions, active-turn restart handoffs, managed Slack routing, External MCP bindings to both sessions, scheduled messages, cron execution state, restart notifications, and goal-loop state. One DSN is one store.
+- `database_url` in `rocketclaw.json` or `femtoclaw.json`: PostgreSQL store for private MCP and managed Slack sessions, in-progress turns and their step journal, managed Slack routing, External MCP bindings to both sessions, scheduled messages, cron execution state, and goal-loop state. One DSN is one store. The release that introduces the step journal is a clean cutover. Stop all work on the old version, rehearse on a copy of the deployed database, and do not roll back by swapping only the binary: startup rejects migrations it does not know.
 - `web_users`: optionally maps browser IP addresses to usernames, for example `"web_users": {"100.64.0.10": "alice"}`. Explicit mappings take precedence for identity and message attribution; otherwise Go uses `tailscale whois --json` to identify the browser by its Tailscale login name and attribute new messages to its display name (or login if the display name is missing or blank). Successful lookups are cached per IP for five minutes, so identity changes can take that long to apply. Unidentified addresses and tagged devices without a manual mapping are denied. Tailscale lookup requires the CLI on the RocketClaw process's PATH and access to its local Tailscale service. Mapping changes require a restart, not an asset reload.
 - `.rocketclaw/overlays/`: configured git overlay clones for runtime assets.
 - `.rocketclaw/.rocketcode/tmp/<session-id>/`: per-conversation shell TMPDIR (not shared across sessions).

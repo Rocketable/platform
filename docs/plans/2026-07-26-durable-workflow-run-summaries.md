@@ -237,7 +237,7 @@ This test is the direct regression for the observed unsupported follow-up explan
 **Files**
 
 - Modify `README.md` if it states that workflows persist only command and final result.
-- Modify `internal/rocketclaw/docs/specs/2026-07-24-starlark-workflows-design.md`.
+- Modify `docs/specs/2026-07-24-starlark-workflows-design.md`.
 - Update the Slack workflow phase progress design to include skipped projection.
 
 **Document**

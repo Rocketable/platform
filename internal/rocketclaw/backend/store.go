@@ -28,10 +28,9 @@ import (
 )
 
 const (
-	restartNotificationDeveloperMessage = "The rocketclaw server has been restarted."
-	runLockName                         = "rocketclaw-run"
-	runLockTable                        = "rocketclaw_locks"
-	historyWithDelegations              = `(conversation_id = $1 OR conversation_id COLLATE "C" >= $1 || '/' AND conversation_id COLLATE "C" < $1 || '0')`
+	runLockName            = "rocketclaw-run"
+	runLockTable           = "rocketclaw_locks"
+	historyWithDelegations = `(conversation_id = $1 OR conversation_id COLLATE "C" >= $1 || '/' AND conversation_id COLLATE "C" < $1 || '0')`
 )
 
 // GoalStatusActive and related constants are persisted goal-loop statuses.
@@ -63,16 +62,6 @@ type ExternalMCPSessionState struct {
 	PrivateConversationID string `json:"private_conversation_id,omitempty"`
 	ManagedConversationID string `json:"managed_conversation_id,omitempty"`
 	SlackChannel          string `json:"slack_channel,omitempty"`
-}
-
-// ActiveTurnState records one durable RocketCode active-turn checkpoint.
-type ActiveTurnState struct {
-	Checkpoint     harness.ActiveTurnCheckpoint `json:"checkpoint"`
-	SourceMetadata map[string]string            `json:"source_metadata,omitempty"`
-	PendingSteers  []protocol.PendingSteer      `json:"pending_steers,omitempty"`
-	CreatedAt      time.Time                    `json:"created_at,omitzero"`
-	UpdatedAt      time.Time                    `json:"updated_at,omitzero"`
-	Terminal       protocol.Terminal            `json:"terminal,omitempty"`
 }
 
 // CronScheduleState records one observed scheduled cron trigger.
@@ -107,16 +96,8 @@ type SessionService struct {
 	db          *sql.DB
 	attachments attachmentStorage
 
-	turnGatesMu       sync.Mutex
-	turnGates         map[string]*sessionTurnGate
-	pendingRecoveries map[string]startupRecoveryHold
-
-	waitersMu sync.Mutex
-	waiters   map[string]*protocol.InboundMessage
-}
-
-type startupRecoveryHold struct {
-	source, destination string
+	turnGatesMu sync.Mutex
+	turnGates   map[string]*sessionTurnGate
 }
 
 type sessionTurnGate struct {
@@ -192,7 +173,7 @@ func NewSessionServiceIn(ctx context.Context, cfg *config.Config, logger *slog.L
 		return nil, err
 	}
 
-	return &SessionService{db: db, attachments: attachments, turnGates: map[string]*sessionTurnGate{}, pendingRecoveries: map[string]startupRecoveryHold{}, waiters: map[string]*protocol.InboundMessage{}}, nil
+	return &SessionService{db: db, attachments: attachments, turnGates: map[string]*sessionTurnGate{}}, nil
 }
 
 // UpsertThread records or updates a text-thread bridge entry.
@@ -422,9 +403,9 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 			`DELETE FROM session_summaries WHERE ` + historyWithDelegations,
 			`DELETE FROM session_tags WHERE conversation_id = $1`,
 			`DELETE FROM active_turns WHERE conversation_id = $1`,
+			`DELETE FROM turn_steps WHERE conversation_id = $1`,
 			`DELETE FROM scheduled_messages WHERE conversation_id = $1`,
 			`DELETE FROM thread_queue WHERE conversation_id = $1`,
-			`DELETE FROM pending_restart_notifications WHERE conversation_id = $1`,
 			`DELETE FROM conversation_goals WHERE conversation_id = $1`,
 		} {
 			if _, err := tx.ExecContext(ctx, statement, conversationID); err != nil {
@@ -442,20 +423,6 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 	}
 
 	s.completeTurnPairReservation(session.ManagedConversationID, session.PrivateConversationID)
-
-	return nil
-}
-
-// MarkRestartRequester records that conversationID should see the post-restart notice.
-func (s *SessionService) MarkRestartRequester(ctx context.Context, conversationID string) error {
-	conversationID = strings.TrimSpace(conversationID)
-	if conversationID == "" {
-		return errors.New("restart requester conversation ID is required")
-	}
-
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO pending_restart_notifications (conversation_id) VALUES ($1) ON CONFLICT(conversation_id) DO NOTHING`, conversationID); err != nil {
-		return fmt.Errorf("mark restart requester: %w", err)
-	}
 
 	return nil
 }
@@ -480,32 +447,6 @@ snoozed_until = COALESCE($4, snoozed_until), settled = CASE WHEN $4::timestamptz
 // ExternalMCPSession returns a persisted external MCP session mapping.
 func (s *SessionService) ExternalMCPSession(externalConversationID string) (ExternalMCPSessionState, bool, error) {
 	return stateDAO{db: s.db}.externalMCPSession(context.Background(), externalConversationID)
-}
-
-// ReserveExternalMCPRecovery makes paired work wait for the recovering owner.
-func (s *SessionService) ReserveExternalMCPRecovery(conversationID string) error {
-	_, session, ok, err := s.ExternalMCPSessionByConversationID(conversationID)
-	if err != nil || !ok {
-		return err
-	}
-
-	if session.PrivateConversationID != "" {
-		s.reserveTurnPair(session.ManagedConversationID, conversationID)
-	}
-
-	return nil
-}
-
-// ReleaseExternalMCPRecovery releases paired work after recovery is abandoned.
-func (s *SessionService) ReleaseExternalMCPRecovery(conversationID string) error {
-	_, session, ok, err := s.ExternalMCPSessionByConversationID(conversationID)
-	if err != nil || !ok || session.PrivateConversationID == "" {
-		return err
-	}
-
-	s.completeTurnPairReservation(session.ManagedConversationID, conversationID)
-
-	return nil
 }
 
 // ScheduledMessages returns all persisted scheduled messages.
@@ -763,43 +704,6 @@ ORDER BY conversation_id`, "active goal threads", func(row rowScanner) (string, 
 	return threads, nil
 }
 
-// ApplyPendingRestartNotifications appends one developer notice to pending requester sessions.
-func (s *SessionService) ApplyPendingRestartNotifications(ctx context.Context) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin restart notification update: %w", err)
-	}
-
-	defer func() { _ = tx.Rollback() }()
-
-	conversationIDs, err := queryStrings(ctx, tx, `SELECT conversation_id FROM pending_restart_notifications ORDER BY conversation_id`, "restart notification requesters")
-	if err != nil {
-		return err
-	}
-
-	for _, conversationID := range conversationIDs {
-		replayInput, err := replayInputForMessage("developer", restartNotificationDeveloperMessage)
-		if err != nil {
-			return fmt.Errorf("encode restart notification replay input: %w", err)
-		}
-
-		_, err = appendSessionEntryDB(ctx, tx, conversationID, &harness.SessionEntry{Version: 1, Type: "restart_notification", Timestamp: time.Now().UTC(), ReplayInput: replayInput})
-		if err != nil {
-			return err
-		}
-	}
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM pending_restart_notifications`); err != nil {
-		return fmt.Errorf("clear restart notification requesters: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit restart notification update: %w", err)
-	}
-
-	return nil
-}
-
 // PruneStateBefore removes expired thread and external-session state.
 func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time) (PruneStateStats, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -894,8 +798,8 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 			return PruneStateStats{}, fmt.Errorf("delete stale active turn: %w", err)
 		}
 
-		if _, err := tx.ExecContext(ctx, `DELETE FROM pending_restart_notifications WHERE conversation_id = $1`, conversationID); err != nil {
-			return PruneStateStats{}, fmt.Errorf("delete stale pending restart notification: %w", err)
+		if _, err := tx.ExecContext(ctx, `DELETE FROM turn_steps WHERE conversation_id = $1`, conversationID); err != nil {
+			return PruneStateStats{}, fmt.Errorf("delete stale turn steps: %w", err)
 		}
 
 		if _, err := tx.ExecContext(ctx, `DELETE FROM conversation_goals WHERE conversation_id = $1`, conversationID); err != nil {
@@ -1016,8 +920,9 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 		return 0, fmt.Errorf("delete rocketcode session summaries: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM active_turns WHERE conversation_id = $1 AND terminal <> ''`, conversationID); err != nil {
-		return 0, fmt.Errorf("delete terminal transcript checkpoints: %w", err)
+	if _, err := tx.ExecContext(ctx, `WITH done AS (DELETE FROM active_turns WHERE conversation_id = $1 AND phase = 'done' RETURNING id)
+DELETE FROM turn_steps WHERE conversation_id = $1 AND key IN (SELECT id FROM done)`, conversationID); err != nil {
+		return 0, fmt.Errorf("delete terminal transcript turns: %w", err)
 	}
 
 	if err := saveSessionSummary(ctx, tx, protocol.SessionSummary{ConversationID: conversationID}); err != nil {
@@ -1043,7 +948,8 @@ func (s *SessionService) Delegations(ctx context.Context, conversationID, source
     WHERE e.conversation_id = $1 AND e.id >= $3 AND ($4::bigint = 0 OR e.id < $4)
         AND (NOT e.entry_json::jsonb ? 'sync_source_entry_id' OR source.id IS NOT NULL OR e.entry_json::jsonb ? 'sync_source_conversation_id')
     UNION ALL
-    SELECT conversation_id, replay_input_json::jsonb FROM active_turns WHERE conversation_id = $1 AND $4::bigint = 0
+    SELECT a.conversation_id, s.value::jsonb->'record'->'replay_input' FROM active_turns a
+    JOIN turn_steps s ON s.conversation_id = a.conversation_id AND s.key = a.id WHERE a.conversation_id = $1 AND $4::bigint = 0
 )
 SELECT DISTINCT child.conversation_id FROM parents p
 CROSS JOIN LATERAL jsonb_array_elements(NULLIF(p.replay, 'null'::jsonb)) item
@@ -1093,7 +999,7 @@ func (s *SessionService) SidebarSessions(ctx context.Context, autoSettleBefore t
 		rows, err := s.db.QueryContext(ctx, `WITH running_conversations AS (
     SELECT DISTINCT conversation_id
     FROM active_turns
-    WHERE terminal = ''
+    WHERE phase <> 'done'
 ),
 private_conversations AS (
     SELECT private_conversation_id AS conversation_id
@@ -1243,24 +1149,6 @@ func (s *SessionService) Stop() error {
 	return nil
 }
 
-// PutMCPWaiter records an MCP turn waiting on a later-work queue row.
-func (s *SessionService) PutMCPWaiter(id string, inbound *protocol.InboundMessage) {
-	s.waitersMu.Lock()
-	s.waiters[id] = inbound
-	s.waitersMu.Unlock()
-}
-
-// TakeMCPWaiter removes and returns the MCP waiter for a queue row.
-func (s *SessionService) TakeMCPWaiter(id string) *protocol.InboundMessage {
-	s.waitersMu.Lock()
-	defer s.waitersMu.Unlock()
-
-	inbound := s.waiters[id]
-	delete(s.waiters, id)
-
-	return inbound
-}
-
 // PairBusyFor reports whether pairID is reserved or holding a turn.
 func (s *SessionService) PairBusyFor(pairID string) bool {
 	s.turnGatesMu.Lock()
@@ -1326,57 +1214,16 @@ func (s *SessionService) toggleSessionTag(ctx context.Context, conversationID, t
 	return tags, nil
 }
 
-func (s *SessionService) holdStartupRecovery(turnID, source, destination string) {
-	s.turnGatesMu.Lock()
-	s.pendingRecoveries[strings.TrimSpace(turnID)] = startupRecoveryHold{source: strings.TrimSpace(source), destination: strings.TrimSpace(destination)}
-	s.turnGatesMu.Unlock()
-}
-
-func (s *SessionService) releaseStartupRecovery(turnID string) {
-	s.turnGatesMu.Lock()
-	delete(s.pendingRecoveries, strings.TrimSpace(turnID))
-	s.turnGatesMu.Unlock()
-}
-
-func (s *SessionService) startupRecoveryBlocks(conversationID string) bool {
-	conversationID = strings.TrimSpace(conversationID)
-
-	s.turnGatesMu.Lock()
-	defer s.turnGatesMu.Unlock()
-
-	for _, hold := range s.pendingRecoveries {
-		if hold.source == conversationID || hold.destination == conversationID {
-			return true
-		}
-	}
-
-	return false
-}
-
 func (s *SessionService) appendExternalMCPEntry(ctx context.Context, privateConversationID, managedConversationID string, entry *harness.SessionEntry, managedReplayPrefix []json.RawMessage) (int64, error) {
-	managedEntry, err := externalMCPManagedEntry(entry, managedReplayPrefix)
-	if err != nil {
-		return 0, err
-	}
-
 	tx, err := s.beginStateTx(ctx, "external MCP session entry append")
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	privateID, err := appendSessionEntryDB(ctx, tx, strings.TrimSpace(privateConversationID), entry)
+	privateID, err := appendPairEntryDB(ctx, tx, privateConversationID, managedConversationID, entry, managedReplayPrefix)
 	if err != nil {
 		return 0, err
-	}
-
-	managedID, err := appendSessionEntryDB(ctx, tx, strings.TrimSpace(managedConversationID), &managedEntry)
-	if err != nil {
-		return 0, fmt.Errorf("append managed external MCP session entry: %w", err)
-	}
-
-	if _, err := tx.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint, 'sync_source_conversation_id', $3::text))::json WHERE id=$2`, privateID, managedID, privateConversationID); err != nil {
-		return 0, fmt.Errorf("record external MCP entry source: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -1385,6 +1232,29 @@ func (s *SessionService) appendExternalMCPEntry(ctx context.Context, privateConv
 
 	if entry.Type != externalMCPMetadataEntryType {
 		s.completeTurnPairReservation(managedConversationID, privateConversationID)
+	}
+
+	return privateID, nil
+}
+
+func appendPairEntryDB(ctx context.Context, db stateStoreDB, privateConversationID, managedConversationID string, entry *harness.SessionEntry, managedReplayPrefix []json.RawMessage) (int64, error) {
+	managedEntry, err := externalMCPManagedEntry(entry, managedReplayPrefix)
+	if err != nil {
+		return 0, err
+	}
+
+	privateID, err := appendSessionEntryDB(ctx, db, strings.TrimSpace(privateConversationID), entry)
+	if err != nil {
+		return 0, err
+	}
+
+	managedID, err := appendSessionEntryDB(ctx, db, strings.TrimSpace(managedConversationID), &managedEntry)
+	if err != nil {
+		return 0, fmt.Errorf("append managed external MCP session entry: %w", err)
+	}
+
+	if _, err := db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint, 'sync_source_conversation_id', $3::text))::json WHERE id=$2`, privateID, managedID, privateConversationID); err != nil {
+		return 0, fmt.Errorf("record external MCP entry source: %w", err)
 	}
 
 	return privateID, nil
@@ -1578,6 +1448,14 @@ func (s sessionStore) outID(entry harness.SessionEntry) (int64, error) {
 	}
 
 	return s.service.AppendEntryID(context.Background(), s.conversationID, &entry)
+}
+
+func (s sessionStore) appendDB(ctx context.Context, db stateStoreDB, entry *harness.SessionEntry) (int64, error) {
+	if s.managedConversationID != "" {
+		return appendPairEntryDB(ctx, db, s.conversationID, s.managedConversationID, entry, s.managedReplayPrefix)
+	}
+
+	return appendSessionEntryDB(ctx, db, s.conversationID, entry)
 }
 
 func removeSessionEntryNUL(data []byte) []byte {

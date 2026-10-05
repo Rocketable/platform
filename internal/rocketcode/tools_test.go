@@ -91,7 +91,7 @@ func TestWebSearchPermissionIsCoarse(t *testing.T) {
 
 	tools := newSandboxedTools(root, testShellTempConfig(t, root, outputDir), nil, DefaultShellCommand)
 
-	loop := &looper{Permissions: PermissionSet{Buckets: []PermissionBucket{{Name: "websearch", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}}}}}}
+	loop := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: PermissionSet{Buckets: []PermissionBucket{{Name: "websearch", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}}}}}}
 	tool := tools["websearch"]
 	decision, err := loop.permissionDecision("websearch", &tool, json.RawMessage(`{}`))
 
@@ -109,7 +109,7 @@ func TestBashPermissionsCheckWholeScript(t *testing.T) {
 	tools := newSandboxedTools(root, testShellTempConfig(t, root, filepath.Join(root.Name(), ".tmp")), nil, DefaultShellCommand)
 	tool := tools["bash"]
 
-	loop := &looper{Permissions: parsePermissionYAML(t, `bash: {"scripts/cmd *": allow}`), Tools: tools, observations: &turnObservations{sink: InertCheckpointSink{}}}
+	loop := &looper{Journal: InertJournal{}, Permissions: parsePermissionYAML(t, `bash: {"scripts/cmd *": allow}`), Tools: tools, observations: &turnObservations{journal: InertJournal{}}}
 	for _, tt := range []struct {
 		command string
 		denied  bool

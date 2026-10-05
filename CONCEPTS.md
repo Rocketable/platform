@@ -142,9 +142,15 @@ The shared language frontends and backend import. A frontend drops protocol mess
 
 ### State Store
 
-RocketClaw's durable database for sessions, Managed Slack Thread routing, goals, cron, scheduled messages, the Thread Queue, External MCP bindings, and restart handoffs.
+RocketClaw's durable database for sessions, Managed Slack Thread routing, goals, cron, scheduled messages, the Thread Queue, External MCP bindings, and the Step Journal.
 
 The State Store is PostgreSQL.
+
+### Step Journal
+
+The durable, conversation-local record of every completed step of in-progress work. Steps include model responses, tool call results, Task subagent turns, Code Mode host and MCP calls, workflow worker results, pending questions, and accepted Slack Steers.
+
+An interrupted turn resumes from its last recorded step. Completed steps return their recorded results instead of running again. A clean shutdown lets running calls finish, so only a call cut off by a crash or a forced exit, which started without a recorded result, is reported to the model as interrupted. A turn's steps are cleared when it finishes.
 
 ## Relationships
 
@@ -154,7 +160,7 @@ The State Store is PostgreSQL.
 - A Slack Steer belongs to one active Managed Slack Thread and is injected into that turn after the current parallel tool batch completes.
 - An Enqueued Slack Message belongs to one Managed Slack Thread's Thread Queue until it is popped, removed, or consumed by an explicit failure path.
 - A BAR is authored, packed, run, and ranked by Quickbench; an ELO Scorer belongs to one BAR.
-- A Managed Slack Thread, Thread Queue, and External MCP binding persist in the State Store.
+- A Managed Slack Thread, Thread Queue, External MCP binding, and Step Journal persist in the State Store.
 - Reload replaces Overlay Clones.
 - Frontends and the backend import Protocol. Frontends do not import the backend.
 - The process assembler constructs the backend and the frontends.

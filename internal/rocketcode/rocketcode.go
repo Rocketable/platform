@@ -45,7 +45,7 @@ type Config struct {
 	AutoApprovePermissions bool
 	Observability          ObservabilityConfig
 	ChildSessions          ChildSessions
-	CheckpointSink         CheckpointSink
+	Journal                Journal
 	CustomTools            []Tool
 	ShellEnv               map[string]string
 	// ChildContext supplies host messages to guardrails and permission reviewers.
@@ -307,10 +307,6 @@ func NewWithModelResolver(
 		return nil, errors.New("child sessions are required")
 	}
 
-	if config.CheckpointSink == nil {
-		return nil, errors.New("checkpoint sink is required")
-	}
-
 	activeAgent, hasActiveAgent := agents.Items[defaultAgent]
 	if !hasActiveAgent {
 		return nil, fmt.Errorf("missing required default agent %q", defaultAgent)
@@ -434,7 +430,7 @@ func NewWithModelResolver(
 		AutoApprovePermissions: config.AutoApprovePermissions,
 		PermissionReviewer:     factory,
 		Observability:          config.Observability,
-		CheckpointSink:         config.CheckpointSink,
+		Journal:                config.Journal,
 		expandInputPrompts:     config.ExpandPromptShellCommands.InputPrompts,
 		promptExpansion:        promptExpansion,
 		spillRel:               spillRel,

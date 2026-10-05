@@ -2,6 +2,7 @@ package slackconnector
 
 import (
 	"context"
+	"encoding/json"
 	"iter"
 	"net/http"
 	"net/http/httptest"
@@ -168,4 +169,38 @@ func TestStartEventsAcknowledgesConsumedInputFailure(t *testing.T) {
 	connector := newTestConnector(server.URL)
 	<-connector.StartEvents(t.Context(), backend)
 	require.ErrorContains(t, <-event.Acknowledgement, "channel_not_found")
+}
+
+// A private External MCP turn records its relay placeholder, so the paired
+// thread's final delivered after a restart edits it once instead of leaving it behind.
+func TestStartEventsRecordsExternalMCPRelayPlaceholder(t *testing.T) {
+	server, posted, updated := newExternalMCPReplyServer(t)
+	defer server.Close()
+
+	const private = "external_mcp:private-agent:private"
+
+	steps := map[string]json.RawMessage{}
+	connector := newTestConnector(server.URL)
+	connector.facts = newTestTurnSteps(t, private, steps)
+
+	target, err := connector.SendExternalMCPRelay(t.Context(), "D123", "111.222", testExternalMCPRelay("request", nil))
+	require.NoError(t, err)
+	require.Len(t, *posted, 2, "the relay and its placeholder")
+
+	start := protocol.NewOutboundMessage(private, "")
+	start.TurnID, start.ExternalConversationID, start.SlackReply = "turn-1", "public-conversation", target
+	events := []protocol.Event{{Message: start, Acknowledgement: make(chan error, 1)}}
+
+	<-connector.StartEvents(t.Context(), &backendMock{SubscribeFunc: func(context.Context) iter.Seq[protocol.Event] { return slices.Values(events) }})
+	require.NoError(t, <-events[0].Acknowledgement)
+	require.Contains(t, steps, "turn-1/reply", "the private turn records the relay placeholder")
+	assert.Len(t, *posted, 2, "no second placeholder")
+
+	final := protocol.NewOutboundMessage(protocol.SlackThreadConversationID("D123", "111.222"), "answer")
+	final.TurnID, final.Complete, final.ExternalConversationID, final.Agent, final.SlackReply = "turn-1", true, "public-conversation", "private-agent", target
+	final.ReplyState = steps["turn-1/reply"]
+	require.NoError(t, newTestConnector(server.URL).SendResponse(t.Context(), final))
+	require.Len(t, *updated, 1)
+	assert.Equal(t, "555.2", (*updated)[0].Get("ts"), "the answer edits the recorded placeholder")
+	assert.Len(t, *posted, 2, "the answer is not posted separately")
 }

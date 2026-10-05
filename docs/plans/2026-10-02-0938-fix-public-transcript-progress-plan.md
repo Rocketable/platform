@@ -158,7 +158,7 @@ The architecture, ordered protocol, and lifecycle sketches describe KTD1–KTD8;
 - `internal/rocketcode/active_turn.go`, `checkpoint.go`, `looper.go`, `responses_websocket.go`, `tasks.go`: checkpoint ownership, provider wait, ordered batch replay, and diagnostic privacy.
 - `internal/rocketclaw/backend/store_dao.go`, `transcript.go`, `provider_replay.go`, `bridge.go`: full-row persistence, source-qualified observation, recovery, and final-only delivery.
 - `CONCEPTS.md` and `docs/solutions/logic-errors/saved-queue-never-started-after-restart.md`: preserve ordinary later-work selection and producer/destination recovery routing.
-- `internal/rocketclaw/docs/solutions/runtime-errors/deployment-binary-missing-live-migrations.md`: leave applied migrations intact; test-schema success is not deployment compatibility.
+- `docs/solutions/runtime-errors/deployment-binary-missing-live-migrations.md`: leave applied migrations intact; test-schema success is not deployment compatibility.
 - [OpenAI Go v3.69.0 README](https://github.com/openai/openai-go/blob/v3.69.0/README.md) and installed Responses event/accumulator documentation support KTD4; current SDK documentation is guidance, not evidence to upgrade dependencies.
 - Deferred to execution: establish the delaying boundary in the user-selected run or owned reproduction; choose exact public-record/interface names and status representation from existing RPC types. These are not permissions to expand scope or defer the privacy/ownership decisions above.
 

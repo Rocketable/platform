@@ -50,10 +50,10 @@ func TestTaskPublicLifecycleKeepsReviewContentPrivate(t *testing.T) {
 
 					return client, ProviderOrigin{Provider: "canonical-provider", Model: "canonical-model"}, nil
 				})
-				sink := recordingCheckpointSink()
+				sink := recordingJournal()
 				l := emptyTestLooper()
-				l.CheckpointSink = sink
-				l.observations = &turnObservations{sink: sink, turnID: "test-turn"}
+				l.Journal = sink
+				l.observations = &turnObservations{journal: sink, turnID: "test-turn"}
 				l.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
 				l.Tools = map[string]looperTool{"task": factory.taskTool()}
 
@@ -70,9 +70,9 @@ func TestTaskPublicLifecycleKeepsReviewContentPrivate(t *testing.T) {
 
 				synctest.Wait()
 
-				writes := sink.RecordOutputTraceCalls()
+				writes := sink.SaveTraceCalls()
 				require.NotEmpty(t, writes, "child lifecycle must persist while response review is held")
-				progress := PublicProgressFromTrace(writes[len(writes)-1].RawMessages)
+				progress := PublicProgressFromTrace(writes[len(writes)-1].Trace)
 				require.Len(t, progress, 2)
 
 				for i, item := range progress {
@@ -87,8 +87,8 @@ func TestTaskPublicLifecycleKeepsReviewContentPrivate(t *testing.T) {
 
 				synctest.Wait()
 
-				writes = sink.RecordOutputTraceCalls()
-				progress = PublicProgressFromTrace(writes[len(writes)-1].RawMessages)
+				writes = sink.SaveTraceCalls()
+				progress = PublicProgressFromTrace(writes[len(writes)-1].Trace)
 
 				want := PublicProgressBlocked
 				if approved {
@@ -117,8 +117,8 @@ func TestTaskPublicLifecycleKeepsReviewContentPrivate(t *testing.T) {
 					require.Contains(t, outputs[0].Result.Output, "REVIEWER_PRIVATE_SENTINEL")
 				}
 
-				for _, write := range sink.RecordOutputTraceCalls() {
-					raw := marshalJSON(t, write.RawMessages)
+				for _, write := range sink.SaveTraceCalls() {
+					raw := marshalJSON(t, write.Trace)
 					for _, sentinel := range []string{"CHILD_PRIVATE_SENTINEL", "REVIEWER_PRIVATE_SENTINEL", "PRIVATE_DESCRIPTION"} {
 						require.NotContains(t, raw, sentinel)
 					}
@@ -170,9 +170,9 @@ func TestTaskPublicLifecycleFailureAndCancellation(t *testing.T) {
 					factory.agents.Items["guard"] = testAgent("guard")
 				}
 
-				sink := recordingCheckpointSink()
+				sink := recordingJournal()
 				l := emptyTestLooper()
-				l.observations = &turnObservations{sink: sink, turnID: "parent-turn"}
+				l.observations = &turnObservations{journal: sink, turnID: "parent-turn"}
 				l.Permissions = PermissionSet{Buckets: []PermissionBucket{
 					{Name: "task", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
 					{Name: "fast", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
@@ -184,7 +184,7 @@ func TestTaskPublicLifecycleFailureAndCancellation(t *testing.T) {
 				errDisk := errors.New("disk sentinel")
 
 				if outcome == "persistence" {
-					sink.RecordOutputTraceFunc = func(_ context.Context, _ string, trace []json.RawMessage) error {
+					sink.SaveTraceFunc = func(_ context.Context, _ string, trace []json.RawMessage) error {
 						for _, item := range PublicProgressFromTrace(trace) {
 							if item.ID == "fast" && item.State == PublicProgressCompleted {
 								return errDisk
@@ -253,8 +253,8 @@ func TestTaskPublicLifecycleFailureAndCancellation(t *testing.T) {
 					}
 				}
 
-				for _, write := range sink.RecordOutputTraceCalls() {
-					require.NotContains(t, marshalJSON(t, write.RawMessages), "PRIVATE")
+				for _, write := range sink.SaveTraceCalls() {
+					require.NotContains(t, marshalJSON(t, write.Trace), "PRIVATE")
 				}
 			})
 		})
@@ -273,7 +273,7 @@ func TestTaskRejectsEmptySubagentModelWithoutResolving(t *testing.T) {
 				return nil, ProviderOrigin{}, errors.New("resolver called")
 			})
 
-			_, err := factory.runTask(context.Background(), testTaskParams("Child", "do it", "child"), toolCallMetadata{observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
+			_, err := factory.runTask(context.Background(), testTaskParams("Child", "do it", "child"), toolCallMetadata{observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
 
 			require.ErrorContains(t, err, "required non-empty string")
 			require.Zero(t, calls)
@@ -296,7 +296,7 @@ func TestTaskResolvesSubagentModelIndependently(t *testing.T) {
 	}})
 	factory.resolver = resolver
 
-	got, err := factory.runTask(context.Background(), testTaskParams("Child", "do it", "child"), toolCallMetadata{observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
+	got, err := factory.runTask(context.Background(), testTaskParams("Child", "do it", "child"), toolCallMetadata{observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
 
 	require.NoError(t, err)
 	require.Equal(t, "<task_result>\nchild answer\n</task_result>", got)
@@ -344,7 +344,7 @@ func TestTaskTool(t *testing.T) {
 			}},
 		}})
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -361,7 +361,7 @@ func TestTaskTool(t *testing.T) {
 			"review": {Name: "review", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "low", MaxRecursion: nil, Prompt: "review carefully", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
 		}})
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -377,7 +377,7 @@ func TestTaskTool(t *testing.T) {
 			"empty": testAgent("empty"),
 		}})
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Empty", "do it", "empty"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
+		got, err := factory.runTask(context.Background(), testTaskParams("Empty", "do it", "empty"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\n\n</task_result>", got)
@@ -386,7 +386,7 @@ func TestTaskTool(t *testing.T) {
 	t.Run("rejects unknown subagent", func(t *testing.T) {
 		factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
 
-		_, err := factory.runTask(context.Background(), testTaskParams("", "", "missing"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
+		_, err := factory.runTask(context.Background(), testTaskParams("", "", "missing"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
 
 		require.EqualError(t, err, "unknown agent type: missing is not a valid agent type")
 	})
@@ -398,7 +398,7 @@ func TestTaskTool(t *testing.T) {
 		}})
 		factory.recursionRemaining = &remaining
 
-		_, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
+		_, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
 
 		require.EqualError(t, err, "maxRecursion limit reached: task delegation is unavailable")
 	})
@@ -409,7 +409,7 @@ func TestTaskTool(t *testing.T) {
 			"helper": testAgentWithPrompt("helper", "help carefully"),
 		}})
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Help", "assist", "helper"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
+		got, err := factory.runTask(context.Background(), testTaskParams("Help", "assist", "helper"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -422,7 +422,7 @@ func TestTaskTool(t *testing.T) {
 		}})
 		factory.rootInstructions = "base prompt"
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -449,7 +449,7 @@ func TestTaskTool(t *testing.T) {
 		factory.expandPromptShellCommands = testPromptExpansion(false, true, false)
 		factory.promptExpansion = env
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -465,7 +465,7 @@ func TestTaskTool(t *testing.T) {
 		factory.rootInstructions = "base prompt"
 		factory.expandPromptShellCommands = testPromptExpansion(true, false, false)
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -488,7 +488,7 @@ func TestTaskTool(t *testing.T) {
 		var group errgroup.Group
 
 		group.Go(func() error {
-			_, err := factory.runTask(ctx, testTaskParams("Slow", "wait", "slow"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
+			_, err := factory.runTask(ctx, testTaskParams("Slow", "wait", "slow"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
 			return err
 		})
 
@@ -505,7 +505,7 @@ func TestTaskTool(t *testing.T) {
 		factory.diagnostics = true
 
 		output := make(chan ChatResponse, 10)
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, output)
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, output)
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -543,7 +543,7 @@ func TestTaskTool(t *testing.T) {
 		factory.diagnostics = true
 		output := make(chan ChatResponse, 20)
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, output)
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, output)
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -581,7 +581,7 @@ func TestTaskTool(t *testing.T) {
 			}})
 			factory.rootInstructions = "Instructions from: AGENTS.md\nproject rules"
 
-			got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
+			got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
 
 			require.NoError(t, err)
 			require.Equal(t, "<task_result>\ndelegation blocked: too risky\n</task_result>", got)
@@ -601,7 +601,7 @@ func TestTaskTool(t *testing.T) {
 			"safety": testAgentWithPrompt("safety", "guard carefully"),
 		}})
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\ndelegation blocked: too risky\n</task_result>", got)
@@ -614,7 +614,7 @@ func TestTaskTool(t *testing.T) {
 			"review": {Name: "review", Guardrail: "safety"},
 			"safety": testAgent("safety"),
 		}})
-		got, err := factory.runTask(t.Context(), testTaskParams("Review", "check this", "review"), toolCallMetadata{observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
+		got, err := factory.runTask(t.Context(), testTaskParams("Review", "check this", "review"), toolCallMetadata{observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\ndelegation blocked: too risky\n</task_result>", got)
 		require.Len(t, newParams(mock), 1)
@@ -633,7 +633,7 @@ func TestTaskTool(t *testing.T) {
 		factory.diagnostics = true
 		output := make(chan ChatResponse, 10)
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, output)
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, output)
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\ndelegation response blocked: do not share\n</task_result>", got)
@@ -651,7 +651,7 @@ func TestTaskTool(t *testing.T) {
 			"safety": testAgentWithPrompt("safety", "guard carefully"),
 		}})
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\ndelegation blocked: inter-agent guardrail returned invalid JSON\n</task_result>", got)
@@ -671,7 +671,7 @@ func TestTaskTool(t *testing.T) {
 		readTool.Permission = "read"
 		factory.baseTools["read"] = readTool
 
-		_, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
+		_, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Len(t, newParams(mock), 1)

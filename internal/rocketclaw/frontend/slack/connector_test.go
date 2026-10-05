@@ -612,8 +612,9 @@ func TestStartStopCancelsInboundContext(t *testing.T) {
 		return ctx.Err()
 	}
 
-	require.NoError(t, connector.Start(context.Background()))
+	require.NoError(t, connector.Authenticate())
 	assert.Equal(t, "UBOT", connector.botUserID)
+	require.NoError(t, connector.Start(context.Background()))
 	<-started
 	<-refreshStarted
 	require.NoError(t, connector.Stop(context.Background()))
@@ -2121,6 +2122,74 @@ func TestSendResponseKeepsOnePlaceholderUntilFinal(t *testing.T) {
 	assert.False(t, connector.hasLiveSlackMessage(reply))
 }
 
+// AE1: a turn resumed after a restart edits the placeholder it recorded before,
+// posts no second placeholder, and never deletes its progress card.
+func TestResumedTurnReattachesRecordedPlaceholder(t *testing.T) {
+	var posted, updated, deleted []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		switch r.URL.Path {
+		case "/chat.postMessage":
+			posted = append(posted, r.PostForm.Get("text"))
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": fmt.Sprintf("555.%d", len(posted))})
+		case "/chat.update":
+			updated = append(updated, r.PostForm.Get("ts")+" "+r.PostForm.Get("text"))
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": r.PostForm.Get("ts")})
+		case "/chat.delete":
+			deleted = append(deleted, r.PostForm.Get("ts"))
+
+			writeJSON(t, w, map[string]any{"ok": true})
+		case "/reactions.remove":
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	steps := map[string]json.RawMessage{}
+	newConnector := func() *Connector {
+		connector := newTestConnector(server.URL)
+		connector.facts = newTestTurnSteps(t, "slack-thread:D123:111.222", steps)
+
+		return connector
+	}
+
+	reply := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
+	progress := protocol.NewOutboundMessage("slack-thread:D123:111.222", "")
+	progress.TurnID, progress.SlackReply = "turn-1", reply
+	final := protocol.NewOutboundMessage("slack-thread:D123:111.222", "Final answer")
+	final.TurnID, final.SlackReply, final.Complete = "turn-1", reply, true
+
+	require.NoError(t, newConnector().SendResponse(t.Context(), protocol.CloneOutboundMessage(progress)))
+	require.Equal(t, []string{slackImmediatePlaceholder}, posted)
+	require.Contains(t, steps, "turn-1/reply")
+
+	t.Run("resumed turn", func(t *testing.T) {
+		updated, deleted = nil, nil
+		restarted := newConnector()
+		require.NoError(t, restarted.SendResponse(t.Context(), protocol.CloneOutboundMessage(progress)))
+		require.NoError(t, restarted.SendResponse(t.Context(), protocol.CloneOutboundMessage(final)))
+		assert.Len(t, posted, 1, "no second placeholder")
+		assert.Equal(t, []string{"555.1 Final answer"}, updated)
+		assert.Empty(t, deleted, "the progress card is edited, not deleted")
+	})
+
+	t.Run("delivery from the row", func(t *testing.T) {
+		updated, deleted = nil, nil
+		delivered := protocol.CloneOutboundMessage(final)
+		delivered.ReplyState = steps["turn-1/reply"]
+		require.NoError(t, newConnector().SendResponse(t.Context(), delivered))
+		assert.Len(t, posted, 1, "no second placeholder")
+		assert.Equal(t, []string{"555.1 Final answer"}, updated)
+		assert.Empty(t, deleted)
+	})
+}
+
 func TestSendResponseRetriesTitledAndMCPFinalUpdates(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
@@ -2742,6 +2811,76 @@ func TestAskUserQuestionCancelDeletesUnansweredQuestion(t *testing.T) {
 	_, stillPending := connector.questions["question-cancel"]
 	connector.mu.Unlock()
 	assert.False(t, stillPending)
+}
+
+// AE7: shutdown leaves a pending question open, and after a restart the same
+// question is re-registered without a second post and its answer continues the turn.
+func TestAskUserQuestionSurvivesRestart(t *testing.T) {
+	var posts, deleted []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		switch r.URL.Path {
+		case "/chat.postMessage":
+			posts = append(posts, r.PostForm.Get("text"))
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
+		case "/chat.delete":
+			deleted = append(deleted, r.PostForm.Get("ts"))
+
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	steps := map[string]json.RawMessage{}
+	newConnector := func() *Connector {
+		connector := newTestConnector(server.URL)
+		connector.facts = newTestTurnSteps(t, "slack-thread:C123:111.222", steps)
+
+		return connector
+	}
+	req := &protocol.AskUserQuestionRequest{ID: "turn-1/call/c1", Question: "Choose?", ConversationID: "slack-thread:C123:111.222", SlackReply: &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}}
+	ask := func(ctx context.Context, connector *Connector) chan error {
+		done := make(chan error, 1)
+
+		go func() {
+			answer, err := connector.AskUserQuestion(ctx, req)
+			if err == nil {
+				assert.Equal(t, []string{"yes"}, answer.Selected)
+			}
+
+			done <- err
+		}()
+
+		require.Eventually(t, func() bool {
+			connector.mu.Lock()
+			defer connector.mu.Unlock()
+
+			return connector.questions[req.ID] != nil
+		}, time.Second, 10*time.Millisecond)
+
+		return done
+	}
+
+	ctx, shutdown := context.WithCancelCause(t.Context())
+	done := ask(ctx, newConnector())
+
+	shutdown(protocol.ErrBridgeStopped)
+	require.Error(t, <-done)
+	assert.Empty(t, deleted, "shutdown leaves the question UI in place")
+
+	restarted := newConnector()
+	done = ask(t.Context(), restarted)
+	assert.Len(t, posts, 1, "the resumed question is not posted again")
+	require.True(t, restarted.completeQuestion(t.Context(), req.ID, protocol.AskUserQuestionAnswer{Selected: []string{"yes"}, Source: protocol.SourceSlack}))
+	require.NoError(t, <-done)
+	assert.Equal(t, []string{"555.666"}, deleted, "the answered question is removed as usual")
 }
 
 func TestHandleInteractiveAnswersQuestionBySlackBlockID(t *testing.T) {
@@ -4255,24 +4394,6 @@ func TestHandleMessageEventFinalAnswerPhaseSteers(t *testing.T) {
 	assert.Empty(t, router.queueSnapshot())
 }
 
-func TestRestorePendingSteersInjectsAtToolBoundary(t *testing.T) {
-	var reactions []string
-
-	server := newSlackStackTestServer(t, new([]url.Values), &reactions)
-	defer server.Close()
-
-	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newThreadRouterStub())
-	conversationID := protocol.SlackThreadConversationID("C123", "111.0")
-	connector.RestorePendingSteers(conversationID, []protocol.PendingSteer{
-		{Text: "don't touch the database", SlackChannel: "C123", SlackTS: "111.2", SlackThreadTS: "111.0"},
-	})
-
-	texts := connector.DrainSteers(t.Context(), conversationID)
-	assert.Equal(t, []string{"don't touch the database"}, texts)
-	assert.Contains(t, reactions, "/reactions.remove "+slackBufferedReaction+" 111.2")
-	connector.RestorePendingSteers("not-a-slack-thread", []protocol.PendingSteer{{Text: "ignored"}})
-}
-
 func TestActivateEnqueuePostsConsumeCardThenPlaceholder(t *testing.T) {
 	var (
 		posted    []url.Values
@@ -4304,18 +4425,6 @@ func TestActivateEnqueueWithoutSlackReplyIsNoop(t *testing.T) {
 	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindEnqueue, "queued", true)
 	require.NoError(t, connector.ActivateEnqueue(t.Context(), &protocol.ThreadQueueItem{ID: "q1"}, inbound))
 	assert.Empty(t, posted)
-}
-
-func TestDiscardPendingSteersAddsInterruption(t *testing.T) {
-	var reactions []string
-
-	server := newSlackStackTestServer(t, new([]url.Values), &reactions)
-	defer server.Close()
-
-	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newThreadRouterStub())
-	connector.DiscardPendingSteers(t.Context(), []protocol.PendingSteer{{SlackChannel: "C123", SlackTS: "111.2", SlackThreadTS: "111.0"}})
-	assert.Contains(t, reactions, "/reactions.remove "+slackBufferedReaction+" 111.2")
-	assert.Contains(t, reactions, "/reactions.add "+slackInterruptionReaction+" 111.2")
 }
 
 func TestHandleMessageEventEnqueueDuringActiveTurnHasNoPlaceholders(t *testing.T) {
@@ -7232,13 +7341,6 @@ func TestHandleSlackAgentSwitchSelectionCoversThreadErrors(t *testing.T) {
 	connector.handleSlackAgentSwitchSelection(t.Context(), "U123", action)
 }
 
-func TestSetPendingSteersSinkStoresSink(t *testing.T) {
-	connector := newTestConnector("http://slack.test")
-	sink := protocol.PendingSteersSink{Set: func(string, []protocol.PendingSteer) error { return nil }}
-	connector.SetPendingSteersSink(sink)
-	require.NotNil(t, connector.pendingSteers.Set)
-}
-
 func TestHandleEnqueueCommandLogsRegisterAndStashErrors(t *testing.T) {
 	var posted []url.Values
 
@@ -7322,7 +7424,33 @@ func newTestChannelFacts() *channelFactsStoreMock {
 		ChannelFactFunc:       func(context.Context, string, string) (string, bool, error) { return "", false, nil },
 		RecordChannelFactFunc: func(context.Context, string, string, string, time.Time) error { return nil },
 		SlackChannelIDsFunc:   func(context.Context) ([]string, error) { return nil, nil },
+		LoadTurnStepFunc:      func(context.Context, string, string) (json.RawMessage, bool, error) { return nil, false, nil },
+		SaveTurnStepFunc:      func(context.Context, string, string, json.RawMessage) error { return nil },
 	}
+}
+
+// newTestTurnSteps returns channel facts whose turn steps for conversationID
+// live in steps, which survives the connectors of a simulated restart.
+func newTestTurnSteps(t *testing.T, conversationID string, steps map[string]json.RawMessage) *channelFactsStoreMock {
+	t.Helper()
+
+	facts := newTestChannelFacts()
+	facts.LoadTurnStepFunc = func(_ context.Context, id, key string) (json.RawMessage, bool, error) {
+		assert.Equal(t, conversationID, id)
+
+		value, ok := steps[key]
+
+		return value, ok, nil
+	}
+	facts.SaveTurnStepFunc = func(_ context.Context, id, key string, value json.RawMessage) error {
+		assert.Equal(t, conversationID, id)
+
+		steps[key] = value
+
+		return nil
+	}
+
+	return facts
 }
 
 func newSlackMessageEvent(messageTS, threadTS, text string) *slackevents.MessageEvent {
@@ -7760,4 +7888,138 @@ func (s *threadRouterStub) repliesSnapshot() []threadReplyCall {
 	defer s.mu.Unlock()
 
 	return append([]threadReplyCall(nil), s.replies...)
+}
+
+func TestSendCronjobRootPostsOnceAcrossReplay(t *testing.T) {
+	posts := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/chat.postMessage":
+			posts++
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "999.000"})
+		case "/conversations.history":
+			writeJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{
+				{"ts": "776.000", "blocks": []map[string]any{{"type": "header", "block_id": "turn-0/cron-root", "text": map[string]any{"type": "plain_text", "text": "older run"}}}},
+				{"ts": "777.000", "blocks": []map[string]any{{"type": "header", "block_id": "turn-1/cron-root", "text": map[string]any{"type": "plain_text", "text": "this run"}}}},
+			}})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	msg := protocol.NewOutboundMessage("cron:daily", "cron body")
+	msg.Complete, msg.TurnID = true, "turn-1"
+	msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "planner", RanAt: "2000-01-02T03:04:05Z"}
+	msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123"}
+	send := func(steps map[string]json.RawMessage) protocol.TextConversationTarget {
+		t.Helper()
+
+		connector := newTestConnector(server.URL)
+		connector.facts = newTestTurnSteps(t, "cron:daily", steps)
+
+		root, err := connector.SendCronjobRoot(t.Context(), msg)
+		require.NoError(t, err)
+
+		return root
+	}
+
+	steps := map[string]json.RawMessage{}
+	first := send(steps)
+
+	require.Equal(t, 1, posts)
+	assert.Equal(t, first, send(steps), "a replayed delivery reuses the recorded root")
+	assert.Equal(t, 1, posts)
+
+	cut := map[string]json.RawMessage{"turn-1/cron-root/posting": json.RawMessage(`{"channel_id":"C123","oldest":"700.000000"}`)}
+	root := send(cut)
+
+	assert.Equal(t, 1, posts, "the root posted before the crash is not posted again")
+	assert.Equal(t, protocol.TextConversationTarget{ChannelID: "C123", MessageID: "777.000", ThreadID: "777.000"}, root)
+	assert.Contains(t, string(cut["turn-1/cron-root"]), "777.000", "the found root is recorded")
+}
+
+func TestAskUserQuestionPostsOnceAndKeepsShutdownAnswers(t *testing.T) {
+	var posts []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		switch r.URL.Path {
+		case "/chat.postMessage":
+			posts = append(posts, r.PostForm.Get("text"))
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
+		case "/conversations.replies":
+			writeJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{
+				{"ts": "111.222", "text": "root"},
+				{"ts": "444.555", "blocks": []map[string]any{{"type": "actions", "block_id": "turn-1/call/c1", "elements": []any{}}}},
+			}})
+		case "/chat.delete":
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	req := &protocol.AskUserQuestionRequest{ID: "turn-1/call/c1", Question: "Choose?", ConversationID: "slack-thread:C123:111.222", SlackReply: &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}}
+	connect := func(steps map[string]json.RawMessage) *Connector {
+		connector := newTestConnector(server.URL)
+		connector.facts = newTestTurnSteps(t, req.ConversationID, steps)
+
+		return connector
+	}
+	ask := func(ctx context.Context, connector *Connector) chan error {
+		done := make(chan error, 1)
+
+		go func() {
+			_, err := connector.AskUserQuestion(ctx, req)
+			done <- err
+		}()
+
+		require.Eventually(t, func() bool {
+			connector.mu.Lock()
+			defer connector.mu.Unlock()
+
+			return connector.questions[req.ID] != nil
+		}, time.Second, 10*time.Millisecond)
+
+		return done
+	}
+
+	steps := map[string]json.RawMessage{"turn-1/call/c1/question/posting": json.RawMessage(`{"channel_id":"C123","thread_ts":"111.222","oldest":"1.000000"}`)}
+	ctx, shutdown := context.WithCancelCause(t.Context())
+	connector := connect(steps)
+	done := ask(ctx, connector)
+
+	assert.Empty(t, posts, "the question posted before the crash is not posted again")
+	assert.Equal(t, "444.555", connector.questions[req.ID].target.MessageID)
+
+	shutdown(protocol.ErrBridgeStopped)
+	require.Error(t, <-done)
+	require.True(t, connector.completeQuestion(t.Context(), req.ID, protocol.AskUserQuestionAnswer{Selected: []string{"yes"}, Source: protocol.SourceSlack}), "the question stays answerable during shutdown")
+
+	answer, err := connect(steps).AskUserQuestion(t.Context(), req)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"yes"}, answer.Selected)
+	assert.Empty(t, posts)
+
+	failing := connect(map[string]json.RawMessage{})
+	save := failing.facts.(*channelFactsStoreMock).SaveTurnStepFunc
+	failing.facts.(*channelFactsStoreMock).SaveTurnStepFunc = func(ctx context.Context, id, key string, value json.RawMessage) error {
+		if key == req.ID+"/question" {
+			return errors.New("store unavailable")
+		}
+
+		return save(ctx, id, key, value)
+	}
+	done = ask(t.Context(), failing)
+	require.Len(t, posts, 1)
+	require.True(t, failing.completeQuestion(t.Context(), req.ID, protocol.AskUserQuestionAnswer{Selected: []string{"no"}, Source: protocol.SourceSlack}))
+	require.NoError(t, <-done)
 }

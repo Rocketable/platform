@@ -72,19 +72,10 @@ func PublicProgressFromTrace(traces []json.RawMessage) []PublicProgress {
 	return progress
 }
 
-type checkpointWrite uint8
-
-const (
-	checkpointStart checkpointWrite = iota
-	checkpointProvider
-	checkpointTool
-	checkpointRecovered
-)
-
 // turnObservations owns trace merging and all persistence through final closure.
 // Workers submit immutable snapshots; replay stays on the root goroutine.
 type turnObservations struct {
-	sink CheckpointSink
+	journal Journal
 
 	mu     sync.Mutex
 	turnID string
@@ -147,7 +138,7 @@ func (o *turnObservations) observeLocked(ctx context.Context, progress *PublicPr
 		trace[index] = raw
 	}
 	// Ponytail: one synchronous write per changed public event. Coalescing needs measurements.
-	if err := o.sink.RecordOutputTrace(ctx, o.turnID, trace); err != nil {
+	if err := o.journal.SaveTrace(ctx, o.turnID, trace); err != nil {
 		o.err = progressPersistenceError{err: err}
 		return o.err
 	}
@@ -194,7 +185,7 @@ func (o *turnObservations) replaceResponse(ctx context.Context, parentID string,
 		return nil
 	}
 
-	if err := o.sink.RecordOutputTrace(ctx, o.turnID, trace); err != nil {
+	if err := o.journal.SaveTrace(ctx, o.turnID, trace); err != nil {
 		o.err = progressPersistenceError{err: err}
 		return o.err
 	}
@@ -204,74 +195,10 @@ func (o *turnObservations) replaceResponse(ctx context.Context, parentID string,
 	return nil
 }
 
-func (o *turnObservations) write(ctx context.Context, checkpoint *ActiveTurnCheckpoint, kind checkpointWrite) error {
+func (o *turnObservations) close() {
 	o.mu.Lock()
-	defer o.mu.Unlock()
-
-	if o.closed {
-		return nil
-	}
-
-	if o.err != nil {
-		return o.err
-	}
-
-	if kind == checkpointStart {
-		o.turnID = checkpoint.TurnID
-		o.trace = slices.Clone(checkpoint.OutputTrace)
-	}
-	// Ponytail: trace reconciliation scans linearly per record; index it if turn traces become large.
-	remaining := slices.Clone(o.trace)
-
-	for _, raw := range checkpoint.OutputTrace {
-		progress := PublicProgressFromTrace([]json.RawMessage{raw})
-		if len(progress) == 1 {
-			continue // Seeded at start; stale full snapshots cannot revive removed rows.
-		}
-
-		index := slices.IndexFunc(remaining, func(item json.RawMessage) bool { return bytes.Equal(item, raw) })
-		if index >= 0 {
-			remaining = slices.Delete(remaining, index, index+1)
-			continue // Preserve repeated identical legacy records, not just distinct JSON.
-		}
-
-		o.trace = append(o.trace, raw)
-	}
-
-	checkpointCopy := *checkpoint
-	checkpointCopy.OutputTrace = slices.Clone(o.trace)
-
-	var err error
-
-	switch kind {
-	case checkpointStart:
-		err = o.sink.StartActiveTurn(ctx, &checkpointCopy)
-	case checkpointProvider:
-		err = o.sink.RecordProviderResponse(ctx, &checkpointCopy)
-	case checkpointTool:
-		err = o.sink.RecordCompletedToolOutput(ctx, &checkpointCopy)
-	case checkpointRecovered:
-		err = o.sink.RecordRecoveredReplay(ctx, &checkpointCopy)
-	}
-
-	if err != nil {
-		return fmt.Errorf("write active turn checkpoint: %w", err)
-	}
-
-	return nil
-}
-
-func (o *turnObservations) close(ctx context.Context, state PublicProgressState) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-
 	o.closed = true
-
-	if err := o.sink.CloseActiveTurn(ctx, o.turnID, state); err != nil {
-		return fmt.Errorf("close active turn: %w", err)
-	}
-
-	return nil
+	o.mu.Unlock()
 }
 
 // progressPersistenceError must bypass provider retry and tool-result conversion.

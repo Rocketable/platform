@@ -107,7 +107,7 @@ Agent-surface disposition: Slack root named-agent selection is **Now**; managed 
 - KTD3. **Use the existing lifecycle operations.** Use `RegisterThread` for a text-free command with no attachments or forwarded previews. Let the existing root start path call `StartThread` for a non-empty remainder or other meaningful content, so placeholders, reactions, metadata, attachments, and forwarding remain centralized.
 - KTD4. **Validate before side effects.** Check the explicit name against `socialModeAgents(channel)` and reuse the existing invalid-agent ephemeral message. Do not call the help fallback or silently substitute the channel's first agent when the explicit name is invalid. Validation remains after the existing authorization and channel checks.
 - KTD5. **Preserve unrelated command paths.** Leave the managed-thread `agent` case, bare-root help fallback, and existing goal, cron, and workflow cases structurally unchanged.
-- KTD6. **Update current command documentation.** Reconcile the exact Slack contract in the cheatsheet and dollar-command design spec, and update the high-level README sentence so it distinguishes ordinary root turns from named-agent ready threads. Treat the dated `internal/rocketclaw/docs/plans/2026-07-24-slack-dollar-commands.md` as historical implementation choreography, not a current command contract, and leave it unchanged.
+- KTD6. **Update current command documentation.** Reconcile the exact Slack contract in the cheatsheet and dollar-command design spec, and update the high-level README sentence so it distinguishes ordinary root turns from named-agent ready threads. Treat the dated `docs/plans/2026-07-24-slack-dollar-commands.md` as historical implementation choreography, not a current command contract, and leave it unchanged.
 - KTD7. **Inherit existing retry semantics.** Do not add event IDs, durable deduplication, or edited-event handling. Treat `RegisterThread`'s existing-thread result as a no-op and preserve `StartThread`'s current replay behavior for repeated accepted events.
 
 ### Assumptions
@@ -150,7 +150,7 @@ The connector remains the only changed production component. The app router alre
 - `internal/rocketclaw/slackconnector/connector.go` shows the root help fallback at `handleAppMentionEvent`, managed-thread `$agent` dispatch, canonical parser behavior, and the existing workflow first-token split pattern.
 - `internal/rocketclaw/slackconnector/connector_test.go` provides root-start Slack fixtures, command canonicalization tests, the help regression, and router stub snapshots for starts, replies, and registrations.
 - `internal/rocketclaw/app/thread_bridges.go` and `internal/rocketclaw/app/thread_bridges_test.go` establish that `RegisterThread` persists the agent without session entries and that a later reply is the first submission.
-- `internal/rocketclaw/docs/specs/2026-07-24-slack-dollar-commands-design.md` and `cmd/rocketclaw/CHEATSHEET.md` are the current command-contract references that still encode the old root restriction.
+- `docs/specs/2026-07-24-slack-dollar-commands-design.md` and `cmd/rocketclaw/CHEATSHEET.md` are the current command-contract references that still encode the old root restriction.
 
 ---
 
@@ -182,7 +182,7 @@ The connector remains the only changed production component. The app router alre
 - **Goal:** Make durable Slack documentation describe the new root named-agent forms and their distinction from managed-thread switching and command help.
 - **Requirements:** R9.
 - **Dependencies:** U1 establishes the final behavior terms before documentation is revised.
-- **Files:** Modify `cmd/rocketclaw/CHEATSHEET.md`; modify `internal/rocketclaw/docs/specs/2026-07-24-slack-dollar-commands-design.md`; modify `README.md`.
+- **Files:** Modify `cmd/rocketclaw/CHEATSHEET.md`; modify `docs/specs/2026-07-24-slack-dollar-commands-design.md`; modify `README.md`.
 - **Approach:** Replace the old root-agent restriction with the two named-agent forms, retain the bare-command help exception, and keep the high-level README wording accurate without documenting implementation details.
 - **Patterns:** Keep the existing dollar-command terminology and distinguish ordinary root mentions, root named-agent ready threads, root named-agent first prompts, and managed-thread `$agent` switching. Do not add a second syntax or document a cross-surface grammar. The dated prior implementation plan remains a historical record and is excluded from the current-contract stale-claim audit.
 - **Test Scenarios:** Perform a direct stale-claim audit of the touched current-contract documents. The behavioral contract remains protected by U1 tests; no new documentation test harness is introduced.

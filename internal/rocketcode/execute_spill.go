@@ -3,6 +3,7 @@ package rocketcode
 import (
 	"bufio"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -62,10 +63,23 @@ func executeSpillFooter(path string) string {
 
 func (l *looper) beginTurnSpills(turnID string) {
 	l.spillMu.Lock()
+	defer l.spillMu.Unlock()
+
 	l.spillTurnID = turnID
 	l.spillSeq = 0
 	l.spillPaths = nil
-	l.spillMu.Unlock()
+
+	if l.spillRel == "" || l.promptExpansion.root == nil {
+		return
+	}
+
+	dir := filepath.ToSlash(filepath.Join(l.spillRel, turnID))
+
+	entries, _ := fs.ReadDir(l.promptExpansion.root.FS(), dir)
+	for _, entry := range entries {
+		l.spillSeq++
+		_ = l.grantSpill(dir + "/" + entry.Name())
+	}
 }
 
 func (l *looper) endTurnSpills() {
@@ -113,10 +127,18 @@ func (l *looper) spillExecuteOutput(out string) (string, error) {
 		return "", fmt.Errorf("write execute spill: %w", err)
 	}
 
+	if err := l.grantSpill(rel); err != nil {
+		return "", err
+	}
+
+	return strings.TrimRight(head, "\n") + executeSpillFooter(rel), nil
+}
+
+func (l *looper) grantSpill(rel string) error {
 	l.spillPaths = append(l.spillPaths, rel)
 
 	if err := l.Permissions.Allow("read", rel); err != nil {
-		return "", fmt.Errorf("grant execute spill read: %w", err)
+		return fmt.Errorf("grant execute spill read: %w", err)
 	}
 
 	if _, ok := l.CodeModeHosts["read"]; !ok && l.sandboxRead.Call != nil {
@@ -127,7 +149,7 @@ func (l *looper) spillExecuteOutput(out string) (string, error) {
 		l.CodeModeHosts["read"] = l.sandboxRead
 	}
 
-	return strings.TrimRight(head, "\n") + executeSpillFooter(rel), nil
+	return nil
 }
 
 func readResultPath(out string) string {

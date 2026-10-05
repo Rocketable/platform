@@ -779,7 +779,7 @@ func (sfs *sandboxedFileSystem) Glob(ctx context.Context, pattern, path string) 
 		hostRoot = filepath.Join(hostRoot, searchPath)
 	}
 
-	cmd := exec.CommandContext(context.WithoutCancel(ctx), "rg", "--no-config", "--files", "--hidden", "--no-follow", "--path-separator=/", "--glob=!.git/*", "-g", pattern)
+	cmd := exec.CommandContext(ctx, "rg", "--no-config", "--files", "--hidden", "--no-follow", "--path-separator=/", "--glob=!.git/*", "-g", pattern)
 	cmd.Dir = hostRoot
 
 	var stdoutBuf, stderr bytes.Buffer
@@ -1022,7 +1022,7 @@ func allowedRipgrepFiles(ctx context.Context, hostRoot, include string) (files [
 		args = append(args, "--glob="+include)
 	}
 
-	cmd := exec.CommandContext(context.WithoutCancel(ctx), "rg", args...)
+	cmd := exec.CommandContext(ctx, "rg", args...)
 	cmd.Dir = hostRoot
 
 	var stdoutBuf, stderr bytes.Buffer
@@ -1067,7 +1067,7 @@ func runRipgrep(ctx context.Context, hostRoot, pattern string, files []string) (
 	args := make([]string, 0, 7+len(files))
 	args = append(args, "--no-config", "--json", "--hidden", "--no-follow", "--path-separator=/", "--glob=!.git/*", "--no-messages", "--", pattern)
 	args = append(args, files...)
-	cmd := exec.CommandContext(context.WithoutCancel(ctx), "rg", args...)
+	cmd := exec.CommandContext(ctx, "rg", args...)
 	cmd.Dir = hostRoot
 
 	var stdoutBuf, stderr bytes.Buffer

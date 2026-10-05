@@ -42,6 +42,8 @@ func runServe(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	context.AfterFunc(ctx, stop)
+
 	version := "(unknown)"
 	if info, ok := debug.ReadBuildInfo(); ok {
 		version = info.Main.Version

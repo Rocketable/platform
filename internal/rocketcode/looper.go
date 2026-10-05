@@ -34,6 +34,36 @@ const providerRetryBackoffMaxDelay = time.Minute
 
 var errTurnInterrupted = errors.New("turn interrupted")
 
+// ErrShutdown is the cancellation cause that stops a turn after its running calls finish and
+// are journaled. Resumable calls, including task and execute, stop through their own steps
+// instead, and resume when the turn runs again.
+var ErrShutdown = errors.New("shutdown")
+
+// callContext returns the context one call runs in. A resumable call stops with ctx; any other
+// call ignores ErrShutdown, so it finishes and is journaled, but stops on any other cancellation.
+func callContext(ctx context.Context, resumable bool) (context.Context, context.CancelFunc) {
+	if resumable {
+		return ctx, func() {}
+	}
+
+	call, cancel := context.WithCancelCause(context.WithoutCancel(ctx))
+	cancelUnlessShutdown := func() {
+		if cause := context.Cause(ctx); !errors.Is(cause, ErrShutdown) {
+			cancel(cause)
+		}
+	}
+
+	stop := context.AfterFunc(ctx, cancelUnlessShutdown)
+	if ctx.Err() != nil {
+		cancelUnlessShutdown()
+	}
+
+	return call, func() {
+		stop()
+		cancel(nil)
+	}
+}
+
 // TurnPhase is whether the live turn is still in the tool loop.
 type TurnPhase int
 
@@ -122,6 +152,9 @@ type looperTool struct {
 	VisibilitySubjects []string
 	// codeModeOnly tools are available only inside execute (not model-facing).
 	codeModeOnly bool
+	// resumable calls pause through their own steps at shutdown and run again on resume; other
+	// calls finish at shutdown, and are reported interrupted only when cut off by a crash.
+	resumable bool
 }
 
 type toolCallMetadata struct {
@@ -158,7 +191,7 @@ type looper struct {
 	PermissionReviewer     permissionReviewer
 	InPermissionReview     bool
 	Observability          ObservabilityConfig
-	CheckpointSink         CheckpointSink
+	Journal                Journal
 	observations           *turnObservations // Root-owned lifetime; workers receive the turn-local pointer.
 	SteerDrain             SteerDrain
 	expandInputPrompts     bool
@@ -614,7 +647,6 @@ func (l *looper) Loop(
 	var (
 		history            []responses.ResponseInputItemUnionParam
 		historyAttribution []ReplayAttribution
-		recoveredTrace     []json.RawMessage
 	)
 
 	loaded := false
@@ -650,29 +682,18 @@ func (l *looper) Loop(
 
 			for i := range entries {
 				entry := &entries[i]
-				if entry.Type == "active_turn_recovery" {
-					recoveredTrace = slices.Clone(entry.OutputTrace)
-					stopRecoveredProgress(recoveredTrace)
-				}
-
 				historyAttribution = append(historyAttribution, entry.attributionRanges(offset)...)
 				offset += len(entry.ReplayInput)
 			}
 		}
 
-		turn, rendered, interrupted, err := l.runTurn(ctx, turnOutput, interrupts, history, historyAttribution, &line, recoveredTrace)
-		recoveredTrace = nil
+		turn, rendered, interrupted, err := l.runTurn(ctx, turnOutput, interrupts, history, historyAttribution, &line)
 		observations := l.observations
 
 		if err != nil {
-			state := PublicProgressFailed
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				state = "" // Preserve shutdown recovery, but close this observation lifetime.
-			}
+			observations.close()
 
-			errClose := observations.close(context.WithoutCancel(ctx), state)
-			// Persistence failure takes precedence over a public preparation reply.
-			if errDirectSkill, ok := errors.AsType[directSkillInputError](cmp.Or(errClose, err)); ok {
+			if errDirectSkill, ok := errors.AsType[directSkillInputError](err); ok {
 				emitChatResponse(turnOutput, ChatResponse{Kind: ChatResponseAssistantMessage, Text: errDirectSkill.Error()})
 				close(turnOutput)
 
@@ -681,40 +702,25 @@ func (l *looper) Loop(
 
 			close(turnOutput)
 
-			return fmt.Errorf("run turn: %w", errors.Join(err, errClose))
+			return fmt.Errorf("run turn: %w", err)
 		}
 
 		if interrupted {
-			errClose := observations.close(context.WithoutCancel(ctx), PublicProgressStopped)
+			observations.close()
 			close(turnOutput)
-
-			if errClose != nil {
-				return errClose
-			}
 
 			continue
 		}
 
 		observations.mu.Lock()
 		observations.closed = true
-		turn.OutputTrace = slices.Clone(observations.trace)
+		turn.OutputTrace = append(slices.Clone(observations.trace), turn.OutputTrace...)
 
 		errSave := observations.err
 		if errSave == nil {
 			if errAppend := sessionOut(turn); errAppend != nil {
 				errSave = fmt.Errorf("append session turn: %w", errAppend)
-			} else if errClear := observations.sink.ClearCompletedTurn(ctx, turn.TurnID); errClear != nil {
-				errSave = fmt.Errorf("clear active turn checkpoint: %w", errClear)
 			}
-		}
-
-		if errSave != nil {
-			state := PublicProgressFailed
-			if errors.Is(errSave, context.Canceled) || errors.Is(errSave, context.DeadlineExceeded) {
-				state = ""
-			}
-
-			errSave = errors.Join(errSave, observations.sink.CloseActiveTurn(context.WithoutCancel(ctx), turn.TurnID, state))
 		}
 		observations.mu.Unlock()
 
@@ -744,19 +750,6 @@ func (l *looper) Loop(
 	return nil
 }
 
-// stopRecoveredProgress closes interrupted public activity without altering replay.
-func stopRecoveredProgress(trace []json.RawMessage) {
-	for i, raw := range trace {
-		progress := PublicProgressFromTrace([]json.RawMessage{raw})
-		if len(progress) != 1 || !slices.Contains([]PublicProgressState{PublicProgressWorking, PublicProgressReview}, progress[0].State) {
-			continue
-		}
-
-		progress[0].State = PublicProgressStopped
-		trace[i], _ = json.Marshal(publicProgressTrace{Type: "rocketcode_public_progress", Progress: progress[0]})
-	}
-}
-
 func (l *looper) setPhase(phase TurnPhase) {
 	l.phaseMu.Lock()
 	if l.turnPhase != phase {
@@ -772,39 +765,28 @@ func (l *looper) runTurn(
 	baseHistory []responses.ResponseInputItemUnionParam,
 	baseAttribution []ReplayAttribution,
 	input *PromptInput,
-	recoveredTrace []json.RawMessage,
 ) (record SessionEntry, rendered []ChatResponse, interrupted bool, err error) {
 	var emptyRecord SessionEntry
 
-	observations := &turnObservations{sink: l.CheckpointSink}
+	observations := &turnObservations{journal: l.Journal}
 	l.observations = observations
 
-	turnItems, errInput := l.promptTurnItems(ctx, input)
-
-	replayInput, err := ReplayInputFromParams(turnItems)
+	step, turnItems, pending, errInput, err := l.openTurn(ctx, input)
 	if err != nil {
 		return emptyRecord, nil, false, err
 	}
 
-	record = SessionEntry{
-		Version:         1,
-		Type:            "turn",
-		Timestamp:       time.Now().UTC(),
-		Model:           l.DisplayModel,
-		Agent:           l.agent.Name,
-		ReasoningEffort: new(string(l.ReasoningEffort)),
-		ReplayInput:     replayInput,
-		OutputTrace:     slices.Clone(recoveredTrace),
-	}
-	record.TurnID = strconv.FormatInt(record.Timestamp.UnixNano(), 10)
+	record = step.Record
+	observations.turnID = record.TurnID
+	observations.trace = slices.Clone(step.Trace)
 
 	l.beginTurnSpills(record.TurnID)
-	defer l.endTurnSpills()
 
-	checkpoint := l.activeTurnCheckpoint(&record, nil, nil)
-	if err := observations.write(ctx, &checkpoint, checkpointStart); err != nil {
-		return emptyRecord, nil, false, fmt.Errorf("start active turn checkpoint: %w", err)
-	}
+	defer func() {
+		if ctx.Err() == nil {
+			l.endTurnSpills()
+		}
+	}()
 
 	if errInput != nil {
 		if err := observations.observe(ctx, &PublicProgress{ID: "input-error", Kind: PublicProgressText, State: PublicProgressFailed, Text: errInput.Error(), Agent: record.Agent, Model: record.Model}); err != nil {
@@ -812,19 +794,6 @@ func (l *looper) runTurn(
 		}
 
 		return emptyRecord, nil, false, directSkillInputError{message: errInput.Error()}
-	}
-
-	markInterrupted := func() error {
-		checkpoint = l.activeTurnCheckpoint(&record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
-
-		recoveredReplayInput, err := RecoveredReplayInput(&checkpoint)
-		if err != nil {
-			return fmt.Errorf("build interrupted turn replay: %w", err)
-		}
-
-		checkpoint.ReplayInput = recoveredReplayInput
-
-		return observations.write(context.WithoutCancel(ctx), &checkpoint, checkpointRecovered)
 	}
 
 	turnCtx, cancel := context.WithCancelCause(ctx)
@@ -878,83 +847,77 @@ func (l *looper) runTurn(
 	doomLoop := doomLoopTrap{recent: nil}
 
 	for {
-		history := append(append([]responses.ResponseInputItemUnionParam{}, baseHistory...), turnItems...)
-		history = l.rewriteHistory(history)
-		history = pruneHistoryBeforeLatestCompaction(history)
+		resp := pending
+		pending = nil
 
-		params := l.buildParams(history)
+		if resp == nil {
+			history := append(append([]responses.ResponseInputItemUnionParam{}, baseHistory...), turnItems...)
+			history = l.rewriteHistory(history)
+			history = pruneHistoryBeforeLatestCompaction(history)
 
-		attribution := append(slices.Clone(baseAttribution), record.attributionRanges(len(baseHistory))...)
-		attributionEnd := len(baseHistory) + len(turnItems)
+			params := l.buildParams(history)
 
-		observer := &responseObservations{owner: observations, agent: record.Agent, model: record.Model}
+			attribution := append(slices.Clone(baseAttribution), record.attributionRanges(len(baseHistory))...)
+			attributionEnd := len(baseHistory) + len(turnItems)
 
-		resp, err := l.newProviderResponse(turnCtx, &params, observer, output, func(recovered []responses.ResponseInputItemUnionParam, retained int) error {
-			// Retained items come from provider input, which omits local metadata.
-			recovered = slices.Clone(recovered)
-			copy(recovered[len(recovered)-retained:], history[len(history)-retained:])
-			recovered = pruneHistoryBeforeLatestCompaction(recovered)
+			observer := &responseObservations{owner: observations, agent: record.Agent, model: record.Model}
 
-			replayInput, errReplay := ReplayInputFromParams(recovered)
-			if errReplay != nil {
-				return errReplay
-			}
+			var errResponse error
 
-			record.ReplayInput = replayInput
-			record.ReplayAttribution = make([]ReplayAttribution, 0, len(attribution))
+			resp, errResponse = l.newProviderResponse(turnCtx, &params, observer, output, func(recovered []responses.ResponseInputItemUnionParam, retained int) error {
+				// Retained items come from provider input, which omits local metadata.
+				recovered = slices.Clone(recovered)
+				copy(recovered[len(recovered)-retained:], history[len(history)-retained:])
+				recovered = pruneHistoryBeforeLatestCompaction(recovered)
 
-			start := attributionEnd - retained
-			for _, snapshot := range attribution {
-				snapshot.Start = max(snapshot.Start, start) + len(recovered) - retained - start
-
-				snapshot.End = max(min(snapshot.End, attributionEnd), start) + len(recovered) - retained - start
-				if snapshot.Start != snapshot.End {
-					record.ReplayAttribution = append(record.ReplayAttribution, snapshot)
+				replayInput, errReplay := ReplayInputFromParams(recovered)
+				if errReplay != nil {
+					return errReplay
 				}
-			}
 
-			turnItems = append([]responses.ResponseInputItemUnionParam(nil), recovered...)
-			checkpoint = l.activeTurnCheckpoint(&record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
+				record.ReplayInput = replayInput
+				record.ReplayAttribution = make([]ReplayAttribution, 0, len(attribution))
 
-			return observations.write(turnCtx, &checkpoint, checkpointProvider)
-		})
-		if err != nil {
-			interrupted := errors.Is(context.Cause(turnCtx), errTurnInterrupted)
-			if interrupted || turnCtx.Err() != nil {
-				if err := markInterrupted(); err != nil {
-					return emptyRecord, nil, false, err
+				start := attributionEnd - retained
+				for _, snapshot := range attribution {
+					snapshot.Start = max(snapshot.Start, start) + len(recovered) - retained - start
+
+					snapshot.End = max(min(snapshot.End, attributionEnd), start) + len(recovered) - retained - start
+					if snapshot.Start != snapshot.End {
+						record.ReplayAttribution = append(record.ReplayAttribution, snapshot)
+					}
 				}
+
+				turnItems = append([]responses.ResponseInputItemUnionParam(nil), recovered...)
+
+				return l.saveTurn(turnCtx, &record, nil)
+			})
+			if errResponse != nil {
+				if errors.Is(context.Cause(turnCtx), errTurnInterrupted) {
+					return emptyRecord, nil, true, nil
+				}
+
+				return emptyRecord, nil, false, fmt.Errorf("request response: %w", errResponse)
 			}
 
-			if interrupted {
-				return emptyRecord, nil, true, nil
+			l.emitHostedToolDiagnostics(output, resp.Output)
+
+			if err := l.appendProviderReplay(&record, &turnItems, resp); err != nil {
+				return emptyRecord, nil, false, err
 			}
 
-			return emptyRecord, nil, false, fmt.Errorf("request response: %w", err)
+			if err := l.saveTurn(turnCtx, &record, resp); err != nil {
+				return emptyRecord, nil, false, fmt.Errorf("record provider response: %w", err)
+			}
 		}
 
-		l.emitHostedToolDiagnostics(output, resp.Output)
 		// Stream reasoning/commentary live; defer final assistant messages to turn end.
 		rendered = appendLiveTurnResponses(output, rendered, responseChatResponses(resp.Output))
-
-		if err := l.appendProviderReplay(&record, &turnItems, resp); err != nil {
-			return emptyRecord, nil, false, err
-		}
-
 		reviewContext := pruneHistoryBeforeLatestCompaction(append(append([]responses.ResponseInputItemUnionParam{}, baseHistory...), turnItems...))
 
-		checkpoint = l.activeTurnCheckpoint(&record, openFunctionCallCheckpoints(resp.Output), checkpoint.CompletedFunctionOutputs)
-		if err := observations.write(turnCtx, &checkpoint, checkpointProvider); err != nil {
-			return emptyRecord, nil, false, fmt.Errorf("record provider response checkpoint: %w", err)
-		}
-
-		hadToolCalls, compactionOnly, toolOutputs, interrupted, err := l.dispatchProviderTools(turnCtx, resp, reviewContext, &doomLoop, output, markInterrupted)
-		if err != nil {
-			return emptyRecord, nil, false, err
-		}
-
-		if interrupted {
-			return emptyRecord, nil, true, nil
+		hadToolCalls, compactionOnly, toolOutputs, interrupted, err := l.dispatchProviderTools(turnCtx, resp, reviewContext, &doomLoop, output)
+		if err != nil || interrupted {
+			return emptyRecord, nil, interrupted, err
 		}
 
 		if !hadToolCalls {
@@ -962,29 +925,101 @@ func (l *looper) runTurn(
 				continue
 			}
 
-			injected, errSteers := l.appendSteers(turnCtx, &record, &turnItems, &checkpoint, TurnPhaseFinalAnswer)
+			injected, errSteers := l.appendSteers(turnCtx, &record, &turnItems, TurnPhaseFinalAnswer)
 			if errSteers != nil {
 				return emptyRecord, nil, false, errSteers
 			}
 
-			if injected {
-				continue
+			if !injected {
+				return record, rendered, false, nil
 			}
 
-			return record, rendered, false, nil
+			if err := l.saveTurn(turnCtx, &record, nil); err != nil {
+				return emptyRecord, nil, false, err
+			}
+
+			continue
 		}
 
-		if err := l.appendToolOutputReplay(turnCtx, &record, &turnItems, &checkpoint, toolOutputs); err != nil {
+		if err := l.appendToolOutputReplay(&record, &turnItems, toolOutputs); err != nil {
 			return emptyRecord, nil, false, err
 		}
 
-		if _, err := l.appendSteers(turnCtx, &record, &turnItems, &checkpoint, TurnPhaseToolLoop); err != nil {
+		if _, err := l.appendSteers(turnCtx, &record, &turnItems, TurnPhaseToolLoop); err != nil {
 			return emptyRecord, nil, false, err
+		}
+
+		if err := l.saveTurn(turnCtx, &record, nil); err != nil {
+			return emptyRecord, nil, false, fmt.Errorf("record tool outputs: %w", err)
 		}
 	}
 }
 
-func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Response, reviewContext []responses.ResponseInputItemUnionParam, doomLoop *doomLoopTrap, output chan<- ChatResponse, markInterrupted func() error) (hadToolCalls, compactionOnly bool, toolOutputs []dispatchedToolOutput, interrupted bool, err error) {
+// openTurn resumes the journaled turn for input's TurnID, or starts a new one from the prompt.
+func (l *looper) openTurn(ctx context.Context, input *PromptInput) (step turnStep, turnItems []responses.ResponseInputItemUnionParam, pending *responses.Response, errInput, err error) {
+	resumed := false
+	if input.TurnID != "" {
+		if resumed, err = loadStep(ctx, l.Journal, input.TurnID, &step); err != nil {
+			return step, nil, nil, nil, err
+		}
+	}
+
+	if !resumed {
+		turnItems, errInput = l.promptTurnItems(ctx, input)
+
+		replayInput, err := ReplayInputFromParams(turnItems)
+		if err != nil {
+			return step, nil, nil, nil, err
+		}
+
+		step.Record = SessionEntry{
+			Version:         1,
+			Type:            "turn",
+			Timestamp:       time.Now().UTC(),
+			Model:           l.DisplayModel,
+			Agent:           l.agent.Name,
+			ReasoningEffort: new(string(l.ReasoningEffort)),
+			ReplayInput:     replayInput,
+		}
+		step.Record.TurnID = cmp.Or(input.TurnID, strconv.FormatInt(step.Record.Timestamp.UnixNano(), 10))
+
+		if err := saveStep(ctx, l.Journal, step.Record.TurnID, &step); err != nil {
+			return step, nil, nil, nil, err
+		}
+
+		return step, turnItems, nil, errInput, nil
+	}
+
+	if turnItems, err = ReplayInputToParams(step.Record.ReplayInput); err != nil {
+		return step, nil, nil, nil, err
+	}
+
+	if len(step.Response) > 0 {
+		pending = new(responses.Response)
+		if err := pending.UnmarshalJSON(step.Response); err != nil {
+			return step, nil, nil, nil, fmt.Errorf("decode journaled response: %w", err)
+		}
+	}
+
+	return step, turnItems, pending, nil, nil
+}
+
+// saveTurn journals the turn's items, trace, and the provider response whose calls are not yet appended.
+func (l *looper) saveTurn(ctx context.Context, record *SessionEntry, resp *responses.Response) error {
+	step := turnStep{Record: *record}
+
+	l.observations.mu.Lock()
+	step.Trace = slices.Clone(l.observations.trace)
+	l.observations.mu.Unlock()
+
+	if resp != nil {
+		step.Response = json.RawMessage(resp.RawJSON())
+	}
+
+	return saveStep(ctx, l.Journal, record.TurnID, &step)
+}
+
+func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Response, reviewContext []responses.ResponseInputItemUnionParam, doomLoop *doomLoopTrap, output chan<- ChatResponse) (hadToolCalls, compactionOnly bool, toolOutputs []dispatchedToolOutput, interrupted bool, err error) {
 	hadToolCalls = slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type == "function_call" })
 
 	compactionOnly = len(resp.Output) > 0 && !slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type != "compaction" })
@@ -1003,22 +1038,21 @@ func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Resp
 		return hadToolCalls, compactionOnly, toolOutputs, false, nil
 	}
 
-	interrupted = errors.Is(context.Cause(ctx), errTurnInterrupted)
-	if interrupted || ctx.Err() != nil {
-		if err := markInterrupted(); err != nil {
-			return false, false, nil, false, err
-		}
-	}
-
-	if interrupted {
+	if errors.Is(context.Cause(ctx), errTurnInterrupted) {
 		return false, false, nil, true, nil
 	}
 
 	return false, false, nil, false, fmt.Errorf("dispatch tool calls: %w", err)
 }
 
-func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, checkpoint *ActiveTurnCheckpoint, phase TurnPhase) (bool, error) {
-	inputs := l.SteerDrain.Drain(ctx, phase)
+// appendSteers skips a drained input whose ID is already in the turn, since a
+// resumed turn's embedder re-offers every steer it accepted.
+func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, phase TurnPhase) (bool, error) {
+	inputs := slices.DeleteFunc(l.SteerDrain.Drain(ctx, phase), func(input PromptInput) bool {
+		return input.ID != "" && slices.ContainsFunc(*turnItems, func(item responses.ResponseInputItemUnionParam) bool {
+			return item.OfMessage != nil && item.OfMessage.ExtraFields()["input_id"] == input.ID
+		})
+	})
 	for _, input := range inputs {
 		if input.DirectSkill != nil {
 			item, err := l.directSkillInput(ctx, input.DirectSkill)
@@ -1039,13 +1073,6 @@ func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnIte
 		}
 
 		*turnItems = append(*turnItems, steer)
-	}
-
-	if len(inputs) > 0 {
-		*checkpoint = l.activeTurnCheckpoint(record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
-		if err := l.observations.write(ctx, checkpoint, checkpointProvider); err != nil {
-			return false, fmt.Errorf("record steer checkpoint: %w", err)
-		}
 	}
 
 	return len(inputs) > 0, nil
@@ -1086,7 +1113,7 @@ func (l *looper) appendProviderReplay(record *SessionEntry, turnItems *[]respons
 	return nil
 }
 
-func (l *looper) appendToolOutputReplay(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, checkpoint *ActiveTurnCheckpoint, toolOutputs []dispatchedToolOutput) error {
+func (l *looper) appendToolOutputReplay(record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, toolOutputs []dispatchedToolOutput) error {
 	for i := range toolOutputs {
 		toolInput := responses.ResponseInputItemUnionParam{OfFunctionCallOutput: &toolOutputs[i].Param}
 
@@ -1095,22 +1122,6 @@ func (l *looper) appendToolOutputReplay(ctx context.Context, record *SessionEntr
 		}
 
 		*turnItems = append(*turnItems, toolInput)
-
-		raw, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{toolInput})
-		if err != nil {
-			return err
-		}
-
-		completed := FunctionOutputCheckpoint{CallID: toolInput.OfFunctionCallOutput.CallID.Or(""), Name: toolOutputs[i].Name, ReplayInput: raw}
-		checkpoint.CompletedFunctionOutputs = append(checkpoint.CompletedFunctionOutputs, completed)
-		checkpoint.OpenFunctionCalls = slices.DeleteFunc(checkpoint.OpenFunctionCalls, func(call FunctionCallCheckpoint) bool {
-			return call.CallID == completed.CallID
-		})
-
-		*checkpoint = l.activeTurnCheckpoint(record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
-		if err := l.observations.write(ctx, checkpoint, checkpointTool); err != nil {
-			return fmt.Errorf("record completed tool output checkpoint: %w", err)
-		}
 	}
 
 	for i := range toolOutputs {
@@ -1124,59 +1135,7 @@ func (l *looper) appendToolOutputReplay(ctx context.Context, record *SessionEntr
 		}
 	}
 
-	if len(toolOutputs) > 0 {
-		*checkpoint = l.activeTurnCheckpoint(record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
-		if err := l.observations.write(ctx, checkpoint, checkpointTool); err != nil {
-			return fmt.Errorf("record completed tool replay checkpoint: %w", err)
-		}
-	}
-
 	return nil
-}
-
-func (l *looper) activeTurnCheckpoint(record *SessionEntry, openCalls []FunctionCallCheckpoint, completedOutputs []FunctionOutputCheckpoint) ActiveTurnCheckpoint {
-	var tokenUsage *TokenUsage
-
-	if record.TokenUsage != nil {
-		usage := *record.TokenUsage
-		tokenUsage = &usage
-	}
-
-	return ActiveTurnCheckpoint{
-		TurnID:                   record.TurnID,
-		Agent:                    l.agent.Name,
-		Model:                    l.Model,
-		DisplayModel:             l.DisplayModel,
-		ReasoningEffort:          record.ReasoningEffort,
-		ReplayAttribution:        slices.Clone(record.ReplayAttribution),
-		ReplayInput:              slices.Clone(record.ReplayInput),
-		OutputTrace:              slices.Clone(record.OutputTrace),
-		TokenUsage:               tokenUsage,
-		ResponseID:               record.ResponseID,
-		OpenFunctionCalls:        slices.Clone(openCalls),
-		CompletedFunctionOutputs: slices.Clone(completedOutputs),
-	}
-}
-
-func openFunctionCallCheckpoints(items []responses.ResponseOutputItemUnion) []FunctionCallCheckpoint {
-	openCalls := []FunctionCallCheckpoint{}
-
-	for i := range items {
-		item := &items[i]
-		if item.Type != "function_call" {
-			continue
-		}
-
-		call := FunctionCallCheckpoint{CallID: item.CallID, Name: item.Name}
-		// Replay retains the original string; invalid arguments must reach tool error handling.
-		if arguments := json.RawMessage(item.Arguments.OfString); json.Valid(arguments) {
-			call.Arguments = arguments
-		}
-
-		openCalls = append(openCalls, call)
-	}
-
-	return openCalls
 }
 
 func (l *looper) promptTurnItems(ctx context.Context, input *PromptInput) ([]responses.ResponseInputItemUnionParam, error) {
@@ -2053,15 +2012,18 @@ func (l *looper) dispatchToolCalls(
 			callCtx = withToolCallContext(callCtx, l, output, call.callID)
 			progress := call.progress
 
-			progress.State = PublicProgressWorking
-			if err := l.observations.observe(groupCtx, &progress); err != nil {
+			key := ToolCallKey(callCtx)
+			if replayed, err := l.replayCall(callCtx, outputs, call.outputIndex, call.name, call.callID, call.tool.resumable, &progress); replayed {
 				return err
 			}
 
+			runCtx, stop := callContext(callCtx, call.tool.resumable)
+			defer stop()
+
 			if call.tool.CallReplay != nil {
-				result, replayInput, err = call.tool.CallReplay(callCtx, call.args, output, metadata)
+				result, replayInput, err = call.tool.CallReplay(runCtx, call.args, output, metadata)
 			} else {
-				result, err = call.tool.Call(callCtx, call.args, output, metadata)
+				result, err = call.tool.Call(runCtx, call.args, output, metadata)
 			}
 
 			if _, ok := errors.AsType[progressPersistenceError](err); ok {
@@ -2073,7 +2035,7 @@ func (l *looper) dispatchToolCalls(
 				state = PublicProgressFailed
 			}
 
-			if groupCtx.Err() != nil {
+			if runCtx.Err() != nil {
 				state = PublicProgressStopped
 			}
 
@@ -2084,7 +2046,7 @@ func (l *looper) dispatchToolCalls(
 			if err != nil {
 				recordSpanError(span, err)
 
-				if groupCtx.Err() != nil {
+				if runCtx.Err() != nil {
 					return fmt.Errorf("run tool %q: %w", call.name, err)
 				}
 
@@ -2101,7 +2063,7 @@ func (l *looper) dispatchToolCalls(
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: call.name, Result: attachmentOutputMessage(result)})
 			outputs[call.outputIndex] = dispatchedToolOutput{Name: call.name, Param: toolCallOutput(call.callID, result), Result: result, ReplayInput: replayInput}
 
-			return nil
+			return l.recordCall(groupCtx, key, &outputs[call.outputIndex].Param, replayInput)
 		})
 	}
 
@@ -2110,6 +2072,67 @@ func (l *looper) dispatchToolCalls(
 	}
 
 	return outputs, true, nil
+}
+
+// replayCall restores a journaled call: a recorded output is reused, and a started, unfinished
+// non-resumable call is reported interrupted. Otherwise it records the started marker and marks the
+// call working; false means the caller runs it. Any error is reported as replayed.
+func (l *looper) replayCall(ctx context.Context, outputs []dispatchedToolOutput, index int, name, callID string, resumable bool, progress *PublicProgress) (bool, error) {
+	key := ToolCallKey(ctx)
+
+	var step callStep
+
+	started, err := loadStep(ctx, l.Journal, key, &step)
+	if err != nil {
+		return true, err
+	}
+
+	if len(step.Output) == 0 && (!started || resumable) {
+		if !started {
+			if err := saveStep(ctx, l.Journal, key, &step); err != nil {
+				return true, err
+			}
+		}
+
+		progress.State = PublicProgressWorking
+		if err := l.observations.observe(ctx, progress); err != nil {
+			return true, err
+		}
+
+		return false, nil
+	}
+
+	state := PublicProgressCompleted
+	if len(step.Output) == 0 {
+		state = PublicProgressStopped
+		output := toolCallOutput(callID, TextToolResult(genericAbortedToolOutputText))
+
+		if step.Output, err = ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfFunctionCallOutput: &output}}); err != nil {
+			return true, err
+		}
+
+		if err := saveStep(ctx, l.Journal, key, &step); err != nil {
+			return true, err
+		}
+	}
+
+	items, err := ReplayInputToParams(step.Output)
+	if err != nil {
+		return true, err
+	}
+
+	outputs[index] = dispatchedToolOutput{Name: name, Param: *items[0].OfFunctionCallOutput, ReplayInput: items[1:]}
+
+	return true, l.observations.finishCall(context.WithoutCancel(ctx), progress, state)
+}
+
+func (l *looper) recordCall(ctx context.Context, key string, output *responses.ResponseInputItemFunctionCallOutputParam, replayInput []responses.ResponseInputItemUnionParam) error {
+	recorded, err := ReplayInputFromParams(append([]responses.ResponseInputItemUnionParam{{OfFunctionCallOutput: output}}, replayInput...))
+	if err != nil {
+		return err
+	}
+
+	return saveStep(ctx, l.Journal, key, &callStep{Output: recorded})
 }
 
 func toolCallFailureResult(name string, err error) ToolResult {

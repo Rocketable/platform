@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -215,7 +217,7 @@ func TestCustomToolsAreCodeModeOnlyInsideExecute(t *testing.T) {
 	assert.Contains(t, hosts, "rocketclaw_reload")
 
 	output := make(chan ChatResponse, 8)
-	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
+	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
 	ctx := withToolCallContext(t.Context(), looper, output, "")
 	run := model[executeToolName]
 	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return ask_user_question(question=\"ship it?\")\n"}`), output, emptyToolCallMetadata())
@@ -262,6 +264,8 @@ func TestCodeModeHostToolsIncludesBashWhenAllowed(t *testing.T) {
 	assert.Contains(t, hosts, "bash")
 
 	looper := &looper{
+		Journal:                InertJournal{},
+		observations:           &turnObservations{journal: InertJournal{}},
 		Permissions:            permissions,
 		AutoApprovePermissions: true,
 		Tools:                  model,
@@ -312,7 +316,7 @@ func TestCodeModeHostsSurviveModelWithoutHosts(t *testing.T) {
 	agent := &Agent{Permission: permissions}
 	model, hosts := factory.assembleTools(agent)
 
-	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts}
+	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
 	ctx := withToolCallContext(t.Context(), looper, nil, "")
 
 	run := model[executeToolName]
@@ -338,7 +342,7 @@ func TestExecuteBashOutputSurvivesContainers(t *testing.T) {
 
 	factory := &toolFactory{baseTools: makeSandboxedTools(sfs, sss)}
 	model, hosts := factory.assembleTools(&Agent{Permission: permissions})
-	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts}
+	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
 	ctx := withToolCallContext(t.Context(), looper, nil, "")
 
 	for _, test := range []struct{ name, expression, want string }{
@@ -376,7 +380,7 @@ func TestExecuteParseFailureDoesNotRunHost(t *testing.T) {
 	factory := &toolFactory{baseTools: makeSandboxedTools(sfs, nil)}
 	agent := &Agent{Permission: permissions}
 	model, hosts := factory.assembleTools(agent)
-	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts}
+	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
 	ctx := withToolCallContext(t.Context(), looper, nil, "")
 
 	run := model[executeToolName]
@@ -405,7 +409,7 @@ func TestExecuteNestedToolEmitsThinkingDiagnostic(t *testing.T) {
 	model, hosts := factory.assembleTools(agent)
 
 	output := make(chan ChatResponse, 8)
-	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
+	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
 	ctx := withToolCallContext(t.Context(), looper, output, "")
 
 	run := model[executeToolName]
@@ -444,7 +448,7 @@ func TestExecuteNestedConcurrencyPrefixesThinkingDiagnostic(t *testing.T) {
 	factory := &toolFactory{baseTools: makeSandboxedTools(sfs, nil)}
 	model, hosts := factory.assembleTools(&Agent{Permission: permissions})
 	output := make(chan ChatResponse, 8)
-	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
+	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
 	ctx := withToolCallContext(t.Context(), looper, output, "")
 
 	run := model[executeToolName]
@@ -485,7 +489,7 @@ func TestExecuteNestedSearchEmitsThinkingDiagnostic(t *testing.T) {
 	model, hosts := factory.assembleTools(agent)
 
 	output := make(chan ChatResponse, 8)
-	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
+	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
 	ctx := withToolCallContext(t.Context(), looper, output, "")
 
 	run := model[executeToolName]
@@ -526,7 +530,7 @@ func TestExecuteNestedToolDiagnosticNotDroppedWhenOutputFull(t *testing.T) {
 
 	// Unbuffered channel: non-blocking emit would drop; nested emit must block until read.
 	output := make(chan ChatResponse)
-	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
+	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
 	ctx := withToolCallContext(t.Context(), looper, output, "")
 
 	done := make(chan struct{})
@@ -709,6 +713,8 @@ func TestExecuteSearchAndRun(t *testing.T) {
 	require.NotNil(t, tools)
 
 	looper := &looper{
+		Journal:                InertJournal{},
+		observations:           &turnObservations{journal: InertJournal{}},
 		Permissions:            permissions,
 		AutoApprovePermissions: false,
 	}
@@ -820,4 +826,138 @@ func startRocketCodeMCPHTTPServer(t *testing.T, register func(*mcp.Server)) stri
 	t.Cleanup(func() { _ = srv.Close() })
 
 	return "http://" + ln.Addr().String()
+}
+
+func TestExecuteReplaysRecordedHostCalls(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		calls    []string
+		keys     []string
+		base     = t.Context()
+		shutdown context.CancelCauseFunc
+	)
+
+	host := func(name string) looperTool {
+		tool := testLooperTool(name)
+		tool.Call = func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
+			mu.Lock()
+			defer mu.Unlock()
+
+			calls = append(calls, name+string(raw))
+			keys = append(keys, ToolCallKey(ctx))
+
+			return TextToolResult(name + string(raw)), nil
+		}
+
+		return tool
+	}
+
+	drain := testLooperTool("drain")
+	drain.Call = func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
+		shutdown(ErrShutdown)
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		calls = append(calls, "drain"+string(raw))
+
+		return TextToolResult("drained"), ctx.Err()
+	}
+
+	var permissions PermissionSet
+	for _, name := range []string{"read", "note", "other", "drain"} {
+		require.NoError(t, permissions.Allow(name, "*"))
+	}
+
+	root, err := os.OpenRoot(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
+	journal := recordingJournal()
+	execute := func(code string) (string, error) {
+		t.Helper()
+
+		model, _ := (&toolFactory{baseTools: makeSandboxedTools(sfs, nil)}).assembleTools(&Agent{Permission: permissions})
+		looper := &looper{Journal: journal, observations: &turnObservations{journal: journal, turnID: "turn-1"}, Permissions: permissions, Tools: model, CodeModeHosts: map[string]looperTool{"note": host("note"), "other": host("other"), "drain": drain}}
+		ctx := withToolCallContext(base, looper, nil, "call-1")
+
+		raw, err := json.Marshal(map[string]string{"code": code})
+		require.NoError(t, err)
+
+		result, err := model[executeToolName].Call(ctx, raw, nil, emptyToolCallMetadata())
+
+		return result.Output, err
+	}
+	run := func(code string) string {
+		t.Helper()
+
+		output, err := execute(code)
+		require.NoError(t, err)
+
+		return output
+	}
+
+	script := "def main():\n    a = note(text=\"one\")\n    b = gather([lambda: note(text=\"left\"), lambda: note(text=\"right\")])\n    return a + \"|\" + \"|\".join(b)\n"
+	first := run(script)
+
+	require.Len(t, calls, 3)
+	require.Len(t, slices.Compact(slices.Sorted(slices.Values(keys))), 3, "each host call, including gather branches, has its own key")
+
+	for _, key := range keys {
+		require.True(t, strings.HasPrefix(key, "turn-1/call/call-1/host/"), key)
+	}
+
+	calls = nil
+
+	require.Equal(t, first, run(script), "a replayed script returns its recorded results")
+	require.Empty(t, calls, "completed host calls and gather branches are not repeated")
+
+	rewrite := func(edit func(*hostCallStep)) {
+		t.Helper()
+
+		var step hostCallStep
+
+		found, err := loadStep(t.Context(), journal, keys[0], &step)
+		require.NoError(t, err)
+		require.True(t, found)
+		edit(&step)
+		require.NoError(t, saveStep(t.Context(), journal, keys[0], &step))
+	}
+
+	calls = nil
+
+	rewrite(func(step *hostCallStep) { step.Done, step.Output = false, "" })
+
+	interrupted, err := execute(script)
+
+	require.Empty(t, calls, "a started, unfinished non-resumable call is not run again")
+	require.Contains(t, fmt.Sprint(interrupted, err), "tool call aborted because the runtime stopped")
+
+	rewrite(func(step *hostCallStep) { step.Err = "note failed" })
+
+	failed, err := execute(script)
+
+	require.Empty(t, calls, "a recorded failure is replayed without running the call")
+	require.Contains(t, fmt.Sprint(failed, err), "note failed")
+
+	diverged := run("def main():\n    return other(text=\"one\")\n")
+
+	require.Equal(t, []string{`other{"text":"one"}`}, calls, "a recording for a different tool runs live")
+	require.Contains(t, diverged, "other")
+
+	calls = nil
+
+	base, shutdown = context.WithCancelCause(t.Context())
+	defer shutdown(nil)
+
+	drainScript := "def main():\n    return drain(text=\"x\")\n"
+	_, _ = execute(drainScript)
+
+	require.Equal(t, []string{`drain{"text":"x"}`}, calls)
+
+	calls, base = nil, t.Context()
+
+	require.Contains(t, run(drainScript), "drained", "a host call running at shutdown finishes and is recorded")
+	require.Empty(t, calls, "the recorded host call is not repeated")
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -358,6 +359,7 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 		{name: "first submit", submitErr: errors.New("submit failed"), wantCleanup: true},
 		{name: "provider error after acceptance", resultErr: errors.New("provider failed"), wantBinding: true},
 		{name: "caller cancellation after acceptance", cancelAfterSubmit: true, wantBinding: true},
+		{name: "shutdown after acceptance", submitErr: fmt.Errorf("run turn: %w", protocol.ErrBridgeStopped), wantBinding: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()

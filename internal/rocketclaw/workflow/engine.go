@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"sync"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -19,6 +20,8 @@ import (
 const (
 	localContext = "workflow context"
 	localPhase   = "workflow phase"
+	localKey     = "workflow key"
+	localSteps   = "workflow steps"
 )
 
 // Worker describes an isolated workflow agent.
@@ -33,11 +36,12 @@ type RunRequest struct {
 	Definition  *Definition
 }
 
-// AgentRequest describes one isolated agent call.
+// AgentRequest describes one isolated agent call. Key is the call's
+// replay-stable journal key under the run ID.
 type AgentRequest struct {
-	Worker Worker
-	Prompt string
-	Schema map[string]any
+	Worker      Worker
+	Prompt, Key string
+	Schema      map[string]any
 }
 
 // AgentRunner runs one isolated agent call.
@@ -103,7 +107,7 @@ func Run(ctx context.Context, definition *Definition, request RunRequest, agent 
 		e.phases[name] = &protocol.PhaseUpdate{PhaseID: fmt.Sprintf("%s/phase/%06d/%s", request.RunID, i, name), Name: name, Status: protocol.PhasePending}
 	}
 
-	thread, stop := e.thread(ctx, "workflow "+definition.Name, "", false)
+	thread, stop := e.thread(ctx, "workflow "+definition.Name, request.RunID+"/workflow/", "", false)
 	defer stop()
 
 	if errContext := context.Cause(ctx); errContext != nil {
@@ -172,9 +176,10 @@ func workflowEvalError(err error) error {
 	return err
 }
 
-func (e *engine) thread(ctx context.Context, name, phase string, fanout bool) (thread *starlark.Thread, stop func()) {
+func (e *engine) thread(ctx context.Context, name, key, phase string, fanout bool) (thread *starlark.Thread, stop func()) {
 	thread = &starlark.Thread{Name: name, OnMaxSteps: e.maxSteps, Print: func(*starlark.Thread, string) {}}
 	thread.SetLocal(localContext, ctx)
+	thread.SetLocal(localKey, key)
 	thread.SetLocal(localPhase, phase)
 	thread.SetLocal("workflow fanout", fanout)
 	e.mu.Lock()
@@ -197,6 +202,14 @@ func (e *engine) thread(ctx context.Context, name, phase string, fanout bool) (t
 		delete(e.active, thread)
 		e.mu.Unlock()
 	}
+}
+
+// nextKey numbers the thread's next agent call or fan-out, so a replayed run finds its recorded workers.
+func nextKey(thread *starlark.Thread) string {
+	steps, _ := thread.Local(localSteps).(int)
+	thread.SetLocal(localSteps, steps+1)
+
+	return thread.Local(localKey).(string) + strconv.Itoa(steps)
 }
 
 func (e *engine) maxSteps(thread *starlark.Thread) {
@@ -333,13 +346,14 @@ func (e *engine) builtins() starlark.StringDict {
 		}
 
 		results := make(starlark.Tuple, len(values))
+		branch := nextKey(thread) + "/"
 		ctx := thread.Local(localContext).(context.Context)
 		group, groupCtx := errgroup.WithContext(ctx)
 		group.SetLimit(16)
 
 		for i, value := range values {
 			group.Go(func() error {
-				child, stop := e.thread(groupCtx, fmt.Sprintf("workflow callback %d", i), thread.Local(localPhase).(string), true)
+				child, stop := e.thread(groupCtx, fmt.Sprintf("workflow callback %d", i), branch+strconv.Itoa(i)+"/", thread.Local(localPhase).(string), true)
 				defer stop()
 
 				result, errCall := call(child, value)
@@ -455,7 +469,7 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 			phase = "run"
 		}
 
-		request := AgentRequest{Prompt: prompt}
+		request := AgentRequest{Prompt: prompt, Key: nextKey(thread)}
 		if worker != nil {
 			request.Worker = Worker(*worker)
 			request.Worker.Tools = slices.Clone(worker.Tools)

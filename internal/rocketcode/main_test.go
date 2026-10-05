@@ -97,6 +97,46 @@ func TestNewExpandsPrimaryPromptInRoot(t *testing.T) {
 	require.Contains(t, diagnostics.String(), "remember workspace memory\n\n<current-workspace>\nWorkspace root: "+dir+"\n</current-workspace>")
 }
 
+func TestTaskChildResumesFromItsJournal(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	agents := LoadAgents(fstest.MapFS{
+		"main.md":   {Data: []byte("---\nmodel: gpt-5.4\n---\nPARENT PROMPT")},
+		"review.md": {Data: []byte("---\nmodel: gpt-5.4\n---\nCHILD PROMPT")},
+	}, passThroughAgentModel)
+	require.Empty(t, agents.Errors)
+
+	mock := mockResponses(responseWithMessage("resp-child", "child answer"))
+	loop, err := NewWithModelResolver(testResolverForResponsesAPI(mock), testConfig(dir), root, agents.Agents, Skills{Items: map[string]Skill{}}, "main", nil)
+	require.NoError(t, err)
+
+	journal := recordingJournal()
+	parent := &looper{Journal: journal, observations: &turnObservations{journal: journal, turnID: "turn-1"}}
+	ctx := withToolCallContext(t.Context(), parent, nil, "call-1")
+	factory := loop.PermissionReviewer.(*toolFactory)
+	metadata := toolCallMetadata{callID: "call-1", observations: parent.observations, progress: &PublicProgress{}}
+
+	first, err := factory.runTask(ctx, testTaskParams("Review", "check this", "review"), metadata, testTaskOutput())
+	require.NoError(t, err)
+	require.Len(t, newParams(mock), 1)
+
+	_, recorded, err := journal.Load(t.Context(), "turn-1/call/call-1/task")
+	require.NoError(t, err)
+	require.True(t, recorded, "the child journals under its parent call, apart from the parent's own keys")
+
+	for _, call := range journal.SaveTraceCalls() {
+		require.Equal(t, "turn-1", call.TurnID, "only root turns persist public traces")
+	}
+
+	again, err := factory.runTask(ctx, testTaskParams("Review", "check this", "review"), metadata, testTaskOutput())
+	require.NoError(t, err)
+	require.Equal(t, first, again)
+	require.Len(t, newParams(mock), 1, "a child whose final answer was recorded finishes without calling the model")
+}
+
 func TestNewTaskSubagentsUseRootInstructionsWithoutParentPrompt(t *testing.T) {
 	for _, tc := range []struct {
 		name, parent, child     string
@@ -127,7 +167,7 @@ func TestNewTaskSubagentsUseRootInstructionsWithoutParentPrompt(t *testing.T) {
 			require.NoError(t, err)
 
 			factory := loop.PermissionReviewer.(*toolFactory)
-			got, err := factory.runTask(t.Context(), testTaskParams("Review", "check this", "review"), toolCallMetadata{observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
+			got, err := factory.runTask(t.Context(), testTaskParams("Review", "check this", "review"), toolCallMetadata{observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
 			require.NoError(t, err)
 			require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
 
@@ -639,7 +679,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 }
 
 func testConfig(shellTempDir string) *Config {
-	return &Config{Model: "", ReasoningEffort: "", Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 0, ShellTempDir: shellTempDir, AutoApprovePermissions: false, Observability: ObservabilityConfig{}, ChildSessions: InertChildSessions{}, CheckpointSink: InertCheckpointSink{}, CustomTools: nil, ShellEnv: nil, ShellCommand: DefaultShellCommand}
+	return &Config{Model: "", ReasoningEffort: "", Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 0, ShellTempDir: shellTempDir, AutoApprovePermissions: false, Observability: ObservabilityConfig{}, ChildSessions: InertChildSessions{}, Journal: InertJournal{}, CustomTools: nil, ShellEnv: nil, ShellCommand: DefaultShellCommand}
 }
 
 func testWorkspaceConfig(t *testing.T, workspace string) *Config {

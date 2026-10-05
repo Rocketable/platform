@@ -10,16 +10,17 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"golang.org/x/sync/errgroup"
 )
 
 type directBridge interface {
-	Start(ctx context.Context) error
+	Run(ctx context.Context) error
 	Stop() error
 	Submit(ctx context.Context, msg *protocol.InboundMessage) error
-	RecoverActiveTurn(ctx context.Context, turn *ActiveTurnState) error
 	InterruptActiveTurn() *protocol.InboundMessage
 	SwitchAgent(agent string)
 	PickLaterWork(ctx context.Context) error
@@ -37,8 +38,26 @@ type threadBridgeManager struct {
 	store   *SessionService
 	factory func(Config) directBridge
 
-	mu      sync.Mutex
-	bridges map[string]directBridge
+	// wake tells Run that a bridge is waiting for its loop.
+	wake chan struct{}
+
+	mu        sync.Mutex
+	bridges   map[string]directBridge
+	pending   map[string]directBridge
+	stopping  bool
+	cronRoots cronRootSender
+}
+
+// cronRootSender posts a delivered cron report as a new Slack thread root.
+type cronRootSender interface {
+	SendCronjobRoot(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error)
+}
+
+// noCronRoots is the cron root sender before Slack is attached.
+type noCronRoots struct{}
+
+func (noCronRoots) SendCronjobRoot(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
+	return protocol.TextConversationTarget{}, errors.New("slack is not available for cron reports")
 }
 
 var _ protocol.PrimaryTextRouter = (*threadBridgeManager)(nil)
@@ -46,19 +65,44 @@ var _ protocol.PrimaryTextRouter = (*threadBridgeManager)(nil)
 func newThreadBridgeManager(runtime *config.Config, store *SessionService, logger *slog.Logger, factory func(Config) directBridge) *threadBridgeManager {
 	return &threadBridgeManager{
 		log: logger.With("component", "thread_bridges"), runtime: runtime, store: store, factory: factory,
-		mu:      sync.Mutex{},
-		bridges: map[string]directBridge{},
+		wake:    make(chan struct{}, 1),
+		bridges: map[string]directBridge{}, pending: map[string]directBridge{}, cronRoots: noCronRoots{},
 	}
 }
 
-func (m *threadBridgeManager) Stop() error {
-	m.mu.Lock()
-	conversationIDs := slices.Sorted(maps.Keys(m.bridges))
+// Run runs every bridge loop on ctx. Bridges start lazily, so Run starts each
+// loop when its bridge is created. Once ctx is done no loop starts: Run stops
+// every bridge, so later submissions are stored durably, and returns when every
+// loop has returned.
+func (m *threadBridgeManager) Run(ctx context.Context) error {
+	var loops errgroup.Group
 
-	bridges := make([]directBridge, 0, len(conversationIDs))
-	for _, conversationID := range conversationIDs {
-		bridges = append(bridges, m.bridges[conversationID])
+	for stopping := false; !stopping; {
+		select {
+		case <-ctx.Done():
+		case <-m.wake:
+		}
+
+		m.mu.Lock()
+		pending := m.pending
+		m.pending = map[string]directBridge{}
+		m.stopping = ctx.Err() != nil
+		stopping = m.stopping
+		m.mu.Unlock()
+
+		for conversationID, managed := range pending {
+			loops.Go(func() error {
+				if err := managed.Run(ctx); err != nil {
+					m.log.Error("run text thread bridge", "conversation_id", conversationID, "error", err)
+				}
+
+				return nil
+			})
+		}
 	}
+
+	m.mu.Lock()
+	bridges := slices.Collect(maps.Values(m.bridges))
 	m.mu.Unlock()
 
 	var errStop error
@@ -66,10 +110,64 @@ func (m *threadBridgeManager) Stop() error {
 		errStop = errors.Join(errStop, bridge.Stop())
 	}
 
+	started, stopLog := time.Now(), make(chan struct{})
+
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			m.mu.Lock()
+			for conversationID, managed := range m.bridges {
+				if bridge, ok := managed.(*Bridge); ok && bridge.handlingSnapshot() {
+					m.log.Info("shutdown waiting for running tool calls", "conversation_id", conversationID, "elapsed", time.Since(started))
+				}
+			}
+			m.mu.Unlock()
+
+			select {
+			case <-stopLog:
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+
+	errStop = errors.Join(errStop, loops.Wait())
+
+	close(stopLog)
+
 	return errStop
 }
 
-func (m *threadBridgeManager) StartPendingScheduledMessages(recovering map[string]bool) error {
+// StartActiveTurns starts every conversation worker that owns an unfinished
+// active turn; each runs that turn before any other work.
+func (m *threadBridgeManager) StartActiveTurns(ctx context.Context) error {
+	workers, err := m.store.activeTurnWorkers(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, conversationID := range workers {
+		thread, recorded, err := m.store.Thread(conversationID)
+		if err != nil {
+			return fmt.Errorf("load active turn worker: %w", err)
+		}
+
+		if !recorded {
+			m.log.Warn("active turn worker conversation is not recorded", "conversation_id", conversationID)
+			continue
+		}
+
+		if _, _, err := m.ensureThreadBridge(conversationID, thread); err != nil {
+			return fmt.Errorf("start active turn worker: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (m *threadBridgeManager) StartPendingScheduledMessages() error {
 	scheduledMessages, err := m.store.ScheduledMessages()
 	if err != nil {
 		return fmt.Errorf("load pending scheduled message bridges: %w", err)
@@ -77,11 +175,7 @@ func (m *threadBridgeManager) StartPendingScheduledMessages(recovering map[strin
 
 	for _, message := range scheduledMessages {
 		conversationID := strings.TrimSpace(message.ConversationID)
-		if recovering[conversationID] {
-			continue
-		}
-
-		if _, _, err := m.ensureThreadBridge(conversationID, ThreadState{Agent: message.Agent}, false); err != nil {
+		if _, _, err := m.ensureThreadBridge(conversationID, ThreadState{Agent: message.Agent}); err != nil {
 			return fmt.Errorf("start pending scheduled message bridge: %w", err)
 		}
 	}
@@ -89,7 +183,9 @@ func (m *threadBridgeManager) StartPendingScheduledMessages(recovering map[strin
 	return nil
 }
 
-func (m *threadBridgeManager) StartActiveGoals(recovering map[string]bool) error {
+// StartActiveGoals continues each active goal, except where an unfinished turn
+// resumes first and continues the goal itself.
+func (m *threadBridgeManager) StartActiveGoals() error {
 	threads, err := m.store.ActiveGoalThreads()
 	if err != nil {
 		return fmt.Errorf("load active goal bridges: %w", err)
@@ -101,11 +197,16 @@ func (m *threadBridgeManager) StartActiveGoals(recovering map[string]bool) error
 	}
 
 	for conversationID, thread := range threads {
-		if recovering[conversationID] {
+		resuming, err := m.store.HasActiveTurn(context.Background(), conversationID)
+		if err != nil {
+			return err
+		}
+
+		if resuming {
 			continue
 		}
 
-		managed, _, err := m.ensureThreadBridge(conversationID, thread, false)
+		managed, _, err := m.ensureThreadBridge(conversationID, thread)
 		if err != nil {
 			return fmt.Errorf("start active goal bridge: %w", err)
 		}
@@ -146,7 +247,7 @@ func (m *threadBridgeManager) SubmitThreadReply(ctx context.Context, target prot
 		inbound.SlackReply.ThreadTS = strings.TrimSpace(target.ThreadID)
 	}
 
-	managed, _, err := m.ensureThreadBridge(conversationID, thread, false)
+	managed, _, err := m.ensureThreadBridge(conversationID, thread)
 	if err != nil {
 		return false, err
 	}
@@ -402,7 +503,7 @@ func (m *threadBridgeManager) PickLaterWork(ctx context.Context, conversationID 
 		return nil
 	}
 
-	managed, _, err := m.ensureThreadBridge(conversationID, thread, false)
+	managed, _, err := m.ensureThreadBridge(conversationID, thread)
 	if err != nil {
 		return err
 	}
@@ -432,8 +533,20 @@ func (m *threadBridgeManager) InterruptConversation(conversationID string) *prot
 	return managed.InterruptActiveTurn()
 }
 
+// ThreadBusy reports a reserved or running pair, or an unfinished active turn
+// waiting to resume, so Slack redeliveries are swallowed rather than started.
 func (m *threadBridgeManager) ThreadBusy(target protocol.TextConversationTarget) bool {
-	return m.store.PairBusyFor(protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID))
+	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
+	if m.store.PairBusyFor(conversationID) {
+		return true
+	}
+
+	active, err := m.store.HasActiveTurn(context.Background(), conversationID)
+	if err != nil {
+		m.log.Error("check active turn for busy thread", "conversation_id", conversationID, "error", err)
+	}
+
+	return active
 }
 
 func (m *threadBridgeManager) RegisterThread(target protocol.TextConversationTarget, agent string) (bool, error) {
@@ -453,45 +566,22 @@ func (m *threadBridgeManager) RegisterThread(target protocol.TextConversationTar
 	return err == nil, err
 }
 
-func (m *threadBridgeManager) RecoverActiveTurn(ctx context.Context, turn *ActiveTurnState) error {
-	checkpoint := turn.Checkpoint
-
-	conversationID := strings.TrimSpace(checkpoint.ConversationKey)
-
-	managed, _, err := m.ensureThreadBridge(conversationID, ThreadState{Agent: checkpoint.Agent}, true)
+func (m *threadBridgeManager) recordedBridge(conversationID string) (*Bridge, error) {
+	thread, recorded, err := m.store.Thread(conversationID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	_, session, ok, err := m.store.ExternalMCPSessionByConversationID(conversationID)
+	if !recorded {
+		return nil, fmt.Errorf("conversation %q is not recorded", conversationID)
+	}
+
+	managed, _, err := m.ensureThreadBridge(conversationID, thread)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	if ok && session.PrivateConversationID == conversationID && session.ManagedConversationID != "" {
-		destinationState, _, err := m.store.Thread(session.ManagedConversationID)
-		if err != nil {
-			return err
-		}
-
-		destination, _, err := m.ensureThreadBridge(session.ManagedConversationID, destinationState, false)
-		if err != nil {
-			return err
-		}
-
-		private, privateOK := managed.(*Bridge)
-
-		destinationBridge, destOK := destination.(*Bridge)
-		if privateOK && destOK {
-			return destinationBridge.enqueue(ctx, &bridgeRequest{producer: private, activeTurn: turn}, "submit recovered active turn")
-		}
-	}
-
-	if err := managed.RecoverActiveTurn(ctx, turn); err != nil {
-		return fmt.Errorf("submit recovered active turn: %w", err)
-	}
-
-	return nil
+	return managed.(*Bridge), nil
 }
 
 func (m *threadBridgeManager) queueItems(conversationID string) ([]protocol.ThreadQueueItem, error) {
@@ -499,6 +589,8 @@ func (m *threadBridgeManager) queueItems(conversationID string) ([]protocol.Thre
 	if err != nil {
 		return nil, fmt.Errorf("list thread queue: %w", err)
 	}
+
+	items = slices.DeleteFunc(items, func(item protocol.ThreadQueueItem) bool { return item.Inbound != nil && !item.Inbound.Human })
 
 	m.mu.Lock()
 	managed := m.bridges[conversationID]
@@ -529,7 +621,7 @@ func (m *threadBridgeManager) promoteQueueItem(ctx context.Context, conversation
 		return false, err
 	}
 
-	managed, _, err := m.ensureThreadBridge(conversationID, thread, false)
+	managed, _, err := m.ensureThreadBridge(conversationID, thread)
 	if err != nil {
 		return false, err
 	}
@@ -539,7 +631,7 @@ func (m *threadBridgeManager) promoteQueueItem(ctx context.Context, conversation
 		return false, err
 	}
 
-	inbound := m.store.TakeMCPWaiter(id)
+	inbound := item.Inbound
 	if inbound == nil {
 		content := item.Content
 		content.Text = item.Message
@@ -558,7 +650,6 @@ func (m *threadBridgeManager) promoteQueueItem(ctx context.Context, conversation
 	inbound.Kind, inbound.Human = protocol.InboundKindSteer, true
 	if err := managed.Submit(ctx, inbound); err != nil {
 		inbound.Kind, inbound.Human = kind, human
-		m.store.PutMCPWaiter(id, inbound)
 
 		return false, errors.Join(err, m.store.PutThreadQueueItem(id, &item))
 	}
@@ -578,6 +669,8 @@ func (m *threadBridgeManager) deleteQueueItem(ctx context.Context, conversationI
 			request := bridge.steers[i]
 			if request.queueItemID == id {
 				bridge.steers = slices.Delete(bridge.steers, i, i+1)
+				bridge.saveSteersLocked(ctx)
+
 				request.completion.err = context.Canceled
 				close(request.completion.done)
 				bridge.mu.Unlock()
@@ -592,10 +685,6 @@ func (m *threadBridgeManager) deleteQueueItem(ctx context.Context, conversationI
 	removed, err := execRows(ctx, m.store.db, "delete queue item", "count deleted queue items", `DELETE FROM thread_queue WHERE conversation_id = $1 AND queue_item_id = $2`, conversationID, id)
 	if err != nil || removed == 0 {
 		return false, err
-	}
-
-	if waiter := m.store.TakeMCPWaiter(id); waiter != nil {
-		waiter.CompleteResponseWithAttachments("", nil, errors.New("queue row removed"))
 	}
 
 	return true, m.PickLaterWork(ctx, conversationID)
@@ -627,7 +716,7 @@ func (m *threadBridgeManager) stashQueueItem(ctx context.Context, conversationID
 		return err
 	}
 
-	managed, _, err := m.ensureThreadBridge(conversationID, thread, false)
+	managed, _, err := m.ensureThreadBridge(conversationID, thread)
 	if err != nil {
 		return err
 	}
@@ -657,7 +746,7 @@ func (m *threadBridgeManager) ensureStartedThread(start *threadStart) (directBri
 		thread = ThreadState{Agent: start.agent}
 	}
 
-	managed, created, err := m.ensureThreadBridge(start.conversationID, thread, false)
+	managed, created, err := m.ensureThreadBridge(start.conversationID, thread)
 	if err != nil {
 		return nil, err
 	}
@@ -710,35 +799,10 @@ func (m *threadBridgeManager) switchConversationAgent(conversationID, agent stri
 	return true, nil
 }
 
-func (m *threadBridgeManager) ensureThreadBridge(conversationID string, thread ThreadState, recoveringActiveTurn bool) (directBridge, bool, error) {
+func (m *threadBridgeManager) ensureThreadBridge(conversationID string, thread ThreadState) (directBridge, bool, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
 		return nil, false, errors.New("text thread conversation ID is required")
-	}
-
-	m.mu.Lock()
-	existing := m.bridges[conversationID]
-	m.mu.Unlock()
-
-	if existing != nil {
-		return existing, false, nil
-	}
-
-	bridgeCfg := Config{
-		ConversationID:       conversationID,
-		Agent:                strings.TrimSpace(thread.Agent),
-		RecoveringActiveTurn: recoveringActiveTurn,
-		UserQuestionAsker:    protocol.NoUserQuestionAsker(),
-	}
-	if recoveringActiveTurn {
-		recorded, ok, err := m.store.Thread(conversationID)
-		if err != nil {
-			return nil, false, fmt.Errorf("read recovered conversation selection: %w", err)
-		}
-
-		if ok && recorded.Agent != thread.Agent {
-			bridgeCfg.AgentAfterRecovery = recorded.Agent
-		}
 	}
 
 	m.mu.Lock()
@@ -748,16 +812,27 @@ func (m *threadBridgeManager) ensureThreadBridge(conversationID string, thread T
 		return managed, false, nil
 	}
 
-	if bridgeCfg.Agent == "" {
+	agent := strings.TrimSpace(thread.Agent)
+	if agent == "" {
 		return nil, false, errors.New("text thread agent is required")
 	}
 
-	managed := m.factory(bridgeCfg)
-	if err := managed.Start(context.Background()); err != nil {
-		return nil, false, fmt.Errorf("start text thread bridge: %w", err)
+	managed := m.factory(Config{ConversationID: conversationID, Agent: agent, UserQuestionAsker: protocol.NoUserQuestionAsker()})
+	m.bridges[conversationID] = managed
+
+	if m.stopping {
+		if err := managed.Stop(); err != nil {
+			return nil, false, fmt.Errorf("stop text thread bridge during shutdown: %w", err)
+		}
+
+		return managed, true, nil
 	}
 
-	m.bridges[conversationID] = managed
+	m.pending[conversationID] = managed
+	select {
+	case m.wake <- struct{}{}:
+	default:
+	}
 
 	return managed, true, nil
 }

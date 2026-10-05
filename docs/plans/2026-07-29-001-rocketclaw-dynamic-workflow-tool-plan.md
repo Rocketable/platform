@@ -13,7 +13,7 @@ execution: code
 ## Goal Capsule
 
 - **Objective:** Let a RocketClaw agent start a saved Starlark workflow as a nested tool call (`rocketclaw_dynamic_workflow`), with workflow names gated by the existing `task` permission bucket (same model as subagents), final workflow text returned as the tool result, and live progress surfaced through the parent turn’s thinking stream.
-- **Authority:** This plan > existing workflow design (`internal/rocketclaw/docs/specs/2026-07-24-starlark-workflows-design.md`) for *agent* invocation only; human `$workflow` stays a foreground managed turn.
+- **Authority:** This plan > existing workflow design (`docs/specs/2026-07-24-starlark-workflows-design.md`) for *agent* invocation only; human `$workflow` stays a foreground managed turn.
 - **Stop when:** An agent with YAML `task: "<workflow>": allow` (or a matching pattern) can invoke the tool mid-turn, see thinking progress, receive the workflow result as tool output, and denied/missing workflows fail cleanly; CHEATSHEET/skills document the tool, shared `task` namespace, and wildcard blast radius.
 - **Out of scope for stop:** Changing Starlark DSL, human `$workflow` UX, workflow worker tool policy, durable resume, or making RocketCode workflow-aware.
 
@@ -379,7 +379,7 @@ U1 → U2 → U3 (tool + nested run + wire-up), then U4 tests, then U5 docs. Tes
 - `internal/rocketclaw/harnessbridge/raw_run.go` — `newWorkflowAgentRunner`
 - `internal/rocketclaw/workflow/engine.go` — `Run`, progress callbacks, `Result`
 - `internal/rocketclaw/app/thread_bridges.go` — list/start APIs (list/load only for this feature)
-- `internal/rocketclaw/docs/specs/2026-07-24-starlark-workflows-design.md` — worker policy, RocketCode-unaware invariant
+- `docs/specs/2026-07-24-starlark-workflows-design.md` — worker policy, RocketCode-unaware invariant
 - `cmd/rocketclaw/CHEATSHEET.md` — tools + permission buckets
 
 **Product Contract preservation:** plan-bootstrap (no prior brainstorm file); contract defined here from the user request plus design-fork answer (nested tool + thinking progress).

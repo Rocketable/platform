@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"iter"
 	"strings"
-	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/jackc/pgx/v5"
@@ -115,14 +114,10 @@ func (s *SessionService) ObserveTranscript(ctx context.Context, conversationID s
         FALSE AS active, '' AS terminal, 0::bigint AS checkpoint_timestamp, '' AS turn_id, 0 AS checkpoint, id AS position
     FROM attributed
     UNION ALL
-    SELECT 0, jsonb_build_object(
-        'version', 1, 'type', 'turn', 'turn_id', a.id,
-        'agent', a.agent, 'model', a.display_model, 'reasoning_effort', a.reasoning_effort_json::jsonb,
-        'replay_input', a.replay_input_json::jsonb, 'replay_attribution', a.replay_attribution_json::jsonb,
-        'output_trace', a.output_trace_json::jsonb, 'token_usage', a.token_usage_json::jsonb,
-        'response_id', a.response_id
-    )::text, '', FALSE, a.terminal = '', a.terminal, a.created_at_unix_ns, a.id, 1, a.history_anchor_id
-    FROM active_turns a
+    SELECT 0, (COALESCE(s.value::jsonb->'record', '{}'::jsonb) || jsonb_build_object(
+        'version', 1, 'type', 'turn', 'turn_id', a.id, 'output_trace', a.output_trace_json::jsonb
+    ))::text, '', FALSE, a.terminal = '', a.terminal, a.created_at_unix_ns, a.id, 1, a.history_anchor_id
+    FROM active_turns a LEFT JOIN turn_steps s ON s.conversation_id = a.conversation_id AND s.key = a.id
     WHERE a.conversation_id = $1
         AND CASE WHEN $4::bigint = 0 THEN a.terminal = '' OR a.history_anchor_id >= $3
             ELSE a.terminal <> '' AND a.history_anchor_id >= $3 AND a.history_anchor_id < $4 END
@@ -179,17 +174,6 @@ func (s *SessionService) TranscriptPage(ctx context.Context, conversationID stri
 	}
 
 	return start, oldest, nil
-}
-
-// SetActiveTurnTerminal retains a failed or stopped checkpoint for observation
-// while preventing startup recovery from resuming it.
-func (s *SessionService) SetActiveTurnTerminal(ctx context.Context, turnID string, terminal protocol.Terminal) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE active_turns SET terminal = $2, updated_at_unix_ns = $3 WHERE id = $1`, turnID, terminal, timeUnixNano(time.Now().UTC()))
-	if err != nil {
-		return fmt.Errorf("set active turn terminal: %w", err)
-	}
-
-	return nil
 }
 
 // OriginPairs reads only the initial caller metadata, never the producer transcript.

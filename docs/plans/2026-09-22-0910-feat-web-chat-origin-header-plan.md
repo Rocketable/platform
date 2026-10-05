@@ -129,7 +129,7 @@ Opening one of these chats does not say what started it. The operator sometimes 
 
 ### Sources / Research
 
-- Slack already frames a cron root as a header block of filename, agent, and ran-at, and an external MCP message as a header block of label, external conversation id, and agent. See `internal/rocketclaw/frontend/slack/connector.go` and `internal/rocketclaw/docs/specs/2026-07-23-cronjob-slack-presentation-design.md`.
+- Slack already frames a cron root as a header block of filename, agent, and ran-at, and an external MCP message as a header block of label, external conversation id, and agent. See `internal/rocketclaw/frontend/slack/connector.go` and `docs/specs/2026-07-23-cronjob-slack-presentation-design.md`.
 - The web transcript has no origin header. A cron run can be opened as a synced web chat, and a delivered Slack thread can be opened in the web UI. Private cron producers and recorded private external MCP sessions are not openable web chats. See `internal/rocketclaw/web/README.md` and `internal/rocketclaw/frontend/rpc/README.md`.
 - An external MCP call can carry a free-form metadata map. The first map is the thread's starting metadata. A later call can add keys without replacing that starting map.
 

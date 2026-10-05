@@ -152,7 +152,7 @@ Expected: production changes remain local to `finishCompleteResponse`; tests enc
 **Files:**
 - Review: `internal/rocketclaw/slackconnector/connector.go`
 - Review: `internal/rocketclaw/slackconnector/connector_test.go`
-- Review: `internal/rocketclaw/docs/specs/2026-07-23-delete-empty-slack-thinking-message-design.md`
+- Review: `docs/specs/2026-07-23-delete-empty-slack-thinking-message-design.md`
 - Review: `README.md`
 
 **Interfaces:**

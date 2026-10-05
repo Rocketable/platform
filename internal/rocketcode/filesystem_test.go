@@ -856,3 +856,17 @@ func TestApplyPatchParity(t *testing.T) {
 		requireParity(t, patch, seed)
 	})
 }
+
+func TestSandboxedFileSystemGlobHonorsCancellation(t *testing.T) {
+	root, err := os.OpenRoot(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.WriteFile("found.txt", []byte("x"), 0o644))
+
+	sfs := &sandboxedFileSystem{root: root}
+	require.Contains(t, sfs.Glob(t.Context(), "*.txt", ""), "found.txt")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.NotContains(t, sfs.Glob(ctx, "*.txt", ""), "found.txt", "cancellation stops read-only searches")
+}

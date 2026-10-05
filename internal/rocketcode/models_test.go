@@ -266,8 +266,8 @@ func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
 
 			require.Equal(t, cmp.Or(effort, "low"), string(loop.ReasoningEffort))
 
-			sink := recordingCheckpointSink()
-			loop.CheckpointSink = sink
+			sink := recordingJournal()
+			loop.Journal = sink
 
 			input := make(chan PromptInput, 1)
 			input <- testPromptInput(PromptInputRoleUser, "hello", make(chan ChatResponse, 8))
@@ -286,7 +286,7 @@ func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
 			require.Equal(t, "main", restored.Agent)
 			require.Equal(t, "work/gpt-5.5", restored.Model)
 			require.Equal(t, new(string(loop.ReasoningEffort)), restored.ReasoningEffort)
-			require.Equal(t, restored.ReasoningEffort, sink.StartActiveTurnCalls()[0].ActiveTurnCheckpoint.ReasoningEffort)
+			require.Equal(t, restored.ReasoningEffort, turnSaves(t, sink)[0].Record.ReasoningEffort)
 		})
 	}
 }

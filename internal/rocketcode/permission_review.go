@@ -70,7 +70,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 		PermissionReviewer:     &childFactory,
 		InPermissionReview:     true,
 		Observability:          f.observability,
-		CheckpointSink:         InertCheckpointSink{},
+		Journal:                InertJournal{},
 	}
 	childFactory.configureSpill(child)
 

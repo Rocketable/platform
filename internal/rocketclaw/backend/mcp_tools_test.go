@@ -45,13 +45,13 @@ func TestRocketcodeConfigIncludesMCPServers(t *testing.T) {
 		},
 	}
 	bridge := NewConversation(cfg, nil, &Config{ConversationID: "c", Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
-	rc := bridge.rocketcodeConfig(t.TempDir(), nil, nil)
+	rc := bridge.rocketcodeConfig(t.TempDir(), nil)
 	require.Len(t, rc.MCPServers, 1)
 	assert.Equal(t, "http://127.0.0.1:9", rc.MCPServers["demo"].URL)
 	assert.Equal(t, cfg.Workspace, rc.MCPWorkspace)
 
 	empty := NewConversation(&config.Config{Workspace: t.TempDir()}, nil, &Config{ConversationID: "c2", Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
-	emptyRC := empty.rocketcodeConfig(t.TempDir(), nil, nil)
+	emptyRC := empty.rocketcodeConfig(t.TempDir(), nil)
 	assert.Nil(t, emptyRC.MCPServers)
 }
 
@@ -78,11 +78,11 @@ func TestWorkflowPrepareOmitsMCPTools(t *testing.T) {
 	// Workflow path does not pass MCPServers; host grants still register execute.
 	// RestrictTools keeps execute and strips task / direct host tools.
 	runtime, err := rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{
-		ShellTempDir:   filepath.Join(cfg.Workspace, filepath.FromSlash(shellRel)),
-		Diagnostics:    true,
-		ChildSessions:  rocketcode.InertChildSessions{},
-		CheckpointSink: rocketcode.InertCheckpointSink{},
-		ShellCommand:   rocketcode.DefaultShellCommand,
+		ShellTempDir:  filepath.Join(cfg.Workspace, filepath.FromSlash(shellRel)),
+		Diagnostics:   true,
+		ChildSessions: rocketcode.InertChildSessions{},
+		Journal:       rocketcode.InertJournal{},
+		ShellCommand:  rocketcode.DefaultShellCommand,
 	}, root, agents, skills, "main", io.Discard)
 	require.NoError(t, err)
 

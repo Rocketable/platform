@@ -79,6 +79,8 @@ func (r *Runtime) SyncConversation(ctx context.Context, source, destination stri
 	select {
 	case <-ctx.Done():
 		return fmt.Errorf("wait for conversation sync: %w", ctx.Err())
+	case <-bridges[1].stopCh:
+		return fmt.Errorf("wait for conversation sync: %w", protocol.ErrBridgeStopped)
 	case <-completion.done:
 		return completion.err
 	}
@@ -240,7 +242,7 @@ func (r *Runtime) ListConversations(ctx context.Context) (conversations []protoc
 }
 
 func (r *Runtime) recordedBridge(conversationID string) (*Bridge, error) {
-	thread, recorded, err := r.Sessions.Thread(conversationID)
+	_, recorded, err := r.Sessions.Thread(conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -249,12 +251,7 @@ func (r *Runtime) recordedBridge(conversationID string) (*Bridge, error) {
 		return nil, fmt.Errorf("conversation %q is not recorded", conversationID)
 	}
 
-	managed, _, err := r.threads.ensureThreadBridge(conversationID, thread, false)
-	if err != nil {
-		return nil, err
-	}
-
-	return managed.(*Bridge), nil
+	return r.threads.recordedBridge(conversationID)
 }
 
 // RunTurn waits for the submitted work's processing and terminal handling.
@@ -317,7 +314,7 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 
 	select {
 	case <-bridge.stopCh:
-		return errBridgeStopped
+		return protocol.ErrBridgeStopped
 	case <-completion.done:
 		return completion.err
 	}
@@ -420,14 +417,27 @@ func (b *Bridge) drainSteers(ctx context.Context, phase rocketcode.TurnPhase) []
 		header, _, _ := strings.Cut(prompt, "\n\n")
 		b.publishConsumed(ctx, request.inbound, header)
 		directSkill := inboundDirectSkill(request.inbound)
-		inputs = append(inputs, rocketcode.PromptInput{ID: request.inbound.Metadata["web_message_id"], Text: prompt, Header: header, Attachments: attachmentsFromInbound(request.inbound.Attachments), DirectSkill: directSkill})
+		inputs = append(inputs, rocketcode.PromptInput{ID: request.queueItemID, Text: prompt, Header: header, Attachments: attachmentsFromInbound(request.inbound.Attachments), DirectSkill: directSkill})
 	}
 
 	return inputs
 }
 
+// publishConsumed posts a web input's consume card once per turn, even across a restart.
 func (b *Bridge) publishConsumed(ctx context.Context, inbound *protocol.InboundMessage, header string) {
 	if id := inbound.Metadata["web_message_id"]; id != "" {
+		b.mu.Lock()
+		key := b.activeTurnID + "/consumed/" + id
+		b.mu.Unlock()
+
+		if _, posted, err := b.config.SessionService.LoadTurnStep(ctx, b.config.ConversationID, key); err != nil || posted {
+			if err != nil {
+				b.log.Error("load consumed web input", "error", err)
+			}
+
+			return
+		}
+
 		message := protocol.NewOutboundMessage(b.config.ConversationID, "")
 
 		message.ConsumedID, message.ConsumedText, message.ConsumedSource = id, inbound.Text, inbound.Source
@@ -440,6 +450,11 @@ func (b *Bridge) publishConsumed(ctx context.Context, inbound *protocol.InboundM
 
 		if err := b.bus.PublishOutbound(ctx, message); err != nil {
 			b.log.Error("publish consumed web input", "error", err)
+			return
+		}
+
+		if err := b.config.SessionService.SaveTurnStep(context.WithoutCancel(ctx), b.config.ConversationID, key, json.RawMessage("true")); err != nil {
+			b.log.Error("record consumed web input", "error", err)
 		}
 	}
 }

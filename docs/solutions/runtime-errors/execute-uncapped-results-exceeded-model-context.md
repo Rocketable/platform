@@ -45,13 +45,13 @@ This lives in the current tree. PR #7 is pending and is not landed.
 
 Clipping only inside host tools does not protect the model. After uncap, bash/read/glob/grep return one full string in Starlark (`internal/rocketcode/shell.go:50-52`, `internal/rocketcode/filesystem.go:155-172`). The model still sees whatever `main()` returns unless `callExecute` clips after `codemode.Run`.
 
-A dual `head_output` / `full_output` object makes the overflow path the default leak. The plan states that split was the opposite of the old bash contract (`internal/rocketcode/docs/plans/2026-08-24-1315-feat-execute-output-spill-plan.md:31-32`). Current code deleted those attrs; do not bring them back.
+A dual `head_output` / `full_output` object makes the overflow path the default leak. The plan states that split was the opposite of the old bash contract (`docs/plans/2026-08-24-1315-feat-execute-output-spill-plan.md:31-32`). Current code deleted those attrs; do not bring them back.
 
 Writing a new spill for every oversized string fails the `return read(spill)` case. `ReadResult` wraps the file (`internal/rocketcode/filesystem.go:135-152`). That wrapper is oversized (`internal/rocketcode/execute_spill_test.go:90-91`). A naive write would increment `spillSeq` and create `output-3.txt` after `output-1.txt` and `output-2.txt` already exist.
 
 Inferring reuse from a spill-directory prefix is the wrong fix. `existingTurnSpillPath` must not treat "under `.rocketcode/spill/…`" as membership. Only paths this turn wrote belong in the reuse set.
 
-Spilling into the session tmp tree is also wrong. RocketClaw shell temp is `<runtimeDir>/.rocketcode/tmp/<conversation>` (`internal/rocketclaw/harnessbridge/bridge.go:1893-1896`). That tree is `TMPDIR` for bash, not execute overflow. The plan warns it already carries a broader grant (`internal/rocketcode/docs/plans/2026-08-24-1315-feat-execute-output-spill-plan.md:100`, `internal/rocketcode/docs/plans/2026-08-24-1315-feat-execute-output-spill-plan.md:116`).
+Spilling into the session tmp tree is also wrong. RocketClaw shell temp is `<runtimeDir>/.rocketcode/tmp/<conversation>` (`internal/rocketclaw/harnessbridge/bridge.go:1893-1896`). That tree is `TMPDIR` for bash, not execute overflow. The plan warns it already carries a broader grant (`docs/plans/2026-08-24-1315-feat-execute-output-spill-plan.md:100`, `docs/plans/2026-08-24-1315-feat-execute-output-spill-plan.md:116`).
 
 ## Solution
 

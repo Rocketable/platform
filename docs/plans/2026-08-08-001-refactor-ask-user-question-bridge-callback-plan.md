@@ -11,6 +11,8 @@ execution: "code"
 
 # Ask-User-Question Bridge Callback - Plan
 
+Superseded in part by `docs/plans/2026-10-04-2254-feat-durable-conversation-work-plan.md`. Resumed turns are no longer treated as "recovery" turns that lose the question tool. A pending question now survives restart: it is recorded in the Step Journal and re-registered without being posted again.
+
 ## Goal Capsule
 
 - **Objective:** Make `ask_user_question` ownership obvious: the bridge that starts a turn says whether that turn can ask a human, and Slack owns the full wait-for-answer path, without changing who can ask humans or how Slack questions look and behave.

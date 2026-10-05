@@ -9,31 +9,15 @@ import (
 // ErrGoalAlreadyActive reports that a conversation already has an active goal.
 var ErrGoalAlreadyActive = errors.New("goal already active")
 
+// ErrBridgeStopped reports work left for the next start: it is the cause of
+// shutdown cancellation and the error of requests a stopped bridge refuses.
+var ErrBridgeStopped = errors.New("bridge stopped")
+
 // Conversation is an explicitly recorded conversation and its selected agent.
 // IDs are opaque to the Backend; frontends resolve presentation and policy.
 type Conversation struct {
 	ID, Agent, CreatedBy string
 	Settled              bool
-}
-
-// PendingSteer is one uninjected Slack Steer copied onto the active-turn row.
-type PendingSteer struct {
-	Text, Principal, SlackChannel, SlackTS, SlackThreadTS string
-}
-
-// PendingSteersSink copies pending Slack Steers onto the active-turn row.
-// The zero value is inert.
-type PendingSteersSink struct {
-	Set func(conversationID string, steers []PendingSteer) error
-}
-
-// Persist copies steers onto the active-turn row, or does nothing when unset.
-func (s PendingSteersSink) Persist(conversationID string, steers []PendingSteer) {
-	if s.Set == nil {
-		return
-	}
-
-	_ = s.Set(conversationID, steers)
 }
 
 // SlackThreadConversationID returns the stable conversation ID for a Slack thread.

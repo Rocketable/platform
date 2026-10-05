@@ -43,6 +43,8 @@ type ThreadQueueItem struct {
 	ParkAfter      string
 	SlackChannel   string
 	SlackTS        string
+	// Inbound, when set, is the full stored request; it replaces the fields above when the row runs.
+	Inbound *InboundMessage
 }
 
 // LaterWorkRow is one mixed-list entry.

@@ -58,7 +58,8 @@ func TestSessionEntryForProviderDifferentProviderProjectsReplay(t *testing.T) {
 		ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"message","role":"user","phase":"commentary","id":"provider-private-sentinel","content":[{"type":"input_text","text":"portable-readable","private":"provider-private-sentinel"},{"type":"input_image","file_id":"provider-private-sentinel","image_url":"data:image/png;base64,portable-image","detail":"high"},{"type":"input_file","file_id":"provider-private-sentinel","file_url":"https://example.test/portable-file","file_data":"portable-data","filename":"portable.txt","detail":"low"}]}`),
 			json.RawMessage(`{"type":"function_call","id":"provider-private-sentinel","call_id":"portable-call","name":"read","arguments":"{\"path\":\"portable.txt\"}","status":"completed","private":"provider-private-sentinel"}`),
-			json.RawMessage(`{"type":"function_call_output","id":"provider-private-sentinel","call_id":"portable-call","status":"completed","output":[{"type":"input_text","text":"portable-tool-output"},{"type":"input_file","file_id":"provider-private-sentinel","file_data":"portable-output-data","filename":"output.txt"}],"private":"provider-private-sentinel"}`),
+			json.RawMessage(`{"type":"function_call_output","id":"provider-private-sentinel","call_id":"portable-call","status":"completed","output":[{"type":"input_text","text":"portable-tool-output"},{"type":"input_image","file_id":"provider-private-sentinel","image_url":"data:image/png;base64,portable-output-image"},{"type":"input_file","file_id":"provider-private-sentinel","file_data":"portable-output-data","filename":"output.txt"}],"private":"provider-private-sentinel"}`),
+			json.RawMessage(`{"type":"function_call_output","id":"provider-private-sentinel","call_id":"portable-string-call","output":"portable-string-output"}`),
 			json.RawMessage(`{"type":"reasoning","id":"provider-private-sentinel","encrypted_content":"provider-private-sentinel","summary":[{"type":"summary_text","text":"portable-summary-one"},{"type":"summary_text","text":"  "},{"type":"summary_text","text":"portable-summary-two"}],"content":[{"type":"reasoning_text","text":"provider-private-sentinel"}],"status":"completed"}`),
 			json.RawMessage(`{"type":"reasoning","encrypted_content":"provider-private-sentinel","summary":[]}`),
 			json.RawMessage(`{"type":"compaction","id":"provider-private-sentinel","encrypted_content":"provider-private-sentinel","content":"portable-compaction","recent":["provider-private-sentinel"]}`),
@@ -78,13 +79,13 @@ func TestSessionEntryForProviderDifferentProviderProjectsReplay(t *testing.T) {
 	require.NoError(t, err)
 
 	text := string(data)
-	for _, want := range []string{providerReplayReadable, "portable-image", "portable-file", "portable-data", "portable.txt", "portable-call", "read", "portable-tool-output", "portable-output-data", "output.txt", "portable-summary-one", "portable-summary-two", "portable-compaction", "commentary"} {
+	for _, want := range []string{providerReplayReadable, "portable-image", "portable-file", "portable-data", "portable.txt", "portable-call", "read", "portable-tool-output", "portable-output-image", "portable-output-data", "output.txt", "portable-string-call", "portable-string-output", "portable-summary-one", "portable-summary-two", "portable-compaction", "commentary"} {
 		assert.Contains(t, text, want)
 	}
 
 	assert.NotContains(t, text, providerReplayPrivate)
 	assert.NotContains(t, text, "provider_hosted")
-	assert.Len(t, got.ReplayInput, 6)
+	assert.Len(t, got.ReplayInput, 7)
 
 	original, err := json.Marshal(entry)
 	require.NoError(t, err)
@@ -105,44 +106,6 @@ func TestSessionEntriesForProviderTreatsMissingModelAsOpenAI(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Empty(t, got[0].ResponseID)
 	assert.Contains(t, string(got[0].ReplayInput[0]), providerReplayReadable)
-}
-
-func TestActiveTurnForProviderProjectsCompletedOutputsWithoutMutation(t *testing.T) {
-	checkpoint := rocketcode.ActiveTurnCheckpoint{
-		TurnID:       "turn-1",
-		DisplayModel: "openai/gpt",
-		ResponseID:   providerReplayPrivate,
-		ReplayInput: []json.RawMessage{
-			json.RawMessage(`{"type":"message","role":"assistant","id":"item","content":"final"}`),
-			json.RawMessage(`{"type":"function_call","id":"provider-private-sentinel","call_id":"portable-call","name":"read","arguments":"{}","status":"completed"}`),
-		},
-		OutputTrace:       []json.RawMessage{json.RawMessage(`{"private":"provider-private-sentinel"}`), json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"item/0","parent_id":"turn/response","kind":"text","state":"completed","text":"early-public"}}`)},
-		OpenFunctionCalls: []rocketcode.FunctionCallCheckpoint{{CallID: "open-call", Name: "bash", Arguments: json.RawMessage(`{"command":"printf portable"}`)}},
-		CompletedFunctionOutputs: []rocketcode.FunctionOutputCheckpoint{{CallID: "portable-call", Name: "read", ReplayInput: []json.RawMessage{
-			json.RawMessage(`{"type":"function_call_output","id":"provider-private-sentinel","call_id":"portable-call","status":"completed","output":"portable-tool-output"}`),
-		}}},
-	}
-	want, err := json.Marshal(checkpoint)
-	require.NoError(t, err)
-
-	got, err := activeTurnForProvider(&checkpoint, "work")
-	require.NoError(t, err)
-	assert.Equal(t, checkpoint.DisplayModel, got.DisplayModel)
-	assert.Empty(t, got.ResponseID)
-	assert.Equal(t, checkpoint.OutputTrace[1:], got.OutputTrace)
-	require.Len(t, got.ReplayInput, 2)
-	require.JSONEq(t, `{"type":"message","role":"assistant","id":"item","content":"final"}`, string(got.ReplayInput[0]))
-	recovered, err := rocketcode.RecoveredReplayInput(&got)
-	require.NoError(t, err)
-	require.JSONEq(t, string(got.ReplayInput[0]), string(recovered[0]), "recovery must preserve the canonical identity matching item/0 without replacing final text with progress")
-	require.Len(t, got.CompletedFunctionOutputs, 1)
-	assert.Contains(t, string(got.CompletedFunctionOutputs[0].ReplayInput[0]), "portable-tool-output")
-	assert.NotContains(t, string(got.CompletedFunctionOutputs[0].ReplayInput[0]), providerReplayPrivate)
-	assert.Equal(t, checkpoint.OpenFunctionCalls, got.OpenFunctionCalls)
-
-	after, err := json.Marshal(checkpoint)
-	require.NoError(t, err)
-	assert.Equal(t, want, after)
 }
 
 func TestReplayForProviderDropsUnknownBeforePayloadDecode(t *testing.T) {
@@ -199,15 +162,6 @@ func TestReplayForProviderRejectsMalformedKnownReadableData(t *testing.T) {
 			_, err = sessionEntryForProvider(&entry, "other")
 			require.ErrorContains(t, err, test.want)
 			require.Equal(t, raw, entry.ReplayInput)
-			checkpoint := rocketcode.ActiveTurnCheckpoint{DisplayModel: "openai/model", ReplayInput: raw}
-			_, err = activeTurnForProvider(&checkpoint, "other")
-			require.ErrorContains(t, err, test.want)
-			require.Equal(t, raw, checkpoint.ReplayInput)
-			checkpoint.ReplayInput = nil
-			checkpoint.CompletedFunctionOutputs = []rocketcode.FunctionOutputCheckpoint{{CallID: "completed", ReplayInput: raw}}
-			_, err = activeTurnForProvider(&checkpoint, "other")
-			require.ErrorContains(t, err, test.want)
-			require.Equal(t, raw, checkpoint.CompletedFunctionOutputs[0].ReplayInput)
 		})
 	}
 
@@ -219,29 +173,6 @@ func TestReplayForProviderRejectsMalformedKnownReadableData(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, replay)
 	}
-}
-
-func TestCrossProviderRepeatedRecoveryCheckpointKeepsProjectedBytes(t *testing.T) {
-	original := rocketcode.ActiveTurnCheckpoint{DisplayModel: "openai/gpt", ReplayInput: []json.RawMessage{
-		json.RawMessage(`{"type":"message","role":"user","content":"portable-readable","id":"provider-private-sentinel"}`),
-	}}
-	projected, err := activeTurnForProvider(&original, "work")
-	require.NoError(t, err)
-	recovered, err := rocketcode.RecoveredReplayInput(&projected)
-	require.NoError(t, err)
-
-	sink := new(captureCheckpointSink)
-	recheckpoint := &rocketcode.ActiveTurnCheckpoint{DisplayModel: "work/gpt", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"continue"}`)}}
-	require.NoError(t, sink.RecordRecoveredReplay(t.Context(), withRecoveredReplay(recheckpoint, recovered, nil)))
-	require.Len(t, sink.checkpoints, 1)
-	want := slices.Clone(sink.checkpoints[0].ReplayInput)
-
-	again, err := activeTurnForProvider(sink.checkpoints[0], "work")
-	require.NoError(t, err)
-	assert.Equal(t, want, again.ReplayInput)
-	data, err := json.Marshal(again.ReplayInput)
-	require.NoError(t, err)
-	assert.NotContains(t, string(data), providerReplayPrivate)
 }
 
 func TestReplayForProviderDropsContentArrayItemsWithoutPortableParts(t *testing.T) {
@@ -310,32 +241,4 @@ func TestReplayForProviderValidatesRequiredKnownFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, replay, 1)
 	assert.Contains(t, string(replay[0]), `"arguments":""`)
-}
-func TestRecoveredAttributionSurvivesProviderProjection(t *testing.T) {
-	var checkpoint rocketcode.ActiveTurnCheckpoint
-	require.NoError(t, json.Unmarshal([]byte(`{"display_model":"work/model-b","agent":"new","reasoning_effort":"low","replay_input":[{"type":"reasoning","encrypted_content":"opaque"},{"type":"message","role":"user","input_id":"input-1","prompt_header":"[Slack]","content":"[Slack]\n\nold question"},{"type":"message","role":"assistant","content":"new answer"}],"replay_attribution":[{"start":0,"end":2,"agent":"old","model":"work/model-a","reasoning_effort":"high"}]}`), &checkpoint))
-	projected, err := activeTurnForProvider(&checkpoint, "other")
-	require.NoError(t, err)
-	data, err := json.Marshal(projected)
-	require.NoError(t, err)
-	require.Contains(t, string(data), `"replay_attribution":[{"start":0,"end":1,"agent":"old","model":"work/model-a","reasoning_effort":"high"}]`)
-	require.Len(t, projected.ReplayInput, 2)
-	require.Contains(t, string(projected.ReplayInput[0]), `"prompt_header":"[Slack]"`)
-	require.Contains(t, string(projected.ReplayInput[0]), `"input_id":"input-1"`)
-	old := projected.ReplayAttribution
-	resumed := withRecoveredReplay(&rocketcode.ActiveTurnCheckpoint{Agent: "latest", DisplayModel: "model-c", ReasoningEffort: new("medium"), ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"latest answer"}`)}}, projected.ReplayInput, append(old, rocketcode.ReplayAttribution{End: 2, Agent: projected.Agent, Model: projected.DisplayModel, ReasoningEffort: projected.ReasoningEffort}))
-	require.Equal(t, 1, projected.ReplayAttribution[0].End)
-	entry := rocketcode.SessionEntry{Agent: resumed.Agent, Model: resumed.DisplayModel, ReasoningEffort: resumed.ReasoningEffort, ReplayInput: resumed.ReplayInput, ReplayAttribution: resumed.ReplayAttribution}
-	require.Equal(t, "work/model-a", entry.AttributionAt(0).Model)
-	require.Equal(t, "work/model-b", entry.AttributionAt(1).Model)
-	require.Equal(t, "model-c", entry.AttributionAt(2).Model)
-	managed, err := externalMCPManagedEntry(&entry, []json.RawMessage{json.RawMessage(`{"type":"message","role":"developer","content":"prefix"}`)})
-	require.NoError(t, err)
-	require.Equal(t, "work/model-a", managed.AttributionAt(1).Model)
-	require.Contains(t, string(managed.ReplayInput[1]), `"prompt_header":"[Slack]"`)
-
-	unknown := withRecoveredReplay(&rocketcode.ActiveTurnCheckpoint{ReplayInput: entry.ReplayInput[2:]}, entry.ReplayInput[:1], []rocketcode.ReplayAttribution{{End: 1}})
-	entry.ReplayAttribution = unknown.ReplayAttribution
-	require.Empty(t, entry.AttributionAt(0).Model)
-	require.Nil(t, entry.AttributionAt(0).ReasoningEffort)
 }

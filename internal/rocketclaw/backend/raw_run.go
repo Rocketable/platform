@@ -3,6 +3,8 @@ package backend
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +37,7 @@ type RawRunProgress struct {
 type workflowAgentRunner struct {
 	cfg           *config.Config
 	agent, parent string
+	journal       rocketcode.Journal
 	root          *os.Root
 	agents        rocketcode.Agents
 	skills        rocketcode.Skills
@@ -42,7 +45,14 @@ type workflowAgentRunner struct {
 	customTools   []rocketcode.Tool
 }
 
-func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logger, customTools ...rocketcode.Tool) (*workflowAgentRunner, error) {
+// workflowWorkerStep is a finished workflow worker's recorded result.
+type workflowWorkerStep struct {
+	Name   string          `json:"name"`
+	Hash   string          `json:"hash"`
+	Result json.RawMessage `json:"result"`
+}
+
+func newWorkflowAgentRunner(cfg *config.Config, agent string, journal rocketcode.Journal, logger *slog.Logger, customTools ...rocketcode.Tool) (*workflowAgentRunner, error) {
 	root, agents, skills, resolver, err := prepareRocketCode(cfg, agent, logger, toolModeWorkflow)
 	if err != nil {
 		return nil, err
@@ -54,7 +64,7 @@ func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logge
 		return nil, fmt.Errorf("create workflow shell temp parent dir: %w", err)
 	}
 
-	return &workflowAgentRunner{cfg: cfg, agent: agent, parent: parent, root: root, agents: agents, skills: skills, resolver: resolver, customTools: customTools}, nil
+	return &workflowAgentRunner{cfg: cfg, agent: agent, parent: parent, journal: journal, root: root, agents: agents, skills: skills, resolver: resolver, customTools: customTools}, nil
 }
 
 func (r *workflowAgentRunner) Close() error {
@@ -65,7 +75,30 @@ func (r *workflowAgentRunner) Close() error {
 	return nil
 }
 
+// Run returns a worker's recorded result when the same request finished before a
+// restart. Otherwise it runs the worker as a turn journaled under the request's
+// key and hash, so an interrupted worker resumes and a changed request runs fresh.
 func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRequest) (result json.RawMessage, err error) {
+	encoded, _ := json.Marshal(request)
+	sum := sha256.Sum256(encoded)
+	want := workflowWorkerStep{Name: request.Worker.Name, Hash: hex.EncodeToString(sum[:])}
+
+	recorded, found, err := r.journal.Load(ctx, request.Key)
+	if err != nil {
+		return nil, fmt.Errorf("load workflow worker result: %w", err)
+	}
+
+	if found {
+		var step workflowWorkerStep
+		if err := json.Unmarshal(recorded, &step); err != nil {
+			return nil, fmt.Errorf("decode workflow worker result: %w", err)
+		}
+
+		if step.Name == want.Name && step.Hash == want.Hash {
+			return step.Result, nil
+		}
+	}
+
 	callAgents := rocketcode.Agents{Items: maps.Clone(r.agents.Items)}
 
 	active := callAgents.Items[r.agent]
@@ -100,7 +133,7 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 		}
 	}()
 
-	runtimeConfig := rocketcode.Config{AutoApproverModel: r.cfg.AutoApproverModel, ShellTempDir: filepath.Join(r.cfg.Workspace, filepath.FromSlash(shellTempRel)), SpillDir: rocketcodeSpillDir(r.cfg), ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: r.cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: r.cfg.Instrumentation.HideInputs, HideOutputs: r.cfg.Instrumentation.HideOutputs}}, ChildSessions: rocketcode.InertChildSessions{}, CheckpointSink: rocketcode.InertCheckpointSink{}, ShellCommand: rocketcode.DefaultShellCommand}
+	runtimeConfig := rocketcode.Config{AutoApproverModel: r.cfg.AutoApproverModel, ShellTempDir: filepath.Join(r.cfg.Workspace, filepath.FromSlash(shellTempRel)), SpillDir: rocketcodeSpillDir(r.cfg), ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: r.cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: r.cfg.Instrumentation.HideInputs, HideOutputs: r.cfg.Instrumentation.HideOutputs}}, ChildSessions: rocketcode.InertChildSessions{}, Journal: r.journal, ShellCommand: rocketcode.DefaultShellCommand}
 	runtimeConfig.CustomTools = r.customTools
 
 	runtime, err := rocketcode.NewWithModelResolver(r.resolver, &runtimeConfig, r.root, callAgents, r.skills, r.agent, io.Discard)
@@ -140,7 +173,7 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 	input := make(chan rocketcode.PromptInput, 1)
 
 	output := make(chan rocketcode.ChatResponse, 128)
-	input <- rocketcode.PromptInput{Role: rocketcode.PromptInputRoleUser, Text: request.Prompt, Responses: output}
+	input <- rocketcode.PromptInput{TurnID: request.Key + "/" + want.Hash, Role: rocketcode.PromptInputRoleUser, Text: request.Prompt, Responses: output}
 
 	close(input)
 
@@ -164,17 +197,21 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 		return nil, fmt.Errorf("run workflow rocketcode turn: %w", errRun)
 	}
 
+	result = json.RawMessage(last)
 	if request.Schema == nil {
 		result, _ = json.Marshal(last) // Encoding a string cannot fail.
-
-		return result, nil
-	}
-
-	if !json.Valid([]byte(last)) {
+	} else if !json.Valid(result) {
 		return nil, errors.New("workflow worker returned invalid JSON")
 	}
 
-	return json.RawMessage(last), nil
+	want.Result = result
+	step, _ := json.Marshal(want)
+
+	if err := r.journal.Save(context.WithoutCancel(ctx), request.Key, step); err != nil {
+		return nil, fmt.Errorf("record workflow worker result: %w", err)
+	}
+
+	return result, nil
 }
 
 // prepareWorkflowTags keeps worker limits and caller guidance local to one run.
@@ -255,13 +292,30 @@ func (d *rawRunDecision) Tool() rocketcode.Tool {
 	}}
 }
 
-func (d *rawRunDecision) Decision() (string, bool) {
+// Decision returns this run's decision, falling back to a decision call recorded
+// in its finished turns when a resumed turn reused that call's journaled result.
+func (d *rawRunDecision) Decision(entries []rocketcode.SessionEntry) (string, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if d.decision == nil {
-		return "", false
+	if d.decision != nil {
+		return *d.decision, true
 	}
 
-	return *d.decision, true
+	payload, decided := "", false
+
+	for i := range entries {
+		for _, raw := range entries[i].ReplayInput {
+			var call struct {
+				Type, Name, Arguments string
+			}
+
+			var input rawRunDecisionInput
+			if json.Unmarshal(raw, &call) == nil && call.Type == "function_call" && call.Name == rawRunToolName && json.Unmarshal([]byte(call.Arguments), &input) == nil {
+				payload, decided = input.Payload, true
+			}
+		}
+	}
+
+	return payload, decided
 }

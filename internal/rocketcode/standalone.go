@@ -120,7 +120,7 @@ func standaloneDefaultConfig() Config {
 		CompactThreshold: 200000,
 		ShellTempDir:     filepath.Join(".tmp", "shell-tmp"),
 		ChildSessions:    InertChildSessions{},
-		CheckpointSink:   InertCheckpointSink{},
+		Journal:          InertJournal{},
 		ShellCommand:     DefaultShellCommand,
 		CustomTools: []Tool{{
 			Name:        "current_time",

@@ -105,13 +105,13 @@ func testWebsocketTextBeforeTerminal(t *testing.T, done, final string) {
 	loop.Tools = map[string]looperTool{"Execute": tool}
 	loop.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "Execute", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
 	loop.Client = newResponsesAPI(&client)
-	sink := recordingCheckpointSink()
+	sink := recordingJournal()
 	persisted := make(chan []PublicProgress, 10)
-	sink.RecordOutputTraceFunc = func(_ context.Context, _ string, trace []json.RawMessage) error {
+	sink.SaveTraceFunc = func(_ context.Context, _ string, trace []json.RawMessage) error {
 		persisted <- PublicProgressFromTrace(trace)
 		return nil
 	}
-	loop.CheckpointSink = sink
+	loop.Journal = sink
 
 	var (
 		record  SessionEntry
@@ -120,7 +120,7 @@ func testWebsocketTextBeforeTerminal(t *testing.T, done, final string) {
 	workers.Go(func() error {
 		var err error
 
-		record, _, _, err = loop.runTurn(ctx, make(chan ChatResponse, 10), nil, nil, nil, &PromptInput{Text: "hello", Role: PromptInputRoleUser}, nil)
+		record, _, _, err = loop.runTurn(ctx, make(chan ChatResponse, 10), nil, nil, nil, &PromptInput{Text: "hello", Role: PromptInputRoleUser})
 
 		return err
 	})
@@ -141,7 +141,7 @@ func testWebsocketTextBeforeTerminal(t *testing.T, done, final string) {
 			require.True(t, strings.HasSuffix(progress[0].ParentID, "/resp_live"))
 			require.Equal(t, "main", progress[0].Agent)
 			require.Equal(t, "openai/gpt-5", progress[0].Model)
-			require.Empty(t, sink.RecordProviderResponseCalls(), "terminal replay cannot exist while held")
+			require.Len(t, turnSaves(t, sink), 1, "terminal replay cannot exist while held")
 		case <-ctx.Done():
 			t.Fatal("no public checkpoint while terminal response was held")
 		}
@@ -154,7 +154,7 @@ func testWebsocketTextBeforeTerminal(t *testing.T, done, final string) {
 		require.Len(t, progress, 1)
 		require.Equal(t, done, progress[0].Text, "done is an authoritative replacement, including empty")
 		require.Equal(t, PublicProgressWorking, progress[0].State, "text done is not request completion")
-		require.Empty(t, sink.RecordProviderResponseCalls())
+		require.Len(t, turnSaves(t, sink), 1)
 	case <-ctx.Done():
 		t.Fatal("done text was not persisted before terminal release")
 	}
@@ -165,7 +165,7 @@ func testWebsocketTextBeforeTerminal(t *testing.T, done, final string) {
 	require.Equal(t, "resp_live", record.ResponseID)
 	require.Contains(t, string(record.ReplayInput[len(record.ReplayInput)-1]), `"phase":"final_answer"`)
 
-	progress := PublicProgressFromTrace(sink.RecordProviderResponseCalls()[0].ActiveTurnCheckpoint.OutputTrace)
+	progress := PublicProgressFromTrace(turnSaves(t, sink)[1].Trace)
 	require.Len(t, progress, 1)
 	require.Equal(t, final, progress[0].Text)
 	require.Equal(t, PublicProgressCompleted, progress[0].State)
@@ -238,13 +238,13 @@ func TestWebsocketStorageFailureDoesNotRetryOrReuseUnreadEvents(t *testing.T) {
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(websocketAPIBaseURL(server.URL)))
 	api := newResponsesAPI(&client)
 	loop := testLooper(api)
-	sink := recordingCheckpointSink()
+	sink := recordingJournal()
 	errPersist := contextLengthExceededError() // A wrapped provider-looking cause must still be fatal local storage.
-	sink.RecordOutputTraceFunc = func(context.Context, string, []json.RawMessage) error {
+	sink.SaveTraceFunc = func(context.Context, string, []json.RawMessage) error {
 		<-sent // Ensure the terminal event is already unread on the socket.
 		return errPersist
 	}
-	loop.CheckpointSink = sink
+	loop.Journal = sink
 	input := make(chan PromptInput, 1)
 
 	output := make(chan ChatResponse, 10)
@@ -257,7 +257,6 @@ func TestWebsocketStorageFailureDoesNotRetryOrReuseUnreadEvents(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, creates, 1, "SDK and looper must not issue a second create")
 	require.Empty(t, collectResponses(output), "storage errors are not public tool or provider diagnostic text")
-	require.Equal(t, PublicProgressFailed, sink.CloseActiveTurnCalls()[0].PublicProgressState)
 	require.Nil(t, api.doer.conn)
 
 	select {
@@ -346,10 +345,10 @@ func TestWebsocketObservationTerminalAndReceiveBoundaries(t *testing.T) {
 
 			client := openai.NewClient(opts...)
 			api := newResponsesAPI(&client)
-			sink := recordingCheckpointSink()
+			sink := recordingJournal()
 			errPersist := errors.New("storage failed during cancellation")
 			persisted := make(chan struct{}, 10)
-			sink.RecordOutputTraceFunc = func(context.Context, string, []json.RawMessage) error {
+			sink.SaveTraceFunc = func(context.Context, string, []json.RawMessage) error {
 				persisted <- struct{}{}
 
 				if boundary == "storage_cancel" {
@@ -359,8 +358,7 @@ func TestWebsocketObservationTerminalAndReceiveBoundaries(t *testing.T) {
 
 				return nil
 			}
-			owner := turnObservations{sink: sink}
-			require.NoError(t, owner.write(ctx, &ActiveTurnCheckpoint{TurnID: "turn"}, checkpointStart))
+			owner := turnObservations{journal: sink, turnID: "turn"}
 			observer := &responseObservations{owner: &owner, agent: "main", model: "gpt-5"}
 
 			var (
@@ -388,8 +386,8 @@ func TestWebsocketObservationTerminalAndReceiveBoundaries(t *testing.T) {
 			}
 
 			err := workers.Wait()
-			writes := sink.RecordOutputTraceCalls()
-			progress := PublicProgressFromTrace(writes[len(writes)-1].RawMessages)
+			writes := sink.SaveTraceCalls()
+			progress := PublicProgressFromTrace(writes[len(writes)-1].Trace)
 
 			switch boundary {
 			case "storage_cancel":
@@ -423,8 +421,8 @@ func TestWebsocketObservationTerminalAndReceiveBoundaries(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, "resp_2", resp.ID)
 				require.Len(t, writes, 4)
-				require.Empty(t, PublicProgressFromTrace(writes[1].RawMessages), "remove abandoned attempt before publishing retry")
-				require.Equal(t, "resp_2", PublicProgressFromTrace(writes[2].RawMessages)[0].Text)
+				require.Empty(t, PublicProgressFromTrace(writes[1].Trace), "remove abandoned attempt before publishing retry")
+				require.Equal(t, "resp_2", PublicProgressFromTrace(writes[2].Trace)[0].Text)
 				require.Empty(t, progress)
 			}
 

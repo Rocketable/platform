@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"mime"
@@ -259,6 +260,10 @@ type OutboundMessage struct {
 	GoalTurn, GoalComplete, GoalActive bool
 	GoalTurnNumber, GoalMaxTurns       int
 	WorkflowTerminal                   Terminal
+	// ReplyState is the connector's recorded reply attachment for TurnID, copied
+	// from the turn's journal when the turn finishes, so a delivery after a restart
+	// edits the original placeholder.
+	ReplyState json.RawMessage `json:",omitempty"`
 
 	deliveryInit, deliveredOnce sync.Once
 	delivered                   chan struct{}
@@ -347,6 +352,9 @@ func (m *InboundMessage) CompleteResponseWithAttachments(text string, attachment
 		close(ch)
 	})
 }
+
+// ReplyStepKey is the journal key of a turn's recorded reply attachment.
+func ReplyStepKey(turnID string) string { return turnID + "/reply" }
 
 // NewOutboundMessage constructs an outbound message for one explicit conversation.
 func NewOutboundMessage(conversationID, text string) *OutboundMessage {

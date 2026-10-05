@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -20,25 +19,21 @@ func (processAssembler) ValidateAssets(cfg *config.Config, runtimeDir string, ch
 	return nil
 }
 
-type cronRootSender interface {
-	SendCronjobRoot(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error)
-}
-
 type cronRunner struct {
 	backend frontend.Backend
 	config  *config.Config
-	slack   cronRootSender
 }
 
+// Run stores the cron request and waits for it while alive. Without a destination
+// the backend's delivery posts a visible report as a new Slack thread.
 func (r *cronRunner) Run(ctx context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 	channel, ok := r.config.Slack.Channel(progress.TextChannel)
 	if !ok || len(channel.Agents) == 0 {
 		return protocol.CronRunResult{}, fmt.Errorf("cron destination %q has no configured agents", progress.TextChannel)
 	}
-	selected := channel.Agents[0]
 	destination := progress.SyncDestination
 	if destination != "" {
-		if err := r.backend.CreateConversation(ctx, protocol.Conversation{ID: destination, Agent: selected, CreatedBy: "cron"}); err != nil {
+		if err := r.backend.CreateConversation(ctx, protocol.Conversation{ID: destination, Agent: channel.Agents[0], CreatedBy: "cron"}); err != nil {
 			return protocol.CronRunResult{}, err
 		}
 	}
@@ -49,28 +44,11 @@ func (r *cronRunner) Run(ctx context.Context, agent, prompt string, progress *ba
 	inbound.ConversationID, inbound.SyncDestination = progress.ConversationID, destination
 	inbound.RequireOutputDecision = true
 	inbound.Cronjob = progress.Cronjob
-	response := inbound.EnableResponseWait()
-	errRun := r.backend.RunTurn(ctx, inbound)
 	if destination == "" {
-		if errRun != nil {
-			return protocol.CronRunResult{}, errRun
-		}
-		result := <-response
-		if strings.TrimSpace(result.Text) == "" && len(result.Attachments) == 0 {
-			return protocol.CronRunResult{}, nil
-		}
-		message := protocol.NewOutboundMessage("", result.Text)
-		message.Complete, message.Cronjob, message.Attachments = true, progress.Cronjob, result.Attachments
-		message.SlackReply = &protocol.SlackReplyTarget{ChannelID: progress.TextChannel}
-		root, err := r.slack.SendCronjobRoot(ctx, message)
-		if err != nil {
-			return protocol.CronRunResult{}, err
-		}
-		destination = protocol.SlackThreadConversationID(root.ChannelID, root.ThreadID)
-		if err := r.backend.CreateConversation(ctx, protocol.Conversation{ID: destination, Agent: selected, CreatedBy: "cron"}); err != nil {
-			return protocol.CronRunResult{}, err
-		}
+		inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: progress.TextChannel}
+		return protocol.CronRunResult{}, r.backend.RunTurn(ctx, inbound)
 	}
+	errRun := r.backend.RunTurn(ctx, inbound)
 	errSync := r.backend.SyncConversation(context.WithoutCancel(ctx), inbound.ConversationID, destination)
 	return protocol.CronRunResult{ConversationID: destination}, errors.Join(errRun, errSync)
 }
