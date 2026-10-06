@@ -16,6 +16,14 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
+func TestTokenUsageAttributes(t *testing.T) {
+	usage := TokenUsage{CompletionTokens: 5, PromptCacheWriteTokens: 4}
+	require.Equal(t, []attribute.KeyValue{
+		attribute.Int64(semconv.LLMTokenCountCompletion, 5),
+		attribute.Int64(semconv.LLMTokenCountPromptDetailsCacheWrite, 4),
+	}, usage.attributes())
+}
+
 func TestObservabilityEmitsAgentProviderAndToolSpans(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
