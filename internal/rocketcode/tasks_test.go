@@ -1,6 +1,7 @@
 package rocketcode
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -795,7 +796,7 @@ func TestBashPermissionGrantsSessionShellTempReadAndGlob(t *testing.T) {
 			return nil, err
 		}
 
-		return []string{rootedPathSubject(readToolPath(params))}, nil
+		return []string{rootedPathSubject(cmp.Or(params.FilePath, params.Filename))}, nil
 	})
 	globTool := testPermissionReadTool(func(raw json.RawMessage) ([]string, error) {
 		var params globToolParams

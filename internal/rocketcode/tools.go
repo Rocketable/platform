@@ -1,6 +1,7 @@
 package rocketcode
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -217,7 +218,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 					return nil, err
 				}
 
-				return []string{sfs.readPermissionSubject(readToolPath(params))}, nil
+				return []string{sfs.readPermissionSubject(cmp.Or(params.FilePath, params.Filename))}, nil
 			},
 			Call: func(_ context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 				var params readToolParams
@@ -225,7 +226,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 					return ToolResult{}, err
 				}
 
-				return sfs.ReadResult(readToolPath(params), max(params.Offset, 1)), nil
+				return sfs.ReadResult(cmp.Or(params.FilePath, params.Filename), max(params.Offset, 1)), nil
 			},
 		},
 		"apply_patch": {
@@ -239,7 +240,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 					return nil, err
 				}
 
-				preview, errText := previewApplyPatch(sfs, applyPatchText(params))
+				preview, errText := previewApplyPatch(sfs, cmp.Or(params.PatchText, params.Patch))
 				if errText != "" {
 					return nil, errors.New(errText)
 				}
@@ -262,7 +263,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 					return ToolResult{}, err
 				}
 
-				return TextToolResult(sfs.ApplyPatch(applyPatchText(params))), nil
+				return TextToolResult(sfs.ApplyPatch(cmp.Or(params.PatchText, params.Patch))), nil
 			},
 		},
 		"glob": {
@@ -657,20 +658,4 @@ func decodeToolParams[T any](raw json.RawMessage, params *T) error {
 	}
 
 	return nil
-}
-
-func readToolPath(params readToolParams) string {
-	if params.FilePath != "" {
-		return params.FilePath
-	}
-
-	return params.Filename
-}
-
-func applyPatchText(params applyPatchToolParams) string {
-	if params.PatchText != "" {
-		return params.PatchText
-	}
-
-	return params.Patch
 }
