@@ -1249,11 +1249,8 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "hello", true)
 	inbound.ConversationID = conversationID
 
-	var group errgroup.Group
-	group.Go(func() error { return handleTestInbound(context.Background(), bridge, &bridgeRequest{inbound: inbound}) })
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
+	group, ctx := errgroup.WithContext(t.Context())
+	group.Go(func() error { return handleTestInbound(ctx, bridge, &bridgeRequest{inbound: inbound}) })
 
 	var outbound *protocol.OutboundMessage
 
@@ -1267,9 +1264,9 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 		}
 	}
 
+	require.NoError(t, group.Wait())
 	require.NotNil(t, outbound)
 	require.Equal(t, "persistent done", outbound.Text)
-	require.NoError(t, group.Wait())
 
 	decoder := json.NewDecoder(strings.NewReader(logs.String()))
 	for decoder.More() {
