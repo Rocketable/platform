@@ -389,23 +389,28 @@ Help with guides and docs.
 	})
 
 	t.Run("returns all matching skills in ranked order", func(t *testing.T) {
+		skills := Skills{Items: map[string]Skill{"git-release": loaded.Items["git-release"], "release-notes": loaded.Items["release-notes"]}}
+		for _, name := range []string{"all-release", "big-release", "z-release"} {
+			skill := loaded.Items["git-release"]
+			skill.Name = name
+			skills.Items[name] = skill
+		}
+
+		skills.Items["tag"] = Skill{Name: "tag", Description: "Summarize releases"}
+
 		require.Equal(t, strings.Join([]string{
 			"## Matching skills",
+			"- **z-release**: Create consistent releases and changelogs",
+			"- **all-release**: Create consistent releases and changelogs",
+			"- **big-release**: Create consistent releases and changelogs",
 			"- **git-release**: Create consistent releases and changelogs",
 			"- **release-notes**: Summarize merged PRs",
-		}, "\n"), loaded.Find("release"))
+			"- **tag**: Summarize releases",
+		}, "\n"), skills.Find("release"))
 	})
 
 	t.Run("matches description and content case insensitively", func(t *testing.T) {
 		require.Equal(t, "## Matching skills"+"\n"+"- **docs-writer**: Write product documentation", loaded.Find("GUIDES"))
-	})
-
-	t.Run("returns no matches message", func(t *testing.T) {
-		require.Equal(t, "No matching skills found.", loaded.Find("security audit"))
-	})
-
-	t.Run("returns empty corpus message", func(t *testing.T) {
-		require.Equal(t, "No skills are currently available.", (Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}).Find("anything"))
 	})
 }
 

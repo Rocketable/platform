@@ -1,6 +1,7 @@
 package rocketcode
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -154,16 +155,8 @@ func (s Skills) Find(query string) string {
 		return "No matching skills found."
 	}
 
-	sort.Slice(matches, func(i, j int) bool {
-		if matches[i].score != matches[j].score {
-			return matches[i].score > matches[j].score
-		}
-
-		if len(matches[i].skill.Name) != len(matches[j].skill.Name) {
-			return len(matches[i].skill.Name) < len(matches[j].skill.Name)
-		}
-
-		return matches[i].skill.Name < matches[j].skill.Name
+	slices.SortFunc(matches, func(a, b scoredSkill) int {
+		return cmp.Or(cmp.Compare(b.score, a.score), cmp.Compare(len(a.skill.Name), len(b.skill.Name)), strings.Compare(a.skill.Name, b.skill.Name))
 	})
 
 	ordered := make([]Skill, 0, len(matches))
