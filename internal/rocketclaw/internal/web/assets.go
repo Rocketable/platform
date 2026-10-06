@@ -2,25 +2,44 @@
 package web
 
 import (
+	"bytes"
 	"embed"
+	"encoding/json"
 	"io/fs"
 	"net/http"
 	"slices"
 	"strings"
+	"time"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 )
 
 //go:embed dist
 var assets embed.FS
 
 // Handler serves application routes and compiled assets without a frontend runtime.
-func Handler() http.Handler {
+func Handler(sentry config.SentryConfig) http.Handler {
 	files, _ := fs.Sub(assets, "dist")
 	server := http.FileServerFS(files)
+
+	var index []byte
+	if sentry.DSN != "" {
+		// The embedded index exists, and validated JSON config contains only serializable values.
+		index, _ = fs.ReadFile(files, "index.html")
+		data, _ := json.Marshal(sentry) // HTML escaping prevents closing the script element.
+		index = []byte(strings.Replace(string(index), "</head>", `<script id="sentry-config" type="application/json">`+string(data)+`</script></head>`, 1))
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
 
 		if slices.Contains([]string{"/", "/cron", "/agents", "/skills", "/config", "/settled", "/search"}, r.URL.Path) || strings.HasPrefix(r.URL.Path, "/s/") {
+			if sentry.DSN != "" {
+				http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(index))
+
+				return
+			}
+
 			r = r.Clone(r.Context())
 			r.URL.Path = "/"
 		}

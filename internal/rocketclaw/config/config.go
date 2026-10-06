@@ -100,8 +100,35 @@ func (c *Config) RuntimeDirName() string {
 
 // WebConfig controls the Web listener and conversation presentation.
 type WebConfig struct {
-	ListenAddress   string `json:"listen_address,omitempty"`
-	AutoSettleAfter string `json:"auto_settle_after,omitempty"`
+	ListenAddress   string       `json:"listen_address,omitempty"`
+	AutoSettleAfter string       `json:"auto_settle_after,omitempty"`
+	Sentry          SentryConfig `json:"sentry,omitzero"`
+}
+
+// SentryConfig contains only public browser tracing settings, never an auth token.
+type SentryConfig struct {
+	DSN              string   `json:"dsn,omitempty"`
+	Environment      string   `json:"environment,omitempty"`
+	TracesSampleRate *float64 `json:"traces_sample_rate,omitempty"`
+}
+
+func (c SentryConfig) validate() error {
+	if rate := c.TracesSampleRate; rate != nil && (*rate < 0 || *rate > 1) {
+		return errors.New("web.sentry.traces_sample_rate must be between 0 and 1")
+	}
+
+	if c.DSN != "" {
+		parsed, err := url.Parse(c.DSN)
+		if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Hostname() == "" || parsed.User == nil || parsed.User.Username() == "" || parsed.Path == "" || parsed.Path == "/" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return errors.New("web.sentry.dsn must be a public Sentry DSN (https://public-key@host/project-id)")
+		}
+
+		if _, private := parsed.User.Password(); private {
+			return errors.New("web.sentry.dsn must not contain a private key")
+		}
+	}
+
+	return nil
 }
 
 // SettleAfter returns the configured inactivity period, defaulting to seven days.
@@ -338,6 +365,10 @@ func (c *Config) Validate() error {
 	}
 
 	if _, err := c.Web.SettleAfter(); err != nil {
+		return err
+	}
+
+	if err := c.Web.Sentry.validate(); err != nil {
 		return err
 	}
 

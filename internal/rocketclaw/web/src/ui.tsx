@@ -1,6 +1,7 @@
 "use client";
 
-import { QueryClient, QueryClientProvider, useQuery, useMutation } from "@tanstack/react-query";
+import { QueryClient, QueryCache, MutationCache, QueryClientProvider, useQuery, useMutation } from "@tanstack/react-query";
+import { captureException } from "@sentry/react";
 import { Menu } from "@base-ui/react/menu";
 import { Combobox } from "@base-ui/react/combobox";
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
@@ -44,7 +45,10 @@ import {
   stripSessionHistory,
 } from "@/session-list";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  queryCache: new QueryCache({ onError: (error) => { captureException(error); } }),
+  mutationCache: new MutationCache({ onError: (error) => { captureException(error); } }),
+});
 const tabReturnTo = { current: "/" };
 type SessionCommand = { mode: "fork" | "handoff" | "name" | "snooze"; source: string; target?: MessageMatch };
 const SessionCommands = createContext<{ command?: SessionCommand; setCommand: Dispatch<SetStateAction<SessionCommand | undefined>>; composer: RefObject<((command: string) => void) | null> }>(null!);
@@ -2095,6 +2099,7 @@ function readHistoryDelta(id: string, draft: ComposerDraft, onDraftChange: () =>
         queryClient.setQueryData<HistoryView>(key, { ...view, reset: true, replacedKeys: [], removedKeys: [], messages: view.entryKeys.flatMap((entry) => groups.get(entry) ?? []) });
       } catch (err) {
         // A history failure must not turn an accepted Prompt into a failed send.
+        captureException(err);
         draft.historyError = err instanceof Error ? err.message : "history failed";
       }
       onDraftChange();
@@ -2119,6 +2124,7 @@ function readEarlierHistory(id: string, draft: ComposerDraft, onDraftChange: () 
       draft.more = view.more;
       draft.delegations = [...new Set([...(draft.delegations ?? []), ...view.delegations])];
     } catch (err) {
+      captureException(err);
       draft.historyError = err instanceof Error ? err.message : "history failed";
     }
     onDraftChange();
@@ -2365,6 +2371,7 @@ async function sendComposer(input: {
     }
   } catch (err) {
     draft.parked = draft.parked?.filter((line) => line.id !== optimistic.id);
+    captureException(err);
     if (dispatchedEdit === undefined) draft.sending = false;
     else if (draft.edit === dispatchedEdit && draft.submission === submission) {
       draft.text = input.text;

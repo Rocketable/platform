@@ -26,7 +26,7 @@ func TestPublicWebDoesNotExposeDiagnostics(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := rpc.NewHTTPHandler(connection)
+	handler := rpc.NewHTTPHandler(connection, config.SentryConfig{})
 
 	for _, prefix := range []string{"/debug/pprof/", "/s/debug/pprof/"} {
 		for _, path := range []string{"", "heap", "allocs", "goroutine", "profile?seconds=1", "trace?seconds=0.01", "cmdline", "symbol", "block", "mutex", "unknown"} {
@@ -64,7 +64,7 @@ func TestWebRPC(t *testing.T) {
 	httpListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = httpListener.Close() })
-	require.NoError(t, json.Unmarshal([]byte(`{"web":{"listen_address":"`+httpListener.Addr().String()+`"}}`), rt.Cfg))
+	require.NoError(t, json.Unmarshal([]byte(`{"web":{"listen_address":"`+httpListener.Addr().String()+`","sentry":{"dsn":"https://public@o1.ingest.sentry.io/1"}}}`), rt.Cfg))
 
 	_, err = startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
 	require.ErrorContains(t, err, "start Web HTTP")
@@ -93,6 +93,7 @@ func TestWebRPC(t *testing.T) {
 	require.NoError(t, responseHTTP.Body.Close())
 	require.Equal(t, http.StatusOK, responseHTTP.StatusCode)
 	require.Contains(t, string(body), "/assets/main-")
+	require.Contains(t, string(body), `"dsn":"https://public@o1.ingest.sentry.io/1"`)
 
 	require.NoError(t, stop(t.Context()))
 	// Immediate shutdown is valid even before Serve's goroutine is scheduled.

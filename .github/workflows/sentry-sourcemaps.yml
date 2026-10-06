@@ -1,0 +1,40 @@
+name: Upload Sentry source maps
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: Save the JavaScript embedded in the release tag
+        run: |
+          mkdir -p .tmp/sentry-release
+          cp internal/rocketclaw/internal/web/dist/assets/*.js .tmp/sentry-release/
+      - name: Generate source maps
+        working-directory: internal/rocketclaw/web
+        env:
+          TMPDIR: ${{ github.workspace }}/.tmp
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+      - name: Verify the JavaScript matches the release
+        run: diff --brief --recursive --exclude='*.map' .tmp/sentry-release .tmp/sentry-sourcemaps
+      - name: Upload matching source maps
+        working-directory: internal/rocketclaw/web
+        env:
+          TMPDIR: ${{ github.workspace }}/.tmp
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        run: bun run sentry:upload
