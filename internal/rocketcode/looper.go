@@ -549,32 +549,18 @@ func (e *SessionEntry) addTokenUsageFromResponse(resp *responses.Response) {
 }
 
 func (u TokenUsage) attributes() []attribute.KeyValue {
-	attrs := []attribute.KeyValue{}
-	if u.PromptTokens != 0 {
-		attrs = append(attrs, attribute.Int64(semconv.LLMTokenCountPrompt, u.PromptTokens))
+	attrs := []attribute.KeyValue{
+		attribute.Int64(semconv.LLMTokenCountPrompt, u.PromptTokens),
+		attribute.Int64(semconv.LLMTokenCountCompletion, u.CompletionTokens),
+		attribute.Int64(semconv.LLMTokenCountTotal, u.TotalTokens),
+		attribute.Int64(semconv.LLMTokenCountPromptDetailsCacheRead, u.PromptCacheReadTokens),
+		attribute.Int64(semconv.LLMTokenCountPromptDetailsCacheWrite, u.PromptCacheWriteTokens),
+		attribute.Int64(semconv.LLMTokenCountCompletionDetailsReasoning, u.CompletionReasoningTokens),
 	}
 
-	if u.CompletionTokens != 0 {
-		attrs = append(attrs, attribute.Int64(semconv.LLMTokenCountCompletion, u.CompletionTokens))
-	}
-
-	if u.TotalTokens != 0 {
-		attrs = append(attrs, attribute.Int64(semconv.LLMTokenCountTotal, u.TotalTokens))
-	}
-
-	if u.PromptCacheReadTokens != 0 {
-		attrs = append(attrs, attribute.Int64(semconv.LLMTokenCountPromptDetailsCacheRead, u.PromptCacheReadTokens))
-	}
-
-	if u.PromptCacheWriteTokens != 0 {
-		attrs = append(attrs, attribute.Int64(semconv.LLMTokenCountPromptDetailsCacheWrite, u.PromptCacheWriteTokens))
-	}
-
-	if u.CompletionReasoningTokens != 0 {
-		attrs = append(attrs, attribute.Int64(semconv.LLMTokenCountCompletionDetailsReasoning, u.CompletionReasoningTokens))
-	}
-
-	return attrs
+	return slices.DeleteFunc(attrs, func(attr attribute.KeyValue) bool {
+		return attr.Value.AsInt64() == 0
+	})
 }
 
 func tokenUsageFromResponse(resp *responses.Response) (TokenUsage, bool) {
