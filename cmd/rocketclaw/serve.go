@@ -94,12 +94,12 @@ func runServe(args []string) error {
 	if err := backend.Run(ctx, cfg, configPath, logger, processAssembler{}); err != nil {
 		if errors.Is(err, backend.ErrRestartRequested) {
 			logger.Info("rocketclaw restart requested; exiting with code 255 for supervisor restart")
-			return serveRunError(err)
+			return exitCodeError(255)
 		}
 
 		logger.Error("rocketclaw exited with error", "error", err)
 
-		return serveRunError(err)
+		return fmt.Errorf("run rocketclaw: %w", err)
 	}
 
 	logger.Info("rocketclaw stopped")
@@ -133,12 +133,4 @@ func logBuildIdentity(logger *slog.Logger, build *debug.BuildInfo) {
 	}
 
 	logger.LogAttrs(context.Background(), slog.LevelInfo, "starting rocketclaw", attrs...)
-}
-
-func serveRunError(err error) error {
-	if errors.Is(err, backend.ErrRestartRequested) {
-		return exitCodeError(255)
-	}
-
-	return fmt.Errorf("run rocketclaw: %w", err)
 }
