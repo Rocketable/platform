@@ -251,15 +251,7 @@ func permissionReviewTranscriptEntries(items []responses.ResponseInputItemUnionP
 			if item.OfMessage.Content.OfString.Valid() {
 				text = item.OfMessage.Content.OfString.Value
 			} else {
-				parts := make([]string, 0, len(item.OfMessage.Content.OfInputItemContentList))
-				for j := range item.OfMessage.Content.OfInputItemContentList {
-					part := item.OfMessage.Content.OfInputItemContentList[j]
-					if part.OfInputText != nil {
-						parts = append(parts, part.OfInputText.Text)
-					}
-				}
-
-				text = strings.Join(parts, "\n")
+				text = permissionReviewContentText(item.OfMessage.Content.OfInputItemContentList)
 			}
 
 			switch {
@@ -285,15 +277,7 @@ func permissionReviewTranscriptEntries(items []responses.ResponseInputItemUnionP
 			if item.OfFunctionCallOutput.Output.OfString.Valid() {
 				text = item.OfFunctionCallOutput.Output.OfString.Value
 			} else {
-				parts := make([]string, 0, len(item.OfFunctionCallOutput.Output.OfResponseFunctionCallOutputItemArray))
-				for j := range item.OfFunctionCallOutput.Output.OfResponseFunctionCallOutputItemArray {
-					part := item.OfFunctionCallOutput.Output.OfResponseFunctionCallOutputItemArray[j]
-					if part.OfInputText != nil {
-						parts = append(parts, part.OfInputText.Text)
-					}
-				}
-
-				text = strings.Join(parts, "\n")
+				text = permissionReviewContentText(item.OfFunctionCallOutput.Output.OfResponseFunctionCallOutputItemArray)
 			}
 
 			if strings.TrimSpace(text) == "" {
@@ -332,6 +316,17 @@ func permissionReviewTranscriptEntries(items []responses.ResponseInputItemUnionP
 	}
 
 	return entries
+}
+
+func permissionReviewContentText[T interface{ GetText() *string }](content []T) string {
+	parts := make([]string, 0, len(content))
+	for _, part := range content {
+		if text := part.GetText(); text != nil {
+			parts = append(parts, *text)
+		}
+	}
+
+	return strings.Join(parts, "\n")
 }
 
 func permissionReviewResponseFormat() responses.ResponseFormatTextConfigUnionParam {
