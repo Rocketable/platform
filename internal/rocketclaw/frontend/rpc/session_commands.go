@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -110,11 +111,22 @@ func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequ
 	flight.waiters++
 	result := s.searchGroup.DoChan(needle, func() (any, error) {
 		defer close(flight.done)
+
+		prefixes := make(map[string]string)
+		for _, id := range s.channels.SlackTagsMatching(scanCtx, needle) {
+			prefixes[id] = "<@" + strings.ToLower(id)
+			if strings.HasPrefix(id, "S") {
+				prefixes[id] = "<!subteam^" + strings.ToLower(id)
+			}
+		}
+
 		// The leader's detached context keeps incoming principal metadata for history.
 		conversations, err := s.backend.ListConversations(scanCtx)
 		if err != nil {
 			return nil, fmt.Errorf("list message search sessions: %w", err)
 		}
+
+		seen := map[string]struct{}{}
 		// Ponytail: scans recorded transcripts; add a message index if volume demands it.
 		for _, conversation := range conversations {
 			visible, err := s.humanConversation(conversation.ID)
@@ -132,11 +144,27 @@ func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequ
 			}
 
 			for _, message := range history.Messages {
-				if (message.Role == "user" || message.Role == "assistant") && strings.Contains(strings.ToLower(message.Text), needle) {
+				if message.Role != "user" && message.Role != "assistant" {
+					continue
+				}
+
+				text := strings.ToLower(message.Text)
+				hit := strings.Contains(text, needle)
+
+				for id, prefix := range prefixes {
+					if strings.Contains(text, prefix) {
+						hit = true
+						seen[id] = struct{}{}
+					}
+				}
+
+				if hit {
 					response.Matches = append(response.Matches, &MessageMatch{ConversationId: conversation.ID, Message: message})
 				}
 			}
 		}
+
+		response.TagIds = slices.Sorted(maps.Keys(seen))
 
 		return response, nil
 	})
@@ -177,6 +205,14 @@ func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequ
 
 		return outcome.Val.(*SearchMessagesResponse), nil
 	}
+}
+
+func (s *Server) slackNames(ctx context.Context, request *SlackNamesRequest) (*SlackNamesResponse, error) {
+	if _, _, err := s.principal(ctx); err != nil {
+		return nil, err
+	}
+
+	return &SlackNamesResponse{Names: s.channels.SlackNames(ctx, request.GetIds())}, nil
 }
 
 // searchOrigins reads every visible conversation's origin facts in one query.

@@ -8,14 +8,14 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, Dia
 import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions, rpc } from "./api";
-import type { ChatOrigin, HistoryView, MessageMatch, PromptDelivery } from "./types";
+import type { ChatOrigin, HistoryView, MessageMatch, PromptDelivery, SearchMessagesResponse } from "./types";
 import { Bot, Check, ChevronDown, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
-import { CodeBlock, TranscriptText, copyText } from "./transcript-text";
+import { CodeBlock, InlineText, TranscriptText, copyText, useCleanText } from "./transcript-text";
 import { projectTimeline, setTimelineRows, timelineLevels, useTimelineDetail, type TimelineRows } from "./timeline-detail";
 import { TimelineDetailCard } from "./timeline-detail-card";
 import { Button } from "@/components/ui/button";
@@ -268,7 +268,7 @@ function QueuePanel({
             </button>
             <div className="min-w-0 flex-1">
               <MessageAuthor principal={item.principal} />
-              <span className="block truncate text-sm">{item.text}</span>
+              <span className="block truncate text-sm"><InlineText text={item.text.replace(/\s+/g, " ")} /></span>
             </div>
             <MessageAttachments attachments={item.attachments} conversationId={conversationId} />
             <Button
@@ -873,7 +873,7 @@ function HandoffDialog({ command, drafts, onDraftChange }: { command: SessionCom
       <div className="flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain">
         <SessionCommandPicker items={[...choices, ...items]} query={query} setQuery={setQuery} forking={false} disabled={pending} />
         {target ? <div className="flex min-w-0 items-center gap-3 rounded-lg border p-2">
-          <div className="min-w-0 flex-1"><SessionRowContent session={sidebar.rows.find((row) => row.id === target.conversationId) ?? { id: target.conversationId }} /><p className="truncate text-xs text-muted-foreground">{target.message.text}</p></div>
+          <div className="min-w-0 flex-1"><SessionRowContent session={sidebar.rows.find((row) => row.id === target.conversationId) ?? { id: target.conversationId }} /><p className="truncate text-xs text-muted-foreground"><InlineText text={target.message.text.replace(/\s+/g, " ")} /></p></div>
           <Button variant="ghost" className="min-h-11 shrink-0" disabled={pending} onClick={() => setCommand({ ...command, target: undefined })}>Change</Button>
         </div> : null}
         {error ? <p role="alert" className="break-words text-destructive">{error.message}</p> : null}
@@ -905,7 +905,7 @@ function SessionCommandPicker({ items, query, setQuery, forking, disabled }: { i
   return <>
     <Input aria-label={forking ? "Search fork messages" : "Search messages"} placeholder="Search messages" value={query} disabled={disabled} onChange={(event) => { setPick(0); setQuery(event.target.value); }} onKeyDown={(event) => setPick(paletteMove(event, selected, items.length, () => items[selected]?.choose()))} />
     <ul className="max-h-[40vh] overflow-y-auto">
-      {items.map((item, index) => <li key={item.key}><Button ref={index === selected ? active : null} variant={index === selected ? "secondary" : "ghost"} size="lg" className="min-h-11 h-auto w-full flex-col items-start" disabled={disabled} onClick={item.choose}>{item.session ? <SessionRowContent session={item.session} /> : null}<span aria-live="polite" className="line-clamp-2 text-left whitespace-normal break-words">{item.label}</span>{item.detail ? <span className="max-w-full truncate text-xs">{item.detail}</span> : null}</Button></li>)}
+      {items.map((item, index) => <li key={item.key}><Button ref={index === selected ? active : null} variant={index === selected ? "secondary" : "ghost"} size="lg" className="min-h-11 h-auto w-full flex-col items-start" disabled={disabled} onClick={item.choose}>{item.session ? <SessionRowContent session={item.session} /> : null}<span aria-live="polite" className="line-clamp-2 text-left whitespace-normal break-words"><InlineText text={item.label.replace(/\s+/g, " ")} /></span>{item.detail ? <span className="max-w-full truncate text-xs">{item.detail}</span> : null}</Button></li>)}
     </ul>
   </>;
 }
@@ -1125,11 +1125,12 @@ function relativeTime(iso: string) {
 
 function SessionRowContent({ session, loading = false, age = relativeTime(session.updatedAt ?? "") }: { session: Session; loading?: boolean; age?: string }) {
   const title = session.name || rowPreview(session, loading).split("\n", 1)[0] || sessionLabel(session.id);
+  const clean = useCleanText(title);
   const channel = slackSession(session.id) ? (session.title ?? "") : "";
   const meta = [session.snoozedUntil ? `Snoozed until ${new Date(session.snoozedUntil).toLocaleString()}` : session.settled ? "Settled" : "", channel, session.agent, ...(session.tags ?? [])].filter(Boolean).join(" · ");
   const updated = session.updatedAt ? `Updated ${new Date(session.updatedAt).toLocaleString(undefined, { timeZoneName: "short" })}` : "";
   return <span className="flex min-w-0 w-full flex-1 flex-col gap-0.5">
-    <span className="flex items-center gap-1.5 text-sm font-medium">{session.forkedFrom ? <GitFork role="img" aria-label="Forked session" className="size-3.5 shrink-0" /> : null}<span data-slot="session-title" className="truncate">{title}</span></span>
+    <span className="flex items-center gap-1.5 text-sm font-medium">{session.forkedFrom ? <GitFork role="img" aria-label="Forked session" className="size-3.5 shrink-0" /> : null}<span data-slot="session-title" className="truncate" title={clean}><InlineText text={title} /></span></span>
     <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"><span className="min-w-0 flex-1 truncate" title={meta}>{meta}</span>{session.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 shrink-0 animate-spin motion-reduce:animate-none" /> : null}{age ? <Tooltip><TooltipTrigger render={<time dateTime={session.updatedAt} />} aria-label={updated} className="shrink-0 tabular-nums">{age}</TooltipTrigger><TooltipContent>{updated}</TooltipContent></Tooltip> : null}</span>
   </span>;
 }
@@ -1368,23 +1369,40 @@ function SearchTabs({ owner }: { owner: string }) {
   </section>;
 }
 
-function MatchedExcerpt({ text, needle }: { text: string; needle: string }) {
-  const lower = text.toLowerCase(), index = needle ? lower.indexOf(needle) : -1;
-  const start = index < 0 ? 0 : Math.max(0, index - 48);
-  const end = index < 0 ? text.length : Math.min(text.length, index + needle.length + 48);
-  const parts: ReactNode[] = [];
-  for (let position = start; position < end;) {
-    const match = needle ? lower.indexOf(needle, position) : -1;
-    const next = match < 0 || match >= end ? end : match;
-    parts.push(text.slice(position, next));
-    if (next === end) break;
-    parts.push(<mark key={match} className="rounded-sm bg-primary/20 text-foreground ring-1 ring-primary/30">{text.slice(match, match + needle.length)}</mark>);
-    position = match + needle.length;
+function windowed(text: string, needle: string, tagIds: string[]) {
+  if (!needle) return text;
+  const lines = text.split("\n");
+  let hit = lines.findIndex((line) => line.toLowerCase().includes(needle));
+  if (hit < 0) hit = lines.findIndex((line) => tagIds.some((id) => line.includes("<@" + id) || line.includes("<!subteam^" + id)));
+  if (hit < 0) return text;
+  let start = Math.max(0, hit - 2), end = Math.min(lines.length, hit + 3), open = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s*```/.test(lines[i])) continue;
+    if (open < 0) open = i;
+    else {
+      if (open < end && i >= start) { start = Math.min(start, open); end = Math.max(end, i + 1); }
+      open = -1;
+    }
   }
-  return <span className="min-w-0 whitespace-pre-wrap break-words">{start ? "…" : ""}{parts}{end < text.length ? "…" : ""}</span>;
+  if (open >= 0 && open < end) { start = Math.min(start, open); end = lines.length; }
+  return `${start ? "…\n" : ""}${lines.slice(start, end).join("\n")}${end < lines.length ? "\n…" : ""}`;
 }
 
-function SearchMatches({ matching, messages, rows, origins, needle, sort }: { matching: Session[]; messages: MessageMatch[]; rows: Session[]; origins: Map<string, string>; needle: string; sort: string }) {
+function SearchResultGroup({ session, hits, text, field, needle, tagIds }: { session: Session; hits: MessageMatch[]; text: string; field?: string; needle: string; tagIds: string[] }) {
+  const count = hits.length + Number(!!text);
+  const label = session.name || rowPreview(session, false).split("\n", 1)[0] || sessionLabel(session.id);
+  const clean = useCleanText(label);
+  const row = (href: string, kind: string, body: string, key?: string) => <li key={key}><Link href={href} className="flex min-h-11 min-w-0 items-start gap-3 px-2 py-1 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring sm:min-h-7"><span className="w-16 shrink-0 text-xs text-muted-foreground">{kind}</span><div className="min-w-0"><TranscriptText text={windowed(body, needle, tagIds)} needle={needle} interactive={false} /></div></Link></li>;
+  return <li role="group" aria-label={clean} className="min-w-0">
+    <h2 className="flex min-w-0 items-center gap-1 text-sm font-medium"><Link href={sessionPath(session.id)} title={clean} className="min-w-0 truncate py-1 hover:underline focus-visible:outline-2 focus-visible:outline-ring"><InlineText text={label} /></Link><span className="shrink-0 text-muted-foreground">({count})</span>{session.pinned ? <Pin aria-label="Pinned" className="size-3 shrink-0" /> : null}</h2>
+    <ul className="mt-1 border-l pl-2 text-sm leading-5">
+      {text ? row(sessionPath(session.id), field || "Preview", text) : null}
+      {hits.map((match) => row(`${sessionPath(session.id)}?message=${encodeURIComponent(match.message.messageId!)}`, match.message.role === "user" ? "You" : "Assistant", match.message.text, match.message.messageId))}
+    </ul>
+  </li>;
+}
+
+function SearchMatches({ matching, messages, rows, origins, needle, sort, tagIds }: { matching: Session[]; messages: MessageMatch[]; rows: Session[]; origins: Map<string, string>; needle: string; sort: string; tagIds: string[] }) {
   const bySession = Map.groupBy(messages, (match) => match.conversationId);
   const matched = new Set(matching);
   const sessions = rows.filter((session) => bySession.has(session.id) || matched.has(session)).sort((a, b) => (!sort && Number(bySession.has(b.id)) - Number(bySession.has(a.id))) || compareSessions(sort, a, b));
@@ -1392,17 +1410,9 @@ function SearchMatches({ matching, messages, rows, origins, needle, sort }: { ma
     {sessions.map((session) => {
       const origin = origins.get(session.id) ?? "";
       const hits = bySession.get(session.id) ?? [];
-      const label = session.name || rowPreview(session, false).split("\n", 1)[0] || sessionLabel(session.id);
-      const field = needle ? [["Name", session.name], ["Room", session.title], ["Agent", session.agent], ["Session", sessionLabel(session.id)], ["Origin", origin]].find(([, text]) => text?.toLowerCase().includes(needle)) : undefined;
+      const field = needle ? [["Name", session.name], ["Room", session.title], ["Agent", session.agent], ["Session", sessionLabel(session.id)], ["Origin", origin]].find(([, value]) => value?.toLowerCase().includes(needle)) : undefined;
       const text = field?.[1] || (!hits.length && matched.has(session) ? session.preview || sessionLabel(session.id) : "");
-      const count = hits.length + Number(!!text);
-      return <li key={session.id} role="group" aria-label={label} className="min-w-0">
-        <h2 className="flex min-w-0 items-center gap-1 text-sm font-medium"><Link href={sessionPath(session.id)} title={label} className="min-w-0 truncate py-1 hover:underline focus-visible:outline-2 focus-visible:outline-ring">{label}</Link><span className="shrink-0 text-muted-foreground">({count})</span>{session.pinned ? <Pin aria-label="Pinned" className="size-3 shrink-0" /> : null}</h2>
-        <ul className="mt-1 border-l pl-2 font-mono text-sm leading-5">
-          {text ? <li><Link href={sessionPath(session.id)} className="flex min-h-11 min-w-0 items-start gap-3 px-2 py-1 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring sm:min-h-7"><span className="w-16 shrink-0 text-xs text-muted-foreground">{field?.[0] || "Preview"}</span><MatchedExcerpt text={text} needle={needle} /></Link></li> : null}
-          {hits.map((match) => <li key={match.message.messageId}><Link href={`${sessionPath(session.id)}?message=${encodeURIComponent(match.message.messageId!)}`} className="flex min-h-11 min-w-0 items-start gap-3 px-2 py-1 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring sm:min-h-7"><span className="w-16 shrink-0 text-xs text-muted-foreground">{match.message.role === "user" ? "You" : "Assistant"}</span><MatchedExcerpt text={match.message.text} needle={needle} /></Link></li>)}
-        </ul>
-      </li>;
+      return <SearchResultGroup key={session.id} session={session} hits={hits} text={text} field={field?.[0]} needle={needle} tagIds={tagIds} />;
     })}
   </ul>;
 }
@@ -1421,7 +1431,7 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
   const filters = sessionSearchTerms(tab.query);
   const searchKey = filters.needle;
   const origins = useSessionOrigins(rows, searchKey);
-  const [result, setResult] = useState<{ query: string; matches: MessageMatch[]; error?: string; pending: boolean }>({ query: "", matches: [], pending: false });
+  const [result, setResult] = useState<{ query: string; matches: MessageMatch[]; tagIds: string[]; error?: string; pending: boolean }>({ query: "", matches: [], tagIds: [], pending: false });
   const request = useRef<AbortController>(null);
   const version = useRef(0);
   const pause = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -1435,12 +1445,12 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
     const controller = new AbortController();
     request.current = controller;
     const current = ++version.current;
-    setResult({ query: searchKey, matches: [], pending: !!searchKey });
+    setResult({ query: searchKey, matches: [], tagIds: [], pending: !!searchKey });
     if (!searchKey) return;
-    void rpc<{ matches: MessageMatch[] }>("SearchMessages", { query: searchKey }, controller.signal).then(({ matches }) => {
-      if (current === version.current) setResult({ query: searchKey, matches, pending: false });
+    void rpc<SearchMessagesResponse>("SearchMessages", { query: searchKey }, controller.signal).then(({ matches, tagIds }) => {
+      if (current === version.current) setResult({ query: searchKey, matches: matches ?? [], tagIds: tagIds ?? [], pending: false });
     }).catch((error: Error) => {
-      if (current === version.current && !controller.signal.aborted) setResult({ query: searchKey, matches: [], error: error.message, pending: false });
+      if (current === version.current && !controller.signal.aborted) setResult({ query: searchKey, matches: [], tagIds: [], error: error.message, pending: false });
     });
   }, [searchKey]);
   useEffect(() => {
@@ -1462,7 +1472,7 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
     </div>
     <div className="min-h-0 flex-1 overflow-y-auto text-sm" aria-label="Search results">
       <SearchStatus pending={pending} checking={origins.pending} error={result.query === searchKey ? result.error : undefined} originError={origins.failed} empty={searching && current && matching.length + messages.length === 0} incomplete={!searchIsAuthoritative(sidebar) || origins.failed || origins.pending} retry={submit} />
-      {current && searching ? <SearchMatches matching={matching} messages={messages} rows={rows} origins={origins.values} needle={filters.needle} sort={filters.sort} /> : null}
+      {current && searching ? <SearchMatches matching={matching} messages={messages} rows={rows} origins={origins.values} needle={filters.needle} sort={filters.sort} tagIds={result.tagIds} /> : null}
       {!searching ? <p className="text-muted-foreground">Type to search messages and conversations.</p> : null}
     </div>
   </>;
@@ -1871,6 +1881,14 @@ function turnKey(turn: Turn) {
   return turn.user[0]?.id ?? turn.items[0]?.id;
 }
 
+function TurnRailButton({ turn, index, onJump, preview }: { turn: Turn; index: number; onJump: (turn: Turn) => void; preview?: boolean }) {
+  const text = (turn.user[0]?.text ?? turn.items.find((line) => line.role === "assistant")?.text ?? "Activity").split("\n").flatMap((line) => /^ {0,3}(`{3,}|~{3,})/.test(line) ? [] : [line.replace(/^[\t ]*(?:[-*•] |\d+\. |(?:>|&gt;) )/, "")]).join(" ").replace(/\s+/g, " ").trim() || "Activity";
+  const clean = useCleanText(text).slice(0, 120);
+  return <button type="button" aria-label={`${preview ? "Jump to turn" : "Turn"} ${index + 1}: ${clean}`} className={preview ? "block w-full rounded-sm px-3 py-2 text-left text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring" : "group flex min-h-6 w-full items-center justify-end rounded-sm text-left text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"} onClick={() => onJump(turn)}>
+    {preview ? <span className="line-clamp-2 break-words">{index + 1}. <InlineText text={text} /></span> : <span aria-hidden="true" className="flex w-6 shrink-0 items-center justify-center"><span className="h-0.5 w-2 rounded-full bg-current transition-[width] group-hover:w-4 group-focus-visible:w-4" /></span>}
+  </button>;
+}
+
 function useTranscriptPosition(conversationId: string, lines: Line[], turns: Turn[]) {
   const viewport = useRef<HTMLDivElement>(null);
   const identity = useQuery(queries.identity());
@@ -2012,21 +2030,10 @@ function TranscriptLog({
     {turns.length > 0 ? (
       <nav aria-label="Conversation turns" className="group/rail absolute top-12 bottom-0 right-[6px] flex w-8 items-center justify-end py-3">
         <div role="group" aria-label="Message previews" className="absolute right-full top-1/2 hidden max-h-[calc(100%-1.5rem)] w-[min(20rem,calc(100vw-4rem))] -translate-y-1/2 overflow-y-auto overscroll-contain rounded-md border bg-popover p-1 text-popover-foreground shadow-lg group-hover/rail:block group-focus-within/rail:block">
-          {turns.map((turn, index) => {
-            const preview = (turn.user[0]?.text ?? turn.items.find((line) => line.role === "assistant")?.text ?? "Activity").replace(/\s+/g, " ").slice(0, 120);
-            return <button key={turnKey(turn)} type="button" aria-label={`Jump to turn ${index + 1}: ${preview}`} className="block w-full rounded-sm px-3 py-2 text-left text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring" onClick={() => jumpToTurn(turn)}><span className="line-clamp-2 break-words">{index + 1}. {preview}</span></button>;
-          })}
+          {turns.map((turn, index) => <TurnRailButton key={turnKey(turn)} turn={turn} index={index} onJump={jumpToTurn} preview />)}
         </div>
         <div className="max-h-full w-8 overflow-y-auto">
-          {turns.map((turn, index) => {
-            const preview = (turn.user[0]?.text ?? turn.items.find((line) => line.role === "assistant")?.text ?? "Activity").replace(/\s+/g, " ").slice(0, 120);
-            const label = `Turn ${index + 1}: ${preview}`;
-            return (
-              <button key={turnKey(turn)} type="button" aria-label={label} className="group flex min-h-6 w-full items-center justify-end rounded-sm text-left text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={() => jumpToTurn(turn)}>
-                <span aria-hidden="true" className="flex w-6 shrink-0 items-center justify-center"><span className="h-0.5 w-2 rounded-full bg-current transition-[width] group-hover:w-4 group-focus-visible:w-4" /></span>
-              </button>
-            );
-          })}
+          {turns.map((turn, index) => <TurnRailButton key={turnKey(turn)} turn={turn} index={index} onJump={jumpToTurn} />)}
         </div>
       </nav>
     ) : null}

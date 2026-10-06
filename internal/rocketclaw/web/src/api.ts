@@ -1,5 +1,5 @@
 import { captureException } from "@sentry/react";
-import type { AgentChoices, ChatOrigin, ConfigView, CronJob, HistoryView, MessageMatch, PromptDelivery, QueueItem, SessionBatch, Skill, TranscriptEvent, Workflow } from "./types";
+import type { AgentChoices, ChatOrigin, ConfigView, CronJob, HistoryView, PromptDelivery, QueueItem, SearchMessagesResponse, SessionBatch, Skill, SlackNamesResponse, TranscriptEvent, Workflow } from "./types";
 
 export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
@@ -64,7 +64,8 @@ export async function* listSessions(signal?: AbortSignal, url = "/api/ListSessio
 }
 
 export const queries = {
-  searchMessages: (query: string) => ({ queryKey: ["searchMessages", query], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ matches: MessageMatch[] }>("SearchMessages", { query }, signal)).matches }),
+  searchMessages: (query: string) => ({ queryKey: ["searchMessages", query], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<SearchMessagesResponse>("SearchMessages", { query }, signal)).matches }),
+  slackName: (id: string) => ({ queryKey: ["slackName", id], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<SlackNamesResponse>("SlackNames", { ids: [id] }, signal)).names?.[id], retry: false, staleTime: (query: { state: { data: string | undefined } }) => query.state.data ? 8 * 60 * 60 * 1000 : 60_000 }),
   protocol: () => ({ queryKey: ["protocol"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ protoSha256: string }>("Protocol", {}, signal)).protoSha256 }),
   identity: () => ({ queryKey: ["identity"], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<{ username: string; principal?: string }>("Identity", {}, signal) }),
   agents: (input?: { conversationId: string }) => ({ queryKey: ["agents", input], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<AgentChoices>("ListAgents", input, signal) }),

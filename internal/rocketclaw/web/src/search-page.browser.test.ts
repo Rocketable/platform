@@ -659,3 +659,68 @@ test("message matches jump after history loads and last close returns to the las
     server.stop(true);
   }
 }, 30_000);
+
+test("search formats rows, windows around matches, and resolves tag names", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const preview = "<!subteam^S0BA868QQ90> *Allen now says he would buy a Windows computer if memory is the cause.*\n\nsee [docs](https://example.com/a)\n```\ncode line\n```";
+  const long = ["alpha", "bravo", "charlie", "delta", "echo", "the windows line", "foxtrot", "golf", "hotel", "india"].join("\n");
+  const tagged = ["keep-out-before", "pad-a", "pad-b", "<!subteam^S0BA868QQ90> tagged here", "pad-c", "pad-d", "keep-out-after"].join("\n");
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "formatted", name: "", preview, tags: ["x"], agent: "main" }, { id: "long", name: "Long chat", preview: "", agent: "main" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
+    if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-format" });
+    if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
+    if (url.pathname === "/api/SearchOrigins") return Response.json({ matches: [] });
+    if (url.pathname === "/api/SlackNames") return Response.json({ names: { S0BA868QQ90: "cs-operators" } });
+    if (url.pathname === "/api/SearchMessages") {
+      const { query } = await request.json() as { query: string };
+      if (query === "windows") return Response.json({ matches: [{ conversationId: "long", message: { messageId: "1:0", role: "assistant", text: "*found windows here*", complete: true } }, { conversationId: "long", message: { messageId: "1:1", role: "assistant", text: long, complete: true } }] });
+      if (query === "cs-operators") return Response.json({ matches: [{ conversationId: "long", message: { messageId: "2:0", role: "assistant", text: tagged, complete: true } }], tagIds: ["S0BA868QQ90"] });
+      return Response.json({ matches: [] });
+    }
+    if (url.pathname.startsWith("/api/")) return Response.json({});
+    const file = Bun.file(path.join(dist, url.pathname));
+    return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+  } });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage();
+    const root = `http://127.0.0.1:${server.port}`;
+    const results = page.getByLabel("Search results");
+    await page.goto(`${root}/search?q=tag:x`);
+    const group = results.getByRole("group", { name: "@cs-operators Allen now says he would buy a Windows computer if memory is the cause." });
+    await group.waitFor();
+    expect(await group.getAttribute("aria-label")).toBe("@cs-operators Allen now says he would buy a Windows computer if memory is the cause.");
+    const heading = group.getByRole("heading").getByRole("link");
+    expect(await heading.getAttribute("title")).toBe("@cs-operators Allen now says he would buy a Windows computer if memory is the cause.");
+    expect(await heading.locator("strong").textContent()).toBe("Allen now says he would buy a Windows computer if memory is the cause.");
+    expect(await results.locator("pre").textContent()).toContain("code line");
+    const row = results.locator("a").filter({ has: page.locator("pre") });
+    expect(await row.locator("a, button").count()).toBe(0);
+    await page.goto(`${root}/search?q=windows`);
+    const marked = results.getByRole("link", { name: /found windows/ });
+    await marked.waitFor();
+    expect(await marked.locator("strong mark").textContent()).toBe("windows");
+    expect(await results.getByText("delta").count()).toBe(1);
+    expect(await results.getByText("the windows line").count()).toBe(1);
+    expect(await results.getByText("golf").count()).toBe(1);
+    expect(await results.getByText("alpha").count()).toBe(0);
+    expect(await results.getByText("india").count()).toBe(0);
+    await page.goto(`${root}/search?q=cs-operators`);
+    await results.getByText("@cs-operators").waitFor();
+    expect(await results.locator("mark").textContent()).toBe("cs-operators");
+    expect(await results.getByText("pad-a").count()).toBe(1);
+    expect(await results.getByText("pad-d").count()).toBe(1);
+    expect(await results.getByText("keep-out-before").count()).toBe(0);
+    expect(await results.getByText("keep-out-after").count()).toBe(0);
+    await page.goto(`${root}/search?q=tag:x`);
+    await results.locator("pre").waitFor();
+    await results.locator("pre").click();
+    await page.waitForURL("**/s/Zm9ybWF0dGVk");
+  } finally {
+    await browser.close();
+    server.stop(true);
+  }
+}, 30_000);

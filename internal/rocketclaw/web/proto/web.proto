@@ -91,7 +91,10 @@ message MessageMatch {
   string conversation_id = 1;
   TranscriptEvent message = 2;
 }
-message SearchMessagesResponse { repeated MessageMatch matches = 1; }
+message SearchMessagesResponse {
+  repeated MessageMatch matches = 1;
+  repeated string tag_ids = 2;
+}
 message SearchOriginsRequest { string query = 1; }
 message OriginMatch {
   string conversation_id = 1;
@@ -99,6 +102,17 @@ message OriginMatch {
   string text = 2;
 }
 message SearchOriginsResponse { repeated OriginMatch matches = 1; }
+
+// SlackNamesRequest asks for display names of Slack IDs.
+message SlackNamesRequest {
+  repeated string ids = 1;
+}
+
+// SlackNamesResponse maps IDs to bare display strings without a leading @ or #.
+// The web prepends those sigils. Unresolved IDs are omitted.
+message SlackNamesResponse {
+  map<string, string> names = 1;
+}
 message HandoffRequest { string id = 1; }
 message HandoffResponse { string document = 1; }
 
@@ -370,6 +384,7 @@ service Web {
   rpc ForkSession(ForkSessionRequest) returns (ForkSessionResponse);
   rpc SearchMessages(SearchMessagesRequest) returns (SearchMessagesResponse);
   rpc SearchOrigins(SearchOriginsRequest) returns (SearchOriginsResponse);
+  rpc SlackNames(SlackNamesRequest) returns (SlackNamesResponse);
   rpc Handoff(HandoffRequest) returns (HandoffResponse);
   rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
   rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);

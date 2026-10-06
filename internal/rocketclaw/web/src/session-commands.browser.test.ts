@@ -282,7 +282,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     const destinationRow = sidebar.locator("li").filter({ has: page.getByRole("link", { name: /Podcast editing notes/ }) });
     await destinationRow.hover();
     const age = destinationRow.locator("time");
-    expect(await destinationRow.locator("span[title]").getAttribute("title")).toBe([details.destination.agent, ...details.destination.tags!].join(" · "));
+    expect(await destinationRow.locator("span[title]:not([data-slot])").getAttribute("title")).toBe([details.destination.agent, ...details.destination.tags!].join(" · "));
     expect(await destinationRow.locator("b").count()).toBe(0);
     expect(await age.count()).toBe(1);
     expect(await age.getAttribute("datetime")).toBe(details.destination.updatedAt);
@@ -388,7 +388,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     const destinationMatch = dialog.getByRole("button", { name: /Destination search needle/ });
     await destinationMatch.getByRole("img", { name: "Forked session", exact: true }).waitFor();
     expect(await destinationMatch.getByText("Podcast editing notes with a very long conversation title", { exact: true }).count()).toBe(1);
-    expect(await destinationMatch.locator("span[title]").getAttribute("title")).toBe([details.destination.agent, ...details.destination.tags!].join(" · "));
+    expect(await destinationMatch.locator("span[title]:not([data-slot])").getAttribute("title")).toBe([details.destination.agent, ...details.destination.tags!].join(" · "));
     expect(searches).toEqual(["destination search"]);
     await destinationMatch.click();
     await page.waitForURL("**/s/" + btoa("destination").replace(/=+$/, ""));
@@ -522,6 +522,60 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await page.keyboard.press("Meta+Shift+p");
     expect(await commands.getByRole("button", { name: /^(Command:|Sessions: (Open original conversation|Fork session|Handoff session|Name session|Snooze session|Pin session|Unpin session|Settle$|Unsettle$|Stop turn|Choose agent))/ }).count()).toBe(0);
     expect(errors).toEqual([]);
+  } finally {
+    await browser.close();
+    server.stop(true);
+  }
+}, 30_000);
+
+test("handoff hits and queued items format tags and markup", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const marked = "*bold* <!subteam^S1>";
+  const message = (messageId: string, role: string, text: string): TranscriptEvent => ({ messageId, entryKey: messageId.split(":")[0], itemId: `item:${messageId}`, inputId: "", role, text, complete: true, turnId: "" });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "source", agent: "main", name: "Source" }, { id: "dest", agent: "main", name: "Dest" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (!url.pathname.startsWith("/api/")) {
+      const file = Bun.file(path.join(dist, url.pathname));
+      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+    }
+    const input = await request.json() as { id: string; query: string };
+    switch (url.pathname) {
+      case "/api/Protocol": return Response.json({ protoSha256: "format-handoff" });
+      case "/api/Identity": return Response.json({ username: "tester" });
+      case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }] });
+      case "/api/SlackNames": return Response.json({ names: { S1: "handle" } });
+      case "/api/History": return Response.json({ messages: [message("1:0", "user", "hello")], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: ["1"], running: false, terminal: "" });
+      case "/api/ListQueue": return Response.json({ items: input.id === "dest" ? [{ id: "q1", text: marked, delivery: "QUEUE" }] : [] });
+      case "/api/Handoff": return Response.json({ document: "doc" });
+      case "/api/SearchMessages": return Response.json({ matches: [{ conversationId: "dest", message: message("2:0", "user", marked) }] });
+      default: return Response.json({});
+    }
+  } });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("dest")}`);
+    const queued = page.locator('[data-queue-id="q1"]');
+    await queued.locator("strong").waitFor();
+    expect(await queued.locator("strong").textContent()).toBe("bold");
+    expect(await queued.getByText("@handle").count()).toBe(1);
+    await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("source")}`);
+    await page.locator("textarea").waitFor();
+    await page.locator("textarea").fill("$handoff");
+    await page.locator("textarea").press("Enter");
+    const dialog = page.getByRole("dialog", { name: "Session handoff" });
+    await dialog.getByRole("textbox", { name: "Search messages" }).fill("bold");
+    const hit = dialog.getByRole("button").filter({ has: page.locator("strong") });
+    await hit.locator("strong").waitFor();
+    expect(await hit.locator("strong").textContent()).toBe("bold");
+    expect(await hit.getByText("@handle").count()).toBe(1);
+    await hit.click();
+    const excerpt = dialog.locator("p.truncate");
+    await excerpt.locator("strong").waitFor();
+    expect(await excerpt.locator("strong").textContent()).toBe("bold");
+    expect(await excerpt.getByText("@handle").count()).toBe(1);
   } finally {
     await browser.close();
     server.stop(true);

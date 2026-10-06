@@ -27,6 +27,12 @@ var _ rpc.ChannelAgentChoices = &mockWebChannels{}
 //			SidebarChannelAgentChoicesFunc: func(context1 context.Context, s string) (string, []string, error) {
 //				panic("mock out the SidebarChannelAgentChoices method")
 //			},
+//			SlackNamesFunc: func(context1 context.Context, strings []string) map[string]string {
+//				panic("mock out the SlackNames method")
+//			},
+//			SlackTagsMatchingFunc: func(context1 context.Context, s string) []string {
+//				panic("mock out the SlackTagsMatching method")
+//			},
 //		}
 //
 //		// use mockedChannelAgentChoices in code that requires rpc.ChannelAgentChoices
@@ -39,6 +45,12 @@ type mockWebChannels struct {
 
 	// SidebarChannelAgentChoicesFunc mocks the SidebarChannelAgentChoices method.
 	SidebarChannelAgentChoicesFunc func(context1 context.Context, s string) (string, []string, error)
+
+	// SlackNamesFunc mocks the SlackNames method.
+	SlackNamesFunc func(context1 context.Context, strings []string) map[string]string
+
+	// SlackTagsMatchingFunc mocks the SlackTagsMatching method.
+	SlackTagsMatchingFunc func(context1 context.Context, s string) []string
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -56,9 +68,25 @@ type mockWebChannels struct {
 			// S is the s argument value.
 			S string
 		}
+		// SlackNames holds details about calls to the SlackNames method.
+		SlackNames []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// Strings is the strings argument value.
+			Strings []string
+		}
+		// SlackTagsMatching holds details about calls to the SlackTagsMatching method.
+		SlackTagsMatching []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+		}
 	}
 	lockChannelAgentChoices        sync.RWMutex
 	lockSidebarChannelAgentChoices sync.RWMutex
+	lockSlackNames                 sync.RWMutex
+	lockSlackTagsMatching          sync.RWMutex
 }
 
 // ChannelAgentChoices calls ChannelAgentChoicesFunc.
@@ -130,5 +158,77 @@ func (mock *mockWebChannels) SidebarChannelAgentChoicesCalls() []struct {
 	mock.lockSidebarChannelAgentChoices.RLock()
 	calls = mock.calls.SidebarChannelAgentChoices
 	mock.lockSidebarChannelAgentChoices.RUnlock()
+	return calls
+}
+
+// SlackNames calls SlackNamesFunc.
+func (mock *mockWebChannels) SlackNames(context1 context.Context, strings []string) map[string]string {
+	if mock.SlackNamesFunc == nil {
+		panic("mockWebChannels.SlackNamesFunc: method is nil but ChannelAgentChoices.SlackNames was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		Strings  []string
+	}{
+		Context1: context1,
+		Strings:  strings,
+	}
+	mock.lockSlackNames.Lock()
+	mock.calls.SlackNames = append(mock.calls.SlackNames, callInfo)
+	mock.lockSlackNames.Unlock()
+	return mock.SlackNamesFunc(context1, strings)
+}
+
+// SlackNamesCalls gets all the calls that were made to SlackNames.
+// Check the length with:
+//
+//	len(mockedChannelAgentChoices.SlackNamesCalls())
+func (mock *mockWebChannels) SlackNamesCalls() []struct {
+	Context1 context.Context
+	Strings  []string
+} {
+	var calls []struct {
+		Context1 context.Context
+		Strings  []string
+	}
+	mock.lockSlackNames.RLock()
+	calls = mock.calls.SlackNames
+	mock.lockSlackNames.RUnlock()
+	return calls
+}
+
+// SlackTagsMatching calls SlackTagsMatchingFunc.
+func (mock *mockWebChannels) SlackTagsMatching(context1 context.Context, s string) []string {
+	if mock.SlackTagsMatchingFunc == nil {
+		panic("mockWebChannels.SlackTagsMatchingFunc: method is nil but ChannelAgentChoices.SlackTagsMatching was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+	}{
+		Context1: context1,
+		S:        s,
+	}
+	mock.lockSlackTagsMatching.Lock()
+	mock.calls.SlackTagsMatching = append(mock.calls.SlackTagsMatching, callInfo)
+	mock.lockSlackTagsMatching.Unlock()
+	return mock.SlackTagsMatchingFunc(context1, s)
+}
+
+// SlackTagsMatchingCalls gets all the calls that were made to SlackTagsMatching.
+// Check the length with:
+//
+//	len(mockedChannelAgentChoices.SlackTagsMatchingCalls())
+func (mock *mockWebChannels) SlackTagsMatchingCalls() []struct {
+	Context1 context.Context
+	S        string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+	}
+	mock.lockSlackTagsMatching.RLock()
+	calls = mock.calls.SlackTagsMatching
+	mock.lockSlackTagsMatching.RUnlock()
 	return calls
 }

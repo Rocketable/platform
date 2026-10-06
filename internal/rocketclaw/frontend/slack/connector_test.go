@@ -7344,6 +7344,7 @@ func newTestConnectorWithOptions(apiURL string, channels []config.SlackChannelCo
 	connector.factsWake = make(chan struct{}, 1)
 	connector.refreshWake = make(chan struct{}, 1)
 	connector.observations = make(map[string]channelObservation)
+	connector.nameByID = map[string]string{}
 
 	return connector
 }

@@ -41,6 +41,10 @@ While idle, sending starts a turn. During active work, a plain Slack call steers
 
 In the Slack app's **Event Subscriptions**, subscribe to the bot events [`channel_rename`](https://docs.slack.dev/reference/events/channel_rename) and [`group_rename`](https://docs.slack.dev/reference/events/group_rename). They require the bot scopes `channels:read` and `groups:read`, respectively. Reinstall the app after adding scopes. Private-channel rename events are available only for channels the bot belongs to.
 
+## Slack Names in Web
+
+Web resolves Slack tags such as `<@U123>` and `<!subteam^S123>` to names, and message search matches those names. Add the bot scopes `users:read` and `usergroups:read` under **OAuth & Permissions**, then reinstall the app. RocketClaw reloads the names every 8 hours. Without a scope, the affected tags show their Slack ID instead.
+
 ## Slack Channel Scenarios
 
 | Scenario | How To Trigger | Notes |
