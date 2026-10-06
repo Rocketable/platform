@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, Dia
 import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions, rpc } from "./api";
+import { draftContent } from "./drafts";
 import type { ChatOrigin, HistoryView, MessageMatch, PromptDelivery, SearchMessagesResponse } from "./types";
 import { Bot, Check, ChevronDown, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
@@ -127,6 +128,8 @@ function FilterPill({ label, onClear }: { label: string; onClear: () => void }) 
 const dollarCommands = [
   { name: "fork", label: "Fork session", hint: "", desc: "Fork from a chosen message" },
   { name: "handoff", label: "Handoff session", hint: "", desc: "Copy a handoff or send it to another session" },
+  { name: "undo", label: "Undo message", hint: "", desc: "Restore the previous request for editing" },
+  { name: "redo", label: "Redo history", hint: "", desc: "Restore the entire hidden conversation" },
   { name: "goal", label: "Start goal", hint: "<objective>", desc: "Start a goal loop" },
   { name: "stop", label: "Stop turn", hint: "", desc: "End the active turn" },
   { name: "cron", label: "Run cron", hint: "[job]", desc: "List or run a cron job" },
@@ -572,7 +575,9 @@ function SidebarOwner({ children }: { children: ReactNode }) {
 }
 
 type PendingFile = { id: string; file: File };
-type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; error: string; edit: number; submission: number };
+type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; error: string; edit: number; submission: number; historyEpoch?: number; revertEligible?: boolean; revertMessageId?: string; canUndo?: boolean; reverting?: boolean; focus?: number; hydrated?: boolean; persistenceKey?: string; persistedEdit?: number; persistenceError?: string };
+const RevertActions = createContext<{ available: boolean; pending: boolean; run: (messageId?: string, redo?: boolean) => Promise<void> } | undefined>(undefined);
+const DraftScope = createContext<string | undefined>(undefined);
 
 function BottomNavigation({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -676,7 +681,24 @@ function ResizableAside({ side, className, children, ...props }: ComponentProps<
   </aside>;
 }
 
+function persistComposerDraft(draft: ComposerDraft) {
+  if (!draft.hydrated || !draft.persistenceKey || draft.persistedEdit === draft.edit) return;
+  draft.persistedEdit = draft.edit;
+  return draftContent(draft.persistenceKey, { text: draft.text, files: draft.files, agent: draft.agent }).then(
+    () => { draft.persistenceError = ""; },
+    () => { draft.persistenceError = "Draft could not be saved locally. Keep this page open."; },
+  );
+}
+
 export function App() {
+  const identity = useQuery(queries.identity(), queryClient), config = useQuery(queries.config(), queryClient);
+  const scope = identity.isSuccess && config.isSuccess ? JSON.stringify(["authenticated-username", location.origin, identity.data.username, config.data.workspace ?? ""]) : undefined;
+  return <QueryClientProvider client={queryClient}><TooltipProvider><ProtocolGuard /><SidebarOwner>
+    <SessionApp scope={scope} scopeError={identity.error?.message ?? config.error?.message} />
+  </SidebarOwner></TooltipProvider></QueryClientProvider>;
+}
+
+function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string }) {
   const [command, setCommand] = useState<SessionCommand>();
   const composer = useRef<((command: string) => void) | null>(null);
   const commands = useMemo(() => ({ command, setCommand, composer }), [command]);
@@ -685,17 +707,40 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [palette, setPalette] = useState<{ mode: "sessions" | "commands" | "cron" | undefined; key: number }>({ mode: undefined, key: 0 });
   const openPalette = useCallback((mode: "sessions" | "commands") => setPalette((current) => ({ mode, key: current.key + 1 })), []);
-  const drafts = useRef(new Map<string, ComposerDraft>());
+  const drafts = useMemo(() => new Map<string, ComposerDraft>(), [scope]);
   const [, setDraftVersion] = useState(0);
-  const onDraftChange = useCallback(() => setDraftVersion((version) => version + 1), []);
+  const onDraftChange = useCallback(() => {
+    setDraftVersion((version) => version + 1);
+    for (const draft of new Set(drafts.values())) {
+      void persistComposerDraft(draft)?.finally(() => setDraftVersion((version) => version + 1));
+    }
+  }, [drafts]);
   const [conversation, setConversation] = useState({ id: route.id, created: "", key: 0 });
+  const newChatOwner = useRef<(() => unknown) | undefined>(undefined);
   const returnTo = conversation.id === "" ? "/" : sessionPath(conversation.id);
   tabReturnTo.current = returnTo;
   const newChat = useCallback(() => {
-    drafts.current.delete("");
-    setConversation((current) => ({ ...current, created: "", key: current.key + 1 }));
-    navigate("/");
-  }, []);
+    const draft = drafts.get("") ?? drafts.get(conversation.id)!;
+    if ([!scope, draft.reverting, !draft.hydrated].some(Boolean)) return;
+    const owner = newChatOwner.current;
+    draft.reverting = true;
+    draft.persistenceError = "";
+    onDraftChange();
+    return draftContent(JSON.stringify([scope, ""]), { text: "", files: [], agent: "" }).then(() => {
+      if (drafts.get("") === draft) { draft.text = ""; draft.files = []; draft.agent = ""; draft.edit++; }
+      if (newChatOwner.current !== owner) return;
+      drafts.delete("");
+      setConversation((current) => ({ ...current, created: "", key: current.key + 1 }));
+      navigate("/");
+    }, () => { draft.persistenceError = "Local draft could not be cleared. Keep this page open."; }).finally(() => {
+      draft.reverting = false;
+      onDraftChange();
+    });
+  }, [drafts, scope, conversation.id, onDraftChange]);
+  useLayoutEffect(() => {
+    newChatOwner.current = newChat;
+    return () => { newChatOwner.current = undefined; };
+  }, [newChat]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat) return;
@@ -734,12 +779,9 @@ export function App() {
     setConversation({ id: route.id, created: "", key: created ? conversation.key : conversation.key + 1 });
   }
   return (
-      <QueryClientProvider client={queryClient}><TooltipProvider>
-        <ProtocolGuard />
-        <SidebarOwner>
-          <SessionCommands value={commands}>
-           {command ? <SessionCommandDialog key={`${command.mode}:${command.source}`} command={command} drafts={drafts.current} onDraftChange={onDraftChange} /> : null}
-            <CommandPalette key={palette.key} drafts={drafts.current} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((open) => !open)} />
+          <DraftScope value={scope}><SessionCommands value={commands}>
+           {command ? <SessionCommandDialog key={`${command.mode}:${command.source}`} command={command} drafts={drafts} onDraftChange={onDraftChange} /> : null}
+            <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((open) => !open)} />
          <MobileSidebar chat={showChat}>
             <BottomNavigation>
               <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="hidden size-[var(--navigation-button)] md:inline-flex" />} aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"} aria-expanded={sidebarOpen} aria-controls="session-sidebar" onClick={() => setSidebarOpen((open) => !open)}>
@@ -770,16 +812,14 @@ export function App() {
               {route.search ? <SearchPage /> : null}
               <TabPane show={showChat}>
                 <MessageScrollerProvider key={conversation.key} autoScroll scrollEdgeThreshold={48}>
-                  <Transcript id={conversation.id} drafts={drafts.current} onDraftChange={onDraftChange} onCreated={(id) => setConversation((current) => ({ ...current, created: id }))} />
+                  <Transcript id={conversation.id} drafts={drafts} scopeError={scopeError} onDraftChange={onDraftChange} onCreated={(id) => setConversation((current) => ({ ...current, created: id }))} />
                 </MessageScrollerProvider>
               </TabPane>
              </main>
              {showChat ? <DelegationPanel id={route.id} /> : null}
            </div>
           </MobileSidebar>
-         </SessionCommands>
-        </SidebarOwner>
-      </TooltipProvider></QueryClientProvider>
+          </SessionCommands></DraftScope>
   );
 }
 
@@ -889,12 +929,16 @@ function HandoffDialog({ command, drafts, onDraftChange }: { command: SessionCom
 
 async function forkDraft(source: string, message?: TranscriptEvent): Promise<ComposerDraft> {
   // Restore files before creating a session; a failed download must not leave a fork.
-  const files = await Promise.all((message?.attachments ?? []).map(async (file) => {
+  const files = await restoreFiles(message?.attachments ?? []);
+  return mutations.forkSession({ id: source, before: message?.messageId }).then((result) => ({ text: result.prompt.text, files, agent: "", sessionId: result.id, sending: false, busy: false, lines: [], error: "", edit: 0, submission: 0 }));
+}
+
+async function restoreFiles(attachments: AttachmentMeta[]): Promise<PendingFile[]> {
+  return Promise.all(attachments.map(async (file) => {
     const response = await fetch(`/api/DownloadAttachment?${new URLSearchParams({ conversationId: file.conversationId, id: file.id })}`);
     if (!response.ok) throw new Error(`Could not restore ${file.name}`);
     return { id: crypto.getRandomValues(new Uint32Array(4)).join("-"), file: new File([await response.blob()], file.name, { type: file.mimeType }) };
   }));
-  return mutations.forkSession({ id: source, before: message?.messageId }).then((result) => ({ text: result.prompt.text, files, agent: "", sessionId: result.id, sending: false, busy: false, lines: [], error: "", edit: 0, submission: 0 }));
 }
 
 function SessionCommandPicker({ items, query, setQuery, forking, disabled }: { items: { key: string; label: string; detail?: string; session?: Session; choose: () => void }[]; query: string; setQuery: (query: string) => void; forking: boolean; disabled: boolean }) {
@@ -1003,7 +1047,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, sidebarOpen, onToggleS
   const actions = useSessionActions(sidebar.rows.find((row) => row.id === id), () => setMode(undefined));
   const choices = useQuery({ ...queries.agents({ conversationId: id }), enabled: id !== "" });
   const draft = drafts.get(id);
-  const commands = id ? dollarCommands.filter(({ name }) => name !== "cron" && name !== "queue" && (name !== "stop" || (draft?.busy ?? sidebar.rows.find((row) => row.id === id)?.running)) && (name !== "agent" || !!choices.data?.agents.length)).map(({ name, label }) => ({ key: name, label: ["fork", "handoff", "stop", "agent"].includes(name) ? `Sessions: ${label}` : `Command: ${label} ($${name})`, disabled: !draft || draft.sending, run: () => {
+  const commands = id ? dollarCommands.filter(({ name }) => name !== "cron" && name !== "queue" && (name !== "undo" || draft?.revertEligible && draft.canUndo) && (name !== "redo" || draft?.revertEligible && draft.revertMessageId) && (name !== "stop" || (draft?.busy ?? sidebar.rows.find((row) => row.id === id)?.running)) && (name !== "agent" || !!choices.data?.agents.length)).map(({ name, label }) => ({ key: name, label: ["fork", "handoff", "stop", "agent"].includes(name) ? `Sessions: ${label}` : `Command: ${label} ($${name})`, disabled: [!draft?.hydrated, draft?.sending, draft?.reverting].some(Boolean), run: () => {
     if (name === "fork" || name === "handoff") setCommand({ mode: name, source: id });
     else composer.current!(name);
   } })) : [];
@@ -1782,6 +1826,7 @@ function MessageFooter({ line, hasSandboxed }: { line: Line; hasSandboxed: boole
 function MessageActions({ line, hasSandboxed }: { line: Line; hasSandboxed: boolean }) {
   const [copied, setCopied] = useState<string>();
   const [error, setError] = useState(false);
+  const revert = useContext(RevertActions);
   return <div data-slot="message-actions" className={cn("invisible flex max-w-full items-center gap-1 group-focus-visible/message:visible [@media(hover:hover)]:group-hover/message:visible [@media(hover:hover)]:group-has-[:focus-visible]/message:visible [@media(hover:none)]:group-focus-within/message:visible", line.role === "user" && "self-end")}>
     {line.role === "assistant" || line.header ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
     <Button type="button" size="icon-xs" variant="ghost" aria-label="Copy message" title="Copy message" onClick={async () => {
@@ -1793,6 +1838,7 @@ function MessageActions({ line, hasSandboxed }: { line: Line; hasSandboxed: bool
         setError(true);
       }
     }}>{copied === line.text && !error ? <Check /> : <Copy />}</Button>
+    {revert?.available && line.role === "user" && line.messageId && line.entryKey ? <Button type="button" size="icon-xs" variant="ghost" className="size-11 sm:size-6" aria-label="Revert message" title="Revert message" disabled={revert.pending} onClick={() => void revert.run(line.messageId)}><Undo2 /></Button> : null}
     <span role="status" className={error ? "text-xs text-destructive" : "sr-only"}>{error ? "Could not copy. Select and copy the text." : copied === line.text ? "Copied" : ""}</span>
   </div>;
 }
@@ -2043,6 +2089,8 @@ function TranscriptLog({
 }
 
 function applyHistoryDelta(draft: ComposerDraft, view: HistoryView) {
+  const cutoffChanged = (draft.revertMessageId ?? "") !== (view.revertMessageId ?? "");
+  if (view.reset) draft.historyEpoch = (draft.historyEpoch ?? 0) + 1;
   const consumed = draft.consumed ??= new Set<string>();
   let newlyConsumed = false;
   for (const message of view.messages) {
@@ -2053,7 +2101,7 @@ function applyHistoryDelta(draft: ComposerDraft, view: HistoryView) {
   }
   draft.parked = draft.parked?.filter((line) => !consumed.has(line.inputId || line.id));
   if (view.reset || newlyConsumed || view.replacedKeys.length || view.removedKeys.length) {
-    const reset = view.reset && !draft.revision;
+    const reset = view.reset && (!draft.revision || cutoffChanged);
     const changed = new Set([...(view.reset ? view.entryKeys : view.replacedKeys), ...view.removedKeys]);
     const groups = Map.groupBy([...draft.lines.filter((line) => !reset && line.entryKey && !changed.has(line.entryKey)), ...historyLines(view.messages)], (line) => line.entryKey!);
     // Earlier pages are not followed; they stay until removed or a reset restarts the view.
@@ -2068,7 +2116,7 @@ function applyHistoryDelta(draft: ComposerDraft, view: HistoryView) {
         groups.get(anchor)!.push(line);
       }
     }
-    const pending = draft.lines.filter((line) => !line.entryKey && line.role === "user" && !line.complete && !consumed.has(line.inputId || line.id));
+    const pending = cutoffChanged ? [] : draft.lines.filter((line) => !line.entryKey && line.role === "user" && !line.complete && !consumed.has(line.inputId || line.id));
     draft.lines = [...(groups.get("") ?? []), ...keys.flatMap((key) => groups.get(key) ?? []), ...pending];
   }
   if (view.reset || draft.start === undefined) {
@@ -2079,6 +2127,9 @@ function applyHistoryDelta(draft: ComposerDraft, view: HistoryView) {
   draft.busy = view.running || draft.lines.some((line) => !line.entryKey && line.role === "user" && !line.complete);
   draft.terminal = view.terminal;
   draft.origin = view.origin;
+  draft.revertEligible = view.revertEligible;
+  draft.revertMessageId = view.revertMessageId;
+  draft.canUndo = view.canUndo;
   draft.revision = view.revision;
   draft.historyError = "";
   return newlyConsumed;
@@ -2090,10 +2141,12 @@ function readHistoryDelta(id: string, draft: ComposerDraft, onDraftChange: () =>
   draft.historyRead = (async () => {
     do {
       draft.historyAgain = false;
+      const epoch = draft.historyEpoch ?? 0;
       try {
         const key = queries.history({ id }).queryKey;
         const cached = queryClient.getQueryData<HistoryView>(key);
         const view = await queries.history({ id, revision: cached ? draft.revision : undefined, limit: historyPage }).queryFn({});
+        if (epoch !== (draft.historyEpoch ?? 0)) { draft.historyAgain = true; continue; }
         if (!view.reset && view.revision === draft.revision
           && draft.busy === (view.running || draft.lines.some((line) => !line.entryKey && line.role === "user" && !line.complete))
           && draft.terminal === view.terminal && JSON.stringify(draft.origin) === JSON.stringify(view.origin)
@@ -2120,16 +2173,18 @@ const historyPage = 50;
 // Prepends one settled page: the previous historyPage entries, or every entry from a linked message onward.
 function readEarlierHistory(id: string, draft: ComposerDraft, onDraftChange: () => void, from?: string): Promise<void> {
   const before = draft.start;
+  const epoch = draft.historyEpoch ?? 0;
   if (draft.earlier || !draft.more || !before) return draft.earlier ?? Promise.resolve();
   draft.earlier = (async () => {
     try {
       const view = await queries.history({ id, before, ...(from ? { from } : { limit: historyPage }) }).queryFn({});
-      if (draft.start !== before) return; // A reset replaced the view while this page was loading.
-      const known = new Set(draft.lines.map((line) => line.entryKey));
-      draft.lines = [...historyLines(view.messages).filter((line) => !known.has(line.entryKey)), ...draft.lines];
-      draft.start = view.start;
-      draft.more = view.more;
-      draft.delegations = [...new Set([...(draft.delegations ?? []), ...view.delegations])];
+      if (draft.start === before && epoch === (draft.historyEpoch ?? 0)) {
+        const known = new Set(draft.lines.map((line) => line.entryKey));
+        draft.lines = [...historyLines(view.messages).filter((line) => !known.has(line.entryKey)), ...draft.lines];
+        draft.start = view.start;
+        draft.more = view.more;
+        draft.delegations = [...new Set([...(draft.delegations ?? []), ...view.delegations])];
+      }
     } catch (err) {
       captureException(err);
       draft.historyError = err instanceof Error ? err.message : "history failed";
@@ -2148,15 +2203,16 @@ function historyLines(messages: TranscriptEvent[]): Line[] {
 }
 
 function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () => void) {
+  const scope = useContext(DraftScope);
   const history = useQuery({ ...queries.history({ id }), enabled: false });
-  const refreshHistory = useCallback(() => readHistoryDelta(draft.sessionId, draft, onDraftChange), [draft, onDraftChange]);
+  const refreshHistory = useCallback(() => { draft.historyEpoch = (draft.historyEpoch ?? 0) + 1; return readHistoryDelta(draft.sessionId, draft, onDraftChange); }, [draft, onDraftChange]);
   const loadEarlier = useCallback((from?: string) => readEarlierHistory(draft.sessionId, draft, onDraftChange, from), [draft, onDraftChange]);
   const followed = history.data?.delegations, earlier = draft.delegations;
   const delegations = useMemo(() => earlier ? [...new Set([...(followed ?? []), ...earlier])] : followed, [followed, earlier]);
   const setBusy = useCallback((value: boolean) => { draft.busy = value; onDraftChange(); }, [draft, onDraftChange]);
   const setLines = useCallback((update: (current: Line[]) => Line[]) => { draft.lines = update(draft.lines); onDraftChange(); }, [draft, onDraftChange]);
   useEffect(() => {
-    if (!id) return;
+    if (!id || !scope) return;
     const stream = new EventSource(`/stream?${new URLSearchParams({ id })}`);
     void refreshHistory();
     stream.onopen = () => { void refreshHistory(); };
@@ -2167,7 +2223,7 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
     return () => {
       stream.close();
     };
-  }, [id, refreshHistory]);
+  }, [id, scope, refreshHistory]);
   return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !draft.revision, historyError: draft.historyError, origin: draft.origin, terminal: draft.terminal, delegations, more: draft.more ?? false, start: draft.start, loadEarlier, hasSandboxed: draft.lines.some((line) => line.origin === "sandboxed") };
 }
 
@@ -2198,18 +2254,34 @@ export function OriginCard({ origin }: { origin?: ChatOrigin }) {
   );
 }
 
-function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; drafts: Map<string, ComposerDraft>; onDraftChange: () => void; onCreated: (id: string) => void }) {
+// Own hydration separately from transcript/history requests. A remounted session
+// reuses its in-memory draft; identity/workspace changes replace only the draft map.
+function useComposerDraft(id: string, drafts: Map<string, ComposerDraft>, changed: () => void) {
+  const scope = useContext(DraftScope);
+  const draft = useMemo(() => drafts.get(id) ?? { text: "", files: [], agent: "", sessionId: id, sending: false, busy: false, lines: [], error: "", edit: 0, submission: 0 }, [id, drafts]);
+  useLayoutEffect(() => { drafts.set(id, draft); }, [id, drafts, draft]);
+  useEffect(() => {
+    if (!scope || draft.hydrated) return;
+    draft.persistenceKey = JSON.stringify([scope, id]);
+    let current = true;
+    void draftContent(draft.persistenceKey).then((content) => {
+      if (current && content && !draft.edit && !draft.text && !draft.files.length) Object.assign(draft, content);
+    }, () => { draft.persistenceError = "Local draft storage is unavailable. Keep this page open."; }).finally(() => {
+      if (current) { draft.hydrated = true; changed(); }
+    });
+    return () => { current = false; };
+  }, [scope, id, draft, changed]);
+  return draft;
+}
+
+function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: string; drafts: Map<string, ComposerDraft>; scopeError?: string; onDraftChange: () => void; onCreated: (id: string) => void }) {
   const [filter, setFilter] = useState<OriginFilter>({ sandboxed: true, canonical: true });
   const search = useSearch();
   const target = useContext(SessionCommands).command?.target;
   const previewing = target?.conversationId === id;
   const preview = useQuery({ ...queries.history({ id }), enabled: previewing });
   const previewLines = useMemo(() => previewing && preview.data ? historyLines(preview.data.messages) : undefined, [previewing, preview.data]);
-  const [draft] = useState(() => {
-    const value = drafts.get(id) ?? { text: "", files: [], agent: "", sessionId: id, sending: false, busy: false, lines: [], error: "", edit: 0, submission: 0 };
-    drafts.set(id, value);
-    return value;
-  });
+  const draft = useComposerDraft(id, drafts, onDraftChange);
   const route = useRoute();
   useLayoutEffect(() => {
     if (id === "" && draft.sessionId !== "" && drafts.get("") === draft) {
@@ -2224,13 +2296,18 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
   // A linked message older than the loaded entries loads every entry from it onward.
   const linkedEntry = messageId?.split(":")[0];
   useEffect(() => {
-    if (!previewing && more && linkedEntry && /^\d+$/.test(linkedEntry) && Number(linkedEntry) < Number(start)) void loadEarlier(linkedEntry);
+    if (!previewing && more && linkedEntry && /^\d+$/.test(linkedEntry) && BigInt(linkedEntry) < BigInt(start!)) void loadEarlier(linkedEntry);
   }, [previewing, more, linkedEntry, start, loadEarlier]);
   const visibleFilter = { sandboxed: filter.sandboxed || matchedOrigin === "sandboxed", canonical: filter.canonical || matchedOrigin === "canonical" };
+  const runRevert = useCallback((messageId?: string, redo?: boolean) => revertComposer(draft, messageId, !!redo, refreshHistory, onDraftChange), [draft, refreshHistory, onDraftChange]);
+  const available = !!draft.revertEligible && !previewing, pending = [draft.reverting, draft.sending, !draft.hydrated].some(Boolean);
+  const revert = useMemo(() => ({ available, pending, run: runRevert }), [available, pending, runRevert]);
+  const error = [scopeError, historyError].find(Boolean);
   return (
-    <>
+    <RevertActions value={revert}>
+      {draft.revertMessageId ? <div role="status" className="flex flex-wrap items-center gap-2 px-12 py-2 text-xs text-muted-foreground md:px-3"><span>History reverted. Files and external effects are unchanged.</span><Button size="sm" variant="outline" className="min-h-11 sm:min-h-8" disabled={revert.pending} onClick={() => void revert.run(undefined, true)}>Redo</Button></div> : null}
       <Delegations value={previewing ? preview.data?.delegations : delegations}><TranscriptLog conversationId={id} lines={previewLines ?? lines} working={!previewing && busy} terminal={previewing ? undefined : terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} more={!previewing && more} loadEarlier={loadEarlier} /></Delegations>
-      {historyError ? <p role="alert" className="px-3 text-sm text-destructive">{historyError}</p> : null}
+      {error ? <p role="alert" className="px-3 text-sm text-destructive">{error}</p> : null}
       {hasSandboxed ? <ButtonGroup aria-label="Show messages from" className="mx-auto my-2.5">
         {(["sandboxed", "canonical"] as const).map((choice) => (
           <Button key={choice} type="button" size="xs" className="relative before:absolute before:-inset-y-2.5 before:inset-x-0" variant={visibleFilter[choice] ? "default" : "outline"} aria-pressed={visibleFilter[choice]} onClick={() => {
@@ -2241,10 +2318,10 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
           </Button>
         ))}
       </ButtonGroup> : null}
-      <fieldset disabled={opening || previewing} className={previewing ? "hidden" : "contents"}>
+      <fieldset disabled={[opening, previewing, !draft.hydrated].some(Boolean)} className={previewing ? "hidden" : "contents"}>
         <SessionComposer id={id} draft={draft} drafts={drafts} onDraftChange={onDraftChange} busy={busy} setBusy={setBusy} setLines={setLines} refreshHistory={refreshHistory} />
       </fieldset>
-    </>
+    </RevertActions>
   );
 }
 
@@ -2253,6 +2330,9 @@ function DelegationPanel({ id }: { id: string }) {
   const wide = useSyncExternalStore(subscribeWide, () => matchMedia("(min-width: 64rem)").matches);
   const main = useQuery({ ...queries.history({ id }), enabled: false });
   const history = useQuery({ ...queries.history({ id: child }), enabled: child !== "" });
+  useEffect(() => {
+    if (child && main.data?.revertMessageId && !main.data.delegations.some((level) => child === level || child.startsWith(`${level}/`))) navigate(delegationHref());
+  }, [child, main.data]);
   if (!child) return null;
   const first = main.data?.delegations.find((level) => child === level || child.startsWith(`${level}/`)) ?? child;
   const levels = [...child.matchAll(/\/|$/g)].map((match) => child.slice(0, match.index)).filter((level) => level.length >= first.length).map((level, index, all) => {
@@ -2384,12 +2464,48 @@ async function sendComposer(input: {
       draft.text = input.text;
       draft.files = input.files;
       draft.agent = agent;
+      draft.edit++;
     }
     input.setLines((current) => current.filter((line) => line.id !== optimistic.id));
     if (draft.submission === submission) {
       input.setSendError(err instanceof Error ? err.message : "send failed");
       if (!stashing) input.setBusy(input.busy);
     }
+  }
+}
+
+// OpenCode V2 packages/app/src/session/revert.ts: only the dispatched session
+// owns restored content. Redo changes history, never the composer.
+async function revertComposer(draft: ComposerDraft, messageId: string | undefined, redo: boolean, refresh: () => Promise<unknown>, changed: () => void) {
+  if (draft.reverting || draft.sending) return;
+  const edit = draft.edit, submission = draft.submission;
+  draft.reverting = true;
+  draft.historyEpoch = (draft.historyEpoch ?? 0) + 1;
+  draft.error = "";
+  changed();
+  try {
+    await queryClient.cancelQueries({ queryKey: ["history"] });
+    if (redo) await mutations.clearRevert({ id: draft.sessionId });
+    else {
+      const result = await mutations.stageRevert({ id: draft.sessionId, messageId });
+      if (result.prompt) {
+        const files = await restoreFiles(result.prompt.attachments ?? []);
+        if (draft.edit === edit && draft.submission === submission) {
+          draft.text = result.prompt.text;
+          draft.files = files;
+          draft.edit++;
+          draft.focus = (draft.focus ?? 0) + 1;
+        }
+      }
+    }
+  } catch (err) {
+    draft.error = err instanceof Error ? err.message : "History change failed";
+  } finally {
+    draft.historyEpoch = (draft.historyEpoch ?? 0) + 1;
+    draft.reverting = false;
+    changed();
+    await queryClient.invalidateQueries({ queryKey: ["queue"] });
+    await refresh();
   }
 }
 
@@ -2480,6 +2596,7 @@ async function stopComposer(input: {
 }
 
 function pendingInputs(draft: ComposerDraft, items: QueueItem[]) {
+  if (draft.revertMessageId) return { parked: [], queued: [] };
   const consumed = draft.consumed ?? new Set<string>();
   const waiting = items.filter((item) => !consumed.has(item.id));
   const parked = new Map<string, Line>(waiting.filter((item) => item.delivery === "STEER").map((item) => [item.id, { ...item, role: "user" }]));
@@ -2509,8 +2626,9 @@ function SessionComposer({
   refreshHistory: () => Promise<unknown>;
 }) {
   const identity = useQuery(queries.identity());
-  const [, setEditVersion] = useState(0);
   const { setCommand } = useContext(SessionCommands);
+  const scope = useContext(DraftScope)!;
+  const revert = useContext(RevertActions)!;
   const { scrollToEnd } = useMessageScroller();
   const prompt = useMutation({ mutationFn: mutations.prompt, onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["queue"] }); } });
   const agents = useQuery({ ...queries.agents({ conversationId: id }), refetchInterval: 2000 });
@@ -2522,7 +2640,7 @@ function SessionComposer({
   const invalidateSidebar = useContext(SidebarInvalidation);
   const create = useMutation({ mutationFn: mutations.createSession, onSuccess: invalidateSidebar });
   const { text, files, sending, agent } = draft;
-  const setText = (value: string) => { draft.text = value; draft.edit++; setEditVersion((version) => version + 1); };
+  const setText = (value: string) => { draft.text = value; draft.edit++; onDraftChange(); };
   const setFiles = (value: PendingFile[]) => { draft.files = value; draft.edit++; onDraftChange(); };
   const setAgent = (value: string) => { draft.agent = value; draft.edit++; onDraftChange(); };
   const [agentOpen, setAgentOpen] = useState(false);
@@ -2551,8 +2669,9 @@ function SessionComposer({
     placeholder = "Message or $command";
   }
   const send = (delivery?: PromptDelivery) => {
-    const command = /^\$(fork|handoff)\s*$/.exec(draft.text);
+    const command = /^\p{White_Space}*\$(fork|handoff|undo|redo)\p{White_Space}*$/u.exec(draft.text);
     if (delivery !== "STASH" && command) {
+      if (["undo", "redo"].includes(command[1])) return revert.run(undefined, command[1] === "redo");
       if (!id) { setSendError("Open a session first."); return Promise.resolve(); }
       setCommand({ mode: command[1] as "fork" | "handoff", source: id });
       setText("");
@@ -2570,7 +2689,10 @@ function SessionComposer({
       selected,
       currentAgent,
       goSession: (sessionId) => {
+        void draftContent(JSON.stringify([scope, ""]), { text: "", files: [], agent: "" }).catch(() => { draft.persistenceError = "Draft could not be saved locally. Keep this page open."; onDraftChange(); });
         draft.sessionId = sessionId;
+        draft.persistenceKey = JSON.stringify([scope, sessionId]);
+        draft.persistedEdit = undefined;
         drafts.set(sessionId, draft);
         onDraftChange();
       },
@@ -2589,11 +2711,14 @@ function SessionComposer({
   return (
     <>
       {sendError ? <p className="px-3 pb-2 text-sm text-destructive sm:px-5">{sendError}</p> : null}
+      {draft.persistenceError ? <p role="alert" className="px-3 pb-2 text-sm text-destructive">{draft.persistenceError}</p> : null}
       {parked.length > 0 ? <section aria-label="Pending steers" className="mx-auto w-full max-w-3xl px-3"><p className="text-xs text-muted-foreground">Waiting to steer</p>{parked.map((line) => <TranscriptLine key={line.id} line={line} conversationId={id} hasSandboxed={false} />)}</section> : null}
       <Composer
         files={files}
         setFiles={setFiles}
-        sending={sending}
+        sending={[sending, draft.reverting].some(Boolean)}
+        focus={draft.focus}
+        historyCommand={(redo) => void revert.run(undefined, redo)}
         sessionId={id}
         text={text}
         setText={setText}
@@ -2675,6 +2800,8 @@ function Composer({
   files,
   setFiles,
   sending,
+  focus,
+  historyCommand,
   sessionId,
   text,
   setText,
@@ -2701,6 +2828,8 @@ function Composer({
   files: PendingFile[];
   setFiles: (files: PendingFile[]) => void;
   sending: boolean;
+  focus?: number;
+  historyCommand: (redo: boolean) => void;
   sessionId: string;
   text: string;
   setText: (value: string) => void;
@@ -2729,9 +2858,13 @@ function Composer({
   const fileInput = useRef<HTMLInputElement>(null);
   const messageInput = useRef<HTMLTextAreaElement>(null);
   const { composer } = useContext(SessionCommands);
+  useEffect(() => {
+    if (focus) { const input = messageInput.current!; input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+  }, [focus]);
   useImperativeHandle(composer, () => (command) => {
     // The agent picker keeps focus so desktop typing searches agents.
     if (command === "agent") return setAgentOpen(true);
+    if (command === "undo" || command === "redo") return historyCommand(command === "redo");
     if (command === "stop") void stop();
     else applyDollar(`$${command} ${text}`);
     messageInput.current?.focus();
@@ -2755,6 +2888,7 @@ function Composer({
                 <button
                   ref={index === pick ? selectedButton : null}
                   type="button"
+                  disabled={sending}
                   className={cn("flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm", index === pick && "bg-accent")}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => applyDollar(cmd.invocation)}

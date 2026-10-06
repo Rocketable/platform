@@ -26,6 +26,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel 
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "delegations" });
       case "/api/Identity": return Response.json({ username: "tester" });
+      case "/api/ListConfig": return Response.json({ config: { workspace: "delegations" } });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListSkills": return Response.json({ skills: [] });
       case "/api/History": {

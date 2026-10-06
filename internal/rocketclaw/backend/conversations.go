@@ -285,6 +285,24 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 	completion := &turnCompletion{done: make(chan struct{})}
 
 	request := bridgeRequest{inbound: inbound, completion: completion}
+	if inbound.Source == protocol.SourceWeb && inbound.Human && inbound.SyncDestination == "" && inbound.SlackReply == nil {
+		_, eligible, _, err := r.Sessions.RevertState(ctx, conversationID)
+		if err != nil {
+			return err
+		}
+
+		if eligible {
+			inbound.Workflow = inboundWorkflow(inbound)
+
+			fresh, err := r.admitWeb(ctx, bridge, &request, protocol.GoalRequest{})
+			if err != nil || !fresh {
+				return err
+			}
+
+			request.queueItemID = inbound.Metadata["web_message_id"]
+		}
+	}
+
 	if inbound.SyncDestination != "" {
 		destination, err := r.threads.recordedBridge(inbound.SyncDestination)
 		if err != nil {
@@ -296,7 +314,7 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 	}
 
 	if err := bridge.enqueue(ctx, &request, "run turn"); err != nil {
-		return err
+		return errors.Join(err, request.closeWorkflow())
 	}
 
 	select {
@@ -313,6 +331,30 @@ func (r *Runtime) StartGoal(ctx context.Context, inbound *protocol.InboundMessag
 	bridge, err := r.threads.recordedBridge(inbound.ConversationID)
 	if err != nil {
 		return err
+	}
+
+	if inbound.Source == protocol.SourceWeb {
+		_, eligible, _, err := r.Sessions.RevertState(ctx, inbound.ConversationID)
+		if err != nil {
+			return err
+		}
+
+		if eligible {
+			inbound.GoalAction = protocol.GoalActionKickoff
+
+			data, _ := json.Marshal(goal) // Only strings and an integer.
+
+			inbound.Metadata["web_goal"] = string(data)
+
+			request := bridgeRequest{inbound: inbound}
+
+			fresh, err := r.admitWeb(ctx, bridge, &request, goal)
+			if err != nil || !fresh {
+				return err
+			}
+
+			return bridge.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: inbound.Metadata["web_message_id"]}, "start Web goal")
+		}
 	}
 
 	if strings.TrimSpace(goal.CheckScript) != "" {
@@ -353,6 +395,15 @@ func (r *Runtime) QueueItems(conversationID string) ([]protocol.ThreadQueueItem,
 
 // PopQueueItem releases held work at the end of the ordinary queue.
 func (r *Runtime) PopQueueItem(ctx context.Context, conversationID, id string) (bool, error) {
+	_, eligible, _, err := r.Sessions.RevertState(ctx, conversationID)
+	if err != nil {
+		return false, err
+	}
+
+	if eligible {
+		return r.mutateWebQueue(ctx, conversationID, id, protocol.InboundKindEnqueue)
+	}
+
 	changed, err := execRows(ctx, r.Sessions.db, "pop queue item", "count popped queue items", `UPDATE thread_queue SET kind = $3, park_after = '', position = (SELECT COALESCE(MAX(position), -1) + 1 FROM thread_queue WHERE conversation_id = $1 AND park_after = '') WHERE conversation_id = $1 AND queue_item_id = $2 AND kind = $4`, conversationID, id, protocol.InboundKindEnqueue, protocol.InboundKindHeld)
 	if err != nil || changed == 0 {
 		return false, err
@@ -363,6 +414,15 @@ func (r *Runtime) PopQueueItem(ctx context.Context, conversationID, id string) (
 
 // PromoteQueueItem claims one persisted enqueue and submits it as a steer, keeping its principal.
 func (r *Runtime) PromoteQueueItem(ctx context.Context, conversationID, id string) (bool, error) {
+	_, eligible, _, err := r.Sessions.RevertState(ctx, conversationID)
+	if err != nil {
+		return false, err
+	}
+
+	if eligible {
+		return r.mutateWebQueue(ctx, conversationID, id, protocol.InboundKindSteer)
+	}
+
 	return r.threads.promoteQueueItem(ctx, conversationID, id, "")
 }
 
@@ -384,12 +444,59 @@ func (r *Runtime) ReorderQueueItems(conversationID string, ids []string) error {
 
 // StashQueueItem persists waiting work and offers it to the conversation bridge.
 func (r *Runtime) StashQueueItem(ctx context.Context, conversationID string, item *protocol.ThreadQueueItem) error {
+	if item.Source == protocol.SourceWeb {
+		_, eligible, _, err := r.Sessions.RevertState(ctx, conversationID)
+		if err != nil {
+			return err
+		}
+
+		if eligible {
+			bridge, err := r.threads.recordedBridge(conversationID)
+			if err != nil {
+				return err
+			}
+
+			content := item.Content
+			content.Text = item.Message
+			inbound := protocol.NewInboundMessageFromContent(item.Source, item.Kind, &content, true)
+			inbound.ConversationID = conversationID
+			inbound.Metadata["web_message_id"], inbound.Metadata[protocol.InboundPrincipalMetadataKey] = item.ID, item.Principal
+			inbound.Workflow = inboundWorkflow(inbound)
+
+			request := bridgeRequest{inbound: inbound}
+
+			fresh, err := r.admitWeb(ctx, bridge, &request, protocol.GoalRequest{})
+			if err != nil || !fresh || item.Kind == protocol.InboundKindHeld {
+				return errors.Join(err, request.closeWorkflow())
+			}
+
+			request.queueItemID = item.ID
+
+			err = bridge.enqueue(ctx, &request, "enqueue Web prompt")
+			if err != nil {
+				err = errors.Join(err, request.closeWorkflow())
+			}
+
+			return err
+		}
+	}
+
 	return r.threads.stashQueueItem(ctx, conversationID, item)
 }
 
 func (b *Bridge) drainSteers(ctx context.Context, phase rocketcode.TurnPhase) []rocketcode.PromptInput {
+	b.mu.Lock()
+	if b.historyMutation {
+		b.mu.Unlock()
+		return nil
+	}
+	b.mu.Unlock()
 	inputs := b.config.SteerDrain.Drain(ctx, phase)
 	b.mu.Lock()
+	if b.historyMutation {
+		b.mu.Unlock()
+		return inputs
+	}
 
 	pending := slices.Clone(b.steers[b.steersRead:])
 	if len(pending) == 0 && len(inputs) == 0 && phase == rocketcode.TurnPhaseFinalAnswer {
@@ -399,7 +506,8 @@ func (b *Bridge) drainSteers(ctx context.Context, phase rocketcode.TurnPhase) []
 	b.steersRead = len(b.steers)
 	b.mu.Unlock()
 
-	for _, request := range pending {
+	for i := range pending {
+		request := &pending[i]
 		prompt := buildPrompt(request.inbound, nil)
 		header, _, _ := strings.Cut(prompt, "\n\n")
 		b.publishConsumed(ctx, request.inbound, header)

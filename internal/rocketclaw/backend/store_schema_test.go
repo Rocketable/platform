@@ -79,7 +79,7 @@ SELECT pg_stat_force_next_flush();`)
 
 	seen := 0
 
-	for facts, err := range store.ChatOriginFacts(ctx) {
+	for facts, err := range store.ChatOriginFacts(ctx, "") {
 		require.NoError(t, err)
 		require.Equal(t, "source", facts.CreatingSource)
 
@@ -266,7 +266,7 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			}
 
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&n))
-			require.Equal(t, 27, n)
+			require.Equal(t, 28, n)
 			// No migration lock may survive startup and poison later pool users.
 			require.Eventually(t, func() bool {
 				var locks int
@@ -331,7 +331,7 @@ func TestSessionMigrationsSerializeLedgerCreation(t *testing.T) {
 
 			var count int
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-			require.Equal(t, 27, count)
+			require.Equal(t, 28, count)
 		})
 	}
 }
@@ -385,7 +385,7 @@ func TestSessionMigrationRollbackAndCatchup(t *testing.T) {
 
 	var n int
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM pg_migrations`).Scan(&n))
-	require.Equal(t, 25, n)
+	require.Equal(t, 26, n)
 
 	var missing sql.NullString
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT to_regclass('slack_channel_facts')::text`).Scan(&missing))

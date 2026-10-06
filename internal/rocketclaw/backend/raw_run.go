@@ -35,6 +35,7 @@ type RawRunProgress struct {
 }
 
 type workflowAgentRunner struct {
+	definition    *workflow.Definition
 	cfg           *config.Config
 	agent, parent string
 	journal       rocketcode.Journal

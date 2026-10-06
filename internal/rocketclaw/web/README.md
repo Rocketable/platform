@@ -45,6 +45,39 @@ independently toggles its origin on or off, so both, either, or neither can be s
 Messages without a recorded origin appear only when both are selected.
 Filtering does not change saved history or routing.
 
+## Revert, Undo, and Redo
+
+Recorded user messages in top-level pure Web sessions have a **Revert message**
+action alongside Copy. Hover on desktop, tap on touch screens, or focus the
+message with the keyboard. Slack, External MCP, Cron-origin and delegation
+histories do not support Revert. Pending inputs keep their withdrawal controls.
+
+Revert stops and settles active work, hides the selected request and everything
+after it, and replaces that session's composer text and files with the request.
+It sends nothing and keeps the current agent and submitting identity.
+`$undo` (also in the command palette) moves to the previous recorded request;
+repeated Undo can leave an empty conversation. **Redo** or `$redo` restores the
+whole hidden suffix without changing the composer.
+
+The cutoff survives reload and daemon restart. Waiting human work stays stored
+but hidden until Redo, which restores its order. Sending a new prompt—including
+Queue or Stash—commits the new branch in the same session and drops the abandoned
+history and waiting human inputs. Redo is then unavailable. Preparation or
+admission failure keeps the cutoff and edited draft recoverable.
+
+Composer content is saved locally in IndexedDB, including supported file bytes,
+scoped to this browser origin, authenticated username, configured workspace and
+session. It is not shared with other viewers; their history updates but their
+drafts do not. A storage failure shows an error: keep the page open because
+reload persistence is unavailable. Rejected Identity or config reads disable
+draft hydration and editing until both are accepted. **New session** clears the
+Home draft from local storage before opening a fresh composer; storage failures
+are reported without discarding its content. Clearing browser site data deletes drafts.
+
+**Revert changes conversation history only.** It does not undo files, tool
+effects, delivered messages or scheduled registrations. Scheduled execution
+pauses while reverted and may resume when the cutoff clears.
+
 The frontend is a client-side React SPA. Bun builds static assets directly into
 `../internal/web/dist/`: `index.html`, hashed JavaScript and
 CSS, and a self-hosted Inter font. `cmd/rocketclaw` embeds and serves that directory
@@ -176,8 +209,14 @@ bun install --frozen-lockfile
 bun run lint
 bunx tsc --noEmit
 bun run build
-bun test
+make test
 ```
+
+Set `ROCKETCLAW_TEST_DATABASE_URL`, `ROCKETCLAW_PLAYWRIGHT_MODULE`, and
+`ROCKETCLAW_CHROMIUM` for the full test run. `make test` builds the SPA, runs the
+standalone Bun tests, then runs transport/browser tests through their Go-owned
+PostgreSQL and provider fixtures. Running those transport files directly with
+`bun test` does not create their fixtures.
 
 Build these assets before building `cmd/rocketclaw`, then run that Go executable
 with Web automatically listening on `0.0.0.0:3000` (override with `web.listen_address`
@@ -404,8 +443,8 @@ not intermediate Web content.
 Steer is enabled while a
 response is running and the draft has content. Failed uploads or
 sends keep the draft and files for retry. Drafts remain in memory when switching
-chats or pages; **New session** resets the Home draft. Reloading closes these
-in-memory drafts. Sending is locked through upload and dispatch, preventing repeated
+chats or pages; **New session** resets the Home draft. Reloading restores persisted
+composer content after Identity and config are accepted. Sending is locked through upload and dispatch, preventing repeated
 clicks or Enter presses from submitting the same pending files twice. The composer
 then accepts another input while the original Prompt waits for its turn to finish.
 

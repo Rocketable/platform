@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
 // SaveAttachment stores immutable original bytes before publishing a reference.
@@ -70,6 +71,40 @@ func (s *SessionService) AttachmentMetadata(ctx context.Context, conversationID,
 	}
 
 	return attachment, nil
+}
+
+// RevertAttachmentMetadata authorizes only an upload referenced by the current
+// staged user boundary. It never exposes the rest of the hidden replay.
+func (s *SessionService) RevertAttachmentMetadata(ctx context.Context, conversationID, id string) (protocol.OutboundAttachment, error) {
+	var raw json.RawMessage
+
+	err := s.db.QueryRowContext(ctx, `SELECT e.entry_json->'replay_input'->split_part(m.revert_message_id, ':', 2)::integer
+    FROM managed_conversations m JOIN session_entries e ON e.conversation_id = m.conversation_id
+        AND e.id = NULLIF(split_part(m.revert_message_id, ':', 1), '')::bigint
+    WHERE m.conversation_id = $1 AND m.revert_message_id <> ''`, conversationID).Scan(&raw)
+	if err != nil {
+		return protocol.OutboundAttachment{}, fmt.Errorf("read reverted attachment owner: %w", err)
+	}
+
+	items, err := rocketcode.ReplayInputToParams([]json.RawMessage{raw})
+	if err != nil {
+		return protocol.OutboundAttachment{}, fmt.Errorf("decode reverted attachment owner: %w", err)
+	}
+
+	role, text, found, err := ReplayInputMessageRoleText(&items[0], raw)
+	if err != nil {
+		return protocol.OutboundAttachment{}, err
+	}
+
+	if found && role == "user" {
+		for word := range strings.FieldsSeq(text) {
+			if word == "attachment:"+id {
+				return s.AttachmentMetadata(ctx, conversationID, id, true)
+			}
+		}
+	}
+
+	return protocol.OutboundAttachment{}, sql.ErrNoRows
 }
 
 // ReplayAttachments resolves metadata for successful attach-tool output, never arbitrary paths.

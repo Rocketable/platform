@@ -4,10 +4,10 @@ import type { HistoryView, TranscriptEvent } from "./types";
 
 // Execute the retained UI's actual private functions without exporting non-components.
 const source = ts.createSourceFile("ui.tsx", await Bun.file(new URL("./ui.tsx", import.meta.url)).text(), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = ["historyPage", "applyHistoryDelta", "readHistoryDelta", "readEarlierHistory", "sendComposer", "promoteComposer", "popComposer", "switchQueueAgent", "stopComposer", "historyLines", "pendingInputs", "lineId", "isStopCommand", "transcriptTurns", "toolTitle"];
+const names = ["historyPage", "applyHistoryDelta", "readHistoryDelta", "readEarlierHistory", "sendComposer", "revertComposer", "restoreFiles", "promoteComposer", "popComposer", "switchQueueAgent", "stopComposer", "historyLines", "pendingInputs", "lineId", "isStopCommand", "transcriptTurns", "toolTitle"];
 const functions = source.statements.filter((node) => (ts.isFunctionDeclaration(node) ? names.includes(node.name?.text ?? "") : ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) => names.includes(declaration.name.getText(source))))).map((node) => node.getText(source)).join("\n");
-const javascript = ts.transpileModule(`import { QueryClient } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nimport { captureException } from ${JSON.stringify(Bun.resolveSync("@sentry/react", import.meta.dir))};\nimport { queries } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};\nconst queryClient = new QueryClient();\n${functions}\nexport { ${names.filter((name) => !["historyPage", "lineId", "isStopCommand", "switchQueueAgent"].includes(name)).join(", ")}, queryClient };`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
-const { applyHistoryDelta, readHistoryDelta, readEarlierHistory, sendComposer, promoteComposer, popComposer, stopComposer, historyLines, pendingInputs, transcriptTurns, toolTitle, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
+const javascript = ts.transpileModule(`import { QueryClient } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nimport { captureException } from ${JSON.stringify(Bun.resolveSync("@sentry/react", import.meta.dir))};\nimport { queries, mutations } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};\nconst queryClient = new QueryClient();\n${functions}\nexport { ${names.filter((name) => !["historyPage", "lineId", "isStopCommand", "switchQueueAgent"].includes(name)).join(", ")}, queryClient };`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
+const { applyHistoryDelta, readHistoryDelta, readEarlierHistory, sendComposer, revertComposer, promoteComposer, popComposer, stopComposer, historyLines, pendingInputs, transcriptTurns, toolTitle, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 type Line = { id: string; role: string; text: string; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; origin?: string; principal?: string };
 const event = (entryKey: string, itemId: string, role: string, text: string, extra: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ entryKey, itemId, inputId: "", role, text, turnId: "", complete: true, ...extra });
 const view = (messages: TranscriptEvent[], extra: Partial<HistoryView> = {}): HistoryView => ({ messages, delegations: [], revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(messages.map((message) => message.entryKey))], running: false, terminal: "", start: "0", more: false, ...extra });
@@ -184,6 +184,60 @@ test("earlier pages prepend before followed entries until a reset restarts the v
     await readEarlierHistory("session", draft, () => { changes++; });
     expect(requests).toHaveLength(2);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("cutoff resets remove optimistic suffix and older pages without changing local content", () => {
+  const draft = { text: "my draft", files: [], agent: "main", lines: historyLines([event("older", "o", "user", "older"), event("tail", "t", "assistant", "hidden")]), revision: "normal", busy: true, parked: [{ id: "waiting", role: "user", text: "waiting" }], historyEpoch: 0 };
+  draft.lines.push({ id: "optimistic", role: "user", text: "pending" });
+  applyHistoryDelta(draft, view([], { revertEligible: true, revertMessageId: "1:0", canUndo: false }));
+  expect(draft.lines).toEqual([]);
+  expect(draft).toMatchObject({ text: "my draft", files: [], agent: "main", busy: false, revertMessageId: "1:0" });
+  expect(pendingInputs(draft, [{ id: "waiting", text: "waiting", delivery: "QUEUE" }])).toEqual({ parked: [], queued: [] });
+});
+
+test("history request ownership rejects an old page even after stage and Redo restore the same marker", async () => {
+  const draft = { lines: historyLines([event("tail", "t", "user", "tail")]), revision: "normal", busy: false, start: "50", more: true, historyEpoch: 0 };
+  const response = Promise.withResolvers<Response>();
+  const original = globalThis.fetch;
+  globalThis.fetch = Object.assign(async () => response.promise, { preconnect: original.preconnect });
+  try {
+    const reading = readEarlierHistory("session", draft, () => {});
+    draft.historyEpoch++;
+    draft.historyEpoch++; // Stage then Redo, returning to the same bounds and marker.
+    response.resolve(Response.json({ ...view([event("stale", "s", "user", "stale")], { start: "1" }), origin: "" }));
+    await reading;
+    expect(draft.lines.map((line: Line) => line.text)).toEqual(["tail"]);
+    expect(draft.start).toBe("50");
+  } finally { globalThis.fetch = original; }
+});
+
+test("revert replaces only the captured untouched draft, Redo leaves it alone, and failures keep edits", async () => {
+  const original = globalThis.fetch;
+  const response = Promise.withResolvers<Response>();
+  const requests: { id: string; messageId?: string }[] = [];
+  globalThis.fetch = Object.assign(async (_url: URL | RequestInfo, init?: RequestInit) => { requests.push(JSON.parse(init!.body as string)); return response.promise; }, { preconnect: original.preconnect });
+  const owner = { sessionId: "first", text: "previous", files: [{ id: "old", file: new File(["old"], "old.txt") }], agent: "current", edit: 0, submission: 0, sending: false, historyEpoch: 0 };
+  const other = { text: "another session" };
+  try {
+    const staging = revertComposer(owner, "9007199254740993:4", false, async () => {}, () => {});
+    response.resolve(Response.json({ revertMessageId: "9007199254740993:4", prompt: { text: "  $skill original\n", attachments: [] } }));
+    await staging;
+    expect(owner).toMatchObject({ text: "  $skill original\n", files: [], agent: "current", focus: 1 });
+    expect(other.text).toBe("another session");
+    expect(requests).toEqual([{ id: "first", messageId: "9007199254740993:4" }]);
+    await revertComposer(owner, undefined, true, async () => {}, () => {});
+    expect(owner.text).toBe("  $skill original\n");
+    const delayed = Promise.withResolvers<Response>();
+    globalThis.fetch = Object.assign(async () => delayed.promise, { preconnect: original.preconnect });
+    const late = revertComposer(owner, undefined, false, async () => {}, () => {});
+    owner.text = "newer edit"; owner.edit++;
+    delayed.resolve(Response.json({ revertMessageId: "1:0", prompt: { text: "old" } }));
+    await late;
+    expect(owner.text).toBe("newer edit");
+    globalThis.fetch = Object.assign(async () => Response.json({ message: "mutation failed", code: 13 }, { status: 500 }), { preconnect: original.preconnect });
+    await revertComposer(owner, undefined, false, async () => {}, () => {});
+    expect(owner).toMatchObject({ text: "newer edit", error: "mutation failed", reverting: false });
+  } finally { globalThis.fetch = original; }
 });
 
 test("actual stream handlers use metadata only as a hint, including on the first open", () => {
@@ -406,6 +460,7 @@ for (const command of ["stop", "enqueue", "stash", "steer"]) for (const busy of 
     expect(draft.parked).toEqual([]);
     expect(draft.text).toBe(failure ? text : "");
     expect(draft.files).toEqual(failure ? files : []);
+    expect(draft.edit).toBe(failure ? 2 : 1); // Restoring failed content is a new persisted edit.
     expect(draft.sending).toBe(false);
     expect(error).toBe(failure ? "stash failed" : "");
   } finally { globalThis.fetch = originalFetch; }

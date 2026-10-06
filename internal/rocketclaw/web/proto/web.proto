@@ -57,7 +57,15 @@ message HistoryResponse {
   int64 start = 11;
   // Older saved entries exist before start.
   bool more = 12;
+  bool revert_eligible = 13;
+  string revert_message_id = 14;
+  bool can_undo = 15;
 }
+
+message StageRevertRequest { string id = 1; string message_id = 2; }
+message StageRevertResponse { string revert_message_id = 1; TranscriptEvent prompt = 2; }
+message ClearRevertRequest { string id = 1; }
+message ClearRevertResponse {}
 
 message ListSessionsResponse {
   repeated Session sessions = 1;
@@ -382,6 +390,8 @@ service Web {
   rpc AnswerQuestion(AnswerQuestionRequest) returns (AnswerQuestionResponse);
   rpc History(HistoryRequest) returns (HistoryResponse);
   rpc ForkSession(ForkSessionRequest) returns (ForkSessionResponse);
+  rpc StageRevert(StageRevertRequest) returns (StageRevertResponse);
+  rpc ClearRevert(ClearRevertRequest) returns (ClearRevertResponse);
   rpc SearchMessages(SearchMessagesRequest) returns (SearchMessagesResponse);
   rpc SearchOrigins(SearchOriginsRequest) returns (SearchOriginsResponse);
   rpc SlackNames(SlackNamesRequest) returns (SlackNamesResponse);

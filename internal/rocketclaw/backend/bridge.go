@@ -135,6 +135,9 @@ type Bridge struct {
 	activeTurnID          string
 	steers                []bridgeRequest
 	steersRead            int
+	historyMutation       bool
+	waiting               []bridgeRequest
+	settlement            *turnCompletion
 }
 
 type turnCompletion struct {
@@ -143,7 +146,8 @@ type turnCompletion struct {
 }
 
 type bridgeRequest struct {
-	inbound *protocol.InboundMessage
+	inbound  *protocol.InboundMessage
+	workflow workflowAgentRunner
 	// turnID is the stable ID of the request's active-turn row, set once the bridge takes it.
 	turnID string
 	// delivery is the stored final outbound of a row that finished before a restart.
@@ -154,6 +158,19 @@ type bridgeRequest struct {
 	completion                *turnCompletion
 	producer                  *Bridge
 	syncSource                string
+}
+
+// closeWorkflow releases prepared data ownership; an unprepared request has no
+// definition or open root. Every workflow.Run still receives a real runner.
+func (request *bridgeRequest) closeWorkflow() error {
+	if request.workflow.definition == nil {
+		return nil
+	}
+
+	err := request.workflow.Close()
+	request.workflow = workflowAgentRunner{}
+
+	return err
 }
 
 // EnqueueActivation posts the consume card for a popped Enqueued Slack Message.
@@ -454,6 +471,18 @@ func (b *Bridge) enqueue(ctx context.Context, request *bridgeRequest, operation 
 	b.mu.Lock()
 
 	stopCh, stopped := b.stopCh, b.stopped
+	if b.historyMutation {
+		if request.queueItemID == "" && request.turnID == "" && request.scheduledMessageID == "" {
+			b.mu.Unlock()
+			return errors.New("conversation history is busy")
+		}
+
+		err := b.preserveRevertRequestLocked(ctx, request)
+		b.mu.Unlock()
+
+		return err
+	}
+
 	if !stopped && request.inbound != nil && request.inbound.Workflow.Name == "" && request.inbound.Kind == protocol.InboundKindSteer && request.inbound.Human && b.inputOpen {
 		if request.queueItemID == "" {
 			request.queueItemID = cmp.Or(request.inbound.Metadata["web_message_id"], rand.Text())
@@ -497,7 +526,8 @@ type journaledSteer struct {
 // not; RocketCode skips the ones its journaled turn already holds. Callers hold b.mu.
 func (b *Bridge) saveSteersLocked(ctx context.Context) {
 	steers := make([]journaledSteer, 0, len(b.steers))
-	for _, steer := range b.steers {
+	for i := range b.steers {
+		steer := &b.steers[i]
 		steers = append(steers, journaledSteer{ID: steer.queueItemID, Inbound: steer.inbound})
 	}
 
@@ -625,7 +655,7 @@ func (b *Bridge) storeQueued() {
 	for {
 		select {
 		case request := <-b.requestCh:
-			if err := b.storeStopped(&request, "store waiting request"); err != nil && !errors.Is(err, protocol.ErrBridgeStopped) {
+			if err := errors.Join(b.storeStopped(&request, "store waiting request"), request.closeWorkflow()); err != nil && !errors.Is(err, protocol.ErrBridgeStopped) {
 				b.log.Error("store waiting request during shutdown", "conversation_id", b.config.ConversationID, "error", err)
 			}
 		default:
@@ -635,18 +665,46 @@ func (b *Bridge) storeQueued() {
 }
 
 func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
+	defer func() {
+		_ = request.closeWorkflow()
+	}()
+
 	b.log.Info("bridge dequeued request", "event", "request_dequeued", "conversation_id", b.config.ConversationID, "has_inbound", request.inbound != nil, "turn_id", request.turnID, "scheduled_message_id", request.scheduledMessageID, "queue_item_id", request.queueItemID, "queue_len", len(b.requestCh))
-	b.setHandling(true)
 	b.mu.Lock()
-	b.activeCompletion = request.completion
+
+	var marker string
+
+	errState := b.config.SessionService.db.QueryRowContext(ctx, `SELECT COALESCE((SELECT revert_message_id FROM managed_conversations WHERE conversation_id = $1), '')`, b.config.ConversationID).Scan(&marker)
+	if b.historyMutation || marker != "" || errState != nil {
+		err := errState
+		if err == nil {
+			err = b.preserveRevertRequestLocked(ctx, request)
+		}
+		b.mu.Unlock()
+
+		if err != nil && request.completion != nil {
+			request.completion.err = err
+			close(request.completion.done)
+		}
+
+		return
+	}
+
+	b.handling = true
+	settlement := &turnCompletion{done: make(chan struct{})}
+	b.settlement = settlement
+	b.activeCompletion = cmp.Or(request.completion, settlement)
 	b.mu.Unlock()
 
 	defer func() {
 		b.mu.Lock()
 		b.activeReply = nil
 		b.activeCompletion = nil
+		b.settlement = nil
+		b.handling = false
+
+		close(settlement.done)
 		b.mu.Unlock()
-		b.setHandling(false)
 	}()
 
 	unlock := func() {}
@@ -741,6 +799,8 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 		b.log.Error("handle inbound rocketcode message", "error_type", fmt.Sprintf("%T", errHandle))
 	}
 
+	settlement.err = errHandle
+
 	if request.completion != nil {
 		request.completion.err = errHandle
 		close(request.completion.done)
@@ -763,8 +823,6 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 	b.pickLaterWorkLogged(ctx, b)
 }
 
-func (b *Bridge) setHandling(handling bool) { b.mu.Lock(); b.handling = handling; b.mu.Unlock() }
-
 func (b *Bridge) handlingSnapshot() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -776,16 +834,24 @@ func (b *Bridge) handlingSnapshot() bool {
 // queue row or one-shot schedule and records the active-turn row that owns it.
 // A false result without an error leaves work behind an active goal or an earlier claimant.
 func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (bool, error) {
-	if request.turnID != "" {
-		return true, nil
+	b.mu.Lock()
+	if b.historyMutation {
+		err := b.preserveRevertRequestLocked(ctx, request)
+		b.mu.Unlock()
+
+		return false, err
 	}
+	// handle already owns settlement. A racing stage waits for that owner,
+	// and runTurn observes the barrier before execution starts. Do not hold
+	// the mutex across EnqueueActivation, which may call back into the bridge.
+	b.mu.Unlock()
 
 	owner := b
 	if request.producer != nil {
 		owner = request.producer
 	}
 
-	if request.queueItemID != "" && request.producer == nil {
+	if request.queueItemID != "" && request.producer == nil && request.inbound.GoalAction != protocol.GoalActionKickoff {
 		goal, active, err := b.config.SessionService.Goal(b.config.ConversationID)
 		if err != nil || active && goal.Status == GoalStatusActive {
 			b.log.Info("queue activation unavailable", "event", "queue_blocked", "conversation_id", b.config.ConversationID, "queue_item_id", request.queueItemID, "goal_active", active && goal.Status == GoalStatusActive, "error_type", fmt.Sprintf("%T", err))
@@ -800,6 +866,25 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	if err := lockSessionHistory(ctx, tx, owner.config.ConversationID); err != nil {
+		return false, err
+	}
+
+	var marker string
+
+	err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT revert_message_id FROM managed_conversations WHERE conversation_id = $1), '')`, owner.config.ConversationID).Scan(&marker)
+	if err != nil {
+		return false, fmt.Errorf("read activation cutoff: %w", err)
+	}
+
+	if marker != "" {
+		return false, nil
+	}
+
+	if request.turnID != "" {
+		return true, nil
+	}
 
 	var queuedItem protocol.ThreadQueueItem
 
@@ -847,8 +932,23 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 
 func (b *Bridge) pickLaterWork(ctx context.Context, fromTimer bool) error {
 	b.mu.Lock()
-	stopped, handling := b.stopped, b.handling
+	stopped, handling, mutation := b.stopped, b.handling, b.historyMutation
 	b.mu.Unlock()
+
+	if mutation {
+		return nil
+	}
+
+	var marker string
+
+	err := b.config.SessionService.db.QueryRowContext(ctx, `SELECT COALESCE((SELECT revert_message_id FROM managed_conversations WHERE conversation_id = $1), '')`, b.config.ConversationID).Scan(&marker)
+	if err != nil {
+		return fmt.Errorf("read later-work cutoff: %w", err)
+	}
+
+	if marker != "" {
+		return nil
+	}
 
 	if stopped {
 		return fmt.Errorf("pick later work: %w", protocol.ErrBridgeStopped)
@@ -905,6 +1005,18 @@ func (b *Bridge) pickLaterWork(ctx context.Context, fromTimer bool) error {
 }
 
 func (b *Bridge) submitEnqueuedItem(ctx context.Context, item *protocol.ThreadQueueItem) error {
+	b.mu.Lock()
+	for i := range b.waiting {
+		if b.waiting[i].queueItemID == item.ID {
+			request := b.waiting[i]
+			b.waiting = slices.Delete(b.waiting, i, i+1)
+			b.mu.Unlock()
+
+			return b.enqueue(ctx, &request, "resume preserved request")
+		}
+	}
+	b.mu.Unlock()
+
 	if inbound := item.Inbound; inbound != nil {
 		if inbound.SyncDestination == "" {
 			return b.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: item.ID}, "submit stored message")
@@ -951,7 +1063,15 @@ func (b *Bridge) submitEnqueuedItem(ctx context.Context, item *protocol.ThreadQu
 }
 
 func (b *Bridge) submitDueScheduled(ctx context.Context, id string, armed *protocol.ScheduledMessageState, now time.Time) error {
+	b.mu.Lock()
+	if b.historyMutation {
+		b.mu.Unlock()
+		return nil
+	}
+
 	stored, ready, err := b.config.SessionService.ClaimScheduledMessage(id, armed.ConversationID, armed.DueAt, now)
+	b.mu.Unlock()
+
 	if err != nil {
 		return fmt.Errorf("claim scheduled message: %w", err)
 	}
@@ -1006,27 +1126,14 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 
 	b.mu.Lock()
 
-	b.inputOpen, b.activeTurnID = msg.Human && msg.SyncDestination == "", request.turnID
+	b.inputOpen, b.activeTurnID = msg.Human && msg.SyncDestination == "" && !b.historyMutation, request.turnID
 	for _, steer := range recorded {
 		b.steers = append(b.steers, bridgeRequest{inbound: steer.Inbound, queueItemID: steer.ID, completion: &turnCompletion{done: make(chan struct{})}})
 	}
 
 	b.mu.Unlock()
 	defer func() {
-		b.mu.Lock()
-		b.inputOpen, b.activeTurnID = false, ""
-		steers := b.steers
-		b.steers, b.steersRead = nil, 0
-		b.mu.Unlock()
-
-		if ctx.Err() != nil {
-			return
-		}
-
-		for _, steer := range steers {
-			steer.completion.err = err
-			close(steer.completion.done)
-		}
+		err = b.settleSteers(ctx, err)
 	}()
 
 	if request.delivery != nil {
@@ -1087,7 +1194,7 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 
 	var errTurn error
 	if msg.Workflow.Name != "" {
-		result, errTurn = b.runWorkflow(ctx, msg, turnID, &finish)
+		result, errTurn = b.runWorkflow(ctx, request, &finish)
 	} else {
 		result, errTurn = b.runTurn(ctx, msg, turnID, turnID, &finish)
 		for retry := 1; msg.RequireOutputDecision && errTurn == nil && !result.outputDecided; retry++ {
@@ -1229,37 +1336,90 @@ func (b *Bridge) postCronRoot(ctx context.Context, outbound *protocol.OutboundMe
 	return destination.syncConversation(context.WithoutCancel(ctx), b)
 }
 
-func (b *Bridge) runWorkflow(ctx context.Context, msg *protocol.InboundMessage, turnID string, finish *turnFinish) (result runResult, err error) {
-	b.publishConsumed(ctx, msg, "")
+// settleSteers transfers finished input ownership either to its callers or the
+// preserved queue. This lifecycle is separate from the turn's execution branches.
+func (b *Bridge) settleSteers(ctx context.Context, err error) error {
+	b.mu.Lock()
+	b.inputOpen, b.activeTurnID = false, ""
+	steers := b.steers
 
+	b.steers, b.steersRead = nil, 0
+	if b.historyMutation {
+		for i := range steers {
+			err = errors.Join(err, b.preserveRevertRequestLocked(context.WithoutCancel(ctx), &steers[i]))
+		}
+
+		steers = nil
+	}
+	b.mu.Unlock()
+
+	if ctx.Err() == nil {
+		for i := range steers {
+			steer := &steers[i]
+			steer.completion.err = err
+			close(steer.completion.done)
+		}
+	}
+
+	return err
+}
+
+// prepareWorkflow retains the definition and open runner until execution owns
+// them. Admission must not discard this preparation and repeat it after pruning.
+func (b *Bridge) prepareWorkflow(request *bridgeRequest) error {
 	root, errRoot := os.OpenRoot(b.runtime.Workspace)
 	if errRoot != nil {
-		return result, fmt.Errorf("open workspace root: %w", errRoot)
+		return fmt.Errorf("open workspace root: %w", errRoot)
 	}
 
 	defer func() { _ = root.Close() }()
 
 	definitions, errLoad := workflow.Load(root, b.runtime.RuntimeDirName())
 	if errLoad != nil {
-		return result, fmt.Errorf("load workflow definitions: %w", errLoad)
+		return fmt.Errorf("load workflow definitions: %w", errLoad)
 	}
+
+	msg := request.inbound
 
 	definition := definitions[msg.Workflow.Name]
 	if definition == nil {
-		return result, fmt.Errorf("workflow %q is not configured", msg.Workflow.Name)
+		return fmt.Errorf("workflow %q is not configured", msg.Workflow.Name)
 	}
 
 	runner, err := newWorkflowAgentRunner(b.runtime, b.agentSnapshot(), rocketcode.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, cmp.Or(msg.SyncDestination, b.config.ConversationID))...)
 	if err != nil {
-		return result, fmt.Errorf("prepare workflow agent runner: %w", err)
+		return fmt.Errorf("prepare workflow agent runner: %w", err)
 	}
 
-	request := workflow.RunRequest{RunID: turnID, Args: msg.Workflow.Args, Definition: definition}
+	runner.definition = definition
+	request.workflow = *runner
+
+	return nil
+}
+
+func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finish *turnFinish) (result runResult, err error) {
+	msg, turnID := incoming.inbound, incoming.turnID
+	b.publishConsumed(ctx, msg, "")
+
+	if incoming.workflow.definition == nil {
+		if err := b.prepareWorkflow(incoming); err != nil {
+			return result, err
+		}
+	}
+
+	runner := &incoming.workflow
+	defer func() { err = errors.Join(err, incoming.closeWorkflow()) }()
+
+	request := workflow.RunRequest{RunID: turnID, Args: msg.Workflow.Args, Definition: runner.definition}
 
 	turnCtx, cancel := context.WithCancel(ctx)
 
 	b.mu.Lock()
-	b.activeReply, b.activeTurnCancel, b.activeTurnInterrupted = msg, cancel, false
+
+	b.activeReply, b.activeTurnCancel, b.activeTurnInterrupted = msg, cancel, b.historyMutation
+	if b.historyMutation {
+		cancel()
+	}
 
 	b.mu.Unlock()
 	defer func() {
@@ -1270,11 +1430,10 @@ func (b *Bridge) runWorkflow(ctx context.Context, msg *protocol.InboundMessage, 
 	}()
 
 	if err := b.bus.PublishOutbound(ctx, b.newOutboundMessage(msg, turnID, "", false)); err != nil {
-		return result, errors.Join(fmt.Errorf("publish workflow start: %w", err), runner.Close())
+		return result, fmt.Errorf("publish workflow start: %w", err)
 	}
 
 	workflowResult, errRun := workflow.Run(turnCtx, request.Definition, request, runner)
-	errRun = errors.Join(errRun, runner.Close())
 
 	b.mu.Lock()
 	interrupted := b.activeTurnInterrupted
@@ -1347,7 +1506,7 @@ func (b *Bridge) runWorkflow(ctx context.Context, msg *protocol.InboundMessage, 
 		replay = slices.Concat(userReplay, assistantReplay, summaryReplay)
 	}
 
-	finish.entries = append(finish.entries, rocketcode.SessionEntry{Version: 1, Type: workflowRunEntryType, Timestamp: time.Now().UTC(), ReplayInput: replay})
+	finish.entries = append(finish.entries, rocketcode.SessionEntry{Version: 1, Type: workflowRunEntryType, TurnID: turnID, Timestamp: time.Now().UTC(), ReplayInput: replay})
 
 	result = runResult{turnID: turnID, workflowTerminal: terminal}
 	if terminal == protocol.TerminalComplete {
@@ -1656,7 +1815,11 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	b.activeAttribution = result.attribution
 	b.activeTurnInterrupts = interrupts
 	b.activeTurnCancel = cancelTurn
-	b.activeTurnInterrupted = false
+
+	b.activeTurnInterrupted = b.historyMutation
+	if b.historyMutation {
+		interrupts <- os.Interrupt
+	}
 	b.mu.Unlock()
 
 	defer func() {

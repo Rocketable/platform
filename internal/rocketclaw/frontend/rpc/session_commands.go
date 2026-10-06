@@ -68,6 +68,42 @@ func (s *Server) forkSession(ctx context.Context, request *ForkSessionRequest) (
 	return &ForkSessionResponse{Id: id, Prompt: event}, nil
 }
 
+func (s *Server) stageRevert(ctx context.Context, request *StageRevertRequest) (*StageRevertResponse, error) {
+	if err := s.visibleConversation(ctx, request.Id); err != nil {
+		return nil, err
+	}
+
+	marker, text, err := s.backend.StageRevert(ctx, request.Id, request.MessageId)
+	if err != nil {
+		return nil, fmt.Errorf("web revert: %w", err)
+	}
+
+	response := &StageRevertResponse{RevertMessageId: marker}
+	// Undo at the beginning changes neither history nor the owning composer.
+	if text == "" && request.MessageId == "" {
+		return response, nil
+	}
+
+	response.Prompt, err = s.inputEvent(ctx, request.Id, text)
+	if err != nil {
+		return nil, err
+	}
+
+	return response, nil
+}
+
+func (s *Server) clearRevert(ctx context.Context, request *ClearRevertRequest) (*ClearRevertResponse, error) {
+	if err := s.visibleConversation(ctx, request.Id); err != nil {
+		return nil, err
+	}
+
+	if err := s.backend.ClearRevert(ctx, request.Id); err != nil {
+		return nil, fmt.Errorf("web redo: %w", err)
+	}
+
+	return &ClearRevertResponse{}, nil
+}
+
 func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequest) (*SearchMessagesResponse, error) {
 	if _, _, err := s.principal(ctx); err != nil {
 		return nil, err
@@ -228,7 +264,7 @@ func (s *Server) searchOrigins(ctx context.Context, request *SearchOriginsReques
 		return response, nil
 	}
 
-	for facts, err := range s.sessions.ChatOriginFacts(ctx) {
+	for facts, err := range s.sessions.ChatOriginFacts(ctx, "") {
 		if err != nil {
 			return nil, err
 		}

@@ -19,6 +19,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "long", name: "Long chat" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
+    if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "long-chat" } });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "long" });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
     if (url.pathname === "/api/History") {

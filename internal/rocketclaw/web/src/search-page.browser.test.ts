@@ -13,6 +13,7 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner, upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: owner });
+    if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "search" } });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-page" });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
     if (url.pathname === "/api/SearchMessages" || url.pathname === "/api/SearchOrigins") return Response.json({ matches: [] });
@@ -159,6 +160,7 @@ test("search URL follows the active tab and reopens a matching tab", async () =>
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "chat", name: "Outage chat", preview: "", agent: "alitu-cs-support" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-links" });
+    if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "search" } });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "alitu-cs-support" }] });
     if (url.pathname === "/api/SearchMessages" || url.pathname === "/api/SearchOrigins") return Response.json({ matches: [] });
     if (url.pathname.startsWith("/api/")) return Response.json({});
@@ -227,6 +229,7 @@ for (const width of [1280, 390]) test(`search editor groups clickable message ma
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, summariesComplete })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-results" });
+    if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "search" } });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
     if (url.pathname === "/api/SearchOrigins") {
       const { query } = await request.json() as { query: string };
@@ -388,6 +391,7 @@ test("newer search replaces an in-flight message search and retries errors", asy
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "chat", name: "A chat", preview: "" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-race" });
+    if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "search" } });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [] });
     if (url.pathname === "/api/SearchOrigins") return Response.json({ matches: [] });
     if (url.pathname === "/api/SearchMessages") {
@@ -454,6 +458,7 @@ test("one SearchOrigins request per needle feeds Cmd+P and /search", async () =>
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-origins" });
+    if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "search" } });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
     if (url.pathname === "/api/SearchMessages") return Response.json({ matches: [] });
     if (url.pathname === "/api/SearchOrigins") {
@@ -507,6 +512,7 @@ test("search shows message and row matches while origins are still loading", asy
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "named", name: "Needle row", preview: "" }, { id: "messaged", name: "Plain chat", preview: "" }, { id: "origin", name: "Origin only", preview: "" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-partial" });
+    if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "search" } });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [] });
     if (url.pathname === "/api/SearchMessages") {
       const { query } = await request.json() as { query: string };
@@ -566,6 +572,7 @@ test("message matches jump after history loads and last close returns to the las
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "one", name: "First chat" }, { id: "two", name: "Second chat" }], owner, upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: owner });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "jump" });
+    if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "search" } });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
     if (url.pathname === "/api/SearchOrigins") return Response.json({ matches: [] });
     if (url.pathname === "/api/SearchMessages") return Response.json({ matches: [

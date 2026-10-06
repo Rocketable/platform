@@ -574,6 +574,17 @@ func (m *threadBridgeManager) recordedBridge(conversationID string) (*Bridge, er
 }
 
 func (m *threadBridgeManager) queueItems(conversationID string) ([]protocol.ThreadQueueItem, error) {
+	var marker string
+
+	err := m.store.db.QueryRowContext(context.Background(), `SELECT COALESCE((SELECT revert_message_id FROM managed_conversations WHERE conversation_id = $1), '')`, conversationID).Scan(&marker)
+	if err != nil {
+		return nil, fmt.Errorf("read queue cutoff: %w", err)
+	}
+
+	if marker != "" {
+		return nil, nil
+	}
+
 	items, err := m.store.ThreadQueueForConversation(conversationID)
 	if err != nil {
 		return nil, fmt.Errorf("list thread queue: %w", err)
@@ -588,7 +599,9 @@ func (m *threadBridgeManager) queueItems(conversationID string) ([]protocol.Thre
 	if managed != nil {
 		bridge := managed.(*Bridge)
 		bridge.mu.Lock()
-		for _, request := range bridge.steers[bridge.steersRead:] {
+		for i := bridge.steersRead; i < len(bridge.steers); i++ {
+			request := &bridge.steers[i]
+			items = slices.DeleteFunc(items, func(item protocol.ThreadQueueItem) bool { return item.ID == request.queueItemID })
 			inbound := request.inbound
 
 			item := protocol.ThreadQueueItem{ID: request.queueItemID, ConversationID: conversationID, Kind: protocol.InboundKindSteer, Message: inbound.Text, Principal: inbound.Metadata[protocol.InboundPrincipalMetadataKey]}
@@ -661,9 +674,37 @@ func (m *threadBridgeManager) deleteQueueItem(ctx context.Context, conversationI
 	if managed != nil {
 		bridge := managed.(*Bridge)
 		bridge.mu.Lock()
+		for i := range bridge.waiting {
+			if bridge.waiting[i].queueItemID != id {
+				continue
+			}
+
+			request := bridge.waiting[i]
+
+			if err := m.store.DeleteThreadQueueItem(id); err != nil {
+				bridge.mu.Unlock()
+				return false, err
+			}
+
+			bridge.waiting = slices.Delete(bridge.waiting, i, i+1)
+
+			if request.completion != nil {
+				request.completion.err = context.Canceled
+				close(request.completion.done)
+			}
+			bridge.mu.Unlock()
+
+			return true, nil
+		}
+
 		for i := bridge.steersRead; i < len(bridge.steers); i++ {
 			request := bridge.steers[i]
 			if request.queueItemID == id {
+				if err := m.store.DeleteThreadQueueItem(id); err != nil {
+					bridge.mu.Unlock()
+					return false, err
+				}
+
 				bridge.steers = slices.Delete(bridge.steers, i, i+1)
 				bridge.saveSteersLocked(ctx)
 

@@ -211,6 +211,14 @@ func (d stateDAO) resetScheduledMessages(ctx context.Context, conversationID str
 
 // PutThreadQueueItem persists one Enqueued Slack Message.
 func (s *SessionService) PutThreadQueueItem(id string, item *protocol.ThreadQueueItem) error {
+	if err := putThreadQueueItem(context.Background(), s.db, id, item); err != nil {
+		return fmt.Errorf("store waiting input: %w", err)
+	}
+
+	return nil
+}
+
+func putThreadQueueItem(ctx context.Context, db stateStoreDB, id string, item *protocol.ThreadQueueItem) error {
 	kind := cmp.Or(item.Kind, protocol.InboundKindEnqueue)
 
 	// Both payloads contain only strings, booleans and byte slices.
@@ -228,9 +236,13 @@ func (s *SessionService) PutThreadQueueItem(id string, item *protocol.ThreadQueu
 		inbound = new(string(removeSessionEntryNUL(data)))
 	}
 
-	_, err := s.db.ExecContext(context.Background(), `INSERT INTO thread_queue (queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply, inbound_json) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) ON CONFLICT(queue_item_id) DO UPDATE SET conversation_id = excluded.conversation_id, message = excluded.message, principal = excluded.principal, stash_at_unix_ns = excluded.stash_at_unix_ns, position = excluded.position, park_after = excluded.park_after, slack_channel = excluded.slack_channel, slack_ts = excluded.slack_ts, kind = excluded.kind, content = excluded.content, source = excluded.source, slack_reply = excluded.slack_reply, inbound_json = excluded.inbound_json`, strings.TrimSpace(id), strings.TrimSpace(item.ConversationID), item.Message, item.Principal, timeUnixNano(item.StashAt), item.Position, strings.TrimSpace(item.ParkAfter), item.SlackChannel, item.SlackTS, kind, content, item.Source, reply, inbound)
+	changed, err := execRows(ctx, db, "put thread queue item", "count stored queue items", `INSERT INTO thread_queue (queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply, inbound_json) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) ON CONFLICT(queue_item_id) DO UPDATE SET message = excluded.message, principal = excluded.principal, stash_at_unix_ns = excluded.stash_at_unix_ns, position = excluded.position, park_after = excluded.park_after, slack_channel = excluded.slack_channel, slack_ts = excluded.slack_ts, kind = excluded.kind, content = excluded.content, source = excluded.source, slack_reply = excluded.slack_reply, inbound_json = excluded.inbound_json WHERE thread_queue.conversation_id = excluded.conversation_id`, strings.TrimSpace(id), strings.TrimSpace(item.ConversationID), item.Message, item.Principal, timeUnixNano(item.StashAt), item.Position, strings.TrimSpace(item.ParkAfter), item.SlackChannel, item.SlackTS, kind, content, item.Source, reply, inbound)
 	if err != nil {
 		return fmt.Errorf("put thread queue item: %w", err)
+	}
+
+	if changed == 0 {
+		return errors.New("queue item ID belongs to another conversation")
 	}
 
 	return nil
@@ -492,6 +504,12 @@ WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntry
 		}
 	}
 
+	if _, err := tx.ExecContext(ctx, `DELETE FROM thread_queue q WHERE q.conversation_id = $1 AND EXISTS (
+    SELECT 1 FROM session_entries e CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item
+    WHERE e.conversation_id = q.conversation_id AND item->>'input_id' = q.queue_item_id)`, finish.store.conversationID); err != nil {
+		return nil, fmt.Errorf("release recorded input ownership: %w", err)
+	}
+
 	if finish.accountGoal {
 		if _, err := tx.ExecContext(ctx, `UPDATE conversation_goals SET turns_used = turns_used + 1, status = CASE WHEN max_turns > 0 AND turns_used + 1 >= max_turns THEN $1 ELSE $2 END, updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (status = '' OR status = $2)`, GoalStatusBudgetExhausted, GoalStatusActive, timeUnixNano(time.Now()), finish.store.conversationID); err != nil {
 			return nil, fmt.Errorf("account goal turn: %w", err)
@@ -515,10 +533,16 @@ WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntry
 
 // closeTurn ends a delivered row; stopped and failed rows stay as transcript history.
 // Steps recorded while delivering (a posted cron root) go with it.
+// Web owners without replay identity, and goal kickoffs with generated prompt
+// framing, stay done so retries and editable commands retain their original input.
 func (s *SessionService) closeTurn(ctx context.Context, turnID string) error {
-	if _, err := s.db.ExecContext(ctx, `WITH delivered AS (DELETE FROM active_turns WHERE id = $1 AND terminal = '' RETURNING id),
+	if _, err := s.db.ExecContext(ctx, `WITH delivered AS (DELETE FROM active_turns a WHERE id = $1 AND terminal = '' AND
+    NOT (inbound_json->>'Source' = 'web' AND COALESCE(inbound_json->'Metadata'->>'web_message_id', '') <> '' AND
+        (inbound_json->>'GoalAction' = 'goal' OR NOT EXISTS (
+        SELECT 1 FROM session_entries e CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item
+        WHERE e.conversation_id = a.conversation_id AND item->>'input_id' = a.inbound_json->'Metadata'->>'web_message_id'))) RETURNING id),
 delivery_steps AS (DELETE FROM turn_steps WHERE starts_with(key, $1 || '/'))
-UPDATE active_turns SET phase = $2 WHERE id = $1 AND terminal <> ''`, turnID, turnDone); err != nil {
+UPDATE active_turns SET phase = $2 WHERE id = $1 AND id NOT IN (SELECT id FROM delivered)`, turnID, turnDone); err != nil {
 		return fmt.Errorf("close active turn: %w", err)
 	}
 

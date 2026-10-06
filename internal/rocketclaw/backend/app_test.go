@@ -210,6 +210,10 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 	seed, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	require.NoError(t, seed.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	boundary, err := seed.AppendEntryID(t.Context(), conversationID, testSessionEntry("recorded", "answer"))
+	require.NoError(t, err)
+	_, _, err = stageRevertDB(t.Context(), seed.db, conversationID, fmt.Sprintf("%d:0", boundary))
+	require.NoError(t, err)
 	require.NoError(t, seed.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "first", Principal: "alice", Source: protocol.SourceWeb, Position: 0, StashAt: time.Unix(1, 0).UTC()}))
 	require.NoError(t, seed.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{ID: "q2", ConversationID: conversationID, Message: "second", Principal: "alice", Source: protocol.SourceWeb, Position: 1, StashAt: time.Unix(2, 0).UTC()}))
 	require.NoError(t, seed.Stop())
@@ -283,6 +287,19 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 		return texts
 	}
 
+	require.Empty(t, runQueuedStartup(t, time.Second), "daemon startup must not resume a staged queue")
+	seed, err = NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	marker, _, _, err := seed.RevertState(t.Context(), conversationID)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("%d:0", boundary), marker)
+
+	queue, err := seed.ThreadQueueForConversation(conversationID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"q1", "q2"}, []string{queue[0].ID, queue[1].ID})
+	_, err = seed.db.ExecContext(t.Context(), `UPDATE managed_conversations SET revert_message_id = '' WHERE conversation_id = $1`, conversationID)
+	require.NoError(t, err)
+	require.NoError(t, seed.Stop())
 	require.Equal(t, []string{"answer", "answer"}, runQueuedStartup(t, 20*time.Second))
 	require.Empty(t, runQueuedStartup(t, time.Second))
 }

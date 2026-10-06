@@ -32,7 +32,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 	mux.Handle("GET /api/", http.NotFoundHandler())
 	mux.Handle("POST /api/", http.NotFoundHandler())
 
-	for method := range strings.FieldsSeq("Protocol Identity Prompt History ForkSession SearchMessages SearchOrigins SlackNames Handoff ListAgents CreateSession ListConfig ListSkills ListWorkflows SettleSession UpdateSession ListCronJobs RunCronJob ListSessionEntries LoadSessionEntries DeleteSessionEntries ListQueue SteerQueueItem PopQueueItem RemoveQueueItem ReorderQueue") {
+	for method := range strings.FieldsSeq("Protocol Identity Prompt History ForkSession StageRevert ClearRevert SearchMessages SearchOrigins SlackNames Handoff ListAgents CreateSession ListConfig ListSkills ListWorkflows SettleSession UpdateSession ListCronJobs RunCronJob ListSessionEntries LoadSessionEntries DeleteSessionEntries ListQueue SteerQueueItem PopQueueItem RemoveQueueItem ReorderQueue") {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 		responseType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Output().FullName())
@@ -277,7 +277,7 @@ func httpInput(body []byte, request proto.Message, method string) error {
 	switch method {
 	case "Prompt":
 		required = "id text"
-	case "History", "ForkSession", "Handoff", "SettleSession", "UpdateSession", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "ReorderQueue":
+	case "History", "ForkSession", "StageRevert", "ClearRevert", "Handoff", "SettleSession", "UpdateSession", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "ReorderQueue":
 		required = "id"
 	case "SearchMessages", "SearchOrigins":
 		required = "query"
