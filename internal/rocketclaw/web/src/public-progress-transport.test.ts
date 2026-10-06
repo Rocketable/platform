@@ -54,6 +54,7 @@ for (const final of ["short", "empty", "stop", "calls"]) test(`real Go HTTP App 
     const reopened = await browser.newPage();
     await reopened.goto(page.url());
     await reopened.locator("#transcript-scroll").getByText("Held public partial suffix", { exact: true }).waitFor();
+    await reopened.getByRole("button", { name: "Stop", exact: true }).click({ trial: true }); // Wait for draft hydration without stopping.
     expect(await reopened.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
     if (final === "stop") {
       await page.getByRole("button", { name: "Stop", exact: true }).click();

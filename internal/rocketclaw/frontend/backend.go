@@ -15,6 +15,8 @@ type Backend interface {
 	ListConversations(context.Context) ([]protocol.Conversation, error)
 	SwitchConversationAgent(string, string) (bool, error)
 	RunTurn(context.Context, *protocol.InboundMessage) error
+	StageRevert(context.Context, string, string) (string, string, error)
+	ClearRevert(context.Context, string) error
 	SyncConversation(context.Context, string, string) error
 	QueueItems(string) ([]protocol.ThreadQueueItem, error)
 	PromoteQueueItem(context.Context, string, string) (bool, error)

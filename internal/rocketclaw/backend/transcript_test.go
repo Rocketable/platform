@@ -19,6 +19,102 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// OpenCode V2 packages/core/src/session/projector.ts projects strictly before
+// the staged user message; RocketClaw boundaries may lie inside a saved turn.
+func TestRevertTranscriptPrefix(t *testing.T) {
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	_, err := s.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ('main', 'planner', '')`)
+	require.NoError(t, err)
+	earlier, err := s.AppendEntryID(ctx, "main", testSessionEntry("earlier", "reply"))
+	require.NoError(t, err)
+
+	checkpoint := &testCheckpoint{TurnID: "boundary", ConversationKey: "main", ReplayInput: testSessionEntry("kept", "hidden checkpoint").ReplayInput}
+	require.NoError(t, upsertTestTurn(ctx, s, checkpoint))
+	require.NoError(t, terminateTestTurn(ctx, s, checkpoint.TurnID, protocol.TerminalStopped))
+
+	entry := testSessionEntry("kept", "kept reply")
+	entry.TurnID = checkpoint.TurnID
+	entry.ReplayInput = append(entry.ReplayInput,
+		json.RawMessage(`{"type":"function_call","name":"Task","call_id":"kept-child","arguments":"{}"}`),
+		json.RawMessage(`{"type":"function_call_output","call_id":"kept-child","output":"kept result"}`))
+	entry.ReplayInput = append(entry.ReplayInput, testSessionEntry("replace me", "abandoned").ReplayInput...)
+	entry.ReplayInput = append(entry.ReplayInput, json.RawMessage(`{"type":"function_call","name":"Task","call_id":"discarded-child","arguments":"{}"}`))
+	entry.ResponseID = "hidden-response"
+	entry.OutputTrace = []json.RawMessage{json.RawMessage(`{"text":"hidden fallback"}`)}
+	entry.TokenUsage = &harness.TokenUsage{TotalTokens: 99}
+	entry.ReplayAttribution = []harness.ReplayAttribution{{Start: 1, End: 6, Agent: "old"}, {Start: 4, End: 6, Agent: "hidden"}}
+	boundary, err := s.AppendEntryID(ctx, "main", entry)
+	require.NoError(t, err)
+	_, err = s.AppendEntryID(ctx, "main", testSessionEntry("later", "abandoned later"))
+	require.NoError(t, err)
+
+	for _, child := range []string{"main/kept-child", "main/discarded-child"} {
+		_, err := s.AppendEntryID(ctx, child, testSessionEntry("child", "reply"))
+		require.NoError(t, err)
+	}
+
+	_, err = s.db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = $1 WHERE conversation_id = 'main'`, fmt.Sprintf("%d:4", boundary))
+	require.NoError(t, err)
+	replay, err := s.ObserveEntries(ctx, "main")
+	require.NoError(t, err)
+	require.Len(t, replay, 2)
+	require.Equal(t, earlier, replay[0].ID)
+	require.Equal(t, entry.ReplayInput[:4], replay[1].Entry.ReplayInput)
+	require.Empty(t, replay[1].Entry.ResponseID)
+	require.Empty(t, replay[1].Entry.OutputTrace)
+	require.Nil(t, replay[1].Entry.TokenUsage)
+	require.Equal(t, []harness.ReplayAttribution{{Start: 1, End: 4, Agent: "old"}}, replay[1].Entry.ReplayAttribution)
+
+	transcript, err := s.ObserveTranscript(ctx, "main", 0, 0, nil)
+	require.NoError(t, err)
+	require.Len(t, transcript, 2, "superseded checkpoint must not reappear behind the boundary")
+	require.Equal(t, replay[1].Entry, transcript[1].Entry)
+
+	children, err := s.Delegations(ctx, "main", "", 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, []string{"main/kept-child"}, children)
+
+	child, err := s.ObserveEntries(ctx, "main/discarded-child")
+	require.NoError(t, err)
+	require.Empty(t, child, "direct access cannot reveal a hidden child")
+
+	childCheckpoint := &testCheckpoint{TurnID: "child-checkpoint", ConversationKey: "main/discarded-child", ReplayInput: testSessionEntry("child live", "child output").ReplayInput}
+	require.NoError(t, upsertTestTurn(ctx, s, childCheckpoint))
+	child, err = s.ObserveTranscript(ctx, "main/discarded-child", 0, 0, nil)
+	require.NoError(t, err)
+	require.Empty(t, child, "hidden child checkpoints must not bypass the prefix")
+
+	var (
+		physical harness.SessionEntry
+		raw      string
+	)
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT entry_json FROM session_entries WHERE id = $1`, boundary).Scan(&raw))
+	require.NoError(t, json.Unmarshal([]byte(raw), &physical))
+	require.Equal(t, *entry, physical, "staging must leave saved bytes intact")
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	require.NoError(t, lockSessionHistory(ctx, tx, "main"))
+	require.NoError(t, commitRevertDB(ctx, tx, "main", fmt.Sprintf("%d:4", boundary)))
+	require.NoError(t, tx.Commit())
+
+	replay, err = s.ObserveEntries(ctx, "main")
+	require.NoError(t, err)
+	require.Len(t, replay, 2)
+	require.Equal(t, entry.ReplayInput[:4], replay[1].Entry.ReplayInput)
+
+	child, err = s.ObserveEntries(ctx, "main/discarded-child")
+	require.NoError(t, err)
+	require.Empty(t, child, "commit deletes discarded child history")
+	child, err = s.ObserveTranscript(ctx, "main/discarded-child", 0, 0, nil)
+	require.NoError(t, err)
+	require.Empty(t, child, "discarded child checkpoints must not reappear after commit")
+	child, err = s.ObserveEntries(ctx, "main/kept-child")
+	require.NoError(t, err)
+	require.Len(t, child, 1)
+}
+
 func TestObserveTranscript(t *testing.T) {
 	s := newTestSessionService(t)
 	ctx := t.Context()

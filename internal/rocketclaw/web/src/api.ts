@@ -81,6 +81,8 @@ export const queries = {
 };
 
 export const mutations = {
+  stageRevert: (input: { id: string; messageId?: string }) => rpc<{ revertMessageId: string; prompt?: TranscriptEvent }>("StageRevert", input),
+  clearRevert: (input: { id: string }) => rpc("ClearRevert", input),
   forkSession: (input: { id: string; before?: string }) => rpc<{ id: string; prompt: TranscriptEvent }>("ForkSession", input),
   popQueueItem: (input: { id: string; itemId: string }) => rpc("PopQueueItem", input),
   createSession: async (input: { name?: string; agent?: string; sourceConversationId?: string }) => (await rpc<{ id: string }>("CreateSession", input)).id,

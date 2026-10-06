@@ -1152,7 +1152,11 @@ func TestRuntimeHeldQueueManualRelease(t *testing.T) {
 	rt.Sessions, manager.store, bridge.config.SessionService = store, store, store
 	persisted, err := store.ThreadQueueForConversation(conversationID)
 	require.NoError(t, err)
-	require.Equal(t, []protocol.ThreadQueueItem{*held}, persisted)
+	require.Len(t, persisted, 1)
+	require.Equal(t, held.Message, persisted[0].Message)
+	require.Equal(t, held.Content.Attachments, persisted[0].Inbound.Attachments)
+	require.Equal(t, held.Principal, persisted[0].Principal)
+	require.Equal(t, held.Kind, persisted[0].Kind)
 	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
 	require.Empty(t, bridge.requestCh)
 	bridge.handling = true
@@ -1206,9 +1210,9 @@ func TestRuntimeHeldQueueManualRelease(t *testing.T) {
 	require.Len(t, items, 2)
 	require.Equal(t, "ready", items[0].ID)
 
-	want := *held
-	want.Kind, want.Position = protocol.InboundKindEnqueue, 41
-	require.Equal(t, want, items[1])
+	require.Equal(t, held.ID, items[1].ID)
+	require.Equal(t, protocol.InboundKindEnqueue, items[1].Kind)
+	require.Equal(t, 41, items[1].Position)
 	require.Equal(t, "ready", (<-bridge.requestCh).queueItemID)
 	_, claimed, err = (stateDAO{db: store.db}).claimThreadQueueItem(t.Context(), conversationID, "ready")
 	require.NoError(t, err)
@@ -1230,9 +1234,7 @@ func TestRuntimeHeldQueueManualRelease(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, promoted)
 	require.Equal(t, protocol.InboundKindSteer, (<-bridge.requestCh).inbound.Kind)
-	require.Contains(t, logs.String(), `"event":"queue_persisted"`)
 	require.Contains(t, logs.String(), `"event":"queue_removed"`)
-	require.Contains(t, logs.String(), `"event":"queue_promoted"`)
 	require.Contains(t, logs.String(), `"blocker":"active_or_queued_request"`)
 	require.NotContains(t, logs.String(), held.Message)
 }

@@ -28,9 +28,9 @@ func TestExternalMCPOriginPairsMigration(t *testing.T) {
 	store := newTestSessionService(t)
 	source := migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}
 	set := migrate.MigrationSet{TableName: "pg_migrations"}
-	n, err := set.ExecMaxContext(t.Context(), store.db, "postgres", source, migrate.Down, 2)
+	n, err := set.ExecMaxContext(t.Context(), store.db, "postgres", source, migrate.Down, 3)
 	require.NoError(t, err)
-	require.Equal(t, 2, n)
+	require.Equal(t, 3, n)
 	_, err = store.db.ExecContext(t.Context(), `INSERT INTO external_mcp_sessions
 (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) VALUES
 ('with-details', 'private', 'managed', 'helper', '#triage'),
@@ -56,16 +56,11 @@ INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUE
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Nil(t, binding.OriginPairs)
-		entries, err := store.ObserveEntries(t.Context(), "private")
+		// This deliberately tests physical migration output at schema 024,
+		// before the current application's history projection columns exist.
+		entries, err := queryStrings(t.Context(), store.db, `SELECT conversation_id || ':' || (entry_json->>'type') FROM session_entries ORDER BY conversation_id`, "migrated origin entries")
 		require.NoError(t, err)
-		require.Len(t, entries, 1)
-		require.Equal(t, "turn", entries[0].Entry.Type)
-		entries, err = store.ObserveEntries(t.Context(), "managed")
-		require.NoError(t, err)
-		require.Empty(t, entries)
-		entries, err = store.ObserveEntries(t.Context(), "unbound")
-		require.NoError(t, err)
-		require.Len(t, entries, 1, "unbound archived details must not be discarded")
+		require.Equal(t, []string{"private:turn", "unbound:mcp_external_origin_pairs"}, entries)
 		n, err = set.ExecMaxContext(t.Context(), store.db, "postgres", source, migrate.Down, 1)
 		require.NoError(t, err)
 		require.Equal(t, 1, n)
@@ -82,7 +77,7 @@ func TestChatOriginFactsReportsFailures(t *testing.T) {
 
 	seen := 0
 
-	for _, err := range store.ChatOriginFacts(ctx) {
+	for _, err := range store.ChatOriginFacts(ctx, "") {
 		require.NoError(t, err)
 
 		seen++
@@ -98,7 +93,7 @@ VALUES ('external', 'private', 'first', 'helper', '#triage', '"not an object"')`
 
 	var errs []error
 
-	for _, err := range store.ChatOriginFacts(ctx) {
+	for _, err := range store.ChatOriginFacts(ctx, "") {
 		if err != nil {
 			errs = append(errs, err)
 		}
@@ -106,13 +101,29 @@ VALUES ('external', 'private', 'first', 'helper', '#triage', '"not an object"')`
 
 	require.Len(t, errs, 1)
 	require.ErrorContains(t, errs[0], "decode external MCP origin pairs")
+	// A single-session origin read must neither visit nor decode unrelated bindings.
+	seen = 0
+
+	for facts, err := range store.ChatOriginFacts(ctx, "second") {
+		require.NoError(t, err)
+		require.Equal(t, "second", facts.ConversationID)
+
+		seen++
+	}
+
+	require.Equal(t, 1, seen)
+
+	for _, err := range store.ChatOriginFacts(ctx, "missing") {
+		require.NoError(t, err)
+		t.Fatal("missing origin unexpectedly returned a row")
+	}
 
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
 
 	errs = nil
 
-	for _, err := range store.ChatOriginFacts(canceled) {
+	for _, err := range store.ChatOriginFacts(canceled, "") {
 		errs = append(errs, err)
 	}
 

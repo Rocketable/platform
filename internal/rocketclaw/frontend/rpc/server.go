@@ -176,7 +176,7 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 		if cronOrigins == nil {
 			cronOrigins = make(map[string]string)
 
-			for facts, err := range s.sessions.ChatOriginFacts(ctx) {
+			for facts, err := range s.sessions.ChatOriginFacts(ctx, "") {
 				if err != nil {
 					return err
 				}
@@ -256,43 +256,7 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 // returns readable payloads only for entries whose fingerprints have changed.
 // A limited view follows entries from From onward; Oldest changes only when
 // history is cleared, which restarts the view.
-type historyRevision struct {
-	ConversationID string            `json:"conversation_id"`
-	Source         string            `json:"source"`
-	Entries        map[string]string `json:"entries"`
-	From           int64             `json:"from,omitempty"`
-	Oldest         int64             `json:"oldest,omitempty"`
-}
-
-// historyRange returns the saved-entry range a History read covers and the
-// conversation's oldest saved-entry ID, clearing previous when it cannot be followed.
-func (s *Server) historyRange(ctx context.Context, request *HistoryRequest, previous *historyRevision) (from, oldest int64, err error) {
-	from = request.GetFrom()
-	if request.GetLimit() > 0 || request.GetBefore() > 0 {
-		start, first, err := s.sessions.TranscriptPage(ctx, request.Id, request.GetBefore(), max(int(request.GetLimit()), 1))
-		if err != nil {
-			return 0, 0, fmt.Errorf("read web history page: %w", err)
-		}
-
-		switch {
-		case request.GetLimit() == 0: // An explicit page range starts at From.
-		case request.GetBefore() == 0 && previous.Entries != nil && previous.Oldest == first:
-			// Ponytail: an open view follows every entry added since it opened; reopening
-			// shrinks it back to the newest limit. Slide From forward if tabs stay open for very long.
-			from = previous.From
-		default:
-			from = start
-		}
-
-		oldest = first
-	}
-
-	if request.GetBefore() > 0 || previous.Oldest != oldest {
-		*previous = historyRevision{}
-	}
-
-	return from, oldest, nil
-}
+type historyRevision = backend.HistoryInventory
 
 func (s *Server) history(ctx context.Context, request *HistoryRequest) (*HistoryResponse, error) {
 	if _, _, err := s.principal(ctx); err != nil {
@@ -314,20 +278,20 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 		previous = historyRevision{}
 	}
 
-	from, oldest, err := s.historyRange(ctx, request, &previous)
+	view, err := s.sessions.ObserveHistory(ctx, request.Id, request.SourceConversationId, request.GetFrom(), request.GetBefore(), int(request.GetLimit()), previous)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read web history page: %w", err)
 	}
 
-	entries, err := s.sessions.ObserveTranscript(ctx, request.Id, from, request.GetBefore(), previous.Entries)
-	if err != nil {
-		return nil, fmt.Errorf("read web history: %w", err)
+	if view.Reset {
+		previous = historyRevision{}
 	}
 
-	response := &HistoryResponse{Reset_: previous.Entries == nil, Start: from, More: from > oldest}
+	entries, from, oldest := view.Entries, view.Inventory.From, view.Inventory.Oldest
+	response := &HistoryResponse{Reset_: view.Reset, Start: from, More: from > oldest, RevertEligible: view.Eligible, RevertMessageId: view.Inventory.Marker, CanUndo: view.Predecessor != "", Delegations: view.Delegations}
 
 	if !cronTrace && request.GetBefore() == 0 {
-		response.Origin, err = s.chatOrigin(ctx, request.Id, entries, from, oldest)
+		response.Origin, err = s.chatOrigin(ctx, request.Id)
 		if err != nil {
 			return nil, err
 		}
@@ -341,7 +305,8 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 	defer func() { _ = root.Close() }()
 
 	calls := make(map[string]map[string]string)
-	current := historyRevision{ConversationID: request.Id, Source: request.SourceConversationId, Entries: make(map[string]string), From: from, Oldest: oldest}
+	current := view.Inventory
+	current.Entries = make(map[string]string)
 
 	for i := range entries {
 		entry := &entries[i]
@@ -376,11 +341,6 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 		}
 
 		response.Messages = append(response.Messages, messages...)
-	}
-
-	response.Delegations, err = s.sessions.Delegations(ctx, request.Id, request.SourceConversationId, from, request.GetBefore())
-	if err != nil {
-		return nil, fmt.Errorf("read web delegations: %w", err)
 	}
 
 	if request.GetBefore() > 0 {
@@ -1354,7 +1314,7 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 
 	if kind == protocol.InboundKindEnqueue || kind == protocol.InboundKindHeld {
 		item := &protocol.ThreadQueueItem{
-			ID: rand.Text(), Message: text, Principal: principal, Source: protocol.SourceWeb,
+			ID: cmp.Or(request.MessageId, rand.Text()), Message: text, Principal: principal, Source: protocol.SourceWeb,
 			Kind: kind, Content: content, StashAt: time.Now().UTC(),
 		}
 		if err := s.backend.StashQueueItem(ctx, request.Id, item); err != nil {
@@ -1370,6 +1330,9 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 	inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
 
 	inbound.Metadata["web_message_id"] = cmp.Or(request.MessageId, rand.Text())
+	if goal.Objective != "" {
+		inbound.Metadata["web_goal_prompt"] = request.Text + strings.TrimPrefix(inbound.Text, text)
+	}
 
 	return s.submitPrompt(ctx, inbound, goal)
 }
@@ -1654,54 +1617,27 @@ type externalMCPOrigin struct {
 	Pairs                  []originPair `json:"pairs"`
 }
 
-// chatOrigin reads the origin from entries starting at saved-entry ID from. The
-// creating entry, oldest, decides the origin even when entries start after it.
-func (s *Server) chatOrigin(ctx context.Context, id string, entries []backend.ObservedSessionEntry, from, oldest int64) (string, error) {
-	thread, _, err := s.sessions.Thread(id)
-	if err != nil {
-		return "", fmt.Errorf("read origin thread: %w", err)
-	}
-
-	externalID, binding, _, err := s.sessions.ExternalMCPSessionByConversationID(id)
-	if err != nil {
-		return "", fmt.Errorf("read origin external MCP binding: %w", err)
-	}
-
-	if from > oldest {
-		first, err := s.sessions.ObserveTranscript(ctx, id, oldest, oldest+1, nil)
+// chatOrigin reads only this session's physical origin, independent of its cutoff.
+func (s *Server) chatOrigin(ctx context.Context, id string) (string, error) {
+	for facts, err := range s.sessions.ChatOriginFacts(ctx, id) {
 		if err != nil {
-			return "", fmt.Errorf("read origin entry: %w", err)
+			return "", fmt.Errorf("read origin facts: %w", err)
 		}
 
-		entries = slices.Concat(first, entries)
-	}
-
-	facts := backend.ChatOriginFacts{ConversationID: id, CreatedBy: thread.CreatedBy, ExternalConversationID: externalID, Binding: binding}
-	// Unsaved turn checkpoints (ID 0) can sort ahead of the creating entry.
-	if first := slices.IndexFunc(entries, func(entry backend.ObservedSessionEntry) bool { return entry.ID != 0 }); first >= 0 {
-		facts.CreatingSource = entries[first].SourceConversationID
-	}
-
-	if locator, cron := creatingCronLocator(id, thread.CreatedBy, facts.CreatingSource); cron {
-		producer, _, err := s.sessions.Thread(locator)
-		if err != nil {
-			return "", fmt.Errorf("read cron producer agent: %w", err)
+		origin, _ := decideOrigin(&facts)
+		if origin == nil {
+			return "", nil
 		}
 
-		facts.ProducerAgent = producer.Agent
+		raw, err := json.Marshal(origin)
+		if err != nil {
+			return "", fmt.Errorf("encode chat origin: %w", err)
+		}
+
+		return string(raw), nil
 	}
 
-	origin, _ := decideOrigin(&facts)
-	if origin == nil {
-		return "", nil
-	}
-
-	raw, err := json.Marshal(origin)
-	if err != nil {
-		return "", fmt.Errorf("encode chat origin: %w", err)
-	}
-
-	return string(raw), nil
+	return "", nil
 }
 
 // decideOrigin applies the origin rules to stored facts and returns the origin with the

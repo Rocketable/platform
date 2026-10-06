@@ -161,7 +161,7 @@ VALUES ('early-reply', $1, '{}', '[]', 1, 1, 0)`, cronSlack)
 
 	var originated []string
 
-	for facts, err := range sessions.ChatOriginFacts(ctx) {
+	for facts, err := range sessions.ChatOriginFacts(ctx, "") {
 		require.NoError(t, err)
 
 		var raw []byte
@@ -198,6 +198,18 @@ VALUES ('early-reply', $1, '{}', '[]', 1, 1, 0)`, cronSlack)
 			require.NoError(t, err)
 			require.Equal(t, origin, history.Origin, "%s with limit %d", id, limit)
 		}
+	}
+	// Isolate physical origin from projection even for an ineligible copied origin;
+	// mutation denial is asserted separately by the unchanged Revert eligibility tests.
+	for _, id := range []string{"web-cron-synced", "web-later-cron"} {
+		_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = (SELECT MIN(id)::text || ':0' FROM session_entries WHERE conversation_id = $1) WHERE conversation_id = $1`, id)
+		require.NoError(t, err)
+		history, err := server.history(ctx, &HistoryRequest{Id: id})
+		require.NoError(t, err)
+		require.Equal(t, bulk[id], history.Origin, "first-message cutoff cannot erase physical origin")
+		require.Equal(t, id == "web-later-cron", history.RevertEligible, "only the creating source decides pure-Web eligibility")
+		_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = '' WHERE conversation_id = $1`, id)
+		require.NoError(t, err)
 	}
 
 	search := func(ctx context.Context, query string) (map[string]string, error) {

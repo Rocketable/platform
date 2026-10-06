@@ -39,6 +39,10 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/UploadAttachment") {
+      expect(await request.text()).toBe("keep attachment");
+      return Response.json({ id: "uploaded-draft", name: "draft.txt", mimeType: "text/plain", size: "15", conversationId: url.searchParams.get("conversationId") });
+    }
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: Object.keys(histories).map((id) => ({ id, name: id === "destination" ? "Podcast editing notes with a very long conversation title" : id, agent: "main", preview: histories[id].at(-1)?.text, forkedFrom: forkParents[id], settled: id === "forked" && settledFork, ...details[id] })), owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
       const file = Bun.file(path.join(dist, url.pathname));
@@ -48,6 +52,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "session-commands" });
       case "/api/Identity": return Response.json({ username: "tester" });
+      case "/api/ListConfig": return Response.json({ config: { workspace: "session-commands" } });
       case "/api/ListAgents": return Response.json({ agents: agentChoices ? [{ name: "main", model: "test" }] : [], currentAgent: "main" });
       case "/api/ListSkills": return Response.json({ skills: [] });
       case "/api/History": {
@@ -245,8 +250,15 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await commandSearch.fill("$goal");
     await commandSearch.press("Enter");
     await commands.waitFor({ state: "hidden" });
+    const savedComposer = await composer.inputValue();
+    await page.waitForFunction(async (text: string) => {
+      const db = await new Promise<IDBDatabase>((resolve) => { const open = indexedDB.open("rocketclaw-drafts", 1); open.onsuccess = () => resolve(open.result); });
+      const rows = await new Promise<{ text: string }[]>((resolve) => { const request = db.transaction("content").objectStore("content").getAll(); request.onsuccess = () => resolve(request.result); });
+      db.close(); return rows.some((row) => row.text === text);
+    }, savedComposer);
     await page.reload();
     await composer.waitFor();
+    await page.waitForFunction((text: string) => document.querySelector("textarea")?.value === text, savedComposer);
     await page.keyboard.press("Meta+Shift+p");
     expect(await commands.getByRole("button").first().textContent()).toBe("Command: Start goal ($goal)");
     expect(await page.evaluate(() => JSON.parse(localStorage.getItem("command-history")!).filter((key: string) => key === "goal"))).toEqual(["goal"]);
@@ -255,7 +267,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await commandSearch.press("ArrowDown");
     await commandSearch.press("Enter");
     await commands.waitFor({ state: "hidden" });
-    expect(await composer.inputValue()).toBe("$steer ");
+    expect(await composer.inputValue()).toBe(`$steer ${savedComposer}`);
     await page.keyboard.press("Meta+Shift+p");
     await commandSearch.fill("Choose agent");
     await commands.getByRole("button", { name: "Sessions: Choose agent" }).click();
@@ -544,6 +556,7 @@ test("handoff hits and queued items format tags and markup", async () => {
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "format-handoff" });
       case "/api/Identity": return Response.json({ username: "tester" });
+      case "/api/ListConfig": return Response.json({ config: { workspace: "/workspace" } });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }] });
       case "/api/SlackNames": return Response.json({ names: { S1: "handle" } });
       case "/api/History": return Response.json({ messages: [message("1:0", "user", "hello")], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: ["1"], running: false, terminal: "" });

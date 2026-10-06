@@ -36,8 +36,10 @@ lint:
 build:
 	bun run build
 
-test:
-	bun test
+test: build
+	# Transport tests need the live PostgreSQL/provider fixtures owned by Go.
+	bun test $$(find src -type f \( -name '*.test.ts' -o -name '*.test.tsx' \) ! -name '*-transport.test.ts' | sort)
+	go -C .. test ./frontend/rpc -run 'Test(PublicProgressRealBrowser|RevertRealBackendBrowser|SessionEntries|SidebarHTTPStreamsBeforeGoTailAndCancels)$$' -count=1
 	$(MAKE) check-cloc-budget
 
 .PHONY: cloc check-cloc-budget lint build test

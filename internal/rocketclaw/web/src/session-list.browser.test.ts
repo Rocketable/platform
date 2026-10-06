@@ -1909,6 +1909,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await settledPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
       await newChat.click();
       if (width === 390) await settledPage.keyboard.press("Escape");
+      await settledPage.waitForFunction(() => document.querySelector("textarea")?.value === "" && !document.querySelector("textarea")?.closest("fieldset")?.disabled);
       expect(await settledPage.getByPlaceholder("Message a new session").inputValue()).toBe("");
       await settledPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "main" }).waitFor();
       expect(ctrl.createdAgents.length).toBe(creations);
@@ -2896,6 +2897,7 @@ test("sidebar titles and turn-rail previews format tags and markup", async () =>
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "sidebar-format" });
       case "/api/Identity": return Response.json({ username: "tester" });
+      case "/api/ListConfig": return Response.json({ config: { workspace: "/workspace" } });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }] });
       case "/api/SlackNames": return Response.json({ names: { S1: "handle" } });
       case "/api/History": return Response.json({ messages: [{ messageId: "1:0", entryKey: "1", itemId: "1:0", inputId: "", role: "user", text: preview, complete: true, turnId: "" }], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: ["1"], running: false, terminal: "" });

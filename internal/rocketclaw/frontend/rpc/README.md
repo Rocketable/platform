@@ -9,7 +9,8 @@ Backend queue operations and returns without waiting for that turn. `ListQueue`,
 existing Backend queue operations; promotion keeps the queued item's original
 principal and message ID. `ListQueue.delivery` distinguishes later work from pending
 steers. Direct steers retain the client's `Prompt.message_id` as durable `input_id`;
-queued messages use their server-assigned queue IDs. History uses those IDs to move
+pure-Web queued/stashed messages retain the supplied stable message ID (or a
+server-generated ID when omitted). History uses those IDs to move
 waiting inputs into chat in consumption order without matching text. Dropped items
 never run. Reorder writes persisted enqueue positions. Join sends only committed,
 content-free conversation-change hints; it does not replay history or return output
@@ -26,6 +27,34 @@ entry when that entry is not returned. SearchOrigins applies the same origin rul
 to every chat the caller may see in one database query and returns the chats whose
 lowercased origin text contains the query; cron runs and private External MCP
 conversations never match.
+
+`StageRevert` accepts a visible session ID and an optional recorded user
+`message_id`; omission selects Undo's predecessor from complete effective
+history, not the loaded page. It settles the runtime bridge, stages an exclusive
+durable cutoff, and returns the actual marker and editable `TranscriptEvent`
+prompt without its generated header. `ClearRevert` clears the entire cutoff and
+wakes preserved work, with no composer payload. Both require a top-level pure
+Web session; Slack, MCP-bound/private, Cron-origin and delegation sessions are
+ineligible even through direct calls.
+
+History returns `revert_eligible`, `revert_message_id` and `can_undo`, including
+an empty first-message cutoff. Its opaque revision includes the cutoff; a change
+resets page bounds, inventory and delegation links from one database snapshot.
+Committed marker changes use the existing Join wake-up channel. Clients must
+reject outstanding reads across mutations/resets, not compare cutoff values
+alone: Stage followed by Redo can restore the same value. IDs are opaque decimal
+strings with replay indices; do not convert them to JavaScript numbers.
+
+Prepared new prompt admission reconciles message identity under the history
+lock and atomically prunes the abandoned suffix, clears the cutoff, rebuilds the
+summary and stores the new queue owner. Retries of accepted IDs do not prune
+again. `$agent` and `$stop` are controls and leave the cutoff intact. Pending
+human work is hidden while staged, restored in order on Redo, and removed when
+a replacement is accepted. Automatic recovery, schedules and goal continuation
+cannot execute behind the cutoff. Uploads remain available to restored drafts.
+Revert never compensates files, external tool effects, deliveries or scheduled
+registrations. Deploy migration 026 with the regenerated protocol and Web assets;
+clear staged cutoffs before a schema downgrade to avoid exposing hidden history.
 In-progress turns and saved turns share source-qualified turn keys; `item_id` is
 render identity, while `message_id` identifies saved entry positions for commands.
 History returns the recorded turn in order, including developer messages, thinking summaries, tool
@@ -173,6 +202,8 @@ replay retains a file reference without embedding its bytes in transcript RPCs.
 `DownloadAttachment(Attachment) -> stream Attachment` requires the **visible
 conversation ID** in `conversation_id` and the attachment ID in `id`. It authorizes
 against that conversation's current history or queued references on every call,
+including uploads referenced by its selected staged user boundary for composer
+restoration—not arbitrary uploads or other references in the hidden suffix—
 then returns exact original bytes in 256 KiB chunks. Merely knowing an ID is not
 authorization. Private Cron producers and recorded private external MCP sessions
 are denied, as are unmapped browser IPs. Deleting history revokes its references;

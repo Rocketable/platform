@@ -352,6 +352,168 @@ func TestHistoryReadsActiveReplay(t *testing.T) {
 	}
 }
 
+// OpenCode V2 packages/app/src/session/revert.ts restores the prompt without
+// sending and clears the entire cutoff on Redo. IDs remain opaque strings.
+func TestRevertRPCAndHistoryReset(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	seeded := openTestTurns(t, dsn)
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
+	_, err = seeded.db.ExecContext(t.Context(), `INSERT INTO session_entries (id, conversation_id, entry_json, entry_timestamp) VALUES
+        (9007199254741001, 'chat', '{"type":"turn","replay_input":[{"type":"message","role":"user","prompt_header":"[Web principal=\"alice\"]","content":"[Web principal=\"alice\"]\n\n  $skill exact\n"},{"type":"message","role":"assistant","content":"answer"}]}', '')`)
+	require.NoError(t, err)
+
+	engine := &mockBackend{}
+	server := &Server{sessions: sessions, cfg: cfg, backend: engine, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	initial, err := server.history(ctx, &HistoryRequest{Id: "chat", Limit: 1})
+	require.NoError(t, err)
+	require.True(t, initial.RevertEligible)
+	require.True(t, initial.CanUndo)
+
+	const marker = "9007199254741001:0"
+
+	engine.StageRevertFunc = func(_ context.Context, id, before string) (string, string, error) {
+		require.Equal(t, "chat", id)
+		require.Equal(t, marker, before)
+		_, err := seeded.db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = $2 WHERE conversation_id = $1`, "chat", marker)
+		require.NoError(t, err)
+
+		return marker, "  $skill exact\n", nil
+	}
+	staged, err := server.stageRevert(ctx, &StageRevertRequest{Id: "chat", MessageId: marker})
+	require.NoError(t, err)
+	require.Equal(t, marker, staged.RevertMessageId)
+	require.Equal(t, "  $skill exact\n", staged.Prompt.Text)
+
+	hidden, err := server.history(ctx, &HistoryRequest{Id: "chat", Limit: 1, Revision: initial.Revision})
+	require.NoError(t, err)
+	require.True(t, hidden.Reset_)
+	require.True(t, hidden.RevertEligible)
+	require.False(t, hidden.CanUndo)
+	require.Equal(t, marker, hidden.RevertMessageId)
+	require.Empty(t, hidden.Messages)
+
+	engine.ClearRevertFunc = func(_ context.Context, id string) error {
+		require.Equal(t, "chat", id)
+
+		_, err := seeded.db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = '' WHERE conversation_id = $1`, "chat")
+		require.NoError(t, err)
+
+		return nil
+	}
+	_, err = server.clearRevert(ctx, &ClearRevertRequest{Id: "chat"})
+	require.NoError(t, err)
+	restored, err := server.history(ctx, &HistoryRequest{Id: "chat", Limit: 1, Revision: hidden.Revision})
+	require.NoError(t, err)
+	require.True(t, restored.Reset_)
+	require.Equal(t, initial.Messages, restored.Messages)
+	_, err = server.stageRevert(t.Context(), &StageRevertRequest{Id: "chat", MessageId: marker})
+	require.Error(t, err, "authentication is checked before mutation")
+}
+
+func TestRevertRealBackendBrowser(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	requests := make(chan string, 2)
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if !assert.NoError(t, err) {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		_, request, err := conn.ReadMessage()
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		requests <- string(request)
+
+		assert.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"branch","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"reply","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"branch reply","annotations":[]}]}]}}`)))
+	}))
+	t.Cleanup(provider.Close)
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}, OpenAI: config.OpenAIConfig{APIKey: "owned-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}}
+	root, err := os.OpenRoot(cfg.Workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\ndescription: Revert fixture\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nReply plainly.\n"), 0o600))
+	require.NoError(t, root.WriteFile("external-effect.txt", []byte("already happened"), 0o600))
+	ctx, cancel := context.WithCancel(t.Context())
+	ready := make(chan *backend.Runtime)
+	assembly := &mockFrontendAssembler{AssembleFunc: func(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+		ready <- rt
+		return nil, rt.RunCtx.Done(), nil, nil // Public assembler permits absent Slack.
+	}, ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil }}
+
+	var running errgroup.Group
+	running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly) })
+	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
+
+	rt := <-ready
+	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "chat", Agent: "main", CreatedBy: "alice"}))
+
+	for _, id := range []string{"retained-upload", "boundary-upload", "hidden-upload"} {
+		require.NoError(t, rt.Sessions.SaveAttachment(ctx, "chat", &protocol.OutboundAttachment{ID: id, Name: id + ".txt", MIMEType: "text/plain", Data: []byte(id + " bytes")}, true))
+	}
+
+	_, err = rt.Sessions.AppendEntryID(ctx, "chat", &rocketcode.SessionEntry{Type: "turn", TurnID: "old", ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","content":"retained request\n\nattachment:retained-upload \"retained-upload.txt\" (workspace path \"artifacts/uploads/retained-upload/retained-upload.txt\")"}`),
+		json.RawMessage(`{"type":"message","role":"assistant","content":"retained answer"}`),
+		json.RawMessage(`{"type":"message","role":"user","content":"abandoned request\n\nattachment:boundary-upload \"boundary-upload.txt\" (workspace path \"artifacts/uploads/boundary-upload/boundary-upload.txt\")"}`),
+		json.RawMessage(`{"type":"function_call","call_id":"discarded","name":"execute","arguments":"{}"}`),
+		json.RawMessage(`{"type":"function_call_output","call_id":"discarded","output":"abandoned tool result"}`),
+		json.RawMessage(`{"type":"message","role":"assistant","content":"abandoned answer"}`),
+		json.RawMessage(`{"type":"message","role":"user","content":"later abandoned request\n\nattachment:hidden-upload \"hidden-upload.txt\" (workspace path \"artifacts/uploads/hidden-upload/hidden-upload.txt\")"}`),
+		json.RawMessage(`{"type":"compaction","content":"abandoned summary"}`),
+	}})
+	require.NoError(t, err)
+	listener, err := Listen(testSocketPath(t))
+	require.NoError(t, err)
+
+	transport := grpc.NewServer()
+
+	New(rt, rt.Sessions, cfg, &mockChannels{}, &mockCronJobs{JobsFunc: func() ([]cronfrontend.Job, error) { return nil, nil }}).Register(transport)
+	go func() { _ = transport.Serve(listener) }()
+
+	t.Cleanup(transport.Stop)
+
+	connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+
+	httpServer := httptest.NewServer(NewHTTPHandler(connection, cfg.Web.Sentry))
+	t.Cleanup(httpServer.Close)
+	runWebTest(t, "src/revert-transport.test.ts", "ROCKETCLAW_REVERT_TEST_URL="+httpServer.URL)
+
+	request := <-requests
+	require.Contains(t, request, "retained answer")
+	require.Contains(t, request, "edited replacement")
+	require.Contains(t, request, "alice")
+	require.NotContains(t, request, "abandoned")
+
+	data, err := root.ReadFile("external-effect.txt")
+	require.NoError(t, err)
+	require.Equal(t, "already happened", string(data), "conversation commit does not undo tool effects")
+	// Reopen the actual store to prove the committed projection, not browser filtering.
+	reopened, err := backend.NewSessionServiceIn(ctx, cfg, slog.New(slog.DiscardHandler))
+
+	require.NoError(t, err)
+	defer func() { require.NoError(t, reopened.Stop()) }()
+
+	stored, err := reopened.ObserveEntries(ctx, "chat")
+	require.NoError(t, err)
+	encoded, err := json.Marshal(stored)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), "abandoned")
+}
+
 func TestHistoryFollowsNewestEntries(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -423,7 +585,7 @@ func TestHistoryFollowsNewestEntries(t *testing.T) {
 	require.Equal(t, keys[5:], restarted.EntryKeys)
 	require.False(t, restarted.GetMore())
 
-	// An unreadable creating entry fails the read instead of silently dropping the origin.
+	// Physical origin needs provenance, not unrelated output-trace decoding outside the page.
 	_, err = sessions.DeleteSession(ctx, "chat")
 	require.NoError(t, err)
 	db, err := sql.Open("pgx", dsn)
@@ -434,8 +596,10 @@ func TestHistoryFollowsNewestEntries(t *testing.T) {
 	require.NoError(t, err)
 	appendTurn("readable")
 
-	_, err = server.history(ctx, &HistoryRequest{Id: "chat", Limit: 1})
-	require.ErrorContains(t, err, "read origin entry")
+	readable, err := server.history(ctx, &HistoryRequest{Id: "chat", Limit: 1})
+	require.NoError(t, err)
+	require.Empty(t, readable.Origin)
+	require.Equal(t, "readable", readable.Messages[0].Text)
 
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()

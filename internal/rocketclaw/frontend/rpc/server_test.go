@@ -43,6 +43,33 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func TestRevertWireContract(t *testing.T) {
+	const marker = "9007199254741001:4"
+
+	stage := &StageRevertRequest{Id: "chat", MessageId: marker}
+	staged := &StageRevertResponse{RevertMessageId: marker, Prompt: &TranscriptEvent{Role: "user", Text: "  $skill exact\n"}}
+	redo := &ClearRevertRequest{Id: "chat"}
+
+	history := &HistoryResponse{RevertEligible: true, RevertMessageId: marker, CanUndo: true}
+	for _, message := range []proto.Message{stage, staged, redo, &ClearRevertResponse{}, history} {
+		encoded, err := proto.Marshal(message)
+		require.NoError(t, err)
+
+		decoded := message.ProtoReflect().New().Interface()
+		require.NoError(t, proto.Unmarshal(encoded, decoded))
+		require.True(t, proto.Equal(message, decoded), "Revert data must survive the gRPC wire format")
+	}
+
+	require.Equal(t, "chat", stage.GetId())
+	require.Equal(t, marker, stage.GetMessageId(), "composite IDs are never numeric protobuf fields")
+	require.Equal(t, marker, staged.GetRevertMessageId())
+	require.Equal(t, "  $skill exact\n", staged.GetPrompt().GetText())
+	require.Equal(t, "chat", redo.GetId())
+	require.True(t, history.GetRevertEligible())
+	require.True(t, history.GetCanUndo())
+	require.Equal(t, marker, history.GetRevertMessageId())
+}
+
 func TestTailscaleBrowserIdentity(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", dir)
@@ -884,7 +911,9 @@ func TestSessionEntries(t *testing.T) {
 		require.NoError(t, err)
 		require.Contains(t, rejected.PrivateText, "`maxTurns:`")
 
-		started, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: " $Goal maxTurns: 2 ship it", Delivery: PromptDelivery_QUEUE, MessageId: "goal-message"})
+		file := protocol.OutboundAttachment{ID: "goal-file", Name: "goal.txt", MIMEType: "text/plain", Data: []byte("goal context")}
+		require.NoError(t, sessions.SaveAttachment(ctx, id, &file, true))
+		started, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: " $Goal maxTurns: 2 ship it", Delivery: PromptDelivery_QUEUE, MessageId: "goal-message", AttachmentIds: []string{file.ID}})
 		require.NoError(t, err)
 		require.Empty(t, started.PrivateText)
 		require.Equal(t, []protocol.GoalRequest{{Objective: "ship it", MaxTurns: 2}}, goals)
@@ -892,9 +921,16 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, protocol.InboundKindPrompt, goalInbounds[0].Kind)
 		require.Equal(t, protocol.SourceWeb, goalInbounds[0].Source)
 		require.Equal(t, id, goalInbounds[0].ConversationID)
-		require.Equal(t, "ship it", goalInbounds[0].Text)
+
+		reference := `attachment:goal-file "goal.txt" (workspace path "artifacts/uploads/goal-file/goal.txt")`
+		require.Equal(t, "ship it\n\n"+reference, goalInbounds[0].Text)
 		require.Equal(t, "alice", goalInbounds[0].Metadata[protocol.InboundPrincipalMetadataKey])
 		require.Equal(t, "goal-message", goalInbounds[0].Metadata["web_message_id"])
+		restored, err := server.inputEvent(ctx, id, goalInbounds[0].Metadata["web_goal_prompt"])
+		require.NoError(t, err)
+		require.Equal(t, " $Goal maxTurns: 2 ship it", restored.Text)
+		require.Len(t, restored.Attachments, 1)
+		require.Equal(t, file.ID, restored.Attachments[0].Id)
 
 		busy, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "$goal busy", Delivery: PromptDelivery_STEER})
 		require.NoError(t, err)
@@ -1682,15 +1718,17 @@ func TestSessionEntries(t *testing.T) {
 	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = $1::json WHERE id = $2`, stored, observed[3].ID)
 	require.NoError(t, err)
 
-	// The transcript skips an active turn its saved entry replaces; the delegation read still parses it.
+	// Both transcript and delegation inventory ignore physically superseded
+	// checkpoints, even when their unreadable detail survives in the journal.
 	corrupt := "cron:corrupt-delegations"
 	_, err = sessions.AppendEntryID(ctx, corrupt, &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "corrupt-turn", Timestamp: time.Now()})
 	require.NoError(t, err)
 	require.NoError(t, seeded.UpsertActiveTurn(ctx, &testCheckpoint{TurnID: "corrupt-turn", ConversationKey: corrupt, Agent: "main"}))
 	_, err = db.ExecContext(ctx, `UPDATE turn_steps SET value = '{"record":{"replay_input":{}}}' WHERE key = 'corrupt-turn'`)
 	require.NoError(t, err)
-	_, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: corrupt})
-	require.ErrorContains(t, err, "read web delegations")
+	corruptView, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: corrupt})
+	require.NoError(t, err)
+	require.Empty(t, corruptView.Delegations)
 
 	for _, table := range []string{"active_turns", "session_entries", "session_summaries"} {
 		_, err = db.ExecContext(ctx, "DELETE FROM "+table+" WHERE conversation_id = $1", corrupt)

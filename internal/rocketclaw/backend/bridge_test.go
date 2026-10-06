@@ -3550,7 +3550,7 @@ Request: $ARGUMENTS
 
 				promote := kind == protocol.InboundKindEnqueue && strings.HasPrefix(invocation, "$skill ")
 				if kind == protocol.InboundKindEnqueue {
-					item := protocol.ThreadQueueItem{ID: "queued", ConversationID: conversationID, Source: source, Message: invocation, Principal: "Alice", Content: protocol.InboundContent{Text: invocation, TextAttachments: []string{"attachment-only argument"}}}
+					item := protocol.ThreadQueueItem{ID: conversationID + "-queued", ConversationID: conversationID, Source: source, Message: invocation, Principal: "Alice", Content: protocol.InboundContent{Text: invocation, TextAttachments: []string{"attachment-only argument"}}}
 					require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
 					manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: service, bridges: map[string]directBridge{conversationID: bridge}}
 					require.NoError(t, service.PutThreadQueueItem("removed", &item))
@@ -3617,7 +3617,7 @@ Request: $ARGUMENTS
 				assert.Contains(t, requestContent, invocation)
 
 				if kind == protocol.InboundKindEnqueue {
-					item := protocol.ThreadQueueItem{ID: "denied", ConversationID: conversationID, Source: source, Message: invocation}
+					item := protocol.ThreadQueueItem{ID: conversationID + "-denied", ConversationID: conversationID, Source: source, Message: invocation}
 					require.NoError(t, service.PutThreadQueueItem(item.ID, &item))
 
 					bridge.requestCh = make(chan bridgeRequest, 1)

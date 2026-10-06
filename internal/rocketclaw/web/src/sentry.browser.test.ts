@@ -43,6 +43,7 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
+    if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "sentry" } });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "sentry-test" });
     if (url.pathname === "/api/ListCronJobs") return Response.json({ message: "request failure", code: 13 }, { status: 500 });
     if (url.pathname === "/api/ListSkills") return Response.json({ skills: breakReact ? "invalid rows" : [] }); // Force a real React render failure.

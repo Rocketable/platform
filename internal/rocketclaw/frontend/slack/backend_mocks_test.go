@@ -23,6 +23,9 @@ var _ frontend.Backend = &backendMock{}
 //
 //		// make and configure a mocked frontend.Backend
 //		mockedBackend := &backendMock{
+//			ClearRevertFunc: func(context1 context.Context, s string) error {
+//				panic("mock out the ClearRevert method")
+//			},
 //			CreateConversationFunc: func(context1 context.Context, conversation protocol.Conversation) error {
 //				panic("mock out the CreateConversation method")
 //			},
@@ -46,6 +49,9 @@ var _ frontend.Backend = &backendMock{}
 //			},
 //			RunTurnFunc: func(context1 context.Context, inboundMessage *protocol.InboundMessage) error {
 //				panic("mock out the RunTurn method")
+//			},
+//			StageRevertFunc: func(context1 context.Context, s string, s1 string) (string, string, error) {
+//				panic("mock out the StageRevert method")
 //			},
 //			StartGoalFunc: func(context1 context.Context, inboundMessage *protocol.InboundMessage, goalRequest protocol.GoalRequest) error {
 //				panic("mock out the StartGoal method")
@@ -72,6 +78,9 @@ var _ frontend.Backend = &backendMock{}
 //
 //	}
 type backendMock struct {
+	// ClearRevertFunc mocks the ClearRevert method.
+	ClearRevertFunc func(context1 context.Context, s string) error
+
 	// CreateConversationFunc mocks the CreateConversation method.
 	CreateConversationFunc func(context1 context.Context, conversation protocol.Conversation) error
 
@@ -96,6 +105,9 @@ type backendMock struct {
 	// RunTurnFunc mocks the RunTurn method.
 	RunTurnFunc func(context1 context.Context, inboundMessage *protocol.InboundMessage) error
 
+	// StageRevertFunc mocks the StageRevert method.
+	StageRevertFunc func(context1 context.Context, s string, s1 string) (string, string, error)
+
 	// StartGoalFunc mocks the StartGoal method.
 	StartGoalFunc func(context1 context.Context, inboundMessage *protocol.InboundMessage, goalRequest protocol.GoalRequest) error
 
@@ -116,6 +128,13 @@ type backendMock struct {
 
 	// calls tracks calls to the methods.
 	calls struct {
+		// ClearRevert holds details about calls to the ClearRevert method.
+		ClearRevert []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+		}
 		// CreateConversation holds details about calls to the CreateConversation method.
 		CreateConversation []struct {
 			// Context1 is the context1 argument value.
@@ -174,6 +193,15 @@ type backendMock struct {
 			// InboundMessage is the inboundMessage argument value.
 			InboundMessage *protocol.InboundMessage
 		}
+		// StageRevert holds details about calls to the StageRevert method.
+		StageRevert []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+			// S1 is the s1 argument value.
+			S1 string
+		}
 		// StartGoal holds details about calls to the StartGoal method.
 		StartGoal []struct {
 			// Context1 is the context1 argument value.
@@ -217,6 +245,7 @@ type backendMock struct {
 		WorkflowDescriptions []struct {
 		}
 	}
+	lockClearRevert             sync.RWMutex
 	lockCreateConversation      sync.RWMutex
 	lockDeleteQueueItem         sync.RWMutex
 	lockListConversations       sync.RWMutex
@@ -225,12 +254,49 @@ type backendMock struct {
 	lockQueueItems              sync.RWMutex
 	lockReorderQueueItems       sync.RWMutex
 	lockRunTurn                 sync.RWMutex
+	lockStageRevert             sync.RWMutex
 	lockStartGoal               sync.RWMutex
 	lockStashQueueItem          sync.RWMutex
 	lockSubscribe               sync.RWMutex
 	lockSwitchConversationAgent sync.RWMutex
 	lockSyncConversation        sync.RWMutex
 	lockWorkflowDescriptions    sync.RWMutex
+}
+
+// ClearRevert calls ClearRevertFunc.
+func (mock *backendMock) ClearRevert(context1 context.Context, s string) error {
+	if mock.ClearRevertFunc == nil {
+		panic("backendMock.ClearRevertFunc: method is nil but Backend.ClearRevert was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+	}{
+		Context1: context1,
+		S:        s,
+	}
+	mock.lockClearRevert.Lock()
+	mock.calls.ClearRevert = append(mock.calls.ClearRevert, callInfo)
+	mock.lockClearRevert.Unlock()
+	return mock.ClearRevertFunc(context1, s)
+}
+
+// ClearRevertCalls gets all the calls that were made to ClearRevert.
+// Check the length with:
+//
+//	len(mockedBackend.ClearRevertCalls())
+func (mock *backendMock) ClearRevertCalls() []struct {
+	Context1 context.Context
+	S        string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+	}
+	mock.lockClearRevert.RLock()
+	calls = mock.calls.ClearRevert
+	mock.lockClearRevert.RUnlock()
+	return calls
 }
 
 // CreateConversation calls CreateConversationFunc.
@@ -522,6 +588,46 @@ func (mock *backendMock) RunTurnCalls() []struct {
 	mock.lockRunTurn.RLock()
 	calls = mock.calls.RunTurn
 	mock.lockRunTurn.RUnlock()
+	return calls
+}
+
+// StageRevert calls StageRevertFunc.
+func (mock *backendMock) StageRevert(context1 context.Context, s string, s1 string) (string, string, error) {
+	if mock.StageRevertFunc == nil {
+		panic("backendMock.StageRevertFunc: method is nil but Backend.StageRevert was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+		S1       string
+	}{
+		Context1: context1,
+		S:        s,
+		S1:       s1,
+	}
+	mock.lockStageRevert.Lock()
+	mock.calls.StageRevert = append(mock.calls.StageRevert, callInfo)
+	mock.lockStageRevert.Unlock()
+	return mock.StageRevertFunc(context1, s, s1)
+}
+
+// StageRevertCalls gets all the calls that were made to StageRevert.
+// Check the length with:
+//
+//	len(mockedBackend.StageRevertCalls())
+func (mock *backendMock) StageRevertCalls() []struct {
+	Context1 context.Context
+	S        string
+	S1       string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+		S1       string
+	}
+	mock.lockStageRevert.RLock()
+	calls = mock.calls.StageRevert
+	mock.lockStageRevert.RUnlock()
 	return calls
 }
 

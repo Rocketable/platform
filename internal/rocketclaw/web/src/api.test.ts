@@ -95,6 +95,7 @@ test("protobuf envelopes retain exact input, selected agent, private text and in
     Prompt: { privateText: "private\nreport" }, CreateSession: { id: "web-session:new" }, RunCronJob: { id: "cron:id" },
     Protocol: { protoSha256: "hash" }, Identity: { username: "alice", principal: "Alice Smith" }, ListQueue: { items: [] }, ListCronJobs: { jobs: [] }, ListConfig: { config: {} }, History: initialHistory,
     ListSessionEntries: { entries: [{ id: "9007199254740993", type: "turn" }] }, LoadSessionEntries: { entries: [{ id: "9007199254740993", json: "{}" }] }, DeleteSessionEntries: { deleted: "9007199254740993" },
+    StageRevert: { revertMessageId: "9007199254740993:4", prompt: { text: "  exact\n", attachments: [] } }, ClearRevert: {},
   };
   const fetchMock = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (url: URL | RequestInfo, init?: RequestInit) => {
     const method = String(url).split("/").at(-1)!;
@@ -103,6 +104,9 @@ test("protobuf envelopes retain exact input, selected agent, private text and in
   }, { preconnect: fetch.preconnect }));
   const signal = new AbortController().signal;
   try {
+    expect(await mutations.stageRevert({ id: "visible", messageId: "9007199254740993:4" })).toMatchObject({ revertMessageId: "9007199254740993:4", prompt: { text: "  exact\n", attachments: [] } });
+    expect(await mutations.clearRevert({ id: "visible" })).toEqual({});
+    expect(requests.splice(0)).toEqual([{ path: "/api/StageRevert", input: { id: "visible", messageId: "9007199254740993:4" } }, { path: "/api/ClearRevert", input: { id: "visible" } }]);
     expect(await queries.agents({ conversationId: "visible" }).queryFn({ signal })).toEqual({ agents: [{ name: "main" }], currentAgent: "main" });
     expect(await queries.skills({ agent: "main" }).queryFn({ signal })).toEqual([{ name: "review" }]);
     await queries.skills().queryFn({ signal });

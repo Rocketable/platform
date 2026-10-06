@@ -98,48 +98,48 @@ func (s *SessionService) ObserveTranscript(ctx context.Context, conversationID s
 		return nil, errors.New("conversation ID is required")
 	}
 
+	return observeTranscriptDB(ctx, s.db, conversationID, from, before, revisions)
+}
+
+func observeTranscriptDB(ctx context.Context, db stateStoreDB, conversationID string, from, before int64, revisions map[string]string) ([]ObservedSessionEntry, error) {
 	manifest, _ := json.Marshal(revisions)
 
-	entries, err := queryRows(ctx, s.db, `WITH saved AS (
-    SELECT id, entry_json::text AS entry_json, entry_json::jsonb AS entry FROM session_entries
-    WHERE conversation_id = $1 AND id >= $3 AND ($4::bigint = 0 OR id < $4)
-), attributed AS (
-    SELECT destination.id, destination.entry_json, destination.entry,
-        COALESCE(destination.entry->>'sync_source_conversation_id', source.conversation_id, '') AS source_conversation_id,
-        destination.entry ? 'sync_source_entry_id' AS synced
-    FROM saved destination
-    LEFT JOIN session_entries source ON source.id = (destination.entry->>'sync_source_entry_id')::bigint
-), transcript AS (
+	entries, err := queryRows(ctx, db, `WITH `+sessionHistorySQL+`, transcript AS (
     SELECT id, entry_json, source_conversation_id, synced,
-        FALSE AS active, '' AS terminal, 0::bigint AS checkpoint_timestamp, '' AS turn_id, 0 AS checkpoint, id AS position
-    FROM attributed
+        FALSE AS active, '' AS terminal, 0::bigint AS checkpoint_timestamp, '' AS turn_id, 0 AS checkpoint, id AS position, revert_index, marker
+    FROM effective_entries WHERE id >= $3 AND ($4::bigint = 0 OR id < $4)
     UNION ALL
     SELECT 0, (COALESCE(s.value::jsonb->'record', '{}'::jsonb) || jsonb_build_object(
         'version', 1, 'type', 'turn', 'turn_id', a.id, 'output_trace', a.output_trace_json::jsonb
-    ))::text, '', FALSE, a.terminal = '', a.terminal, a.created_at_unix_ns, a.id, 1, a.history_anchor_id
+    ))::text, '', FALSE, a.terminal = '', a.terminal, a.created_at_unix_ns, a.id, 1, a.history_anchor_id, -1, c.marker
     FROM active_turns a LEFT JOIN turn_steps s ON s.conversation_id = a.conversation_id AND s.key = a.id
+    CROSS JOIN cutoff c
     WHERE a.conversation_id = $1
+        AND (SELECT readable FROM visibility)
+        AND (c.marker = '' OR a.history_anchor_id < split_part(c.marker, ':', 1)::bigint)
+        AND (a.phase <> 'done' OR a.terminal <> '')
         AND CASE WHEN $4::bigint = 0 THEN a.terminal = '' OR a.history_anchor_id >= $3
             ELSE a.terminal <> '' AND a.history_anchor_id >= $3 AND a.history_anchor_id < $4 END
         AND NOT EXISTS (
-        SELECT 1 FROM attributed WHERE entry->>'turn_id' = a.id AND (NOT synced OR source_conversation_id = $1)
+        SELECT 1 FROM physical_entries WHERE entry->>'turn_id' = a.id AND (NOT synced OR source_conversation_id = $1)
     )
 ), fingerprinted AS (
     SELECT *, CASE WHEN COALESCE(entry_json::jsonb->>'turn_id', '') <> ''
         THEN 'turn:' || CASE WHEN synced THEN source_conversation_id ELSE $1 END || ':' || (entry_json::jsonb->>'turn_id')
         ELSE id::text END AS key,
-        md5(entry_json || terminal || checkpoint_timestamp::text) AS revision
+        md5(entry_json || terminal || checkpoint_timestamp::text || CASE WHEN revert_index >= 0 THEN marker ELSE '' END) AS revision
     FROM transcript
 )
 SELECT id, CASE WHEN $2::jsonb->>key IS DISTINCT FROM revision THEN entry_json END,
-    source_conversation_id, synced, active, terminal, checkpoint_timestamp, key, revision
+    source_conversation_id, synced, active, terminal, checkpoint_timestamp, key, revision, revert_index
 FROM fingerprinted ORDER BY position, checkpoint, checkpoint_timestamp, turn_id`, "transcript", func(row rowScanner) (ObservedSessionEntry, error) {
 		var (
 			entry               ObservedSessionEntry
 			raw                 sql.NullString
 			checkpointTimestamp int64
+			index               int
 		)
-		if err := row.Scan(&entry.ID, &raw, &entry.SourceConversationID, &entry.Synced, &entry.Active, &entry.Terminal, &checkpointTimestamp, &entry.Key, &entry.Revision); err != nil {
+		if err := row.Scan(&entry.ID, &raw, &entry.SourceConversationID, &entry.Synced, &entry.Active, &entry.Terminal, &checkpointTimestamp, &entry.Key, &entry.Revision, &index); err != nil {
 			return ObservedSessionEntry{}, fmt.Errorf("scan transcript entry: %w", err)
 		}
 
@@ -147,6 +147,8 @@ FROM fingerprinted ORDER BY position, checkpoint, checkpoint_timestamp, turn_id`
 			if err := json.Unmarshal([]byte(raw.String), &entry.Entry); err != nil {
 				return ObservedSessionEntry{}, fmt.Errorf("decode transcript entry: %w", err)
 			}
+
+			clipRevertEntry(&entry.Entry, index)
 
 			if entry.ID == 0 {
 				entry.Entry.Timestamp = timeFromUnixNano(checkpointTimestamp)
@@ -166,12 +168,14 @@ FROM fingerprinted ORDER BY position, checkpoint, checkpoint_timestamp, turn_id`
 // entries before (zero for no bound), or zero when fewer exist, and the
 // conversation's oldest saved-entry ID, which changes only when history is cleared.
 func (s *SessionService) TranscriptPage(ctx context.Context, conversationID string, before int64, limit int) (start, oldest int64, err error) {
-	err = s.db.QueryRowContext(ctx, `SELECT
-    COALESCE((SELECT id FROM session_entries WHERE conversation_id = $1 AND ($2::bigint = 0 OR id < $2) ORDER BY id DESC OFFSET $3 LIMIT 1), 0),
-    COALESCE((SELECT MIN(id) FROM session_entries WHERE conversation_id = $1), 0)`, conversationID, before, limit-1).Scan(&start, &oldest)
+	err = s.db.QueryRowContext(ctx, transcriptPageSQL, conversationID, before, limit-1).Scan(&start, &oldest)
 	if err != nil {
 		return 0, 0, fmt.Errorf("read transcript page: %w", err)
 	}
 
 	return start, oldest, nil
 }
+
+const transcriptPageSQL = `WITH ` + sessionHistorySQL + ` SELECT
+    COALESCE((SELECT id FROM effective_entries WHERE ($2::bigint = 0 OR id < $2) ORDER BY id DESC OFFSET $3 LIMIT 1), 0),
+    COALESCE((SELECT MIN(id) FROM effective_entries), 0)`
