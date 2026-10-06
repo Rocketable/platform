@@ -124,6 +124,10 @@ The session history of what one tool call delegated: its automatic permission re
 
 A Delegation History has no Managed Slack Thread or web chat of its own. It is deleted and forked with its producing conversation.
 
+### Private Producer Conversation
+
+A hidden conversation that runs work for a human-visible destination conversation, such as an External MCP case or a one-off cron run. Its turns carry that destination as their sync destination: Sync copies the history there, Web lists only the destination, and session tags set during the turn land on the destination.
+
 ## Process layout
 
 ### Backend

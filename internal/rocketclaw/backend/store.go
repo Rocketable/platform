@@ -1097,6 +1097,74 @@ ORDER BY pinned DESC, COALESCE(last_updated, '0001-01-01 00:00:00+00'::timestamp
 	}
 }
 
+// ChatOriginFacts are the stored facts that decide a conversation's chat origin.
+type ChatOriginFacts struct {
+	ConversationID         string
+	CreatedBy              ThreadCreator
+	ExternalConversationID string
+	Binding                ExternalMCPSessionState
+	// CreatingSource is the creating entry's source conversation, attributed as ObserveTranscript does.
+	CreatingSource string
+	// ProducerAgent is the agent of the cron run that may have created the conversation.
+	ProducerAgent string
+}
+
+// ChatOriginFacts yields, in one query, origin facts for every conversation people
+// may see: cron runs and private External MCP conversations are omitted. The creating
+// entry is read only where it can decide the origin: not for Slack threads cron did not
+// create, nor for web:cron: and web:one-off-cron: chats, whose ID names the run.
+func (s *SessionService) ChatOriginFacts(ctx context.Context) iter.Seq2[ChatOriginFacts, error] {
+	return func(yield func(ChatOriginFacts, error) bool) {
+		rows, err := s.db.QueryContext(ctx, `WITH visible AS (
+    SELECT conversation_id, created_by, conversation_id LIKE 'web:cron:%' OR conversation_id LIKE 'web:one-off-cron:%' AS named_run
+    FROM managed_conversations c
+    WHERE conversation_id NOT LIKE 'cron:%' AND conversation_id NOT LIKE 'one-off-cron:%'
+        AND NOT EXISTS (SELECT 1 FROM external_mcp_sessions p WHERE p.private_conversation_id = c.conversation_id)
+)
+SELECT c.conversation_id, c.created_by, COALESCE(m.external_conversation_id, ''), COALESCE(m.agent, ''),
+    COALESCE(m.managed_conversation_id, ''), COALESCE(m.origin_pairs, 'null'), COALESCE(creating.source, ''), COALESCE(producer.agent, '')
+FROM visible c
+LEFT JOIN external_mcp_sessions m ON m.managed_conversation_id = c.conversation_id
+-- The predicate stays inside the lateral so skipped rows never read their often large creating entry.
+LEFT JOIN LATERAL (
+    SELECT COALESCE(e.entry_json->>'sync_source_conversation_id', source.conversation_id, '') AS source
+    FROM session_entries e LEFT JOIN session_entries source ON source.id = (e.entry_json->>'sync_source_entry_id')::bigint
+    WHERE e.conversation_id = c.conversation_id AND NOT c.named_run AND (c.conversation_id NOT LIKE 'slack-thread:%' OR c.created_by = $1)
+    ORDER BY e.id LIMIT 1
+) creating ON TRUE
+LEFT JOIN managed_conversations producer ON producer.conversation_id = CASE WHEN c.named_run THEN substr(c.conversation_id, 5) ELSE creating.source END`, ThreadCreatedByCron)
+		if err != nil {
+			yield(ChatOriginFacts{}, fmt.Errorf("query chat origin facts: %w", err))
+			return
+		}
+		defer func() { _ = rows.Close() }()
+
+		for rows.Next() {
+			var (
+				facts ChatOriginFacts
+				pairs []byte
+			)
+			if err := rows.Scan(&facts.ConversationID, &facts.CreatedBy, &facts.ExternalConversationID, &facts.Binding.Agent, &facts.Binding.ManagedConversationID, &pairs, &facts.CreatingSource, &facts.ProducerAgent); err != nil {
+				yield(ChatOriginFacts{}, fmt.Errorf("scan chat origin facts: %w", err))
+				return
+			}
+
+			if err := json.Unmarshal(pairs, &facts.Binding.OriginPairs); err != nil {
+				yield(ChatOriginFacts{}, fmt.Errorf("decode external MCP origin pairs: %w", err))
+				return
+			}
+
+			if !yield(facts, nil) {
+				return
+			}
+		}
+
+		if err := errors.Join(rows.Err(), ctx.Err()); err != nil {
+			yield(ChatOriginFacts{}, fmt.Errorf("read chat origin facts: %w", err))
+		}
+	}
+}
+
 // ChannelFact returns a stored Slack name, never derived channel policy.
 func (s *SessionService) ChannelFact(ctx context.Context, workspaceID, channelID string) (name string, found bool, err error) {
 	err = s.db.QueryRowContext(ctx, `SELECT name FROM slack_channel_facts WHERE workspace_id = $1 AND channel_id = $2`, workspaceID, channelID).Scan(&name)

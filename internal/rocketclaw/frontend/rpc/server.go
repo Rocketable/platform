@@ -310,10 +310,6 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 		}
 	}
 
-	if request.OriginOnly {
-		return response, nil
-	}
-
 	root, err := os.OpenRoot(s.cfg.Workspace)
 	if err != nil {
 		return nil, fmt.Errorf("open attachment workspace: %w", err)
@@ -1643,7 +1639,7 @@ func (s *Server) chatOrigin(ctx context.Context, id string, entries []backend.Ob
 		return "", fmt.Errorf("read origin thread: %w", err)
 	}
 
-	externalID, binding, paired, err := s.sessions.ExternalMCPSessionByConversationID(id)
+	externalID, binding, _, err := s.sessions.ExternalMCPSessionByConversationID(id)
 	if err != nil {
 		return "", fmt.Errorf("read origin external MCP binding: %w", err)
 	}
@@ -1657,33 +1653,26 @@ func (s *Server) chatOrigin(ctx context.Context, id string, entries []backend.Ob
 		entries = slices.Concat(first, entries)
 	}
 
-	locator, cronOn := creatingCronLocator(id, thread.CreatedBy, entries)
+	facts := backend.ChatOriginFacts{ConversationID: id, CreatedBy: thread.CreatedBy, ExternalConversationID: externalID, Binding: binding}
+	// Unsaved turn checkpoints (ID 0) can sort ahead of the creating entry.
+	if first := slices.IndexFunc(entries, func(entry backend.ObservedSessionEntry) bool { return entry.ID != 0 }); first >= 0 {
+		facts.CreatingSource = entries[first].SourceConversationID
+	}
 
-	mcpOn := paired && binding.ManagedConversationID == id
-	if mcpOn == cronOn {
+	if locator, cron := creatingCronLocator(id, thread.CreatedBy, facts.CreatingSource); cron {
+		producer, _, err := s.sessions.Thread(locator)
+		if err != nil {
+			return "", fmt.Errorf("read cron producer agent: %w", err)
+		}
+
+		facts.ProducerAgent = producer.Agent
+	}
+
+	origin, _ := decideOrigin(&facts)
+	if origin == nil {
 		return "", nil
 	}
 
-	if mcpOn {
-		pairs := make([]originPair, 0, len(binding.OriginPairs))
-		for _, key := range slices.Sorted(maps.Keys(binding.OriginPairs)) {
-			pairs = append(pairs, originPair{Key: key, Value: binding.OriginPairs[key]})
-		}
-
-		return originJSON(externalMCPOrigin{Kind: originExternalMCP, ExternalConversationID: externalID, Agent: binding.Agent, Pairs: pairs})
-	}
-
-	run, _ := parseCronRun(locator)
-
-	producer, _, err := s.sessions.Thread(locator)
-	if err != nil {
-		return "", fmt.Errorf("read cron producer agent: %w", err)
-	}
-
-	return originJSON(cronOrigin{Kind: originCron, SourcePath: run.path, Stem: run.stem, RunKind: run.kind, RunID: locator, Agent: producer.Agent, RanAt: run.at.Format(time.RFC3339Nano)})
-}
-
-func originJSON(origin any) (string, error) {
 	raw, err := json.Marshal(origin)
 	if err != nil {
 		return "", fmt.Errorf("encode chat origin: %w", err)
@@ -1692,7 +1681,36 @@ func originJSON(origin any) (string, error) {
 	return string(raw), nil
 }
 
-func creatingCronLocator(id string, createdBy backend.ThreadCreator, entries []backend.ObservedSessionEntry) (string, bool) {
+// decideOrigin applies the origin rules to stored facts and returns the origin with the
+// lowercased text origin search matches; a nil origin means none.
+func decideOrigin(facts *backend.ChatOriginFacts) (origin any, text string) {
+	locator, cronOn := creatingCronLocator(facts.ConversationID, facts.CreatedBy, facts.CreatingSource)
+
+	mcpOn := facts.Binding.ManagedConversationID == facts.ConversationID
+	if mcpOn == cronOn {
+		return nil, ""
+	}
+
+	if mcpOn {
+		pairs := make([]originPair, 0, len(facts.Binding.OriginPairs))
+		texts := make([]string, 0, len(facts.Binding.OriginPairs))
+
+		for _, key := range slices.Sorted(maps.Keys(facts.Binding.OriginPairs)) {
+			pairs = append(pairs, originPair{Key: key, Value: facts.Binding.OriginPairs[key]})
+			texts = append(texts, key+"="+facts.Binding.OriginPairs[key])
+		}
+
+		return externalMCPOrigin{Kind: originExternalMCP, ExternalConversationID: facts.ExternalConversationID, Agent: facts.Binding.Agent, Pairs: pairs},
+			strings.ToLower(fmt.Sprintf("External MCP External conversation: %s Agent: %s %s", facts.ExternalConversationID, facts.Binding.Agent, strings.Join(texts, " ")))
+	}
+
+	run, _ := parseCronRun(locator)
+	cron := cronOrigin{Kind: originCron, SourcePath: run.path, Stem: run.stem, RunKind: run.kind, RunID: locator, Agent: facts.ProducerAgent, RanAt: run.at.Format(time.RFC3339Nano)}
+
+	return cron, strings.ToLower(fmt.Sprintf("Cron Source: %s Stem: %s Run kind: %s Run ID: %s Agent: %s Ran at: %s", cron.SourcePath, cron.Stem, cron.RunKind, cron.RunID, cron.Agent, cron.RanAt))
+}
+
+func creatingCronLocator(id string, createdBy backend.ThreadCreator, creatingSource string) (string, bool) {
 	if source, ok := strings.CutPrefix(id, "web:"); ok {
 		if _, parsed := parseCronRun(source); parsed {
 			return source, true
@@ -1703,11 +1721,8 @@ func creatingCronLocator(id string, createdBy backend.ThreadCreator, entries []b
 		return "", false
 	}
 
-	for i := range entries {
-		source := entries[i].SourceConversationID
-		if _, ok := parseCronRun(source); ok {
-			return source, true
-		}
+	if _, ok := parseCronRun(creatingSource); ok {
+		return creatingSource, true
 	}
 
 	return "", false

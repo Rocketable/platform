@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -155,7 +156,11 @@ func (b *Bridge) runNestedWorkflow(ctx context.Context, agentName, name string, 
 		return "", fmt.Errorf("workflow %q is not configured", name)
 	}
 
-	agentRun, err := newWorkflowAgentRunner(b.runtime, agentName, rocketcode.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, b.config.ConversationID)...)
+	b.mu.Lock()
+	tagConversationID := cmp.Or(b.activeReply.SyncDestination, b.config.ConversationID)
+	b.mu.Unlock()
+
+	agentRun, err := newWorkflowAgentRunner(b.runtime, agentName, rocketcode.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, tagConversationID)...)
 	if err != nil {
 		return "", fmt.Errorf("prepare nested workflow agent runner: %w", err)
 	}

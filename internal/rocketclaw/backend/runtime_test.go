@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -210,11 +211,41 @@ func TestRuntimeSummaryBackfillLifecycle(t *testing.T) {
 func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := newTestSessionService(t)
+		workspace := t.TempDir()
+		writeAgent(t, workspace, "main", "---\nmodel: gpt-5.5\npermission:\n  rocketclaw:\n    rocketclaw_current_session_id: allow\n    rocketclaw_get_tags: allow\n    rocketclaw_set_tag: [[red, yellow]]\n---\nPrompt\n")
+
+		var tagOutputs []string
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Input []struct{ Type, Output string }
+			}
+			if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+				return
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+
+			tagOutputs = nil
+
+			for _, item := range body.Input {
+				if item.Type == "function_call_output" {
+					tagOutputs = append(tagOutputs, item.Output)
+				}
+			}
+
+			if len(tagOutputs) == 0 {
+				writeRawRunFunctionCall(t, w, "tag", "execute", json.RawMessage(`{"code":"def main():\n    return \"\\n\".join([rocketclaw_set_tag(tag=\"red\"), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_get_tags(), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_get_tags(), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_current_session_id()])\n"}`))
+			} else {
+				writeRawRunMessage(t, w, "done", "message", "done")
+			}
+		}))
+		defer server.Close()
 
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 
-		rt := &Runtime{Sessions: store, Cfg: new(config.Config), Log: slog.New(slog.DiscardHandler)}
+		rt := &Runtime{Sessions: store, Cfg: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, Log: slog.New(slog.DiscardHandler)}
 
 		rt.threads = newThreadBridgeManager(rt.Cfg, store, rt.Log, func(cfg Config) directBridge {
 			cfg.SessionService = store
@@ -255,9 +286,12 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 
 		producer := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
 		producer.ConversationID, producer.SyncDestination = "X", "Y"
-		producer.AttachmentPresence = protocol.AttachmentPresenceImages
 		producer.SlackReply = &protocol.SlackReplyTarget{MessageTS: "producer"}
 		require.NoError(t, rt.RunTurn(ctx, producer))
+		server.Close()
+		// The private producer's tag tools act on its human-visible destination, while its session ID stays private.
+		require.Equal(t, []string{strings.Join([]string{`{"tags":["Y-tag","red"]}`, `{"tags":["Y-tag","yellow"]}`, `{"tags":["Y-tag","yellow"]}`, `{"tags":["Y-tag"]}`, `{"tags":["Y-tag"]}`, `{"tags":["Y-tag","yellow"]}`, "X"}, "\n")}, tagOutputs)
+
 		source := rt.threads.bridges["X"].(*Bridge)
 		source.mu.Lock()
 		source.pendingOutput.Agent, source.pendingOutput.Model, source.pendingOutput.ReasoningEffort = "producer", "work/producer", new("high")
@@ -292,7 +326,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 			return err
 		})
 		synctest.Wait()
-		require.Equal(t, []string{"X"}, delivered)
+		require.Equal(t, []string{"X", "X"}, delivered)
 
 		beforeEntries, err := store.ObserveEntries(ctx, "Y")
 		require.NoError(t, err)
@@ -309,7 +343,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		require.NoError(t, ctx.Err())
 		synctest.Wait()
 		require.False(t, waitingFinished, "failed Sync must retain the destination reservation")
-		require.Equal(t, []string{"X"}, delivered)
+		require.Equal(t, []string{"X", "X"}, delivered)
 
 		afterEntries, err := store.ObserveEntries(ctx, "Y")
 		require.NoError(t, err)
@@ -331,16 +365,16 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, rt.SyncConversation(ctx, "X", "Y"))
 
-		for _, id := range []string{"X", "Y"} {
+		for id, want := range map[string][]string{"X": {"X-tag"}, "Y": {"Y-tag", "yellow"}} {
 			tags, err := sessionTags(ctx, store.db, id)
 			require.NoError(t, err)
-			require.Equal(t, []string{id + "-tag"}, tags)
+			require.Equal(t, want, tags)
 		}
 
 		require.NoError(t, waiting.Wait())
 		synctest.Wait()
-		require.Equal(t, []string{"X", "Y", "Y"}, delivered)
-		require.Equal(t, []string{"producer", "producer", "human"}, deliveryOrder)
+		require.Equal(t, []string{"X", "X", "Y", "Y"}, delivered)
+		require.Equal(t, []string{"producer", "producer", "producer", "human"}, deliveryOrder)
 
 		thread, found, err := store.Thread("Y")
 		require.NoError(t, err)
@@ -353,7 +387,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 
 		summaries, err := store.ListSessions(ctx, []string{"Y"})
 		require.NoError(t, err)
-		require.Equal(t, []protocol.SessionSummary{{ConversationID: "Y", LastMessage: "X history", LastUpdated: time.Unix(1, 123456000).UTC()}}, summaries)
+		require.Equal(t, []protocol.SessionSummary{{ConversationID: "Y", LastMessage: "done", LastUpdated: time.Unix(1, 123456000).UTC()}}, summaries)
 
 		for row, err := range store.SidebarSessions(ctx, time.Now().Add(-7*24*time.Hour)) {
 			require.NoError(t, err)
@@ -362,6 +396,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 				require.False(t, row.Running)
 				require.False(t, row.Pinned)
 				require.False(t, row.Conversation.Settled, "newly synced old history must end snooze visibly")
+				require.Equal(t, []string{"Y-tag", "yellow"}, row.Tags)
 			}
 		}
 
@@ -383,11 +418,11 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, summaries, afterSync)
 		synctest.Wait()
-		require.Len(t, delivered, 3)
+		require.Len(t, delivered, 4)
 
 		entries, err := store.ObserveEntries(ctx, "Y")
 		require.NoError(t, err)
-		require.Len(t, entries, 6)
+		require.Len(t, entries, 7)
 
 		for _, observed := range entries {
 			if observed.Entry.Model == "work/X" {
@@ -403,7 +438,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 
 		entries, err = store.ObserveEntries(ctx, "X")
 		require.NoError(t, err)
-		require.Len(t, entries, 5)
+		require.Len(t, entries, 6)
 		sourceEntries := entries
 
 		scheduled, err = store.ScheduledMessagesForConversation("Y")
@@ -428,7 +463,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		require.NoError(t, err)
 		destinationEntries, err := store.ObserveEntries(ctx, "Y")
 		require.NoError(t, err)
-		require.Len(t, destinationEntries, 7)
+		require.Len(t, destinationEntries, 8)
 
 		continuation := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
 		continuation.ConversationID, continuation.SyncDestination = "X", "Y"
@@ -436,7 +471,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		continuation.SlackReply = &protocol.SlackReplyTarget{MessageTS: "continuation"}
 		require.NoError(t, rt.RunTurn(ctx, continuation))
 		synctest.Wait()
-		require.Equal(t, []string{"X", "Y", "Y", "Y", "X"}, delivered)
+		require.Equal(t, []string{"X", "X", "Y", "Y", "Y", "X"}, delivered)
 
 		entries, err = store.ObserveEntries(ctx, "X")
 		require.NoError(t, err)
@@ -451,7 +486,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 
 		require.NoError(t, rt.SyncConversation(ctx, "X", "Y"))
 		synctest.Wait()
-		require.Equal(t, []string{"X", "Y", "Y", "Y", "X", "Y"}, delivered)
+		require.Equal(t, []string{"X", "X", "Y", "Y", "Y", "X", "Y"}, delivered)
 
 		entries, err = store.ObserveEntries(ctx, "X")
 		require.NoError(t, err)

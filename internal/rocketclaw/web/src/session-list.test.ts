@@ -26,9 +26,9 @@ async function* batchesOf(rows: SessionBatch[]) {
 
 // Keep the shared UI parser private; browser tests cover its mounted callers.
 const source = ts.createSourceFile("ui.tsx", await Bun.file(new URL("./ui.tsx", import.meta.url)).text(), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const functions = source.statements.filter((node) => ts.isFunctionDeclaration(node) && ["slackSession", "sessionLabel", "typedPrefix", "matchesSession", "sessionSearchTerms", "sessionMatchesSearch"].includes(node.name?.text ?? "")).map((node) => node.getText(source)).join("\n");
-const javascript = new Bun.Transpiler({ loader: "tsx" }).transformSync(`${functions}\nexport { sessionSearchTerms, sessionMatchesSearch };`);
-const { sessionSearchTerms, sessionMatchesSearch } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
+const functions = source.statements.filter((node) => ts.isFunctionDeclaration(node) && ["slackSession", "sessionLabel", "typedPrefix", "matchesSession", "sessionSearchTerms", "sessionMatchesSearch", "compareSessions"].includes(node.name?.text ?? "")).map((node) => node.getText(source)).join("\n");
+const javascript = new Bun.Transpiler({ loader: "tsx" }).transformSync(`${functions}\nexport { sessionSearchTerms, sessionMatchesSearch, compareSessions };`);
+const { sessionSearchTerms, sessionMatchesSearch, compareSessions } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 
 test("session tag filters are literal AND matches with only valid filters removed from text", () => {
   const row: Session = { id: "slack-thread:C:one", agent: "main", title: "room", preview: "Outage", pinned: true, forkedFrom: "original", tags: ["customer", "Needs review", 'say "hello"', "is:pinned", "*"] };
@@ -60,6 +60,30 @@ test("session tag filters are literal AND matches with only valid filters remove
   expect(!!sessionMatchesSearch({ ...row, pinned: false }, sessionSearchTerms("tag:customer is:pinned"), "", "", "")).toBe(false);
   expect(!!sessionMatchesSearch({ ...row, forkedFrom: undefined }, sessionSearchTerms("tag:customer is:forked"), "", "", "")).toBe(false);
   expect(sessionSearchTerms('tag:"Needs is:pinned review" agent:ma')).toMatchObject({ pinnedOnly: false, text: "agent:ma", needle: "", filterTerms: ['tag:"Needs is:pinned review"'] });
+});
+
+test("is:unsettled and sort: filter and order rows, and an unfinished operator token is not free text", () => {
+  for (const [query, needle, unsettledOnly, sort] of [
+    ["is:unsettled tag:x outage", "outage", true, ""],
+    ["IS:UNSETTLED SORT:OLDEST", "", true, "oldest"],
+    ["sort:oldest sort:newest", "", false, "newest"],
+    ["is:", "", false, ""],
+    ["is:uns", "", false, ""],
+    ["sort:", "", false, ""],
+    ["sort:ne", "", false, ""],
+    ["outage is:uns", "outage", false, ""],
+    ["is:foo", "is:foo", false, ""],
+    ["sort:bogus", "sort:bogus", false, ""],
+  ] as const) expect(sessionSearchTerms(query)).toMatchObject({ needle, unsettledOnly, sort });
+  const filters = sessionSearchTerms("is:unsettled tag:x outage");
+  const open: Session = { id: "open", preview: "Outage", tags: ["x"] };
+  expect(!!sessionMatchesSearch(open, filters, "", "", "")).toBe(true);
+  for (const closed of [{ settled: true }, { settled: true, snoozedUntil: "2027-01-02T09:30:00Z" }]) expect(!!sessionMatchesSearch({ ...open, ...closed }, filters, "", "", "")).toBe(false);
+  const rows: Session[] = [{ id: "c" }, { id: "e", updatedAt: "2026-01-02T00:00:00Z" }, { id: "d", updatedAt: "" }, { id: "b", updatedAt: "2026-01-01T00:00:00.5Z", pinned: true }, { id: "a", updatedAt: "2026-01-02T00:00:00Z" }];
+  const order = (sort: string) => rows.toSorted((a, b) => compareSessions(sort, a, b)).map((row) => row.id);
+  expect(order("oldest")).toEqual(["b", "a", "e", "c", "d"]);
+  expect(order("newest")).toEqual(["a", "e", "b", "c", "d"]);
+  expect(order("")).toEqual(["b", "c", "e", "d", "a"]);
 });
 
 describe("session list reconciliation", () => {

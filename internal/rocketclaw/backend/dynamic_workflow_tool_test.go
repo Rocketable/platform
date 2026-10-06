@@ -75,7 +75,7 @@ def main(args): return None
 	definitions, err := workflow.Load(root, ".rocketclaw")
 	require.NoError(t, err)
 
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace}, log: slog.New(slog.DiscardHandler)}
+	bridge := &Bridge{runtime: &config.Config{Workspace: workspace}, log: slog.New(slog.DiscardHandler), activeReply: new(protocol.InboundMessage)}
 
 	output := make(chan rocketcode.ChatResponse, 4)
 	tool, ok := bridge.dynamicWorkflowTool(permissions, "main", definitions)
@@ -121,7 +121,7 @@ def main(args):
 `)
 
 	root := openWorkspaceRoot(t, workspace)
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace}, log: slog.New(slog.DiscardHandler)}
+	bridge := &Bridge{runtime: &config.Config{Workspace: workspace}, log: slog.New(slog.DiscardHandler), activeReply: new(protocol.InboundMessage)}
 
 	// Nested run with turn-start definitions (same freeze as production Call).
 	definitions, err := workflow.Load(root, ".rocketclaw")
@@ -203,7 +203,8 @@ func TestNestedWorkflowSessionTags(t *testing.T) {
 	}))
 	defer server.Close()
 
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: "external_mcp:owning", SessionService: service}, log: slog.New(slog.DiscardHandler)}
+	// A nested workflow inside a producer turn tags the turn's visible destination.
+	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: "external_mcp:owning", SessionService: service}, log: slog.New(slog.DiscardHandler), activeReply: &protocol.InboundMessage{SyncDestination: "visible"}}
 	definitions, err := workflow.Load(root, ".rocketclaw")
 	require.NoError(t, err)
 
@@ -213,7 +214,10 @@ func TestNestedWorkflowSessionTags(t *testing.T) {
 		require.Equal(t, 2, requests, "a rerun returns the finished worker's recorded result")
 	}
 
-	tags, err := sessionTags(t.Context(), service.db, "external_mcp:owning")
+	ids, err := queryStrings(t.Context(), service.db, "SELECT conversation_id FROM session_tags", "tag owners")
+	require.NoError(t, err)
+	require.Equal(t, []string{"visible"}, ids)
+	tags, err := sessionTags(t.Context(), service.db, "visible")
 	require.NoError(t, err)
 	require.Equal(t, []string{"customer"}, tags)
 }

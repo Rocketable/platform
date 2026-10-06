@@ -224,7 +224,7 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			}
 
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&n))
-			require.Equal(t, 26, n)
+			require.Equal(t, 27, n)
 			// No migration lock may survive startup and poison later pool users.
 			require.Eventually(t, func() bool {
 				var locks int
@@ -289,7 +289,7 @@ func TestSessionMigrationsSerializeLedgerCreation(t *testing.T) {
 
 			var count int
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-			require.Equal(t, 26, count)
+			require.Equal(t, 27, count)
 		})
 	}
 }
@@ -343,7 +343,7 @@ func TestSessionMigrationRollbackAndCatchup(t *testing.T) {
 
 	var n int
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM pg_migrations`).Scan(&n))
-	require.Equal(t, 24, n)
+	require.Equal(t, 25, n)
 
 	var missing sql.NullString
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT to_regclass('slack_channel_facts')::text`).Scan(&missing))
@@ -368,6 +368,38 @@ func TestSessionMigrationRollbackAndCatchup(t *testing.T) {
 	require.ErrorContains(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)), "unknown migration")
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT to_regclass('session_summaries')::text`).Scan(&missing))
 	require.True(t, missing.Valid)
+}
+
+func TestProducerSessionTagsMigration(t *testing.T) {
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	_, err := store.db.ExecContext(ctx, `DELETE FROM pg_migrations WHERE id='025_copy_producer_session_tags.sql';
+INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) VALUES
+    ('e1', 'private-missing', 'visible-missing', 'main', ''),
+    ('e2', 'private-tagged', 'visible-tagged', 'main', ''),
+    ('e3', 'private-empty', 'visible-empty', 'main', ''),
+    ('e4', 'private-untagged', 'visible-untagged', 'main', '');
+INSERT INTO session_tags (conversation_id, tags) VALUES
+    ('private-missing', '["customer"]'),
+    ('private-tagged', '["private"]'), ('visible-tagged', '["kept"]'),
+    ('private-empty', '["filled"]'), ('visible-empty', '[]'),
+    ('private-untagged', '[]'),
+    ('unbound', '["alone"]')`)
+	require.NoError(t, err)
+	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
+
+	tags, err := queryStrings(ctx, store.db, `SELECT conversation_id || '=' || tags::text FROM session_tags ORDER BY conversation_id`, "session tags")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		`private-empty=["filled"]`,
+		`private-missing=["customer"]`,
+		`private-tagged=["private"]`,
+		`private-untagged=[]`,
+		`unbound=["alone"]`,
+		`visible-empty=["filled"]`,
+		`visible-missing=["customer"]`,
+		`visible-tagged=["kept"]`,
+	}, tags)
 }
 
 func TestSessionMigrationUnlockFailureDiscardsConnection(t *testing.T) {

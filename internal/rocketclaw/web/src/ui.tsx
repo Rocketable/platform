@@ -1,6 +1,6 @@
 "use client";
 
-import { QueryClient, QueryClientProvider, useQuery, useQueries, useMutation } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery, useMutation } from "@tanstack/react-query";
 import { Menu } from "@base-ui/react/menu";
 import { Combobox } from "@base-ui/react/combobox";
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
@@ -924,7 +924,7 @@ function paletteRows(
   recent: string[],
 ): { key: string; label?: string; detail?: string; session?: Session; loading?: boolean; keep?: boolean; disabled?: boolean; run: () => void }[] {
   if (mode === "sessions") {
-    return sidebar.rows.filter((session) => sessionMatchesSearch(session, filters, agentFilter, roomFilter, origins.get(session.id) ?? "")).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map((session) => ({
+    return sidebar.rows.filter((session) => sessionMatchesSearch(session, filters, agentFilter, roomFilter, origins.get(session.id) ?? "")).sort((a, b) => compareSessions(filters.sort, a, b)).map((session) => ({
       key: session.id,
       session, loading: sidebar.loadingIds.has(session.id),
       run: () => navigate(sessionPath(session.id)),
@@ -966,51 +966,27 @@ function usePendingCron(id: string) {
   );
 }
 
-function originSearchText({ origin }: { origin?: ChatOrigin }) {
-  if (!origin) return "";
-  return (origin.kind === "cron"
-    ? `Cron Source: ${origin.sourcePath} Stem: ${origin.stem} Run kind: ${origin.runKind} Run ID: ${origin.runId} Agent: ${origin.agent} Ran at: ${origin.ranAt}`
-    : `External MCP External conversation: ${origin.externalConversationId} Agent: ${origin.agent} ${origin.pairs?.map(({ key, value }) => `${key}=${value}`).join(" ") ?? ""}`).toLowerCase();
-}
-
-async function loadSessionOrigins(ids: string[], owner: string | undefined, protocol: string | undefined, signal: AbortSignal) {
-  const values = new Map<string, string>();
-  let failed = false;
-  const key = ["sessionOrigins", owner, protocol, ids];
-  for (let start = 0; start < ids.length; start += 24) {
-    signal.throwIfAborted();
-    const batch = ids.slice(start, start + 24);
-    const results = await Promise.allSettled(batch.map((id) => queryClient.fetchQuery({
-      ...queries.history({ id, originOnly: true }),
-      queryKey: ["sessionOrigin", owner, protocol, id],
-      staleTime: 10_000,
-      retry: false,
-    })));
-    results.forEach((result, index) => {
-      if (result.status === "fulfilled") values.set(batch[index], originSearchText(result.value));
-      else failed = true;
-    });
-    signal.throwIfAborted();
-    queryClient.setQueryData(key, { values: new Map(values), failed, complete: false });
-  }
-  return { values, failed, complete: true };
-}
-
-function useSessionOrigins(rows: Session[], enabled: boolean) {
+// The server searches every visible chat origin in one request; values maps matching chats to their origin text.
+function useSessionOrigins(rows: Session[], needle: string) {
   const identity = useQuery(queries.identity());
   const protocol = useQuery(queries.protocol());
+  // New sidebar conversations start a fresh origin search for the same needle.
   const ids = useMemo(() => rows.map(({ id }) => id).toSorted(), [rows]);
-  const query = useQuery<Awaited<ReturnType<typeof loadSessionOrigins>>>({
-    queryKey: ["sessionOrigins", identity.data?.username, protocol.data, ids],
-    enabled,
-    staleTime: (entry) => entry.state.data?.complete ? 10_000 : 0,
-    retry: false,
-    queryFn: ({ signal }) => loadSessionOrigins(ids, identity.data?.username, protocol.data, signal),
-  });
+  const [settled, setSettled] = useState(needle);
   useEffect(() => {
-    if (!enabled) void queryClient.cancelQueries({ queryKey: ["sessionOrigins"] });
-  }, [enabled]);
-  return { values: query.data?.values ?? new Map<string, string>(), pending: enabled && (query.isPending || query.isFetching || !query.data?.complete), failed: !!query.data?.failed || query.isError };
+    const timer = setTimeout(() => setSettled(needle), 250);
+    return () => clearTimeout(timer);
+  }, [needle]);
+  const query = useQuery<Map<string, string>>({
+    queryKey: ["searchOrigins", identity.data?.username, protocol.data, settled, ids],
+    enabled: settled !== "",
+    placeholderData: (previous) => previous,
+    staleTime: 10_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+    queryFn: async ({ signal }) => new Map((await rpc<{ matches: { conversationId: string; text: string }[] }>("SearchOrigins", { query: settled }, signal)).matches.map(({ conversationId, text }) => [conversationId, text])),
+  });
+  return { values: query.data ?? new Map<string, string>(), pending: needle !== "" && (needle !== settled || query.isPending || query.isFetching), failed: needle !== "" && needle === settled && query.isError };
 }
 
 const paletteCopy = { sessions: { title: "Go to session", desc: "Search and open a session.", placeholder: "Search sessions" }, commands: { title: "Run command", desc: "Search and run a command.", placeholder: "Type a command" },
@@ -1055,7 +1031,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, sidebarOpen, onToggleS
   const agents = useQuery({ ...queries.agents(), staleTime: 60_000, enabled: mode === "sessions" });
   const filters = sessionSearchTerms(query);
   const active = useRef<HTMLButtonElement>(null);
-  const origins = useSessionOrigins(sidebar.rows, mode === "sessions" && filters.needle !== "");
+  const origins = useSessionOrigins(sidebar.rows, mode === "sessions" ? filters.needle : "");
   const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000, enabled: mode === "commands" || mode === "cron" });
   const runCron = useMutation({
     mutationFn: mutations.runCron,
@@ -1236,8 +1212,9 @@ function matchesSession(session: Session, needle: string, agentFilter: string, r
 
 function sessionSearchTerms(query: string) {
   const tags: string[] = [], filterTerms: string[] = [];
-  let pinnedOnly = false, forkedOnly = false;
-  const text = query.replace(/(?:^|\s)(is:(?:settled|pinned|forked)|tag:("(?:[^"\\]|\\.)*"|\S+))(?=\s|$)/gi, (term, filter: string, value?: string) => {
+  let pinnedOnly = false, forkedOnly = false, unsettledOnly = false, sort = "";
+  const text = query.replace(/(?:^|\s)(is:(?:settled|unsettled|pinned|forked)|sort:(?:newest|oldest)|tag:("(?:[^"\\]|\\.)*"|\S+))(?=\s|$)/gi, (term, filter: string, value?: string) => {
+    const lower = filter.toLowerCase();
     if (value !== undefined) {
       let tag = value;
       if (value.startsWith('"')) {
@@ -1245,20 +1222,32 @@ function sessionSearchTerms(query: string) {
       }
       if (tag === "") return term;
       tags.push(tag);
+    } else if (lower.startsWith("sort:")) {
+      sort = lower.slice(5);
     } else {
-      pinnedOnly ||= filter.toLowerCase() === "is:pinned";
-      forkedOnly ||= filter.toLowerCase() === "is:forked";
+      pinnedOnly ||= lower === "is:pinned";
+      forkedOnly ||= lower === "is:forked";
+      unsettledOnly ||= lower === "is:unsettled";
     }
     filterTerms.push(filter);
     return "";
   }).trim();
-  const needle = typedPrefix(text, "agent:") === null && typedPrefix(text, "room:") === null ? text.toLowerCase() : "";
-  return { pinnedOnly, forkedOnly, tags, filterTerms, text, needle };
+  // A trailing is:/sort: token that is still a prefix of a known term is being typed, not searched.
+  const typing = /(?:^|\s)((?:is|sort):\S*)$/i.exec(text);
+  const rest = typing && " is:settled is:unsettled is:pinned is:forked sort:newest sort:oldest".includes(` ${typing[1].toLowerCase()}`) ? text.slice(0, typing.index).trim() : text;
+  const needle = typedPrefix(text, "agent:") === null && typedPrefix(text, "room:") === null ? rest.toLowerCase() : "";
+  return { pinnedOnly, forkedOnly, unsettledOnly, sort, tags, filterTerms, text, needle };
 }
 
 function sessionMatchesSearch(session: Session, filters: ReturnType<typeof sessionSearchTerms>, agentFilter: string, roomFilter: string, origin: string) {
   const tags = new Set(session.tags);
-  return filters.tags.every((tag) => tags.has(tag)) && (!filters.pinnedOnly || session.pinned) && (!filters.forkedOnly || session.forkedFrom) && matchesSession(session, "", agentFilter, roomFilter) && (matchesSession(session, filters.needle, "", "") || origin.includes(filters.needle));
+  return filters.tags.every((tag) => tags.has(tag)) && (!filters.pinnedOnly || session.pinned) && (!filters.forkedOnly || session.forkedFrom) && (!filters.unsettledOnly || !session.settled) && matchesSession(session, "", agentFilter, roomFilter) && (matchesSession(session, filters.needle, "", "") || origin.includes(filters.needle));
+}
+
+// sort: orders by last activity (missing last, then ID); otherwise pinned rows come first.
+function compareSessions(sort: string, a: Session, b: Session) {
+  const time = (session: Session) => Date.parse(session.updatedAt ?? "") * (sort === "newest" ? -1 : 1) || Infinity;
+  return sort ? time(a) - time(b) || a.id.localeCompare(b.id) : Number(!!b.pinned) - Number(!!a.pinned);
 }
 
 type SavedSearch = { id: string; name?: string; query: string; agentFilter: string; roomFilter: string };
@@ -1274,10 +1263,16 @@ function SearchTabs({ owner }: { owner: string }) {
   const storageKey = `search-tabs:${owner}`;
   const [rename, setRename] = useState<string | null>(null);
   const [saved, setSaved] = useState<SavedSearches>(() => {
-    const stored = localStorage.getItem(storageKey);
-    if (stored) return JSON.parse(stored) as SavedSearches;
-    const id = crypto.getRandomValues(new Uint32Array(4)).join("-");
-    return { tabs: [{ id, query: "", agentFilter: "", roomFilter: "" }], active: id };
+    const stored = JSON.parse(localStorage.getItem(storageKey) ?? '{"tabs":[]}') as SavedSearches;
+    const params = new URLSearchParams(location.search);
+    const link = { query: params.get("q") ?? "", agentFilter: params.get("agent") ?? "", roomFilter: params.get("room") ?? "" };
+    const linked = !!(link.query || link.agentFilter || link.roomFilter);
+    if (stored.tabs.length && !linked) return stored;
+    const match = stored.tabs.toSorted((a, b) => Number(b.id === stored.active) - Number(a.id === stored.active)).find((item) => item.query === link.query && item.agentFilter === link.agentFilter && item.roomFilter === link.roomFilter);
+    const id = match?.id ?? crypto.getRandomValues(new Uint32Array(4)).join("-");
+    const next = { tabs: match ? stored.tabs : [...stored.tabs, { id, ...link }], active: id };
+    if (linked) localStorage.setItem(storageKey, JSON.stringify(next));
+    return next;
   });
   const draft = useRef(localStorage.getItem(storageKey) === null);
   const savedRef = useRef(saved);
@@ -1289,6 +1284,11 @@ function SearchTabs({ owner }: { owner: string }) {
   const agents = useQuery({ ...queries.agents(), staleTime: 60_000 });
   const selected = saved.tabs.findIndex((tab) => tab.id === saved.active);
   const tab = saved.tabs[selected];
+  const search = useSearch();
+  useEffect(() => {
+    const params = new URLSearchParams(Object.entries({ q: tab.query, agent: tab.agentFilter, room: tab.roomFilter }).filter(([, value]) => value));
+    history.replaceState(history.state, "", `/search${params.size ? `?${params}` : ""}`);
+  }, [tab, search]);
   useLayoutEffect(() => {
     if (rename !== null) { activeTab.current!.focus(); window.getSelection()?.selectAllChildren(activeTab.current!); }
     if (focusAfterClose.current) {
@@ -1379,13 +1379,13 @@ function MatchedExcerpt({ text, needle }: { text: string; needle: string }) {
   return <span className="min-w-0 whitespace-pre-wrap break-words">{start ? "…" : ""}{parts}{end < text.length ? "…" : ""}</span>;
 }
 
-function SearchMatches({ matching, messages, rows, origins, needle }: { matching: Session[]; messages: MessageMatch[]; rows: Session[]; origins: string[]; needle: string }) {
+function SearchMatches({ matching, messages, rows, origins, needle, sort }: { matching: Session[]; messages: MessageMatch[]; rows: Session[]; origins: Map<string, string>; needle: string; sort: string }) {
   const bySession = Map.groupBy(messages, (match) => match.conversationId);
   const matched = new Set(matching);
-  const sessions = rows.filter((session) => bySession.has(session.id) || matched.has(session)).sort((a, b) => Number(bySession.has(b.id)) - Number(bySession.has(a.id)) || Number(!!b.pinned) - Number(!!a.pinned));
+  const sessions = rows.filter((session) => bySession.has(session.id) || matched.has(session)).sort((a, b) => (!sort && Number(bySession.has(b.id)) - Number(bySession.has(a.id))) || compareSessions(sort, a, b));
   return <ul className="flex min-w-0 flex-col gap-4">
     {sessions.map((session) => {
-      const origin = origins[rows.findIndex((row) => row.id === session.id)] ?? "";
+      const origin = origins.get(session.id) ?? "";
       const hits = bySession.get(session.id) ?? [];
       const label = session.name || rowPreview(session, false).split("\n", 1)[0] || sessionLabel(session.id);
       const field = needle ? [["Name", session.name], ["Room", session.title], ["Agent", session.agent], ["Session", sessionLabel(session.id)], ["Origin", origin]].find(([, text]) => text?.toLowerCase().includes(needle)) : undefined;
@@ -1402,9 +1402,9 @@ function SearchMatches({ matching, messages, rows, origins, needle }: { matching
   </ul>;
 }
 
-function SearchStatus({ pending, error, originError, empty, incomplete, retry }: { pending: boolean; error?: string; originError: boolean; empty: boolean; incomplete: boolean; retry: () => void }) {
+function SearchStatus({ pending, checking, error, originError, empty, incomplete, retry }: { pending: boolean; checking: boolean; error?: string; originError: boolean; empty: boolean; incomplete: boolean; retry: () => void }) {
   return <>
-    {pending ? <p role="status" className="text-muted-foreground">Searching…</p> : null}
+    {pending || checking ? <p role="status" className="text-muted-foreground">{pending ? "Searching…" : "Still checking chat origins…"}</p> : null}
     {error ? <p role="alert" className="text-destructive">Search failed: {error} <button type="button" className="underline" onClick={retry}>Retry</button></p> : null}
     {originError ? <p role="alert" className="text-destructive">Some chat origins could not be searched.</p> : null}
     {empty ? <p role="status" className="text-muted-foreground">{incomplete ? "Session search is still loading." : "No matches"}</p> : null}
@@ -1415,11 +1415,7 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
   const sidebar = useContext(Sidebar);
   const filters = sessionSearchTerms(tab.query);
   const searchKey = filters.needle;
-  const identity = useQuery(queries.identity());
-  const protocol = useQuery(queries.protocol());
-  const origins = useQueries({ queries: filters.needle ? rows.map(({ id }) => ({
-    ...queries.history({ id, originOnly: true }), queryKey: ["sessionOrigin", identity.data?.username, protocol.data, id], staleTime: 10_000, retry: false, select: originSearchText,
-  })) : [] });
+  const origins = useSessionOrigins(rows, searchKey);
   const [result, setResult] = useState<{ query: string; matches: MessageMatch[]; error?: string; pending: boolean }>({ query: "", matches: [], pending: false });
   const request = useRef<AbortController>(null);
   const version = useRef(0);
@@ -1449,10 +1445,9 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
     return () => { clearTimeout(pause.current); clearTimeout(deadline.current); };
   }, [submit]);
   useEffect(() => () => { request.current?.abort(); version.current++; }, []);
-  const pending = result.pending || result.query !== searchKey || origins.some((origin) => origin.isPending);
-  const originError = origins.some((origin) => origin.isError);
+  const pending = result.pending || result.query !== searchKey;
   const current = !pending && !result.error;
-  const matching = rows.filter((row, index) => sessionMatchesSearch(row, filters, tab.agentFilter, tab.roomFilter, origins[index]?.data ?? ""));
+  const matching = rows.filter((row) => sessionMatchesSearch(row, filters, tab.agentFilter, tab.roomFilter, origins.values.get(row.id) ?? ""));
   const visible = new Set(rows.filter((row) => sessionMatchesSearch(row, { ...filters, needle: "" }, tab.agentFilter, tab.roomFilter, "")).map((row) => row.id));
   const messages = result.matches.filter((match) => visible.has(match.conversationId));
   const searching = !!tab.query.trim() || !!tab.agentFilter || !!tab.roomFilter;
@@ -1461,8 +1456,8 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
       <SessionSearch rows={rows} catalog={catalog} query={tab.query} setQuery={(query) => edit({ query })} agentFilter={tab.agentFilter} setAgentFilter={(agentFilter) => edit({ agentFilter })} roomFilter={tab.roomFilter} setRoomFilter={(roomFilter) => edit({ roomFilter })} inputRef={input} onKeyDown={(event) => { if (event.key === "Enter") { onFirstSubmit(); submit(); } }} />
     </div>
     <div className="min-h-0 flex-1 overflow-y-auto text-sm" aria-label="Search results">
-      <SearchStatus pending={pending} error={result.query === searchKey ? result.error : undefined} originError={originError} empty={searching && current && matching.length + messages.length === 0} incomplete={!searchIsAuthoritative(sidebar) || originError} retry={submit} />
-      {current && searching ? <SearchMatches matching={matching} messages={messages} rows={rows} origins={origins.map((origin) => origin.data ?? "")} needle={filters.needle} /> : null}
+      <SearchStatus pending={pending} checking={origins.pending} error={result.query === searchKey ? result.error : undefined} originError={origins.failed} empty={searching && current && matching.length + messages.length === 0} incomplete={!searchIsAuthoritative(sidebar) || origins.failed || origins.pending} retry={submit} />
+      {current && searching ? <SearchMatches matching={matching} messages={messages} rows={rows} origins={origins.values} needle={filters.needle} sort={filters.sort} /> : null}
       {!searching ? <p className="text-muted-foreground">Type to search messages and conversations.</p> : null}
     </div>
   </>;
@@ -1474,14 +1469,14 @@ function searchInput(query: string, typed: string, rows: Session[], catalog: { n
   const input = query.trimEnd().endsWith(typed.trimEnd()) && sessionSearchTerms(typed).text === text ? typed : text;
   const pills = [...new Set(filterTerms.slice(0, filterTerms.length - sessionSearchTerms(input).filterTerms.length))];
   const token = input.slice(input.search(/\S*$/));
-  const tagPrefix = typedPrefix(token, "tag:"), isPrefix = typedPrefix(token, "is:");
+  const tagPrefix = typedPrefix(token, "tag:"), isPrefix = typedPrefix(token, "is:"), sortPrefix = typedPrefix(token, "sort:");
   const agentPrefix = typedPrefix(text, "agent:"), roomPrefix = typedPrefix(text, "room:");
-  const needle = (tagPrefix?.replace(/^"|"$/g, "") ?? isPrefix)?.toLowerCase();
-  const names = roomPrefix !== null ? slackRooms(rows) : tagPrefix !== null ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : ["pinned", "forked"];
+  const needle = (tagPrefix?.replace(/^"|"$/g, "") ?? isPrefix ?? sortPrefix)?.toLowerCase();
+  const names = roomPrefix !== null ? slackRooms(rows) : tagPrefix !== null ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : sortPrefix !== null ? ["newest", "oldest"] : ["pinned", "forked", "unsettled"];
   const offered = overlayChoices(agentPrefix, roomPrefix ?? needle ?? null, catalog, names);
-  // A completed is:/tag: term commits on space or Enter instead of offering itself again.
+  // A completed is:/sort:/tag: term commits on space or Enter instead of offering itself again.
   const choices = agentPrefix === null && roomPrefix === null && offered.some((item) => item.key.toLowerCase() === needle) ? [] : offered;
-  return { text, filterTerms, input, pills, token, tagPrefix, agentPrefix, roomPrefix, choices };
+  return { text, filterTerms, input, pills, token, tagPrefix, sortPrefix, agentPrefix, roomPrefix, choices };
 }
 
 function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFilter, roomFilter, setRoomFilter, inputRef, placeholder, onKeyDown }: {
@@ -1501,7 +1496,7 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
   const stale = !sidebar.refreshing && rows.length > 0 && !searchIsAuthoritative(sidebar);
   const [overlayPick, setOverlayPick] = useState(0);
   const [typed, setTyped] = useState("");
-  const { text, filterTerms, input, pills, token, tagPrefix, agentPrefix, roomPrefix, choices } = searchInput(query, typed, rows, catalog);
+  const { text, filterTerms, input, pills, token, tagPrefix, sortPrefix, agentPrefix, roomPrefix, choices } = searchInput(query, typed, rows, catalog);
   const pick = choices.length === 0 ? 0 : overlayPick % choices.length;
   const active = useRef<HTMLButtonElement>(null);
   useEffect(() => { active.current?.scrollIntoView({ block: "nearest" }); }, [pick, text]);
@@ -1516,7 +1511,7 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
   };
   const applyOverlay = (name: string) => {
     if (agentPrefix === null && roomPrefix === null) {
-      change([...pills, tagPrefix !== null ? `tag:${/\s/.test(name) || name.startsWith('"') ? JSON.stringify(name) : name}` : `is:${name}`], input.slice(0, input.length - token.length).trim());
+      change([...pills, tagPrefix !== null ? `tag:${/\s/.test(name) || name.startsWith('"') ? JSON.stringify(name) : name}` : `${sortPrefix !== null ? "sort" : "is"}:${name}`], input.slice(0, input.length - token.length).trim());
     } else if (agentPrefix !== null) {
       setAgentFilter(name);
       change(filterTerms, "");
@@ -1626,8 +1621,8 @@ const SessionList = memo(function SessionList({ settledOnly = false }: { settled
   const catalog = agents.data?.agents ?? [];
   const rows = sidebar.rows;
   const filters = sessionSearchTerms(query);
-  const filtered = rows.filter((session) => (settledOnly ? session.settled : !session.settled) && sessionMatchesSearch(session, filters, agentFilter, roomFilter, "")).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
-  const searching = [filters.needle, agentFilter, roomFilter, filters.pinnedOnly, filters.forkedOnly, filters.tags.length].some(Boolean);
+  const filtered = rows.filter((session) => (settledOnly ? session.settled : !session.settled) && sessionMatchesSearch(session, filters, agentFilter, roomFilter, "")).sort((a, b) => compareSessions(filters.sort, a, b));
+  const searching = [filters.needle, agentFilter, roomFilter, filters.pinnedOnly, filters.forkedOnly, filters.unsettledOnly, filters.tags.length].some(Boolean);
   return (
     <div className={cn("flex h-full min-h-0 flex-col", settledOnly && "mx-auto w-full max-w-3xl gap-6 p-4")}>
       {settledOnly ? <PageTitle>Settled</PageTitle> : null}

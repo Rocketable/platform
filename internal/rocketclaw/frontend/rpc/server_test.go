@@ -1162,7 +1162,7 @@ func TestSessionEntries(t *testing.T) {
 		{"assistant", "Exact report\nwith details"},
 	}, got)
 
-	t.Run("origin-only history keeps original private metadata and authorization", func(t *testing.T) {
+	t.Run("origin search keeps original private metadata and authorization", func(t *testing.T) {
 		binding, found, err := sessions.ExternalMCPSession("external")
 		require.NoError(t, err)
 		require.True(t, found)
@@ -1172,20 +1172,15 @@ func TestSessionEntries(t *testing.T) {
 
 		full, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id})
 		require.NoError(t, err)
-		origin, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, OriginOnly: true})
-		require.NoError(t, err)
-		require.Equal(t, full.Origin, origin.Origin)
-		require.JSONEq(t, `{"kind":"external_mcp","externalConversationId":"external","agent":"producer","pairs":[{"key":"Original-Key","value":"Value <&> Unicode Ω"}]}`, origin.Origin)
-		require.Empty(t, origin.Messages)
+		require.JSONEq(t, `{"kind":"external_mcp","externalConversationId":"external","agent":"producer","pairs":[{"key":"Original-Key","value":"Value <&> Unicode Ω"}]}`, full.Origin)
 
-		ordinary, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: "empty-web", OriginOnly: true})
+		origins, err := invoke[SearchOriginsResponse](ctx, connection, "SearchOrigins", &SearchOriginsRequest{Query: "PRODUCER"})
 		require.NoError(t, err)
-		require.Empty(t, ordinary.Messages, "the ordinary transcript is not returned to origin search")
-		require.Empty(t, ordinary.Origin)
+		require.Len(t, origins.GetMatches(), 1, "the private conversation stays hidden")
+		require.Equal(t, id, origins.GetMatches()[0].GetConversationId())
+		require.Equal(t, "external mcp external conversation: external agent: producer original-key=value <&> unicode ω", origins.GetMatches()[0].GetText())
 
-		_, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: "private-X", OriginOnly: true})
-		require.Equal(t, codes.PermissionDenied, status.Code(err))
-		_, err = invoke[HistoryResponse](t.Context(), connection, "History", &HistoryRequest{Id: id, OriginOnly: true})
+		_, err = invoke[SearchOriginsResponse](t.Context(), connection, "SearchOrigins", &SearchOriginsRequest{Query: "producer"})
 		require.Equal(t, codes.Unauthenticated, status.Code(err))
 	})
 
@@ -1780,6 +1775,16 @@ func TestSessionEntries(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, latest.More)
 		require.Equal(t, trace.Origin, latest.Origin, "the creating entry decides the origin outside the newest entries")
+
+		var broken int64
+		require.NoError(t, db.QueryRowContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, '{"version":"broken"}', '') RETURNING id`, webID).Scan(&broken))
+		origins, err := invoke[SearchOriginsResponse](ctx, connection, "SearchOrigins", &SearchOriginsRequest{Query: "CRON/SILENT.MD"})
+		require.NoError(t, err, "origin search reads only the creating entry")
+		require.Len(t, origins.GetMatches(), 1, "the cron run itself stays hidden")
+		require.Equal(t, webID, origins.GetMatches()[0].GetConversationId())
+
+		_, err = db.ExecContext(ctx, `DELETE FROM session_entries WHERE id = $1`, broken)
+		require.NoError(t, err)
 
 		for _, test := range []struct {
 			name, channel string
@@ -2750,6 +2755,7 @@ func TestSessionEntries(t *testing.T) {
 		{"History", &HistoryRequest{Id: id}, &HistoryResponse{}},
 		{"ForkSession", &ForkSessionRequest{Id: id}, &ForkSessionResponse{}},
 		{"SearchMessages", &SearchMessagesRequest{Query: "handoff"}, &SearchMessagesResponse{}},
+		{"SearchOrigins", &SearchOriginsRequest{Query: "handoff"}, &SearchOriginsResponse{}},
 		{"Handoff", &HandoffRequest{Id: id}, &HandoffResponse{}},
 		{"SettleSession", &SettleSessionRequest{Id: id, Settled: true}, &SettleSessionResponse{}},
 		{"UpdateSession", &UpdateSessionRequest{Id: id, Name: new("Retain this name")}, &UpdateSessionResponse{}},

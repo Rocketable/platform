@@ -1249,7 +1249,7 @@ func (b *Bridge) runWorkflow(ctx context.Context, msg *protocol.InboundMessage, 
 		return result, fmt.Errorf("workflow %q is not configured", msg.Workflow.Name)
 	}
 
-	runner, err := newWorkflowAgentRunner(b.runtime, b.agentSnapshot(), rocketcode.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, b.config.ConversationID)...)
+	runner, err := newWorkflowAgentRunner(b.runtime, b.agentSnapshot(), rocketcode.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, cmp.Or(msg.SyncDestination, b.config.ConversationID))...)
 	if err != nil {
 		return result, fmt.Errorf("prepare workflow agent runner: %w", err)
 	}
@@ -1603,7 +1603,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	b.log.Info("prepared rocketcode session history", "conversation_id", b.config.ConversationID, "turn_id", turnID, "entry_count", len(observed), "replay_item_count", replayItemCount, "history_bytes", historyBytes, "compaction_count", compactionCount, "latest_entry_id", latestEntryID, "latest_entry_type", latestEntryType)
 
-	customTools := []rocketcode.Tool{attachments.Tool(root, b.config.SessionService, b.config.ConversationID)}
+	customTools := append(sessionTagTools(b.config.SessionService, cmp.Or(msg.SyncDestination, b.config.ConversationID)), attachments.Tool(root, b.config.SessionService, b.config.ConversationID))
 
 	decision := new(rawRunDecision)
 	if msg.RequireOutputDecision || msg.SyncDestination != "" {
@@ -1838,8 +1838,6 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 	tools := make([]rocketcode.Tool, 0, 6+len(customTools))
 
 	tools = append(tools, reloadTool(b.config.RequestReload), scheduleMessageTool(b.ScheduleMessage, b.log), resetScheduledMessagesTool(b.ResetScheduledMessages), listSessionsTool(b.config.SessionService), getSessionTool(b.config.SessionService), currentSessionIDTool(b.config.ConversationID))
-
-	tools = append(tools, sessionTagTools(b.config.SessionService, b.config.ConversationID)...)
 	if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err == nil && ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
 		tools = append(tools, updateGoalTool(b))
 	}

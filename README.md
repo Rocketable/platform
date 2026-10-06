@@ -197,7 +197,8 @@ arguments (`{}` for a direct call). It returns only the bare conversation ID, wi
 no JSON wrapper or added newline. Pass that ID to `rocketclaw_get_session(conversation_id="...")` in the next
 call to read stored entries, including those before the compaction point.
 This is the owning bridge's durable conversation ID: a private External MCP bridge
-returns its private history ID, not its public external ID or managed destination.
+returns its private history ID, not its public external ID or managed destination,
+even though its session tag tools act on that destination.
 Child agents that inherit these tools return the same owning conversation ID,
 subject to their own permissions; they do not get a separate child-run history ID.
 
@@ -268,12 +269,16 @@ or staged reload without replacing live definitions.
 
 Both tools return text containing `{"tags":[...]}`, sorted lexically, or
 `{"tags":[]}` when empty. They accept no conversation ID and use the calling
-agent's owning conversation, including for children and workflows. All permitted
-callers can read its complete active tag list. Tags survive restart, compaction,
-history-only deletion, agent changes, and configuration reloads. Regrouping does
-not reconcile old tags until a set call touches that group. Fresh sessions and
-forks start empty; Sync copies history, not tags. Permanent pruning and failed
-session cleanup remove metadata.
+agent's owning conversation, including for children and workflows. In a private
+producer turn with a human-visible destination, such as an External MCP case or a
+one-off cron run, they use that destination instead, so the tags appear on its Web
+row; `rocketclaw_current_session_id` still returns the private history ID. All
+permitted callers can read its complete active tag list. Tags survive restart,
+compaction, history-only deletion, agent changes, and configuration reloads.
+Regrouping does not reconcile old tags until a set call touches that group. Fresh
+sessions and forks start empty; Sync copies history, not tags. Upgrading copied
+External MCP private-history tags once to untagged destinations. Permanent pruning
+and failed session cleanup remove metadata.
 
 Web shows tags beside the agent name on active and settled rows. Cmd/Ctrl+P and
 the Search page accept `tag:customer`, `tag:customer outage`, and JSON-quoted names
