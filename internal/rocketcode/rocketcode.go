@@ -532,7 +532,7 @@ func normalizeConfig(configInput *Config) Config {
 	config := *configInput
 
 	if config.Model == "" {
-		config.Model = defaultModelRef().apiModel
+		config.Model = defaultOpenAIModel
 	}
 
 	if config.ReasoningEffort == "" {
