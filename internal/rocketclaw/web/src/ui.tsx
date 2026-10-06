@@ -264,7 +264,7 @@ function QueuePanel({
             </button>
             <div className="min-w-0 flex-1">
               <MessageAuthor principal={item.principal} />
-              <span className="block truncate text-sm">{item.delivery === "STASH" ? "Stashed · " : "Queued · "}{item.text}</span>
+              <span className="block truncate text-sm">{item.text}</span>
             </div>
             <MessageAttachments attachments={item.attachments} conversationId={conversationId} />
             <Button
@@ -2724,6 +2724,7 @@ function Composer({
   });
   const empty = text.trim() === "" && files.length === 0;
   const stopping = busy && empty;
+  const steerOff = !busy || sending || empty || isStopCommand(text);
   const pickerOpen = matches.length > 0;
   const selectedInvocation = matches[pick]?.invocation;
   useEffect(() => {
@@ -2814,9 +2815,9 @@ function Composer({
                <div className="hidden md:contents"><SessionHeaderActions id={sessionId} /></div>
             </div>
             <div className="flex shrink-0 items-center justify-end gap-1">
-              <Button type="button" variant="ghost" className="h-11 sm:h-8" disabled={sending || empty} onClick={() => void send("STASH")}>Stash</Button>
+              <Button type="button" variant={steerOff ? "quiet" : "ghost"} className="h-11 sm:h-8" disabled={sending || empty} onClick={() => void send("STASH")}>Stash</Button>
               <Tooltip>
-                <TooltipTrigger render={<Button type="button" variant="ghost" className="h-11 sm:h-8" disabled={!busy || sending || empty || isStopCommand(text)} />} aria-label="Steer" onClick={() => void send("STEER")}>
+                <TooltipTrigger render={<Button type="button" variant="ghost" className="h-11 sm:h-8" disabled={steerOff} />} aria-label="Steer" onClick={() => void send("STEER")}>
                   Steer
                 </TooltipTrigger>
                 <TooltipContent>Guide the current response <ModEnterKeys mac={mac} /></TooltipContent>

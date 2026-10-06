@@ -431,7 +431,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     expect(prompts).toEqual([{ id: "destination", text: handoffDocument, delivery: "STASH" }]);
     expect(forks).toHaveLength(1);
     const stashed = page.locator('[data-queue-id="stashed"]');
-    await stashed.getByText(`Stashed · ${handoffDocument}`, { exact: true }).waitFor();
+    await stashed.getByText(handoffDocument, { exact: true }).waitFor();
     expect(await page.locator("[data-queue-id]").count()).toBe(1);
     await stashed.getByRole("button", { name: "Pop", exact: true }).waitFor();
     expect(prompts).toHaveLength(1);
