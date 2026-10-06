@@ -460,14 +460,6 @@ func (ps PermissionSet) evaluateRules(permission, subject string, folded bool, s
 	return decision
 }
 
-func (ps PermissionSet) hasAllowRuleForPermission(permission string) bool {
-	return ps.hasRuleForPermission(permission, permissionAllow)
-}
-
-func (ps PermissionSet) hasActionableRuleForPermission(permission string) bool {
-	return ps.hasRuleForPermission(permission, permissionAllow, permissionAuto)
-}
-
 func (ps PermissionSet) hasRuleForPermission(permission string, actions ...PermissionAction) bool {
 	if permission == "read" && slices.Contains(actions, permissionAllow) {
 		for _, access := range ps.skillRead {
