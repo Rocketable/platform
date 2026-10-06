@@ -27,6 +27,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
   const searches: string[] = [];
   const handoffDocument = "# Handoff from source\n" + "Continue the verified work.\n".repeat(80);
   let handoffReady = Promise.withResolvers<void>();
+  let handoffSeen = Promise.withResolvers<void>();
   const stashReady = Promise.withResolvers<void>();
   const newSessionReady = Promise.withResolvers<void>();
   const firstTurnReady = Promise.withResolvers<void>();
@@ -69,6 +70,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
       }
       case "/api/Handoff":
         handoffs.push(input.id);
+        handoffSeen.resolve();
         if (failHandoff) return Response.json({ message: "Handoff provider failed", code: 13 }, { status: 500 });
         await handoffReady.promise;
         return Response.json({ document: handoffDocument });
@@ -355,7 +357,9 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     expect(await dialog.getByRole("button", { name: /Destination search needle/ }).count()).toBe(0);
     expect(prompts).toHaveLength(0);
     failHandoff = false;
+    handoffSeen = Promise.withResolvers();
     await dialog.getByRole("button", { name: "Retry handoff" }).click();
+    await handoffSeen.promise;
     expect(handoffs).toEqual(["source", "source"]);
     const aborted = page.waitForEvent("requestfailed", (request: { url: () => string }) => request.url().endsWith("/api/Handoff"));
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
@@ -378,6 +382,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     expect(prompts).toHaveLength(0);
 
     await composer.fill("$handoff");
+    handoffSeen = Promise.withResolvers();
     await composer.press("Enter");
     await destinationSearch.fill("destination search");
     const destinationMatch = dialog.getByRole("button", { name: /Destination search needle/ });
@@ -391,6 +396,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await dialog.getByText("Podcast editing notes with a very long conversation title", { exact: true }).waitFor();
     await page.locator("main").getByText("You are looking at the destination", { exact: true }).waitFor();
     await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>('button[aria-label="Stash handoff here"]')?.disabled);
+    await handoffSeen.promise;
     expect(handoffs).toEqual(["source", "source", "source", "source"]);
     expect(await composer.isVisible()).toBe(false);
     // The dialog's entrance scale also changes its buttons' measured bounds.
