@@ -2644,7 +2644,11 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await stashPage.locator("textarea").fill("$stop");
     await stashPage.locator('input[type="file"]').setInputFiles({ name: "held.txt", mimeType: "text/plain", buffer: Buffer.from("held contents") });
     ctrl.promptError = true;
-    await stashPage.getByRole("button", { name: "Stash", exact: true }).click();
+    const stashButton = stashPage.getByRole("button", { name: "Stash", exact: true });
+    // Idle: Stash stays usable but is no louder than the disabled Steer.
+    expect(await stashButton.isDisabled()).toBe(false);
+    expect((await stashButton.getAttribute("class"))?.split(/\s+/)).toContain("opacity-50");
+    await stashButton.click();
     await shown(stashPage, "Stash failed; retry");
     expect(await stashPage.locator("textarea").inputValue()).toBe("$stop");
     expect(await stashPage.getByRole("button", { name: "Remove held.txt", exact: true }).count()).toBe(1);
@@ -2653,7 +2657,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await stashPage.keyboard.press("Meta+Alt+Enter");
     const heldRow = stashPage.locator("[data-queue-id]");
     await heldRow.getByRole("button", { name: "Pop", exact: true }).waitFor();
-    expect(await heldRow.innerText()).toContain("Stashed · $stop");
+    expect(await heldRow.getByText("$stop", { exact: true }).count()).toBe(1);
     expect(await stashPage.locator("textarea").inputValue()).toBe("");
     expect(await stashPage.getByRole("button", { name: "Stop", exact: true }).count()).toBe(0);
     expect(await heldRow.getByRole("button", { name: "Steer", exact: true }).count()).toBe(0);
@@ -2685,16 +2689,18 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await popping.isDisabled()).toBe(true);
     popRelease.resolve();
     await heldRow.getByRole("button", { name: "Steer", exact: true }).waitFor();
-    expect(await heldRow.innerText()).toContain("Queued · $stop");
+    expect(await heldRow.getByText("$stop", { exact: true }).count()).toBe(1);
     expect(ctrl.queue[0].delivery).toBe("QUEUE");
     expect(await stashPage.getByRole("region", { name: "Pending steers", exact: true }).count()).toBe(0);
     await heldRow.getByRole("button", { name: "Steer", exact: true }).click();
     await stashPage.getByRole("region", { name: "Pending steers", exact: true }).getByText("$stop", { exact: true }).waitFor();
     expect(ctrl.queue[0].delivery).toBe("STEER");
     await stashPage.locator("textarea").fill("busy stash");
+    // Running: Stash lights up together with Steer.
+    expect((await stashButton.getAttribute("class"))?.split(/\s+/)).not.toContain("opacity-50");
     await stashPage.locator("textarea").press("Control+Alt+Enter");
     await heldRow.getByRole("button", { name: "Pop", exact: true }).waitFor();
-    expect(await heldRow.innerText()).toContain("Stashed · busy stash");
+    expect(await heldRow.getByText("busy stash", { exact: true }).count()).toBe(1);
     expect(await stashPage.getByRole("region", { name: "Messages", exact: true }).getByText("busy stash", { exact: true }).count()).toBe(0);
     expect(await stashPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await stashPage.close();
