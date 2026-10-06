@@ -510,8 +510,6 @@ func TestTranscriptObservationReportsUnavailableStorage(t *testing.T) {
 	require.NoError(t, s.Stop())
 	_, err := s.ObserveTranscript(t.Context(), "main", 0, 0, nil)
 	require.ErrorContains(t, err, "database is closed")
-	_, err = s.OriginPairs(t.Context(), "main")
-	require.ErrorContains(t, err, "read origin metadata")
 
 	journal := conversationJournal{store: s, conversationID: "main", log: slog.New(slog.DiscardHandler)}
 	require.ErrorContains(t, journal.SaveTrace(t.Context(), "turn", nil), "save turn trace")
@@ -680,10 +678,8 @@ func runningTestTurns(t *testing.T, s *SessionService) []string {
 
 func TestTranscriptObservationReportsUnreadableStoredEntries(t *testing.T) {
 	s := newTestSessionService(t)
-	_, err := s.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', json_build_object('type', $1::text, 'output_trace', 1), '')`, externalMCPOriginPairsEntryType)
+	_, err := s.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', '{"type":"turn","output_trace":1}', '')`)
 	require.NoError(t, err)
 	_, err = s.ObserveTranscript(t.Context(), "main", 0, 0, nil)
 	require.ErrorContains(t, err, "decode transcript entry")
-	_, err = s.OriginPairs(t.Context(), "main")
-	require.ErrorContains(t, err, "decode origin metadata")
 }

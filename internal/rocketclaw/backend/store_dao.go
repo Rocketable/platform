@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"time"
 
@@ -47,7 +48,7 @@ func (s *SessionService) SetThreadAgentIfExists(conversationID, agent string) (b
 }
 
 func (d stateDAO) externalMCPSession(ctx context.Context, externalConversationID string) (ExternalMCPSessionState, bool, error) {
-	_, session, err := scanExternalMCPSession(d.db.QueryRowContext(ctx, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel FROM external_mcp_sessions WHERE external_conversation_id = $1`, strings.TrimSpace(externalConversationID)))
+	_, session, err := scanExternalMCPSession(d.db.QueryRowContext(ctx, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel, origin_pairs FROM external_mcp_sessions WHERE external_conversation_id = $1`, strings.TrimSpace(externalConversationID)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return ExternalMCPSessionState{}, false, nil
 	}
@@ -61,7 +62,7 @@ func (d stateDAO) externalMCPSession(ctx context.Context, externalConversationID
 
 // ExternalMCPSessionByConversationID returns the public ID and binding for either session ID.
 func (s *SessionService) ExternalMCPSessionByConversationID(conversationID string) (externalConversationID string, session ExternalMCPSessionState, ok bool, err error) {
-	externalConversationID, session, err = scanExternalMCPSession(s.db.QueryRowContext(context.Background(), `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel FROM external_mcp_sessions WHERE private_conversation_id = $1 OR managed_conversation_id = $2`, strings.TrimSpace(conversationID), strings.TrimSpace(conversationID)))
+	externalConversationID, session, err = scanExternalMCPSession(s.db.QueryRowContext(context.Background(), `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel, origin_pairs FROM external_mcp_sessions WHERE private_conversation_id = $1 OR managed_conversation_id = $2`, strings.TrimSpace(conversationID), strings.TrimSpace(conversationID)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ExternalMCPSessionState{}, false, nil
 	}
@@ -78,14 +79,30 @@ func scanExternalMCPSession(scanner rowScanner) (string, ExternalMCPSessionState
 		externalConversationID string
 		session                ExternalMCPSessionState
 		privateConversationID  sql.NullString
+		originPairs            []byte
 	)
-	if err := scanner.Scan(&externalConversationID, &session.Agent, &privateConversationID, &session.ManagedConversationID, &session.SlackChannel); err != nil {
+	if err := scanner.Scan(&externalConversationID, &session.Agent, &privateConversationID, &session.ManagedConversationID, &session.SlackChannel, &originPairs); err != nil {
 		return "", ExternalMCPSessionState{}, fmt.Errorf("scan external MCP session: %w", err)
+	}
+
+	if err := json.Unmarshal(originPairs, &session.OriginPairs); err != nil {
+		return "", ExternalMCPSessionState{}, fmt.Errorf("decode external MCP origin pairs: %w", err)
 	}
 
 	session.PrivateConversationID = privateConversationID.String
 
 	return externalConversationID, session, nil
+}
+
+// originPairsJSON stores caller details without runtime-injected keys.
+func originPairsJSON(metadata map[string]string) []byte {
+	pairs := maps.Clone(metadata)
+	maps.DeleteFunc(pairs, func(key, _ string) bool {
+		return key == "external_conversation_id" || strings.HasPrefix(key, "rocketclaw_")
+	})
+	raw, _ := json.Marshal(pairs) // Encoding a string map cannot fail.
+
+	return raw
 }
 
 func (d stateDAO) goal(ctx context.Context, conversationID string) (GoalState, bool, error) {

@@ -3384,7 +3384,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
 	managedConversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, service.RegisterExternalMCPConversation("public-1", "planner", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:private", ManagedConversationID: managedConversationID, SlackChannel: "#ops"}))
+	require.NoError(t, service.RegisterExternalMCPConversation("public-1", "planner", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:private", ManagedConversationID: managedConversationID, SlackChannel: "#ops", OriginPairs: map[string]string{"z": "last", "a": "first"}}))
 	bridge.config = Config{ConversationID: "external_mcp:planner:private", Agent: "planner", ManagedConversationID: managedConversationID, ExternalConversationID: "public-1", SessionService: service}
 	bridge.bus = discardPublisher{}
 	bridge.log = slog.New(slog.DiscardHandler)
@@ -3434,29 +3434,26 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	require.NoError(t, err)
 
 	metadataEntries := 0
-	originEntries := 0
 
 	for i := range entries {
 		if entries[i].Entry.Type == externalMCPMetadataEntryType {
 			metadataEntries++
 		}
-
-		if entries[i].Entry.Type == externalMCPOriginPairsEntryType {
-			originEntries++
-		}
 	}
 
 	assert.Equal(t, 1, metadataEntries)
-	assert.Equal(t, 1, originEntries)
+	assert.Len(t, entries, 4, "only the metadata prompt and three turns belong in history")
+
+	binding, found, err := service.ExternalMCPSession("public-1")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, map[string]string{"a": "first", "z": "last"}, binding.OriginPairs)
 
 	managedEntries, err := service.ObserveEntries(context.Background(), managedConversationID)
 	require.NoError(t, err)
-	require.Len(t, managedEntries, 5)
+	require.Len(t, managedEntries, 4)
 	assert.Equal(t, externalMCPMetadataEntryType, managedEntries[0].Entry.Type)
-	pairs, ok := OriginPairsFromEntry(&managedEntries[1].Entry)
-	require.True(t, ok)
-	assert.Equal(t, map[string]string{"a": "first", "z": "last"}, pairs)
-	assert.Contains(t, string(managedEntries[3].Entry.ReplayInput[0]), "ROCKETCLAW_METADATA_LATER_KEY")
+	assert.Contains(t, string(managedEntries[2].Entry.ReplayInput[0]), "ROCKETCLAW_METADATA_LATER_KEY")
 
 	for i := range entries {
 		messages, err := replayInputMessages(entries[i].Entry.ReplayInput)

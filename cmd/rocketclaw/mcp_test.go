@@ -276,11 +276,11 @@ func TestExternalMCPRepeatedIDKeepsLockedAgentAndRejectsChannelMismatch(t *testi
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = session.Close() })
 
-	first, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "ticket-1", "agent": "planner", "input": "hello", "slack_channel": "#ops"}})
+	first, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "ticket-1", "agent": "planner", "input": "hello", "slack_channel": "#ops", "metadata": map[string]string{"topic": "original"}}})
 	require.NoError(t, err)
 	require.False(t, first.IsError)
 
-	repeat, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "ticket-1", "agent": "other", "input": "again", "slack_channel": "#ops"}})
+	repeat, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "ticket-1", "agent": "other", "input": "again", "slack_channel": "#ops", "metadata": map[string]string{"topic": "later"}}})
 	require.NoError(t, err)
 	require.False(t, repeat.IsError)
 	require.Equal(t, []string{"planner", "planner"}, agents)
@@ -290,6 +290,7 @@ func TestExternalMCPRepeatedIDKeepsLockedAgentAndRejectsChannelMismatch(t *testi
 	require.True(t, ok)
 	assert.Equal(t, "planner", stored.Agent)
 	assert.Equal(t, "#ops", stored.SlackChannel)
+	assert.Equal(t, map[string]string{"topic": "original"}, stored.OriginPairs)
 
 	mismatch, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "ticket-1", "agent": "planner", "input": "wrong channel", "slack_channel": "#triage"}})
 	require.NoError(t, err)

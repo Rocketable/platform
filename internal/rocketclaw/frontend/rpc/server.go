@@ -1665,9 +1665,9 @@ func (s *Server) chatOrigin(ctx context.Context, id string, entries []backend.Ob
 	}
 
 	if mcpOn {
-		pairs, err := s.startingPairs(ctx, binding.PrivateConversationID)
-		if err != nil {
-			return "", err
+		pairs := make([]originPair, 0, len(binding.OriginPairs))
+		for _, key := range slices.Sorted(maps.Keys(binding.OriginPairs)) {
+			pairs = append(pairs, originPair{Key: key, Value: binding.OriginPairs[key]})
 		}
 
 		return originJSON(externalMCPOrigin{Kind: originExternalMCP, ExternalConversationID: externalID, Agent: binding.Agent, Pairs: pairs})
@@ -1736,22 +1736,4 @@ func parseCronRun(source string) (cronRun, bool) {
 	relative := path[:start]
 
 	return cronRun{kind: kind, path: relative, stem: strings.TrimSuffix(strings.TrimPrefix(relative, "cron/"), ".md"), at: at}, true
-}
-
-func (s *Server) startingPairs(ctx context.Context, id string) ([]originPair, error) {
-	if id == "" {
-		return nil, nil
-	}
-
-	pairs, err := s.sessions.OriginPairs(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("read starting metadata pairs: %w", err)
-	}
-
-	out := make([]originPair, 0, len(pairs))
-	for _, key := range slices.Sorted(maps.Keys(pairs)) {
-		out = append(out, originPair{Key: key, Value: pairs[key]})
-	}
-
-	return out, nil
 }

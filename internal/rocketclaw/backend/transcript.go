@@ -175,27 +175,3 @@ func (s *SessionService) TranscriptPage(ctx context.Context, conversationID stri
 
 	return start, oldest, nil
 }
-
-// OriginPairs reads only the initial caller metadata, never the producer transcript.
-func (s *SessionService) OriginPairs(ctx context.Context, conversationID string) (map[string]string, error) {
-	var raw string
-
-	err := s.db.QueryRowContext(ctx, `SELECT entry_json FROM session_entries
-WHERE conversation_id = $1 AND entry_json::jsonb->>'type' = $2 ORDER BY id LIMIT 1`, conversationID, externalMCPOriginPairsEntryType).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("read origin metadata: %w", err)
-	}
-
-	var entry ObservedSessionEntry
-	if err := json.Unmarshal([]byte(raw), &entry.Entry); err != nil {
-		return nil, fmt.Errorf("decode origin metadata: %w", err)
-	}
-
-	pairs, _ := OriginPairsFromEntry(&entry.Entry)
-
-	return pairs, nil
-}
