@@ -26,8 +26,7 @@ message Session {
 message HistoryRequest {
   string id = 1;
   string source_conversation_id = 2;
-  // Return only the origin, without formatting or transmitting the transcript.
-  bool origin_only = 3;
+  reserved 3;
   // Opaque inventory returned by the last applied History response.
   string revision = 4;
   // Positive limit returns only the newest limit saved entries plus running
@@ -90,6 +89,13 @@ message MessageMatch {
   TranscriptEvent message = 2;
 }
 message SearchMessagesResponse { repeated MessageMatch matches = 1; }
+message SearchOriginsRequest { string query = 1; }
+message OriginMatch {
+  string conversation_id = 1;
+  // Lowercased origin search text containing the query.
+  string text = 2;
+}
+message SearchOriginsResponse { repeated OriginMatch matches = 1; }
 message HandoffRequest { string id = 1; }
 message HandoffResponse { string document = 1; }
 
@@ -360,6 +366,7 @@ service Web {
   rpc History(HistoryRequest) returns (HistoryResponse);
   rpc ForkSession(ForkSessionRequest) returns (ForkSessionResponse);
   rpc SearchMessages(SearchMessagesRequest) returns (SearchMessagesResponse);
+  rpc SearchOrigins(SearchOriginsRequest) returns (SearchOriginsResponse);
   rpc Handoff(HandoffRequest) returns (HandoffResponse);
   rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
   rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);

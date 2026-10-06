@@ -179,6 +179,32 @@ func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequ
 	}
 }
 
+// searchOrigins reads every visible conversation's origin facts in one query.
+func (s *Server) searchOrigins(ctx context.Context, request *SearchOriginsRequest) (*SearchOriginsResponse, error) {
+	if _, _, err := s.principal(ctx); err != nil {
+		return nil, err
+	}
+
+	response := &SearchOriginsResponse{}
+
+	needle := strings.ToLower(strings.TrimSpace(request.GetQuery()))
+	if needle == "" {
+		return response, nil
+	}
+
+	for facts, err := range s.sessions.ChatOriginFacts(ctx) {
+		if err != nil {
+			return nil, err
+		}
+
+		if _, text := decideOrigin(&facts); strings.Contains(text, needle) { // No origin has empty text.
+			response.Matches = append(response.Matches, &OriginMatch{ConversationId: facts.ConversationID, Text: text})
+		}
+	}
+
+	return response, nil
+}
+
 func (s *Server) handoff(ctx context.Context, request *HandoffRequest) (*HandoffResponse, error) {
 	if err := s.visibleConversation(ctx, request.Id); err != nil {
 		return nil, err

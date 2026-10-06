@@ -41,10 +41,9 @@ test("transcript and entry HTTP proxy reach Go and reject an unmapped connection
   expect(history.messages.at(-1)).toMatchObject({ agent: "planner", model: "work/model-a", reasoningEffort: "", origin: "canonical" });
   const copied = await call("History", { id });
   expect(copied.messages.at(-1)).toMatchObject({ agent: "producer", reasoningEffort: "high", origin: "sandboxed" });
-  const origin = await call("History", { id, originOnly: true });
-  expect(origin.messages).toEqual([]);
-  expect(JSON.parse(origin.origin).pairs).toEqual([{ key: "Original-Key", value: "Value <&> Unicode Ω" }]);
-  expect(await call("History", { id, originOnly: true }, true)).toMatchObject({ code: 16 });
+  expect(JSON.parse(copied.origin).pairs).toEqual([{ key: "Original-Key", value: "Value <&> Unicode Ω" }]);
+  expect(await call("SearchOrigins", { query: "unicode ω" })).toEqual({ matches: [{ conversationId: id, text: "external mcp external conversation: external agent: producer original-key=value <&> unicode ω" }] });
+  expect(await call("SearchOrigins", { query: "unicode" }, true)).toMatchObject({ code: 16 });
   expect(history.messages.map(({ role, text }) => ({ role, text }))).toEqual([
     { role: "developer", text: "private instructions" }, { role: "user", text: "human one" },
     { role: "thinking", text: "**Planning the answer**" }, { role: "tool", text: "execute\n{\"code\":\"true\"}" },

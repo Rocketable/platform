@@ -15,7 +15,7 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     if (url.pathname === "/api/Identity") return Response.json({ username: owner });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-page" });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
-    if (url.pathname === "/api/SearchMessages") return Response.json({ matches: [] });
+    if (url.pathname === "/api/SearchMessages" || url.pathname === "/api/SearchOrigins") return Response.json({ matches: [] });
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = Bun.file(path.join(dist, url.pathname));
     return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
@@ -119,6 +119,11 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     expect(await page.getByRole("tab").first().evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
     expect(await search.inputValue()).toBe("same");
     expect(await page.getByRole("button", { name: "agent:main" }).count()).toBe(0);
+    await search.fill(""); // An owner switch imports the URL search; an empty one keeps Bob's tab a draft.
+    await page.waitForURL("**/search");
+    await page.getByRole("tab").first().click();
+    await name.fill("Alice");
+    await name.press("Enter");
     await page.evaluate(() => localStorage.setItem("last-seen:alice", "/s/b25l?message=private"));
     owner = "bob";
     await page.getByRole("tab", { name: "Search 1" }).waitFor({ timeout: 10_000 });
@@ -146,14 +151,73 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
   }
 }, 30_000);
 
+test("search URL follows the active tab and reopens a matching tab", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async (request) => {
+    const url = new URL(request.url);
+    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "chat", name: "Outage chat", preview: "", agent: "alitu-cs-support" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
+    if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-links" });
+    if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "alitu-cs-support" }] });
+    if (url.pathname === "/api/SearchMessages" || url.pathname === "/api/SearchOrigins") return Response.json({ matches: [] });
+    if (url.pathname.startsWith("/api/")) return Response.json({});
+    const file = Bun.file(path.join(dist, url.pathname));
+    return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+  } });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage();
+    const link = "/search?q=outage&agent=alitu-cs-support";
+    const at = (target: string) => page.waitForURL((url: URL) => url.pathname + url.search === target);
+    const search = page.getByRole("textbox", { name: "Search sessions" });
+    const tabs = page.getByRole("tab");
+    const opened = async (count: number) => {
+      await page.getByRole("button", { name: "agent:alitu-cs-support" }).waitFor();
+      expect(await tabs.count()).toBe(count);
+      expect(await tabs.first().getAttribute("aria-selected")).toBe("true");
+      expect(await search.inputValue()).toBe("outage");
+    };
+    await page.goto(`http://127.0.0.1:${server.port}${link}`);
+    await opened(1);
+    await page.reload();
+    await opened(1);
+    await page.getByRole("button", { name: "New search" }).click();
+    await at("/search");
+    await search.fill("other room");
+    await at("/search?q=other+room");
+    await page.goto(`http://127.0.0.1:${server.port}${link}`);
+    await opened(2);
+    await page.getByLabel("Search results").getByRole("heading").getByRole("link", { name: "Outage chat" }).click();
+    await page.waitForURL("**/s/Y2hhdA");
+    await page.goBack();
+    await at(link);
+    await opened(2);
+    const entries = await page.evaluate(() => history.length);
+    await tabs.last().click();
+    await at("/search?q=other+room");
+    await tabs.first().click();
+    await at(link);
+    await page.getByRole("button", { name: "Close search 1" }).click();
+    await at("/search?q=other+room");
+    await page.getByRole("button", { name: "New search" }).click();
+    await at("/search");
+    expect(await page.evaluate(() => history.length)).toBe(entries);
+  } finally {
+    await browser.close();
+    server.stop(true);
+  }
+}, 30_000);
+
 for (const width of [1280, 390]) test(`search editor groups clickable message matches at ${width}px, and Enter reloads`, async () => {
   const { chromium: engine } = await import(playwright!);
   const searches: string[] = [];
+  const originSearches: string[] = [];
   let summariesComplete = true;
   const rows = [
-    { id: "first", name: "", title: "", preview: "Ordinary", agent: "main" },
-    { id: "second", name: "", title: "#notes", preview: "Needle notes\nOther text", agent: "main" },
-    { id: "third", name: "Pinned conversation", preview: "Other text", agent: "main", pinned: true, tags: ["customer", "Needs review", 'say "hello"'] },
+    { id: "first", name: "", title: "", preview: "Ordinary", agent: "main", updatedAt: "2026-01-03T00:00:00Z" },
+    { id: "second", name: "", title: "#notes", preview: "Needle notes\nOther text", agent: "main", updatedAt: "2026-01-02T00:00:00Z" },
+    { id: "third", name: "Pinned conversation", preview: "Other text", agent: "main", pinned: true, tags: ["customer", "Needs review", 'say "hello"'], updatedAt: "2026-01-01T00:00:00Z" },
     { id: "fourth", name: "Origin chat", preview: "Other text", agent: "main", pinned: true },
     { id: "web-session:unnamed", name: "", title: "", preview: "", agent: "main" },
   ];
@@ -164,9 +228,11 @@ for (const width of [1280, 390]) test(`search editor groups clickable message ma
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-results" });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
-    if (url.pathname === "/api/History") {
-      const { id } = await request.json() as { id: string };
-      return Response.json({ messages: [], origin: id === "fourth" ? JSON.stringify({ kind: "cron", sourcePath: "/notes/archive-key.md", stem: "review" }) : "", revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
+    if (url.pathname === "/api/SearchOrigins") {
+      const { query } = await request.json() as { query: string };
+      originSearches.push(query);
+      const text = "cron source: /notes/archive-key.md stem: review";
+      return Response.json({ matches: text.includes(query) ? [{ conversationId: "fourth", text }] : [] });
     }
     if (url.pathname === "/api/SearchMessages") {
       const { query } = await request.json() as { query: string };
@@ -204,7 +270,9 @@ for (const width of [1280, 390]) test(`search editor groups clickable message ma
     expect(await results.getByText("No matches").count()).toBe(0);
     summariesComplete = true;
     await results.getByText("No matches").waitFor();
+    await page.waitForTimeout(300);
     expect(searches).toEqual([]);
+    expect(originSearches).toEqual([]); // Status-only queries search neither messages nor origins.
     await search.fill("tag:customer is:pinned needle");
     await group.waitFor({ timeout: 5000 });
     expect(await results.getByRole("group").count()).toBe(1);
@@ -244,6 +312,13 @@ for (const width of [1280, 390]) test(`search editor groups clickable message ma
     await results.getByText("Type to search messages and conversations.").waitFor();
     expect(await results.getByRole("link").count()).toBe(0);
     expect(searches).toEqual(["needle", "needle", "archive-key", "no-such-match"]);
+    const order = (labels: string[]) => page.waitForFunction((labels: string[]) => [...document.querySelectorAll('[aria-label="Search results"] [role="group"]')].map((node) => node.getAttribute("aria-label")).join("|") === labels.join("|"), labels, { timeout: 5000 });
+    await search.fill("sort:oldest needle");
+    await order(["Pinned conversation", "Needle notes", "Ordinary"]); // sort: overrides message-hit grouping.
+    await search.fill("sort:newest needle");
+    await order(["Ordinary", "Needle notes", "Pinned conversation"]);
+    for (const term of ["sort:oldest", "sort:newest"]) await page.getByRole("button", { name: term, exact: true }).click();
+    await search.fill("");
     await search.fill("tag:needs");
     await page.getByRole("button", { name: "Needs review", exact: true }).click();
     expect(await pills.allTextContents()).toEqual(['tag:"Needs review"']);
@@ -275,6 +350,7 @@ test("newer search replaces an in-flight message search and retries errors", asy
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-race" });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [] });
+    if (url.pathname === "/api/SearchOrigins") return Response.json({ matches: [] });
     if (url.pathname === "/api/SearchMessages") {
       const { query } = await request.json() as { query: string };
       searches.push(query);
@@ -328,6 +404,114 @@ test("newer search replaces an in-flight message search and retries errors", asy
   }
 }, 30_000);
 
+test("one SearchOrigins request per needle feeds Cmd+P and /search", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const rows = Array.from({ length: 30 }, (_, i) => ({ id: `row-${String(i).padStart(2, "0")}`, name: `Row ${i}`, preview: "", agent: "main" }));
+  const originSearches: string[] = [];
+  let failing = true;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
+    if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-origins" });
+    if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
+    if (url.pathname === "/api/SearchMessages") return Response.json({ matches: [] });
+    if (url.pathname === "/api/SearchOrigins") {
+      const { query } = await request.json() as { query: string };
+      originSearches.push(query);
+      if (failing) return Response.json({ message: "origin unavailable", code: 13 }, { status: 500 });
+      const text = "external mcp external conversation: deep-origin agent: main ";
+      return Response.json({ matches: text.includes(query) ? [{ conversationId: "row-29", text }] : [] });
+    }
+    if (url.pathname === "/api/History") return Response.json({ message: "origin search must not read histories", code: 13 }, { status: 500 });
+    if (url.pathname.startsWith("/api/")) return Response.json({});
+    const file = Bun.file(path.join(dist, url.pathname));
+    return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+  } });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.goto(`http://127.0.0.1:${server.port}/search`);
+    await page.locator("#session-sidebar").getByText("Row 29", { exact: true }).waitFor();
+    const search = page.getByRole("textbox", { name: "Search sessions" });
+    const results = page.getByLabel("Search results");
+    await search.fill("deep-origin");
+    await results.getByRole("alert").filter({ hasText: "Some chat origins could not be searched." }).waitFor();
+    expect(await results.getByRole("status").filter({ hasText: "Searching…" }).count()).toBe(0);
+    failing = false;
+    await search.fill("deep");
+    await results.getByRole("group", { name: "Row 29", exact: true }).waitFor({ timeout: 5000 });
+    await results.getByRole("alert").waitFor({ state: "detached" });
+    expect(await results.getByRole("group").count()).toBe(1);
+    await search.pressSequentially("-ori", { delay: 30 }); // Typing settles into one request.
+    await page.waitForTimeout(400);
+    expect(originSearches).toEqual(["deep-origin", "deep", "deep-ori"]);
+    await page.keyboard.press("Control+p");
+    const palette = page.getByRole("dialog", { name: "Go to session", exact: true });
+    await palette.getByPlaceholder("Search sessions").fill("DEEP-ORIGIN");
+    await palette.getByText("Row 29", { exact: true }).waitFor({ timeout: 5000 });
+    expect(await palette.locator("li > button").count()).toBe(1);
+    expect(originSearches.slice(3)).toEqual(["deep-origin"]);
+  } finally {
+    await browser.close();
+    server.stop(true);
+  }
+}, 30_000);
+
+test("search shows message and row matches while origins are still loading", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const hold = Promise.withResolvers<void>();
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "named", name: "Needle row", preview: "" }, { id: "messaged", name: "Plain chat", preview: "" }, { id: "origin", name: "Origin only", preview: "" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
+    if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-partial" });
+    if (url.pathname === "/api/ListAgents") return Response.json({ agents: [] });
+    if (url.pathname === "/api/SearchMessages") {
+      const { query } = await request.json() as { query: string };
+      return Response.json({ matches: query === "needle" ? [{ conversationId: "messaged", message: { messageId: "1:0", role: "user", text: "A needle message", complete: true } }] : [] });
+    }
+    if (url.pathname === "/api/SearchOrigins") {
+      const { query } = await request.json() as { query: string };
+      await hold.promise;
+      const text = "external mcp external conversation: needle-origin agent: main ";
+      return Response.json({ matches: text.includes(query) ? [{ conversationId: "origin", text }] : [] });
+    }
+    if (url.pathname.startsWith("/api/")) return Response.json({});
+    const file = Bun.file(path.join(dist, url.pathname));
+    return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+  } });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.goto(`http://127.0.0.1:${server.port}/search`);
+    await page.locator("#session-sidebar").getByText("Origin only", { exact: true }).waitFor();
+    const search = page.getByRole("textbox", { name: "Search sessions" });
+    const results = page.getByLabel("Search results");
+    const checking = results.getByRole("status").filter({ hasText: "Still checking chat origins…" });
+    await search.fill("needle");
+    await results.getByRole("group", { name: "Needle row", exact: true }).waitFor({ timeout: 5000 });
+    await results.getByRole("link", { name: /A needle message/ }).waitFor();
+    await checking.waitFor();
+    expect(await results.getByRole("group", { name: "Origin only", exact: true }).count()).toBe(0);
+    await search.fill("absent");
+    await results.getByText("Session search is still loading.").waitFor();
+    expect(await results.getByText("No matches").count()).toBe(0);
+    await search.fill("needle");
+    await results.getByRole("group", { name: "Needle row", exact: true }).waitFor();
+    hold.resolve();
+    await results.getByRole("group", { name: "Origin only", exact: true }).waitFor({ timeout: 5000 });
+    await checking.waitFor({ state: "detached" });
+    expect(await results.getByRole("group").count()).toBe(3);
+  } finally {
+    hold.resolve();
+    await browser.close();
+    server.stop(true);
+  }
+}, 30_000);
+
 test("message matches jump after history loads and last close returns to the last visible message", async () => {
   const { chromium: engine } = await import(playwright!);
   const messages = (prefix: string) => Array.from({ length: 18 }, (_, i) => [
@@ -344,13 +528,13 @@ test("message matches jump after history loads and last close returns to the las
     if (url.pathname === "/api/Identity") return Response.json({ username: owner });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "jump" });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
+    if (url.pathname === "/api/SearchOrigins") return Response.json({ matches: [] });
     if (url.pathname === "/api/SearchMessages") return Response.json({ matches: [
       { conversationId: "one", message: messages("one")[2] },
       { conversationId: "one", message: messages("one")[3] },
     ] });
     if (url.pathname === "/api/History") {
-      const { id, originOnly } = await request.json() as { id: string; originOnly?: boolean };
-      if (originOnly) return Response.json({ messages: [], origin: "", revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
+      const { id } = await request.json() as { id: string };
       if (delayHistory && id === "one") await pending.promise;
       return Response.json({ messages: messages(id), origin: "", revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(messages(id).map((message) => message.entryKey))], running: false, terminal: "" });
     }

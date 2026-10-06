@@ -22,7 +22,10 @@ shown, not on the whole chat. `start` is where the returned entries begin and `m
 exist. A positive `before` reads a settled, unfollowed page of older entries: the
 newest `limit` of them, or every entry from `from` onward. If older history is
 cleared, the next limited read resets. A chat's origin still comes from its first
-entry when that entry is not returned.
+entry when that entry is not returned. SearchOrigins applies the same origin rules
+to every chat the caller may see in one database query and returns the chats whose
+lowercased origin text contains the query; cron runs and private External MCP
+conversations never match.
 In-progress turns and saved turns share source-qualified turn keys; `item_id` is
 render identity, while `message_id` identifies saved entry positions for commands.
 History returns the recorded turn in order, including developer messages, thinking summaries, tool

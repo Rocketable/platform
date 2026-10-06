@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"testing"
 
 	migrate "github.com/rubenv/sql-migrate"
@@ -27,9 +28,9 @@ func TestExternalMCPOriginPairsMigration(t *testing.T) {
 	store := newTestSessionService(t)
 	source := migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}
 	set := migrate.MigrationSet{TableName: "pg_migrations"}
-	n, err := set.ExecMaxContext(t.Context(), store.db, "postgres", source, migrate.Down, 1)
+	n, err := set.ExecMaxContext(t.Context(), store.db, "postgres", source, migrate.Down, 2)
 	require.NoError(t, err)
-	require.Equal(t, 1, n)
+	require.Equal(t, 2, n)
 	_, err = store.db.ExecContext(t.Context(), `INSERT INTO external_mcp_sessions
 (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) VALUES
 ('with-details', 'private', 'managed', 'helper', '#triage'),
@@ -69,4 +70,52 @@ INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUE
 		require.NoError(t, err)
 		require.Equal(t, 1, n)
 	}
+}
+
+func TestChatOriginFactsReportsFailures(t *testing.T) {
+	store := newTestSessionService(t)
+	ctx := t.Context()
+
+	for _, id := range []string{"first", "second"} {
+		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "main"}))
+	}
+
+	seen := 0
+
+	for _, err := range store.ChatOriginFacts(ctx) {
+		require.NoError(t, err)
+
+		seen++
+
+		break
+	}
+
+	require.Equal(t, 1, seen, "stopping early ends the scan")
+
+	_, err := store.db.ExecContext(ctx, `INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel, origin_pairs)
+VALUES ('external', 'private', 'first', 'helper', '#triage', '"not an object"')`)
+	require.NoError(t, err)
+
+	var errs []error
+
+	for _, err := range store.ChatOriginFacts(ctx) {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	require.Len(t, errs, 1)
+	require.ErrorContains(t, errs[0], "decode external MCP origin pairs")
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	errs = nil
+
+	for _, err := range store.ChatOriginFacts(canceled) {
+		errs = append(errs, err)
+	}
+
+	require.Len(t, errs, 1)
+	require.ErrorIs(t, errs[0], context.Canceled)
 }

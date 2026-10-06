@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore, type ReactNode } from "react";
 import { Check, Copy, Maximize2, WrapText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogTrigger, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -121,8 +121,26 @@ function fencedParts(text: string) {
   return parts;
 }
 
+// Markdown links, Slack links, bare URLs, then Slack bold (`*x*`, `**x**`); only http(s) URLs match.
+const inlinePattern = /\[([^\]\n]+)\]\((?:<(https?:\/\/[^>\s]+)>|(https?:\/\/(?:[^()\s]|\([^()\s]*\))+))\)|<(https?:\/\/[^|>\s]+)(?:\|([^>\n]+))?>|(?<!\]\(<?|<)(https?:\/\/[^\s<>]*[^\s<>.,;:!?'")\]*])|(?<![\w*/])\*\*([^\s*](?:[^\n]*?[^\s*])?)\*\*(?![\w*/])|(?<![\w*/])\*([^\s*](?:[^*\n]*?[^\s*])?)\*(?![\w*/])/g;
+
+function inlineNodes(text: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let last = 0;
+  for (const match of text.matchAll(inlinePattern)) {
+    const [, label, angled, url, slack, slackLabel, bare, strong, single] = match;
+    const href = (angled ?? url ?? slack ?? bare)?.replaceAll("&amp;", "&");
+    nodes.push(text.slice(last, match.index), href
+      ? <a key={match.index} href={href} className="underline" target="_blank" rel="noopener noreferrer">{label ?? slackLabel ?? href}</a>
+      : <strong key={match.index}>{inlineNodes(strong ?? single)}</strong>);
+    last = match.index + match[0].length;
+  }
+  nodes.push(text.slice(last));
+  return nodes;
+}
+
 export function TranscriptText({ text }: { text: string }) {
   return <>{fencedParts(text).map((part) => part.label
     ? <CodeBlock key={part.start} text={part.text} label={part.label} />
-    : <div key={part.start} className="whitespace-pre-wrap break-words">{part.text}</div>)}</>;
+    : <div key={part.start} className="whitespace-pre-wrap break-words">{inlineNodes(part.text)}</div>)}</>;
 }

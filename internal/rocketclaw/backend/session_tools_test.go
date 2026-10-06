@@ -123,7 +123,7 @@ func TestSessionTagToolsBridge(t *testing.T) {
 			defer func() { require.NoError(t, root.Close()) }()
 
 			bridge := &Bridge{runtime: cfg, config: Config{ConversationID: "external_mcp:owning", SessionService: service, RequestReload: testNoopRestart}, log: slog.New(slog.DiscardHandler)}
-			runtimeConfig := bridge.rocketcodeConfig(workspace, nil)
+			runtimeConfig := bridge.rocketcodeConfig(workspace, nil, sessionTagTools(service, "external_mcp:owning")...)
 			runtimeConfig.Journal = rocketcode.InertJournal{}
 			runtimeConfig.ChildSessions = rocketcode.InertChildSessions{}
 			runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
@@ -306,7 +306,7 @@ func TestSessionTagChildAuthority(t *testing.T) {
 				defer func() { require.NoError(t, root.Close()) }()
 
 				bridge := &Bridge{runtime: cfg, config: Config{ConversationID: "owning", SessionService: service, RequestReload: testNoopRestart}, log: slog.New(slog.DiscardHandler)}
-				runtimeConfig := bridge.rocketcodeConfig(workspace, nil)
+				runtimeConfig := bridge.rocketcodeConfig(workspace, nil, sessionTagTools(service, "owning")...)
 				runtimeConfig.Journal = rocketcode.InertJournal{}
 				runtimeConfig.ChildSessions = rocketcode.InertChildSessions{}
 				runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)

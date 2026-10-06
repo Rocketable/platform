@@ -14,6 +14,8 @@ New composer and handoff previews snapshot the server-resolved author only when
 identity is ready, not refreshing. Recorded history or queue data replaces that
 preview by input ID; the current viewer never supplies an author for saved messages.
 Copy puts the message text on the clipboard.
+Message text shows `*bold*` and `**bold**` in bold. Markdown, Slack, and bare
+`http(s)` links are clickable and open in a new tab; everything else stays literal.
 Code blocks and tool output scroll sideways by default. Their wrap button, also in
 the expanded view, wraps long lines for every block at once; this browser
 remembers the choice across reloads.
@@ -132,7 +134,12 @@ name and origin matches open the conversation. Message groups come before
 metadata-only matches, with pinned conversations first within each group.
 An empty search asks for a query instead of listing conversations. Closing a tab
 removes that search; closing the last returns to the last message visible in any chat, or Home
-if none was seen. Opening Search again starts an empty tab. Cmd/Ctrl+P still opens
+if none was seen. Opening Search again starts an empty tab. The address follows the
+selected tab as `/search?q=…&agent=…&room=…`, omitting empty values and adding no
+history entries, so it can be copied and shared. Opening such a URL selects a tab
+with the same query, agent, and room, or saves a new one, so Back from a result
+reuses that tab. `agent:` or `room:` typed inside `q` stays query text rather than
+a filter; use the `agent` and `room` parameters. Cmd/Ctrl+P still opens
 the session-search dialog, including active and settled chats. Each dialog opening
 clears text, pills, and result selection and focuses the input.
 Search matches names, titles, previews, agents, session labels, origin card fields,
@@ -147,14 +154,26 @@ tags match nothing. Bare `tag:`, unclosed quotes, and invalid quoted values stay
 ordinary search text. A tag-only query loads no transcript; `tag:customer outage`
 sends only `outage` to transcript search and keeps hits from tagged sessions.
 Agent and room selections preserve tag filters, and saved queries keep their raw
-syntax without a migration. Agent, room, tag, `is:pinned`, and `is:forked` filters constrain
-both row and origin matches. The session-search dialog lists each conversation
+syntax without a migration. Agent, room, tag, `is:pinned`, `is:forked`, and
+`is:unsettled` filters constrain both row and origin matches; `is:unsettled`
+keeps only chats the default sidebar shows (not settled, snoozed, or due for
+auto-settle). The session-search dialog lists each conversation
 once, pinned first, retaining recent-first order within each group.
-Origin data loads only when free text remains: empty input, status tokens, pills,
-and unfinished `agent:`/`room:` suggestions do not fetch histories. Ordinary
-sidebar loading stays independent. Incomplete enumeration or origin lookups show
-loading feedback rather than a definitive empty result. Failed origin lookups
-show an error while usable row matches remain selectable.
+`sort:newest` or `sort:oldest` instead orders results by last activity on every
+search surface, overriding pinned-first and message-hit grouping; rows without
+activity come last, equal times order by conversation ID, and the last `sort:` wins.
+Typing `is:` suggests `pinned`, `forked`, and `unsettled`; typing `sort:` suggests
+`newest` and `oldest`. A trailing unfinished `is:` or `sort:` term (such as `is:uns`)
+is not searched; unknown complete terms such as `is:foo` stay ordinary text.
+The server searches every visible chat's origin in one request, sent once typing
+pauses for 250 ms and only when free text remains: empty input, status tokens, pills,
+and unfinished `agent:`/`room:`/`is:`/`sort:` terms send no origin search. Ordinary
+sidebar loading stays independent. Incomplete enumeration or a pending origin search
+shows loading feedback rather than a definitive empty result. The Search page shows
+message and row matches as soon as the message search returns, adds origin matches
+when the origin search returns, and shows “Still checking chat origins…” until then;
+returning to the tab does not recheck origins. A failed origin search
+shows an error while usable row matches remain selectable.
 The command button and Cmd/Ctrl+Shift+P open the command palette. It always offers
 **Sessions: New**, **Sessions: Search**, **Sessions: List Settled**, **Cron: Dashboard**,
 **Cron: Run**, **List Agents**, **List Skills**, **Settings**, and **Hide Sidebar / Show Sidebar**.
@@ -315,7 +334,8 @@ Settled chats live on the **Settled** tab (`/settled`) rather than in the defaul
 sidebar. Use **Unsettle** to return a chat to the sidebar. Global search always
 includes settled chats; `is:settled` is accepted as an include token, not literal
 text or a settled-only filter. The Settled page retains its own local row search
-and agent, room, and pinned filters, limited to settled chats.
+and agent, room, and pinned filters, limited to settled chats, so `is:unsettled`
+there shows "No matches".
 Use the clock button in a chat or **Session actions** in a sidebar row to
 **Snooze** until a chosen local date and time. Snoozed chats appear under
 **Settled** with their return time.
