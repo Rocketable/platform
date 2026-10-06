@@ -182,7 +182,7 @@ func startExternalMCPServer(
 		managedConversationID := protocol.SlackThreadConversationID(reply.SlackReply.ChannelID, reply.SlackReply.ThreadTS)
 
 		createdConversationID = managedConversationID
-		if err := store.RegisterExternalMCPConversation(externalConversationID, managedAgent, &backend.ExternalMCPSessionState{Agent: usedAgent, PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, SlackChannel: slackChannel}); err != nil {
+		if err := store.RegisterExternalMCPConversation(externalConversationID, managedAgent, &backend.ExternalMCPSessionState{Agent: usedAgent, PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, SlackChannel: slackChannel, OriginPairs: metadata}); err != nil {
 			return externalmcp.SessionResult{}, fmt.Errorf("persist external MCP conversation: %w", err)
 		}
 

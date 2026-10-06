@@ -163,6 +163,8 @@ Slack configuration uses direct `slack.channels` mappings. Each mapping names a 
 
 External MCP exposes `session_prompt`. Every call supplies an external conversation ID, agent, and configured Slack channel. A new ID creates one private MCP session and one managed Slack session on the same Slack thread. The MCP agent remains fixed; the managed agent starts from the channel configuration and can be switched from Slack. MCP history is copied into managed history, but Slack history is never copied back. Later calls keep the same channel and Slack thread. Slack Blocks label MCP requests and responses with their conversation ID and agent.
 
+Origin display and search read the first call's extra details from the external session record, not from tool-output history. Later calls do not replace these original details. Metadata prompts sent to the model remain in message history.
+
 Permission patterns can use `${ROCKETCLAW_*}` variables from the run's shell
 environment, for example `edit: {'.tmp/${ROCKETCLAW_METADATA_FRUIT}/*': allow}`.
 Each agent resolves its patterns when it starts, including delegated agents,

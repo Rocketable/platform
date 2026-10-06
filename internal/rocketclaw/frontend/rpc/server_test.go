@@ -1163,8 +1163,13 @@ func TestSessionEntries(t *testing.T) {
 	}, got)
 
 	t.Run("origin-only history keeps original private metadata and authorization", func(t *testing.T) {
-		_, err := sessions.AppendEntryID(ctx, "private-X", &rocketcode.SessionEntry{Version: 1, Type: "mcp_external_origin_pairs", OutputTrace: []json.RawMessage{json.RawMessage(`{"pairs":{"Original-Key":"Value <&> Unicode Ω"}}`)}})
+		binding, found, err := sessions.ExternalMCPSession("external")
 		require.NoError(t, err)
+		require.True(t, found)
+
+		binding.OriginPairs = map[string]string{"Original-Key": "Value <&> Unicode Ω"}
+		require.NoError(t, sessions.UpsertExternalMCPSession("external", &binding))
+
 		full, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id})
 		require.NoError(t, err)
 		origin, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, OriginOnly: true})

@@ -36,6 +36,14 @@ func TestExternalMCPBindingPersistsPrivateAndManagedConversations(t *testing.T) 
 		assert.Equal(t, "deploy-42", externalConversationID)
 		assert.Equal(t, binding, found)
 	}
+
+	binding.OriginPairs = map[string]string{"topic": "billing", "external_conversation_id": "external", "rocketclaw_principal": "reader"}
+	require.NoError(t, store.UpsertExternalMCPSession("deploy-42", &binding))
+	got, ok, err = store.ExternalMCPSession("deploy-42")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, map[string]string{"topic": "billing"}, got.OriginPairs)
+	assert.Len(t, binding.OriginPairs, 3, "storing details must not mutate the caller's map")
 }
 
 func TestExternalMCPConversationRegistrationIsAtomic(t *testing.T) {
@@ -43,14 +51,23 @@ func TestExternalMCPConversationRegistrationIsAtomic(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop()) })
 
-	require.NoError(t, store.RegisterExternalMCPConversation("existing", "managed-agent", &ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private-1", ManagedConversationID: "slack-thread:C1:1.1", SlackChannel: "#ops"}))
+	require.NoError(t, store.RegisterExternalMCPConversation("existing", "managed-agent", &ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private-1", ManagedConversationID: "slack-thread:C1:1.1", SlackChannel: "#ops", OriginPairs: map[string]string{"topic": "billing", "rocketclaw_principal": "reader"}}))
+	binding, found, err := store.ExternalMCPSession("existing")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, map[string]string{"topic": "billing"}, binding.OriginPairs)
+
 	thread, ok, err := store.Thread("slack-thread:C1:1.1")
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "managed-agent", thread.Agent)
 
-	err = store.RegisterExternalMCPConversation("existing", "other-managed", &ExternalMCPSessionState{Agent: "other-private", PrivateConversationID: "external_mcp:private-2", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops"})
+	err = store.RegisterExternalMCPConversation("existing", "other-managed", &ExternalMCPSessionState{Agent: "other-private", PrivateConversationID: "external_mcp:private-2", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops", OriginPairs: map[string]string{"topic": "replacement"}})
 	require.Error(t, err)
+	binding, found, err = store.ExternalMCPSession("existing")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, map[string]string{"topic": "billing"}, binding.OriginPairs)
 
 	_, ok, err = store.Thread("slack-thread:C1:2.2")
 	require.NoError(t, err)

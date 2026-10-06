@@ -58,10 +58,11 @@ const ThreadCreatedByCron ThreadCreator = "cron"
 
 // ExternalMCPSessionState binds an external MCP conversation ID to private and managed sessions.
 type ExternalMCPSessionState struct {
-	Agent                 string `json:"agent,omitempty"`
-	PrivateConversationID string `json:"private_conversation_id,omitempty"`
-	ManagedConversationID string `json:"managed_conversation_id,omitempty"`
-	SlackChannel          string `json:"slack_channel,omitempty"`
+	Agent                 string            `json:"agent,omitempty"`
+	PrivateConversationID string            `json:"private_conversation_id,omitempty"`
+	ManagedConversationID string            `json:"managed_conversation_id,omitempty"`
+	SlackChannel          string            `json:"slack_channel,omitempty"`
+	OriginPairs           map[string]string `json:"origin_pairs,omitempty"`
 }
 
 // CronScheduleState records one observed scheduled cron trigger.
@@ -299,7 +300,7 @@ func (s *SessionService) UpsertExternalMCPSession(externalConversationID string,
 		privateConversationID = session.PrivateConversationID
 	}
 
-	_, err := s.db.ExecContext(context.Background(), `INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) VALUES ($1, $2, $3, $4, $5) ON CONFLICT(external_conversation_id) DO UPDATE SET private_conversation_id = excluded.private_conversation_id, managed_conversation_id = excluded.managed_conversation_id, agent = excluded.agent, slack_channel = excluded.slack_channel`, externalConversationID, privateConversationID, session.ManagedConversationID, session.Agent, session.SlackChannel)
+	_, err := s.db.ExecContext(context.Background(), `INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel, origin_pairs) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT(external_conversation_id) DO UPDATE SET private_conversation_id = excluded.private_conversation_id, managed_conversation_id = excluded.managed_conversation_id, agent = excluded.agent, slack_channel = excluded.slack_channel, origin_pairs = excluded.origin_pairs`, externalConversationID, privateConversationID, session.ManagedConversationID, session.Agent, session.SlackChannel, originPairsJSON(session.OriginPairs))
 	if err != nil {
 		return fmt.Errorf("upsert external MCP session: %w", err)
 	}
@@ -348,7 +349,7 @@ func (s *SessionService) RegisterExternalMCPConversation(externalConversationID,
 		return fmt.Errorf("register external MCP managed conversation: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) VALUES ($1, $2, $3, $4, $5)`, externalConversationID, session.PrivateConversationID, session.ManagedConversationID, session.Agent, session.SlackChannel); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel, origin_pairs) VALUES ($1, $2, $3, $4, $5, $6)`, externalConversationID, session.PrivateConversationID, session.ManagedConversationID, session.Agent, session.SlackChannel, originPairsJSON(session.OriginPairs)); err != nil {
 		return fmt.Errorf("register external MCP binding: %w", err)
 	}
 
@@ -1616,7 +1617,7 @@ SELECT COALESCE(entry_timestamp, $1) < $2 FROM latest_entry`, fallback.UTC().For
 }
 
 func externalMCPSessions(ctx context.Context, db stateStoreDB) (map[string]ExternalMCPSessionState, error) {
-	return queryMap(ctx, db, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel FROM external_mcp_sessions ORDER BY external_conversation_id`, "external MCP sessions", scanExternalMCPSession)
+	return queryMap(ctx, db, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel, origin_pairs FROM external_mcp_sessions ORDER BY external_conversation_id`, "external MCP sessions", scanExternalMCPSession)
 }
 
 func readRows(ctx context.Context, db stateStoreDB, query, label string, scan func(rowScanner) error, args ...any) error {
