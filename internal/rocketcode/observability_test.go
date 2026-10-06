@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"testing/synctest"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
@@ -22,6 +24,45 @@ func TestTokenUsageAttributes(t *testing.T) {
 		attribute.Int64(semconv.LLMTokenCountCompletion, 5),
 		attribute.Int64(semconv.LLMTokenCountPromptDetailsCacheWrite, 4),
 	}, usage.attributes())
+}
+
+func TestObservabilityExportsUTF8Values(t *testing.T) {
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer collector.Close()
+
+	exporter, err := otlptracehttp.New(t.Context(), otlptracehttp.WithEndpointURL(collector.URL), otlptracehttp.WithEncoding(otlptracehttp.EncodingProtobuf))
+
+	require.NoError(t, err)
+	defer func() { require.NoError(t, exporter.Shutdown(t.Context())) }()
+
+	for _, test := range []struct {
+		name, text, want string
+		hide             bool
+	}{
+		{name: "valid", text: "hello 世界", want: "hello 世界"},
+		{name: "invalid bytes", text: "before\xff\xfeafter", want: "before�after"},
+		{name: "truncated rune", text: "hello\xe2\x82", want: "hello�"},
+		{name: "hidden", text: "before\xffafter", want: instrumentation.RedactedValue, hide: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := tracetest.NewSpanRecorder()
+
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+			defer func() { require.NoError(t, provider.Shutdown(t.Context())) }()
+
+			observability := ObservabilityConfig{Enabled: true, Tracer: provider.Tracer("test"), TraceConfig: instrumentation.TraceConfig{HideInputs: test.hide, HideOutputs: test.hide}}
+			_, span := observability.startSpan(t.Context(), "test", semconv.SpanKindTool, observability.inputValue(test.text), observability.outputValue(test.text))
+			span.span.End()
+
+			spans := recorder.Ended()
+			require.NoError(t, exporter.ExportSpans(t.Context(), spans))
+			require.Len(t, spans, 1)
+			require.Contains(t, spans[0].Attributes(), attribute.String(semconv.InputValue, test.want))
+			require.Contains(t, spans[0].Attributes(), attribute.String(semconv.OutputValue, test.want))
+		})
+	}
 }
 
 func TestObservabilityEmitsAgentProviderAndToolSpans(t *testing.T) {
