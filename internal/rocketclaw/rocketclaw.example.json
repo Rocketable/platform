@@ -21,7 +21,12 @@
     "level": "debug"
   },
   "web": {
-    "auto_settle_after": "168h"
+    "auto_settle_after": "168h",
+    "sentry": {
+      "dsn": "",
+      "environment": "production",
+      "traces_sample_rate": 0.1
+    }
   },
   "mcp_external": {
     "enabled": true,

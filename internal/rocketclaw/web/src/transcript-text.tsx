@@ -1,27 +1,33 @@
 import { useState, useSyncExternalStore, type ReactNode } from "react";
+import { captureException } from "@sentry/react";
 import { Check, Copy, Maximize2, WrapText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogTrigger, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 
 export async function copyText(text: string, container: Element) {
-  if (navigator.clipboard) {
-    await navigator.clipboard.writeText(text);
-  } else {
-    // RocketClaw also serves plain HTTP, where the Clipboard API is unavailable.
-    const input = document.createElement("textarea");
-    input.value = text;
-    input.style.position = "fixed";
-    input.style.opacity = "0";
-    const focus = document.activeElement as HTMLElement;
-    container.append(input);
-    try {
-      input.select();
-      if (!document.execCommand("copy")) throw new Error("Copy failed");
-    } finally {
-      input.remove();
-      focus.focus({ preventScroll: true });
+  try {
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      // RocketClaw also serves plain HTTP, where the Clipboard API is unavailable.
+      const input = document.createElement("textarea");
+      input.value = text;
+      input.style.position = "fixed";
+      input.style.opacity = "0";
+      const focus = document.activeElement as HTMLElement;
+      container.append(input);
+      try {
+        input.select();
+        if (!document.execCommand("copy")) throw new Error("Copy failed");
+      } finally {
+        input.remove();
+        focus.focus({ preventScroll: true });
+      }
     }
+  } catch (error) {
+    captureException(error);
+    throw error;
   }
 }
 

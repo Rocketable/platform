@@ -134,6 +134,39 @@ func TestLoadAutoSettleAfter(t *testing.T) {
 	}
 }
 
+func TestLoadSentry(t *testing.T) {
+	for _, filename := range []string{"rocketclaw.json", "femtoclaw.json"} {
+		for _, tt := range []struct {
+			name, sentry, wantErr string
+		}{
+			{"disabled", `{}`, ""},
+			{"configured", `{"dsn":"https://public@o1.ingest.sentry.io/1","environment":"production","traces_sample_rate":0.25}`, ""},
+			{"zero sampling", `{"dsn":"https://public@o1.ingest.sentry.io/1","traces_sample_rate":0}`, ""},
+			{"negative sampling", `{"traces_sample_rate":-0.1}`, "web.sentry.traces_sample_rate"},
+			{"excessive sampling", `{"traces_sample_rate":1.1}`, "web.sentry.traces_sample_rate"},
+			{"invalid DSN", `{"dsn":"not-a-dsn"}`, "web.sentry.dsn"},
+			{"private key", `{"dsn":"https://public:private@o1.ingest.sentry.io/1"}`, "web.sentry.dsn"},
+		} {
+			t.Run(filename+"/"+tt.name, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), filename)
+				content := fmt.Sprintf(`{"database_url":"postgres://localhost/test","openai":{"api_key":"test"},"slack":{"bot_token":"test","app_token":"test","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"web":{"sentry":%s}}`, tt.sentry)
+				require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+				cfg, err := Load(path, "", AWSFetcher{})
+				if tt.wantErr != "" {
+					require.ErrorContains(t, err, tt.wantErr)
+					return
+				}
+
+				require.NoError(t, err)
+				data, err := json.Marshal(cfg.Web.Sentry)
+				require.NoError(t, err)
+				require.JSONEq(t, tt.sentry, string(data))
+			})
+		}
+	}
+}
+
 func TestLoadPreservesModelConfig(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "workspace": ".",

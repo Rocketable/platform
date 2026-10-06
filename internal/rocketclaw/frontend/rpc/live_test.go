@@ -167,7 +167,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 		require.NoError(t, err)
 
 		html = regexp.MustCompile(`<script type="module" src="[^"]+"></script>`).ReplaceAll(html, []byte(`<script type="module" src="/current.js"></script>`))
-		handler := NewHTTPHandler(connection)
+		handler := NewHTTPHandler(connection, cfg.Web.Sentry)
 		httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.URL.Path == "/current.js":

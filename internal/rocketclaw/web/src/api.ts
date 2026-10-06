@@ -1,3 +1,4 @@
+import { captureException } from "@sentry/react";
 import type { AgentChoices, ChatOrigin, ConfigView, CronJob, HistoryView, MessageMatch, PromptDelivery, QueueItem, SessionBatch, Skill, TranscriptEvent, Workflow } from "./types";
 
 export class RPCError extends Error {
@@ -5,50 +6,60 @@ export class RPCError extends Error {
 }
 
 export async function rpc<T>(method: string, input: object = {}, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(`/api/${method}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input), signal });
-  const body = await response.json();
-  if (!response.ok) throw new RPCError(body.message, body.code);
-  return body;
+  try {
+    const response = await fetch(`/api/${method}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input), signal });
+    const body = await response.json();
+    if (!response.ok) throw new RPCError(body.message, body.code);
+    return body;
+  } catch (error) {
+    if (!signal?.aborted) captureException(error, { tags: { rpc: method } });
+    throw error;
+  }
 }
 
 // Completion belongs to the transport, not the terminal snapshot's flag.
 // Read through EOF so errors after the terminal snapshot cannot commit a cache.
 export async function* listSessions(signal?: AbortSignal, url = "/api/ListSessions"): AsyncGenerator<SessionBatch> {
-  const response = await fetch(url, { signal });
-  if (!response.ok) {
-    const body = await response.json();
-    throw new RPCError(body.message, body.code);
-  }
-  const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
-  let pending = "", complete = false;
   try {
-    for (;;) {
-      signal?.throwIfAborted();
-      const { value, done } = await reader.read();
-      if (done) break;
-      pending += value;
-      let boundary: number;
-      while ((boundary = pending.indexOf("\n\n")) >= 0) {
-        const frame = pending.slice(0, boundary);
-        pending = pending.slice(boundary + 2);
-        let event = "message";
-        const data: string[] = [];
-        for (const line of frame.split("\n")) {
-          if (line.startsWith("event:")) event = line.slice(6).trim();
-          if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
-        }
-        if (!data.length) continue;
-        const body = JSON.parse(data.join("\n"));
-        if (event === "error") throw new RPCError(body.message, body.code);
-        if (event === "complete") complete = true;
-        else if (event === "message") yield body;
-      }
+    const response = await fetch(url, { signal });
+    if (!response.ok) {
+      const body = await response.json();
+      throw new RPCError(body.message, body.code);
     }
-    signal?.throwIfAborted();
-    if (!complete) throw new Error("Session stream ended without completion");
-  } finally {
-    await reader.cancel();
-    reader.releaseLock();
+    const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
+    let pending = "", complete = false;
+    try {
+      for (;;) {
+        signal?.throwIfAborted();
+        const { value, done } = await reader.read();
+        if (done) break;
+        pending += value;
+        let boundary: number;
+        while ((boundary = pending.indexOf("\n\n")) >= 0) {
+          const frame = pending.slice(0, boundary);
+          pending = pending.slice(boundary + 2);
+          let event = "message";
+          const data: string[] = [];
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) event = line.slice(6).trim();
+            if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+          }
+          if (!data.length) continue;
+          const body = JSON.parse(data.join("\n"));
+          if (event === "error") throw new RPCError(body.message, body.code);
+          if (event === "complete") complete = true;
+          else if (event === "message") yield body;
+        }
+      }
+      signal?.throwIfAborted();
+      if (!complete) throw new Error("Session stream ended without completion");
+    } finally {
+      await reader.cancel();
+      reader.releaseLock();
+    }
+  } catch (error) {
+    if (!signal?.aborted) captureException(error, { tags: { rpc: "ListSessions" } });
+    throw error;
   }
 }
 

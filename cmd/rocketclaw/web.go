@@ -35,7 +35,7 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 		return nil, fmt.Errorf("connect Web HTTP to RPC: %w", err)
 	}
 
-	httpServer := &http.Server{Handler: rpc.NewHTTPHandler(connection)}
+	httpServer := &http.Server{Handler: rpc.NewHTTPHandler(connection, rt.Cfg.Web.Sentry)}
 	server := grpc.NewServer()
 	rpc.New(rt, rt.Sessions, rt.Cfg, channels, cronjobs).Register(server)
 

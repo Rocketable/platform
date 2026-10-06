@@ -1,12 +1,29 @@
-import { mkdir, readdir, rm } from "node:fs/promises";
+import { copyFile, mkdir, readdir, rename, rm } from "node:fs/promises";
 import postcss from "postcss";
 import tailwind from "@tailwindcss/postcss";
 
 const outdir = new URL("../internal/web/dist/", import.meta.url).pathname;
 await mkdir(outdir, { recursive: true });
 for (const name of await readdir(outdir)) await rm(`${outdir}/${name}`, { recursive: true });
-const result = await Bun.build({ entrypoints: ["./src/main.tsx"], outdir, target: "browser", minify: true, splitting: true, naming: "assets/[name]-[hash].[ext]", define: { "process.env.NODE_ENV": '"production"' } });
+const result = await Bun.build({ entrypoints: ["./src/main.tsx"], outdir, target: "browser", minify: true, sourcemap: "linked", splitting: true, naming: "assets/[name]-[hash].[ext]", define: { "process.env.NODE_ENV": '"production"' } });
 if (!result.success) throw new AggregateError(result.logs, "SPA build failed");
+// Bun's debugId comment lacks Sentry's runtime registration; let the CLI own both IDs and maps.
+for (const output of result.outputs) {
+  if (output.path.endsWith(".js")) await Bun.write(output.path, (await output.text()).replace(/^\/\/# debugId=.*$/gm, ""));
+  if (output.path.endsWith(".map")) {
+    const map = await output.json();
+    delete map.debugId;
+    await Bun.write(output.path, JSON.stringify(map));
+  }
+}
+await Bun.$`bunx --no-install sentry-cli sourcemaps inject ${outdir + "assets"}`;
+const maps = new URL("../../../.tmp/sentry-sourcemaps/", import.meta.url).pathname;
+await mkdir(maps, { recursive: true });
+for (const name of await readdir(maps)) await rm(maps + name);
+for (const name of await readdir(outdir + "assets")) {
+  if (name.endsWith(".js")) await copyFile(outdir + "assets/" + name, maps + name);
+  if (name.endsWith(".map")) await rename(outdir + "assets/" + name, maps + name);
+}
 const css = await postcss([tailwind({ optimize: true })]).process(await Bun.file("app/globals.css").text(), { from: "app/globals.css" });
 const font = Bun.file("src/fonts/inter-latin.woff2");
 const fontName = `assets/inter-${Bun.hash(await font.arrayBuffer()).toString(16)}.woff2`;

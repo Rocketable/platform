@@ -76,6 +76,14 @@ admission, ownership, and routing still use the login name. Missing or blank dis
 names fall back to the login. Web shows each recorded author above the message text
 and keeps the exact prompt header in its info details.
 
+Optional frontend error and performance tracking uses `web.sentry` in the same
+config file. Set a public Sentry DSN to report JS/TS and React errors,
+`console.error`, handled request failures, page/request timings, click
+responsiveness, long tasks, and Web Vitals without session replay. It is disabled
+by default. Errors are not sampled; performance traces default to 10% sampling.
+See [frontend error and performance tracking](internal/rocketclaw/web/README.md#frontend-error-and-performance-tracking)
+for the settings, source-map uploads, and data-collection details.
+
 Web reads the same persisted transcript during a turn and after a refresh,
 including recorded reasoning summaries and tool calls/results. Its live connection
 carries only conversation-change signals; each signal triggers a delta read that

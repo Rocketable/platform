@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -26,7 +27,7 @@ import (
 func startHTTPTestServer(t *testing.T, connection *grpc.ClientConn) *httptest.Server {
 	t.Helper()
 
-	server := httptest.NewUnstartedServer(NewHTTPHandler(connection))
+	server := httptest.NewUnstartedServer(NewHTTPHandler(connection, config.SentryConfig{}))
 	require.NoError(t, server.Listener.Close())
 
 	listener, err := net.Listen("tcp", ":0")
@@ -45,7 +46,7 @@ func TestHTTPBoundary(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := NewHTTPHandler(connection)
+	handler := NewHTTPHandler(connection, config.SentryConfig{})
 
 	for _, tc := range []struct{ method, body, message string }{
 		{"RunCronJob", `{}`, "stem is required"},
@@ -269,7 +270,7 @@ func TestHTTPStreams(t *testing.T) {
 				return
 			}
 
-			server := httptest.NewServer(NewHTTPHandler(connection))
+			server := httptest.NewServer(NewHTTPHandler(connection, config.SentryConfig{}))
 			t.Cleanup(server.Close)
 
 			path, method := "/api/ListSessions", http.MethodGet

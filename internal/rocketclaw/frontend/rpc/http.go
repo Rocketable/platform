@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/internal/web"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -25,9 +26,9 @@ import (
 )
 
 // NewHTTPHandler bridges the browser API to the local Web service.
-func NewHTTPHandler(connection *grpc.ClientConn) http.Handler {
+func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("GET /", web.Handler())
+	mux.Handle("GET /", web.Handler(sentry))
 	mux.Handle("GET /api/", http.NotFoundHandler())
 	mux.Handle("POST /api/", http.NotFoundHandler())
 
