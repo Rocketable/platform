@@ -302,13 +302,9 @@ func NewInboundMessageFromContent(source Source, kind InboundKind, content *Inbo
 
 	inbound.Metadata = map[string]string{InboundRawTextMetadataKey: content.Text}
 	if len(content.Attachments) > 0 {
-		inbound.Attachments = make([]InboundAttachment, 0, len(content.Attachments))
-		for i := range content.Attachments {
-			inbound.Attachments = append(inbound.Attachments, InboundAttachment{
-				Name:     content.Attachments[i].Name,
-				MIMEType: content.Attachments[i].MIMEType,
-				Data:     append([]byte(nil), content.Attachments[i].Data...),
-			})
+		inbound.Attachments = slices.Clip(slices.Clone(content.Attachments))
+		for i := range inbound.Attachments {
+			inbound.Attachments[i].Data = append([]byte(nil), inbound.Attachments[i].Data...)
 		}
 	}
 
