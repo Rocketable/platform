@@ -179,6 +179,7 @@ func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
 				return []protocol.Conversation{}, nil
 			}
 		}},
+		channels:  &mockChannels{SlackTagsMatchingFunc: func(context.Context, string) []string { return nil }},
 		usernames: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice", netip.MustParseAddr("192.0.2.2"): "bob"},
 	}
 	firstCtx, cancelFirst := context.WithCancel(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1")))
@@ -243,6 +244,65 @@ func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
 	close(release)
 	require.NoError(t, <-retry)
 	<-newScanCtx.Done()
+}
+
+func TestSearchMessagesMatchesSlackTagNames(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	const id = "tag-search"
+	require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main", CreatedBy: "alice"}))
+	_, err = sessions.AppendEntryID(t.Context(), id, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","content":"ping <!subteam^S0BA868QQ90>"}`),
+		json.RawMessage(`{"type":"message","role":"assistant","content":"unrelated reply"}`),
+		json.RawMessage(`{"type":"message","role":"user","content":"hi <@U05MD4PEVHN>"}`),
+		json.RawMessage(`{"type":"message","role":"user","content":"alan tagged nobody"}`),
+		json.RawMessage(`{"type":"message","role":"user","content":"alan hi <@U05MD4PEVHN>"}`),
+	}})
+	require.NoError(t, err)
+
+	matching := map[string][]string{"cs-operators": {"S0BA868QQ90"}, "alan": {"U05MD4PEVHN"}}
+	server := &Server{
+		backend: &mockBackend{ListConversationsFunc: func(context.Context) ([]protocol.Conversation, error) {
+			return []protocol.Conversation{{ID: id}}, nil
+		}},
+		sessions:  sessions,
+		usernames: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice"},
+		cfg:       &config.Config{Workspace: t.TempDir()},
+		channels: &mockChannels{SlackTagsMatchingFunc: func(_ context.Context, needle string) []string {
+			return matching[needle]
+		}},
+	}
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
+
+	group, err := server.searchMessages(ctx, &SearchMessagesRequest{Query: "cs-operators"})
+	require.NoError(t, err)
+	require.Len(t, group.Matches, 1)
+	require.Equal(t, "ping <!subteam^S0BA868QQ90>", group.Matches[0].Message.Text)
+	require.Equal(t, []string{"S0BA868QQ90"}, group.TagIds)
+
+	user, err := server.searchMessages(ctx, &SearchMessagesRequest{Query: "alan"})
+	require.NoError(t, err)
+	require.Len(t, user.Matches, 3)
+	require.Equal(t, "hi <@U05MD4PEVHN>", user.Matches[0].Message.Text)
+	require.Equal(t, "alan tagged nobody", user.Matches[1].Message.Text)
+	require.Equal(t, "alan hi <@U05MD4PEVHN>", user.Matches[2].Message.Text)
+	require.Equal(t, []string{"U05MD4PEVHN"}, user.TagIds)
+
+	matching["cs-operators"] = nil
+	emptyTags, err := server.searchMessages(ctx, &SearchMessagesRequest{Query: "cs-operators"})
+	require.NoError(t, err)
+	require.Empty(t, emptyTags.Matches)
+	require.Empty(t, emptyTags.TagIds)
+
+	text, err := server.searchMessages(ctx, &SearchMessagesRequest{Query: "unrelated"})
+	require.NoError(t, err)
+	require.Len(t, text.Matches, 1)
+	require.Equal(t, "unrelated reply", text.Matches[0].Message.Text)
+	require.Empty(t, text.TagIds)
 }
 
 func TestSessionEntries(t *testing.T) {
@@ -408,6 +468,7 @@ func TestSessionEntries(t *testing.T) {
 
 		return channelTitle, []string{"planner", "main"}, nil
 	}
+	channels.SlackTagsMatchingFunc = func(context.Context, string) []string { return nil }
 	cronRunner := &mockCronRunner{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		require.Equal(t, "planner", agent)
 		require.Contains(t, prompt, "Cron body")

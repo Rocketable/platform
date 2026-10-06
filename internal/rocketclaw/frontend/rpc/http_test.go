@@ -56,6 +56,7 @@ func TestHTTPBoundary(t *testing.T) {
 		{"PopQueueItem", `{"itemId":"held"}`, "id is required"},
 		{"RemoveQueueItem", `{"id":"chat"}`, "itemId is required"},
 		{"ReorderQueue", `{"id":"chat"}`, "itemIds is required"},
+		{"SlackNames", `{}`, "ids is required"},
 		{"ListSkills", `{"agent":""}`, "agent must not be empty"},
 	} {
 		response := httptest.NewRecorder()

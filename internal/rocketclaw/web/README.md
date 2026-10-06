@@ -14,8 +14,16 @@ New composer and handoff previews snapshot the server-resolved author only when
 identity is ready, not refreshing. Recorded history or queue data replaces that
 preview by input ID; the current viewer never supplies an author for saved messages.
 Copy puts the message text on the clipboard.
-Message text shows `*bold*` and `**bold**` in bold. Markdown, Slack, and bare
-`http(s)` links are clickable and open in a new tab; everything else stays literal.
+Message text follows Slack formatting: `*bold*` and `**bold**`, `_italic_`,
+`~strikethrough~`, `` `inline code` ``, fenced code blocks, `> ` quotes, and
+`- `/`* `/`1. ` lists (nested items render flat). Markdown, Slack, and bare
+`http(s)` links are clickable and open in a new tab. Slack tags show names:
+`<@U…>` as `@display name`, `<!subteam^S…>` as `@handle`, `<#C…>` as `#channel`,
+and `<!here>` as `@here`. Names come from Slack and refresh every 8 hours; a tag
+that cannot be resolved shows its ID, such as `@U123`. Headings and tables stay
+literal. Session titles, turn previews, handoff results, and queued items show the
+same inline formatting on one line; their tooltips and accessible names use the
+plain text with names filled in. Copy still copies the original text.
 Code blocks and tool output scroll sideways by default. Their wrap button, also in
 the expanded view, wraps long lines for every block at once; this browser
 remembers the choice across reloads.
@@ -239,7 +247,13 @@ to edit its name in place. Enter or clicking away saves; Escape cancels.
 Custom names stay unchanged when the query is edited; a blank name
 restores the query label. Results use a compact Search Editor-style list, grouped by
 conversation. The match count sits in parentheses beside each title, followed by
-highlighted, clickable matching excerpts. Message matches
+highlighted, clickable matching excerpts. Excerpts use the message formatting
+above without inner links or code-block buttons, so a click opens the match;
+code in an excerpt wraps to the row width.
+With a search word, an excerpt shows the matching line with up to two lines on
+each side, widened to keep a code block whole; without one it shows the whole
+message. Message search also matches Slack tags by name: `cs-operators` finds
+messages that tag `@cs-operators`, and the tag is highlighted. Message matches
 jump to the recorded user or assistant message, including after a reload;
 name and origin matches open the conversation. Message groups come before
 metadata-only matches, with pinned conversations first within each group.

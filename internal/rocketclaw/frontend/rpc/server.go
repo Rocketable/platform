@@ -74,6 +74,8 @@ type tailscaleUser struct {
 type ChannelAgentChoices interface {
 	ChannelAgentChoices(context.Context, string) ([]string, error)
 	SidebarChannelAgentChoices(context.Context, string) (string, []string, error)
+	SlackNames(context.Context, []string) map[string]string
+	SlackTagsMatching(context.Context, string) []string
 }
 
 // CronJobs uses the process's existing Cron manager for reads and execution.

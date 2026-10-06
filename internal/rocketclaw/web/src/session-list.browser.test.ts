@@ -667,10 +667,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
 
     const desktopSidebar = page.locator("#session-sidebar");
     const channelRow = desktopSidebar.getByRole("link").filter({ hasText: "filter preview" });
-    expect(await channelRow.locator("span[title]").getAttribute("title")).toBe("room · main");
-    expect((await channelRow.locator("span[title]").boundingBox())!.x).toBe((await channelRow.locator('[data-slot="session-title"]').boundingBox())!.x);
+    expect(await channelRow.locator("span[title]:not([data-slot])").getAttribute("title")).toBe("room · main");
+    expect((await channelRow.locator("span[title]:not([data-slot])").boundingBox())!.x).toBe((await channelRow.locator('[data-slot="session-title"]').boundingBox())!.x);
     const webRow = desktopSidebar.getByRole("link").filter({ hasText: "saved preview" });
-    expect(await webRow.locator("span[title]").textContent()).toBe("main");
+    expect(await webRow.locator("span[title]:not([data-slot])").textContent()).toBe("main");
     expect(await webRow.locator("time").isVisible()).toBe(true);
     const menuPosition = await page.getByRole("button", { name: "Hide sidebar", exact: true }).boundingBox();
     expect((await desktopSidebar.boundingBox())!.y).toBe(0);
@@ -1434,9 +1434,9 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await link.click({ trial: true }); // Measure after the mobile sheet finishes moving.
       await sidebar.evaluate(async () => { await Promise.all(document.getAnimations().filter((animation) => animation instanceof CSSTransition).map((animation) => animation.finished)); });
       const before = await link.boundingBox();
-      expect(await link.locator("span[title]").getAttribute("title")).toBe("room · main");
-      expect((await link.locator("span[title]").boundingBox())!.x).toBe((await link.locator('[data-slot="session-title"]').boundingBox())!.x);
-      expect((await indicator.boundingBox())!.x).toBeGreaterThan((await link.locator("span[title]").boundingBox())!.x);
+      expect(await link.locator("span[title]:not([data-slot])").getAttribute("title")).toBe("room · main");
+      expect((await link.locator("span[title]:not([data-slot])").boundingBox())!.x).toBe((await link.locator('[data-slot="session-title"]').boundingBox())!.x);
+      expect((await indicator.boundingBox())!.x).toBeGreaterThan((await link.locator("span[title]:not([data-slot])").boundingBox())!.x);
       ctrl.yieldBatches = complete([{ ...row("slack-thread:C:running-chat", "latest assistant reply"), running: false }], "bob");
       await sidebar.getByText("latest assistant reply", { exact: true }).waitFor();
       expect(await indicator.count()).toBe(0);
@@ -1529,7 +1529,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await matrixPills.allTextContents()).toEqual(['tag:"Needs review"', 'tag:"say \\"hello\\""', "is:pinned", "tag:customer"]);
     while (await matrixPills.count()) await matrixPills.first().click();
     await matrixSearch.fill("tag:customer");
-    const winnerMeta = matrix.locator('#session-sidebar a').filter({ hasText: "Winner" }).locator("span[title]");
+    const winnerMeta = matrix.locator('#session-sidebar a').filter({ hasText: "Winner" }).locator("span[title]:not([data-slot])");
     expect(await winnerMeta.getAttribute("title")).toBe('room · main · customer · Needs review · say "hello"');
     const changedWinner = { ...matrixRows[0], tags: ["internal"] };
     ctrl.yieldBatches = complete([changedWinner, ...matrixRows.slice(1)]);
@@ -1767,7 +1767,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const settledMain = settledPage.locator("main");
     await shown(settledMain, "matching settled");
     await hidden(settledMain, "matching active");
-    expect(await settledMain.getByRole("link").filter({ hasText: "matching settled" }).locator("span[title]").getAttribute("title")).toBe("Settled · room · main · customer · resolved");
+    expect(await settledMain.getByRole("link").filter({ hasText: "matching settled" }).locator("span[title]:not([data-slot])").getAttribute("title")).toBe("Settled · room · main · customer · resolved");
     await settledMain.getByRole("textbox").fill("is:unsettled");
     await shown(settledMain, "No matches");
     await settledMain.getByRole("textbox").fill("tag:customer tag:resolved");
@@ -2881,3 +2881,45 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     server.stop(true);
   }
 }, 180_000);
+
+test("sidebar titles and turn-rail previews format tags and markup", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const preview = "<!subteam^S1> *Red alert*";
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "alert", preview, agent: "main" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (!url.pathname.startsWith("/api/")) {
+      const file = Bun.file(path.join(dist, url.pathname));
+      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+    }
+    switch (url.pathname) {
+      case "/api/Protocol": return Response.json({ protoSha256: "sidebar-format" });
+      case "/api/Identity": return Response.json({ username: "tester" });
+      case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }] });
+      case "/api/SlackNames": return Response.json({ names: { S1: "handle" } });
+      case "/api/History": return Response.json({ messages: [{ messageId: "1:0", entryKey: "1", itemId: "1:0", inputId: "", role: "user", text: preview, complete: true, turnId: "" }], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: ["1"], running: false, terminal: "" });
+      case "/api/ListQueue": return Response.json({ items: [] });
+      default: return Response.json({});
+    }
+  } });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    await page.goto(`http://127.0.0.1:${server.port}/s/${Buffer.from("alert").toString("base64url")}`);
+    const title = page.locator('#session-sidebar [data-slot="session-title"]');
+    await title.getByText("@handle Red alert", { exact: true }).waitFor();
+    expect(await title.textContent()).toBe("@handle Red alert");
+    expect(await title.locator("strong").textContent()).toBe("Red alert");
+    expect(await title.getAttribute("title")).toBe("@handle Red alert");
+    expect(await title.evaluate((el: HTMLElement) => getComputedStyle(el).whiteSpace)).toBe("nowrap");
+    const rail = page.getByRole("navigation", { name: "Conversation turns" });
+    await rail.getByRole("button", { name: "Turn 1: @handle Red alert", exact: true }).waitFor();
+    await rail.hover();
+    await rail.getByRole("button", { name: "Jump to turn 1: @handle Red alert", exact: true }).waitFor();
+    expect(await rail.locator("strong").textContent()).toBe("Red alert");
+  } finally {
+    await browser.close();
+    server.stop(true);
+  }
+}, 30_000);

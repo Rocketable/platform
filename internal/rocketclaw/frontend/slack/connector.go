@@ -109,6 +109,13 @@ type Connector struct {
 	factsWake   chan struct{}
 	refreshWake chan struct{}
 	factsGroup  errgroup.Group
+
+	// nameMu covers nameByID and namesAt, including Slack I/O for a load or miss, so
+	// event handling on c.mu never waits. namesAt is the last successful users.list.
+	nameMu       sync.Mutex
+	nameByID     map[string]string
+	namesAt      time.Time
+	namesRetryAt time.Time
 }
 
 type channelObservation struct {
@@ -186,6 +193,7 @@ func New(cfg *config.SlackConfig, threadRouter protocol.PrimaryTextRouter, facts
 		},
 		reconnectDelay: time.Second,
 		replies:        map[string]slackReplyState{}, pending: map[string]slackReplyState{}, stacks: map[string][]slackBufferedMessage{}, poppedQueue: map[string]struct{}{}, queueCards: map[string]string{},
+		nameByID: map[string]string{},
 	}
 
 	return c
@@ -218,6 +226,78 @@ func (c *Connector) SidebarChannelAgentChoices(ctx context.Context, channelID st
 	}
 
 	return name, slices.Clone(c.socialModeAgents("@")), nil
+}
+
+// SlackNames returns bare display names for Slack user, user group, and channel
+// IDs, omitting IDs it cannot resolve. Users and groups come from a directory
+// reloaded every 8 hours; channels come from stored facts without calling Slack.
+func (c *Connector) SlackNames(ctx context.Context, ids []string) map[string]string {
+	c.nameMu.Lock()
+	defer c.nameMu.Unlock()
+
+	if slices.ContainsFunc(ids, slackDirectoryID) {
+		c.refreshNames(ctx)
+	}
+
+	names := make(map[string]string, len(ids))
+	for _, id := range ids {
+		name, ok := c.nameByID[id]
+		switch {
+		case !slackDirectoryID(id):
+			if stored, found, err := c.facts.ChannelFact(ctx, c.teamID, id); err == nil && found {
+				name = stored
+			}
+		case !ok && !strings.HasPrefix(id, "S"):
+			// Unknown users stay cached as "" until the next reload so they
+			// cannot exhaust the users.info limit slackPrincipal shares.
+			// Transient failures, including cancellation, are not cached.
+			user, err := c.api.GetUserInfoContext(ctx, id)
+			if err == nil {
+				name = slackDisplayName(user)
+				c.nameByID[id] = name
+			} else if errSlack, ok := errors.AsType[slack.SlackErrorResponse](err); ok && errSlack.Err == "user_not_found" {
+				c.nameByID[id] = name
+			}
+		}
+
+		if name != "" {
+			names[id] = name
+		}
+	}
+
+	return names
+}
+
+// SlackTagsMatching returns user and group IDs whose bare names contain needle.
+func (c *Connector) SlackTagsMatching(ctx context.Context, needle string) []string {
+	c.nameMu.Lock()
+	defer c.nameMu.Unlock()
+
+	c.refreshNames(ctx)
+
+	needle = strings.ToLower(needle)
+
+	var ids []string
+
+	for id, name := range c.nameByID {
+		if slackDirectoryID(id) && strings.Contains(strings.ToLower(name), needle) {
+			ids = append(ids, id)
+		}
+	}
+
+	return ids
+}
+
+func slackDirectoryID(id string) bool {
+	return strings.HasPrefix(id, "U") || strings.HasPrefix(id, "W") || strings.HasPrefix(id, "S")
+}
+
+func slackDisplayName(user *slack.User) string {
+	if name := strings.TrimSpace(user.Profile.DisplayName); name != "" {
+		return name
+	}
+
+	return strings.TrimSpace(user.RealName)
 }
 
 // Authenticate identifies the bot and workspace before other frontends use the connector.
@@ -2929,6 +3009,45 @@ func newSlackInboundMessage(text string, content *protocol.InboundContent, reply
 	return inbound
 }
 
+// refreshNames reloads the user and group directory when it is 8 hours old
+// and no recent load failed.
+// Callers hold nameMu.
+func (c *Connector) refreshNames(ctx context.Context) {
+	if time.Since(c.namesAt) < 8*time.Hour || time.Now().Before(c.namesRetryAt) {
+		return
+	}
+
+	users, err := c.api.GetUsersContext(ctx)
+	if err != nil {
+		// A failed load keeps the previous directory and is retried after a
+		// minute, so an outage or missing scope does not put a Slack call on
+		// every name lookup and search.
+		c.namesRetryAt = time.Now().Add(time.Minute)
+
+		return
+	}
+
+	next := make(map[string]string, len(users))
+	for i := range users {
+		next[users[i].ID] = slackDisplayName(&users[i])
+	}
+
+	if groups, errGroups := c.api.GetUserGroupsContext(ctx, slack.GetUserGroupsOptionIncludeDisabled(true)); errGroups == nil {
+		for i := range groups {
+			next[groups[i].ID] = groups[i].Handle
+		}
+	} else {
+		for id, name := range c.nameByID {
+			if strings.HasPrefix(id, "S") {
+				next[id] = name
+			}
+		}
+	}
+
+	c.nameByID = next
+	c.namesAt = time.Now()
+}
+
 func (c *Connector) slackPrincipal(ctx context.Context, userID string) string {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
@@ -2940,11 +3059,7 @@ func (c *Connector) slackPrincipal(ctx context.Context, userID string) string {
 		return userID
 	}
 
-	name := strings.TrimSpace(user.Profile.DisplayName)
-	if name == "" {
-		name = strings.TrimSpace(user.RealName)
-	}
-
+	name := slackDisplayName(user)
 	if name == "" {
 		return userID
 	}
