@@ -540,39 +540,6 @@ func (c *Connector) SendCronjobRoot(ctx context.Context, msg *protocol.OutboundM
 	return root, c.uploadResponseAttachments(ctx, root.ChannelID, root.ThreadID, msg.Attachments)
 }
 
-// StartNewThreadRoot posts the root message for a model-created Slack conversation.
-func (c *Connector) StartNewThreadRoot(ctx context.Context, req *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error) {
-	channelID := strings.TrimSpace(req.SlackReply.ChannelID)
-
-	channelID, err := c.resolveConfiguredChannelID(ctx, channelID)
-	if err != nil {
-		return protocol.StartNewThreadRootResult{}, err
-	}
-
-	header := "🔀 " + strings.TrimSpace(req.Title)
-	fallbackText, blocks, overflow := titledMessageLayout(header, header+"\n\n"+req.Prompt, req.Prompt)
-
-	postedChannelID, threadTS, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(blocks...))
-	if err != nil {
-		return protocol.StartNewThreadRootResult{}, fmt.Errorf("send Slack new thread root: %w", err)
-	}
-
-	if len(overflow) > 0 {
-		if err := c.postResponseChunks(ctx, postedChannelID, threadTS, overflow, nil); err != nil {
-			return protocol.StartNewThreadRootResult{}, fmt.Errorf("send Slack new thread root continuation: %w", err)
-		}
-	}
-
-	root := protocol.TextConversationTarget{ChannelID: postedChannelID, MessageID: threadTS, ThreadID: threadTS}
-
-	url, err := c.api.GetPermalinkContext(ctx, &slack.PermalinkParameters{Channel: root.ChannelID, Ts: root.ThreadID})
-	if err != nil {
-		c.log.Warn("get Slack new thread permalink", "channel", root.ChannelID, "thread_ts", root.ThreadID, "error", err)
-	}
-
-	return protocol.StartNewThreadRootResult{Target: root, URL: strings.TrimSpace(url)}, nil
-}
-
 // AskUserQuestion posts one in-message Slack question and waits for the human answer.
 func (c *Connector) AskUserQuestion(ctx context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
 	text := strings.TrimSpace(req.Question)

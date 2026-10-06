@@ -16,7 +16,6 @@ import (
 type SlackFrontend interface {
 	Start(context.Context) error
 	Stop(context.Context) error
-	StartNewThreadRoot(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error)
 	SendCronjobRoot(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error)
 	AskUserQuestion(context.Context, *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error)
 	DrainSteers(context.Context, string) []string
@@ -32,10 +31,9 @@ type Runtime struct {
 	ExternalMCPUsers         map[string]string
 	RefreshExternalMCPAgents *func() error
 
-	TextRouter      protocol.PrimaryTextRouter
-	threads         *threadBridgeManager
-	startThreadRoot *func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error)
-	slackAsker      *protocol.UserQuestionAsker
+	TextRouter protocol.PrimaryTextRouter
+	threads    *threadBridgeManager
+	slackAsker *protocol.UserQuestionAsker
 
 	eventsMu    sync.Mutex
 	subscribers map[chan protocol.Event]<-chan struct{}
@@ -116,7 +114,6 @@ func (r *Runtime) PublishOutbound(ctx context.Context, message *protocol.Outboun
 // AttachSlack hooks originator Slack methods into backend thread state.
 func (r *Runtime) AttachSlack(slack SlackFrontend) {
 	*r.slackAsker = protocol.InteractiveUserQuestionAsker(slack.AskUserQuestion)
-	*r.startThreadRoot = slack.StartNewThreadRoot
 
 	r.threads.mu.Lock()
 	r.threads.cronRoots = slack

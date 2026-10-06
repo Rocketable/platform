@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"log/slog"
 	"os"
@@ -585,40 +586,12 @@ func TestThreadBridgeManagerSubmitsPersistedThreadReply(t *testing.T) {
 	assert.Equal(t, "111.222", submittedMessages(bridge)[0].SlackReply.ThreadTS)
 }
 
-func TestThreadBridgeManagerDisablesStartNewThreadForCronThreadReply(t *testing.T) {
-	store := newWorkspaceSessionService(t)
-	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
-	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
+func TestThreadBridgeManagerStartNewThreadCreatesWebSession(t *testing.T) {
+	// The fake CLI stands in for the host tailscale binary that RocketClaw shells out to.
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "tailscale"), []byte("#!/bin/sh\n[ \"$*\" = \"ip -4\" ] && echo 100.95.197.99\n"), 0o755))
+	t.Setenv("PATH", bin)
 
-	bridge := newDirectBridgeMock()
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
-	runTestManager(t, manager)
-
-	inbound := newThreadInboundMessage("follow up", "222.333", "")
-	handled, err := manager.SubmitThreadReply(context.Background(), slackTarget("D123", "111.222"), inbound)
-	require.NoError(t, err)
-	assert.True(t, handled)
-	require.Len(t, submittedMessages(bridge), 1)
-	assert.Equal(t, "true", submittedMessages(bridge)[0].Metadata[protocol.InboundStartNewThreadDisabledMetadataKey])
-}
-
-func TestThreadBridgeManagerDisablesStartNewThreadForCronThreadGoalStart(t *testing.T) {
-	store := newWorkspaceSessionService(t)
-	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
-	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
-
-	bridge := newDirectBridgeMock()
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
-	runTestManager(t, manager)
-
-	inbound := newThreadInboundMessage("goal", "222.333", "")
-	err := manager.StartGoalInThread(context.Background(), "planner", "goal", "", 3, slackTarget("D123", "111.222"), inbound)
-	require.NoError(t, err)
-	require.Len(t, submittedMessages(bridge), 1)
-	assert.Equal(t, "true", submittedMessages(bridge)[0].Metadata[protocol.InboundStartNewThreadDisabledMetadataKey])
-}
-
-func TestThreadBridgeManagerStartNewThreadUsesFreshThreadLocalConversation(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, config.DefaultRuntimeDir, "skills"), 0o755))
 	writeAppTestAgent(t, workspace, "main", "---\ndescription: Test agent\nmodel: gpt-5.5\n---\nPrompt\n")
@@ -628,89 +601,68 @@ func TestThreadBridgeManagerStartNewThreadUsesFreshThreadLocalConversation(t *te
 
 	var created Config
 
-	manager := newThreadBridgeManager(&config.Config{Workspace: workspace}, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
+	manager := newThreadBridgeManager(&config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080"}}, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
 		created = cfg
 		return bridge
 	})
 	runTestManager(t, manager)
 
-	rootCalls := 0
-	result, err := manager.StartNewThread(t.Context(), &protocol.StartNewThreadRequest{Source: protocol.SourceSlack, CurrentAgent: "main", Title: "Child", Prompt: " literal $(date) ", SlackReply: &protocol.SlackReplyTarget{ChannelID: "C1", MessageTS: "1", ThreadTS: "1"}}, func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error) {
-		rootCalls++
-		return protocol.StartNewThreadRootResult{Target: protocol.TextConversationTarget{ChannelID: "C2", MessageID: "2", ThreadID: "2"}, URL: "https://example.invalid/thread"}, nil
-	})
+	result, err := manager.StartNewThread(t.Context(), &protocol.StartNewThreadRequest{CurrentAgent: "main", Title: "Child", Prompt: " literal $(date) ", CreatedBy: "Alice"})
 	require.NoError(t, err)
 
-	conversationID := protocol.SlackThreadConversationID("C2", "2")
+	conversationID := result.ConversationID
+	_, _, slack := protocol.SlackThreadTarget(conversationID)
 
-	assert.Equal(t, 1, rootCalls)
-	assert.Equal(t, protocol.StartNewThreadResult{ConversationID: conversationID, URL: "https://example.invalid/thread"}, result)
+	require.NotEmpty(t, conversationID)
+	assert.False(t, slack)
+	assert.Equal(t, "http://100.95.197.99:8080/s/"+base64.RawURLEncoding.EncodeToString([]byte(conversationID)), result.URL)
 	assert.Equal(t, Config{ConversationID: conversationID, Agent: "main", UserQuestionAsker: protocol.NoUserQuestionAsker()}, created)
 	require.Len(t, submittedMessages(bridge), 1)
-	require.Len(t, submittedMessages(bridge), 1)
-	assert.Equal(t, " literal $(date) ", submittedMessages(bridge)[0].Text)
-	assert.Contains(t, buildPrompt(submittedMessages(bridge)[0], nil), "\n\n literal $(date) ")
-	assert.Equal(t, conversationID, submittedMessages(bridge)[0].ConversationID)
-	assert.Equal(t, "System", submittedMessages(bridge)[0].Metadata[protocol.InboundOriginMetadataKey])
-	assert.Equal(t, "Text", submittedMessages(bridge)[0].Metadata[protocol.InboundMediaMetadataKey])
-	require.NotNil(t, submittedMessages(bridge)[0].SlackReply)
-	assert.Equal(t, protocol.SlackReplyTarget{ChannelID: "C2", MessageTS: "2", ThreadTS: "2"}, *submittedMessages(bridge)[0].SlackReply)
-}
 
-func TestThreadBridgeManagerStartNewThreadAcceptsSystemSourceWithChannel(t *testing.T) {
-	workspace := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, config.DefaultRuntimeDir, "skills"), 0o755))
-	writeAppTestAgent(t, workspace, "main", "---\ndescription: Test agent\nmodel: gpt-5.5\n---\nPrompt\n")
-
-	store := newWorkspaceSessionService(t)
-	bridge := newDirectBridgeMock()
-	manager := newThreadBridgeManager(&config.Config{Workspace: workspace}, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
-	runTestManager(t, manager)
-
-	rootCalls := 0
-	result, err := manager.StartNewThread(t.Context(), &protocol.StartNewThreadRequest{Source: protocol.SourceSystem, CurrentAgent: "main", AllowedAgents: []string{"main"}, Title: "Nightly", Prompt: "run suite", SlackReply: &protocol.SlackReplyTarget{ChannelID: "#ops"}}, func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error) {
-		rootCalls++
-		return protocol.StartNewThreadRootResult{Target: protocol.TextConversationTarget{ChannelID: "C2", MessageID: "2", ThreadID: "2"}, URL: "https://example.invalid/thread"}, nil
-	})
-	require.NoError(t, err)
-
-	conversationID := protocol.SlackThreadConversationID("C2", "2")
-
-	assert.Equal(t, 1, rootCalls)
-	assert.Equal(t, protocol.StartNewThreadResult{ConversationID: conversationID, URL: "https://example.invalid/thread"}, result)
-	require.Len(t, submittedMessages(bridge), 1)
-	assert.Equal(t, "run suite", submittedMessages(bridge)[0].Text)
-	assert.Equal(t, conversationID, submittedMessages(bridge)[0].ConversationID)
+	first := submittedMessages(bridge)[0]
+	assert.Equal(t, " literal $(date) ", first.Text)
+	assert.Contains(t, buildPrompt(first, nil), "\n\n literal $(date) ")
+	assert.Equal(t, conversationID, first.ConversationID)
+	assert.Equal(t, "System", first.Metadata[protocol.InboundOriginMetadataKey])
+	assert.Equal(t, "Text", first.Metadata[protocol.InboundMediaMetadataKey])
+	assert.Nil(t, first.SlackReply)
 
 	thread, ok, err := store.Thread(conversationID)
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, "main", thread.Agent)
-	assert.NotEqual(t, ThreadCreatedByCron, thread.CreatedBy)
+	assert.Equal(t, ThreadState{Agent: "main", CreatedBy: "Alice"}, thread)
+
+	var name string
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT name FROM managed_conversations WHERE conversation_id = $1`, conversationID).Scan(&name))
+	assert.Equal(t, "Child", name)
+
+	second, err := manager.StartNewThread(t.Context(), &protocol.StartNewThreadRequest{CurrentAgent: "main", Title: "Child", Prompt: "again"})
+	require.NoError(t, err)
+	assert.NotEqual(t, conversationID, second.ConversationID)
 }
 
-func TestThreadBridgeManagerStartNewThreadRejectsLockedAgentAndUnavailableSources(t *testing.T) {
+func TestThreadBridgeManagerStartNewThreadRejectsUnavailableAgents(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, config.DefaultRuntimeDir, "skills"), 0o755))
 	writeAppTestAgent(t, workspace, "main", "---\ndescription: Test agent\nmodel: gpt-5.5\n---\nPrompt\n")
 
 	store := newWorkspaceSessionService(t)
-	manager := newThreadBridgeManager(&config.Config{Workspace: workspace}, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return newDirectBridgeMock() })
+	manager := newThreadBridgeManager(&config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080"}}, store, slog.New(slog.DiscardHandler), func(Config) directBridge {
+		t.Fatal("no conversation should start")
+		return nil
+	})
 	runTestManager(t, manager)
 
-	root := func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error) {
-		t.Fatal("createRoot should not run")
-		return protocol.StartNewThreadRootResult{}, nil
-	}
-
-	_, err := manager.StartNewThread(t.Context(), &protocol.StartNewThreadRequest{Source: protocol.SourceSystem, CurrentAgent: "main", AllowedAgents: []string{"main"}, Agent: "other", Title: "Nightly", Prompt: "run suite", SlackReply: &protocol.SlackReplyTarget{ChannelID: "#ops"}}, root)
+	_, err := manager.StartNewThread(t.Context(), &protocol.StartNewThreadRequest{CurrentAgent: "main", AllowedAgents: []string{"main"}, Agent: "other", Title: "Nightly", Prompt: "run suite"})
 	require.ErrorContains(t, err, `agent "other" is not allowed on this source surface`)
 
-	_, err = manager.StartNewThread(t.Context(), &protocol.StartNewThreadRequest{Source: protocol.SourceExternalMCP, CurrentAgent: "main", Title: "Nightly", Prompt: "run suite", SlackReply: &protocol.SlackReplyTarget{ChannelID: "#ops"}}, root)
-	require.ErrorContains(t, err, "rocketclaw_start_new_thread is not available for external_mcp turns")
+	_, err = manager.StartNewThread(t.Context(), &protocol.StartNewThreadRequest{CurrentAgent: "missing", Title: "Nightly", Prompt: "run suite"})
+	require.ErrorContains(t, err, `agent "missing" is not configured`)
 
-	_, err = manager.StartNewThread(t.Context(), &protocol.StartNewThreadRequest{Source: protocol.SourceSystem, CurrentAgent: "main", Title: "Nightly", Prompt: "run suite"}, root)
-	require.ErrorContains(t, err, "rocketclaw_start_new_thread is not available for system turns")
+	t.Setenv("PATH", t.TempDir())
+
+	_, err = manager.StartNewThread(t.Context(), &protocol.StartNewThreadRequest{CurrentAgent: "main", Title: "Nightly", Prompt: "run suite"})
+	require.ErrorContains(t, err, "tailscale")
 }
 
 func TestThreadBridgeManagerIgnoresUnmanagedThreadTargets(t *testing.T) {

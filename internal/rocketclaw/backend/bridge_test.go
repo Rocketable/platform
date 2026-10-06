@@ -3249,13 +3249,6 @@ func TestAskUserQuestionToolFiltersRedundantCustomOptions(t *testing.T) {
 	assert.JSONEq(t, `{"selected":["high"],"custom":"","source":"slack"}`, result.Output)
 }
 
-func TestStartNewThreadNativeTurnGate(t *testing.T) {
-	assert.True(t, startNewThreadNativeTurn(&protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "C1", MessageTS: "1"}}))
-	assert.False(t, startNewThreadNativeTurn(&protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "C1", MessageTS: "1"}, Metadata: map[string]string{protocol.InboundStartNewThreadDisabledMetadataKey: "true"}}))
-	assert.False(t, startNewThreadNativeTurn(&protocol.InboundMessage{Source: protocol.SourceExternalMCP, Human: true}))
-	assert.False(t, startNewThreadNativeTurn(&protocol.InboundMessage{Source: protocol.SourceSlack, Human: false, SlackReply: &protocol.SlackReplyTarget{ChannelID: "C1", MessageTS: "1"}}))
-}
-
 func TestNativeQuestionTurnGate(t *testing.T) {
 	assert.True(t, nativeQuestionTurn(&protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "C1", MessageTS: "1"}}))
 	assert.False(t, nativeQuestionTurn(&protocol.InboundMessage{Source: protocol.SourceSlack, Human: true}))
@@ -3300,15 +3293,28 @@ func TestAgentExplicitlyAllowsRocketClawToolRequiresAllow(t *testing.T) {
 
 func TestStartNewThreadToolPreservesLiteralPrompt(t *testing.T) {
 	tool := startNewThreadTool(func(_ context.Context, req *protocol.StartNewThreadRequest) (protocol.StartNewThreadResult, error) {
-		assert.Equal(t, " literal $(date) ", req.Prompt)
-		assert.Equal(t, "Child", req.Title)
+		assert.Equal(t, &protocol.StartNewThreadRequest{CurrentAgent: "main", Title: "Child", Prompt: " literal $(date) ", CreatedBy: "Alice", AllowedAgents: []string{"main", "helper"}}, req)
 
-		return protocol.StartNewThreadResult{ConversationID: "slack-thread:C1:2"}, nil
-	}, &protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, ConversationID: "slack-thread:C1:1", SlackReply: &protocol.SlackReplyTarget{ChannelID: "C1", MessageTS: "1", ThreadTS: "1"}}, "main")
+		return protocol.StartNewThreadResult{ConversationID: "abc", URL: "http://100.95.197.99:3000/s/YWJj"}, nil
+	}, &protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, ConversationID: "slack-thread:C1:1", SlackReply: &protocol.SlackReplyTarget{ChannelID: "C1", MessageTS: "1", ThreadTS: "1"}, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice", protocol.InboundAllowedAgentsMetadataKey: "main,helper"}}, "main")
 
 	result, err := tool.Call(t.Context(), []byte(`{"title":" Child ","prompt":" literal $(date) "}`), nil)
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"conversation_id":"slack-thread:C1:2"}`, result.Output)
+	assert.JSONEq(t, `{"conversation_id":"abc","url":"http://100.95.197.99:3000/s/YWJj"}`, result.Output)
+}
+
+func TestStartNewThreadToolLocksCronToItsAgent(t *testing.T) {
+	var got *protocol.StartNewThreadRequest
+
+	tool := startNewThreadTool(func(_ context.Context, req *protocol.StartNewThreadRequest) (protocol.StartNewThreadResult, error) {
+		got = req
+
+		return protocol.StartNewThreadResult{}, nil
+	}, &protocol.InboundMessage{Source: protocol.SourceSystem, SlackReply: &protocol.SlackReplyTarget{ChannelID: "#ops"}, Cronjob: &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "job"}}, "job")
+
+	_, err := tool.Call(t.Context(), []byte(`{"title":"Nightly","prompt":"run suite","agent":"other"}`), nil)
+	require.NoError(t, err)
+	assert.Equal(t, &protocol.StartNewThreadRequest{CurrentAgent: "job", Agent: "other", Title: "Nightly", Prompt: "run suite", CreatedBy: string(ThreadCreatedByCron), AllowedAgents: []string{"job"}}, got)
 }
 
 func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {

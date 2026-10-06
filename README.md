@@ -69,6 +69,9 @@ go run github.com/Rocketable/platform/cmd/rocketclaw@main
 
 Web always starts at `0.0.0.0:3000`. To change its bind address, set
 `"web": {"listen_address": "127.0.0.1:3000"}` in `rocketclaw.json` or `femtoclaw.json`.
+Links RocketClaw hands out, such as the session URL `rocketclaw_start_new_thread`
+returns, use this machine's Tailscale IPv4 (`tailscale ip -4`) and the port from that
+address: `http://<tailscale-ip>:<port>`.
 No Web environment variables or socket setup are required. Browser access uses
 the configured `web_users` IP-to-username mapping, or Tailscale WhoIs when the IP has no mapping.
 New human messages use the configured name or Tailscale display name as their author;

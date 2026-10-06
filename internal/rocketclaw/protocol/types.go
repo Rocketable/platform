@@ -26,8 +26,6 @@ const (
 	InboundPrincipalMetadataKey = "rocketclaw_principal"
 	// InboundAllowedAgentsMetadataKey lists source-surface allowed agents for model-created child conversations.
 	InboundAllowedAgentsMetadataKey = "rocketclaw_allowed_agents"
-	// InboundStartNewThreadDisabledMetadataKey suppresses model-created child conversation tooling for this turn.
-	InboundStartNewThreadDisabledMetadataKey = "rocketclaw_start_new_thread_disabled"
 )
 
 // InboundKind describes how an inbound message should be handled.
@@ -221,24 +219,16 @@ func (a UserQuestionAsker) AskUserQuestion(ctx context.Context, req *AskUserQues
 	return a.ask(ctx, req)
 }
 
-// StartNewThreadRequest asks RocketClaw to create a new managed conversation from the current turn.
+// StartNewThreadRequest asks RocketClaw to create a new Web session from the current turn.
 type StartNewThreadRequest struct {
-	Source                             Source
-	CurrentAgent, Agent, Title, Prompt string
-	AllowedAgents                      []string
-	SlackReply                         *SlackReplyTarget
+	CurrentAgent, Agent, Title, Prompt, CreatedBy string
+	AllowedAgents                                 []string
 }
 
-// StartNewThreadResult reports the created conversation and openable surface.
+// StartNewThreadResult reports the created Web session and its address.
 type StartNewThreadResult struct {
 	ConversationID string `json:"conversation_id"`
-	URL            string `json:"url,omitempty"`
-}
-
-// StartNewThreadRootResult reports the native root surface created by a text connector.
-type StartNewThreadRootResult struct {
-	Target TextConversationTarget
-	URL    string
+	URL            string `json:"url"`
 }
 
 // OutboundMessage is a text message headed to enabled connectors.
