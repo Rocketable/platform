@@ -1497,33 +1497,19 @@ func compactedOutputToReplayParams(items []responses.ResponseOutputItemUnion) ([
 	for i := range items {
 		switch items[i].Type {
 		case "message":
-			parts := make([]string, 0, len(items[i].Content))
-			for j := range items[i].Content {
-				if items[i].Content[j].Type == "output_text" {
-					parts = append(parts, items[i].Content[j].Text)
-				}
-			}
-
 			role := strings.TrimSpace(items[i].Role)
 			if role == "" {
 				role = "user"
 			}
 
-			message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRole(role), Content: easyInputStringContent(strings.Join(parts, "")), Type: "message"}
+			message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRole(role), Content: easyInputStringContent(responseItemText(&items[i])), Type: "message"}
 			if items[i].Phase != "" {
 				message.Phase = responses.EasyInputMessagePhase(items[i].Phase)
 			}
 
 			input = append(input, responses.ResponseInputItemUnionParam{OfMessage: &message})
 		case "compaction", "compaction_summary":
-			parts := make([]string, 0, len(items[i].Content))
-			for j := range items[i].Content {
-				if items[i].Content[j].Type == "output_text" {
-					parts = append(parts, items[i].Content[j].Text)
-				}
-			}
-
-			input = append(input, compactionReplayInput(items[i].ID, items[i].EncryptedContent, strings.Join(parts, "")))
+			input = append(input, compactionReplayInput(items[i].ID, items[i].EncryptedContent, responseItemText(&items[i])))
 		case "reasoning":
 			summary := ""
 			if len(items[i].Summary) > 0 {

@@ -65,31 +65,19 @@ func CompactedOutputToReplayInput(items []responses.ResponseOutputItemUnion) ([]
 func compactedOutputItemToReplayInput(item *responses.ResponseOutputItemUnion) (responses.ResponseInputItemUnionParam, bool) {
 	switch item.Type {
 	case "message":
-		parts := make([]string, 0, len(item.Content))
-		for i := range item.Content {
-			if item.Content[i].Type == "output_text" {
-				parts = append(parts, item.Content[i].Text)
-			}
-		}
-
 		role := strings.TrimSpace(item.Role)
 		if role == "" {
 			role = "user"
 		}
 
-		message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRole(role), Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(strings.Join(parts, ""))}, Type: "message"}
+		message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRole(role), Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(responseItemText(item))}, Type: "message"}
 		if item.Phase != "" {
 			message.Phase = responses.EasyInputMessagePhase(item.Phase)
 		}
 
 		return responses.ResponseInputItemUnionParam{OfMessage: &message}, true
 	case "compaction", "compaction_summary":
-		parts := make([]string, 0, len(item.Content)+len(item.Summary))
-		for i := range item.Content {
-			if item.Content[i].Type == "output_text" {
-				parts = append(parts, item.Content[i].Text)
-			}
-		}
+		parts := []string{responseItemText(item)}
 
 		for i := range item.Summary {
 			parts = append(parts, item.Summary[i].Text)
