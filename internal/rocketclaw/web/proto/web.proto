@@ -21,6 +21,9 @@ message Session {
   string snoozed_until = 12;
   string forked_from = 13;
   repeated string tags = 14;
+  // The chat's recorded origin is a cron run, even after human follow-ups.
+  bool cron = 15;
+  string cron_name = 16;
 }
 
 message HistoryRequest {

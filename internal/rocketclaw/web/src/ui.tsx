@@ -1211,37 +1211,38 @@ function matchesSession(session: Session, needle: string, agentFilter: string, r
 }
 
 function sessionSearchTerms(query: string) {
-  const tags: string[] = [], filterTerms: string[] = [];
-  let pinnedOnly = false, forkedOnly = false, unsettledOnly = false, sort = "";
-  const text = query.replace(/(?:^|\s)(is:(?:settled|unsettled|pinned|forked)|sort:(?:newest|oldest)|tag:("(?:[^"\\]|\\.)*"|\S+))(?=\s|$)/gi, (term, filter: string, value?: string) => {
+  const tags: string[] = [], cronNames: string[] = [], filterTerms: string[] = [];
+  let pinnedOnly = false, forkedOnly = false, unsettledOnly = false, cronOnly = false, sort = "";
+  const text = query.replace(/(?:^|\s)(is:(?:settled|unsettled|pinned|forked|cron)|sort:(?:newest|oldest)|(?:tag|cron):("(?:[^"\\]|\\.)*"|\S+))(?=\s|$)/gi, (term, filter: string, value?: string) => {
     const lower = filter.toLowerCase();
     if (value !== undefined) {
-      let tag = value;
+      let name = value;
       if (value.startsWith('"')) {
-        try { tag = JSON.parse(value); } catch { return term; }
+        try { name = JSON.parse(value); } catch { return term; }
       }
-      if (tag === "") return term;
-      tags.push(tag);
+      if (name === "") return term;
+      (lower.startsWith("cron:") ? cronNames : tags).push(name);
     } else if (lower.startsWith("sort:")) {
       sort = lower.slice(5);
     } else {
       pinnedOnly ||= lower === "is:pinned";
       forkedOnly ||= lower === "is:forked";
       unsettledOnly ||= lower === "is:unsettled";
+      cronOnly ||= lower === "is:cron";
     }
     filterTerms.push(filter);
     return "";
   }).trim();
-  // A trailing is:/sort: token that is still a prefix of a known term is being typed, not searched.
-  const typing = /(?:^|\s)((?:is|sort):\S*)$/i.exec(text);
-  const rest = typing && " is:settled is:unsettled is:pinned is:forked sort:newest sort:oldest".includes(` ${typing[1].toLowerCase()}`) ? text.slice(0, typing.index).trim() : text;
+  // A trailing operator prefix is being typed, not searched.
+  const typing = /(?:^|\s)((?:is|sort|cron):\S*)$/i.exec(text);
+  const rest = typing && " is:settled is:unsettled is:pinned is:forked is:cron sort:newest sort:oldest cron:".includes(` ${typing[1].toLowerCase()}`) ? text.slice(0, typing.index).trim() : text;
   const needle = typedPrefix(text, "agent:") === null && typedPrefix(text, "room:") === null ? rest.toLowerCase() : "";
-  return { pinnedOnly, forkedOnly, unsettledOnly, sort, tags, filterTerms, text, needle };
+  return { pinnedOnly, forkedOnly, unsettledOnly, cronOnly, cronNames, sort, tags, filterTerms, text, needle };
 }
 
 function sessionMatchesSearch(session: Session, filters: ReturnType<typeof sessionSearchTerms>, agentFilter: string, roomFilter: string, origin: string) {
   const tags = new Set(session.tags);
-  return filters.tags.every((tag) => tags.has(tag)) && (!filters.pinnedOnly || session.pinned) && (!filters.forkedOnly || session.forkedFrom) && (!filters.unsettledOnly || !session.settled) && matchesSession(session, "", agentFilter, roomFilter) && (matchesSession(session, filters.needle, "", "") || origin.includes(filters.needle));
+  return filters.tags.every((tag) => tags.has(tag)) && filters.cronNames.every((name) => session.cronName === name) && (!filters.pinnedOnly || session.pinned) && (!filters.forkedOnly || session.forkedFrom) && (!filters.unsettledOnly || !session.settled) && (!filters.cronOnly || session.cron) && matchesSession(session, "", agentFilter, roomFilter) && (matchesSession(session, filters.needle, "", "") || origin.includes(filters.needle));
 }
 
 // sort: orders by last activity (missing last, then ID); otherwise pinned rows come first.
@@ -1469,14 +1470,15 @@ function searchInput(query: string, typed: string, rows: Session[], catalog: { n
   const input = query.trimEnd().endsWith(typed.trimEnd()) && sessionSearchTerms(typed).text === text ? typed : text;
   const pills = [...new Set(filterTerms.slice(0, filterTerms.length - sessionSearchTerms(input).filterTerms.length))];
   const token = input.slice(input.search(/\S*$/));
-  const tagPrefix = typedPrefix(token, "tag:"), isPrefix = typedPrefix(token, "is:"), sortPrefix = typedPrefix(token, "sort:");
+  const tagPrefix = typedPrefix(token, "tag:"), cronPrefix = typedPrefix(token, "cron:"), isPrefix = typedPrefix(token, "is:"), sortPrefix = typedPrefix(token, "sort:");
   const agentPrefix = typedPrefix(text, "agent:"), roomPrefix = typedPrefix(text, "room:");
-  const needle = (tagPrefix?.replace(/^"|"$/g, "") ?? isPrefix ?? sortPrefix)?.toLowerCase();
-  const names = roomPrefix !== null ? slackRooms(rows) : tagPrefix !== null ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : sortPrefix !== null ? ["newest", "oldest"] : ["pinned", "forked", "unsettled"];
+  const needle = ((tagPrefix ?? cronPrefix)?.replace(/^"|"$/g, "") ?? isPrefix ?? sortPrefix)?.toLowerCase();
+  const names = roomPrefix !== null ? slackRooms(rows) : cronPrefix !== null ? [...new Set(rows.flatMap((row) => row.cronName ? [row.cronName] : []))] : tagPrefix !== null ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : sortPrefix !== null ? ["newest", "oldest"] : ["pinned", "forked", "unsettled", "cron"];
   const offered = overlayChoices(agentPrefix, roomPrefix ?? needle ?? null, catalog, names);
-  // A completed is:/sort:/tag: term commits on space or Enter instead of offering itself again.
-  const choices = agentPrefix === null && roomPrefix === null && offered.some((item) => item.key.toLowerCase() === needle) ? [] : offered;
-  return { text, filterTerms, input, pills, token, tagPrefix, sortPrefix, agentPrefix, roomPrefix, choices };
+  const completed = cronPrefix !== null ? sessionSearchTerms(token).cronNames[0] : needle;
+  // A completed filter term commits on space or Enter instead of offering itself again.
+  const choices = agentPrefix === null && roomPrefix === null && offered.some((item) => (cronPrefix !== null ? item.key : item.key.toLowerCase()) === completed) ? [] : offered;
+  return { text, filterTerms, input, pills, token, tagPrefix, cronPrefix, sortPrefix, agentPrefix, roomPrefix, choices };
 }
 
 function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFilter, roomFilter, setRoomFilter, inputRef, placeholder, onKeyDown }: {
@@ -1496,7 +1498,7 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
   const stale = !sidebar.refreshing && rows.length > 0 && !searchIsAuthoritative(sidebar);
   const [overlayPick, setOverlayPick] = useState(0);
   const [typed, setTyped] = useState("");
-  const { text, filterTerms, input, pills, token, tagPrefix, sortPrefix, agentPrefix, roomPrefix, choices } = searchInput(query, typed, rows, catalog);
+  const { text, filterTerms, input, pills, token, tagPrefix, cronPrefix, sortPrefix, agentPrefix, roomPrefix, choices } = searchInput(query, typed, rows, catalog);
   const pick = choices.length === 0 ? 0 : overlayPick % choices.length;
   const active = useRef<HTMLButtonElement>(null);
   useEffect(() => { active.current?.scrollIntoView({ block: "nearest" }); }, [pick, text]);
@@ -1511,7 +1513,7 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
   };
   const applyOverlay = (name: string) => {
     if (agentPrefix === null && roomPrefix === null) {
-      change([...pills, tagPrefix !== null ? `tag:${/\s/.test(name) || name.startsWith('"') ? JSON.stringify(name) : name}` : `${sortPrefix !== null ? "sort" : "is"}:${name}`], input.slice(0, input.length - token.length).trim());
+      change([...pills, tagPrefix !== null || cronPrefix !== null ? `${cronPrefix !== null ? "cron" : "tag"}:${/\s/.test(name) || name.startsWith('"') ? JSON.stringify(name) : name}` : `${sortPrefix !== null ? "sort" : "is"}:${name}`], input.slice(0, input.length - token.length).trim());
     } else if (agentPrefix !== null) {
       setAgentFilter(name);
       change(filterTerms, "");
@@ -1621,8 +1623,8 @@ const SessionList = memo(function SessionList({ settledOnly = false }: { settled
   const catalog = agents.data?.agents ?? [];
   const rows = sidebar.rows;
   const filters = sessionSearchTerms(query);
-  const filtered = rows.filter((session) => (settledOnly ? session.settled : !session.settled) && sessionMatchesSearch(session, filters, agentFilter, roomFilter, "")).sort((a, b) => compareSessions(filters.sort, a, b));
-  const searching = [filters.needle, agentFilter, roomFilter, filters.pinnedOnly, filters.forkedOnly, filters.unsettledOnly, filters.tags.length].some(Boolean);
+  const filtered = rows.filter((session) => (settledOnly ? session.settled : !session.settled && !session.cron) && sessionMatchesSearch(session, filters, agentFilter, roomFilter, "")).sort((a, b) => compareSessions(filters.sort, a, b));
+  const searching = [filters.needle, agentFilter, roomFilter, filters.pinnedOnly, filters.forkedOnly, filters.unsettledOnly, filters.cronOnly, filters.cronNames.length, filters.tags.length].some(Boolean);
   return (
     <div className={cn("flex h-full min-h-0 flex-col", settledOnly && "mx-auto w-full max-w-3xl gap-6 p-4")}>
       {settledOnly ? <PageTitle>Settled</PageTitle> : null}

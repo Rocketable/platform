@@ -286,6 +286,13 @@ such as `tag:"Needs review"`. Repeated tag filters require every named tag. Labe
 refresh through the existing two-second sidebar cycle, not a pushed tag event.
 Tags do not change activity, settlement, or snooze.
 
+Web hides cron-origin chats from the sidebar, including pinned and running chats.
+They remain available in Cmd/Ctrl+P and the Search page; use `is:cron` to show only
+cron chats, or `cron:HEARTBEAT` for one job's chats (the exact filename without
+`.md`; quote names containing spaces, such as `cron:"Weekly report"`). These
+filters follow the chat's recorded origin, not its current agent or
+message text, and still apply after human follow-ups.
+
 Migration `019_session_tags.sql` runs through normal State Store startup before
 tag-enabled code reads metadata. It needs no backfill. After it runs, binaries
 without migration 019 cannot start against the upgraded database: the migration

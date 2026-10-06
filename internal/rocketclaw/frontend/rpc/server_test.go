@@ -1821,6 +1821,7 @@ func TestSessionEntries(t *testing.T) {
 				index := slices.IndexFunc(listed.Sessions, func(session *Session) bool { return session.Id == webID })
 				require.NotEqual(t, -1, index)
 				require.ElementsMatch(t, test.want, listed.Sessions[index].AllowedAgents)
+				require.True(t, listed.Sessions[index].Cron, "cron origin survives follow-ups and config changes")
 
 				for _, agent := range []string{"main", "planner", "selected"} {
 					_, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: webID, Text: "$agent " + agent})

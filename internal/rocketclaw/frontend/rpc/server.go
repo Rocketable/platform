@@ -162,9 +162,28 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 		return fmt.Errorf("web session inactivity period: %w", err)
 	}
 
+	var cronOrigins map[string]string
+
 	for row, err := range s.sessions.SidebarSessions(ctx, time.Now().Add(-settleAfter)) {
 		if err != nil {
 			return err
+		}
+
+		// Read origins after the row snapshot: a first cron sync must not add
+		// a listed chat newer than its origin facts.
+		if cronOrigins == nil {
+			cronOrigins = make(map[string]string)
+
+			for facts, err := range s.sessions.ChatOriginFacts(ctx) {
+				if err != nil {
+					return err
+				}
+
+				origin, _ := decideOrigin(&facts)
+				if cron, ok := origin.(cronOrigin); ok {
+					cronOrigins[facts.ConversationID] = cron.Stem
+				}
+			}
 		}
 
 		conversation := row.Conversation
@@ -198,7 +217,9 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 			metadataByChannel[channel] = channelMetadata
 		}
 
-		session := &Session{Id: conversation.ID, Title: channelMetadata.Title, Agent: conversation.Agent, AllowedAgents: channelMetadata.AllowedAgents, Settled: conversation.Settled, Running: row.Running, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags}
+		cronName, cronOn := cronOrigins[conversation.ID]
+
+		session := &Session{Id: conversation.ID, Title: channelMetadata.Title, Agent: conversation.Agent, AllowedAgents: channelMetadata.AllowedAgents, Settled: conversation.Settled, Running: row.Running, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: cronOn, CronName: cronName}
 		if row.SnoozedUntil != nil {
 			session.SnoozedUntil = row.SnoozedUntil.UTC().Format(time.RFC3339Nano)
 		}

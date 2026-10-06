@@ -121,6 +121,9 @@ type Session struct {
 	SnoozedUntil  string                 `protobuf:"bytes,12,opt,name=snoozed_until,json=snoozedUntil,proto3" json:"snoozed_until,omitempty"`
 	ForkedFrom    string                 `protobuf:"bytes,13,opt,name=forked_from,json=forkedFrom,proto3" json:"forked_from,omitempty"`
 	Tags          []string               `protobuf:"bytes,14,rep,name=tags,proto3" json:"tags,omitempty"`
+	// The chat's recorded origin is a cron run, even after human follow-ups.
+	Cron          bool   `protobuf:"varint,15,opt,name=cron,proto3" json:"cron,omitempty"`
+	CronName      string `protobuf:"bytes,16,opt,name=cron_name,json=cronName,proto3" json:"cron_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -244,6 +247,20 @@ func (x *Session) GetTags() []string {
 		return x.Tags
 	}
 	return nil
+}
+
+func (x *Session) GetCron() bool {
+	if x != nil {
+		return x.Cron
+	}
+	return false
+}
+
+func (x *Session) GetCronName() string {
+	if x != nil {
+		return x.CronName
+	}
+	return ""
 }
 
 type HistoryRequest struct {
@@ -3759,7 +3776,7 @@ var File_web_proto protoreflect.FileDescriptor
 const file_web_proto_rawDesc = "" +
 	"\n" +
 	"\tweb.proto\x12\x03rpc\"\x15\n" +
-	"\x13ListSessionsRequest\"\xe5\x02\n" +
+	"\x13ListSessionsRequest\"\x96\x03\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
@@ -3776,7 +3793,9 @@ const file_web_proto_rawDesc = "" +
 	"\rsnoozed_until\x18\f \x01(\tR\fsnoozedUntil\x12\x1f\n" +
 	"\vforked_from\x18\r \x01(\tR\n" +
 	"forkedFrom\x12\x12\n" +
-	"\x04tags\x18\x0e \x03(\tR\x04tagsJ\x04\b\v\x10\f\"\xba\x01\n" +
+	"\x04tags\x18\x0e \x03(\tR\x04tags\x12\x12\n" +
+	"\x04cron\x18\x0f \x01(\bR\x04cron\x12\x1b\n" +
+	"\tcron_name\x18\x10 \x01(\tR\bcronNameJ\x04\b\v\x10\f\"\xba\x01\n" +
 	"\x0eHistoryRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x124\n" +
 	"\x16source_conversation_id\x18\x02 \x01(\tR\x14sourceConversationId\x12\x1a\n" +
