@@ -1834,20 +1834,13 @@ func sanitizeShellTempSegment(conversationID string) string {
 		return "anonymous"
 	}
 
-	var b strings.Builder
-
-	b.Grow(len(id))
-
-	for _, r := range id {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
+	return strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' {
+			return r
 		}
-	}
 
-	return b.String()
+		return '_'
+	}, id)
 }
 
 func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]string, customTools ...rocketcode.Tool) rocketcode.Config {

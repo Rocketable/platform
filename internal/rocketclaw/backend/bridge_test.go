@@ -4345,8 +4345,11 @@ func readRocketCodeOutbound(t *testing.T, bus *testBus) *protocol.OutboundMessag
 
 func TestRocketcodeShellTempRel(t *testing.T) {
 	assert.Equal(t, ".rocketclaw/.rocketcode/tmp/anonymous", rocketcodeShellTempRel(".rocketclaw", ""))
+	assert.Equal(t, ".rocketclaw/.rocketcode/tmp/anonymous", rocketcodeShellTempRel(".rocketclaw", " \t\n\u2003"))
 	assert.Equal(t, ".rocketclaw/.rocketcode/tmp/slack-thread_C123_111.222", rocketcodeShellTempRel(".rocketclaw", "slack-thread:C123:111.222"))
 	assert.Equal(t, "runtime/.rocketcode/tmp/cron_job", rocketcodeShellTempRel("runtime", "cron:job"))
+	assert.Equal(t, "runtime/.rocketcode/tmp/Az09-_.", rocketcodeShellTempRel("runtime", " \u2003Az09-_.\t "))
+	assert.Equal(t, "runtime/.rocketcode/tmp/A______Z", rocketcodeShellTempRel("runtime", " \u2003Aé/界🙂\xff\xfeZ\t "))
 }
 
 func seedReplayText(items []responses.ResponseInputItemUnionParam) string {
