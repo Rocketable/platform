@@ -63,6 +63,51 @@ func TestGlobGrepPermissionSubjects(t *testing.T) {
 	require.Equal(t, []string{"func Test"}, grepSubjects)
 }
 
+func TestSandboxedToolParameterAliases(t *testing.T) {
+	patch := "*** Begin Patch\n*** Update File: note.txt\n@@\n-old\n+new\n*** End Patch"
+
+	otherPatch := "*** Begin Patch\n*** Update File: other.txt\n@@\n-old\n+new\n*** End Patch"
+	for _, tt := range []struct {
+		name  string
+		read  readToolParams
+		patch applyPatchToolParams
+	}{
+		{"canonical takes precedence", readToolParams{FilePath: "note.txt", Filename: "other.txt"}, applyPatchToolParams{PatchText: patch, Patch: otherPatch}},
+		{"alias", readToolParams{Filename: "note.txt"}, applyPatchToolParams{Patch: patch}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root, err := os.OpenRoot(t.TempDir())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, root.Close()) })
+			require.NoError(t, root.WriteFile("note.txt", []byte("old\n"), 0o644))
+			require.NoError(t, root.WriteFile("other.txt", []byte("old\n"), 0o644))
+			require.NoError(t, root.Mkdir(".tmp", 0o755))
+			tools := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, filepath.Join(root.Name(), ".tmp")), nil, DefaultShellCommand)
+
+			for _, input := range []struct {
+				tool, want string
+				params     any
+			}{
+				{"read", "<path>note.txt</path>\n<type>file</type>\n<content>\n1: old\n\n(End of file - total 1 lines)\n</content>", tt.read},
+				{"apply_patch", "Success. Updated the following files:\nM note.txt", tt.patch},
+			} {
+				raw, err := json.Marshal(input.params)
+				require.NoError(t, err)
+				subjects, err := tools[input.tool].Subjects(raw)
+				require.NoError(t, err)
+				require.Equal(t, []string{"note.txt"}, subjects)
+				result, err := tools[input.tool].Call(t.Context(), raw, nil, toolCallMetadata{})
+				require.NoError(t, err)
+				require.Equal(t, input.want, result.Output)
+			}
+
+			content, err := root.ReadFile("note.txt")
+			require.NoError(t, err)
+			require.Equal(t, "new\n", string(content))
+		})
+	}
+}
+
 func TestWebFetchPermissionSubjectsMatchOpenCode(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
