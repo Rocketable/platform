@@ -142,12 +142,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		threadBridges    *threadBridgeManager
 		slackSink        SlackFrontend
 		stops            []namedStopper
-		startThreadRoot  func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error)
 	)
-
-	startThreadRoot = func(_ context.Context, req *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error) {
-		return protocol.StartNewThreadRootResult{}, fmt.Errorf("text root is not available for %s turns", req.Source)
-	}
 
 	if stats, err := rocketcodeSessions.PruneStateBefore(runCtx, time.Now().Add(-stateRetention)); err != nil {
 		logger.Warn("prune stale rocketclaw state", "error", err)
@@ -253,10 +248,6 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		return "rocketclaw runtime assets reloaded", nil
 	}
 
-	startNewThread := func(startCtx context.Context, req *protocol.StartNewThreadRequest) (protocol.StartNewThreadResult, error) {
-		return threadBridges.StartNewThread(startCtx, req, startThreadRoot)
-	}
-
 	logger.Info(
 		"initializing rocketclaw runtime",
 		"workspace", cfg.Workspace,
@@ -293,7 +284,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 
 			return slackSink.ActivateEnqueue(ctx, item, inbound)
 		}}
-		Config.StartNewThread = startNewThread
+		Config.StartNewThread = threadBridges.StartNewThread
 		Config.SessionService = rocketcodeSessions
 
 		bridge := NewConversation(cfg, rt, &Config, logger)
@@ -329,7 +320,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		Sessions:                 rocketcodeSessions,
 		ExternalMCPUsers:         externalMCPUsers,
 		RefreshExternalMCPAgents: &refreshExternalMCPAgents, TextRouter: threadBridges, threads: threadBridges,
-		startThreadRoot: &startThreadRoot, slackAsker: &slackUserQuestionAsker,
+		slackAsker: &slackUserQuestionAsker,
 	}
 
 	slack, copyDone, extraStops, err := s.assemble.Assemble(rt)

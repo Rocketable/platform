@@ -3,10 +3,14 @@ package backend
 import (
 	"cmp"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
+	"os/exec"
 	"slices"
 	"strings"
 	"sync"
@@ -27,9 +31,9 @@ type directBridge interface {
 }
 
 type threadStart struct {
-	conversationID, agent   string
-	requireCreated          bool
-	existingErr, persistErr string
+	conversationID, agent string
+	createdBy             ThreadCreator
+	persistErr            string
 }
 
 type threadBridgeManager struct {
@@ -159,7 +163,7 @@ func (m *threadBridgeManager) StartActiveTurns(ctx context.Context) error {
 			continue
 		}
 
-		if _, _, err := m.ensureThreadBridge(conversationID, thread); err != nil {
+		if _, err := m.ensureThreadBridge(conversationID, thread); err != nil {
 			return fmt.Errorf("start active turn worker: %w", err)
 		}
 	}
@@ -175,7 +179,7 @@ func (m *threadBridgeManager) StartPendingScheduledMessages() error {
 
 	for _, message := range scheduledMessages {
 		conversationID := strings.TrimSpace(message.ConversationID)
-		if _, _, err := m.ensureThreadBridge(conversationID, ThreadState{Agent: message.Agent}); err != nil {
+		if _, err := m.ensureThreadBridge(conversationID, ThreadState{Agent: message.Agent}); err != nil {
 			return fmt.Errorf("start pending scheduled message bridge: %w", err)
 		}
 	}
@@ -206,7 +210,7 @@ func (m *threadBridgeManager) StartActiveGoals() error {
 			continue
 		}
 
-		managed, _, err := m.ensureThreadBridge(conversationID, thread)
+		managed, err := m.ensureThreadBridge(conversationID, thread)
 		if err != nil {
 			return fmt.Errorf("start active goal bridge: %w", err)
 		}
@@ -239,15 +243,11 @@ func (m *threadBridgeManager) SubmitThreadReply(ctx context.Context, target prot
 		return false, nil
 	}
 
-	if thread.CreatedBy == ThreadCreatedByCron {
-		disableStartNewThread(inbound)
-	}
-
 	if inbound.SlackReply != nil {
 		inbound.SlackReply.ThreadTS = strings.TrimSpace(target.ThreadID)
 	}
 
-	managed, _, err := m.ensureThreadBridge(conversationID, thread)
+	managed, err := m.ensureThreadBridge(conversationID, thread)
 	if err != nil {
 		return false, err
 	}
@@ -342,7 +342,9 @@ func (m *threadBridgeManager) StartThread(ctx context.Context, agent string, tar
 	return m.submitInbound(ctx, managed, inbound, "Slack thread start")
 }
 
-func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *protocol.StartNewThreadRequest, createRoot func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error)) (protocol.StartNewThreadResult, error) {
+// StartNewThread creates a named Web session, submits its first turn, and
+// links to it at this machine's Tailscale IPv4 on the Web port.
+func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *protocol.StartNewThreadRequest) (protocol.StartNewThreadResult, error) {
 	targetAgent := cmp.Or(strings.TrimSpace(req.Agent), strings.TrimSpace(req.CurrentAgent), "main")
 	if len(req.AllowedAgents) > 0 && !slices.Contains(req.AllowedAgents, targetAgent) {
 		return protocol.StartNewThreadResult{}, fmt.Errorf("agent %q is not allowed on this source surface", targetAgent)
@@ -357,46 +359,39 @@ func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *protocol.
 		return protocol.StartNewThreadResult{}, fmt.Errorf("agent %q is not configured", targetAgent)
 	}
 
-	var (
-		conversationID, url string
-		rootTarget          protocol.TextConversationTarget
-	)
-
-	switch req.Source {
-	case protocol.SourceSystem:
-		if req.SlackReply == nil || strings.TrimSpace(req.SlackReply.ChannelID) == "" {
-			return protocol.StartNewThreadResult{}, fmt.Errorf("rocketclaw_start_new_thread is not available for %s turns", req.Source)
-		}
-
-		fallthrough
-	case protocol.SourceSlack:
-		root, err := createRoot(ctx, req)
-		if err != nil {
-			return protocol.StartNewThreadResult{}, err
-		}
-
-		rootTarget = root.Target
-		conversationID, url = protocol.SlackThreadConversationID(rootTarget.ChannelID, rootTarget.ThreadID), root.URL
-	case protocol.SourceExternalMCP, protocol.SourceWeb:
-		return protocol.StartNewThreadResult{}, fmt.Errorf("rocketclaw_start_new_thread is not available for %s turns", req.Source)
+	_, port, err := net.SplitHostPort(m.runtime.Web.ListenAddress)
+	if err != nil {
+		return protocol.StartNewThreadResult{}, fmt.Errorf("web.listen_address: %w", err)
 	}
 
-	managed, err := m.ensureStartedThread(&threadStart{conversationID: conversationID, agent: targetAgent, requireCreated: true, existingErr: "Slack new thread conversation already exists", persistErr: "persist Slack new thread bridge"})
+	tailscaleIPs, err := exec.CommandContext(ctx, "tailscale", "ip", "-4").Output()
+	if err != nil {
+		return protocol.StartNewThreadResult{}, fmt.Errorf("find this machine's Tailscale IPv4 for Web links: %w", err)
+	}
+
+	host, _, _ := strings.Cut(strings.TrimSpace(string(tailscaleIPs)), "\n")
+
+	conversationID := rand.Text()
+
+	managed, err := m.ensureStartedThread(&threadStart{conversationID: conversationID, agent: targetAgent, createdBy: ThreadCreator(req.CreatedBy), persistErr: "persist new Web session"})
 	if err != nil {
 		return protocol.StartNewThreadResult{}, err
+	}
+
+	if _, err := m.store.UpdateConversationDetails(ctx, conversationID, nil, &req.Title, nil); err != nil {
+		return protocol.StartNewThreadResult{}, fmt.Errorf("name new Web session: %w", err)
 	}
 
 	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, req.Prompt, false)
 	inbound.PreserveWhitespace = true
 	inbound.ConversationID = conversationID
-	inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: strings.TrimSpace(rootTarget.ChannelID), MessageTS: strings.TrimSpace(rootTarget.MessageID), ThreadTS: strings.TrimSpace(rootTarget.ThreadID)}
-
 	inbound.Metadata = map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text"}
-	if err := managed.Submit(ctx, inbound); err != nil {
-		return protocol.StartNewThreadResult{}, fmt.Errorf("submit Slack new thread first prompt: %w", err)
+
+	if err := m.submitInbound(ctx, managed, inbound, "new Web session first prompt"); err != nil {
+		return protocol.StartNewThreadResult{}, err
 	}
 
-	return protocol.StartNewThreadResult{ConversationID: conversationID, URL: url}, nil
+	return protocol.StartNewThreadResult{ConversationID: conversationID, URL: "http://" + net.JoinHostPort(host, port) + "/s/" + base64.RawURLEncoding.EncodeToString([]byte(conversationID))}, nil
 }
 
 func (m *threadBridgeManager) StartGoalInThread(ctx context.Context, agent, objective, checkScript string, maxTurns int, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) error {
@@ -408,12 +403,6 @@ func (m *threadBridgeManager) StartGoalInThread(ctx context.Context, agent, obje
 	thread, _, err := m.store.Thread(conversationID)
 	if err != nil {
 		return fmt.Errorf("load goal thread state: %w", err)
-	}
-
-	cronCreated := thread.CreatedBy == ThreadCreatedByCron
-
-	if cronCreated {
-		disableStartNewThread(inbound)
 	}
 
 	if storedAgent := strings.TrimSpace(thread.Agent); storedAgent != "" {
@@ -503,7 +492,7 @@ func (m *threadBridgeManager) PickLaterWork(ctx context.Context, conversationID 
 		return nil
 	}
 
-	managed, _, err := m.ensureThreadBridge(conversationID, thread)
+	managed, err := m.ensureThreadBridge(conversationID, thread)
 	if err != nil {
 		return err
 	}
@@ -576,7 +565,7 @@ func (m *threadBridgeManager) recordedBridge(conversationID string) (*Bridge, er
 		return nil, fmt.Errorf("conversation %q is not recorded", conversationID)
 	}
 
-	managed, _, err := m.ensureThreadBridge(conversationID, thread)
+	managed, err := m.ensureThreadBridge(conversationID, thread)
 	if err != nil {
 		return nil, err
 	}
@@ -621,7 +610,7 @@ func (m *threadBridgeManager) promoteQueueItem(ctx context.Context, conversation
 		return false, err
 	}
 
-	managed, _, err := m.ensureThreadBridge(conversationID, thread)
+	managed, err := m.ensureThreadBridge(conversationID, thread)
 	if err != nil {
 		return false, err
 	}
@@ -730,7 +719,7 @@ func (m *threadBridgeManager) stashQueueItem(ctx context.Context, conversationID
 		return err
 	}
 
-	managed, _, err := m.ensureThreadBridge(conversationID, thread)
+	managed, err := m.ensureThreadBridge(conversationID, thread)
 	if err != nil {
 		return err
 	}
@@ -752,21 +741,13 @@ func (m *threadBridgeManager) ensureStartedThread(start *threadStart) (directBri
 		return nil, err
 	}
 
-	if start.requireCreated && recorded {
-		return nil, errors.New(start.existingErr)
-	}
-
 	if !recorded {
-		thread = ThreadState{Agent: start.agent}
+		thread = ThreadState{Agent: start.agent, CreatedBy: start.createdBy}
 	}
 
-	managed, created, err := m.ensureThreadBridge(start.conversationID, thread)
+	managed, err := m.ensureThreadBridge(start.conversationID, thread)
 	if err != nil {
 		return nil, err
-	}
-
-	if start.requireCreated && !created {
-		return nil, errors.New(start.existingErr)
 	}
 
 	if !recorded {
@@ -782,14 +763,6 @@ func (m *threadBridgeManager) ensureStartedThread(start *threadStart) (directBri
 	}
 
 	return managed, nil
-}
-
-func disableStartNewThread(inbound *protocol.InboundMessage) {
-	if inbound.Metadata == nil {
-		inbound.Metadata = map[string]string{}
-	}
-
-	inbound.Metadata[protocol.InboundStartNewThreadDisabledMetadataKey] = "true"
 }
 
 func (m *threadBridgeManager) switchConversationAgent(conversationID, agent string) (bool, error) {
@@ -813,22 +786,22 @@ func (m *threadBridgeManager) switchConversationAgent(conversationID, agent stri
 	return true, nil
 }
 
-func (m *threadBridgeManager) ensureThreadBridge(conversationID string, thread ThreadState) (directBridge, bool, error) {
+func (m *threadBridgeManager) ensureThreadBridge(conversationID string, thread ThreadState) (directBridge, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
-		return nil, false, errors.New("text thread conversation ID is required")
+		return nil, errors.New("text thread conversation ID is required")
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if managed := m.bridges[conversationID]; managed != nil {
-		return managed, false, nil
+		return managed, nil
 	}
 
 	agent := strings.TrimSpace(thread.Agent)
 	if agent == "" {
-		return nil, false, errors.New("text thread agent is required")
+		return nil, errors.New("text thread agent is required")
 	}
 
 	managed := m.factory(Config{ConversationID: conversationID, Agent: agent, UserQuestionAsker: protocol.NoUserQuestionAsker()})
@@ -836,10 +809,10 @@ func (m *threadBridgeManager) ensureThreadBridge(conversationID string, thread T
 
 	if m.stopping {
 		if err := managed.Stop(); err != nil {
-			return nil, false, fmt.Errorf("stop text thread bridge during shutdown: %w", err)
+			return nil, fmt.Errorf("stop text thread bridge during shutdown: %w", err)
 		}
 
-		return managed, true, nil
+		return managed, nil
 	}
 
 	m.pending[conversationID] = managed
@@ -848,5 +821,5 @@ func (m *threadBridgeManager) ensureThreadBridge(conversationID string, thread T
 	default:
 	}
 
-	return managed, true, nil
+	return managed, nil
 }

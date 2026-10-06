@@ -37,9 +37,6 @@ var _ backend.SlackFrontend = &SlackFrontendMock{}
 //			StartFunc: func(context1 context.Context) error {
 //				panic("mock out the Start method")
 //			},
-//			StartNewThreadRootFunc: func(context1 context.Context, startNewThreadRequest *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error) {
-//				panic("mock out the StartNewThreadRoot method")
-//			},
 //			StopFunc: func(context1 context.Context) error {
 //				panic("mock out the Stop method")
 //			},
@@ -64,9 +61,6 @@ type SlackFrontendMock struct {
 
 	// StartFunc mocks the Start method.
 	StartFunc func(context1 context.Context) error
-
-	// StartNewThreadRootFunc mocks the StartNewThreadRoot method.
-	StartNewThreadRootFunc func(context1 context.Context, startNewThreadRequest *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error)
 
 	// StopFunc mocks the Stop method.
 	StopFunc func(context1 context.Context) error
@@ -108,26 +102,18 @@ type SlackFrontendMock struct {
 			// Context1 is the context1 argument value.
 			Context1 context.Context
 		}
-		// StartNewThreadRoot holds details about calls to the StartNewThreadRoot method.
-		StartNewThreadRoot []struct {
-			// Context1 is the context1 argument value.
-			Context1 context.Context
-			// StartNewThreadRequest is the startNewThreadRequest argument value.
-			StartNewThreadRequest *protocol.StartNewThreadRequest
-		}
 		// Stop holds details about calls to the Stop method.
 		Stop []struct {
 			// Context1 is the context1 argument value.
 			Context1 context.Context
 		}
 	}
-	lockActivateEnqueue    sync.RWMutex
-	lockAskUserQuestion    sync.RWMutex
-	lockDrainSteers        sync.RWMutex
-	lockSendCronjobRoot    sync.RWMutex
-	lockStart              sync.RWMutex
-	lockStartNewThreadRoot sync.RWMutex
-	lockStop               sync.RWMutex
+	lockActivateEnqueue sync.RWMutex
+	lockAskUserQuestion sync.RWMutex
+	lockDrainSteers     sync.RWMutex
+	lockSendCronjobRoot sync.RWMutex
+	lockStart           sync.RWMutex
+	lockStop            sync.RWMutex
 }
 
 // ActivateEnqueue calls ActivateEnqueueFunc.
@@ -307,42 +293,6 @@ func (mock *SlackFrontendMock) StartCalls() []struct {
 	mock.lockStart.RLock()
 	calls = mock.calls.Start
 	mock.lockStart.RUnlock()
-	return calls
-}
-
-// StartNewThreadRoot calls StartNewThreadRootFunc.
-func (mock *SlackFrontendMock) StartNewThreadRoot(context1 context.Context, startNewThreadRequest *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error) {
-	if mock.StartNewThreadRootFunc == nil {
-		panic("SlackFrontendMock.StartNewThreadRootFunc: method is nil but SlackFrontend.StartNewThreadRoot was just called")
-	}
-	callInfo := struct {
-		Context1              context.Context
-		StartNewThreadRequest *protocol.StartNewThreadRequest
-	}{
-		Context1:              context1,
-		StartNewThreadRequest: startNewThreadRequest,
-	}
-	mock.lockStartNewThreadRoot.Lock()
-	mock.calls.StartNewThreadRoot = append(mock.calls.StartNewThreadRoot, callInfo)
-	mock.lockStartNewThreadRoot.Unlock()
-	return mock.StartNewThreadRootFunc(context1, startNewThreadRequest)
-}
-
-// StartNewThreadRootCalls gets all the calls that were made to StartNewThreadRoot.
-// Check the length with:
-//
-//	len(mockedSlackFrontend.StartNewThreadRootCalls())
-func (mock *SlackFrontendMock) StartNewThreadRootCalls() []struct {
-	Context1              context.Context
-	StartNewThreadRequest *protocol.StartNewThreadRequest
-} {
-	var calls []struct {
-		Context1              context.Context
-		StartNewThreadRequest *protocol.StartNewThreadRequest
-	}
-	mock.lockStartNewThreadRoot.RLock()
-	calls = mock.calls.StartNewThreadRoot
-	mock.lockStartNewThreadRoot.RUnlock()
 	return calls
 }
 

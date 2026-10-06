@@ -1623,7 +1623,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		customTools = append(customTools, askUserQuestionTool(b.config.UserQuestionAsker, msg))
 	}
 
-	if startNewThreadNativeTurn(msg) && agentExplicitlyAllowsRocketClawTool(&agent, startNewThreadToolName) {
+	if agentExplicitlyAllowsRocketClawTool(&agent, startNewThreadToolName) {
 		customTools = append(customTools, startNewThreadTool(b.config.StartNewThread, msg, agentName))
 	}
 
@@ -2303,7 +2303,7 @@ func startNewThreadTool(start func(context.Context, *protocol.StartNewThreadRequ
 
 	return rocketcode.Tool{
 		Name:               startNewThreadToolName,
-		Description:        "Start a new human-visible RocketClaw managed conversation on the same native surface as this turn. The new conversation inherits this conversation's context before receiving prompt as its first task. Use agent only when a specific configured agent should handle the new thread.",
+		Description:        "Start a new RocketClaw Web session and give it prompt as its first task. The new session starts empty: it cannot see this conversation's history, so prompt must carry all the context its first task needs. title names the session in the Web sidebar. Use agent only when a specific configured agent should handle it. Returns conversation_id and url; share url with the human so they can open the session.",
 		Permission:         "rocketclaw",
 		VisibilitySubjects: []string{startNewThreadToolName},
 		Subjects:           func(json.RawMessage) ([]string, error) { return []string{startNewThreadToolName}, nil },
@@ -2328,8 +2328,13 @@ func startNewThreadTool(start func(context.Context, *protocol.StartNewThreadRequ
 			}
 
 			allowedAgents := strings.FieldsFunc(msg.Metadata[protocol.InboundAllowedAgentsMetadataKey], func(r rune) bool { return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' ' })
+			createdBy := msg.Metadata[protocol.InboundPrincipalMetadataKey]
 
-			req := protocol.StartNewThreadRequest{Source: msg.Source, CurrentAgent: currentAgent, Agent: strings.TrimSpace(input.Agent), Title: title, Prompt: prompt, AllowedAgents: allowedAgents, SlackReply: protocol.Clone(msg.SlackReply)}
+			if msg.Cronjob != nil {
+				allowedAgents, createdBy = []string{currentAgent}, string(ThreadCreatedByCron)
+			}
+
+			req := protocol.StartNewThreadRequest{CurrentAgent: currentAgent, Agent: strings.TrimSpace(input.Agent), Title: title, Prompt: prompt, CreatedBy: createdBy, AllowedAgents: allowedAgents}
 
 			result, err := start(ctx, &req)
 			if err != nil {
@@ -2354,10 +2359,6 @@ func agentExplicitlyAllowsRocketClawTool(agent *rocketcode.Agent, tool string) b
 
 func nativeQuestionTurn(msg *protocol.InboundMessage) bool {
 	return msg.Human && msg.Source == protocol.SourceSlack && msg.SlackReply != nil
-}
-
-func startNewThreadNativeTurn(msg *protocol.InboundMessage) bool {
-	return nativeQuestionTurn(msg) && msg.Metadata[protocol.InboundStartNewThreadDisabledMetadataKey] != "true"
 }
 
 func updateGoalTool(b *Bridge) rocketcode.Tool {

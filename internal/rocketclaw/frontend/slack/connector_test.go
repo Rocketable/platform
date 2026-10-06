@@ -2319,54 +2319,6 @@ func TestSendResponseUsesGoalBlocksForGoalAnswers(t *testing.T) {
 	assert.Contains(t, reactions, slackGoalCompleteReaction+" a.2")
 }
 
-func TestStartNewThreadRootPostsMessageAndPermalink(t *testing.T) {
-	var posted url.Values
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			posted = cloneValues(r.PostForm)
-
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "999.000"})
-		case "/chat.getPermalink":
-			writeJSON(t, w, map[string]any{"ok": true, "permalink": "https://slack.example/archives/C123/p999000"})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-	result, err := connector.StartNewThreadRoot(context.Background(), &protocol.StartNewThreadRequest{
-		Title:      "Child",
-		Prompt:     "Do the work",
-		SlackReply: &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"},
-	})
-	require.NoError(t, err)
-	assert.Equal(t, protocol.TextConversationTarget{ChannelID: "C123", MessageID: "999.000", ThreadID: "999.000"}, result.Target)
-	assert.Equal(t, "https://slack.example/archives/C123/p999000", result.URL)
-	assert.Equal(t, "C123", posted.Get("channel"))
-	assert.Equal(t, "🔀 Child\n\nDo the work", posted.Get("text"))
-
-	var blocks []struct {
-		Type string `json:"type"`
-		Text struct {
-			Text string `json:"text"`
-		} `json:"text"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(posted.Get("blocks")), &blocks))
-	require.Len(t, blocks, 3)
-	assert.Equal(t, "header", blocks[0].Type)
-	assert.Equal(t, "🔀 Child", blocks[0].Text.Text)
-	assert.Equal(t, "divider", blocks[1].Type)
-	assert.Equal(t, "section", blocks[2].Type)
-	assert.Equal(t, "Do the work", blocks[2].Text.Text)
-}
-
 func TestSendCronjobRootUsesCronLayout(t *testing.T) {
 	var posted url.Values
 
@@ -2402,29 +2354,6 @@ func TestSendCronjobRootUsesCronLayout(t *testing.T) {
 	assert.Empty(t, posted.Get("thread_ts"))
 }
 
-func TestStartNewThreadRootResolvesHashChannel(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/conversations.list":
-			writeJSON(t, w, map[string]any{"ok": true, "channels": []map[string]any{{"id": "C999", "name": "ops"}}, "response_metadata": map[string]any{"next_cursor": ""}})
-		case "/chat.postMessage":
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "C999", "ts": "1.1"})
-		case "/chat.getPermalink":
-			writeJSON(t, w, map[string]any{"ok": false, "error": "channel_not_found"})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	connector := newTestConnectorWithOptions(server.URL, []config.SlackChannelConfig{{Channel: "#ops"}}, inertThreadRouter{})
-	result, err := connector.StartNewThreadRoot(t.Context(), &protocol.StartNewThreadRequest{
-		Title: "Cron", Prompt: "run", SlackReply: &protocol.SlackReplyTarget{ChannelID: "#ops"},
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "C999", result.Target.ChannelID)
-}
-
 func TestSlackRootPostsReportSlackFailures(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -2444,12 +2373,6 @@ func TestSlackRootPostsReportSlackFailures(t *testing.T) {
 
 	_, err = connector.SendCronjobRoot(t.Context(), &protocol.OutboundMessage{Text: "report", Cronjob: cronjob, SlackReply: &protocol.SlackReplyTarget{ChannelID: "C123"}})
 	require.ErrorContains(t, err, "post Slack cronjob root")
-
-	_, err = connector.StartNewThreadRoot(t.Context(), &protocol.StartNewThreadRequest{Title: "Cron", Prompt: "run", SlackReply: &protocol.SlackReplyTarget{ChannelID: "#ops"}})
-	require.ErrorContains(t, err, `resolve configured Slack channel "#ops"`)
-
-	_, err = connector.StartNewThreadRoot(t.Context(), &protocol.StartNewThreadRequest{Title: "Cron", Prompt: "run", SlackReply: &protocol.SlackReplyTarget{ChannelID: "C123"}})
-	require.ErrorContains(t, err, "send Slack new thread root")
 }
 
 func TestSendResponseRequiresSlackTarget(t *testing.T) {

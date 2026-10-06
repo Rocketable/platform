@@ -1243,19 +1243,11 @@ func TestAttachSlack(t *testing.T) {
 	})
 	runTestManager(t, manager)
 
-	var (
-		asker protocol.UserQuestionAsker
-		root  func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error)
-	)
+	var asker protocol.UserQuestionAsker
 
-	slack := &slackFrontendMock{StartNewThreadRootFunc: func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error) {
-		return protocol.StartNewThreadRootResult{}, nil
-	}}
-	rt := &Runtime{threads: manager, slackAsker: &asker, startThreadRoot: &root}
+	slack := new(slackFrontendMock)
+	rt := &Runtime{threads: manager, slackAsker: &asker}
 	rt.AttachSlack(slack)
 	require.True(t, asker.ExposeTool())
 	require.Same(t, slack, manager.cronRoots)
-	got, err := root(t.Context(), &protocol.StartNewThreadRequest{})
-	require.NoError(t, err)
-	require.Equal(t, protocol.StartNewThreadRootResult{}, got)
 }
