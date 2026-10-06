@@ -1796,7 +1796,16 @@ func TestCompactedOutputToReplayInputPreservesSupportedItems(t *testing.T) {
 			Content: []responses.ResponseOutputMessageContentUnion{{Type: "output_text", Text: "assistant"}},
 		},
 		{Type: "compaction", ID: "cmp_1", EncryptedContent: "sealed"},
-		{Type: "compaction_summary", ID: "cmp_2", EncryptedContent: "chatgpt-sealed"},
+		{
+			Type: "compaction_summary", ID: "cmp_2", EncryptedContent: "chatgpt-sealed",
+			Content: []responses.ResponseOutputMessageContentUnion{
+				{Type: "output_text", Text: "content "},
+				{Type: "refusal", Refusal: "ignored"},
+				{Type: "output_text", Text: ""},
+				{Type: "output_text", Text: "first\n"},
+			},
+			Summary: []responses.ResponseReasoningItemSummary{{Text: "summary "}, {Text: ""}, {Text: "last"}},
+		},
 		{Type: "reasoning", ID: "rsn_1", Summary: []responses.ResponseReasoningItemSummary{{Text: "summary"}}, EncryptedContent: "reasoning-sealed"},
 		{Type: "reasoning", ID: "rsn_2"},
 	}
@@ -1808,11 +1817,13 @@ func TestCompactedOutputToReplayInputPreservesSupportedItems(t *testing.T) {
 	require.Len(t, params, len(items))
 
 	assert.Equal(t, "hello world", params[0].OfMessage.Content.OfString.Value)
+	assert.Equal(t, responses.EasyInputMessageRoleUser, params[0].OfMessage.Role)
 	assert.Equal(t, responses.EasyInputMessagePhase("final_answer"), params[0].OfMessage.Phase)
 	assert.Equal(t, "assistant", params[1].OfMessage.Content.OfString.Value)
 	assert.Equal(t, "sealed", params[2].OfCompaction.EncryptedContent)
 	assert.Equal(t, "chatgpt-sealed", params[3].OfCompaction.EncryptedContent)
 	assert.JSONEq(t, `{"encrypted_content":"sealed","id":"cmp_1","type":"compaction"}`, string(got[2]))
+	assert.JSONEq(t, `{"encrypted_content":"chatgpt-sealed","id":"cmp_2","type":"compaction","content":"content first\nsummary last","summary":"content first\nsummary last"}`, string(got[3]))
 	assert.Equal(t, "summary", params[4].OfReasoning.Summary[0].Text)
 	assert.Equal(t, "rsn_2", params[5].OfReasoning.ID)
 }
