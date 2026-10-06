@@ -65,6 +65,18 @@ func TestTurnObservationPersistenceFailure(t *testing.T) {
 
 	owner.close()
 	require.NoError(t, owner.observe(t.Context(), &progress), "closed lifetime ignores late workers even after a write failure")
+
+	owner = turnObservations{journal: journal, turnID: "turn-2"}
+	err = owner.replaceResponse(t.Context(), "", []PublicProgress{progress})
+	require.ErrorIs(t, err, errPersist)
+	_, ok = errors.AsType[progressPersistenceError](err)
+	require.True(t, ok)
+	require.Empty(t, owner.trace, "a failed save must not commit the replacement in memory")
+	require.ErrorIs(t, owner.replaceResponse(t.Context(), "", []PublicProgress{progress}), errPersist)
+	require.Len(t, journal.SaveTraceCalls(), 2)
+	require.Same(t, t.Context(), journal.SaveTraceCalls()[1].Ctx)
+	require.Equal(t, "turn-2", journal.SaveTraceCalls()[1].TurnID)
+	require.Equal(t, []PublicProgress{progress}, PublicProgressFromTrace(journal.SaveTraceCalls()[1].Trace))
 }
 
 func TestPublicProgressTraceAllowlist(t *testing.T) {

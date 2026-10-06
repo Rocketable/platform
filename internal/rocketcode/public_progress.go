@@ -138,14 +138,7 @@ func (o *turnObservations) observeLocked(ctx context.Context, progress *PublicPr
 		trace[index] = raw
 	}
 	// Ponytail: one synchronous write per changed public event. Coalescing needs measurements.
-	if err := o.journal.SaveTrace(ctx, o.turnID, trace); err != nil {
-		o.err = progressPersistenceError{err: err}
-		return o.err
-	}
-
-	o.trace = trace
-
-	return nil
+	return o.saveTraceLocked(ctx, trace)
 }
 
 // replaceResponse atomically replaces one attempt's public text, retaining other
@@ -185,6 +178,10 @@ func (o *turnObservations) replaceResponse(ctx context.Context, parentID string,
 		return nil
 	}
 
+	return o.saveTraceLocked(ctx, trace)
+}
+
+func (o *turnObservations) saveTraceLocked(ctx context.Context, trace []json.RawMessage) error {
 	if err := o.journal.SaveTrace(ctx, o.turnID, trace); err != nil {
 		o.err = progressPersistenceError{err: err}
 		return o.err
