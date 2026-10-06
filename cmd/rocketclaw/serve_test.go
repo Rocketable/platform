@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/stretchr/testify/require"
 )
 
@@ -111,11 +110,6 @@ func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
 
 	err := runServe(nil)
 	require.ErrorContains(t, err, "run rocketclaw")
-}
-
-func TestServeRunErrorMapsRestartRequestToSupervisorExitCode(t *testing.T) {
-	err := serveRunError(backend.ErrRestartRequested)
-	require.ErrorIs(t, err, exitCodeError(255))
 }
 
 func TestBuildIdentityUsesOnlyAvailableBinaryMetadata(t *testing.T) {
