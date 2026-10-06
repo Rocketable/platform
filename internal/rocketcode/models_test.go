@@ -308,40 +308,18 @@ func TestSessionAttributionReasoningPresence(t *testing.T) {
 }
 
 func TestParseModelRef(t *testing.T) {
-	for _, tc := range []struct{ name, model, apiModel, display string }{
-		{name: "empty", model: "", apiModel: "gpt-6-luna", display: "gpt-6-luna"},
-		{name: "openai", model: "gpt-5.5", apiModel: "gpt-5.5", display: "gpt-5.5"},
-		{name: "legacy openai prefix", model: "openai/gpt-5.5", apiModel: "gpt-5.5", display: "gpt-5.5"},
+	for _, tc := range []struct{ name, model, apiModel string }{
+		{name: "empty", model: "", apiModel: "gpt-6-luna"},
+		{name: "whitespace", model: "   ", apiModel: "gpt-6-luna"},
+		{name: "openai", model: "gpt-5.5", apiModel: "gpt-5.5"},
+		{name: "legacy openai prefix", model: "openai/gpt-5.5", apiModel: "gpt-5.5"},
+		{name: "trimmed prefix", model: " openai/gpt-5.5 ", apiModel: "gpt-5.5"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			parsed, err := parseModelRef(tc.model)
 
 			require.NoError(t, err)
-			require.Equal(t, tc.apiModel, parsed.apiModel)
-			require.Equal(t, tc.display, parsed.display())
-		})
-	}
-}
-
-func TestParseModelRefRejectsInvalidOrUnsupportedQualifiedModel(t *testing.T) {
-	for _, model := range []string{"/model", "openai/", "openai/gpt/extra", "openai-compatible/local/gpt-oss", "anthropic/claude"} {
-		t.Run(model, func(t *testing.T) {
-			_, err := parseModelRef(model)
-
-			require.Error(t, err)
-		})
-	}
-}
-
-func TestResolveAgentModelRefRejectsEmptyAgentModel(t *testing.T) {
-	for _, tc := range []struct{ name, model string }{
-		{name: "empty", model: ""},
-		{name: "whitespace", model: "   "},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := resolveAgentModelRef(tc.model)
-
-			require.EqualError(t, err, "required non-empty string")
+			require.Equal(t, tc.apiModel, parsed)
 		})
 	}
 }

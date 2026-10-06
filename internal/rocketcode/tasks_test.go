@@ -1134,7 +1134,7 @@ func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
 	var factory toolFactory
 
 	factory.resolver = testResolverForResponsesAPI(client)
-	factory.autoApproverModel = defaultModelRef().display()
+	factory.autoApproverModel = defaultOpenAIModel
 	factory.agents = agents
 	factory.skills = Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}
 	factory.baseTools = map[string]looperTool{

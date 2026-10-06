@@ -11,8 +11,6 @@ import (
 
 const defaultOpenAIModel shared.ResponsesModel = "gpt-6-luna"
 
-type modelRef struct{ apiModel string }
-
 // ProviderOrigin identifies the provider and API model selected by a resolver.
 type ProviderOrigin struct {
 	Provider         string
@@ -30,12 +28,12 @@ type openAIModelResolver struct {
 }
 
 func (r openAIModelResolver) Resolve(model string) (*openai.Client, ProviderOrigin, error) {
-	ref, err := resolveAgentModelRef(model)
+	apiModel, err := resolveAgentModelRef(model)
 	if err != nil {
 		return nil, ProviderOrigin{}, err
 	}
 
-	return r.client, ProviderOrigin{Provider: "openai", Model: ref.apiModel}, nil
+	return r.client, ProviderOrigin{Provider: "openai", Model: apiModel}, nil
 }
 
 func resolveModel(resolver ModelResolver, model string) (*openai.Client, ProviderOrigin, error) {
@@ -67,39 +65,31 @@ func (o ProviderOrigin) displayModel() string {
 	return o.Provider + "/" + o.Model
 }
 
-func defaultModelRef() modelRef {
-	return modelRef{apiModel: defaultOpenAIModel}
-}
-
-func (m modelRef) display() string {
-	return m.apiModel
-}
-
-func parseModelRef(model string) (modelRef, error) {
+func parseModelRef(model string) (string, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {
-		return defaultModelRef(), nil
+		return defaultOpenAIModel, nil
 	}
 
 	if after, ok := strings.CutPrefix(model, "openai/"); ok {
 		model = after
 		if model == "" || strings.Contains(model, "/") {
-			return modelRef{}, fmt.Errorf("invalid model %q: expected openai/model", "openai/"+model)
+			return "", fmt.Errorf("invalid model %q: expected openai/model", "openai/"+model)
 		}
 
-		return modelRef{apiModel: model}, nil
+		return model, nil
 	}
 
 	if strings.Contains(model, "/") {
-		return modelRef{}, fmt.Errorf("invalid model %q: expected unprefixed OpenAI model ID", model)
+		return "", fmt.Errorf("invalid model %q: expected unprefixed OpenAI model ID", model)
 	}
 
-	return modelRef{apiModel: model}, nil
+	return model, nil
 }
 
-func resolveAgentModelRef(model string) (modelRef, error) {
+func resolveAgentModelRef(model string) (string, error) {
 	if strings.TrimSpace(model) == "" {
-		return modelRef{}, errors.New("required non-empty string")
+		return "", errors.New("required non-empty string")
 	}
 
 	return parseModelRef(model)

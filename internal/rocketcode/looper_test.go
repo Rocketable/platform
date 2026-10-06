@@ -53,12 +53,12 @@ func testResolverForResponsesAPI(api responsesAPI) testModelResolverFunc {
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithMiddleware(middleware))
 
 	return testModelResolverFunc(func(model string) (*openai.Client, ProviderOrigin, error) {
-		ref, err := resolveAgentModelRef(model)
+		apiModel, err := resolveAgentModelRef(model)
 		if err != nil {
 			return nil, ProviderOrigin{}, err
 		}
 
-		return &client, ProviderOrigin{Provider: "openai", Model: ref.apiModel}, nil
+		return &client, ProviderOrigin{Provider: "openai", Model: apiModel}, nil
 	})
 }
 
