@@ -10,32 +10,56 @@ import (
 
 func TestResponseOutputReplayText(t *testing.T) {
 	for _, tt := range []struct {
-		name, input, want string
+		name, input, want, wantCompacted, wantDurable string
 	}{
 		{
-			name:  "message parts",
-			input: `{"type":"message","id":"msg","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":" first\n"},{"type":"refusal","refusal":"refused"},{"type":"output_text","text":"世界 "}]}`,
-			want:  `{"type":"message","id":"msg","role":"assistant","phase":"final_answer","content":" first\n世界 "}`,
+			name:          "message parts",
+			input:         `{"type":"message","id":"msg","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":" first\n"},{"type":"refusal","refusal":"refused"},{"type":"output_text","text":"世界 "}]}`,
+			want:          `{"type":"message","id":"msg","role":"assistant","phase":"final_answer","content":" first\n世界 "}`,
+			wantCompacted: `{"type":"message","role":"assistant","phase":"final_answer","content":" first\n世界 "}`,
+			wantDurable:   `{"type":"message","role":"assistant","phase":"final_answer","content":" first\n世界 "}`,
 		},
 		{
-			name:  "empty message",
-			input: `{"type":"message","id":"msg"}`,
-			want:  `{"type":"message","id":"msg","role":"assistant","content":""}`,
+			name:          "empty message",
+			input:         `{"type":"message","id":"msg"}`,
+			want:          `{"type":"message","id":"msg","role":"assistant","content":""}`,
+			wantCompacted: `{"type":"message","role":"user","content":""}`,
+			wantDurable:   `{"type":"message","role":"user","content":""}`,
 		},
 		{
-			name:  "compaction content",
-			input: `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":[{"type":"output_text","text":" first\n"},{"type":"refusal","refusal":"refused"},{"type":"output_text","text":"世界 "}]}`,
-			want:  `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":" first\n世界 "}`,
+			name:          "compaction content",
+			input:         `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":[{"type":"output_text","text":" first\n"},{"type":"refusal","refusal":"refused"},{"type":"output_text","text":"世界 "}]}`,
+			want:          `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":" first\n世界 "}`,
+			wantCompacted: `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":" first\n世界 "}`,
+			wantDurable:   `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":" first\n世界 ","summary":" first\n世界 "}`,
 		},
 		{
-			name:  "empty summary uses content",
-			input: `{"type":"compaction_summary","id":"cmp","encrypted_content":"sealed","summary":[{"text":""}],"content":[{"type":"output_text","text":"fallback"}]}`,
-			want:  `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":"fallback"}`,
+			name:          "empty summary uses content",
+			input:         `{"type":"compaction_summary","id":"cmp","encrypted_content":"sealed","summary":[{"text":""}],"content":[{"type":"output_text","text":"fallback"}]}`,
+			want:          `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":"fallback"}`,
+			wantCompacted: `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":"fallback"}`,
+			wantDurable:   `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":"fallback","summary":"fallback"}`,
 		},
 		{
-			name:  "summary takes precedence",
-			input: `{"type":"compaction","id":"cmp","encrypted_content":"sealed","summary":[{"text":"summary"},{"text":"later"}],"content":[{"type":"output_text","text":"fallback"}]}`,
-			want:  `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":"summary"}`,
+			name:          "summary takes precedence",
+			input:         `{"type":"compaction","id":"cmp","encrypted_content":"sealed","summary":[{"text":"summary"},{"text":"later"}],"content":[{"type":"output_text","text":"fallback"}]}`,
+			want:          `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":"summary"}`,
+			wantCompacted: `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":"fallback"}`,
+			wantDurable:   `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":"fallbacksummarylater","summary":"fallbacksummarylater"}`,
+		},
+		{
+			name:          "refusal-only compaction",
+			input:         `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":[{"type":"refusal","refusal":"refused"}]}`,
+			want:          `{"type":"compaction","id":"cmp","encrypted_content":"sealed"}`,
+			wantCompacted: `{"type":"compaction","id":"cmp","encrypted_content":"sealed"}`,
+			wantDurable:   `{"type":"compaction","id":"cmp","encrypted_content":"sealed"}`,
+		},
+		{
+			name:          "empty compaction",
+			input:         `{"type":"compaction","id":"cmp","encrypted_content":"sealed"}`,
+			want:          `{"type":"compaction","id":"cmp","encrypted_content":"sealed"}`,
+			wantCompacted: `{"type":"compaction","id":"cmp","encrypted_content":"sealed"}`,
+			wantDurable:   `{"type":"compaction","id":"cmp","encrypted_content":"sealed"}`,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -44,6 +68,16 @@ func TestResponseOutputReplayText(t *testing.T) {
 			got, ok := responseOutputToReplayInput(&item)
 			require.True(t, ok)
 			require.JSONEq(t, tt.want, marshalReplayJSON(t, got))
+
+			compacted, err := compactedOutputToReplayParams([]responses.ResponseOutputItemUnion{item})
+			require.NoError(t, err)
+			require.Len(t, compacted, 1)
+			require.JSONEq(t, tt.wantCompacted, marshalReplayJSON(t, compacted[0]))
+
+			durable, err := CompactedOutputToReplayInput([]responses.ResponseOutputItemUnion{item})
+			require.NoError(t, err)
+			require.Len(t, durable, 1)
+			require.JSONEq(t, tt.wantDurable, string(durable[0]))
 		})
 	}
 }
