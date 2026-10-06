@@ -56,42 +56,22 @@ func ruleMatchesMCPServer(pattern, server string) bool {
 	return name == server || name == "*"
 }
 
-func eachMCPAllowRule(permissions PermissionSet, fn func(pattern string) bool) {
-	for _, bucket := range permissions.Buckets {
-		if bucket.Name != mcpPermissionBucket {
-			continue
-		}
-
-		for _, rule := range bucket.Rules {
-			if rule.Action != PermissionAllow && rule.Action != PermissionAuto {
-				continue
-			}
-
-			if fn(rule.Pattern) {
-				return
-			}
-		}
-	}
-}
-
 func visibleMCPServers(permissions PermissionSet, servers []string) []string {
 	var visible []string
 
 	for _, server := range servers {
-		match := false
-
-		eachMCPAllowRule(permissions, func(pattern string) bool {
-			if ruleMatchesMCPServer(pattern, server) {
-				match = true
-
-				return true
+	buckets:
+		for _, bucket := range permissions.Buckets {
+			if bucket.Name != mcpPermissionBucket {
+				continue
 			}
 
-			return false
-		})
-
-		if match {
-			visible = append(visible, server)
+			for _, rule := range bucket.Rules {
+				if (rule.Action == PermissionAllow || rule.Action == PermissionAuto) && ruleMatchesMCPServer(rule.Pattern, server) {
+					visible = append(visible, server)
+					break buckets
+				}
+			}
 		}
 	}
 
