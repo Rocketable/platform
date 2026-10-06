@@ -89,11 +89,11 @@ func recordProviderDiagnosticEvent(ctx context.Context, diagnostic *ProviderDiag
 }
 
 func (o ObservabilityConfig) inputValue(text string) attribute.KeyValue {
-	return attribute.String(semconv.InputValue, o.TraceConfig.MaskInputValue(text))
+	return attribute.String(semconv.InputValue, strings.ToValidUTF8(o.TraceConfig.MaskInputValue(text), "�"))
 }
 
 func (o ObservabilityConfig) outputValue(text string) attribute.KeyValue {
-	return attribute.String(semconv.OutputValue, o.TraceConfig.MaskOutputValue(text))
+	return attribute.String(semconv.OutputValue, strings.ToValidUTF8(o.TraceConfig.MaskOutputValue(text), "�"))
 }
 
 func (o ObservabilityConfig) startToolSpan(ctx context.Context, name, callID, permission string, args json.RawMessage, metadata toolCallMetadata) (context.Context, observabilitySpan) {
