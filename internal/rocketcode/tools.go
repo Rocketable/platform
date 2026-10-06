@@ -200,7 +200,7 @@ func toolVisible(agent *Agent, name string, tool *looperTool) bool {
 		return false
 	}
 
-	return agent.Permission.hasActionableRuleForPermission(permission)
+	return agent.Permission.hasRuleForPermission(permission, permissionAllow, permissionAuto)
 }
 
 func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map[string]looperTool {

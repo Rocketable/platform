@@ -155,7 +155,7 @@ func (c shellTempConfig) ensureTempDir(root *os.Root) error {
 
 // effectivePermissions grants read/glob on this session shell temp tree when bash is allowed.
 func (c *shellTempConfig) effectivePermissions(permissions PermissionSet) PermissionSet {
-	if c.tmpRelDir == "" || c.tmpRelDir == "." || !permissions.hasAllowRuleForPermission("bash") {
+	if c.tmpRelDir == "" || c.tmpRelDir == "." || !permissions.hasRuleForPermission("bash", permissionAllow) {
 		return permissions
 	}
 
