@@ -4257,14 +4257,8 @@ func TestHandleMessageEventPairBusySteersWithoutSlackStack(t *testing.T) {
 	router.busy = true
 	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), router)
 
-	files := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, err := w.Write([]byte("image"))
-		assert.NoError(t, err)
-	}))
-	defer files.Close()
-
 	steer := newSlackMessageEvent("111.2", "111.0", "don't touch the database")
-	steer.Message = &slack.Msg{Files: []slack.File{{Name: "image.png", Mimetype: "image/png", URLPrivateDownload: files.URL + "/image.png"}}}
+	steer.Message = &slack.Msg{Files: []slack.File{{Name: "image.png", Mimetype: "image/png", URLPrivateDownload: server.URL + "/image.png"}}}
 	connector.handleMessageEvent(t.Context(), steer, slackNativeForward{})
 
 	// R14: producer occupancy is Backend's decision, not a Slack buffer.
@@ -4276,7 +4270,7 @@ func TestHandleMessageEventPairBusySteersWithoutSlackStack(t *testing.T) {
 	assert.True(t, inbound.Human)
 	assert.Equal(t, "don't touch the database", inbound.Text)
 	assert.Equal(t, "U123", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
-	assert.Equal(t, []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("image")}}, inbound.Attachments)
+	assert.Equal(t, []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("acquired /image.png")}}, inbound.Attachments)
 	assert.Equal(t, "C123", inbound.SlackReply.ChannelID)
 	assert.Equal(t, "111.0", inbound.SlackReply.ThreadTS)
 	assert.Equal(t, "111.2", inbound.SlackReply.MessageTS)
@@ -4304,14 +4298,8 @@ func TestHandleMessageEventSteerReceiptHasNoPlaceholders(t *testing.T) {
 
 	postedBefore := len(posted)
 
-	files := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, err := w.Write([]byte("image"))
-		assert.NoError(t, err)
-	}))
-	defer files.Close()
-
 	steer := newSlackMessageEvent("111.2", "111.0", "don't touch the database")
-	steer.Message = &slack.Msg{Files: []slack.File{{Name: "image.png", Mimetype: "image/png", URLPrivateDownload: files.URL + "/image.png"}}}
+	steer.Message = &slack.Msg{Files: []slack.File{{Name: "image.png", Mimetype: "image/png", URLPrivateDownload: server.URL + "/image.png"}}}
 	connector.handleMessageEvent(t.Context(), steer, slackNativeForward{})
 
 	assert.Len(t, posted, postedBefore)
@@ -4322,7 +4310,7 @@ func TestHandleMessageEventSteerReceiptHasNoPlaceholders(t *testing.T) {
 	assert.Equal(t, protocol.InboundKindSteer, inbound.Kind)
 	assert.Equal(t, "don't touch the database", inbound.Text)
 	assert.Equal(t, "U123", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
-	assert.Equal(t, []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("image")}}, inbound.Attachments)
+	assert.Equal(t, []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("acquired /image.png")}}, inbound.Attachments)
 	assert.Equal(t, "C123", inbound.SlackReply.ChannelID)
 	assert.Equal(t, "111.0", inbound.SlackReply.ThreadTS)
 	assert.Equal(t, "111.2", inbound.SlackReply.MessageTS)
@@ -4473,21 +4461,12 @@ func TestHandleMessageEventEnqueueDuringActiveTurnHasNoPlaceholders(t *testing.T
 
 	postedBefore := len(posted)
 
-	var downloads []string
-
-	files := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		downloads = append(downloads, r.URL.Path)
-		_, err := w.Write([]byte("acquired " + r.URL.Path))
-		assert.NoError(t, err)
-	}))
-	defer files.Close()
-
 	const invocation = "$review  \"first area\"  second  "
 
 	enqueue := newSlackMessageEvent("111.2", "111.0", "$enqueue "+invocation)
 	enqueue.Message = &slack.Msg{Text: enqueue.Text, Files: []slack.File{
-		{Name: "image.png", Mimetype: "image/png", URLPrivateDownload: files.URL + "/image.png"},
-		{Name: "notes.txt", Mimetype: "text/plain", URLPrivateDownload: files.URL + "/notes.txt"},
+		{Name: "image.png", Mimetype: "image/png", URLPrivateDownload: server.URL + "/image.png"},
+		{Name: "notes.txt", Mimetype: "text/plain", URLPrivateDownload: server.URL + "/notes.txt"},
 	}}
 	connector.handleMessageEvent(t.Context(), enqueue, slackNativeForward{previews: []string{"original forwarded text"}})
 
@@ -4500,7 +4479,6 @@ func TestHandleMessageEventEnqueueDuringActiveTurnHasNoPlaceholders(t *testing.T
 	assert.Equal(t, invocation, queue[0].Message)
 	assert.Equal(t, "C123", queue[0].SlackChannel)
 	assert.Equal(t, "111.2", queue[0].SlackTS)
-	assert.Equal(t, []string{"/image.png", "/notes.txt"}, downloads)
 	assert.Equal(t, protocol.SourceSlack, queue[0].Source)
 	assert.Equal(t, invocation, queue[0].Content.Text)
 	assert.Equal(t, []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("acquired /image.png")}}, queue[0].Content.Attachments)
@@ -7634,6 +7612,10 @@ func newSlackStackTestServer(t *testing.T, posted *[]url.Values, reactions *[]st
 			writeJSON(t, w, map[string]any{"ok": true})
 		case "/users.info":
 			writeJSON(t, w, map[string]any{"ok": true})
+		// slack-go v0.30.1 sends the file token only to the API host.
+		case "/image.png", "/notes.txt":
+			_, err := w.Write([]byte("acquired " + r.URL.Path))
+			assert.NoError(t, err)
 		default:
 			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
 		}

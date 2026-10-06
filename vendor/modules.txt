@@ -1,4 +1,4 @@
-# cirello.io/pglock v1.17.0
+# cirello.io/pglock v1.18.0
 ## explicit; go 1.26.0
 cirello.io/pglock
 # github.com/Arize-ai/openinference/go/openinference-instrumentation v0.1.2
@@ -231,7 +231,7 @@ github.com/jackc/pgx/v5/pgproto3
 github.com/jackc/pgx/v5/pgtype
 github.com/jackc/pgx/v5/pgxpool
 github.com/jackc/pgx/v5/stdlib
-# github.com/jackc/puddle/v2 v2.2.2
+# github.com/jackc/puddle/v2 v2.2.3
 ## explicit; go 1.19
 github.com/jackc/puddle/v2
 github.com/jackc/puddle/v2/internal/genstack
@@ -265,7 +265,7 @@ github.com/modelcontextprotocol/go-sdk/oauthex
 # github.com/ncruces/go-strftime v1.1.0
 ## explicit; go 1.24
 github.com/ncruces/go-strftime
-# github.com/openai/openai-go/v3 v3.71.1
+# github.com/openai/openai-go/v3 v3.71.2
 ## explicit; go 1.25.0
 github.com/openai/openai-go/v3
 github.com/openai/openai-go/v3/auth
@@ -319,8 +319,8 @@ github.com/segmentio/asm/keyset
 github.com/segmentio/encoding/ascii
 github.com/segmentio/encoding/iso8601
 github.com/segmentio/encoding/json
-# github.com/slack-go/slack v0.29.0
-## explicit; go 1.25
+# github.com/slack-go/slack v0.30.1
+## explicit; go 1.26
 github.com/slack-go/slack
 github.com/slack-go/slack/internal/backoff
 github.com/slack-go/slack/internal/errorsx
@@ -335,7 +335,7 @@ github.com/stretchr/testify/assert/yaml
 github.com/stretchr/testify/internal/difflib
 github.com/stretchr/testify/internal/spew
 github.com/stretchr/testify/require
-# github.com/tidwall/gjson v1.19.0
+# github.com/tidwall/gjson v1.20.0
 ## explicit; go 1.23
 github.com/tidwall/gjson
 # github.com/tidwall/match v1.2.0
@@ -418,7 +418,7 @@ go.opentelemetry.io/proto/otlp/collector/trace/v1
 go.opentelemetry.io/proto/otlp/common/v1
 go.opentelemetry.io/proto/otlp/resource/v1
 go.opentelemetry.io/proto/otlp/trace/v1
-# go.starlark.net v0.0.0-20260930220527-d7438c5a85ac
+# go.starlark.net v0.0.0-20261005163335-bcb1a1a55bf9
 ## explicit; go 1.25.0
 go.starlark.net/internal/compile
 go.starlark.net/internal/spell
@@ -490,10 +490,10 @@ golang.org/x/text/width
 # golang.org/x/time v0.16.0
 ## explicit; go 1.26.0
 golang.org/x/time/rate
-# google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc
+# google.golang.org/genproto/googleapis/api v0.0.0-20261005182115-fad411399dd8
 ## explicit; go 1.26.0
 google.golang.org/genproto/googleapis/api/httpbody
-# google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc
+# google.golang.org/genproto/googleapis/rpc v0.0.0-20261005182115-fad411399dd8
 ## explicit; go 1.26.0
 google.golang.org/genproto/googleapis/rpc/status
 # google.golang.org/grpc v1.84.0

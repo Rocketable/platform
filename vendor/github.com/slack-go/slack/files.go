@@ -266,6 +266,11 @@ func (api *Client) GetFileInfoContext(ctx context.Context, fileID string, count,
 }
 
 // GetFile retrieves a given file from its private download URL.
+//
+// The request carries the token, so GetFile accepts only https URLs on slack.com or
+// slack-gov.com (and their subdomains) and URLs on the host set with OptionAPIURL. It
+// returns an error for any other URL. A remote or external file (File.IsExternal) has
+// a url_private outside Slack: fetch it without the Slack client.
 func (api *Client) GetFile(downloadURL string, writer io.Writer) error {
 	return api.GetFileContext(context.Background(), downloadURL, writer)
 }
@@ -273,7 +278,7 @@ func (api *Client) GetFile(downloadURL string, writer io.Writer) error {
 // GetFileContext retrieves a given file from its private download URL with a custom context.
 // For more details, see GetFile documentation.
 func (api *Client) GetFileContext(ctx context.Context, downloadURL string, writer io.Writer) error {
-	return downloadFile(ctx, api.httpclient, api.token, downloadURL, writer, api)
+	return downloadFile(ctx, api.httpclient, api.token, api.endpoint, downloadURL, writer, api)
 }
 
 // GetFiles retrieves all files according to the parameters given.
@@ -365,15 +370,22 @@ func (api *Client) ListFilesContext(ctx context.Context, params ListFilesParamet
 
 // DeleteFileComment deletes a file's comment.
 // For more details, see DeleteFileCommentContext documentation.
-func (api *Client) DeleteFileComment(commentID, fileID string) error {
+func (api *Client) DeleteFileComment(fileID, commentID string) error {
 	return api.DeleteFileCommentContext(context.Background(), fileID, commentID)
 }
 
 // DeleteFileCommentContext deletes a file's comment with a custom context.
-// Slack API docs: https://api.slack.com/methods/files.comments.delete
+//
+// Slack API docs: https://docs.slack.dev/reference/methods/files.comments.delete
 func (api *Client) DeleteFileCommentContext(ctx context.Context, fileID, commentID string) (err error) {
 	if fileID == "" || commentID == "" {
 		return ErrParametersMissing
+	}
+	// DeleteFileComment took (commentID, fileID) until it changed to match this
+	// function. Comment IDs start with "Fc", so reject the old order instead of
+	// sending swapped IDs.
+	if strings.HasPrefix(fileID, "Fc") && !strings.HasPrefix(commentID, "Fc") {
+		return fmt.Errorf("files.comments.delete: %q looks like a comment ID; the arguments are (fileID, commentID)", fileID)
 	}
 
 	values := url.Values{
@@ -477,7 +489,12 @@ func (api *Client) GetUploadURLExternalContext(ctx context.Context, params GetUp
 
 // UploadToURL uploads the file to the provided URL using post method
 // This is not a Slack API method, but a helper function to upload files to the URL
+//
+// The request carries the token, so the URL must pass the same check as in GetFile.
 func (api *Client) UploadToURL(ctx context.Context, params UploadToURLParameters) (err error) {
+	if err := ensureURLMayReceiveToken(api.endpoint, params.UploadURL); err != nil {
+		return err
+	}
 	values := url.Values{}
 	switch {
 	case params.Content != "":

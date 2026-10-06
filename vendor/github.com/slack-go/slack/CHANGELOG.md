@@ -7,6 +7,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.1] - 2026-10-04
+
+### Security
+
+- `GetFile`, `GetFileContext` and `UploadToURL` now send the token only to https URLs on
+  `slack.com`, `slack-gov.com` and their subdomains, and to the host set with `OptionAPIURL`.
+  Any other URL returns an error before a request is made. The `url_private` of a remote or
+  external file (`File.IsExternal`) points outside Slack, so `GetFile(file.URLPrivate)` sent
+  the token to that host
+  ([GHSA-3q3v-34v2-g88f](https://github.com/slack-go/slack/security/advisories/GHSA-3q3v-34v2-g88f)).
+  A test that points `GetFile` at an `httptest` server must also pass that server to
+  `OptionAPIURL`.
+
+## [0.30.0] - 2026-10-04
+
+### Added
+
+- `slackevents`: Add the Agent messaging events
+  [`app_context_changed`](https://docs.slack.dev/reference/events/app_context_changed)
+  (`AppContextChangedEvent`),
+  [`agent_session_stopped`](https://docs.slack.dev/reference/events/agent_session_stopped)
+  (`AgentSessionStoppedEvent`) and
+  [`agent_session_title_changed`](https://docs.slack.dev/reference/events/agent_session_title_changed)
+  (`AgentSessionTitleChangedEvent`). The shared `AppContext` object is also exposed as
+  `AppHomeOpenedEvent.Context` and `MessageEvent.AppContext`, which Slack populates once
+  the app subscribes to `app_context_changed`. An `AppContextEntity` carries a string
+  `Value` for channel, canvas and list entities and a `Message` for `message_context`
+  entities, whose value is an object.
+- `slackevents`: `EventsAPICallbackEvent` now unmarshals `authorizations`, so the
+  installations an event was delivered for can be read without a second request.
+- Add `SetAgentSessionStatus` and `RenameAgentSession` (plus `Context` variants) for the
+  [`agents.sessions.setStatus`](https://docs.slack.dev/reference/methods/agents.sessions.setStatus)
+  and [`agents.sessions.rename`](https://docs.slack.dev/reference/methods/agents.sessions.rename)
+  methods, with `AgentSessionStatus*` constants for the accepted statuses.
+- `CreateManifest` now returns the new app's `AppId`, `Credentials` and `OAuthAuthorizeUrl`
+  from [`apps.manifest.create`](https://docs.slack.dev/reference/methods/apps.manifest.create).
+  Slack sends the credentials only in this response (#1587).
+- Add `Features.AgentView` and `Features.AssistantView` for the `features.agent_view` and
+  `features.assistant_view` [app manifest](https://docs.slack.dev/reference/app-manifest)
+  settings, so a typed export and update keeps them (#1588, #1589).
+- Add `Features.UnfurlDomains`, `Features.RichPreviews`, `Features.Search`,
+  `OAuthConfig.PKCEEnabled`, `OAuthConfig.TokenManagementEnabled`, `Settings.IsMCPEnabled`,
+  `Settings.TokenRotationEnabled`, `Settings.IncomingWebhooks`, `Settings.FunctionRuntime`,
+  `Settings.SIWSLinks`, `EventSubscriptions.MetadataSubscriptions` and `OutgoingDomains` for the
+  matching [app manifest](https://docs.slack.dev/reference/app-manifest) keys, so a typed export
+  and update keeps them. `Features.Search` covers the two callback IDs, not `slackbot_metadata`
+  (#1588).
+- Add `Attachment.HideColor` (`hide_color`), which removes the color bar from a file unfurl
+  sent with [`chat.unfurl`](https://docs.slack.dev/reference/methods/chat.unfurl) (#1590).
+- Block Kit: Add `TaskCardBlock.HideTitle` (`hide_title`) and `WithHideTitle`, which hide the
+  title of a [`task_card`](https://docs.slack.dev/reference/block-kit/blocks/task-card-block)
+  block so `details` becomes the top element (#1590).
+- Add `CreateUserGroupOptionAdditionalChannels`, `UpdateUserGroupsOptionAdditionalChannels`
+  and `UpdateUserGroupsOptionIncludeCount` for the `additional_channels` and `include_count`
+  arguments of [`usergroups.create`](https://docs.slack.dev/reference/methods/usergroups.create)
+  and [`usergroups.update`](https://docs.slack.dev/reference/methods/usergroups.update)
+  (#1598, #1599).
+- Add `SetAppIcon` (plus `Context` variant) for the
+  [`apps.icon.set`](https://docs.slack.dev/reference/methods/apps.icon.set) method, which sets an
+  app's icon from a public URL or an uploaded image (#1596, #1597).
+- Add `AdminTeamsList` for the
+  [`admin.teams.list`](https://docs.slack.dev/reference/methods/admin.teams.list) method, with
+  `AdminTeamsListOptionLimit` and `AdminTeamsListOptionCursor` (#1592, #1593).
+- Add `AdminUsersList` for the
+  [`admin.users.list`](https://docs.slack.dev/reference/methods/admin.users.list) method, with
+  an `AdminUsersListOption<Field>` option for each argument (#1594, #1595).
+- `UserGroup` now exposes `AutoProvision`, `ChannelCount`, `EnterpriseSubteamID`,
+  `IsEditingRestricted`, `IsIDPGroup`, `IsMembershipLocked`, `IsOrgLevel`, `IsSection`,
+  `IsSubteam` and `IsVisible` (#1604, #1605).
+- Add `GetUsersOptionIncludeLocale` and `GetUserInfoOptionIncludeLocale` to choose whether
+  [`users.list`](https://docs.slack.dev/reference/methods/users.list) and
+  [`users.info`](https://docs.slack.dev/reference/methods/users.info) return the user's `locale`.
+  Both methods still ask for it by default. `GetUserInfo` and `GetUserInfoContext` take the new
+  option through a variadic `options ...GetUserInfoOption`, so an interface or mock that
+  declares their old signature needs the new parameter (#1602, #1603).
+- Add `CreateManifestRaw`, `UpdateManifestRaw`, `ExportManifestRaw` and `ValidateManifestRaw`
+  (plus `Context` variants), which send and return the app manifest as raw JSON, so keys that
+  `Manifest` does not model are kept (#1600, #1601).
+- Add `CreateManifestOptionTeamID` to create an app in a given workspace with an org-level
+  configuration token. `CreateManifest` and `CreateManifestContext` take it through a variadic
+  `options ...CreateManifestOption`, so an interface or mock that declares their old signature
+  needs the new parameter (#1600, #1601).
+
+### Changed
+
+- The minimum supported Go version is now 1.26. The library supports the two most recent Go
+  releases, so the test matrix covers Go 1.26 and Go 1.27.
+- `DeleteFileComment` now takes `(fileID, commentID)`, the same order as
+  `DeleteFileCommentContext` (#1591). A call that still passes a comment ID (`Fc…`) first
+  returns an error and sends nothing to Slack.
+
+  > [!WARNING]
+  > **Breaking change.** Swap the arguments of every `DeleteFileComment` call:
+  >
+  > ```go
+  > // Before
+  > err := api.DeleteFileComment(commentID, fileID)
+  > // After
+  > err := api.DeleteFileComment(fileID, commentID)
+  > ```
+
+### Fixed
+
+- `socketmode` and RTM reconnects now wait at most 5 minutes between attempts, and
+  `RetryConfig.BackoffMax` now caps the Web API retry delay. The backoff ignored its
+  maximum and kept doubling, so after a long outage a Socket Mode client could stay asleep
+  long after the network recovered and miss the events sent in that window (#1585, #1586).
+- `socketmode`: The client now reconnects when the WebSocket stream ends in the middle of a TLS
+  record. Before, it read the failed connection again until gorilla/websocket panicked with
+  `repeated read on failed websocket connection`, which stopped the process. The client also
+  reconnects after 10 empty or malformed frames in a row (#1608).
+- `GetFile` now returns an error when the token cannot read the file. Slack then redirects the
+  download to the workspace sign-in page, and `GetFile` used to write that HTML page as the
+  file (#1284, #1582).
+
 ## [0.29.0] - 2026-08-15
 
 ### Fixed
@@ -630,7 +745,9 @@ for details.
 [#1196]: https://github.com/slack-go/slack/issues/1196
 [#1547]: https://github.com/slack-go/slack/pull/1547
 
-[Unreleased]: https://github.com/slack-go/slack/compare/v0.29.0...HEAD
+[Unreleased]: https://github.com/slack-go/slack/compare/v0.30.1...HEAD
+[0.30.1]: https://github.com/slack-go/slack/compare/v0.30.0...v0.30.1
+[0.30.0]: https://github.com/slack-go/slack/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/slack-go/slack/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/slack-go/slack/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/slack-go/slack/compare/v0.26.0...v0.27.0
@@ -639,7 +756,7 @@ for details.
 [0.24.0]: https://github.com/slack-go/slack/compare/v0.23.1...v0.24.0
 [0.23.1]: https://github.com/slack-go/slack/compare/v0.23.0...v0.23.1
 [0.23.0]: https://github.com/slack-go/slack/compare/v0.22.0...v0.23.0
-[0.22.0]: https://github.com/slack-go/slack/compare/v0.21.1...0.22.0
+[0.22.0]: https://github.com/slack-go/slack/compare/v0.21.1...v0.22.0
 [0.21.1]: https://github.com/slack-go/slack/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/slack-go/slack/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/slack-go/slack/compare/v0.19.0...v0.20.0

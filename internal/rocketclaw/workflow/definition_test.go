@@ -402,12 +402,17 @@ func TestLoadDialectOptions(t *testing.T) {
 
 func TestLoadRejectsValidationStepExhaustion(t *testing.T) {
 	root := workflowRoot(t)
-	source := `meta = {"name": "test", "description": "Test"}
-large = [` + strings.Repeat("0,", 100_000) + `]
-def main(args):
-    return args
-`
-	writeWorkflow(t, root, "test.star", source)
+	// Starlark counts steps on calls and back-edges, not list-literal instructions.
+	// Top-level worker calls are the init work this validator still allows.
+	var source strings.Builder
+	source.WriteString("meta = {\"name\": \"test\", \"description\": \"Test\"}\n")
+
+	for i := range 2_000 {
+		fmt.Fprintf(&source, "w%d = worker(name=\"n%d\", instructions=\"i\")\n", i, i)
+	}
+
+	source.WriteString("def main(args):\n    return args\n")
+	writeWorkflow(t, root, "test.star", source.String())
 
 	_, err := Load(root, "runtime")
 	if err == nil || !strings.Contains(err.Error(), "step") {
