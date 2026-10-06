@@ -593,7 +593,7 @@ func TestExecuteNestedToolDiagnosticNotDroppedWhenOutputFull(t *testing.T) {
 	assert.Equal(t, executeNestedToolPrefix+"read", nestedName)
 }
 
-func TestExecuteAllowServerWildcard(t *testing.T) {
+func TestMCPServerVisibility(t *testing.T) {
 	t.Parallel()
 
 	reg, err := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{
@@ -602,17 +602,32 @@ func TestExecuteAllowServerWildcard(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("mcp", "demo.*"))
+	for _, tc := range []struct {
+		name, rules string
+		want        []string
+	}{
+		{"server wildcard", `mcp: {"demo.*": allow}`, []string{"demo", "demo"}},
+		{"auto exact tool", `mcp: {"acme.echo": auto}`, []string{"acme"}},
+		{"bare server", `mcp: {"demo": allow}`, []string{"demo", "demo"}},
+		{"all servers", `mcp: {"*": allow}`, []string{"demo", "acme", "demo", "hidden"}},
+		{"wildcard server", `mcp: {"*.echo": auto}`, []string{"demo", "acme", "demo", "hidden"}},
+		{"blank pattern", `mcp: {"   ": allow}`, []string{"demo", "acme", "demo", "hidden"}},
+		{"mixed rules", "read: {'*': allow}\nmcp: {'demo.other': deny, 'acme.echo': auto, 'demo.echo': allow, 'demo.*': allow, '*': deny}", []string{"demo", "acme", "demo"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			permissions := parsePermissionYAML(t, tc.rules)
+			require.Equal(t, tc.want, visibleMCPServers(permissions, []string{"demo", "acme", "demo", "hidden"}))
 
-	tools := (&toolFactory{mcpRegistry: reg}).mcpToolsFor(&Agent{Permission: permissions}, nil)
-	require.Len(t, tools, 2)
-	assert.Equal(t, executeToolName, tools[executeToolName].Definition.Name)
-	assert.Equal(t, []string{"code_mode_approve"}, tools[executeToolName].VisibilitySubjects)
+			tools := (&toolFactory{mcpRegistry: reg}).mcpToolsFor(&Agent{Permission: permissions}, nil)
+			require.Len(t, tools, 2)
+			assert.Equal(t, executeToolName, tools[executeToolName].Definition.Name)
+			assert.Equal(t, []string{"code_mode_approve"}, tools[executeToolName].VisibilitySubjects)
+		})
+	}
 
 	prompt := codeModeSystemPrompt(nil, []string{"demo"})
 	assert.Contains(t, prompt, "demo")
-	assert.NotContains(t, codeModeSystemPrompt(nil, []string{"demo"}), "acme")
+	assert.NotContains(t, prompt, "acme")
 }
 
 func TestExecuteExactToolGrant(t *testing.T) {
