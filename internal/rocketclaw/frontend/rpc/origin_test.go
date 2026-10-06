@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/netip"
+	"os"
 	"slices"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -94,7 +96,16 @@ func TestChatOriginFactsMatchHistory(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
-	server := New(&mockBackend{}, sessions, &config.Config{Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}, &mockChannels{}, &mockCronJobs{})
+	cfg := &config.Config{Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	root, err := os.OpenRoot(cfg.Workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.MkdirAll(cfg.RuntimeDirName()+"/agents", 0o700))
+	server := New(&mockBackend{}, sessions, cfg, &mockChannels{SidebarChannelAgentChoicesFunc: func(_ context.Context, channel string) (string, []string, error) {
+		return channel, []string{"main"}, nil
+	}}, &mockCronJobs{LoadOneOffCronjobFunc: func(stem string) (protocol.OneOffCronjob, error) {
+		return protocol.OneOffCronjob{RelativePath: "cron/" + stem + ".md"}, nil
+	}})
 	scheduled := "cron:cron/daily.md:20260905T010000.000000001Z:first"
 	oneOff := "one-off-cron:cron/report.md:20260905T020000.000000002Z:second"
 	cronSlack, plainSlack, destination := "slack-thread:C1:1.1", "slack-thread:C2:2.2", "slack-thread:C3:3.3"
@@ -166,6 +177,20 @@ VALUES ('early-reply', $1, '{}', '[]', 1, 1, 0)`, cronSlack)
 
 	require.ElementsMatch(t, []string{cronSlack, plainSlack, destination, "web:" + scheduled, "web:" + oneOff, "web-cron-synced", "web-later-cron", "web-empty"}, slices.Collect(maps.Keys(bulk)), "cron runs and private External MCP conversations stay hidden")
 	require.ElementsMatch(t, []string{cronSlack, destination, "web:" + scheduled, "web:" + oneOff, "web-cron-synced"}, originated)
+
+	listed := make(map[string]string)
+
+	require.NoError(t, server.listSessions(&mockServerStream{ContextFunc: func() context.Context {
+		return ctx
+	}, SendMsgFunc: func(message any) error {
+		for _, session := range message.(*ListSessionsResponse).Sessions {
+			listed[session.Id] = session.GetCronName()
+			require.Equal(t, session.GetCronName() != "", session.GetCron())
+		}
+
+		return nil
+	}}))
+	require.Equal(t, map[string]string{cronSlack: "daily", plainSlack: "", destination: "", "web:" + oneOff: "report", "web-cron-synced": "daily", "web-later-cron": ""}, listed, "only creating cron history counts; private producers remain absent")
 
 	for id, origin := range bulk {
 		for _, limit := range []int32{0, 1} {

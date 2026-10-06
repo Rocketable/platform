@@ -86,6 +86,36 @@ test("is:unsettled and sort: filter and order rows, and an unfinished operator t
   expect(order("")).toEqual(["b", "c", "e", "d", "a"]);
 });
 
+test("is:cron filters by recorded origin, not agent or text", () => {
+  const rows: Session[] = [{ id: "slack-thread:C:1", cron: true, cronName: "daily" }, { id: "web:one-off-cron:run", cron: true, cronName: "Weekly report" }, { id: "human", agent: "cron", preview: "cron daily report" }];
+  for (const query of ["is:cron", "IS:CRON"]) {
+    const filters = sessionSearchTerms(query);
+    expect(filters).toMatchObject({ cronOnly: true, needle: "", filterTerms: [query] });
+    expect(rows.filter((row) => sessionMatchesSearch(row, filters, "", "", "")).map((row) => row.id)).toEqual(rows.slice(0, 2).map((row) => row.id));
+  }
+  expect(rows.filter((row) => sessionMatchesSearch(row, sessionSearchTerms(""), "", "", ""))).toEqual(rows);
+  expect(sessionSearchTerms("is:cr")).toMatchObject({ cronOnly: false, needle: "" });
+  expect(sessionMatchesSearch(rows[0], sessionSearchTerms("is:cron is:pinned"), "", "", "")).toBeFalsy();
+  for (const [query, ids, needle] of [
+    ["cron:daily", [rows[0].id], ""],
+    ["is:cron CRON:daily", [rows[0].id], ""],
+    ['cron:"Weekly report"', [rows[1].id], ""],
+    ["cron:dai", [], ""],
+    ["cron:Daily", [], ""],
+    ["cron:unknown", [], ""],
+    ["cron:daily cron:daily", [rows[0].id], ""],
+    ['cron:daily cron:"Weekly report"', [], ""],
+    ["cron:daily report", [], "report"],
+    ["cron:", rows.map((row) => row.id), ""],
+  ] as const) {
+    const filters = sessionSearchTerms(query);
+    expect(filters.needle).toBe(needle);
+    expect(rows.filter((row) => sessionMatchesSearch(row, filters, "", "", "")).map((row) => row.id)).toEqual([...ids]);
+  }
+  expect(sessionSearchTerms('cron:""')).toMatchObject({ cronNames: [], needle: 'cron:""' });
+  expect(sessionSearchTerms('cron:"bad\\q"')).toMatchObject({ cronNames: [], needle: 'cron:"bad\\q"' });
+});
+
 describe("session list reconciliation", () => {
   test("keeps prior rows and replaces matching IDs in server prefix order", () => {
     const prior: Session[] = [

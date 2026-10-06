@@ -215,10 +215,10 @@ for (const width of [1280, 390]) test(`search editor groups clickable message ma
   const originSearches: string[] = [];
   let summariesComplete = true;
   const rows = [
-    { id: "first", name: "", title: "", preview: "Ordinary", agent: "main", updatedAt: "2026-01-03T00:00:00Z" },
+    { id: "first", name: "", title: "", preview: "Ordinary", agent: "main", cron: true, cronName: "daily", updatedAt: "2026-01-03T00:00:00Z" },
     { id: "second", name: "", title: "#notes", preview: "Needle notes\nOther text", agent: "main", updatedAt: "2026-01-02T00:00:00Z" },
     { id: "third", name: "Pinned conversation", preview: "Other text", agent: "main", pinned: true, tags: ["customer", "Needs review", 'say "hello"'], updatedAt: "2026-01-01T00:00:00Z" },
-    { id: "fourth", name: "Origin chat", preview: "Other text", agent: "main", pinned: true },
+    { id: "fourth", name: "Origin chat", preview: "Other text", agent: "main", pinned: true, cron: true, cronName: "Weekly report" },
     { id: "web-session:unnamed", name: "", title: "", preview: "", agent: "main" },
   ];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
@@ -246,10 +246,42 @@ for (const width of [1280, 390]) test(`search editor groups clickable message ma
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage({ viewport: { width, height: 700 } });
-    await page.goto(`http://127.0.0.1:${server.port}/search`);
+    await page.goto(`http://127.0.0.1:${server.port}/`);
     const search = page.getByRole("textbox", { name: "Search sessions" });
     const results = page.getByLabel("Search results");
     const group = results.getByRole("group", { name: "Pinned conversation", exact: true });
+    if (width < 768) await page.getByRole("button", { name: "Sessions", exact: true }).click();
+    const sidebar = width < 768 ? page.getByRole("dialog", { name: "Sessions", exact: true }) : page.locator("#session-sidebar");
+    await sidebar.getByRole("link", { name: /Needle notes/ }).waitFor();
+    expect(await sidebar.getByRole("link", { name: /Ordinary|Origin chat/ }).count()).toBe(0);
+    if (width < 768) { await page.keyboard.press("Escape"); await sidebar.waitFor({ state: "detached" }); }
+    await page.keyboard.press("Control+p");
+    const palette = page.getByRole("dialog", { name: "Go to session" });
+    await palette.getByRole("button").filter({ hasText: "Ordinary" }).waitFor();
+    await palette.getByPlaceholder("Search sessions").fill("is:cr");
+    await palette.getByRole("button", { name: "cron", exact: true }).click();
+    expect(await palette.locator('[data-slot="session-title"]').allTextContents()).toEqual(["Origin chat", "Ordinary"]);
+    await palette.getByPlaceholder("Search sessions").fill("cron:DAILY");
+    await palette.getByRole("button", { name: "daily", exact: true }).click();
+    expect(await palette.locator('[data-slot="session-title"]').allTextContents()).toEqual(["Ordinary"]);
+    await palette.getByRole("button", { name: "cron:daily", exact: true }).click();
+    await palette.getByPlaceholder("Search sessions").fill("cron:Week");
+    await palette.getByRole("button", { name: "Weekly report", exact: true }).click();
+    expect(await palette.locator('[data-slot="session-title"]').allTextContents()).toEqual(["Origin chat"]);
+    await page.keyboard.press("Escape");
+    await palette.waitFor({ state: "detached" });
+    await page.getByRole("button", { name: "Search sessions", exact: true }).click();
+    await search.fill("is:cr");
+    await page.getByRole("button", { name: "cron", exact: true }).click();
+    await results.getByRole("group", { name: "Origin chat", exact: true }).waitFor();
+    expect(await results.getByRole("group").allTextContents()).toHaveLength(2);
+    await search.fill("cron:DAILY");
+    await page.getByRole("button", { name: "daily", exact: true }).click();
+    await results.getByRole("group", { name: "Ordinary", exact: true }).waitFor();
+    expect(await results.getByRole("group").count()).toBe(1);
+    await page.getByRole("button", { name: "is:cron", exact: true }).click();
+    expect(await results.getByRole("group").count()).toBe(1);
+    await page.getByRole("button", { name: "cron:daily", exact: true }).click();
     for (const query of ["tag:customer", 'tag:"Needs review"', 'tag:"say \\"hello\\""', "tag:customer tag:customer is:pinned"]) {
       await search.fill(query);
       await group.waitFor();
@@ -299,6 +331,13 @@ for (const width of [1280, 390]) test(`search editor groups clickable message ma
     expect(await results.getByRole("link", { name: /Needle notes/ }).last().locator("mark").textContent()).toBe("Needle");
     await page.waitForTimeout(300);
     expect(searches).toEqual(["needle"]);
+    await search.fill("is:cron cron:daily needle");
+    await results.getByRole("group", { name: "Ordinary", exact: true }).waitFor();
+    expect(await results.getByRole("group").count()).toBe(1);
+    expect(await results.getByRole("link", { name: /Needle in excluded chat/ }).count()).toBe(1);
+    await page.getByRole("button", { name: "cron:daily", exact: true }).click();
+    await page.getByRole("button", { name: "is:cron", exact: true }).click();
+    await group.waitFor();
     await search.press("Enter");
     await page.waitForTimeout(100);
     expect(searches).toEqual(["needle", "needle"]);

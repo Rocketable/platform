@@ -720,7 +720,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await sessionPalette.getByRole("button").filter({ hasText: "saved preview" }).waitFor();
       expect(await sessionPalette.getByRole("button").count()).toBe(1);
     }
-    for (const term of ["CRON/REPORT.MD", "ONE-OFF", "CRON:UNIQUE-RUN", "CRON-AGENT", "2026-09-22T03:04:05Z"]) {
+    for (const term of ["CRON/REPORT.MD", "ONE-OFF", "UNIQUE-RUN", "CRON-AGENT", "2026-09-22T03:04:05Z"]) {
       await search.fill(term);
       await sessionPalette.getByRole("button").filter({ hasText: "will vanish" }).waitFor();
       expect(await sessionPalette.getByRole("button").count()).toBe(1);
