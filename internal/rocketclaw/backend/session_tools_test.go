@@ -378,6 +378,17 @@ func TestSessionToolsStoredContract(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "conversation_id\tturns\tlast_updated\tlast_user_message\tlast_assistant_message\ncron:first\t1\t2026-09-24T12:00:00Z\told\tassistant\nexec:last\t1\t2026-09-24T13:00:00Z\texec\tassistant\nexternal_mcp:private\t2\t2026-09-24T11:00:00Z\t  latest\\n user\\tΩ\\r\\\\  \tassistant\n", result.Output)
 	}
+
+	// The prompt header says who sent a human turn, so readers can tell an operator from a customer.
+	headed := &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: base, ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Slack principal=\"Operator\"]","content":"[Slack principal=\"Operator\"]\n\nsend it"}`),
+		json.RawMessage(`{"type":"message","role":"user","content":"no header"}`),
+	}}
+	_, err = service.AppendEntryID(t.Context(), "headed", headed)
+	require.NoError(t, err)
+	result, err = get.Call(t.Context(), json.RawMessage(`{"conversation_id":"headed"}`), nil)
+	require.NoError(t, err)
+	require.Equal(t, "timestamp\trole\tcontent\n2026-09-24T12:00:00Z\tuser\t[Slack principal=\"Operator\"]\\n\\nsend it\n2026-09-24T12:00:00Z\tuser\tno header\n", result.Output)
 }
 
 func TestSessionToolsTimePrecisionAndDurations(t *testing.T) {

@@ -399,6 +399,12 @@ func getSessionTool(service *SessionService) rocketcode.Tool {
 
 						switch {
 						case message:
+							// The prompt header names the sender, so readers can tell an operator from a customer.
+							if item.OfMessage != nil && (role == "user" || role == "developer") {
+								if header, _ := item.OfMessage.ExtraFields()["prompt_header"].(string); header != "" {
+									text = header + "\n\n" + text
+								}
+							}
 						case item.OfFunctionCall != nil:
 							call := item.OfFunctionCall
 							role, text = "tool_call", call.Name+" ["+call.CallID+"] "+call.Arguments
