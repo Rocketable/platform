@@ -127,7 +127,7 @@ func (s Skills) Find(query string) string {
 
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return renderSkillMatches(slices.SortedFunc(maps.Values(s.Items), func(a, b Skill) int {
+		return formatSkills("## Matching skills", slices.SortedFunc(maps.Values(s.Items), func(a, b Skill) int {
 			return strings.Compare(a.Name, b.Name)
 		}))
 	}
@@ -166,7 +166,7 @@ func (s Skills) Find(query string) string {
 		ordered = append(ordered, match.skill)
 	}
 
-	return renderSkillMatches(ordered)
+	return formatSkills("## Matching skills", ordered)
 }
 
 // Available returns skills allowed for agent, sorted by name. Skills requiring
@@ -310,12 +310,10 @@ func (s Skills) readableDirs(root *os.Root) map[string]skillReadDir {
 	return dirs
 }
 
-func formatAvailableSkills(skills []Skill) string {
-	if len(skills) == 0 {
-		return "No skills are currently available."
-	}
+func formatSkills(heading string, skills []Skill) string {
+	lines := make([]string, 1, len(skills)+1)
 
-	lines := []string{"## Available skills"}
+	lines[0] = heading
 	for _, skill := range skills {
 		lines = append(lines, fmt.Sprintf("- **%s**: %s", skill.Name, skill.Description))
 	}
@@ -472,17 +470,6 @@ func validateSkillFrontmatter(filePath string, frontmatter skillFrontmatter) err
 	}
 
 	return nil
-}
-
-func renderSkillMatches(skills []Skill) string {
-	lines := make([]string, 0, len(skills)+1)
-
-	lines = append(lines, "## Matching skills")
-	for _, skill := range skills {
-		lines = append(lines, fmt.Sprintf("- **%s**: %s", skill.Name, skill.Description))
-	}
-
-	return strings.Join(lines, "\n")
 }
 
 func scoreSkill(normalizedQuery string, tokens []string, skill *Skill) int {
