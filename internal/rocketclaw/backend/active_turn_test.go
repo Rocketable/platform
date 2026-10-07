@@ -837,7 +837,7 @@ func TestShutdownReleasesCronRunnerWait(t *testing.T) {
 
 	require.NoError(t, service.UpsertThread("cron:weekly", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
 
-	destination, err := rt.recordedBridge(template.config.ConversationID)
+	destination, err := rt.threads.recordedBridge(template.config.ConversationID)
 	require.NoError(t, err)
 
 	synced := make(chan error, 1)

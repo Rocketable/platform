@@ -54,7 +54,7 @@ func (r *Runtime) SyncConversation(ctx context.Context, source, destination stri
 	bridges := make([]*Bridge, 0, 2)
 
 	for _, id := range []string{source, destination} {
-		managed, err := r.recordedBridge(id)
+		managed, err := r.threads.recordedBridge(id)
 		if err != nil {
 			return err
 		}
@@ -241,19 +241,6 @@ func (r *Runtime) ListConversations(ctx context.Context) (conversations []protoc
 	return conversations, nil
 }
 
-func (r *Runtime) recordedBridge(conversationID string) (*Bridge, error) {
-	_, recorded, err := r.Sessions.Thread(conversationID)
-	if err != nil {
-		return nil, err
-	}
-
-	if !recorded {
-		return nil, fmt.Errorf("conversation %q is not recorded", conversationID)
-	}
-
-	return r.threads.recordedBridge(conversationID)
-}
-
 // RunTurn waits for the submitted work's processing and terminal handling.
 func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage) error {
 	conversationID := inbound.ConversationID
@@ -265,7 +252,7 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 		r.Sessions.turnGatesMu.Unlock()
 	}
 
-	bridge, err := r.recordedBridge(conversationID)
+	bridge, err := r.threads.recordedBridge(conversationID)
 	if err != nil {
 		return err
 	}
@@ -299,7 +286,7 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 
 	request := bridgeRequest{inbound: inbound, completion: completion}
 	if inbound.SyncDestination != "" {
-		destination, err := r.recordedBridge(inbound.SyncDestination)
+		destination, err := r.threads.recordedBridge(inbound.SyncDestination)
 		if err != nil {
 			return err
 		}
@@ -323,7 +310,7 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 // StartGoal records an active goal on a recorded conversation and submits its
 // first turn without waiting for the goal loop.
 func (r *Runtime) StartGoal(ctx context.Context, inbound *protocol.InboundMessage, goal protocol.GoalRequest) error {
-	bridge, err := r.recordedBridge(inbound.ConversationID)
+	bridge, err := r.threads.recordedBridge(inbound.ConversationID)
 	if err != nil {
 		return err
 	}
