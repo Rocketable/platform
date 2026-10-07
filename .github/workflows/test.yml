@@ -11,6 +11,10 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [core, web]
     services:
       postgres:
         image: postgres:18
@@ -48,5 +52,9 @@ jobs:
           echo "ROCKETCLAW_PLAYWRIGHT_MODULE=$dir/node_modules/playwright-core" >> "$GITHUB_ENV"
           echo "ROCKETCLAW_CHROMIUM=$(bun -e 'console.log(require("playwright-core").chromium.executablePath())')" >> "$GITHUB_ENV"
       - run: make test
+        if: matrix.suite == 'core'
+      - if: matrix.suite == 'web'
+        run: make -C internal/rocketclaw generate
       - name: Web tests against Go test servers
+        if: matrix.suite == 'web'
         run: make -C internal/rocketclaw/web test
