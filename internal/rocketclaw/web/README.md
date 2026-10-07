@@ -45,6 +45,71 @@ independently toggles its origin on or off, so both, either, or neither can be s
 Messages without a recorded origin appear only when both are selected.
 Filtering does not change saved history or routing.
 
+## Tabs
+
+This build uses the **grouped rich tabs** design (variant `tab-grouped`). Its
+thesis is information density, following OpenCode v2's `tabs.layout` and
+`tabs.indicators` settings: a tab should tell you what a session is doing without
+opening it.
+
+Sessions and pages (New session, Search, Cron, Agents, Skills, Settings) open as
+tabs. Every navigation opens a tab for its location or focuses the tab that
+already has it, so a location never appears twice, and the selected tab always
+matches the address bar. Sending the first message from the New session tab turns
+that tab into the new session's tab. Closing a tab selects its right neighbour, or
+the left one at the end, skipping groups collapsed in left placement when another
+tab is shown; closing the last tab leaves the New session tab, which has no close
+button while it is alone. On Cron, Agents, Skills, and Settings, the page's close
+button closes that page's tab; Escape does the same on those pages and on Search.
+
+Tabs sit in three groups, always in this order: **Pinned**, **Sessions**, and
+**Pages**. Pins are local to the tab strip and this browser; they do not change
+the server-side session pin used by search ordering.
+
+- **Left placement** is a 16rem panel where the sidebar used to be. Group headers
+  show a count and collapse or expand their group; collapsed groups are
+  remembered. Each session tab shows its title and a second line with the Slack
+  channel, agent, tags, a running spinner, and the relative age. A named session
+  adds a third line with its latest preview. Pin and close buttons appear on
+  hover, keyboard focus, the selected tab, and always on touch screens.
+- **Top placement** is a compact, horizontally scrolling strip of chips, with a
+  divider between groups. Pinned chips show a pin icon. Below the `md`
+  breakpoint (768px) the strip is always on top, even when left is chosen.
+
+The indicator setting mirrors OpenCode's `tabs.indicators`. **Status** shows a
+kind icon on each tab; **numbers** shows badges 1-9 instead. A running session
+always shows its spinner, and its accessible name ends in "Turn running".
+Cmd/Ctrl+Alt+1…9 selects the Nth tab in visual order (Pinned, Sessions, Pages),
+skipping groups collapsed in left placement; the badges follow the same order.
+
+The buttons at the end of the strip move the strip and switch indicators. The
+command palette offers **Tabs: Move to left/top**, **Tabs: Show number/status
+indicators**, and **Tabs: Pin/Unpin tab** for the selected tab.
+
+Keyboard: tabs use `tablist`/`tab` roles, one tablist per group, with
+`aria-orientation` matching the placement. Among tabs, only the selected one is
+in the Tab order, or the first shown tab when a collapsed group hides the
+selected one. Arrow keys move focus across all groups, Home and End jump to
+the first and last tab, and Enter or Space opens the focused tab. Close and pin
+buttons are labelled with the tab title.
+
+Storage: open tabs, the selected tab, pins, collapsed groups, and the indicator
+setting are saved in `localStorage` under `tabs-grouped:<user>`, scoped to the
+confirmed user. Entries are locations only; titles and running state come live
+from the session list, and a session missing from the list shows its ID label.
+Stored data that fails to parse or has the wrong shape resets to one tab for the
+current address. The address always wins: a reload or deep link selects (and if
+needed adds) the tab for that address, and the app root opens the New session tab.
+Placement is a per-browser preference under `tab-placement` (`top` or `left`,
+default `top`), shared by every tab variant.
+
+Tradeoffs: this design shows the most at a glance (running state, agent, age, and
+preview without switching) and scales to many tabs through groups and collapse.
+It costs width in left placement, and the fixed group order means a new session
+tab does not appear next to the page you opened it from. It keeps one mounted chat
+view like the base, so switching session tabs reloads history (unlike warm tabs),
+and it has no preview tabs, context menu, drag reordering, or per-tab history.
+
 ## Revert, Undo, and Redo
 
 Recorded user messages in top-level pure Web sessions have a **Revert message**
@@ -338,7 +403,7 @@ returning to the tab does not recheck origins. A failed origin search
 shows an error while usable row matches remain selectable.
 The command button and Cmd/Ctrl+Shift+P open the command palette. It always offers
 **Sessions: New**, **Sessions: Search**, **Cron: Dashboard**, **Cron: Run**,
-**List Agents**, **List Skills**, and **Settings**.
+**List Agents**, **List Skills**, **Settings**, and the **Tabs:** commands.
 Timeline detail levels are also available, from `Timeline: Messages only` through
 `Timeline: Everything`.
 Like VS Code, selected commands appear first, newest first;
@@ -487,11 +552,9 @@ below the panel and hides the composer until the handoff is closed.
 Conversations without stored history stay out of the session list until their first
 entry arrives. Clearing all stored history hides the conversation again without
 deleting its record or its Slack messages.
-Click the selected Cron, Agents, Skills, or Config tab again to return
-to the chat you left, even after switching between pages. Without a previous
-chat, it returns Home. On desktop, the page header's close button does the same,
-and Escape does too unless a dialog or tooltip is open. New chat, search, and these page
-buttons form a centered group in the footer.
+On desktop, the page header's close button closes that page's tab (see Tabs),
+and Escape does too unless a dialog or tooltip is open. New chat, search, and the
+command palette buttons form a centered group in the footer.
 The theme toggle floats in the upper-right corner of the page and switches light, dark, and system. Config has a select for the color theme. The choices are Neutral, Harbor, Grove, Ember, Violet, Rose, Sand, Lagoon, Slate, Copper, Ink, Signal, Go - Playground, and Go - Sources. Ink and Signal are high contrast. The Go themes adapt Mike Gleason jr Couturier's light themes, with local dark variations. The choice is stored in the browser, not on the server. See [theme sources and licenses](../../../THEMES.md) for attribution and reuse terms.
 Config's Timeline section has the **Timeline detail** card, following OpenCode v2. A
 five-stop slider picks Messages only, Quiet, Compact, Detailed, or Everything, and an

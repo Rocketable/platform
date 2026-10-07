@@ -743,7 +743,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const commandPalette = page.getByRole("dialog", { name: "Run command", exact: true });
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
     expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
-    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "List Agents", "List Skills", "Sessions: New", "Sessions: Search", "Settings", "Timeline: Compact", "Timeline: Detailed", "Timeline: Everything", "Timeline: Messages only", "Timeline: Quiet"]);
+    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "List Agents", "List Skills", "Sessions: New", "Sessions: Search", "Settings", "Tabs: Move to left", "Tabs: Pin tab", "Tabs: Show number indicators", "Timeline: Compact", "Timeline: Detailed", "Timeline: Everything", "Timeline: Messages only", "Timeline: Quiet"]);
     await page.keyboard.press("Escape");
     await commandPalette.waitFor({ state: "hidden" });
     await navigationCommands.click();
@@ -1191,7 +1191,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
 
     ctrl.yieldBatches = complete([]);
     blocked.resolve();
-    await page.getByText("backfilled preview", { exact: true }).waitFor({ state: "hidden", timeout: 15_000 });
+    await sessionPalette.getByText("backfilled preview", { exact: true }).waitFor({ state: "hidden", timeout: 15_000 });
     await hidden(page, "saved preview");
     await page.keyboard.press("Control+p");
     await search.fill("empty-search");
@@ -1248,12 +1248,12 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await hidden(page, "will vanish");
     ctrl.yieldBatches = complete([row("gone", "bob preview")], "bob");
     blocked.resolve();
-    await shown(page, "bob preview");
+    await shown(sessionPalette, "bob preview");
     await hidden(page, "will vanish");
     blocked = Promise.withResolvers();
     ownerTail.resolve();
     await oldResponse;
-    await shown(page, "bob preview");
+    await shown(sessionPalette, "bob preview");
     await hidden(page, "late alice preview");
     expect(await page.evaluate(snapshot, ["bob", "test-protocol"])).toEqual([row("gone", "bob preview")]);
     await page.reload();
@@ -1269,7 +1269,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await hidden(sessionPalette, "bob preview");
     ctrl.yieldBatches = complete([row("gone", "new protocol preview")], "bob");
     blocked.resolve();
-    await shown(page, "new protocol preview");
+    await shown(sessionPalette, "new protocol preview");
 
     for (const rejection of ["mismatch", "unauthorized"] as const) {
       await page.keyboard.press("Control+p");
@@ -1279,7 +1279,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         if (rejection === "unauthorized") throw new RPCError("denied", 16);
         yield batch([row("other-owner", "unconfirmed owner preview")], { owner: "unconfirmed" });
       };
-      await page.getByText("new protocol preview", { exact: true }).waitFor({ state: "hidden", timeout: 15_000 });
+      await sessionPalette.getByText("new protocol preview", { exact: true }).waitFor({ state: "hidden", timeout: 15_000 });
       await hidden(page, "unconfirmed owner preview");
       await page.keyboard.press("Control+p");
       await search.fill("preview");
@@ -1662,6 +1662,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await hidden(navPalette, "matching other room");
     await navPage.keyboard.press("Escape");
     const footer = navPage.locator("footer");
+    const tabStrip = navPage.getByRole("navigation", { name: "Tabs" });
     const openPage = async (name: string) => {
       await footer.getByRole("button", { name: "Open command palette" }).click();
       await navPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: ({ Cron: "Cron: Dashboard", Agents: "List Agents", Skills: "List Skills", Config: "Settings" } as Record<string, string>)[name], exact: true }).click();
@@ -1722,13 +1723,15 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         }
         if (width === 1280 && name === "Skills") await close.click();
         else await navPage.keyboard.press("Escape");
-        await navPage.waitForURL(`${origin}${chatPath}`);
+        await tabStrip.getByRole("tab", { name: name === "Config" ? "Settings" : name, exact: true }).waitFor({ state: "detached" });
       }
       await openPage("Cron");
       await navPage.waitForURL(`${origin}/cron`);
       await openPage("Skills");
       await navPage.waitForURL(`${origin}/skills`);
       await navPage.keyboard.press("Escape");
+      await tabStrip.getByRole("tab", { name: "Skills", exact: true }).waitFor({ state: "detached" });
+      await tabStrip.getByRole("tab", { name: /^matching active/ }).click();
       await navPage.waitForURL(`${origin}${chatPath}`);
       if (width === 390) await navPage.keyboard.press("Escape");
       expect(await navPage.getByPlaceholder("Message or $command").inputValue()).toBe("keep this chat draft");

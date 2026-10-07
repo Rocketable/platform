@@ -9,7 +9,7 @@ import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field
 import { queries, mutations, listSessions, rpc } from "./api";
 import { draftContent } from "./drafts";
 import type { ChatOrigin, HistoryView, MessageMatch, PromptDelivery, SearchMessagesResponse } from "./types";
-import { Bot, Check, ChevronDown, CircleAlert, Command, Copy, CornerUpLeft, Download, FileIcon, GitFork, GripVertical, Info, LoaderCircle, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
+import { Bot, Check, ChevronDown, CircleAlert, CircleDot, Clock, Command, Copy, CornerUpLeft, Download, FileIcon, GitFork, GripVertical, Hash, Info, LoaderCircle, MessageSquare, PanelLeft, PanelTop, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -49,7 +49,6 @@ const queryClient = new QueryClient({
   queryCache: new QueryCache({ onError: (error) => { captureException(error); } }),
   mutationCache: new MutationCache({ onError: (error) => { captureException(error); } }),
 });
-const tabReturnTo = { current: "/" };
 type SessionCommand = { mode: "fork" | "handoff" | "name"; source: string; target?: MessageMatch };
 const SessionCommands = createContext<{ command?: SessionCommand; setCommand: Dispatch<SetStateAction<SessionCommand | undefined>>; composer: RefObject<((command: string) => void) | null> }>(null!);
 
@@ -66,11 +65,14 @@ function delegationHref(id?: string) {
   return `${location.pathname}${params.size ? `?${params}` : ""}`;
 }
 
-function subscribeWide(listener: () => void) {
-  const media = matchMedia("(min-width: 64rem)");
-  media.addEventListener("change", listener);
-  return () => media.removeEventListener("change", listener);
+function subscribeMedia(query: string) {
+  return (listener: () => void) => {
+    const media = matchMedia(query);
+    media.addEventListener("change", listener);
+    return () => media.removeEventListener("change", listener);
+  };
 }
+const subscribeWide = subscribeMedia("(min-width: 64rem)"), subscribeMd = subscribeMedia("(min-width: 48rem)");
 
 function slackSession(id: string) {
   return id.startsWith("slack-thread:");
@@ -593,6 +595,198 @@ function SidebarOwner({ children }: { children: ReactNode }) {
   );
 }
 
+// Tab locations are page paths or session paths; titles and running state come live from the session list.
+type TabState = { tabs: string[]; active: string; pinned: string[]; collapsed: string[]; indicators: "status" | "numbers" };
+type SavedTabs = { owner: string; state: TabState };
+type TabsValue = { owner: string; path: string; state: TabState; placement: string; update: (change: (state: TabState) => Partial<TabState>) => void; close: (tab: string) => void; created: (id: string) => void; other: string; otherIndicators: TabState["indicators"]; commands: { key: string; label: string; run: () => void }[] };
+const OpenTabs = createContext<TabsValue>(null!);
+const tabPages: Record<string, [string, typeof Bot]> = { "/": ["New session", SquarePen], "/search": ["Search", Search], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings] };
+
+function tabLocation(pathname: string) {
+  return Object.hasOwn(tabPages, pathname) || pathname.startsWith("/s/") ? pathname : "/";
+}
+
+function blankTabs(tab: string): TabState {
+  return { tabs: [tab], active: tab, pinned: [], collapsed: [], indicators: "status" };
+}
+
+function readTabs(owner: string): TabState | undefined {
+  let value;
+  try { value = JSON.parse(localStorage.getItem(`tabs-grouped:${owner}`)!); } catch { return undefined; }
+  const strings = (list: unknown): list is string[] => Array.isArray(list) && list.every((item) => typeof item === "string");
+  const valid = value instanceof Object && strings(value.tabs) && value.tabs.every((tab: string) => tabLocation(tab) === tab) && new Set(value.tabs).size === value.tabs.length && value.tabs.includes(value.active) && strings(value.pinned) && strings(value.collapsed) && ["status", "numbers"].includes(value.indicators);
+  return valid ? value : undefined;
+}
+
+function toggled(list: string[], item: string) {
+  return list.includes(item) ? list.filter((other) => other !== item) : [...list, item];
+}
+
+// OpenCode v2 groups its vertical tab panel; the visual order is Pinned, Sessions, then Pages.
+function tabGroups({ tabs, pinned }: TabState) {
+  const pins = new Set(pinned);
+  return [
+    { name: "Pinned", tabs: tabs.filter((tab) => pins.has(tab)) },
+    { name: "Sessions", tabs: tabs.filter((tab) => !pins.has(tab) && tab.startsWith("/s/")) },
+    { name: "Pages", tabs: tabs.filter((tab) => !pins.has(tab) && !tab.startsWith("/s/")) },
+  ];
+}
+
+function tabsValue(saved: SavedTabs, path: string, placement: string, setSaved: Dispatch<SetStateAction<SavedTabs>>, setPlacement: (placement: string) => void): TabsValue {
+  const { state } = saved;
+  const update = (change: (state: TabState) => Partial<TabState>) => setSaved((current) => ({ ...current, state: { ...current.state, ...change(current.state) } }));
+  const other = placement === "left" ? "top" : "left";
+  const indicators = state.indicators === "numbers" ? "status" : "numbers";
+  return { owner: saved.owner, path, state, placement, update, other, otherIndicators: indicators,
+    // Closing the active tab activates its visual neighbour, preferring tabs not hidden in a collapsed group; closing the last tab leaves the composer.
+    close: (tab) => {
+      const groups = tabGroups(state), hidden = new Set(placement === "left" ? state.collapsed : []);
+      const neighbour = (order: string[]) => order[order.indexOf(tab) + 1] ?? order[order.indexOf(tab) - 1];
+      const tabs = state.tabs.filter((item) => item !== tab);
+      const shown = groups.flatMap((group) => hidden.has(group.name) && !group.tabs.includes(tab) ? [] : group.tabs);
+      const active = tab !== path ? path : neighbour(shown) ?? neighbour(groups.flatMap((group) => group.tabs)) ?? "/";
+      setSaved({ ...saved, state: { ...state, tabs: tabs.length ? tabs : ["/"], pinned: state.pinned.filter((item) => item !== tab), active } });
+      if (active !== path) navigate(active);
+    },
+    created: (id) => update(({ tabs, pinned }) => {
+      const swap = (tab: string) => tab === "/" ? sessionPath(id) : tab;
+      return { tabs: tabs.map(swap), pinned: pinned.map(swap), active: sessionPath(id) };
+    }),
+    commands: [
+      { key: "tabs-placement", label: `Tabs: Move to ${other}`, run: () => { localStorage.setItem("tab-placement", other); setPlacement(other); } },
+      { key: "tabs-indicators", label: `Tabs: Show ${indicators === "numbers" ? "number" : "status"} indicators`, run: () => update(() => ({ indicators })) },
+      { key: "tabs-pin", label: state.pinned.includes(path) ? "Tabs: Unpin tab" : "Tabs: Pin tab", run: () => update(({ pinned }) => ({ pinned: toggled(pinned, path) })) },
+    ] };
+}
+
+function TabsOwner({ children }: { children: ReactNode }) {
+  const identity = useQuery(queries.identity());
+  const owner = identity.isSuccess ? identity.data.username : "";
+  const path = tabLocation(usePathname());
+  const [placement, setPlacement] = useState(() => localStorage.getItem("tab-placement") === "left" ? "left" : "top");
+  const [saved, setSaved] = useState<SavedTabs>({ owner: "", state: blankTabs(path) });
+  // The URL always wins: it is opened or focused as a tab, so a reload restores the active tab.
+  if (owner !== "" && (saved.owner !== owner || saved.state.active !== path)) {
+    const state = saved.owner === owner ? saved.state : readTabs(owner) ?? blankTabs(path);
+    setSaved({ owner, state: { ...state, tabs: state.tabs.includes(path) ? state.tabs : [...state.tabs, path], active: path } });
+  }
+  useEffect(() => {
+    if (saved.owner !== "") localStorage.setItem(`tabs-grouped:${saved.owner}`, JSON.stringify(saved.state));
+  }, [saved]);
+  const value = useMemo(() => tabsValue(saved, path, placement, setSaved, setPlacement), [saved, path, placement]);
+  return <OpenTabs value={value}>{children}</OpenTabs>;
+}
+
+function moveTabFocus(event: React.KeyboardEvent<HTMLElement>) {
+  const all = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')];
+  const at = all.indexOf(event.target as HTMLElement);
+  const to = ({ ArrowDown: at + 1, ArrowRight: at + 1, ArrowUp: at - 1, ArrowLeft: at - 1, Home: 0, End: all.length - 1 } as Record<string, number>)[event.key];
+  if (at < 0 || (to === undefined && event.key !== "Enter" && event.key !== " ")) return;
+  event.preventDefault();
+  if (to === undefined) all[at].click();
+  else all[(to + all.length) % all.length].focus();
+}
+
+function TabStrip({ left }: { left: boolean }) {
+  const tabs = useContext(OpenTabs);
+  const { state, path } = tabs;
+  const groups = tabGroups(state);
+  const collapsed = new Set(left ? state.collapsed : []);
+  const visible = groups.flatMap((group) => collapsed.has(group.name) ? [] : group.tabs);
+  const shortcuts = useRef({ visible, path, close: tabs.close });
+  useLayoutEffect(() => { shortcuts.current = { visible, path, close: tabs.close }; });
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat) return;
+      const { visible, path, close } = shortcuts.current;
+      const digit = /^Digit([1-9])$/.exec(event.code);
+      if (digit && (event.metaKey || event.ctrlKey) && event.altKey && !event.shiftKey) {
+        const target = visible[Number(digit[1]) - 1];
+        if (!target) return;
+        event.preventDefault();
+        if (target !== path) navigate(target);
+        return;
+      }
+      // Escape on a page closes its tab unless an overlay owns the key.
+      if (event.key !== "Escape" || path === "/" || path.startsWith("/s/")) return;
+      if (document.querySelector('[role="dialog"], [role="listbox"], [role="menu"], [role="tooltip"]')) return;
+      event.preventDefault();
+      close(path);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  if (tabs.owner === "") return null;
+  const numbers = new Map(state.indicators === "numbers" ? visible.slice(0, 9).map((tab, at) => [tab, at + 1]) : []);
+  const [move, indicate] = ["tabs-placement", "tabs-indicators"].map((key) => tabs.commands.find((command) => command.key === key)!);
+  const { other, otherIndicators: indicators } = tabs;
+  const focusable = visible.includes(path) ? path : visible[0];
+  return <nav aria-label="Tabs" className={cn("flex shrink-0", left ? "w-64 flex-col border-r" : "items-center border-b pr-12")}>
+    <div className={cn("min-h-0 min-w-0 flex-1", left ? "overflow-y-auto p-2" : "flex overflow-x-auto [scrollbar-width:thin]")} onKeyDown={moveTabFocus}>
+      {groups.map(({ name, tabs: items }) => items.length ? <TabGroup key={name} name={name} items={items} left={left} collapsed={collapsed.has(name)} numbers={numbers} focusable={focusable} /> : null)}
+    </div>
+    <div className={cn("flex shrink-0 gap-1 p-1", left && "border-t")}>
+      <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" className="max-md:hidden" />} aria-label={`Move tabs to ${other}`} onClick={move.run}>
+        {left ? <PanelTop /> : <PanelLeft />}
+      </TooltipTrigger><TooltipContent>Move tabs to {other}</TooltipContent></Tooltip>
+      <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" />} aria-label={`Show tab ${indicators}`} onClick={indicate.run}>
+        {indicators === "numbers" ? <Hash /> : <CircleDot />}
+      </TooltipTrigger><TooltipContent>Show tab {indicators}</TooltipContent></Tooltip>
+    </div>
+  </nav>;
+}
+
+function TabGroup({ name, items, left, collapsed, numbers, focusable }: { name: string; items: string[]; left: boolean; collapsed: boolean; numbers: Map<string, number>; focusable: string }) {
+  const { state, path, update } = useContext(OpenTabs);
+  const sidebar = useContext(Sidebar);
+  const rows = new Map(sidebar.rows.map((row) => [row.id, row]));
+  return <div className={cn(left ? "mb-2" : "flex shrink-0 not-first:border-l")}>
+    {left ? <button type="button" aria-expanded={!collapsed} className="flex w-full items-center gap-1 rounded-sm px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={() => update(({ collapsed }) => ({ collapsed: toggled(collapsed, name) }))}>
+      <ChevronDown className={cn("size-3.5 transition-transform motion-reduce:transition-none", collapsed && "-rotate-90")} />{name}<span className="ml-auto tabular-nums">{items.length}</span>
+    </button> : null}
+    {collapsed ? null : <div role="tablist" aria-label={name} aria-orientation={left ? "vertical" : "horizontal"} className={cn("flex gap-0.5", left ? "flex-col" : "items-center p-1")}>
+      {items.map((tab) => {
+        const id = tab.startsWith("/s/") ? decodeSessionId(tab.slice(3)) : "";
+        return <TabItem key={tab} tab={tab} left={left} selected={tab === path} focusable={tab === focusable} pinned={name === "Pinned"} number={numbers.get(tab) ?? 0} session={rows.get(id)} loading={sidebar.loadingIds.has(id)} closable={state.tabs.length > 1 || tab !== "/"} />;
+      })}
+    </div>}
+  </div>;
+}
+
+function TabItem({ tab, left, selected, focusable, pinned, number, session, loading, closable }: { tab: string; left: boolean; selected: boolean; focusable: boolean; pinned: boolean; number: number; session?: Session; loading: boolean; closable: boolean }) {
+  const { close } = useContext(OpenTabs);
+  const ref = useRef<HTMLDivElement>(null);
+  const [label, Icon] = tab.startsWith("/s/") ? [session ? sessionTitle(session, loading) : sessionLabel(decodeSessionId(tab.slice(3))), MessageSquare] : tabPages[tab];
+  const title = useCleanText(label);
+  useEffect(() => { if (selected) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [selected, title]);
+  const reveal = left && !selected && "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100";
+  return <div ref={ref} className={cn("group flex min-w-0 rounded-md hover:bg-accent", selected && "bg-sidebar-row-active", left ? "items-start" : "shrink-0 items-center")}>
+    <div role="tab" tabIndex={focusable ? 0 : -1} aria-selected={selected} aria-label={session?.running ? `${title}, Turn running` : title} title={title}
+      className={cn("flex min-w-0 flex-1 cursor-pointer gap-2 rounded-md px-2 py-1.5 text-sm outline-none focus-visible:outline-2 focus-visible:outline-ring", left ? "items-start" : "max-w-48 items-center")}
+      onClick={() => { if (!selected) navigate(tab); }}>
+      <TabLabel left={left} number={number} icon={<Icon aria-hidden="true" className={cn("size-3.5 shrink-0", left && "mt-0.5")} />} title={title} session={session} loading={loading} />
+    </div>
+    <TabPin tab={tab} left={left} pinned={pinned} title={title} reveal={reveal} />
+    {closable ? <button type="button" aria-label={`Close ${title}`} className={cn("rounded-sm p-1.5 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring", reveal)} onClick={() => close(tab)}><X className="size-3.5" /></button> : null}
+  </div>;
+}
+
+// Left placement shows the session row (agent, age, running) plus a preview line under a custom name.
+function TabLabel({ left, number, icon, title, session, loading }: { left: boolean; number: number; icon: ReactNode; title: string; session?: Session; loading: boolean }) {
+  const lead = number ? <span data-slot="tab-number" className="flex size-4 shrink-0 items-center justify-center rounded-sm bg-muted text-[0.625rem] font-medium tabular-nums">{number}</span> : icon;
+  if (left && session) return <>{lead}<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+    <SessionRowContent session={session} loading={loading} />
+    {session.name && session.preview ? <span className="truncate text-xs text-muted-foreground">{rowPreview(session, loading).split("\n", 1)[0]}</span> : null}
+  </span></>;
+  return <>{lead}<span className="min-w-0 flex-1 truncate">{title}</span>{session?.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 shrink-0 animate-spin motion-reduce:animate-none" /> : null}</>;
+}
+
+function TabPin({ tab, left, pinned, title, reveal }: { tab: string; left: boolean; pinned: boolean; title: string; reveal: string | false }) {
+  const { update } = useContext(OpenTabs);
+  if (!left) return pinned ? <Pin role="img" aria-label="Pinned" className="size-3 shrink-0 fill-current text-muted-foreground" /> : null;
+  return <button type="button" aria-label={`${pinned ? "Unpin" : "Pin"} ${title}`} aria-pressed={pinned} className={cn("rounded-sm p-1.5 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring", !pinned && reveal)} onClick={() => update((state) => ({ pinned: toggled(state.pinned, tab) }))}><Pin className={cn("size-3.5", pinned && "fill-current")} /></button>;
+}
+
 type PendingFile = { id: string; file: File };
 type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; movable?: boolean; jobs?: BackgroundJob[]; error: string; edit: number; submission: number; historyEpoch?: number; revertEligible?: boolean; revertMessageId?: string; canUndo?: boolean; reverting?: boolean; focus?: number; hydrated?: boolean; persistenceKey?: string; persistedEdit?: number; persistenceError?: string };
 const RevertActions = createContext<{ available: boolean; pending: boolean; run: (messageId?: string, redo?: boolean) => Promise<void> } | undefined>(undefined);
@@ -672,9 +866,9 @@ function persistComposerDraft(draft: ComposerDraft) {
 export function App() {
   const identity = useQuery(queries.identity(), queryClient), config = useQuery(queries.config(), queryClient);
   const scope = identity.isSuccess && config.isSuccess ? JSON.stringify(["authenticated-username", location.origin, identity.data.username, config.data.workspace ?? ""]) : undefined;
-  return <QueryClientProvider client={queryClient}><TooltipProvider><ProtocolGuard /><SidebarOwner>
+  return <QueryClientProvider client={queryClient}><TooltipProvider><ProtocolGuard /><SidebarOwner><TabsOwner>
     <SessionApp scope={scope} scopeError={identity.error?.message ?? config.error?.message} />
-  </SidebarOwner></TooltipProvider></QueryClientProvider>;
+  </TabsOwner></SidebarOwner></TooltipProvider></QueryClientProvider>;
 }
 
 function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string }) {
@@ -695,8 +889,8 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   }, [drafts]);
   const [conversation, setConversation] = useState({ id: route.id, created: "", key: 0 });
   const newChatOwner = useRef<(() => unknown) | undefined>(undefined);
-  const returnTo = conversation.id === "" ? "/" : sessionPath(conversation.id);
-  tabReturnTo.current = returnTo;
+  const tabs = useContext(OpenTabs);
+  const left = useSyncExternalStore(subscribeMd, () => matchMedia("(min-width: 48rem)").matches) && tabs.placement === "left";
   const newChat = useCallback(() => {
     const draft = drafts.get("") ?? drafts.get(conversation.id)!;
     if ([!scope, draft.reverting, !draft.hydrated].some(Boolean)) return;
@@ -733,19 +927,9 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
         return;
       }
     };
-    const onEscape = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.repeat || showChat || event.key !== "Escape") return;
-      if (document.querySelector('[role="dialog"], [role="listbox"], [role="menu"], [role="tooltip"]')) return;
-      event.preventDefault();
-      navigate(tabReturnTo.current);
-    };
     window.addEventListener("keydown", onKey, true);
-    window.addEventListener("keydown", onEscape);
-    return () => {
-      window.removeEventListener("keydown", onKey, true);
-      window.removeEventListener("keydown", onEscape);
-    };
-  }, [newChat, showChat, openPalette]);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [newChat, openPalette]);
   if (showChat && conversation.id !== route.id) {
     // Creation assigns this conversation its ID; other navigation starts a fresh subtree.
     const created = conversation.id === "" && conversation.created === route.id;
@@ -772,13 +956,15 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               </div>
             </BottomNavigation>
             <div className="fixed top-2 right-2 z-40 rounded-md bg-background shadow-sm"><ThemeToggle /></div>
+            {left ? null : <TabStrip left={false} />}
           <div className="flex min-h-0 min-w-0 flex-1">
+            {left ? <TabStrip left /> : null}
             <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]", command?.target && "pt-[min(75dvh,30rem)]")}>
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
               {route.search ? <SearchPage /> : null}
               <TabPane show={showChat}>
                 <MessageScrollerProvider key={conversation.key} autoScroll scrollEdgeThreshold={48}>
-                  <Transcript id={conversation.id} drafts={drafts} scopeError={scopeError} onDraftChange={onDraftChange} onCreated={(id) => setConversation((current) => ({ ...current, created: id }))} />
+                  <Transcript id={conversation.id} drafts={drafts} scopeError={scopeError} onDraftChange={onDraftChange} onCreated={(id) => { setConversation((current) => ({ ...current, created: id })); tabs.created(id); }} />
                 </MessageScrollerProvider>
               </TabPane>
              </main>
@@ -1006,6 +1192,7 @@ const paletteCopy = { sessions: { title: "Go to session", desc: "Search and open
 function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string, ComposerDraft>; mode: "sessions" | "commands" | "cron" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | undefined) => void; newChat: () => void }) {
   const sidebar = useContext(Sidebar);
   const { setCommand, composer } = useContext(SessionCommands);
+  const tabCommands = useContext(OpenTabs).commands;
   const { id } = useRoute();
   const actions = useSessionActions(sidebar.rows.find((row) => row.id === id), () => setMode(undefined));
   const choices = useQuery({ ...queries.agents({ conversationId: id }), enabled: id !== "" });
@@ -1055,7 +1242,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
       setMode(undefined);
     },
   });
-  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.values, [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands], filters, agentFilter, roomFilter, recent);
+  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.values, [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands, ...tabCommands], filters, agentFilter, roomFilter, recent);
   const selected = items.length === 0 ? 0 : pick % items.length;
   const choose = (item: (typeof items)[number]) => {
     if (item.disabled) return;
@@ -1130,8 +1317,12 @@ function relativeTime(iso: string) {
   return `${Math.floor(ms / 86_400_000)}d`;
 }
 
+function sessionTitle(session: Session, loading: boolean) {
+  return session.name || rowPreview(session, loading).split("\n", 1)[0] || sessionLabel(session.id);
+}
+
 function SessionRowContent({ session, loading = false, age = relativeTime(session.updatedAt ?? "") }: { session: Session; loading?: boolean; age?: string }) {
-  const title = session.name || rowPreview(session, loading).split("\n", 1)[0] || sessionLabel(session.id);
+  const title = sessionTitle(session, loading);
   const clean = useCleanText(title);
   const channel = slackSession(session.id) ? (session.title ?? "") : "";
   const meta = [channel, session.agent, ...(session.tags ?? [])].filter(Boolean).join(" · ");
@@ -1591,9 +1782,10 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
 }
 
 function PageTitle({ children }: { children: ReactNode }) {
+  const tabs = useContext(OpenTabs);
   return <header className="flex w-full shrink-0 items-center gap-2">
     <h1 className="text-lg font-semibold">{children}</h1>
-    <Button type="button" variant="ghost" size="icon-sm" className="ml-auto hidden md:inline-flex" aria-label="Close" onClick={() => navigate(tabReturnTo.current)}><X /></Button>
+    <Button type="button" variant="ghost" size="icon-sm" className="ml-auto hidden md:inline-flex" aria-label="Close" onClick={() => tabs.close(tabs.path)}><X /></Button>
   </header>;
 }
 
