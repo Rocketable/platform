@@ -250,7 +250,9 @@ never printed. Function calls show their name, call ID and arguments; results sh
 their call ID and text. Reasoning shows stored plaintext summaries and content.
 Trace-only events follow each entry's replay items because their interleaving is
 not recorded. Unsupported events and non-text tool results have explicit omission
-markers rather than serialized objects. An unknown ID returns only the header.
+markers rather than serialized objects. A stored item that cannot be decoded becomes
+an `event` row naming its entry ID, list, and item index instead of failing the
+read. An unknown ID returns only the header.
 Get requires a nonblank ID.
 
 Both TSV outputs escape literal backslashes as `\\`, tabs as `\t`, carriage returns
