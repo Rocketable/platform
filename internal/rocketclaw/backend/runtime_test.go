@@ -456,10 +456,6 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 
 		_, err = store.db.ExecContext(ctx, `ALTER TABLE session_summaries DROP CONSTRAINT reject_sync_summary`)
 		require.NoError(t, err)
-		_, err = store.SetConversationSettled(ctx, "Y", true)
-		require.NoError(t, err)
-		_, err = store.UpdateConversationDetails(ctx, "Y", nil, nil, new(time.Now().Add(time.Hour)))
-		require.NoError(t, err)
 		require.NoError(t, rt.SyncConversation(ctx, "X", "Y"))
 
 		for id, want := range map[string][]string{"X": {"X-tag"}, "Y": {"Y-tag", "yellow"}} {
@@ -473,43 +469,21 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		require.Equal(t, []string{"X", "X", "Y", "Y"}, delivered)
 		require.Equal(t, []string{"producer", "producer", "producer", "human"}, deliveryOrder)
 
-		thread, found, err := store.Thread("Y")
-		require.NoError(t, err)
-		require.True(t, found)
-		require.False(t, thread.Settled)
-
-		var snoozed bool
-		require.NoError(t, store.db.QueryRowContext(ctx, `SELECT snoozed_until IS NOT NULL FROM managed_conversations WHERE conversation_id = 'Y'`).Scan(&snoozed))
-		require.False(t, snoozed)
-
 		summaries, err := store.ListSessions(ctx, []string{"Y"})
 		require.NoError(t, err)
 		require.Equal(t, []protocol.SessionSummary{{ConversationID: "Y", LastMessage: "done", LastUpdated: time.Unix(1, 123456000).UTC()}}, summaries)
 
-		for row, err := range store.SidebarSessions(ctx, time.Now().Add(-7*24*time.Hour)) {
+		for row, err := range store.SidebarSessions(ctx) {
 			require.NoError(t, err)
 
 			if row.Conversation.ID == "Y" {
 				require.False(t, row.Running)
 				require.False(t, row.Pinned)
-				require.False(t, row.Conversation.Settled, "newly synced old history must end snooze visibly")
 				require.Equal(t, []string{"Y-tag", "yellow"}, row.Tags)
 			}
 		}
 
-		_, err = store.SetConversationSettled(ctx, "Y", true)
-		require.NoError(t, err)
 		require.NoError(t, rt.SyncConversation(ctx, "X", "Y"))
-
-		thread, _, err = store.Thread("Y")
-		require.NoError(t, err)
-		require.True(t, thread.Settled, "syncing without new entries must not reopen")
-
-		_, err = store.UpdateConversationDetails(ctx, "Y", nil, nil, new(time.Now().Add(time.Hour)))
-		require.NoError(t, err)
-		require.NoError(t, rt.SyncConversation(ctx, "X", "Y"))
-		require.NoError(t, store.db.QueryRowContext(ctx, `SELECT snoozed_until IS NOT NULL FROM managed_conversations WHERE conversation_id = 'Y'`).Scan(&snoozed))
-		require.True(t, snoozed, "syncing without new entries must not end snooze")
 
 		afterSync, err := store.ListSessions(ctx, []string{"Y"})
 		require.NoError(t, err)

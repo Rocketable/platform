@@ -16,7 +16,7 @@ test("first Go row and composer choices arrive before the blocked tail", async (
     expect(await call("Protocol")).toEqual({ protoSha256: new Bun.CryptoHasher("sha256").update(await Bun.file(new URL("../proto/web.proto", import.meta.url)).arrayBuffer()).digest("hex") });
     const iterator = listSessions(abort.signal, `${url}/api/ListSessions`);
     expect(await iterator.next()).toMatchObject({ done: false, value: {
-      sessions: [{ id: "slack-thread:C1:1.1", title: "C1", agent: "main", settled: true, updatedAt: "1970-01-01T00:00:02.123456Z", allowedAgents: ["main"] }],
+      sessions: [{ id: "slack-thread:C1:1.1", title: "C1", agent: "main", updatedAt: "1970-01-01T00:00:02.123456Z", allowedAgents: ["main"] }],
       owner: "alice", upstreamSuccess: false, summariesComplete: true,
     } });
     const pending = iterator.next();

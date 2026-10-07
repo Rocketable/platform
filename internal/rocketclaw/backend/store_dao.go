@@ -204,7 +204,7 @@ func (s *SessionService) Thread(conversationID string) (ThreadState, bool, error
 		createdBy string
 	)
 
-	err := s.db.QueryRowContext(context.Background(), `SELECT agent, created_by, settled FROM managed_conversations WHERE conversation_id = $1`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &createdBy, &thread.Settled)
+	err := s.db.QueryRowContext(context.Background(), `SELECT agent, created_by FROM managed_conversations WHERE conversation_id = $1`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &createdBy)
 	if err == sql.ErrNoRows {
 		return ThreadState{}, false, nil
 	}

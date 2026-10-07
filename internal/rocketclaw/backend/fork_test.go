@@ -161,7 +161,7 @@ func TestForkConversation(t *testing.T) {
 
 	parents := map[string]string{"middle": "source", "full": "source", "child": "middle"}
 
-	for row, err := range sessions.SidebarSessions(t.Context(), time.Time{}) {
+	for row, err := range sessions.SidebarSessions(t.Context()) {
 		require.NoError(t, err)
 		require.Equal(t, parents[row.Conversation.ID], row.ForkedFrom)
 		delete(parents, row.Conversation.ID)

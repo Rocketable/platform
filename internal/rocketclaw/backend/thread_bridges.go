@@ -398,7 +398,7 @@ func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *protocol.
 		return protocol.StartNewThreadResult{}, err
 	}
 
-	if _, err := m.store.UpdateConversationDetails(ctx, conversationID, nil, &req.Title, nil); err != nil {
+	if _, err := m.store.UpdateConversationDetails(ctx, conversationID, nil, &req.Title); err != nil {
 		return protocol.StartNewThreadResult{}, fmt.Errorf("name new Web session: %w", err)
 	}
 
