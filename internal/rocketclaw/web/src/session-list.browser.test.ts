@@ -2452,6 +2452,13 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       element.dispatchEvent(new DragEvent("drop", { bubbles: true, dataTransfer }));
     });
     await attachmentPage.getByRole("button", { name: "Remove drop.bin", exact: true }).waitFor();
+    // A pasted screenshot arrives as a clipboard file, as with cmd+V or the context menu's Paste.
+    await attachmentPage.locator("textarea").evaluate((element: HTMLElement) => {
+      const clipboardData = new DataTransfer();
+      clipboardData.items.add(new File([new Uint8Array([137, 80, 78, 71])], "image.png", { type: "image/png" }));
+      element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData }));
+    });
+    await attachmentPage.getByRole("button", { name: "Remove image.png", exact: true }).click();
     await attachmentPage.locator("textarea").fill("  exact file draft\n");
     await attachmentPage.locator("footer").getByRole("button", { name: "Open command palette" }).click();
     await attachmentPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Settings" }).click();
