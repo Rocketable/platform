@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -34,6 +35,30 @@ func TestForkConversation(t *testing.T) {
 	id, err := sessions.AppendEntryID(t.Context(), "source", &entry)
 	require.NoError(t, err)
 
+	// A copied wake turn shows its Completion Notes from copied finished jobs; running work stays with the source.
+	// The fork can load the source's retained output.
+	finished, other, running := testBackgroundJob("source", "turn-1/call/a"), testBackgroundJob("source", "turn-1/call/c"), testBackgroundJob("source", "turn-1/call/b")
+	for _, job := range []*backgroundJob{finished, other} {
+		createTestBackgroundJob(t, sessions, job)
+		end := *job
+		end.status, end.noteState, end.wake, end.result = backgroundCompleted, notePending, true, "completed"
+		won, err := sessions.finishBackgroundJob(t.Context(), &end)
+		require.NoError(t, err)
+		require.True(t, won)
+	}
+
+	createTestBackgroundJob(t, sessions, running)
+	spill, retained, modified := openTestSpill(t, sessions), filepath.Join(rocketcodeRetainedDir("source"), "a.txt"), time.Now().Add(-time.Hour).Truncate(time.Second)
+	require.NoError(t, spill.MkdirAll(filepath.Dir(retained), 0o700))
+	require.NoError(t, spill.WriteFile(retained, []byte("full output"), 0o600))
+	require.NoError(t, spill.Chtimes(retained, modified, modified))
+	_, err = sessions.AppendEntryID(t.Context(), "source", &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[System]","input_id":"turn-1/call/a turn-1/call/b turn-1/call/c","content":"[System]\n\nnote"}`),
+	}})
+	require.NoError(t, err)
+
+	note := []protocol.BackgroundJob{{ID: "turn-1/call/a", Kind: "execute", State: "completed", Label: "tests", ToolCallID: "call", Note: backgroundNote(&backgroundJob{jobID: "turn-1/call/a", kind: backgroundExecute, status: backgroundCompleted, label: "tests", result: "completed"})}}
+
 	for _, delegation := range []string{"source/call-1", "source/call-1/call-2"} {
 		_, err = sessions.AppendEntryID(t.Context(), delegation, testSessionEntry(delegation, "child"))
 		require.NoError(t, err)
@@ -46,7 +71,7 @@ func TestForkConversation(t *testing.T) {
 	}{
 		{"first", fmt.Sprintf("%d:0", id), "first", 0},
 		{"middle", fmt.Sprintf("%d:2", id), "second attachment:", 2},
-		{"full", "", "", 4},
+		{"full", "", "", 5},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			prompt, err := sessions.ForkConversation(t.Context(), "source", protocol.Conversation{ID: tt.name, Agent: "main", CreatedBy: "alice"}, tt.before)
@@ -70,8 +95,25 @@ func TestForkConversation(t *testing.T) {
 
 			require.Len(t, items, tt.items)
 
+			if tt.name == "full" {
+				notes, err := runtime.CompletionNotes(t.Context(), tt.name, []string{"turn-1/call/a", "turn-1/call/b"})
+				require.NoError(t, err)
+				require.Equal(t, note, notes)
+				require.Empty(t, backgroundJobIDs(t, sessions, tt.name), "copied notes are neither running nor pending")
+
+				copied := filepath.Join(rocketcodeRetainedDir(tt.name), "a.txt")
+				data, err := spill.ReadFile(copied)
+				require.NoError(t, err)
+				require.Equal(t, "full output", string(data))
+
+				info, err := spill.Stat(copied)
+				require.NoError(t, err)
+				require.True(t, modified.Equal(info.ModTime()), "the copy expires with its source")
+			}
+
+			// A fork's subagents continue from the copied histories.
 			for _, delegation := range []string{"/call-1", "/call-1/call-2"} {
-				copied, err := sessions.ObserveEntries(t.Context(), tt.name+delegation)
+				copied, err := childSessions{store: sessions, conversationID: tt.name}.ChildEntries(t.Context(), delegation)
 				require.NoError(t, err)
 				require.Len(t, copied, 1)
 			}
@@ -109,6 +151,13 @@ func TestForkConversation(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Contains(t, string(entries[0].Entry.ReplayInput[1]), "answer")
+	notes, err := runtime.CompletionNotes(t.Context(), "full", []string{"turn-1/call/a"})
+	require.NoError(t, err)
+	require.Equal(t, note, notes, "deleting the source leaves the fork's notes")
+
+	data, err := spill.ReadFile(filepath.Join(rocketcodeRetainedDir("full"), "a.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "full output", string(data), "deleting the source leaves the fork's retained output")
 
 	parents := map[string]string{"middle": "source", "full": "source", "child": "middle"}
 
@@ -119,6 +168,11 @@ func TestForkConversation(t *testing.T) {
 	}
 
 	require.Empty(t, parents)
+	_, err = sessions.DeleteSession(t.Context(), "full")
+	require.NoError(t, err)
+	notes, err = runtime.CompletionNotes(t.Context(), "full", []string{"turn-1/call/a"})
+	require.NoError(t, err)
+	require.Empty(t, notes, "the copied jobs go with their fork")
 }
 
 func TestForkConversationRollsBackFailedCopies(t *testing.T) {

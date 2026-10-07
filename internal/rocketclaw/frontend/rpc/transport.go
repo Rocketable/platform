@@ -43,7 +43,7 @@ func Listen(socketPath string) (net.Listener, error) {
 func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	desc := grpc.ServiceDesc{ServiceName: "rpc.Web", HandlerType: (*any)(nil), Metadata: "web.proto"}
 
-	for _, method := range []string{"Protocol", "Identity", "Prompt", "History", "ForkSession", "StageRevert", "ClearRevert", "SearchMessages", "SearchOrigins", "SlackNames", "Handoff", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "ListWorkflows", "SettleSession", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "ReorderQueue"} {
+	for _, method := range []string{"Protocol", "Identity", "Prompt", "History", "ForkSession", "StageRevert", "ClearRevert", "SearchMessages", "SearchOrigins", "SlackNames", "Handoff", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "ListWorkflows", "SettleSession", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "ReorderQueue", "MoveToBackground", "StopBackgroundJob"} {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 
@@ -114,7 +114,7 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 	case "CreateSession":
 		return s.createSession(ctx, request.(*CreateSessionRequest))
 	case "History":
-		return s.history(ctx, request.(*HistoryRequest))
+		return s.historyRPC(ctx, request.(*HistoryRequest))
 	case "ForkSession":
 		return s.forkSession(ctx, request.(*ForkSessionRequest))
 	case "StageRevert":
@@ -137,6 +137,10 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 		return s.queueItem(ctx, method, request.(*QueueItemRequest))
 	case "ReorderQueue":
 		return s.reorderQueue(ctx, request.(*ReorderQueueRequest))
+	case "MoveToBackground":
+		return s.moveToBackground(ctx, request.(*MoveToBackgroundRequest))
+	case "StopBackgroundJob":
+		return s.stopBackgroundJob(ctx, request.(*StopBackgroundJobRequest))
 	case "ListSessionEntries":
 		return s.ListSessionEntries(ctx, request.(*SessionEntriesRequest))
 	case "LoadSessionEntries":
@@ -146,4 +150,19 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 	default: // Protocol negotiates the schema, not a browser principal.
 		return &ProtocolResponse{ProtoSha256: protoSHA256}, nil
 	}
+}
+
+// historyRPC answers the History RPC: the transcript page plus the conversation's Background
+// Jobs, which internal history reads (search, attachments, session commands) do not need.
+func (s *Server) historyRPC(ctx context.Context, request *HistoryRequest) (*HistoryResponse, error) {
+	response, err := s.history(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.listBackgroundJobs(ctx, response, request); err != nil {
+		return nil, err
+	}
+
+	return response, nil
 }

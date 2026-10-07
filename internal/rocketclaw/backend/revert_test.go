@@ -284,6 +284,61 @@ func TestRevertStorageLifecycle(t *testing.T) {
 	require.Len(t, entries, 2)
 }
 
+// Removed calls' delegations go, also by call-ID-plus-hash key; running Background Jobs keep theirs, like $stop.
+func TestRevertKeepsKeptAndRunningSubagents(t *testing.T) {
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	_, err := s.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ('main', 'planner', '')`)
+	require.NoError(t, err)
+
+	call := func(id string) json.RawMessage {
+		return json.RawMessage(`{"type":"function_call","call_id":"` + id + `","name":"task","arguments":"{}"}`)
+	}
+
+	first := testSessionEntry("first", "reply")
+	first.TurnID, first.ReplayInput = "turn-1", append(first.ReplayInput, call("call_k"))
+	_, err = s.AppendEntryID(ctx, "main", first)
+	require.NoError(t, err)
+
+	second := testSessionEntry("second", "reply")
+	second.TurnID, second.ReplayInput = "turn-2", append(second.ReplayInput, call("call_r"), call("call_b"))
+	secondID, err := s.AppendEntryID(ctx, "main", second)
+	require.NoError(t, err)
+
+	children := []string{"main/call_k", "main/call_k-aaaaaaaa", "main/call_r-bbbbbbbb", "main/call_b-cccccccc"}
+	for _, child := range children {
+		_, err := s.AppendEntryID(ctx, child, testSessionEntry("work", "done"))
+		require.NoError(t, err)
+	}
+
+	job := testBackgroundJob("main", "turn-2/call/call_b")
+	job.kind, job.subagentKey = backgroundTask, "/call_b-cccccccc"
+	createTestBackgroundJob(t, s, job)
+	seedActiveTurn(t, s, "main", "turn-2", nil)
+
+	for _, key := range []string{"turn-2/call/call_b/step", "turn-2/call/call_r"} {
+		require.NoError(t, s.SaveTurnStep(ctx, "main", key, json.RawMessage(`{}`)))
+	}
+
+	marker, _, err := stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", secondID))
+	require.NoError(t, err)
+
+	staged, err := s.ObserveEntries(ctx, "main/call_k-aaaaaaaa")
+	require.NoError(t, err)
+	require.Len(t, staged, 1, "a staged revert keeps a kept call's subagent readable")
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	require.NoError(t, lockSessionHistory(ctx, tx, "main"))
+	require.NoError(t, commitRevertDB(ctx, tx, "main", marker))
+	require.NoError(t, tx.Commit())
+
+	kept, err := queryStrings(ctx, s.db, `SELECT DISTINCT conversation_id FROM session_entries WHERE conversation_id <> 'main' ORDER BY conversation_id`, "kept delegations")
+	require.NoError(t, err)
+	require.Equal(t, []string{"main/call_b-cccccccc", "main/call_k", "main/call_k-aaaaaaaa"}, kept)
+	require.Equal(t, []string{"turn-2/call/call_b/step"}, testTurnStepKeys(t, s, "main"), "the running job keeps its journal")
+}
+
 func TestRevertEligibility(t *testing.T) {
 	s := newTestSessionService(t)
 

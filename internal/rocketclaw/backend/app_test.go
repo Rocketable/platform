@@ -11,7 +11,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -304,6 +306,41 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 	require.Empty(t, runQueuedStartup(t, time.Second))
 }
 
+// A turn continuing a subagent that resumes after a restart is refused instead of running it twice.
+func TestStartupResumedSubagentIsBusyForFrontends(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
+
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	seed, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+
+	task := testBackgroundJob("web-a", "turn-1/call/a")
+	task.kind, task.subagentKey = backgroundTask, "/a"
+	createTestBackgroundJob(t, seed, task)
+	require.NoError(t, seed.Stop())
+
+	var errContinue error
+
+	copyDone := make(chan struct{})
+	close(copyDone)
+
+	assembler := &frontendAssemblerMock{
+		ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil },
+		AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+			turn := backgroundTurn{registry: rt.background, root: testTurnRoot(t), conversationID: "web-a", origin: &protocol.InboundMessage{}}
+			_, errContinue = turn.Run(rt.RunCtx, &rocketcode.BackgroundJob{ID: "turn-2/call/c", Kind: rocketcode.BackgroundKindTask, SubagentKey: "/a"}, &backgroundWorkMock{RunBackgroundFunc: func(context.Context) (string, error) { return "second turn", nil }})
+
+			return nil, copyDone, nil, nil
+		},
+	}
+
+	require.NoError(t, Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler), assembler))
+	require.EqualError(t, errContinue, "subagent /a is still running; wait for its note before continuing it")
+}
+
 func TestConfigureInstrumentationStartsAndStopsExporter(t *testing.T) {
 	collector := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	t.Cleanup(collector.Close)
@@ -374,99 +411,176 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
-// AE1, Risk "Lock lease": shutdown waits for a running bash command with the run
-// lock context, and so its heartbeat, still alive, and stops frontends only after.
+// Shutdown waits for foreground bash with the run lock's heartbeat alive and stops frontends only
+// after; bash in a Background Job is killed instead, and its row left running for the next start.
 func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
-	workspace := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "waiter.md"), []byte("---\ndescription: Waiter\nmode: primary\nmodel: gpt-5.5\npermission:\n  bash:\n    \"*\": allow\n---\nPrompt\n"), 0o600))
-	started, finished := filepath.Join(workspace, "started"), filepath.Join(workspace, "done")
+	for _, background := range []bool{false, true} {
+		t.Run(fmt.Sprintf("background=%v", background), func(t *testing.T) {
+			workspace := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "waiter.md"), []byte("---\ndescription: Waiter\nmode: primary\nmodel: gpt-5.5\npermission:\n  bash:\n    \"*\": allow\n  rocketclaw:\n    allow_background: allow\n---\nPrompt\n"), 0o600))
+			started, finished, pid := filepath.Join(workspace, "started"), filepath.Join(workspace, "done"), filepath.Join(workspace, "pid")
+			sleep := map[bool]string{false: "2", true: "60"}[background]
+			waiting, ended := filepath.Join(workspace, "waiting"), filepath.Join(workspace, "ended")
+			code := "def main():\n    return bash(command=r'''echo $$ > " + pid + " && touch " + started + " && sleep " + sleep + " && touch " + finished + "''')\n"
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		code, err := json.Marshal(struct {
-			Code string `json:"code"`
-		}{"def main():\n    return bash(command=r'''touch " + started + " && sleep 2 && touch " + finished + "''')\n"})
-		assert.NoError(t, err)
+			if background { // The script's last bash runs only once the turn that started it ended.
+				code = strings.Replace(code, "    return", "    bash(command=r'''touch "+waiting+" && until [ -f "+ended+" ]; do sleep 0.01; done''')\n    return", 1)
+			}
 
-		output := fmt.Sprintf(`{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_b","name":"execute","arguments":%q}`, code)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				arguments, err := json.Marshal(struct {
+					Code        string `json:"code"`
+					Description string `json:"description"`
+					Background  bool   `json:"background"`
+				}{code, "Wait", background})
+				assert.NoError(t, err)
 
-		if strings.Contains(string(body), "function_call_output") {
-			output = `{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}`
-		}
+				output := fmt.Sprintf(`{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_b","name":"execute","arguments":%q}`, arguments)
 
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[` + output + `]}`))
-	}))
-	t.Cleanup(server.Close)
+				if strings.Contains(string(body), "function_call_output") {
+					output = `{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}`
+				}
 
-	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-	require.NoError(t, err)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[` + output + `]}`))
+			}))
+			t.Cleanup(server.Close)
 
-	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
-
-	ctx, signal := context.WithCancel(t.Context())
-	defer signal()
-
-	runCtx := make(chan context.Context, 1)
-
-	slack := &slackFrontendMock{
-		StartFunc:       func(context.Context) error { return nil },
-		DrainSteersFunc: func(context.Context, string) []string { return nil },
-		StopFunc: func(context.Context) error {
-			assert.FileExists(t, finished, "frontends stop only after bash finishes")
-			return nil
-		},
-	}
-	assembler := &frontendAssemblerMock{
-		ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil },
-		AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
-			runCtx <- rt.RunCtx
-
-			target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
-			_, err := rt.TextRouter.RegisterThread(target, "waiter")
+			dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 			require.NoError(t, err)
 
-			msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "wait for it", true)
-			msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.0", ThreadTS: "111.0"}
-			_, err = rt.TextRouter.SubmitThreadReply(rt.RunCtx, target, msg)
+			cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
+
+			ctx, signal := context.WithCancel(t.Context())
+			defer signal()
+
+			runtimes := make(chan *Runtime, 1)
+
+			slack := &slackFrontendMock{
+				StartFunc:       func(context.Context) error { return nil },
+				DrainSteersFunc: func(context.Context, string) []string { return nil },
+				StopFunc: func(context.Context) error {
+					if background {
+						assert.NoFileExists(t, finished, "background bash is killed")
+					} else {
+						assert.FileExists(t, finished, "frontends stop only after bash finishes")
+					}
+
+					return nil
+				},
+			}
+			assembler := &frontendAssemblerMock{
+				ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil },
+				AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+					runtimes <- rt
+
+					target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
+					_, err := rt.TextRouter.RegisterThread(target, "waiter")
+					require.NoError(t, err)
+
+					msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "wait for it", true)
+					msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.0", ThreadTS: "111.0"}
+					_, err = rt.TextRouter.SubmitThreadReply(rt.RunCtx, target, msg)
+					require.NoError(t, err)
+
+					return slack, nil, []func(context.Context) error{slack.Stop}, nil
+				},
+			}
+
+			var logs bytes.Buffer
+
+			done := make(chan error, 1)
+			go func() { done <- Run(ctx, cfg, "", slog.New(slog.NewTextHandler(&logs, nil)), assembler) }()
+
+			var rt *Runtime
+
+			select {
+			case rt = <-runtimes:
+			case err := <-done:
+				t.Fatalf("run ended before assembling frontends: %v", err)
+			}
+
+			if background {
+				require.Eventually(t, func() bool {
+					_, err := os.Stat(waiting)
+					return err == nil
+				}, 10*time.Second, 10*time.Millisecond)
+				// The active turn row ends only after the turn returned, so the script's next bash runs after it.
+				require.Eventually(t, func() bool {
+					active, err := rt.Sessions.HasActiveTurn(t.Context(), protocol.SlackThreadConversationID("C123", "111.0"))
+					return err == nil && !active
+				}, 10*time.Second, 10*time.Millisecond)
+				require.NoError(t, os.WriteFile(ended, nil, 0o600))
+			}
+
+			require.Eventually(t, func() bool {
+				_, err := os.Stat(started)
+				return err == nil
+			}, 10*time.Second, 10*time.Millisecond, "a background script's tools keep working after its turn ends")
+			signal()
+
+			lock := rt.RunCtx
+
+			for !background {
+				if _, err := os.Stat(finished); err == nil {
+					break
+				}
+
+				require.NoError(t, lock.Err(), "the run lock stays held while bash runs")
+				time.Sleep(20 * time.Millisecond)
+			}
+
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("shutdown did not finish after bash")
+			}
+
+			assert.Len(t, slack.StopCalls(), 1)
+
+			if !background {
+				assert.Contains(t, logs.String(), `msg="shutdown waiting for running tool calls" component=thread_bridges conversation_id=slack-thread:C123:111.0`)
+				return
+			}
+
+			data, err := os.ReadFile(pid)
 			require.NoError(t, err)
+			shell, err := strconv.Atoi(strings.TrimSpace(string(data)))
+			require.NoError(t, err)
+			require.ErrorIs(t, syscall.Kill(shell, 0), syscall.ESRCH, "shutdown waits for killed background bash")
 
-			return slack, nil, []func(context.Context) error{slack.Stop}, nil
-		},
+			store, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, store.Stop()) })
+
+			running, err := store.runningBackgroundJobs(t.Context())
+			require.NoError(t, err)
+			require.Len(t, running, 1, "the startup step decides how a killed job ends")
+			require.Equal(t, "Wait", running[0].label)
+
+			ctx, signal = context.WithCancel(t.Context())
+			defer signal()
+
+			go func() {
+				done <- Run(ctx, cfg, "", slog.New(slog.DiscardHandler), &frontendAssemblerMock{
+					ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil },
+					AssembleFunc: func(*Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+						return slack, nil, nil, nil
+					},
+				})
+			}()
+
+			require.Eventually(t, func() bool {
+				jobs, err := store.backgroundJobs(t.Context(), protocol.SlackThreadConversationID("C123", "111.0"))
+				return err == nil && len(jobs) == 1 && jobs[0].status == backgroundKilled && jobs[0].noteState == notePending && !jobs[0].wake
+			}, 10*time.Second, 10*time.Millisecond, "the next start reports the script killed, for the next turn")
+			signal()
+			require.NoError(t, <-done)
+		})
 	}
-
-	var logs bytes.Buffer
-
-	done := make(chan error, 1)
-	go func() { done <- Run(ctx, cfg, "", slog.New(slog.NewTextHandler(&logs, nil)), assembler) }()
-
-	require.Eventually(t, func() bool {
-		_, err := os.Stat(started)
-		return err == nil
-	}, 10*time.Second, 10*time.Millisecond)
-	signal()
-
-	lock := <-runCtx
-
-	for {
-		if _, err := os.Stat(finished); err == nil {
-			break
-		}
-
-		require.NoError(t, lock.Err(), "the run lock stays held while bash runs")
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(10 * time.Second):
-		t.Fatal("shutdown did not finish after bash")
-	}
-
-	assert.Len(t, slack.StopCalls(), 1)
-	assert.Contains(t, logs.String(), `msg="shutdown waiting for running tool calls" component=thread_bridges conversation_id=slack-thread:C123:111.0`)
 }
 
 // Slack starts accepting input only after it is attached, so a Slack message that

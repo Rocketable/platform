@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -75,7 +74,7 @@ func dynamicWorkflowToolDescription(allowed []protocol.WorkflowDescription) stri
 	return strings.Join(lines, "\n")
 }
 
-func (b *Bridge) dynamicWorkflowTool(permissions rocketcode.PermissionSet, agentName string, definitions map[string]*workflow.Definition) (rocketcode.Tool, bool) {
+func (b *Bridge) dynamicWorkflowTool(permissions rocketcode.PermissionSet, agentName, tagConversationID string, definitions map[string]*workflow.Definition) (rocketcode.Tool, bool) {
 	allowed := allowedWorkflowDescriptions(permissions, workflow.Descriptions(definitions))
 	if len(allowed) == 0 {
 		return rocketcode.Tool{}, false
@@ -113,7 +112,7 @@ func (b *Bridge) dynamicWorkflowTool(permissions rocketcode.PermissionSet, agent
 				return rocketcode.ToolResult{}, err
 			}
 
-			result, err := b.runNestedWorkflow(ctx, agentName, params.Name, definitions[params.Name], params.Args)
+			result, err := b.runNestedWorkflow(ctx, agentName, tagConversationID, params.Name, definitions[params.Name], params.Args)
 			if err != nil {
 				return rocketcode.ToolResult{}, err
 			}
@@ -123,7 +122,7 @@ func (b *Bridge) dynamicWorkflowTool(permissions rocketcode.PermissionSet, agent
 	}, true
 }
 
-func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *rocketcode.Agent, agentName string) (rocketcode.Tool, bool) {
+func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *rocketcode.Agent, agentName, tagConversationID string) (rocketcode.Tool, bool) {
 	allowed := false
 
 	for _, bucket := range agent.Permission.Buckets {
@@ -148,17 +147,13 @@ func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *rocketcode.Agent
 		return rocketcode.Tool{}, false
 	}
 
-	return b.dynamicWorkflowTool(agent.Permission, agentName, definitions)
+	return b.dynamicWorkflowTool(agent.Permission, agentName, tagConversationID, definitions)
 }
 
-func (b *Bridge) runNestedWorkflow(ctx context.Context, agentName, name string, definition *workflow.Definition, args string) (resultText string, err error) {
+func (b *Bridge) runNestedWorkflow(ctx context.Context, agentName, tagConversationID, name string, definition *workflow.Definition, args string) (resultText string, err error) {
 	if definition == nil {
 		return "", fmt.Errorf("workflow %q is not configured", name)
 	}
-
-	b.mu.Lock()
-	tagConversationID := cmp.Or(b.activeReply.SyncDestination, b.config.ConversationID)
-	b.mu.Unlock()
 
 	agentRun, err := newWorkflowAgentRunner(b.runtime, agentName, rocketcode.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, tagConversationID)...)
 	if err != nil {

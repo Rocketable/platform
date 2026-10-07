@@ -101,7 +101,7 @@ func TestChatOriginFactsMatchHistory(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll(cfg.RuntimeDirName()+"/agents", 0o700))
-	server := New(&mockBackend{}, sessions, cfg, &mockChannels{SidebarChannelAgentChoicesFunc: func(_ context.Context, channel string) (string, []string, error) {
+	server := New(withoutBackgroundJobs(), sessions, cfg, &mockChannels{SidebarChannelAgentChoicesFunc: func(_ context.Context, channel string) (string, []string, error) {
 		return channel, []string{"main"}, nil
 	}}, &mockCronJobs{LoadOneOffCronjobFunc: func(stem string) (protocol.OneOffCronjob, error) {
 		return protocol.OneOffCronjob{RelativePath: "cron/" + stem + ".md"}, nil

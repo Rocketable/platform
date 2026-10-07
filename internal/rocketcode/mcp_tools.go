@@ -24,6 +24,8 @@ const (
 	searchBuiltinName         = "search"
 	mcpPermissionBucket       = "mcp"
 	codeModeApproveSubject    = "code_mode_approve"
+	// AllowBackgroundSubject is the rocketclaw permission subject that allows Background Jobs.
+	AllowBackgroundSubject = "allow_background"
 	// executeNestedToolPrefix marks nested code-mode tool diagnostics for thinking UI.
 	executeNestedToolPrefix = executeToolName + " → "
 	codeModeRawStringRule   = `Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. execute code is a JSON string — JSON still wraps it in "...". Inside that string, bash(command=...) takes r'''...''' only, not Starlark "..." or '...'. r"..." is raw but single-line; a real newline needs r'''...'''. Example execute argument: {"code":"def main():\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\n"}. $ is valid inside a closed Starlark string, not interpolation. bash(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun.`
@@ -196,6 +198,7 @@ func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool)
 	registry := f.mcpRegistry
 	permissions := agent.Permission
 	serversCopy := slices.Clone(servers)
+	retainedRel := f.retainedRel
 
 	return map[string]looperTool{
 		loadExecuteResultToolName: {
@@ -213,10 +216,10 @@ func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool)
 
 				tc, _ := toolCallContextFrom(ctx)
 
-				return tc.looper.loadExecuteResult(ctx, params)
+				return tc.looper.loadExecuteResult(ctx, retainedRel, params)
 			},
 		},
-		executeToolName: {
+		executeToolName: f.backgroundTool(agent, BackgroundKindExecute, &looperTool{
 			Definition: *functionTool(executeToolName, executeDescription(), map[string]any{
 				"code": map[string]any{
 					"type":        "string",
@@ -228,9 +231,9 @@ func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool)
 			VisibilitySubjects: []string{codeModeApproveSubject},
 			Subjects:           func(json.RawMessage) ([]string, error) { return []string{codeModeApproveSubject}, nil },
 			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
-				return callExecute(ctx, registry, permissions, serversCopy, raw)
+				return callExecute(ctx, registry, permissions, serversCopy, retainedRel, raw)
 			},
-		},
+		}),
 	}
 }
 
@@ -305,7 +308,7 @@ func listAllowedTools(ctx context.Context, session *mcpclient.Session, permissio
 	return tools, notes, nil
 }
 
-func callExecute(ctx context.Context, registry *mcpclient.Registry, permissions PermissionSet, visibleServers []string, raw json.RawMessage) (result ToolResult, err error) {
+func callExecute(ctx context.Context, registry *mcpclient.Registry, permissions PermissionSet, visibleServers []string, retainedRel string, raw json.RawMessage) (result ToolResult, err error) {
 	var params executeParams
 	if err := decodeToolParams(raw, &params); err != nil {
 		return ToolResult{}, fmt.Errorf("parse execute params: %w", err)
@@ -376,12 +379,26 @@ func callExecute(ctx context.Context, registry *mcpclient.Registry, permissions 
 	}
 
 	if tc, ok := toolCallContextFrom(ctx); ok && tc.looper != nil {
-		clipped, errSave := tc.looper.saveExecuteResult(out)
+		var errSave error
+
+		// Settling keeps a still-attached script's job from leaving its turn (backgroundWork.Detach),
+		// so a result stored for the turn reaches it.
+		if tc.sink != nil {
+			tc.sink.mu.Lock()
+			tc.sink.settled = true
+			tc.sink.mu.Unlock()
+		}
+
+		// A script that left its turn outlives the turn's spill, so its output is retained instead.
+		if backgroundDetached(ctx) {
+			out, errSave = retainExecuteResult(tc.looper.promptExpansion.root, retainedRel, out)
+		} else {
+			out, errSave = tc.looper.saveExecuteResult(out)
+		}
+
 		if errSave != nil {
 			return ToolResult{}, errSave
 		}
-
-		out = clipped
 	}
 
 	return TextToolResult(out), nil

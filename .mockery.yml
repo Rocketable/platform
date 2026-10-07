@@ -30,6 +30,9 @@ packages:
             pkgname: main
             structname: SlackFrontendMock
             inpackage: false
+      backgroundNotes:
+        config:
+          structname: backgroundNotesMock
       directBridge:
         config:
           structname: directBridgeMock
@@ -104,6 +107,15 @@ packages:
           structname: agentRunnerMock
   github.com/Rocketable/platform/internal/rocketcode:
     interfaces:
+      BackgroundJobs:
+        config:
+          structname: mockBackgroundJobs
+      BackgroundWork:
+        config:
+          dir: '{{.ConfigDir}}/internal/rocketclaw/backend'
+          pkgname: backend
+          structname: backgroundWorkMock
+          inpackage: false
       Journal:
         config:
           structname: mockJournal

@@ -24,6 +24,8 @@ type Tool struct {
 	Call               func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error)
 	// Resumable calls interrupted by a restart run again instead of being reported interrupted.
 	Resumable bool
+	// TurnBound calls refuse to run in background work, which has left the turn they act on.
+	TurnBound bool
 }
 
 var customToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -99,6 +101,11 @@ func customLooperTool(tool *Tool) (looperTool, error) {
 	}
 
 	call := func(ctx context.Context, raw json.RawMessage, output chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
+		// A result, not an error, so a background script keeps running past the refusal.
+		if tool.TurnBound && backgroundDetached(ctx) {
+			return TextToolResult(fmt.Sprintf(turnBoundRefused, tool.Name)), nil
+		}
+
 		return tool.Call(ctx, raw, output)
 	}
 

@@ -23,8 +23,14 @@ var _ frontend.Backend = &mockBackend{}
 //
 //		// make and configure a mocked frontend.Backend
 //		mockedBackend := &mockBackend{
+//			BackgroundJobsFunc: func(context1 context.Context, s string) ([]protocol.BackgroundJob, bool, error) {
+//				panic("mock out the BackgroundJobs method")
+//			},
 //			ClearRevertFunc: func(context1 context.Context, s string) error {
 //				panic("mock out the ClearRevert method")
+//			},
+//			CompletionNotesFunc: func(context1 context.Context, s string, strings []string) ([]protocol.BackgroundJob, error) {
+//				panic("mock out the CompletionNotes method")
 //			},
 //			CreateConversationFunc: func(context1 context.Context, conversation protocol.Conversation) error {
 //				panic("mock out the CreateConversation method")
@@ -34,6 +40,9 @@ var _ frontend.Backend = &mockBackend{}
 //			},
 //			ListConversationsFunc: func(context1 context.Context) ([]protocol.Conversation, error) {
 //				panic("mock out the ListConversations method")
+//			},
+//			MoveToBackgroundFunc: func(s string) (bool, error) {
+//				panic("mock out the MoveToBackground method")
 //			},
 //			PopQueueItemFunc: func(context1 context.Context, s string, s1 string) (bool, error) {
 //				panic("mock out the PopQueueItem method")
@@ -59,6 +68,9 @@ var _ frontend.Backend = &mockBackend{}
 //			StashQueueItemFunc: func(context1 context.Context, s string, threadQueueItem *protocol.ThreadQueueItem) error {
 //				panic("mock out the StashQueueItem method")
 //			},
+//			StopBackgroundJobFunc: func(context1 context.Context, s string, s1 string) (bool, error) {
+//				panic("mock out the StopBackgroundJob method")
+//			},
 //			SubscribeFunc: func(context1 context.Context) iter.Seq[protocol.Event] {
 //				panic("mock out the Subscribe method")
 //			},
@@ -78,8 +90,14 @@ var _ frontend.Backend = &mockBackend{}
 //
 //	}
 type mockBackend struct {
+	// BackgroundJobsFunc mocks the BackgroundJobs method.
+	BackgroundJobsFunc func(context1 context.Context, s string) ([]protocol.BackgroundJob, bool, error)
+
 	// ClearRevertFunc mocks the ClearRevert method.
 	ClearRevertFunc func(context1 context.Context, s string) error
+
+	// CompletionNotesFunc mocks the CompletionNotes method.
+	CompletionNotesFunc func(context1 context.Context, s string, strings []string) ([]protocol.BackgroundJob, error)
 
 	// CreateConversationFunc mocks the CreateConversation method.
 	CreateConversationFunc func(context1 context.Context, conversation protocol.Conversation) error
@@ -89,6 +107,9 @@ type mockBackend struct {
 
 	// ListConversationsFunc mocks the ListConversations method.
 	ListConversationsFunc func(context1 context.Context) ([]protocol.Conversation, error)
+
+	// MoveToBackgroundFunc mocks the MoveToBackground method.
+	MoveToBackgroundFunc func(s string) (bool, error)
 
 	// PopQueueItemFunc mocks the PopQueueItem method.
 	PopQueueItemFunc func(context1 context.Context, s string, s1 string) (bool, error)
@@ -114,6 +135,9 @@ type mockBackend struct {
 	// StashQueueItemFunc mocks the StashQueueItem method.
 	StashQueueItemFunc func(context1 context.Context, s string, threadQueueItem *protocol.ThreadQueueItem) error
 
+	// StopBackgroundJobFunc mocks the StopBackgroundJob method.
+	StopBackgroundJobFunc func(context1 context.Context, s string, s1 string) (bool, error)
+
 	// SubscribeFunc mocks the Subscribe method.
 	SubscribeFunc func(context1 context.Context) iter.Seq[protocol.Event]
 
@@ -128,12 +152,28 @@ type mockBackend struct {
 
 	// calls tracks calls to the methods.
 	calls struct {
+		// BackgroundJobs holds details about calls to the BackgroundJobs method.
+		BackgroundJobs []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+		}
 		// ClearRevert holds details about calls to the ClearRevert method.
 		ClearRevert []struct {
 			// Context1 is the context1 argument value.
 			Context1 context.Context
 			// S is the s argument value.
 			S string
+		}
+		// CompletionNotes holds details about calls to the CompletionNotes method.
+		CompletionNotes []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+			// Strings is the strings argument value.
+			Strings []string
 		}
 		// CreateConversation holds details about calls to the CreateConversation method.
 		CreateConversation []struct {
@@ -155,6 +195,11 @@ type mockBackend struct {
 		ListConversations []struct {
 			// Context1 is the context1 argument value.
 			Context1 context.Context
+		}
+		// MoveToBackground holds details about calls to the MoveToBackground method.
+		MoveToBackground []struct {
+			// S is the s argument value.
+			S string
 		}
 		// PopQueueItem holds details about calls to the PopQueueItem method.
 		PopQueueItem []struct {
@@ -220,6 +265,15 @@ type mockBackend struct {
 			// ThreadQueueItem is the threadQueueItem argument value.
 			ThreadQueueItem *protocol.ThreadQueueItem
 		}
+		// StopBackgroundJob holds details about calls to the StopBackgroundJob method.
+		StopBackgroundJob []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+			// S1 is the s1 argument value.
+			S1 string
+		}
 		// Subscribe holds details about calls to the Subscribe method.
 		Subscribe []struct {
 			// Context1 is the context1 argument value.
@@ -245,10 +299,13 @@ type mockBackend struct {
 		WorkflowDescriptions []struct {
 		}
 	}
+	lockBackgroundJobs          sync.RWMutex
 	lockClearRevert             sync.RWMutex
+	lockCompletionNotes         sync.RWMutex
 	lockCreateConversation      sync.RWMutex
 	lockDeleteQueueItem         sync.RWMutex
 	lockListConversations       sync.RWMutex
+	lockMoveToBackground        sync.RWMutex
 	lockPopQueueItem            sync.RWMutex
 	lockPromoteQueueItem        sync.RWMutex
 	lockQueueItems              sync.RWMutex
@@ -257,10 +314,47 @@ type mockBackend struct {
 	lockStageRevert             sync.RWMutex
 	lockStartGoal               sync.RWMutex
 	lockStashQueueItem          sync.RWMutex
+	lockStopBackgroundJob       sync.RWMutex
 	lockSubscribe               sync.RWMutex
 	lockSwitchConversationAgent sync.RWMutex
 	lockSyncConversation        sync.RWMutex
 	lockWorkflowDescriptions    sync.RWMutex
+}
+
+// BackgroundJobs calls BackgroundJobsFunc.
+func (mock *mockBackend) BackgroundJobs(context1 context.Context, s string) ([]protocol.BackgroundJob, bool, error) {
+	if mock.BackgroundJobsFunc == nil {
+		panic("mockBackend.BackgroundJobsFunc: method is nil but Backend.BackgroundJobs was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+	}{
+		Context1: context1,
+		S:        s,
+	}
+	mock.lockBackgroundJobs.Lock()
+	mock.calls.BackgroundJobs = append(mock.calls.BackgroundJobs, callInfo)
+	mock.lockBackgroundJobs.Unlock()
+	return mock.BackgroundJobsFunc(context1, s)
+}
+
+// BackgroundJobsCalls gets all the calls that were made to BackgroundJobs.
+// Check the length with:
+//
+//	len(mockedBackend.BackgroundJobsCalls())
+func (mock *mockBackend) BackgroundJobsCalls() []struct {
+	Context1 context.Context
+	S        string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+	}
+	mock.lockBackgroundJobs.RLock()
+	calls = mock.calls.BackgroundJobs
+	mock.lockBackgroundJobs.RUnlock()
+	return calls
 }
 
 // ClearRevert calls ClearRevertFunc.
@@ -296,6 +390,46 @@ func (mock *mockBackend) ClearRevertCalls() []struct {
 	mock.lockClearRevert.RLock()
 	calls = mock.calls.ClearRevert
 	mock.lockClearRevert.RUnlock()
+	return calls
+}
+
+// CompletionNotes calls CompletionNotesFunc.
+func (mock *mockBackend) CompletionNotes(context1 context.Context, s string, strings []string) ([]protocol.BackgroundJob, error) {
+	if mock.CompletionNotesFunc == nil {
+		panic("mockBackend.CompletionNotesFunc: method is nil but Backend.CompletionNotes was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+		Strings  []string
+	}{
+		Context1: context1,
+		S:        s,
+		Strings:  strings,
+	}
+	mock.lockCompletionNotes.Lock()
+	mock.calls.CompletionNotes = append(mock.calls.CompletionNotes, callInfo)
+	mock.lockCompletionNotes.Unlock()
+	return mock.CompletionNotesFunc(context1, s, strings)
+}
+
+// CompletionNotesCalls gets all the calls that were made to CompletionNotes.
+// Check the length with:
+//
+//	len(mockedBackend.CompletionNotesCalls())
+func (mock *mockBackend) CompletionNotesCalls() []struct {
+	Context1 context.Context
+	S        string
+	Strings  []string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+		Strings  []string
+	}
+	mock.lockCompletionNotes.RLock()
+	calls = mock.calls.CompletionNotes
+	mock.lockCompletionNotes.RUnlock()
 	return calls
 }
 
@@ -404,6 +538,38 @@ func (mock *mockBackend) ListConversationsCalls() []struct {
 	mock.lockListConversations.RLock()
 	calls = mock.calls.ListConversations
 	mock.lockListConversations.RUnlock()
+	return calls
+}
+
+// MoveToBackground calls MoveToBackgroundFunc.
+func (mock *mockBackend) MoveToBackground(s string) (bool, error) {
+	if mock.MoveToBackgroundFunc == nil {
+		panic("mockBackend.MoveToBackgroundFunc: method is nil but Backend.MoveToBackground was just called")
+	}
+	callInfo := struct {
+		S string
+	}{
+		S: s,
+	}
+	mock.lockMoveToBackground.Lock()
+	mock.calls.MoveToBackground = append(mock.calls.MoveToBackground, callInfo)
+	mock.lockMoveToBackground.Unlock()
+	return mock.MoveToBackgroundFunc(s)
+}
+
+// MoveToBackgroundCalls gets all the calls that were made to MoveToBackground.
+// Check the length with:
+//
+//	len(mockedBackend.MoveToBackgroundCalls())
+func (mock *mockBackend) MoveToBackgroundCalls() []struct {
+	S string
+} {
+	var calls []struct {
+		S string
+	}
+	mock.lockMoveToBackground.RLock()
+	calls = mock.calls.MoveToBackground
+	mock.lockMoveToBackground.RUnlock()
 	return calls
 }
 
@@ -708,6 +874,46 @@ func (mock *mockBackend) StashQueueItemCalls() []struct {
 	mock.lockStashQueueItem.RLock()
 	calls = mock.calls.StashQueueItem
 	mock.lockStashQueueItem.RUnlock()
+	return calls
+}
+
+// StopBackgroundJob calls StopBackgroundJobFunc.
+func (mock *mockBackend) StopBackgroundJob(context1 context.Context, s string, s1 string) (bool, error) {
+	if mock.StopBackgroundJobFunc == nil {
+		panic("mockBackend.StopBackgroundJobFunc: method is nil but Backend.StopBackgroundJob was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+		S1       string
+	}{
+		Context1: context1,
+		S:        s,
+		S1:       s1,
+	}
+	mock.lockStopBackgroundJob.Lock()
+	mock.calls.StopBackgroundJob = append(mock.calls.StopBackgroundJob, callInfo)
+	mock.lockStopBackgroundJob.Unlock()
+	return mock.StopBackgroundJobFunc(context1, s, s1)
+}
+
+// StopBackgroundJobCalls gets all the calls that were made to StopBackgroundJob.
+// Check the length with:
+//
+//	len(mockedBackend.StopBackgroundJobCalls())
+func (mock *mockBackend) StopBackgroundJobCalls() []struct {
+	Context1 context.Context
+	S        string
+	S1       string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+		S1       string
+	}
+	mock.lockStopBackgroundJob.RLock()
+	calls = mock.calls.StopBackgroundJob
+	mock.lockStopBackgroundJob.RUnlock()
 	return calls
 }
 

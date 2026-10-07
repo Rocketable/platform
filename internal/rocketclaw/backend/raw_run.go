@@ -15,7 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 
-	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
+	instrumentation "github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
@@ -133,7 +133,7 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 		}
 	}()
 
-	runtimeConfig := rocketcode.Config{AutoApproverModel: r.cfg.AutoApproverModel, ShellTempDir: filepath.Join(r.cfg.Workspace, filepath.FromSlash(shellTempRel)), SpillDir: rocketcodeSpillDir(r.cfg), ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: r.cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: r.cfg.Instrumentation.HideInputs, HideOutputs: r.cfg.Instrumentation.HideOutputs}}, ChildSessions: rocketcode.InertChildSessions{}, Journal: r.journal, ShellCommand: rocketcode.DefaultShellCommand}
+	runtimeConfig := rocketcode.Config{AutoApproverModel: r.cfg.AutoApproverModel, ShellTempDir: filepath.Join(r.cfg.Workspace, filepath.FromSlash(shellTempRel)), SpillDir: rocketcodeSpillDir(r.cfg), RetainedResultDir: filepath.Join("retained", "unused"), ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: r.cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: r.cfg.Instrumentation.HideInputs, HideOutputs: r.cfg.Instrumentation.HideOutputs}}, ChildSessions: rocketcode.InertChildSessions{}, Journal: r.journal, BackgroundJobs: rocketcode.InertBackgroundJobs{}, ShellCommand: rocketcode.DefaultShellCommand}
 	runtimeConfig.CustomTools = r.customTools
 
 	runtime, err := rocketcode.NewWithModelResolver(r.resolver, &runtimeConfig, r.root, callAgents, r.skills, r.agent, io.Discard)
@@ -267,4 +267,10 @@ func prepareRocketCode(cfg *config.Config, agent string, logger *slog.Logger, mo
 
 func rocketcodeSpillDir(cfg *config.Config) string {
 	return filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), ".rocketcode", "spill")
+}
+
+// rocketcodeRetainedDir is a conversation's retained background output, relative to the spill dir.
+func rocketcodeRetainedDir(conversationID string) string {
+	sum := sha256.Sum256([]byte(conversationID))
+	return filepath.Join("retained", hex.EncodeToString(sum[:]))
 }

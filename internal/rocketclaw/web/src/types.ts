@@ -1,13 +1,14 @@
 export type PromptDelivery = "STEER" | "QUEUE" | "STASH";
 export type Attachment = { id: string; name: string; mimeType: string; size?: string; originalUnverified?: boolean; conversationId: string };
-export type TranscriptEvent = { text: string; role: string; complete: boolean; turnId: string; entryKey: string; itemId: string; inputId: string; messageId?: string; toolCallId?: string; toolName?: string; attachments?: Attachment[]; agent?: string; model?: string; reasoningEffort?: string; origin?: string; header?: string; principal?: string; state?: "working" | "review" | "completed" | "blocked" | "failed" | "stopped"; parentId?: string };
+export type TranscriptEvent = { text: string; role: string; complete: boolean; turnId: string; entryKey: string; itemId: string; inputId: string; messageId?: string; toolCallId?: string; toolName?: string; attachments?: Attachment[]; agent?: string; model?: string; reasoningEffort?: string; origin?: string; header?: string; principal?: string; state?: "working" | "review" | "completed" | "blocked" | "failed" | "stopped" | "background"; parentId?: string; completionNotes?: BackgroundJob[]; delegation?: string; review?: string };
+export type BackgroundJob = { jobId: string; kind: string; state: string; label: string; toolCallId: string; subagentKey: string; stoppedBy: string; hidden: boolean; note: string };
 export type SessionEntryMeta = { id: string; type?: string; timestamp?: string };
 export type SessionEntryData = { id: string; json?: string };
 export type QueueItem = { id: string; text: string; attachments?: Attachment[]; delivery?: PromptDelivery; principal?: string };
 export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; settled?: boolean; allowedAgents?: string[]; running?: boolean; pinned?: boolean; name?: string; snoozedUntil?: string; forkedFrom?: string; tags?: string[]; cron?: boolean; cronName?: string };
 export type OriginPair = { key: string; value: string };
 export type ChatOrigin = { kind: string; sourcePath?: string; stem?: string; runKind?: string; runId?: string; agent?: string; ranAt?: string; externalConversationId?: string; pairs?: OriginPair[] };
-export type HistoryView = { messages: TranscriptEvent[]; origin?: ChatOrigin; delegations: string[]; revision: string; reset: boolean; replacedKeys: string[]; removedKeys: string[]; entryKeys: string[]; running: boolean; terminal: string; start: string; more: boolean; revertEligible?: boolean; revertMessageId?: string; canUndo?: boolean };
+export type HistoryView = { messages: TranscriptEvent[]; origin?: ChatOrigin; delegations: string[]; revision: string; reset: boolean; replacedKeys: string[]; removedKeys: string[]; entryKeys: string[]; running: boolean; terminal: string; start: string; more: boolean; revertEligible?: boolean; revertMessageId?: string; canUndo?: boolean; movable: boolean; backgroundJobs: BackgroundJob[] };
 export type MessageMatch = { conversationId: string; message: TranscriptEvent };
 export type SearchMessagesResponse = { matches?: MessageMatch[]; tagIds?: string[] };
 export type SessionBatch = { sessions: Session[]; owner: string; upstreamSuccess: boolean; summariesComplete: boolean };

@@ -140,6 +140,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		shutdownOnce     sync.Once
 		restartRequested = make(chan struct{})
 		threadBridges    *threadBridgeManager
+		background       *backgroundRegistry
 		slackSink        SlackFrontend
 		stops            []namedStopper
 	)
@@ -148,6 +149,10 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		logger.Warn("prune stale rocketclaw state", "error", err)
 	} else if stats.Threads+stats.ExternalMCPSessions > 0 || stats.SessionRows > 0 {
 		logger.Info("pruned stale rocketclaw state", "threads", stats.Threads, "external_mcp_sessions", stats.ExternalMCPSessions, "session_rows", stats.SessionRows)
+	}
+
+	if err := rocketcodeSessions.sweepRetainedResults(); err != nil {
+		logger.Warn("sweep expired retained execute results", "error", err)
 	}
 
 	backfillCtx, cancelBackfill := context.WithCancel(runCtx)
@@ -287,8 +292,13 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		Config.StartNewThread = threadBridges.StartNewThread
 		Config.SessionService = rocketcodeSessions
 
-		return NewConversation(cfg, rt, &Config, logger)
+		bridge := NewConversation(cfg, rt, &Config, logger)
+		bridge.background = background
+
+		return bridge
 	})
+	background = newBackgroundRegistry(rocketcodeSessions, threadBridges, logger.With("component", "background_jobs"))
+	rocketcodeSessions.jobs = background
 
 	var bridgeLoops errgroup.Group
 
@@ -302,6 +312,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 			logger.Warn("stop thread bridges", "error", err)
 		}
 
+		background.shutdown()
 		s.cancel()
 
 		cleanupCtx := context.Background()
@@ -316,8 +327,13 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		Cfg: cfg, Log: logger, RunCtx: runCtx,
 		Sessions:                 rocketcodeSessions,
 		ExternalMCPUsers:         externalMCPUsers,
-		RefreshExternalMCPAgents: &refreshExternalMCPAgents, TextRouter: threadBridges, threads: threadBridges,
+		RefreshExternalMCPAgents: &refreshExternalMCPAgents, TextRouter: threadBridges, threads: threadBridges, background: background,
 		slackAsker: &slackUserQuestionAsker,
+	}
+
+	resumeJobs, err := background.recoverJobs(runCtx)
+	if err != nil {
+		return err
 	}
 
 	slack, copyDone, extraStops, err := s.assemble.Assemble(rt)
@@ -337,6 +353,10 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		if err := slack.Start(runCtx); err != nil {
 			return fmt.Errorf("start Slack connector: %w", err)
 		}
+	}
+
+	if err := resumeJobs(runCtx); err != nil {
+		return err
 	}
 
 	if err := threadBridges.StartActiveTurns(runCtx); err != nil {

@@ -113,6 +113,8 @@ test("failed calls surface when hidden, stay grouped when grouped, and delivered
   expect(shape([call("w1", "websearch", "tool call aborted because the process restarted")], "messages")).toEqual(["w1+"]);
   expect(shape([call("task1", "task", "subagent task aborted because the process restarted")], "messages")).toEqual(["task1+"]);
   expect(shape([call("e1", "execute", "tool call rejected: repeated identical call")], "messages")).toEqual([]);
+  // A call moved to the background shows at every level, like a failure.
+  expect(shape([{ ...call("e3", "execute"), state: "background" }, { ...call("task2", "task"), state: "background" }], "messages")).toEqual(["e3+", "task2+"]);
   expect(shape([call("f1", "rocketclaw_attach_files_to_response", "attached", [{ id: "file" }])], "messages")).toEqual(["f1+"]);
   expect(shape([call("e1", "execute"), call("f1", "rocketclaw_attach_files_to_response", "attached", [{ id: "file" }]), call("e2", "execute")], "compact")).toEqual(["Used 1 tool[e1]", "f1+", "Used 1 tool[e2]"]);
 });

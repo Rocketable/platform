@@ -41,11 +41,15 @@ type Config struct {
 	ShellTempDir string
 	// SpillDir is the workspace-relative or absolute directory for oversized
 	// execute output. Empty uses <workspace>/.rocketcode/spill.
-	SpillDir               string
+	SpillDir string
+	// RetainedResultDir is the directory, relative to SpillDir, that keeps oversized output of
+	// background execute scripts readable for 7 days. Required; give each conversation its own.
+	RetainedResultDir      string
 	AutoApprovePermissions bool
 	Observability          ObservabilityConfig
 	ChildSessions          ChildSessions
 	Journal                Journal
+	BackgroundJobs         BackgroundJobs
 	CustomTools            []Tool
 	ShellEnv               map[string]string
 	// ChildContext supplies host messages to guardrails and permission reviewers.
@@ -71,6 +75,8 @@ const (
 // ChildSessions stores finished Task, guardrail, and permission review turns.
 type ChildSessions interface {
 	AppendChildEntry(ctx context.Context, key string, entry *SessionEntry) error
+	// ChildEntries returns the entries saved under key, oldest first.
+	ChildEntries(ctx context.Context, key string) ([]SessionEntry, error)
 }
 
 // InertChildSessions discards child session entries.
@@ -79,6 +85,11 @@ type InertChildSessions struct{}
 // AppendChildEntry discards one child session entry.
 func (InertChildSessions) AppendChildEntry(context.Context, string, *SessionEntry) error {
 	return nil
+}
+
+// ChildEntries returns no entries.
+func (InertChildSessions) ChildEntries(context.Context, string) ([]SessionEntry, error) {
+	return nil, nil
 }
 
 // ObservabilityConfig controls OpenInference-compatible tracing for RocketCode.
@@ -283,6 +294,11 @@ func NewWithModelResolver(
 		return nil, err
 	}
 
+	// Inside the spill dir, the file-tool block keeps retained output private.
+	if !filepath.IsLocal(config.RetainedResultDir) {
+		return nil, fmt.Errorf("retained result dir %q must be a relative path inside the spill dir", config.RetainedResultDir)
+	}
+
 	if agents.Items == nil {
 		return nil, errors.New("agents are required")
 	}
@@ -394,9 +410,11 @@ func NewWithModelResolver(
 		childContext:               config.ChildContext,
 		shellTemp:                  shellTemp,
 		spillRel:                   spillRel,
+		retainedRel:                filepath.Join(spillRel, config.RetainedResultDir),
 		autoApprovePermissions:     config.AutoApprovePermissions,
 		observability:              config.Observability,
 		childSessions:              config.ChildSessions,
+		backgroundJobs:             config.BackgroundJobs,
 		mcpRegistry:                mcpRegistry,
 	}
 	modelTools, codeHosts := factory.assembleTools(agentForTools)
@@ -431,6 +449,7 @@ func NewWithModelResolver(
 		PermissionReviewer:     factory,
 		Observability:          config.Observability,
 		Journal:                config.Journal,
+		notes:                  InertBackgroundJobs{},
 		expandInputPrompts:     config.ExpandPromptShellCommands.InputPrompts,
 		promptExpansion:        promptExpansion,
 		spillRel:               spillRel,

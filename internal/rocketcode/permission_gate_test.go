@@ -68,24 +68,33 @@ func TestCheckNestedPermissionDeny(t *testing.T) {
 	require.Contains(t, err.Error(), "denied")
 }
 
+// A review during a call joins the call's review history: unique to its turn when a provider
+// reuses the call ID, and the same when the turn resumes.
 func TestCheckNestedPermissionAutoWithReviewerAllow(t *testing.T) {
 	t.Parallel()
 
 	var permissions PermissionSet
 	require.NoError(t, permissions.Set("mcp", "demo.echo", PermissionAuto))
 
-	looper := &looper{
-		Journal:                InertJournal{},
-		observations:           &turnObservations{journal: InertJournal{}},
-		Permissions:            permissions,
-		AutoApprovePermissions: true,
-		PermissionReviewer: &mockPermissionReviewer{reviewPermissionFunc: func(context.Context, *permissionReviewRequest, chan<- ChatResponse) permissionReviewDecision {
-			return permissionReviewDecision{Outcome: permissionReviewOutcomeAllow, Rationale: "ok"}
-		}},
-		agent: Agent{Name: "main"},
-	}
-	ctx := withToolCallContext(t.Context(), looper, nil, "")
+	reviewer := &mockPermissionReviewer{reviewPermissionFunc: func(context.Context, *permissionReviewRequest, chan<- ChatResponse) permissionReviewDecision {
+		return permissionReviewDecision{Outcome: permissionReviewOutcomeAllow, Rationale: "ok"}
+	}}
 
-	err := CheckNestedPermission(ctx, "execute", "mcp", "demo.echo", map[string]any{"message": "hi"})
-	require.NoError(t, err)
+	for _, turnID := range []string{"turn-1", "turn-1", "turn-2"} {
+		looper := &looper{
+			Journal:                InertJournal{},
+			observations:           &turnObservations{journal: InertJournal{}, turnID: turnID},
+			Permissions:            permissions,
+			AutoApprovePermissions: true,
+			PermissionReviewer:     reviewer,
+			agent:                  Agent{Name: "main"},
+		}
+		ctx := withToolCallContext(t.Context(), looper, nil, "call_0")
+
+		err := CheckNestedPermission(ctx, "execute", "mcp", "demo.echo", map[string]any{"message": "hi"})
+		require.NoError(t, err)
+	}
+
+	requests := reviewedRequests(reviewer)
+	require.Equal(t, []string{reviewKey("turn-1", "call_0"), reviewKey("turn-1", "call_0"), reviewKey("turn-2", "call_0")}, []string{requests[0].Review, requests[1].Review, requests[2].Review})
 }

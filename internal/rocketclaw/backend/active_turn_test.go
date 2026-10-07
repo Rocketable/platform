@@ -470,7 +470,8 @@ func TestLegacyCronScheduleResumesIntoCanonical(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(t.Context(), store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 1)
+			// Back to before 027_producer_handoff, which 028_background_jobs follows.
+			_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(t.Context(), store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 2)
 			require.NoError(t, err)
 			require.NoError(t, store.UpsertThread("cron:legacy", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
 
@@ -1617,4 +1618,174 @@ def main(args):
 			require.Eventually(t, func() bool { return len(testTurnStepKeys(t, service, conversationID)) == 0 }, 5*time.Second, 10*time.Millisecond, "the finished runs leave no journal steps")
 		})
 	}
+}
+
+// restart starts nt's bridges the way a new process does, settling the Background Jobs a stopped
+// one left running before any turn resumes.
+func (nt *noteTest) restart(t *testing.T) (manager *threadBridgeManager, shutdown func() error) {
+	t.Helper()
+
+	manager, shutdown = nt.run(t, ignoreOutbound)
+	resume, err := nt.bridge(t, manager, nt.conversationID).background.recoverJobs(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, resume(t.Context()))
+
+	return manager, shutdown
+}
+
+func killedExecuteNote(jobID string) string {
+	return `<execute id="` + jobID + `" state="killed" description="tests">` + "\nThe job was killed because the server restarted.\n</execute>"
+}
+
+// The killed script's note waits for the conversation's next turn and starts no turn of its own.
+func TestRestartReportsKilledScriptAtNextTurn(t *testing.T) {
+	nt := newNoteTest(t, answerNoteTest)
+	job := testBackgroundJob(nt.conversationID, "turn-0/call/a")
+	job.origin = nt.slackPrompt("run the tests")
+	createTestBackgroundJob(t, nt.service, job)
+
+	manager, _ := nt.restart(t)
+	nt.waitIdle(t, manager, nt.conversationID)
+	assert.Empty(t, nt.requests, "no turn starts for the killed script")
+	assert.Equal(t, []string{"turn-0/call/a pending false"}, noteStates(t, nt.service))
+
+	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("next")))
+	assert.NotContains(t, nt.request(t), "turn-0/call/a")
+	assert.Equal(t, "[System]\n\n"+killedExecuteNote("turn-0/call/a"), lastRequestMessage(t, nt.request(t)), "the next turn reports the killed script")
+	readFinal(t, nt.finals)
+	nt.waitIdle(t, manager, nt.conversationID)
+	assert.Equal(t, []string{"turn-0/call/a consumed false"}, noteStates(t, nt.service))
+}
+
+// A subagent cut by a restart resumes its journaled turn, then delivers its note; a second start replays nothing.
+func TestRestartResumesBackgroundSubagent(t *testing.T) {
+	cut := make(chan struct{}, 1)
+	cut <- struct{}{}
+
+	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		switch {
+		case strings.Contains(body, `"content":"research the flaky test"`):
+			select {
+			case <-cut:
+				<-r.Context().Done() // The restart cuts the subagent's first run.
+				return
+			default:
+			}
+
+			_, _ = w.Write([]byte(`{"id":"resp_2","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_2","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"found it","annotations":[]}]}]}`))
+		case !strings.Contains(body, "function_call_output"):
+			_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_t","name":"task","arguments":"{\"description\":\"research\",\"prompt\":\"research the flaky test\",\"subagent_type\":\"researcher\",\"background\":true}"}]}`))
+		default:
+			answerNoteTest(w, r, n, body)
+		}
+	})
+	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-5.5\npermission:\n  task: allow\n  rocketclaw:\n    allow_background: allow\n---\nPrompt\n")
+
+	first, shutdown := nt.run(t, ignoreOutbound)
+	registry := nt.bridge(t, first, nt.conversationID).background
+	require.NoError(t, nt.bridge(t, first, nt.conversationID).Submit(t.Context(), nt.slackPrompt("hello")))
+
+	for range 3 { // The task call, the subagent's cut run, and the turn's answer.
+		nt.request(t)
+	}
+
+	assert.Equal(t, "answer", readFinal(t, nt.finals).Text)
+	nt.waitIdle(t, first, nt.conversationID)
+	require.NoError(t, shutdown())
+	registry.shutdown()
+
+	jobs, err := queryStrings(t.Context(), nt.service.db, `SELECT job_id FROM background_jobs WHERE kind = 'task' AND status = 'running'`, "running tasks")
+	require.NoError(t, err)
+	require.Len(t, jobs, 1)
+	keys, err := queryStrings(t.Context(), nt.service.db, `SELECT subagent_key FROM background_jobs WHERE job_id = $1`, "task subagent key", jobs[0])
+	require.NoError(t, err)
+	require.Regexp(t, `^/call_t-[0-9a-f]{8}$`, keys[0])
+
+	manager, shutdown := nt.restart(t)
+	assert.Contains(t, nt.request(t), `"content":"research the flaky test"`, "the subagent resumes its journaled turn")
+	assert.Equal(t, systemPromptHeader()+"\n\n"+`<subagent id="`+jobs[0]+`" state="completed" description="research" continue="`+keys[0]+`">`+"\n<task_result>\nfound it\n</task_result>\n</subagent>", lastRequestMessage(t, nt.request(t)))
+	readFinal(t, nt.finals)
+	nt.waitIdle(t, manager, nt.conversationID)
+	assert.Equal(t, []string{jobs[0] + " consumed true"}, noteStates(t, nt.service))
+	require.NoError(t, shutdown())
+
+	manager, _ = nt.restart(t)
+	nt.waitIdle(t, manager, nt.conversationID)
+	assert.Empty(t, nt.requests, "a second start replays nothing")
+}
+
+// The killed note wakes the hidden cron run, and its follow-up is posted in the thread the run posted.
+func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
+	nt := newNoteTest(t, func(w http.ResponseWriter, _ *http.Request, _ int, _ string) {
+		// A cron run's reply is its report.
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Report finished.","annotations":[]}]}]}`))
+	})
+	first, shutdown := nt.run(t, ignoreOutbound)
+	report := protocol.SlackThreadConversationID("C1", "1.2")
+
+	first.mu.Lock()
+	first.cronRoots = &slackFrontendMock{SendCronjobRootFunc: func(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
+		return protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, nil
+	}}
+	first.mu.Unlock()
+
+	msg := seedCronRun(t, nt.service, "cron:nightly")
+	job := testBackgroundJob("cron:nightly", "turn-cron/call/a")
+	job.origin = msg
+	createTestBackgroundJob(t, nt.service, job)
+
+	outbound := protocol.NewOutboundMessage("cron:nightly", "Report started")
+	outbound.TurnID, outbound.Complete, outbound.Cronjob, outbound.SlackReply = "turn-cron", true, msg.Cronjob, msg.SlackReply
+	_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:nightly", nt.service), entries: []rocketcode.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
+	require.NoError(t, err)
+	require.NoError(t, first.StartActiveTurns(t.Context()))
+	assert.Equal(t, "Report started", readFinalFor(t, nt.finals, "cron:nightly").Text)
+	require.Eventually(t, func() bool {
+		destinations, err := queryStrings(context.Background(), nt.service.db, `SELECT sync_destination FROM background_jobs`, "job destinations")
+		return err == nil && slices.Equal(destinations, []string{report})
+	}, 10*time.Second, 10*time.Millisecond)
+	nt.waitIdle(t, first, report)
+	require.NoError(t, shutdown())
+
+	manager, _ := nt.restart(t)
+	assert.Equal(t, "Report finished.", readFinalFor(t, nt.finals, report).Text, "the follow-up is posted in the report thread")
+	assert.Equal(t, systemPromptHeader()+"\n\n"+killedExecuteNote(job.jobID), lastRequestMessage(t, nt.request(t)))
+	nt.waitIdle(t, manager, report)
+	assert.Equal(t, []string{"turn-cron/call/a consumed true"}, noteStates(t, nt.service))
+}
+
+// A second start replays nothing.
+func TestRestartWakesUndeliveredNote(t *testing.T) {
+	nt := newNoteTest(t, answerNoteTest)
+	nt.addNote(t, nt.conversationID, "turn-0/call/a", nt.slackPrompt("run the tests"))
+
+	manager, shutdown := nt.restart(t)
+	assert.Equal(t, systemPromptHeader()+"\n\n"+testExecuteNote("turn-0/call/a"), lastRequestMessage(t, nt.request(t)))
+	readFinal(t, nt.finals)
+	nt.waitIdle(t, manager, nt.conversationID)
+	require.NoError(t, shutdown())
+
+	manager, _ = nt.restart(t)
+	nt.waitIdle(t, manager, nt.conversationID)
+	assert.Empty(t, nt.requests, "a second start replays nothing")
+	assert.Equal(t, []string{"turn-0/call/a consumed true"}, noteStates(t, nt.service))
+}
+
+func TestRestartDropsJobsOfDeletedConversation(t *testing.T) {
+	nt := newNoteTest(t, answerNoteTest)
+	task := testBackgroundJob(nt.conversationID, "turn-0/call/a")
+	task.kind, task.subagentKey = backgroundTask, "/a"
+
+	for _, job := range []*backgroundJob{task, testBackgroundJob(nt.conversationID, "turn-0/call/b")} {
+		createTestBackgroundJob(t, nt.service, job)
+	}
+
+	nt.addNote(t, nt.conversationID, "turn-0/call/c", nt.slackPrompt("run the tests"))
+	_, err := nt.service.DeleteSession(t.Context(), nt.conversationID)
+	require.NoError(t, err)
+
+	manager, _ := nt.restart(t)
+	nt.waitIdle(t, manager, nt.conversationID)
+	assert.Empty(t, nt.requests)
+	assert.Empty(t, backgroundRows(t, nt.service))
 }

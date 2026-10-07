@@ -78,11 +78,12 @@ func TestWorkflowPrepareOmitsMCPTools(t *testing.T) {
 	// Workflow path does not pass MCPServers; host grants still register execute.
 	// RestrictTools keeps execute and strips task / direct host tools.
 	runtime, err := rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{
-		ShellTempDir:  filepath.Join(cfg.Workspace, filepath.FromSlash(shellRel)),
-		Diagnostics:   true,
-		ChildSessions: rocketcode.InertChildSessions{},
-		Journal:       rocketcode.InertJournal{},
-		ShellCommand:  rocketcode.DefaultShellCommand,
+		ShellTempDir:      filepath.Join(cfg.Workspace, filepath.FromSlash(shellRel)),
+		RetainedResultDir: "retained",
+		Diagnostics:       true,
+		ChildSessions:     rocketcode.InertChildSessions{},
+		Journal:           rocketcode.InertJournal{},
+		ShellCommand:      rocketcode.DefaultShellCommand,
 	}, root, agents, skills, "main", io.Discard)
 	require.NoError(t, err)
 

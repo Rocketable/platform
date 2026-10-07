@@ -88,7 +88,7 @@ func TestSaveExecuteResult(t *testing.T) {
 	require.Equal(t, before, resumed.spillResults)
 
 	for id := range before {
-		page, err := resumed.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: id, StartLine: 2100})
+		page, err := resumed.loadExecuteResult(t.Context(), "", loadExecuteResultParams{ResultID: id, StartLine: 2100})
 		require.NoError(t, err)
 		require.Equal(t, "line\n\n[EOF]\n", page.Output)
 	}
@@ -108,7 +108,7 @@ func TestSaveExecuteResult(t *testing.T) {
 	resumed.restoreTurnExecuteResults("turn-1")
 
 	for id := range before {
-		_, err := resumed.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: id})
+		_, err := resumed.loadExecuteResult(t.Context(), "", loadExecuteResultParams{ResultID: id})
 		require.EqualError(t, err, "unknown or expired execute result")
 	}
 }
@@ -142,19 +142,19 @@ func TestLoadExecuteResultPages(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				require.NoError(t, root.WriteFile(path, []byte(tc.text), 0o600))
-				page, err := loop.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: id, StartLine: tc.start, Limit: tc.limit, LineNumbers: tc.numbers})
+				page, err := loop.loadExecuteResult(t.Context(), "", loadExecuteResultParams{ResultID: id, StartLine: tc.start, Limit: tc.limit, LineNumbers: tc.numbers})
 				require.NoError(t, err)
 				require.Equal(t, tc.want, page.Output)
 			})
 		}
 
 		for _, params := range []loadExecuteResultParams{{ResultID: id, StartLine: -1}, {ResultID: id, Limit: -1}} {
-			_, err := loop.loadExecuteResult(t.Context(), params)
+			_, err := loop.loadExecuteResult(t.Context(), "", params)
 			require.Error(t, err)
 		}
 
 		require.NoError(t, root.Remove(path))
-		_, err := loop.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: id})
+		_, err := loop.loadExecuteResult(t.Context(), "", loadExecuteResultParams{ResultID: id})
 		require.EqualError(t, err, "stored execute result unavailable")
 	}
 }
@@ -178,7 +178,7 @@ func TestLoadExecuteResultByteBoundAndContinuation(t *testing.T) {
 		require.NotEmpty(t, path)
 
 		before := maps.Clone(loop.spillResults)
-		page, err := loop.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: id})
+		page, err := loop.loadExecuteResult(t.Context(), "", loadExecuteResultParams{ResultID: id})
 		require.NoError(t, err)
 		require.LessOrEqual(t, len(page.Output), executeHeadMaxBytes)
 		require.True(t, utf8.ValidString(page.Output))
@@ -186,7 +186,7 @@ func TestLoadExecuteResultByteBoundAndContinuation(t *testing.T) {
 
 		if strings.HasPrefix(full, "€") {
 			for _, numbers := range []bool{false, true} {
-				page, err = loop.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: id, LineNumbers: numbers})
+				page, err = loop.loadExecuteResult(t.Context(), "", loadExecuteResultParams{ResultID: id, LineNumbers: numbers})
 				require.NoError(t, err)
 
 				prefix := ""
@@ -199,12 +199,12 @@ func TestLoadExecuteResultByteBoundAndContinuation(t *testing.T) {
 				require.LessOrEqual(t, len(page.Output), executeHeadMaxBytes)
 			}
 
-			page, err = loop.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: id, StartLine: 2})
+			page, err = loop.loadExecuteResult(t.Context(), "", loadExecuteResultParams{ResultID: id, StartLine: 2})
 			require.NoError(t, err)
 			require.Equal(t, "short\n\n[EOF]\n", page.Output)
 		} else {
 			require.Equal(t, "first\n\n[next_start_line=2]\n", page.Output)
-			page, err = loop.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: id, StartLine: 2})
+			page, err = loop.loadExecuteResult(t.Context(), "", loadExecuteResultParams{ResultID: id, StartLine: 2})
 			require.NoError(t, err)
 			require.Equal(t, strings.Repeat("x", executeHeadMaxBytes-1024-1)+"\n\n[next_start_line=3]\n", page.Output)
 		}
@@ -229,26 +229,26 @@ func TestLoadExecuteResultMembershipAndCancellation(t *testing.T) {
 
 	for id, path := range loop.spillResults {
 		for _, invalid := range []string{"", "unknown", path, "../../etc/passwd", root.Name() + "/" + path} {
-			_, err := loop.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: invalid})
+			_, err := loop.loadExecuteResult(t.Context(), "", loadExecuteResultParams{ResultID: invalid})
 			require.EqualError(t, err, "unknown or expired execute result")
 		}
 
 		sibling := &looper{promptExpansion: loop.promptExpansion, spillRel: loop.spillRel}
 		sibling.restoreTurnExecuteResults("sibling")
-		_, err := sibling.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: id})
+		_, err := sibling.loadExecuteResult(t.Context(), "", loadExecuteResultParams{ResultID: id})
 		require.Error(t, err)
 		sibling.deleteTurnExecuteResults()
 
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 
-		_, err = loop.loadExecuteResult(ctx, loadExecuteResultParams{ResultID: id, StartLine: 2})
+		_, err = loop.loadExecuteResult(ctx, "", loadExecuteResultParams{ResultID: id, StartLine: 2})
 		require.ErrorIs(t, err, context.Canceled)
 		loop.restoreTurnExecuteResults("new-turn") // Deliberately retain old bytes to test membership, not deletion.
 
 		_, err = root.Stat(path)
 		require.NoError(t, err)
-		_, err = loop.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: id})
+		_, err = loop.loadExecuteResult(t.Context(), "", loadExecuteResultParams{ResultID: id})
 		require.Error(t, err)
 		loop.deleteTurnExecuteResults() // A canceled loader must release the lifetime lock.
 		require.NoError(t, root.RemoveAll(defaultSpillRel+"/turn"))
@@ -287,11 +287,11 @@ func TestLoadExecuteResultRejectsSymlinksAndDirectories(t *testing.T) {
 					require.NoError(t, root.Symlink(filepath.Base(dir)+"-real", dir))
 				}
 
-				page, err := loop.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: id})
+				page, err := loop.loadExecuteResult(t.Context(), "", loadExecuteResultParams{ResultID: id})
 				require.Error(t, err)
 				require.Empty(t, page.Output)
 				loop.restoreTurnExecuteResults("turn")
-				page, err = loop.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: id})
+				page, err = loop.loadExecuteResult(t.Context(), "", loadExecuteResultParams{ResultID: id})
 				require.Error(t, err)
 				require.Empty(t, page.Output)
 			}
@@ -342,7 +342,7 @@ func TestExecuteResultParallelAssociation(t *testing.T) {
 			_, footer, _ := strings.Cut(out, "result_id=\"")
 			id, _, _ := strings.Cut(footer, "\"")
 
-			page, err := loop.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: id, StartLine: 2001, Limit: 1})
+			page, err := loop.loadExecuteResult(t.Context(), "", loadExecuteResultParams{ResultID: id, StartLine: 2001, Limit: 1})
 			if err != nil {
 				return err
 			}

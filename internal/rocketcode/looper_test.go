@@ -286,6 +286,7 @@ func testLooper(client responsesAPI) *looper {
 	l.Model = openai.ChatModelGPT6Luna
 	l.PermissionReviewer = inertPermissionReviewer{}
 	l.Journal = InertJournal{}
+	l.notes = InertBackgroundJobs{}
 	l.observations = &turnObservations{journal: l.Journal}
 
 	return &l
@@ -297,6 +298,7 @@ func emptyTestLooper() *looper {
 	l.ProviderOrigin = ProviderOrigin{Provider: "openai", Model: openai.ChatModelGPT6Luna}
 	l.PermissionReviewer = inertPermissionReviewer{}
 	l.Journal = InertJournal{}
+	l.notes = InertBackgroundJobs{}
 	l.observations = &turnObservations{journal: l.Journal}
 
 	return &l
@@ -720,10 +722,10 @@ func TestLooperExecuteResultTurnExit(t *testing.T) {
 
 			_, err = root.Stat(path)
 			require.ErrorIs(t, err, os.ErrNotExist)
-			_, err = loop.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: id})
+			_, err = loop.loadExecuteResult(t.Context(), "", loadExecuteResultParams{ResultID: id})
 			require.EqualError(t, err, "unknown or expired execute result")
 			loop.restoreTurnExecuteResults("turn-1")
-			_, err = loop.loadExecuteResult(t.Context(), loadExecuteResultParams{ResultID: id})
+			_, err = loop.loadExecuteResult(t.Context(), "", loadExecuteResultParams{ResultID: id})
 			require.EqualError(t, err, "unknown or expired execute result")
 		})
 	}

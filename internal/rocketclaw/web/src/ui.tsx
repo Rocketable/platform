@@ -29,7 +29,7 @@ import { Sheet, SheetContent, SheetTrigger, SheetTitle, SheetDescription } from 
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import type { Agent, Attachment as AttachmentMeta, ConfigView, CronJob, QueueItem, Session, TranscriptEvent } from "@/types";
+import type { Agent, Attachment as AttachmentMeta, BackgroundJob, ConfigView, CronJob, QueueItem, Session, TranscriptEvent } from "@/types";
 import { runPreload } from "@/preload";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
 import {
@@ -205,6 +205,7 @@ function QueuePanel({
   onPop,
   onRemove,
   onReorder,
+  jobs,
 }: {
   conversationId: string;
   items: QueueItem[];
@@ -214,12 +215,13 @@ function QueuePanel({
   onPop: (id: string) => Promise<unknown>;
   onRemove: (id: string) => void;
   onReorder: (itemIds: string[]) => void;
+  jobs: ReactNode;
 }) {
   const dragId = useRef<string | null>(null);
   const [order, setOrder] = useState<string[] | null>(null);
   const [poppingId, setPoppingId] = useState("");
   const queueActionLabel = busy ? "Steer" : "Send";
-  if (items.length === 0) {
+  if (items.length === 0 && !jobs) {
     return null;
   }
   const ids = order ?? items.map((item) => item.id);
@@ -235,6 +237,7 @@ function QueuePanel({
   };
   return (
     <div className="relative z-0 -mb-3 rounded-[22px] bg-muted px-2 pt-2 pb-5 shadow-[inset_0_0_0_1px_var(--border)]">
+      {jobs}
       <ul className={cn("flex flex-col gap-0.5", items.length > 3 && "max-h-32 overflow-y-auto")}>
         {rows.map((item) => (
           <li key={item.id} data-queue-id={item.id} className="flex items-center gap-2 rounded-md px-2 py-1">
@@ -298,6 +301,25 @@ function QueuePanel({
       </ul>
     </div>
   );
+}
+
+const jobState = (job: BackgroundJob) => ({ completed: "finished", stopped: `stopped by ${job.stoppedBy}`, killed: "killed (server restarted)" } as Record<string, string | undefined>)[job.state] ?? job.state;
+
+// jobsSlot is the composer's Background Jobs list, or nothing when the conversation has none.
+function jobsSlot(id: string, jobs: BackgroundJob[] | undefined, onChange: () => Promise<unknown>, openCall: (callId: string) => void) {
+  return jobs?.length ? <BackgroundJobs id={id} jobs={jobs} onChange={onChange} openCall={openCall} /> : null;
+}
+
+function BackgroundJobs({ id, jobs, openCall, onChange }: { id: string; jobs: BackgroundJob[]; openCall: (callId: string) => void; onChange: () => Promise<unknown> }) {
+  const stop = useMutation({ mutationFn: mutations.stopBackgroundJob, onSuccess: onChange });
+  return <ul aria-label="Background jobs" className={cn("flex flex-col gap-0.5", jobs.length > 3 && "max-h-32 overflow-y-auto")}>
+    {jobs.map((job) => <li key={job.jobId} className="flex items-center gap-2 rounded-md px-2 py-1">
+      <span className="min-w-0 flex-1 truncate text-sm">{job.label} · {jobState(job)}</span>
+      {job.hidden ? null : <Button type="button" variant="ghost" size="sm" aria-label={`Open ${job.label}`} onClick={() => job.subagentKey ? navigate(delegationHref(id + job.subagentKey)) : openCall(job.toolCallId)}>Open</Button>}
+      {job.state === "running" ? <Button type="button" variant="ghost" size="sm" aria-label={`Stop ${job.label}`} disabled={stop.isPending} onClick={() => stop.mutate({ conversationId: id, jobId: job.jobId })}>Stop</Button> : null}
+    </li>)}
+    {stop.error ? <li role="alert" className="px-2 text-xs text-destructive">{stop.error.message}</li> : null}
+  </ul>;
 }
 
 function sessionLabel(id: string) {
@@ -575,7 +597,7 @@ function SidebarOwner({ children }: { children: ReactNode }) {
 }
 
 type PendingFile = { id: string; file: File };
-type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; error: string; edit: number; submission: number; historyEpoch?: number; revertEligible?: boolean; revertMessageId?: string; canUndo?: boolean; reverting?: boolean; focus?: number; hydrated?: boolean; persistenceKey?: string; persistedEdit?: number; persistenceError?: string };
+type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; movable?: boolean; jobs?: BackgroundJob[]; error: string; edit: number; submission: number; historyEpoch?: number; revertEligible?: boolean; revertMessageId?: string; canUndo?: boolean; reverting?: boolean; focus?: number; hydrated?: boolean; persistenceKey?: string; persistedEdit?: number; persistenceError?: string };
 const RevertActions = createContext<{ available: boolean; pending: boolean; run: (messageId?: string, redo?: boolean) => Promise<void> } | undefined>(undefined);
 const DraftScope = createContext<string | undefined>(undefined);
 
@@ -1697,7 +1719,7 @@ const SessionList = memo(function SessionList({ settledOnly = false }: { settled
   );
 });
 
-type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin" | "header" | "principal" | "state" | "parentId">;
+type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin" | "header" | "principal" | "state" | "parentId" | "completionNotes" | "delegation" | "review">;
 type OriginFilter = { sandboxed: boolean; canonical: boolean };
 
 function lineId(role: Line["role"], text: string, seen: Map<string, number>) {
@@ -1867,40 +1889,60 @@ function MessageAuthor({ principal, role = "user" }: { principal?: string; role?
   return role === "user" && principal ? <span data-slot="message-author" className="mb-1 block whitespace-pre-wrap wrap-anywhere text-xs text-muted-foreground">{principal}</span> : null;
 }
 
+// Each Completion Note is one row with its note, from its stored job, folded beneath.
+function CompletionNotes({ notes }: { notes: BackgroundJob[] }) {
+  return notes.map((note) => <details key={note.jobId} className="mb-3 min-w-0">
+    <summary className="cursor-pointer px-3 py-2 text-xs font-medium">{note.label} · {jobState(note)}</summary>
+    <CodeBlock label={note.label} text={note.note} />
+  </details>);
+}
+
+// A task row opens the subagent its call recorded; older rows open the delegation ending in their call ID.
+function delegationOf(line: Line, delegations?: string[]) {
+  return line.delegation || delegations?.find((child) => child.slice(child.lastIndexOf("/") + 1) === line.toolCallId);
+}
+
+function ToolLine({ line, conversationId, hasSandboxed, open }: { line: Line; conversationId: string; hasSandboxed: boolean; open?: boolean }) {
+  const title = toolTitle(line);
+  const delegations = use(Delegations);
+  const delegation = delegationOf(line, delegations);
+  // A reviewed call's row opens its permission review once the delegations list it; an older task row, the one ending in its call ID.
+  const review = (line.review && delegations?.includes(line.review) ? line.review : undefined) || line.delegation && delegations?.find((child) => child !== delegation && child.slice(child.lastIndexOf("/") + 1) === line.toolCallId);
+  const parts = [line, ...(line.toolParts ?? [])];
+  const text = [
+    line.toolName ? `Arguments\n${line.text.slice(line.toolName.length + 1)}` : `Result\n${line.text}`,
+    ...parts.slice(1).map((part) => `${part.role === "developer" ? "Skill instructions" : "Result"}\n${part.text}`),
+  ].join("\n\n");
+  return (
+    <details open={open ?? true} data-tool-call-id={line.toolCallId} className="mb-3 min-w-0">
+      <summary className="cursor-pointer px-3 py-2 text-xs font-medium" title={title}>
+        <span className="ml-1 inline-block max-w-[calc(100%-1.5rem)] truncate align-middle font-mono">{title}</span>
+        {line.state ? <span aria-live="polite" className="ml-2 text-muted-foreground">{line.state}</span> : null}
+      </summary>
+      {delegation ? <Link href={delegationHref(delegation)} aria-label={`Open delegation: ${title}`} className="block w-fit px-3 pb-2 text-xs text-muted-foreground underline hover:text-foreground">Open delegation</Link> : null}
+      {review ? <Link href={delegationHref(review)} aria-label={`Open permission review: ${title}`} className="block w-fit px-3 pb-2 text-xs text-muted-foreground underline hover:text-foreground">Open permission review</Link> : null}
+      {line.state ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
+      <CodeBlock label={title} text={text} />
+      {parts.map((part) => (
+        <div key={part.id}>
+          <MessageAttachments attachments={part.attachments} conversationId={conversationId} />
+        </div>
+      ))}
+      <button type="button" className="px-3 py-2 text-xs text-muted-foreground hover:text-foreground" onClick={(event) => {
+        const details = event.currentTarget.closest("details")!;
+        details.open = false;
+        const summary = details.querySelector("summary")!;
+        summary.scrollIntoView({ block: "nearest" });
+        summary.focus({ preventScroll: true });
+      }}>Collapse tool ↑</button>
+    </details>
+  );
+}
+
 function TranscriptLine({ line, conversationId, hasSandboxed, open }: { line: Line; conversationId: string; hasSandboxed: boolean; open?: boolean }) {
+  if (line.completionNotes?.length) return <CompletionNotes notes={line.completionNotes} />;
   if (["thinking", "developer"].includes(line.role)) return <TraceLine line={line} hasSandboxed={hasSandboxed} open={open} />;
-  if (line.role === "tool") {
-    const title = toolTitle(line);
-    const delegation = use(Delegations)?.find((child) => child.slice(child.lastIndexOf("/") + 1) === line.toolCallId);
-    const parts = [line, ...(line.toolParts ?? [])];
-    const text = [
-      line.toolName ? `Arguments\n${line.text.slice(line.toolName.length + 1)}` : `Result\n${line.text}`,
-      ...parts.slice(1).map((part) => `${part.role === "developer" ? "Skill instructions" : "Result"}\n${part.text}`),
-    ].join("\n\n");
-    return (
-      <details open={open ?? true} className="mb-3 min-w-0">
-        <summary className="cursor-pointer px-3 py-2 text-xs font-medium" title={title}>
-          <span className="ml-1 inline-block max-w-[calc(100%-1.5rem)] truncate align-middle font-mono">{title}</span>
-          {line.state ? <span aria-live="polite" className="ml-2 text-muted-foreground">{line.state}</span> : null}
-        </summary>
-        {delegation ? <Link href={delegationHref(delegation)} aria-label={`Open delegation: ${title}`} className="block w-fit px-3 pb-2 text-xs text-muted-foreground underline hover:text-foreground">Open delegation</Link> : null}
-        {line.state ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
-        <CodeBlock label={title} text={text} />
-        {parts.map((part) => (
-          <div key={part.id}>
-            <MessageAttachments attachments={part.attachments} conversationId={conversationId} />
-          </div>
-        ))}
-        <button type="button" className="px-3 py-2 text-xs text-muted-foreground hover:text-foreground" onClick={(event) => {
-          const details = event.currentTarget.closest("details")!;
-          details.open = false;
-          const summary = details.querySelector("summary")!;
-          summary.scrollIntoView({ block: "nearest" });
-          summary.focus({ preventScroll: true });
-        }}>Collapse tool ↑</button>
-      </details>
-    );
-  }
+  if (line.role === "tool") return <ToolLine line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} open={open} />;
   const align = line.role === "user" ? "end" : undefined;
   return (
     <Message data-message-id={line.messageId || undefined} align={align} className="mb-4" tabIndex={0} onPointerDown={(event) => {
@@ -1995,6 +2037,15 @@ const TranscriptTurn = memo(function TranscriptTurn({ turn, index, detail, conve
 }, (previous, next) => !next.live && previous.index === next.index && previous.detail === next.detail && previous.conversationId === next.conversationId && previous.hasSandboxed === next.hasSandboxed
   && previous.turn.lines.length === next.turn.lines.length && previous.turn.lines.every((line, index) => line === next.turn.lines[index]));
 
+function WorkingStatus({ conversationId, movable, onChange }: { conversationId: string; movable: boolean; onChange: () => Promise<unknown> }) {
+  const move = useMutation({ mutationFn: mutations.moveToBackground, onSuccess: onChange });
+  return <MessageScrollerItem><div className="flex flex-wrap items-center gap-2 px-1 pb-4">
+    <p role="status" className="text-sm text-muted-foreground">Working…</p>
+    {movable ? <Button type="button" size="xs" variant="outline" disabled={move.isPending} onClick={() => move.mutate({ conversationId })}>Move to background</Button> : null}
+    {move.error ? <span role="alert" className="text-xs text-destructive">{move.error.message}</span> : null}
+  </div></MessageScrollerItem>;
+}
+
 function TranscriptLog({
   conversationId,
   lines,
@@ -2005,10 +2056,14 @@ function TranscriptLog({
   hasSandboxed,
   more,
   loadEarlier,
+  movable,
+  refreshHistory,
 }: {
   lines: Line[];
   conversationId: string;
   working: boolean;
+  movable: boolean;
+  refreshHistory: () => Promise<unknown>;
   terminal?: string;
   origin?: ChatOrigin;
   filter: OriginFilter;
@@ -2065,7 +2120,7 @@ function TranscriptLog({
         <>
           {loading ? <MessageScrollerItem><p role="status" className="px-1 text-sm text-muted-foreground">Loading earlier messages…</p></MessageScrollerItem> : null}
           {turns.map((turn, index) => <TranscriptTurn key={turnKey(turn)} turn={turn} index={index} live={index === turns.length - 1} detail={detail} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
-          {working ? <MessageScrollerItem><p role="status" className="px-1 pb-4 text-sm text-muted-foreground">Working…</p></MessageScrollerItem> : null}
+          {working ? <WorkingStatus conversationId={conversationId} movable={movable} onChange={refreshHistory} /> : null}
           {terminal ? <MessageScrollerItem><p role="status" className="px-1 pb-4 text-sm text-muted-foreground">Turn {terminal}.</p></MessageScrollerItem> : null}
         </>
       )}
@@ -2129,6 +2184,8 @@ function applyHistoryDelta(draft: ComposerDraft, view: HistoryView) {
   draft.revertEligible = view.revertEligible;
   draft.revertMessageId = view.revertMessageId;
   draft.canUndo = view.canUndo;
+  draft.movable = view.movable;
+  draft.jobs = view.backgroundJobs;
   draft.revision = view.revision;
   draft.historyError = "";
   return newlyConsumed;
@@ -2150,6 +2207,7 @@ function readHistoryDelta(id: string, draft: ComposerDraft, onDraftChange: () =>
           && draft.busy === (view.running || draft.lines.some((line) => !line.entryKey && line.role === "user" && !line.complete))
           && draft.terminal === view.terminal && JSON.stringify(draft.origin) === JSON.stringify(view.origin)
           && JSON.stringify(cached?.delegations) === JSON.stringify(view.delegations)
+          && draft.movable === view.movable && JSON.stringify(draft.jobs) === JSON.stringify(view.backgroundJobs)
           && !draft.historyError) continue;
         if (applyHistoryDelta(draft, view)) void queryClient.invalidateQueries({ queryKey: ["queue"] });
         // Main's delegation panel reads a full durable parent view from this cache.
@@ -2193,6 +2251,21 @@ function readEarlierHistory(id: string, draft: ComposerDraft, onDraftChange: () 
   return draft.earlier;
 }
 
+// Open scrolls to a script's call, loading earlier pages until it is rendered or none remain.
+async function openCall(draft: ComposerDraft, onDraftChange: () => void, scrollToMessage: ReturnType<typeof useMessageScroller>["scrollToMessage"], callId: string) {
+  const find = () => document.querySelector<HTMLElement>(`#transcript-scroll [data-tool-call-id="${CSS.escape(callId)}"]`);
+  for (let start: string | undefined; !find() && draft.more && start !== draft.start;) {
+    start = draft.start;
+    await readEarlierHistory(draft.sessionId, draft, onDraftChange);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  }
+  const node = find();
+  if (!node) return;
+  for (let group = node.parentElement?.closest("details"); group; group = group.parentElement?.closest("details")) group.open = true;
+  scrollToMessage(`turn-${node.closest<HTMLElement>("[data-turn-key]")!.dataset.turnKey}`, { align: "start", behavior: "instant" });
+  node.scrollIntoView({ block: "center", behavior: "instant" });
+}
+
 function historyLines(messages: TranscriptEvent[]): Line[] {
   const seen = new Map<string, number>();
   return messages.map((message) => {
@@ -2223,7 +2296,7 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
       stream.close();
     };
   }, [id, scope, refreshHistory]);
-  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !draft.revision, historyError: draft.historyError, origin: draft.origin, terminal: draft.terminal, delegations, more: draft.more ?? false, start: draft.start, loadEarlier, hasSandboxed: draft.lines.some((line) => line.origin === "sandboxed") };
+  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !draft.revision, historyError: draft.historyError, origin: draft.origin, terminal: draft.terminal, delegations, more: draft.more ?? false, start: draft.start, loadEarlier, movable: draft.movable ?? false, hasSandboxed: draft.lines.some((line) => line.origin === "sandboxed") };
 }
 
 export function OriginCard({ origin }: { origin?: ChatOrigin }) {
@@ -2289,7 +2362,7 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
       route.goSession(draft.sessionId);
     }
   });
-  const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, terminal, delegations, more, start, loadEarlier, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
+  const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, terminal, delegations, more, start, loadEarlier, movable, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
   const messageId = location.pathname === sessionPath(id) ? new URLSearchParams(search).get("message") : null;
   const matchedOrigin = (previewLines ?? lines).find((line) => line.messageId === messageId)?.origin;
   // A linked message older than the loaded entries loads every entry from it onward.
@@ -2305,7 +2378,7 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
   return (
     <RevertActions value={revert}>
       {draft.revertMessageId ? <div role="status" className="flex flex-wrap items-center gap-2 px-12 py-2 text-xs text-muted-foreground md:px-3"><span>History reverted. Files and external effects are unchanged.</span><Button size="sm" variant="outline" className="min-h-11 sm:min-h-8" disabled={revert.pending} onClick={() => void revert.run(undefined, true)}>Redo</Button></div> : null}
-      <Delegations value={previewing ? preview.data?.delegations : delegations}><TranscriptLog conversationId={id} lines={previewLines ?? lines} working={!previewing && busy} terminal={previewing ? undefined : terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} more={!previewing && more} loadEarlier={loadEarlier} /></Delegations>
+      <Delegations value={previewing ? preview.data?.delegations : delegations}><TranscriptLog conversationId={id} lines={previewLines ?? lines} working={!previewing && busy} terminal={previewing ? undefined : terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} more={!previewing && more} loadEarlier={loadEarlier} movable={movable} refreshHistory={refreshHistory} /></Delegations>
       {error ? <p role="alert" className="px-3 text-sm text-destructive">{error}</p> : null}
       {hasSandboxed ? <ButtonGroup aria-label="Show messages from" className="mx-auto my-2.5">
         {(["sandboxed", "canonical"] as const).map((choice) => (
@@ -2333,11 +2406,12 @@ function DelegationPanel({ id }: { id: string }) {
     if (child && main.data?.revertMessageId && !main.data.delegations.some((level) => child === level || child.startsWith(`${level}/`))) navigate(delegationHref());
   }, [child, main.data]);
   if (!child) return null;
-  const first = main.data?.delegations.find((level) => child === level || child.startsWith(`${level}/`)) ?? child;
+  const opened = historyLines(main.data?.messages ?? []).map((line) => delegationOf(line, main.data?.delegations));
+  const first = opened.find((level) => level && (child === level || child.startsWith(`${level}/`))) ?? child;
   const levels = [...child.matchAll(/\/|$/g)].map((match) => child.slice(0, match.index)).filter((level) => level.length >= first.length).map((level, index, all) => {
-    const call = level.slice(level.lastIndexOf("/") + 1);
-    const row = historyLines(queryClient.getQueryData<HistoryView>(queries.history({ id: index ? all[index - 1] : id }).queryKey)?.messages ?? []).find((line) => line.toolName && line.toolCallId === call);
-    return { level, label: row ? toolTitle(row) : call };
+    const parent = queryClient.getQueryData<HistoryView>(queries.history({ id: index ? all[index - 1] : id }).queryKey);
+    const row = historyLines(parent?.messages ?? []).find((line) => line.toolName && [delegationOf(line, parent?.delegations), line.review].includes(level));
+    return { level, label: row ? toolTitle(row) : level.slice(level.lastIndexOf("/") + 1) };
   });
   const parent = levels.at(-2);
   const lines = historyLines(history.data?.messages ?? []);
@@ -2628,7 +2702,7 @@ function SessionComposer({
   const { setCommand } = useContext(SessionCommands);
   const scope = useContext(DraftScope)!;
   const revert = useContext(RevertActions)!;
-  const { scrollToEnd } = useMessageScroller();
+  const { scrollToEnd, scrollToMessage } = useMessageScroller();
   const prompt = useMutation({ mutationFn: mutations.prompt, onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["queue"] }); } });
   const agents = useQuery({ ...queries.agents({ conversationId: id }), refetchInterval: 2000 });
   const queueQuery = useQuery({ ...queries.queue({ id }), enabled: id !== "", refetchInterval: 2000 });
@@ -2740,6 +2814,7 @@ function SessionComposer({
         popQueued={(itemId) => popComposer({ draft, onDraftChange, id, itemId, selected, currentAgent, prompt, popQueueItem, setSendError })}
         removeQueued={(itemId) => void removeQueueItem.mutateAsync({ id, itemId }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "remove failed"))}
         reorderQueued={(itemIds) => void reorderQueue.mutateAsync({ id, itemIds }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "reorder failed"))}
+        jobs={jobsSlot(id, draft.jobs, refreshHistory, (callId) => void openCall(draft, onDraftChange, scrollToMessage, callId))}
       />
     </>
   );
@@ -2823,6 +2898,7 @@ function Composer({
   popQueued,
   removeQueued,
   reorderQueued,
+  jobs,
 }: {
   files: PendingFile[];
   setFiles: (files: PendingFile[]) => void;
@@ -2851,6 +2927,7 @@ function Composer({
   popQueued: (id: string) => Promise<unknown>;
   removeQueued: (id: string) => void;
   reorderQueued: (itemIds: string[]) => void;
+  jobs: ReactNode;
 }) {
   const mac = typeof navigator === "object" && /(Mac|iPod|iPhone|iPad)/.test(navigator.platform);
   const selectedButton = useRef<HTMLButtonElement>(null);
@@ -2902,7 +2979,7 @@ function Composer({
             ))}
           </ul>
         ) : null}
-        <QueuePanel conversationId={sessionId} items={queued} busy={busy} sending={sending} onSteer={(id, itemText) => void steerQueued(id, itemText)} onPop={popQueued} onRemove={removeQueued} onReorder={reorderQueued} />
+        <QueuePanel conversationId={sessionId} items={queued} busy={busy} sending={sending} onSteer={(id, itemText) => void steerQueued(id, itemText)} onPop={popQueued} onRemove={removeQueued} onReorder={reorderQueued} jobs={jobs} />
         <ComposerAttachments files={files} setFiles={setFiles} sending={sending} fileInput={fileInput}>
           <Textarea
             ref={messageInput}

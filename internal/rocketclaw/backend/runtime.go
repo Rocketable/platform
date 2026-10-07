@@ -33,6 +33,7 @@ type Runtime struct {
 
 	TextRouter protocol.PrimaryTextRouter
 	threads    *threadBridgeManager
+	background *backgroundRegistry
 	slackAsker *protocol.UserQuestionAsker
 
 	eventsMu    sync.Mutex

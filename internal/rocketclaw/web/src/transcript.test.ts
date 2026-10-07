@@ -10,7 +10,7 @@ const javascript = ts.transpileModule(`import { QueryClient } from ${JSON.string
 const { applyHistoryDelta, readHistoryDelta, readEarlierHistory, sendComposer, revertComposer, promoteComposer, popComposer, stopComposer, historyLines, pendingInputs, transcriptTurns, toolTitle, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 type Line = { id: string; role: string; text: string; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; origin?: string; principal?: string };
 const event = (entryKey: string, itemId: string, role: string, text: string, extra: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ entryKey, itemId, inputId: "", role, text, turnId: "", complete: true, ...extra });
-const view = (messages: TranscriptEvent[], extra: Partial<HistoryView> = {}): HistoryView => ({ messages, delegations: [], revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(messages.map((message) => message.entryKey))], running: false, terminal: "", start: "0", more: false, ...extra });
+const view = (messages: TranscriptEvent[], extra: Partial<HistoryView> = {}): HistoryView => ({ messages, delegations: [], revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(messages.map((message) => message.entryKey))], running: false, terminal: "", start: "0", more: false, movable: false, backgroundJobs: [], ...extra });
 
 test("history deltas replace whole groups, remove groups, and keep canonical inventory order", () => {
   const draft = { lines: historyLines([
@@ -151,6 +151,21 @@ test("serialized reads coalesce signals and reconnects, use only applied revisio
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("a movable flip or Background Job change reaches the view without a new revision", async () => {
+  const draft = { lines: [] as Line[], busy: false, historyError: "", movable: undefined as boolean | undefined, jobs: undefined as object[] | undefined };
+  const job = { jobId: "turn-1/call/a", kind: "execute", state: "running", label: "tests", toolCallId: "a", subagentKey: "", stoppedBy: "", hidden: false, note: "" };
+  const replies = [{ movable: true, backgroundJobs: [job] }, { movable: true, backgroundJobs: [job] }, { movable: false, backgroundJobs: [job] }, { movable: false, backgroundJobs: [{ ...job, state: "killed" }] }];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = Object.assign(async () => Response.json({ ...view([], { reset: false, revision: "same", running: true, ...replies.shift() }), origin: "" }), { preconnect: originalFetch.preconnect });
+  let changes = 0;
+  try {
+    for (const want of [[1, true, "running"], [1, true, "running"], [2, false, "running"], [3, false, "killed"]] as const) {
+      await readHistoryDelta("jobs", draft, () => { changes++; });
+      expect([changes, draft.movable, draft.jobs?.map((item) => (item as typeof job).state)]).toEqual([want[0], want[1], [want[2]]]);
+    }
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("earlier pages prepend before followed entries until a reset restarts the view", async () => {
   const draft: { lines: Line[]; busy: boolean; revision?: string; start?: string; more?: boolean; delegations?: string[]; historyError?: string } = { lines: [], busy: false };
   applyHistoryDelta(draft, view([event("5", "5:0", "user", "five")], { revision: "tail", start: "5", more: true }));
@@ -287,7 +302,8 @@ test("thinking rows top-align the robot beside multiline text", () => {
 test("the in-progress status shows whenever the session is busy, whatever the newest line", () => {
   const text = (name: string) => source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name)!.getText(source);
   expect(text("Transcript")).toContain("working={!previewing && busy}");
-  expect(text("TranscriptLog")).toContain('{working ? <MessageScrollerItem><p role="status"');
+  expect(text("TranscriptLog")).toContain("{working ? <WorkingStatus ");
+  expect(text("WorkingStatus")).toMatch(/<MessageScrollerItem>[^{]*<p role="status"[^>]*>Working…<\/p>/);
   expect(text("TranscriptLog")).not.toContain(">Thinking <");
 });
 

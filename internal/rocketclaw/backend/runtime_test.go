@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -216,13 +217,11 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		ctx := t.Context()
 		msg := seedCronRun(t, store, "cron:daily")
 		source := NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: msg.ConversationID, Agent: "job", SessionService: store}, slog.New(slog.DiscardHandler))
-		source.threads, source.activeReply = manager, msg
-		require.NoError(t, source.ScheduleMessage(time.Hour, "discard before sync", false))
-		require.NoError(t, source.ResetScheduledMessages())
-		require.NoError(t, source.ScheduleMessage(2*time.Hour, "after sync", true))
+		source.threads = manager
+		require.NoError(t, source.ScheduleMessage(msg, time.Hour, "discard before sync", false))
+		require.NoError(t, source.ResetScheduledMessages(msg))
+		require.NoError(t, source.ScheduleMessage(msg, 2*time.Hour, "after sync", true))
 		endTestTurn(t, store, msg.ConversationID, "turn-cron", protocol.TerminalComplete)
-
-		source.activeReply = nil
 
 		rt := &Runtime{Sessions: store}
 		ownerID := protocol.SlackThreadConversationID("C1", "1.2")
@@ -389,16 +388,12 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		source := rt.threads.bridges["X"].(*Bridge)
 		source.mu.Lock()
 		source.pendingOutput.Agent, source.pendingOutput.Model, source.pendingOutput.ReasoningEffort = "producer", "work/producer", new("high")
-		source.activeReply = producer
 		source.mu.Unlock()
 		require.NoError(t, startTurnDB(ctx, store.db, "producer-effects", "X", producer))
-		require.NoError(t, source.ScheduleMessage(time.Hour, "discard before sync", false))
-		require.NoError(t, source.ResetScheduledMessages())
-		require.NoError(t, source.ScheduleMessage(time.Hour, "after sync", false))
+		require.NoError(t, source.ScheduleMessage(producer, time.Hour, "discard before sync", false))
+		require.NoError(t, source.ResetScheduledMessages(producer))
+		require.NoError(t, source.ScheduleMessage(producer, time.Hour, "after sync", false))
 		endTestTurn(t, store, "X", "producer-effects", protocol.TerminalComplete)
-		source.mu.Lock()
-		source.activeReply = nil
-		source.mu.Unlock()
 		// A copied row's ID, not timestamp magnitude, determines the last update.
 		_, err := store.AppendEntryID(ctx, "X", &rocketcode.SessionEntry{Timestamp: time.Unix(1, 123456789).UTC()})
 		require.NoError(t, err)
@@ -1384,4 +1379,304 @@ func TestAttachSlack(t *testing.T) {
 	rt.AttachSlack(slack)
 	require.True(t, asker.ExposeTool())
 	require.Same(t, slack, manager.cronRoots)
+}
+
+// The turn learns, after the calls' background results, which of its calls moved.
+func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
+	release := make(chan struct{})
+	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		switch {
+		case n == 0:
+			code := "def main():\n    return 'after: ' + ask_user_question(question='Ship?', details='', options=[], multiple=False)\n"
+			execute, _ := json.Marshal(struct {
+				Code        string `json:"code"`
+				Description string `json:"description"`
+				Background  bool   `json:"background"`
+			}{code, "ask", false}) // Encoding strings and a bool cannot fail.
+			task, _ := json.Marshal(struct {
+				Description  string `json:"description"`
+				Prompt       string `json:"prompt"`
+				SubagentType string `json:"subagent_type"`
+				Background   bool   `json:"background"`
+				Continue     string `json:"continue"`
+			}{"research", "research the flaky test", "researcher", false, ""})
+			_, _ = fmt.Fprintf(w, `{"id":"resp_0","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_e","name":"execute","arguments":%q},{"id":"fc_2","type":"function_call","status":"completed","call_id":"call_t","name":"task","arguments":%q}]}`, execute, task)
+		case strings.Contains(body, `"content":"research the flaky test"`):
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+
+			_, _ = w.Write([]byte(`{"id":"resp_s","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_s","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"found it","annotations":[]}]}]}`))
+		default:
+			answerNoteTest(w, r, n, body)
+		}
+	})
+	releaseSubagent := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseSubagent) // Before the provider closes, which waits for the held request.
+	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-5.5\npermission:\n  task: allow\n  rocketclaw:\n    allow_background: allow\n    ask_user_question: allow\n---\nPrompt\n")
+
+	asked, withdrawn := make(chan string, 1), make(chan error, 1)
+	asker := protocol.InteractiveUserQuestionAsker(func(ctx context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
+		asked <- req.ID
+
+		<-ctx.Done() // The Slack connector deletes an unanswered question when its wait is cancelled.
+
+		withdrawn <- context.Cause(ctx)
+
+		return protocol.AskUserQuestionAnswer{}, ctx.Err()
+	})
+
+	var (
+		manager  *threadBridgeManager
+		registry *backgroundRegistry
+	)
+
+	manager = newThreadBridgeManager(nt.cfg, nt.service, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
+		cfg.SessionService, cfg.RequestRestart, cfg.StartNewThread, cfg.UserQuestionAsker = nt.service, testNoopRestart, testNoopStartNewThread, asker
+		bridge := NewConversation(nt.cfg, finalsPublisher{finals: nt.finals}, &cfg, slog.New(slog.DiscardHandler))
+		bridge.threads, bridge.background = manager, registry
+
+		return bridge
+	})
+	registry = newBackgroundRegistry(nt.service, manager, testLogger())
+	runTestManager(t, manager)
+
+	rt := &Runtime{threads: manager, Sessions: nt.service, background: registry}
+	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("ship it")))
+
+	executeID, _, _ := strings.Cut(<-asked, "/host/")
+	taskID := strings.TrimSuffix(executeID, "call_e") + "call_t"
+
+	for range 2 { // The turn's calls and the subagent's run.
+		nt.request(t)
+	}
+
+	_, movable, err := rt.BackgroundJobs(t.Context(), nt.conversationID)
+	require.NoError(t, err)
+	require.True(t, movable)
+
+	moved, err := rt.MoveToBackground(nt.conversationID)
+	require.NoError(t, err)
+	require.True(t, moved)
+
+	select {
+	case cause := <-withdrawn:
+		require.ErrorIs(t, cause, errMovedToBackground, "the pending question is withdrawn")
+	case <-time.After(10 * time.Second):
+		t.Fatal("the pending question was not withdrawn")
+	}
+
+	body := nt.request(t)
+	assert.Contains(t, body, "The script is running in the background (job ID: "+executeID+")")
+	assert.Contains(t, body, "The subagent is working in the background (job ID: "+taskID+")")
+	assert.Equal(t, "[System]\n\n"+fmt.Sprintf(movedNote, "- execute: ask (job ID: "+executeID+")\n- task: research (job ID: "+taskID+")\n"), lastRequestMessage(t, body))
+	readFinal(t, nt.finals)
+
+	jobs := func() []string {
+		rows, err := queryStrings(context.Background(), nt.service.db, `SELECT job_id || ' ' || status || ' ' || note_state || ' ' || result FROM background_jobs ORDER BY job_id`, "background rows")
+		require.NoError(t, err)
+
+		return rows
+	}
+
+	require.Eventually(t, func() bool {
+		rows := jobs()
+		return len(rows) == 2 && rows[0] == executeID+" completed consumed after: "+questionWithdrawn && strings.HasPrefix(rows[1], taskID+" running none")
+	}, 10*time.Second, 10*time.Millisecond, "the script finishes in the background while the moved subagent runs")
+
+	releaseSubagent()
+	require.Eventually(t, func() bool {
+		rows := jobs()
+		return len(rows) == 2 && strings.HasPrefix(rows[1], taskID+" completed consumed") && strings.Contains(rows[1], "found it")
+	}, 10*time.Second, 10*time.Millisecond, "the moved subagent finishes and reports")
+	nt.waitIdle(t, manager, nt.conversationID)
+}
+
+// Nothing to move is a no-op, and a denied agent's running execute stays in the foreground.
+func TestMoveToBackgroundSkipsDeniedAgent(t *testing.T) {
+	gate := ""
+	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		if n > 0 {
+			answerNoteTest(w, r, n, body)
+			return
+		}
+
+		code := "def main():\n    bash(command=r'''touch " + gate + ".started; while [ ! -f " + gate + " ]; do sleep 0.05; done''')\n    return 'done'\n"
+		arguments, _ := json.Marshal(struct {
+			Code string `json:"code"`
+		}{code}) // Encoding a string cannot fail.
+		_, _ = fmt.Fprintf(w, `{"id":"resp_0","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_e","name":"execute","arguments":%q}]}`, arguments)
+	})
+	gate = filepath.Join(nt.cfg.Workspace, "gate")
+	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-5.5\npermission:\n  bash: {\"*\": allow}\n---\nPrompt\n")
+
+	manager, _ := nt.run(t, ignoreOutbound)
+	bridge := nt.bridge(t, manager, nt.conversationID)
+	rt := &Runtime{threads: manager, Sessions: nt.service, background: bridge.background}
+
+	moved, err := rt.MoveToBackground(nt.conversationID)
+	require.NoError(t, err)
+	require.False(t, moved, "an idle conversation has nothing to move")
+
+	require.NoError(t, bridge.Submit(t.Context(), nt.slackPrompt("run it")))
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(gate + ".started")
+		return err == nil
+	}, 10*time.Second, 10*time.Millisecond)
+
+	jobs, movable, err := rt.BackgroundJobs(t.Context(), nt.conversationID)
+	require.NoError(t, err)
+	require.Empty(t, jobs)
+	require.False(t, movable, "a denied agent's call is not movable")
+
+	moved, err = rt.MoveToBackground(nt.conversationID)
+	require.NoError(t, err)
+	require.False(t, moved)
+
+	bridge.mu.Lock()
+	require.Empty(t, bridge.movedNotes, "no note tells the turn of a move")
+	bridge.mu.Unlock()
+
+	require.NoError(t, os.WriteFile(gate, nil, 0o600))
+	nt.request(t)
+	assert.Contains(t, nt.request(t), `done`, "the call returns its real result")
+	readFinal(t, nt.finals)
+	assert.Empty(t, backgroundRows(t, nt.service))
+}
+
+// A move racing a finish gives the call one outcome: its real result, or a background result whose note holds it.
+func TestMoveAsCallFinishes(t *testing.T) {
+	store := newTestSessionService(t)
+	registry, notes := newTestBackgroundRegistry(store)
+	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
+	finished := &backgroundWorkMock{RunBackgroundFunc: func(context.Context) (string, error) { return "done", nil }, DetachFunc: func() bool { return true }}
+
+	result, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/a", Kind: rocketcode.BackgroundKindExecute}, finished)
+	require.NoError(t, err)
+	require.Equal(t, rocketcode.BackgroundResult{Output: "done"}, result)
+	require.Empty(t, registry.move("main"), "a finished call has nothing left to move")
+
+	for i := range 20 {
+		jobID := fmt.Sprintf("turn-2/call/%d", i)
+		started, finish := make(chan struct{}, 1), make(chan struct{})
+
+		var call errgroup.Group
+		call.Go(func() (err error) {
+			result, err = turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: jobID, Kind: rocketcode.BackgroundKindExecute}, blockedWork(started, finish))
+			return err
+		})
+		<-started
+		close(finish)
+		registry.move("main")
+		require.NoError(t, call.Wait())
+
+		exists, err := store.hasBackgroundJob(t.Context(), "main", jobID)
+		require.NoError(t, err)
+		require.Equal(t, result.Moved, exists)
+
+		if !result.Moved {
+			require.Equal(t, "done", result.Output)
+			continue
+		}
+
+		require.Equal(t, "main", <-notes)
+		require.Equal(t, "done", testBackgroundRow(t, store, "main", jobID).result, "the note carries the real result")
+	}
+}
+
+// Hidden runs' jobs are listed and stoppable at their destination; a killed job stays listed until its note is consumed.
+func TestRuntimeListsAndStopsBackgroundJobs(t *testing.T) {
+	store := newTestSessionService(t)
+	registry, notes := newTestBackgroundRegistry(store)
+	rt := &Runtime{Sessions: store, background: registry}
+	started, release := make(chan struct{}, 1), make(chan struct{})
+
+	defer close(release)
+
+	cron := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "cron:daily", origin: &protocol.InboundMessage{SyncDestination: "reports"}}
+	_, err := cron.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/loop", Kind: rocketcode.BackgroundKindTask, Label: "loop", CallID: "loop", SubagentKey: "/loop", Detached: true}, blockedWork(started, release))
+	require.NoError(t, err)
+	<-started
+
+	for _, jobID := range []string{"turn-2/call/killed", "turn-2/call/consumed"} {
+		job := testBackgroundJob("reports", jobID)
+		createTestBackgroundJob(t, store, job)
+		finishTestBackgroundJob(t, store, job, backgroundKilled, false)
+	}
+
+	_, err = store.db.ExecContext(t.Context(), `UPDATE background_jobs SET note_state = $1 WHERE job_id = 'turn-2/call/consumed'`, noteConsumed)
+	require.NoError(t, err)
+
+	loop := protocol.BackgroundJob{ID: "turn-1/call/loop", Kind: "task", State: "running", Label: "loop", ToolCallID: "loop", SubagentKey: "/loop", Hidden: true}
+	killed := protocol.BackgroundJob{ID: "turn-2/call/killed", Kind: "execute", State: "killed", Label: "tests", ToolCallID: "call"}
+	jobs, movable, err := rt.BackgroundJobs(t.Context(), "reports")
+	require.NoError(t, err)
+	require.False(t, movable)
+	require.Equal(t, []protocol.BackgroundJob{loop, killed}, jobs)
+
+	stopped, err := rt.StopBackgroundJob(t.Context(), "reports", loop.ID)
+	require.NoError(t, err)
+	require.True(t, stopped)
+	require.Equal(t, "cron:daily", <-notes, "the stopped note wakes the hidden run")
+
+	loop.State, loop.StoppedBy = "stopped", "user"
+	_, err = store.db.ExecContext(t.Context(), `UPDATE background_jobs SET note_state = $1 WHERE job_id = $2`, noteConsumed, killed.ID)
+	require.NoError(t, err)
+	jobs, _, err = rt.BackgroundJobs(t.Context(), "reports")
+	require.NoError(t, err)
+	require.Equal(t, []protocol.BackgroundJob{loop}, jobs, "a consumed note drops its job from the list")
+}
+
+// An attached call's start and finish flip movable, which no row change reports.
+func TestMovableChangeWakesWebViews(t *testing.T) {
+	store := newTestSessionService(t)
+	registry, _ := newTestBackgroundRegistry(store)
+	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
+	ctx, cancel := context.WithCancel(t.Context())
+	changes := make(chan protocol.ConversationChange, 4)
+
+	var listen errgroup.Group
+	listen.Go(func() error {
+		for change, err := range store.Changes(ctx, "main") {
+			if err != nil {
+				return err
+			}
+
+			changes <- change
+		}
+
+		return nil
+	})
+	t.Cleanup(func() {
+		cancel()
+		require.NoError(t, listen.Wait())
+	})
+
+	<-changes // The listener's opening wake-up.
+
+	next := func() protocol.ConversationChange {
+		select {
+		case change := <-changes:
+			return change
+		case <-time.After(5 * time.Second):
+			t.Fatal("no change notice")
+			return protocol.ConversationChange{}
+		}
+	}
+
+	started, release := make(chan struct{}, 1), make(chan struct{})
+
+	var call errgroup.Group
+	call.Go(func() error {
+		_, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/a", Kind: rocketcode.BackgroundKindExecute}, blockedWork(started, release))
+		return err
+	})
+	<-started
+	assert.NotEmpty(t, next().Revision, "the attached call made the conversation movable")
+
+	close(release)
+	require.NoError(t, call.Wait())
+	assert.Equal(t, "main", next().ConversationID, "the finished call made it unmovable")
 }

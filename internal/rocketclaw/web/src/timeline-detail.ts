@@ -103,7 +103,7 @@ export function setTimelineRows(next: TimelineRows) {
   publish(next);
 }
 
-type TimelineItem = { id: string; role: string; text: string; toolName?: string; toolParts?: TimelineItem[]; attachments?: unknown[] };
+type TimelineItem = { id: string; role: string; text: string; toolName?: string; toolParts?: TimelineItem[]; attachments?: unknown[]; state?: string };
 type TimelineGroup<T> = { kind: "group"; key: string; label: string; members: { line: T; open: boolean }[] };
 const categoryByTool: Partial<Record<string, TimelineCategory>> = { execute: "execute", task: "subagents", skill: "skills" };
 const categoryByRole: Partial<Record<string, TimelineCategory>> = { thinking: "thinking", developer: "notices" };
@@ -124,7 +124,7 @@ export function projectTimeline<T extends TimelineItem>(items: T[], rows: Timeli
     }
     const { placement, details } = rows[id];
     const pinned = [line, ...(line.toolParts ?? [])].some((part) => part.attachments?.length);
-    const failed = line.role === "tool" && failure.test((line.toolName ? line.toolParts?.[0]?.text : line.text) ?? "");
+    const failed = line.role === "tool" && (line.state === "background" || failure.test((line.toolName ? line.toolParts?.[0]?.text : line.text) ?? ""));
     if (placement === "hidden" && !pinned && !failed) continue;
     if (placement === "grouped" && !pinned) {
       if (!group) projected.push(group = { kind: "group", key: line.id, label: "", members: [] });

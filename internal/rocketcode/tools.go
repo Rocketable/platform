@@ -43,9 +43,11 @@ type toolFactory struct {
 	childContext               []SessionEntry
 	shellTemp                  shellTempConfig
 	spillRel                   string
+	retainedRel                string // This conversation's retained background results.
 	autoApprovePermissions     bool
 	observability              ObservabilityConfig
 	childSessions              ChildSessions
+	backgroundJobs             BackgroundJobs
 	childKey                   string
 
 	// inGuardrailRun reports whether this factory is executing a guardrail agent.

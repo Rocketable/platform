@@ -160,7 +160,7 @@ func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
 		bridge := NewConversation(&config.Config{Workspace: workspace}, discardPublisher{}, &cfg, slog.New(slog.DiscardHandler))
 		require.NoError(t, store.UpsertThread(cfg.ConversationID, ThreadState{Agent: cfg.Agent}))
 		require.NoError(t, startTestBridge(t.Context(), bridge))
-		require.NoError(t, bridge.ScheduleMessage(time.Hour, "later", false))
+		require.NoError(t, bridge.ScheduleMessage(new(protocol.InboundMessage), time.Hour, "later", false))
 		require.NoError(t, bridge.Stop())
 	}
 

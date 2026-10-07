@@ -461,6 +461,8 @@ Choosing one copies history **before** that message into a new session and resto
 the selected text and attachments in its composer. **Full session** copies all
 recorded history. The source remains intact, and the fork starts no turn until
 you send a message. Active, unrecorded output and queued work are not copied.
+Copied Completion Notes keep their rows and the scripts' retained oversized output,
+which expires when the source's does; running Background Jobs stay with the source.
 Forked sessions show a fork glyph in the sidebar. Use **Open original conversation**
 on the row to return to the immediate source, or search `is:forked` to find forks.
 Sidebar rows show the title, Slack channel when available, agent name and active
@@ -596,8 +598,28 @@ failed call (a result starting with `tool call failed`, `denied` or `aborted`) a
 on its own when its category is hidden, and a call that delivers files always appears
 on its own. While a turn runs, **Working…** shows at every level. The chat has no
 database-entry inspection panel.
+While an `execute` or `task` call of an agent with
+`permission.rocketclaw.allow_background: allow` runs, **Move to background** shows
+beside **Working…**. It moves every such call of the conversation at once; the
+agent gets a system note that you moved the work, and a script waiting on a
+question loses that question and continues in the background. Work of other
+agents stays in the foreground. Running Background Jobs, and finished ones whose
+Completion Note the agent has not read yet, are listed above the composer, in the
+queue's box, with their state and **Open**; running ones also get **Stop**. Open shows a subagent's Delegation
+History or scrolls to a script's call, loading earlier turns when needed. Jobs
+started by hidden cron or External MCP runs that report to this chat are listed
+too, without Open. Calls running in the background stay visible at every Timeline
+detail level. Each Completion Note is one row, `<label> · finished`, `failed`,
+`stopped by user`, `stopped by agent`, or `killed (server restarted)`, shown at
+every level with the full note collapsed beneath it. `$stop` does not stop
+Background Jobs; use Stop.
 A tool row whose call delegated work (an `auto` permission review, a guardrail
-check, or a Task subagent) shows **Open delegation**. It opens that Delegation
+check, or a Task subagent) shows **Open delegation**. A `task` row opens its
+subagent, and a row that continued a subagent opens that subagent. A row whose call
+was reviewed, before it ran or during it, such as of a Code Mode script's tool
+calls, shows **Open permission review** instead, or as well on a `task` row;
+rows saved before reviews had their own history open it as **Open delegation**,
+except a `task` row's. Each link opens its Delegation
 History read-only beside the chat on wide screens and full screen on narrow
 ones, with breadcrumbs for nested delegations. The panel lives in the
 `delegation` query parameter, so Back, Forward, and reload keep it. A link at the

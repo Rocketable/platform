@@ -267,7 +267,7 @@ func TestHistoryReadsActiveReplay(t *testing.T) {
 	}}
 	require.NoError(t, seeded.UpsertActiveTurn(t.Context(), checkpoint))
 
-	server := &Server{sessions: sessions, cfg: cfg, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: cfg, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 	view, err := server.history(ctx, &HistoryRequest{Id: "chat"})
 	require.NoError(t, err)
@@ -522,7 +522,7 @@ func TestHistoryFollowsNewestEntries(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
-	server := &Server{sessions: sessions, cfg: cfg, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: cfg, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 
 	var keys []string
@@ -617,7 +617,7 @@ func TestHistoryPublicProgress(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	require.NoError(t, sessions.UpsertThread("public", backend.ThreadState{Agent: "main"}))
-	server := &Server{sessions: sessions, cfg: cfg, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: cfg, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 	checkpoint := &testCheckpoint{TurnID: "turn", ConversationKey: "public", Agent: "main", DisplayModel: "root/model", ReasoningEffort: new("high"), ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","input_id":"input","content":"ask"}`),
@@ -627,15 +627,23 @@ func TestHistoryPublicProgress(t *testing.T) {
 	}, OutputTrace: []json.RawMessage{
 		json.RawMessage(`{"type":"legacy","text":"PRIVATE CHILD SENTINEL"}`),
 		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"msg/0","parent_id":"turn/response","kind":"text","state":"working","text":"held partial suffix","agent":"main","model":"root/model"}}`),
-		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"A","parent_id":"turn/response","kind":"delegation","state":"working","agent":"canonical-child","model":"child/model"}}`),
+		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"A","parent_id":"turn/response","kind":"delegation","state":"working","agent":"canonical-child","model":"child/model","subagent_key":"/A-0a1b2c3d"}}`),
 		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"B","parent_id":"turn/response","kind":"tool","state":"completed","text":"B result","agent":"main","model":"root/model"}}`),
-		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"C","parent_id":"turn/response","kind":"delegation","state":"blocked","agent":"canonical-child","model":"child/model"}}`),
+		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"C","parent_id":"turn/response","kind":"delegation","state":"blocked","agent":"canonical-child","model":"child/model","subagent_key":"/old"}}`),
 		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"unknown","kind":"private","state":"working","text":"PRIVATE CHILD SENTINEL"}}`),
 	}}
 	require.NoError(t, seeded.UpsertActiveTurn(ctx, checkpoint))
+	// A was reviewed before it ran and B only during its run; both save under the call's review key.
+	reviews := []string{"public/" + rocketcode.ReviewKey("turn", "A"), "public/" + rocketcode.ReviewKey("turn", "B")}
+	for _, review := range reviews {
+		_, err := sessions.AppendEntryID(ctx, review, &rocketcode.SessionEntry{Type: "turn"})
+		require.NoError(t, err)
+	}
+
 	held, err := server.history(ctx, &HistoryRequest{Id: "public"})
 	require.NoError(t, err)
 	require.True(t, held.Running)
+	require.Equal(t, reviews, held.Delegations)
 
 	texts := make([]string, len(held.Messages))
 	for i, message := range held.Messages {
@@ -649,6 +657,11 @@ func TestHistoryPublicProgress(t *testing.T) {
 	require.True(t, held.Messages[4].Complete, "B finishes independently while A and parent remain active")
 	require.Equal(t, []string{"working", "completed", "blocked"}, []string{held.Messages[2].State, held.Messages[3].State, held.Messages[5].State})
 	require.Equal(t, "canonical-child", held.Messages[2].Agent)
+	// A task row opens its recorded subagent, including the one a continue call continued.
+	require.Equal(t, []string{"public/A-0a1b2c3d", "", "", "public/old", "public/old"}, []string{held.Messages[2].Delegation, held.Messages[3].Delegation, held.Messages[4].Delegation, held.Messages[5].Delegation, held.Messages[6].Delegation})
+	// Each call's row names its review history; the delegations list only the reviewed calls'.
+	require.Equal(t, []string{reviews[0], reviews[1], "", "public/" + rocketcode.ReviewKey("turn", "C"), ""}, []string{held.Messages[2].Review, held.Messages[3].Review, held.Messages[4].Review, held.Messages[5].Review, held.Messages[6].Review})
+	require.NotContains(t, held.Delegations, held.Messages[5].Review)
 	require.Equal(t, "child/model", held.Messages[2].Model)
 	require.Nil(t, held.Messages[2].ReasoningEffort)
 	require.Equal(t, "main", held.Messages[1].Agent)
@@ -753,6 +766,7 @@ func TestHistoryPublicProgress(t *testing.T) {
 		view, err := server.history(ctx, &HistoryRequest{Id: "public"})
 		require.NoError(t, err)
 		require.False(t, view.Running)
+		require.Equal(t, reviews, view.Delegations, "the saved turn keeps its calls' reviews")
 		encoded, err := json.Marshal(view)
 		require.NoError(t, err)
 		require.NotContains(t, string(encoded), "REVIEWER SENTINEL")

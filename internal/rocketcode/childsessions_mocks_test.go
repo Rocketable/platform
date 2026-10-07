@@ -22,6 +22,9 @@ var _ ChildSessions = &mockChildSessions{}
 //			AppendChildEntryFunc: func(ctx context.Context, key string, entry *SessionEntry) error {
 //				panic("mock out the AppendChildEntry method")
 //			},
+//			ChildEntriesFunc: func(ctx context.Context, key string) ([]SessionEntry, error) {
+//				panic("mock out the ChildEntries method")
+//			},
 //		}
 //
 //		// use mockedChildSessions in code that requires ChildSessions
@@ -31,6 +34,9 @@ var _ ChildSessions = &mockChildSessions{}
 type mockChildSessions struct {
 	// AppendChildEntryFunc mocks the AppendChildEntry method.
 	AppendChildEntryFunc func(ctx context.Context, key string, entry *SessionEntry) error
+
+	// ChildEntriesFunc mocks the ChildEntries method.
+	ChildEntriesFunc func(ctx context.Context, key string) ([]SessionEntry, error)
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -43,8 +49,16 @@ type mockChildSessions struct {
 			// Entry is the entry argument value.
 			Entry *SessionEntry
 		}
+		// ChildEntries holds details about calls to the ChildEntries method.
+		ChildEntries []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// Key is the key argument value.
+			Key string
+		}
 	}
 	lockAppendChildEntry sync.RWMutex
+	lockChildEntries     sync.RWMutex
 }
 
 // AppendChildEntry calls AppendChildEntryFunc.
@@ -84,5 +98,41 @@ func (mock *mockChildSessions) AppendChildEntryCalls() []struct {
 	mock.lockAppendChildEntry.RLock()
 	calls = mock.calls.AppendChildEntry
 	mock.lockAppendChildEntry.RUnlock()
+	return calls
+}
+
+// ChildEntries calls ChildEntriesFunc.
+func (mock *mockChildSessions) ChildEntries(ctx context.Context, key string) ([]SessionEntry, error) {
+	if mock.ChildEntriesFunc == nil {
+		panic("mockChildSessions.ChildEntriesFunc: method is nil but ChildSessions.ChildEntries was just called")
+	}
+	callInfo := struct {
+		Ctx context.Context
+		Key string
+	}{
+		Ctx: ctx,
+		Key: key,
+	}
+	mock.lockChildEntries.Lock()
+	mock.calls.ChildEntries = append(mock.calls.ChildEntries, callInfo)
+	mock.lockChildEntries.Unlock()
+	return mock.ChildEntriesFunc(ctx, key)
+}
+
+// ChildEntriesCalls gets all the calls that were made to ChildEntries.
+// Check the length with:
+//
+//	len(mockedChildSessions.ChildEntriesCalls())
+func (mock *mockChildSessions) ChildEntriesCalls() []struct {
+	Ctx context.Context
+	Key string
+} {
+	var calls []struct {
+		Ctx context.Context
+		Key string
+	}
+	mock.lockChildEntries.RLock()
+	calls = mock.calls.ChildEntries
+	mock.lockChildEntries.RUnlock()
 	return calls
 }

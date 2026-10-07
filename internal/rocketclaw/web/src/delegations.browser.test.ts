@@ -10,9 +10,15 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel 
   const { chromium: engine } = await import(playwright!);
   const event = (role: string, text: string, tool: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ role, text, complete: true, entryKey: "", itemId: "", inputId: "", turnId: "", ...tool });
   const histories: Record<string, { messages: TranscriptEvent[]; delegations: string[] }> = {
-    chat: { messages: [event("user", "Run the review", { messageId: "1:0" }), event("tool", `task {"description":"Review"}`, { toolName: "task", toolCallId: "call-task" }), event("tool", `bash {"command":"ls"}`, { toolName: "bash", toolCallId: "call-plain" }), event("assistant", "Review finished")], delegations: ["chat/call-task"] },
-    "chat/call-task": { messages: [event("user", "Review this"), event("tool", `execute {"code":"print(1)"}`, { toolName: "execute", toolCallId: "call-inner" }), event("assistant", "Child done")], delegations: ["chat/call-task/call-inner"] },
-    "chat/call-task/call-inner": { messages: [event("assistant", "Inner review allowed")], delegations: [] },
+    // A task row opens the subagent its progress records, also when it continued it; an older row without one opens the listed delegation ending in its call ID.
+    // A row opens its permission review only once the delegations list it; an older task row opens the one saved under its call ID.
+    chat: { messages: [event("user", "Run the review", { messageId: "1:0" }), event("tool", `task {"description":"Review"}`, { toolName: "task", toolCallId: "call-task", delegation: "chat/call-task-0a1b2c3d" }), event("tool", `bash {"command":"ls"}`, { toolName: "bash", toolCallId: "call-plain", review: "chat/call-plain-review-9f9f9f9f" }), event("tool", `task {"description":"Again"}`, { toolName: "task", toolCallId: "call-again", delegation: "chat/call-task-0a1b2c3d" }),
+      event("tool", `bash {"command":"rm"}`, { toolName: "bash", toolCallId: "call_0", review: "chat/call_0-review-1a2b3c4d" }), event("tool", `task {"description":"Fresh"}`, { toolName: "task", toolCallId: "call-fresh", delegation: "chat/call-fresh-2b3c4d5e", review: "chat/call-fresh-review-3c4d5e6f" }), event("tool", `bash {"command":"old"}`, { toolName: "bash", toolCallId: "call-old" }), event("assistant", "Review finished")],
+      delegations: ["chat/call-task", "chat/call-task-0a1b2c3d", "chat/call_0-review-1a2b3c4d", "chat/call-fresh-2b3c4d5e", "chat/call-fresh-review-3c4d5e6f", "chat/call-old"] },
+    "chat/call-task": { messages: [event("assistant", "Task call allowed")], delegations: [] },
+    "chat/call_0-review-1a2b3c4d": { messages: [event("assistant", "Bash call allowed")], delegations: [] },
+    "chat/call-task-0a1b2c3d": { messages: [event("user", "Review this"), event("tool", `execute {"code":"print(1)"}`, { toolName: "execute", toolCallId: "call-inner" }), event("assistant", "Child done")], delegations: ["chat/call-task-0a1b2c3d/call-inner"] },
+    "chat/call-task-0a1b2c3d/call-inner": { messages: [event("assistant", "Inner review allowed")], delegations: [] },
   };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
@@ -47,19 +53,37 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel 
     const open = page.locator("main").getByRole("link", { name: /^Open delegation/ });
     await page.locator("main").getByText("Review finished", { exact: true }).waitFor();
     // The default Compact level folds both calls into one closed summary row.
-    await page.locator("main summary").filter({ hasText: "Used 2 tools" }).click();
-    await page.locator('main summary[title="task"]').click();
-    expect(await open.count()).toBe(1);
+    await page.locator("main summary").filter({ hasText: "Used 6 tools" }).click();
+    for (const title of ["task", "task", "task", "bash · ls", "bash · rm", "bash · old"]) await page.locator(`main details:not([open]) > summary[title="${title}"]`).first().click();
+    const href = async (link: { getAttribute(name: string): Promise<string | null> }) => new URL(await link.getAttribute("href") ?? "", page.url()).searchParams.get("delegation");
+    expect(await open.count()).toBe(4);
+    expect(await href(open.nth(1))).toBe("chat/call-task-0a1b2c3d");
+    expect(await href(open.nth(2))).toBe("chat/call-fresh-2b3c4d5e");
+    expect(await href(page.getByRole("link", { name: "Open delegation: bash · old", exact: true }))).toBe("chat/call-old");
     const plain = page.locator('main details:has(> summary[title="bash · ls"])');
     await plain.waitFor();
     expect(await plain.getByRole("link").count()).toBe(0);
     const panel = width >= 1024 ? page.getByRole("complementary", { name: "Delegation", exact: true }) : page.getByRole("dialog", { name: "Delegation", exact: true });
     const crumbs = panel.getByRole("navigation", { name: "Delegation breadcrumbs" });
     const delegation = () => new URL(page.url()).searchParams.get("delegation");
-
-    await open.and(page.getByRole("link", { name: "Open delegation: task", exact: true })).click();
-    await panel.getByText("Child done", { exact: true }).waitFor();
+    const review = page.locator("main").getByRole("link", { name: /^Open permission review/ });
+    expect(await review.count()).toBe(3);
+    expect(await href(review.nth(2))).toBe("chat/call-fresh-review-3c4d5e6f");
+    await review.and(page.getByRole("link", { name: "Open permission review: task", exact: true })).first().click();
+    await panel.getByText("Task call allowed", { exact: true }).waitFor();
     expect(delegation()).toBe("chat/call-task");
+    await page.goBack();
+    await panel.waitFor({ state: "detached" });
+    await review.and(page.getByRole("link", { name: "Open permission review: bash · rm", exact: true })).click();
+    await panel.getByText("Bash call allowed", { exact: true }).waitFor();
+    expect(delegation()).toBe("chat/call_0-review-1a2b3c4d");
+    expect(await crumbs.locator('[aria-current="page"]').textContent()).toBe("bash · rm");
+    await page.goBack();
+    await panel.waitFor({ state: "detached" });
+
+    await open.and(page.getByRole("link", { name: "Open delegation: task", exact: true })).first().click();
+    await panel.getByText("Child done", { exact: true }).waitFor();
+    expect(delegation()).toBe("chat/call-task-0a1b2c3d");
     expect(new URL(page.url()).searchParams.get("message")).toBe("1:0");
     expect(await page.getByRole("dialog").count()).toBe(width >= 1024 ? 0 : 1);
     await page.goBack();
@@ -67,22 +91,23 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel 
     expect(delegation()).toBe(null);
     await page.goForward();
     await panel.getByText("Child done", { exact: true }).waitFor();
+    expect(await panel.getByRole("link", { name: /^Open permission review/ }).count()).toBe(0);
 
     await panel.getByRole("link", { name: "Open delegation: Run · print(1)", exact: true }).click();
     await panel.getByText("Inner review allowed", { exact: true }).waitFor();
-    expect(delegation()).toBe("chat/call-task/call-inner");
+    expect(delegation()).toBe("chat/call-task-0a1b2c3d/call-inner");
     expect(await crumbs.getByRole("link").allTextContents()).toEqual(["Conversation", "task"]);
     expect(await crumbs.locator('[aria-current="page"]').textContent()).toBe("Run · print(1)");
     await Bun.write(path.resolve(import.meta.dir, `../../../../.tmp/delegation-panel-${width}.png`), await page.screenshot());
     await panel.getByRole("link", { name: "Back to task", exact: true }).click();
     await panel.getByText("Child done", { exact: true }).waitFor();
-    expect(delegation()).toBe("chat/call-task");
+    expect(delegation()).toBe("chat/call-task-0a1b2c3d");
     await page.goBack();
     await panel.getByText("Inner review allowed", { exact: true }).waitFor();
 
     await crumbs.getByRole("link", { name: "task", exact: true }).click();
     await panel.getByText("Child done", { exact: true }).waitFor();
-    expect(delegation()).toBe("chat/call-task");
+    expect(delegation()).toBe("chat/call-task-0a1b2c3d");
     expect(await crumbs.locator('[aria-current="page"]').textContent()).toBe("task");
     await page.reload();
     await panel.getByText("Child done", { exact: true }).waitFor();
