@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -507,6 +508,10 @@ type turnFinish struct {
 	accountGoal bool
 	outbound    *protocol.OutboundMessage
 	terminal    protocol.Terminal
+	hidden      bool // The turn is a hidden run's (hiddenRun).
+	// retry is set by finishTurn: the fewest failed wakes among the notes the hidden run's turn
+	// released for a retry, or 0 when it released none.
+	retry int
 }
 
 // conversationJournal stores one conversation's RocketCode turn steps.
@@ -555,7 +560,9 @@ func (j conversationJournal) SaveTrace(ctx context.Context, turnID string, trace
 	defer func() {
 		// These are repeated snapshots, not tool starts/finishes or execution durations.
 		// Ponytail: full snapshots repeat prior operations; a delta API needs separate approval.
-		for _, progress := range harness.PublicProgressFromTrace(trace) {
+		observed := harness.PublicProgressFromTrace(trace)
+		for i := range observed {
+			progress := &observed[i]
 			if progress.Kind != harness.PublicProgressText {
 				j.log.Info("operation observed", "event", "operation_snapshot", "conversation_id", j.conversationID, "turn_id", turnID, "operation_id", progress.ID, "parent_id", progress.ParentID, "kind", progress.Kind, "state", progress.State, "boundary", "journal_observation", "observation_elapsed_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
 			}
@@ -646,7 +653,8 @@ func (s *SessionService) HasActiveTurn(ctx context.Context, conversationID strin
 }
 
 // finishTurn moves a running row to delivering in one transaction with its
-// history, goal accounting, and journal cleanup, and returns the outbound to
+// history, goal accounting, Completion Note claims, and journal cleanup that
+// keeps Background Jobs' steps, and returns the outbound to
 // deliver. When another path, such as $stop, finished the row first, that
 // path's stored outbound wins and nothing else is written.
 func (s *SessionService) finishTurn(ctx context.Context, turnID string, finish *turnFinish) (*protocol.OutboundMessage, error) {
@@ -700,7 +708,29 @@ WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntry
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM turn_steps WHERE conversation_id = $1 AND (starts_with(key, $2 || '/') OR key = $2 AND $3 = '')`, finish.store.conversationID, turnID, finish.terminal); err != nil {
+	// A turn that saved entries delivered its claimed notes; one that saved none, such as a
+	// failed wake, releases them to the next turn without waking for them again, as OpenCode's
+	// next turn still sees a failed turn's promoted input (packages/core/src/session/input.ts).
+	// A hidden run may have no next turn, so its main agent's notes wake it again 1 minute after
+	// the first such turn, 5 minutes after the second, and every 30 minutes after that.
+	var errSettle error
+
+	switch {
+	case len(finish.entries) > 0:
+		_, errSettle = tx.ExecContext(ctx, `UPDATE background_jobs SET note_state = $3 WHERE conversation_id = $1 AND claimed_turn_id = $2 AND note_state = 'pending'`, finish.store.conversationID, turnID, noteConsumed)
+	case finish.hidden:
+		errSettle = tx.QueryRowContext(ctx, `WITH released AS (UPDATE background_jobs SET claimed_turn_id = '', wake = (child_key = ''), wake_attempts = wake_attempts + 1,
+wake_after_unix_ns = $4 + ($5::bigint[])[LEAST(wake_attempts + 1, 3)] WHERE conversation_id = $1 AND claimed_turn_id = $2 AND note_state = $3 RETURNING wake_attempts, child_key)
+SELECT COALESCE(MIN(wake_attempts) FILTER (WHERE child_key = ''), 0) FROM released`, finish.store.conversationID, turnID, notePending, timeUnixNano(time.Now()), []int64{int64(time.Minute), int64(5 * time.Minute), int64(30 * time.Minute)}).Scan(&finish.retry)
+	default:
+		_, errSettle = tx.ExecContext(ctx, `UPDATE background_jobs SET claimed_turn_id = '', wake = FALSE WHERE conversation_id = $1 AND claimed_turn_id = $2 AND note_state = $3`, finish.store.conversationID, turnID, notePending)
+	}
+
+	if errSettle != nil {
+		return nil, fmt.Errorf("settle background note claims: %w", errSettle)
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM turn_steps s WHERE conversation_id = $1 AND (starts_with(key, $2 || '/') OR key = $2 AND $3 = '') AND `+keepRunningJobSteps, finish.store.conversationID, turnID, finish.terminal); err != nil {
 		return nil, fmt.Errorf("clear turn steps: %w", err)
 	}
 
@@ -715,22 +745,269 @@ WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntry
 	return finish.outbound, nil
 }
 
+// keepRunningJobSteps keeps, in a delete of turn_steps s under the key prefix $2, the steps
+// of the running Background Jobs nested under that prefix, which own them.
+const keepRunningJobSteps = `NOT EXISTS (SELECT 1 FROM background_jobs j WHERE j.conversation_id = s.conversation_id AND j.status = 'running'
+    AND starts_with(j.job_id, $2 || '/') AND starts_with(s.key, j.job_id || '/'))`
+
 // closeTurn ends a delivered row; stopped and failed rows stay as transcript history.
 // Steps recorded while delivering (a posted cron root) go with it.
 // Web owners without replay identity, and goal kickoffs with generated prompt
 // framing, stay done so retries and editable commands retain their original input.
 func (s *SessionService) closeTurn(ctx context.Context, turnID string) error {
-	if _, err := s.db.ExecContext(ctx, `WITH delivered AS (DELETE FROM active_turns a WHERE id = $1 AND terminal = '' AND
+	if _, err := s.db.ExecContext(ctx, `WITH delivered AS (DELETE FROM active_turns a WHERE id = $2 AND terminal = '' AND
     NOT (inbound_json->>'Source' = 'web' AND COALESCE(inbound_json->'Metadata'->>'web_message_id', '') <> '' AND
         (inbound_json->>'GoalAction' = 'goal' OR NOT EXISTS (
         SELECT 1 FROM session_entries e CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item
         WHERE e.conversation_id = a.conversation_id AND item->>'input_id' = a.inbound_json->'Metadata'->>'web_message_id'))) RETURNING id),
-delivery_steps AS (DELETE FROM turn_steps WHERE starts_with(key, $1 || '/'))
-UPDATE active_turns SET phase = $2 WHERE id = $1 AND id NOT IN (SELECT id FROM delivered)`, turnID, turnDone); err != nil {
+delivery_steps AS (DELETE FROM turn_steps s WHERE starts_with(key, $2 || '/') AND `+keepRunningJobSteps+`)
+UPDATE active_turns SET phase = $1 WHERE id = $2 AND id NOT IN (SELECT id FROM delivered)`, turnDone, turnID); err != nil {
 		return fmt.Errorf("close active turn: %w", err)
 	}
 
 	return nil
+}
+
+// backgroundJobKind is the work a Background Job runs; task and subagent wake
+// rows run a subagent.
+type backgroundJobKind string
+
+const (
+	backgroundExecute      backgroundJobKind = "execute"
+	backgroundTask         backgroundJobKind = "task"
+	backgroundSubagentWake backgroundJobKind = "subagent_wake"
+)
+
+// backgroundJobStatus is a Background Job's lifecycle state; only running is not terminal.
+type backgroundJobStatus string
+
+const (
+	backgroundRunning   backgroundJobStatus = "running"
+	backgroundCompleted backgroundJobStatus = "completed"
+	backgroundFailed    backgroundJobStatus = "failed"
+	backgroundStopped   backgroundJobStatus = "stopped"
+	backgroundKilled    backgroundJobStatus = "killed"
+)
+
+// noteState tracks a Background Job's Completion Note.
+type noteState string
+
+const (
+	noteNone     noteState = "none"
+	notePending  noteState = "pending"
+	noteConsumed noteState = "consumed"
+)
+
+// backgroundJob is one durable Background Job row, keyed by its root
+// conversation and its tool call key. The job owns the journal steps under
+// jobID + "/"; childKey names the owning subagent, empty for the main agent.
+type backgroundJob struct {
+	conversationID, jobID, childKey string
+	kind                            backgroundJobKind
+	status                          backgroundJobStatus
+	agent, label, callID            string
+	subagentKey                     string
+	// origin is the originating turn's frozen routing; its SyncDestination
+	// also lists the job at that conversation.
+	origin    *protocol.InboundMessage
+	runnerID  string
+	noteState noteState
+	wake      bool
+	// wakeAfter is when a note a hidden run released may wake it again (finishTurn).
+	wakeAfter     time.Time
+	claimedTurnID string
+	createdAt     time.Time
+	finishedAt    time.Time
+	// result is the job's output, or its error when it failed.
+	result string
+}
+
+const backgroundJobColumns = `conversation_id, job_id, child_key, kind, status, agent, label, call_id, subagent_key, origin_json, runner_id, note_state, wake, wake_after_unix_ns, claimed_turn_id, created_at_unix_ns, finished_at_unix_ns, result`
+
+func scanBackgroundJob(scanner rowScanner) (backgroundJob, error) {
+	var (
+		job                              backgroundJob
+		origin                           []byte
+		wakeAfter, createdAt, finishedAt int64
+	)
+
+	if err := scanner.Scan(&job.conversationID, &job.jobID, &job.childKey, &job.kind, &job.status, &job.agent, &job.label, &job.callID, &job.subagentKey, &origin, &job.runnerID, &job.noteState, &job.wake, &wakeAfter, &job.claimedTurnID, &createdAt, &finishedAt, &job.result); err != nil {
+		return backgroundJob{}, fmt.Errorf("scan background job: %w", err)
+	}
+
+	if err := json.Unmarshal(origin, &job.origin); err != nil {
+		return backgroundJob{}, fmt.Errorf("decode background job origin: %w", err)
+	}
+
+	job.wakeAfter, job.createdAt, job.finishedAt = timeFromUnixNano(wakeAfter), timeFromUnixNano(createdAt), timeFromUnixNano(finishedAt)
+
+	return job, nil
+}
+
+// createBackgroundJob records a running job once per (conversation, job ID)
+// and returns the stored row; created is false when the row already existed.
+func createBackgroundJob(ctx context.Context, db stateStoreDB, job *backgroundJob) (stored backgroundJob, created bool, err error) {
+	origin, err := json.Marshal(job.origin)
+	if err != nil {
+		return backgroundJob{}, false, fmt.Errorf("encode background job origin: %w", err)
+	}
+
+	inserted, err := execRows(ctx, db, "create background job", "count created background job", `INSERT INTO background_jobs (conversation_id, job_id, child_key, kind, status, agent, label, call_id, subagent_key, origin_json, sync_destination, runner_id, note_state, wake, claimed_turn_id, created_at_unix_ns, finished_at_unix_ns, result)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, FALSE, '', $14, 0, '') ON CONFLICT (conversation_id, job_id) DO NOTHING`, job.conversationID, job.jobID, job.childKey, job.kind, backgroundRunning, job.agent, job.label, job.callID, job.subagentKey, string(removeSessionEntryNUL(origin)), job.origin.SyncDestination, job.runnerID, noteNone, timeUnixNano(time.Now()))
+	if err != nil {
+		return backgroundJob{}, false, err
+	}
+
+	stored, err = scanBackgroundJob(db.QueryRowContext(ctx, `SELECT `+backgroundJobColumns+` FROM background_jobs WHERE conversation_id = $1 AND job_id = $2`, job.conversationID, job.jobID))
+
+	return stored, inserted > 0, err
+}
+
+// finishBackgroundJob ends a running job held by job.runnerID and, in the same transaction,
+// settles the notes its subagent claimed and deletes its journal steps except those of the
+// running jobs it started. It reports false when another transition or runner won.
+func (s *SessionService) finishBackgroundJob(ctx context.Context, job *backgroundJob) (bool, error) {
+	if job.kind == backgroundSubagentWake { // A subagent wake leaves no note of its own.
+		job.noteState, job.wake = noteNone, false
+	}
+
+	tx, err := s.beginStateTx(ctx, "background job finish")
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	finished, err := execRows(ctx, tx, "finish background job", "count finished background job", `UPDATE background_jobs SET status = $4, note_state = $5, wake = $6, result = $7, finished_at_unix_ns = $8
+WHERE conversation_id = $1 AND job_id = $2 AND runner_id = $3 AND status = $9`, job.conversationID, job.jobID, job.runnerID, job.status, job.noteState, job.wake, strings.ReplaceAll(job.result, "\x00", ""), timeUnixNano(time.Now()), backgroundRunning)
+	if err != nil || finished == 0 {
+		return false, err
+	}
+
+	// A subagent saves its turn only when its job completes; otherwise the notes it claimed go back to
+	// its next turn, like a failed turn's.
+	claims, settled := `UPDATE background_jobs SET note_state = $3 WHERE conversation_id = $1 AND claimed_turn_id = $2 AND note_state = 'pending'`, noteConsumed
+	if job.status != backgroundCompleted {
+		claims, settled = `UPDATE background_jobs SET claimed_turn_id = '', wake = FALSE WHERE conversation_id = $1 AND claimed_turn_id = $2 AND note_state = $3`, notePending
+	}
+
+	if _, err := tx.ExecContext(ctx, claims, job.conversationID, job.jobID, settled); err != nil {
+		return false, fmt.Errorf("settle background job note claims: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM turn_steps s WHERE conversation_id = $1 AND starts_with(key, $2 || '/') AND `+keepRunningJobSteps, job.conversationID, job.jobID); err != nil {
+		return false, fmt.Errorf("clear background job steps: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit background job finish: %w", err)
+	}
+
+	return true, nil
+}
+
+// hasBackgroundJob reports whether the call keyed jobID already became a job.
+func (s *SessionService) hasBackgroundJob(ctx context.Context, conversationID, jobID string) (bool, error) {
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM background_jobs WHERE conversation_id = $1 AND job_id = $2)`, conversationID, jobID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("look up background job: %w", err)
+	}
+
+	return exists, nil
+}
+
+// restampBackgroundJob hands a running job held by job.runnerID to runnerID.
+func (s *SessionService) restampBackgroundJob(ctx context.Context, job *backgroundJob, runnerID string) (bool, error) {
+	moved, err := execRows(ctx, s.db, "restamp background job", "count restamped background job", `UPDATE background_jobs SET runner_id = $4 WHERE conversation_id = $1 AND job_id = $2 AND runner_id = $3 AND status = $5`, job.conversationID, job.jobID, job.runnerID, runnerID, backgroundRunning)
+	return moved > 0, err
+}
+
+// claimBackgroundNotes claims the owner's unclaimed pending notes for turnID,
+// skipping notes another transaction is claiming, in finish order. With held it
+// also returns the pending notes turnID already holds, for a resumed turn.
+func claimBackgroundNotes(ctx context.Context, db stateStoreDB, conversationID, childKey, turnID string, held bool) ([]backgroundJob, error) {
+	return queryRows(ctx, db, `WITH claimed AS (UPDATE background_jobs SET claimed_turn_id = $3 WHERE (conversation_id, job_id) IN (
+    SELECT conversation_id, job_id FROM background_jobs WHERE conversation_id = $1 AND child_key = $2 AND note_state = $4 AND claimed_turn_id = '' FOR UPDATE SKIP LOCKED
+) RETURNING `+backgroundJobColumns+`)
+SELECT * FROM (SELECT * FROM claimed UNION ALL SELECT `+backgroundJobColumns+` FROM background_jobs WHERE $5 AND conversation_id = $1 AND child_key = $2 AND note_state = $4 AND claimed_turn_id = $3) notes ORDER BY finished_at_unix_ns, job_id`, "background note claims", scanBackgroundJob, conversationID, childKey, turnID, notePending, held)
+}
+
+// redirectBackgroundJobs makes a hidden run's jobs without a destination report to destinationID.
+func (d stateDAO) redirectBackgroundJobs(ctx context.Context, conversationID, destinationID string) error {
+	if _, err := d.db.ExecContext(ctx, `UPDATE background_jobs SET sync_destination = $2, origin_json = (origin_json::jsonb || jsonb_build_object('SyncDestination', $2::text))::json WHERE conversation_id = $1 AND sync_destination = ''`, conversationID, destinationID); err != nil {
+		return fmt.Errorf("redirect background jobs: %w", err)
+	}
+
+	return nil
+}
+
+// backgroundWake returns the owner's unclaimed Completion Note that may wake it first, if any:
+// the earliest finished of those that may wake it now, or else the one whose wakeAfter comes first.
+func (s *SessionService) backgroundWake(ctx context.Context, conversationID, childKey string) (backgroundJob, bool, error) {
+	job, err := scanBackgroundJob(s.db.QueryRowContext(ctx, `SELECT `+backgroundJobColumns+` FROM background_jobs WHERE conversation_id = $1 AND child_key = $2 AND note_state = $3 AND wake AND claimed_turn_id = '' ORDER BY GREATEST(wake_after_unix_ns, $4), finished_at_unix_ns, job_id LIMIT 1`, conversationID, childKey, notePending, timeUnixNano(time.Now())))
+	if errors.Is(err, sql.ErrNoRows) {
+		return backgroundJob{}, false, nil
+	}
+
+	return job, err == nil, err
+}
+
+// backgroundWakeOwners returns, for startup, one unclaimed Completion Note
+// that may wake its owner, per owner.
+func (s *SessionService) backgroundWakeOwners(ctx context.Context) ([]backgroundJob, error) {
+	return queryRows(ctx, s.db, `SELECT DISTINCT ON (conversation_id, child_key) `+backgroundJobColumns+` FROM background_jobs WHERE note_state = $1 AND wake AND claimed_turn_id = '' ORDER BY conversation_id, child_key`, "background wake owners", scanBackgroundJob, notePending)
+}
+
+// notedBackgroundJobs returns the conversation's jobs listed in jobIDs, in finish order.
+func (s *SessionService) notedBackgroundJobs(ctx context.Context, conversationID string, jobIDs []string) ([]backgroundJob, error) {
+	return queryRows(ctx, s.db, `SELECT `+backgroundJobColumns+` FROM background_jobs WHERE conversation_id = $1 AND job_id = ANY($2) ORDER BY finished_at_unix_ns, job_id`, "noted background jobs", scanBackgroundJob, conversationID, jobIDs)
+}
+
+// startSubagentWake claims the pending notes of the subagent a wake job runs
+// and records the job, running as that subagent's agent, in one transaction.
+// It returns no notes, and records nothing, unless one of them may wake it.
+func (s *SessionService) startSubagentWake(ctx context.Context, job *backgroundJob) ([]backgroundJob, error) {
+	tx, err := s.beginStateTx(ctx, "subagent wake start")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	notes, err := claimBackgroundNotes(ctx, tx, job.conversationID, job.subagentKey, job.jobID, false)
+	if err != nil || !slices.ContainsFunc(notes, func(note backgroundJob) bool { return note.wake }) {
+		return nil, err
+	}
+
+	job.agent, job.label, job.origin = notes[0].agent, notes[0].label, notes[0].origin
+	if _, _, err := createBackgroundJob(ctx, tx, job); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit subagent wake start: %w", err)
+	}
+
+	return notes, nil
+}
+
+// releaseStaleBackgroundClaims frees pending notes claimed by turns that are no longer running.
+func (s *SessionService) releaseStaleBackgroundClaims(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE background_jobs j SET claimed_turn_id = '' WHERE note_state = $1 AND claimed_turn_id <> ''
+AND NOT EXISTS (SELECT 1 FROM active_turns a WHERE a.id = j.claimed_turn_id AND a.phase = $2)`, notePending, turnRunning); err != nil {
+		return fmt.Errorf("release stale background note claims: %w", err)
+	}
+
+	return nil
+}
+
+// backgroundJobs lists a conversation's running jobs and undelivered notes,
+// including those of hidden runs whose sync destination it is.
+func (s *SessionService) backgroundJobs(ctx context.Context, conversationID string) ([]backgroundJob, error) {
+	return queryRows(ctx, s.db, `SELECT `+backgroundJobColumns+` FROM background_jobs WHERE (conversation_id = $1 OR sync_destination = $1) AND (status = $2 OR note_state = $3) ORDER BY created_at_unix_ns, job_id`, "background jobs", scanBackgroundJob, conversationID, backgroundRunning, notePending)
+}
+
+// runningBackgroundJobs returns every running job, for startup recovery.
+func (s *SessionService) runningBackgroundJobs(ctx context.Context) ([]backgroundJob, error) {
+	return queryRows(ctx, s.db, `SELECT `+backgroundJobColumns+` FROM background_jobs WHERE status = $1 ORDER BY created_at_unix_ns, conversation_id, job_id`, "running background jobs", scanBackgroundJob, backgroundRunning)
 }
 
 func boolInt(value bool) int {

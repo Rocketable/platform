@@ -7,9 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"iter"
 	"log/slog"
+	"maps"
 	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -96,6 +99,10 @@ type sessionStore struct {
 type SessionService struct {
 	db          *sql.DB
 	attachments attachmentStorage
+	// jobs is the running process's job registry once its run starts.
+	jobs conversationJobs
+	// spillDir is rocketcode's spill dir, which keeps conversations' retained background output.
+	spillDir string
 
 	turnGatesMu sync.Mutex
 	turnGates   map[string]*sessionTurnGate
@@ -174,7 +181,7 @@ func NewSessionServiceIn(ctx context.Context, cfg *config.Config, logger *slog.L
 		return nil, err
 	}
 
-	return &SessionService{db: db, attachments: attachments, turnGates: map[string]*sessionTurnGate{}}, nil
+	return &SessionService{db: db, attachments: attachments, jobs: noConversationJobs{}, spillDir: rocketcodeSpillDir(cfg), turnGates: map[string]*sessionTurnGate{}}, nil
 }
 
 // UpsertThread records or updates a text-thread bridge entry.
@@ -409,6 +416,7 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 			`DELETE FROM session_tags WHERE conversation_id = $1`,
 			`DELETE FROM active_turns WHERE conversation_id = $1`,
 			`DELETE FROM turn_steps WHERE conversation_id = $1`,
+			`DELETE FROM background_jobs WHERE conversation_id = $1`,
 			`DELETE FROM scheduled_messages WHERE conversation_id = $1`,
 			`DELETE FROM thread_queue WHERE conversation_id = $1`,
 			`DELETE FROM conversation_goals WHERE conversation_id = $1`,
@@ -429,7 +437,7 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 
 	s.completeTurnPairReservation(session.ManagedConversationID, session.PrivateConversationID)
 
-	return nil
+	return s.removeRetainedResults(session.PrivateConversationID, session.ManagedConversationID)
 }
 
 // SetConversationSettled changes only the recorded conversation's sidebar state.
@@ -822,6 +830,10 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 			return PruneStateStats{}, fmt.Errorf("delete stale turn steps: %w", err)
 		}
 
+		if _, err := tx.ExecContext(ctx, `DELETE FROM background_jobs WHERE conversation_id = $1`, conversationID); err != nil {
+			return PruneStateStats{}, fmt.Errorf("delete stale background jobs: %w", err)
+		}
+
 		if _, err := tx.ExecContext(ctx, `DELETE FROM conversation_goals WHERE conversation_id = $1`, conversationID); err != nil {
 			return PruneStateStats{}, fmt.Errorf("delete stale conversation goal: %w", err)
 		}
@@ -841,7 +853,7 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 		return PruneStateStats{}, fmt.Errorf("commit state prune: %w", err)
 	}
 
-	return stats, nil
+	return stats, s.removeRetainedResults(slices.Collect(maps.Keys(deleteConversations))...)
 }
 
 // ObserveEntries loads observed session entries through the runtime service.
@@ -895,6 +907,8 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 		return 0, errors.New("conversation ID is required")
 	}
 
+	s.jobs.abandon(conversationID)
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin session deletion: %w", err)
@@ -919,6 +933,11 @@ DELETE FROM turn_steps WHERE conversation_id = $1 AND key IN (SELECT id FROM don
 		return 0, fmt.Errorf("delete terminal transcript turns: %w", err)
 	}
 
+	if _, err := tx.ExecContext(ctx, `WITH jobs AS (DELETE FROM background_jobs WHERE conversation_id = $1 RETURNING job_id)
+DELETE FROM turn_steps s USING jobs WHERE s.conversation_id = $1 AND starts_with(s.key, jobs.job_id || '/')`, conversationID); err != nil {
+		return 0, fmt.Errorf("delete background jobs: %w", err)
+	}
+
 	if err := saveSessionSummary(ctx, tx, protocol.SessionSummary{ConversationID: conversationID}); err != nil {
 		return 0, err
 	}
@@ -927,7 +946,7 @@ DELETE FROM turn_steps WHERE conversation_id = $1 AND key IN (SELECT id FROM don
 		return 0, fmt.Errorf("commit session deletion: %w", err)
 	}
 
-	return rows, nil
+	return rows, s.removeRetainedResults(conversationID)
 }
 
 // Delegations returns saved direct child histories referenced by this transcript,
@@ -943,28 +962,29 @@ func (s *SessionService) Delegations(ctx context.Context, conversationID, source
 	return children, nil
 }
 
+// A call's children are the history saved under its call ID, as before reviews and
+// subagents had their own key, and its permission review (rocketcode.ReviewKey).
 const delegationsSQL = `WITH ` + sessionHistorySQL + `, parents AS (
     SELECT COALESCE(NULLIF(source_conversation_id, ''), $1) AS producer,
-        entry->'replay_input' AS replay, revert_index
+        entry->'replay_input' AS replay, entry->>'turn_id' AS turn_id, revert_index
     FROM effective_entries e
     WHERE e.id >= $3 AND ($4::bigint = 0 OR e.id < $4) AND (NOT synced OR source_conversation_id <> '')
     UNION ALL
-    SELECT a.conversation_id, s.value::jsonb->'record'->'replay_input', -1 FROM active_turns a
+    SELECT a.conversation_id, s.value::jsonb->'record'->'replay_input', a.id, -1 FROM active_turns a
     JOIN turn_steps s ON s.conversation_id = a.conversation_id AND s.key = a.id WHERE a.conversation_id = $1 AND $4::bigint = 0
         AND (SELECT readable FROM visibility)
         AND (SELECT marker FROM cutoff) = ''
         AND NOT EXISTS (SELECT 1 FROM physical_entries e WHERE e.entry->>'turn_id' = a.id AND (NOT e.synced OR e.source_conversation_id = $1))
 )
-SELECT DISTINCT child.conversation_id FROM parents p
+SELECT DISTINCT child.id FROM parents p
 CROSS JOIN LATERAL jsonb_array_elements(NULLIF(p.replay, 'null'::jsonb)) WITH ORDINALITY AS items(item, ordinal)
-CROSS JOIN LATERAL (
-    SELECT conversation_id FROM session_entries
-    WHERE conversation_id = p.producer || '/' || (item->>'call_id') LIMIT 1
-) child
+CROSS JOIN LATERAL (VALUES (p.producer || '/' || (item->>'call_id')), (p.producer || '/' || (item->>'call_id') || '-review-' ||
+    left(encode(sha256(convert_to(p.turn_id || '/call/' || (item->>'call_id'), 'UTF8')), 'hex'), 8))) child(id)
 WHERE item->>'type' = 'function_call' AND strpos(item->>'call_id', '/') = 0
     AND (p.revert_index < 0 OR ordinal <= p.revert_index)
     AND ($2 = '' OR p.producer = $2)
-ORDER BY child.conversation_id`
+    AND EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = child.id)
+ORDER BY child.id`
 
 // ListSessions returns summaries for the requested stored rocketcode sessions.
 func (s *SessionService) ListSessions(ctx context.Context, conversationIDs []string) ([]protocol.SessionSummary, error) {
@@ -1521,6 +1541,55 @@ func (s *SessionService) beginStateTx(ctx context.Context, label string) (*sql.T
 	return tx, nil
 }
 
+// openSpill opens the spill dir; found is false before any turn created it.
+func (s *SessionService) openSpill() (root *os.Root, found bool, err error) {
+	root, err = os.OpenRoot(s.spillDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, nil
+	}
+
+	if err != nil {
+		return nil, false, fmt.Errorf("open execute spill dir: %w", err)
+	}
+
+	return root, true, nil
+}
+
+// sweepRetainedResults removes expired retained background output at startup, before any turn
+// can retain more.
+func (s *SessionService) sweepRetainedResults() error {
+	root, found, err := s.openSpill()
+	if !found {
+		return err
+	}
+
+	harness.SweepRetainedResults(root, "retained")
+
+	if err := root.Close(); err != nil {
+		return fmt.Errorf("close execute spill dir: %w", err)
+	}
+
+	return nil
+}
+
+// removeRetainedResults removes deleted conversations' retained background output.
+func (s *SessionService) removeRetainedResults(conversationIDs ...string) error {
+	root, found, err := s.openSpill()
+	if !found {
+		return err
+	}
+
+	for _, conversationID := range conversationIDs {
+		err = errors.Join(err, root.RemoveAll(rocketcodeRetainedDir(conversationID)))
+	}
+
+	if err = errors.Join(err, root.Close()); err != nil {
+		return fmt.Errorf("remove retained execute results: %w", err)
+	}
+
+	return nil
+}
+
 func (s sessionStore) in() iter.Seq2[harness.SessionEntry, error] {
 	return func(yield func(harness.SessionEntry, error) bool) {
 		var (
@@ -1673,8 +1742,8 @@ func slackStateKeyTime(key string) (time.Time, bool) {
 }
 
 func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, conversationID string, cutoff time.Time) (bool, error) {
-	queued, err := conversationExists(ctx, db, `thread_queue`, `conversation_id`, conversationID)
-	if err != nil || queued {
+	pending, err := conversationHasPendingWork(ctx, db, conversationID)
+	if err != nil || pending {
 		return false, err
 	}
 
@@ -1791,13 +1860,17 @@ func queryStrings(ctx context.Context, db stateStoreDB, query, label string, arg
 	}, args...)
 }
 
-func conversationExists(ctx context.Context, db stateStoreDB, table, column, conversationID string) (bool, error) {
-	var exists bool
-	if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM `+table+` WHERE `+column+` = $1)`, conversationID).Scan(&exists); err != nil {
-		return false, fmt.Errorf("check conversation reference in %s: %w", table, err)
+// conversationHasPendingWork reports queued messages, running Background Jobs,
+// or wakeable Completion Notes, its own or those of hidden runs reporting to it,
+// which keep a conversation from being pruned.
+func conversationHasPendingWork(ctx context.Context, db stateStoreDB, conversationID string) (bool, error) {
+	var pending bool
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM thread_queue WHERE conversation_id = $1)
+OR EXISTS(SELECT 1 FROM background_jobs WHERE (conversation_id = $1 OR sync_destination = $1) AND (status = $2 OR note_state = $3 AND wake))`, conversationID, backgroundRunning, notePending).Scan(&pending); err != nil {
+		return false, fmt.Errorf("check conversation pending work: %w", err)
 	}
 
-	return exists, nil
+	return pending, nil
 }
 
 func pruneExternalMCPSessions(ctx context.Context, tx *sql.Tx, cutoff time.Time, threadIDs []string, sessions map[string]ExternalMCPSessionState, deleteConversations map[string]struct{}) (PruneStateStats, error) {
@@ -1817,12 +1890,12 @@ func pruneExternalMCPSessions(ctx context.Context, tx *sql.Tx, cutoff time.Time,
 		}
 
 		if privateConversationID != "" {
-			queued, err := conversationExists(ctx, tx, `thread_queue`, `conversation_id`, privateConversationID)
+			pending, err := conversationHasPendingWork(ctx, tx, privateConversationID)
 			if err != nil {
 				return PruneStateStats{}, err
 			}
 
-			if queued {
+			if pending {
 				continue
 			}
 
@@ -1879,6 +1952,8 @@ referenced_conversations AS (
     SELECT private_conversation_id FROM external_mcp_sessions
     UNION ALL
     SELECT conversation_id FROM thread_queue
+    UNION ALL
+    SELECT unnest(ARRAY[conversation_id, sync_destination]) FROM background_jobs WHERE status = $2 OR note_state = $3 AND wake
 ),
 orphaned_histories AS (
     SELECT h.conversation_id
@@ -1886,7 +1961,7 @@ orphaned_histories AS (
     LEFT JOIN referenced_conversations r ON r.conversation_id = h.conversation_id
     WHERE r.conversation_id IS NULL
 )
-SELECT conversation_id FROM orphaned_histories`, "stale private session conversations", cutoff.UTC().Format(time.RFC3339Nano))
+SELECT conversation_id FROM orphaned_histories`, "stale private session conversations", cutoff.UTC().Format(time.RFC3339Nano), backgroundRunning, notePending)
 }
 
 func deleteSessionEntries(ctx context.Context, db stateStoreDB, conversationIDs map[string]struct{}) (int64, error) {

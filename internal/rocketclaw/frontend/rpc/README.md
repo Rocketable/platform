@@ -91,6 +91,32 @@ successful delivery report shown in History. Migration `011_last_message_summari
 invalidates the derived user-only previews for the existing background backfill.
 Session `running` is true while the conversation has an unfinished turn, independently of settled status.
 
+`MoveToBackground` moves every running `execute` and `task` call of agents with
+`permission.rocketclaw.allow_background: allow` in the conversation into Background
+Jobs and reports `moved`; with nothing eligible it changes nothing.
+`StopBackgroundJob` stops one job by ID, records it as stopped by user, and
+reports `stopped`, false when the job had already finished. It reaches the conversation's own jobs,
+its subagents' jobs, and jobs of hidden cron or External MCP runs whose sync
+destination is this conversation, the same scope as the agent's
+`rocketclaw_stop_background_job`. Both authorize like the queue RPCs and are
+refused for private cron and External MCP conversations. History adds a `movable`
+flag, true while such a call runs attached to its turn, and a `backgroundJobs`
+list with label, kind, state, tool call ID, subagent key, who stopped it, and a
+`hidden` mark. The list holds jobs that are running or whose Completion Note is
+still pending, including those of hidden runs that report here. Transcript events
+that deliver Completion Notes carry them in `completionNotes` with each job ID,
+final state, and note text. They come from the stored jobs whose IDs the system
+input saved as its input ID, never from its text, so output that looks like a note
+adds no row; the jobs stay until their conversation is deleted, and a fork copies
+the finished ones its copied notes list, as already read, with their unexpired
+retained output. A task call's
+events carry `delegation`, the Delegation History of the subagent the call started
+or continued, as recorded in its public progress. Any call's `function_call` event
+carries `review`, the Delegation History its automatic permission reviews save to,
+derived from the turn ID and call ID; the Web links it only while the response's
+`delegations` list it, so a review saved after the row was sent still links.
+Job changes and `movable` flips send the usual conversation-change hint.
+
 `Session.tags` (additive protobuf field 14) carries the owning conversation's
 durable, lexically sorted active tag names in `ListSessions`. Missing metadata
 returns an empty list. The existing sidebar query joins tags without adding a

@@ -326,6 +326,53 @@ without migration 019 cannot start against the upgraded database: the migration
 loader rejects unknown ledger entries. Keep the tag table and migration ledger;
 dropping metadata loses tags. A binary-only downgrade is not supported.
 
+#### Background Jobs
+
+An agent can leave long `execute` scripts and `task` subagents running while the
+conversation moves on. It is off by default; enable it per agent with an exact rule:
+
+```yaml
+permission:
+  rocketclaw:
+    allow_background: allow
+```
+
+Only `allow` and `deny` are accepted. `rocketclaw: allow` and `rocketclaw` wildcard
+rules do not enable it, and each agent, including a subagent, uses its own setting.
+Denied agents keep their tool schemas unchanged.
+
+For allowed agents, `execute` gains `background` and a short `description` label,
+and `task` gains `background` and `continue`. A background call returns a job ID
+at once. When the job finishes, fails, or is stopped, its Completion Note enters
+the conversation's running turn at the next step, or starts a new system turn when
+it is idle; a Slack wake reply lands in the same thread. A hidden cron or External
+MCP run's wake reaches the same destination as the original run. When a turn that
+read notes fails or stops before saving, a conversation reads them at its next turn
+without another wake; a hidden run, which may have no next turn, wakes again 1
+minute later, then 5 minutes later, then every 30 minutes until a wake saves, also
+across restarts. Only the first failure is posted to its destination, saying that
+the wake retries; later failed retries post nothing there. A note for a job
+started by a subagent wakes that subagent instead, and its parent is not told.
+Every `task` result of an allowed agent reports a continue ID that a later `task`
+call passes as `continue` to resume that subagent with its earlier history.
+
+Background work cannot use `ask_user_question`,
+`rocketclaw_attach_files_to_response`, or `rocketclaw_restart`; other tools keep the context of the turn that started it.
+`task` subagents never get `ask_user_question`, whether or not they run in the
+background. Allowed agents can stop a job of their conversation with
+`rocketclaw_stop_background_job`; Slack has no other stop control, and `$stop`
+stops only the running turn and its foreground work. In Web, **Move to background**
+moves running work of allowed agents, and the running jobs are listed above the
+composer with Stop (see the [Web README](internal/rocketclaw/web/README.md)).
+
+Shutdown kills Background Jobs, including their bash, while foreground bash still
+finishes. After a restart, background subagents resume and later report. A killed
+script is reported at the conversation's next turn without starting one; a hidden
+cron or External MCP run wakes instead so its destination learns the work died.
+There is no limit on concurrent jobs. Migration `028_background_jobs.sql` stores
+jobs and their notes; as with other migrations, a binary-only downgrade is not
+supported.
+
 ### Invoking Skills
 
 Send bare `$` in Slack, or type a leading `$` in the web composer, to discover built-in commands followed by skills allowed for the selected agent. Web suggestions update when you switch agents; selecting a suggestion inserts its prefix without sending.
@@ -359,7 +406,7 @@ Queued calls retain their original invocation and attachments. Availability and 
 4. A human message, `$workflow` command, cron job, scheduled prompt, or MCP request enters RocketClaw and invokes RocketCode with the selected agent.
 5. RocketCode runs model/tool turns under configured permissions.
 6. RocketClaw signals persisted transcript changes to Web and delivers final responses, files, or reactions through the originating connector.
-7. Conversation state, every completed step of in-progress turns, scheduled work, queued messages, and routing metadata are persisted. Shutdown stops each turn at its next step: tool calls already running, including bash, finish and are recorded first, while subagents, Code Mode scripts, and workflows stop between their own steps. A second stop signal exits at once. After a restart, each conversation continues its interrupted turn from the last recorded step, then starts saved unstarted messages, without waiting for new input.
+7. Conversation state, every completed step of in-progress turns, scheduled work, queued messages, and routing metadata are persisted. Shutdown stops each turn at its next step: tool calls already running, including bash, finish and are recorded first, while subagents, Code Mode scripts, and workflows stop between their own steps. Background Jobs are killed instead. A second stop signal exits at once. After a restart, each conversation continues its interrupted turn from the last recorded step, then starts saved unstarted messages, without waiting for new input.
 
 Saved workflows run only as foreground managed turns. Each workflow launches fresh isolated custom workers, keeps intermediate values out of managed history, and persists a compact terminal summary of completed, failed, stopped, and skipped phases so later turns can explain what happened. Successful runs also record and deliver the final value. Slack shows one in-progress placeholder and the final result, without phase or worker activity cards. Fan-out workers share one checkout, so parallel writers must own disjoint files. `$stop` ends the run. A daemon restart resumes the run without repeating completed workers.
 
@@ -382,6 +429,7 @@ RocketClaw is configured with `rocketclaw.json` in the working directory. Runtim
 - `.rocketclaw/overlays/`: configured git overlay clones for runtime assets.
 - `.rocketclaw/.rocketcode/tmp/<session-id>/`: per-conversation shell TMPDIR (not shared across sessions).
 - `.rocketclaw/.rocketcode/spill/<turn-id>/`: oversized execute output for the current turn (deleted when the turn ends).
+- `.rocketclaw/.rocketcode/spill/retained/<conversation-hash>/`: oversized output of background `execute` scripts, kept for 7 days.
 - `.rocketclaw/workflows/`: effective saved Starlark workflows assembled from embedded, overlay, and workspace `workflows/` assets.
 
 Generated runtime state should not be treated as source code.
@@ -392,7 +440,7 @@ Execute keeps full host-tool results inside Starlark, but clips oversized return
 {"result_id":"<ID from Execute>","start_line":2001,"limit":10,"line_numbers":true}
 ```
 
-Pages are bounded to 2000 source lines and 50 KiB including numbering and footer. `start_line` is 1-based; 0 means 1. `limit=0` means 2000; larger limits are capped at 2000. Negative values are invalid. Follow `next_start_line` until `EOF`. A line too large for a fresh page returns a UTF-8-safe prefix with an omission marker and advances to the next line; the omitted tail cannot be fetched with this line-only tool, but full storage stays intact. Loading needs no filesystem read grant and creates no new spill. IDs belong only to the current RocketCode Turn and expire on terminal success, error, or interrupt. Restarting the same unfinished journaled turn preserves its original IDs without changing filesystem permissions. `Config.SpillDir` placement is unchanged.
+Pages are bounded to 2000 source lines and 50 KiB including numbering and footer. `start_line` is 1-based; 0 means 1. `limit=0` means 2000; larger limits are capped at 2000. Negative values are invalid. Follow `next_start_line` until `EOF`. A line too large for a fresh page returns a UTF-8-safe prefix with an omission marker and advances to the next line; the omitted tail cannot be fetched with this line-only tool, but full storage stays intact. Loading needs no filesystem read grant and creates no new spill. IDs belong only to the current RocketCode Turn and expire on terminal success, error, or interrupt. Restarting the same unfinished journaled turn preserves its original IDs without changing filesystem permissions. A script running as a Background Job instead keeps its oversized output for 7 days, and any turn of the same conversation can load it in that window. `Config.SpillDir` placement is unchanged.
 
 The loader reads only regular files and rejects symlinks in the stored path. Workspace read/edit tools reject the configured spill directory, and file searches exclude its contents. Bash rejects explicit spill paths in arguments, redirections, and `workdir`, even with broad allow rules. These checks do not isolate Bash from the filesystem: scripts and variables can construct paths indirectly. `load_execute_result` is reserved; custom tools cannot register that name.
 

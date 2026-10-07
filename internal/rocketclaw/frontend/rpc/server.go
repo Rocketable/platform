@@ -428,16 +428,10 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 		}
 
 		if event.Role == "user" {
-			header, inputID, principal := event.Header, event.InputId, event.Principal
-
-			event, err = s.inputEvent(ctx, producer, event.Text)
+			event, err = s.savedInputEvent(ctx, producer, event)
 			if err != nil {
 				return nil, err
 			}
-
-			event.Header = header
-			event.InputId = inputID
-			event.Principal = principal
 		}
 
 		event.attribute(entry.Entry.AttributionAt(i), producer, conversationID)
@@ -449,18 +443,20 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 		}
 
 		if callProgress >= 0 {
-			event.publicProgress(&progress[callProgress], entry.Key, string(entry.Terminal))
+			event.publicProgress(&progress[callProgress], entry, producer)
 
 			if identity.Type == "function_call_output" {
 				event.ItemId += ":outcome"
 			}
 		}
 
+		event.linkReview(producer)
+
 		if entry.ID != 0 {
 			event.MessageId = fmt.Sprintf("%d:%d", entry.ID, i)
 		}
 
-		texts, err := event.publicText(identity.Content, identity.ID, identity.Status, progress, entry)
+		texts, err := event.publicText(identity.Content, identity.ID, identity.Status, progress, entry, producer)
 		if err != nil {
 			return nil, err
 		}
@@ -554,7 +550,7 @@ func (s *Server) hostCallEvents(ctx context.Context, root *os.Root, entry *backe
 }
 
 // publicText reconciles native content parts and locally flattened provider text.
-func (e *TranscriptEvent) publicText(content json.RawMessage, id, messageStatus string, progress []rocketcode.PublicProgress, entry *backend.ObservedSessionEntry) ([]*TranscriptEvent, error) {
+func (e *TranscriptEvent) publicText(content json.RawMessage, id, messageStatus string, progress []rocketcode.PublicProgress, entry *backend.ObservedSessionEntry, producer string) ([]*TranscriptEvent, error) {
 	if e.Role != "assistant" || id == "" || len(content) == 0 {
 		return []*TranscriptEvent{e}, nil
 	}
@@ -564,7 +560,7 @@ func (e *TranscriptEvent) publicText(content json.RawMessage, id, messageStatus 
 			index := strings.LastIndexByte(item.ID, '/')
 			return item.Kind == rocketcode.PublicProgressText && index >= 0 && item.ID[:index] == id
 		}); overlap >= 0 {
-			e.publicProgress(&progress[overlap], entry.Key, string(entry.Terminal))
+			e.publicProgress(&progress[overlap], entry, producer)
 		}
 
 		return []*TranscriptEvent{e}, nil
@@ -594,7 +590,7 @@ func (e *TranscriptEvent) publicText(content json.RawMessage, id, messageStatus 
 		if overlap := slices.IndexFunc(progress, func(item rocketcode.PublicProgress) bool {
 			return item.Kind == rocketcode.PublicProgressText && item.ID == itemID
 		}); overlap >= 0 {
-			text.publicProgress(&progress[overlap], entry.Key, string(entry.Terminal))
+			text.publicProgress(&progress[overlap], entry, producer)
 
 			if messageStatus == "completed" {
 				text.State, text.Complete = "completed", true
@@ -611,7 +607,9 @@ func (e *TranscriptEvent) publicText(content json.RawMessage, id, messageStatus 
 func fallbackProgress(entry *backend.ObservedSessionEntry, progress []rocketcode.PublicProgress, replayText, replayResults, replayCalls map[string]bool, conversationID string, messages []*TranscriptEvent) []*TranscriptEvent {
 	producer := cmp.Or(entry.SourceConversationID, conversationID)
 
-	for i, item := range progress {
+	for i := range progress {
+		item := &progress[i]
+
 		switch {
 		case item.Kind == rocketcode.PublicProgressText:
 			id := item.ID
@@ -637,7 +635,7 @@ func fallbackProgress(entry *backend.ObservedSessionEntry, progress []rocketcode
 		}
 
 		event.attribute(entry.Entry.AttributionAt(len(entry.Entry.ReplayInput)), producer, conversationID)
-		event.publicProgress(&item, entry.Key, string(entry.Terminal))
+		event.publicProgress(item, entry, producer)
 
 		if item.Kind != rocketcode.PublicProgressText {
 			if item.Kind == rocketcode.PublicProgressDelegation || item.Text == "" {
@@ -650,8 +648,8 @@ func fallbackProgress(entry *backend.ObservedSessionEntry, progress []rocketcode
 		position := len(messages)
 		// Ponytail: O(progress² × rows) anchoring keeps no extra index; index
 		// identities if long compacted turns make this scan expensive.
-		for _, next := range progress[i+1:] {
-			id := entry.Key + ":" + next.ParentID + "/" + next.ID
+		for j := i + 1; j < len(progress); j++ {
+			id := entry.Key + ":" + progress[j].ParentID + "/" + progress[j].ID
 
 			if anchor := slices.IndexFunc(messages, func(message *TranscriptEvent) bool {
 				return message.ItemId == id || message.ItemId == id+":outcome"
@@ -667,14 +665,20 @@ func fallbackProgress(entry *backend.ObservedSessionEntry, progress []rocketcode
 	return messages
 }
 
-// publicProgress supplies display identity and safe attribution, never command identity.
-func (e *TranscriptEvent) publicProgress(item *rocketcode.PublicProgress, key, terminal string) {
-	e.ParentId = key + ":" + item.ParentID
+// publicProgress supplies display identity and safe attribution, never command identity. A task
+// call's subagent and a call's permission review are direct children of producer, the history
+// that holds the call.
+func (e *TranscriptEvent) publicProgress(item *rocketcode.PublicProgress, entry *backend.ObservedSessionEntry, producer string) {
+	e.ParentId = entry.Key + ":" + item.ParentID
 	e.ItemId = e.ParentId + "/" + item.ID
 
 	e.State = string(item.State)
-	if terminal != "" && (item.State == rocketcode.PublicProgressWorking || item.State == rocketcode.PublicProgressReview) {
-		e.State = terminal
+	if entry.Terminal != "" && (item.State == rocketcode.PublicProgressWorking || item.State == rocketcode.PublicProgressReview) {
+		e.State = string(entry.Terminal)
+	}
+
+	if item.SubagentKey != "" {
+		e.Delegation = producer + item.SubagentKey[strings.LastIndexByte(item.SubagentKey, '/'):]
 	}
 
 	e.Complete = e.State != "working" && e.State != "review"
@@ -691,6 +695,15 @@ func (e *TranscriptEvent) publicProgress(item *rocketcode.PublicProgress, key, t
 	e.Agent, e.Model = item.Agent, item.Model
 }
 
+// linkReview names, on the row of a call producer made, the Delegation History its automatic
+// permission reviews save to. The Web links it only while the response's delegations list it,
+// which also covers a review a background script saves after its row was sent.
+func (e *TranscriptEvent) linkReview(producer string) {
+	if e.ToolName != "" {
+		e.Review = producer + "/" + rocketcode.ReviewKey(e.TurnId, e.ToolCallId)
+	}
+}
+
 func (e *TranscriptEvent) attribute(snapshot rocketcode.ReplayAttribution, source, destination string) {
 	e.Agent, e.Model, e.ReasoningEffort = snapshot.Agent, snapshot.Model, snapshot.ReasoningEffort
 	e.Origin = "canonical"
@@ -699,6 +712,29 @@ func (e *TranscriptEvent) attribute(snapshot rocketcode.ReplayAttribution, sourc
 	if source != destination || cron {
 		e.Origin = "sandboxed"
 	}
+}
+
+// savedInputEvent projects a saved input of producer with its saved metadata. A system input's
+// ID lists the jobs whose Completion Notes it delivers.
+func (s *Server) savedInputEvent(ctx context.Context, producer string, saved *TranscriptEvent) (*TranscriptEvent, error) {
+	event, err := s.inputEvent(ctx, producer, saved.Text)
+	if err != nil {
+		return nil, err
+	}
+
+	event.Header, event.InputId, event.Principal = saved.Header, saved.InputId, saved.Principal
+	if event.InputId == "" || event.Header != "[System]" && !strings.HasPrefix(event.Header, "[System ") {
+		return event, nil
+	}
+
+	notes, err := s.backend.CompletionNotes(ctx, producer, strings.Fields(event.InputId))
+	if err != nil {
+		return nil, fmt.Errorf("read web completion notes: %w", err)
+	}
+
+	event.CompletionNotes = backgroundJobs(notes)
+
+	return event, nil
 }
 
 func (s *Server) inputEvent(ctx context.Context, id, text string) (*TranscriptEvent, error) {
@@ -1513,6 +1549,65 @@ func (s *Server) reorderQueue(ctx context.Context, request *ReorderQueueRequest)
 	}
 
 	return &QueueItemResponse{}, nil
+}
+
+// listBackgroundJobs adds the conversation's Background Jobs to response, and whether
+// MoveToBackground has work there.
+func (s *Server) listBackgroundJobs(ctx context.Context, response *HistoryResponse, request *HistoryRequest) error {
+	// Only the History RPC's latest page of a chat carries the running list; cron traces and
+	// internal history reads (search, attachments, session commands) never need it.
+	if request.GetBefore() != 0 || strings.HasPrefix(request.Id, "cron:") || strings.HasPrefix(request.Id, "one-off-cron:") {
+		return nil
+	}
+
+	jobs, movable, err := s.backend.BackgroundJobs(ctx, request.Id)
+	if err != nil {
+		return fmt.Errorf("read web background jobs: %w", err)
+	}
+
+	response.Movable, response.BackgroundJobs = movable, backgroundJobs(jobs)
+
+	return nil
+}
+
+func backgroundJobs(jobs []protocol.BackgroundJob) []*BackgroundJob {
+	listed := make([]*BackgroundJob, len(jobs))
+	for i := range jobs {
+		job := &jobs[i]
+		listed[i] = &BackgroundJob{JobId: job.ID, Kind: job.Kind, State: job.State, Label: job.Label, ToolCallId: job.ToolCallID, SubagentKey: job.SubagentKey, StoppedBy: job.StoppedBy, Hidden: job.Hidden, Note: job.Note}
+	}
+
+	return listed
+}
+
+func (s *Server) moveToBackground(ctx context.Context, request *MoveToBackgroundRequest) (*MoveToBackgroundResponse, error) {
+	if err := s.visibleConversation(ctx, request.ConversationId); err != nil {
+		return nil, err
+	}
+
+	moved, err := s.backend.MoveToBackground(request.ConversationId)
+	if err != nil {
+		return nil, fmt.Errorf("web move to background: %w", err)
+	}
+
+	return &MoveToBackgroundResponse{Moved: moved}, nil
+}
+
+func (s *Server) stopBackgroundJob(ctx context.Context, request *StopBackgroundJobRequest) (*StopBackgroundJobResponse, error) {
+	if err := s.visibleConversation(ctx, request.ConversationId); err != nil {
+		return nil, err
+	}
+
+	if strings.TrimSpace(request.JobId) == "" {
+		return nil, fmt.Errorf("web stop background job: %w", status.Error(codes.InvalidArgument, "background job ID is required"))
+	}
+
+	stopped, err := s.backend.StopBackgroundJob(ctx, request.ConversationId, request.JobId)
+	if err != nil {
+		return nil, fmt.Errorf("web stop background job: %w", err)
+	}
+
+	return &StopBackgroundJobResponse{Stopped: stopped}, nil
 }
 
 func (s *Server) visibleConversation(ctx context.Context, id string) error {

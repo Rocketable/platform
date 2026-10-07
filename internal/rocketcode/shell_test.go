@@ -52,6 +52,21 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 			})
 		}
 	})
+	t.Run("only a killed background job stops bash", func(t *testing.T) {
+		killed, kill := context.WithCancelCause(t.Context())
+		kill(fmt.Errorf("stopped by user: %w", ErrBackgroundKilled))
+
+		got := sss.Bash(killed, bashParams{Command: "sleep 30; echo finished"})
+		require.False(t, got.Success)
+		require.NotContains(t, got.Output, "finished")
+
+		cancelled, cancel := context.WithCancelCause(t.Context())
+		cancel(ErrShutdown)
+
+		got = sss.Bash(cancelled, bashParams{Command: "sleep 0.2; echo finished"})
+		require.True(t, got.Success, got.Output)
+		require.Contains(t, got.Output, "finished")
+	})
 	t.Run("captures stderr", func(t *testing.T) {
 		got := sss.Bash(context.Background(), bashParams{Command: "echo stdout_msg && echo stderr_msg >&2", TimeoutMillisecond: 0, Workdir: "", Description: "stderr"}).String()
 		require.Contains(t, got, "stdout_msg")

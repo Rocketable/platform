@@ -8,18 +8,24 @@ import (
 	"slices"
 
 	"github.com/Rocketable/platform/internal/rocketcode/codemode"
+	"github.com/openai/openai-go/v3/responses"
 )
 
 type toolCallContextKey struct{}
 
+// toolCallContext snapshots the turn state a call needs, because a Background Job keeps
+// running after the looper moves on to later tool batches and turns.
 type toolCallContext struct {
-	looper *looper
-	output chan<- ChatResponse
-	callID string
+	looper       *looper
+	observations *turnObservations
+	reviewInput  []responses.ResponseInputItemUnionParam
+	output       chan<- ChatResponse
+	callID       string
+	sink         *backgroundSink // The call's own Background Job, if it runs as one.
 }
 
 func withToolCallContext(ctx context.Context, l *looper, output chan<- ChatResponse, callID string) context.Context {
-	return context.WithValue(ctx, toolCallContextKey{}, toolCallContext{looper: l, output: output, callID: callID})
+	return context.WithValue(ctx, toolCallContextKey{}, toolCallContext{looper: l, observations: l.observations, reviewInput: l.permissionReviewInput, output: output, callID: callID})
 }
 
 func toolCallContextFrom(ctx context.Context) (toolCallContext, bool) {
@@ -37,7 +43,7 @@ func ToolCallKey(ctx context.Context) string {
 		return ""
 	}
 
-	key := tc.looper.observations.turnID + "/call/" + tc.callID
+	key := tc.observations.turnID + "/call/" + tc.callID
 	if host := codemode.CallKey(ctx); host != "" {
 		key += "/host/" + host
 	}
@@ -81,8 +87,8 @@ func CheckNestedToolCall(ctx context.Context, toolName string, tool *looperTool,
 		return nil
 	}
 
-	decision.review.ReviewContext = slices.Clone(tc.looper.permissionReviewInput)
-	decision.review.CallID = tc.callID
+	decision.review.ReviewContext = slices.Clone(tc.reviewInput)
+	decision.review.Review = ReviewKey(tc.observations.turnID, tc.callID)
 
 	reviewDecision := tc.looper.PermissionReviewer.reviewPermission(ctx, decision.review, tc.output)
 	if reviewDecision.Outcome != permissionReviewOutcomeAllow {

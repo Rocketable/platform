@@ -269,7 +269,7 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			}
 
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&n))
-			require.Equal(t, 29, n)
+			require.Equal(t, 30, n)
 			// No migration lock may survive startup and poison later pool users.
 			require.Eventually(t, func() bool {
 				var locks int
@@ -334,7 +334,7 @@ func TestSessionMigrationsSerializeLedgerCreation(t *testing.T) {
 
 			var count int
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-			require.Equal(t, 29, count)
+			require.Equal(t, 30, count)
 		})
 	}
 }
@@ -388,7 +388,7 @@ func TestSessionMigrationRollbackAndCatchup(t *testing.T) {
 
 	var n int
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM pg_migrations`).Scan(&n))
-	require.Equal(t, 27, n)
+	require.Equal(t, 28, n)
 
 	var missing sql.NullString
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT to_regclass('slack_channel_facts')::text`).Scan(&missing))
@@ -553,6 +553,43 @@ INSERT INTO scheduled_messages (scheduled_message_id, conversation_id, agent, me
 	messages, err := dao.scheduledMessages(ctx, "")
 	require.NoError(t, err)
 	require.Equal(t, map[string]protocol.ScheduledMessageState{"kept": {ConversationID: "owner", Agent: "selected", Message: "existing schedule", DueAt: time.Unix(0, 123).UTC(), Recurring: true, Interval: 456}}, messages)
+}
+
+func TestBackgroundJobsMigration(t *testing.T) {
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	source := migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}
+	set := migrate.MigrationSet{TableName: "pg_migrations"}
+	schema := func() (bool, string) {
+		var (
+			table sql.NullString
+			body  string
+		)
+		require.NoError(t, store.db.QueryRowContext(ctx, `SELECT to_regclass('background_jobs')::text, prosrc FROM pg_proc WHERE proname = 'notify_transcript_change' AND pronamespace = current_schema()::regnamespace`).Scan(&table, &body))
+
+		return table.Valid, body
+	}
+
+	for range 2 {
+		n, err := set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Down, 1)
+		require.NoError(t, err)
+		require.Equal(t, 1, n)
+
+		exists, body := schema()
+		require.False(t, exists)
+		require.NotContains(t, body, "background_jobs")
+
+		_, err = store.db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('rolled-back', '{}', '')`)
+		require.NoError(t, err, "the restored transcript trigger still runs")
+
+		n, err = set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Up, 1)
+		require.NoError(t, err)
+		require.Equal(t, 1, n)
+
+		exists, body = schema()
+		require.True(t, exists)
+		require.Contains(t, body, "sync_destination")
+	}
 }
 
 func TestSessionMigrationUnlockFailureDiscardsConnection(t *testing.T) {

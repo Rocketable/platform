@@ -30,6 +30,8 @@ const (
 	PublicProgressBlocked   PublicProgressState = "blocked"
 	PublicProgressFailed    PublicProgressState = "failed"
 	PublicProgressStopped   PublicProgressState = "stopped"
+	// PublicProgressBackground means the call returned while its work runs as a Background Job.
+	PublicProgressBackground PublicProgressState = "background"
 )
 
 // PublicProgress contains only explicitly public text and producer identity.
@@ -43,6 +45,9 @@ type PublicProgress struct {
 	Text     string              `json:"text,omitempty"`
 	Agent    string              `json:"agent,omitempty"`
 	Model    string              `json:"model,omitempty"`
+	// SubagentKey is the child-session key of the subagent a task call runs or continues, as
+	// OpenCode keeps a task part's child session ID in its metadata.
+	SubagentKey string `json:"subagent_key,omitempty"`
 }
 
 type publicProgressTrace struct {
@@ -62,7 +67,7 @@ func PublicProgressFromTrace(traces []json.RawMessage) []PublicProgress {
 		}
 
 		if !slices.Contains([]PublicProgressKind{PublicProgressText, PublicProgressTool, PublicProgressDelegation}, trace.Progress.Kind) ||
-			!slices.Contains([]PublicProgressState{PublicProgressWorking, PublicProgressReview, PublicProgressCompleted, PublicProgressBlocked, PublicProgressFailed, PublicProgressStopped}, trace.Progress.State) {
+			!slices.Contains([]PublicProgressState{PublicProgressWorking, PublicProgressReview, PublicProgressCompleted, PublicProgressBlocked, PublicProgressFailed, PublicProgressStopped, PublicProgressBackground}, trace.Progress.State) {
 			continue
 		}
 
@@ -97,9 +102,11 @@ func (o *turnObservations) finishCall(ctx context.Context, progress *PublicProgr
 	defer o.mu.Unlock()
 
 	snapshot := *progress
-	for _, item := range PublicProgressFromTrace(o.trace) {
-		if item.ID == progress.ID && item.ParentID == progress.ParentID {
-			snapshot = item
+	traced := PublicProgressFromTrace(o.trace)
+
+	for i := range traced {
+		if traced[i].ID == progress.ID && traced[i].ParentID == progress.ParentID {
+			snapshot = traced[i]
 			break
 		}
 	}
@@ -131,7 +138,8 @@ func (o *turnObservations) observeLocked(ctx context.Context, progress *PublicPr
 	if index < 0 {
 		trace = append(trace, raw)
 	} else {
-		if PublicProgressFromTrace([]json.RawMessage{trace[index]})[0] == snapshot {
+		// A call whose work became a Background Job stays "background" for the rest of its turn.
+		if existing := PublicProgressFromTrace([]json.RawMessage{trace[index]})[0]; existing == snapshot || existing.State == PublicProgressBackground {
 			return nil
 		}
 
@@ -168,8 +176,8 @@ func (o *turnObservations) replaceResponse(ctx context.Context, parentID string,
 
 	var records []json.RawMessage
 
-	for _, item := range progress {
-		raw, _ := json.Marshal(publicProgressTrace{Type: "rocketcode_public_progress", Progress: item})
+	for i := range progress {
+		raw, _ := json.Marshal(publicProgressTrace{Type: "rocketcode_public_progress", Progress: progress[i]})
 		records = append(records, raw)
 	}
 

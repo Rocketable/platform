@@ -60,6 +60,7 @@ const (
 	resetScheduledMessagesToolName = "rocketclaw_reset_scheduled_messages"
 
 	internalErrorResponse        = "I hit an internal error while waiting for rocketcode."
+	wakeRetryNotice              = "I will keep retrying and post the background result here when it arrives."
 	attachmentAccessFallback     = "I can see that you attached a file, but I could not send it to the model. Please re-upload it as a supported image or send a smaller file."
 	unsupportedFileFallback      = "I can see that you attached a non-image file. I can inspect image attachments right now, but other file types are not supported yet."
 	defaultQueueSize             = 128
@@ -112,6 +113,8 @@ type Bridge struct {
 	stopCh    chan struct{}
 	// threads resolves the other side of a stored External MCP request.
 	threads *threadBridgeManager
+	// background runs the turns' execute and task calls of agents allowed to background them.
+	background *backgroundRegistry
 
 	mu                    sync.Mutex
 	handling, stopped     bool
@@ -131,6 +134,13 @@ type Bridge struct {
 	historyMutation       bool
 	waiting               []bridgeRequest
 	settlement            *turnCompletion
+	// notesOpen reports that the running turn takes Completion Notes at its next step, so a new
+	// Completion Note waits for it rather than waking the conversation. notesOffered are the
+	// notes it holds that it already took.
+	notesOpen    bool
+	notesOffered []string
+	// movedNotes tell the running turn, at its next step, which of its calls the user moved.
+	movedNotes []rocketcode.PromptInput
 }
 
 type turnCompletion struct {
@@ -151,6 +161,8 @@ type bridgeRequest struct {
 	completion                *turnCompletion
 	producer                  *Bridge
 	syncSource                string
+	// backgroundWake has activation claim the conversation's pending Completion Notes for a wake turn.
+	backgroundWake bool
 }
 
 // closeWorkflow releases prepared data ownership; an unprepared request has no
@@ -215,6 +227,20 @@ func (s childSessions) AppendChildEntry(ctx context.Context, key string, entry *
 	return err
 }
 
+func (s childSessions) ChildEntries(ctx context.Context, key string) ([]rocketcode.SessionEntry, error) {
+	observed, err := s.store.ObserveEntries(ctx, s.conversationID+key)
+	if err != nil {
+		return nil, err
+	}
+
+	entries := make([]rocketcode.SessionEntry, len(observed))
+	for i := range observed {
+		entries[i] = observed[i].Entry
+	}
+
+	return entries, nil
+}
+
 // NewConversation constructs a rocketcode bridge for one conversation.
 func NewConversation(cfg *config.Config, publisher protocol.OutboundPublisher, bridgeCfg *Config, logger *slog.Logger) *Bridge {
 	return &Bridge{log: logger.With("component", "rocketcode"), config: normalizeConfig(bridgeCfg), runtime: cfg, bus: publisher, requestCh: make(chan bridgeRequest, defaultQueueSize), stopCh: make(chan struct{})}
@@ -258,18 +284,21 @@ func (b *Bridge) SwitchAgent(agent string) {
 	b.mu.Unlock()
 }
 
-// ScheduleMessage schedules one delayed prompt for this conversation.
-func (b *Bridge) ScheduleMessage(delay time.Duration, message string, recurring bool) error {
+// hiddenRun reports whether a turn of inbound is a hidden run: a cron run that decides on its
+// output, or a turn of a Private Producer Conversation.
+func hiddenRun(inbound *protocol.InboundMessage) bool {
+	return inbound.SyncDestination != "" || inbound.RequireOutputDecision
+}
+
+// ScheduleMessage schedules one delayed prompt for this conversation. origin is the inbound of
+// the asking turn; a hidden producer turn records the prompt privately instead.
+func (b *Bridge) ScheduleMessage(origin *protocol.InboundMessage, delay time.Duration, message string, recurring bool) error {
 	scheduled := protocol.ScheduledMessageState{ConversationID: b.config.ConversationID, Agent: b.agentSnapshot(), Message: message, DueAt: time.Now().UTC().Add(delay), Recurring: recurring}
 	if recurring {
 		scheduled.Interval = delay
 	}
 
-	b.mu.Lock()
-	private := b.activeReply != nil && (b.activeReply.SyncDestination != "" || b.activeReply.RequireOutputDecision)
-	b.mu.Unlock()
-
-	if private {
+	if hiddenRun(origin) {
 		data, err := json.Marshal(scheduled)
 		if err != nil {
 			return fmt.Errorf("encode scheduled message: %w", err)
@@ -293,13 +322,10 @@ func (b *Bridge) ScheduleMessage(delay time.Duration, message string, recurring 
 	return nil
 }
 
-// ResetScheduledMessages deletes pending scheduled prompts for this conversation.
-func (b *Bridge) ResetScheduledMessages() error {
-	b.mu.Lock()
-	private := b.activeReply != nil && (b.activeReply.SyncDestination != "" || b.activeReply.RequireOutputDecision)
-	b.mu.Unlock()
-
-	if private {
+// ResetScheduledMessages deletes pending scheduled prompts for this conversation, privately
+// for a hidden producer turn, as ScheduleMessage does.
+func (b *Bridge) ResetScheduledMessages(origin *protocol.InboundMessage) error {
+	if hiddenRun(origin) {
 		_, err := b.config.SessionService.AppendEntryID(context.Background(), b.config.ConversationID, &rocketcode.SessionEntry{Version: 1, Type: producerResetEntryType, Timestamp: time.Now().UTC()})
 		return err
 	}
@@ -443,9 +469,11 @@ func (b *Bridge) stopIdleTurn() *protocol.InboundMessage {
 		outbound.WorkflowTerminal = protocol.TerminalStopped
 	}
 
-	outbound, err = b.config.SessionService.finishTurn(ctx, turn.id, &turnFinish{store: newSessionStore(turn.conversationID, b.config.SessionService), outbound: outbound, terminal: protocol.TerminalStopped})
+	finish := turnFinish{store: newSessionStore(turn.conversationID, b.config.SessionService), outbound: outbound, terminal: protocol.TerminalStopped, hidden: hiddenRun(turn.inbound)}
+
+	outbound, err = b.config.SessionService.finishTurn(ctx, turn.id, &finish)
 	if err == nil {
-		err = b.deliver(ctx, &bridgeRequest{inbound: turn.inbound, turnID: turn.id}, outbound)
+		err = b.deliver(ctx, &bridgeRequest{inbound: turn.inbound, turnID: turn.id}, outbound, finish.retry)
 	}
 
 	if err != nil {
@@ -534,11 +562,11 @@ func (b *Bridge) saveSteersLocked(ctx context.Context) {
 }
 
 // storeStopped keeps a request submitted during shutdown in the Thread Queue so it
-// starts after the restart. Row, queue, schedule, goal-continuation, and sync
+// starts after the restart. Row, queue, schedule, goal-continuation, wake, and sync
 // requests are rebuilt from their own durable state instead.
 func (b *Bridge) storeStopped(request *bridgeRequest, operation string) error {
 	msg := request.inbound
-	if msg == nil || request.turnID != "" || request.queueItemID != "" || request.scheduledMessageID != "" || msg.GoalAction == protocol.GoalActionContinue {
+	if msg == nil || request.turnID != "" || request.queueItemID != "" || request.scheduledMessageID != "" || request.backgroundWake || msg.GoalAction == protocol.GoalActionContinue {
 		return fmt.Errorf("%s: %w", operation, protocol.ErrBridgeStopped)
 	}
 
@@ -769,7 +797,7 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 
 	admitted, errHandle := b.activateInbound(ctx, request)
 	if !admitted && errHandle == nil {
-		b.pickLaterWorkLogged(ctx, b, &protocol.InboundMessage{})
+		b.skipInbound(ctx, request)
 		return
 	}
 
@@ -779,8 +807,10 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 		request.inbound.CompleteResponseWithAttachments("", nil, errHandle)
 	}
 
-	if errHandle == nil && request.producer != nil && request.completion == nil {
-		errHandle = b.syncConversation(ctx, request.producer)
+	// A failed producer turn syncs too: the sync releases the turn pair it reserved, which a
+	// failed wake would otherwise hold until a restart, blocking every later turn here.
+	if request.producer != nil && request.completion == nil {
+		errHandle = errors.Join(errHandle, b.syncConversation(ctx, request.producer))
 	}
 
 	if ctx.Err() != nil {
@@ -815,6 +845,16 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 	}
 }
 
+// skipInbound ends a request whose activation found nothing to run: it frees the turn pair a
+// hidden producer reserved for it and looks for later work.
+func (b *Bridge) skipInbound(ctx context.Context, request *bridgeRequest) {
+	if request.producer != nil {
+		b.config.SessionService.completeTurnPairReservation(b.config.ConversationID, request.producer.config.ConversationID)
+	}
+
+	b.pickLaterWorkLogged(ctx, b, &protocol.InboundMessage{})
+}
+
 func (b *Bridge) handlingSnapshot() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -823,8 +863,9 @@ func (b *Bridge) handlingSnapshot() bool {
 }
 
 // activateInbound takes a request: in one transaction it claims the request's
-// queue row or one-shot schedule and records the active-turn row that owns it.
-// A false result without an error leaves work behind an active goal or an earlier claimant.
+// queue row, one-shot schedule, or Completion Notes and records the active-turn
+// row that owns it. A false result without an error leaves work behind an active
+// goal or an earlier claimant, or finds no note left to wake for.
 func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (bool, error) {
 	b.mu.Lock()
 	if b.historyMutation {
@@ -901,6 +942,13 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 	}
 
 	turnID := fmt.Sprintf("turn-%d", time.Now().UnixNano())
+
+	if request.backgroundWake {
+		if woken, err := claimWakeNotes(ctx, tx, owner.config.ConversationID, turnID, request.inbound); err != nil || !woken {
+			return false, err
+		}
+	}
+
 	if err := startTurnDB(ctx, tx, turnID, owner.config.ConversationID, request.inbound); err != nil {
 		return false, err
 	}
@@ -922,9 +970,33 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 	return true, nil
 }
 
+// claimWakeNotes claims, in tx, the Completion Notes a wake turn delivers and records their jobs
+// in its inbound. It reports false when no note left wakes the conversation now.
+func claimWakeNotes(ctx context.Context, tx stateStoreDB, conversationID, turnID string, inbound *protocol.InboundMessage) (bool, error) {
+	notes, err := claimBackgroundNotes(ctx, tx, conversationID, "", turnID, false)
+	if err != nil || !slices.ContainsFunc(notes, func(note backgroundJob) bool { return note.wake && !note.wakeAfter.After(time.Now()) }) {
+		return false, err
+	}
+
+	// A wake queued before its cron run posted a thread would post a second root; leaving the
+	// notes unclaimed lets later work wake them toward the thread their jobs now report to.
+	if inbound.SyncDestination == "" && slices.ContainsFunc(notes, func(note backgroundJob) bool { return note.origin.SyncDestination != "" }) {
+		return false, nil
+	}
+
+	ids := make([]string, len(notes))
+	for i := range notes {
+		ids[i] = notes[i].jobID
+	}
+
+	inbound.Metadata = map[string]string{backgroundNotesMetadataKey: strings.Join(ids, " ")}
+
+	return true, nil
+}
+
 func (b *Bridge) pickLaterWork(ctx context.Context, fromTimer bool) error {
 	b.mu.Lock()
-	stopped, handling, mutation := b.stopped, b.handling, b.historyMutation
+	stopped, handling, notesOpen, mutation := b.stopped, b.handling, b.notesOpen, b.historyMutation
 	b.mu.Unlock()
 
 	if mutation {
@@ -983,6 +1055,35 @@ WHERE a.phase <> $2 AND c.producer_inbound_json->>'SyncDestination' = $1)`, b.co
 	if ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
 		b.log.Info("later work blocked", "event", "queue_blocked", "conversation_id", b.config.ConversationID, "blocker", "goal")
 		return nil
+	}
+
+	// A Completion Note wakes the conversation with a system turn that replies where the job's
+	// turn did; a hidden producer's runs for its destination again. A note a hidden run's failed
+	// turn released wakes it once its delay ends.
+	note, wake, err := b.config.SessionService.backgroundWake(ctx, b.config.ConversationID, "")
+	if err != nil {
+		return fmt.Errorf("load background notes for later work: %w", err)
+	}
+
+	switch {
+	case !wake || notesOpen:
+	case note.wakeAfter.After(time.Now()):
+		b.armScheduledMessage("", &protocol.ScheduledMessageState{ConversationID: b.config.ConversationID, DueAt: note.wakeAfter})
+	default:
+		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
+		inbound.ConversationID, inbound.SlackReply = b.config.ConversationID, protocol.Clone(note.origin.SlackReply)
+		inbound.SyncDestination, inbound.RequireOutputDecision, inbound.Cronjob = note.origin.SyncDestination, note.origin.RequireOutputDecision, note.origin.Cronjob
+
+		if inbound.SyncDestination == "" {
+			return b.enqueue(ctx, &bridgeRequest{inbound: inbound, backgroundWake: true}, "submit background wake")
+		}
+
+		destination, err := b.threads.recordedBridge(inbound.SyncDestination)
+		if err != nil {
+			return fmt.Errorf("load background wake destination: %w", err)
+		}
+
+		return destination.enqueue(ctx, &bridgeRequest{inbound: inbound, backgroundWake: true, producer: b}, "submit background wake")
 	}
 
 	queue, err := b.config.SessionService.ThreadQueueForConversation(b.config.ConversationID)
@@ -1294,6 +1395,23 @@ func (b *Bridge) pickLaterWorkLogged(ctx context.Context, worker *Bridge, inboun
 	}
 }
 
+// wakePrompt sets a wake turn's prompt to its Completion Notes; its inbound stores only their jobs.
+func (b *Bridge) wakePrompt(ctx context.Context, msg *protocol.InboundMessage) error {
+	ids := strings.Fields(msg.Metadata[backgroundNotesMetadataKey])
+	if len(ids) == 0 {
+		return nil
+	}
+
+	notes, err := b.config.SessionService.notedBackgroundJobs(ctx, b.config.ConversationID, ids)
+	if err != nil {
+		return err
+	}
+
+	msg.Text = backgroundNotesText(notes)
+
+	return nil
+}
+
 func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err error) {
 	msg := request.inbound
 
@@ -1310,6 +1428,8 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 	b.mu.Lock()
 
 	b.inputOpen, b.activeTurnID = msg.Human && msg.SyncDestination == "" && !b.historyMutation, request.turnID
+	b.notesOffered = strings.Fields(msg.Metadata[backgroundNotesMetadataKey])
+
 	for _, steer := range recorded {
 		b.steers = append(b.steers, bridgeRequest{inbound: steer.Inbound, queueItemID: steer.ID, completion: &turnCompletion{done: make(chan struct{})}})
 	}
@@ -1320,7 +1440,9 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 	}()
 
 	if request.delivery != nil {
-		if err := b.deliver(ctx, request, request.delivery); err != nil {
+		// Ponytail: a delivery a restart cut no longer knows its turn's retry, so a failed retry
+		// of a hidden run's wake cut there posts once; store the retry with the outbound if that matters.
+		if err := b.deliver(ctx, request, request.delivery, 0); err != nil {
 			return err
 		}
 
@@ -1337,6 +1459,10 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 			msg.CompleteResponseWithAttachments("", nil, nil)
 			return b.config.SessionService.closeTurn(context.WithoutCancel(ctx), request.turnID)
 		}
+	}
+
+	if err := b.wakePrompt(ctx, msg); err != nil {
+		return err
 	}
 
 	turnID := request.turnID
@@ -1434,7 +1560,7 @@ func (b *Bridge) finish(ctx context.Context, request *bridgeRequest, finish *tur
 		outbound.Cronjob = nil
 	}
 
-	finish.outbound, finish.terminal = outbound, terminal
+	finish.outbound, finish.terminal, finish.hidden = outbound, terminal, hiddenRun(msg)
 
 	outbound, err := b.config.SessionService.finishTurn(context.WithoutCancel(ctx), request.turnID, finish)
 	if err != nil {
@@ -1442,17 +1568,24 @@ func (b *Bridge) finish(ctx context.Context, request *bridgeRequest, finish *tur
 		return fmt.Errorf("finish turn %q: %w", request.turnID, err)
 	}
 
-	return b.deliver(ctx, request, outbound)
+	return b.deliver(ctx, request, outbound, finish.retry)
 }
 
-// deliver publishes a finished row's final outbound and then closes the row.
-func (b *Bridge) deliver(ctx context.Context, request *bridgeRequest, outbound *protocol.OutboundMessage) error {
+// deliver publishes a finished row's final outbound and then closes the row. retry is the
+// row's turnFinish.retry: a hidden run's first failure tells the destination that its wake
+// retries, and a failed retry of a wake goes only to the run's own conversation, whose sync
+// still releases the destination.
+func (b *Bridge) deliver(ctx context.Context, request *bridgeRequest, outbound *protocol.OutboundMessage, retry int) error {
 	msg := request.inbound
+
+	if retry == 1 {
+		outbound.Text = strings.TrimSpace(outbound.Text + "\n\n" + wakeRetryNotice)
+	}
 
 	b.mu.Lock()
 
 	b.inputOpen = false
-	if msg.SyncDestination != "" {
+	if msg.SyncDestination != "" && (retry <= 1 || msg.Metadata[backgroundNotesMetadataKey] == "") {
 		b.pendingOutput = protocol.CloneOutboundMessage(outbound)
 	}
 	b.mu.Unlock()
@@ -1524,6 +1657,11 @@ func (b *Bridge) postCronRoot(ctx context.Context, outbound *protocol.OutboundMe
 		return err
 	}
 
+	// The run's Background Jobs now report to the thread it is bound to, like a one-off cron's.
+	if err := (stateDAO{db: tx}).redirectBackgroundJobs(ctx, b.config.ConversationID, destinationID); err != nil {
+		return err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit cron destination binding: %w", err)
 	}
@@ -1543,7 +1681,7 @@ func (b *Bridge) settleSteers(ctx context.Context, err error) error {
 	b.inputOpen, b.activeTurnID = false, ""
 	steers := b.steers
 
-	b.steers, b.steersRead = nil, 0
+	b.steers, b.steersRead, b.notesOffered, b.movedNotes = nil, 0, nil, nil
 	if b.historyMutation {
 		for i := range steers {
 			err = errors.Join(err, b.preserveRevertRequestLocked(context.WithoutCancel(ctx), &steers[i]))
@@ -1816,7 +1954,8 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		return runResult{}, fmt.Errorf("open workspace root: %w", err)
 	}
 
-	defer func() { _ = root.Close() }()
+	shared := &turnRoot{root: root, users: 1}
+	defer shared.release()
 
 	agents, skills, err := loadRocketCodeDefinitionsIn(root, b.runtime, b.runtime.RuntimeDirName(), toolModePersistent)
 	if err != nil {
@@ -1957,14 +2096,16 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	b.log.Info("prepared rocketcode session history", "conversation_id", b.config.ConversationID, "turn_id", turnID, "entry_count", len(observed), "replay_item_count", replayItemCount, "history_bytes", historyBytes, "compaction_count", compactionCount, "latest_entry_id", latestEntryID, "latest_entry_type", latestEntryType)
 
-	customTools := append(sessionTagTools(b.config.SessionService, cmp.Or(msg.SyncDestination, b.config.ConversationID)), attachments.Tool(root, b.config.SessionService, b.config.ConversationID))
+	// Tools that act on the turn's routing read msg, so its background work keeps it.
+	tagConversationID := cmp.Or(msg.SyncDestination, b.config.ConversationID)
+	customTools := append(sessionTagTools(b.config.SessionService, tagConversationID), attachments.Tool(root, b.config.SessionService, b.config.ConversationID), b.scheduleMessageTool(msg), b.resetScheduledMessagesTool(msg))
 
 	agent := agents.Items[agentName]
 	if agentExplicitlyAllowsRocketClawTool(&agent, restartToolName) {
 		customTools = append(customTools, restartTool(b.config.RequestRestart))
 	}
 
-	if tool, ok := b.maybeDynamicWorkflowTool(root, &agent, agentName); ok {
+	if tool, ok := b.maybeDynamicWorkflowTool(root, &agent, agentName, tagConversationID); ok {
 		customTools = append(customTools, tool)
 	}
 
@@ -1978,6 +2119,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	rocketcodeConfig := b.rocketcodeConfig(shellTempDir, shellEnv, customTools...)
 	rocketcodeConfig.ChildContext = childContext
+	rocketcodeConfig.BackgroundJobs = backgroundTurn{registry: b.background, root: shared, conversationID: b.config.ConversationID, origin: msg, turnID: turnID}
 
 	looper, err := rocketcode.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agentName, io.Discard)
 	if err != nil {
@@ -2006,8 +2148,8 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	b.activeAttribution = result.attribution
 	b.activeTurnInterrupts = interrupts
 	b.activeTurnCancel = cancelTurn
-
-	b.activeTurnInterrupted = b.historyMutation
+	// A history mutation interrupts the turn at once, so it takes no Completion Notes.
+	b.activeTurnInterrupted, b.notesOpen = b.historyMutation, !b.historyMutation
 	if b.historyMutation {
 		interrupts <- os.Interrupt
 	}
@@ -2021,6 +2163,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		b.activeTurnInterrupts = nil
 		b.activeTurnCancel = nil
 		b.activeTurnInterrupted = false
+		b.notesOpen = false
 		b.mu.Unlock()
 		cancelTurn()
 	}()
@@ -2039,7 +2182,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		return result, fmt.Errorf("publish rocketcode turn start: %w", err)
 	}
 
-	input <- rocketcode.PromptInput{ID: msg.Metadata["web_message_id"], TurnID: journalKey, Role: "", Text: prompt, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: directSkill, Responses: output}
+	input <- rocketcode.PromptInput{ID: cmp.Or(msg.Metadata["web_message_id"], msg.Metadata[backgroundNotesMetadataKey]), TurnID: journalKey, Role: "", Text: prompt, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: directSkill, Responses: output}
 
 	close(input)
 
@@ -2186,14 +2329,14 @@ func sanitizeShellTempSegment(conversationID string) string {
 func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]string, customTools ...rocketcode.Tool) rocketcode.Config {
 	tools := make([]rocketcode.Tool, 0, 6+len(customTools))
 
-	tools = append(tools, reloadTool(b.config.RequestReload), scheduleMessageTool(b.ScheduleMessage, b.log), resetScheduledMessagesTool(b.ResetScheduledMessages), listSessionsTool(b.config.SessionService), getSessionTool(b.config.SessionService), currentSessionIDTool(b.config.ConversationID))
+	tools = append(tools, reloadTool(b.config.RequestReload), listSessionsTool(b.config.SessionService), getSessionTool(b.config.SessionService), currentSessionIDTool(b.config.ConversationID), stopBackgroundJobTool(b.background, b.config.ConversationID))
 	if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err == nil && ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
 		tools = append(tools, updateGoalTool(b))
 	}
 
 	tools = append(tools, customTools...)
 
-	return rocketcode.Config{Model: "", AutoApproverModel: b.runtime.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(b.runtime), Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: b.runtime.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: b.runtime.Instrumentation.HideInputs, HideOutputs: b.runtime.Instrumentation.HideOutputs}}, ChildSessions: childSessions{store: b.config.SessionService, conversationID: b.config.ConversationID}, Journal: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(b.runtime.MCPServers), MCPWorkspace: b.runtime.Workspace}
+	return rocketcode.Config{Model: "", AutoApproverModel: b.runtime.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(b.runtime), RetainedResultDir: rocketcodeRetainedDir(b.config.ConversationID), Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: b.runtime.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: b.runtime.Instrumentation.HideInputs, HideOutputs: b.runtime.Instrumentation.HideOutputs}}, ChildSessions: childSessions{store: b.config.SessionService, conversationID: b.config.ConversationID}, Journal: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, BackgroundJobs: rocketcode.InertBackgroundJobs{}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(b.runtime.MCPServers), MCPWorkspace: b.runtime.Workspace}
 }
 
 func toMCPClientServers(servers map[string]config.MCPServerConfig) map[string]mcpclient.ServerConfig {
@@ -2381,7 +2524,7 @@ func parseReasonArg(raw json.RawMessage, op string) (string, error) {
 }
 
 func restartTool(requestRestart func(string) (string, error)) rocketcode.Tool {
-	return rocketcode.Tool{Name: restartToolName, Description: "Restart rocketclaw only after completing an explicitly requested runtime configuration change that requires restart, such as changes to rocketclaw.json, femtoclaw.json, or configured overlay entries. Use rocketclaw_reload instead for agents/, skills/, cron/, scripts/, or already-configured overlay repository content changes. The reason field must explain why rocketclaw needs to restart. Do not call this after memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.", Permission: "rocketclaw", VisibilitySubjects: []string{restartToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{restartToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+	return rocketcode.Tool{Name: restartToolName, TurnBound: true, Description: "Restart rocketclaw only after completing an explicitly requested runtime configuration change that requires restart, such as changes to rocketclaw.json, femtoclaw.json, or configured overlay entries. Use rocketclaw_reload instead for agents/, skills/, cron/, scripts/, or already-configured overlay repository content changes. The reason field must explain why rocketclaw needs to restart. Do not call this after memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.", Permission: "rocketclaw", VisibilitySubjects: []string{restartToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{restartToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		reason, err := parseReasonArg(raw, "restart")
 		if err != nil {
 			return rocketcode.ToolResult{}, err
@@ -2412,9 +2555,9 @@ func reloadTool(requestReload func(string) (string, error)) rocketcode.Tool {
 	}}
 }
 
-func scheduleMessageTool(schedule func(time.Duration, string, bool) error, logger *slog.Logger) rocketcode.Tool {
+func (b *Bridge) scheduleMessageTool(origin *protocol.InboundMessage) rocketcode.Tool {
 	return rocketcode.Tool{Name: scheduleMessageToolName, Description: "Schedule a message to the current rocketclaw conversation after a short delay. Set recurring to false for one-shot schedules or true to repeat until scheduled messages are reset.", Permission: "rocketclaw", VisibilitySubjects: []string{scheduleMessageToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{scheduleMessageToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"message": map[string]any{"type": "string"}, "send_this_in": map[string]any{"type": "string"}, "recurring": map[string]any{"type": "boolean"}}, "required": []string{"message", "send_this_in", "recurring"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
-		logger.Info("rocketclaw schedule message tool called")
+		b.log.Info("rocketclaw schedule message tool called")
 
 		var input struct {
 			Message    string `json:"message"`
@@ -2444,8 +2587,8 @@ func scheduleMessageTool(schedule func(time.Duration, string, bool) error, logge
 			return rocketcode.ToolResult{}, errors.New("recurring send_this_in must be at least 1m")
 		}
 
-		if err := schedule(delay, message, input.Recurring); err != nil {
-			logger.Error("rocketclaw schedule message tool failed", "delay", delay, "delay_ms", delay.Milliseconds(), "recurring", input.Recurring, "message_len", len([]rune(message)), "error", err)
+		if err := b.ScheduleMessage(origin, delay, message, input.Recurring); err != nil {
+			b.log.Error("rocketclaw schedule message tool failed", "delay", delay, "delay_ms", delay.Milliseconds(), "recurring", input.Recurring, "message_len", len([]rune(message)), "error", err)
 			return rocketcode.ToolResult{}, err
 		}
 
@@ -2499,7 +2642,7 @@ func (c *outboundAttachmentCollector) Tool(root *os.Root, sessions *SessionServi
 		"required": []string{"attachments"},
 	}
 
-	return rocketcode.Tool{Name: attachFilesToolName, Description: "Queue files to attach to the final human-visible response. Call before the final response finishes.", Permission: "rocketclaw", VisibilitySubjects: []string{attachFilesToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{attachFilesToolName}, nil }, Parameters: parameters, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+	return rocketcode.Tool{Name: attachFilesToolName, TurnBound: true, Description: "Queue files to attach to the final human-visible response. Call before the final response finishes.", Permission: "rocketclaw", VisibilitySubjects: []string{attachFilesToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{attachFilesToolName}, nil }, Parameters: parameters, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		var input attachFilesInput
 		if err := json.Unmarshal(raw, &input); err != nil {
 			return rocketcode.ToolResult{}, fmt.Errorf("parse response attachments: %w", err)
@@ -2594,9 +2737,9 @@ func outboundAttachment(root *os.Root, input *outboundAttachmentInput) (protocol
 	return protocol.OutboundAttachment{Name: name, MIMEType: protocol.NormalizeMIMEType(mimeType), Data: bytes.Clone(data)}, nil
 }
 
-func resetScheduledMessagesTool(reset func() error) rocketcode.Tool {
+func (b *Bridge) resetScheduledMessagesTool(origin *protocol.InboundMessage) rocketcode.Tool {
 	return rocketcode.Tool{Name: resetScheduledMessagesToolName, Description: "Delete pending scheduled messages for the current rocketclaw conversation.", Permission: "rocketclaw", VisibilitySubjects: []string{scheduleMessageToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{scheduleMessageToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{}}, Call: func(context.Context, json.RawMessage, chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
-		if err := reset(); err != nil {
+		if err := b.ResetScheduledMessages(origin); err != nil {
 			return rocketcode.ToolResult{}, err
 		}
 
@@ -2605,7 +2748,7 @@ func resetScheduledMessagesTool(reset func() error) rocketcode.Tool {
 }
 
 func askUserQuestionTool(asker protocol.UserQuestionAsker, msg *protocol.InboundMessage) rocketcode.Tool {
-	return rocketcode.Tool{Name: askUserQuestionToolName, Resumable: true, Description: "Ask the human partner a native Slack question and wait for their answer. The options array is only for concrete predefined choices to show as buttons/selects; do not include catch-all choices like Custom, Other, or Free text.", Permission: "rocketclaw", VisibilitySubjects: []string{askUserQuestionToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{askUserQuestionToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"question": map[string]any{"type": "string"}, "details": map[string]any{"type": "string"}, "options": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"label": map[string]any{"type": "string"}, "value": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}, "required": []string{"label", "value", "description"}}}, "multiple": map[string]any{"type": "boolean"}}, "required": []string{"question", "details", "options", "multiple"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+	return rocketcode.Tool{Name: askUserQuestionToolName, Resumable: true, TurnBound: true, Description: "Ask the human partner a native Slack question and wait for their answer. The options array is only for concrete predefined choices to show as buttons/selects; do not include catch-all choices like Custom, Other, or Free text.", Permission: "rocketclaw", VisibilitySubjects: []string{askUserQuestionToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{askUserQuestionToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"question": map[string]any{"type": "string"}, "details": map[string]any{"type": "string"}, "options": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"label": map[string]any{"type": "string"}, "value": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}, "required": []string{"label", "value", "description"}}}, "multiple": map[string]any{"type": "boolean"}}, "required": []string{"question", "details", "options", "multiple"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		var req protocol.AskUserQuestionRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return rocketcode.ToolResult{}, fmt.Errorf("parse human question: %w", err)
@@ -2622,8 +2765,21 @@ func askUserQuestionTool(asker protocol.UserQuestionAsker, msg *protocol.Inbound
 		req.ID, req.Source, req.ConversationID = rocketcode.ToolCallKey(ctx), msg.Source, msg.ConversationID
 		req.SlackReply = protocol.Clone(msg.SlackReply)
 
+		// Moving the script withdraws its question through the asker's cancellation cleanup.
+		if moved, ok := ctx.Value(backgroundMovedKey{}).(context.Context); ok {
+			var cancel context.CancelCauseFunc
+
+			ctx, cancel = context.WithCancelCause(ctx)
+			defer cancel(nil)
+			defer context.AfterFunc(moved, func() { cancel(context.Cause(moved)) })()
+		}
+
 		answer, err := asker.AskUserQuestion(ctx, &req)
 		if err != nil {
+			if errors.Is(context.Cause(ctx), errMovedToBackground) {
+				return rocketcode.TextToolResult(questionWithdrawn), nil
+			}
+
 			return rocketcode.ToolResult{}, fmt.Errorf("ask user question: %w", err)
 		}
 

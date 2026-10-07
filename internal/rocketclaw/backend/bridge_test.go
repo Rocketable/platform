@@ -18,6 +18,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1059,9 +1061,9 @@ func TestRocketCodeConfigEnablesDiagnostics(t *testing.T) {
 	assert.Equal(t, 16, cfg.ParallelToolCalls)
 	assert.Equal(t, rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, cfg.ExpandPromptShellCommands)
 	assert.NotContains(t, toolNames, restartToolName)
-	assert.Contains(t, toolNames, scheduleMessageToolName)
+	assert.NotContains(t, toolNames, scheduleMessageToolName, "each turn builds its schedule tools")
 	assert.Contains(t, toolNames, reloadToolName)
-	assert.Contains(t, toolNames, resetScheduledMessagesToolName)
+	assert.Contains(t, toolNames, stopBackgroundJobToolName)
 	assert.Contains(t, toolNames, attachFilesToolName)
 	assert.Contains(t, toolNames, listSessionsToolName)
 	assert.Contains(t, toolNames, getSessionToolName)
@@ -1246,6 +1248,7 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 	var logs lockedBuffer
 
 	bridge := NewConversation(&config.Config{Workspace: workspace, Models: map[string]string{"main": "main-model", "helper": "child/helper-model", "guardrail": "guard/guardrail-model"}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, Providers: map[string]config.OpenAIConfig{"child": {APIBaseURL: childServer.URL}, "guard": {APIBaseURL: guardServer.URL}}}, bus, &Config{ConversationID: conversationID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	bridge.background = newBackgroundRegistry(service, &backgroundNotesMock{}, testLogger())
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "hello", true)
 	inbound.ConversationID = conversationID
 
@@ -1312,35 +1315,31 @@ func TestBridgeStopAfterStartContextCanceledIsIdempotent(t *testing.T) {
 }
 
 func TestScheduleMessageToolValidatesAndPreservesMessage(t *testing.T) {
-	var (
-		delay     time.Duration
-		message   string
-		recurring bool
-		logs      bytes.Buffer
-	)
+	var logs bytes.Buffer
 
-	logger := slog.New(slog.NewJSONHandler(&logs, nil))
-	tool := scheduleMessageTool(func(d time.Duration, msg string, repeat bool) error {
-		delay = d
-		message = msg
-		recurring = repeat
-
-		return nil
-	}, logger)
+	service := newTestSessionService(t)
+	bridge := &Bridge{log: slog.New(slog.NewJSONHandler(&logs, nil)), config: Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", SessionService: service}}
+	tool := bridge.scheduleMessageTool(new(protocol.InboundMessage))
 	assert.ElementsMatch(t, []string{"message", "send_this_in", "recurring"}, tool.Parameters["required"])
 
-	result, err := tool.Call(context.Background(), []byte(`{"message":"  keep spaces  ","send_this_in":"5m"}`), nil)
+	result, err := tool.Call(context.Background(), []byte(`{"message":"  keep spaces  ","send_this_in":"1h"}`), nil)
 	require.NoError(t, err)
-	assert.Equal(t, "scheduled message in 5m0s", result.Output)
-	assert.Equal(t, 5*time.Minute, delay)
-	assert.Equal(t, "  keep spaces  ", message)
-	assert.False(t, recurring)
+	assert.Equal(t, "scheduled message in 1h0m0s", result.Output)
 	assert.Contains(t, logs.String(), "rocketclaw schedule message tool called")
 
-	result, err = tool.Call(context.Background(), []byte(`{"message":"again","send_this_in":"1m","recurring":true}`), nil)
+	result, err = tool.Call(context.Background(), []byte(`{"message":"again","send_this_in":"1h","recurring":true}`), nil)
 	require.NoError(t, err)
-	assert.Equal(t, "scheduled recurring message every 1m0s", result.Output)
-	assert.True(t, recurring)
+	assert.Equal(t, "scheduled recurring message every 1h0m0s", result.Output)
+
+	messages, err := service.ScheduledMessagesForConversation(bridge.config.ConversationID)
+	require.NoError(t, err)
+
+	recurring := map[string]bool{}
+	for _, message := range messages {
+		recurring[message.Message] = message.Recurring
+	}
+
+	assert.Equal(t, map[string]bool{"  keep spaces  ": false, "again": true}, recurring)
 
 	for _, raw := range []string{
 		`{`,
@@ -1354,20 +1353,19 @@ func TestScheduleMessageToolValidatesAndPreservesMessage(t *testing.T) {
 		require.Error(t, err, raw)
 	}
 
-	tool = scheduleMessageTool(func(time.Duration, string, bool) error { return assert.AnError }, logger)
+	require.NoError(t, service.Stop())
+
 	_, err = tool.Call(context.Background(), []byte(`{"message":"hello","send_this_in":"5m"}`), nil)
-	require.ErrorIs(t, err, assert.AnError)
+	require.ErrorContains(t, err, "persist scheduled message")
 	assert.Contains(t, logs.String(), "rocketclaw schedule message tool failed")
 }
 
 func TestResetScheduledMessagesToolUsesScheduleSubject(t *testing.T) {
-	reset := false
-	tool := resetScheduledMessagesTool(func() error {
-		reset = true
+	service := newTestSessionService(t)
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "slack-thread:C123:111.222", SessionService: service}}
+	require.NoError(t, service.PutScheduledMessage("later", &protocol.ScheduledMessageState{ConversationID: bridge.config.ConversationID, Agent: "main", Message: "later", DueAt: time.Now().Add(time.Hour)}))
 
-		return nil
-	})
-
+	tool := bridge.resetScheduledMessagesTool(new(protocol.InboundMessage))
 	assert.Equal(t, resetScheduledMessagesToolName, tool.Name)
 	assert.Equal(t, []string{scheduleMessageToolName}, tool.VisibilitySubjects)
 	subjects, err := tool.Subjects(nil)
@@ -1377,11 +1375,15 @@ func TestResetScheduledMessagesToolUsesScheduleSubject(t *testing.T) {
 	result, err := tool.Call(context.Background(), nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "scheduled messages reset", result.Output)
-	assert.True(t, reset)
 
-	tool = resetScheduledMessagesTool(func() error { return assert.AnError })
+	messages, err := service.ScheduledMessagesForConversation(bridge.config.ConversationID)
+	require.NoError(t, err)
+	assert.Empty(t, messages)
+
+	require.NoError(t, service.Stop())
+
 	_, err = tool.Call(context.Background(), nil, nil)
-	require.ErrorIs(t, err, assert.AnError)
+	require.ErrorContains(t, err, "reset scheduled messages")
 }
 
 func TestAttachFilesToolReadsWorkspacePath(t *testing.T) {
@@ -1846,7 +1848,7 @@ Prompt
 
 	shellTempDir := filepath.Join(workspace, "shell-tmp")
 	require.NoError(t, os.Mkdir(shellTempDir, 0o755))
-	_, err = rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{ShellTempDir: shellTempDir, ChildSessions: rocketcode.InertChildSessions{}, Journal: rocketcode.InertJournal{}, ShellCommand: rocketcode.DefaultShellCommand}, root, agents, skills, "main", io.Discard)
+	_, err = rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{ShellTempDir: shellTempDir, RetainedResultDir: "retained", ChildSessions: rocketcode.InertChildSessions{}, Journal: rocketcode.InertJournal{}, ShellCommand: rocketcode.DefaultShellCommand}, root, agents, skills, "main", io.Discard)
 	require.NoError(t, err)
 }
 
@@ -2058,7 +2060,7 @@ func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
 func TestBridgeScheduleMessageSubmitsAfterDelay(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: protocol.SlackThreadConversationID("D123", "111.222"), SessionService: newTestSessionService(t)}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
-		require.NoError(t, bridge.ScheduleMessage(5*time.Second, "later", false))
+		require.NoError(t, bridge.ScheduleMessage(new(protocol.InboundMessage), 5*time.Second, "later", false))
 		synctest.Wait()
 
 		select {
@@ -2091,7 +2093,7 @@ func TestBridgeScheduleMessagePersistsRecurringMetadata(t *testing.T) {
 	service := newTestSessionService(t)
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", SessionService: service}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 
-	require.NoError(t, bridge.ScheduleMessage(time.Minute, "again", true))
+	require.NoError(t, bridge.ScheduleMessage(new(protocol.InboundMessage), time.Minute, "again", true))
 
 	messages, err := service.ScheduledMessages()
 	require.NoError(t, err)
@@ -2112,7 +2114,7 @@ func TestBridgeScheduleMessageLogsPersistFailure(t *testing.T) {
 
 	bridge := &Bridge{log: slog.New(slog.NewJSONHandler(&logs, nil)), config: Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", SessionService: store}}
 
-	require.Error(t, bridge.ScheduleMessage(time.Minute, "later", false))
+	require.Error(t, bridge.ScheduleMessage(new(protocol.InboundMessage), time.Minute, "later", false))
 	assert.Contains(t, logs.String(), "scheduled message persist failed")
 }
 
@@ -2133,8 +2135,7 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 	inbound.ConversationID, inbound.SyncDestination = privateConversationID, threadKey
 	require.NoError(t, startTurnDB(t.Context(), service.db, "producer", privateConversationID, inbound))
 	bridge := NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: privateConversationID, Agent: "planner", SessionService: service}, slog.New(slog.DiscardHandler))
-	bridge.activeReply = inbound
-	require.NoError(t, bridge.ScheduleMessage(100*time.Millisecond, "later", false))
+	require.NoError(t, bridge.ScheduleMessage(inbound, 100*time.Millisecond, "later", false))
 	_, err = service.finishTurn(t.Context(), "producer", &turnFinish{store: newSessionStore(privateConversationID, service), entries: []rocketcode.SessionEntry{*testSessionEntry("producer context", "producer answer")}, outbound: protocol.NewOutboundMessage(privateConversationID, "")})
 	require.NoError(t, err)
 	require.NoError(t, service.closeTurn(t.Context(), "producer"))
@@ -2658,7 +2659,7 @@ func TestBridgeScheduleMessageUsesOwningSlackThread(t *testing.T) {
 		require.NoError(t, service.UpsertThread(protocol.SlackThreadConversationID("D123", "111.222"), ThreadState{Agent: "planner"}))
 
 		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, Agent: "planner", SessionService: service}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
-		require.NoError(t, bridge.ScheduleMessage(5*time.Second, "later", false))
+		require.NoError(t, bridge.ScheduleMessage(new(protocol.InboundMessage), 5*time.Second, "later", false))
 
 		time.Sleep(5 * time.Second)
 		synctest.Wait()
@@ -2926,7 +2927,7 @@ func TestBridgeStopDisarmsScheduledMessage(t *testing.T) {
 		var logs lockedBuffer
 
 		bridge := &Bridge{log: slog.New(slog.NewJSONHandler(&logs, nil)), config: Config{ConversationID: "slack-thread:C123:111.222", SessionService: newTestSessionService(t)}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
-		require.NoError(t, bridge.ScheduleMessage(5*time.Second, "later", false))
+		require.NoError(t, bridge.ScheduleMessage(new(protocol.InboundMessage), 5*time.Second, "later", false))
 		require.NoError(t, bridge.Stop())
 
 		time.Sleep(5 * time.Second)
@@ -2957,10 +2958,10 @@ func TestBridgeResetScheduledMessagesDeletesPersistedAndCancelsArmed(t *testing.
 		bridge.requestCh = make(chan bridgeRequest, 1)
 		bridge.stopCh = make(chan struct{})
 
-		require.NoError(t, bridge.ScheduleMessage(5*time.Second, "later", false))
+		require.NoError(t, bridge.ScheduleMessage(new(protocol.InboundMessage), 5*time.Second, "later", false))
 		require.NoError(t, store.PutScheduledMessage("other", &protocol.ScheduledMessageState{ConversationID: "other", Agent: "main", Message: "keep", DueAt: time.Now().UTC().Add(time.Hour)}))
 
-		require.NoError(t, bridge.ResetScheduledMessages())
+		require.NoError(t, bridge.ResetScheduledMessages(new(protocol.InboundMessage)))
 		synctest.Wait()
 		time.Sleep(5 * time.Second)
 		synctest.Wait()
@@ -2986,7 +2987,7 @@ func TestBridgeResetScheduledMessagesReportsStoreError(t *testing.T) {
 	require.NoError(t, store.Stop())
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "slack-thread:C123:111.222", SessionService: store}}
-	require.Error(t, bridge.ResetScheduledMessages())
+	require.Error(t, bridge.ResetScheduledMessages(new(protocol.InboundMessage)))
 }
 
 func TestBridgeArmsOverdueScheduledMessage(t *testing.T) {
@@ -3111,7 +3112,7 @@ func TestBridgeRestoresScheduledMessageAfterRestart(t *testing.T) {
 
 		first := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: conversationID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.DiscardHandler))
 		require.NoError(t, startTestBridge(t.Context(), first))
-		require.NoError(t, first.ScheduleMessage(5*time.Second, "later", false))
+		require.NoError(t, first.ScheduleMessage(new(protocol.InboundMessage), 5*time.Second, "later", false))
 		require.NoError(t, first.Stop())
 
 		var logs bytes.Buffer
@@ -4509,4 +4510,775 @@ func TestAppendSessionEntryKeepsPriorEntriesThenAdded(t *testing.T) {
 
 	assert.Equal(t, []byte(`"after"`), []byte(replay[0]))
 	assert.False(t, seen[1].Timestamp.Before(before))
+}
+
+// noteTest runs a Slack thread conversation's bridges wired to a background registry, as app.go
+// does, against a provider that reports each request body and answers through respond.
+type noteTest struct {
+	service        *SessionService
+	cfg            *config.Config
+	conversationID string
+	requests       chan string
+	finals         chan *protocol.OutboundMessage
+}
+
+// noteTestResponder answers the nth provider request, counted from 0.
+type noteTestResponder func(w http.ResponseWriter, r *http.Request, n int, body string)
+
+func answerNoteTest(w http.ResponseWriter, _ *http.Request, _ int, _ string) {
+	_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}]}`))
+}
+
+// holdNoteTest holds the provider requests numbered in held until release closes or the request ends.
+func holdNoteTest(release <-chan struct{}, held ...int) noteTestResponder {
+	return func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		if slices.Contains(held, n) {
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+		}
+
+		answerNoteTest(w, r, n, body)
+	}
+}
+
+func newNoteTest(t *testing.T, respond noteTestResponder) *noteTest {
+	t.Helper()
+
+	workspace := t.TempDir()
+	for _, agent := range []string{"main", "job"} {
+		writeAgent(t, workspace, agent, "---\ndescription: Agent\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
+	}
+
+	writeAgent(t, workspace, "researcher", "---\ndescription: Researcher\nmode: subagent\nmodel: gpt-5.5\npermission: {}\n---\nResearch\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	nt := &noteTest{service: newTestSessionServiceAt(t, workspace), conversationID: protocol.SlackThreadConversationID("C123", "111.222"), requests: make(chan string, 16), finals: make(chan *protocol.OutboundMessage, 16)}
+
+	var (
+		mu    sync.Mutex
+		count int
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		nt.requests <- string(body)
+
+		mu.Lock()
+		n := count
+		count++
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		respond(w, r, n, string(body))
+	}))
+	t.Cleanup(server.Close)
+
+	nt.cfg = &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}}}}}
+	require.NoError(t, nt.service.UpsertThread(nt.conversationID, ThreadState{Agent: "main"}))
+
+	return nt
+}
+
+// run starts a manager of real bridges that hands each published outbound to observe and reports
+// completed ones on finals. It returns the manager and its shutdown.
+func (nt *noteTest) run(t *testing.T, observe func(*protocol.OutboundMessage)) (manager *threadBridgeManager, shutdown func() error) {
+	t.Helper()
+
+	var registry *backgroundRegistry
+
+	publisher := &outboundPublisherMock{PublishOutboundFunc: func(_ context.Context, message *protocol.OutboundMessage) error {
+		observe(message)
+		message.MarkDelivered(nil)
+
+		if message.Complete {
+			nt.finals <- message
+		}
+
+		return nil
+	}}
+	manager = newThreadBridgeManager(nt.cfg, nt.service, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
+		cfg.SessionService, cfg.RequestRestart, cfg.StartNewThread = nt.service, testNoopRestart, testNoopStartNewThread
+		bridge := NewConversation(nt.cfg, publisher, &cfg, slog.New(slog.DiscardHandler))
+		bridge.threads, bridge.background = manager, registry
+
+		return bridge
+	})
+	registry = newBackgroundRegistry(nt.service, manager, testLogger())
+
+	return manager, runTestManager(t, manager)
+}
+
+func ignoreOutbound(*protocol.OutboundMessage) {}
+
+func (nt *noteTest) bridge(t *testing.T, manager *threadBridgeManager, conversationID string) *Bridge {
+	t.Helper()
+
+	bridge, err := manager.recordedBridge(conversationID)
+	require.NoError(t, err)
+
+	return bridge
+}
+
+// slackPrompt is a human Slack message in the conversation's thread.
+func (nt *noteTest) slackPrompt(text string) *protocol.InboundMessage {
+	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, text, true)
+	msg.ConversationID, msg.SlackReply = nt.conversationID, &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.333", ThreadTS: "111.222"}
+
+	return msg
+}
+
+// addNote stores a completed main-agent job of conversationID, started by origin, with a wakeable note.
+func (nt *noteTest) addNote(t *testing.T, conversationID, jobID string, origin *protocol.InboundMessage) {
+	t.Helper()
+
+	job := testBackgroundJob(conversationID, jobID)
+	job.origin = origin
+	createTestBackgroundJob(t, nt.service, job)
+	finishTestBackgroundJob(t, nt.service, job, backgroundCompleted, true)
+}
+
+// waitIdle waits until conversationID's bridge runs and holds no turn.
+func (nt *noteTest) waitIdle(t *testing.T, manager *threadBridgeManager, conversationID string) {
+	t.Helper()
+
+	bridge := nt.bridge(t, manager, conversationID)
+	require.Eventually(t, func() bool {
+		running, err := queryStrings(context.Background(), nt.service.db, `SELECT id FROM active_turns WHERE phase <> $1`, "running turns", turnDone)
+		return err == nil && len(running) == 0 && !bridge.handlingSnapshot() && len(bridge.requestCh) == 0
+	}, 10*time.Second, 10*time.Millisecond)
+}
+
+func (nt *noteTest) request(t *testing.T) string {
+	t.Helper()
+
+	select {
+	case body := <-nt.requests:
+		return body
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for a provider request")
+		return ""
+	}
+}
+
+func readFinalFor(t *testing.T, finals chan *protocol.OutboundMessage, conversationID string) *protocol.OutboundMessage {
+	t.Helper()
+
+	for {
+		if final := readFinal(t, finals); final.ConversationID == conversationID {
+			return final
+		}
+	}
+}
+
+func noteStates(t *testing.T, service *SessionService) []string {
+	t.Helper()
+
+	states, err := queryStrings(t.Context(), service.db, `SELECT job_id || ' ' || note_state || ' ' || wake::text FROM background_jobs WHERE kind <> 'subagent_wake' ORDER BY job_id`, "note states")
+	require.NoError(t, err)
+
+	return states
+}
+
+func lastRequestMessage(t *testing.T, body string) string {
+	t.Helper()
+
+	var request struct {
+		Input []struct{ Content json.RawMessage }
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &request))
+	require.NotEmpty(t, request.Input)
+
+	var text string
+	require.NoError(t, json.Unmarshal(request.Input[len(request.Input)-1].Content, &text))
+
+	return text
+}
+
+func systemPromptHeader() string {
+	return "[System additional_instructions=" + strconv.Quote(defaultReplyInstruction) + "]"
+}
+
+func testExecuteNote(jobID string) string {
+	return `<execute id="` + jobID + `" state="completed" description="tests">` + "\ncompleted\n</execute>"
+}
+
+// One system turn holds all notes in finish order and replies in the thread of the turn that started the jobs.
+func TestBackgroundNotesWakeIdleConversation(t *testing.T) {
+	nt := newNoteTest(t, answerNoteTest)
+	manager, _ := nt.run(t, ignoreOutbound)
+
+	for _, jobID := range []string{"turn-1/call/b", "turn-1/call/a"} {
+		nt.addNote(t, nt.conversationID, jobID, nt.slackPrompt("run the tests"))
+	}
+
+	manager.noteReady(nt.conversationID)
+
+	final := readFinal(t, nt.finals)
+	assert.Equal(t, "answer", final.Text)
+	assert.Equal(t, &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.333", ThreadTS: "111.222"}, final.SlackReply)
+	assert.Equal(t, systemPromptHeader()+"\n\n"+testExecuteNote("turn-1/call/b")+"\n\n"+testExecuteNote("turn-1/call/a"), lastRequestMessage(t, nt.request(t)))
+
+	manager.noteReady(nt.conversationID)
+	nt.waitIdle(t, manager, nt.conversationID)
+	assert.Empty(t, nt.requests, "delivered notes start no other turn")
+	assert.Equal(t, []string{"turn-1/call/a consumed true", "turn-1/call/b consumed true"}, noteStates(t, nt.service))
+
+	entries, err := nt.service.ObserveEntries(t.Context(), nt.conversationID)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	items, err := rocketcode.ReplayInputToParams(entries[0].Entry.ReplayInput)
+	require.NoError(t, err)
+	assert.Equal(t, "turn-1/call/b turn-1/call/a", items[0].OfMessage.ExtraFields()["input_id"], "the Web finds the turn's notes by their job IDs")
+}
+
+// The note enters the next step, also of a goal continuation or a final answer, and starts no turn of its own.
+func TestBackgroundNoteEntersRunningTurn(t *testing.T) {
+	for _, goal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("goal=%t", goal), func(t *testing.T) {
+			release := make(chan struct{})
+			nt := newNoteTest(t, holdNoteTest(release, 0))
+			manager, _ := nt.run(t, ignoreOutbound)
+
+			msg := nt.slackPrompt("hello")
+			if goal {
+				require.NoError(t, nt.service.BeginGoal(nt.conversationID, "ship it", "", 1, "", ""))
+
+				msg = protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "Continue the active goal loop.", false)
+				msg.GoalAction = protocol.GoalActionContinue
+			}
+
+			require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), msg))
+			nt.request(t)
+
+			nt.addNote(t, nt.conversationID, "turn-0/call/a", nt.slackPrompt("run the tests"))
+			manager.noteReady(nt.conversationID)
+			close(release)
+
+			assert.Equal(t, "[System]\n\n"+testExecuteNote("turn-0/call/a"), lastRequestMessage(t, nt.request(t)), "the final answer continues with the note")
+			readFinal(t, nt.finals)
+			nt.waitIdle(t, manager, nt.conversationID)
+			assert.Empty(t, nt.requests, "no turn starts for the note")
+			assert.Equal(t, []string{"turn-0/call/a consumed true"}, noteStates(t, nt.service))
+		})
+	}
+}
+
+func TestBackgroundNoteAfterLastStepWakesOnce(t *testing.T) {
+	nt := newNoteTest(t, answerNoteTest)
+	job := testBackgroundJob(nt.conversationID, "turn-0/call/a")
+	job.origin = nt.slackPrompt("run the tests")
+	createTestBackgroundJob(t, nt.service, job)
+
+	var (
+		manager *threadBridgeManager
+		noted   bool
+	)
+
+	manager, _ = nt.run(t, func(message *protocol.OutboundMessage) {
+		if !message.Complete || noted {
+			return
+		}
+
+		noted = true
+		end := *job
+
+		end.status, end.noteState, end.wake, end.result = backgroundCompleted, notePending, true, "completed"
+		if _, err := nt.service.finishBackgroundJob(context.Background(), &end); err != nil {
+			t.Errorf("finish background job: %v", err)
+		}
+
+		manager.noteReady(nt.conversationID)
+	})
+
+	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("hello")))
+	assert.NotContains(t, nt.request(t), "turn-0/call/a")
+	readFinal(t, nt.finals)
+	assert.Equal(t, systemPromptHeader()+"\n\n"+testExecuteNote("turn-0/call/a"), lastRequestMessage(t, nt.request(t)), "one later turn delivers the note")
+	readFinal(t, nt.finals)
+	nt.waitIdle(t, manager, nt.conversationID)
+	assert.Empty(t, nt.requests)
+	assert.Equal(t, []string{"turn-0/call/a consumed true"}, noteStates(t, nt.service))
+}
+
+// A note injected into a turn that is then stopped wakes nothing; the next turn delivers it.
+func TestStoppedTurnReleasesItsNotes(t *testing.T) {
+	release := make(chan struct{})
+	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		if n == 1 {
+			<-r.Context().Done()
+			return
+		}
+
+		holdNoteTest(release, 0)(w, r, n, body)
+	})
+	manager, _ := nt.run(t, ignoreOutbound)
+	bridge := nt.bridge(t, manager, nt.conversationID)
+
+	require.NoError(t, bridge.Submit(t.Context(), nt.slackPrompt("hello")))
+	nt.request(t)
+	nt.addNote(t, nt.conversationID, "turn-0/call/a", nt.slackPrompt("run the tests"))
+	manager.noteReady(nt.conversationID)
+	close(release)
+	assert.Equal(t, "[System]\n\n"+testExecuteNote("turn-0/call/a"), lastRequestMessage(t, nt.request(t)))
+
+	manager.InterruptConversation(nt.conversationID)
+	assert.Empty(t, readFinal(t, nt.finals).Text)
+	nt.waitIdle(t, manager, nt.conversationID)
+	assert.Empty(t, nt.requests, "a stopped turn's note wakes nothing")
+	assert.Equal(t, []string{"turn-0/call/a pending false"}, noteStates(t, nt.service))
+
+	require.NoError(t, bridge.Submit(t.Context(), nt.slackPrompt("next")))
+	assert.NotContains(t, nt.request(t), "turn-0/call/a")
+	assert.Equal(t, "[System]\n\n"+testExecuteNote("turn-0/call/a"), lastRequestMessage(t, nt.request(t)), "the next turn delivers the note")
+	readFinal(t, nt.finals)
+	nt.waitIdle(t, manager, nt.conversationID)
+	assert.Equal(t, []string{"turn-0/call/a consumed false"}, noteStates(t, nt.service))
+}
+
+// Released notes wake nothing again, and the owner's next turn delivers them.
+func TestFailedWakeReleasesItsNotes(t *testing.T) {
+	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		if n > 0 {
+			answerNoteTest(w, r, n, body)
+			return
+		}
+
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"bad request","type":"invalid_request_error"}}`))
+	})
+	manager, _ := nt.run(t, ignoreOutbound)
+	nt.addNote(t, nt.conversationID, "turn-0/call/a", nt.slackPrompt("run the tests"))
+
+	manager.noteReady(nt.conversationID)
+	assert.True(t, strings.HasPrefix(readFinal(t, nt.finals).Text, internalErrorResponse))
+	assert.Equal(t, systemPromptHeader()+"\n\n"+testExecuteNote("turn-0/call/a"), lastRequestMessage(t, nt.request(t)))
+	nt.waitIdle(t, manager, nt.conversationID)
+	assert.Equal(t, []string{"turn-0/call/a pending false"}, noteStates(t, nt.service))
+
+	manager.noteReady(nt.conversationID)
+	nt.waitIdle(t, manager, nt.conversationID)
+	assert.Empty(t, nt.requests, "a released note wakes nothing")
+
+	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("next")))
+	assert.NotContains(t, nt.request(t), "turn-0/call/a")
+	assert.Equal(t, "[System]\n\n"+testExecuteNote("turn-0/call/a"), lastRequestMessage(t, nt.request(t)), "the next turn delivers the note")
+	readFinal(t, nt.finals)
+	nt.waitIdle(t, manager, nt.conversationID)
+	assert.Equal(t, []string{"turn-0/call/a consumed false"}, noteStates(t, nt.service))
+}
+
+func TestResumedTurnInjectsNoteOnce(t *testing.T) {
+	release := make(chan struct{})
+	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		if n == 1 {
+			<-r.Context().Done()
+			return
+		}
+
+		holdNoteTest(release, 0)(w, r, n, body)
+	})
+	first, shutdown := nt.run(t, ignoreOutbound)
+
+	require.NoError(t, nt.bridge(t, first, nt.conversationID).Submit(t.Context(), nt.slackPrompt("hello")))
+	nt.request(t)
+	nt.addNote(t, nt.conversationID, "turn-0/call/a", nt.slackPrompt("run the tests"))
+	first.noteReady(nt.conversationID)
+	close(release)
+	assert.Contains(t, nt.request(t), "turn-0/call/a")
+	require.NoError(t, shutdown())
+
+	second, _ := nt.run(t, ignoreOutbound)
+	require.NoError(t, second.StartActiveTurns(t.Context()))
+	readFinal(t, nt.finals)
+	assert.Equal(t, 1, strings.Count(nt.request(t), "state="), "the resumed turn holds the note once")
+	nt.waitIdle(t, second, nt.conversationID)
+	assert.Empty(t, nt.requests, "the note is not injected again")
+
+	entries, err := nt.service.ObserveEntries(t.Context(), nt.conversationID)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	recorded, err := json.Marshal(entries[0].Entry.ReplayInput)
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(string(recorded), "state="), "the note is in history once")
+	assert.Equal(t, []string{"turn-0/call/a consumed true"}, noteStates(t, nt.service))
+}
+
+// A note claimed before any step recorded it enters the resumed turn.
+func TestResumedTurnInjectsNoteClaimedBeforeCrash(t *testing.T) {
+	nt := newNoteTest(t, answerNoteTest)
+	nt.addNote(t, nt.conversationID, "turn-0/call/a", nt.slackPrompt("run the tests"))
+	require.NoError(t, startTurnDB(t.Context(), nt.service.db, "turn-crashed", nt.conversationID, nt.slackPrompt("hello")))
+	_, err := claimBackgroundNotes(t.Context(), nt.service.db, nt.conversationID, "", "turn-crashed", false)
+	require.NoError(t, err)
+
+	manager, _ := nt.run(t, ignoreOutbound)
+	require.NoError(t, manager.StartActiveTurns(t.Context()))
+	assert.NotContains(t, nt.request(t), "state=")
+	assert.Equal(t, "[System]\n\n"+testExecuteNote("turn-0/call/a"), lastRequestMessage(t, nt.request(t)))
+	readFinal(t, nt.finals)
+	nt.waitIdle(t, manager, nt.conversationID)
+	assert.Equal(t, []string{"turn-0/call/a consumed true"}, noteStates(t, nt.service))
+}
+
+// The destination is the thread a cron run posted, subject to its output decision, or an External MCP managed thread.
+func TestHiddenProducerWakeReachesDestination(t *testing.T) {
+	decide := func(w http.ResponseWriter, _ *http.Request, _ int, _ string) {
+		// A hidden run's reply is its output.
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Tests passed.","annotations":[]}]}]}`))
+	}
+
+	t.Run("cron", func(t *testing.T) {
+		nt := newNoteTest(t, decide)
+		manager, _ := nt.run(t, ignoreOutbound)
+		report := protocol.SlackThreadConversationID("C1", "1.2")
+
+		manager.mu.Lock()
+		manager.cronRoots = &slackFrontendMock{SendCronjobRootFunc: func(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
+			return protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, nil
+		}}
+		manager.mu.Unlock()
+
+		// The run started a background job, then posted "Report started" as a new thread root.
+		msg := seedCronRun(t, nt.service, "cron:daily")
+		job := testBackgroundJob("cron:daily", "turn-cron/call/a")
+		job.origin = msg
+		createTestBackgroundJob(t, nt.service, job)
+
+		outbound := protocol.NewOutboundMessage("cron:daily", "Report started")
+		outbound.TurnID, outbound.Complete, outbound.Cronjob, outbound.SlackReply = "turn-cron", true, msg.Cronjob, msg.SlackReply
+		_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", nt.service), entries: []rocketcode.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
+		require.NoError(t, err)
+		require.NoError(t, manager.StartActiveTurns(t.Context()))
+		readFinalFor(t, nt.finals, "cron:daily")
+		require.Eventually(t, func() bool {
+			destinations, err := queryStrings(context.Background(), nt.service.db, `SELECT sync_destination || ' ' || (origin_json::jsonb->>'SyncDestination') FROM background_jobs`, "job destinations")
+			return err == nil && slices.Equal(destinations, []string{report + " " + report})
+		}, 10*time.Second, 10*time.Millisecond, "the job reports to the posted thread")
+
+		finishTestBackgroundJob(t, nt.service, job, backgroundCompleted, true)
+		manager.noteReady("cron:daily")
+
+		assert.Equal(t, "Tests passed.", readFinalFor(t, nt.finals, report).Text, "the decided output is posted in the report thread")
+		assert.Equal(t, systemPromptHeader()+"\n\n"+testExecuteNote(job.jobID), lastRequestMessage(t, nt.request(t)))
+		nt.waitIdle(t, manager, report)
+		assert.Equal(t, []string{"turn-cron/call/a consumed true"}, noteStates(t, nt.service))
+	})
+
+	// A wake queued from the run's origin before the run posted its thread still reaches that
+	// thread and posts no second root.
+	t.Run("cron wake queued before the root", func(t *testing.T) {
+		nt := newNoteTest(t, decide)
+		manager, _ := nt.run(t, ignoreOutbound)
+		report := protocol.SlackThreadConversationID("C1", "1.2")
+		roots := make(chan struct{}, 4)
+
+		manager.mu.Lock()
+		manager.cronRoots = &slackFrontendMock{SendCronjobRootFunc: func(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
+			roots <- struct{}{}
+			return protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, nil
+		}}
+		manager.mu.Unlock()
+
+		msg := seedCronRun(t, nt.service, "cron:daily")
+		job := testBackgroundJob("cron:daily", "turn-cron/call/a")
+		job.origin = msg
+		createTestBackgroundJob(t, nt.service, job)
+
+		outbound := protocol.NewOutboundMessage("cron:daily", "Report started")
+		outbound.TurnID, outbound.Complete, outbound.Cronjob, outbound.SlackReply = "turn-cron", true, msg.Cronjob, msg.SlackReply
+		_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", nt.service), entries: []rocketcode.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
+		require.NoError(t, err)
+		require.NoError(t, manager.StartActiveTurns(t.Context()))
+		readFinalFor(t, nt.finals, "cron:daily")
+		<-roots
+		require.Eventually(t, func() bool {
+			destinations, err := queryStrings(context.Background(), nt.service.db, `SELECT sync_destination FROM background_jobs`, "job destinations")
+			return err == nil && slices.Equal(destinations, []string{report})
+		}, 10*time.Second, 10*time.Millisecond)
+
+		finishTestBackgroundJob(t, nt.service, job, backgroundCompleted, true)
+
+		stale := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
+		stale.ConversationID, stale.SlackReply, stale.RequireOutputDecision, stale.Cronjob = "cron:daily", protocol.Clone(msg.SlackReply), msg.RequireOutputDecision, msg.Cronjob
+		require.NoError(t, nt.bridge(t, manager, "cron:daily").enqueue(t.Context(), &bridgeRequest{inbound: stale, backgroundWake: true}, "submit background wake"))
+
+		assert.Equal(t, "Tests passed.", readFinalFor(t, nt.finals, report).Text)
+		nt.waitIdle(t, manager, report)
+		assert.Empty(t, roots, "no second root is posted")
+		assert.Equal(t, []string{"turn-cron/call/a consumed true"}, noteStates(t, nt.service))
+	})
+
+	t.Run("external MCP", func(t *testing.T) {
+		nt := newNoteTest(t, decide)
+		manager, _ := nt.run(t, ignoreOutbound)
+		private, managed := "external_mcp:planner:private", protocol.SlackThreadConversationID("C9", "9.9")
+
+		for _, conversationID := range []string{private, managed} {
+			require.NoError(t, nt.service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+		}
+
+		origin := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "plan", true)
+		origin.ConversationID, origin.SyncDestination = private, managed
+		origin.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C9", MessageTS: "9.10", ThreadTS: "9.9"}
+		nt.addNote(t, private, "turn-mcp/call/a", origin)
+		manager.noteReady(private)
+
+		final := readFinalFor(t, nt.finals, managed)
+		assert.Equal(t, "Tests passed.", final.Text)
+		assert.Equal(t, "9.9", final.SlackReply.ThreadTS)
+		nt.waitIdle(t, manager, managed)
+
+		entries, err := nt.service.ObserveEntries(t.Context(), managed)
+		require.NoError(t, err)
+		require.NotEmpty(t, entries)
+
+		synced, err := json.Marshal(entries)
+		require.NoError(t, err)
+		assert.Contains(t, string(synced), "turn-mcp/call/a", "the wake's history is synced to the managed thread")
+	})
+}
+
+// A hidden run may never have a next turn, so its failed wake retries after a growing delay, also
+// after a restart, until a wake delivers the note to the destination. Only the first failure
+// reaches the destination, saying the wake retries.
+func TestHiddenRunFailedWakeRetries(t *testing.T) {
+	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		// A kept-alive connection would block on the network and stop the bubble's clock.
+		w.Header().Set("Connection", "close")
+
+		if n < 3 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"bad request","type":"invalid_request_error"}}`))
+
+			return
+		}
+
+		answerNoteTest(w, r, n, body)
+	})
+	private, managed := "external_mcp:planner:private", protocol.SlackThreadConversationID("C9", "9.9")
+
+	// The provider stays outside the bubble; the store, whose connections hold bubble timers, inside.
+	synctest.Test(t, func(t *testing.T) {
+		nt.service = newTestSessionServiceAt(t, nt.cfg.Workspace)
+		for _, conversationID := range []string{nt.conversationID, private, managed} {
+			require.NoError(t, nt.service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+		}
+
+		manager, shutdown := nt.run(t, ignoreOutbound)
+		origin := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "plan", true)
+		origin.ConversationID, origin.SyncDestination = private, managed
+		nt.addNote(t, private, "turn-mcp/call/a", origin)
+
+		// woken waits for the bubble to settle and returns the one wake request it sent.
+		woken := func() string {
+			t.Helper()
+
+			synctest.Wait()
+			require.Len(t, nt.requests, 1)
+
+			return <-nt.requests
+		}
+
+		// posted returns the final messages the destination got.
+		posted := func() []string {
+			var texts []string
+
+			for len(nt.finals) > 0 {
+				if final := <-nt.finals; final.ConversationID == managed {
+					texts = append(texts, final.Text)
+				}
+			}
+
+			return texts
+		}
+
+		// failed checks that the wake failed and left its note to retry after delay.
+		failed := func(attempts int, delay time.Duration) {
+			t.Helper()
+
+			var state string
+			require.NoError(t, nt.service.db.QueryRowContext(t.Context(), `SELECT note_state || ' ' || wake::text || ' ' || wake_attempts || ' ' || wake_after_unix_ns FROM background_jobs`).Scan(&state))
+			assert.Equal(t, "pending true "+strconv.Itoa(attempts)+" "+strconv.FormatInt(time.Now().Add(delay).UnixNano(), 10), state)
+		}
+
+		manager.noteReady(private)
+		woken()
+		failed(1, time.Minute)
+
+		first := posted()
+		require.Len(t, first, 1, "the first failure reaches the destination once")
+		assert.True(t, strings.HasPrefix(first[0], internalErrorResponse))
+		assert.True(t, strings.HasSuffix(first[0], "\n\n"+wakeRetryNotice), first[0])
+
+		manager.noteReady(private)
+		synctest.Wait()
+		assert.Empty(t, nt.requests, "a later look for work wakes nothing early")
+
+		time.Sleep(time.Minute)
+		woken()
+		failed(2, 5*time.Minute)
+		assert.Empty(t, posted(), "a failed retry posts nothing to the destination")
+
+		require.NoError(t, shutdown())
+		nt.restart(t)
+
+		time.Sleep(5*time.Minute - time.Nanosecond)
+		synctest.Wait()
+		assert.Empty(t, nt.requests, "no wake before the delay ends")
+
+		time.Sleep(time.Nanosecond)
+		assert.Equal(t, systemPromptHeader()+"\n\n"+testExecuteNote("turn-mcp/call/a"), lastRequestMessage(t, woken()), "the restarted process retries the wake")
+		failed(3, 30*time.Minute)
+		assert.Empty(t, posted(), "a failed retry posts nothing to the destination")
+
+		time.Sleep(30 * time.Minute)
+		woken()
+		assert.Equal(t, []string{"answer"}, posted(), "the answer reaches the destination")
+		assert.Equal(t, []string{"turn-mcp/call/a consumed true"}, noteStates(t, nt.service))
+	})
+}
+
+func TestStopLeavesBackgroundJobsRunning(t *testing.T) {
+	nt := newNoteTest(t, holdNoteTest(nil, 0))
+	manager, _ := nt.run(t, ignoreOutbound)
+	bridge := nt.bridge(t, manager, nt.conversationID)
+
+	require.NoError(t, bridge.Submit(t.Context(), nt.slackPrompt("hello")))
+	nt.request(t)
+
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	turn := backgroundTurn{registry: bridge.background, root: testTurnRoot(t), conversationID: nt.conversationID, origin: nt.slackPrompt("run the tests")}
+	_, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-0/call/a", Kind: rocketcode.BackgroundKindExecute, Label: "tests", Agent: "main", Detached: true}, blockedWork(started, release))
+	require.NoError(t, err)
+	<-started
+
+	manager.InterruptConversation(nt.conversationID)
+	readFinal(t, nt.finals)
+	nt.waitIdle(t, manager, nt.conversationID)
+	assert.Equal(t, backgroundRunning, testBackgroundRow(t, nt.service, nt.conversationID, "turn-0/call/a").status)
+
+	close(release)
+	assert.Contains(t, lastRequestMessage(t, nt.request(t)), `<execute id="turn-0/call/a" state="completed" description="tests">`+"\ndone\n</execute>", "the job finishes and reports")
+	readFinal(t, nt.finals)
+}
+
+// The wake uses its conversation's settings, and its turn joins only the subagent's history.
+func TestSubagentWakeContinuesSavedHistory(t *testing.T) {
+	nt := newNoteTest(t, answerNoteTest)
+	manager, _ := nt.run(t, ignoreOutbound)
+	child := nt.conversationID + "/call_a"
+
+	replay, err := replayInputForMessage("user", "research the flaky test")
+	require.NoError(t, err)
+	_, err = nt.service.AppendEntryID(t.Context(), child, &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "turn-1/call/call_a/task", Agent: "researcher", Timestamp: time.Now(), ReplayInput: replay})
+	require.NoError(t, err)
+
+	output, err := manager.continueSubagent(t.Context(), &backgroundJob{conversationID: nt.conversationID, subagentKey: "/call_a", agent: "researcher", origin: nt.slackPrompt("research")}, "[System]\n\nnote")
+	require.NoError(t, err)
+	assert.Equal(t, "answer", output)
+
+	body := nt.request(t)
+	assert.Contains(t, body, "research the flaky test")
+	assert.Equal(t, "[System]\n\nnote", lastRequestMessage(t, body))
+
+	entries, err := nt.service.ObserveEntries(t.Context(), child)
+	require.NoError(t, err)
+	assert.Len(t, entries, 2)
+
+	entries, err = nt.service.ObserveEntries(t.Context(), nt.conversationID)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "the parent learns nothing")
+}
+
+// A hidden producer's wake that finds its notes already delivered starts no turn.
+func TestEmptyProducerWakeLeavesDestinationFree(t *testing.T) {
+	nt := newNoteTest(t, answerNoteTest)
+	manager, _ := nt.run(t, ignoreOutbound)
+	private, managed := "external_mcp:planner:private", protocol.SlackThreadConversationID("C9", "9.9")
+
+	for _, conversationID := range []string{private, managed} {
+		require.NoError(t, nt.service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	}
+
+	wake := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
+	wake.ConversationID, wake.SyncDestination = private, managed
+	require.NoError(t, nt.bridge(t, manager, managed).enqueue(t.Context(), &bridgeRequest{inbound: wake, backgroundWake: true, producer: nt.bridge(t, manager, private)}, "submit background wake"))
+
+	nt.waitIdle(t, manager, managed)
+	assert.Empty(t, nt.requests)
+	assert.False(t, nt.service.PairBusyFor(managed), "the destination is not left reserved")
+}
+
+// After a hidden producer's turn ends, schedules stay private, a nested workflow runs, and turn-bound tools refuse.
+func TestBackgroundScriptUsesOriginTurnTools(t *testing.T) {
+	gate := ""
+	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		if n > 0 {
+			answerNoteTest(w, r, n, body)
+			return
+		}
+
+		code := "def main():\n    bash(command=r'''while [ ! -f " + gate + " ]; do sleep 0.05; done''')\n    return '|'.join([rocketclaw_attach_files_to_response(attachments=[]), rocketclaw_restart(reason='x'), rocketclaw_schedule_message(message='later', send_this_in='1h', recurring=False), rocketclaw_dynamic_workflow(name='quiet', args='')])\n"
+		arguments, _ := json.Marshal(struct {
+			Code        string `json:"code"`
+			Description string `json:"description"`
+			Background  bool   `json:"background"`
+		}{code, "tools", true}) // Encoding strings and a bool cannot fail.
+
+		_, _ = fmt.Fprintf(w, `{"id":"resp_0","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_b","name":"execute","arguments":%q}]}`, arguments)
+	})
+	gate = filepath.Join(nt.cfg.Workspace, "gate")
+	writeWorkflowFixture(t, nt.cfg.Workspace, "quiet", "meta = {\"name\": \"quiet\", \"description\": \"Quiet\"}\ndef main(args):\n    return None\n")
+	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-5.5\npermission:\n  bash: {\"*\": allow}\n  workflow: {\"*\": allow}\n  rocketclaw: {allow_background: allow, rocketclaw_restart: allow}\n---\nPrompt\n")
+
+	manager, _ := nt.run(t, ignoreOutbound)
+	private, managed := "external_mcp:planner:private", protocol.SlackThreadConversationID("C9", "9.9")
+
+	for _, conversationID := range []string{private, managed} {
+		require.NoError(t, nt.service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	}
+
+	origin := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "plan", true)
+	origin.ConversationID, origin.SyncDestination = private, managed
+	require.NoError(t, nt.bridge(t, manager, managed).enqueue(t.Context(), &bridgeRequest{inbound: origin, producer: nt.bridge(t, manager, private)}, "test"))
+	readFinalFor(t, nt.finals, managed)
+	nt.waitIdle(t, manager, managed)
+	nt.request(t)
+	nt.request(t)
+
+	require.NoError(t, os.WriteFile(gate, nil, 0o600))
+
+	const refusal = "Refused: %[1]s did nothing, because this call now runs as background work, after the turn it acts on. Nothing was shown to the user, and nobody will answer. This text is not %[1]s's result or the user's answer. Decide without it, or call %[1]s in the turn that receives this job's result."
+	assert.Contains(t, lastRequestMessage(t, nt.request(t)), fmt.Sprintf(refusal, attachFilesToolName)+"|"+fmt.Sprintf(refusal, restartToolName)+"|scheduled message in 1h0m0s|"+nestedWorkflowSilentCompleteText+"\n</execute>")
+	readFinalFor(t, nt.finals, managed)
+	nt.waitIdle(t, manager, managed)
+
+	scheduled, err := nt.service.ScheduledMessagesForConversation(private)
+	require.NoError(t, err)
+	assert.Empty(t, scheduled, "the hidden run schedules nothing itself")
+
+	scheduled, err = nt.service.ScheduledMessagesForConversation(managed)
+	require.NoError(t, err)
+	assert.Len(t, scheduled, 1, "its private schedule reaches the destination with the wake's sync")
+}
+
+// Exactly the three turn-bound platform tools refuse to run in background work.
+func TestTurnBoundPlatformTools(t *testing.T) {
+	origin := new(protocol.InboundMessage)
+	bridge := &Bridge{runtime: &config.Config{}, config: Config{ConversationID: "main", SessionService: newTestSessionService(t)}, log: slog.New(slog.DiscardHandler)}
+	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []rocketcode.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(testNoopRestart), new(outboundAttachmentCollector).Tool(nil, bridge.config.SessionService, "main"), askUserQuestionTool(protocol.UserQuestionAsker{}, origin), startNewThreadTool(testNoopStartNewThread, origin, "main")})
+
+	var bound []string
+
+	for i := range tools {
+		if tools[i].TurnBound {
+			bound = append(bound, tools[i].Name)
+		}
+	}
+
+	assert.ElementsMatch(t, []string{attachFilesToolName, askUserQuestionToolName, restartToolName}, bound)
 }

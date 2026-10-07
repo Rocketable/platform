@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -133,17 +136,59 @@ func (s *SessionService) ForkConversation(ctx context.Context, source string, de
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
+	// Copied system inputs show their Completion Notes from the finished jobs their IDs list, so
+	// copy those as consumed notes that wake nothing. Running jobs stay with the source.
+	if _, err := tx.ExecContext(ctx, `WITH delegations AS (INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
 SELECT $1 || substr(e.conversation_id, length(p.id) + 1), e.entry_json, e.entry_timestamp
 FROM (SELECT DISTINCT unnest($2::text[]) AS id) p
 JOIN session_entries e ON e.conversation_id COLLATE "C" >= p.id || '/' AND e.conversation_id COLLATE "C" < p.id || '0'
-ORDER BY e.id`, destination.ID, producers); err != nil {
-		return "", fmt.Errorf("copy fork delegations: %w", err)
+ORDER BY e.id)
+INSERT INTO background_jobs (conversation_id, job_id, child_key, kind, status, agent, label, call_id, subagent_key, origin_json, sync_destination, runner_id, note_state, wake, claimed_turn_id, created_at_unix_ns, finished_at_unix_ns, result)
+SELECT $1, job_id, child_key, kind, status, agent, label, call_id, subagent_key, origin_json, '', runner_id, $3, FALSE, '', created_at_unix_ns, finished_at_unix_ns, result
+FROM background_jobs WHERE conversation_id = ANY($2) AND child_key = '' AND status <> $4 AND job_id IN (
+    SELECT unnest(string_to_array(i->>'input_id', ' ')) FROM session_entries e, jsonb_array_elements(e.entry_json::jsonb->'replay_input') i
+    WHERE e.conversation_id = $1 AND (i->>'prompt_header' = '[System]' OR starts_with(i->>'prompt_header', '[System ')))`, destination.ID, producers, noteConsumed, backgroundRunning); err != nil {
+		return "", fmt.Errorf("copy fork delegations and completion notes: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
 		return "", fmt.Errorf("commit fork: %w", err)
 	}
 
-	return prompt, nil
+	return prompt, s.linkRetainedResults(destination.ID, producers)
+}
+
+// linkRetainedResults links, rather than copies, the producers' retained execute output into
+// conversationID's, so the copied Completion Notes' result IDs still load in the fork. A link keeps
+// each file's modification time, which expires it with its source.
+func (s *SessionService) linkRetainedResults(conversationID string, producers []string) error {
+	root, found, err := s.openSpill()
+	if !found {
+		return err
+	}
+
+	dir := rocketcodeRetainedDir(conversationID)
+
+	for _, producer := range slices.Compact(slices.Sorted(slices.Values(producers))) {
+		source := rocketcodeRetainedDir(producer)
+
+		entries, errRead := fs.ReadDir(root.FS(), source)
+		if errors.Is(errRead, fs.ErrNotExist) {
+			continue
+		}
+
+		err = errors.Join(err, errRead, root.MkdirAll(dir, 0o700))
+		for _, entry := range entries {
+			// A result swept from the source since the listing stays gone.
+			if errLink := root.Link(filepath.Join(source, entry.Name()), filepath.Join(dir, entry.Name())); !errors.Is(errLink, fs.ErrNotExist) {
+				err = errors.Join(err, errLink)
+			}
+		}
+	}
+
+	if err = errors.Join(err, root.Close()); err != nil {
+		return fmt.Errorf("copy fork retained execute results: %w", err)
+	}
+
+	return nil
 }

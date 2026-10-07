@@ -46,7 +46,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 
 	childFactory := *f
 	childFactory.inPermissionReview = true
-	childFactory.childKey = f.childKey + "/" + request.CallID
+	childFactory.childKey = f.childKey + "/" + request.Review
 
 	modelTools, codeHosts := childFactory.assembleTools(&agent)
 	child := &looper{
@@ -71,6 +71,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 		InPermissionReview:     true,
 		Observability:          f.observability,
 		Journal:                InertJournal{},
+		notes:                  InertBackgroundJobs{},
 	}
 	childFactory.configureSpill(child)
 

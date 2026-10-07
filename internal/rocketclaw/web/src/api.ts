@@ -93,4 +93,6 @@ export const mutations = {
   removeQueueItem: (input: { id: string; itemId: string }) => rpc("RemoveQueueItem", input),
   steerQueueItem: (input: { id: string; itemId: string }) => rpc("SteerQueueItem", input),
   reorderQueue: (input: { id: string; itemIds: string[] }) => rpc("ReorderQueue", input),
+  moveToBackground: (input: { conversationId: string }) => rpc("MoveToBackground", input),
+  stopBackgroundJob: (input: { conversationId: string; jobId: string }) => rpc("StopBackgroundJob", input),
 };

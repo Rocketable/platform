@@ -25,7 +25,8 @@ const sessionHistorySQL = `visibility AS (
                 SELECT 1 FROM session_entries p
                 CROSS JOIN LATERAL jsonb_array_elements(NULLIF(p.entry_json::jsonb->'replay_input', 'null'::jsonb)) WITH ORDINALITY AS items(item, ordinal)
                 WHERE p.conversation_id = parent.conversation_id AND item->>'type' = 'function_call'
-                    AND starts_with($1 || '/', parent.conversation_id || '/' || (item->>'call_id') || '/')
+                    AND (starts_with($1 || '/', parent.conversation_id || '/' || (item->>'call_id') || '/')
+                        OR starts_with($1, parent.conversation_id || '/' || (item->>'call_id') || '-'))
                     AND (p.id < split_part(parent.revert_message_id, ':', 1)::bigint OR
                         p.id = split_part(parent.revert_message_id, ':', 1)::bigint AND ordinal <= split_part(parent.revert_message_id, ':', 2)::integer))) AS readable
 ), physical_entries AS (
@@ -212,7 +213,9 @@ func commitRevertDB(ctx context.Context, db stateStoreDB, conversationID, marker
 	if err != nil {
 		return err
 	}
-	// Children are conversation records, never handles for undoing tool effects.
+	// Children are conversation records, never handles for undoing tool effects. A task
+	// subagent's or permission review's key adds a hash to its call ID, and a running
+	// Background Job's subagent keeps its history to finish, as $stop leaves background work running.
 	children, err := queryStrings(ctx, db, `WITH `+sessionHistorySQL+`
     SELECT DISTINCT child.conversation_id FROM (
         SELECT conversation_id FROM session_entries UNION SELECT conversation_id FROM active_turns
@@ -220,7 +223,9 @@ func commitRevertDB(ctx context.Context, db stateStoreDB, conversationID, marker
     WHERE starts_with(child.conversation_id, $1 || '/') AND NOT EXISTS (
         SELECT 1 FROM effective_entries e CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry->'replay_input', 'null'::jsonb)) WITH ORDINALITY AS items(item, ordinal)
         WHERE item->>'type' = 'function_call' AND (e.revert_index < 0 OR ordinal <= e.revert_index)
-            AND starts_with(child.conversation_id || '/', $1 || '/' || (item->>'call_id') || '/'))`, "discarded revert delegations", conversationID)
+            AND (starts_with(child.conversation_id || '/', $1 || '/' || (item->>'call_id') || '/') OR starts_with(child.conversation_id, $1 || '/' || (item->>'call_id') || '-')))
+    AND NOT EXISTS (SELECT 1 FROM background_jobs j WHERE j.conversation_id = $1 AND j.status = 'running' AND j.subagent_key <> ''
+        AND starts_with(child.conversation_id || '/', $1 || j.subagent_key || '/'))`, "discarded revert delegations", conversationID)
 	if err != nil {
 		return err
 	}
@@ -233,7 +238,8 @@ func commitRevertDB(ctx context.Context, db stateStoreDB, conversationID, marker
 		}
 	}
 
-	if _, err := db.ExecContext(ctx, `DELETE FROM turn_steps WHERE conversation_id = $1 AND EXISTS (SELECT 1 FROM unnest($2::text[]) id WHERE key = id OR starts_with(key, id || '/'))`, conversationID, discarded); err != nil {
+	if _, err := db.ExecContext(ctx, `DELETE FROM turn_steps s WHERE conversation_id = $1 AND EXISTS (SELECT 1 FROM unnest($2::text[]) id WHERE key = id OR starts_with(key, id || '/'))
+    AND NOT EXISTS (SELECT 1 FROM background_jobs j WHERE j.conversation_id = s.conversation_id AND j.status = 'running' AND starts_with(s.key, j.job_id || '/'))`, conversationID, discarded); err != nil {
 		return fmt.Errorf("prune revert journals: %w", err)
 	}
 

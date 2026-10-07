@@ -115,13 +115,15 @@ func StandaloneProvidersFromEnv() (Providers, error) {
 
 func standaloneDefaultConfig() Config {
 	return Config{
-		Model:            defaultOpenAIModel,
-		ReasoningEffort:  shared.ReasoningEffort("high"),
-		CompactThreshold: 200000,
-		ShellTempDir:     filepath.Join(".tmp", "shell-tmp"),
-		ChildSessions:    InertChildSessions{},
-		Journal:          InertJournal{},
-		ShellCommand:     DefaultShellCommand,
+		Model:             defaultOpenAIModel,
+		ReasoningEffort:   shared.ReasoningEffort("high"),
+		CompactThreshold:  200000,
+		ShellTempDir:      filepath.Join(".tmp", "shell-tmp"),
+		RetainedResultDir: "retained",
+		ChildSessions:     InertChildSessions{},
+		Journal:           InertJournal{},
+		BackgroundJobs:    InertBackgroundJobs{},
+		ShellCommand:      DefaultShellCommand,
 		CustomTools: []Tool{{
 			Name:        "current_time",
 			Description: "Tell the current time anywhere in the world.",

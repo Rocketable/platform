@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -461,6 +462,99 @@ func (r *Runtime) StashQueueItem(ctx context.Context, conversationID string, ite
 	return r.threads.stashQueueItem(ctx, conversationID, item)
 }
 
+// MoveToBackground moves every running execute and task call of the conversation's allowed agents
+// into the background and reports whether any moved. Its running turn learns at its next step
+// which of its own calls moved, and a moved script's pending question is withdrawn.
+func (r *Runtime) MoveToBackground(conversationID string) (bool, error) {
+	bridge, err := r.threads.recordedBridge(conversationID)
+	if err != nil {
+		return false, err
+	}
+
+	// Holding b.mu until the note is queued makes the step after the moved calls drain it.
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+
+	moved := r.background.move(conversationID)
+
+	var listed strings.Builder
+
+	for _, run := range moved {
+		if run.row.childKey == "" { // A subagent's moved calls belong to its own turn.
+			fmt.Fprintf(&listed, "- %s: %s (job ID: %s)\n", run.row.kind, cmp.Or(run.row.label, run.row.jobID), run.row.jobID)
+		}
+	}
+
+	if listed.Len() > 0 {
+		bridge.movedNotes = append(bridge.movedNotes, systemPromptInput("", fmt.Sprintf(movedNote, listed.String())))
+	}
+
+	return len(moved) > 0, nil
+}
+
+// StopBackgroundJob stops, for the user, a running Background Job listed at conversationID.
+func (r *Runtime) StopBackgroundJob(ctx context.Context, conversationID, jobID string) (bool, error) {
+	return r.background.stop(ctx, conversationID, jobID, errStoppedByUser)
+}
+
+// BackgroundJobs lists the Background Jobs shown at conversationID and reports whether
+// MoveToBackground has a running call to move there.
+func (r *Runtime) BackgroundJobs(ctx context.Context, conversationID string) ([]protocol.BackgroundJob, bool, error) {
+	jobs, err := r.Sessions.backgroundJobs(ctx, conversationID)
+	if err != nil {
+		return nil, false, err
+	}
+
+	return listedBackgroundJobs(jobs, conversationID), r.background.movable(conversationID), nil
+}
+
+// CompletionNotes returns, in finish order, the jobs whose Completion Notes a system input saved
+// at history delivers, by the job IDs it stored, with each note's text. A Delegation History's
+// notes are rows of its conversation, owned by its subagent.
+func (r *Runtime) CompletionNotes(ctx context.Context, history string, jobIDs []string) ([]protocol.BackgroundJob, error) {
+	// Ponytail: a Delegation History's conversation ID is not stored, so each ancestor ID is
+	// tried in turn, one query per nesting level; store it with the history if this gets costly.
+	for conversationID := history; ; {
+		jobs, err := r.Sessions.notedBackgroundJobs(ctx, conversationID, jobIDs)
+		if err != nil {
+			return nil, err
+		}
+
+		jobs = slices.DeleteFunc(jobs, func(job backgroundJob) bool { return job.conversationID+job.childKey != history })
+		if len(jobs) > 0 {
+			notes := listedBackgroundJobs(jobs, conversationID)
+			for i := range notes {
+				notes[i].Note = backgroundNote(&jobs[i])
+			}
+
+			return notes, nil
+		}
+
+		index := strings.LastIndexByte(conversationID, '/')
+		if index < 0 {
+			return nil, nil
+		}
+
+		conversationID = conversationID[:index]
+	}
+}
+
+// listedBackgroundJobs shows jobs at conversationID, hiding those of the runs reporting there.
+func listedBackgroundJobs(jobs []backgroundJob, conversationID string) []protocol.BackgroundJob {
+	listed := make([]protocol.BackgroundJob, len(jobs))
+
+	for i := range jobs {
+		job := &jobs[i]
+
+		listed[i] = protocol.BackgroundJob{ID: job.jobID, Kind: string(job.kind), State: string(job.status), Label: job.label, ToolCallID: job.callID, SubagentKey: job.subagentKey, Hidden: job.conversationID != conversationID}
+		if job.status == backgroundStopped {
+			listed[i].StoppedBy = strings.TrimPrefix(job.result, "stopped by ")
+		}
+	}
+
+	return listed
+}
+
 func (b *Bridge) drainSteers(ctx context.Context, phase rocketcode.TurnPhase) []rocketcode.PromptInput {
 	b.mu.Lock()
 	if b.historyMutation {
@@ -475,9 +569,26 @@ func (b *Bridge) drainSteers(ctx context.Context, phase rocketcode.TurnPhase) []
 		return inputs
 	}
 
+	// Completion Notes are claimed under b.mu, so a note this last step misses finds notesOpen false
+	// and wakes the conversation. A resumed turn is offered the notes it held once more.
+	notes, err := claimBackgroundNotes(context.WithoutCancel(ctx), b.config.SessionService.db, b.config.ConversationID, "", b.activeTurnID, true)
+	if err != nil {
+		b.log.Error("claim background notes", "conversation_id", b.config.ConversationID, "turn_id", b.activeTurnID, "error", err)
+	}
+
+	for i := range notes {
+		if !slices.Contains(b.notesOffered, notes[i].jobID) {
+			b.notesOffered = append(b.notesOffered, notes[i].jobID)
+			inputs = append(inputs, systemPromptInput(notes[i].jobID, backgroundNote(&notes[i])))
+		}
+	}
+
+	inputs = append(inputs, b.movedNotes...)
+	b.movedNotes = nil
+
 	pending := slices.Clone(b.steers[b.steersRead:])
 	if len(pending) == 0 && len(inputs) == 0 && phase == rocketcode.TurnPhaseFinalAnswer {
-		b.inputOpen = false
+		b.inputOpen, b.notesOpen = false, false
 	}
 
 	b.steersRead = len(b.steers)

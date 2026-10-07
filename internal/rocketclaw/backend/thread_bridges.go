@@ -7,10 +7,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"net"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/Rocketable/platform/internal/rocketcode"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -570,6 +573,54 @@ func (m *threadBridgeManager) RegisterThread(target protocol.TextConversationTar
 	_, err := m.ensureStartedThread(&threadStart{conversationID: conversationID, agent: agent, persistErr: "persist text thread bridge"})
 
 	return err == nil, err
+}
+
+// noteReady has conversationID's bridge, started when needed, deliver a new Completion Note: a
+// running turn takes it at its next step, and otherwise the bridge's later work wakes the conversation.
+func (m *threadBridgeManager) noteReady(conversationID string) {
+	if err := m.PickLaterWork(context.Background(), conversationID); err != nil {
+		m.log.Warn("pick later work for a background note", "conversation_id", conversationID, "error", err)
+	}
+}
+
+// continueSubagent runs input as a new turn of the subagent a subagent job runs, or without input
+// resumes the turn it journaled, with the settings and tools a turn of its conversation gives
+// subagents.
+func (m *threadBridgeManager) continueSubagent(ctx context.Context, job *backgroundJob, input string) (string, error) {
+	bridge, err := m.recordedBridge(job.conversationID)
+	if err != nil {
+		return "", err
+	}
+
+	agentName := bridge.agentSnapshot()
+
+	root, agents, skills, resolver, err := prepareRocketCode(m.runtime, agentName, bridge.log, toolModePersistent)
+	if err != nil {
+		return "", err
+	}
+
+	shared := &turnRoot{root: root, users: 1}
+	defer shared.release()
+
+	shellTempRel := rocketcodeShellTempRel(m.runtime.RuntimeDirName(), job.conversationID)
+	if err := root.MkdirAll(shellTempRel, 0o700); err != nil {
+		return "", fmt.Errorf("create rocketcode shell temp dir: %w", err)
+	}
+
+	rocketcodeConfig := bridge.rocketcodeConfig(filepath.Join(m.runtime.Workspace, filepath.FromSlash(shellTempRel)), nil, append(sessionTagTools(m.store, cmp.Or(job.origin.SyncDestination, job.conversationID)), bridge.scheduleMessageTool(job.origin), bridge.resetScheduledMessagesTool(job.origin))...)
+	rocketcodeConfig.BackgroundJobs = backgroundTurn{registry: bridge.background, root: shared, conversationID: job.conversationID, origin: job.origin}
+
+	runtime, err := rocketcode.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agentName, io.Discard)
+	if err != nil {
+		return "", fmt.Errorf("prepare subagent wake: %w", err)
+	}
+
+	output, err := runtime.ContinueSubagent(ctx, job.jobID, job.subagentKey, job.agent, input)
+	if err != nil {
+		return "", fmt.Errorf("continue subagent: %w", err)
+	}
+
+	return output, nil
 }
 
 func (m *threadBridgeManager) recordedBridge(conversationID string) (*Bridge, error) {

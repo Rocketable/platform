@@ -33,7 +33,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 	mux.Handle("GET /api/", http.NotFoundHandler())
 	mux.Handle("POST /api/", http.NotFoundHandler())
 
-	for method := range strings.FieldsSeq("Protocol Identity Prompt History ForkSession StageRevert ClearRevert SearchMessages SearchOrigins SlackNames Handoff ListAgents CreateSession ListConfig ListSkills ListWorkflows SettleSession UpdateSession ListCronJobs RunCronJob ListSessionEntries LoadSessionEntries DeleteSessionEntries ListQueue SteerQueueItem PopQueueItem RemoveQueueItem ReorderQueue") {
+	for method := range strings.FieldsSeq("Protocol Identity Prompt History ForkSession StageRevert ClearRevert SearchMessages SearchOrigins SlackNames Handoff ListAgents CreateSession ListConfig ListSkills ListWorkflows SettleSession UpdateSession ListCronJobs RunCronJob ListSessionEntries LoadSessionEntries DeleteSessionEntries ListQueue SteerQueueItem PopQueueItem RemoveQueueItem ReorderQueue MoveToBackground StopBackgroundJob") {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 		responseType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Output().FullName())
@@ -287,6 +287,8 @@ func httpInput(body []byte, request proto.Message, method string) error {
 		required = "ids"
 	case "RunCronJob":
 		required = "stem"
+	case "MoveToBackground", "StopBackgroundJob":
+		required = "conversationId"
 	}
 
 	switch method {
@@ -296,6 +298,8 @@ func httpInput(body []byte, request proto.Message, method string) error {
 		required += " itemId"
 	case "ReorderQueue":
 		required += " itemIds"
+	case "StopBackgroundJob":
+		required += " jobId"
 	}
 
 	for name := range strings.FieldsSeq(required) {

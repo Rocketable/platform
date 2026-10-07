@@ -369,6 +369,7 @@ func TestSessionEntries(t *testing.T) {
 	)
 
 	core := &mockBackend{
+		BackgroundJobsFunc:     withoutBackgroundJobs().BackgroundJobsFunc,
 		SubscribeFunc:          rt.Subscribe,
 		CreateConversationFunc: rt.CreateConversation,
 		ListConversationsFunc:  rt.ListConversations,
@@ -2926,6 +2927,11 @@ func TestCronHistoryUsesStoredSourceLabelsAndDestination(t *testing.T) {
 	require.Len(t, cronHistory([]backend.ObservedSessionEntry{{SourceConversationID: colon}, {SourceConversationID: colon + "-another-run"}}, "opaque-human-Y"), 2)
 }
 
+// withoutBackgroundJobs is a backend with no Background Jobs and nothing to move.
+func withoutBackgroundJobs() *mockBackend {
+	return &mockBackend{BackgroundJobsFunc: func(context.Context, string) ([]protocol.BackgroundJob, bool, error) { return nil, false, nil }}
+}
+
 func invoke[Response any](ctx context.Context, connection *grpc.ClientConn, method string, request any) (*Response, error) {
 	response := new(Response)
 
@@ -3036,4 +3042,159 @@ func TestPrivateSocket(t *testing.T) {
 
 	_, err = os.Stat(socketPath)
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+// Move and stop reach the backend only for visible conversations; a hidden run's job change wakes its destination's stream.
+func TestBackgroundJobRPCs(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	const cronRun = "cron:cron/daily.md:20000102T030405.000000006Z:a"
+
+	for _, id := range []string{"chat", cronRun, "private-X"} {
+		require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main"}))
+	}
+
+	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "chat", Agent: "main", SlackChannel: "#ops"}))
+
+	// The script's output quotes a note, which must not become a row of its own.
+	note := `<execute id="turn-1/call/a" state="completed" description="tests">` + "\n" + `<execute id="turn-1/call/fake" state="failed" description="fake">` + "\n</execute>"
+	stopped := `<subagent id="turn-1/call/b" state="stopped" description="say \"hi\"" continue="/call_b">` + "\nThe job was stopped by user. Do not run it again unless asked.\n</subagent>"
+
+	type input struct {
+		Type    string `json:"type"`
+		Role    string `json:"role"`
+		InputID string `json:"input_id,omitempty"`
+		Header  string `json:"prompt_header"`
+		Content string `json:"content"`
+	}
+
+	entry := rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now().UTC()}
+
+	for _, item := range []input{
+		{"message", "user", "turn-1/call/a", "[System]", "[System]\n\n" + note},
+		{"message", "user", "turn-1/call/a turn-1/call/b", `[System additional_instructions="x"]`, "[System additional_instructions=\"x\"]\n\n" + note + "\n\n" + stopped},
+		{"message", "user", "web-1", `[Web principal="alice"]`, "[Web principal=\"alice\"]\n\n" + note},
+		{"message", "user", "", "[System]", "[System]\n\n" + note},
+	} {
+		raw, err := json.Marshal(item)
+		require.NoError(t, err)
+
+		entry.ReplayInput = append(entry.ReplayInput, raw)
+	}
+
+	_, err = sessions.AppendEntryID(t.Context(), "chat", &entry)
+	require.NoError(t, err)
+
+	listed := []protocol.BackgroundJob{{ID: "turn-2/call/s", Kind: "execute", State: "running", Label: "tests", ToolCallID: "s"}, {ID: "turn-9/call/k", Kind: "task", State: "killed", Label: "report", ToolCallID: "k", SubagentKey: "/k", Hidden: true}, {ID: "turn-3/call/x", Kind: "execute", State: "stopped", StoppedBy: "agent"}}
+	noted := map[string]protocol.BackgroundJob{
+		"turn-1/call/a": {ID: "turn-1/call/a", Kind: "execute", State: "completed", Label: "tests", Note: note},
+		"turn-1/call/b": {ID: "turn-1/call/b", Kind: "task", State: "stopped", Label: `say "hi"`, SubagentKey: "/call_b", StoppedBy: "user", Note: stopped},
+	}
+	core := &mockBackend{
+		BackgroundJobsFunc: func(context.Context, string) ([]protocol.BackgroundJob, bool, error) { return listed, true, nil },
+		CompletionNotesFunc: func(_ context.Context, _ string, jobIDs []string) (jobs []protocol.BackgroundJob, _ error) {
+			for _, id := range jobIDs {
+				jobs = append(jobs, noted[id])
+			}
+
+			return jobs, nil
+		},
+		MoveToBackgroundFunc:  func(string) (bool, error) { return true, nil },
+		StopBackgroundJobFunc: func(context.Context, string, string) (bool, error) { return true, nil },
+	}
+
+	listener, err := Listen(testSocketPath(t))
+	require.NoError(t, err)
+
+	transport := grpc.NewServer()
+	New(core, sessions, cfg, &mockChannels{}, &mockCronJobs{}).Register(transport)
+
+	var serving errgroup.Group
+	serving.Go(func() error { return transport.Serve(listener) })
+	t.Cleanup(func() {
+		transport.Stop()
+		require.NoError(t, serving.Wait())
+	})
+
+	connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+
+	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: "chat"})
+	require.NoError(t, err)
+	require.True(t, history.Movable)
+	require.Len(t, history.BackgroundJobs, 3)
+
+	for i, want := range []*BackgroundJob{{JobId: "turn-2/call/s", Kind: "execute", State: "running", Label: "tests", ToolCallId: "s"}, {JobId: "turn-9/call/k", Kind: "task", State: "killed", Label: "report", ToolCallId: "k", SubagentKey: "/k", Hidden: true}, {JobId: "turn-3/call/x", Kind: "execute", State: "stopped", StoppedBy: "agent"}} {
+		require.True(t, proto.Equal(want, history.BackgroundJobs[i]), "%v", history.BackgroundJobs[i])
+	}
+
+	require.Len(t, history.Messages, 4)
+
+	completed := &BackgroundJob{JobId: "turn-1/call/a", Kind: "execute", State: "completed", Label: "tests", Note: note}
+
+	// An injected note and a wake's notes come from the jobs their input IDs list; a human input
+	// that quotes a note and a system input without job IDs, such as a moved note, have none.
+	for i, want := range [][]*BackgroundJob{{completed}, {completed, {JobId: "turn-1/call/b", Kind: "task", State: "stopped", Label: `say "hi"`, SubagentKey: "/call_b", StoppedBy: "user", Note: stopped}}, nil, nil} {
+		require.Len(t, history.Messages[i].CompletionNotes, len(want), "message %d", i)
+
+		for j := range want {
+			require.True(t, proto.Equal(want[j], history.Messages[i].CompletionNotes[j]), "%v", history.Messages[i].CompletionNotes[j])
+		}
+	}
+
+	require.Len(t, core.CompletionNotesCalls(), 2)
+	require.Equal(t, "chat", core.CompletionNotesCalls()[1].S)
+	require.Equal(t, []string{"turn-1/call/a", "turn-1/call/b"}, core.CompletionNotesCalls()[1].Strings)
+
+	moved, err := invoke[MoveToBackgroundResponse](ctx, connection, "MoveToBackground", &MoveToBackgroundRequest{ConversationId: "chat"})
+	require.NoError(t, err)
+	require.True(t, moved.Moved)
+
+	stoppedJob, err := invoke[StopBackgroundJobResponse](ctx, connection, "StopBackgroundJob", &StopBackgroundJobRequest{ConversationId: "chat", JobId: "turn-9/call/k"})
+	require.NoError(t, err)
+	require.True(t, stoppedJob.Stopped)
+
+	_, err = invoke[StopBackgroundJobResponse](ctx, connection, "StopBackgroundJob", &StopBackgroundJobRequest{ConversationId: "chat"})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+
+	for _, hidden := range []string{cronRun, "private-X"} {
+		_, err = invoke[MoveToBackgroundResponse](ctx, connection, "MoveToBackground", &MoveToBackgroundRequest{ConversationId: hidden})
+		require.Equal(t, codes.PermissionDenied, status.Code(err))
+		_, err = invoke[StopBackgroundJobResponse](ctx, connection, "StopBackgroundJob", &StopBackgroundJobRequest{ConversationId: hidden, JobId: "turn-9/call/k"})
+		require.Equal(t, codes.PermissionDenied, status.Code(err))
+	}
+
+	require.Equal(t, "chat", core.MoveToBackgroundCalls()[0].S)
+	require.Len(t, core.MoveToBackgroundCalls(), 1, "a private conversation's move never reaches the backend")
+	require.Len(t, core.StopBackgroundJobCalls(), 1)
+	require.Equal(t, "turn-9/call/k", core.StopBackgroundJobCalls()[0].S1)
+
+	joinCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	stream, err := connection.NewStream(joinCtx, &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/Join")
+	require.NoError(t, err)
+	require.NoError(t, stream.SendMsg(&JoinRequest{Id: "chat"}))
+	require.NoError(t, stream.CloseSend())
+
+	change := &ConversationChange{}
+	require.NoError(t, stream.RecvMsg(change)) // The stream's opening wake-up.
+
+	db, err := sql.Open("pgx", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	_, err = db.ExecContext(ctx, `INSERT INTO background_jobs (conversation_id, job_id, child_key, kind, status, agent, label, call_id, subagent_key, origin_json, sync_destination, runner_id, note_state, wake, claimed_turn_id, created_at_unix_ns, finished_at_unix_ns, result)
+VALUES ($1, 'turn-9/call/k', '', 'task', 'running', 'main', 'report', 'k', '/k', '{}', 'chat', 'runner', 'none', FALSE, '', 1, 0, '')`, cronRun)
+	require.NoError(t, err)
+	require.NoError(t, stream.RecvMsg(change))
+	require.Equal(t, "chat", change.ConversationId, "a hidden run's job change wakes its destination")
+	require.NotEmpty(t, change.Revision)
 }

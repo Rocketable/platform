@@ -122,6 +122,11 @@ websearch: allow
 		_, err := parsePermissionNode(parseYAMLNode(t, `rocketclaw: {load_agents_md: `+value+`}`))
 		require.ErrorContains(t, err, "load_agents_md must be a boolean")
 	}
+
+	for _, value := range []string{`auto`, `auto(reviewer)`, `true`, `[]`} {
+		_, err := parsePermissionNode(parseYAMLNode(t, `rocketclaw: {allow_background: `+value+`}`))
+		require.ErrorContains(t, err, "allow_background must be allow or deny")
+	}
 }
 
 func TestParsePermissionAuto(t *testing.T) {
@@ -171,6 +176,11 @@ func TestPermissionSetEvaluate(t *testing.T) {
 		{name: "root instructions ignore wildcard", yaml: `rocketclaw: {'*': deny}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionAllow, matched: false},
 		{name: "root instructions ignore later wildcard", yaml: `rocketclaw: {load_agents_md: false, '*': allow}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionDeny, matched: true},
 		{name: "root instructions last exact rule wins", yaml: `rocketclaw: {load_agents_md: false, load_agents_md: true}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionAllow, matched: true},
+		{name: "background default off", yaml: `{}`, permission: "rocketclaw", subject: "allow_background", action: PermissionDeny, matched: false},
+		{name: "background enabled", yaml: `rocketclaw: {allow_background: allow}`, permission: "rocketclaw", subject: "allow_background", action: PermissionAllow, matched: true},
+		{name: "background disabled", yaml: `rocketclaw: {allow_background: deny}`, permission: "rocketclaw", subject: "allow_background", action: PermissionDeny, matched: true},
+		{name: "background ignores scalar allow", yaml: `rocketclaw: allow`, permission: "rocketclaw", subject: "allow_background", action: PermissionDeny, matched: false},
+		{name: "background ignores wildcard", yaml: `rocketclaw: {'*': allow}`, permission: "rocketclaw", subject: "allow_background", action: PermissionDeny, matched: false},
 		{name: "tag groups are not action rules", yaml: `rocketclaw: {rocketclaw_set_tag: [[red, yellow, green]]}`, permission: "rocketclaw", subject: "rocketclaw_set_tag", action: PermissionDeny, matched: false},
 		{name: "tag groups preserve other rules", yaml: `rocketclaw: {rocketclaw_set_tag: [[red, yellow, green]], rocketclaw_get_session: allow}`, permission: "rocketclaw", subject: "rocketclaw_get_session", action: PermissionAllow, matched: true},
 		{name: "scalar tag rule stays scalar", yaml: `rocketclaw: {rocketclaw_set_tag: auto}`, permission: "rocketclaw", subject: "rocketclaw_set_tag", action: PermissionAuto, matched: true},

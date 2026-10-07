@@ -35,7 +35,7 @@ func GenerateHandoff(ctx context.Context, cfg *config.Config, agent, transcript 
 
 	defer func() { err = errors.Join(err, root.RemoveAll(scratch)) }()
 
-	runtimeConfig := rocketcode.Config{ShellTempDir: filepath.Join(cfg.Workspace, scratch), SpillDir: rocketcodeSpillDir(cfg), ChildSessions: rocketcode.InertChildSessions{}, Journal: rocketcode.InertJournal{}, ShellCommand: rocketcode.DefaultShellCommand}
+	runtimeConfig := rocketcode.Config{ShellTempDir: filepath.Join(cfg.Workspace, scratch), SpillDir: rocketcodeSpillDir(cfg), RetainedResultDir: filepath.Join("retained", "unused"), ChildSessions: rocketcode.InertChildSessions{}, Journal: rocketcode.InertJournal{}, BackgroundJobs: rocketcode.InertBackgroundJobs{}, ShellCommand: rocketcode.DefaultShellCommand}
 
 	runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, agent, io.Discard)
 	if err != nil {

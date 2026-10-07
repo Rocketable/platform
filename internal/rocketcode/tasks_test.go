@@ -3,10 +3,13 @@ package rocketcode
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -322,7 +325,7 @@ func TestTaskResolvesGuardrailModelIndependently(t *testing.T) {
 		json.RawMessage(`{"type":"message","role":"developer","content":"This external MCP thread has metadata:\nROCKETCLAW_METADATA_TICKET_ID=\"123\""}`),
 	}}}
 
-	decision := factory.runGuardrail(context.Background(), &agent, ChildRunStageDelegation, "review", "child", toolCallMetadata{}, testTaskOutput())
+	decision := factory.runGuardrail(context.Background(), &agent, ChildRunStageDelegation, "review", "child", "/call-1", toolCallMetadata{}, testTaskOutput())
 
 	require.False(t, decision.Approved)
 	require.Equal(t, "blocked", decision.Reason)
@@ -1111,15 +1114,126 @@ func TestChildRunsAppendUnderToolCallKeys(t *testing.T) {
 		got = append(got, call.Key+" "+call.Entry.Agent)
 	}
 
+	review, task, inner := calls[0].Key, calls[2].Key, calls[3].Key
+	require.Regexp(t, `^/call-probe-review-[0-9a-f]{8}$`, review, "a review's key adds its reviewed call key's hash to its call ID")
+	require.Regexp(t, `^/call-task-[0-9a-f]{8}$`, task, "a task's key adds its tool call key's hash to its call ID")
+	require.Regexp(t, `^/call-inner-review-[0-9a-f]{8}$`, strings.TrimPrefix(inner, task), "a subagent's review is its own child")
 	require.Equal(t, []string{
-		"/call-probe guardian",
-		"/call-probe guardian",
-		"/call-task safety",
-		"/call-task/call-inner guardian",
-		"/call-task/call-inner guardian",
-		"/call-task review",
-		"/call-task safety",
-	}, got)
+		review + " guardian",
+		review + " guardian",
+		task + " safety",
+		inner + " guardian",
+		inner + " guardian",
+		task + " review",
+		task + " safety",
+	}, got, "a review inside a running call joins its call's review history")
+}
+
+// A reused call ID gets its own permission review, a resumed turn's review keeps its own, and
+// neither shares the history of the reviewed task's subagent. A denied call's review is saved too.
+func TestPermissionReviewKeyIsUniquePerToolCall(t *testing.T) {
+	call := responseWithFunctionCalls("root", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call_0", "task", `{"description":"Review","prompt":"look","subagent_type":"child","command":""}`)})
+	allowed := []*responses.Response{call, responseWithMessage("review", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`), responseWithMessage("child", "done"), responseWithMessage("root-final", "done")}
+	denied := []*responses.Response{call, responseWithMessage("review", `{"risk_level":"critical","user_authorization":"unknown","outcome":"deny","rationale":"no"}`), responseWithMessage("root-final", "done")}
+	saved := map[string][]SessionEntry{}
+	rows := make([]PublicProgress, 0, 3)
+
+	for i, turnID := range []string{"turn-1", "turn-1", "turn-2"} {
+		mock := mockResponses([][]*responses.Response{allowed, allowed, denied}[i]...)
+		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"child": testAgent("child")}})
+		factory.childSessions = savedChildSessions(saved)
+		factory.autoApprovePermissions = true
+		looper := testLooper(mock)
+		looper.agent = Agent{Name: "main"}
+		looper.AutoApprovePermissions = true
+		looper.PermissionReviewer = factory
+		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "*", Action: permissionAuto}}}}}
+		looper.Tools = map[string]looperTool{"task": factory.taskTool()}
+		output := make(chan ChatResponse, 20)
+
+		input := make(chan PromptInput, 1)
+		input <- PromptInput{TurnID: turnID, Role: PromptInputRoleUser, Text: "start", Responses: output}
+
+		close(input)
+
+		require.NoError(t, looper.Loop(t.Context(), input, emptySession(), discardSession, make(chan os.Signal, 1)))
+
+		progress := PublicProgressFromTrace(looper.observations.trace)
+		rows = append(rows, progress[slices.IndexFunc(progress, func(item PublicProgress) bool { return item.ID == "call_0" })])
+	}
+
+	require.Equal(t, taskKey("turn-1", "call_0"), rows[0].SubagentKey)
+	require.Len(t, saved["/"+reviewKey("turn-1", "call_0")], 2, "both runs of turn-1 review under one key")
+	require.Len(t, saved["/"+reviewKey("turn-2", "call_0")], 1)
+	require.Equal(t, "guardian", saved["/"+reviewKey("turn-2", "call_0")][0].Agent)
+	require.Equal(t, PublicProgressBlocked, rows[2].State)
+	require.Len(t, saved, 3, "the reviews of both turns and turn-1's subagent")
+}
+
+// Like OpenCode's per-subagent session ID, a reused call ID starts a new subagent; a resumed call keeps its own.
+func TestTaskSubagentKeyIsUniquePerToolCall(t *testing.T) {
+	saved := map[string][]SessionEntry{}
+	mock := mockResponses(responseWithMessage("first", "one"), responseWithMessage("resumed", "one again"), responseWithMessage("second", "two"))
+	factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"child": testAgent("child")}})
+	factory.childSessions = savedChildSessions(saved)
+	task := factory.taskTool()
+
+	keys := make([]string, 0, 3)
+
+	for i, turnID := range []string{"turn-1", "turn-1", "turn-2"} {
+		parent := testLooper(mockResponses())
+		parent.observations.turnID = turnID
+		result, err := task.Call(withToolCallContext(t.Context(), parent, nil, "call_0"), json.RawMessage(`{"subagent_type":"child","prompt":"look","description":"Review","command":""}`), nil, toolCallMetadata{callID: "call_0", observations: parent.observations, progress: &PublicProgress{ID: "call_0"}})
+		require.NoError(t, err)
+		require.Equal(t, "<task_result>\n"+[]string{"one", "one again", "two"}[i]+"\n</task_result>", result.Output)
+
+		progress := PublicProgressFromTrace(parent.observations.trace)
+		keys = append(keys, progress[len(progress)-1].SubagentKey)
+	}
+
+	require.Equal(t, taskKey("turn-1", "call_0"), keys[0])
+	require.Equal(t, keys[0], keys[1], "a resumed call keeps its subagent")
+	require.Equal(t, taskKey("turn-2", "call_0"), keys[2])
+	require.NotEqual(t, keys[0], keys[2])
+	require.Len(t, saved, 2)
+	require.Len(t, saved[keys[0]], 2)
+	require.Len(t, saved[keys[2]], 1)
+}
+
+// taskKey is the subagent key of a new root task call keyed turnID + "/call/" + callID.
+func taskKey(turnID, callID string) string {
+	sum := sha256.Sum256([]byte(turnID + "/call/" + callID))
+	return "/" + callID + "-" + hex.EncodeToString(sum[:4])
+}
+
+// reviewKey is the permission review key segment of a root call keyed turnID + "/call/" + callID.
+func reviewKey(turnID, callID string) string {
+	sum := sha256.Sum256([]byte(turnID + "/call/" + callID))
+	return callID + "-review-" + hex.EncodeToString(sum[:4])
+}
+
+// Whatever a subagent's own permissions, only the root agent may ask the human partner.
+func TestSubagentsNeverAskUserQuestion(t *testing.T) {
+	for _, permissions := range []string{`{rocketclaw: allow}`, `{rocketclaw: {allow_background: allow, ask_user_question: allow}, task: allow}`} {
+		t.Run(permissions, func(t *testing.T) {
+			mock := mockResponses(responseWithMessage("child", "done"))
+			child := testAgentWithPermissionName("child", parsePermissionYAML(t, permissions))
+			factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"child": child}})
+			factory.backgroundJobs = enabledBackgroundJobs()
+			ask := testLooperTool(askUserQuestionToolName)
+			ask.Permission = "rocketclaw"
+			ask.VisibilitySubjects = []string{askUserQuestionToolName}
+			factory.baseTools[askUserQuestionToolName] = ask
+			require.Contains(t, factory.toolsFor(&child), askUserQuestionToolName, "the same agent at the root may ask")
+
+			_, err := factory.runTask(t.Context(), testTaskParams("Child", "do it", "child"), toolCallMetadata{callID: "call-1", observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
+			require.NoError(t, err)
+
+			for _, tool := range newParams(mock)[0].Tools {
+				require.NotEqual(t, new(askUserQuestionToolName), tool.GetName())
+			}
+		})
+	}
 }
 
 func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
@@ -1142,6 +1256,7 @@ func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
 		"read": readTool,
 	}
 	factory.childSessions = InertChildSessions{}
+	factory.backgroundJobs = InertBackgroundJobs{}
 
 	return &factory
 }
@@ -1176,14 +1291,14 @@ func testAgentWithPermissionName(name string, permission PermissionSet) Agent {
 	return agent
 }
 
-func testTaskParams(description, prompt, subagentType string) taskParams {
+func testTaskParams(description, prompt, subagentType string) *taskParams {
 	var params taskParams
 
 	params.Description = description
 	params.Prompt = prompt
 	params.SubagentType = subagentType
 
-	return params
+	return &params
 }
 
 func testTaskOutput() chan ChatResponse {

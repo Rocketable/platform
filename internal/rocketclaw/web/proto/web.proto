@@ -60,6 +60,30 @@ message HistoryResponse {
   bool revert_eligible = 13;
   string revert_message_id = 14;
   bool can_undo = 15;
+  // An allowed agent's execute or task call runs attached, so MoveToBackground has work to move.
+  bool movable = 16;
+  // Background Jobs running or holding an undelivered Completion Note, including those of hidden
+  // cron and External MCP runs whose destination is this conversation.
+  repeated BackgroundJob background_jobs = 17;
+}
+
+// A listed Background Job, or the job a Completion Note reports.
+message BackgroundJob {
+  string job_id = 1;
+  // execute, task, or subagent_wake.
+  string kind = 2;
+  // running, completed, failed, stopped, or killed.
+  string state = 3;
+  string label = 4;
+  string tool_call_id = 5;
+  // Child-session key of the subagent a task or subagent_wake job runs.
+  string subagent_key = 6;
+  // user or agent, for a stopped job.
+  string stopped_by = 7;
+  // The job of a hidden run whose destination is this conversation; its transcript is not here.
+  bool hidden = 8;
+  // The job's Completion Note text, in TranscriptEvent.completion_notes only.
+  string note = 9;
 }
 
 message StageRevertRequest { string id = 1; string message_id = 2; }
@@ -156,6 +180,12 @@ message TranscriptEvent {
   string state = 18;
   string parent_id = 19;
   string principal = 20;
+  // Completion Notes this system input delivers, in order, from their stored jobs.
+  repeated BackgroundJob completion_notes = 21;
+  // Delegation History a task call's row opens: the subagent it started or continued.
+  string delegation = 22;
+  // Delegation History a reviewed call's row opens: its automatic permission review.
+  string review = 23;
 }
 
 // Attachment download frames carry at most 256 KiB. History carries metadata only.
@@ -347,6 +377,24 @@ message ReorderQueueRequest {
   repeated string item_ids = 2;
 }
 
+message MoveToBackgroundRequest {
+  string conversation_id = 1;
+}
+
+message MoveToBackgroundResponse {
+  bool moved = 1;
+}
+
+message StopBackgroundJobRequest {
+  string conversation_id = 1;
+  string job_id = 2;
+}
+
+message StopBackgroundJobResponse {
+  // False when the job had already finished.
+  bool stopped = 1;
+}
+
 message SessionEntriesRequest {
   string id = 1;
 }
@@ -409,6 +457,8 @@ service Web {
   rpc SteerQueueItem(QueueItemRequest) returns (QueueItemResponse);
   rpc PopQueueItem(QueueItemRequest) returns (QueueItemResponse);
   rpc ReorderQueue(ReorderQueueRequest) returns (QueueItemResponse);
+  rpc MoveToBackground(MoveToBackgroundRequest) returns (MoveToBackgroundResponse);
+  rpc StopBackgroundJob(StopBackgroundJobRequest) returns (StopBackgroundJobResponse);
   rpc ListSessionEntries(SessionEntriesRequest) returns (ListSessionEntriesResponse);
   rpc LoadSessionEntries(SessionEntriesRequest) returns (LoadSessionEntriesResponse);
   rpc DeleteSessionEntries(SessionEntriesRequest) returns (DeleteSessionEntriesResponse);

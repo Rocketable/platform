@@ -59,6 +59,10 @@ func TestHTTPBoundary(t *testing.T) {
 		{"ReorderQueue", `{"id":"chat"}`, "itemIds is required"},
 		{"SlackNames", `{}`, "ids is required"},
 		{"ListSkills", `{"agent":""}`, "agent must not be empty"},
+		{"MoveToBackground", `{}`, "conversationId is required"},
+		{"MoveToBackground", `{"conversationId":"chat","jobId":"turn-1/call/a"}`, "invalid field jobId"},
+		{"StopBackgroundJob", `{"conversationId":"chat"}`, "jobId is required"},
+		{"StopBackgroundJob", `{"conversationId":"chat","jobId":"turn-1/call/a","reason":"user"}`, "invalid field reason"},
 	} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/"+tc.method, strings.NewReader(tc.body)))

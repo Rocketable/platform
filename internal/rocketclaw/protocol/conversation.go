@@ -20,6 +20,15 @@ type Conversation struct {
 	Settled              bool
 }
 
+// BackgroundJob is a Background Job a conversation lists: running, or finished with its
+// Completion Note still pending. Hidden marks a job of a hidden cron or External MCP run whose
+// destination is the conversation; StoppedBy is "user" or "agent" for a stopped job. Note is
+// the job's Completion Note text, set only where a transcript shows the note.
+type BackgroundJob struct {
+	ID, Kind, State, Label, ToolCallID, SubagentKey, StoppedBy, Note string
+	Hidden                                                           bool
+}
+
 // SlackThreadConversationID returns the stable conversation ID for a Slack thread.
 func SlackThreadConversationID(channelID, threadTS string) string {
 	channelID, threadTS = strings.TrimSpace(channelID), strings.TrimSpace(threadTS)

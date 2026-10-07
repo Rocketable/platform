@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -21,6 +22,7 @@ const (
 	executeHeadMaxBytes = 50 * 1024
 	defaultSpillRel     = ".rocketcode/spill"
 	deniedSpillAccess   = "execute output storage is private; use load_execute_result"
+	retainedResultTTL   = 7 * 24 * time.Hour
 )
 
 func isExecuteSpillPath(root *os.Root, spillRel, path string) bool {
@@ -77,11 +79,59 @@ func clipExecuteHead(text string) (string, bool) {
 	return out.String(), false
 }
 
-func executeSpillFooter(id string) string {
+var errUnknownExecuteResult = errors.New("unknown or expired execute result")
+
+func executeSpillFooter(id, expires string) string {
 	return "\n\n...output truncated...\n\n" +
 		"Full output: result_id=\"" + id + "\".\n" +
 		"Call the top-level load_execute_result tool with this result_id, start_line, limit, and line_numbers.\n" +
-		"This result expires when this turn ends.\n"
+		"This result expires " + expires + ".\n"
+}
+
+// retainExecuteResult files a detached script's oversized output in dir, which outlives turns,
+// and sweeps results there older than retainedResultTTL.
+func retainExecuteResult(root *os.Root, dir, out string) (string, error) {
+	head, oversized := clipExecuteHead(out)
+	if !oversized {
+		return out, nil
+	}
+
+	sweepRetainedDir(root, dir)
+
+	if err := root.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create retained execute result dir: %w", err)
+	}
+
+	id := uuid.NewString()
+	if err := root.WriteFile(filepath.Join(dir, id+".txt"), []byte(out), 0o600); err != nil {
+		return "", fmt.Errorf("write retained execute result: %w", err)
+	}
+
+	return strings.TrimRight(head, "\n") + executeSpillFooter(id, "in 7 days"), nil
+}
+
+// sweepRetainedDir removes the results in dir older than retainedResultTTL.
+func sweepRetainedDir(root *os.Root, dir string) {
+	entries, _ := fs.ReadDir(root.FS(), dir)
+	for _, entry := range entries {
+		if info, err := entry.Info(); err == nil && time.Since(info.ModTime()) > retainedResultTTL {
+			_ = root.Remove(filepath.Join(dir, entry.Name()))
+		}
+	}
+}
+
+// SweepRetainedResults sweeps every retained result directory in dir, such as the
+// RetainedResultDir of each conversation, and removes those it empties. Nothing may retain
+// a result in dir meanwhile, as an emptied directory goes away under it.
+func SweepRetainedResults(root *os.Root, dir string) {
+	entries, _ := fs.ReadDir(root.FS(), dir)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			retained := filepath.Join(dir, entry.Name())
+			sweepRetainedDir(root, retained)
+			_ = root.Remove(retained) // Fails, keeping the directory, unless it is empty.
+		}
+	}
 }
 
 func (l *looper) restoreTurnExecuteResults(turnID string) {
@@ -150,7 +200,7 @@ func (l *looper) saveExecuteResult(out string) (string, error) {
 
 	l.spillResults[id] = rel
 
-	return strings.TrimRight(head, "\n") + executeSpillFooter(id), nil
+	return strings.TrimRight(head, "\n") + executeSpillFooter(id, "when this turn ends"), nil
 }
 
 type loadExecuteResultParams struct {
@@ -160,8 +210,9 @@ type loadExecuteResultParams struct {
 	LineNumbers bool   `json:"line_numbers"`
 }
 
-// loadExecuteResult reads only registered current-turn files, never caller paths.
-func (l *looper) loadExecuteResult(ctx context.Context, params loadExecuteResultParams) (result ToolResult, err error) {
+// loadExecuteResult reads only registered current-turn files and this conversation's retained
+// results under retainedRel, never caller paths.
+func (l *looper) loadExecuteResult(ctx context.Context, retainedRel string, params loadExecuteResultParams) (result ToolResult, err error) {
 	if params.StartLine < 0 || params.Limit < 0 {
 		return ToolResult{}, errors.New("start_line and limit must not be negative")
 	}
@@ -180,25 +231,16 @@ func (l *looper) loadExecuteResult(ctx context.Context, params loadExecuteResult
 	l.spillMu.Lock()
 	defer l.spillMu.Unlock()
 
-	path, ok := l.spillResults[params.ResultID]
-	if !ok {
-		return ToolResult{}, errors.New("unknown or expired execute result")
+	file, err := l.openStoredExecuteResult(retainedRel, params.ResultID)
+	if err != nil {
+		return ToolResult{}, err
 	}
 
-	file, err := openExecuteResult(l.promptExpansion.root, path)
-	if err != nil {
-		return ToolResult{}, errors.New("stored execute result unavailable")
-	}
 	defer func() {
 		if errClose := file.Close(); errClose != nil {
 			err = errors.Join(err, fmt.Errorf("close execute result: %w", errClose))
 		}
 	}()
-
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		return ToolResult{}, errors.New("stored execute result unavailable")
-	}
 
 	const contentBudget = executeHeadMaxBytes - 1024
 
@@ -296,6 +338,48 @@ func (l *looper) loadExecuteResult(ctx context.Context, params loadExecuteResult
 
 // openExecuteResult opens each registered path component without following links.
 // O_NOFOLLOW on a full path would still follow replaced parent directories.
+// openStoredExecuteResult opens a live turn spill, or else a retained Background Job result
+// in retainedRel, which expires after retainedResultTTL. The caller holds spillMu.
+func (l *looper) openStoredExecuteResult(retainedRel, resultID string) (_ *os.File, err error) {
+	path, live := l.spillResults[resultID]
+	if !live {
+		// A retained ID is a UUID, so a valid one names a file directly in retainedRel.
+		id, errParse := uuid.Parse(resultID)
+		if errParse != nil {
+			return nil, errUnknownExecuteResult
+		}
+
+		path = filepath.Join(retainedRel, id.String()+".txt")
+	}
+
+	file, err := openExecuteResult(l.promptExpansion.root, path)
+	if err != nil && !live {
+		return nil, errUnknownExecuteResult
+	}
+
+	if err != nil {
+		return nil, errors.New("stored execute result unavailable")
+	}
+
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, file.Close())
+		}
+	}()
+
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, errors.New("stored execute result unavailable")
+	}
+
+	if !live && time.Since(info.ModTime()) > retainedResultTTL {
+		_ = l.promptExpansion.root.Remove(path)
+		return nil, errors.New("execute result expired")
+	}
+
+	return file, nil
+}
+
 func openExecuteResult(root *os.Root, path string) (_ *os.File, err error) {
 	file, err := root.Open(".")
 	if err != nil {

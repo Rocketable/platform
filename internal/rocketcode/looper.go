@@ -194,9 +194,13 @@ type looper struct {
 	Journal                Journal
 	observations           *turnObservations // Root-owned lifetime; workers receive the turn-local pointer.
 	SteerDrain             SteerDrain
-	expandInputPrompts     bool
-	promptExpansion        promptExpansionEnvironment
-	spillRel               string
+	// notes drains Completion Notes for the subagent at subagentKey with the steers; the main
+	// agent's notes arrive through SteerDrain, so it and hidden review runs hold inert notes.
+	notes              BackgroundJobs
+	subagentKey        string
+	expandInputPrompts bool
+	promptExpansion    promptExpansionEnvironment
+	spillRel           string
 
 	spillMu      sync.Mutex
 	spillTurnID  string
@@ -252,7 +256,8 @@ type permissionReviewRequest struct {
 	Reviewer         string                                  `json:"reviewer"`
 	ReviewerEmbedded bool                                    `json:"reviewer_embedded"`
 	ReviewContext    []responses.ResponseInputItemUnionParam `json:"-"`
-	CallID           string                                  `json:"-"`
+	// Review is the review's child-session key segment, from the reviewed call's tool call key.
+	Review string `json:"-"`
 }
 
 type permissionReviewRiskLevel string
@@ -1034,7 +1039,7 @@ func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Resp
 // appendSteers skips a drained input whose ID is already in the turn, since a
 // resumed turn's embedder re-offers every steer it accepted.
 func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, phase TurnPhase) (bool, error) {
-	inputs := slices.DeleteFunc(l.SteerDrain.Drain(ctx, phase), func(input PromptInput) bool {
+	inputs := slices.DeleteFunc(append(l.SteerDrain.Drain(ctx, phase), l.notes.DrainNotes(ctx, l.subagentKey)...), func(input PromptInput) bool {
 		return input.ID != "" && slices.ContainsFunc(*turnItems, func(item responses.ResponseInputItemUnionParam) bool {
 			return item.OfMessage != nil && item.OfMessage.ExtraFields()["input_id"] == input.ID
 		})
@@ -1909,7 +1914,7 @@ func (l *looper) dispatchToolCalls(
 			errDenied = err
 		} else if !decision.denied && decision.review != nil {
 			decision.review.ReviewContext = slices.Clone(l.permissionReviewInput)
-			decision.review.CallID = item.CallID
+			decision.review.Review = ReviewKey(l.observations.turnID, item.CallID)
 			reviewDecision := l.PermissionReviewer.reviewPermission(ctx, decision.review, output)
 			decision.denied = reviewDecision.Outcome != permissionReviewOutcomeAllow
 			decision.message = formatPermissionReviewDenied(reviewDecision)
@@ -2186,20 +2191,10 @@ func (d *doomLoopTrap) trapped(name string, args json.RawMessage) bool {
 
 func (l *looper) permissionDecision(toolName string, tool *looperTool, args json.RawMessage) (toolPermissionDecision, error) {
 	if toolName == loadExecuteResultToolName {
+		// The tool resolves turn spills and retained Background Job results itself.
 		var params loadExecuteResultParams
-		if err := decodeToolParams(args, &params); err != nil {
-			return toolPermissionDecision{}, err
-		}
 
-		l.spillMu.Lock()
-		_, ok := l.spillResults[params.ResultID]
-		l.spillMu.Unlock()
-
-		if !ok {
-			return toolPermissionDecision{}, errors.New("unknown or expired execute result")
-		}
-
-		return toolPermissionDecision{}, nil
+		return toolPermissionDecision{}, decodeToolParams(args, &params)
 	}
 
 	permission := tool.Permission

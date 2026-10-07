@@ -60,6 +60,7 @@ Built-in permission buckets:
 - `read` / `edit` / `glob` / `grep` / `webfetch` / `bash`: same subjects as before; unlock nested builtins inside Code Mode `execute` (not separate top-level tools)
 - `mcp`: outbound MCP as `server.tool` or wildcards such as `demo.*`; unlocks Code Mode `execute` MCP builtins when a matching configured `mcp_servers` name is granted
 - `rocketclaw.code_mode_approve`: optional whole-script Code Mode approval before `execute` runs; `allow` by default, independent of other RocketClaw rules and nested tool grants
+- `rocketclaw.allow_background`: `allow` lets the agent run `execute` scripts and `task` subagents in the background and gives it `rocketclaw_stop_background_job`; only `allow` or `deny`, `deny` by default, independent of other RocketClaw rules
 
 For edit-only agents, an `edit` allow also permits reading the same path unless a `read` rule matched first. Do not add a top-level deny that would block this fallback.
 
@@ -68,6 +69,8 @@ For bash agents, rocketcode checks permissions against each parsed shell call. M
 Automatic permission review rules use `auto` or `auto(<agent-name>)`. Bare `auto` uses RocketCode's embedded `guardian` reviewer. `auto(<agent-name>)` uses that loaded custom reviewer agent. RocketClaw always enables RocketCode automatic review; failed review, invalid reviewer output, recursive review, timeout, or rejection denies the tool call. Do not create or rename an agent to `guardian`, because that name is reserved for the embedded reviewer. Custom reviewer agents should normally set `reasoningEffort: low` because each automatic permission review has 90 seconds to return a valid decision.
 
 If the human wants whole-script review rather than just reviews of nested calls, set `permission.rocketclaw.code_mode_approve: auto` or `auto(<agent-name>)`. Omit it (or set `allow`) when no whole-script review is requested. Other `rocketclaw` wildcard rules do not change its default `allow`.
+
+If the human wants the agent to leave long scripts or subagents running while the conversation moves on, set `permission.rocketclaw.allow_background: allow`. Omit it otherwise. `rocketclaw: allow` and `rocketclaw` wildcard rules do not enable it, and any value other than `allow` or `deny` fails agent loading. Background work cannot ask questions, attach files, or restart RocketClaw.
 
 Prefer exact `allow` for low-risk deterministic opt-ins. Use `auto` only for operations where the human wants a reviewer judgment at runtime, for example:
 
@@ -137,6 +140,7 @@ Account for these rocketcode runtime facts when designing agent instructions and
 - Built-in filesystem tools hard-deny env files such as `.env`, `.env.local`, and `.env.production` regardless of permissions. `.env.example` remains readable and editable.
 - Symlink aliases are rejected for direct read, edit, and search targets. Directory grep pre-filters files before invoking `rg`; built-in `rg` calls use `--no-config` and `--no-follow`.
 - The shell tool statically denies common direct env-file and external-path attempts such as `cat .env`, `cat ../outside`, and `cd /tmp`, but this is only a preflight guardrail, not an OS-enforced shell sandbox for dynamically generated paths.
+- `task` subagents never get `ask_user_question`, whatever their permissions.
 - Prompt shell expansion with ``!`command` `` is opt-in per prompt source. Do not rely on it unless the runtime enables it.
 - Prompt shell expansion runs from the workspace root and captures stdout only. The default runner uses `/bin/bash`, ignores `$SHELL`, and disables startup files and inherited shell functions/options.
 

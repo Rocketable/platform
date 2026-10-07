@@ -234,6 +234,10 @@ func parsePermissionRules(permission string, node *yaml.Node) ([]PermissionRule,
 				}
 			}
 
+			if permission == "rocketclaw" && node.Content[i].Value == AllowBackgroundSubject && (value.Kind != yaml.ScalarNode || (actionValue != string(permissionAllow) && actionValue != string(permissionDeny))) {
+				return nil, errors.New("allow_background must be allow or deny")
+			}
+
 			action, reviewer, err := parsePermissionAction(actionValue)
 			if err != nil {
 				return nil, fmt.Errorf("pattern %q: %w", node.Content[i].Value, err)
@@ -365,6 +369,7 @@ func (ps *PermissionSet) Set(permission, pattern string, action PermissionAction
 // The matched result reports whether a configured rule explicitly matched.
 // When matched is false, action defaults to PermissionDeny, except that
 // rocketclaw.code_mode_approve and rocketclaw.load_agents_md default to PermissionAllow.
+// Those two and rocketclaw.allow_background change only through an exact rule.
 func (ps PermissionSet) Evaluate(permission, subject string) (action PermissionAction, matched bool) {
 	decision := ps.evaluate(permission, subject)
 	return decision.Action, decision.Matched
@@ -410,8 +415,8 @@ func (ps PermissionSet) evaluate(permission, subject string, scripts ...string) 
 func (ps PermissionSet) evaluateRules(permission, subject string, folded bool, scripts ...string) permissionDecision {
 	decision := permissionDecision{Action: permissionDeny, Bucket: "", Rule: PermissionRule{Pattern: "", Action: ""}, Matched: false, Permission: permission, Subject: subject}
 
-	exactRocketClawSetting := permission == "rocketclaw" && (subject == codeModeApproveSubject || subject == "load_agents_md")
-	if exactRocketClawSetting {
+	exactRocketClawSetting := permission == "rocketclaw" && (subject == codeModeApproveSubject || subject == "load_agents_md" || subject == AllowBackgroundSubject)
+	if exactRocketClawSetting && subject != AllowBackgroundSubject {
 		decision.Action = permissionAllow
 	}
 
@@ -435,7 +440,7 @@ func (ps PermissionSet) evaluateRules(permission, subject string, folded bool, s
 
 			switch {
 			case exactRocketClawSetting:
-				// Only an exact rule can change these default-on settings.
+				// Only an exact rule can change these settings.
 				matches = rule.Pattern == subject
 			case permission == "bash" && len(scripts) > 0:
 				matches = bashComponentPatternMatch(input, pattern, segments...) ||

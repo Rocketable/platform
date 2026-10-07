@@ -120,9 +120,19 @@ A RocketCode Turn is not the active-turn slot on a Managed Slack Thread. Slack o
 
 ### Delegation History
 
-The session history of what one tool call delegated: its automatic permission reviews, guardrail checks, and Task subagent, each a finished turn. Its conversation ID is the producing conversation's ID plus `/<tool call ID>`; a delegation inside it adds another `/<tool call ID>`.
+A session history of work one tool call delegated, each a finished turn: its automatic permission reviews, or its Task subagent with the subagent's guardrail checks. Its conversation ID is the producing conversation's ID plus `/<tool call ID>-review-<hash of the reviewed call's tool call key>` for its reviews, before it runs and during it, such as of a Code Mode script's tool calls, or `/<tool call ID>-<hash of the call's tool call key>` for a Task subagent, the ID a later `task` call continues; a delegation inside it adds another such segment. The hash keeps the ID unique when a provider reuses call IDs and the same when a turn resumes. Histories saved before this keep their old `/<tool call ID>`.
 
 A Delegation History has no Managed Slack Thread or web chat of its own. It is deleted and forked with its producing conversation.
+
+### Background Job
+
+An Execute script or Task subagent that keeps running after its tool call returned, owned by the conversation (or subagent) that started it. Only agents allowed by `permission.rocketclaw.allow_background` can start one, and a human can move running work into one from Web.
+
+A Background Job's ID is the tool call key that started it. It ends as completed, failed, stopped, or killed, and each ending produces one Completion Note. An oversized result of a background Execute is retained privately for 7 days instead of becoming a Spill, and `load_execute_result` reads it from any turn of the owning conversation.
+
+### Completion Note
+
+The system message that tells a Background Job's owner how the job ended. It enters a running turn of the owner at its next step, or wakes the owner with a new turn. A note for a script killed by a restart waits for the owner's next turn instead, unless the owner is a hidden cron or External MCP run. A turn that fails or stops before saving leaves the notes it read for the owner's next turn, without waking it again, unless the owner is a hidden cron or External MCP run, which may have no next turn: its notes wake it again 1 minute later, then 5 minutes later, then every 30 minutes until a wake saves. Only the first failure reaches its destination, saying the wake retries. It is consumed exactly once.
 
 ### Private Producer Conversation
 

@@ -741,10 +741,10 @@ func TestLoadExecuteResultDispatchWithoutRead(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, decision.denied)
 
-	for _, args := range []string{`{"result_id":"missing"}`, `{"result_id":"../../etc/passwd"}`, `{"result_id":1}`} {
+	for args, want := range map[string]string{`{"result_id":"missing"}`: "unknown or expired execute result", `{"result_id":"../../etc/passwd"}`: "unknown or expired execute result", `{"result_id":1}`: "check permission"} {
 		results, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("invalid", []responses.ResponseFunctionToolCall{testFunctionCall("invalid", "invalid-call", loadExecuteResultToolName, args)}), nil, nil)
 		require.NoError(t, err)
-		require.Contains(t, results[0].Result.Output, "check permission")
+		require.Contains(t, results[0].Result.Output, want)
 	}
 
 	require.Empty(t, reviewedRequests(reviewer))

@@ -170,6 +170,34 @@ func loadRocketCodeDefinitions(root *os.Root, workspace string, mode toolMode, m
 	return loadRocketCodeDefinitionsIn(root, cfg, config.DefaultRuntimeDir, mode)
 }
 
+func TestLoadRocketCodeDefinitionsKeepsBackgroundExact(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "broad", "---\nmodel: gpt-5.4\npermission:\n  rocketclaw: allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "background", "---\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    allow_background: allow\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, root.Close()) }()
+
+	for _, mode := range []toolMode{toolModePersistent, toolModeWorkflow} {
+		agents, _, err := loadRocketCodeDefinitions(root, workspace, mode)
+		require.NoError(t, err)
+
+		action, _ := agents.Items["broad"].Permission.Evaluate("rocketclaw", "allow_background")
+		require.Equal(t, rocketcode.PermissionDeny, action)
+
+		action, _ = agents.Items["background"].Permission.Evaluate("rocketclaw", "allow_background")
+		require.Equal(t, rocketcode.PermissionAllow, action)
+	}
+
+	writeAgent(t, workspace, "background", "---\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    allow_background: auto\n---\nPrompt\n")
+
+	_, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+	require.ErrorContains(t, err, "allow_background must be allow or deny")
+}
+
 func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "assistant", "---\ndescription: Main\nmodel: gpt-5.4\nreasoningEffort: high\nverbosity: low\npermission:\n  bash:\n    \"gh *\": allow\n  rocketclaw:\n    code_mode_approve: auto(release-reviewer)\n---\nPrompt\n")
@@ -474,7 +502,7 @@ func TestRocketCodeReadsAllowedSkillFilesFromConfiguredRuntimeDirectory(t *testi
 			require.NoError(t, err)
 
 			client := openai.NewClient()
-			runtime, err := rocketcode.New(&client, &rocketcode.Config{ShellTempDir: workspace, ChildSessions: rocketcode.InertChildSessions{}, Journal: rocketcode.InertJournal{}, ShellCommand: rocketcode.DefaultShellCommand}, root, agents, skills, "main", nil)
+			runtime, err := rocketcode.New(&client, &rocketcode.Config{ShellTempDir: workspace, RetainedResultDir: "retained", ChildSessions: rocketcode.InertChildSessions{}, Journal: rocketcode.InertJournal{}, ShellCommand: rocketcode.DefaultShellCommand}, root, agents, skills, "main", nil)
 			require.NoError(t, err)
 
 			action, _ := runtime.Permissions.Evaluate("read", filepath.ToSlash(filepath.Join(skillDir, "asset.txt")))
@@ -499,7 +527,7 @@ func TestRocketCodeInterpolatesPermissionPatternsFromShellEnv(t *testing.T) {
 	require.Equal(t, ".tmp/${ROCKETCLAW_METADATA_FRUIT}/note.txt", agents.Items["main"].Permission.Buckets[0].Rules[1].Pattern)
 
 	client := openai.NewClient()
-	runtime, err := rocketcode.New(&client, &rocketcode.Config{ShellTempDir: workspace, ChildSessions: rocketcode.InertChildSessions{}, Journal: rocketcode.InertJournal{}, ShellCommand: rocketcode.DefaultShellCommand, ShellEnv: map[string]string{"ROCKETCLAW_METADATA_FRUIT": "banana"}}, root, agents, skills, "main", nil)
+	runtime, err := rocketcode.New(&client, &rocketcode.Config{ShellTempDir: workspace, RetainedResultDir: "retained", ChildSessions: rocketcode.InertChildSessions{}, Journal: rocketcode.InertJournal{}, ShellCommand: rocketcode.DefaultShellCommand, ShellEnv: map[string]string{"ROCKETCLAW_METADATA_FRUIT": "banana"}}, root, agents, skills, "main", nil)
 	require.NoError(t, err)
 
 	action, _ := runtime.Permissions.Evaluate("edit", ".tmp/banana/note.txt")
