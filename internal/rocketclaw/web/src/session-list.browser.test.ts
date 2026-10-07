@@ -382,7 +382,11 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       { stem: "silent", status: "ran", lastRun: new Date(Date.now() - 3_600_000).toISOString(), nextRun: "", origin: "cron:silent-source" },
   ];
   let listResponse: ReadableStreamDefaultController;
-  let transcriptStream = Promise.withResolvers<ReadableStreamDefaultController>();
+  const transcriptStreams = new Map<string, ReturnType<typeof Promise.withResolvers<ReadableStreamDefaultController>>>();
+  const transcriptStream = (id: string) => {
+    if (!transcriptStreams.has(id)) transcriptStreams.set(id, Promise.withResolvers<ReadableStreamDefaultController>());
+    return transcriptStreams.get(id)!;
+  };
   const historyResponse = (id: string, messages: TranscriptEvent[], origin = "", revision = "") => {
     const running = ctrl.running || ctrl.prompting.has(id);
     const previous: TranscriptEvent[] = revision ? JSON.parse(revision).messages : [];
@@ -394,7 +398,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(req) {
     const url = new URL(req.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) {
-      transcriptStream.resolve(controller);
+      transcriptStream(url.searchParams.get("id")!).resolve(controller);
       controller.enqueue(": connected\n\n");
     } }), { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/ListSessions") return new Response(new ReadableStream({ async start(controller) {
@@ -741,10 +745,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await page.waitForURL(`${origin}/s/${Buffer.from("kept").toString("base64url")}`);
     await page.getByPlaceholder("Message or $command").waitFor();
     expect(historyRequests.some((request) => request.id === "kept")).toBe(true);
-    await transcriptStream.promise;
+    await transcriptStream("kept").promise;
     await navigation.getByRole("button", { name: "New session", exact: true }).click();
     await page.waitForURL(origin + "/");
-    transcriptStream = Promise.withResolvers<ReadableStreamDefaultController>();
+    transcriptStreams.clear();
     await page.keyboard.press("Control+Shift+p");
     const commandPalette = page.getByRole("dialog", { name: "Run command", exact: true });
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
@@ -969,7 +973,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       if (delivery === "STEER") await parking.getByText("identical follow-up", { exact: true }).nth(interventionIds.length - 2).waitFor();
     }
     expect(new Set(interventionIds).size).toBe(3);
-    const stream = await transcriptStream.promise;
+    const stream = await transcriptStream("web-session:new").promise;
     ctrl.history.push({ entryKey: "intervention-run", itemId: "intervention-run:1", inputId: "", role: "assistant", turnId: "intervention-run", text: "Before steering", complete: false });
     stream.enqueue(`data: ${JSON.stringify({ conversationId: "web-session:new", revision: "hint" })}\n\n`);
     for (const [index, id] of [interventionIds[2], interventionIds[1]].entries()) {
@@ -2046,7 +2050,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     ctrl.running = false;
     const transcriptPage = await browser.newPage();
     for (const width of [1280, 390]) {
-      transcriptStream = Promise.withResolvers();
+      transcriptStreams.clear();
       // Keep the preview list overflowing even with the preset's compact spacing.
       await transcriptPage.setViewportSize({ width, height: 600 });
       await transcriptPage.goto(`${origin}/s/${Buffer.from(`jump-${width}`).toString("base64url")}`);
@@ -2077,7 +2081,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await transcriptPage.waitForFunction(() => document.querySelector("#transcript-scroll")!.scrollTop < 50);
       expect(await transcriptPage.getByRole("region", { name: "Turn 1", exact: true }).evaluate((el: HTMLElement) => el === document.activeElement)).toBe(true);
       ctrl.history = [...ctrl.history.filter((message) => message.entryKey !== "live"), { entryKey: "live", itemId: "live:0", inputId: "", role: "assistant", text: `Live reply ${width}`, turnId: "live", complete: false }];
-      (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ conversationId: `jump-${width}`, revision: "hint" })}\n\n`);
+      (await transcriptStream(`jump-${width}`).promise).enqueue(`data: ${JSON.stringify({ conversationId: `jump-${width}`, revision: "hint" })}\n\n`);
       await transcriptPage.getByText(`Live reply ${width}`, { exact: true }).waitFor({ state: "attached" });
       expect(await scroll.evaluate((el: HTMLElement) => el.scrollTop)).toBeLessThan(50);
       await transcriptPage.getByRole("button", { name: "Scroll to latest", exact: true }).click();
@@ -2086,7 +2090,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         return el.scrollHeight - el.clientHeight - el.scrollTop < 2;
       });
       ctrl.history[ctrl.history.length - 1] = { ...ctrl.history.at(-1)!, text: `\nFollowing latest ${width}\n` + "More streamed text.\n".repeat(40) };
-      (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ conversationId: `jump-${width}`, revision: "hint" })}\n\n`);
+      (await transcriptStream(`jump-${width}`).promise).enqueue(`data: ${JSON.stringify({ conversationId: `jump-${width}`, revision: "hint" })}\n\n`);
       await transcriptPage.getByText(`Following latest ${width}`, { exact: false }).waitFor({ state: "attached" });
       await transcriptPage.waitForFunction(() => {
         const el = document.querySelector("#transcript-scroll")!;
@@ -2112,7 +2116,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await transcriptPage.context().grantPermissions(["clipboard-read", "clipboard-write"]);
     for (const width of [1280, 390]) {
       ctrl.history = ctrl.history.filter((message) => message.entryKey !== "fenced-stream");
-      transcriptStream = Promise.withResolvers();
+      transcriptStreams.clear();
       await transcriptPage.setViewportSize({ width, height: 600 });
       await transcriptPage.goto(`${origin}/s/${Buffer.from(`code-${width}`).toString("base64url")}`);
       await transcriptPage.locator('pre[aria-label="sh"]').waitFor();
@@ -2161,7 +2165,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       expect(await tool.locator("pre").isVisible()).toBe(true);
       // A partial streamed fence is rendered as code before its closing fence arrives.
       ctrl.history = [...ctrl.history.filter((message) => message.entryKey !== "fenced-stream"), { entryKey: "fenced-stream", itemId: "fenced-stream:0", inputId: "", role: "assistant", text: "~~~py\n  streamed", turnId: "fenced-stream", complete: false }];
-      (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ conversationId: `code-${width}`, revision: "hint" })}\n\n`);
+      (await transcriptStream(`code-${width}`).promise).enqueue(`data: ${JSON.stringify({ conversationId: `code-${width}`, revision: "hint" })}\n\n`);
       await transcriptPage.locator('pre[aria-label="py"]').waitFor();
       expect(await transcriptPage.locator('pre[aria-label="py"]').textContent()).toBe("  streamed");
       // One remembered wrap setting applies to every block, inline and expanded, long tokens included.
@@ -2170,7 +2174,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await transcriptPage.getByRole("button", { name: "Wrap sh", exact: true }).click();
       expect(await transcriptPage.getByRole("button", { name: "Wrap bash", exact: true }).getAttribute("aria-pressed")).toBe("true");
       expect([await fits("bash"), await fits("sh")]).toEqual([true, true]);
-      transcriptStream = Promise.withResolvers();
+      transcriptStreams.clear();
       await transcriptPage.reload();
       await transcriptPage.locator('pre[aria-label="sh"]').waitFor();
       expect(await fits("sh")).toBe(true);
@@ -2194,7 +2198,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       step("tool", `execute\n${JSON.stringify({ code: "bash(command=r'''make test''')" })}`, { toolName: "execute", toolCallId: "run" }), step("tool", "all tests passed", { toolCallId: "run" }),
     ];
     ctrl.history = detailItems.map((item, index) => ({ ...item, entryKey: "detail", itemId: `detail:${index}`, inputId: "", turnId: "", complete: true }));
-    transcriptStream = Promise.withResolvers();
+    transcriptStreams.clear();
     const detailPage = await browser.newPage();
     await detailPage.goto(`${origin}/s/${Buffer.from("timeline-detail").toString("base64url")}`);
     const grouped = detailPage.locator("#transcript-scroll summary").filter({ hasText: /^Used \d tools? ▸$/ });
@@ -2204,7 +2208,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await grouped.click();
     ctrl.history = [...detailItems, step("tool", "skill\n{\"name\":\"release\"}", { toolName: "skill", toolCallId: "load" }), step("assistant", "Build is green")]
       .map((item, index) => ({ ...item, entryKey: "detail", itemId: `detail:${index}`, inputId: "", turnId: "", complete: true }));
-    (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ conversationId: "timeline-detail", revision: "hint" })}\n\n`);
+    (await transcriptStream("timeline-detail").promise).enqueue(`data: ${JSON.stringify({ conversationId: "timeline-detail", revision: "hint" })}\n\n`);
     await detailPage.getByText("Build is green", { exact: true }).waitFor();
     expect(await grouped.textContent()).toBe("Used 2 tools ▸");
     expect(await grouped.evaluate((el: HTMLElement) => (el.parentElement as HTMLDetailsElement).open)).toBe(true);
@@ -2410,7 +2414,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await detailsPage.close();
     }
     ctrl.history = [{ entryKey: "files", itemId: "files:0", inputId: "", role: "tool", text: "Delivered image", toolCallId: "result", turnId: "", complete: true, attachments: [image] }];
-    transcriptStream = Promise.withResolvers();
+    transcriptStreams.clear();
     const attachmentPage = await browser.newPage();
     // Direct HTTP deployments have getRandomValues, but not secure-context randomUUID.
     await attachmentPage.addInitScript(() => Object.defineProperty(crypto, "randomUUID", { value: undefined }));
@@ -2430,7 +2434,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       { entryKey: "files", itemId: "files:3", inputId: "consumed-2", role: "user", text: "steering message consumed", turnId: "", complete: true },
       { entryKey: "files", itemId: "files:4", inputId: "", role: "assistant", text: "", turnId: "", complete: true, attachments: [live] },
     );
-    (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ conversationId: "visible-files", revision: "hint" })}\n\n`);
+    (await transcriptStream("visible-files").promise).enqueue(`data: ${JSON.stringify({ conversationId: "visible-files", revision: "hint" })}\n\n`);
     await attachmentPage.getByRole("region", { name: "Messages", exact: true }).getByText("queued message now consumed", { exact: true }).waitFor();
     const reconciled = await attachmentPage.getByRole("region", { name: "Messages", exact: true }).innerText();
     expect(reconciled.indexOf("queued message now consumed")).toBeLessThan(reconciled.indexOf("reply to queued message"));
@@ -2639,7 +2643,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     ctrl.history = [];
     ctrl.queue = [];
     ctrl.running = false;
-    transcriptStream = Promise.withResolvers();
+    transcriptStreams.clear();
     const stashPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await stashPage.goto(`${origin}/s/${Buffer.from("stash-session").toString("base64url")}`);
     await stashPage.locator("textarea").fill("$stop");
@@ -2665,7 +2669,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await heldRow.getByRole("button", { name: "Reorder", exact: true }).count()).toBe(1);
     expect(await heldRow.getByRole("button", { name: "Remove", exact: true }).count()).toBe(1);
     expect(await stashPage.getByRole("region", { name: "Messages", exact: true }).getByText("$stop", { exact: true }).count()).toBe(0);
-    transcriptStream = Promise.withResolvers();
+    transcriptStreams.clear();
     await stashPage.reload();
     await heldRow.getByRole("button", { name: "Pop", exact: true }).waitFor();
     await heldRow.getByRole("link", { name: "Download held.txt", exact: true }).waitFor();
@@ -2681,7 +2685,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     });
     ctrl.running = true;
     ctrl.history.push({ entryKey: "other-work", itemId: "other-work:0", inputId: "other-work", role: "user", text: "Other queued work", turnId: "other-work", complete: false });
-    (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ conversationId: "stash-session", revision: "hint" })}\n\n`);
+    (await transcriptStream("stash-session").promise).enqueue(`data: ${JSON.stringify({ conversationId: "stash-session", revision: "hint" })}\n\n`);
     await stashPage.getByRole("button", { name: "Stop", exact: true }).waitFor();
     await heldRow.getByRole("button", { name: "Pop", exact: true }).focus();
     await stashPage.keyboard.press("Enter");
@@ -2712,7 +2716,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     ctrl.queue = [];
     ctrl.running = false;
     ctrl.currentAgents.set("retired-session", "retired");
-    transcriptStream = Promise.withResolvers();
+    transcriptStreams.clear();
     const retiredPage = await browser.newPage({ viewport: { width: 1280, height: 844 } });
     const retiredPrompts = () => ctrl.prompt.filter((text) => text.startsWith("retired-session:"));
     await retiredPage.goto(`${origin}/s/${Buffer.from("retired-session").toString("base64url")}`);
@@ -2725,7 +2729,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(retiredPrompts()).toEqual(["retired-session:held hello", "retired-session:$agent other"]);
     ctrl.queue = [];
     ctrl.currentAgents.set("retired-session", "retired");
-    transcriptStream = Promise.withResolvers();
+    transcriptStreams.clear();
     await retiredPage.reload();
     await retiredPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
     await retiredPage.route("**/api/Prompt", (route: { request(): { postDataJSON(): { text: string } }; fulfill(options: object): Promise<void>; continue(): Promise<void> }) => route.request().postDataJSON().text.startsWith("$agent ")
@@ -2753,7 +2757,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     // Sending already-queued work also switches the unlisted agent first.
     ctrl.currentAgents.set("retired-session", "retired");
     ctrl.queue = [{ id: "queued-work", text: "queued work", delivery: "QUEUE", principal: ctrl.principal }];
-    transcriptStream = Promise.withResolvers();
+    transcriptStreams.clear();
     await retiredPage.reload();
     await retiredPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
     const steered = retiredPage.waitForResponse((response: PromptResponse) => response.url().endsWith("/api/SteerQueueItem"));
@@ -2764,7 +2768,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     ctrl.queue = [];
     // An unrecorded agent is not a mismatch, and a new chat without `main` starts on the first listed agent.
     ctrl.currentAgents.set("blank-session", "");
-    transcriptStream = Promise.withResolvers();
+    transcriptStreams.clear();
     await retiredPage.goto(`${origin}/s/${Buffer.from("blank-session").toString("base64url")}`);
     await retiredPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
     const blankSent = retiredPage.waitForResponse((response: PromptResponse) => response.url().endsWith("/api/Prompt") && response.request().postDataJSON().text === "hi");
@@ -2773,7 +2777,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await blankSent;
     expect(ctrl.prompt.filter((text) => text.startsWith("blank-session:"))).toEqual(["blank-session:hi"]);
     await retiredPage.route("**/api/ListAgents", (route: { fulfill(options: { json: unknown }): Promise<void> }) => route.fulfill({ json: { agents: [{ name: "other", model: "gpt" }], currentAgent: "" } }));
-    transcriptStream = Promise.withResolvers();
+    transcriptStreams.clear();
     await retiredPage.goto(`${origin}/`);
     await retiredPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
     await retiredPage.close();
@@ -2790,8 +2794,14 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     ];
     ctrl.queue = [{ id: "bob-queue", text: "Bob's queued message", delivery: "QUEUE", principal: bob }, { id: "bob-stash", text: "Bob's stashed message", delivery: "STASH", principal: bob }];
     ctrl.running = false;
-    transcriptStream = Promise.withResolvers();
+    transcriptStreams.clear();
     const authorPage = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    // A background tab connecting first must not receive this conversation's hint.
+    await page.evaluate(() => {
+      const stream = new EventSource("/stream?id=background-session");
+      Object.assign(window, { __backgroundStream: stream });
+      return new Promise<void>((resolve) => { stream.onopen = () => resolve(); });
+    });
     await authorPage.goto(`${origin}/s/${Buffer.from("author-session").toString("base64url")}`);
     const authorChat = authorPage.getByRole("region", { name: "Messages", exact: true });
     const savedBubble = authorChat.locator('[data-slot="bubble-content"]').filter({ hasText: "Bob's saved message" });
@@ -2826,11 +2836,11 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await authorParking.locator('[data-slot="message-author"]').textContent()).toBe(bob);
     ctrl.history.push({ entryKey: "live-author", itemId: "live-author:0", inputId: "bob-stash", role: "user", text: "Bob's stashed message", principal: bob, header: rawHeader, turnId: "live-author", complete: true, attachments: [image] });
     ctrl.queue = ctrl.queue.filter((item) => item.id !== "bob-stash");
-    (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ conversationId: "author-session", revision: "hint" })}\n\n`);
+    (await transcriptStream("author-session").promise).enqueue(`data: ${JSON.stringify({ conversationId: "author-session", revision: "hint" })}\n\n`);
     await authorParking.waitFor({ state: "hidden" });
     await authorChat.getByRole("img", { name: "history.png", exact: true }).waitFor();
     expect(await authorChat.locator('[data-slot="message-author"]').allTextContents()).toEqual([bob, bob]);
-    transcriptStream = Promise.withResolvers();
+    transcriptStreams.clear();
     await authorPage.reload();
     await authorChat.getByRole("img", { name: "history.png", exact: true }).waitFor();
     expect(await authorChat.locator('[data-slot="message-author"]').allTextContents()).toEqual([bob, bob]);
