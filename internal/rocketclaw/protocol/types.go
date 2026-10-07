@@ -105,7 +105,7 @@ type InboundContent struct {
 type OutboundAttachment struct {
 	ID                 string
 	Name, MIMEType     string
-	Data               []byte
+	Data               []byte `json:"-"` // Persisted turn state keeps only ID; large files exceed Postgres JSON limits.
 	OriginalUnverified bool
 	Size               int64 // Stored byte length for metadata-only reads.
 }

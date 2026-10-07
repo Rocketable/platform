@@ -3,6 +3,7 @@ package backend
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -138,9 +139,11 @@ func TestClaimedQueueItemRunsExactlyOnceAfterCrash(t *testing.T) {
 	require.Empty(t, queue, "the claim and the row commit together")
 	require.Equal(t, []string{request.turnID}, runningTestTurns(t, service))
 
-	queued := []protocol.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}
+	queued := []protocol.OutboundAttachment{{ID: "queued-report", Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}
+	require.NoError(t, service.SaveAttachment(t.Context(), conversationID, &queued[0], false))
 	data, err := json.Marshal(queued)
 	require.NoError(t, err)
+	require.NotContains(t, string(data), base64.StdEncoding.EncodeToString(queued[0].Data), "journaled attachments keep only their stored ID")
 	require.NoError(t, service.SaveTurnStep(t.Context(), conversationID, request.turnID+"/attachments", data))
 
 	runTestBridge(t, newBridge())
@@ -171,12 +174,17 @@ func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
 	require.NoError(t, startTurnDB(t.Context(), service.db, "turn-finished", conversationID, msg))
 
 	outbound := crashed.newOutboundMessage(msg, "turn-finished", "finished answer", true)
-	outbound.Attachments = []protocol.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}
+	outbound.Attachments = []protocol.OutboundAttachment{{ID: "finished-report", Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}
+	require.NoError(t, service.SaveAttachment(t.Context(), conversationID, &outbound.Attachments[0], false))
 	outbound.ReplyState = json.RawMessage(`{"ChannelID":"C456","MessageTS":"777.2"}`)
 
 	require.NoError(t, service.SaveTurnStep(t.Context(), conversationID, protocol.ReplyStepKey("turn-finished"), []byte(`{"ChannelID":"C123","MessageTS":"555.1"}`)))
 	_, err := service.finishTurn(t.Context(), "turn-finished", &turnFinish{store: newSessionStore(conversationID, service), accountGoal: true, outbound: outbound})
 	require.NoError(t, err)
+
+	var persisted string
+	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT outbound_json::text FROM active_turns WHERE id = 'turn-finished'`).Scan(&persisted))
+	assert.NotContains(t, persisted, base64.StdEncoding.EncodeToString(outbound.Attachments[0].Data), "a finished turn keeps only attachment IDs, so large files fit")
 
 	late := []rocketcode.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), TurnID: "turn-finished"}}
 	stored, err := service.finishTurn(t.Context(), "turn-finished", &turnFinish{store: newSessionStore(conversationID, service), accountGoal: true, entries: late, outbound: crashed.newOutboundMessage(msg, "turn-finished", "late answer", true)})
@@ -211,8 +219,9 @@ func TestFinishTurnKeepsLargeAttachment(t *testing.T) {
 	require.NoError(t, startTurnDB(t.Context(), service.db, "attachment-turn", inbound.ConversationID, inbound))
 
 	outbound := protocol.NewOutboundMessage(inbound.ConversationID, "file ready")
-	// Base64 encoding 192 MiB exceeds jsonb's single-string limit; JSON can store it.
-	outbound.Attachments = []protocol.OutboundAttachment{{Name: "file.bin", Data: bytes.Repeat([]byte{0x61}, 192<<20)}}
+	// 192 MiB in base64 exceeds jsonb's string limit; the finished turn stores the attachment ID and reloads the bytes.
+	outbound.Attachments = []protocol.OutboundAttachment{{ID: "large-file", Name: "file.bin", Data: bytes.Repeat([]byte{0x61}, 192<<20)}}
+	require.NoError(t, service.SaveAttachment(t.Context(), inbound.ConversationID, &outbound.Attachments[0], false))
 
 	require.NoError(t, service.SaveTurnStep(t.Context(), inbound.ConversationID, protocol.ReplyStepKey("attachment-turn"), []byte(`{"ChannelID":"C789","MessageTS":"888.3"}`)))
 

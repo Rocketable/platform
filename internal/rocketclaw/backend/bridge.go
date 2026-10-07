@@ -2073,6 +2073,10 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		if err := json.Unmarshal(queued, &attachments.attachments); err != nil {
 			return runResult{}, fmt.Errorf("decode queued response attachments: %w", err)
 		}
+
+		if err := b.config.SessionService.loadAttachmentData(ctx, attachments.attachments); err != nil {
+			return runResult{}, err
+		}
 	}
 
 	observed, err := b.config.SessionService.ObserveEntries(ctx, b.config.ConversationID)

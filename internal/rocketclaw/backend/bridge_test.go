@@ -1419,9 +1419,11 @@ func TestAttachFilesToolReadsWorkspacePath(t *testing.T) {
 	recorded, found, err := sessions.LoadTurnStep(t.Context(), "attachment-test", "turn-1/attachments")
 	require.NoError(t, err)
 	require.True(t, found)
+	require.Less(t, len(recorded), 200, "the journal keeps attachment IDs, not bytes, so large files fit")
 
 	var resumed []protocol.OutboundAttachment
 	require.NoError(t, json.Unmarshal(recorded, &resumed))
+	require.NoError(t, sessions.loadAttachmentData(t.Context(), resumed))
 	assert.Equal(t, got, resumed, "a resumed turn keeps attachments queued before a restart")
 	require.NoError(t, root.WriteFile("reports/latest.txt", []byte("changed"), 0o644))
 	stored, err := sessions.LoadAttachment(t.Context(), "attachment-test", got[0].ID, false)
