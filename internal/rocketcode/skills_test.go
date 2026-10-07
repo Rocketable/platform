@@ -368,7 +368,7 @@ name: docs-writer
 description: Write product documentation
 ---
 
-Help with guides and docs.
+Help with guides and docs. École １２.
 `),
 	}, "/tmp/skills").Skills
 
@@ -410,7 +410,9 @@ Help with guides and docs.
 	})
 
 	t.Run("matches description and content case insensitively", func(t *testing.T) {
-		require.Equal(t, "## Matching skills"+"\n"+"- **docs-writer**: Write product documentation", loaded.Find("GUIDES"))
+		for _, query := range []string{"GUIDES", " --GUIDES///DOCS?! ", " ÉCOLE---１２ ", "GUIDES\xffDOCS"} {
+			require.Equal(t, "## Matching skills"+"\n"+"- **docs-writer**: Write product documentation", loaded.Find(query), "query %q", query)
+		}
 	})
 }
 

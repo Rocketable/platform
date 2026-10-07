@@ -133,7 +133,9 @@ func (s Skills) Find(query string) string {
 	}
 
 	normalizedQuery := normalizeSkillSearchText(query)
-	tokens := tokenizeSkillQuery(query)
+	tokens := strings.FieldsFunc(normalizedQuery, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	})
 
 	type scoredSkill struct {
 		skill Skill
@@ -489,23 +491,6 @@ func renderSkillMatches(skills []Skill) string {
 
 func normalizeSkillSearchText(text string) string {
 	return strings.ToLower(text)
-}
-
-func tokenizeSkillQuery(query string) []string {
-	parts := strings.FieldsFunc(strings.ToLower(query), func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
-	})
-
-	tokens := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-
-		tokens = append(tokens, part)
-	}
-
-	return tokens
 }
 
 func scoreSkill(normalizedQuery string, tokens []string, skill *Skill) int {
