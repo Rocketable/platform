@@ -209,6 +209,100 @@ func TestRuntimeSummaryBackfillLifecycle(t *testing.T) {
 }
 
 func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
+	t.Run("history before delivered owner", func(t *testing.T) {
+		store := newTestSessionService(t)
+		store.db.SetMaxOpenConns(1)
+		manager, cfg, roots, finals := newCronTestManager(t, store)
+		ctx := t.Context()
+		msg := seedCronRun(t, store, "cron:daily")
+		source := NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: msg.ConversationID, Agent: "job", SessionService: store}, slog.New(slog.DiscardHandler))
+		source.threads, source.activeReply = manager, msg
+		require.NoError(t, source.ScheduleMessage(time.Hour, "discard before sync", false))
+		require.NoError(t, source.ResetScheduledMessages())
+		require.NoError(t, source.ScheduleMessage(2*time.Hour, "after sync", true))
+		endTestTurn(t, store, msg.ConversationID, "turn-cron", protocol.TerminalComplete)
+
+		source.activeReply = nil
+
+		rt := &Runtime{Sessions: store}
+		ownerID := protocol.SlackThreadConversationID("C1", "1.2")
+		sourceEntries, err := store.ObserveEntries(ctx, msg.ConversationID)
+		require.NoError(t, err)
+		require.Len(t, sourceEntries, 3)
+
+		var expected protocol.ScheduledMessageState
+		require.NoError(t, json.Unmarshal(sourceEntries[2].Entry.OutputTrace[0], &expected))
+
+		expected.ConversationID, expected.Agent = ownerID, "selected"
+		for _, id := range []string{"web:cron:daily", ownerID} {
+			require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "selected"}))
+			_, err := store.AppendEntryID(ctx, id, testSessionEntry("existing history", "existing answer"))
+			require.NoError(t, err)
+			destination, err := manager.recordedBridge(id)
+			require.NoError(t, err)
+			require.NoError(t, destination.syncConversation(ctx, source))
+
+			scheduled, err := store.ScheduledMessagesForConversation(id)
+			require.NoError(t, err)
+			require.Empty(t, scheduled, "unbound history copies must not apply effects")
+		}
+
+		inbound, through, err := (stateDAO{db: store.db}).producer(ctx, msg.ConversationID)
+		require.NoError(t, err)
+		require.Empty(t, inbound.SyncDestination, "arbitrary Sync must not choose the owner")
+		require.Zero(t, through)
+
+		beforeEntries, err := store.ObserveEntries(ctx, ownerID)
+		require.NoError(t, err)
+		require.Len(t, beforeEntries, 4)
+
+		require.NoError(t, store.PutScheduledMessage("existing", &protocol.ScheduledMessageState{ConversationID: ownerID, Agent: "selected", Message: "preserve on rollback", DueAt: time.Now().Add(time.Hour)}))
+		beforeSchedules, err := store.ScheduledMessagesForConversation(ownerID)
+		require.NoError(t, err)
+		_, err = store.db.ExecContext(ctx, `ALTER TABLE managed_conversations ADD CONSTRAINT reject_effect_progress CHECK (producer_effects_through_id = 0) NOT VALID`)
+		require.NoError(t, err)
+
+		outbound := source.newOutboundMessage(msg, "turn-cron", "report", true)
+		require.ErrorContains(t, source.postCronRoot(ctx, outbound), "reject_effect_progress")
+		readFinal(t, roots)
+
+		inbound, through, err = (stateDAO{db: store.db}).producer(ctx, msg.ConversationID)
+		require.NoError(t, err)
+		require.Equal(t, ownerID, inbound.SyncDestination, "delivered binding must survive projection failure")
+		require.Zero(t, through)
+
+		afterSchedules, err := store.ScheduledMessagesForConversation(ownerID)
+		require.NoError(t, err)
+		require.Equal(t, beforeSchedules, afterSchedules, "failed cursor write must roll back schedule/reset effects")
+
+		_, err = store.db.ExecContext(ctx, `ALTER TABLE managed_conversations DROP CONSTRAINT reject_effect_progress`)
+		require.NoError(t, err)
+		require.NoError(t, source.postCronRoot(ctx, outbound))
+		readFinal(t, roots)
+
+		thread, recorded, err := store.Thread(ownerID)
+		require.NoError(t, err)
+		require.True(t, recorded)
+		require.Equal(t, "selected", thread.Agent, "delivery replay must preserve the canonical selection")
+
+		afterEntries, err := store.ObserveEntries(ctx, ownerID)
+		require.NoError(t, err)
+		require.Equal(t, beforeEntries, afterEntries, "effects must apply even with zero inserted history rows")
+
+		inbound, through, err = (stateDAO{db: store.db}).producer(ctx, msg.ConversationID)
+		require.NoError(t, err)
+		require.Equal(t, ownerID, inbound.SyncDestination)
+		require.Equal(t, sourceEntries[2].ID, through)
+
+		scheduled, err := store.ScheduledMessagesForConversation(ownerID)
+		require.NoError(t, err)
+		require.Len(t, scheduled, 1)
+
+		for _, message := range scheduled {
+			require.Equal(t, expected, message, "projection preserves the due time and recurring cadence")
+		}
+	})
+
 	synctest.Test(t, func(t *testing.T) {
 		store := newTestSessionService(t)
 		workspace := t.TempDir()
@@ -255,7 +349,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		shutdown := runTestManager(t, rt.threads)
 		defer func() { require.NoError(t, shutdown()) }()
 
-		for _, id := range []string{"X", "Y"} {
+		for _, id := range []string{"X", "Y", "Z"} {
 			require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}))
 			_, err := store.toggleSessionTag(ctx, id, id+"-tag", []string{id + "-tag"})
 			require.NoError(t, err)
@@ -295,12 +389,16 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		source := rt.threads.bridges["X"].(*Bridge)
 		source.mu.Lock()
 		source.pendingOutput.Agent, source.pendingOutput.Model, source.pendingOutput.ReasoningEffort = "producer", "work/producer", new("high")
-		// A scheduled cron has no Slack destination until it has a visible report.
-		source.activeReply = &protocol.InboundMessage{RequireOutputDecision: true}
+		source.activeReply = producer
 		source.mu.Unlock()
+		require.NoError(t, startTurnDB(ctx, store.db, "producer-effects", "X", producer))
 		require.NoError(t, source.ScheduleMessage(time.Hour, "discard before sync", false))
 		require.NoError(t, source.ResetScheduledMessages())
 		require.NoError(t, source.ScheduleMessage(time.Hour, "after sync", false))
+		endTestTurn(t, store, "X", "producer-effects", protocol.TerminalComplete)
+		source.mu.Lock()
+		source.activeReply = nil
+		source.mu.Unlock()
 		// A copied row's ID, not timestamp magnitude, determines the last update.
 		_, err := store.AppendEntryID(ctx, "X", &rocketcode.SessionEntry{Timestamp: time.Unix(1, 123456789).UTC()})
 		require.NoError(t, err)
@@ -356,6 +454,10 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		afterSchedules, err := store.ScheduledMessagesForConversation("Y")
 		require.NoError(t, err)
 		require.Equal(t, beforeSchedules, afterSchedules)
+
+		_, through, err := (stateDAO{db: store.db}).producer(ctx, "X")
+		require.NoError(t, err)
+		require.Zero(t, through, "failed Sync must not advance producer effects")
 
 		_, err = store.db.ExecContext(ctx, `ALTER TABLE session_summaries DROP CONSTRAINT reject_sync_summary`)
 		require.NoError(t, err)
@@ -494,6 +596,36 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		entries, err = store.ObserveEntries(ctx, "Y")
 		require.NoError(t, err)
 		require.Equal(t, destinationEntries, entries, "subsequent Sync must not duplicate copied entries")
+
+		for id, message := range scheduled {
+			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, message.Message, false)
+			inbound.ConversationID = "Y"
+			request := &bridgeRequest{inbound: inbound, scheduledMessageID: id}
+			admitted, err := rt.threads.bridges["Y"].(*Bridge).activateInbound(ctx, request)
+			require.NoError(t, err)
+			require.True(t, admitted)
+			endTestTurn(t, store, "Y", request.turnID, protocol.TerminalComplete)
+		}
+
+		require.NoError(t, store.PutScheduledMessage("Z-existing", &protocol.ScheduledMessageState{ConversationID: "Z", Agent: "main", Message: "keep Z", DueAt: time.Now().Add(time.Hour)}))
+		beforeZ, err := store.ScheduledMessagesForConversation("Z")
+		require.NoError(t, err)
+
+		for _, pair := range [][2]string{{"X", "Y"}, {"X", "Z"}, {"Y", "Z"}} {
+			require.NoError(t, rt.SyncConversation(ctx, pair[0], pair[1]))
+		}
+
+		scheduled, err = store.ScheduledMessagesForConversation("Y")
+		require.NoError(t, err)
+		require.Empty(t, scheduled, "repeated Sync must not rearm a consumed one-shot")
+
+		afterZ, err := store.ScheduledMessagesForConversation("Z")
+		require.NoError(t, err)
+		require.Equal(t, beforeZ, afterZ, "alternate and onward history copies must not replay schedules or resets")
+
+		zEntries, err := store.ObserveEntries(ctx, "Z")
+		require.NoError(t, err)
+		require.Greater(t, len(zEntries), len(sourceEntries), "both copies still expose history")
 
 		beforeDelete, err := store.ListSessions(ctx, []string{"Y"})
 		require.NoError(t, err)

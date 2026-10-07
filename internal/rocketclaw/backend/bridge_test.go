@@ -2117,30 +2117,51 @@ func TestBridgeScheduleMessageLogsPersistFailure(t *testing.T) {
 }
 
 func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		service := newTestSessionService(t)
-		threadKey := protocol.SlackThreadConversationID("D123", "111.222")
-		privateConversationID := "external_mcp:planner:private"
+	newBridge, service, requests, finals := newResumeTestBridges(t, false)
+	cfg := newBridge().runtime
+	threadKey := newBridge().config.ConversationID
+	privateConversationID := "external_mcp:planner:private"
 
-		require.NoError(t, service.UpsertThread(threadKey, ThreadState{Agent: "planner"}))
-		require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: threadKey, SlackChannel: "ops"}))
+	writeAgent(t, cfg.Workspace, "selected", "---\ndescription: Selected\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nSelected canonical instructions\n")
+	require.NoError(t, service.UpsertThread(threadKey, ThreadState{Agent: "selected"}))
+	require.NoError(t, service.UpsertThread(privateConversationID, ThreadState{Agent: "planner"}))
+	require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: threadKey, SlackChannel: "ops"}))
+	_, err := service.AppendEntryID(t.Context(), threadKey, testSessionEntry("canonical context", "canonical history"))
+	require.NoError(t, err)
 
-		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: privateConversationID, Agent: "planner", ManagedConversationID: threadKey, ExternalConversationID: "public-1", SessionService: service}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
-		require.NoError(t, bridge.ScheduleMessage(5*time.Second, "later", false))
+	inbound := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "producer context", true)
+	inbound.ConversationID, inbound.SyncDestination = privateConversationID, threadKey
+	require.NoError(t, startTurnDB(t.Context(), service.db, "producer", privateConversationID, inbound))
+	bridge := NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: privateConversationID, Agent: "planner", SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge.activeReply = inbound
+	require.NoError(t, bridge.ScheduleMessage(100*time.Millisecond, "later", false))
+	_, err = service.finishTurn(t.Context(), "producer", &turnFinish{store: newSessionStore(privateConversationID, service), entries: []rocketcode.SessionEntry{*testSessionEntry("producer context", "producer answer")}, outbound: protocol.NewOutboundMessage(privateConversationID, "")})
+	require.NoError(t, err)
+	require.NoError(t, service.closeTurn(t.Context(), "producer"))
 
-		time.Sleep(5 * time.Second)
-		synctest.Wait()
+	manager, _ := newTestBridgeManager(t, cfg, service, finals)
+	require.NoError(t, manager.StartPendingScheduledMessages())
+	final := readFinal(t, finals)
+	assert.Equal(t, threadKey, final.ConversationID)
+	assert.Equal(t, "selected", final.Agent)
+	assert.Nil(t, final.SlackReply, "routing comes from the canonical Slack ID, not an inherited reply")
+	assert.Nil(t, final.Cronjob)
 
-		select {
-		case request := <-bridge.requestCh:
-			require.NotNil(t, request.inbound)
-			assert.Equal(t, "later", request.inbound.Text)
-			assert.Equal(t, privateConversationID, request.inbound.ConversationID)
-			assert.Nil(t, request.inbound.SlackReply)
-		case <-time.After(time.Nanosecond):
-			t.Fatal("scheduled external MCP message was not submitted")
-		}
-	})
+	body := <-requests
+	assert.Contains(t, body, "Selected canonical instructions")
+	assert.Contains(t, body, "canonical context")
+	assert.Contains(t, body, "producer context")
+
+	var request struct {
+		Input []struct{ Role, Content string }
+	}
+
+	require.NoError(t, json.Unmarshal([]byte(body), &request))
+	assert.Equal(t, "user", request.Input[len(request.Input)-1].Role)
+	assert.Equal(t, "[System additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nlater", request.Input[len(request.Input)-1].Content)
+	entries, err := service.ObserveEntries(t.Context(), privateConversationID)
+	require.NoError(t, err)
+	assert.Len(t, entries, 2, "the canonical scheduled turn does not enter private history")
 }
 
 func TestBridgeInterruptCancelsTurnWaitingForPairedSession(t *testing.T) {

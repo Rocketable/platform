@@ -1148,16 +1148,7 @@ func (s *Server) agentChoices(ctx context.Context, id string) ([]string, error) 
 				continue
 			}
 
-			for _, channel := range s.cfg.Slack.Channels {
-				if channel.Channel != job.TextChannel {
-					continue
-				}
-
-				allowed := slices.DeleteFunc(slices.Clone(channel.Agents), func(name string) bool { return !slices.Contains(choices, name) })
-				if len(allowed) > 0 {
-					return allowed, nil
-				}
-			}
+			return s.cfg.CronWebAgentChoices(choices, &job), nil
 		}
 	}
 

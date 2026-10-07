@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	harness "github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	migrate "github.com/rubenv/sql-migrate"
@@ -266,7 +269,7 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			}
 
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&n))
-			require.Equal(t, 28, n)
+			require.Equal(t, 29, n)
 			// No migration lock may survive startup and poison later pool users.
 			require.Eventually(t, func() bool {
 				var locks int
@@ -331,7 +334,7 @@ func TestSessionMigrationsSerializeLedgerCreation(t *testing.T) {
 
 			var count int
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-			require.Equal(t, 28, count)
+			require.Equal(t, 29, count)
 		})
 	}
 }
@@ -385,7 +388,7 @@ func TestSessionMigrationRollbackAndCatchup(t *testing.T) {
 
 	var n int
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM pg_migrations`).Scan(&n))
-	require.Equal(t, 26, n)
+	require.Equal(t, 27, n)
 
 	var missing sql.NullString
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT to_regclass('slack_channel_facts')::text`).Scan(&missing))
@@ -442,6 +445,114 @@ INSERT INTO session_tags (conversation_id, tags) VALUES
 		`visible-missing=["customer"]`,
 		`visible-tagged=["kept"]`,
 	}, tags)
+}
+
+func TestProducerHandoffMigration(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	cfg, err := pgx.ParseConfig(dsn)
+	require.NoError(t, err)
+
+	db := stdlib.OpenDB(*cfg)
+	defer func() { require.NoError(t, db.Close()) }()
+
+	ctx := t.Context()
+	_, err = (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(ctx, db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Up, 28)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES
+    ('recoverable', 'main', ''), ('projected', 'main', ''), ('silent', 'main', 'cron'),
+    ('delivered', 'main', 'cron'), ('legacy', 'main', ''), ('onward', 'main', ''), ('ordinary', 'main', '');
+INSERT INTO session_entries (id, conversation_id, entry_json, entry_timestamp) VALUES
+    (10, 'recoverable', '{"type":"producer_reset_schedules"}', ''),
+    (11, 'recoverable', '{"type":"producer_schedule"}', ''),
+    (12, 'recoverable', '{"type":"producer_reset_schedules"}', ''),
+    (13, 'recoverable', '{"type":"producer_schedule"}', ''),
+    (20, 'projected', '{"type":"producer_schedule"}', ''),
+    (30, 'silent', '{"type":"producer_schedule"}', ''),
+    (40, 'legacy', '{"type":"producer_reset_schedules"}', ''),
+    (50, 'delivered', '{"type":"producer_schedule"}', ''),
+    (101, 'owner', '{"type":"producer_schedule","sync_source_entry_id":11,"sync_source_conversation_id":"recoverable"}', ''),
+    (102, 'alternate', '{"type":"producer_reset_schedules","sync_source_entry_id":12,"sync_source_conversation_id":"recoverable"}', ''),
+    (103, 'owner', '{"type":"producer_schedule","sync_source_entry_id":20}', ''),
+    (104, 'onward', '{"type":"producer_reset_schedules","sync_source_entry_id":40}', ''),
+    (105, 'slack-thread:C1:1.2', '{"type":"producer_schedule","sync_source_entry_id":50}', '');
+SELECT setval(pg_get_serial_sequence('session_entries', 'id'), 105);
+INSERT INTO active_turns (id, conversation_id, inbound_json, output_trace_json, history_anchor_id, created_at_unix_ns, updated_at_unix_ns, phase) VALUES
+    ('active', 'recoverable', '{"ConversationID":"recoverable","SyncDestination":"owner"}', '[]', 10, 1, 1, 'running'),
+    ('already', 'projected', '{"ConversationID":"projected","SyncDestination":"owner"}', '[]', 19, 1, 1, 'delivering'),
+    ('cron', 'silent', '{"ConversationID":"silent","RequireOutputDecision":true}', '[]', 29, 1, 1, 'running'),
+    ('report', 'delivered', '{"ConversationID":"delivered","RequireOutputDecision":true}', '[]', 49, 1, 1, 'delivering');
+INSERT INTO turn_steps (conversation_id, key, value) VALUES
+    ('recoverable', 'active/tool/schedule', '{"output":"scheduled"}'),
+    ('delivered', 'report/cron-root', '{"ChannelID":"C1","MessageID":"1.2"}');
+INSERT INTO scheduled_messages (scheduled_message_id, conversation_id, agent, message, due_at_unix_ns, recurring, interval_ns) VALUES
+    ('kept', 'owner', 'selected', 'existing schedule', 123, 1, 456);`)
+	require.NoError(t, err)
+	require.NoError(t, initializeSessionDB(ctx, db, slog.New(slog.DiscardHandler)))
+	dao := stateDAO{db: db}
+
+	for _, tc := range []struct {
+		id, owner string
+		through   int64
+		pending   []int64
+	}{
+		{"recoverable", "owner", 11, []int64{12, 13}},
+		{"projected", "owner", 20, nil},
+		{"silent", "", 0, []int64{30}},
+		{"delivered", "slack-thread:C1:1.2", 50, nil},
+		{"legacy", "", 40, nil},
+		{"onward", "", 0, nil},
+		{"ordinary", "", 0, nil},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			routing, through, err := dao.producer(t.Context(), tc.id)
+			require.NoError(t, err)
+			require.Equal(t, tc.through, through)
+
+			if tc.id == "legacy" || tc.id == "onward" || tc.id == "ordinary" {
+				require.Nil(t, routing)
+			} else {
+				require.NotNil(t, routing)
+				require.Equal(t, tc.owner, routing.SyncDestination)
+			}
+
+			effects, err := dao.producerEffects(t.Context(), tc.id, through)
+			require.NoError(t, err)
+
+			ids := make([]int64, 0, len(effects))
+			for i := range effects {
+				ids = append(ids, effects[i].ID)
+			}
+
+			require.True(t, slices.Equal(tc.pending, ids), "pending effect IDs = %v, want %v", ids, tc.pending)
+		})
+	}
+
+	store := &SessionService{db: db}
+	step, found, err := store.LoadTurnStep(ctx, "recoverable", "active/tool/schedule")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.JSONEq(t, `{"output":"scheduled"}`, string(step), "the scheduling result remains available to journal replay")
+
+	_, err = store.finishTurn(ctx, "active", &turnFinish{store: newSessionStore("recoverable", store), outbound: protocol.NewOutboundMessage("recoverable", "")})
+	require.NoError(t, err)
+	require.NoError(t, store.closeTurn(ctx, "active"))
+	ids, err := store.pendingProducerIDs(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"recoverable"}, ids)
+
+	newID, err := store.AppendEntryID(ctx, "recoverable", &harness.SessionEntry{Version: 1, Type: producerResetEntryType})
+	require.NoError(t, err)
+	require.Greater(t, newID, int64(13))
+
+	effects, err := dao.producerEffects(ctx, "recoverable", 11)
+	require.NoError(t, err)
+	require.Len(t, effects, 3)
+
+	messages, err := dao.scheduledMessages(ctx, "")
+	require.NoError(t, err)
+	require.Equal(t, map[string]protocol.ScheduledMessageState{"kept": {ConversationID: "owner", Agent: "selected", Message: "existing schedule", DueAt: time.Unix(0, 123).UTC(), Recurring: true, Interval: 456}}, messages)
 }
 
 func TestSessionMigrationUnlockFailureDiscardsConnection(t *testing.T) {

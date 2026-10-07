@@ -187,6 +187,16 @@ access. Paired threads retain their stored metadata when continued from the web.
 
 Every active `cron/*.md` definition declares a quoted `channel` that matches a configured Slack channel. Empty completion output is silent; non-empty output starts a fresh managed thread in that channel.
 
+Scheduled follow-ups run in the destination conversation with its history and
+selected agent, not in the private cron or External MCP run. A silent cron with
+no destination creates or reuses a web-only conversation when its first pending
+follow-up becomes due. Later follow-ups reuse it, including after a restart;
+they do not post to Slack. Silence applies to the original report, not to future
+scheduled work. Opening a cron's history in Web does not claim its follow-ups or
+rearm schedules that have already run.
+If creating the destination or copying pending work fails temporarily, RocketClaw
+keeps that work saved and tries again after one second while the conversation worker runs.
+
 #### Agent session inspection
 
 Agents can inspect durable conversations with `rocketclaw_current_session_id`,

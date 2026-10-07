@@ -2,7 +2,6 @@ package backend
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,16 +27,7 @@ func (r *Runtime) CreateConversation(ctx context.Context, conversation protocol.
 		return err
 	}
 
-	summary, err := loadSessionSummary(ctx, tx, conversation.ID)
-	if err != nil {
-		return err
-	}
-
-	if _, err := tx.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, $2, $3) ON CONFLICT (conversation_id) DO NOTHING`, conversation.ID, conversation.Agent, conversation.CreatedBy); err != nil {
-		return fmt.Errorf("create conversation: %w", err)
-	}
-
-	if err := saveSessionSummary(ctx, tx, summary); err != nil {
+	if err := (stateDAO{db: tx}).createConversation(ctx, conversation); err != nil {
 		return err
 	}
 
@@ -89,11 +79,6 @@ func (r *Runtime) SyncConversation(ctx context.Context, source, destination stri
 func (b *Bridge) syncConversation(ctx context.Context, source *Bridge) error {
 	store := b.config.SessionService
 
-	entries, err := store.ObserveEntries(ctx, source.config.ConversationID)
-	if err != nil {
-		return err
-	}
-
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin conversation sync: %w", err)
@@ -101,7 +86,19 @@ func (b *Bridge) syncConversation(ctx context.Context, source *Bridge) error {
 
 	defer func() { _ = tx.Rollback() }()
 
-	if err := lockSessionHistory(ctx, tx, b.config.ConversationID); err != nil {
+	ids := []string{source.config.ConversationID, b.config.ConversationID}
+	slices.Sort(ids)
+
+	for _, id := range ids {
+		if err := lockSessionHistory(ctx, tx, id); err != nil {
+			return err
+		}
+	}
+
+	dao := stateDAO{db: tx}
+
+	entries, err := dao.observedEntries(ctx, source.config.ConversationID)
+	if err != nil {
 		return err
 	}
 
@@ -111,8 +108,6 @@ func (b *Bridge) syncConversation(ctx context.Context, source *Bridge) error {
 	}
 
 	changed := false
-
-	schedules := map[string]protocol.ScheduledMessageState{}
 
 	for i := range entries {
 		observed := &entries[i]
@@ -150,29 +145,11 @@ WHERE NOT EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1 AND e
 		if err := projectSessionSummary(&summary, &entry, entry.Timestamp.UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
+	}
 
-		switch entry.Type {
-		case producerScheduleEntryType:
-			var scheduled protocol.ScheduledMessageState
-			if err := json.Unmarshal(entry.OutputTrace[0], &scheduled); err != nil {
-				return fmt.Errorf("decode synced schedule: %w", err)
-			}
-
-			scheduled.ConversationID, scheduled.Agent = b.config.ConversationID, b.agentSnapshot()
-
-			id := rand.Text()
-			if err := (stateDAO{db: tx}).putScheduledMessage(ctx, id, &scheduled); err != nil {
-				return err
-			}
-
-			schedules[id] = scheduled
-		case producerResetEntryType:
-			if err := (stateDAO{db: tx}).resetScheduledMessages(ctx, b.config.ConversationID); err != nil {
-				return err
-			}
-
-			clear(schedules)
-		}
+	schedules, err := dao.projectProducerEffects(ctx, source.config.ConversationID, b.config.ConversationID, b.agentSnapshot())
+	if err != nil {
+		return err
 	}
 
 	if changed {

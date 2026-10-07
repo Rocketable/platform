@@ -157,11 +157,14 @@ func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
 		{ConversationID: protocol.SlackThreadConversationID("D123", "111.222"), Agent: "planner", StartNewThread: inertStartNewThread, SessionService: store},
 		{ConversationID: protocol.SlackThreadConversationID("D123", "333.444"), Agent: "helper", StartNewThread: inertStartNewThread, SessionService: store},
 	} {
-		bridge := NewConversation(&config.Config{Workspace: workspace}, nil, &cfg, slog.New(slog.DiscardHandler))
+		bridge := NewConversation(&config.Config{Workspace: workspace}, discardPublisher{}, &cfg, slog.New(slog.DiscardHandler))
+		require.NoError(t, store.UpsertThread(cfg.ConversationID, ThreadState{Agent: cfg.Agent}))
 		require.NoError(t, startTestBridge(t.Context(), bridge))
 		require.NoError(t, bridge.ScheduleMessage(time.Hour, "later", false))
 		require.NoError(t, bridge.Stop())
 	}
+
+	require.NoError(t, store.UpsertThread(protocol.SlackThreadConversationID("D123", "111.222"), ThreadState{Agent: "selected"}))
 
 	created := make([]Config, 0, 2)
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
@@ -173,7 +176,7 @@ func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
 	require.NoError(t, manager.StartPendingScheduledMessages())
 	require.Len(t, created, 2)
 	assert.ElementsMatch(t, []Config{
-		{ConversationID: protocol.SlackThreadConversationID("D123", "111.222"), Agent: "planner", UserQuestionAsker: protocol.NoUserQuestionAsker()},
+		{ConversationID: protocol.SlackThreadConversationID("D123", "111.222"), Agent: "selected", UserQuestionAsker: protocol.NoUserQuestionAsker()},
 		{ConversationID: protocol.SlackThreadConversationID("D123", "333.444"), Agent: "helper", UserQuestionAsker: protocol.NoUserQuestionAsker()},
 	}, created)
 }

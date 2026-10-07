@@ -112,7 +112,8 @@ func TestLoadDefinitionsLoadsMarkdownAndSkipsTemplates(t *testing.T) {
 		t.Fatalf("definition = %#v; want daily worker body", def)
 	}
 
-	if len(def.schedules) != 2 || def.schedules[0].duration.String() != "15m0s" || def.schedules[1].parsed == nil {
+	now := time.Date(2026, time.May, 21, 0, 0, 0, 0, time.UTC)
+	if len(def.schedules) != 2 || !def.schedules[0].Next(now).Equal(now.Add(15*time.Minute)) || !def.schedules[1].Next(now).Equal(now.Add(8*time.Hour)) {
 		t.Fatalf("schedules = %#v; want duration and cron", def.schedules)
 	}
 }
@@ -385,12 +386,13 @@ func TestStartRejectsAlreadyStartedManager(t *testing.T) {
 func TestParseScheduleTimestamp(t *testing.T) {
 	dueAt := "2026-05-21T15:04:05.123456789Z"
 
-	schedule, err := parseSchedule(dueAt)
+	definition, err := loadDefinition([]byte("---\nschedule: '"+dueAt+"'\nchannel: '#ops'\n---\nJob"), "cron/daily.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if schedule.dueAt.Format(time.RFC3339Nano) != dueAt || schedule.duration != 0 || schedule.parsed != nil {
+	schedule := definition.schedules[0]
+	if schedule.DueAt.Format(time.RFC3339Nano) != dueAt || schedule.Raw != dueAt {
 		t.Fatalf("schedule = %#v; want timestamp-only schedule", schedule)
 	}
 }

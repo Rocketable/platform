@@ -1777,6 +1777,17 @@ func TestSessionEntries(t *testing.T) {
 	_, err = invoke[HistoryResponse](t.Context(), connection, "History", &HistoryRequest{Id: undelivered})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
 	t.Run("open cron as writable web chat", func(t *testing.T) {
+		producer := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "silent cron", false)
+		producer.ConversationID, producer.RequireOutputDecision = undelivered, true
+		routing, err := json.Marshal(producer)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET producer_inbound_json = $2::json WHERE conversation_id = $1`, undelivered, string(routing))
+		require.NoError(t, err)
+		schedule, err := json.Marshal(protocol.ScheduledMessageState{ConversationID: undelivered, Agent: "producer", Message: "later", DueAt: time.Now().Add(time.Hour)})
+		require.NoError(t, err)
+		effectID, err := sessions.AppendEntryID(ctx, undelivered, &rocketcode.SessionEntry{Version: 1, Type: "producer_schedule", Timestamp: entry.Timestamp, OutputTrace: []json.RawMessage{schedule}})
+		require.NoError(t, err)
+
 		path := filepath.Join(cfg.RuntimeDirName(), "cron", "silent.md")
 
 		require.NoError(t, root.WriteFile(path, []byte("---\nschedule: 24h\nagent: planner\nchannel: '#ops'\n---\nSilent\n"), 0o600))
@@ -1788,7 +1799,7 @@ func TestSessionEntries(t *testing.T) {
 		cfg.Slack.Channels[0].Agents = []string{"missing", "selected", "main"}
 		request := &CreateSessionRequest{SourceConversationId: undelivered}
 		core.SyncConversationFunc = func(context.Context, string, string) error { return errors.New("sync interrupted") }
-		_, err := invoke[CreateSessionResponse](ctx, connection, "CreateSession", request)
+		_, err = invoke[CreateSessionResponse](ctx, connection, "CreateSession", request)
 		require.ErrorContains(t, err, "sync interrupted")
 		// The RPC delegates history copying to SyncConversation; its transaction and
 		// concurrent deduplication are covered by backend runtime tests.
@@ -1815,6 +1826,7 @@ func TestSessionEntries(t *testing.T) {
 		}
 
 		webID := ids[0]
+		require.Equal(t, "web:"+undelivered, webID)
 		_, _, slack := protocol.SlackThreadTarget(webID)
 		require.False(t, slack)
 
@@ -1841,6 +1853,15 @@ func TestSessionEntries(t *testing.T) {
 		}
 
 		require.Equal(t, 1, count)
+
+		var (
+			owner   string
+			through int64
+		)
+
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT producer_inbound_json->>'SyncDestination', producer_effects_through_id FROM managed_conversations WHERE conversation_id = $1`, undelivered).Scan(&owner, &through))
+		require.Empty(t, owner, "opening Web cannot bind a still-unresolved cron")
+		require.Zero(t, through, "history-only opening cannot consume the pending effect")
 		// Seed the persisted provenance produced by the real SyncConversation.
 		_, err = db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) SELECT $1, (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id))::json, entry_timestamp FROM session_entries WHERE id=$2`, webID, traceEntryID)
 		require.NoError(t, err)
@@ -1863,6 +1884,10 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, trace.Messages, history.Messages)
 		require.True(t, history.Reset_)
 		require.NotEmpty(t, history.Revision)
+		// The backend tests exercise delivery binding and atomic effect consumption.
+		// Model their resulting facts here; reopening Web must leave them untouched.
+		_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET producer_inbound_json = jsonb_set(producer_inbound_json::jsonb, '{SyncDestination}', to_jsonb($2::text))::json, producer_effects_through_id = $3 WHERE conversation_id = $1`, undelivered, id, effectID)
+		require.NoError(t, err)
 
 		_, err = sessions.AppendEntryID(ctx, webID, &rocketcode.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"later"}`)}})
 		require.NoError(t, err)
@@ -1935,6 +1960,13 @@ func TestSessionEntries(t *testing.T) {
 		thread, _, err = sessions.Thread(webID)
 		require.NoError(t, err)
 		require.Equal(t, "selected", thread.Agent, "reopening preserves the user's selection")
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT producer_inbound_json->>'SyncDestination', producer_effects_through_id FROM managed_conversations WHERE conversation_id = $1`, undelivered).Scan(&owner, &through))
+		require.Equal(t, id, owner, "reopening an alternate history destination cannot replace the delivered owner")
+		require.Equal(t, effectID, through, "consumed effects remain consumed")
+
+		pending, err := sessions.ScheduledMessagesForConversation(webID)
+		require.NoError(t, err)
+		require.Empty(t, pending)
 
 		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: webID, Text: "Continue this run", Delivery: PromptDelivery_QUEUE})
 		require.NoError(t, err)

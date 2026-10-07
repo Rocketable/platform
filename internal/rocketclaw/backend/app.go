@@ -287,10 +287,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		Config.StartNewThread = threadBridges.StartNewThread
 		Config.SessionService = rocketcodeSessions
 
-		bridge := NewConversation(cfg, rt, &Config, logger)
-		bridge.threads = threadBridges
-
-		return bridge
+		return NewConversation(cfg, rt, &Config, logger)
 	})
 
 	var bridgeLoops errgroup.Group

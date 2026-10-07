@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -23,33 +24,64 @@ import (
 )
 
 func TestSubmitExternalMCPInputPreservesPublicConversationMetadata(t *testing.T) {
-	var captured *protocol.InboundMessage
+	for _, private := range []bool{false, true} {
+		t.Run(strconv.FormatBool(private), func(t *testing.T) {
+			var captured *protocol.InboundMessage
 
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+			conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+			destination := ""
 
-	turns := mcpTurns(func(inbound *protocol.InboundMessage) error {
-		captured = inbound
-		inbound.CompleteResponseWithAttachments("answer", nil, nil)
-		return nil
-	})
-	turns.CreateConversationFunc = func(_ context.Context, conversation protocol.Conversation) error {
-		assert.Equal(t, "planner", conversation.Agent)
-		assert.Equal(t, conversationID, conversation.ID)
-		return nil
+			var reply *protocol.InboundMessage
+
+			if private {
+				destination = conversationID
+				conversationID = "external_mcp:planner:private"
+				reply = &protocol.InboundMessage{SlackReply: &protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.222"}}
+			}
+
+			turns := mcpTurns(func(inbound *protocol.InboundMessage) error {
+				captured = inbound
+				inbound.CompleteResponseWithAttachments("answer", nil, nil)
+
+				return nil
+			})
+			turns.CreateConversationFunc = func(_ context.Context, conversation protocol.Conversation) error {
+				assert.Equal(t, "planner", conversation.Agent)
+				assert.Equal(t, conversationID, conversation.ID)
+
+				return nil
+			}
+			turns.SyncConversationFunc = func(_ context.Context, source, target string) error {
+				require.NotNil(t, captured, "the producer must run before Sync")
+				assert.Equal(t, conversationID, source)
+				assert.Equal(t, destination, target)
+
+				return nil
+			}
+
+			content := &protocol.InboundContent{Text: "prompt"}
+			result, accepted, err := submitExternalMCPInput(context.Background(), turns, "planner", conversationID, content, map[string]string{"ticket": "123"}, "alice", reply, "public-1")
+
+			require.NoError(t, err)
+			assert.True(t, accepted)
+			require.NotNil(t, captured)
+			assert.Equal(t, protocol.SourceExternalMCP, captured.Source)
+			assert.Equal(t, "public-1", captured.Metadata["external_conversation_id"])
+			assert.Equal(t, "123", captured.Metadata["ticket"])
+			assert.Equal(t, "alice", captured.Metadata[protocol.InboundPrincipalMetadataKey])
+			assert.Equal(t, conversationID, captured.ConversationID)
+			assert.Equal(t, destination, captured.SyncDestination)
+			assert.False(t, captured.RequireOutputDecision, "MCP output does not use the cron decision contract")
+
+			if private {
+				assert.Equal(t, reply.SlackReply, captured.SlackReply)
+			} else {
+				assert.Nil(t, captured.SlackReply)
+			}
+
+			assert.Equal(t, externalmcp.SessionResult{ExternalConversationID: "public-1", Agent: "planner", Answer: "answer", Attachments: []externalmcp.SessionAttachment{}}, result)
+		})
 	}
-
-	content := &protocol.InboundContent{Text: "prompt"}
-	result, accepted, err := submitExternalMCPInput(context.Background(), turns, "planner", conversationID, content, map[string]string{"ticket": "123"}, "alice", nil, "public-1")
-
-	require.NoError(t, err)
-	assert.True(t, accepted)
-	require.NotNil(t, captured)
-	assert.Equal(t, protocol.SourceExternalMCP, captured.Source)
-	assert.Equal(t, "public-1", captured.Metadata["external_conversation_id"])
-	assert.Equal(t, "123", captured.Metadata["ticket"])
-	assert.Equal(t, "alice", captured.Metadata[protocol.InboundPrincipalMetadataKey])
-	assert.Nil(t, captured.SlackReply)
-	assert.Equal(t, externalmcp.SessionResult{ExternalConversationID: "public-1", Agent: "planner", Answer: "answer", Attachments: []externalmcp.SessionAttachment{}}, result)
 }
 
 func TestSubmitExternalMCPInputWaitsForOwnQueuedTurnResult(t *testing.T) {
@@ -176,10 +208,12 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
 		SendExternalMCPRelayFunc: func(_ context.Context, _, threadTS string, _ *protocol.ExternalMCPRelay) (*protocol.SlackReplyTarget, error) {
 			mu.Lock()
 			defer mu.Unlock()
+
 			if threadTS == "" {
 				rootCount++
 				return &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}, nil
 			}
+
 			return &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: threadTS, ThreadTS: threadTS}, nil
 		},
 	}
@@ -255,6 +289,7 @@ func TestExternalMCPRepeatedIDKeepsLockedAgentAndRejectsChannelMismatch(t *testi
 			if threadTS == "" {
 				return &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}, nil
 			}
+
 			return &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: threadTS, ThreadTS: threadTS}, nil
 		},
 	}
@@ -306,11 +341,13 @@ func TestSubmitExternalMCPInputReturnsAfterSubmitAgent(t *testing.T) {
 		inbound.CompleteResponseWithAttachments("answer", nil, nil)
 		close(started)
 		<-release
+
 		return nil
 	})
 
 	resultCh := make(chan externalmcp.SessionResult, 1)
 	errCh := make(chan error, 1)
+
 	go func() {
 		result, _, err := submitExternalMCPInput(context.Background(), turns, "planner", "external_mcp:planner:x", &protocol.InboundContent{Text: "hello"}, nil, "", nil, "public-1")
 		if err != nil {
@@ -323,6 +360,7 @@ func TestSubmitExternalMCPInputReturnsAfterSubmitAgent(t *testing.T) {
 	}()
 
 	<-started
+
 	select {
 	case result := <-resultCh:
 		t.Fatalf("returned before submitAgent finished: %#v", result)
@@ -378,9 +416,11 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 			relay := &mcpRelayMock{
 				SendExternalMCPRelayFunc: func(context.Context, string, string, *protocol.ExternalMCPRelay) (*protocol.SlackReplyTarget, error) {
 					relayCalls++
+
 					if tt.relayErr != nil {
 						return nil, tt.relayErr
 					}
+
 					return &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}, nil
 				},
 				CleanupExternalMCPRelayFunc: func(context.Context, *protocol.SlackReplyTarget) { cleanupCalls++ },
@@ -393,6 +433,7 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 				if tt.submitErr != nil {
 					return tt.submitErr
 				}
+
 				switch {
 				case tt.cancelAfterSubmit:
 					cancel()
@@ -401,6 +442,7 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 				default:
 					inbound.CompleteResponseWithAttachments("answer", nil, nil)
 				}
+
 				return nil
 			})
 			cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}}}}
