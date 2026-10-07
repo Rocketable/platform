@@ -4,7 +4,6 @@ package cronfrontend
 import (
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -18,9 +17,8 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/robfig/cron/v3"
-	"sigs.k8s.io/yaml"
 )
 
 // Runner executes a producer through terminal delivery.
@@ -54,7 +52,7 @@ type cronScheduleStore interface {
 
 type definition struct {
 	relativePath, agent, textChannel, body string
-	schedules                              []schedule
+	schedules                              []config.CronSchedule
 }
 
 // Job is the read-only presentation of a loaded definition and its next triggers.
@@ -62,13 +60,6 @@ type Job struct {
 	RelativePath, Agent, TextChannel, Body string
 	Schedules                              []string
 	Upcoming                               []time.Time
-}
-
-type schedule struct {
-	raw      string
-	dueAt    time.Time
-	duration time.Duration
-	parsed   cron.Schedule
 }
 
 const (
@@ -141,11 +132,11 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.closed = false
 
 	for i := range definitions {
-		if len(definitions[i].schedules) == 1 && !definitions[i].schedules[0].dueAt.IsZero() {
+		if len(definitions[i].schedules) == 1 && !definitions[i].schedules[0].DueAt.IsZero() {
 			definition := definitions[i]
 
 			m.wg.Add(1)
-			go m.runOneOffTimer(runCtx, &definition, max(definition.schedules[0].dueAt.Sub(now), 0))
+			go m.runOneOffTimer(runCtx, &definition, max(definition.schedules[0].DueAt.Sub(now), 0))
 		}
 	}
 
@@ -188,51 +179,14 @@ func (m *Manager) Stop(ctx context.Context) error {
 
 // LoadOneOffCronjob resolves and loads one live cronjob for a managed Slack thread run.
 func (m *Manager) LoadOneOffCronjob(target string) (protocol.OneOffCronjob, error) {
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return protocol.OneOffCronjob{}, errors.New("cron target must be a top-level cron stem like daily or daily.md")
-	}
-
-	if strings.Contains(target, "/") || strings.Contains(target, `\`) || strings.Contains(target, string(filepath.Separator)) {
-		return protocol.OneOffCronjob{}, errors.New("cron target must be a top-level cron stem; nested paths are not allowed")
-	}
-
-	name := target
-	if before, ok := strings.CutSuffix(name, ".md"); ok {
-		name = before
-	} else if filepath.Ext(name) != "" {
-		return protocol.OneOffCronjob{}, errors.New("cron target must omit extensions other than .md")
-	}
-
-	name = strings.TrimSpace(name)
-	if name == "" || name == "." || name == ".." {
-		return protocol.OneOffCronjob{}, errors.New("cron target must be a top-level cron stem like daily or daily.md")
-	}
-
-	if strings.HasSuffix(name, ".example") {
-		return protocol.OneOffCronjob{}, errors.New("cron target must reference a real cron file, not an example template")
-	}
-
-	relativePath := filepath.ToSlash(filepath.Join("cron", name+".md"))
-
-	root, err := os.OpenRoot(m.workspace)
+	job, err := config.LoadOneOffCronjob(m.workspace, m.runtimeDir, target)
 	if err != nil {
-		return protocol.OneOffCronjob{}, fmt.Errorf("open workspace root: %w", err)
+		return protocol.OneOffCronjob{}, fmt.Errorf("load one-off cronjob: %w", err)
 	}
 
-	defer func() { _ = root.Close() }()
+	job.Prompt = m.preparePrompt(job.Prompt)
 
-	data, err := root.ReadFile(m.cronRelativePath(name + ".md"))
-	if err != nil {
-		return protocol.OneOffCronjob{}, fmt.Errorf("read cronjob %s: %w", relativePath, err)
-	}
-
-	definition, err := loadDefinition(data, relativePath)
-	if err != nil {
-		return protocol.OneOffCronjob{}, err
-	}
-
-	return protocol.OneOffCronjob{Agent: definition.agent, Prompt: m.preparePrompt(definition.body), RelativePath: relativePath, TextChannel: definition.textChannel}, nil
+	return job, nil
 }
 
 // Jobs returns loaded definitions and their next triggers in the next day.
@@ -258,13 +212,13 @@ func (m *Manager) Jobs() ([]Job, error) {
 	for _, definition := range definitions {
 		job := Job{RelativePath: definition.relativePath, Agent: definition.agent, TextChannel: definition.textChannel, Body: definition.body}
 		for i, schedule := range definition.schedules {
-			job.Schedules = append(job.Schedules, schedule.raw)
-			if !schedule.dueAt.IsZero() && !schedule.dueAt.Before(now) && !schedule.dueAt.After(now.Add(24*time.Hour)) {
-				job.Upcoming = append(job.Upcoming, schedule.dueAt)
+			job.Schedules = append(job.Schedules, schedule.Raw)
+			if !schedule.DueAt.IsZero() && !schedule.DueAt.Before(now) && !schedule.DueAt.After(now.Add(24*time.Hour)) {
+				job.Upcoming = append(job.Upcoming, schedule.DueAt)
 			}
 
 			for _, trigger := range triggers {
-				if trigger.ScheduleID == scheduleID(definition.relativePath, i, schedule.raw) && !trigger.NextDue.Before(now) {
+				if trigger.ScheduleID == scheduleID(definition.relativePath, i, schedule.Raw) && !trigger.NextDue.Before(now) {
 					job.Upcoming = append(job.Upcoming, trigger.NextDue)
 				}
 			}
@@ -411,7 +365,7 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 
 	type scheduledDefinition struct {
 		definition definition
-		schedule   schedule
+		schedule   config.CronSchedule
 	}
 
 	scheduledDefinitions := map[string]scheduledDefinition{}
@@ -419,11 +373,11 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 	for i := range definitions {
 		definition := definitions[i]
 		for index, schedule := range definition.schedules {
-			if !schedule.dueAt.IsZero() {
+			if !schedule.DueAt.IsZero() {
 				continue
 			}
 
-			id := scheduleID(definition.relativePath, index, schedule.raw)
+			id := scheduleID(definition.relativePath, index, schedule.Raw)
 			scheduledDefinitions[id] = scheduledDefinition{definition: definition, schedule: schedule}
 		}
 	}
@@ -442,7 +396,7 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 			continue
 		}
 
-		relativePath, ok, err := m.store.ClaimCronSchedule(state, scheduled.schedule.next(now), now)
+		relativePath, ok, err := m.store.ClaimCronSchedule(state, scheduled.schedule.Next(now), now)
 		if err != nil {
 			return fmt.Errorf("claim cron schedule: %w", err)
 		}
@@ -499,14 +453,14 @@ func (m *Manager) scheduledStates(definitions []definition, now time.Time) []bac
 	for i := range definitions {
 		definition := definitions[i]
 		for index, schedule := range definition.schedules {
-			if !schedule.dueAt.IsZero() {
+			if !schedule.DueAt.IsZero() {
 				continue
 			}
 
 			states = append(states, backend.CronScheduleState{
-				ScheduleID:   scheduleID(definition.relativePath, index, schedule.raw),
+				ScheduleID:   scheduleID(definition.relativePath, index, schedule.Raw),
 				RelativePath: definition.relativePath,
-				NextDue:      schedule.next(now),
+				NextDue:      schedule.Next(now),
 			})
 		}
 	}
@@ -639,210 +593,18 @@ func (m *Manager) cronRelativePath(name string) string {
 }
 
 func loadDefinition(data []byte, relativePath string) (definition, error) {
-	frontmatterBytes, body, err := splitFrontmatter(data)
+	job, schedules, err := config.ParseCronDefinition(data, relativePath)
 	if err != nil {
-		return definition{}, fmt.Errorf("parse cronjob %s: %w", relativePath, err)
-	}
-
-	scheduleValues, agent, textChannel, err := parseFrontmatter(frontmatterBytes)
-	if err != nil {
-		return definition{}, fmt.Errorf("parse cronjob %s frontmatter: %w", relativePath, err)
-	}
-
-	if textChannel == "" {
-		return definition{}, fmt.Errorf("parse cronjob %s frontmatter: channel is required", relativePath)
-	}
-
-	schedules := make([]schedule, 0, len(scheduleValues))
-	oneOff := false
-
-	for _, raw := range scheduleValues {
-		schedule, err := parseSchedule(raw)
-		if err != nil {
-			return definition{}, fmt.Errorf("parse cronjob %s schedule %q: %w", relativePath, raw, err)
-		}
-
-		schedule.raw = strings.TrimSpace(raw)
-
-		oneOff = oneOff || !schedule.dueAt.IsZero()
-		schedules = append(schedules, schedule)
-	}
-
-	if oneOff && len(schedules) != 1 {
-		return definition{}, fmt.Errorf("parse cronjob %s schedules: timestamp schedules cannot be combined with other schedules", relativePath)
+		return definition{}, fmt.Errorf("load cron definition: %w", err)
 	}
 
 	return definition{
-		relativePath: relativePath,
-		agent:        agent,
-		textChannel:  textChannel,
-		body:         body,
+		relativePath: job.RelativePath,
+		agent:        job.Agent,
+		textChannel:  job.TextChannel,
+		body:         job.Prompt,
 		schedules:    schedules,
 	}, nil
-}
-
-func parseFrontmatter(data []byte) (scheduleValues []string, agent, textChannel string, err error) {
-	var raw frontmatter
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return nil, "", "", fmt.Errorf("unmarshal frontmatter yaml: %w", err)
-	}
-
-	if !raw.Schedule.present {
-		return nil, "", "", errors.New("schedule is required")
-	}
-
-	agent = string(raw.Agent)
-	if agent == "" {
-		agent = "main"
-	}
-
-	return slices.Clone(raw.Schedule.values), agent, string(raw.Channel), nil
-}
-
-type frontmatter struct {
-	Schedule frontmatterSchedule `json:"schedule"`
-	Agent    frontmatterAgent    `json:"agent"`
-	Channel  frontmatterChannel  `json:"channel"`
-}
-
-type frontmatterSchedule struct {
-	present bool
-	values  []string
-}
-
-func (s *frontmatterSchedule) UnmarshalJSON(data []byte) error {
-	if strings.TrimSpace(string(data)) == "null" {
-		return nil
-	}
-
-	var single string
-	if err := json.Unmarshal(data, &single); err == nil {
-		s.present = true
-		s.values = []string{single}
-
-		return nil
-	}
-
-	var list []string
-	if err := json.Unmarshal(data, &list); err == nil {
-		s.present = true
-		s.values = slices.Clone(list)
-
-		return nil
-	}
-
-	return errors.New("schedule must be a string or list of strings")
-}
-
-type frontmatterAgent string
-
-func (a *frontmatterAgent) UnmarshalJSON(data []byte) error {
-	if strings.TrimSpace(string(data)) == "null" {
-		return nil
-	}
-
-	var text string
-	if err := json.Unmarshal(data, &text); err == nil {
-		*a = frontmatterAgent(strings.TrimSpace(text))
-
-		return nil
-	}
-
-	*a = frontmatterAgent(strings.TrimSpace(string(data)))
-
-	return nil
-}
-
-type frontmatterChannel string
-
-func (c *frontmatterChannel) UnmarshalJSON(data []byte) error {
-	var text string
-	if err := json.Unmarshal(data, &text); err == nil {
-		text = strings.TrimSpace(text)
-		if text != "" && !strings.HasPrefix(text, "#") {
-			text = "#" + text
-		}
-
-		*c = frontmatterChannel(text)
-	}
-
-	return nil
-}
-
-func splitFrontmatter(data []byte) (frontmatter []byte, body string, err error) {
-	source := string(data)
-
-	line, next, ok := readLine(source, 0)
-	if !ok || strings.TrimSuffix(line, "\r") != "---" {
-		return nil, "", errors.New("yaml frontmatter is required")
-	}
-
-	frontmatterStart := next
-	for offset := next; offset <= len(source); {
-		line, next, ok = readLine(source, offset)
-		if !ok {
-			break
-		}
-
-		if strings.TrimSuffix(line, "\r") == "---" {
-			return []byte(source[frontmatterStart:offset]), source[next:], nil
-		}
-
-		offset = next
-	}
-
-	return nil, "", errors.New("yaml frontmatter closing delimiter is required")
-}
-
-func readLine(source string, start int) (line string, next int, ok bool) {
-	if start >= len(source) {
-		return "", len(source), false
-	}
-
-	if index := strings.IndexByte(source[start:], '\n'); index >= 0 {
-		index += start
-		return source[start:index], index + 1, true
-	}
-
-	return source[start:], len(source), true
-}
-
-func parseSchedule(raw string) (schedule, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return schedule{}, errors.New("schedule must not be blank")
-	}
-
-	if dueAt, err := time.Parse(time.RFC3339Nano, raw); err == nil {
-		return schedule{dueAt: dueAt}, nil
-	}
-
-	if duration, err := time.ParseDuration(raw); err == nil {
-		if duration <= 0 {
-			return schedule{}, errors.New("duration schedules must be greater than zero")
-		}
-
-		return schedule{duration: duration, parsed: nil}, nil
-	}
-
-	if strings.HasPrefix(raw, "@every") {
-		return schedule{}, errors.New("@every is not supported")
-	}
-
-	parsed, err := cron.ParseStandard(raw)
-	if err != nil {
-		return schedule{}, fmt.Errorf("invalid cron expression: %w", err)
-	}
-
-	return schedule{duration: 0, parsed: parsed}, nil
-}
-
-func (s schedule) next(now time.Time) time.Time {
-	if s.duration > 0 {
-		return now.Add(s.duration)
-	}
-
-	return s.parsed.Next(now)
 }
 
 func scheduleID(relativePath string, index int, raw string) string {

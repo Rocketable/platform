@@ -179,8 +179,25 @@ func (m *threadBridgeManager) StartPendingScheduledMessages() error {
 
 	for _, message := range scheduledMessages {
 		conversationID := strings.TrimSpace(message.ConversationID)
-		if _, err := m.ensureThreadBridge(conversationID, ThreadState{Agent: message.Agent}); err != nil {
+
+		thread, _, err := m.store.Thread(conversationID)
+		if err != nil {
+			return fmt.Errorf("load scheduled conversation selection: %w", err)
+		}
+
+		if _, err := m.ensureThreadBridge(conversationID, thread); err != nil {
 			return fmt.Errorf("start pending scheduled message bridge: %w", err)
+		}
+	}
+
+	producers, err := m.store.pendingProducerIDs(context.Background())
+	if err != nil {
+		return err
+	}
+
+	for _, source := range producers {
+		if err := m.PickLaterWork(context.Background(), source); err != nil {
+			return err
 		}
 	}
 
@@ -846,6 +863,10 @@ func (m *threadBridgeManager) ensureThreadBridge(conversationID string, thread T
 	}
 
 	managed := m.factory(Config{ConversationID: conversationID, Agent: agent, UserQuestionAsker: protocol.NoUserQuestionAsker()})
+	if bridge, ok := managed.(*Bridge); ok {
+		bridge.threads = m
+	}
+
 	m.bridges[conversationID] = managed
 
 	if m.stopping {

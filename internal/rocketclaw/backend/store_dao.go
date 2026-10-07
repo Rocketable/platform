@@ -3,6 +3,7 @@ package backend
 import (
 	"cmp"
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,181 @@ import (
 
 type stateDAO struct {
 	db stateStoreDB
+}
+
+// createConversation preserves selection and runs under the caller's history lock.
+func (d stateDAO) createConversation(ctx context.Context, conversation protocol.Conversation) error {
+	summary, err := loadSessionSummary(ctx, d.db, conversation.ID)
+	if err != nil {
+		return err
+	}
+
+	if _, err := d.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, $2, $3) ON CONFLICT (conversation_id) DO NOTHING`, conversation.ID, conversation.Agent, conversation.CreatedBy); err != nil {
+		return fmt.Errorf("create conversation: %w", err)
+	}
+
+	return saveSessionSummary(ctx, d.db, summary)
+}
+
+func (d stateDAO) observedEntries(ctx context.Context, conversationID string) ([]ObservedSessionEntry, error) {
+	return queryRows(ctx, d.db, `WITH `+sessionHistorySQL+`
+SELECT id, entry_json, source_conversation_id, synced, revert_index FROM effective_entries
+ORDER BY id`, "rocketcode session entries", func(row rowScanner) (ObservedSessionEntry, error) {
+		var (
+			entry ObservedSessionEntry
+			raw   string
+			index int
+		)
+		if err := row.Scan(&entry.ID, &raw, &entry.SourceConversationID, &entry.Synced, &index); err != nil {
+			return ObservedSessionEntry{}, fmt.Errorf("scan rocketcode session entry: %w", err)
+		}
+
+		if err := json.Unmarshal([]byte(raw), &entry.Entry); err != nil {
+			return ObservedSessionEntry{}, fmt.Errorf("parse rocketcode session entry: %w", err)
+		}
+
+		clipRevertEntry(&entry.Entry, index)
+
+		return entry, nil
+	}, conversationID)
+}
+
+// producer reads routing and effect progress under the caller's source history lock.
+// A nil inbound means this conversation has no retained producer routing.
+func (d stateDAO) producer(ctx context.Context, conversationID string) (*protocol.InboundMessage, int64, error) {
+	var (
+		data    []byte
+		through int64
+	)
+	if err := d.db.QueryRowContext(ctx, `SELECT producer_inbound_json, producer_effects_through_id FROM managed_conversations WHERE conversation_id = $1`, conversationID).Scan(&data, &through); err != nil {
+		return nil, 0, fmt.Errorf("load producer routing: %w", err)
+	}
+
+	var inbound *protocol.InboundMessage
+
+	if data != nil {
+		if err := json.Unmarshal(data, &inbound); err != nil {
+			return nil, 0, fmt.Errorf("decode producer routing: %w", err)
+		}
+	}
+
+	return inbound, through, nil
+}
+
+// bindProducer is called only after authorized destination resolution. The atomic
+// update returns the established owner even when another binder already won.
+func (d stateDAO) bindProducer(ctx context.Context, conversationID, destination string) (string, error) {
+	var owner string
+	if err := d.db.QueryRowContext(ctx, `UPDATE managed_conversations SET producer_inbound_json =
+jsonb_set(producer_inbound_json::jsonb, '{SyncDestination}', to_jsonb(COALESCE(NULLIF(producer_inbound_json->>'SyncDestination', ''), $2)))::json
+WHERE conversation_id = $1 RETURNING producer_inbound_json->>'SyncDestination'`, conversationID, destination).Scan(&owner); err != nil {
+		return "", fmt.Errorf("bind producer destination: %w", err)
+	}
+
+	return owner, nil
+}
+
+// producerEffects loads only original effects in history order, after progress
+// has been read under the same transaction's source history lock.
+func (d stateDAO) producerEffects(ctx context.Context, conversationID string, through int64) ([]ObservedSessionEntry, error) {
+	return queryRows(ctx, d.db, `SELECT id, entry_json FROM session_entries
+WHERE conversation_id = $1 AND id > $2 AND entry_json->>'type' IN ($3, $4)
+    AND NOT entry_json::jsonb ? 'sync_source_entry_id' ORDER BY id`, "pending producer effects", func(row rowScanner) (ObservedSessionEntry, error) {
+		var (
+			entry ObservedSessionEntry
+			data  []byte
+		)
+		if err := row.Scan(&entry.ID, &data); err != nil {
+			return entry, fmt.Errorf("scan producer effect: %w", err)
+		}
+
+		if err := json.Unmarshal(data, &entry.Entry); err != nil {
+			return entry, fmt.Errorf("decode producer effect: %w", err)
+		}
+
+		return entry, nil
+	}, conversationID, through, producerScheduleEntryType, producerResetEntryType)
+}
+
+// advanceProducerEffects commits progress in the caller's effect transaction.
+func (d stateDAO) advanceProducerEffects(ctx context.Context, conversationID string, through int64) error {
+	if _, err := d.db.ExecContext(ctx, `UPDATE managed_conversations SET producer_effects_through_id = $2 WHERE conversation_id = $1`, conversationID, through); err != nil {
+		return fmt.Errorf("advance producer effects: %w", err)
+	}
+
+	return nil
+}
+
+// projectProducerEffects applies original effects only to their retained owner,
+// under the caller's source and destination history locks. Progress commits with
+// the effects; the returned surviving schedules are armed only after commit.
+func (d stateDAO) projectProducerEffects(ctx context.Context, source, destination, agent string) (map[string]protocol.ScheduledMessageState, error) {
+	inbound, through, err := d.producer(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+
+	if inbound == nil || inbound.SyncDestination != destination {
+		return nil, nil
+	}
+
+	var active bool
+	if err := d.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM active_turns WHERE conversation_id = $1 AND phase <> $2)`, source, turnDone).Scan(&active); err != nil {
+		return nil, fmt.Errorf("check producer projection completion: %w", err)
+	}
+
+	if active {
+		return nil, nil
+	}
+
+	effects, err := d.producerEffects(ctx, source, through)
+	if err != nil {
+		return nil, err
+	}
+
+	// Legacy executable rows precede resumed effects. Rehome them before applying
+	// schedule/reset entries, preserving their IDs, due times, and cadence.
+	schedules, err := queryMap(ctx, d.db, `UPDATE scheduled_messages SET conversation_id = $2, agent = $3
+WHERE conversation_id = $1
+RETURNING scheduled_message_id, conversation_id, agent, message, due_at_unix_ns, recurring, interval_ns`, "rehome producer schedules", scanScheduledMessage, source, destination, agent)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range effects {
+		observed := &effects[i]
+
+		switch observed.Entry.Type {
+		case producerScheduleEntryType:
+			var scheduled protocol.ScheduledMessageState
+			if err := json.Unmarshal(observed.Entry.OutputTrace[0], &scheduled); err != nil {
+				return nil, fmt.Errorf("decode synced schedule: %w", err)
+			}
+
+			scheduled.ConversationID, scheduled.Agent = destination, agent
+
+			id := rand.Text()
+			if err := d.putScheduledMessage(ctx, id, &scheduled); err != nil {
+				return nil, err
+			}
+
+			schedules[id] = scheduled
+		case producerResetEntryType:
+			if err := d.resetScheduledMessages(ctx, destination); err != nil {
+				return nil, err
+			}
+
+			clear(schedules)
+		}
+	}
+
+	if len(effects) > 0 {
+		if err := d.advanceProducerEffects(ctx, source, effects[len(effects)-1].ID); err != nil {
+			return nil, err
+		}
+	}
+
+	return schedules, nil
 }
 
 // Thread returns the persisted managed conversation state.
@@ -411,6 +587,14 @@ func startTurnDB(ctx context.Context, db stateStoreDB, turnID, conversationID st
 	if _, err := db.ExecContext(ctx, `INSERT INTO active_turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id)
 VALUES ($1, $2, $3, '[]', $4, $4, COALESCE((SELECT MAX(id) FROM session_entries WHERE conversation_id = $2), 0))`, turnID, conversationID, string(removeSessionEntryNUL(data)), now); err != nil {
 		return fmt.Errorf("start active turn: %w", err)
+	}
+
+	if inbound.SyncDestination != "" || inbound.RequireOutputDecision {
+		if _, err := db.ExecContext(ctx, `UPDATE managed_conversations SET producer_inbound_json =
+($2::jsonb || jsonb_build_object('SyncDestination', COALESCE(NULLIF(producer_inbound_json->>'SyncDestination', ''), $2::jsonb->>'SyncDestination')))::json
+WHERE conversation_id = $1`, conversationID, string(removeSessionEntryNUL(data))); err != nil {
+			return fmt.Errorf("retain producer routing: %w", err)
+		}
 	}
 
 	return nil

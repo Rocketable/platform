@@ -777,7 +777,7 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 
 	admitted, errHandle := b.activateInbound(ctx, request)
 	if !admitted && errHandle == nil {
-		b.pickLaterWorkLogged(ctx, b)
+		b.pickLaterWorkLogged(ctx, b, &protocol.InboundMessage{})
 		return
 	}
 
@@ -816,11 +816,11 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 
 	b.completeRequestTurnPairReservation(request)
 
-	if request.producer != nil {
-		b.pickLaterWorkLogged(ctx, request.producer)
-	}
+	b.pickLaterWorkLogged(ctx, handler, request.inbound)
 
-	b.pickLaterWorkLogged(ctx, b)
+	if handler != b {
+		b.pickLaterWorkLogged(ctx, b, &protocol.InboundMessage{})
+	}
 }
 
 func (b *Bridge) handlingSnapshot() bool {
@@ -964,6 +964,25 @@ func (b *Bridge) pickLaterWork(ctx context.Context, fromTimer bool) error {
 		return nil
 	}
 
+	var private, producing bool
+	if err := b.config.SessionService.db.QueryRowContext(ctx, `SELECT
+EXISTS (SELECT 1 FROM managed_conversations WHERE conversation_id = $1 AND producer_inbound_json IS NOT NULL),
+EXISTS (
+SELECT 1 FROM active_turns a JOIN managed_conversations c ON c.conversation_id = a.conversation_id
+WHERE a.phase <> $2 AND c.producer_inbound_json->>'SyncDestination' = $1)`, b.config.ConversationID, turnDone).Scan(&private, &producing); err != nil {
+		return fmt.Errorf("check later-work producer delivery: %w", err)
+	}
+
+	if private {
+		if err := b.handoffProducer(ctx); err != nil {
+			return err
+		}
+	}
+
+	if producing {
+		return nil
+	}
+
 	goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID)
 	if err != nil {
 		return fmt.Errorf("load goal for later work: %w", err)
@@ -996,12 +1015,179 @@ func (b *Bridge) pickLaterWork(ctx context.Context, fromTimer bool) error {
 		return b.submitEnqueuedItem(ctx, &head.Queue)
 	}
 
+	if private {
+		return nil
+	}
+
 	if head.Scheduled.DueAt.After(now) {
 		b.log.Info("later work not due", "event", "queue_blocked", "conversation_id", b.config.ConversationID, "scheduled_message_id", head.ScheduledID, "blocker", "not_due", "due_at", head.Scheduled.DueAt, "remaining_ms", head.Scheduled.DueAt.Sub(now).Milliseconds())
 		return nil
 	}
 
 	return b.submitDueScheduled(ctx, head.ScheduledID, &head.Scheduled, now)
+}
+
+// handoffProducer resolves only completed original work, then projects it before
+// the canonical worker can admit a scheduled prompt.
+func (b *Bridge) handoffProducer(ctx context.Context) error {
+	store, source := b.config.SessionService, b.config.ConversationID
+	web := "web:" + source
+
+	tx, err := store.beginStateTx(ctx, "producer handoff")
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	ids := []string{source, web}
+	slices.Sort(ids)
+
+	for _, id := range ids {
+		if err := lockSessionHistory(ctx, tx, id); err != nil {
+			return err
+		}
+	}
+
+	dao := stateDAO{db: tx}
+
+	inbound, through, err := dao.producer(ctx, source)
+	if err != nil {
+		return err
+	}
+
+	var active bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM active_turns WHERE conversation_id = $1 AND phase <> $2)`, source, turnDone).Scan(&active); err != nil {
+		return fmt.Errorf("check producer completion: %w", err)
+	}
+
+	if active {
+		return nil
+	}
+
+	effects, err := dao.producerEffects(ctx, source, through)
+	if err != nil {
+		return err
+	}
+
+	legacy, err := dao.scheduledMessages(ctx, source)
+	if err != nil {
+		return err
+	}
+
+	owner := inbound.SyncDestination
+	if owner == "" {
+		earliest, err := earliestProducerSchedule(effects, legacy)
+		if err != nil {
+			return err
+		}
+
+		if earliest == nil {
+			if len(effects) > 0 {
+				if err := dao.resetScheduledMessages(ctx, source); err != nil {
+					return err
+				}
+
+				if err := dao.advanceProducerEffects(ctx, source, effects[len(effects)-1].ID); err != nil {
+					return err
+				}
+			}
+
+			if err := tx.Commit(); err != nil {
+				return fmt.Errorf("commit cancelled producer effects: %w", err)
+			}
+
+			return nil
+		}
+
+		if earliest.DueAt.After(time.Now()) {
+			if err := tx.Commit(); err != nil {
+				return fmt.Errorf("commit pending producer wakeup: %w", err)
+			}
+
+			b.armScheduledMessage("", earliest)
+
+			return nil
+		}
+
+		var recorded bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM managed_conversations WHERE conversation_id = $1)`, web).Scan(&recorded); err != nil {
+			return fmt.Errorf("read canonical web conversation: %w", err)
+		}
+
+		if !recorded {
+			definitions, _, err := LoadRuntimeDefinitions(b.runtime, b.runtime.RuntimeDirName())
+			if err != nil {
+				return fmt.Errorf("load web agents: %w", err)
+			}
+
+			choices := slices.Sorted(maps.Keys(definitions.Items))
+
+			stem := strings.TrimSuffix(strings.TrimPrefix(inbound.Cronjob.RelativePath, "cron/"), ".md")
+			if job, err := config.LoadOneOffCronjob(b.runtime.Workspace, b.runtime.RuntimeDirName(), stem); err == nil {
+				choices = b.runtime.CronWebAgentChoices(choices, &job)
+			}
+
+			if len(choices) == 0 {
+				return errors.New("create canonical web conversation: no loaded agents")
+			}
+
+			if err := dao.createConversation(ctx, protocol.Conversation{ID: web, Agent: choices[0], CreatedBy: string(ThreadCreatedByCron)}); err != nil {
+				return err
+			}
+		}
+
+		owner, err = dao.bindProducer(ctx, source, web)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit producer handoff: %w", err)
+	}
+
+	destination, err := b.threads.recordedBridge(owner)
+	if err != nil {
+		return err
+	}
+
+	if len(effects) > 0 || len(legacy) > 0 {
+		return destination.syncConversation(ctx, b)
+	}
+
+	return destination.pickLaterWork(ctx, true)
+}
+
+// earliestProducerSchedule treats legacy rows as existing work before resumed
+// effects, so a later reset cancels them when choosing the first Web wakeup.
+func earliestProducerSchedule(effects []ObservedSessionEntry, legacy map[string]protocol.ScheduledMessageState) (*protocol.ScheduledMessageState, error) {
+	var earliest *protocol.ScheduledMessageState
+
+	for _, scheduled := range legacy {
+		if earliest == nil || scheduled.DueAt.Before(earliest.DueAt) {
+			earliest = &scheduled
+		}
+	}
+
+	for i := range effects {
+		effect := &effects[i]
+		if effect.Entry.Type == producerResetEntryType {
+			earliest = nil
+			continue
+		}
+
+		var scheduled protocol.ScheduledMessageState
+		if err := json.Unmarshal(effect.Entry.OutputTrace[0], &scheduled); err != nil {
+			return nil, fmt.Errorf("decode pending producer schedule: %w", err)
+		}
+
+		if earliest == nil || scheduled.DueAt.Before(earliest.DueAt) {
+			earliest = &scheduled
+		}
+	}
+
+	return earliest, nil
 }
 
 func (b *Bridge) submitEnqueuedItem(ctx context.Context, item *protocol.ThreadQueueItem) error {
@@ -1105,9 +1291,14 @@ func (b *Bridge) completeRequestTurnPairReservation(request *bridgeRequest) {
 	b.config.SessionService.completeTurnPairReservation(b.config.ManagedConversationID, b.config.ConversationID)
 }
 
-func (b *Bridge) pickLaterWorkLogged(ctx context.Context, worker *Bridge) {
-	if errPick := worker.pickLaterWork(ctx, false); errPick != nil {
+func (b *Bridge) pickLaterWorkLogged(ctx context.Context, worker *Bridge, inbound *protocol.InboundMessage) {
+	errPick := worker.pickLaterWork(ctx, false)
+	if errPick != nil {
 		b.log.Error("pick later work", "error", errPick)
+
+		if (inbound.SyncDestination != "" || inbound.RequireOutputDecision) && !errors.Is(errPick, protocol.ErrBridgeStopped) {
+			worker.armScheduledMessage("", &protocol.ScheduledMessageState{ConversationID: worker.config.ConversationID, DueAt: time.Now().Add(time.Second)})
+		}
 	}
 }
 
@@ -1324,8 +1515,29 @@ func (b *Bridge) postCronRoot(ctx context.Context, outbound *protocol.OutboundMe
 	}
 
 	destinationID := protocol.SlackThreadConversationID(root.ChannelID, root.ThreadID)
-	if err := b.config.SessionService.UpsertThread(destinationID, ThreadState{Agent: channel.Agents[0], CreatedBy: ThreadCreatedByCron}); err != nil {
+
+	ctx = context.WithoutCancel(ctx)
+	if err := (&Runtime{Sessions: b.config.SessionService}).CreateConversation(ctx, protocol.Conversation{ID: destinationID, Agent: channel.Agents[0], CreatedBy: string(ThreadCreatedByCron)}); err != nil {
 		return fmt.Errorf("record cronjob thread: %w", err)
+	}
+
+	tx, err := b.config.SessionService.beginStateTx(ctx, "cron destination binding")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := lockSessionHistory(ctx, tx, b.config.ConversationID); err != nil {
+		return err
+	}
+
+	destinationID, err = (stateDAO{db: tx}).bindProducer(ctx, b.config.ConversationID, destinationID)
+	if err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit cron destination binding: %w", err)
 	}
 
 	destination, err := b.threads.recordedBridge(destinationID)
@@ -1333,7 +1545,7 @@ func (b *Bridge) postCronRoot(ctx context.Context, outbound *protocol.OutboundMe
 		return fmt.Errorf("load cronjob thread: %w", err)
 	}
 
-	return destination.syncConversation(context.WithoutCancel(ctx), b)
+	return destination.syncConversation(ctx, b)
 }
 
 // settleSteers transfers finished input ownership either to its callers or the
@@ -1805,6 +2017,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	activeReply := new(protocol.InboundMessage)
 
 	activeReply.SyncDestination = msg.SyncDestination
+	activeReply.RequireOutputDecision = msg.RequireOutputDecision
 	activeReply.SlackReply = protocol.Clone(msg.SlackReply)
 
 	turnCtx, cancelTurn := context.WithCancel(ctx)
@@ -2607,10 +2820,22 @@ func (b *Bridge) runGoalCheck(ctx context.Context, script string) (string, bool)
 }
 
 func (b *Bridge) armScheduledMessage(id string, message *protocol.ScheduledMessageState) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.stopped {
+		return
+	}
+
 	armed := *message
 	time.AfterFunc(max(time.Until(armed.DueAt), 0), func() {
 		if err := b.pickLaterWork(context.Background(), true); err != nil {
 			b.log.Error("scheduled message enqueue failed", "scheduled_message_id", id, "conversation_id", armed.ConversationID, "error", err)
+
+			if id == "" && !errors.Is(err, protocol.ErrBridgeStopped) {
+				armed.DueAt = time.Now().Add(time.Second)
+				b.armScheduledMessage(id, &armed)
+			}
 		}
 	})
 }

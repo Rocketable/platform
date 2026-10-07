@@ -502,6 +502,113 @@ func TestSessionServiceScheduledMessages(t *testing.T) {
 	assert.Equal(t, map[string]protocol.ScheduledMessageState{"schedule-1": {ConversationID: "slack-thread:D123:111.222", Agent: "helper", Message: "later", DueAt: dueAt}}, messages)
 }
 
+func TestLegacyProducerScheduleWaitsForResetHandoff(t *testing.T) {
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	require.NoError(t, store.UpsertThread("producer", ThreadState{Agent: "main"}))
+
+	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "produce", false)
+	inbound.SyncDestination = "owner"
+	require.NoError(t, startTurnDB(ctx, store.db, "active", "producer", inbound))
+	require.NoError(t, store.PutScheduledMessage("legacy", &protocol.ScheduledMessageState{ConversationID: "producer", Agent: "main", Message: "legacy", DueAt: time.Now().Add(time.Hour)}))
+	id, err := store.AppendEntryID(ctx, "producer", &harness.SessionEntry{Version: 1, Type: producerResetEntryType})
+	require.NoError(t, err)
+
+	dao := stateDAO{db: store.db}
+	_, err = dao.projectProducerEffects(ctx, "producer", "owner", "selected")
+	require.NoError(t, err)
+	_, through, err := dao.producer(ctx, "producer")
+	require.NoError(t, err)
+	assert.Zero(t, through, "early Sync cannot consume a reset before the legacy row can move")
+	endTestTurn(t, store, "producer", "active", "")
+
+	schedules, err := dao.projectProducerEffects(ctx, "producer", "owner", "selected")
+	require.NoError(t, err)
+	assert.Empty(t, schedules)
+
+	messages, err := store.ScheduledMessages()
+	require.NoError(t, err)
+	assert.Empty(t, messages, "the resumed reset cancels the rehomed legacy row")
+
+	_, through, err = dao.producer(ctx, "producer")
+	require.NoError(t, err)
+	assert.Equal(t, id, through)
+}
+
+func TestProducerRoutingAndEffectsSurviveCompletion(t *testing.T) {
+	for _, destination := range []string{"owner", ""} {
+		t.Run("destination="+destination, func(t *testing.T) {
+			workspace := t.TempDir()
+			store := newTestSessionServiceAt(t, workspace)
+			ctx := t.Context()
+			require.NoError(t, store.UpsertThread("producer", ThreadState{Agent: "main"}))
+
+			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "produce", false)
+			inbound.ConversationID, inbound.SyncDestination = "producer", destination
+			inbound.RequireOutputDecision = destination == ""
+			inbound.Metadata = map[string]string{"origin": "explicit"}
+			require.NoError(t, startTurnDB(ctx, store.db, "first", "producer", inbound))
+			id, err := store.AppendEntryID(ctx, "producer", &harness.SessionEntry{Version: 1, Type: producerResetEntryType})
+			require.NoError(t, err)
+			endTestTurn(t, store, "producer", "first", "")
+			require.NoError(t, store.Stop())
+			store = newTestSessionServiceAt(t, workspace)
+			dao := stateDAO{db: store.db}
+			routing, through, err := dao.producer(ctx, "producer")
+			require.NoError(t, err)
+			require.NotNil(t, routing)
+			require.Equal(t, destination, routing.SyncDestination)
+			require.Equal(t, inbound.RequireOutputDecision, routing.RequireOutputDecision)
+			require.Equal(t, inbound.Metadata, routing.Metadata)
+			require.Zero(t, through)
+
+			ids, err := store.pendingProducerIDs(ctx)
+			require.NoError(t, err)
+			require.Equal(t, []string{"producer"}, ids)
+
+			effects, err := dao.producerEffects(ctx, "producer", through)
+			require.NoError(t, err)
+			require.Len(t, effects, 1)
+			require.Equal(t, id, effects[0].ID)
+
+			owner, err := dao.bindProducer(ctx, "producer", "owner")
+			require.NoError(t, err)
+			require.Equal(t, "owner", owner)
+
+			// A later activation and a competing authorized bind cannot replace the owner.
+			inbound.SyncDestination = "other"
+			require.NoError(t, startTurnDB(ctx, store.db, "second", "producer", inbound))
+			owner, err = dao.bindProducer(ctx, "producer", "third")
+			require.NoError(t, err)
+			require.Equal(t, "owner", owner)
+
+			routing, _, err = dao.producer(ctx, "producer")
+			require.NoError(t, err)
+			require.Equal(t, "owner", routing.SyncDestination)
+
+			ids, err = store.pendingProducerIDs(ctx)
+			require.NoError(t, err)
+			require.Empty(t, ids, "unfinished producers are not ready for handoff")
+			endTestTurn(t, store, "producer", "second", "")
+
+			require.NoError(t, dao.advanceProducerEffects(ctx, "producer", id))
+			ids, err = store.pendingProducerIDs(ctx)
+			require.NoError(t, err)
+			require.Empty(t, ids)
+
+			effects, err = dao.producerEffects(ctx, "producer", id)
+			require.NoError(t, err)
+			require.Empty(t, effects)
+			require.NoError(t, store.Stop())
+			store = newTestSessionServiceAt(t, workspace)
+			routing, through, err = (stateDAO{db: store.db}).producer(ctx, "producer")
+			require.NoError(t, err)
+			require.Equal(t, "owner", routing.SyncDestination)
+			require.Equal(t, id, through)
+		})
+	}
+}
+
 func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 	workspace := t.TempDir()
 	store := newTestSessionServiceAt(t, workspace)
@@ -670,14 +777,14 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 28, n)
+	assert.Equal(t, 29, n)
 	require.Error(t, first.db.QueryRowContext(t.Context(), `SELECT 1 FROM store_bootstrap`).Scan(&n))
 
 	second, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop()) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 28, n)
+	assert.Equal(t, 29, n)
 }
 
 func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
@@ -723,7 +830,7 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 
 				var count int
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-				require.Equal(t, 28, count)
+				require.Equal(t, 29, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations WHERE applied_at='2026-01-01Z'`).Scan(&count))
 				require.Equal(t, prefix, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM session_tags`).Scan(&count))
@@ -774,7 +881,7 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 28, n)
+	assert.Equal(t, 29, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
 }
 

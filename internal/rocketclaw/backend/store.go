@@ -851,26 +851,7 @@ func (s *SessionService) ObserveEntries(ctx context.Context, conversationID stri
 		return nil, errors.New("conversation ID is required")
 	}
 
-	entries, err := queryRows(ctx, s.db, `WITH `+sessionHistorySQL+`
-SELECT id, entry_json, source_conversation_id, synced, revert_index FROM effective_entries
-ORDER BY id`, "rocketcode session entries", func(row rowScanner) (ObservedSessionEntry, error) {
-		var (
-			entry ObservedSessionEntry
-			raw   string
-			index int
-		)
-		if err := row.Scan(&entry.ID, &raw, &entry.SourceConversationID, &entry.Synced, &index); err != nil {
-			return ObservedSessionEntry{}, fmt.Errorf("scan rocketcode session entry: %w", err)
-		}
-
-		if err := json.Unmarshal([]byte(raw), &entry.Entry); err != nil {
-			return ObservedSessionEntry{}, fmt.Errorf("parse rocketcode session entry: %w", err)
-		}
-
-		clipRevertEntry(&entry.Entry, index)
-
-		return entry, nil
-	}, conversationID)
+	entries, err := (stateDAO{db: s.db}).observedEntries(ctx, conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -1270,6 +1251,19 @@ func (s *SessionService) PairBusyFor(pairID string) bool {
 	}
 
 	return gate.reservedFor != "" || len(gate.token) == 0
+}
+
+// pendingProducerIDs discovers completed producers even after their active rows
+// and executable one-shot schedules have disappeared.
+func (s *SessionService) pendingProducerIDs(ctx context.Context) ([]string, error) {
+	return queryStrings(ctx, s.db, `SELECT c.conversation_id FROM managed_conversations c
+WHERE c.producer_inbound_json IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = c.conversation_id AND a.phase <> $1)
+    AND (EXISTS (SELECT 1 FROM scheduled_messages s WHERE s.conversation_id = c.conversation_id)
+    OR EXISTS (SELECT 1 FROM session_entries e WHERE e.conversation_id = c.conversation_id
+        AND e.id > c.producer_effects_through_id AND e.entry_json->>'type' IN ($2, $3)
+        AND NOT e.entry_json::jsonb ? 'sync_source_entry_id'))
+ORDER BY c.conversation_id`, "pending producer IDs", turnDone, producerScheduleEntryType, producerResetEntryType)
 }
 
 func sessionTags(ctx context.Context, db stateStoreDB, conversationID string) ([]string, error) {
