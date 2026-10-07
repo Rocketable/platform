@@ -135,7 +135,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await page.keyboard.press("Escape");
     await headerDialog.waitFor({ state: "hidden" });
     await page.mouse.move(0, 0);
-    await page.locator("textarea").focus();
+    await page.locator("textarea:visible").focus();
     await headerButton.waitFor({ state: "hidden" });
     expect(await copyButton.isVisible()).toBe(false);
     await headerMessage.focus();
@@ -146,7 +146,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await headerDialog.waitFor();
     await page.keyboard.press("Escape");
     await headerDialog.waitFor({ state: "hidden" });
-    const composer = page.locator("textarea");
+    const composer = page.locator("textarea:visible");
     await composer.fill("$fork");
     await composer.press("Enter");
     const dialog = page.getByRole("dialog");
@@ -156,7 +156,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     expect(forks[0].id).toBe("source");
     expect(forks[0].before).toBe("2:0");
     expect(await composer.inputValue()).toBe("Choose this prompt");
-    await page.locator("main").getByText("First answer", { exact: true }).waitFor();
+    await page.locator("main").getByText("First answer", { exact: true }).filter({ visible: true }).waitFor();
     expect(prompts).toHaveLength(0);
 
     await page.reload();
@@ -211,7 +211,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await rename.waitFor({ state: "hidden" });
     expect(details.source.name).toBe("Named source");
     expect(prompts).toHaveLength(0);
-    await page.getByLabel("Attach files", { exact: true }).setInputFiles({ name: "draft.txt", mimeType: "text/plain", buffer: Buffer.from("keep attachment") });
+    await page.locator("main > :visible").getByLabel("Attach files", { exact: true }).setInputFiles({ name: "draft.txt", mimeType: "text/plain", buffer: Buffer.from("keep attachment") });
     for (const [label, invocation] of [["Start goal", "$goal"], ["Run workflow", "$workflow"], ["Invoke skill", "$skill"], ["Enqueue work", "$enqueue"], ["Stash work", "$stash"], ["Steer turn", "$steer"]]) {
       await composer.fill("keep this draft");
       await page.keyboard.press("Meta+Shift+p");
@@ -243,7 +243,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     }, savedComposer);
     await page.reload();
     await composer.waitFor();
-    await page.waitForFunction((text: string) => document.querySelector("textarea")?.value === text, savedComposer);
+    await page.waitForFunction((text: string) => [...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.value === text, savedComposer);
     await page.keyboard.press("Meta+Shift+p");
     expect(await commands.getByRole("button").first().textContent()).toBe("Command: Start goal ($goal)");
     expect(await page.evaluate(() => JSON.parse(localStorage.getItem("command-history")!).filter((key: string) => key === "goal"))).toEqual(["goal"]);
@@ -366,7 +366,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await page.waitForURL("**/s/" + btoa("destination").replace(/=+$/, ""));
     expect(await dialog.getByRole("heading").textContent()).toBe("Session handoff");
     await dialog.getByText("Podcast editing notes with a very long conversation title", { exact: true }).waitFor();
-    await page.locator("main").getByText("You are looking at the destination", { exact: true }).waitFor();
+    await page.locator("main").getByText("You are looking at the destination", { exact: true }).filter({ visible: true }).waitFor();
     await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>('button[aria-label="Stash handoff here"]')?.disabled);
     await handoffSeen.promise;
     expect(handoffs).toEqual(["source", "source", "source", "source"]);
@@ -402,9 +402,9 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await dialog.waitFor({ state: "hidden" });
     expect(prompts).toEqual([{ id: "destination", text: handoffDocument, delivery: "STASH" }]);
     expect(forks).toHaveLength(1);
-    const stashed = page.locator('[data-queue-id="stashed"]');
+    const stashed = page.locator('[data-queue-id="stashed"]:visible');
     await stashed.getByText(handoffDocument, { exact: true }).waitFor();
-    expect(await page.locator("[data-queue-id]").count()).toBe(1);
+    expect(await page.locator("[data-queue-id]:visible").count()).toBe(1);
     await stashed.getByRole("button", { name: "Pop", exact: true }).waitFor();
     expect(prompts).toHaveLength(1);
 
@@ -452,7 +452,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await dialog.getByRole("button", { name: "Start new session", exact: true }).click();
     await page.waitForURL("**/s/" + btoa("created").replace(/=+$/, ""));
     await dialog.waitFor({ state: "hidden" });
-    await page.locator("main").getByText("First turn failed", { exact: true }).waitFor();
+    await page.locator("main").getByText("First turn failed", { exact: true }).filter({ visible: true }).waitFor();
     expect(await composer.inputValue()).toBe(handoffDocument);
     failFirstTurn = false;
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("source")}`);
@@ -530,14 +530,14 @@ test("handoff hits and queued items format tags and markup", async () => {
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("dest")}`);
-    const queued = page.locator('[data-queue-id="q1"]');
+    const queued = page.locator('[data-queue-id="q1"]:visible');
     await queued.getByText("@handle").waitFor();
     expect(await queued.locator("strong").textContent()).toBe("bold");
     expect(await queued.getByText("@handle").count()).toBe(1);
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("source")}`);
-    await page.locator("textarea").waitFor();
-    await page.locator("textarea").fill("$handoff");
-    await page.locator("textarea").press("Enter");
+    await page.locator("textarea:visible").waitFor();
+    await page.locator("textarea:visible").fill("$handoff");
+    await page.locator("textarea:visible").press("Enter");
     const dialog = page.getByRole("dialog", { name: "Session handoff" });
     await dialog.getByRole("textbox", { name: "Search messages" }).fill("bold");
     const hit = dialog.getByRole("button").filter({ has: page.locator("strong") });

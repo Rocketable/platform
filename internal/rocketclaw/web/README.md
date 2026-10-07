@@ -45,6 +45,53 @@ independently toggles its origin on or off, so both, either, or neither can be s
 Messages without a recorded origin appear only when both are selected.
 Filtering does not change saved history or routing.
 
+## Tabs
+
+This is the **warm tabs** variant, one of five competing tab designs. Its thesis
+is state retention: switching tabs is instant and loses nothing you were doing.
+
+Every session and page you open appears as a tab: sessions, Search, Cron, Agents,
+Skills, Settings, and the New session composer. Opening something that is already
+open activates its tab, so nothing appears twice, and the address bar always shows
+the active tab. Session tabs take their title and running spinner from the session
+list; a session missing from the list shows its ID.
+
+- **Warm session tabs.** Open session tabs stay mounted while hidden. Switching back
+  keeps the scroll position, unsent draft, attachments, and composer state, and does
+  not reload history from the start: the tab catches up with a revision delta.
+- **One live stream.** Only the visible session tab holds a `/stream` connection.
+  The server speaks HTTP/1.1 and browsers allow about six connections per host, so
+  hidden tabs disconnect. Their running spinner still updates from the session list.
+- **Cap.** Up to five session views stay mounted, counting the New session composer.
+  Opening more unmounts the least recently used one; it reloads when you open it
+  again, and its draft is kept. Pages stay mounted as before, and Search stays
+  mounted while its tab is open.
+- **New session.** Sending from the New session tab turns that tab into the new
+  session's tab without reloading it.
+- **Closing.** Use a tab's × button, or the page header's close button or Escape on a
+  page. The tab to the right opens, or the one to the left at the end. Closing the
+  last tab opens New session; a lone New session tab cannot be closed.
+- **Placement.** Tabs sit on top by default. The button at the end of the strip or
+  the palette command **Tabs: Move to left** (or **to top**) switches placement; the
+  browser keeps the choice under `tab-placement`. Below the `md` breakpoint the strip
+  is always on top and scrolls sideways.
+- **Keyboard and screen readers.** The strip is a `tablist`. Tab reaches the active
+  tab; Left/Up and Right/Down open the previous and next tab, and Home/End the first
+  and last. Each close button is labelled "Close" plus the tab title.
+
+Open tabs are saved in `localStorage` under `tabs-warm:<username>` as an ordered list
+of locations (a session path or a page path), never content. The URL is the active
+tab, so a reload restores it and a deep link opens or adds its own tab. Unreadable or
+mismatched data resets to one tab for the current URL. Each signed-in user has their
+own tabs.
+
+Tradeoffs: memory and DOM size grow with open session tabs, up to the cap. A hidden
+tab is not live and catches up only when shown. Each mounted composer keeps polling
+its agent list and queue every two seconds, so open session tabs add short
+background requests. The other variants spend their complexity on tab management
+(preview tabs, pinning, drag reorder, per-tab history, grouping); this one has none
+of that and spends it on keeping each tab alive instead.
+
 ## Revert, Undo, and Redo
 
 Recorded user messages in top-level pure Web sessions have a **Revert message**
@@ -487,11 +534,9 @@ below the panel and hides the composer until the handoff is closed.
 Conversations without stored history stay out of the session list until their first
 entry arrives. Clearing all stored history hides the conversation again without
 deleting its record or its Slack messages.
-Click the selected Cron, Agents, Skills, or Config tab again to return
-to the chat you left, even after switching between pages. Without a previous
-chat, it returns Home. On desktop, the page header's close button does the same,
-and Escape does too unless a dialog or tooltip is open. New chat, search, and these page
-buttons form a centered group in the footer.
+On desktop, a page's header close button closes that page's tab, and so does Escape
+unless a dialog or tooltip is open; the neighbouring tab opens (see [Tabs](#tabs)).
+New session, Search sessions, and the command palette form a centered group in the footer.
 The theme toggle floats in the upper-right corner of the page and switches light, dark, and system. Config has a select for the color theme. The choices are Neutral, Harbor, Grove, Ember, Violet, Rose, Sand, Lagoon, Slate, Copper, Ink, Signal, Go - Playground, and Go - Sources. Ink and Signal are high contrast. The Go themes adapt Mike Gleason jr Couturier's light themes, with local dark variations. The choice is stored in the browser, not on the server. See [theme sources and licenses](../../../THEMES.md) for attribution and reuse terms.
 Config's Timeline section has the **Timeline detail** card, following OpenCode v2. A
 five-stop slider picks Messages only, Quiet, Compact, Detailed, or Everything, and an

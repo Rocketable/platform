@@ -533,8 +533,9 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
   const shown = async (page: { getByText: (text: string, opts?: { exact?: boolean }) => { waitFor: (opts: { state: "visible" | "hidden"; timeout?: number }) => Promise<void>; count: () => Promise<number> } }, text: string) => {
     await page.getByText(text, { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
   };
-  const hidden = async (page: { getByText: (text: string, opts?: { exact?: boolean }) => { count: () => Promise<number> } }, text: string) => {
-    expect(await page.getByText(text, { exact: true }).count()).toBe(0);
+  // Warm session tabs keep other sessions mounted but hidden, so only visible text counts.
+  const hidden = async (page: { getByText: (text: string, opts?: { exact?: boolean }) => { filter: (opts: { visible: boolean }) => { count: () => Promise<number> } } }, text: string) => {
+    expect(await page.getByText(text, { exact: true }).filter({ visible: true }).count()).toBe(0);
   };
   const snapshot = async ([owner, protocol]: string[]) => {
     const request = indexedDB.open("rocketclaw-session-list", 1);
@@ -733,7 +734,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await search.press("Enter");
     await opened;
     await page.waitForURL(`${origin}/s/${Buffer.from("kept").toString("base64url")}`);
-    await page.getByPlaceholder("Message or $command").waitFor();
+    await page.getByPlaceholder("Message or $command").filter({ visible: true }).waitFor();
     expect(historyRequests.some((request) => request.id === "kept")).toBe(true);
     await transcriptStream("kept").promise;
     await navigation.getByRole("button", { name: "New session", exact: true }).click();
@@ -743,7 +744,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const commandPalette = page.getByRole("dialog", { name: "Run command", exact: true });
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
     expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
-    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "List Agents", "List Skills", "Sessions: New", "Sessions: Search", "Settings", "Timeline: Compact", "Timeline: Detailed", "Timeline: Everything", "Timeline: Messages only", "Timeline: Quiet"]);
+    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "List Agents", "List Skills", "Sessions: New", "Sessions: Search", "Settings", "Tabs: Move to left", "Timeline: Compact", "Timeline: Detailed", "Timeline: Everything", "Timeline: Messages only", "Timeline: Quiet"]);
     await page.keyboard.press("Escape");
     await commandPalette.waitFor({ state: "hidden" });
     await navigationCommands.click();
@@ -793,7 +794,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await touch.detach();
     expect(ctrl.listCalls).toBe(heldCalls);
 
-    const skillComposer = page.getByPlaceholder("Message a new session");
+    const skillComposer = page.getByPlaceholder("Message a new session").filter({ visible: true });
     await skillComposer.fill("$ski");
     await skillComposer.press("Tab");
     expect(await skillComposer.inputValue()).toBe("$skill ");
@@ -821,17 +822,17 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await page.getByRole("combobox", { name: "Choose agent" }).click();
     await page.getByRole("option", { name: "other gpt" }).click();
     ctrl.holdPrompt = true;
-    await page.getByPlaceholder("Message a new session").fill("hello\n\nwhile held");
+    await page.getByPlaceholder("Message a new session").filter({ visible: true }).fill("hello\n\nwhile held");
     await page.getByRole("button", { name: "Send" }).click();
     await ctrl.promptStarted.promise;
     expect(ctrl.prompt).toEqual(["web-session:new:hello\n\nwhile held"]);
     expect(await page.locator('[data-slot="bubble-content"] [data-slot="message-author"]').textContent()).toBe("Alice Smith");
     await page.waitForURL("**/s/d2ViLXNlc3Npb246bmV3");
-    await page.getByPlaceholder("Queue a follow-up · ⌘⏎ steers").waitFor();
-    await page.locator("textarea:enabled").waitFor();
+    await page.getByPlaceholder("Queue a follow-up · ⌘⏎ steers").filter({ visible: true }).waitFor();
+    await page.locator("textarea:visible:enabled").waitFor();
     expect(await page.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
     // Selecting chat text offers quoting without replacing the native context menu.
-    await page.locator("textarea").fill("My draft");
+    await page.locator("textarea:visible").fill("My draft");
     const selectedQuote: string = await page.locator("#transcript-scroll").evaluate((element: HTMLElement) => {
       const range = document.createRange();
       range.selectNodeContents(element.querySelector('[aria-label="Turn 1"] [data-slot="bubble-content"] div')!);
@@ -845,14 +846,14 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await page.getByRole("button", { name: "Quote", exact: true }).click();
     expect(selectedQuote).toBe("hello\n\nwhile held");
     const quotedDraft = "My draft\n\n> hello\n> \n> while held\n\n";
-    expect(await page.locator("textarea").inputValue()).toBe(quotedDraft);
-    expect(await page.locator("textarea").evaluate((element: HTMLTextAreaElement) => [document.activeElement === element, element.selectionStart, element.selectionEnd])).toEqual([true, quotedDraft.length, quotedDraft.length]);
+    expect(await page.locator("textarea:visible").inputValue()).toBe(quotedDraft);
+    expect(await page.locator("textarea:visible").evaluate((element: HTMLTextAreaElement) => [document.activeElement === element, element.selectionStart, element.selectionEnd])).toEqual([true, quotedDraft.length, quotedDraft.length]);
     await page.keyboard.type("My comment");
-    expect(await page.locator("textarea").inputValue()).toBe(quotedDraft + "My comment");
+    expect(await page.locator("textarea:visible").inputValue()).toBe(quotedDraft + "My comment");
     await page.getByRole("button", { name: "Quote", exact: true }).waitFor({ state: "hidden" });
-    await page.locator("textarea").evaluate((element: HTMLTextAreaElement) => element.select());
+    await page.locator("textarea:visible").evaluate((element: HTMLTextAreaElement) => element.select());
     expect(await page.getByRole("button", { name: "Quote", exact: true }).count()).toBe(0);
-    await page.locator("textarea").fill("");
+    await page.locator("textarea:visible").fill("");
     for (const width of [1280, 390]) {
       await page.setViewportSize({ width, height: 844 });
       await page.locator('#transcript-scroll [data-slot="bubble-content"] div').first().click({ trial: true }); // Measure after the responsive layout finishes resizing.
@@ -874,8 +875,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
       if (width === 1280) {
         await quoteButton.click();
-        expect(await page.locator("textarea").inputValue()).toBe("> hello\n\n");
-        await page.locator("textarea").fill("");
+        expect(await page.locator("textarea:visible").inputValue()).toBe("> hello\n\n");
+        await page.locator("textarea:visible").fill("");
       } else {
         await page.keyboard.press("Escape");
         await quoteButton.waitFor({ state: "hidden" });
@@ -889,9 +890,9 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const chat = page.getByRole("region", { name: "Messages", exact: true });
     const parking = page.getByRole("region", { name: "Pending steers", exact: true });
     for (const delivery of ["QUEUE", "STEER", "STEER"] as const) {
-      await page.locator("textarea").fill("identical follow-up");
+      await page.locator("textarea:visible").fill("identical follow-up");
       const intervention = page.waitForRequest("**/api/Prompt");
-      if (delivery === "QUEUE") await page.locator("textarea").press("Enter");
+      if (delivery === "QUEUE") await page.locator("textarea:visible").press("Enter");
       else {
         const steerBox = await page.getByRole("button", { name: "Steer", exact: true }).last().boundingBox();
         const sendBox = await page.getByRole("button", { name: "Send", exact: true }).boundingBox();
@@ -920,12 +921,12 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await parking.waitFor({ state: "hidden" });
     await chat.getByText("identical follow-up", { exact: true }).nth(1).waitFor();
     // A stale queue poll must not resurrect either consumed steer.
-    expect(await page.locator("[data-queue-id]").count()).toBe(1);
+    expect(await page.locator("[data-queue-id]:visible").count()).toBe(1);
     ctrl.history.push({ entryKey: "intervention-run", itemId: "intervention-run:4", inputId: "", role: "assistant", turnId: "intervention-run", text: "After steering", complete: false });
     stream.enqueue(`data: ${JSON.stringify({ conversationId: "web-session:new", revision: "hint" })}\n\n`);
     await chat.getByText("After steering", { exact: true }).waitFor();
     const queuedId = `server-${interventionIds[0]}`;
-    await page.locator(`[data-queue-id="${queuedId}"]`).getByRole("button", { name: "Steer", exact: true }).click();
+    await page.locator(`[data-queue-id="${queuedId}"]:visible`).getByRole("button", { name: "Steer", exact: true }).click();
     await parking.getByText("identical follow-up", { exact: true }).waitFor();
     expect(await chat.getByText("identical follow-up", { exact: true }).count()).toBe(2);
     ctrl.history.push({ entryKey: "intervention-run", itemId: "intervention-run:5", inputId: queuedId, role: "user", text: "identical follow-up", turnId: "intervention-run", complete: true });
@@ -941,53 +942,53 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const stopOriginal = page.waitForRequest("**/api/Prompt");
     await page.getByRole("button", { name: "Stop", exact: true }).click();
     expect((await stopOriginal).postDataJSON()).toEqual({ id: "web-session:new", text: "$stop" });
-    await page.locator("textarea").fill("newer draft while the turn runs");
+    await page.locator("textarea:visible").fill("newer draft while the turn runs");
     const createdResponse = page.waitForResponse("**/api/Prompt*");
     promptHold.resolve("private reply for created session");
     await (await createdResponse).finished();
     await shown(page, "private reply for created session");
-    expect(await page.getByPlaceholder("Message or $command").inputValue()).toBe("newer draft while the turn runs");
+    expect(await page.getByPlaceholder("Message or $command").filter({ visible: true }).inputValue()).toBe("newer draft while the turn runs");
     await page.setViewportSize({ width: 1280, height: 800 });
     // A consumed picker must follow a later explicit switch, including after navigation.
     ctrl.holdPrompt = false;
-    await page.locator("textarea").fill("$agent main");
+    await page.locator("textarea:visible").fill("$agent main");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await shown(page, "Switched to main");
     await page.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "main" }).waitFor();
     await goToSession(page, "will vanish");
     await page.goBack();
-    await page.locator("textarea").fill("stay with main");
+    await page.locator("textarea:visible").fill("stay with main");
     const switchedResponse = page.waitForResponse("**/api/Prompt");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await switchedResponse;
     expect(ctrl.prompt.slice(-2)).toEqual(["web-session:new:$agent main", "web-session:new:stay with main"]);
     ctrl.holdPrompt = true;
-    await page.locator("textarea").fill("created draft to discard");
+    await page.locator("textarea:visible").fill("created draft to discard");
     await page.keyboard.press("Control+Alt+n");
     await page.waitForURL(origin + "/");
-    expect(await page.getByPlaceholder("Message a new session").inputValue()).toBe("");
+    expect(await page.getByPlaceholder("Message a new session").filter({ visible: true }).inputValue()).toBe("");
     await hidden(page, "private reply for created session");
     promptHold = Promise.withResolvers();
 
     ctrl.holdCreate = true;
     ctrl.createStarted = Promise.withResolvers();
     ctrl.promptStarted = Promise.withResolvers();
-    await page.getByPlaceholder("Message a new session").fill("send from abandoned home");
+    await page.getByPlaceholder("Message a new session").filter({ visible: true }).fill("send from abandoned home");
     await page.getByRole("button", { name: "Send" }).click();
     await ctrl.createStarted.promise;
     await goToSession(page, "will vanish");
     await page.waitForURL("**/s/Z29uZQ");
     await page.keyboard.press("Meta+Alt+n");
     await page.waitForURL(origin + "/");
-    await page.getByPlaceholder("Message a new session").fill("unrelated new draft");
+    await page.getByPlaceholder("Message a new session").filter({ visible: true }).fill("unrelated new draft");
     createHold.resolve("web-session:abandoned");
     await ctrl.promptStarted.promise;
     const abandonedResponse = page.waitForResponse("**/api/Prompt*");
     promptHold.resolve("private reply for abandoned home");
     await (await abandonedResponse).finished();
-    await page.getByPlaceholder("Message a new session").press("End");
+    await page.getByPlaceholder("Message a new session").filter({ visible: true }).press("End");
     expect(page.url()).toBe(origin + "/");
-    expect(await page.getByPlaceholder("Message a new session").inputValue()).toBe("unrelated new draft");
+    expect(await page.getByPlaceholder("Message a new session").filter({ visible: true }).inputValue()).toBe("unrelated new draft");
     await hidden(page, "private reply for abandoned home");
     expect(ctrl.prompt.filter((item) => item === "web-session:abandoned:send from abandoned home")).toHaveLength(1);
     ctrl.holdCreate = false;
@@ -999,30 +1000,30 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     ctrl.holdCreate = true;
     ctrl.createStarted = Promise.withResolvers();
     ctrl.promptStarted = Promise.withResolvers();
-    await page.locator("textarea").fill("restored home submission");
+    await page.locator("textarea:visible").fill("restored home submission");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await ctrl.createStarted.promise;
     await goToSession(page, "will vanish");
     await page.goBack();
     await page.waitForURL(origin + "/");
-    expect(await page.locator("textarea").inputValue()).toBe("restored home submission");
+    expect(await page.locator("textarea:visible").inputValue()).toBe("restored home submission");
     createHold.resolve("web-session:restored");
     await page.waitForURL(`**/s/${Buffer.from("web-session:restored").toString("base64url")}`);
     await ctrl.promptStarted.promise;
     await shown(page, "restored home submission");
-    await page.locator("textarea").fill("restored fresh draft");
+    await page.locator("textarea:visible").fill("restored fresh draft");
     const restoredResponse = page.waitForResponse("**/api/Prompt");
     promptHold.resolve("restored reply");
     await restoredResponse;
     await shown(page, "restored reply");
-    expect(await page.locator("textarea").inputValue()).toBe("restored fresh draft");
+    expect(await page.locator("textarea:visible").inputValue()).toBe("restored fresh draft");
     ctrl.holdCreate = false;
     promptHold = Promise.withResolvers();
 
     await goToSession(page, "saved preview");
     await page.waitForURL("**/s/a2VwdA");
     ctrl.promptStarted = Promise.withResolvers();
-    await page.getByPlaceholder("Message or $command").fill("held in A");
+    await page.getByPlaceholder("Message or $command").filter({ visible: true }).fill("held in A");
     await page.getByRole("button", { name: "Send" }).click();
     await ctrl.promptStarted.promise;
     // A held prompt must not make another session's History report it as running.
@@ -1030,45 +1031,45 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect((await otherHistory.json()).running).toBe(false);
     await goToSession(page, "will vanish");
     await page.waitForURL("**/s/Z29uZQ");
-    await page.getByPlaceholder("Message or $command").fill("B draft");
+    await page.getByPlaceholder("Message or $command").filter({ visible: true }).fill("B draft");
     await hidden(page, "Working…");
     expect(await page.getByRole("button", { name: "Stop", exact: true }).count()).toBe(0);
     const promptResponse = page.waitForResponse("**/api/Prompt*");
     promptHold.resolve("private reply for A");
     await (await promptResponse).finished();
     // A completed render after the response must not clear B's draft or append A's reply.
-    await page.getByPlaceholder("Message or $command").press("End");
-    expect(await page.getByPlaceholder("Message or $command").inputValue()).toBe("B draft");
+    await page.getByPlaceholder("Message or $command").filter({ visible: true }).press("End");
+    expect(await page.getByPlaceholder("Message or $command").filter({ visible: true }).inputValue()).toBe("B draft");
     await hidden(page, "private reply for A");
     // A late failure must not complete a newer, still-blocked steer in this session.
     promptHold = Promise.withResolvers();
     ctrl.promptStarted = Promise.withResolvers();
-    await page.locator("textarea").fill("older failing turn");
+    await page.locator("textarea:visible").fill("older failing turn");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await ctrl.promptStarted.promise;
     const olderTurn = promptHold;
     promptHold = Promise.withResolvers();
     ctrl.promptStarted = Promise.withResolvers();
-    await page.locator("textarea").fill("newer held steer");
-    await page.locator("textarea").press("Control+Enter");
+    await page.locator("textarea:visible").fill("newer held steer");
+    await page.locator("textarea:visible").press("Control+Enter");
     await ctrl.promptStarted.promise;
-    await page.locator("textarea").fill("newer unsent draft");
+    await page.locator("textarea:visible").fill("newer unsent draft");
     const olderFailure = page.waitForResponse((response: { request: () => { postDataJSON: () => { text: string } }; url: () => string }) => response.url().endsWith("/api/Prompt") && response.request().postDataJSON().text === "older failing turn");
     olderTurn.reject(new RPCError("older turn failed late", 13));
     await (await olderFailure).finished();
     // Removal of its optimistic row proves the browser processed the rejection.
     await page.getByText("older failing turn", { exact: true }).waitFor({ state: "hidden" });
-    expect(await page.locator("textarea").inputValue()).toBe("newer unsent draft");
-    expect(await page.locator("textarea").getAttribute("placeholder")).toBe("Queue a follow-up · ⌘⏎ steers");
+    expect(await page.locator("textarea:visible").inputValue()).toBe("newer unsent draft");
+    expect(await page.locator("textarea:visible").getAttribute("placeholder")).toBe("Queue a follow-up · ⌘⏎ steers");
     await hidden(page, "older turn failed late");
-    await page.locator("textarea").fill("");
+    await page.locator("textarea:visible").fill("");
     expect(await page.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
-    await page.locator("textarea").fill("newer unsent draft");
+    await page.locator("textarea:visible").fill("newer unsent draft");
     const newerCompletion = page.waitForResponse("**/api/Prompt");
     promptHold.resolve("newer turn completed");
     await newerCompletion;
     await shown(page, "newer turn completed");
-    expect(await page.locator("textarea").inputValue()).toBe("newer unsent draft");
+    expect(await page.locator("textarea:visible").inputValue()).toBe("newer unsent draft");
     ctrl.holdPrompt = false;
     const selectedURL = page.url();
     await page.keyboard.press("Control+p");
@@ -1191,7 +1192,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
 
     ctrl.yieldBatches = complete([]);
     blocked.resolve();
-    await page.getByText("backfilled preview", { exact: true }).waitFor({ state: "hidden", timeout: 15_000 });
+    await sessionPalette.getByText("backfilled preview", { exact: true }).waitFor({ state: "hidden", timeout: 15_000 });
     await hidden(page, "saved preview");
     await page.keyboard.press("Control+p");
     await search.fill("empty-search");
@@ -1248,12 +1249,12 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await hidden(page, "will vanish");
     ctrl.yieldBatches = complete([row("gone", "bob preview")], "bob");
     blocked.resolve();
-    await shown(page, "bob preview");
+    await shown(sessionPalette, "bob preview");
     await hidden(page, "will vanish");
     blocked = Promise.withResolvers();
     ownerTail.resolve();
     await oldResponse;
-    await shown(page, "bob preview");
+    await shown(sessionPalette, "bob preview");
     await hidden(page, "late alice preview");
     expect(await page.evaluate(snapshot, ["bob", "test-protocol"])).toEqual([row("gone", "bob preview")]);
     await page.reload();
@@ -1269,7 +1270,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await hidden(sessionPalette, "bob preview");
     ctrl.yieldBatches = complete([row("gone", "new protocol preview")], "bob");
     blocked.resolve();
-    await shown(page, "new protocol preview");
+    await shown(sessionPalette, "new protocol preview");
 
     for (const rejection of ["mismatch", "unauthorized"] as const) {
       await page.keyboard.press("Control+p");
@@ -1279,7 +1280,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         if (rejection === "unauthorized") throw new RPCError("denied", 16);
         yield batch([row("other-owner", "unconfirmed owner preview")], { owner: "unconfirmed" });
       };
-      await page.getByText("new protocol preview", { exact: true }).waitFor({ state: "hidden", timeout: 15_000 });
+      await sessionPalette.getByText("new protocol preview", { exact: true }).waitFor({ state: "hidden", timeout: 15_000 });
       await hidden(page, "unconfirmed owner preview");
       await page.keyboard.press("Control+p");
       await search.fill("preview");
@@ -1359,7 +1360,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         }
         await shown(storagePage, "live without storage");
         await storagePage.keyboard.press("Escape");
-        await storagePage.getByPlaceholder("Message a new session").fill(`send with ${failure} storage`);
+        await storagePage.getByPlaceholder("Message a new session").filter({ visible: true }).fill(`send with ${failure} storage`);
         const sent = storagePage.waitForResponse("**/api/Prompt");
         await storagePage.getByRole("button", { name: "Send" }).click();
         await storagePage.waitForURL("**/s/d2ViLXNlc3Npb246bmV3");
@@ -1442,7 +1443,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await matrix.goto(origin);
     await openSessions(matrix);
     const matrixDialog = matrix.getByRole("dialog", { name: "Go to session", exact: true });
-    const matrixSearch = matrixDialog.getByPlaceholder("Search sessions");
+    const matrixSearch = matrixDialog.getByPlaceholder("Search sessions").filter({ visible: true });
     await matrixDialog.getByText("Winner", { exact: true }).waitFor();
     await matrix.keyboard.press("Escape");
     await matrixDialog.waitFor({ state: "hidden" });
@@ -1575,10 +1576,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await openSessions(failure);
     const failureDialog = failure.getByRole("dialog", { name: "Go to session", exact: true });
     await failureDialog.getByText("Winner", { exact: true }).waitFor();
-    await failureDialog.getByPlaceholder("Search sessions").fill("row and origin");
+    await failureDialog.getByPlaceholder("Search sessions").filter({ visible: true }).fill("row and origin");
     await failureDialog.getByRole("alert").waitFor();
     await failureDialog.getByText("Winner", { exact: true }).waitFor();
-    await failureDialog.getByPlaceholder("Search sessions").fill("absent");
+    await failureDialog.getByPlaceholder("Search sessions").filter({ visible: true }).fill("absent");
     await failureDialog.getByText("Search incomplete", { exact: true }).waitFor();
     expect(await failureDialog.getByText("No matches", { exact: true }).count()).toBe(0);
     await failure.close();
@@ -1598,13 +1599,13 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await openSessions(many);
     const manyDialog = many.getByRole("dialog", { name: "Go to session", exact: true });
     await many.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button').length === 96);
-    await manyDialog.getByPlaceholder("Search sessions").fill("origin-only-needle");
+    await manyDialog.getByPlaceholder("Search sessions").filter({ visible: true }).fill("origin-only-needle");
     await manyDialog.getByText("loading...", { exact: true }).waitFor();
     await many.waitForTimeout(300);
     expect(await many.evaluate(() => (window as unknown as { originFetches: number }).originFetches)).toBe(1); // One request covers all 96 chats.
     manyOriginsHold.resolve();
     await manyDialog.getByText("Search fixture 0", { exact: true }).waitFor();
-    await manyDialog.getByPlaceholder("Search sessions").fill("not-in-any-row");
+    await manyDialog.getByPlaceholder("Search sessions").filter({ visible: true }).fill("not-in-any-row");
     await manyDialog.getByText("loading...", { exact: true }).waitFor();
     lastOriginHold.resolve();
     await manyDialog.getByText("No matches", { exact: true }).waitFor();
@@ -1626,7 +1627,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await pendingPage.goto(origin);
     await openSessions(pendingPage);
     const pendingDialog = pendingPage.getByRole("dialog", { name: "Go to session", exact: true });
-    const pendingSearch = pendingDialog.getByPlaceholder("Search sessions");
+    const pendingSearch = pendingDialog.getByPlaceholder("Search sessions").filter({ visible: true });
     await shown(pendingDialog, "matching active");
     for (const prefix of ["agent:main", "room:missing"]) {
       await pendingSearch.fill(prefix);
@@ -1646,7 +1647,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await navPage.goto(origin);
     await openSessions(navPage);
     const navPalette = navPage.getByRole("dialog", { name: "Go to session", exact: true });
-    const navSearch = navPalette.getByPlaceholder("Search sessions");
+    const navSearch = navPalette.getByPlaceholder("Search sessions").filter({ visible: true });
     await navSearch.fill("agent:main");
     await navPalette.getByRole("button", { name: "main gpt", exact: true }).waitFor();
     await navPage.keyboard.press("Enter");
@@ -1673,7 +1674,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     // Escape first closes search suggestions without leaving the page.
     await footer.getByRole("button", { name: "Search sessions", exact: true }).click();
     await navPage.waitForURL("**/search");
-    await navMain.getByPlaceholder("Search or agent: or room:").fill("agent:");
+    await navMain.getByPlaceholder("Search or agent: or room:").filter({ visible: true }).fill("agent:");
     for (let i = 0; i < 10; i++) await navPage.keyboard.press("ArrowDown");
     expect(await navMain.getByRole("button", { name: "agent9", exact: true }).evaluate((node: HTMLElement) => {
       const bounds = node.getBoundingClientRect();
@@ -1681,7 +1682,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     })).toBe(true);
     await navPage.keyboard.press("Escape");
     expect(new URL(navPage.url()).pathname).toBe("/search");
-    expect(await navMain.getByPlaceholder("Search or agent: or room:").inputValue()).toBe("");
+    expect(await navMain.getByPlaceholder("Search or agent: or room:").filter({ visible: true }).inputValue()).toBe("");
     await navPage.keyboard.press("Escape");
     await navPage.waitForURL(`${origin}/`);
     for (const name of ["Cron", "Agents", "Skills", "Config"]) {
@@ -1699,7 +1700,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await navPage.setViewportSize({ width, height: 844 });
       await goToSession(navPage, "matching active");
       await navPage.waitForURL(`${origin}${chatPath}`);
-      await navPage.getByPlaceholder("Message or $command").fill("keep this chat draft");
+      await navPage.getByPlaceholder("Message or $command").filter({ visible: true }).fill("keep this chat draft");
       for (const name of ["Cron", "Agents", "Skills", "Config"]) {
         await openPage(name);
         await navPage.waitForURL(`${origin}/${name.toLowerCase()}`);
@@ -1728,10 +1729,13 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await navPage.waitForURL(`${origin}/cron`);
       await openPage("Skills");
       await navPage.waitForURL(`${origin}/skills`);
+      // Escape closes the page tab and activates its neighbour, so two pages take two presses.
+      await navPage.keyboard.press("Escape");
+      await navPage.waitForURL(`${origin}/cron`);
       await navPage.keyboard.press("Escape");
       await navPage.waitForURL(`${origin}${chatPath}`);
       if (width === 390) await navPage.keyboard.press("Escape");
-      expect(await navPage.getByPlaceholder("Message or $command").inputValue()).toBe("keep this chat draft");
+      expect(await navPage.getByPlaceholder("Message or $command").filter({ visible: true }).inputValue()).toBe("keep this chat draft");
       const newChat = footer.getByRole("button", { name: "New session", exact: true });
       const groupBox = await newChat.locator("..").boundingBox();
       if (width === 390) {
@@ -1747,21 +1751,24 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await navPage.waitForURL(`${origin}/`);
       expect(ctrl.createdAgents.length).toBe(creations);
       if (width === 390) await navPage.keyboard.press("Escape");
-      expect(await navPage.getByPlaceholder("Message a new session").inputValue()).toBe("");
+      expect(await navPage.getByPlaceholder("Message a new session").filter({ visible: true }).inputValue()).toBe("");
       await navPage.getByRole("combobox", { name: "Choose agent" }).click();
       await navPage.getByRole("option", { name: "other gpt", exact: true }).click();
-      await navPage.getByPlaceholder("Message a new session").fill("fresh draft");
+      await navPage.getByPlaceholder("Message a new session").filter({ visible: true }).fill("fresh draft");
       await openPage("Config");
       await navPage.waitForURL(`${origin}/config`);
       await navPage.goBack();
       await navPage.waitForURL(`${origin}/`);
       if (width === 390) await navPage.keyboard.press("Escape");
-      expect(await navPage.getByPlaceholder("Message a new session").inputValue()).toBe("fresh draft");
+      expect(await navPage.getByPlaceholder("Message a new session").filter({ visible: true }).inputValue()).toBe("fresh draft");
       await navPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
+      // Back keeps the Settings tab open; close it so later page tabs close back to the chat.
+      await navPage.getByRole("button", { name: "Close Settings", exact: true }).click();
+      expect(new URL(navPage.url()).pathname).toBe("/");
       await newChat.click();
       if (width === 390) await navPage.keyboard.press("Escape");
-      await navPage.waitForFunction(() => document.querySelector("textarea")?.value === "" && !document.querySelector("textarea")?.closest("fieldset")?.disabled);
-      expect(await navPage.getByPlaceholder("Message a new session").inputValue()).toBe("");
+      await navPage.waitForFunction(() => [...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.value === "" && ![...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.closest("fieldset")?.disabled);
+      expect(await navPage.getByPlaceholder("Message a new session").filter({ visible: true }).inputValue()).toBe("");
       await navPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "main" }).waitFor();
       expect(ctrl.createdAgents.length).toBe(creations);
     }
@@ -1839,7 +1846,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await cronPage.waitForURL(`**/s/${btoa("web:cron:silent-source").replaceAll("=", "")}`);
       await cronPage.locator("#transcript-scroll").getByText("Silent run trace", { exact: true }).waitFor();
       expect(cronOpens.slice(opensBefore)).toEqual(["cron:silent-source"]);
-      await cronPage.getByPlaceholder("Message or $command").fill("Continue this run");
+      await cronPage.getByPlaceholder("Message or $command").filter({ visible: true }).fill("Continue this run");
       await cronPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
       await cronPage.getByRole("combobox", { name: "Choose agent" }).click();
       await cronPage.getByRole("option").first().waitFor();
@@ -2158,7 +2165,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await detailsPage.locator("main").getByRole("button", { name: "Unpin session", exact: true }).waitFor();
       await detailsPage.keyboard.press("Control+p");
       const detailsPalette = detailsPage.getByRole("dialog", { name: "Go to session", exact: true });
-      const search = detailsPalette.getByPlaceholder("Search sessions");
+      const search = detailsPalette.getByPlaceholder("Search sessions").filter({ visible: true });
       expect(await detailsPalette.locator("li > button").first().innerText()).toContain("Original preview");
       await search.fill("IS:PINNED");
       await detailsPalette.getByText("Pinned preview", { exact: true }).waitFor();
@@ -2192,7 +2199,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       expect(Math.abs(pinBox!.y - sendBox!.y)).toBeLessThan(8);
       const rename = detailsPage.locator("main").getByRole("button", { name: "Name session", exact: true });
       expect(await rename.innerText()).toBe("");
-      await detailsPage.locator("textarea").hover();
+      await detailsPage.locator("textarea:visible").hover();
       await rename.hover();
       await detailsPage.locator('[data-slot="tooltip-content"]').filter({ hasText: "Name session" }).waitFor();
       expect(await detailsPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -2240,31 +2247,31 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await (await picker).setFiles([{ name: "keep.bin", mimeType: "application/octet-stream", buffer: Buffer.from([0, 255, 1, 2]) }, { name: "remove.txt", mimeType: "text/plain", buffer: Buffer.from("remove") }]);
     await attachmentPage.getByRole("button", { name: "Remove remove.txt", exact: true }).click();
     expect(await attachmentPage.getByRole("button", { name: "Remove remove.txt", exact: true }).count()).toBe(0);
-    await attachmentPage.locator("textarea").evaluate((element: HTMLElement) => {
+    await attachmentPage.locator("textarea:visible").evaluate((element: HTMLElement) => {
       const dataTransfer = new DataTransfer();
       dataTransfer.items.add(new File([new Uint8Array([3, 4, 0, 255])], "drop.bin"));
       element.dispatchEvent(new DragEvent("drop", { bubbles: true, dataTransfer }));
     });
     await attachmentPage.getByRole("button", { name: "Remove drop.bin", exact: true }).waitFor();
     // A pasted screenshot arrives as a clipboard file, as with cmd+V or the context menu's Paste.
-    await attachmentPage.locator("textarea").evaluate((element: HTMLElement) => {
+    await attachmentPage.locator("textarea:visible").evaluate((element: HTMLElement) => {
       const clipboardData = new DataTransfer();
       clipboardData.items.add(new File([new Uint8Array([137, 80, 78, 71])], "image.png", { type: "image/png" }));
       element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData }));
     });
     await attachmentPage.getByRole("button", { name: "Remove image.png", exact: true }).click();
-    await attachmentPage.locator("textarea").fill("  exact file draft\n");
+    await attachmentPage.locator("textarea:visible").fill("  exact file draft\n");
     await attachmentPage.locator("footer").getByRole("button", { name: "Open command palette" }).click();
     await attachmentPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Settings" }).click();
     await attachmentPage.goBack();
     await attachmentPage.getByRole("button", { name: "Remove keep.bin", exact: true }).waitFor();
-    expect(await attachmentPage.locator("textarea").inputValue()).toBe("  exact file draft\n");
+    expect(await attachmentPage.locator("textarea:visible").inputValue()).toBe("  exact file draft\n");
     await goToSession(attachmentPage, "Most recent message");
     await attachmentPage.waitForURL(`**/s/${Buffer.from("recent").toString("base64url")}`);
     expect(await attachmentPage.getByRole("button", { name: "Remove keep.bin", exact: true }).count()).toBe(0);
     await attachmentPage.goBack();
     await attachmentPage.getByRole("button", { name: "Remove keep.bin", exact: true }).waitFor();
-    expect(await attachmentPage.locator("textarea").inputValue()).toBe("  exact file draft\n");
+    expect(await attachmentPage.locator("textarea:visible").inputValue()).toBe("  exact file draft\n");
     const beforeFailedUpload = ctrl.prompt.length;
     await attachmentPage.getByRole("combobox", { name: "Choose agent" }).click();
     await attachmentPage.getByRole("option", { name: "other gpt" }).click();
@@ -2272,16 +2279,16 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await attachmentPage.getByRole("button", { name: "Send", exact: true }).click();
     await attachmentPage.getByText("Upload failed: drop.bin", { exact: true }).waitFor();
     expect(ctrl.prompt.length).toBe(beforeFailedUpload);
-    expect(await attachmentPage.locator("textarea").inputValue()).toBe("  exact file draft\n");
+    expect(await attachmentPage.locator("textarea:visible").inputValue()).toBe("  exact file draft\n");
     expect(await attachmentPage.getByRole("button", { name: /^Remove .*\.bin$/ }).count()).toBe(2);
-    expect(await attachmentPage.locator("textarea").isEnabled()).toBe(true);
+    expect(await attachmentPage.locator("textarea:visible").isEnabled()).toBe(true);
     expect(await attachmentPage.getByRole("combobox", { name: "Choose agent" }).innerText()).toBe("other");
     expect(["keep.bin", "drop.bin"].map((name) => [...uploadedFiles.findLast(({ meta }) => meta.name === name)!.data])).toEqual([[0, 255, 1, 2], [3, 4, 0, 255]]);
     ctrl.uploadError = "";
     ctrl.promptError = true;
     await attachmentPage.getByRole("button", { name: "Send", exact: true }).click();
     await attachmentPage.getByText("Send failed; retry", { exact: true }).waitFor();
-    expect(await attachmentPage.locator("textarea").inputValue()).toBe("  exact file draft\n");
+    expect(await attachmentPage.locator("textarea:visible").inputValue()).toBe("  exact file draft\n");
     expect(await attachmentPage.getByRole("button", { name: /^Remove .*\.bin$/ }).count()).toBe(2);
     expect(ctrl.attachmentPrompts.at(-1)).toMatchObject({ id: "visible-files", text: "  exact file draft\n", delivery: "STEER" });
     expect(ctrl.attachmentPrompts.at(-1)?.attachmentIds?.map((id) => uploadedFiles.find(({ meta }) => meta.id === id)?.meta.name)).toEqual(["keep.bin", "drop.bin"]);
@@ -2292,11 +2299,11 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await attachmentPage.getByRole("button", { name: "Send", exact: true }).click();
     await ctrl.uploadStarted.promise;
     const beforeUploadDispatch = ctrl.attachmentPrompts.length;
-    await attachmentPage.locator("textarea").dispatchEvent("keydown", { key: "Enter" });
+    await attachmentPage.locator("textarea:visible").dispatchEvent("keydown", { key: "Enter" });
     await goToSession(attachmentPage, "Most recent message");
     await attachmentPage.goBack();
     await attachmentPage.getByRole("button", { name: "Remove keep.bin", exact: true }).waitFor();
-    expect(await attachmentPage.locator("textarea").inputValue()).toBe("  exact file draft\n");
+    expect(await attachmentPage.locator("textarea:visible").inputValue()).toBe("  exact file draft\n");
     expect(ctrl.attachmentPrompts.length).toBe(beforeUploadDispatch);
     uploadHold.resolve();
     ctrl.holdUpload = false;
@@ -2314,25 +2321,25 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await goToSession(attachmentPage, "Most recent message");
     await attachmentPage.goBack();
     await attachmentPage.getByRole("link", { name: "Download keep.bin", exact: true }).waitFor();
-    expect(await attachmentPage.getByText("exact file draft", { exact: true }).count()).toBe(1);
+    expect(await attachmentPage.getByText("exact file draft", { exact: true }).filter({ visible: true }).count()).toBe(1);
     // The active turn makes Enter queue; the in-flight lock prevents a second upload/send.
-    await attachmentPage.locator('input[type="file"]').setInputFiles({ name: "queued.bin", mimeType: "application/octet-stream", buffer: Buffer.from("queue") });
+    await attachmentPage.locator('main > :visible input[type="file"]').setInputFiles({ name: "queued.bin", mimeType: "application/octet-stream", buffer: Buffer.from("queue") });
     promptHold = Promise.withResolvers();
     ctrl.holdPrompt = true;
     ctrl.promptStarted = Promise.withResolvers();
     const sends = ctrl.attachmentPrompts.length;
-    await attachmentPage.locator("textarea").press("Enter");
+    await attachmentPage.locator("textarea:visible").press("Enter");
     await ctrl.promptStarted.promise;
-    await attachmentPage.locator("textarea").dispatchEvent("keydown", { key: "Enter" });
+    await attachmentPage.locator("textarea:visible").dispatchEvent("keydown", { key: "Enter" });
     expect(ctrl.attachmentPrompts.length).toBe(sends + 1);
     expect(ctrl.attachmentPrompts.at(-1)?.delivery).toBe("QUEUE");
     expect(await attachmentPage.getByRole("region", { name: "Messages", exact: true }).getByRole("link", { name: "Download queued.bin", exact: true }).count()).toBe(0);
     expect(Buffer.from(uploadedFiles.at(-1)!.data).toString()).toBe("queue");
-    expect(await attachmentPage.locator("textarea").isEnabled()).toBe(true);
+    expect(await attachmentPage.locator("textarea:visible").isEnabled()).toBe(true);
     expect(await attachmentPage.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
-    await attachmentPage.locator('input[type="file"]').setInputFiles({ name: "steer.bin", mimeType: "application/octet-stream", buffer: Buffer.from("steer") });
+    await attachmentPage.locator('main > :visible input[type="file"]').setInputFiles({ name: "steer.bin", mimeType: "application/octet-stream", buffer: Buffer.from("steer") });
     ctrl.promptStarted = Promise.withResolvers();
-    await attachmentPage.locator("textarea").press("Control+Enter");
+    await attachmentPage.locator("textarea:visible").press("Control+Enter");
     await ctrl.promptStarted.promise;
     expect(ctrl.attachmentPrompts.at(-1)?.delivery).toBe("STEER");
     await attachmentPage.getByRole("region", { name: "Pending steers", exact: true }).getByRole("link", { name: "Download steer.bin", exact: true }).waitFor();
@@ -2340,17 +2347,17 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const stopped = attachmentPage.waitForResponse((response: { url: () => string; request: () => { postDataJSON: () => { text: string } } }) => response.url().endsWith("/api/Prompt") && response.request().postDataJSON().text === "$stop");
     await attachmentPage.getByRole("button", { name: "Stop", exact: true }).click();
     await stopped;
-    await attachmentPage.locator("textarea").fill("newer attachment draft");
+    await attachmentPage.locator("textarea:visible").fill("newer attachment draft");
     promptHold.resolve("");
     ctrl.holdPrompt = false;
     await attachmentPage.getByRole("button", { name: "Remove queued.bin", exact: true }).waitFor({ state: "hidden" });
     await attachmentPage.getByRole("button", { name: "Remove steer.bin", exact: true }).waitFor({ state: "hidden" });
-    expect(await attachmentPage.locator("textarea").inputValue()).toBe("newer attachment draft");
-    await attachmentPage.locator('input[type="file"]').setInputFiles({ name: "reset.bin", mimeType: "application/octet-stream", buffer: Buffer.from("reset") });
+    expect(await attachmentPage.locator("textarea:visible").inputValue()).toBe("newer attachment draft");
+    await attachmentPage.locator('main > :visible input[type="file"]').setInputFiles({ name: "reset.bin", mimeType: "application/octet-stream", buffer: Buffer.from("reset") });
     await attachmentPage.getByRole("button", { name: "New session", exact: true }).click();
     await attachmentPage.waitForURL(`${origin}/`);
     expect(await attachmentPage.getByRole("button", { name: "Remove reset.bin", exact: true }).count()).toBe(0);
-    await attachmentPage.locator('input[type="file"]').setInputFiles({ name: "home.bin", mimeType: "application/octet-stream", buffer: Buffer.from("home") });
+    await attachmentPage.locator('main > :visible input[type="file"]').setInputFiles({ name: "home.bin", mimeType: "application/octet-stream", buffer: Buffer.from("home") });
     await attachmentPage.getByRole("button", { name: "Send", exact: true }).click();
     await attachmentPage.waitForURL("**/s/d2ViLXNlc3Npb246bmV3");
     await attachmentPage.getByRole("button", { name: "Remove home.bin", exact: true }).waitFor({ state: "hidden" });
@@ -2367,8 +2374,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     ctrl.promptStarted = Promise.withResolvers();
     const photoPage = await browser.newPage();
     await photoPage.goto(`${origin}/s/${Buffer.from("photo-session").toString("base64url")}`);
-    await photoPage.locator("textarea").fill("What's this? \n");
-    await photoPage.locator('input[type="file"]').setInputFiles({ name: "photo.png", mimeType: "image/png", buffer: imageBytes });
+    await photoPage.locator("textarea:visible").fill("What's this? \n");
+    await photoPage.locator('main > :visible input[type="file"]').setInputFiles({ name: "photo.png", mimeType: "image/png", buffer: imageBytes });
     await photoPage.getByRole("button", { name: "Send", exact: true }).click();
     await ctrl.uploadStarted.promise;
     expect(await photoPage.getByRole("region", { name: "Turn 1", exact: true }).getByText("What's this?", { exact: true }).textContent()).toBe("What's this? \n");
@@ -2384,18 +2391,18 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     ctrl.history = [{ entryKey: "photo", itemId: "photo:0", inputId: ctrl.attachmentPrompts.at(-1)!.messageId, role: "user", text: "What's this? \n", turnId: "", complete: true, attachments: [sentPhoto] }];
     await goToSession(photoPage, "Most recent message");
     await photoPage.goBack();
-    await photoPage.waitForFunction(() => (document.querySelector('img[alt="photo.png"]') as HTMLImageElement)?.src.includes("/api/DownloadAttachment"));
-    expect(await photoPage.getByText("What's this?", { exact: true }).count()).toBe(1);
+    await photoPage.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>('img[alt="photo.png"]')].find((image) => image.checkVisibility())?.src.includes("/api/DownloadAttachment"));
+    expect(await photoPage.getByText("What's this?", { exact: true }).filter({ visible: true }).count()).toBe(1);
     expect(await photoPage.getByRole("img", { name: "photo.png", exact: true }).count()).toBe(1);
     expect(await photoPage.evaluate(async (url: string) => { try { await fetch(url); return true; } catch { return false; } }, localPhotoURL)).toBe(false);
     promptHold.resolve("");
     ctrl.holdPrompt = false;
     await photoPage.reload();
-    await photoPage.waitForFunction(() => (document.querySelector('img[alt="photo.png"]') as HTMLImageElement)?.naturalWidth === 1);
+    await photoPage.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>('img[alt="photo.png"]')].find((image) => image.checkVisibility())?.naturalWidth === 1);
     expect(await photoPage.getByText("What's this?", { exact: true }).textContent()).toBe("What's this? \n");
     expect(await photoPage.getByRole("img", { name: "photo.png", exact: true }).count()).toBe(1);
-    await photoPage.locator("textarea").fill("What's this? \n");
-    await photoPage.locator('input[type="file"]').setInputFiles({ name: "photo.png", mimeType: "image/png", buffer: imageBytes });
+    await photoPage.locator("textarea:visible").fill("What's this? \n");
+    await photoPage.locator('main > :visible input[type="file"]').setInputFiles({ name: "photo.png", mimeType: "image/png", buffer: imageBytes });
     ctrl.promptStarted = Promise.withResolvers();
     await photoPage.getByRole("button", { name: "Send", exact: true }).click();
     await ctrl.promptStarted.promise;
@@ -2403,8 +2410,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     ctrl.history.push({ ...ctrl.history[0], entryKey: "second-photo", itemId: "second-photo:0", inputId: ctrl.attachmentPrompts.at(-1)!.messageId, attachments: [secondPhoto] });
     await goToSession(photoPage, "Most recent message");
     await photoPage.goBack();
-    await photoPage.waitForFunction(() => { const images = [...document.querySelectorAll<HTMLImageElement>('img[alt="photo.png"]')]; return images.length === 2 && images.every((image) => image.src.includes("/api/DownloadAttachment") && image.naturalWidth === 1); });
-    expect(await photoPage.getByText("What's this?", { exact: true }).allTextContents()).toEqual(["What's this? \n", "What's this? \n"]);
+    await photoPage.waitForFunction(() => { const images = [...document.querySelectorAll<HTMLImageElement>('img[alt="photo.png"]')].filter((image) => image.checkVisibility()); return images.length === 2 && images.every((image) => image.src.includes("/api/DownloadAttachment") && image.naturalWidth === 1); });
+    expect(await photoPage.getByText("What's this?", { exact: true }).filter({ visible: true }).allTextContents()).toEqual(["What's this? \n", "What's this? \n"]);
     expect(await photoPage.getByRole("img", { name: "photo.png", exact: true }).count()).toBe(2);
     await photoPage.close();
     const desktopPage = await browser.newPage({ viewport: { width: 1280, height: 800 } });
@@ -2447,8 +2454,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     transcriptStreams.clear();
     const stashPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await stashPage.goto(`${origin}/s/${Buffer.from("stash-session").toString("base64url")}`);
-    await stashPage.locator("textarea").fill("$stop");
-    await stashPage.locator('input[type="file"]').setInputFiles({ name: "held.txt", mimeType: "text/plain", buffer: Buffer.from("held contents") });
+    await stashPage.locator("textarea:visible").fill("$stop");
+    await stashPage.locator('main > :visible input[type="file"]').setInputFiles({ name: "held.txt", mimeType: "text/plain", buffer: Buffer.from("held contents") });
     ctrl.promptError = true;
     const stashButton = stashPage.getByRole("button", { name: "Stash", exact: true });
     // Idle: Stash stays usable but is no louder than the disabled Steer.
@@ -2456,15 +2463,15 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect((await stashButton.getAttribute("class"))?.split(/\s+/)).toContain("opacity-50");
     await stashButton.click();
     await shown(stashPage, "Stash failed; retry");
-    expect(await stashPage.locator("textarea").inputValue()).toBe("$stop");
+    expect(await stashPage.locator("textarea:visible").inputValue()).toBe("$stop");
     expect(await stashPage.getByRole("button", { name: "Remove held.txt", exact: true }).count()).toBe(1);
     ctrl.promptError = false;
-    await stashPage.locator("textarea").focus();
+    await stashPage.locator("textarea:visible").focus();
     await stashPage.keyboard.press("Meta+Alt+Enter");
-    const heldRow = stashPage.locator("[data-queue-id]");
+    const heldRow = stashPage.locator("[data-queue-id]:visible");
     await heldRow.getByRole("button", { name: "Pop", exact: true }).waitFor();
     expect(await heldRow.getByText("$stop", { exact: true }).count()).toBe(1);
-    expect(await stashPage.locator("textarea").inputValue()).toBe("");
+    expect(await stashPage.locator("textarea:visible").inputValue()).toBe("");
     expect(await stashPage.getByRole("button", { name: "Stop", exact: true }).count()).toBe(0);
     expect(await heldRow.getByRole("button", { name: "Steer", exact: true }).count()).toBe(0);
     expect(await heldRow.getByRole("button", { name: "Reorder", exact: true }).count()).toBe(1);
@@ -2501,10 +2508,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await heldRow.getByRole("button", { name: "Steer", exact: true }).click();
     await stashPage.getByRole("region", { name: "Pending steers", exact: true }).getByText("$stop", { exact: true }).waitFor();
     expect(ctrl.queue[0].delivery).toBe("STEER");
-    await stashPage.locator("textarea").fill("busy stash");
+    await stashPage.locator("textarea:visible").fill("busy stash");
     // Running: Stash lights up together with Steer.
     expect((await stashButton.getAttribute("class"))?.split(/\s+/)).not.toContain("opacity-50");
-    await stashPage.locator("textarea").press("Control+Alt+Enter");
+    await stashPage.locator("textarea:visible").press("Control+Alt+Enter");
     await heldRow.getByRole("button", { name: "Pop", exact: true }).waitFor();
     expect(await heldRow.getByText("busy stash", { exact: true }).count()).toBe(1);
     expect(await stashPage.getByRole("region", { name: "Messages", exact: true }).getByText("busy stash", { exact: true }).count()).toBe(0);
@@ -2522,10 +2529,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const retiredPrompts = () => ctrl.prompt.filter((text) => text.startsWith("retired-session:"));
     await retiredPage.goto(`${origin}/s/${Buffer.from("retired-session").toString("base64url")}`);
     await retiredPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
-    await retiredPage.locator("textarea").fill("held hello");
+    await retiredPage.locator("textarea:visible").fill("held hello");
     await retiredPage.getByRole("button", { name: "Stash", exact: true }).click();
     const popped = retiredPage.waitForResponse((response: PromptResponse) => response.url().endsWith("/api/PopQueueItem"));
-    await retiredPage.locator("[data-queue-id]").getByRole("button", { name: "Pop", exact: true }).click();
+    await retiredPage.locator("[data-queue-id]:visible").getByRole("button", { name: "Pop", exact: true }).click();
     await popped;
     expect(retiredPrompts()).toEqual(["retired-session:held hello", "retired-session:$agent other"]);
     ctrl.queue = [];
@@ -2536,14 +2543,14 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await retiredPage.route("**/api/Prompt", (route: { request(): { postDataJSON(): { text: string } }; fulfill(options: object): Promise<void>; continue(): Promise<void> }) => route.request().postDataJSON().text.startsWith("$agent ")
       ? route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ message: "agent is not currently allowed", code: 3 }) })
       : route.continue());
-    await retiredPage.locator("textarea").fill("hello");
-    await retiredPage.locator("textarea").press("Enter");
+    await retiredPage.locator("textarea:visible").fill("hello");
+    await retiredPage.locator("textarea:visible").press("Enter");
     await shown(retiredPage, "agent is not currently allowed");
-    expect(await retiredPage.locator("textarea").inputValue()).toBe("hello");
+    expect(await retiredPage.locator("textarea:visible").inputValue()).toBe("hello");
     expect(retiredPrompts()).toEqual(["retired-session:held hello", "retired-session:$agent other"]);
     // A rejected switch keeps the stash held instead of popping it to the unlisted agent.
     ctrl.queue = [{ id: "kept-stash", text: "kept stash", delivery: "STASH", principal: ctrl.principal }];
-    const keptRow = retiredPage.locator('[data-queue-id="kept-stash"]');
+    const keptRow = retiredPage.locator('[data-queue-id="kept-stash"]:visible');
     await keptRow.getByRole("button", { name: "Pop", exact: true }).click();
     await keptRow.getByRole("button", { name: "Pop", exact: true }).waitFor();
     await shown(retiredPage, "agent is not currently allowed");
@@ -2551,7 +2558,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     ctrl.queue = [];
     await retiredPage.unroute("**/api/Prompt");
     const helloSent = retiredPage.waitForResponse((response: PromptResponse) => response.url().endsWith("/api/Prompt") && response.request().postDataJSON().text === "hello");
-    await retiredPage.locator("textarea").press("Enter");
+    await retiredPage.locator("textarea:visible").press("Enter");
     await helloSent;
     expect(retiredPrompts().slice(2)).toEqual(["retired-session:$agent other", "retired-session:hello"]);
     expect(ctrl.currentAgents.get("retired-session")).toBe("other");
@@ -2562,7 +2569,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await retiredPage.reload();
     await retiredPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
     const steered = retiredPage.waitForResponse((response: PromptResponse) => response.url().endsWith("/api/SteerQueueItem"));
-    await retiredPage.locator('[data-queue-id="queued-work"]').getByRole("button", { name: "Send", exact: true }).click();
+    await retiredPage.locator('[data-queue-id="queued-work"]:visible').getByRole("button", { name: "Send", exact: true }).click();
     await steered;
     expect(retiredPrompts().at(-1)).toBe("retired-session:$agent other");
     expect(ctrl.queue[0].delivery).toBe("STEER");
@@ -2573,8 +2580,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await retiredPage.goto(`${origin}/s/${Buffer.from("blank-session").toString("base64url")}`);
     await retiredPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
     const blankSent = retiredPage.waitForResponse((response: PromptResponse) => response.url().endsWith("/api/Prompt") && response.request().postDataJSON().text === "hi");
-    await retiredPage.locator("textarea").fill("hi");
-    await retiredPage.locator("textarea").press("Enter");
+    await retiredPage.locator("textarea:visible").fill("hi");
+    await retiredPage.locator("textarea:visible").press("Enter");
     await blankSent;
     expect(ctrl.prompt.filter((text) => text.startsWith("blank-session:"))).toEqual(["blank-session:hi"]);
     await retiredPage.route("**/api/ListAgents", (route: { fulfill(options: { json: unknown }): Promise<void> }) => route.fulfill({ json: { agents: [{ name: "other", model: "gpt" }], currentAgent: "" } }));
@@ -2627,11 +2634,11 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await authorPage.screenshot({ path: path.join(screenshots, `human-author-${width}.png`) });
     }
     for (const id of ["bob-queue", "bob-stash"]) {
-      await authorPage.locator(`[data-queue-id="${id}"] [data-slot="message-author"]`).waitFor();
-      expect(await authorPage.locator(`[data-queue-id="${id}"] [data-slot="message-author"]`).textContent()).toBe(bob);
+      await authorPage.locator(`[data-queue-id="${id}"]:visible [data-slot="message-author"]`).waitFor();
+      expect(await authorPage.locator(`[data-queue-id="${id}"]:visible [data-slot="message-author"]`).textContent()).toBe(bob);
     }
-    await authorPage.locator('[data-queue-id="bob-stash"]').getByRole("button", { name: "Pop", exact: true }).click();
-    await authorPage.locator('[data-queue-id="bob-stash"]').getByRole("button", { name: "Send", exact: true }).click();
+    await authorPage.locator('[data-queue-id="bob-stash"]:visible').getByRole("button", { name: "Pop", exact: true }).click();
+    await authorPage.locator('[data-queue-id="bob-stash"]:visible').getByRole("button", { name: "Send", exact: true }).click();
     const authorParking = authorPage.getByRole("region", { name: "Pending steers", exact: true });
     await authorParking.locator('[data-slot="message-author"]').waitFor();
     expect(await authorParking.locator('[data-slot="message-author"]').textContent()).toBe(bob);
@@ -2645,7 +2652,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await authorPage.reload();
     await authorChat.getByRole("img", { name: "history.png", exact: true }).waitFor();
     expect(await authorChat.locator('[data-slot="message-author"]').allTextContents()).toEqual([bob, bob]);
-    expect(await authorPage.locator('[data-queue-id="bob-queue"] [data-slot="message-author"]').textContent()).toBe(bob);
+    expect(await authorPage.locator('[data-queue-id="bob-queue"]:visible [data-slot="message-author"]').textContent()).toBe(bob);
 
     // An identity refresh cannot supply a provisional author; recorded authors remain visible.
     const refreshing = Promise.withResolvers<void>();
@@ -2655,7 +2662,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     ctrl.holdPrompt = true;
     promptHold = Promise.withResolvers();
     ctrl.promptStarted = Promise.withResolvers();
-    await authorPage.locator("textarea").fill("Unlabeled while identity refreshes");
+    await authorPage.locator("textarea:visible").fill("Unlabeled while identity refreshes");
     await authorPage.getByLabel("Send", { exact: true }).click();
     await ctrl.promptStarted.promise;
     expect(await authorChat.locator('[data-slot="bubble-content"]').filter({ hasText: "Unlabeled while identity refreshes" }).locator('[data-slot="message-author"]').count()).toBe(0);
@@ -2665,7 +2672,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await authorPage.unroute("**/api/Identity");
     promptHold.resolve("");
     ctrl.holdPrompt = false;
-    await authorPage.locator("textarea").fill("$handoff");
+    await authorPage.locator("textarea:visible").fill("$handoff");
     await authorPage.getByLabel("Send", { exact: true }).click();
     const handoffDialog = authorPage.getByRole("dialog", { name: "Session handoff", exact: true });
     await handoffDialog.getByRole("button", { name: "Start new session", exact: true }).waitFor();

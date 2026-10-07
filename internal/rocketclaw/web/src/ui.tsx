@@ -9,7 +9,7 @@ import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field
 import { queries, mutations, listSessions, rpc } from "./api";
 import { draftContent } from "./drafts";
 import type { ChatOrigin, HistoryView, MessageMatch, PromptDelivery, SearchMessagesResponse } from "./types";
-import { Bot, Check, ChevronDown, CircleAlert, Command, Copy, CornerUpLeft, Download, FileIcon, GitFork, GripVertical, Info, LoaderCircle, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
+import { Bot, Check, ChevronDown, CircleAlert, Command, Copy, CornerUpLeft, Download, FileIcon, GitFork, GripVertical, Info, LoaderCircle, PanelLeft, PanelTop, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -49,9 +49,8 @@ const queryClient = new QueryClient({
   queryCache: new QueryCache({ onError: (error) => { captureException(error); } }),
   mutationCache: new MutationCache({ onError: (error) => { captureException(error); } }),
 });
-const tabReturnTo = { current: "/" };
 type SessionCommand = { mode: "fork" | "handoff" | "name"; source: string; target?: MessageMatch };
-const SessionCommands = createContext<{ command?: SessionCommand; setCommand: Dispatch<SetStateAction<SessionCommand | undefined>>; composer: RefObject<((command: string) => void) | null> }>(null!);
+const SessionCommands = createContext<{ command?: SessionCommand; setCommand: Dispatch<SetStateAction<SessionCommand | undefined>>; composer: RefObject<((command: string) => void) | null>; closeTab: (tab: string) => void }>(null!);
 
 function sessionPath(id: string) {
   return `/s/${encodeSessionId(id)}`;
@@ -66,10 +65,13 @@ function delegationHref(id?: string) {
   return `${location.pathname}${params.size ? `?${params}` : ""}`;
 }
 
-function subscribeWide(listener: () => void) {
-  const media = matchMedia("(min-width: 64rem)");
-  media.addEventListener("change", listener);
-  return () => media.removeEventListener("change", listener);
+function useMedia(query: string) {
+  const subscribe = useCallback((listener: () => void) => {
+    const media = matchMedia(query);
+    media.addEventListener("change", listener);
+    return () => media.removeEventListener("change", listener);
+  }, [query]);
+  return useSyncExternalStore(subscribe, () => matchMedia(query).matches);
 }
 
 function slackSession(id: string) {
@@ -402,6 +404,79 @@ function WarmTabs({ cron, agents, skills, config }: { cron: boolean; agents: boo
   );
 }
 
+const pageTabs = new Map([["/", "New session"], ["/search", "Search"], ["/cron", "Cron"], ["/agents", "Agents"], ["/skills", "Skills"], ["/config", "Settings"]]);
+// Session views past this many, least recently used first, unmount and reload when activated again.
+const warmViews = 5;
+type TabView = { id: string; created: string; key: number };
+// Tabs are locations; views are the mounted session transcripts, most recently active first.
+type TabState = { owner?: string; tabs: string[]; views: TabView[]; serial: number };
+
+// Folds the URL into the tabs and warm views; chat is the shown session ID, or undefined on a page.
+function nextTabState(work: TabState, owner: string | undefined, current: string, chat: string | undefined): TabState {
+  const created = chat ? work.views.find((view) => view.id === "" && view.created === chat) : undefined;
+  // Tabs opened before identity resolves join the stored ones; another owner's tabs never carry over.
+  let next = owner === undefined || owner === work.owner ? work : { ...work, owner, tabs: [...new Set([...storedTabs(owner), ...(work.owner === undefined ? work.tabs : [])])] };
+  if (!next.tabs.includes(current)) next = { ...next, tabs: created ? next.tabs.map((tab) => tab === "/" ? current : tab) : [...next.tabs, current] };
+  if (chat !== undefined && next.views[0]?.id !== chat) {
+    // Creation turns the composer's view into the new session's view without remounting it.
+    const view = next.views.find((item) => item.id === chat) ?? (created ? { ...created, id: chat, created: "" } : { id: chat, created: "", key: next.serial });
+    next = { ...next, serial: next.serial + 1, views: [view, ...next.views.filter((item) => item.id !== chat && item !== created)] };
+  }
+  const open = new Set(next.tabs);
+  const views = next.views.filter((view) => open.has(view.id ? sessionPath(view.id) : "/")).slice(0, warmViews);
+  return views.length < next.views.length ? { ...next, views } : next;
+}
+
+// The URL is the active tab, so storage keeps only the open locations in order.
+function storedTabs(owner: string): string[] {
+  try {
+    const tabs = JSON.parse(localStorage.getItem(`tabs-warm:${owner}`)!) as string[];
+    if (Array.isArray(tabs) && new Set(tabs).size === tabs.length && tabs.every((tab) => typeof tab === "string" && (pageTabs.has(tab) || tab.length > 3 && tab === sessionPath(decodeSessionId(tab.slice(3)))))) return tabs;
+  } catch {
+    // Corrupt storage starts over; SessionApp then adds the current location as the only tab.
+  }
+  return [];
+}
+
+function TabStrip({ tabs, current, left, togglePlacement }: { tabs: string[]; current: string; left: boolean; togglePlacement: () => void }) {
+  const sidebar = useContext(Sidebar);
+  const vertical = useMedia("(min-width: 48rem)") && left;
+  return <nav aria-label="Tabs" className={cn("flex shrink-0 items-center gap-1 border-b px-2 py-1 pr-12", left && "md:w-56 md:flex-col md:items-stretch md:border-r md:border-b-0 md:py-2 md:pr-2")}>
+    <div role="tablist" aria-label="Open tabs" aria-orientation={vertical ? "vertical" : "horizontal"} className={cn("flex min-w-0 flex-1 gap-1 overflow-x-auto scrollbar-none", left && "md:flex-col md:overflow-x-hidden md:overflow-y-auto md:*:max-w-none")}>
+      {tabs.map((tab) => {
+        const id = pageTabs.has(tab) ? "" : decodeSessionId(tab.slice(3));
+        const session = sidebar.rows.find((row) => row.id === id);
+        const title = pageTabs.get(tab) ?? ((session && (session.name || rowPreview(session, sidebar.loadingIds.has(id)).split("\n", 1)[0])) || sessionLabel(id));
+        return <TabItem key={tab} tab={tab} title={title} selected={tab === current} running={!!session?.running} closable={tabs.length > 1 || tab !== "/"} />;
+      })}
+    </div>
+    <Button type="button" variant="ghost" size="icon-sm" className="shrink-0" aria-label={left ? "Move tabs to top" : "Move tabs to left"} title={left ? "Move tabs to top" : "Move tabs to left"} onClick={togglePlacement}>{left ? <PanelTop /> : <PanelLeft />}</Button>
+  </nav>;
+}
+
+function TabItem({ tab, title, selected, running, closable }: { tab: string; title: string; selected: boolean; running: boolean; closable: boolean }) {
+  const { closeTab } = useContext(SessionCommands);
+  const clean = useCleanText(title);
+  const item = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (selected) item.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [selected, title]);
+  return <div ref={item} className={cn("flex min-w-0 max-w-56 shrink-0 items-center rounded-md text-sm", selected ? "bg-sidebar-row-active" : "hover:bg-accent")}>
+    <button type="button" role="tab" aria-selected={selected} tabIndex={selected ? 0 : -1} title={clean} className="flex min-h-11 min-w-0 flex-1 items-center gap-1.5 rounded-md px-3 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-ring sm:min-h-8" onClick={() => { if (!selected) navigate(tab); }} onKeyDown={(event) => {
+      const all = [...event.currentTarget.closest('[role="tablist"]')!.querySelectorAll<HTMLElement>('[role="tab"]')];
+      const at = all.indexOf(event.currentTarget);
+      const next = ({ ArrowRight: at + 1, ArrowDown: at + 1, ArrowLeft: at - 1, ArrowUp: at - 1, Home: 0, End: all.length - 1 } as Record<string, number>)[event.key];
+      if (next === undefined) return;
+      event.preventDefault();
+      const target = all.at(next % all.length)!;
+      target.focus();
+      target.click();
+    }}>
+      <span className="min-w-0 truncate"><InlineText text={title} /></span>
+      {running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 shrink-0 animate-spin motion-reduce:animate-none" /> : null}
+    </button>
+    {closable ? <button type="button" aria-label={`Close ${clean}`} className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring sm:size-8" onClick={() => closeTab(tab)}><X className="size-3.5" /></button> : null}
+  </div>;
+}
+
 function ProtocolGuard() {
   const proto = useQuery({ ...queries.protocol(), refetchInterval: 2000 });
   const seen = useRef("");
@@ -680,9 +755,32 @@ export function App() {
 function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string }) {
   const [command, setCommand] = useState<SessionCommand>();
   const composer = useRef<((command: string) => void) | null>(null);
-  const commands = useMemo(() => ({ command, setCommand, composer }), [command]);
   const route = useRoute();
+  const pathname = usePathname();
   const showChat = ![route.cron, route.agents, route.skills, route.config, route.search].some(Boolean);
+  const current = showChat ? (route.id ? sessionPath(route.id) : "/") : pathname;
+  const owner = useQuery(queries.identity()).data?.username;
+  const [left, setLeft] = useState(() => localStorage.getItem("tab-placement") === "left");
+  const togglePlacement = () => {
+    localStorage.setItem("tab-placement", left ? "top" : "left");
+    setLeft(!left);
+  };
+  const [tabState, setTabState] = useState<TabState>(() => ({ tabs: [current], views: [], serial: 0 }));
+  useEffect(() => {
+    if (tabState.owner !== undefined) localStorage.setItem(`tabs-warm:${tabState.owner}`, JSON.stringify(tabState.tabs));
+  }, [tabState.owner, tabState.tabs]);
+  const next = nextTabState(tabState, owner, current, showChat ? route.id : undefined);
+  if (next !== tabState) setTabState(next);
+  const closeTab = useCallback((tab: string) => {
+    const index = tabState.tabs.indexOf(tab);
+    const rest = tabState.tabs.toSpliced(index, 1);
+    if (tab === current) navigate(rest[Math.min(index, rest.length - 1)] ?? "/");
+    setTabState((value) => ({ ...value, tabs: value.tabs.filter((item) => item !== tab) }));
+  }, [tabState.tabs, current]);
+  const commands = useMemo(() => ({ command, setCommand, composer, closeTab }), [command, closeTab]);
+  // Hidden tabs bind their composers to this unread handle, so palette commands reach only the visible tab.
+  const idle = useRef<((command: string) => void) | null>(null);
+  const hiddenCommands = useMemo(() => ({ ...commands, composer: idle }), [commands]);
   const [palette, setPalette] = useState<{ mode: "sessions" | "commands" | "cron" | undefined; key: number }>({ mode: undefined, key: 0 });
   const openPalette = useCallback((mode: "sessions" | "commands") => setPalette((current) => ({ mode, key: current.key + 1 })), []);
   const drafts = useMemo(() => new Map<string, ComposerDraft>(), [scope]);
@@ -693,28 +791,29 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
       void persistComposerDraft(draft)?.finally(() => setDraftVersion((version) => version + 1));
     }
   }, [drafts]);
-  const [conversation, setConversation] = useState({ id: route.id, created: "", key: 0 });
   const newChatOwner = useRef<(() => unknown) | undefined>(undefined);
-  const returnTo = conversation.id === "" ? "/" : sessionPath(conversation.id);
-  tabReturnTo.current = returnTo;
   const newChat = useCallback(() => {
-    const draft = drafts.get("") ?? drafts.get(conversation.id)!;
-    if ([!scope, draft.reverting, !draft.hydrated].some(Boolean)) return;
-    const owner = newChatOwner.current;
-    draft.reverting = true;
-    draft.persistenceError = "";
+    // The composer has no draft until its tab first mounts; storage may still hold an older one.
+    const draft = drafts.get("");
+    if ([!scope, draft?.reverting, draft && !draft.hydrated].some(Boolean)) return;
+    // Navigating while the clear is pending keeps the user where they went.
+    const owner = newChatOwner.current, from = location.pathname;
+    if (draft) {
+      draft.reverting = true;
+      draft.persistenceError = "";
+    }
     onDraftChange();
     return draftContent(JSON.stringify([scope, ""]), { text: "", files: [], agent: "" }).then(() => {
-      if (drafts.get("") === draft) { draft.text = ""; draft.files = []; draft.agent = ""; draft.edit++; }
-      if (newChatOwner.current !== owner) return;
+      if (draft && drafts.get("") === draft) { draft.text = ""; draft.files = []; draft.agent = ""; draft.edit++; }
+      if (newChatOwner.current !== owner || location.pathname !== from) return;
       drafts.delete("");
-      setConversation((current) => ({ ...current, created: "", key: current.key + 1 }));
+      setTabState((value) => ({ ...value, views: value.views.filter((view) => view.id !== "") }));
       navigate("/");
-    }, () => { draft.persistenceError = "Local draft could not be cleared. Keep this page open."; }).finally(() => {
-      draft.reverting = false;
+    }, () => { if (draft) draft.persistenceError = "Local draft could not be cleared. Keep this page open."; }).finally(() => {
+      if (draft) draft.reverting = false;
       onDraftChange();
     });
-  }, [drafts, scope, conversation.id, onDraftChange]);
+  }, [drafts, scope, onDraftChange]);
   useLayoutEffect(() => {
     newChatOwner.current = newChat;
     return () => { newChatOwner.current = undefined; };
@@ -737,7 +836,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
       if (event.defaultPrevented || event.repeat || showChat || event.key !== "Escape") return;
       if (document.querySelector('[role="dialog"], [role="listbox"], [role="menu"], [role="tooltip"]')) return;
       event.preventDefault();
-      navigate(tabReturnTo.current);
+      closeTab(current);
     };
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("keydown", onEscape);
@@ -745,16 +844,11 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("keydown", onEscape);
     };
-  }, [newChat, showChat, openPalette]);
-  if (showChat && conversation.id !== route.id) {
-    // Creation assigns this conversation its ID; other navigation starts a fresh subtree.
-    const created = conversation.id === "" && conversation.created === route.id;
-    setConversation({ id: route.id, created: "", key: created ? conversation.key : conversation.key + 1 });
-  }
+  }, [newChat, showChat, openPalette, closeTab, current]);
   return (
           <DraftScope value={scope}><SessionCommands value={commands}>
            {command ? <SessionCommandDialog key={`${command.mode}:${command.source}`} command={command} drafts={drafts} onDraftChange={onDraftChange} /> : null}
-            <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} />
+            <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} placement={{ key: "tab-placement", label: left ? "Tabs: Move to top" : "Tabs: Move to left", run: togglePlacement }} />
          <div className="flex h-dvh min-h-0 flex-col overflow-hidden overscroll-y-none bg-background">
             <BottomNavigation>
               <div className="min-w-0 max-w-full justify-self-center overflow-x-auto overflow-y-hidden scrollbar-none">
@@ -772,17 +866,25 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               </div>
             </BottomNavigation>
             <div className="fixed top-2 right-2 z-40 rounded-md bg-background shadow-sm"><ThemeToggle /></div>
+          <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", left && "md:flex-row")}>
+          <TabStrip tabs={tabState.tabs} current={current} left={left} togglePlacement={togglePlacement} />
           <div className="flex min-h-0 min-w-0 flex-1">
             <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]", command?.target && "pt-[min(75dvh,30rem)]")}>
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
-              {route.search ? <SearchPage /> : null}
-              <TabPane show={showChat}>
-                <MessageScrollerProvider key={conversation.key} autoScroll scrollEdgeThreshold={48}>
-                  <Transcript id={conversation.id} drafts={drafts} scopeError={scopeError} onDraftChange={onDraftChange} onCreated={(id) => setConversation((current) => ({ ...current, created: id }))} />
-                </MessageScrollerProvider>
-              </TabPane>
+              {tabState.tabs.includes("/search") ? <TabPane show={route.search}><SearchPage /></TabPane> : null}
+              {/* Mount order, not recency: moving a pane's DOM node would reset its scroll. */}
+              {tabState.views.toSorted((a, b) => a.key - b.key).map((view) => {
+                const active = showChat && view.id === route.id;
+                return <TabPane key={view.key} show={active}>
+                  {/* A hidden viewport measures 0x0, which autoScroll would read as reaching the end and pin there. */}
+                  <MessageScrollerProvider autoScroll={active} scrollEdgeThreshold={48}><SessionCommands value={active ? commands : hiddenCommands}>
+                    <Transcript id={view.id} active={active} viewportId={active ? "transcript-scroll" : undefined} drafts={drafts} scopeError={scopeError} onDraftChange={onDraftChange} onCreated={(id) => setTabState((value) => ({ ...value, views: value.views.map((item) => item.id === "" ? { ...item, created: id } : item) }))} />
+                  </SessionCommands></MessageScrollerProvider>
+                </TabPane>;
+              })}
              </main>
              {showChat ? <DelegationPanel id={route.id} /> : null}
+          </div>
            </div>
           </div>
           </SessionCommands></DraftScope>
@@ -1003,7 +1105,7 @@ function useSessionOrigins(rows: Session[], needle: string) {
 const paletteCopy = { sessions: { title: "Go to session", desc: "Search and open a session.", placeholder: "Search sessions" }, commands: { title: "Run command", desc: "Search and run a command.", placeholder: "Type a command" },
   cron: { title: "Run cron", desc: "Search and run a cron job.", placeholder: "Search cron jobs" } };
 
-function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string, ComposerDraft>; mode: "sessions" | "commands" | "cron" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | undefined) => void; newChat: () => void }) {
+function CommandPalette({ drafts, mode, setMode, newChat, placement }: { drafts: Map<string, ComposerDraft>; mode: "sessions" | "commands" | "cron" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | undefined) => void; newChat: () => void; placement: { key: string; label: string; run: () => void } }) {
   const sidebar = useContext(Sidebar);
   const { setCommand, composer } = useContext(SessionCommands);
   const { id } = useRoute();
@@ -1055,7 +1157,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
       setMode(undefined);
     },
   });
-  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.values, [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands], filters, agentFilter, roomFilter, recent);
+  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.values, [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands, placement], filters, agentFilter, roomFilter, recent);
   const selected = items.length === 0 ? 0 : pick % items.length;
   const choose = (item: (typeof items)[number]) => {
     if (item.disabled) return;
@@ -1277,10 +1379,12 @@ function SearchTabs({ owner }: { owner: string }) {
   const selected = saved.tabs.findIndex((tab) => tab.id === saved.active);
   const tab = saved.tabs[selected];
   const search = useSearch();
+  const pathname = usePathname();
   useEffect(() => {
+    if (location.pathname !== "/search") return;
     const params = new URLSearchParams(Object.entries({ q: tab.query, agent: tab.agentFilter, room: tab.roomFilter }).filter(([, value]) => value));
     history.replaceState(history.state, "", `/search${params.size ? `?${params}` : ""}`);
-  }, [tab, search]);
+  }, [tab, search, pathname]);
   useLayoutEffect(() => {
     if (rename !== null) { activeTab.current!.focus(); window.getSelection()?.selectAllChildren(activeTab.current!); }
     if (focusAfterClose.current) {
@@ -1305,6 +1409,11 @@ function SearchTabs({ owner }: { owner: string }) {
     const tabs = saved.tabs.filter((_, position) => position !== index);
     if (!tabs.length) {
       localStorage.removeItem(storageKey);
+      // The pane stays mounted while its outer tab is open; the next visit starts from a fresh draft.
+      const id = crypto.getRandomValues(new Uint32Array(4)).join("-");
+      savedRef.current = { tabs: [{ id, query: "", agentFilter: "", roomFilter: "" }], active: id };
+      setSaved(savedRef.current);
+      draft.current = true;
       const last = localStorage.getItem(`last-seen:${owner}`);
       navigate(last ?? "/");
       return;
@@ -1591,9 +1700,10 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
 }
 
 function PageTitle({ children }: { children: ReactNode }) {
+  const { closeTab } = useContext(SessionCommands);
   return <header className="flex w-full shrink-0 items-center gap-2">
     <h1 className="text-lg font-semibold">{children}</h1>
-    <Button type="button" variant="ghost" size="icon-sm" className="ml-auto hidden md:inline-flex" aria-label="Close" onClick={() => navigate(tabReturnTo.current)}><X /></Button>
+    <Button type="button" variant="ghost" size="icon-sm" className="ml-auto hidden md:inline-flex" aria-label="Close" onClick={() => closeTab(location.pathname)}><X /></Button>
   </header>;
 }
 
@@ -1854,8 +1964,7 @@ function TurnRailButton({ turn, index, onJump, preview }: { turn: Turn; index: n
   </button>;
 }
 
-function useTranscriptPosition(conversationId: string, lines: Line[], turns: Turn[]) {
-  const viewport = useRef<HTMLDivElement>(null);
+function useTranscriptPosition(viewport: RefObject<HTMLDivElement | null>, conversationId: string, lines: Line[], turns: Turn[]) {
   const identity = useQuery(queries.identity());
   const firstOwner = useRef<string | undefined>(identity.isSuccess ? identity.data.username : undefined);
   const { scrollToMessage } = useMessageScroller();
@@ -1877,7 +1986,7 @@ function useTranscriptPosition(conversationId: string, lines: Line[], turns: Tur
     });
     const last = visible.at(-1)?.dataset.messageId;
     if (last) localStorage.setItem(`last-seen:${identity.data.username}`, `${sessionPath(conversationId)}?message=${encodeURIComponent(last)}`);
-  }, [conversationId, identity.isSuccess, identity.data]);
+  }, [viewport, conversationId, identity.isSuccess, identity.data]);
   useEffect(() => {
     const frame = requestAnimationFrame(() => requestAnimationFrame(seen));
     return () => cancelAnimationFrame(frame);
@@ -1892,7 +2001,7 @@ function useTranscriptPosition(conversationId: string, lines: Line[], turns: Tur
     });
     return () => cancelAnimationFrame(frame);
   }, [targetKey, targetId, scrollToMessage, seen, viewport]);
-  return { viewport, seen, scrollToMessage };
+  return { seen, scrollToMessage };
 }
 
 // Finished turns keep their line objects between updates, so only changed turns and the live one re-render.
@@ -1925,6 +2034,8 @@ function WorkingStatus({ conversationId, movable, onChange }: { conversationId: 
 }
 
 function TranscriptLog({
+  viewport,
+  viewportId,
   conversationId,
   lines,
   working,
@@ -1937,6 +2048,8 @@ function TranscriptLog({
   movable,
   refreshHistory,
 }: {
+  viewport: RefObject<HTMLDivElement | null>;
+  viewportId?: string;
   lines: Line[];
   conversationId: string;
   working: boolean;
@@ -1951,7 +2064,7 @@ function TranscriptLog({
 }) {
   const turns = transcriptTurns(lines, filter);
   const detail = useTimelineDetail();
-  const { viewport, seen, scrollToMessage } = useTranscriptPosition(conversationId, lines, turns);
+  const { seen, scrollToMessage } = useTranscriptPosition(viewport, conversationId, lines, turns);
   const anchor = useRef<{ key: string; top: number }>(undefined);
   const [loading, setLoading] = useState(false);
   // Scrolling near the top loads one earlier page and keeps the turns on screen still.
@@ -1986,7 +2099,7 @@ function TranscriptLog({
   };
   return (
     <MessageScroller className="flex-1">
-    <MessageScrollerViewport ref={viewport} id="transcript-scroll" preserveScrollOnPrepend={false} onScroll={() => { seen(); nearTop(); }} className="overflow-x-hidden [overflow-anchor:none]">
+    <MessageScrollerViewport ref={viewport} id={viewportId} preserveScrollOnPrepend={false} onScroll={() => { seen(); nearTop(); }} className="overflow-x-hidden [overflow-anchor:none]">
       <div className="min-h-full pl-3 pr-8 pt-3 pb-4 sm:pl-5 sm:pr-10 sm:pt-4">
       <MessageScrollerContent className="mx-auto w-full min-w-0 max-w-3xl">
       {origin && (origin.kind === "cron" || origin.kind === "external_mcp") ? <MessageScrollerItem messageId="origin"><OriginCard origin={origin} /></MessageScrollerItem> : null}
@@ -2152,7 +2265,7 @@ function historyLines(messages: TranscriptEvent[]): Line[] {
   });
 }
 
-function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () => void) {
+function useSessionStream(id: string, active: boolean, draft: ComposerDraft, onDraftChange: () => void) {
   const scope = useContext(DraftScope);
   const history = useQuery({ ...queries.history({ id }), enabled: false });
   const refreshHistory = useCallback(() => { draft.historyEpoch = (draft.historyEpoch ?? 0) + 1; return readHistoryDelta(draft.sessionId, draft, onDraftChange); }, [draft, onDraftChange]);
@@ -2161,8 +2274,9 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
   const delegations = useMemo(() => earlier ? [...new Set([...(followed ?? []), ...earlier])] : followed, [followed, earlier]);
   const setBusy = useCallback((value: boolean) => { draft.busy = value; onDraftChange(); }, [draft, onDraftChange]);
   const setLines = useCallback((update: (current: Line[]) => Line[]) => { draft.lines = update(draft.lines); onDraftChange(); }, [draft, onDraftChange]);
+  // HTTP/1.1 allows about six connections per host, so only the active tab streams; others catch up on activation.
   useEffect(() => {
-    if (!id || !scope) return;
+    if (!id || !scope || !active) return;
     const stream = new EventSource(`/stream?${new URLSearchParams({ id })}`);
     void refreshHistory();
     stream.onopen = () => { void refreshHistory(); };
@@ -2173,7 +2287,7 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
     return () => {
       stream.close();
     };
-  }, [id, scope, refreshHistory]);
+  }, [id, scope, active, refreshHistory]);
   return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !draft.revision, historyError: draft.historyError, origin: draft.origin, terminal: draft.terminal, delegations, more: draft.more ?? false, start: draft.start, loadEarlier, movable: draft.movable ?? false, hasSandboxed: draft.lines.some((line) => line.origin === "sandboxed") };
 }
 
@@ -2224,7 +2338,8 @@ function useComposerDraft(id: string, drafts: Map<string, ComposerDraft>, change
   return draft;
 }
 
-function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: string; drafts: Map<string, ComposerDraft>; scopeError?: string; onDraftChange: () => void; onCreated: (id: string) => void }) {
+function Transcript({ id, active, viewportId, drafts, scopeError, onDraftChange, onCreated }: { id: string; active: boolean; viewportId?: string; drafts: Map<string, ComposerDraft>; scopeError?: string; onDraftChange: () => void; onCreated: (id: string) => void }) {
+  const viewport = useRef<HTMLDivElement>(null);
   const [filter, setFilter] = useState<OriginFilter>({ sandboxed: true, canonical: true });
   const search = useSearch();
   const target = useContext(SessionCommands).command?.target;
@@ -2234,13 +2349,13 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
   const draft = useComposerDraft(id, drafts, onDraftChange);
   const route = useRoute();
   useLayoutEffect(() => {
-    if (id === "" && draft.sessionId !== "" && drafts.get("") === draft) {
+    if (active && id === "" && draft.sessionId !== "" && drafts.get("") === draft) {
       drafts.delete("");
       onCreated(draft.sessionId);
       route.goSession(draft.sessionId);
     }
   });
-  const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, terminal, delegations, more, start, loadEarlier, movable, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
+  const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, terminal, delegations, more, start, loadEarlier, movable, hasSandboxed } = useSessionStream(id, active, draft, onDraftChange);
   const messageId = location.pathname === sessionPath(id) ? new URLSearchParams(search).get("message") : null;
   const matchedOrigin = (previewLines ?? lines).find((line) => line.messageId === messageId)?.origin;
   // A linked message older than the loaded entries loads every entry from it onward.
@@ -2256,7 +2371,7 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
   return (
     <RevertActions value={revert}>
       {draft.revertMessageId ? <div role="status" className="flex flex-wrap items-center gap-2 px-12 py-2 text-xs text-muted-foreground md:px-3"><span>History reverted. Files and external effects are unchanged.</span><Button size="sm" variant="outline" className="min-h-11 sm:min-h-8" disabled={revert.pending} onClick={() => void revert.run(undefined, true)}>Redo</Button></div> : null}
-      <Delegations value={previewing ? preview.data?.delegations : delegations}><TranscriptLog conversationId={id} lines={previewLines ?? lines} working={!previewing && busy} terminal={previewing ? undefined : terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} more={!previewing && more} loadEarlier={loadEarlier} movable={movable} refreshHistory={refreshHistory} /></Delegations>
+      <Delegations value={previewing ? preview.data?.delegations : delegations}><TranscriptLog viewport={viewport} viewportId={viewportId} conversationId={id} lines={previewLines ?? lines} working={!previewing && busy} terminal={previewing ? undefined : terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} more={!previewing && more} loadEarlier={loadEarlier} movable={movable} refreshHistory={refreshHistory} /></Delegations>
       {error ? <p role="alert" className="px-3 text-sm text-destructive">{error}</p> : null}
       {hasSandboxed ? <ButtonGroup aria-label="Show messages from" className="mx-auto my-2.5">
         {(["sandboxed", "canonical"] as const).map((choice) => (
@@ -2269,7 +2384,7 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
         ))}
       </ButtonGroup> : null}
       <fieldset disabled={[opening, previewing, !draft.hydrated].some(Boolean)} className={previewing ? "hidden" : "contents"}>
-        <SessionComposer id={id} draft={draft} drafts={drafts} onDraftChange={onDraftChange} busy={busy} setBusy={setBusy} setLines={setLines} refreshHistory={refreshHistory} />
+        <SessionComposer id={id} viewport={viewport} draft={draft} drafts={drafts} onDraftChange={onDraftChange} busy={busy} setBusy={setBusy} setLines={setLines} refreshHistory={refreshHistory} />
       </fieldset>
     </RevertActions>
   );
@@ -2277,7 +2392,7 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
 
 function DelegationPanel({ id }: { id: string }) {
   const child = new URLSearchParams(useSearch()).get("delegation") ?? "";
-  const wide = useSyncExternalStore(subscribeWide, () => matchMedia("(min-width: 64rem)").matches);
+  const wide = useMedia("(min-width: 64rem)");
   const main = useQuery({ ...queries.history({ id }), enabled: false });
   const history = useQuery({ ...queries.history({ id: child }), enabled: child !== "" });
   useEffect(() => {
@@ -2559,6 +2674,7 @@ function pendingInputs(draft: ComposerDraft, items: QueueItem[]) {
 
 function SessionComposer({
   id,
+  viewport,
   draft,
   drafts,
   onDraftChange,
@@ -2568,6 +2684,7 @@ function SessionComposer({
   refreshHistory,
 }: {
   id: string;
+  viewport: RefObject<HTMLDivElement | null>;
   draft: ComposerDraft;
   drafts: Map<string, ComposerDraft>;
   onDraftChange: () => void;
@@ -2673,6 +2790,7 @@ function SessionComposer({
       {draft.persistenceError ? <p role="alert" className="px-3 pb-2 text-sm text-destructive">{draft.persistenceError}</p> : null}
       {parked.length > 0 ? <section aria-label="Pending steers" className="mx-auto w-full max-w-3xl px-3"><p className="text-xs text-muted-foreground">Waiting to steer</p>{parked.map((line) => <TranscriptLine key={line.id} line={line} conversationId={id} hasSandboxed={false} />)}</section> : null}
       <Composer
+        viewport={viewport}
         files={files}
         setFiles={setFiles}
         sending={[sending, draft.reverting].some(Boolean)}
@@ -2719,13 +2837,13 @@ function ModEnterKeys({ mac }: { mac: boolean }) {
   );
 }
 
-function SelectionQuote({ text, setText, messageInput, sending }: { text: string; setText: (value: string) => void; messageInput: React.RefObject<HTMLTextAreaElement | null>; sending: boolean }) {
+function SelectionQuote({ text, setText, messageInput, viewport, sending }: { text: string; setText: (value: string) => void; messageInput: React.RefObject<HTMLTextAreaElement | null>; viewport: RefObject<HTMLDivElement | null>; sending: boolean }) {
   const [quote, setQuote] = useState<{ left: number; top: number }>();
   useEffect(() => {
     const clear = () => setQuote(undefined);
     const select = () => {
       const selection = window.getSelection();
-      const transcript = document.getElementById("transcript-scroll");
+      const transcript = viewport.current;
       if (sending || !selection?.rangeCount || !selection.toString().trim()) return clear();
       const range = selection.getRangeAt(0);
       if (!transcript?.contains(range.startContainer) || !transcript.contains(range.endContainer)) return clear();
@@ -2743,7 +2861,7 @@ function SelectionQuote({ text, setText, messageInput, sending }: { text: string
       document.removeEventListener("keydown", escape);
       window.removeEventListener("resize", clear);
     };
-  }, [sending]);
+  }, [sending, viewport]);
   return quote && !sending ? <div className="fixed z-50" style={{ left: quote.left, top: quote.top }}>
     <Button type="button" size="sm" onMouseDown={(event) => { if (event.button === 0) event.preventDefault(); }} onClick={() => {
       // Read the selection now: a click can arrive before the last selectionchange has rendered.
@@ -2757,6 +2875,7 @@ function SelectionQuote({ text, setText, messageInput, sending }: { text: string
 }
 
 function Composer({
+  viewport,
   files,
   setFiles,
   sending,
@@ -2786,6 +2905,7 @@ function Composer({
   reorderQueued,
   jobs,
 }: {
+  viewport: RefObject<HTMLDivElement | null>;
   files: PendingFile[];
   setFiles: (files: PendingFile[]) => void;
   sending: boolean;
@@ -2841,7 +2961,7 @@ function Composer({
   }, [pickerOpen, selectedInvocation]);
   return (
     <div className="px-3 pb-4 sm:px-5">
-      <SelectionQuote text={text} setText={setText} messageInput={messageInput} sending={sending} />
+      <SelectionQuote text={text} setText={setText} messageInput={messageInput} viewport={viewport} sending={sending} />
       <div className="relative mx-auto w-full max-w-3xl">
         {matches.length > 0 ? (
           <ul className="absolute inset-x-0 bottom-full z-10 mb-2 max-h-[50dvh] overflow-y-auto rounded-2xl border bg-popover text-popover-foreground shadow-md">

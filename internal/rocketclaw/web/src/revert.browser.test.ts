@@ -49,7 +49,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat")}`);
-    const input = page.locator("textarea");
+    const input = page.locator("textarea:visible");
     await input.fill("Existing draft");
     const selected = page.locator('[data-message-id="9007199254741001:2"]');
     if (width < 640) await selected.getByText("Second request", { exact: true }).tap();
@@ -57,7 +57,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     const action = selected.getByRole("button", { name: "Revert message", exact: true });
     if (width >= 640) { await selected.focus(); await action.focus(); await action.press("Enter"); }
     else await action.click();
-    await page.waitForFunction(() => document.querySelector("textarea")?.value === "Second request");
+    await page.waitForFunction(() => [...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.value === "Second request");
     expect(await input.evaluate((node: HTMLTextAreaElement) => node === document.activeElement && node.selectionStart === node.value.length && node.selectionEnd === node.value.length)).toBe(true);
     // Composer restoration precedes the queue and history refreshes.
     await page.getByText("Second answer", { exact: true }).waitFor({ state: "detached" });
@@ -67,7 +67,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     expect(prompts).toHaveLength(0);
     await input.fill("Edited replacement");
     await page.getByRole("button", { name: "Add files", exact: true }).click();
-    await page.locator('input[type="file"]').setInputFiles({ name: "draft.txt", mimeType: "text/plain", buffer: Buffer.from("private bytes") });
+    await page.locator('main > :visible input[type="file"]').setInputFiles({ name: "draft.txt", mimeType: "text/plain", buffer: Buffer.from("private bytes") });
     // Read the persisted bytes, not a timer; the next reload must restore File objects.
     await page.waitForFunction(async () => {
       const db = await new Promise<IDBDatabase>((resolve) => { const open = indexedDB.open("rocketclaw-drafts", 1); open.onsuccess = () => resolve(open.result); });
@@ -76,16 +76,16 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
       return rows.some((row) => row.text === "Edited replacement" && row.files[0]?.file instanceof File);
     });
     await page.reload();
-    await page.waitForFunction(() => document.querySelector("textarea")?.value === "Edited replacement");
+    await page.waitForFunction(() => [...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.value === "Edited replacement");
     await page.getByText("draft.txt", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Redo", exact: true }).click();
     await page.getByText("Second answer", { exact: true }).waitFor();
     expect(await input.inputValue()).toBe("Edited replacement");
     await input.fill("$undo"); await input.press("Enter");
-    await page.waitForFunction(() => document.querySelector("textarea")?.value === "Second request");
+    await page.waitForFunction(() => [...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.value === "Second request");
     expect(await page.getByText("draft.txt", { exact: true }).count()).toBe(0);
     await input.fill("$undo"); await input.press("Enter");
-    await page.waitForFunction(() => document.querySelector("textarea")?.value === "First request");
+    await page.waitForFunction(() => [...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.value === "First request");
     await page.waitForFunction(() => !document.querySelector("[data-message-id]"));
     expect(await page.locator("[data-message-id]").count()).toBe(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -102,12 +102,12 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     });
     username = "bob";
     await page.reload(); await input.waitFor();
-    await page.waitForFunction(() => !document.querySelector("textarea")?.disabled && !document.querySelector("textarea")?.closest("fieldset")?.disabled);
+    await page.waitForFunction(() => ![...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.disabled && ![...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.closest("fieldset")?.disabled);
     expect(await input.inputValue()).toBe("");
     expect(await page.getByText("legacy.txt", { exact: true }).count()).toBe(0);
     username = "alice";
     await page.reload(); await input.waitFor();
-    await page.waitForFunction(() => document.querySelector("textarea")?.value === "First request");
+    await page.waitForFunction(() => [...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.value === "First request");
     // A failed polling refresh retains Query data, but must revoke local draft scope.
     rejected = true;
     await page.getByText("Identity rejected", { exact: true }).first().waitFor();
@@ -118,7 +118,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     expect(await input.isEditable()).toBe(false);
     rejected = false;
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat")}`);
-    await page.waitForFunction(() => document.querySelector("textarea")?.value === "First request");
+    await page.waitForFunction(() => [...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.value === "First request");
     rejectedConfig = true;
     await page.reload();
     await page.getByRole("alert").filter({ hasText: "Config rejected" }).first().waitFor();
@@ -126,7 +126,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     expect(await input.isEditable()).toBe(false);
     rejectedConfig = false; workspace = "second";
     await page.reload(); await input.waitFor();
-    await page.waitForFunction(() => !document.querySelector("textarea")?.closest("fieldset")?.disabled);
+    await page.waitForFunction(() => ![...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.closest("fieldset")?.disabled);
     expect(await input.inputValue()).toBe("");
     await input.fill("Keep named draft");
     // New session must clear only the persisted empty-session composer before remount.
@@ -141,7 +141,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
       const scratch = outcome === "reset" ? "$go" : "Discarded scratch";
       await input.fill(scratch);
       await page.getByRole("button", { name: "Add files", exact: true }).click();
-      await page.locator('input[type="file"]').setInputFiles({ name: "scratch.txt", mimeType: "text/plain", buffer: Buffer.from("scratch bytes") });
+      await page.locator('main > :visible input[type="file"]').setInputFiles({ name: "scratch.txt", mimeType: "text/plain", buffer: Buffer.from("scratch bytes") });
       await page.waitForFunction(async (text: string) => {
         const db = await new Promise<IDBDatabase>((resolve) => { const open = indexedDB.open("rocketclaw-drafts", 1); open.onsuccess = () => resolve(open.result); });
         const rows = await new Promise<{ text: string; files: { file: File }[] }[]>((resolve) => { const read = db.transaction("content").objectStore("content").getAll(); read.onsuccess = () => resolve(read.result); });
@@ -188,7 +188,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
       const bounds = (await agent.boundingBox())!;
       await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
       expect(await page.getByRole("listbox").count()).toBe(0);
-      expect(await page.getByLabel("Attach files").isDisabled()).toBe(true);
+      expect(await page.locator("main > :visible").getByLabel("Attach files").isDisabled()).toBe(true);
       await input.evaluate((node: HTMLTextAreaElement) => {
         const dataTransfer = new DataTransfer();
         dataTransfer.items.add(new File(["late bytes"], "late.txt"));
@@ -200,13 +200,13 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
       expect(await input.isEditable()).toBe(false);
       if (outcome === "navigate") {
         await page.evaluate(() => { history.pushState({}, "", `/s/${btoa("chat")}`); dispatchEvent(new PopStateEvent("popstate")); });
-        await page.waitForFunction(() => document.querySelector("textarea")?.value === "Keep named draft");
+        await page.waitForFunction(() => [...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.value === "Keep named draft");
         await input.focus();
         await input.evaluate((node: HTMLTextAreaElement) => node.setSelectionRange(node.value.length, node.value.length));
         await page.keyboard.type(" + current edit");
       } else if (outcome === "scope") {
         username = "bob";
-        await page.waitForFunction(() => document.querySelector("textarea")?.value === "");
+        await page.waitForFunction(() => [...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.value === "");
       }
       await page.evaluate(() => (window as unknown as { releaseClear: () => void }).releaseClear());
       if (outcome === "navigate") {
@@ -214,11 +214,11 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
         expect(await input.inputValue()).toBe("Keep named draft + current edit");
         await page.evaluate(() => { history.pushState({}, "", "/"); dispatchEvent(new PopStateEvent("popstate")); });
       } else if (outcome === "scope") {
-        await page.waitForFunction(() => !document.querySelector("textarea")?.closest("fieldset")?.disabled);
+        await page.waitForFunction(() => ![...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.closest("fieldset")?.disabled);
         expect(await input.inputValue()).toBe("");
         expect(await page.getByRole("alert").filter({ hasText: "Local draft could not be cleared" }).count()).toBe(0);
         username = "alice";
-        await page.waitForFunction(() => document.querySelector("textarea")?.value === "Discarded scratch");
+        await page.waitForFunction(() => [...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.value === "Discarded scratch");
         expect(await input.isEditable()).toBe(true);
         await page.keyboard.press("Control+Alt+n");
       } else if (storageFailure) {
@@ -228,11 +228,11 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
         await page.getByText("scratch.txt", { exact: true }).waitFor();
         for (const name of ["Add files", "Remove scratch.txt", "Stash", "Send"]) expect(await page.getByRole("button", { name, exact: true }).isEnabled()).toBe(true);
         expect(await agent.isEnabled()).toBe(true);
-        expect(await page.getByLabel("Attach files").isEnabled()).toBe(true);
+        expect(await page.locator("main > :visible").getByLabel("Attach files").isEnabled()).toBe(true);
         await input.fill("Recovered scratch");
         await page.keyboard.press("Control+Alt+n");
       }
-      await page.waitForFunction(() => document.querySelector("textarea")?.value === "" && !document.querySelector("textarea")?.closest("fieldset")?.disabled);
+      await page.waitForFunction(() => [...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.value === "" && ![...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.closest("fieldset")?.disabled);
       // One reset plus the new composer's ordinary hydration save, not two resets.
       if (outcome === "reset") {
         await page.waitForFunction(() => (window as unknown as { clearWrites: number }).clearWrites >= 2);
@@ -240,7 +240,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
       }
       expect(await page.getByText("scratch.txt", { exact: true }).count()).toBe(0);
       await page.reload();
-      await page.waitForFunction(() => !document.querySelector("textarea")?.closest("fieldset")?.disabled);
+      await page.waitForFunction(() => ![...document.querySelectorAll("textarea")].find((node) => node.checkVisibility())?.closest("fieldset")?.disabled);
       expect(await input.inputValue()).toBe("");
       expect(await page.getByText("scratch.txt", { exact: true }).count()).toBe(0);
     }
