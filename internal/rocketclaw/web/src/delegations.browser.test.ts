@@ -118,9 +118,9 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel 
     expect(new URL(page.url()).searchParams.get("message")).toBe("1:0");
     await page.goBack();
     await panel.getByText("Child done", { exact: true }).waitFor();
-    if (width >= 1024) for (const [aside, name, sign, initial, max] of [[panel, "Resize delegation panel", -1, 384, 768], [page.locator("#session-sidebar"), "Resize sidebar", 1, 288, 512]] as const) {
-      const handle = page.getByRole("separator", { name, exact: true });
-      const size = async () => Math.round((await aside.boundingBox())!.width);
+    if (width >= 1024) {
+      const handle = page.getByRole("separator", { name: "Resize delegation panel", exact: true });
+      const size = async () => Math.round((await panel.boundingBox())!.width);
       const drag = async (by: number) => {
         const box = (await handle.boundingBox())!;
         await page.mouse.move(box.x + box.width / 2, box.y + 50);
@@ -128,22 +128,22 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel 
         await page.mouse.move(Math.min(Math.max(box.x + box.width / 2 + by, 0), width - 1), box.y + 50, { steps: 4 });
         await page.mouse.up();
       };
-      expect(await size()).toBe(initial);
-      await drag(sign * 100);
+      expect(await size()).toBe(384);
+      await drag(-100);
       const dragged = await size();
-      expect(Math.abs(dragged - initial - 100)).toBeLessThan(2);
+      expect(Math.abs(dragged - 384 - 100)).toBeLessThan(2);
       await handle.press("ArrowLeft");
-      expect(await size()).toBe(dragged - sign * 16);
-      await drag(sign * 2000);
+      expect(await size()).toBe(dragged + 16);
+      await drag(-2000);
       const widest = await size();
       const chat = Math.round((await page.locator("main").boundingBox())!.width);
       expect(chat).toBeGreaterThanOrEqual(416);
-      expect(widest === max || chat === 416).toBe(true);
+      expect(widest === 768 || chat === 416).toBe(true);
       expect(await handle.getAttribute("aria-valuenow")).toBe(String(widest));
       await page.reload();
       await panel.getByText("Child done", { exact: true }).waitFor();
       expect(await size()).toBe(widest);
-      await drag(-sign * 2000);
+      await drag(2000);
     }
     await panel.getByRole("link", { name: "Back to conversation", exact: true }).click();
     await panel.waitFor({ state: "detached" });

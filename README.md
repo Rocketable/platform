@@ -309,14 +309,13 @@ sessions and forks start empty; Sync copies history, not tags. Upgrading copied
 External MCP private-history tags once to untagged destinations. Permanent pruning
 and failed session cleanup remove metadata.
 
-Web shows tags beside the agent name on active and settled rows. Cmd/Ctrl+P and
+Web shows tags beside the agent name on session rows. Cmd/Ctrl+P and
 the Search page accept `tag:customer`, `tag:customer outage`, and JSON-quoted names
 such as `tag:"Needs review"`. Repeated tag filters require every named tag. Labels
-refresh through the existing two-second sidebar cycle, not a pushed tag event.
-Tags do not change activity, settlement, or snooze.
+refresh through the existing two-second session-list cycle, not a pushed tag event.
+Tags do not change activity.
 
-Web hides cron-origin chats from the sidebar, including pinned and running chats.
-They remain available in Cmd/Ctrl+P and the Search page; use `is:cron` to show only
+Web lists cron-origin chats in Cmd/Ctrl+P and the Search page; use `is:cron` to show only
 cron chats, or `cron:HEARTBEAT` for one job's chats (the exact filename without
 `.md`; quote names containing spaces, such as `cron:"Weekly report"`). These
 filters follow the chat's recorded origin, not its current agent or
