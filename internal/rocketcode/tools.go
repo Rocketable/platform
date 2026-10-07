@@ -625,7 +625,7 @@ func (f *toolFactory) skillDescription() string {
 		"The following skills provide specialized sets of instructions for particular tasks.",
 		"Invoke this tool to load a skill when a task matches one of the available skills listed below:",
 		"",
-		formatAvailableSkills(list),
+		formatSkills("## Available skills", list),
 	}, "\n")
 }
 

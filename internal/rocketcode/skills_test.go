@@ -167,10 +167,20 @@ func TestSkillDescriptions(t *testing.T) {
 
 		description := factory.skillDescription()
 
-		require.Contains(t, description, "Load a specialized skill when the task at hand matches one of the skills listed in the system prompt.")
-		require.Contains(t, description, "## Available skills")
-		require.Contains(t, description, "- **docs-helper**: Write docs")
-		require.Contains(t, description, "- **git-review**: Review git changes")
+		require.Equal(t, strings.Join([]string{
+			"Load a specialized skill when the task at hand matches one of the skills listed in the system prompt.",
+			"",
+			"Use this tool to inject the skill's instructions and resources into current conversation. The output may contain detailed workflow guidance as well as references to scripts, files, etc in the same directory as the skill.",
+			"",
+			"The skill name must match one of the skills listed in your system prompt.",
+			"",
+			"The following skills provide specialized sets of instructions for particular tasks.",
+			"Invoke this tool to load a skill when a task matches one of the available skills listed below:",
+			"",
+			"## Available skills",
+			"- **docs-helper**: Write docs",
+			"- **git-review**: Review git changes",
+		}, "\n"), description)
 	})
 
 	t.Run("tool description filters denied skills", func(t *testing.T) {
@@ -303,7 +313,7 @@ func TestFindSkillsTool(t *testing.T) {
 		got, err := tool.Call(context.Background(), json.RawMessage(`{"query":"git"}`), nil, emptyToolCallMetadata())
 
 		require.NoError(t, err)
-		require.Contains(t, got.Output, "- **git-review**: Review git changes")
+		require.Equal(t, "## Matching skills\n- **git-review**: Review git changes", got.Output)
 	})
 
 	t.Run("excludes permission denied skills", func(t *testing.T) {
