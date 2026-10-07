@@ -3,13 +3,14 @@
 import { QueryClient, QueryCache, MutationCache, QueryClientProvider, useQuery, useMutation } from "@tanstack/react-query";
 import { captureException } from "@sentry/react";
 import { Combobox } from "@base-ui/react/combobox";
+import { Menu } from "@base-ui/react/menu";
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions, rpc } from "./api";
 import { draftContent } from "./drafts";
 import type { ChatOrigin, HistoryView, MessageMatch, PromptDelivery, SearchMessagesResponse } from "./types";
-import { Bot, Check, ChevronDown, CircleAlert, Command, Copy, CornerUpLeft, Download, FileIcon, GitFork, GripVertical, Info, LoaderCircle, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
+import { Bot, Check, ChevronDown, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, MessageSquare, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -49,7 +50,6 @@ const queryClient = new QueryClient({
   queryCache: new QueryCache({ onError: (error) => { captureException(error); } }),
   mutationCache: new MutationCache({ onError: (error) => { captureException(error); } }),
 });
-const tabReturnTo = { current: "/" };
 type SessionCommand = { mode: "fork" | "handoff" | "name"; source: string; target?: MessageMatch };
 const SessionCommands = createContext<{ command?: SessionCommand; setCommand: Dispatch<SetStateAction<SessionCommand | undefined>>; composer: RefObject<((command: string) => void) | null> }>(null!);
 
@@ -66,10 +66,13 @@ function delegationHref(id?: string) {
   return `${location.pathname}${params.size ? `?${params}` : ""}`;
 }
 
-function subscribeWide(listener: () => void) {
-  const media = matchMedia("(min-width: 64rem)");
-  media.addEventListener("change", listener);
-  return () => media.removeEventListener("change", listener);
+function useMedia(query: string) {
+  const subscribe = useCallback((listener: () => void) => {
+    const media = matchMedia(query);
+    media.addEventListener("change", listener);
+    return () => media.removeEventListener("change", listener);
+  }, [query]);
+  return useSyncExternalStore(subscribe, () => matchMedia(query).matches);
 }
 
 function slackSession(id: string) {
@@ -330,6 +333,10 @@ function sessionLabel(id: string) {
     return parts[1] ? `slack ${parts[1]}` : id;
   }
   return id;
+}
+
+function sessionTitle(session: Session, loading: boolean) {
+  return session.name || rowPreview(session, loading).split("\n", 1)[0] || sessionLabel(session.id);
 }
 
 function useRoute() {
@@ -660,6 +667,165 @@ function ResizableAside({ className, children, ...props }: ComponentProps<"aside
   </aside>;
 }
 
+type Tab = { path: string; pinned?: boolean; preview?: boolean };
+type TabState = { owner?: string; tabs: Tab[]; active: string };
+const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
+const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/search": ["Search", Search], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings] };
+
+function pinnedFirst(tabs: Tab[]) {
+  return tabs.toSorted((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
+}
+
+// An opened location replaces the preview tab, or else opens right of the active tab.
+function openTab(state: TabState, path: string): TabState {
+  if (state.tabs.some((tab) => tab.path === path)) return { ...state, active: path };
+  const preview = state.tabs.findIndex((tab) => tab.preview);
+  const at = preview >= 0 ? preview : state.tabs.findIndex((tab) => tab.path === state.active) + 1 || state.tabs.length;
+  return { ...state, active: path, tabs: pinnedFirst(state.tabs.toSpliced(at, Number(preview >= 0), { path, preview: true })) };
+}
+
+// The URL is the active tab, so a reload keeps it and any other URL opens as a permanent tab.
+function loadTabs(owner: string | undefined, path: string): TabState {
+  let tabs: Tab[] = [];
+  if (owner !== undefined) {
+    try {
+      const stored = JSON.parse(localStorage.getItem(`tabs:${owner}`) ?? "") as Tab[];
+      const flag = (value: unknown) => value === undefined || typeof value === "boolean";
+      if (stored.every((tab) => typeof tab.path === "string" && flag(tab.pinned) && flag(tab.preview)) && new Set(stored.map((tab) => tab.path)).size === stored.length) tabs = stored;
+    } catch { /* Missing or unreadable tabs reset to the current location. */ }
+  }
+  return { owner, tabs: tabs.some((tab) => tab.path === path) ? tabs : [...tabs, { path }], active: path };
+}
+
+function useTabs() {
+  const identity = useQuery(queries.identity());
+  const owner = identity.data?.username;
+  const pathname = usePathname() || "/";
+  const [state, setState] = useState(() => loadTabs(owner, pathname));
+  const [placement, setPlacement] = useState(() => localStorage.getItem("tab-placement") === "left" ? "left" : "top");
+  if (state.owner !== owner) setState(loadTabs(owner, pathname));
+  else if (state.active !== pathname) setState(openTab(state, pathname));
+  useEffect(() => {
+    if (state.owner !== undefined) localStorage.setItem(`tabs:${state.owner}`, JSON.stringify(state.tabs));
+  }, [state.owner, state.tabs]);
+  const update = (change: (tabs: Tab[]) => Tab[]) => setState((current) => ({ ...current, tabs: pinnedFirst(change(current.tabs)) }));
+  // Closing the active tab activates the target, else its right neighbour, else its left one; no tabs leaves Home.
+  const close = (paths: string[], target?: string) => {
+    const doomed = new Set(paths), kept = (tab: Tab) => !doomed.has(tab.path);
+    const rest = state.tabs.filter(kept);
+    setState({ ...state, tabs: rest.length ? rest : [{ path: "/" }] });
+    if (!doomed.has(pathname) || (!rest.length && pathname === "/")) return;
+    const at = state.tabs.findIndex((tab) => tab.path === pathname);
+    navigate(target ?? (state.tabs.slice(at + 1).find(kept) ?? state.tabs.slice(0, at).findLast(kept))?.path ?? "/");
+  };
+  const unpinned = (tabs: Tab[]) => tabs.flatMap((tab) => tab.pinned ? [] : [tab.path]);
+  const next = placement === "left" ? "top" : "left";
+  return {
+    state, pathname, placement, close,
+    promote: (path: string) => { if (state.tabs.some((tab) => tab.path === path && tab.preview)) update((tabs) => tabs.map((tab) => tab.path === path ? { ...tab, preview: false } : tab)); },
+    move: (from: string, to: string) => update((tabs) => moveQueueId(tabs.map((tab) => tab.path), from, to).map((path) => tabs.find((tab) => tab.path === path)!)),
+    create: (id: string) => update((tabs) => tabs.map((tab) => tab.path === "/" ? { path: sessionPath(id), pinned: tab.pinned } : tab)),
+    commands: (path: string) => [
+      { key: "close", label: "Close", run: () => close([path]) },
+      { key: "close-others", label: "Close others", run: () => close(unpinned(state.tabs).filter((other) => other !== path), path) },
+      { key: "close-right", label: "Close to the right", run: () => close(unpinned(state.tabs.slice(state.tabs.findIndex((tab) => tab.path === path) + 1)), path) },
+      { key: "close-all", label: "Close all", run: () => close(unpinned(state.tabs)) },
+      { key: "pin", label: state.tabs.find((tab) => tab.path === path)?.pinned ? "Unpin" : "Pin", run: () => update((tabs) => tabs.map((tab) => tab.path === path ? { path, pinned: !tab.pinned } : tab)) },
+      { key: "placement", label: `Move tabs to ${next}`, run: () => { localStorage.setItem("tab-placement", next); setPlacement(next); } },
+    ],
+  };
+}
+
+function TabStrip({ tabs: { state, pathname, close, promote, move, commands }, vertical }: { tabs: ReturnType<typeof useTabs>; vertical: boolean }) {
+  const [menu, setMenu] = useState<{ path: string; anchor: Element | { getBoundingClientRect: () => DOMRect } }>();
+  const pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
+  const list = useRef<HTMLDivElement>(null), refocus = useRef(false);
+  // Closing from the strip unmounts the focused control, so focus moves to the selected tab, as in SearchTabs.
+  const selected = () => list.current!.querySelector<HTMLElement>('[aria-selected="true"]')!;
+  return <>
+    <div ref={list} role="tablist" aria-label="Open tabs" aria-orientation={vertical ? "vertical" : "horizontal"} className={cn("flex shrink-0 [scrollbar-width:thin]", vertical ? "w-56 flex-col gap-0.5 overflow-y-auto border-r p-1" : "mr-12 overflow-x-auto overflow-y-hidden border-b")}
+      onContextMenu={(event) => {
+        const path = pathOf(event);
+        if (!path) return;
+        event.preventDefault();
+        setMenu({ path, anchor: { getBoundingClientRect: () => DOMRect.fromRect({ x: event.clientX, y: event.clientY }) } });
+      }}
+      onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
+      onAuxClick={(event) => {
+        const path = pathOf(event);
+        if (event.button !== 1 || !path) return;
+        event.preventDefault();
+        close([path]);
+      }}
+      onDragStart={(event) => event.dataTransfer.setData("application/x-rocketclaw-tab", pathOf(event)!)}
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={(event) => {
+        const path = pathOf(event);
+        if (path) move(event.dataTransfer.getData("application/x-rocketclaw-tab"), path);
+      }}
+      onKeyDown={(event) => {
+        const tab = event.target as HTMLElement, path = pathOf(event)!;
+        if (tab.role !== "tab") return;
+        if ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu") {
+          event.preventDefault();
+          setMenu({ path, anchor: tab });
+          return;
+        }
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          if (path !== pathname) navigate(path);
+          return;
+        }
+        const at = state.tabs.findIndex((item) => item.path === path);
+        const step = ({ ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 } as Record<string, number>)[event.key];
+        const position = event.key === "Home" ? 0 : event.key === "End" ? state.tabs.length - 1 : step ? at + step : -1;
+        if (!state.tabs[position]) return;
+        event.preventDefault();
+        if (event.shiftKey && step) {
+          flushSync(() => move(path, state.tabs[position].path));
+          tab.focus();
+        } else event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[position].focus();
+      }}>
+      {state.tabs.map((tab) => <TabItem key={tab.path} tab={tab} active={tab.path === pathname} vertical={vertical} promote={() => promote(tab.path)} close={() => { flushSync(() => close([tab.path])); selected().focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} />)}
+    </div>
+    <Menu.Root open={!!menu} onOpenChange={(open) => { if (!open) setMenu(undefined); }}>
+      <Menu.Portal><Menu.Positioner anchor={menu?.anchor} sideOffset={4} align="start" className="z-50 outline-none"><Menu.Popup finalFocus={() => { const closed = refocus.current; refocus.current = false; return closed ? selected() : true; }} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none">
+        {menu ? commands(menu.path).map(({ key, label, run }) => <Menu.Item key={key} onClick={() => { refocus.current = key.startsWith("close"); run(); }} className="flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent">{label}</Menu.Item>) : null}
+      </Menu.Popup></Menu.Positioner></Menu.Portal>
+    </Menu.Root>
+  </>;
+}
+
+function TabItem({ tab, active, vertical, promote, close, openMenu }: { tab: Tab; active: boolean; vertical: boolean; promote: () => void; close: () => void; openMenu: (anchor: Element) => void }) {
+  const sidebar = useContext(Sidebar);
+  const id = tab.path.startsWith("/s/") ? decodeSessionId(tab.path.slice(3)) : "";
+  const session = sidebar.rows.find((row) => row.id === id) ?? { id };
+  const [label, Icon] = pageTabs[tab.path] ?? [sessionTitle(session, sidebar.loadingIds.has(id)), MessageSquare];
+  const title = useCleanText(label);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
+  return <div data-tab={tab.path} draggable className={cn("group flex shrink-0 items-center", vertical ? "rounded-md" : "border-r", active ? "bg-sidebar-row-active" : "hover:bg-accent")}>
+    <div ref={ref} role="tab" aria-selected={active} aria-label={title} title={title} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm outline-none last:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", vertical ? "flex-1" : "max-w-48", tab.preview && "italic")}
+      onClick={() => { if (!active) navigate(tab.path); }} onDoubleClick={promote}>
+      <Icon aria-hidden="true" className="size-4 shrink-0" />
+      {session.running ? <span role="img" aria-label="Turn running" className="hidden size-2 shrink-0 rounded-full bg-foreground in-aria-selected:block [@media(hover:none)]:block" /> : null}
+      {tab.pinned && !vertical ? null : <span className="truncate">{title}</span>}
+    </div>
+    {active ? <button type="button" aria-label="Tab actions" className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground last:mr-1 hover:bg-accent hover:text-foreground" onClick={(event) => openMenu(event.currentTarget)}><Ellipsis className="size-3.5" /></button> : null}
+    {tab.pinned ? null : <TabClose title={title} running={!!session.running} active={active} close={close} />}
+  </div>;
+}
+
+// A running turn's dot holds the close button's place until hover, focus, or activation.
+// Where close owns the slot (active or touch), TabItem shows the dot before the title instead.
+function TabClose({ title, running, active, close }: { title: string; running: boolean; active: boolean; close: () => void }) {
+  const dot = running && !active;
+  return <span className="relative mr-1 flex size-6 shrink-0 items-center justify-center">
+    <button type="button" aria-label={`Close ${title}`} className={cn("flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring", dot && "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100")} onClick={close}><X className="size-3.5" /></button>
+    {dot ? <span role="img" aria-label="Turn running" className="pointer-events-none absolute size-2 rounded-full bg-foreground group-hover:opacity-0 group-focus-within:opacity-0 [@media(hover:none)]:hidden" /> : null}
+  </span>;
+}
+
 function persistComposerDraft(draft: ComposerDraft) {
   if (!draft.hydrated || !draft.persistenceKey || draft.persistedEdit === draft.edit) return;
   draft.persistedEdit = draft.edit;
@@ -695,8 +861,10 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   }, [drafts]);
   const [conversation, setConversation] = useState({ id: route.id, created: "", key: 0 });
   const newChatOwner = useRef<(() => unknown) | undefined>(undefined);
-  const returnTo = conversation.id === "" ? "/" : sessionPath(conversation.id);
-  tabReturnTo.current = returnTo;
+  const tabs = useTabs();
+  const medium = useMedia("(min-width: 48rem)");
+  const vertical = tabs.placement === "left" && medium;
+  const { close: closeTab } = tabs;
   const newChat = useCallback(() => {
     const draft = drafts.get("") ?? drafts.get(conversation.id)!;
     if ([!scope, draft.reverting, !draft.hydrated].some(Boolean)) return;
@@ -737,7 +905,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
       if (event.defaultPrevented || event.repeat || showChat || event.key !== "Escape") return;
       if (document.querySelector('[role="dialog"], [role="listbox"], [role="menu"], [role="tooltip"]')) return;
       event.preventDefault();
-      navigate(tabReturnTo.current);
+      closeTab([location.pathname]);
     };
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("keydown", onEscape);
@@ -745,14 +913,14 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("keydown", onEscape);
     };
-  }, [newChat, showChat, openPalette]);
+  }, [newChat, showChat, openPalette, closeTab]);
   if (showChat && conversation.id !== route.id) {
     // Creation assigns this conversation its ID; other navigation starts a fresh subtree.
     const created = conversation.id === "" && conversation.created === route.id;
     setConversation({ id: route.id, created: "", key: created ? conversation.key : conversation.key + 1 });
   }
   return (
-          <DraftScope value={scope}><SessionCommands value={commands}>
+          <DraftScope value={scope}><SessionCommands value={commands}><TabActions value={tabs}>
            {command ? <SessionCommandDialog key={`${command.mode}:${command.source}`} command={command} drafts={drafts} onDraftChange={onDraftChange} /> : null}
             <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} />
          <div className="flex h-dvh min-h-0 flex-col overflow-hidden overscroll-y-none bg-background">
@@ -772,20 +940,22 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               </div>
             </BottomNavigation>
             <div className="fixed top-2 right-2 z-40 rounded-md bg-background shadow-sm"><ThemeToggle /></div>
+          {vertical ? null : <TabStrip tabs={tabs} vertical={false} />}
           <div className="flex min-h-0 min-w-0 flex-1">
+            {vertical ? <TabStrip tabs={tabs} vertical /> : null}
             <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]", command?.target && "pt-[min(75dvh,30rem)]")}>
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
               {route.search ? <SearchPage /> : null}
               <TabPane show={showChat}>
                 <MessageScrollerProvider key={conversation.key} autoScroll scrollEdgeThreshold={48}>
-                  <Transcript id={conversation.id} drafts={drafts} scopeError={scopeError} onDraftChange={onDraftChange} onCreated={(id) => setConversation((current) => ({ ...current, created: id }))} />
+                  <Transcript id={conversation.id} drafts={drafts} scopeError={scopeError} onDraftChange={onDraftChange} onCreated={(id) => { tabs.create(id); setConversation((current) => ({ ...current, created: id })); }} />
                 </MessageScrollerProvider>
               </TabPane>
              </main>
              {showChat ? <DelegationPanel id={route.id} /> : null}
            </div>
           </div>
-          </SessionCommands></DraftScope>
+          </TabActions></SessionCommands></DraftScope>
   );
 }
 
@@ -1007,6 +1177,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
   const sidebar = useContext(Sidebar);
   const { setCommand, composer } = useContext(SessionCommands);
   const { id } = useRoute();
+  const tabCommands = useContext(TabActions).commands(usePathname() || "/").map((item) => ({ ...item, key: `tab-${item.key}`, label: `Tabs: ${item.label}` }));
   const actions = useSessionActions(sidebar.rows.find((row) => row.id === id), () => setMode(undefined));
   const choices = useQuery({ ...queries.agents({ conversationId: id }), enabled: id !== "" });
   const draft = drafts.get(id);
@@ -1055,7 +1226,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
       setMode(undefined);
     },
   });
-  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.values, [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands], filters, agentFilter, roomFilter, recent);
+  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.values, [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands, ...tabCommands], filters, agentFilter, roomFilter, recent);
   const selected = items.length === 0 ? 0 : pick % items.length;
   const choose = (item: (typeof items)[number]) => {
     if (item.disabled) return;
@@ -1131,7 +1302,7 @@ function relativeTime(iso: string) {
 }
 
 function SessionRowContent({ session, loading = false, age = relativeTime(session.updatedAt ?? "") }: { session: Session; loading?: boolean; age?: string }) {
-  const title = session.name || rowPreview(session, loading).split("\n", 1)[0] || sessionLabel(session.id);
+  const title = sessionTitle(session, loading);
   const clean = useCleanText(title);
   const channel = slackSession(session.id) ? (session.title ?? "") : "";
   const meta = [channel, session.agent, ...(session.tags ?? [])].filter(Boolean).join(" · ");
@@ -1376,7 +1547,7 @@ function windowed(text: string, needle: string, tagIds: string[]) {
 
 function SearchResultGroup({ session, hits, text, field, needle, tagIds }: { session: Session; hits: MessageMatch[]; text: string; field?: string; needle: string; tagIds: string[] }) {
   const count = hits.length + Number(!!text);
-  const label = session.name || rowPreview(session, false).split("\n", 1)[0] || sessionLabel(session.id);
+  const label = sessionTitle(session, false);
   const clean = useCleanText(label);
   const row = (href: string, kind: string, body: string, key?: string) => <li key={key}><Link href={href} className="flex min-h-11 min-w-0 items-start gap-3 px-2 py-1 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring sm:min-h-7"><span className="w-16 shrink-0 text-xs text-muted-foreground">{kind}</span><div className="min-w-0"><TranscriptText text={windowed(body, needle, tagIds)} needle={needle} interactive={false} /></div></Link></li>;
   return <li role="group" aria-label={clean} className="min-w-0">
@@ -1591,9 +1762,10 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
 }
 
 function PageTitle({ children }: { children: ReactNode }) {
+  const { close } = useContext(TabActions);
   return <header className="flex w-full shrink-0 items-center gap-2">
     <h1 className="text-lg font-semibold">{children}</h1>
-    <Button type="button" variant="ghost" size="icon-sm" className="ml-auto hidden md:inline-flex" aria-label="Close" onClick={() => navigate(tabReturnTo.current)}><X /></Button>
+    <Button type="button" variant="ghost" size="icon-sm" className="ml-auto hidden md:inline-flex" aria-label="Close" onClick={() => close([location.pathname])}><X /></Button>
   </header>;
 }
 
@@ -2277,7 +2449,7 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
 
 function DelegationPanel({ id }: { id: string }) {
   const child = new URLSearchParams(useSearch()).get("delegation") ?? "";
-  const wide = useSyncExternalStore(subscribeWide, () => matchMedia("(min-width: 64rem)").matches);
+  const wide = useMedia("(min-width: 64rem)");
   const main = useQuery({ ...queries.history({ id }), enabled: false });
   const history = useQuery({ ...queries.history({ id: child }), enabled: child !== "" });
   useEffect(() => {
@@ -2578,6 +2750,7 @@ function SessionComposer({
 }) {
   const identity = useQuery(queries.identity());
   const { setCommand } = useContext(SessionCommands);
+  const { promote } = useContext(TabActions);
   const scope = useContext(DraftScope)!;
   const revert = useContext(RevertActions)!;
   const { scrollToEnd, scrollToMessage } = useMessageScroller();
@@ -2593,12 +2766,14 @@ function SessionComposer({
   const { text, files, sending, agent } = draft;
   const [, setTyped] = useState(0);
   // Typing redraws only this composer; a whole-app redraw per keystroke made long chats lag.
+  // A draft or a send keeps the preview tab.
   const setText = (value: string) => {
     draft.text = value;
     draft.edit++;
     setTyped((count) => count + 1);
     const error = draft.persistenceError ?? "";
     void persistComposerDraft(draft)?.finally(() => { if (draft.persistenceError !== error) onDraftChange(); });
+    promote(id ? sessionPath(id) : "/");
   };
   const setFiles = (value: PendingFile[]) => { draft.files = value; draft.edit++; onDraftChange(); };
   const setAgent = (value: string) => { draft.agent = value; draft.edit++; onDraftChange(); };
@@ -2636,6 +2811,7 @@ function SessionComposer({
       setText("");
       return Promise.resolve();
     }
+    promote(id ? sessionPath(id) : "/");
     return sendComposer({
       draft,
       onDraftChange,
