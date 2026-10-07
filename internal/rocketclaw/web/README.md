@@ -45,6 +45,59 @@ independently toggles its origin on or off, so both, either, or neither can be s
 Messages without a recorded origin appear only when both are selected.
 Filtering does not change saved history or routing.
 
+## Tabs
+
+This build is the **minimal** tab variant. Its thesis is that tabs should be a
+side effect of navigation, not something you manage: the address bar is the only
+source of truth, and the strip just remembers where you have been. It aims for the
+smallest code change that still meets the tab requirements.
+
+- **Opening.** Every location you visit gets a tab: a session (`/s/…`), Search, Cron,
+  Agents, Skills, Settings, or the new-session composer (`/`). That covers the palette,
+  search results, links in a transcript, footer buttons, cron links, fork and handoff
+  results, and the browser's Back and Forward buttons. If the location already has a
+  tab, that tab is selected instead, so a location never appears twice. New tabs are
+  added at the end. The selected tab is always the one in the address bar.
+- **Titles.** Session tabs use the session's name, or the first line of its preview,
+  or its ID, and update live from the session list. A running session shows a spinner
+  labeled "Turn running".
+- **New sessions.** Sending the first message from the composer tab turns that tab
+  into the new session's tab.
+- **Closing.** Each tab has a close button labeled "Close <title>". Closing the
+  selected tab selects the tab to its right, or to its left if it was last. Closing
+  the last tab opens the composer. Closing the composer when it is the only tab does
+  nothing. On Cron, Agents, Skills, and Settings, the page's close button and Escape
+  close that page's tab.
+- **Keyboard.** The strip is a `tablist`. Only the selected tab is in the Tab order.
+  Arrow keys (Left/Right or Up/Down), Home, and End move focus between tabs, and
+  Enter or Space opens the focused tab.
+- **Placement.** The button at the end of the strip, or **Tabs: Toggle top/left
+  placement** in the command palette, moves the strip between the top and the left.
+  Top is the default. Below the `md` breakpoint (768px) the strip is always on top,
+  and it scrolls sideways, keeping the selected tab in view.
+- **Storage.** The ordered list of open locations is saved in this browser's
+  `localStorage` under `tabs-minimal:<username>`. Titles and running state are not
+  stored. Placement is saved under `tab-placement` (`top` or `left`), which all tab
+  variants share. Stored data that cannot be read starts over with one tab for the
+  current address.
+- **Reload and links.** Because the address names the selected tab, a reload keeps
+  both the tabs and the selected tab. Opening any address, including `/`, selects or
+  adds that location's tab; the stored list never overrides the address.
+
+Tradeoffs compared with the other variants:
+
+- There is no preview tab, pinning, context menu, drag-to-reorder, per-tab history,
+  grouping, or reopen-closed-tab. Tab order is the order of first visit.
+- Only one session is mounted at a time, as before tabs. Switching tabs reloads that
+  session's history and resets its scroll position.
+- Any navigation, including Back, adds a tab, so the strip can grow quickly. You
+  prune it by closing tabs.
+- Tabs are not synced between browser windows. The last window to change tabs wins
+  in storage.
+- Selecting a tab opens its plain location, so a `?message=` or `?delegation=` part
+  of a session address is not kept. Search reopens its last selected saved search.
+- The tabs have no matching `tabpanel` element.
+
 ## Revert, Undo, and Redo
 
 Recorded user messages in top-level pure Web sessions have a **Revert message**
@@ -338,7 +391,7 @@ returning to the tab does not recheck origins. A failed origin search
 shows an error while usable row matches remain selectable.
 The command button and Cmd/Ctrl+Shift+P open the command palette. It always offers
 **Sessions: New**, **Sessions: Search**, **Cron: Dashboard**, **Cron: Run**,
-**List Agents**, **List Skills**, and **Settings**.
+**List Agents**, **List Skills**, **Settings**, and **Tabs: Toggle top/left placement**.
 Timeline detail levels are also available, from `Timeline: Messages only` through
 `Timeline: Everything`.
 Like VS Code, selected commands appear first, newest first;
@@ -487,11 +540,9 @@ below the panel and hides the composer until the handoff is closed.
 Conversations without stored history stay out of the session list until their first
 entry arrives. Clearing all stored history hides the conversation again without
 deleting its record or its Slack messages.
-Click the selected Cron, Agents, Skills, or Config tab again to return
-to the chat you left, even after switching between pages. Without a previous
-chat, it returns Home. On desktop, the page header's close button does the same,
-and Escape does too unless a dialog or tooltip is open. New chat, search, and these page
-buttons form a centered group in the footer.
+On desktop, the Cron, Agents, Skills, and Config page header's close button closes
+that page's tab (see [Tabs](#tabs)), and Escape does too unless a dialog or tooltip is
+open. New chat, search, and the command palette button form a centered group in the footer.
 The theme toggle floats in the upper-right corner of the page and switches light, dark, and system. Config has a select for the color theme. The choices are Neutral, Harbor, Grove, Ember, Violet, Rose, Sand, Lagoon, Slate, Copper, Ink, Signal, Go - Playground, and Go - Sources. Ink and Signal are high contrast. The Go themes adapt Mike Gleason jr Couturier's light themes, with local dark variations. The choice is stored in the browser, not on the server. See [theme sources and licenses](../../../THEMES.md) for attribution and reuse terms.
 Config's Timeline section has the **Timeline detail** card, following OpenCode v2. A
 five-stop slider picks Messages only, Quiet, Compact, Detailed, or Everything, and an

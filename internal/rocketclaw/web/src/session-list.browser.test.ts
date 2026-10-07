@@ -530,8 +530,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
   const port = server.port;
   const origin = `http://127.0.0.1:${port}`;
   const browser = await engine.launch({ executablePath: chromium, headless: true, args: ["--disable-features=OverscrollHistoryNavigation"] });
-  const shown = async (page: { getByText: (text: string, opts?: { exact?: boolean }) => { waitFor: (opts: { state: "visible" | "hidden"; timeout?: number }) => Promise<void>; count: () => Promise<number> } }, text: string) => {
-    await page.getByText(text, { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+  const shown = async (page: { getByText: (text: string, opts?: { exact?: boolean }) => { first: () => { waitFor: (opts: { state: "visible" | "hidden"; timeout?: number }) => Promise<void> } } }, text: string) => {
+    await page.getByText(text, { exact: true }).first().waitFor({ state: "visible", timeout: 15_000 });
   };
   const hidden = async (page: { getByText: (text: string, opts?: { exact?: boolean }) => { count: () => Promise<number> } }, text: string) => {
     expect(await page.getByText(text, { exact: true }).count()).toBe(0);
@@ -743,7 +743,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const commandPalette = page.getByRole("dialog", { name: "Run command", exact: true });
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
     expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
-    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "List Agents", "List Skills", "Sessions: New", "Sessions: Search", "Settings", "Timeline: Compact", "Timeline: Detailed", "Timeline: Everything", "Timeline: Messages only", "Timeline: Quiet"]);
+    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "List Agents", "List Skills", "Sessions: New", "Sessions: Search", "Settings", "Tabs: Toggle top/left placement", "Timeline: Compact", "Timeline: Detailed", "Timeline: Everything", "Timeline: Messages only", "Timeline: Quiet"]);
     await page.keyboard.press("Escape");
     await commandPalette.waitFor({ state: "hidden" });
     await navigationCommands.click();
@@ -1191,7 +1191,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
 
     ctrl.yieldBatches = complete([]);
     blocked.resolve();
-    await page.getByText("backfilled preview", { exact: true }).waitFor({ state: "hidden", timeout: 15_000 });
+    await page.getByText("backfilled preview", { exact: true }).first().waitFor({ state: "hidden", timeout: 15_000 });
     await hidden(page, "saved preview");
     await page.keyboard.press("Control+p");
     await search.fill("empty-search");
@@ -1279,7 +1279,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         if (rejection === "unauthorized") throw new RPCError("denied", 16);
         yield batch([row("other-owner", "unconfirmed owner preview")], { owner: "unconfirmed" });
       };
-      await page.getByText("new protocol preview", { exact: true }).waitFor({ state: "hidden", timeout: 15_000 });
+      await page.getByText("new protocol preview", { exact: true }).first().waitFor({ state: "hidden", timeout: 15_000 });
       await hidden(page, "unconfirmed owner preview");
       await page.keyboard.press("Control+p");
       await search.fill("preview");
@@ -1729,6 +1729,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await openPage("Skills");
       await navPage.waitForURL(`${origin}/skills`);
       await navPage.keyboard.press("Escape");
+      await navPage.waitForURL(`${origin}/cron`);
+      await navPage.keyboard.press("Escape");
       await navPage.waitForURL(`${origin}${chatPath}`);
       if (width === 390) await navPage.keyboard.press("Escape");
       expect(await navPage.getByPlaceholder("Message or $command").inputValue()).toBe("keep this chat draft");
@@ -1755,6 +1757,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await navPage.waitForURL(`${origin}/config`);
       await navPage.goBack();
       await navPage.waitForURL(`${origin}/`);
+      await navPage.getByRole("button", { name: "Close Settings", exact: true }).click(); // Back leaves the Settings tab open.
       if (width === 390) await navPage.keyboard.press("Escape");
       expect(await navPage.getByPlaceholder("Message a new session").inputValue()).toBe("fresh draft");
       await navPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();

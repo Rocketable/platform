@@ -9,7 +9,7 @@ import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field
 import { queries, mutations, listSessions, rpc } from "./api";
 import { draftContent } from "./drafts";
 import type { ChatOrigin, HistoryView, MessageMatch, PromptDelivery, SearchMessagesResponse } from "./types";
-import { Bot, Check, ChevronDown, CircleAlert, Command, Copy, CornerUpLeft, Download, FileIcon, GitFork, GripVertical, Info, LoaderCircle, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
+import { Bot, Check, ChevronDown, CircleAlert, Command, Copy, CornerUpLeft, Download, FileIcon, GitFork, GripVertical, Info, LoaderCircle, PanelLeft, PanelTop, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -49,7 +49,7 @@ const queryClient = new QueryClient({
   queryCache: new QueryCache({ onError: (error) => { captureException(error); } }),
   mutationCache: new MutationCache({ onError: (error) => { captureException(error); } }),
 });
-const tabReturnTo = { current: "/" };
+const closeTab: { current: (tab: string) => void } = { current: () => {} };
 type SessionCommand = { mode: "fork" | "handoff" | "name"; source: string; target?: MessageMatch };
 const SessionCommands = createContext<{ command?: SessionCommand; setCommand: Dispatch<SetStateAction<SessionCommand | undefined>>; composer: RefObject<((command: string) => void) | null> }>(null!);
 
@@ -67,9 +67,8 @@ function delegationHref(id?: string) {
 }
 
 function subscribeWide(listener: () => void) {
-  const media = matchMedia("(min-width: 64rem)");
-  media.addEventListener("change", listener);
-  return () => media.removeEventListener("change", listener);
+  addEventListener("resize", listener);
+  return () => removeEventListener("resize", listener);
 }
 
 function slackSession(id: string) {
@@ -631,6 +630,67 @@ function BottomNavigation({ children }: { children: ReactNode }) {
   );
 }
 
+const pageTitles: Record<string, string> = { "/": "New session", "/search": "Search", "/cron": "Cron", "/agents": "Agents", "/skills": "Skills", "/config": "Settings" };
+
+// Every location the URL visits becomes a tab; the URL is always the active tab.
+function TabStrip({ owner, created, left, togglePlacement }: { owner: string; created: string; left: boolean; togglePlacement: () => void }) {
+  const key = `tabs-minimal:${owner}`;
+  const [state, setState] = useState(() => {
+    try {
+      const stored: unknown = JSON.parse(localStorage.getItem(key)!);
+      if (Array.isArray(stored) && stored.every((tab) => typeof tab === "string")) return { tabs: stored, path: "" };
+    } catch { /* Corrupt storage resets to the current location. */ }
+    return { tabs: [] as string[], path: "" };
+  });
+  const path = usePathname();
+  const sidebar = useContext(Sidebar);
+  if (state.path !== path) {
+    const composer = state.path === "/" && path === sessionPath(created) ? state.tabs.indexOf("/") : -1;
+    setState({ path, tabs: state.tabs.includes(path) ? state.tabs : composer < 0 ? [...state.tabs, path] : state.tabs.with(composer, path) });
+  }
+  useEffect(() => { localStorage.setItem(key, JSON.stringify(state.tabs)); }, [key, state.tabs]);
+  const items = state.tabs.map((tab) => {
+    const id = tab.startsWith("/s/") ? decodeSessionId(tab.slice(3)) : "";
+    const row = sidebar.rows.find((item) => item.id === id);
+    return { tab, row, title: pageTitles[tab] || row?.name || (row ? rowPreview(row, sidebar.loadingIds.has(id)).split("\n", 1)[0] : "") || sessionLabel(id) || tab };
+  });
+  const titles = items.map((item) => item.title).join("\n");
+  const list = useRef<HTMLDivElement>(null);
+  const focusAfterClose = useRef(false);
+  const wide = useSyncExternalStore(subscribeWide, () => matchMedia("(min-width: 48rem)").matches);
+  useEffect(() => {
+    const selected = list.current!.querySelector<HTMLElement>('[aria-selected="true"]')!;
+    selected.parentElement!.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (focusAfterClose.current) selected.focus();
+    focusAfterClose.current = false;
+  }, [path, left, titles]);
+  closeTab.current = (tab) => {
+    const tabs = state.tabs.filter((item) => item !== tab);
+    if (!tabs.length && tab === "/") return;
+    setState({ ...state, tabs });
+    if (tab === path) navigate(tabs[Math.min(state.tabs.indexOf(tab), tabs.length - 1)] ?? "/");
+  };
+  return <div className={cn("flex shrink-0 items-center gap-1 border-b p-1 pr-12", left && "md:w-56 md:flex-col md:items-stretch md:border-r md:border-b-0 md:pr-1")}>
+    <div ref={list} role="tablist" aria-label="Open tabs" aria-orientation={left && wide ? "vertical" : "horizontal"} className={cn("flex min-w-0 flex-1 gap-1 overflow-x-auto", left && "md:flex-col md:overflow-y-auto")} onKeyDown={(event) => {
+      const tabs = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')];
+      const index = tabs.indexOf(event.target as HTMLElement);
+      const next = ({ ArrowRight: index + 1, ArrowDown: index + 1, ArrowLeft: index - 1, ArrowUp: index - 1, Home: 0, End: -1 } as Record<string, number>)[event.key];
+      if (index < 0 || next === undefined) return;
+      event.preventDefault();
+      tabs.at(next % tabs.length)!.focus();
+    }}>
+      {items.map(({ tab, row, title }) => <div key={tab} className={cn("flex shrink-0 items-center rounded-md", tab === path && "bg-accent")}>
+        <button type="button" role="tab" aria-selected={tab === path} tabIndex={tab === path ? 0 : -1} className="flex min-w-0 max-w-48 flex-1 items-center gap-1 rounded-md py-1 pl-2 text-left text-sm focus-visible:outline-2 focus-visible:outline-ring" onClick={() => navigate(tab)}>
+          {row?.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 shrink-0 animate-spin motion-reduce:animate-none" /> : null}
+          <span className="truncate">{title}</span>
+        </button>
+        <button type="button" aria-label={`Close ${title}`} className="rounded-md p-1 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={() => { focusAfterClose.current = state.tabs.length > 1 || tab !== "/"; closeTab.current(tab); }}><X className="size-3.5" /></button>
+      </div>)}
+    </div>
+    <Button type="button" variant="ghost" size="icon-sm" className="shrink-0" aria-label={left ? "Move tabs to top" : "Move tabs to left"} onClick={togglePlacement}>{left ? <PanelTop /> : <PanelLeft />}</Button>
+  </div>;
+}
+
 function ResizableAside({ className, children, ...props }: ComponentProps<"aside">) {
   const [min, max] = [288, Math.round(innerWidth * 0.6)];
   const clamp = (value: number) => Math.round(Math.min(Math.max(value, min), max));
@@ -695,8 +755,9 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   }, [drafts]);
   const [conversation, setConversation] = useState({ id: route.id, created: "", key: 0 });
   const newChatOwner = useRef<(() => unknown) | undefined>(undefined);
-  const returnTo = conversation.id === "" ? "/" : sessionPath(conversation.id);
-  tabReturnTo.current = returnTo;
+  const username = useQuery(queries.identity()).data?.username;
+  const [placement, setPlacement] = useState(() => localStorage.getItem("tab-placement") ?? "top");
+  const togglePlacement = () => { const next = placement === "left" ? "top" : "left"; localStorage.setItem("tab-placement", next); setPlacement(next); };
   const newChat = useCallback(() => {
     const draft = drafts.get("") ?? drafts.get(conversation.id)!;
     if ([!scope, draft.reverting, !draft.hydrated].some(Boolean)) return;
@@ -737,7 +798,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
       if (event.defaultPrevented || event.repeat || showChat || event.key !== "Escape") return;
       if (document.querySelector('[role="dialog"], [role="listbox"], [role="menu"], [role="tooltip"]')) return;
       event.preventDefault();
-      navigate(tabReturnTo.current);
+      closeTab.current(location.pathname);
     };
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("keydown", onEscape);
@@ -749,12 +810,12 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   if (showChat && conversation.id !== route.id) {
     // Creation assigns this conversation its ID; other navigation starts a fresh subtree.
     const created = conversation.id === "" && conversation.created === route.id;
-    setConversation({ id: route.id, created: "", key: created ? conversation.key : conversation.key + 1 });
+    setConversation({ id: route.id, created: created ? route.id : "", key: created ? conversation.key : conversation.key + 1 });
   }
   return (
           <DraftScope value={scope}><SessionCommands value={commands}>
            {command ? <SessionCommandDialog key={`${command.mode}:${command.source}`} command={command} drafts={drafts} onDraftChange={onDraftChange} /> : null}
-            <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} />
+            <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} togglePlacement={togglePlacement} />
          <div className="flex h-dvh min-h-0 flex-col overflow-hidden overscroll-y-none bg-background">
             <BottomNavigation>
               <div className="min-w-0 max-w-full justify-self-center overflow-x-auto overflow-y-hidden scrollbar-none">
@@ -772,6 +833,8 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               </div>
             </BottomNavigation>
             <div className="fixed top-2 right-2 z-40 rounded-md bg-background shadow-sm"><ThemeToggle /></div>
+          <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", placement === "left" && "md:flex-row")}>
+            {username ? <TabStrip key={username} owner={username} created={conversation.created} left={placement === "left"} togglePlacement={togglePlacement} /> : null}
           <div className="flex min-h-0 min-w-0 flex-1">
             <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]", command?.target && "pt-[min(75dvh,30rem)]")}>
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
@@ -784,6 +847,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
              </main>
              {showChat ? <DelegationPanel id={route.id} /> : null}
            </div>
+          </div>
           </div>
           </SessionCommands></DraftScope>
   );
@@ -1003,7 +1067,7 @@ function useSessionOrigins(rows: Session[], needle: string) {
 const paletteCopy = { sessions: { title: "Go to session", desc: "Search and open a session.", placeholder: "Search sessions" }, commands: { title: "Run command", desc: "Search and run a command.", placeholder: "Type a command" },
   cron: { title: "Run cron", desc: "Search and run a cron job.", placeholder: "Search cron jobs" } };
 
-function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string, ComposerDraft>; mode: "sessions" | "commands" | "cron" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | undefined) => void; newChat: () => void }) {
+function CommandPalette({ drafts, mode, setMode, newChat, togglePlacement }: { drafts: Map<string, ComposerDraft>; mode: "sessions" | "commands" | "cron" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | undefined) => void; newChat: () => void; togglePlacement: () => void }) {
   const sidebar = useContext(Sidebar);
   const { setCommand, composer } = useContext(SessionCommands);
   const { id } = useRoute();
@@ -1055,7 +1119,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
       setMode(undefined);
     },
   });
-  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.values, [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands], filters, agentFilter, roomFilter, recent);
+  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.values, [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands, { key: "tab-placement", label: "Tabs: Toggle top/left placement", run: togglePlacement }], filters, agentFilter, roomFilter, recent);
   const selected = items.length === 0 ? 0 : pick % items.length;
   const choose = (item: (typeof items)[number]) => {
     if (item.disabled) return;
@@ -1593,7 +1657,7 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
 function PageTitle({ children }: { children: ReactNode }) {
   return <header className="flex w-full shrink-0 items-center gap-2">
     <h1 className="text-lg font-semibold">{children}</h1>
-    <Button type="button" variant="ghost" size="icon-sm" className="ml-auto hidden md:inline-flex" aria-label="Close" onClick={() => navigate(tabReturnTo.current)}><X /></Button>
+    <Button type="button" variant="ghost" size="icon-sm" className="ml-auto hidden md:inline-flex" aria-label="Close" onClick={() => closeTab.current(location.pathname)}><X /></Button>
   </header>;
 }
 
