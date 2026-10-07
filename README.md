@@ -387,7 +387,7 @@ Concurrent startups serialize schema upgrades on one database connection. Cancel
 Only one RocketClaw process runs against a database at a time. Additional processes
 wait for the pglock run lock to become available; interrupting startup cancels that wait.
 
-Store tests run against the last three supported PostgreSQL majors from https://www.postgresql.org/versions.json. Local `make test` in `internal/rocketclaw` uses Docker for the newest of those, or `ROCKETCLAW_TEST_DATABASE_URL` if set. GitHub Actions runs all three.
+GitHub Actions runs store tests against PostgreSQL 18, the only major used for `cmd/rocketclaw`. Local `make test` in `internal/rocketclaw` uses Docker for the newest supported major from https://www.postgresql.org/versions.json, or `ROCKETCLAW_TEST_DATABASE_URL` if set.
 
 Agent files must declare `model` frontmatter. Use a concrete model such as `gpt-5.5`, or map a deployment-specific name in `rocketclaw.json` or `femtoclaw.json`:
 
