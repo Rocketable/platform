@@ -359,9 +359,14 @@ func getSessionTool(service *SessionService) rocketcode.Tool {
 				entry := &observations[i].Entry
 				timestamp := entry.Timestamp.Format(time.RFC3339Nano)
 				// Trace-only events have no recorded interleaving with replay items.
-				for _, source := range [][]json.RawMessage{entry.ReplayInput, entry.OutputTrace} {
-					for _, raw := range source {
+				for s, source := range [][]json.RawMessage{entry.ReplayInput, entry.OutputTrace} {
+					for j, raw := range source {
 						kind := replayInputRawKind(raw)
+						if kind == "" && s == 1 {
+							// Only replay input holds untyped messages; untyped trace data is entry bookkeeping such as a producer schedule.
+							kind = entry.Type
+						}
+
 						switch kind {
 						case "", "message", "function_call", "function_call_output", "reasoning", "compaction":
 						default:
@@ -369,17 +374,28 @@ func getSessionTool(service *SessionService) rocketcode.Tool {
 							continue
 						}
 
+						var (
+							role, text string
+							message    bool
+						)
+
 						items, err := rocketcode.ReplayInputToParams([]json.RawMessage{raw})
+						if err == nil {
+							role, text, message, err = ReplayInputMessageRoleText(&items[0], raw)
+						}
+
 						if err != nil {
-							return rocketcode.ToolResult{}, fmt.Errorf("decode session event: %w", err)
+							// The decoder only sees this one item, so its own location is a placeholder.
+							if errReplay, ok := errors.AsType[*rocketcode.ReplayDecodeError](err); ok {
+								err = errReplay.Cause
+							}
+
+							fmt.Fprintf(&output, "%s\tevent\t%s\n", timestamp, escape.Replace(fmt.Sprintf("[entry %d %s item %d: stored event not decoded: %v]", observations[i].ID, [...]string{"replay_input", "output_trace"}[s], j, err)))
+
+							continue
 						}
 
 						item := &items[0]
-
-						role, text, message, err := ReplayInputMessageRoleText(item, raw)
-						if err != nil {
-							return rocketcode.ToolResult{}, err
-						}
 
 						switch {
 						case message:

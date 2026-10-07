@@ -459,8 +459,12 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 			json.RawMessage(`{"type":"unknown_provider_item","encrypted_content":"sealed"}`),
 		},
 	}
+	// A synced producer schedule stores untyped bookkeeping, not a replay message, in its trace.
+	schedule := &rocketcode.SessionEntry{Version: 1, Type: producerScheduleEntryType, Timestamp: entry.Timestamp, OutputTrace: []json.RawMessage{json.RawMessage(`{"conversation_id":"producer","agent":"main","message":"later","due_at":"2026-10-07T00:00:00Z"}`)}}
 	for _, id := range []string{"external_mcp:private", "cron:one", "exec:one", "slack-thread:C1:1", "web:stored", "unrecorded"} {
 		_, err := service.AppendEntryID(t.Context(), id, entry)
+		require.NoError(t, err)
+		_, err = service.AppendEntryID(t.Context(), id, schedule)
 		require.NoError(t, err)
 	}
 
@@ -500,7 +504,7 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 		require.NoError(t, err)
 
 		at := entry.Timestamp.Format(time.RFC3339Nano)
-		require.Equal(t, "timestamp\trole\tcontent\n"+at+"\ttool_call\tRead [call] {}\n"+at+"\ttool_result\t[call] line\\nΩ\\t\\\\\\r\n"+at+"\ttool_result\t[parts] text\\n[non-text tool result omitted]\n"+at+"\tuser\t\n"+at+"\treasoning\tthinking\\nplaintext\n"+at+"\tevent\t[web_search_call: stored event not rendered]\n"+at+"\tevent\t[unknown_provider_item: stored event not rendered]\n", result.Output)
+		require.Equal(t, "timestamp\trole\tcontent\n"+at+"\ttool_call\tRead [call] {}\n"+at+"\ttool_result\t[call] line\\nΩ\\t\\\\\\r\n"+at+"\ttool_result\t[parts] text\\n[non-text tool result omitted]\n"+at+"\tuser\t\n"+at+"\treasoning\tthinking\\nplaintext\n"+at+"\tevent\t[web_search_call: stored event not rendered]\n"+at+"\tevent\t[unknown_provider_item: stored event not rendered]\n"+at+"\tevent\t[producer_schedule: stored event not rendered]\n", result.Output)
 	}
 
 	require.Equal(t, before, snapshot())
@@ -542,6 +546,16 @@ func TestSessionToolsErrors(t *testing.T) {
 	require.NoError(t, err)
 	_, err = list.Call(t.Context(), json.RawMessage(`{"since":"","until":"","limit":0,"include_message_preview":true}`), nil)
 	require.Error(t, err)
+
+	// Each undecodable stored item is reported in place without hiding the rest of the read.
+	var brokenID int64
+
+	require.NoError(t, service.db.QueryRowContext(t.Context(), `UPDATE session_entries SET entry_json = '{"replay_input":[{"type":"message","role":"user","content":"before"},false,{"type":"message","role":"user","content":"after"}],"output_trace":[false]}' WHERE conversation_id = 'broken' RETURNING id`).Scan(&brokenID))
+	result, err := get.Call(t.Context(), json.RawMessage(`{"conversation_id":"broken"}`), nil)
+	require.NoError(t, err)
+
+	undecoded := "0001-01-01T00:00:00Z\tevent\t[entry %d %s item %d: stored event not decoded: unmarshal SDK replay input: apijson: was not able to coerce type as union]\n"
+	require.Equal(t, "timestamp\trole\tcontent\n0001-01-01T00:00:00Z\tuser\tbefore\n"+fmt.Sprintf(undecoded, brokenID, "replay_input", 1)+"0001-01-01T00:00:00Z\tuser\tafter\n"+fmt.Sprintf(undecoded, brokenID, "output_trace", 0), result.Output)
 }
 
 func TestSessionToolsBridgePermissions(t *testing.T) {
