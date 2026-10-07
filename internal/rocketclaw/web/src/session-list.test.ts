@@ -62,23 +62,19 @@ test("session tag filters are literal AND matches with only valid filters remove
   expect(sessionSearchTerms('tag:"Needs is:pinned review" agent:ma')).toMatchObject({ pinnedOnly: false, text: "agent:ma", needle: "", filterTerms: ['tag:"Needs is:pinned review"'] });
 });
 
-test("is:unsettled and sort: filter and order rows, and an unfinished operator token is not free text", () => {
-  for (const [query, needle, unsettledOnly, sort] of [
-    ["is:unsettled tag:x outage", "outage", true, ""],
-    ["IS:UNSETTLED SORT:OLDEST", "", true, "oldest"],
+test("sort: orders rows, and an unfinished operator token is not free text", () => {
+  for (const [query, needle, pinnedOnly, sort] of [
+    ["is:pinned tag:x outage", "outage", true, ""],
+    ["IS:PINNED SORT:OLDEST", "", true, "oldest"],
     ["sort:oldest sort:newest", "", false, "newest"],
     ["is:", "", false, ""],
-    ["is:uns", "", false, ""],
+    ["is:pin", "", false, ""],
     ["sort:", "", false, ""],
     ["sort:ne", "", false, ""],
-    ["outage is:uns", "outage", false, ""],
+    ["outage is:pin", "outage", false, ""],
     ["is:foo", "is:foo", false, ""],
     ["sort:bogus", "sort:bogus", false, ""],
-  ] as const) expect(sessionSearchTerms(query)).toMatchObject({ needle, unsettledOnly, sort });
-  const filters = sessionSearchTerms("is:unsettled tag:x outage");
-  const open: Session = { id: "open", preview: "Outage", tags: ["x"] };
-  expect(!!sessionMatchesSearch(open, filters, "", "", "")).toBe(true);
-  for (const closed of [{ settled: true }, { settled: true, snoozedUntil: "2027-01-02T09:30:00Z" }]) expect(!!sessionMatchesSearch({ ...open, ...closed }, filters, "", "", "")).toBe(false);
+  ] as const) expect(sessionSearchTerms(query)).toMatchObject({ needle, pinnedOnly, sort });
   const rows: Session[] = [{ id: "c" }, { id: "e", updatedAt: "2026-01-02T00:00:00Z" }, { id: "d", updatedAt: "" }, { id: "b", updatedAt: "2026-01-01T00:00:00.5Z", pinned: true }, { id: "a", updatedAt: "2026-01-02T00:00:00Z" }];
   const order = (sort: string) => rows.toSorted((a, b) => compareSessions(sort, a, b)).map((row) => row.id);
   expect(order("oldest")).toEqual(["b", "a", "e", "c", "d"]);
@@ -142,8 +138,8 @@ describe("session list reconciliation", () => {
   });
 
   test("strips preview and timestamp without removing routing metadata", () => {
-    expect(stripSessionHistory([{ id: "keep", title: "room", preview: "secret", updatedAt: "1", agent: "main", settled: true }], "keep")).toEqual([
-      { id: "keep", title: "room", preview: "", updatedAt: "", agent: "main", settled: true },
+    expect(stripSessionHistory([{ id: "keep", title: "room", preview: "secret", updatedAt: "1", agent: "main" }], "keep")).toEqual([
+      { id: "keep", title: "room", preview: "", updatedAt: "", agent: "main" },
     ]);
   });
 

@@ -18,7 +18,7 @@ func TestEmbeddedApplication(t *testing.T) {
 
 	handler := Handler(config.SentryConfig{})
 
-	for _, path := range []string{"/", "/s/conversation", "/cron", "/agents", "/skills", "/config", "/settled", "/search"} {
+	for _, path := range []string{"/", "/s/conversation", "/cron", "/agents", "/skills", "/config", "/search"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, http.NoBody))
 		require.Equal(t, http.StatusOK, response.Code, path)

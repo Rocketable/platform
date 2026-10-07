@@ -259,7 +259,7 @@ with `ROCKETCLAW_WEB_TEST_SERVER_DIR` before `bun test`; see
 PostgreSQL and browser-test instructions in the transport README to exercise
 those paths. Keep temporary test artifacts under the repository's `.tmp/`.
 
-The sidebar restores the last complete list only after live identity confirms the
+The session list restores the last complete list only after live identity confirms the
 Go-mapped username, keys native IndexedDB by owner and protocol, and keeps that
 snapshot until a refresh is successfully exhausted with complete summaries.
 Each row previews the latest nonempty user or assistant message, including delivered
@@ -271,15 +271,14 @@ date” on hover or keyboard focus. No extra space is reserved and the list does
 not shift. Missing summaries show `loading...`.
 Failed, partial or cancelled streams do not replace the snapshot. History
 deletion clears preview text without removing the row. Composer choices and
-sends stay on the agent query and do not wait for sidebar refresh.
+sends stay on the agent query and do not wait for session-list refresh.
 Click or tap the handle to hide or show the bottom navigation, or swipe the handle
 down to hide it and up to show it. On mobile it floats over a slim 16px strip while
 retaining a 44px touch target. The handle stays
 visible when the controls are hidden and supports Enter/Space when focused.
 Touch devices and narrow screens use 48px navigation targets and 8px gaps;
 desktop uses 32px targets and 4px gaps. Icons are 24px in both layouts.
-The center bar has New session, Search sessions, and Open command palette. The
-separate desktop sidebar toggle and collapse handle remain. Cmd/Ctrl+B hides and shows the sidebar.
+The centered bar has New session, Search sessions, and Open command palette.
 Cmd/Ctrl+Alt+N opens a new session. The magnifying glass beside New session opens
 the Search page. Each search has its own editable tab, saved in this browser for
 the confirmed user. Click another tab to switch searches; click the selected tab
@@ -305,7 +304,7 @@ history entries, so it can be copied and shared. Opening such a URL selects a ta
 with the same query, agent, and room, or saves a new one, so Back from a result
 reuses that tab. `agent:` or `room:` typed inside `q` stays query text rather than
 a filter; use the `agent` and `room` parameters. Cmd/Ctrl+P still opens
-the session-search dialog, including active and settled chats. Each dialog opening
+the session-search dialog, which lists every conversation. Each dialog opening
 clears text, pills, and result selection and focuses the input.
 Search matches names, titles, previews, agents, session labels, origin card fields,
 and original MCP metadata keys and values, case-insensitively. Type `agent:` or
@@ -319,29 +318,27 @@ tags match nothing. Bare `tag:`, unclosed quotes, and invalid quoted values stay
 ordinary search text. A tag-only query loads no transcript; `tag:customer outage`
 sends only `outage` to transcript search and keeps hits from tagged sessions.
 Agent and room selections preserve tag filters, and saved queries keep their raw
-syntax without a migration. Agent, room, tag, `is:pinned`, `is:forked`, and
-`is:unsettled` filters constrain both row and origin matches; `is:unsettled`
-keeps only chats the default sidebar shows (not settled, snoozed, or due for
-auto-settle). The session-search dialog lists each conversation
+syntax without a migration. Agent, room, tag, `is:pinned`, and `is:forked`
+filters constrain both row and origin matches. The session-search dialog lists each conversation
 once, pinned first, retaining recent-first order within each group.
 `sort:newest` or `sort:oldest` instead orders results by last activity on every
 search surface, overriding pinned-first and message-hit grouping; rows without
 activity come last, equal times order by conversation ID, and the last `sort:` wins.
-Typing `is:` suggests `pinned`, `forked`, and `unsettled`; typing `sort:` suggests
-`newest` and `oldest`. A trailing unfinished `is:` or `sort:` term (such as `is:uns`)
+Typing `is:` suggests `pinned`, `forked`, and `cron`; typing `sort:` suggests
+`newest` and `oldest`. A trailing unfinished `is:` or `sort:` term (such as `is:pin`)
 is not searched; unknown complete terms such as `is:foo` stay ordinary text.
 The server searches every visible chat's origin in one request, sent once typing
 pauses for 250 ms and only when free text remains: empty input, status tokens, pills,
 and unfinished `agent:`/`room:`/`is:`/`sort:` terms send no origin search. Ordinary
-sidebar loading stays independent. Incomplete enumeration or a pending origin search
+session-list loading stays independent. Incomplete enumeration or a pending origin search
 shows loading feedback rather than a definitive empty result. The Search page shows
 message and row matches as soon as the message search returns, adds origin matches
 when the origin search returns, and shows “Still checking chat origins…” until then;
 returning to the tab does not recheck origins. A failed origin search
 shows an error while usable row matches remain selectable.
 The command button and Cmd/Ctrl+Shift+P open the command palette. It always offers
-**Sessions: New**, **Sessions: Search**, **Sessions: List Settled**, **Cron: Dashboard**,
-**Cron: Run**, **List Agents**, **List Skills**, **Settings**, and **Hide Sidebar / Show Sidebar**.
+**Sessions: New**, **Sessions: Search**, **Cron: Dashboard**, **Cron: Run**,
+**List Agents**, **List Skills**, and **Settings**.
 Timeline detail levels are also available, from `Timeline: Messages only` through
 `Timeline: Everything`.
 Like VS Code, selected commands appear first, newest first;
@@ -351,9 +348,9 @@ text, and records only selections—not searches or dismissals. Search still fil
 the list, and unavailable session commands stay hidden even when recently used.
 Rows keep compact spacing and touch-sized targets on mobile.
 For the current session it also offers **Open original conversation** (when forked),
-**Name session**, **Pin/Unpin**, **Snooze session**, **Settle/Unsettle**, **Fork session**,
+**Name session**, **Pin/Unpin**, **Fork session**,
 **Handoff session**, **Choose agent**, and **Stop turn** while running.
-The sidebar and palette use the same session-action definitions. Fork, handoff,
+The composer's session buttons and the palette use the same session-action definitions. Fork, handoff,
 rename, and agent selection open their controls directly.
 **Command: Start goal ($goal)**, **Command: Run workflow ($workflow)**,
 **Command: Invoke skill ($skill)**, **Command: Enqueue work ($enqueue)**,
@@ -374,14 +371,8 @@ The Stash button and shortcut still hold the entire draft literally, including
 any `$command` text. Slack's command language is unchanged.
 Run cron opens a new session immediately. The job still runs privately, and the chat fills in when it finishes.
 A chat that began as a cron run or an external MCP call starts with a collapsed origin card. Use show more to see its details; the card scrolls with the messages. An ordinary chat has no origin card.
-On mobile, the Sessions toggle sits
-at the top-left opposite the theme toggle, leaving three controls centered below.
-On titled pages, the mobile Sessions button shares the title's header row so
-they cannot overlap. In chat, it remains a floating corner button.
-Swipe right from the middle of the main content to open the mobile sidebar, or
-left from inside the sidebar to close it. Vertical scrolling and text-field
-gestures do not trigger the sidebar. Rename and Pin remain available in sidebar
-rows; their composer buttons appear only on desktop.
+The composer's session buttons appear only on desktop; on mobile, the command
+palette offers the same actions.
 Safe-area padding is preserved. On very narrow screens, navigation buttons scroll
 horizontally instead of overlapping.
 
@@ -464,16 +455,16 @@ recorded history. The source remains intact, and the fork starts no turn until
 you send a message. Active, unrecorded output and queued work are not copied.
 Copied Completion Notes keep their rows and the scripts' retained oversized output,
 which expires when the source's does; running Background Jobs stay with the source.
-Forked sessions show a fork glyph in the sidebar. Use **Open original conversation**
-on the row to return to the immediate source, or search `is:forked` to find forks.
-Sidebar rows show the title, Slack channel when available, agent name and active
+Forked sessions show a fork glyph in session rows. Use **Open original conversation**
+beside the composer's session buttons or in the command palette to return to the
+immediate source, or search `is:forked` to find forks.
+Session rows show the title, Slack channel when available, agent name and active
 tags, fork/running indicators, and relative time. Metadata text starts at the row's
 left edge, without a spinner indent. Tags render as plain text; the metadata title
-retains long labels. Active and settled rows update even when only tags change.
+retains long labels. Rows update even when only tags change.
 Owner/protocol-scoped snapshots retain tags; older cached rows without tags stay
 usable. Labels follow the existing two-second refresh cycle and do not change
-ordering, settlement, snooze, or incomplete-search feedback.
-Settled chats, session search, and handoff destinations also show status.
+ordering or incomplete-search feedback.
 The source link is stored for new forks; older forks created without this metadata
 cannot be identified retroactively. Deleting a source leaves its forks intact.
 Send `$handoff` from any session to open a search with **Copy handoff** and
@@ -493,30 +484,14 @@ After choosing a destination, **Copy Handoff** also copies it without stashing.
 The handoff panel keeps **Preview**, **Copy**, and **Stash** actions visible.
 **Preview** opens the full document; selecting a destination shows its conversation
 below the panel and hides the composer until the handoff is closed.
-The sidebar starts at the top without a title bar or search input. Its fold/unfold
-toggle stays at the bottom-left when hiding or reopening it.
-Conversations without stored history stay out of the sidebar until their first
+Conversations without stored history stay out of the session list until their first
 entry arrives. Clearing all stored history hides the conversation again without
 deleting its record or its Slack messages.
-Settled chats live on the **Settled** tab (`/settled`) rather than in the default
-sidebar. Use **Unsettle** to return a chat to the sidebar. Global search always
-includes settled chats; `is:settled` is accepted as an include token, not literal
-text or a settled-only filter. The Settled page retains its own local row search
-and agent, room, and pinned filters, limited to settled chats, so `is:unsettled`
-there shows "No matches".
-Use the clock button in a chat or **Session actions** in a sidebar row to
-**Snooze** until a chosen local date and time. Snoozed chats appear under
-**Settled** with their return time.
-New messages bring them back early, and **Unsettle** ends snooze immediately.
-At the chosen time, the chat returns on the next sidebar refresh and gets a fresh
-inactivity window, even if its last message is old. Opening a hidden chat does
-not unsettle it. Choosing **Settle** cancels a pending snooze.
-Click the selected Settled, Cron, Agents, Skills, or Config tab again to return
+Click the selected Cron, Agents, Skills, or Config tab again to return
 to the chat you left, even after switching between pages. Without a previous
 chat, it returns Home. On desktop, the page header's close button does the same,
 and Escape does too unless a dialog or tooltip is open. New chat, search, and these page
-buttons form a centered group in the footer, available even when the sidebar is
-closed.
+buttons form a centered group in the footer.
 The theme toggle floats in the upper-right corner of the page and switches light, dark, and system. Config has a select for the color theme. The choices are Neutral, Harbor, Grove, Ember, Violet, Rose, Sand, Lagoon, Slate, Copper, Ink, Signal, Go - Playground, and Go - Sources. Ink and Signal are high contrast. The Go themes adapt Mike Gleason jr Couturier's light themes, with local dark variations. The choice is stored in the browser, not on the server. See [theme sources and licenses](../../../THEMES.md) for attribution and reuse terms.
 Config's Timeline section has the **Timeline detail** card, following OpenCode v2. A
 five-stop slider picks Messages only, Quiet, Compact, Detailed, or Everything, and an
@@ -529,41 +504,19 @@ The down-arrow appears above the chat composer when away from the latest message
 It scrolls to the latest message and resumes following live replies. Reading earlier
 messages keeps automatic scrolling paused.
 
-Pin a session from its sidebar row or the pin button in the composer. Pinned sessions
-sort first, keep their normal recent-first order within that group, and do not
-automatically settle. You can still settle them manually. Search `is:pinned` to
-find only pinned sessions, including settled ones; text, agent, and room filters
-still apply. On the Settled page, results remain limited to settled sessions.
-Sidebar text uses the full row width. A **Settle** button and **Session actions**
-menu appear on hover or keyboard focus (and stay visible on touch screens).
-Settle a session in one click; open the menu for Rename, Snooze, and Pin.
-On the Settled page, the menu also offers Unsettle.
+Pin a session with the pin button in the composer or from the command palette.
+Pinned sessions sort first and keep their normal recent-first order within that
+group. Search `is:pinned` to find only pinned sessions; text, agent, and room
+filters still apply.
 The session age stays visible beside the agent; hover it for the exact
 last-update date and time in your local time zone.
 Use the rename icon beside the pin in the chat to set an optional name. Chat action
 buttons have descriptive tooltips. Add files sits at the far left, before the agent
 selector. On mobile, these and the session actions sit above Steer and Send. The name
-replaces the sidebar's last-message preview without changing the messages; both
+replaces the session row's last-message preview without changing the messages; both
 the name and the preview remain searchable. Clear the name to restore the preview.
 Pins and names are shared with everyone who can see the session and persist
 across reloads and devices.
-
-Backend setting `web.auto_settle_after` defaults to `168h` and accepts Go
-`time.ParseDuration` syntax (for example, `24h` or `1h30m`, not `7d`). Inactivity
-starts at the latest stored chat entry of any role or kind. Running and pinned chats are
-excluded from auto-settling. New entries reopen settled chats, including those
-settled manually. Manually choosing **Unsettle** starts a fresh inactivity window
-without changing message timestamps. Settling is recalculated on each list refresh;
-empty chats and chats whose summaries are still loading are not auto-settled.
-The Config page's Web section shows the effective `web.auto_settle_after` in
-normalized Go duration syntax, including the default (`168h0m0s`, seven days).
-Set this in either `rocketclaw.json` or `femtoclaw.json`:
-
-```json
-{
-  "web": { "auto_settle_after": "168h" }
-}
-```
 
 Cron runs are grouped beneath their definition, with links to their chat.
 Search above the grid filters both the grid and the groups by case-insensitive
@@ -626,8 +579,8 @@ History read-only beside the chat on wide screens and full screen on narrow
 ones, with breadcrumbs for nested delegations. The panel lives in the
 `delegation` query parameter, so Back, Forward, and reload keep it. A link at the
 end of each transcript goes back up one level. Only finished delegations are
-saved. On wide screens the session sidebar and the delegation panel can be
-resized by dragging their inner edge, and the width is remembered.
+saved. On wide screens the delegation panel can be resized by dragging its
+inner edge, and the width is remembered.
 Each tool call has one labeled disclosure containing its arguments and matching
 result. Loaded skill instructions fold with their skill call. Long results have a
 collapse control at the bottom as well as the header. Cron run previews and the

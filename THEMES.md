@@ -10,7 +10,7 @@ The chooser's names are defined in
 The Neutral base theme and semantic CSS token structure come from **shadcn/ui**,
 by shadcn and contributors. The project's
 [`components.json`](internal/rocketclaw/web/components.json) selects `base-nova`
-with the `neutral` base color. RocketClaw adds message and sidebar-row tokens
+with the `neutral` base color. RocketClaw adds message tokens and a sidebar-row token
 and adjusts some chart values; this is an adapted theme, not an unchanged copy.
 
 Verified upstream references:

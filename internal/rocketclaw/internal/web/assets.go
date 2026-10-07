@@ -33,7 +33,7 @@ func Handler(sentry config.SentryConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
 
-		if slices.Contains([]string{"/", "/cron", "/agents", "/skills", "/config", "/settled", "/search"}, r.URL.Path) || strings.HasPrefix(r.URL.Path, "/s/") {
+		if slices.Contains([]string{"/", "/cron", "/agents", "/skills", "/config", "/search"}, r.URL.Path) || strings.HasPrefix(r.URL.Path, "/s/") {
 			if sentry.DSN != "" {
 				http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(index))
 
