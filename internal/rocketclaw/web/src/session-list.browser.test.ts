@@ -530,8 +530,9 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
   const port = server.port;
   const origin = `http://127.0.0.1:${port}`;
   const browser = await engine.launch({ executablePath: chromium, headless: true, args: ["--disable-features=OverscrollHistoryNavigation"] });
-  const shown = async (page: { getByText: (text: string, opts?: { exact?: boolean }) => { waitFor: (opts: { state: "visible" | "hidden"; timeout?: number }) => Promise<void>; count: () => Promise<number> } }, text: string) => {
-    await page.getByText(text, { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+  const shown = async (page: { getByText: (text: string, opts?: { exact?: boolean }) => { first: () => { waitFor: (opts: { state: "visible" | "hidden"; timeout?: number }) => Promise<void> }; count: () => Promise<number> } }, text: string) => {
+    // A session's tab title can repeat its row title.
+    await page.getByText(text, { exact: true }).first().waitFor({ state: "visible", timeout: 15_000 });
   };
   const hidden = async (page: { getByText: (text: string, opts?: { exact?: boolean }) => { count: () => Promise<number> } }, text: string) => {
     expect(await page.getByText(text, { exact: true }).count()).toBe(0);
@@ -743,7 +744,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const commandPalette = page.getByRole("dialog", { name: "Run command", exact: true });
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
     expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
-    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "List Agents", "List Skills", "Sessions: New", "Sessions: Search", "Settings", "Timeline: Compact", "Timeline: Detailed", "Timeline: Everything", "Timeline: Messages only", "Timeline: Quiet"]);
+    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "List Agents", "List Skills", "Sessions: New", "Sessions: Search", "Settings", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Move tabs to left", "Tabs: Pin", "Timeline: Compact", "Timeline: Detailed", "Timeline: Everything", "Timeline: Messages only", "Timeline: Quiet"]);
     await page.keyboard.press("Escape");
     await commandPalette.waitFor({ state: "hidden" });
     await navigationCommands.click();
@@ -1191,7 +1192,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
 
     ctrl.yieldBatches = complete([]);
     blocked.resolve();
-    await page.getByText("backfilled preview", { exact: true }).waitFor({ state: "hidden", timeout: 15_000 });
+    await page.getByText("backfilled preview", { exact: true }).first().waitFor({ state: "hidden", timeout: 15_000 });
+    await hidden(page, "backfilled preview");
     await hidden(page, "saved preview");
     await page.keyboard.press("Control+p");
     await search.fill("empty-search");
@@ -1279,7 +1281,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         if (rejection === "unauthorized") throw new RPCError("denied", 16);
         yield batch([row("other-owner", "unconfirmed owner preview")], { owner: "unconfirmed" });
       };
-      await page.getByText("new protocol preview", { exact: true }).waitFor({ state: "hidden", timeout: 15_000 });
+      await page.getByText("new protocol preview", { exact: true }).first().waitFor({ state: "hidden", timeout: 15_000 });
+      await hidden(page, "new protocol preview");
       await hidden(page, "unconfirmed owner preview");
       await page.keyboard.press("Control+p");
       await search.fill("preview");
@@ -1670,6 +1673,12 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await navPage.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     };
     const navMain = navPage.locator("main");
+    const navTabs = navPage.getByRole("tablist", { name: "Open tabs" });
+    // Closing a page closes its tab, and a neighbouring tab becomes active.
+    const closed = async (name: string) => {
+      await navPage.waitForURL((url: URL) => url.pathname !== `/${name.toLowerCase()}`);
+      expect(await navTabs.getByRole("tab", { name: name === "Config" ? "Settings" : name, exact: true }).count()).toBe(0);
+    };
     // Escape first closes search suggestions without leaving the page.
     await footer.getByRole("button", { name: "Search sessions", exact: true }).click();
     await navPage.waitForURL("**/search");
@@ -1683,7 +1692,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(new URL(navPage.url()).pathname).toBe("/search");
     expect(await navMain.getByPlaceholder("Search or agent: or room:").inputValue()).toBe("");
     await navPage.keyboard.press("Escape");
-    await navPage.waitForURL(`${origin}/`);
+    await closed("Search");
     for (const name of ["Cron", "Agents", "Skills", "Config"]) {
       await openPage(name);
       await navPage.waitForURL(`${origin}/${name.toLowerCase()}`);
@@ -1692,7 +1701,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         await shown(navPage.locator("main"), "connected@example.com");
       }
       await navPage.keyboard.press("Escape");
-      await navPage.waitForURL(`${origin}/`);
+      await closed(name);
     }
     const chatPath = `/s/${Buffer.from("slack-thread:C:active").toString("base64url")}`;
     for (const width of [1280, 390]) {
@@ -1722,13 +1731,18 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         }
         if (width === 1280 && name === "Skills") await close.click();
         else await navPage.keyboard.press("Escape");
+        await closed(name);
+        await navTabs.getByRole("tab", { name: "matching active", exact: true }).click();
         await navPage.waitForURL(`${origin}${chatPath}`);
       }
       await openPage("Cron");
       await navPage.waitForURL(`${origin}/cron`);
       await openPage("Skills");
       await navPage.waitForURL(`${origin}/skills`);
+      expect(await navTabs.getByRole("tab", { name: "Cron", exact: true }).count()).toBe(0); // Skills replaced the Cron preview tab.
       await navPage.keyboard.press("Escape");
+      await closed("Skills");
+      await navTabs.getByRole("tab", { name: "matching active", exact: true }).click();
       await navPage.waitForURL(`${origin}${chatPath}`);
       if (width === 390) await navPage.keyboard.press("Escape");
       expect(await navPage.getByPlaceholder("Message or $command").inputValue()).toBe("keep this chat draft");

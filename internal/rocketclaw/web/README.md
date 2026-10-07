@@ -259,6 +259,59 @@ with `ROCKETCLAW_WEB_TEST_SERVER_DIR` before `bun test`; see
 PostgreSQL and browser-test instructions in the transport README to exercise
 those paths. Keep temporary test artifacts under the repository's `.tmp/`.
 
+## Tabs
+
+Tabs follow editor semantics.
+Sessions and pages (New session, Search, Cron, Agents, Skills, Settings) open in
+one strip, and a location never appears in two tabs. The URL always names the
+active tab.
+
+- **Preview tab.** Opening a location that is not already open (palette, Search
+  results, links, footer buttons, page commands) shows it in the single preview
+  tab, drawn in italics. The next such open replaces it; with no preview tab, the
+  new one opens right of the active tab. Double-clicking the tab, typing a draft or
+  sending a message in it, or pinning it makes it permanent. A deep link or reload opens its location
+  as a permanent tab. Sending the first message from New session turns that tab
+  into the new session's tab.
+- **Pinned tabs** are browser-only (unlike **Pin session**, which is shared and
+  orders search). They stay first, show only their icon on top placement, have no
+  close button, and survive Close others, Close to the right, and Close all.
+- **Context menu.** Right-click a tab, press Shift+F10 or the menu key on a focused
+  tab, or use the **…** button on the active tab (for touch) to reach Close,
+  Close others, Close to the right, Close all, Pin/Unpin, and Move tabs to
+  left/top. The command palette offers the same commands as **Tabs: …** for the
+  active tab.
+- **Closing.** The × button, a middle-click, the menu, a page's close button, or
+  Escape on a page closes a tab. Closing the active tab activates its right
+  neighbour, or its left one at the end. Closing the last tab opens New session;
+  New session alone does not close. Closing with the × button or the menu moves
+  keyboard focus to the selected tab.
+- **Reordering.** Drag a tab onto another. With a tab focused, Shift+Arrow moves it.
+- **Running turns** show a dot where the close button sits. The close button replaces it on hover, on keyboard focus, on the active tab,
+  and always on touch screens; on the active tab and on touch screens the dot moves
+  before the title instead. Screen readers hear “Turn running”.
+- **Keyboard.** The strip is a `tablist` with one Tab stop. Arrow keys (Left/Right
+  or Up/Down), Home, and End move focus; Enter or Space activates.
+- **Placement.** Tabs sit on top by default or in a 14rem column on the left. Switch
+  from the context menu or the palette. Below the `md` breakpoint, left falls back
+  to top, and the top strip scrolls horizontally.
+- **Storage.** Open tabs, their order, pins, and the preview flag are kept in this
+  browser's `localStorage` under `tabs:<user>`, separately for each
+  signed-in user. The address is the active tab, so a reload keeps it, and opening
+  any URL, including Home (`/`), activates its tab or adds one. Unreadable or
+  malformed storage (such as duplicate paths) resets to one tab for the current URL.
+  Placement is a browser-wide preference under `tab-placement` (`top` or `left`).
+  Titles and running state come live from the session list; a session missing
+  from it shows its ID.
+
+Tradeoffs: preview replacement keeps the strip short without manual closing, but
+an item opened once and left unpromoted vanishes on the next open, which can
+surprise people. Unlike browser-style tabs there is no
+per-tab Back/Forward or reopen-closed-tab. Unlike grouped tabs there are no
+agent/age lines or groups. Unlike warm tabs, switching sessions remounts the
+transcript. In exchange, the strip stays compact, and the menu, pins, and drag
+give more control than a minimal strip.
+
 The session list restores the last complete list only after live identity confirms the
 Go-mapped username, keys native IndexedDB by owner and protocol, and keeps that
 snapshot until a refresh is successfully exhausted with complete summaries.
@@ -487,11 +540,9 @@ below the panel and hides the composer until the handoff is closed.
 Conversations without stored history stay out of the session list until their first
 entry arrives. Clearing all stored history hides the conversation again without
 deleting its record or its Slack messages.
-Click the selected Cron, Agents, Skills, or Config tab again to return
-to the chat you left, even after switching between pages. Without a previous
-chat, it returns Home. On desktop, the page header's close button does the same,
-and Escape does too unless a dialog or tooltip is open. New chat, search, and these page
-buttons form a centered group in the footer.
+On desktop, the page header's close button closes that page's tab (see
+[Tabs](#tabs)), and Escape on a page does too unless a dialog or tooltip is open.
+New chat, search, and the command palette form a centered group in the footer.
 The theme toggle floats in the upper-right corner of the page and switches light, dark, and system. Config has a select for the color theme. The choices are Neutral, Harbor, Grove, Ember, Violet, Rose, Sand, Lagoon, Slate, Copper, Ink, Signal, Go - Playground, and Go - Sources. Ink and Signal are high contrast. The Go themes adapt Mike Gleason jr Couturier's light themes, with local dark variations. The choice is stored in the browser, not on the server. See [theme sources and licenses](../../../THEMES.md) for attribution and reuse terms.
 Config's Timeline section has the **Timeline detail** card, following OpenCode v2. A
 five-stop slider picks Messages only, Quiet, Compact, Detailed, or Everything, and an
