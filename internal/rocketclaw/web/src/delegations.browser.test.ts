@@ -81,6 +81,11 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel 
     await page.goBack();
     await panel.waitFor({ state: "detached" });
 
+    // A link within the current tab's location keeps the browser's open-in-new-tab default.
+    const [opened] = await Promise.all([page.context().waitForEvent("page", { timeout: 5_000 }), open.and(page.getByRole("link", { name: "Open delegation: task", exact: true })).first().click({ modifiers: ["ControlOrMeta"] })]);
+    await opened.waitForURL((url: URL) => url.searchParams.get("delegation") === "chat/call-task-0a1b2c3d");
+    await opened.close();
+    expect(delegation()).toBe(null);
     await open.and(page.getByRole("link", { name: "Open delegation: task", exact: true })).first().click();
     await panel.getByText("Child done", { exact: true }).waitFor();
     expect(delegation()).toBe("chat/call-task-0a1b2c3d");

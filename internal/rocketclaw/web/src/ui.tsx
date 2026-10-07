@@ -9,8 +9,8 @@ import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field
 import { queries, mutations, listSessions, rpc } from "./api";
 import { draftContent } from "./drafts";
 import type { ChatOrigin, HistoryView, MessageMatch, PromptDelivery, SearchMessagesResponse } from "./types";
-import { Bot, Check, ChevronDown, CircleAlert, Command, Copy, CornerUpLeft, Download, FileIcon, GitFork, GripVertical, Info, LoaderCircle, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
-import Link, { usePathname, useSearch, navigate } from "./navigation";
+import { ArrowLeft, ArrowRight, Bot, Check, ChevronDown, CircleAlert, Command, Copy, CornerUpLeft, Download, FileIcon, GitFork, GripVertical, Info, LoaderCircle, PanelLeft, PanelTop, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
+import Link, { OpenTab, usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { flushSync } from "react-dom";
@@ -49,7 +49,6 @@ const queryClient = new QueryClient({
   queryCache: new QueryCache({ onError: (error) => { captureException(error); } }),
   mutationCache: new MutationCache({ onError: (error) => { captureException(error); } }),
 });
-const tabReturnTo = { current: "/" };
 type SessionCommand = { mode: "fork" | "handoff" | "name"; source: string; target?: MessageMatch };
 const SessionCommands = createContext<{ command?: SessionCommand; setCommand: Dispatch<SetStateAction<SessionCommand | undefined>>; composer: RefObject<((command: string) => void) | null> }>(null!);
 
@@ -669,12 +668,198 @@ function persistComposerDraft(draft: ComposerDraft) {
   );
 }
 
+// A tab owns its location (a pathname) plus its own back and forward stacks, like a browser tab.
+// Locations are unique across tabs, and the active tab is the one showing this window's URL.
+type BrowserTab = { location: string; back: string[]; forward: string[] };
+type TabSet = { owner: string; tabs: BrowserTab[]; closed: BrowserTab[]; active: string };
+const pageTabs: Record<string, string> = { "/": "New session", "/search": "Search", "/cron": "Cron", "/agents": "Agents", "/skills": "Skills", "/config": "Settings" };
+const Tabs = createContext<{ set?: TabSet; update: (change: (set: TabSet) => TabSet, replace?: boolean) => void; left: boolean; placement: string; togglePlacement: () => void; commands: { key: string; label: string; run: () => void }[] }>(null!);
+
+function blankTab(location: string): BrowserTab {
+  return { location, back: [], forward: [] };
+}
+
+function readTabs(raw: string | null) {
+  try {
+    const set = JSON.parse(raw!) as Pick<TabSet, "tabs" | "closed">;
+    const valid = (tab: BrowserTab) => typeof tab.location === "string" && Array.isArray(tab.back) && Array.isArray(tab.forward);
+    if (set.tabs.length > 0 && set.tabs.every(valid) && set.closed.every(valid)) return set;
+  } catch {
+    // Unparsable storage resets like storage of the wrong shape.
+  }
+}
+
+// Navigation lands in the tab that already shows the location; otherwise the active tab moves there.
+// A step back (-1) or forward (1) moves along the tab's stacks; any other step (0) pushes.
+// ponytail: a browser traversal that skips entries (the Back menu) or misses the stack's end is pushed;
+// upgrade: store each tab's stack position in history.state.
+function visitTab(set: TabSet, location: string, step: number): TabSet {
+  if (set.tabs.some((tab) => tab.location === location)) return { ...set, active: location };
+  return { ...set, active: location, tabs: set.tabs.map((tab) => {
+    if (tab.location !== set.active) return tab;
+    if (step < 0 && location === tab.back.at(-1)) return { location, back: tab.back.slice(0, -1), forward: [tab.location, ...tab.forward] };
+    if (step > 0 && location === tab.forward[0]) return { location, back: [...tab.back, tab.location], forward: tab.forward.slice(1) };
+    return { location, back: [...tab.back, tab.location], forward: [] };
+  }) };
+}
+
+function insertTab(set: TabSet, tab: BrowserTab, focus: boolean): TabSet {
+  const open = set.tabs.some((item) => item.location === tab.location);
+  return { ...set, tabs: open ? set.tabs : set.tabs.toSpliced(set.tabs.findIndex((item) => item.location === set.active) + 1, 0, tab), active: focus ? tab.location : set.active };
+}
+
+function closeTab(set: TabSet, location: string): TabSet {
+  const index = set.tabs.findIndex((tab) => tab.location === location);
+  const remaining = set.tabs.toSpliced(index, 1);
+  const tabs = remaining.length ? remaining : [blankTab("/")];
+  return { ...set, tabs, closed: [set.tabs[index], ...set.closed].slice(0, 10), active: location === set.active ? tabs[Math.min(index, tabs.length - 1)].location : set.active };
+}
+
+function subscribeMedium(listener: () => void) {
+  const media = matchMedia("(min-width: 48rem)");
+  media.addEventListener("change", listener);
+  return () => media.removeEventListener("change", listener);
+}
+
+function TabsOwner({ children }: { children: ReactNode }) {
+  const identity = useQuery(queries.identity());
+  const owner = identity.data?.username;
+  const pathname = usePathname();
+  const [state, setState] = useState<TabSet>();
+  const [placement, setPlacement] = useState(() => localStorage.getItem("tab-placement") === "left" ? "left" : "top");
+  const medium = useSyncExternalStore(subscribeMedium, () => matchMedia("(min-width: 48rem)").matches);
+  const set = state && state.owner === owner ? state : undefined;
+  if (owner !== undefined && !set) {
+    // The URL always wins: it gets a tab when no stored tab shows it.
+    const stored = readTabs(localStorage.getItem(`tabs-browser:${owner}`)) ?? { tabs: [], closed: [] };
+    setState({ owner, closed: stored.closed, active: pathname, tabs: stored.tabs.some((tab) => tab.location === pathname) ? stored.tabs : [...stored.tabs, blankTab(pathname)] });
+  }
+  // Handlers registered by effects read the newest tab set here, never one from an older render.
+  const latest = useRef(set);
+  useLayoutEffect(() => { latest.current = set; }, [set]);
+  const update = useCallback((change: (set: TabSet) => TabSet, replace = false) => {
+    const current = latest.current;
+    if (!current) return;
+    const next = change(current);
+    latest.current = next;
+    // One render must see the new tabs and the new URL together, even from a non-discrete storage event.
+    flushSync(() => {
+      setState(next);
+      if (next.active !== location.pathname) navigate(next.active, replace);
+    });
+  }, []);
+  // In-app navigation dispatches an untrusted popstate and always pushes; the browser's own popstate is
+  // Back or Forward, told apart by the depth navigate() stores in history.state.
+  const depth = useRef(history.state?.index ?? 0);
+  useEffect(() => {
+    const onPopState = (event: PopStateEvent) => {
+      const index = history.state?.index ?? 0;
+      const step = event.isTrusted ? Math.sign(index - depth.current) : 0;
+      depth.current = index;
+      if (location.pathname !== latest.current?.active) update((current) => visitTab(current, location.pathname, step));
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [update]);
+  // The last list written or received; echoing a received list back could overwrite a newer one.
+  const synced = useRef("");
+  useEffect(() => {
+    if (!set) return;
+    const raw = JSON.stringify({ tabs: set.tabs, closed: set.closed });
+    if (raw !== synced.current) localStorage.setItem(`tabs-browser:${set.owner}`, raw);
+    synced.current = raw;
+  }, [set]);
+  useEffect(() => {
+    // Other windows share members, order, locations and history; each window keeps its own active tab.
+    // An event can arrive after a newer write, so every window adopts the stored list rather than the event's.
+    // ponytail: whole-list last-writer-wins drops one of two near-simultaneous edits; upgrade: merge per tab.
+    const onStorage = (event: StorageEvent) => {
+      const remote = event.key === `tabs-browser:${latest.current?.owner}` ? readTabs(localStorage.getItem(event.key)) : undefined;
+      if (!remote) return;
+      synced.current = JSON.stringify({ tabs: remote.tabs, closed: remote.closed });
+      update((current) => {
+        const index = current.tabs.findIndex((tab) => tab.location === current.active);
+        return { ...current, tabs: remote.tabs, closed: remote.closed, active: remote.tabs.some((tab) => tab.location === current.active) ? current.active : remote.tabs[Math.min(index, remote.tabs.length - 1)].location };
+      }, true);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [update]);
+  const togglePlacement = useCallback(() => {
+    const next = placement === "left" ? "top" : "left";
+    localStorage.setItem("tab-placement", next);
+    setPlacement(next);
+  }, [placement]);
+  const value = useMemo(() => ({ set, update, left: placement === "left" && medium, placement, togglePlacement, commands: [
+    ...(set?.closed.length ? [{ key: "reopen-tab", label: "Tabs: Reopen closed tab", run: () => update((current) => insertTab({ ...current, closed: current.closed.slice(1) }, current.closed[0], true)) }] : []),
+    { key: "tab-placement", label: placement === "left" ? "Tabs: Move to top" : "Tabs: Move to left", run: togglePlacement },
+  ] }), [set, update, placement, medium, togglePlacement]);
+  const openTab = useCallback((path: string) => update((current) => insertTab(current, blankTab(path), false)), [update]);
+  return <Tabs value={value}><OpenTab value={openTab}>{children}</OpenTab></Tabs>;
+}
+
+function TabStrip() {
+  const { set, update, left, placement, togglePlacement } = useContext(Tabs);
+  const sidebar = useContext(Sidebar);
+  const refocus = useRef(false);
+  const list = useRef<HTMLDivElement>(null);
+  const entries = (set?.tabs ?? []).map(({ location }) => {
+    const id = location.startsWith("/s/") ? decodeSessionId(location.slice(3)) : "";
+    const session = sidebar.rows.find((row) => row.id === id);
+    return { location, session, title: id ? session?.name || rowPreview(session ?? { id }, sidebar.loadingIds.has(id)).split("\n", 1)[0] || sessionLabel(id) : pageTabs[location] ?? location };
+  });
+  // Titles arrive after the tab set and change tab widths, so they also re-reveal the active tab.
+  const titles = entries.map(({ title }) => title).join("\n");
+  useLayoutEffect(() => {
+    const selected = list.current?.querySelector<HTMLElement>('[aria-selected="true"]');
+    selected?.parentElement?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (refocus.current) selected?.focus();
+    refocus.current = false;
+  }, [set, titles]);
+  if (!set) return null;
+  const close = (location: string) => {
+    refocus.current = true;
+    update((latest) => closeTab(latest, location));
+  };
+  const index = set.tabs.findIndex((tab) => tab.location === set.active);
+  const { back, forward } = set.tabs[index];
+  const closable = set.tabs.length > 1 || set.active !== "/";
+  const move = placement === "left" ? "Move tabs to top" : "Move tabs to left";
+  return <nav aria-label="Tabs" className={cn("flex shrink-0 gap-1 bg-background", left ? "w-56 flex-col border-r p-2" : "items-center border-b py-1 pr-12 pl-2")}>
+    <div className="flex shrink-0 items-center gap-0.5">
+      <Button variant="ghost" size="icon-sm" aria-label="Tab back" title="Tab back" disabled={!back.length} onClick={() => update((current) => visitTab(current, back[back.length - 1], -1))}><ArrowLeft /></Button>
+      <Button variant="ghost" size="icon-sm" aria-label="Tab forward" title="Tab forward" disabled={!forward.length} onClick={() => update((current) => visitTab(current, forward[0], 1))}><ArrowRight /></Button>
+      <Button variant="ghost" size="icon-sm" aria-label="New tab" title="New tab" onClick={() => update((current) => insertTab(current, blankTab("/"), true))}><Plus /></Button>
+      <Button variant="ghost" size="icon-sm" className="max-md:hidden" aria-label={move} title={move} onClick={togglePlacement}>{placement === "left" ? <PanelTop /> : <PanelLeft />}</Button>
+    </div>
+    <div ref={list} role="tablist" aria-label="Open tabs" aria-orientation={left ? "vertical" : "horizontal"} className={cn("flex min-w-0 gap-1 [scrollbar-width:thin]", left ? "min-h-0 flex-col overflow-y-auto" : "overflow-x-auto")}>
+      {entries.map(({ location, session, title }, position) => {
+        const current = position === index;
+        return <div key={location} className={cn("flex shrink-0 items-center rounded-md", current ? "bg-sidebar-row-active" : "hover:bg-accent", !left && "max-w-48")}>
+          <button type="button" role="tab" aria-selected={current} tabIndex={current ? 0 : -1} className="flex min-h-8 min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 text-left text-sm focus-visible:outline-2 focus-visible:outline-ring" onClick={() => navigate(location)} onKeyDown={(event) => {
+            if (event.key === "Delete" && closable) close(location);
+            const count = set.tabs.length;
+            const target = ["ArrowRight", "ArrowDown"].includes(event.key) ? (position + 1) % count : ["ArrowLeft", "ArrowUp"].includes(event.key) ? (position + count - 1) % count : event.key === "Home" ? 0 : event.key === "End" ? count - 1 : -1;
+            if (target < 0) return;
+            event.preventDefault();
+            list.current!.querySelectorAll<HTMLElement>('[role="tab"]')[target].focus();
+          }}>
+            <span className="truncate"><InlineText text={title} /></span>
+            {session?.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 shrink-0 animate-spin motion-reduce:animate-none" /> : null}
+          </button>
+          {closable ? <button type="button" aria-label={`Close ${title}`} tabIndex={current ? 0 : -1} className="shrink-0 rounded-md p-1.5 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={() => close(location)}><X className="size-3.5" /></button> : null}
+        </div>;
+      })}
+    </div>
+  </nav>;
+}
+
 export function App() {
   const identity = useQuery(queries.identity(), queryClient), config = useQuery(queries.config(), queryClient);
   const scope = identity.isSuccess && config.isSuccess ? JSON.stringify(["authenticated-username", location.origin, identity.data.username, config.data.workspace ?? ""]) : undefined;
-  return <QueryClientProvider client={queryClient}><TooltipProvider><ProtocolGuard /><SidebarOwner>
+  return <QueryClientProvider client={queryClient}><TooltipProvider><ProtocolGuard /><SidebarOwner><TabsOwner>
     <SessionApp scope={scope} scopeError={identity.error?.message ?? config.error?.message} />
-  </SidebarOwner></TooltipProvider></QueryClientProvider>;
+  </TabsOwner></SidebarOwner></TooltipProvider></QueryClientProvider>;
 }
 
 function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string }) {
@@ -695,8 +880,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   }, [drafts]);
   const [conversation, setConversation] = useState({ id: route.id, created: "", key: 0 });
   const newChatOwner = useRef<(() => unknown) | undefined>(undefined);
-  const returnTo = conversation.id === "" ? "/" : sessionPath(conversation.id);
-  tabReturnTo.current = returnTo;
+  const tabs = useContext(Tabs);
   const newChat = useCallback(() => {
     const draft = drafts.get("") ?? drafts.get(conversation.id)!;
     if ([!scope, draft.reverting, !draft.hydrated].some(Boolean)) return;
@@ -737,7 +921,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
       if (event.defaultPrevented || event.repeat || showChat || event.key !== "Escape") return;
       if (document.querySelector('[role="dialog"], [role="listbox"], [role="menu"], [role="tooltip"]')) return;
       event.preventDefault();
-      navigate(tabReturnTo.current);
+      tabs.update((set) => closeTab(set, set.active));
     };
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("keydown", onEscape);
@@ -745,7 +929,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("keydown", onEscape);
     };
-  }, [newChat, showChat, openPalette]);
+  }, [newChat, showChat, openPalette, tabs]);
   if (showChat && conversation.id !== route.id) {
     // Creation assigns this conversation its ID; other navigation starts a fresh subtree.
     const created = conversation.id === "" && conversation.created === route.id;
@@ -772,7 +956,9 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               </div>
             </BottomNavigation>
             <div className="fixed top-2 right-2 z-40 rounded-md bg-background shadow-sm"><ThemeToggle /></div>
+          {tabs.left ? null : <TabStrip />}
           <div className="flex min-h-0 min-w-0 flex-1">
+            {tabs.left ? <TabStrip /> : null}
             <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]", command?.target && "pt-[min(75dvh,30rem)]")}>
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
               {route.search ? <SearchPage /> : null}
@@ -1005,6 +1191,7 @@ const paletteCopy = { sessions: { title: "Go to session", desc: "Search and open
 
 function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string, ComposerDraft>; mode: "sessions" | "commands" | "cron" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | undefined) => void; newChat: () => void }) {
   const sidebar = useContext(Sidebar);
+  const tabs = useContext(Tabs);
   const { setCommand, composer } = useContext(SessionCommands);
   const { id } = useRoute();
   const actions = useSessionActions(sidebar.rows.find((row) => row.id === id), () => setMode(undefined));
@@ -1055,7 +1242,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
       setMode(undefined);
     },
   });
-  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.values, [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands], filters, agentFilter, roomFilter, recent);
+  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.values, [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands, ...tabs.commands], filters, agentFilter, roomFilter, recent);
   const selected = items.length === 0 ? 0 : pick % items.length;
   const choose = (item: (typeof items)[number]) => {
     if (item.disabled) return;
@@ -1591,9 +1778,10 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
 }
 
 function PageTitle({ children }: { children: ReactNode }) {
+  const tabs = useContext(Tabs);
   return <header className="flex w-full shrink-0 items-center gap-2">
     <h1 className="text-lg font-semibold">{children}</h1>
-    <Button type="button" variant="ghost" size="icon-sm" className="ml-auto hidden md:inline-flex" aria-label="Close" onClick={() => navigate(tabReturnTo.current)}><X /></Button>
+    <Button type="button" variant="ghost" size="icon-sm" className="ml-auto hidden md:inline-flex" aria-label="Close" onClick={() => tabs.update((set) => closeTab(set, set.active))}><X /></Button>
   </header>;
 }
 

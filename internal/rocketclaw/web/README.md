@@ -45,6 +45,62 @@ independently toggles its origin on or off, so both, either, or neither can be s
 Messages without a recorded origin appear only when both are selected.
 Filtering does not change saved history or routing.
 
+## Tabs
+
+This variant treats tabs like browser tabs: each tab has its own back and
+forward history. Sessions, the Home composer, Search, Cron, Agents, Skills, and
+Settings all open in tabs. Session tab titles and the running spinner come live
+from the session list; a session missing from the list shows its ID.
+
+- **Navigating moves the current tab.** Opening a session or page from the
+  palette, Search, a link, or the footer replaces the current tab's location
+  and adds the old one to that tab's history. If the location is already open
+  in another tab, that tab is selected instead, so no location is open twice.
+- **Back and forward.** The arrows at the start of the strip move through the
+  current tab's own history. Following a link adds a step, even when it leads
+  to the location you just left. Browser Back and Forward follow the address
+  bar and also undo tab switches: reaching a location open in another tab
+  selects that tab, and reaching the current tab's previous or next location
+  steps through its history. Any other location they reach, such as one picked
+  several entries back from the browser's Back menu, is added as a new step.
+- **Background tabs.** Cmd/Ctrl+click or middle-click on an in-app link, such as
+  a search result, opens it in a new tab next to the current one without leaving
+  the current tab. A link that stays in the current tab's location, such as
+  **Open delegation**, keeps the browser's default and opens a browser tab.
+- **New tab.** **+** opens the Home composer in a new tab (or selects it if one
+  is open). Sending from it turns that same tab into the new session.
+- **Closing.** Each tab's **×**, the Delete key on a focused tab, a page's close
+  button, and Escape on a page close the tab. The tab to the right is selected,
+  or the one to the left at the end. Closing the last tab opens Home; a lone
+  Home tab cannot be closed. The palette's **Tabs: Reopen closed tab** restores
+  the most recently closed tab with its history.
+- **Placement.** The button beside **+** and the palette command **Tabs: Move to
+  left/top** switch the strip between a top row and a left column. Below the
+  `md` width the strip is always a top row that scrolls sideways.
+- **Keyboard.** The strip is a `tablist`. Only the selected tab and its close
+  button are in the Tab order. Arrow keys move focus between tabs, Home and End
+  jump to the ends, Enter or Space opens the focused tab, and Delete closes it.
+
+Storage: the tab list, each tab's location and history, and up to 10 closed
+tabs are saved in `localStorage` under `tabs-browser:<username>`; the placement
+is saved under `tab-placement` (`top` or `left`). A tab's location is a path
+only, so query parameters such as `?message=` are not kept. Stored data that
+does not parse or has the wrong shape starts over with one tab for the current
+address. Other windows of the same browser and user pick up tab changes at once
+through the `storage` event, but each window keeps its own selected tab.
+
+The selected tab is always the one the address bar shows. Opening any address,
+including the bare app address `/`, selects or adds the tab for it; the stored
+tabs are never used to redirect you.
+
+Tradeoffs compared with the other designs: navigation reuses the current tab,
+so the strip stays short and Back works as in a browser, but opening something
+from a page such as Search replaces that page unless you use a background tab or
+**+**. Shared tab lists keep windows in sync, but two windows editing at the
+same moment keep only the last change, which both windows then show. Session
+tabs are not kept loaded in the background; switching tabs reloads the session
+view, as navigation always has.
+
 ## Revert, Undo, and Redo
 
 Recorded user messages in top-level pure Web sessions have a **Revert message**
@@ -487,11 +543,9 @@ below the panel and hides the composer until the handoff is closed.
 Conversations without stored history stay out of the session list until their first
 entry arrives. Clearing all stored history hides the conversation again without
 deleting its record or its Slack messages.
-Click the selected Cron, Agents, Skills, or Config tab again to return
-to the chat you left, even after switching between pages. Without a previous
-chat, it returns Home. On desktop, the page header's close button does the same,
-and Escape does too unless a dialog or tooltip is open. New chat, search, and these page
-buttons form a centered group in the footer.
+On desktop, the page header's close button closes the page's tab (see
+[Tabs](#tabs)), and Escape does too unless a dialog or tooltip is open. New chat,
+search, and these page buttons form a centered group in the footer.
 The theme toggle floats in the upper-right corner of the page and switches light, dark, and system. Config has a select for the color theme. The choices are Neutral, Harbor, Grove, Ember, Violet, Rose, Sand, Lagoon, Slate, Copper, Ink, Signal, Go - Playground, and Go - Sources. Ink and Signal are high contrast. The Go themes adapt Mike Gleason jr Couturier's light themes, with local dark variations. The choice is stored in the browser, not on the server. See [theme sources and licenses](../../../THEMES.md) for attribution and reuse terms.
 Config's Timeline section has the **Timeline detail** card, following OpenCode v2. A
 five-stop slider picks Messages only, Quiet, Compact, Detailed, or Everything, and an

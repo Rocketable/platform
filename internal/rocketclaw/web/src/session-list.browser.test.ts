@@ -743,7 +743,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const commandPalette = page.getByRole("dialog", { name: "Run command", exact: true });
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
     expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
-    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "List Agents", "List Skills", "Sessions: New", "Sessions: Search", "Settings", "Timeline: Compact", "Timeline: Detailed", "Timeline: Everything", "Timeline: Messages only", "Timeline: Quiet"]);
+    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "List Agents", "List Skills", "Sessions: New", "Sessions: Search", "Settings", "Tabs: Move to left", "Timeline: Compact", "Timeline: Detailed", "Timeline: Everything", "Timeline: Messages only", "Timeline: Quiet"]);
     await page.keyboard.press("Escape");
     await commandPalette.waitFor({ state: "hidden" });
     await navigationCommands.click();
@@ -1248,12 +1248,12 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await hidden(page, "will vanish");
     ctrl.yieldBatches = complete([row("gone", "bob preview")], "bob");
     blocked.resolve();
-    await shown(page, "bob preview");
+    await shown(sessionPalette, "bob preview");
     await hidden(page, "will vanish");
     blocked = Promise.withResolvers();
     ownerTail.resolve();
     await oldResponse;
-    await shown(page, "bob preview");
+    await shown(sessionPalette, "bob preview");
     await hidden(page, "late alice preview");
     expect(await page.evaluate(snapshot, ["bob", "test-protocol"])).toEqual([row("gone", "bob preview")]);
     await page.reload();
@@ -1269,7 +1269,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await hidden(sessionPalette, "bob preview");
     ctrl.yieldBatches = complete([row("gone", "new protocol preview")], "bob");
     blocked.resolve();
-    await shown(page, "new protocol preview");
+    await shown(sessionPalette, "new protocol preview");
 
     for (const rejection of ["mismatch", "unauthorized"] as const) {
       await page.keyboard.press("Control+p");
@@ -1279,7 +1279,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         if (rejection === "unauthorized") throw new RPCError("denied", 16);
         yield batch([row("other-owner", "unconfirmed owner preview")], { owner: "unconfirmed" });
       };
-      await page.getByText("new protocol preview", { exact: true }).waitFor({ state: "hidden", timeout: 15_000 });
+      await sessionPalette.getByText("new protocol preview", { exact: true }).waitFor({ state: "hidden", timeout: 15_000 });
       await hidden(page, "unconfirmed owner preview");
       await page.keyboard.press("Control+p");
       await search.fill("preview");
@@ -1644,6 +1644,9 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const navPage = await context.newPage();
     await navPage.route("**/api/ListAgents", (route: { fulfill(options: { json: unknown }): Promise<void> }) => route.fulfill({ json: { agents: suggestionAgents } }));
     await navPage.goto(origin);
+    // Start this window with a single composer tab instead of the tabs earlier pages stored.
+    await navPage.evaluate(() => { for (const key of Object.keys(localStorage)) if (key.startsWith("tabs-browser:")) localStorage.removeItem(key); });
+    await navPage.reload();
     await openSessions(navPage);
     const navPalette = navPage.getByRole("dialog", { name: "Go to session", exact: true });
     const navSearch = navPalette.getByPlaceholder("Search sessions");
@@ -1700,7 +1703,9 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await goToSession(navPage, "matching active");
       await navPage.waitForURL(`${origin}${chatPath}`);
       await navPage.getByPlaceholder("Message or $command").fill("keep this chat draft");
+      // Each page opens in a new tab; closing that tab activates the chat tab next to it.
       for (const name of ["Cron", "Agents", "Skills", "Config"]) {
+        await navPage.getByRole("button", { name: "New tab", exact: true }).click();
         await openPage(name);
         await navPage.waitForURL(`${origin}/${name.toLowerCase()}`);
         const heading = navMain.getByRole("heading", { name, exact: true });
@@ -1724,6 +1729,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         else await navPage.keyboard.press("Escape");
         await navPage.waitForURL(`${origin}${chatPath}`);
       }
+      await navPage.getByRole("button", { name: "New tab", exact: true }).click();
       await openPage("Cron");
       await navPage.waitForURL(`${origin}/cron`);
       await openPage("Skills");
