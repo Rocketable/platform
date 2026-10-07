@@ -52,6 +52,48 @@ FROM pg_index WHERE indrelid = 'session_entries'::regclass`
 	require.Equal(t, int64(3), after-before, "read the parent and only one indexed entry per child history")
 }
 
+func TestChatOriginFactsSkipsKnownSourceLookup(t *testing.T) {
+	store := newTestSessionService(t)
+	store.db.SetMaxOpenConns(1)
+
+	ctx := t.Context()
+	_, err := store.db.ExecContext(ctx, `
+INSERT INTO session_entries (id, conversation_id, entry_json, entry_timestamp)
+VALUES (1000, 'source', '{}', '');
+INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
+SELECT 'unrelated-' || n, '{}', '' FROM generate_series(1, 512) n;
+INSERT INTO managed_conversations (conversation_id, agent, created_by)
+SELECT 'web:origin-' || n, 'sample-agent', 'alice' FROM generate_series(1, 128) n;
+INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
+SELECT conversation_id, '{"sync_source_conversation_id":"source","sync_source_entry_id":1000}', ''
+FROM managed_conversations;
+ANALYZE session_entries;
+SET plan_cache_mode = force_generic_plan;
+SELECT pg_stat_force_next_flush();`)
+	require.NoError(t, err)
+
+	const sourceReads = `SELECT pg_stat_get_tuples_returned('session_entries_pkey'::regclass)`
+
+	var before, after int64
+	require.NoError(t, store.db.QueryRowContext(ctx, sourceReads).Scan(&before))
+
+	seen := 0
+
+	for facts, err := range store.ChatOriginFacts(ctx) {
+		require.NoError(t, err)
+		require.Equal(t, "source", facts.CreatingSource)
+
+		seen++
+	}
+
+	require.Equal(t, 128, seen)
+
+	_, err = store.db.ExecContext(ctx, `SELECT pg_stat_force_next_flush()`)
+	require.NoError(t, err)
+	require.NoError(t, store.db.QueryRowContext(ctx, sourceReads).Scan(&after))
+	require.Equal(t, before, after, "an explicit source needs no source-entry lookup")
+}
+
 func TestExternalMCPMetadataLookupUsesIndex(t *testing.T) {
 	store := newTestSessionService(t)
 	store.db.SetMaxOpenConns(1)

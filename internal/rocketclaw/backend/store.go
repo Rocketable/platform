@@ -1118,21 +1118,36 @@ func (s *SessionService) ChatOriginFacts(ctx context.Context) iter.Seq2[ChatOrig
 		rows, err := s.db.QueryContext(ctx, `WITH visible AS (
     SELECT conversation_id, created_by, conversation_id LIKE 'web:cron:%' OR conversation_id LIKE 'web:one-off-cron:%' AS named_run
     FROM managed_conversations c
+    LEFT JOIN external_mcp_sessions p ON p.private_conversation_id = c.conversation_id
     WHERE conversation_id NOT LIKE 'cron:%' AND conversation_id NOT LIKE 'one-off-cron:%'
-        AND NOT EXISTS (SELECT 1 FROM external_mcp_sessions p WHERE p.private_conversation_id = c.conversation_id)
+        AND p.private_conversation_id IS NULL
+),
+creating_entries AS (
+    SELECT c.conversation_id, e.entry_json->>'sync_source_conversation_id' AS source,
+        e.entry_json->>'sync_source_entry_id' AS source_entry_id
+    FROM visible c
+    CROSS JOIN LATERAL (
+        SELECT entry_json FROM session_entries WHERE conversation_id = c.conversation_id ORDER BY id LIMIT 1
+    ) e
+    WHERE NOT c.named_run AND (c.conversation_id NOT LIKE 'slack-thread:%' OR c.created_by = $1)
+),
+creating_sources AS (
+    SELECT conversation_id, source FROM creating_entries WHERE source IS NOT NULL
+    UNION ALL
+    SELECT e.conversation_id, COALESCE(source.conversation_id, '') FROM creating_entries e
+    LEFT JOIN session_entries source ON source.id = e.source_entry_id::bigint
+    WHERE e.source IS NULL
+),
+attributed_conversations AS (
+    SELECT c.conversation_id, c.created_by, COALESCE(s.source, '') AS creating_source,
+        CASE WHEN c.named_run THEN substr(c.conversation_id, 5) ELSE s.source END AS producer_id
+    FROM visible c LEFT JOIN creating_sources s ON s.conversation_id = c.conversation_id
 )
 SELECT c.conversation_id, c.created_by, COALESCE(m.external_conversation_id, ''), COALESCE(m.agent, ''),
-    COALESCE(m.managed_conversation_id, ''), COALESCE(m.origin_pairs, 'null'), COALESCE(creating.source, ''), COALESCE(producer.agent, '')
-FROM visible c
+    COALESCE(m.managed_conversation_id, ''), COALESCE(m.origin_pairs, 'null'), c.creating_source, COALESCE(producer.agent, '')
+FROM attributed_conversations c
 LEFT JOIN external_mcp_sessions m ON m.managed_conversation_id = c.conversation_id
--- The predicate stays inside the lateral so skipped rows never read their often large creating entry.
-LEFT JOIN LATERAL (
-    SELECT COALESCE(e.entry_json->>'sync_source_conversation_id', source.conversation_id, '') AS source
-    FROM session_entries e LEFT JOIN session_entries source ON source.id = (e.entry_json->>'sync_source_entry_id')::bigint
-    WHERE e.conversation_id = c.conversation_id AND NOT c.named_run AND (c.conversation_id NOT LIKE 'slack-thread:%' OR c.created_by = $1)
-    ORDER BY e.id LIMIT 1
-) creating ON TRUE
-LEFT JOIN managed_conversations producer ON producer.conversation_id = CASE WHEN c.named_run THEN substr(c.conversation_id, 5) ELSE creating.source END`, ThreadCreatedByCron)
+LEFT JOIN managed_conversations producer ON producer.conversation_id = c.producer_id`, ThreadCreatedByCron)
 		if err != nil {
 			yield(ChatOriginFacts{}, fmt.Errorf("query chat origin facts: %w", err))
 			return
