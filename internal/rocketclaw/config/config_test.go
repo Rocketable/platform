@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,7 +39,8 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	    "bot_token": "xoxb-test",
 	    "app_token": "xapp-test",
 	    "channels": [{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]
-	  }
+	  },
+	  "web": {"auto_settle_after": "1h"}
 	}`)
 
 	assert.Equal(t, "api_key", cfg.OpenAI.RocketCodeAuth)
@@ -50,9 +50,6 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	cfg.Web.ListenAddress = "127.0.0.1:8080"
 	require.NoError(t, cfg.Validate())
 	assert.Equal(t, "127.0.0.1:8080", cfg.Web.ListenAddress)
-	settleAfter, err := cfg.Web.SettleAfter()
-	require.NoError(t, err)
-	assert.Equal(t, 7*24*time.Hour, settleAfter)
 	assert.True(t, filepath.IsAbs(cfg.Workspace))
 }
 
@@ -97,38 +94,6 @@ func TestAttachmentLocation(t *testing.T) {
 				}
 
 				require.Equal(t, want, location)
-			})
-		}
-	}
-}
-
-func TestLoadAutoSettleAfter(t *testing.T) {
-	for _, filename := range []string{"rocketclaw.json", "femtoclaw.json"} {
-		for _, tt := range []struct {
-			value string
-			want  time.Duration
-		}{
-			{"168h", 7 * 24 * time.Hour},
-			{"1h30m", 90 * time.Minute},
-			{"0", 0},
-			{"-1h", 0},
-			{"7d", 0},
-		} {
-			t.Run(filename+"/"+tt.value, func(t *testing.T) {
-				path := filepath.Join(t.TempDir(), filename)
-				content := fmt.Sprintf(`{"database_url":"postgres://localhost/test", "openai":{"api_key":"test"}, "slack":{"bot_token":"test","app_token":"test","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}, "web":{"auto_settle_after":%q}}`, tt.value)
-				require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-
-				cfg, err := Load(path, "", AWSFetcher{})
-				if tt.want == 0 {
-					require.ErrorContains(t, err, "web.auto_settle_after")
-					return
-				}
-
-				require.NoError(t, err)
-				got, err := cfg.Web.SettleAfter()
-				require.NoError(t, err)
-				require.Equal(t, tt.want, got)
 			})
 		}
 	}

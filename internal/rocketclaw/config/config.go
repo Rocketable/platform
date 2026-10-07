@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strings"
 	"text/template"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws/arn"
 )
@@ -100,9 +99,8 @@ func (c *Config) RuntimeDirName() string {
 
 // WebConfig controls the Web listener and conversation presentation.
 type WebConfig struct {
-	ListenAddress   string       `json:"listen_address,omitempty"`
-	AutoSettleAfter string       `json:"auto_settle_after,omitempty"`
-	Sentry          SentryConfig `json:"sentry,omitzero"`
+	ListenAddress string       `json:"listen_address,omitempty"`
+	Sentry        SentryConfig `json:"sentry,omitzero"`
 }
 
 // SentryConfig contains only public browser tracing settings, never an auth token.
@@ -129,25 +127,6 @@ func (c SentryConfig) validate() error {
 	}
 
 	return nil
-}
-
-// SettleAfter returns the configured inactivity period, defaulting to seven days.
-func (c WebConfig) SettleAfter() (time.Duration, error) {
-	value := c.AutoSettleAfter
-	if value == "" {
-		value = "168h"
-	}
-
-	duration, err := time.ParseDuration(value)
-	if err != nil {
-		return 0, fmt.Errorf("web.auto_settle_after: %w", err)
-	}
-
-	if duration <= 0 {
-		return 0, errors.New("web.auto_settle_after must be positive")
-	}
-
-	return duration, nil
 }
 
 // LoggingConfig controls rocketclaw logging.
@@ -361,10 +340,6 @@ func LoadExternalMCPUsers(configPath string) (map[string]string, error) {
 func (c *Config) Validate() error {
 	c.Web.ListenAddress = cmp.Or(c.Web.ListenAddress, "0.0.0.0:3000")
 	if _, _, err := c.AttachmentLocation(); err != nil {
-		return err
-	}
-
-	if _, err := c.Web.SettleAfter(); err != nil {
 		return err
 	}
 

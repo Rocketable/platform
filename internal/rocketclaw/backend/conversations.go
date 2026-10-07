@@ -157,12 +157,6 @@ WHERE NOT EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1 AND e
 		if err := saveSessionSummary(ctx, tx, summary); err != nil {
 			return err
 		}
-
-		if _, err := tx.ExecContext(ctx, `UPDATE managed_conversations SET settled = FALSE,
-reopened_at = CASE WHEN snoozed_until IS NOT NULL THEN CURRENT_TIMESTAMP ELSE reopened_at END,
-snoozed_until = NULL WHERE conversation_id = $1`, b.config.ConversationID); err != nil {
-			return fmt.Errorf("reopen synced conversation: %w", err)
-		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -197,7 +191,7 @@ snoozed_until = NULL WHERE conversation_id = $1`, b.config.ConversationID); err 
 
 // ListConversations returns recorded conversations, never discovered pair IDs.
 func (r *Runtime) ListConversations(ctx context.Context) (conversations []protocol.Conversation, err error) {
-	rows, err := r.Sessions.db.QueryContext(ctx, `SELECT conversation_id, agent, created_by, settled FROM managed_conversations ORDER BY conversation_id`)
+	rows, err := r.Sessions.db.QueryContext(ctx, `SELECT conversation_id, agent, created_by FROM managed_conversations ORDER BY conversation_id`)
 	if err != nil {
 		return nil, fmt.Errorf("list conversations: %w", err)
 	}
@@ -205,7 +199,7 @@ func (r *Runtime) ListConversations(ctx context.Context) (conversations []protoc
 
 	for rows.Next() {
 		var conversation protocol.Conversation
-		if err := rows.Scan(&conversation.ID, &conversation.Agent, &conversation.CreatedBy, &conversation.Settled); err != nil {
+		if err := rows.Scan(&conversation.ID, &conversation.Agent, &conversation.CreatedBy); err != nil {
 			return nil, fmt.Errorf("read conversation: %w", err)
 		}
 

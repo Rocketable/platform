@@ -499,7 +499,7 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 
 			var rows []SidebarSession
 
-			for row, err := range service.SidebarSessions(t.Context(), time.Time{}) {
+			for row, err := range service.SidebarSessions(t.Context()) {
 				require.NoError(t, err, "sidebar enumeration must not decode replay history")
 
 				rows = append(rows, row)
@@ -544,7 +544,7 @@ FROM pg_index WHERE indrelid = 'session_entries'::regclass`
 
 	var ids []string
 
-	for row, err := range service.SidebarSessions(ctx, time.Time{}) {
+	for row, err := range service.SidebarSessions(ctx) {
 		require.NoError(t, err)
 
 		ids = append(ids, row.Conversation.ID)
@@ -556,160 +556,6 @@ FROM pg_index WHERE indrelid = 'session_entries'::regclass`
 	require.NoError(t, err)
 	require.NoError(t, service.db.QueryRowContext(ctx, historyReads).Scan(&after))
 	require.Equal(t, int64(1), after-before, "sidebar history checks must stop at the first indexed entry")
-}
-
-func TestSidebarSessionsAutoSettleAndReopen(t *testing.T) {
-	service := newTestSessionService(t)
-	ctx := t.Context()
-	cutoff := time.Date(2026, 1, 1, 0, 0, 0, 123456000, time.UTC)
-
-	for _, id := range []string{"older", "boundary", "recent", "running", "failed", "stopped", "manual", "empty", "missing"} {
-		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
-
-		if id == "empty" || id == "missing" {
-			continue
-		}
-
-		stamp := cutoff
-
-		switch id {
-		case "older":
-			stamp = stamp.Add(-time.Microsecond)
-		case "recent":
-			stamp = stamp.Add(time.Microsecond)
-		}
-
-		_, err := service.AppendEntryID(ctx, id, &harness.SessionEntry{Type: "tool", Timestamp: stamp})
-		require.NoError(t, err)
-	}
-
-	_, err := service.db.ExecContext(ctx, `DELETE FROM session_summaries WHERE conversation_id = 'missing'`)
-	require.NoError(t, err)
-	_, err = service.SetConversationSettled(ctx, "manual", true)
-	require.NoError(t, err)
-	seedActiveTurn(t, service, "running", "active", nil)
-
-	for _, terminal := range []protocol.Terminal{protocol.TerminalFailed, protocol.TerminalStopped} {
-		id := string(terminal)
-		seedActiveTurn(t, service, id, id, nil)
-		endTestTurn(t, service, id, id, terminal)
-	}
-
-	got := make(map[string]bool)
-
-	for row, err := range service.SidebarSessions(ctx, cutoff) {
-		require.NoError(t, err)
-
-		got[row.Conversation.ID] = row.Conversation.Settled
-		require.Equal(t, row.Conversation.ID == "running", row.Running)
-	}
-
-	require.Equal(t, map[string]bool{"older": true, "boundary": true, "recent": false, "running": false, "failed": true, "stopped": true, "manual": true}, got)
-
-	// A new entry reopens manual and automatic settlement, even without preview text.
-	for _, id := range []string{"manual", "older", "failed", "stopped"} {
-		_, err := service.AppendEntryID(ctx, id, &harness.SessionEntry{Type: "developer", Timestamp: cutoff.Add(time.Hour)})
-		require.NoError(t, err)
-	}
-
-	_, err = service.SetConversationSettled(ctx, "boundary", false)
-	require.NoError(t, err)
-
-	var reopened time.Time
-	require.NoError(t, service.db.QueryRowContext(ctx, `SELECT reopened_at FROM managed_conversations WHERE conversation_id = 'boundary'`).Scan(&reopened))
-
-	for row, err := range service.SidebarSessions(ctx, cutoff) {
-		require.NoError(t, err)
-		require.False(t, row.Conversation.Settled, row.Conversation.ID)
-
-		if row.Conversation.ID == "boundary" {
-			require.Equal(t, cutoff, row.Summary.LastUpdated)
-		}
-	}
-
-	for _, before := range []time.Time{reopened.Add(-time.Microsecond), reopened} {
-		for row, err := range service.SidebarSessions(ctx, before) {
-			require.NoError(t, err)
-
-			if row.Conversation.ID == "boundary" {
-				require.Equal(t, before.Equal(reopened), row.Conversation.Settled)
-			}
-		}
-	}
-
-	// Reopening, history, and the summary must commit together or not at all.
-	_, err = service.SetConversationSettled(ctx, "manual", true)
-	require.NoError(t, err)
-	entries, err := service.ObserveEntries(ctx, "manual")
-	require.NoError(t, err)
-	summaries, err := service.ListSessions(ctx, []string{"manual"})
-	require.NoError(t, err)
-	_, err = service.db.ExecContext(ctx, `ALTER TABLE managed_conversations ADD CONSTRAINT reject_reopen CHECK (conversation_id <> 'manual' OR settled)`)
-	require.NoError(t, err)
-	_, err = service.AppendEntryID(ctx, "manual", testSessionEntry("new message", "new reply"))
-	require.ErrorContains(t, err, "reopen conversation after message")
-	afterEntries, err := service.ObserveEntries(ctx, "manual")
-	require.NoError(t, err)
-	require.Equal(t, entries, afterEntries)
-
-	afterSummaries, err := service.ListSessions(ctx, []string{"manual"})
-	require.NoError(t, err)
-	require.Equal(t, summaries, afterSummaries)
-
-	thread, _, err := service.Thread("manual")
-	require.NoError(t, err)
-	require.True(t, thread.Settled)
-}
-
-func TestSidebarSessionsSnooze(t *testing.T) {
-	service := newTestSessionService(t)
-	ctx := t.Context()
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	cutoff := now.Add(-7 * 24 * time.Hour)
-	future := now.Add(time.Hour)
-
-	for _, tt := range []struct {
-		id      string
-		until   time.Time
-		settled bool
-	}{
-		{"waiting", future, true},
-		{"pinned", future, true},
-		{"manual", future, true},
-		{"expired", now.Add(-time.Second), false},
-		{"inactive", cutoff, true},
-	} {
-		require.NoError(t, service.UpsertThread(tt.id, ThreadState{Agent: "main"}))
-		_, err := service.AppendEntryID(ctx, tt.id, testSessionEntryAt(cutoff.Add(-time.Hour), "old message"))
-		require.NoError(t, err)
-		_, err = service.db.ExecContext(ctx, `UPDATE managed_conversations SET snoozed_until = $2, pinned = $3 WHERE conversation_id = $1`, tt.id, tt.until, tt.id == "pinned")
-		require.NoError(t, err)
-
-		for row, err := range service.SidebarSessions(ctx, cutoff) {
-			require.NoError(t, err)
-
-			if row.Conversation.ID == tt.id {
-				require.Equal(t, tt.settled, row.Conversation.Settled, tt.id)
-			}
-		}
-	}
-
-	_, err := service.AppendEntryID(ctx, "waiting", testSessionEntryAt(cutoff.Add(-time.Hour), "newly received old message"))
-	require.NoError(t, err)
-	_, err = service.SetConversationSettled(ctx, "manual", false)
-	require.NoError(t, err)
-
-	for row, err := range service.SidebarSessions(ctx, cutoff) {
-		require.NoError(t, err)
-
-		if row.Conversation.ID == "waiting" || row.Conversation.ID == "manual" {
-			require.False(t, row.Conversation.Settled, row.Conversation.ID)
-
-			var until sql.NullTime
-			require.NoError(t, service.db.QueryRowContext(ctx, `SELECT snoozed_until FROM managed_conversations WHERE conversation_id = $1`, row.Conversation.ID).Scan(&until))
-			require.False(t, until.Valid)
-		}
-	}
 }
 
 func TestSidebarSessionPinsAndNames(t *testing.T) {
@@ -724,24 +570,23 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 	}
 
 	for _, id := range []string{"a", "ä"} {
-		updated, err := service.UpdateConversationDetails(ctx, id, new(true), new("Release notes"), nil)
+		updated, err := service.UpdateConversationDetails(ctx, id, new(true), new("Release notes"))
 		require.NoError(t, err)
 		require.True(t, updated)
 	}
 
-	updated, err := service.UpdateConversationDetails(ctx, "a", nil, new("Renamed"), nil)
+	updated, err := service.UpdateConversationDetails(ctx, "a", nil, new("Renamed"))
 	require.NoError(t, err)
 	require.True(t, updated)
 	require.NoError(t, service.UpsertThread("a", ThreadState{Agent: "main"}))
 
 	var ids []string
 
-	for row, err := range service.SidebarSessions(ctx, stamp) {
+	for row, err := range service.SidebarSessions(ctx) {
 		require.NoError(t, err)
 
 		ids = append(ids, row.Conversation.ID)
 		require.Equal(t, row.Conversation.ID != "Z", row.Pinned)
-		require.Equal(t, row.Conversation.ID == "Z", row.Conversation.Settled)
 		require.Equal(t, stamp, row.Summary.LastUpdated)
 
 		if row.Conversation.ID == "a" {
@@ -751,41 +596,25 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 
 	require.Equal(t, []string{"a", "ä", "Z"}, ids)
 
-	_, err = service.SetConversationSettled(ctx, "a", true)
+	_, err = service.UpdateConversationDetails(ctx, "ä", new(false), nil)
+	require.NoError(t, err)
+	_, err = service.UpdateConversationDetails(ctx, "a", nil, new(""))
 	require.NoError(t, err)
 
-	for row, err := range service.SidebarSessions(ctx, stamp) {
-		require.NoError(t, err)
-
-		if row.Conversation.ID == "a" {
-			require.True(t, row.Pinned)
-			require.True(t, row.Conversation.Settled)
-		}
-	}
-
-	_, err = service.AppendEntryID(ctx, "a", testSessionEntryAt(stamp, "new message"))
-	require.NoError(t, err)
-	_, err = service.UpdateConversationDetails(ctx, "ä", new(false), nil, nil)
-	require.NoError(t, err)
-	_, err = service.UpdateConversationDetails(ctx, "a", nil, new(""), nil)
-	require.NoError(t, err)
-
-	for row, err := range service.SidebarSessions(ctx, stamp) {
+	for row, err := range service.SidebarSessions(ctx) {
 		require.NoError(t, err)
 
 		switch row.Conversation.ID {
 		case "a":
 			require.True(t, row.Pinned)
-			require.False(t, row.Conversation.Settled)
 			require.Empty(t, row.Name)
 		case "ä":
 			require.False(t, row.Pinned)
-			require.True(t, row.Conversation.Settled)
 			require.Equal(t, "Release notes", row.Name)
 		}
 	}
 
-	updated, err = service.UpdateConversationDetails(ctx, "missing", new(true), nil, nil)
+	updated, err = service.UpdateConversationDetails(ctx, "missing", new(true), nil)
 	require.NoError(t, err)
 	require.False(t, updated)
 }
@@ -793,7 +622,7 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	service := newTestSessionService(t)
 	for _, id := range []string{"a", "Z", "ä", "empty", "missing", "zero", "cron:private", "one-off-cron:private", "private"} {
-		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main", Settled: id == "Z"}))
+		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
 
 		if id != "zero" {
 			_, err := service.toggleSessionTag(t.Context(), id, "customer", []string{"customer", "internal"})
@@ -818,15 +647,13 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	insertSessionEntryWithoutSummary(t, service, "missing", testSessionEntry("old", "answer"))
 	_, err = service.db.ExecContext(t.Context(), `DELETE FROM session_summaries WHERE conversation_id = 'missing'`)
 	require.NoError(t, err)
-	_, err = service.SetConversationSettled(t.Context(), "Z", true)
-	require.NoError(t, err)
 	// Enumeration must not parse replay even for missing summaries.
 	_, err = service.db.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{"timestamp":false}'`)
 	require.NoError(t, err)
 
 	var got []SidebarSession
 
-	for row, err := range service.SidebarSessions(t.Context(), time.Time{}) {
+	for row, err := range service.SidebarSessions(t.Context()) {
 		require.NoError(t, err)
 
 		got = append(got, row)
@@ -835,7 +662,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	want := make([]SidebarSession, 0, 5)
 
 	for _, id := range []string{"Z", "a", "ä", "missing", "zero"} {
-		row := SidebarSession{Conversation: protocol.Conversation{ID: id, Agent: "main", Settled: id == "Z"}, Running: id == "a"}
+		row := SidebarSession{Conversation: protocol.Conversation{ID: id, Agent: "main"}, Running: id == "a"}
 
 		row.Tags = []string{"customer"}
 		if id == "zero" {
@@ -855,7 +682,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	_, err = service.toggleSessionTag(t.Context(), "a", "internal", []string{"customer", "internal"})
 	require.NoError(t, err)
 
-	for row, err := range service.SidebarSessions(t.Context(), time.Time{}) {
+	for row, err := range service.SidebarSessions(t.Context()) {
 		require.NoError(t, err)
 
 		if row.Conversation.ID == "a" {
@@ -875,7 +702,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 
 	var remaining []string
 
-	for row, err := range service.SidebarSessions(t.Context(), time.Time{}) {
+	for row, err := range service.SidebarSessions(t.Context()) {
 		require.NoError(t, err)
 
 		remaining = append(remaining, row.Conversation.ID)
@@ -888,7 +715,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	_, err = service.db.ExecContext(t.Context(), `UPDATE session_summaries SET last_updated = '-infinity' WHERE conversation_id = 'zero'`)
 	require.NoError(t, err)
 
-	next, stop := iter.Pull2(service.SidebarSessions(t.Context(), time.Time{}))
+	next, stop := iter.Pull2(service.SidebarSessions(t.Context()))
 	defer stop()
 
 	for _, id := range remaining[:len(remaining)-1] {
@@ -917,7 +744,7 @@ func TestSidebarSessionsCloseRowsOnEarlyStopAndCancellation(t *testing.T) {
 
 	before := service.db.Stats().InUse
 
-	next, stop := iter.Pull2(service.SidebarSessions(t.Context(), time.Time{}))
+	next, stop := iter.Pull2(service.SidebarSessions(t.Context()))
 	defer stop()
 
 	row, err, ok := next()
@@ -929,7 +756,7 @@ func TestSidebarSessionsCloseRowsOnEarlyStopAndCancellation(t *testing.T) {
 	require.Equal(t, before, service.db.Stats().InUse)
 	ctx, cancel := context.WithCancel(t.Context())
 
-	next, stop = iter.Pull2(service.SidebarSessions(ctx, time.Time{}))
+	next, stop = iter.Pull2(service.SidebarSessions(ctx))
 	defer stop()
 
 	_, err, ok = next()
@@ -953,7 +780,7 @@ func TestSidebarSessionsCloseRowsOnEarlyStopAndCancellation(t *testing.T) {
 	require.Equal(t, before, service.db.Stats().InUse)
 
 	// Cancellation before the first read must also report failure, not an empty list.
-	next, stop = iter.Pull2(service.SidebarSessions(ctx, time.Time{}))
+	next, stop = iter.Pull2(service.SidebarSessions(ctx))
 	defer stop()
 
 	row, err, ok = next()
@@ -1088,7 +915,7 @@ func TestSidebarSessionsCancelPendingDatabaseRow(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	next, stop := iter.Pull2(service.SidebarSessions(ctx, time.Time{}))
+	next, stop := iter.Pull2(service.SidebarSessions(ctx))
 
 	defer func() {
 		cancel()

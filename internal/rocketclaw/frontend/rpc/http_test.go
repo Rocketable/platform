@@ -51,7 +51,6 @@ func TestHTTPBoundary(t *testing.T) {
 
 	for _, tc := range []struct{ method, body, message string }{
 		{"RunCronJob", `{}`, "stem is required"},
-		{"SettleSession", `{"id":"chat"}`, "settled is required"},
 		{"SteerQueueItem", `{"id":"chat"}`, "itemId is required"},
 		{"PopQueueItem", `{"id":"chat"}`, "itemId is required"},
 		{"PopQueueItem", `{"itemId":"held"}`, "id is required"},

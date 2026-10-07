@@ -12,13 +12,13 @@ message Session {
   string preview = 3;
   string updated_at = 4;
   string agent = 5;
-  bool settled = 6;
+  reserved 6;
   repeated string allowed_agents = 7;
   bool running = 8;
   bool pinned = 9;
   string name = 10;
   reserved 11;
-  string snoozed_until = 12;
+  reserved 12;
   string forked_from = 13;
   repeated string tags = 14;
   // The chat's recorded origin is a cron run, even after human follow-ups.
@@ -316,7 +316,7 @@ message ConfigView {
   string auto_approver_model = 7;
   bool instrumentation_enabled = 8;
   bool mcp_external = 9;
-  string web_auto_settle_after = 10;
+  reserved 10;
   string tailscale_user = 11;
 }
 
@@ -326,19 +326,11 @@ message ListConfigResponse {
   ConfigView config = 1;
 }
 
-message SettleSessionRequest {
-  string id = 1;
-  bool settled = 2;
-}
-
-message SettleSessionResponse {}
-
 message UpdateSessionRequest {
   string id = 1;
   optional bool pinned = 2;
   optional string name = 3;
-  reserved 4;
-  optional string snoozed_until = 5;
+  reserved 4, 5;
 }
 
 message UpdateSessionResponse {}
@@ -448,7 +440,6 @@ service Web {
   rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);
   rpc ListWorkflows(ListWorkflowsRequest) returns (ListWorkflowsResponse);
   rpc ListConfig(ListConfigRequest) returns (ListConfigResponse);
-  rpc SettleSession(SettleSessionRequest) returns (SettleSessionResponse);
   rpc UpdateSession(UpdateSessionRequest) returns (UpdateSessionResponse);
   rpc Protocol(ProtocolRequest) returns (ProtocolResponse);
   rpc Identity(IdentityRequest) returns (IdentityResponse);
