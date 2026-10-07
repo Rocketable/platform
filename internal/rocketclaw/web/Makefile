@@ -38,7 +38,7 @@ build:
 
 test: build
 	# Transport tests need the live PostgreSQL/provider fixtures owned by Go.
-	bun test $$(find src -type f \( -name '*.test.ts' -o -name '*.test.tsx' \) ! -name '*-transport.test.ts' | sort)
+	bash -o pipefail -c 'find ./src -type f \( -name "*.test.ts" -o -name "*.test.tsx" \) ! -name "*-transport.test.ts" -print0 | sort -z | xargs -0 -n 1 -P 4 bun test'
 	go -C .. test ./frontend/rpc -run 'Test(PublicProgressRealBrowser|RevertRealBackendBrowser|SessionEntries|SidebarHTTPStreamsBeforeGoTailAndCancels)$$' -count=1
 	$(MAKE) check-cloc-budget
 
