@@ -21,8 +21,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
   const details: Record<string, Partial<Session>> = { destination: { agent: "a-very-long-agent-name-that-must-not-hide-the-session-age", updatedAt: "2026-09-09T00:00:00.123456Z", tags: ["customer", "a-very-long-tag-name-that-must-not-hide-the-session-age", "<b>literal</b>"] } };
   let failPin = true;
   let agentChoices = true;
-  let failSettle = true;
-  let settledFork = false;
   const handoffs: string[] = [];
   const searches: string[] = [];
   const handoffDocument = "# Handoff from source\n" + "Continue the verified work.\n".repeat(80);
@@ -43,7 +41,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
       expect(await request.text()).toBe("keep attachment");
       return Response.json({ id: "uploaded-draft", name: "draft.txt", mimeType: "text/plain", size: "15", conversationId: url.searchParams.get("conversationId") });
     }
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: Object.keys(histories).map((id) => ({ id, name: id === "destination" ? "Podcast editing notes with a very long conversation title" : id, agent: "main", preview: histories[id].at(-1)?.text, forkedFrom: forkParents[id], settled: id === "forked" && settledFork, ...details[id] })), owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: Object.keys(histories).map((id) => ({ id, name: id === "destination" ? "Podcast editing notes with a very long conversation title" : id, agent: "main", preview: histories[id].at(-1)?.text, forkedFrom: forkParents[id], ...details[id] })), owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
@@ -61,9 +59,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
       }
       case "/api/ListQueue": return Response.json({ items: queues[input.id] ?? [] });
       case "/api/UpdateSession":
-      case "/api/SettleSession":
         if (input.pinned && failPin) return Response.json({ message: "Pin failed", code: 13 }, { status: 500 });
-        if (input.id === "destination" && input.settled && failSettle) return Response.json({ message: "Settle failed", code: 13 }, { status: 500 });
         details[input.id] = { ...details[input.id], ...input };
         return Response.json({});
       case "/api/ForkSession": {
@@ -177,7 +173,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await commandSearch.fill("original");
     expect(await commands.getByRole("button", { name: /Open original conversation/ }).count()).toBe(0);
     await commandSearch.fill("");
-    for (const name of ["Sessions: Fork session", "Sessions: Handoff session", "Sessions: Name session", "Sessions: Snooze session", "Sessions: Pin session", "Sessions: Settle", "Sessions: Choose agent", "Command: Start goal ($goal)", "Command: Run workflow ($workflow)", "Command: Invoke skill ($skill)", "Command: Enqueue work ($enqueue)", "Command: Stash work ($stash)", "Command: Steer turn ($steer)"]) {
+    for (const name of ["Sessions: Fork session", "Sessions: Handoff session", "Sessions: Name session", "Sessions: Pin session", "Sessions: Choose agent", "Command: Start goal ($goal)", "Command: Run workflow ($workflow)", "Command: Invoke skill ($skill)", "Command: Enqueue work ($enqueue)", "Command: Stash work ($stash)", "Command: Steer turn ($steer)"]) {
       const action = commands.getByRole("button", { name, exact: true });
       await action.waitFor();
       expect(await action.textContent()).toBe(name);
@@ -201,14 +197,11 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await pin.waitFor({ state: "visible" });
     await commandSearch.press("Enter");
     await commands.waitFor({ state: "hidden" });
-    for (const label of ["Unpin session", "Settle", "Unsettle"]) {
-      await page.keyboard.press("Meta+Shift+p");
-      await commandSearch.fill(label);
-      await commands.getByRole("button", { name: `Sessions: ${label}`, exact: true }).click();
-      await commands.waitFor({ state: "hidden" });
-    }
+    await page.keyboard.press("Meta+Shift+p");
+    await commandSearch.fill("Unpin session");
+    await commands.getByRole("button", { name: "Sessions: Unpin session", exact: true }).click();
+    await commands.waitFor({ state: "hidden" });
     expect(details.source.pinned).toBe(false);
-    expect(details.source.settled).toBe(false);
     await page.keyboard.press("Meta+Shift+p");
     await commandSearch.fill("Name session");
     await commands.getByRole("button", { name: "Sessions: Name session" }).click();
@@ -217,14 +210,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await rename.getByRole("button", { name: "Save", exact: true }).click();
     await rename.waitFor({ state: "hidden" });
     expect(details.source.name).toBe("Named source");
-    await page.keyboard.press("Meta+Shift+p");
-    await commandSearch.fill("Snooze session");
-    await commands.getByRole("button", { name: "Sessions: Snooze session", exact: true }).click();
-    const snooze = page.getByRole("dialog", { name: "Snooze session", exact: true });
-    await snooze.getByLabel("Return at (local time)").fill("2027-01-02T09:30");
-    await snooze.getByRole("button", { name: "Snooze", exact: true }).click();
-    await snooze.waitFor({ state: "hidden" });
-    expect(details.source.snoozedUntil).toBe(await page.evaluate(() => new Date("2027-01-02T09:30").toISOString()));
     expect(prompts).toHaveLength(0);
     await page.getByLabel("Attach files", { exact: true }).setInputFiles({ name: "draft.txt", mimeType: "text/plain", buffer: Buffer.from("keep attachment") });
     for (const [label, invocation] of [["Start goal", "$goal"], ["Run workflow", "$workflow"], ["Invoke skill", "$skill"], ["Enqueue work", "$enqueue"], ["Stash work", "$stash"], ["Steer turn", "$steer"]]) {
@@ -284,15 +269,13 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await dialog.getByRole("button", { name: "Choose this prompt Continue before this message" }).waitFor();
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("forked").replace(/=+$/, "")}`);
-    if (width < 768) await page.getByRole("button", { name: "Sessions", exact: true }).click();
-    const sidebar = width < 768 ? page.getByRole("dialog", { name: "Sessions", exact: true }) : page.locator("#session-sidebar");
-    const forkRow = sidebar.locator("li").filter({ has: page.getByRole("img", { name: "Forked session", exact: true }) });
-    await forkRow.waitFor();
-    expect(await sidebar.getByRole("img", { name: "Forked session", exact: true }).count()).toBe(1);
-    await forkRow.hover();
-    expect(await forkRow.getByRole("button").count()).toBe(2);
-    const destinationRow = sidebar.locator("li").filter({ has: page.getByRole("link", { name: /Podcast editing notes/ }) });
-    await destinationRow.hover();
+    await composer.waitFor();
+    await page.keyboard.press("Control+p");
+    const palette = page.getByRole("dialog", { name: "Go to session", exact: true });
+    const search = palette.getByPlaceholder("Search sessions");
+    const destinationRow = palette.locator("li").filter({ hasText: "Podcast editing notes" });
+    await destinationRow.waitFor();
+    expect(await palette.getByRole("img", { name: "Forked session", exact: true }).count()).toBe(1);
     const age = destinationRow.locator("time");
     expect(await destinationRow.locator("span[title]:not([data-slot])").getAttribute("title")).toBe([details.destination.agent, ...details.destination.tags!].join(" · "));
     expect(await destinationRow.locator("b").count()).toBe(0);
@@ -310,28 +293,8 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
       expect(await age.getAttribute("aria-label")).toBe(`Updated ${date}`);
       await page.mouse.move(0, 0);
       await tooltip.waitFor({ state: "hidden" });
-      await destinationRow.hover();
     }
-    await Bun.write(path.resolve(import.meta.dir, `../../../../.tmp/sidebar-actions-${width}.png`), await page.screenshot());
-    await destinationRow.getByRole("button", { name: "Settle", exact: true }).click();
-    await destinationRow.getByRole("alert").waitFor();
-    expect(await destinationRow.getByRole("alert").textContent()).toBe("Settle failed");
-    expect(details.destination?.settled).not.toBe(true);
-    failSettle = false;
-    await destinationRow.getByRole("button", { name: "Settle", exact: true }).click();
-    await destinationRow.waitFor({ state: "hidden" });
-    expect(details.destination.settled).toBe(true);
-    expect(new URL(page.url()).pathname).toBe("/s/" + btoa("forked").replace(/=+$/, ""));
-    details.destination.settled = false;
-    await forkRow.hover();
-    await forkRow.getByRole("button", { name: "Session actions" }).click();
-    expect(await page.getByRole("menuitem", { name: "Settle", exact: true }).count()).toBe(0);
-    for (const name of ["Name session", "Pin session", "Snooze session"]) await page.getByRole("menuitem", { name, exact: true }).waitFor();
-    await page.getByRole("menuitem", { name: "Open original conversation", exact: true }).click();
-    await page.waitForURL("**/s/" + btoa("source").replace(/=+$/, ""));
-    await page.keyboard.press("Control+p");
-    const palette = page.getByRole("dialog", { name: "Go to session", exact: true });
-    const search = palette.getByPlaceholder("Search sessions");
+    await Bun.write(path.resolve(import.meta.dir, `../../../../.tmp/palette-rows-${width}.png`), await page.screenshot());
     await search.fill("IS:FORKED");
     await palette.getByRole("button", { name: /forked/ }).waitFor();
     expect(await palette.getByRole("img", { name: "Forked session", exact: true }).count()).toBe(1);
@@ -341,13 +304,10 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await search.fill("is:forked source");
     expect(await palette.locator("li > button").count()).toBe(0);
     await page.keyboard.press("Escape");
-    settledFork = true;
-    await page.goto(`http://127.0.0.1:${server.port}/settled`);
-    const settled = page.locator("main");
-    await settled.getByRole("textbox").fill("is:forked");
-    await settled.getByRole("img", { name: "Forked session", exact: true }).waitFor();
-    expect(await settled.locator("li").count()).toBe(1);
-    settledFork = false;
+    if (width >= 768) {
+      await page.locator("main").getByRole("button", { name: "Open original conversation", exact: true }).click();
+      await page.waitForURL("**/s/" + btoa("source").replace(/=+$/, ""));
+    }
     forkParents.destination = "source";
 
     // Handoff originates from an ordinary session, independent of the fork above.
@@ -532,7 +492,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await page.goto(`http://127.0.0.1:${server.port}/`);
     await composer.waitFor();
     await page.keyboard.press("Meta+Shift+p");
-    expect(await commands.getByRole("button", { name: /^(Command:|Sessions: (Open original conversation|Fork session|Handoff session|Name session|Snooze session|Pin session|Unpin session|Settle$|Unsettle$|Stop turn|Choose agent))/ }).count()).toBe(0);
+    expect(await commands.getByRole("button", { name: /^(Command:|Sessions: (Open original conversation|Fork session|Handoff session|Name session|Pin session|Unpin session|Stop turn|Choose agent))/ }).count()).toBe(0);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();

@@ -253,11 +253,7 @@ for (const width of [1280, 390]) test(`search editor groups clickable message ma
     const search = page.getByRole("textbox", { name: "Search sessions" });
     const results = page.getByLabel("Search results");
     const group = results.getByRole("group", { name: "Pinned conversation", exact: true });
-    if (width < 768) await page.getByRole("button", { name: "Sessions", exact: true }).click();
-    const sidebar = width < 768 ? page.getByRole("dialog", { name: "Sessions", exact: true }) : page.locator("#session-sidebar");
-    await sidebar.getByRole("link", { name: /Needle notes/ }).waitFor();
-    expect(await sidebar.getByRole("link", { name: /Ordinary|Origin chat/ }).count()).toBe(0);
-    if (width < 768) { await page.keyboard.press("Escape"); await sidebar.waitFor({ state: "detached" }); }
+    await page.getByRole("button", { name: "Search sessions", exact: true }).waitFor();
     await page.keyboard.press("Control+p");
     const palette = page.getByRole("dialog", { name: "Go to session" });
     await palette.getByRole("button").filter({ hasText: "Ordinary" }).waitFor();
@@ -477,8 +473,13 @@ test("one SearchOrigins request per needle feeds Cmd+P and /search", async () =>
   try {
     const page = await browser.newPage();
     await page.goto(`http://127.0.0.1:${server.port}/search`);
-    await page.locator("#session-sidebar").getByText("Row 29", { exact: true }).waitFor();
     const search = page.getByRole("textbox", { name: "Search sessions" });
+    await search.waitFor();
+    await page.keyboard.press("Control+p");
+    const rows = page.getByRole("dialog", { name: "Go to session" });
+    await rows.getByText("Row 29", { exact: true }).waitFor();
+    await page.keyboard.press("Escape");
+    await rows.waitFor({ state: "detached" });
     const results = page.getByLabel("Search results");
     await search.fill("deep-origin");
     await results.getByRole("alert").filter({ hasText: "Some chat origins could not be searched." }).waitFor();
@@ -532,8 +533,13 @@ test("search shows message and row matches while origins are still loading", asy
   try {
     const page = await browser.newPage();
     await page.goto(`http://127.0.0.1:${server.port}/search`);
-    await page.locator("#session-sidebar").getByText("Origin only", { exact: true }).waitFor();
     const search = page.getByRole("textbox", { name: "Search sessions" });
+    await search.waitFor();
+    await page.keyboard.press("Control+p");
+    const rows = page.getByRole("dialog", { name: "Go to session" });
+    await rows.getByText("Origin only", { exact: true }).waitFor();
+    await page.keyboard.press("Escape");
+    await rows.waitFor({ state: "detached" });
     const results = page.getByLabel("Search results");
     const checking = results.getByRole("status").filter({ hasText: "Still checking chat origins…" });
     await search.fill("needle");

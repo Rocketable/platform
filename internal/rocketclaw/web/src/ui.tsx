@@ -2,7 +2,6 @@
 
 import { QueryClient, QueryCache, MutationCache, QueryClientProvider, useQuery, useMutation } from "@tanstack/react-query";
 import { captureException } from "@sentry/react";
-import { Menu } from "@base-ui/react/menu";
 import { Combobox } from "@base-ui/react/combobox";
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -10,7 +9,7 @@ import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field
 import { queries, mutations, listSessions, rpc } from "./api";
 import { draftContent } from "./drafts";
 import type { ChatOrigin, HistoryView, MessageMatch, PromptDelivery, SearchMessagesResponse } from "./types";
-import { Bot, Check, ChevronDown, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
+import { Bot, Check, ChevronDown, CircleAlert, Command, Copy, CornerUpLeft, Download, FileIcon, GitFork, GripVertical, Info, LoaderCircle, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -25,7 +24,7 @@ import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Attachment, AttachmentGroup, AttachmentMedia, AttachmentContent, AttachmentTitle, AttachmentDescription, AttachmentActions, AttachmentAction } from "@/components/ui/attachment";
 import { Message, MessageContent } from "@/components/ui/message";
 import { MessageScrollerProvider, MessageScroller, MessageScrollerViewport, MessageScrollerContent, MessageScrollerItem, MessageScrollerButton, useMessageScroller } from "@/components/ui/message-scroller";
-import { Sheet, SheetContent, SheetTrigger, SheetTitle, SheetDescription } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -51,7 +50,7 @@ const queryClient = new QueryClient({
   mutationCache: new MutationCache({ onError: (error) => { captureException(error); } }),
 });
 const tabReturnTo = { current: "/" };
-type SessionCommand = { mode: "fork" | "handoff" | "name" | "snooze"; source: string; target?: MessageMatch };
+type SessionCommand = { mode: "fork" | "handoff" | "name"; source: string; target?: MessageMatch };
 const SessionCommands = createContext<{ command?: SessionCommand; setCommand: Dispatch<SetStateAction<SessionCommand | undefined>>; composer: RefObject<((command: string) => void) | null> }>(null!);
 
 function sessionPath(id: string) {
@@ -339,7 +338,6 @@ function useRoute() {
   const agents = pathname === "/agents";
   const skills = pathname === "/skills";
   const config = pathname === "/config";
-  const settled = pathname === "/settled";
   const search = pathname === "/search";
   const id = pathname.startsWith("/s/") ? decodeSessionId(pathname.slice(3)) : "";
   return {
@@ -347,7 +345,6 @@ function useRoute() {
     agents,
     skills,
     config,
-    settled,
     search,
     id,
     goHome: () => navigate("/"),
@@ -629,76 +626,36 @@ function BottomNavigation({ children }: { children: ReactNode }) {
         <span aria-hidden="true" className="h-1 w-10 rounded-full bg-muted-foreground" />
       </button>
       </div>
-      <div id="bottom-navigation" className={cn("min-h-0 grid-cols-[1fr_auto_1fr] items-center gap-[var(--navigation-gap)] py-1 max-md:grid-cols-1", collapsed ? "hidden" : "grid")}>{children}</div>
+      <div id="bottom-navigation" className={cn("min-h-0 items-center gap-[var(--navigation-gap)] py-1", collapsed ? "hidden" : "grid")}>{children}</div>
     </footer>
   );
 }
 
-function MobileSidebar({ children, chat }: { children: ReactNode; chat: boolean }) {
-  const [open, setOpen] = useState(false);
-  const panel = useRef<HTMLDivElement>(null);
-  const swipe = useRef<{ x: number; y: number; open: boolean } | null>(null);
-  return <div className="flex h-dvh min-h-0 flex-col overflow-hidden overscroll-y-none bg-background"
-    onTouchStart={(event) => {
-      swipe.current = null;
-      const target = event.target as HTMLElement;
-      if (window.matchMedia("(min-width: 48rem)").matches || event.touches.length !== 1 || target.closest('input, textarea, select, [contenteditable="true"]')) return;
-      const surface = target.closest("[data-sidebar-swipe]");
-      if (!surface) return;
-      swipe.current = { x: event.touches[0].clientX, y: event.touches[0].clientY, open: surface.getAttribute("data-sidebar-swipe") === "open" };
-    }}
-    onTouchCancel={() => { swipe.current = null; }}
-    onTouchEnd={(event) => {
-      const start = swipe.current;
-      swipe.current = null;
-      if (!start || window.getSelection()?.toString()) return;
-      const touch = event.changedTouches.item(0)!;
-      const x = touch.clientX - start.x;
-      const y = touch.clientY - start.y;
-      if (Math.abs(x) < 60 || Math.abs(x) < Math.abs(y) * 1.5 || (x > 0) !== start.open) return;
-      event.preventDefault();
-      setOpen(start.open);
-    }}>
-    <Sheet open={open} onOpenChange={setOpen}>
-      {children}
-      {chat ? <div className="fixed top-2 left-2 z-40 rounded-md bg-background shadow-sm md:hidden">
-        <SheetTrigger render={<Button variant="ghost" size="icon-sm" />} aria-label="Sessions"><PanelLeftOpen /></SheetTrigger>
-      </div> : null}
-      <SheetContent ref={panel} initialFocus={panel} side="left" className="w-72" showCloseButton={false} data-sidebar-swipe="close" onClick={(event) => { if ((event.target as Element).closest('a[href^="/s/"]')) setOpen(false); }}>
-        <SheetTitle className="sr-only">Sessions</SheetTitle>
-        <SheetDescription className="sr-only">Find and open a conversation.</SheetDescription>
-        <SessionList />
-      </SheetContent>
-    </Sheet>
-  </div>;
-}
-
-function ResizableAside({ side, className, children, ...props }: ComponentProps<"aside"> & { side: "sidebar" | "delegation" }) {
-  const wide = useSyncExternalStore(subscribeWide, () => matchMedia("(min-width: 64rem)").matches);
-  const [edge, label, fallback, min, max] = side === "sidebar" ? [1, "Resize sidebar", wide ? 288 : 256, 192, 512] : [-1, "Resize delegation panel", 384, 288, Math.round(innerWidth * 0.6)];
+function ResizableAside({ className, children, ...props }: ComponentProps<"aside">) {
+  const [min, max] = [288, Math.round(innerWidth * 0.6)];
   const clamp = (value: number) => Math.round(Math.min(Math.max(value, min), max));
-  const [stored, setStored] = useState(() => Number(localStorage.getItem(`${side}-width`)));
-  const width = clamp(stored || fallback);
+  const [stored, setStored] = useState(() => Number(localStorage.getItem("delegation-width")));
+  const width = clamp(stored || 384);
   const resize = (value: number) => {
     const room = document.querySelector("main")!.getBoundingClientRect().width - 26 * parseFloat(getComputedStyle(document.documentElement).fontSize);
     const next = clamp(Math.min(value, width + room));
     setStored(next);
-    localStorage.setItem(`${side}-width`, String(next));
+    localStorage.setItem("delegation-width", String(next));
   };
   return <aside {...props} className={cn("relative", className)} style={{ width, minWidth: min }}>
     {children}
-    <div role="separator" aria-orientation="vertical" aria-label={label} aria-valuenow={width} aria-valuemin={min} aria-valuemax={max} tabIndex={0}
-      className={cn("absolute inset-y-0 z-10 w-1.5 cursor-col-resize touch-none outline-none hover:bg-border focus-visible:bg-ring", edge > 0 ? "-right-0.75" : "-left-0.75")}
+    <div role="separator" aria-orientation="vertical" aria-label="Resize delegation panel" aria-valuenow={width} aria-valuemin={min} aria-valuemax={max} tabIndex={0}
+      className="absolute inset-y-0 -left-0.75 z-10 w-1.5 cursor-col-resize touch-none outline-none hover:bg-border focus-visible:bg-ring"
       onPointerDown={(event) => event.currentTarget.setPointerCapture(event.pointerId)}
       onPointerMove={(event) => {
         if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
         const rect = event.currentTarget.parentElement!.getBoundingClientRect();
-        resize(edge > 0 ? event.clientX - rect.left : rect.right - event.clientX);
+        resize(rect.right - event.clientX);
       }}
       onKeyDown={(event) => {
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
         event.preventDefault();
-        resize(width + (event.key === "ArrowRight" ? 16 : -16) * edge);
+        resize(width + (event.key === "ArrowRight" ? -16 : 16));
       }} />
   </aside>;
 }
@@ -725,8 +682,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const composer = useRef<((command: string) => void) | null>(null);
   const commands = useMemo(() => ({ command, setCommand, composer }), [command]);
   const route = useRoute();
-  const showChat = ![route.cron, route.agents, route.skills, route.config, route.settled, route.search].some(Boolean);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const showChat = ![route.cron, route.agents, route.skills, route.config, route.search].some(Boolean);
   const [palette, setPalette] = useState<{ mode: "sessions" | "commands" | "cron" | undefined; key: number }>({ mode: undefined, key: 0 });
   const openPalette = useCallback((mode: "sessions" | "commands") => setPalette((current) => ({ mode, key: current.key + 1 })), []);
   const drafts = useMemo(() => new Map<string, ComposerDraft>(), [scope]);
@@ -771,11 +727,6 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
         openPalette(event.shiftKey ? "commands" : "sessions");
         return;
       }
-      if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "b" && !event.shiftKey) {
-        event.preventDefault();
-        setSidebarOpen((open) => !open);
-        return;
-      }
       if ((event.metaKey || event.ctrlKey) && event.altKey && !event.shiftKey && event.code === "KeyN") {
         event.preventDefault();
         newChat();
@@ -803,12 +754,9 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   return (
           <DraftScope value={scope}><SessionCommands value={commands}>
            {command ? <SessionCommandDialog key={`${command.mode}:${command.source}`} command={command} drafts={drafts} onDraftChange={onDraftChange} /> : null}
-            <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((open) => !open)} />
-         <MobileSidebar chat={showChat}>
+            <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} />
+         <div className="flex h-dvh min-h-0 flex-col overflow-hidden overscroll-y-none bg-background">
             <BottomNavigation>
-              <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="hidden size-[var(--navigation-button)] md:inline-flex" />} aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"} aria-expanded={sidebarOpen} aria-controls="session-sidebar" onClick={() => setSidebarOpen((open) => !open)}>
-                {sidebarOpen ? <PanelLeftClose className="size-[var(--navigation-icon)]" /> : <PanelLeftOpen className="size-[var(--navigation-icon)]" />}
-              </TooltipTrigger><TooltipContent side="top">{sidebarOpen ? "Hide sidebar" : "Show sidebar"}</TooltipContent></Tooltip>
               <div className="min-w-0 max-w-full justify-self-center overflow-x-auto overflow-y-hidden scrollbar-none">
                 <div className="flex w-max items-center gap-[var(--navigation-gap)]">
                   <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="New session" onClick={newChat}>
@@ -825,12 +773,8 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
             </BottomNavigation>
             <div className="fixed top-2 right-2 z-40 rounded-md bg-background shadow-sm"><ThemeToggle /></div>
           <div className="flex min-h-0 min-w-0 flex-1">
-            <ResizableAside side="sidebar" id="session-sidebar" className={cn("hidden flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground", sidebarOpen && "md:flex")}>
-              <SessionList />
-            </ResizableAside>
-            <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]", command?.target && "pt-[min(75dvh,30rem)]")} data-sidebar-swipe="open">
+            <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]", command?.target && "pt-[min(75dvh,30rem)]")}>
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
-              {route.settled ? <SessionList settledOnly /> : null}
               {route.search ? <SearchPage /> : null}
               <TabPane show={showChat}>
                 <MessageScrollerProvider key={conversation.key} autoScroll scrollEdgeThreshold={48}>
@@ -840,13 +784,13 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
              </main>
              {showChat ? <DelegationPanel id={route.id} /> : null}
            </div>
-          </MobileSidebar>
+          </div>
           </SessionCommands></DraftScope>
   );
 }
 
 function SessionCommandDialog({ command, drafts, onDraftChange }: { command: SessionCommand; drafts: Map<string, ComposerDraft>; onDraftChange: () => void }) {
-  if (command.mode === "name" || command.mode === "snooze") return <NameSessionDialog id={command.source} snooze={command.mode === "snooze"} />;
+  if (command.mode === "name") return <NameSessionDialog id={command.source} />;
   return command.mode === "fork" ? <ForkDialog source={command.source} drafts={drafts} onDraftChange={onDraftChange} /> : <HandoffDialog command={command} drafts={drafts} onDraftChange={onDraftChange} />;
 }
 
@@ -982,8 +926,6 @@ function paletteRows(
   sidebar: { rows: Session[]; loadingIds: ReadonlySet<string> },
   jobs: { stem: string; status: string; schedule?: string; agent?: string; channel?: string }[] | undefined,
   newChat: () => void,
-  sidebarOpen: boolean,
-  onToggleSidebar: () => void,
   openCron: () => void,
   runStem: (stem: string) => void,
   origins: ReadonlyMap<string, string>,
@@ -1010,9 +952,8 @@ function paletteRows(
     { key: "new", label: "Sessions: New", run: newChat },
     { key: "search", label: "Sessions: Search", run: () => navigate("/search") },
     { key: "run-cron", label: "Cron: Run", keep: true, run: openCron },
-    ...([["settled", "Sessions: List Settled"], ["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
+    ...([["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
     ...timelineLevels.map(({ id, label, rows }) => ({ key: `timeline-${id}`, label: `Timeline: ${label}`, run: () => setTimelineRows(rows) })),
-    { key: "sidebar", label: sidebarOpen ? "Hide Sidebar" : "Show Sidebar", run: onToggleSidebar },
     // VS Code: src/vs/platform/quickinput/browser/commandsQuickAccess.ts, _getPicks.
   ].filter((item) => needle === "" || item.label.toLowerCase().includes(needle)).sort((a, b) => (recent.indexOf(a.key) + 1 || Infinity) - (recent.indexOf(b.key) + 1 || Infinity) || a.label.localeCompare(b.label));
 }
@@ -1062,7 +1003,7 @@ function useSessionOrigins(rows: Session[], needle: string) {
 const paletteCopy = { sessions: { title: "Go to session", desc: "Search and open a session.", placeholder: "Search sessions" }, commands: { title: "Run command", desc: "Search and run a command.", placeholder: "Type a command" },
   cron: { title: "Run cron", desc: "Search and run a cron job.", placeholder: "Search cron jobs" } };
 
-function CommandPalette({ drafts, mode, setMode, newChat, sidebarOpen, onToggleSidebar }: { drafts: Map<string, ComposerDraft>; mode: "sessions" | "commands" | "cron" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | undefined) => void; newChat: () => void; sidebarOpen: boolean; onToggleSidebar: () => void }) {
+function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string, ComposerDraft>; mode: "sessions" | "commands" | "cron" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | undefined) => void; newChat: () => void }) {
   const sidebar = useContext(Sidebar);
   const { setCommand, composer } = useContext(SessionCommands);
   const { id } = useRoute();
@@ -1114,7 +1055,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, sidebarOpen, onToggleS
       setMode(undefined);
     },
   });
-  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, sidebarOpen, onToggleSidebar, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.values, [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands], filters, agentFilter, roomFilter, recent);
+  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.values, [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands], filters, agentFilter, roomFilter, recent);
   const selected = items.length === 0 ? 0 : pick % items.length;
   const choose = (item: (typeof items)[number]) => {
     if (item.disabled) return;
@@ -1193,7 +1134,7 @@ function SessionRowContent({ session, loading = false, age = relativeTime(sessio
   const title = session.name || rowPreview(session, loading).split("\n", 1)[0] || sessionLabel(session.id);
   const clean = useCleanText(title);
   const channel = slackSession(session.id) ? (session.title ?? "") : "";
-  const meta = [session.snoozedUntil ? `Snoozed until ${new Date(session.snoozedUntil).toLocaleString()}` : session.settled ? "Settled" : "", channel, session.agent, ...(session.tags ?? [])].filter(Boolean).join(" · ");
+  const meta = [channel, session.agent, ...(session.tags ?? [])].filter(Boolean).join(" · ");
   const updated = session.updatedAt ? `Updated ${new Date(session.updatedAt).toLocaleString(undefined, { timeZoneName: "short" })}` : "";
   return <span className="flex min-w-0 w-full flex-1 flex-col gap-0.5">
     <span className="flex items-center gap-1.5 text-sm font-medium">{session.forkedFrom ? <GitFork role="img" aria-label="Forked session" className="size-3.5 shrink-0" /> : null}<span data-slot="session-title" className="truncate" title={clean}><InlineText text={title} /></span></span>
@@ -1206,21 +1147,18 @@ function useSessionActions(session: Session | undefined, onSuccess?: () => void)
   const { setCommand } = useContext(SessionCommands);
   const saved = () => { invalidate(); onSuccess?.(); };
   const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: saved });
-  const settle = useMutation({ mutationFn: mutations.settleSession, onSuccess: saved });
   const id = session?.id ?? "";
   const items = session ? [
     ...(session.forkedFrom ? [{ key: "origin", label: "Open original conversation", icon: CornerUpLeft, run: () => navigate(sessionPath(session.forkedFrom!)) }] : []),
     { key: "name", label: "Name session", icon: TextCursorInput, run: () => setCommand({ mode: "name", source: id }) },
     { key: "pin", label: session.pinned ? "Unpin session" : "Pin session", icon: Pin, pressed: !!session.pinned, keep: true, run: () => update.mutate({ id, pinned: !session.pinned }) },
-    { key: "snooze", label: "Snooze session", icon: Clock, run: () => setCommand({ mode: "snooze", source: id }) },
-    { key: "settle", label: session.settled ? "Unsettle" : "Settle", icon: session.settled ? Undo2 : Check, keep: true, run: () => settle.mutate({ id, settled: !session.settled }) },
-  ].map((item) => ({ ...item, disabled: update.isPending || settle.isPending })) : [];
-  return { items, error: update.error ?? settle.error };
+  ].map((item) => ({ ...item, disabled: update.isPending })) : [];
+  return { items, error: update.error };
 }
 
 function SessionActions({ session }: { session?: Session }) {
   const { items, error } = useSessionActions(session);
-  return <>{items.filter((item) => ["name", "pin", "snooze"].includes(item.key)).map(({ key, label, icon: Icon, pressed, disabled, run }) => <Tooltip key={key}>
+  return <>{items.map(({ key, label, icon: Icon, pressed, disabled, run }) => <Tooltip key={key}>
     <TooltipTrigger render={<Button variant="ghost" size="icon" className="size-11 sm:size-8" disabled={disabled} />} aria-label={label} aria-pressed={pressed} onClick={run}><Icon className={cn(pressed && "fill-current")} /></TooltipTrigger><TooltipContent>{label}</TooltipContent>
   </Tooltip>)}{error ? <span role="alert" className="text-xs text-destructive">{error.message}</span> : null}</>;
 }
@@ -1230,45 +1168,28 @@ function SessionHeaderActions({ id }: { id: string }) {
   return <SessionActions session={sidebar.rows.find((row) => row.id === id)} />;
 }
 
-function SessionRowActions({ session }: { session: Session }) {
-  const { items, error } = useSessionActions(session);
-  return <><ButtonGroup aria-label="Session controls">
-    {items.filter((item) => item.key === "settle" && !session.settled).map(({ key, label, icon: Icon, disabled, run }) => <Tooltip key={key}>
-      <TooltipTrigger render={<Button variant="ghost" size="icon-sm" disabled={disabled} />} aria-label={label} onClick={run}><Icon /></TooltipTrigger><TooltipContent>{label}</TooltipContent>
-    </Tooltip>)}
-    <Menu.Root>
-      <Menu.Trigger render={<Button variant="ghost" size="icon-sm" />} aria-label="Session actions"><Ellipsis /></Menu.Trigger>
-      <Menu.Portal><Menu.Positioner sideOffset={4} align="end" className="z-50 outline-none"><Menu.Popup onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="min-w-40 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none">
-        {items.filter((item) => item.key !== "settle" || session.settled).map(({ key, label, icon: Icon, pressed, disabled, run }) => <Menu.Item key={key} disabled={disabled} onClick={run} className="flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent data-disabled:opacity-50">
-          <Icon className={cn("size-4", pressed && "fill-current")} />{label}
-        </Menu.Item>)}
-      </Menu.Popup></Menu.Positioner></Menu.Portal>
-    </Menu.Root>
-  </ButtonGroup>{error ? <span role="alert" className="px-2 text-xs text-destructive">{error.message}</span> : null}</>;
-}
-
-function NameSessionDialog({ id, snooze }: { id: string; snooze: boolean }) {
+function NameSessionDialog({ id }: { id: string }) {
   const sidebar = useContext(Sidebar);
   const session = sidebar.rows.find((row) => row.id === id);
   const { setCommand } = useContext(SessionCommands);
-  const [value, setValue] = useState(snooze ? "" : session?.name ?? "");
+  const [value, setValue] = useState(session?.name ?? "");
   const nameId = useId();
   const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: () => { sidebar.invalidateQueries(); setCommand(undefined); } });
   return <Dialog open onOpenChange={(open) => { if (!open) setCommand(undefined); }}>
         <DialogContent>
-          <DialogTitle>{snooze ? "Snooze session" : "Name session"}</DialogTitle>
-          <DialogDescription>{snooze ? "Hide until this local time. New messages bring the chat back early. Find it under Settled to Unsettle sooner." : "Shared with everyone who can see this session. Leave blank to show the last message."}</DialogDescription>
-          <form className="mt-4 flex flex-col gap-3" action={() => update.mutate({ id, ...(snooze ? { snoozedUntil: new Date(value).toISOString() } : { name: value }) })}>
+          <DialogTitle>Name session</DialogTitle>
+          <DialogDescription>Shared with everyone who can see this session. Leave blank to show the last message.</DialogDescription>
+          <form className="mt-4 flex flex-col gap-3" action={() => update.mutate({ id, name: value })}>
             <FieldGroup>
               <Field data-invalid={!!update.error}>
-                <FieldLabel htmlFor={nameId}>{snooze ? "Return at (local time)" : "Session name"}</FieldLabel>
-                <Input id={nameId} name={snooze ? "snoozedUntil" : "name"} type={snooze ? "datetime-local" : "text"} required={snooze} value={value} aria-invalid={!!update.error} onChange={(event) => setValue(event.target.value)} />
+                <FieldLabel htmlFor={nameId}>Session name</FieldLabel>
+                <Input id={nameId} name="name" type="text" value={value} aria-invalid={!!update.error} onChange={(event) => setValue(event.target.value)} />
                 {update.error ? <FieldError>{update.error.message}</FieldError> : null}
               </Field>
             </FieldGroup>
             <div className="flex justify-end gap-2">
               <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>
-              <Button type="submit" disabled={update.isPending}>{update.isPending ? "Saving…" : snooze ? "Snooze" : "Save"}</Button>
+              <Button type="submit" disabled={update.isPending}>{update.isPending ? "Saving…" : "Save"}</Button>
             </div>
           </form>
         </DialogContent>
@@ -1283,8 +1204,8 @@ function matchesSession(session: Session, needle: string, agentFilter: string, r
 
 function sessionSearchTerms(query: string) {
   const tags: string[] = [], cronNames: string[] = [], filterTerms: string[] = [];
-  let pinnedOnly = false, forkedOnly = false, unsettledOnly = false, cronOnly = false, sort = "";
-  const text = query.replace(/(?:^|\s)(is:(?:settled|unsettled|pinned|forked|cron)|sort:(?:newest|oldest)|(?:tag|cron):("(?:[^"\\]|\\.)*"|\S+))(?=\s|$)/gi, (term, filter: string, value?: string) => {
+  let pinnedOnly = false, forkedOnly = false, cronOnly = false, sort = "";
+  const text = query.replace(/(?:^|\s)(is:(?:pinned|forked|cron)|sort:(?:newest|oldest)|(?:tag|cron):("(?:[^"\\]|\\.)*"|\S+))(?=\s|$)/gi, (term, filter: string, value?: string) => {
     const lower = filter.toLowerCase();
     if (value !== undefined) {
       let name = value;
@@ -1298,7 +1219,6 @@ function sessionSearchTerms(query: string) {
     } else {
       pinnedOnly ||= lower === "is:pinned";
       forkedOnly ||= lower === "is:forked";
-      unsettledOnly ||= lower === "is:unsettled";
       cronOnly ||= lower === "is:cron";
     }
     filterTerms.push(filter);
@@ -1306,14 +1226,14 @@ function sessionSearchTerms(query: string) {
   }).trim();
   // A trailing operator prefix is being typed, not searched.
   const typing = /(?:^|\s)((?:is|sort|cron):\S*)$/i.exec(text);
-  const rest = typing && " is:settled is:unsettled is:pinned is:forked is:cron sort:newest sort:oldest cron:".includes(` ${typing[1].toLowerCase()}`) ? text.slice(0, typing.index).trim() : text;
+  const rest = typing && " is:pinned is:forked is:cron sort:newest sort:oldest cron:".includes(` ${typing[1].toLowerCase()}`) ? text.slice(0, typing.index).trim() : text;
   const needle = typedPrefix(text, "agent:") === null && typedPrefix(text, "room:") === null ? rest.toLowerCase() : "";
-  return { pinnedOnly, forkedOnly, unsettledOnly, cronOnly, cronNames, sort, tags, filterTerms, text, needle };
+  return { pinnedOnly, forkedOnly, cronOnly, cronNames, sort, tags, filterTerms, text, needle };
 }
 
 function sessionMatchesSearch(session: Session, filters: ReturnType<typeof sessionSearchTerms>, agentFilter: string, roomFilter: string, origin: string) {
   const tags = new Set(session.tags);
-  return filters.tags.every((tag) => tags.has(tag)) && filters.cronNames.every((name) => session.cronName === name) && (!filters.pinnedOnly || session.pinned) && (!filters.forkedOnly || session.forkedFrom) && (!filters.unsettledOnly || !session.settled) && (!filters.cronOnly || session.cron) && matchesSession(session, "", agentFilter, roomFilter) && (matchesSession(session, filters.needle, "", "") || origin.includes(filters.needle));
+  return filters.tags.every((tag) => tags.has(tag)) && filters.cronNames.every((name) => session.cronName === name) && (!filters.pinnedOnly || session.pinned) && (!filters.forkedOnly || session.forkedFrom) && (!filters.cronOnly || session.cron) && matchesSession(session, "", agentFilter, roomFilter) && (matchesSession(session, filters.needle, "", "") || origin.includes(filters.needle));
 }
 
 // sort: orders by last activity (missing last, then ID); otherwise pinned rows come first.
@@ -1553,7 +1473,7 @@ function searchInput(query: string, typed: string, rows: Session[], catalog: { n
   const tagPrefix = typedPrefix(token, "tag:"), cronPrefix = typedPrefix(token, "cron:"), isPrefix = typedPrefix(token, "is:"), sortPrefix = typedPrefix(token, "sort:");
   const agentPrefix = typedPrefix(text, "agent:"), roomPrefix = typedPrefix(text, "room:");
   const needle = ((tagPrefix ?? cronPrefix)?.replace(/^"|"$/g, "") ?? isPrefix ?? sortPrefix)?.toLowerCase();
-  const names = roomPrefix !== null ? slackRooms(rows) : cronPrefix !== null ? [...new Set(rows.flatMap((row) => row.cronName ? [row.cronName] : []))] : tagPrefix !== null ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : sortPrefix !== null ? ["newest", "oldest"] : ["pinned", "forked", "unsettled", "cron"];
+  const names = roomPrefix !== null ? slackRooms(rows) : cronPrefix !== null ? [...new Set(rows.flatMap((row) => row.cronName ? [row.cronName] : []))] : tagPrefix !== null ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : sortPrefix !== null ? ["newest", "oldest"] : ["pinned", "forked", "cron"];
   const offered = overlayChoices(agentPrefix, roomPrefix ?? needle ?? null, catalog, names);
   const completed = cronPrefix !== null ? sessionSearchTerms(token).cronNames[0] : needle;
   // A completed filter term commits on space or Enter instead of offering itself again.
@@ -1672,52 +1592,10 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
 
 function PageTitle({ children }: { children: ReactNode }) {
   return <header className="flex w-full shrink-0 items-center gap-2">
-    <SheetTrigger render={<Button variant="ghost" size="icon-sm" className="md:hidden" />} aria-label="Sessions"><PanelLeftOpen /></SheetTrigger>
     <h1 className="text-lg font-semibold">{children}</h1>
     <Button type="button" variant="ghost" size="icon-sm" className="ml-auto hidden md:inline-flex" aria-label="Close" onClick={() => navigate(tabReturnTo.current)}><X /></Button>
   </header>;
 }
-
-const SessionRow = memo(function SessionRow({ session, active, loading, age }: { session: Session; active: boolean; loading: boolean; age: string }) {
-  return <li className="group relative flex list-none items-stretch py-0.5">
-    <Link href={sessionPath(session.id)} className={cn("relative flex min-w-0 flex-1 cursor-pointer overflow-hidden rounded-md px-2.5 py-2 text-left outline-none select-none", active ? "bg-sidebar-row-active text-sidebar-foreground" : "text-sidebar-foreground hover:bg-sidebar-row-hover")}>
-      <SessionRowContent session={session} loading={loading} age={age} />
-    </Link>
-    <div className="pointer-events-none absolute top-1 right-1 rounded-md bg-sidebar shadow-sm opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
-      <SessionRowActions session={session} />
-    </div>
-  </li>;
-}, (a, b) => a.active === b.active && a.loading === b.loading && a.age === b.age &&
-  a.session.id === b.session.id && a.session.title === b.session.title && a.session.preview === b.session.preview && a.session.updatedAt === b.session.updatedAt &&
-  a.session.agent === b.session.agent && a.session.settled === b.session.settled && a.session.running === b.session.running && a.session.pinned === b.session.pinned &&
-  (a.session.tags ?? []).length === (b.session.tags ?? []).length && (a.session.tags ?? []).every((tag, index) => tag === b.session.tags?.[index]) &&
-  a.session.name === b.session.name && a.session.snoozedUntil === b.session.snoozedUntil && a.session.forkedFrom === b.session.forkedFrom);
-
-const SessionList = memo(function SessionList({ settledOnly = false }: { settledOnly?: boolean }) {
-  const sidebar = useContext(Sidebar);
-  const agents = useQuery({ ...queries.agents(), staleTime: 60_000, enabled: settledOnly });
-  const route = useRoute();
-  const [query, setQuery] = useState("");
-  const [agentFilter, setAgentFilter] = useState("");
-  const [roomFilter, setRoomFilter] = useState("");
-  const catalog = agents.data?.agents ?? [];
-  const rows = sidebar.rows;
-  const filters = sessionSearchTerms(query);
-  const filtered = rows.filter((session) => (settledOnly ? session.settled : !session.settled && !session.cron) && sessionMatchesSearch(session, filters, agentFilter, roomFilter, "")).sort((a, b) => compareSessions(filters.sort, a, b));
-  const searching = [filters.needle, agentFilter, roomFilter, filters.pinnedOnly, filters.forkedOnly, filters.unsettledOnly, filters.cronOnly, filters.cronNames.length, filters.tags.length].some(Boolean);
-  return (
-    <div className={cn("flex h-full min-h-0 flex-col", settledOnly && "mx-auto w-full max-w-3xl gap-6 p-4")}>
-      {settledOnly ? <PageTitle>Settled</PageTitle> : null}
-      {settledOnly ? <div className="flex shrink-0 items-center gap-1">
-        <SessionSearch rows={rows} catalog={catalog} query={query} setQuery={setQuery} agentFilter={agentFilter} setAgentFilter={setAgentFilter} roomFilter={roomFilter} setRoomFilter={setRoomFilter} />
-      </div> : null}
-      {filtered.length === 0 && (settledOnly || searching) ? <p role="status" className="px-3 pb-1 text-xs text-muted-foreground">{searchIsAuthoritative(sidebar) ? searching ? "No matches" : "No settled chats" : "loading..."}</p> : null}
-      <ScrollArea className="min-h-0 flex-1"><ul className="flex flex-col px-2 pb-2">
-        {filtered.map((session) => <SessionRow key={session.id} session={session} active={route.id === session.id} loading={sidebar.loadingIds.has(session.id)} age={relativeTime(session.updatedAt ?? "")} />)}
-      </ul></ScrollArea>
-    </div>
-  );
-});
 
 type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin" | "header" | "principal" | "state" | "parentId" | "completionNotes" | "delegation" | "review">;
 type OriginFilter = { sandboxed: boolean; canonical: boolean };
@@ -2435,7 +2313,7 @@ function DelegationPanel({ id }: { id: string }) {
       {history.isSuccess ? <Link href={delegationHref(parent?.level)} className="block w-fit text-xs text-muted-foreground underline hover:text-foreground">{parent ? `Back to ${parent.label}` : "Back to conversation"}</Link> : null}
     </div></ScrollArea>
   </>;
-  return wide ? <ResizableAside side="delegation" aria-label="Delegation" className="flex flex-col border-l bg-background">{body}</ResizableAside> : <Sheet open onOpenChange={(open) => { if (!open) close(); }}>
+  return wide ? <ResizableAside aria-label="Delegation" className="flex flex-col border-l bg-background">{body}</ResizableAside> : <Sheet open onOpenChange={(open) => { if (!open) close(); }}>
     <SheetContent side="right" showCloseButton={false} className="data-[side=right]:w-full data-[side=right]:sm:max-w-none"><SheetTitle className="sr-only">Delegation</SheetTitle>{body}</SheetContent>
   </Sheet>;
 }
@@ -3435,7 +3313,6 @@ function ConfigLoaded({ view }: { view: ConfigView }) {
       <ConfigSection title="Web">
         <ConfigRow label="Configured user" value={identity.data?.username ?? ""} />
         <ConfigRow label="Tailscale user" value={view.tailscaleUser || "Unavailable"} />
-        <ConfigRow label="web.auto_settle_after" value={view.webAutoSettleAfter ?? ""} />
       </ConfigSection>
       <ConfigSection title="Slack">
         <ConfigList items={channels} empty="No channels" />

@@ -75,7 +75,7 @@ child diagnostics, review reasons, reasoning bodies, and provisional arguments
 never enter this public path. History reads neither acknowledge Slack delivery
 nor change queue/steer boundaries. Slack keeps placeholder-plus-final delivery.
 New messages save their exact generated bracket header alongside model-facing
-text as `prompt_header` in local replay. History and sidebar previews remove only
+text as `prompt_header` in local replay. History and session-list previews remove only
 that saved prefix from user/developer display text. History exposes it as
 `TranscriptEvent.header`; the Web message footer shows it through an info icon
 on hover or click. New text headers omit `media=Text`. Old messages are not
@@ -89,7 +89,7 @@ Missing or malformed stored principals stay unlabeled; raw headers remain intact
 Previews use the latest nonempty user or assistant message, including the same
 successful delivery report shown in History. Migration `011_last_message_summaries.sql`
 invalidates the derived user-only previews for the existing background backfill.
-Session `running` is true while the conversation has an unfinished turn, independently of settled status.
+Session `running` is true while the conversation has an unfinished turn.
 
 `MoveToBackground` moves every running `execute` and `task` call of agents with
 `permission.rocketclaw.allow_background: allow` in the conversation into Background
@@ -119,18 +119,10 @@ Job changes and `movable` flips send the usual conversation-change hint.
 
 `Session.tags` (additive protobuf field 14) carries the owning conversation's
 durable, lexically sorted active tag names in `ListSessions`. Missing metadata
-returns an empty list. The existing sidebar query joins tags without adding a
+returns an empty list. The existing session-list query joins tags without adding a
 request per row or widening private-session discovery. Tag-only changes appear
-on the next snapshot without changing previews, timestamps, pin, settlement, or
-snooze. HTTP retains the same owner/completeness envelopes and ordering; no tag
+on the next snapshot without changing previews, timestamps, or pin. HTTP retains the same owner/completeness envelopes and ordering; no tag
 mutation RPC or event is added.
-
-`UpdateSession` accepts a future RFC3339 `snoozed_until` timestamp alongside name
-and pin metadata. Snoozing replaces explicit settlement and hides the chat until
-the deadline. `ListSessions` reports it as settled with its active deadline;
-expiry starts a fresh inactivity window. New stored entries, newly synced entries,
-and manual Unsettle clear snooze. Settle also clears snooze, hiding the chat until
-new activity or Unsettle. Opening a chat does not change its visibility state.
 
 Session discovery starts from explicitly recorded conversations with stored entries,
 excluding private Cron locators and recorded MCP X bindings. It does not discover
@@ -151,10 +143,6 @@ for Slack Y. `$agent name` persists selection and updates the live bridge withou
 resetting history; private producer X cannot be selected. Removed choices are not
 re-added merely because they remain the current selection.
 
-`SettleSession` persists the sidebar grouping flag on the existing managed
-conversation. Migration `008_managed_conversation_settled.sql` adds a non-null
-boolean defaulting to false. Listings retain this flag after reopening; settling
-does not delete entries/goals, change the agent, or cancel active execution.
 `ListConfig` exposes only the retained `ConfigView` fields: workspace, overlays,
 model aliases, channel agent choices, MCP server names, logging level,
 auto-approver model, and enabled flags. It never serializes credentials, database
@@ -195,7 +183,7 @@ producer and creates or reuses `web:<source ID>`, then calls `SyncConversation`.
 Creation and sync are idempotent, including concurrent opens and retries after a
 failed sync. This creates a writable Web conversation, without Slack creation or
 Cron execution. The Web chat ID retains its source cron ID to resolve the current definition's channel for
-agent choices in the picker, sidebar, and server-side agent changes. Choices use
+agent choices in the picker, session list, and server-side agent changes. Choices use
 the current configured channel agent order intersected with loaded agents; if no
 list can be computed, all loaded agents are allowed. Creation selects the first
 allowed loaded agent; reopening does not overwrite a conversation's selection.
@@ -269,7 +257,7 @@ stored but cannot be downloaded; garbage collection is not part of this transpor
 
 ### History summary backfill
 
-Existing histories gain durable sidebar summaries in the background when the
+Existing histories gain durable session-list summaries in the background when the
 RocketClaw runtime starts. Backfill does not gate readiness. It commits progress
 incrementally, so a later runtime start resumes histories that still lack a
 summary. It does not create conversation records or expose orphaned histories.
@@ -277,7 +265,7 @@ Normal history writes maintain the summary in the same transaction as the histor
 New conversation records initialize their summary in the creation transaction,
 including when they attach existing orphan history. An empty summary is complete;
 a missing summary is not. Empty histories retain blank previews and display
-timestamps. Sidebar enumeration checks for stored entries and reads stored
+timestamps. Session-list enumeration checks for stored entries and reads stored
 summaries without decoding replay, including while legacy
 summaries are still missing. Empty histories are omitted until an entry is stored.
 
@@ -288,9 +276,9 @@ and joins the backfill before releasing the runtime lock or closing the store.
 
 ### Run the Web transport
 
-Sidebar Slack labels use stored channel facts. A background lane refreshes known
+Session-list Slack labels use stored channel facts. A background lane refreshes known
 channels every three minutes; rate limits can extend staleness, and failed
-lookups retain the last known facts. Sidebar requests do not wait for Slack.
+lookups retain the last known facts. Session-list requests do not wait for Slack.
 Stored facts do not grant permission: action authorization still uses live checks.
 Configure rename subscriptions using
 [Slack Channel Rename Subscriptions](../../../../cmd/rocketclaw/CHEATSHEET.md#slack-channel-rename-subscriptions).
