@@ -700,19 +700,6 @@ func TestSessionEntries(t *testing.T) {
 	}
 
 	for _, tt := range []struct {
-		duration string
-		settled  bool
-	}{{"", true}, {"240h", false}} {
-		cfg.Web.AutoSettleAfter = tt.duration
-		conversations, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
-		require.NoError(t, err)
-		require.Len(t, conversations.Sessions, 1)
-		require.Equal(t, tt.settled, conversations.Sessions[0].Settled)
-	}
-
-	cfg.Web.AutoSettleAfter = ""
-
-	for _, tt := range []struct {
 		request *UpdateSessionRequest
 		pinned  bool
 		name    string
@@ -729,7 +716,6 @@ func TestSessionEntries(t *testing.T) {
 		require.Len(t, conversations.Sessions, 1)
 		require.Equal(t, tt.pinned, conversations.Sessions[0].GetPinned())
 		require.Equal(t, tt.name, conversations.Sessions[0].GetName())
-		require.Equal(t, !tt.pinned, conversations.Sessions[0].Settled)
 		updatedAt, err := time.Parse(time.RFC3339Nano, conversations.Sessions[0].UpdatedAt)
 		require.NoError(t, err)
 		require.Equal(t, entry.Timestamp.Truncate(time.Microsecond), updatedAt)
@@ -749,51 +735,10 @@ func TestSessionEntries(t *testing.T) {
 		{&UpdateSessionRequest{Id: "missing", Name: new("name")}, codes.NotFound},
 		{&UpdateSessionRequest{Id: "cron:private", Pinned: new(true)}, codes.PermissionDenied},
 		{&UpdateSessionRequest{Id: id, Name: new("bad\x00name")}, codes.InvalidArgument},
-		{&UpdateSessionRequest{Id: id, SnoozedUntil: new("not-a-time")}, codes.InvalidArgument},
-		{&UpdateSessionRequest{Id: id, SnoozedUntil: new(time.Now().Add(-time.Hour).Format(time.RFC3339Nano))}, codes.InvalidArgument},
 	} {
 		_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", tt.request)
 		require.Equal(t, tt.code, status.Code(err))
 	}
-
-	for _, settled := range []bool{true, false} {
-		until := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond).Format(time.RFC3339Nano)
-		_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", &UpdateSessionRequest{Id: id, SnoozedUntil: &until})
-		require.NoError(t, err)
-		conversations, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
-		require.NoError(t, err)
-		require.Equal(t, until, conversations.Sessions[0].SnoozedUntil)
-		require.True(t, conversations.Sessions[0].Settled)
-
-		_, err = invoke[SettleSessionResponse](ctx, connection, "SettleSession", &SettleSessionRequest{Id: id, Settled: settled})
-		require.NoError(t, err)
-		conversations, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
-		require.NoError(t, err)
-		require.Len(t, conversations.Sessions, 1)
-		require.Equal(t, id, conversations.Sessions[0].Id)
-		require.Equal(t, "main", conversations.Sessions[0].Agent)
-		require.Equal(t, settled, conversations.Sessions[0].Settled)
-		require.Empty(t, conversations.Sessions[0].SnoozedUntil)
-
-		stored, found, err := sessions.Thread(id)
-		require.NoError(t, err)
-		require.True(t, found)
-		require.Equal(t, backend.ThreadState{Agent: "main", Settled: settled}, stored)
-
-		preservedGoal, found, err := sessions.Goal(id)
-		require.NoError(t, err)
-		require.True(t, found)
-		require.Equal(t, goal, preservedGoal)
-
-		preserved, err := invoke[LoadSessionEntriesResponse](ctx, connection, "LoadSessionEntries", request)
-		require.NoError(t, err)
-		require.True(t, proto.Equal(loaded, preserved))
-	}
-
-	_, err = invoke[SettleSessionResponse](t.Context(), connection, "SettleSession", &SettleSessionRequest{Id: id, Settled: true})
-	require.Equal(t, codes.Unauthenticated, status.Code(err))
-	_, err = invoke[SettleSessionResponse](ctx, connection, "SettleSession", &SettleSessionRequest{Id: "missing", Settled: true})
-	require.Equal(t, codes.NotFound, status.Code(err))
 
 	deleted, err := invoke[DeleteSessionEntriesResponse](ctx, connection, "DeleteSessionEntries", request)
 	require.NoError(t, err)
@@ -1329,7 +1274,6 @@ func TestSessionEntries(t *testing.T) {
 	require.Empty(t, emptyConfig.Config.Models)
 	require.Empty(t, emptyConfig.Config.Overlays)
 	require.Empty(t, emptyConfig.Config.McpServers)
-	require.Equal(t, "168h0m0s", emptyConfig.Config.GetWebAutoSettleAfter())
 
 	for _, method := range []string{"ListConfig", "ListSkills", "ListWorkflows"} {
 		_, err = invoke[ListConfigResponse](t.Context(), connection, method, &ListConfigRequest{})
@@ -1337,7 +1281,6 @@ func TestSessionEntries(t *testing.T) {
 	}
 
 	cfg.Overlays = []string{"local-overlay"}
-	cfg.Web.AutoSettleAfter = "1h30m"
 	cfg.Models = map[string]string{"zeta": "gpt-5.5", "alpha": "gpt-5.4"}
 	cfg.Logging.Level, cfg.AutoApproverModel = "info", "gpt-5.5"
 	cfg.MCPExternal.Enabled, cfg.Instrumentation.Enabled = true, true
@@ -1352,7 +1295,7 @@ func TestSessionEntries(t *testing.T) {
 	view, err := invoke[ListConfigResponse](ctx, connection, "ListConfig", &ListConfigRequest{})
 	require.NoError(t, err)
 
-	wantConfig := &ConfigView{Workspace: cfg.Workspace, Overlays: []string{"local-overlay"}, Models: []*ConfigModel{{Name: "alpha", Model: "gpt-5.4"}, {Name: "zeta", Model: "gpt-5.5"}}, SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"main"}}}, McpServers: []string{"alpha", "zeta"}, LoggingLevel: "info", AutoApproverModel: "gpt-5.5", InstrumentationEnabled: true, McpExternal: true, WebAutoSettleAfter: "1h30m0s"}
+	wantConfig := &ConfigView{Workspace: cfg.Workspace, Overlays: []string{"local-overlay"}, Models: []*ConfigModel{{Name: "alpha", Model: "gpt-5.4"}, {Name: "zeta", Model: "gpt-5.5"}}, SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"main"}}}, McpServers: []string{"alpha", "zeta"}, LoggingLevel: "info", AutoApproverModel: "gpt-5.5", InstrumentationEnabled: true, McpExternal: true}
 	require.True(t, proto.Equal(wantConfig, view.Config), "unexpected config view: %v", view.Config)
 	encodedView, err := proto.Marshal(view)
 	require.NoError(t, err)
@@ -2892,7 +2835,6 @@ func TestSessionEntries(t *testing.T) {
 		{"SearchMessages", &SearchMessagesRequest{Query: "handoff"}, &SearchMessagesResponse{}},
 		{"SearchOrigins", &SearchOriginsRequest{Query: "handoff"}, &SearchOriginsResponse{}},
 		{"Handoff", &HandoffRequest{Id: id}, &HandoffResponse{}},
-		{"SettleSession", &SettleSessionRequest{Id: id, Settled: true}, &SettleSessionResponse{}},
 		{"UpdateSession", &UpdateSessionRequest{Id: id, Name: new("Retain this name")}, &UpdateSessionResponse{}},
 		{"ListQueue", &ListQueueRequest{Id: id}, &ListQueueResponse{}},
 		{"ListSessionEntries", &SessionEntriesRequest{Id: id}, &ListSessionEntriesResponse{}},

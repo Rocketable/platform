@@ -54,7 +54,7 @@ test("transcript and entry HTTP proxy reach Go and reject an unmapped connection
     { role: "tool", text: "{\"tags\":[\"customer\"]}" }, { role: "tool", text: "tagged" },
   ]);
   const config = await call("ListConfig");
-  expect(config.config).toEqual({ workspace: process.env.ROCKETCLAW_VIEW_TEST_WORKSPACE, overlays: ["local-overlay"], models: [{ name: "alpha", model: "gpt-5.4" }, { name: "zeta", model: "gpt-5.5" }], slackChannels: [{ channel: "#ops", agents: ["main"] }], mcpServers: ["alpha", "zeta"], loggingLevel: "info", autoApproverModel: "gpt-5.5", instrumentationEnabled: true, mcpExternal: true, webAutoSettleAfter: "1h30m0s", tailscaleUser: "" });
+  expect(config.config).toEqual({ workspace: process.env.ROCKETCLAW_VIEW_TEST_WORKSPACE, overlays: ["local-overlay"], models: [{ name: "alpha", model: "gpt-5.4" }, { name: "zeta", model: "gpt-5.5" }], slackChannels: [{ channel: "#ops", agents: ["main"] }], mcpServers: ["alpha", "zeta"], loggingLevel: "info", autoApproverModel: "gpt-5.5", instrumentationEnabled: true, mcpExternal: true, tailscaleUser: "" });
   expect(JSON.stringify(config)).not.toContain("secret-");
   expect(JSON.stringify(config)).not.toContain("postgres://");
   expect((await call("ListSkills")).skills).toEqual(["alpha", "zeta"].map((name) => ({ name, description: "Read-only skill", license: "MIT", compatibility: "Unix", content: "# Instructions\nKeep [literal] text.\n", origin: `${name}/SKILL.md` })));

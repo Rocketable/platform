@@ -915,63 +915,6 @@ func TestSlackChannelFacts(t *testing.T) {
 	assert.Equal(t, []string{"G1"}, ids)
 }
 
-func TestSessionServiceSettledPersistence(t *testing.T) {
-	workspace := t.TempDir()
-	store := newTestSessionServiceAt(t, workspace)
-	require.NoError(t, store.UpsertThread("opaque", ThreadState{Agent: "planner", CreatedBy: "alice"}))
-	require.NoError(t, store.UpsertThread("unrelated", ThreadState{Agent: "main"}))
-	_, err := store.db.ExecContext(t.Context(), `ALTER TABLE managed_conversations DROP COLUMN settled; DELETE FROM pg_migrations WHERE id = '008_managed_conversation_settled.sql'`)
-	require.NoError(t, err)
-	require.NoError(t, store.Stop())
-	store = newTestSessionServiceAt(t, workspace)
-	thread, found, err := store.Thread("opaque")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.False(t, thread.Settled)
-
-	entry := testSessionEntry("question", "answer")
-	_, err = store.AppendEntryID(t.Context(), "opaque", entry)
-	require.NoError(t, err)
-
-	seedActiveTurn(t, store, "opaque", "active", nil)
-	entriesBefore, err := store.ObserveEntries(t.Context(), "opaque")
-	require.NoError(t, err)
-
-	for _, settled := range []bool{true, false} {
-		updated, err := store.SetConversationSettled(t.Context(), "opaque", settled)
-		require.NoError(t, err)
-		require.True(t, updated)
-		// Ordinary rebinding must not reset the explicit sidebar state.
-		require.NoError(t, store.UpsertThread("opaque", ThreadState{Agent: "planner"}))
-		require.NoError(t, store.Stop())
-		store = newTestSessionServiceAt(t, workspace)
-		thread, found, err := store.Thread("opaque")
-		require.NoError(t, err)
-		require.True(t, found)
-		require.Equal(t, ThreadState{Agent: "planner", CreatedBy: "alice", Settled: settled}, thread)
-		entries, err := store.ObserveEntries(t.Context(), "opaque")
-		require.NoError(t, err)
-		require.Equal(t, entriesBefore, entries)
-		active, err := store.HasActiveTurn(t.Context(), "opaque")
-		require.NoError(t, err)
-		require.True(t, active)
-	}
-
-	other, found, err := store.Thread("unrelated")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Equal(t, ThreadState{Agent: "main"}, other)
-	updated, err := store.SetConversationSettled(t.Context(), "missing", true)
-	require.NoError(t, err)
-	require.False(t, updated)
-
-	var count int
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM managed_conversations`).Scan(&count))
-	require.Equal(t, 2, count)
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations WHERE id = '008_managed_conversation_settled.sql'`).Scan(&count))
-	require.Equal(t, 1, count)
-}
-
 func TestSessionServiceSyncCronSchedulesInsertsUpdatesAndDeletes(t *testing.T) {
 	store := newTestSessionService(t)
 	now := time.Date(2026, 7, 4, 10, 0, 0, 0, time.UTC)

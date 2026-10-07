@@ -21,7 +21,6 @@
     "level": "debug"
   },
   "web": {
-    "auto_settle_after": "168h",
     "sentry": {
       "dsn": "",
       "environment": "production",

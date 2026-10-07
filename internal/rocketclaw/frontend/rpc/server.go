@@ -159,14 +159,9 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 	complete := true
 	metadataByChannel := make(map[string]*Session)
 
-	settleAfter, err := s.cfg.Web.SettleAfter()
-	if err != nil {
-		return fmt.Errorf("web session inactivity period: %w", err)
-	}
-
 	var cronOrigins map[string]string
 
-	for row, err := range s.sessions.SidebarSessions(ctx, time.Now().Add(-settleAfter)) {
+	for row, err := range s.sessions.SidebarSessions(ctx) {
 		if err != nil {
 			return err
 		}
@@ -221,10 +216,7 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 
 		cronName, cronOn := cronOrigins[conversation.ID]
 
-		session := &Session{Id: conversation.ID, Title: channelMetadata.Title, Agent: conversation.Agent, AllowedAgents: channelMetadata.AllowedAgents, Settled: conversation.Settled, Running: row.Running, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: cronOn, CronName: cronName}
-		if row.SnoozedUntil != nil {
-			session.SnoozedUntil = row.SnoozedUntil.UTC().Format(time.RFC3339Nano)
-		}
+		session := &Session{Id: conversation.ID, Title: channelMetadata.Title, Agent: conversation.Agent, AllowedAgents: channelMetadata.AllowedAgents, Running: row.Running, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: cronOn, CronName: cronName}
 
 		if strings.HasPrefix(conversation.ID, "web:") {
 			session.AllowedAgents, err = s.agentChoices(ctx, conversation.ID)
@@ -1033,23 +1025,6 @@ func (s *Server) runCronJob(ctx context.Context, request *RunCronJobRequest) (*R
 	return &RunCronJobResponse{Id: id}, nil
 }
 
-func (s *Server) settleSession(ctx context.Context, request *SettleSessionRequest) (*SettleSessionResponse, error) {
-	if err := s.visibleConversation(ctx, request.Id); err != nil {
-		return nil, err
-	}
-
-	updated, err := s.sessions.SetConversationSettled(ctx, request.Id, request.Settled)
-	if err != nil {
-		return nil, fmt.Errorf("settle web conversation: %w", err)
-	}
-
-	if !updated {
-		return nil, fmt.Errorf("settle web conversation: %w", status.Error(codes.NotFound, "conversation is not recorded"))
-	}
-
-	return &SettleSessionResponse{}, nil
-}
-
 func (s *Server) updateSession(ctx context.Context, request *UpdateSessionRequest) (*UpdateSessionResponse, error) {
 	if err := s.visibleConversation(ctx, request.Id); err != nil {
 		return nil, err
@@ -1063,18 +1038,7 @@ func (s *Server) updateSession(ctx context.Context, request *UpdateSessionReques
 		request.Name = new(strings.TrimSpace(*request.Name))
 	}
 
-	var snoozedUntil *time.Time
-
-	if request.SnoozedUntil != nil {
-		until, err := time.Parse(time.RFC3339Nano, *request.SnoozedUntil)
-		if err != nil || !until.After(time.Now()) {
-			return nil, fmt.Errorf("update web conversation: %w", status.Error(codes.InvalidArgument, "snooze time must be a future RFC3339 timestamp"))
-		}
-
-		snoozedUntil = &until
-	}
-
-	updated, err := s.sessions.UpdateConversationDetails(ctx, request.Id, request.Pinned, request.Name, snoozedUntil)
+	updated, err := s.sessions.UpdateConversationDetails(ctx, request.Id, request.Pinned, request.Name)
 	if err != nil {
 		return nil, fmt.Errorf("update web conversation: %w", err)
 	}
@@ -1091,17 +1055,12 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 		return nil, err
 	}
 
-	settleAfter, err := s.cfg.Web.SettleAfter()
-	if err != nil {
-		return nil, fmt.Errorf("web config inactivity period: %w", err)
-	}
-
 	// This is the retained UI's allowlist, not serialization of the config.
 	view := &ConfigView{
 		Workspace: s.cfg.Workspace, Overlays: slices.Clone(s.cfg.Overlays),
 		LoggingLevel: s.cfg.Logging.Level, AutoApproverModel: s.cfg.AutoApproverModel,
 		InstrumentationEnabled: s.cfg.Instrumentation.Enabled, McpExternal: s.cfg.MCPExternal.Enabled,
-		McpServers: slices.Sorted(maps.Keys(s.cfg.MCPServers)), WebAutoSettleAfter: settleAfter.String(),
+		McpServers: slices.Sorted(maps.Keys(s.cfg.MCPServers)),
 	}
 	ip := netip.MustParseAddr(metadata.ValueFromIncomingContext(ctx, "rocketclaw-principal")[0])
 

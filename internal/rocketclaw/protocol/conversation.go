@@ -17,7 +17,6 @@ var ErrBridgeStopped = errors.New("bridge stopped")
 // IDs are opaque to the Backend; frontends resolve presentation and policy.
 type Conversation struct {
 	ID, Agent, CreatedBy string
-	Settled              bool
 }
 
 // BackgroundJob is a Background Job a conversation lists: running, or finished with its
