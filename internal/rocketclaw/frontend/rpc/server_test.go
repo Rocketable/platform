@@ -345,17 +345,13 @@ func TestSessionEntries(t *testing.T) {
 		SubscribeFunc:          rt.Subscribe,
 		CreateConversationFunc: rt.CreateConversation,
 		ListConversationsFunc:  rt.ListConversations,
-		RunTurnFunc: func(ctx context.Context, inbound *protocol.InboundMessage) error {
+		RunTurnFunc: func(_ context.Context, inbound *protocol.InboundMessage) error {
 			turns = append(turns, inbound)
 			if inbound.Kind == protocol.InboundKindCancel {
 				return nil
 			}
 
-			if err := rt.RunTurn(ctx, inbound); err != nil {
-				return fmt.Errorf("run turn: %w", err)
-			}
-
-			return nil
+			return fmt.Errorf("run turn: conversation %q is not recorded", inbound.ConversationID)
 		},
 		SwitchConversationAgentFunc: sessions.SetThreadAgentIfExists,
 		WorkflowDescriptionsFunc:    func() ([]protocol.WorkflowDescription, error) { return workflows, nil },
