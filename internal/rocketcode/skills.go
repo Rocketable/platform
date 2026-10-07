@@ -109,12 +109,8 @@ func LoadSkills(fsys fs.FS, root string) SkillLoadResult {
 		result.Skills.Items[skill.Name] = skill
 	}
 
-	result.Skills.Dirs = make([]string, 0, len(dirs))
-	for dir := range dirs {
-		result.Skills.Dirs = append(result.Skills.Dirs, dir)
-	}
-
-	sort.Strings(result.Skills.Dirs)
+	result.Skills.Dirs = slices.AppendSeq(make([]string, 0, len(dirs)), maps.Keys(dirs))
+	slices.Sort(result.Skills.Dirs)
 
 	return result
 }
