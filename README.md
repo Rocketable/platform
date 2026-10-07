@@ -248,7 +248,9 @@ then pass a returned ID to `rocketclaw_get_session(conversation_id="...")`.
 Get returns TSV with `timestamp`, `role`, and `content` columns, one readable
 message or event per row in stored entry-ID order, not timestamp order. It includes
 pre-compaction messages and marks compaction boundaries; encrypted payloads are
-never printed. Function calls show their name, call ID and arguments; results show
+never printed. User and developer messages keep their stored prompt header, such as
+`[Slack … principal=…]`, as the first paragraph, so readers can tell who sent them.
+Function calls show their name, call ID and arguments; results show
 their call ID and text. Reasoning shows stored plaintext summaries and content.
 Trace-only events follow each entry's replay items because their interleaving is
 not recorded. Unsupported events and non-text tool results have explicit omission
