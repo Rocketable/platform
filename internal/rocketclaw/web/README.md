@@ -214,8 +214,9 @@ make test
 
 Set `ROCKETCLAW_TEST_DATABASE_URL`, `ROCKETCLAW_PLAYWRIGHT_MODULE`, and
 `ROCKETCLAW_CHROMIUM` for the full test run. `make test` builds the SPA, runs the
-standalone Bun tests, then runs transport/browser tests through their Go-owned
-PostgreSQL and provider fixtures. Running those transport files directly with
+standalone Bun test files in up to four isolated processes, then runs
+transport/browser tests through their Go-owned PostgreSQL and provider fixtures.
+Running those transport files directly with
 `bun test` does not create their fixtures.
 
 Build these assets before building `cmd/rocketclaw`, then run that Go executable
