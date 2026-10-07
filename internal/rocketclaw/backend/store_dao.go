@@ -670,7 +670,9 @@ func (s *SessionService) finishTurn(ctx context.Context, turnID string, finish *
 	defer func() { _ = tx.Rollback() }()
 
 	moved, err := execRows(ctx, tx, "finish active turn", "count finished active turn", `UPDATE active_turns SET phase = $2, terminal = $4, updated_at_unix_ns = $5,
-outbound_json = ($3::jsonb || COALESCE((SELECT jsonb_build_object('ReplyState', value::jsonb) FROM turn_steps WHERE conversation_id = $7 AND key = $8), '{}'::jsonb))::json
+outbound_json = (SELECT json_object_agg(key, COALESCE(reply.value, payload.value))
+    FROM json_each($3::json) payload
+    FULL JOIN (SELECT 'ReplyState' AS key, value FROM turn_steps WHERE conversation_id = $7 AND key = $8) reply USING (key))
 WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntryNUL(outbound)), finish.terminal, timeUnixNano(time.Now()), turnRunning, finish.store.conversationID, protocol.ReplyStepKey(turnID))
 	if err != nil {
 		return nil, err

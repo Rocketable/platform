@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -171,6 +172,7 @@ func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
 
 	outbound := crashed.newOutboundMessage(msg, "turn-finished", "finished answer", true)
 	outbound.Attachments = []protocol.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}
+	outbound.ReplyState = json.RawMessage(`{"ChannelID":"C456","MessageTS":"777.2"}`)
 
 	require.NoError(t, service.SaveTurnStep(t.Context(), conversationID, protocol.ReplyStepKey("turn-finished"), []byte(`{"ChannelID":"C123","MessageTS":"555.1"}`)))
 	_, err := service.finishTurn(t.Context(), "turn-finished", &turnFinish{store: newSessionStore(conversationID, service), accountGoal: true, outbound: outbound})
@@ -200,6 +202,31 @@ func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
 	continued := readFinal(t, finals)
 	assert.Equal(t, "answer", continued.Text, "the goal continues once after the redelivered turn")
 	assert.Len(t, requests, 1, "only the continuation calls the model")
+}
+
+func TestFinishTurnKeepsLargeAttachment(t *testing.T) {
+	service := newTestSessionService(t)
+	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "make a file", true)
+	inbound.ConversationID = "web:attachment"
+	require.NoError(t, startTurnDB(t.Context(), service.db, "attachment-turn", inbound.ConversationID, inbound))
+
+	outbound := protocol.NewOutboundMessage(inbound.ConversationID, "file ready")
+	// Base64 encoding 192 MiB exceeds jsonb's single-string limit; JSON can store it.
+	outbound.Attachments = []protocol.OutboundAttachment{{Name: "file.bin", Data: bytes.Repeat([]byte{0x61}, 192<<20)}}
+
+	require.NoError(t, service.SaveTurnStep(t.Context(), inbound.ConversationID, protocol.ReplyStepKey("attachment-turn"), []byte(`{"ChannelID":"C789","MessageTS":"888.3"}`)))
+
+	_, err := service.finishTurn(t.Context(), "attachment-turn", &turnFinish{store: newSessionStore(inbound.ConversationID, service), outbound: outbound})
+	require.NoError(t, err)
+	stored, found, err := service.headTurn(t.Context(), inbound.ConversationID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, turnDelivering, stored.phase)
+	assert.Equal(t, outbound.Text, stored.outbound.Text)
+	require.Len(t, stored.outbound.Attachments, 1)
+	assert.Equal(t, outbound.Attachments[0].Name, stored.outbound.Attachments[0].Name)
+	assert.True(t, bytes.Equal(outbound.Attachments[0].Data, stored.outbound.Attachments[0].Data))
+	assert.JSONEq(t, `{"ChannelID":"C789","MessageTS":"888.3"}`, string(stored.outbound.ReplyState))
 }
 
 // AE9: $stop on a workflow row waiting to resume posts one stopped final and never runs it.
