@@ -3,6 +3,7 @@ package rocketcode
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -837,12 +838,12 @@ func (sfs *sandboxedFileSystem) Glob(ctx context.Context, pattern, path string) 
 		return "No files found"
 	}
 
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].mtime == results[j].mtime {
-			return results[i].path < results[j].path
+	slices.SortFunc(results, func(a, b globMatch) int {
+		if order := cmp.Compare(b.mtime, a.mtime); order != 0 {
+			return order
 		}
 
-		return results[i].mtime > results[j].mtime
+		return strings.Compare(a.path, b.path)
 	})
 
 	output := make([]string, 0, len(results))
@@ -1166,16 +1167,12 @@ func parseGrepMatches(stdout []byte, searchRoot *os.Root, hostRoot string) ([]gr
 }
 
 func formatGrepOutput(matches []grepMatch, partial bool) string {
-	sort.Slice(matches, func(i, j int) bool {
-		if matches[i].mtime == matches[j].mtime {
-			if matches[i].path == matches[j].path {
-				return matches[i].line < matches[j].line
-			}
-
-			return matches[i].path < matches[j].path
+	slices.SortFunc(matches, func(a, b grepMatch) int {
+		if order := cmp.Compare(b.mtime, a.mtime); order != 0 {
+			return order
 		}
 
-		return matches[i].mtime > matches[j].mtime
+		return cmp.Or(strings.Compare(a.path, b.path), cmp.Compare(a.line, b.line))
 	})
 
 	output := []string{fmt.Sprintf("Found %d matches", len(matches))}

@@ -325,7 +325,7 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	require.NoError(t, root.MkdirAll("glob/nested", 0o755))
-	require.NoError(t, root.WriteFile("glob/old.txt", []byte("old"), 0o644))
+	require.NoError(t, root.WriteFile("glob/a-old.txt", []byte("old"), 0o644))
 	require.NoError(t, root.WriteFile("glob/new.txt", []byte("new"), 0o644))
 	require.NoError(t, root.WriteFile("glob/nested/inside.txt", []byte("inside"), 0o644))
 	require.NoError(t, root.WriteFile("glob/skip.md", []byte("skip"), 0o644))
@@ -340,7 +340,7 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 	newer := older.Add(time.Hour)
 	inside := newer.Add(time.Hour)
 
-	require.NoError(t, root.Chtimes("glob/old.txt", older, older))
+	require.NoError(t, root.Chtimes("glob/a-old.txt", older, older))
 	require.NoError(t, root.Chtimes("glob/new.txt", newer, newer))
 	require.NoError(t, root.Chtimes("glob/nested/inside.txt", inside, inside))
 
@@ -350,13 +350,19 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 		require.Equal(t, "No files found", sfs.Glob(context.Background(), "**/*.pdf", "glob"))
 	})
 
-	t.Run("sorts by newest first within search path", func(t *testing.T) {
-		got := sfs.Glob(context.Background(), "*.txt", "glob")
-		require.Equal(t, strings.Join([]string{
-			filepath.Join(dir, "glob", "nested", "inside.txt"),
-			filepath.Join(dir, "glob", "new.txt"),
-			filepath.Join(dir, "glob", "old.txt"),
-		}, "\n"), got)
+	t.Run("sorts by newest first then path", func(t *testing.T) {
+		t.Cleanup(func() { require.NoError(t, root.Chtimes("glob/nested/inside.txt", inside, inside)) })
+
+		for _, modified := range []time.Time{inside, newer} {
+			require.NoError(t, root.Chtimes("glob/nested/inside.txt", modified, modified))
+
+			got := sfs.Glob(context.Background(), "*.txt", "glob")
+			require.Equal(t, strings.Join([]string{
+				filepath.Join(dir, "glob", "nested", "inside.txt"),
+				filepath.Join(dir, "glob", "new.txt"),
+				filepath.Join(dir, "glob", "a-old.txt"),
+			}, "\n"), got)
+		}
 	})
 
 	t.Run("searches nested path from sandbox root", func(t *testing.T) {
@@ -364,7 +370,7 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 		require.Equal(t, strings.Join([]string{
 			filepath.Join(dir, "glob", "nested", "inside.txt"),
 			filepath.Join(dir, "glob", "new.txt"),
-			filepath.Join(dir, "glob", "old.txt"),
+			filepath.Join(dir, "glob", "a-old.txt"),
 		}, "\n"), got)
 	})
 
@@ -373,7 +379,7 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 		require.Equal(t, strings.Join([]string{
 			filepath.Join(dir, "glob", "nested", "inside.txt"),
 			filepath.Join(dir, "glob", "new.txt"),
-			filepath.Join(dir, "glob", "old.txt"),
+			filepath.Join(dir, "glob", "a-old.txt"),
 		}, "\n"), got)
 	})
 
@@ -432,6 +438,17 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 	})
 }
 
+func TestFormatGrepOutput(t *testing.T) {
+	matches := []grepMatch{
+		{path: "a", line: 1, text: "old", mtime: 0},
+		{path: "c", line: 1, text: "last", mtime: 1},
+		{path: "b", line: 2, text: "second", mtime: 1},
+		{path: "b", line: 1, text: "first", mtime: 1},
+	}
+
+	require.Equal(t, "Found 4 matches\nb:\n  Line 1: first\n  Line 2: second\n\nc:\n  Line 1: last\n\na:\n  Line 1: old", formatGrepOutput(matches, false))
+}
+
 func TestSandboxedFileSystemGrep(t *testing.T) {
 	dir := t.TempDir()
 
@@ -440,7 +457,7 @@ func TestSandboxedFileSystemGrep(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	require.NoError(t, root.MkdirAll("grep/nested", 0o755))
-	require.NoError(t, root.WriteFile("grep/old.txt", []byte("needle old\nshared"), 0o644))
+	require.NoError(t, root.WriteFile("grep/a-old.txt", []byte("needle old\nshared"), 0o644))
 	require.NoError(t, root.WriteFile("grep/new.txt", []byte("needle new\nshared"), 0o644))
 	require.NoError(t, root.WriteFile("grep/nested/inside.txt", []byte("needle inside\nshared"), 0o644))
 	require.NoError(t, root.WriteFile("grep/skip.md", []byte("needle markdown"), 0o644))
@@ -453,7 +470,7 @@ func TestSandboxedFileSystemGrep(t *testing.T) {
 	newer := older.Add(time.Hour)
 	inside := newer.Add(time.Hour)
 
-	require.NoError(t, root.Chtimes("grep/old.txt", older, older))
+	require.NoError(t, root.Chtimes("grep/a-old.txt", older, older))
 	require.NoError(t, root.Chtimes("grep/new.txt", newer, newer))
 	require.NoError(t, root.Chtimes("grep/nested/inside.txt", inside, inside))
 	require.NoError(t, root.Chtimes("grep/skip.md", inside.Add(time.Hour), inside.Add(time.Hour)))
@@ -464,19 +481,28 @@ func TestSandboxedFileSystemGrep(t *testing.T) {
 		require.Equal(t, "No files found", sfs.Grep(context.Background(), "missing", "grep", ""))
 	})
 
-	t.Run("searches directory sorted by newest file first", func(t *testing.T) {
-		got := sfs.Grep(context.Background(), "needle", "grep", "*.txt")
-		require.Equal(t, strings.Join([]string{
-			"Found 3 matches",
-			filepath.Join(dir, "grep", "nested", "inside.txt") + ":",
-			"  Line 1: needle inside",
-			"",
-			filepath.Join(dir, "grep", "new.txt") + ":",
-			"  Line 1: needle new",
-			"",
-			filepath.Join(dir, "grep", "old.txt") + ":",
-			"  Line 1: needle old",
-		}, "\n"), got)
+	t.Run("searches directory sorted by newest file then path and line", func(t *testing.T) {
+		t.Cleanup(func() { require.NoError(t, root.Chtimes("grep/nested/inside.txt", inside, inside)) })
+
+		for _, modified := range []time.Time{inside, newer} {
+			require.NoError(t, root.Chtimes("grep/nested/inside.txt", modified, modified))
+
+			got := sfs.Grep(context.Background(), "needle|shared", "grep", "*.txt")
+			require.Equal(t, strings.Join([]string{
+				"Found 6 matches",
+				filepath.Join(dir, "grep", "nested", "inside.txt") + ":",
+				"  Line 1: needle inside",
+				"  Line 2: shared",
+				"",
+				filepath.Join(dir, "grep", "new.txt") + ":",
+				"  Line 1: needle new",
+				"  Line 2: shared",
+				"",
+				filepath.Join(dir, "grep", "a-old.txt") + ":",
+				"  Line 1: needle old",
+				"  Line 2: shared",
+			}, "\n"), got)
+		}
 	})
 
 	t.Run("searches exact file path", func(t *testing.T) {
