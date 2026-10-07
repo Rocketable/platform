@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 func startHTTPTestServer(t *testing.T, connection *grpc.ClientConn) *httptest.Server {
@@ -100,7 +101,7 @@ func TestHTTPStreams(t *testing.T) {
 		code     codes.Code
 		httpCode int
 	}{
-		{name: "unary"}, {name: "stash"}, {name: "pop"}, {name: "complete"}, {name: "post-terminal-error"}, {name: "wirecut"}, {name: "oversized"}, {name: "invalid-text"},
+		{name: "unary"}, {name: "large-history"}, {name: "stash"}, {name: "pop"}, {name: "complete"}, {name: "post-terminal-error"}, {name: "wirecut"}, {name: "oversized"}, {name: "invalid-text"},
 		{name: "cancel"}, {name: "idle-cancel"}, {name: "upload"}, {name: "download"}, {name: "inline"}, {name: "forced-download"}, {name: "truncated"},
 		{"auth", codes.Unauthenticated, http.StatusUnauthorized},
 		{"permission", codes.PermissionDenied, http.StatusForbidden},
@@ -134,6 +135,12 @@ func TestHTTPStreams(t *testing.T) {
 				switch scenario {
 				case "invalid-text":
 					return nil
+				case "large-history":
+					request := &HistoryRequest{}
+					require.NoError(t, stream.RecvMsg(request))
+					require.Equal(t, "visible", request.Id)
+
+					return stream.SendMsg(&HistoryResponse{Messages: []*TranscriptEvent{{Text: strings.Repeat("x", 5<<20)}}})
 				case "pop":
 					request := &QueueItemRequest{}
 					require.NoError(t, stream.RecvMsg(request))
@@ -298,6 +305,11 @@ func TestHTTPStreams(t *testing.T) {
 				requestBody = strings.NewReader(`{"id":"visible","text":"hello","delivery":"QUEUE"}`)
 			}
 
+			if scenario == "large-history" {
+				path, method = "/api/History", http.MethodPost
+				requestBody = strings.NewReader(`{"id":"visible","limit":1}`)
+			}
+
 			if scenario == "stash" {
 				path, method = "/api/Prompt", http.MethodPost
 				requestBody = strings.NewReader(`{"id":"visible","text":"$stop","delivery":"STASH"}`)
@@ -384,6 +396,13 @@ func TestHTTPStreams(t *testing.T) {
 			}
 
 			switch scenario {
+			case "large-history":
+				require.Equal(t, http.StatusOK, response.StatusCode)
+
+				var history HistoryResponse
+				require.NoError(t, protojson.Unmarshal(body, &history))
+				require.Len(t, history.Messages, 1)
+				require.Equal(t, strings.Repeat("x", 5<<20), history.Messages[0].Text)
 			case "pop":
 				require.Equal(t, http.StatusOK, response.StatusCode)
 				require.JSONEq(t, `{}`, string(body))

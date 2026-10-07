@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"net/netip"
@@ -50,7 +51,8 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 				return
 			}
 
-			if err := connection.Invoke(r.Context(), "/rpc.Web/"+method, request, response); err != nil {
+			// Match the in-process server's send limit; history pages count entries, not bytes.
+			if err := connection.Invoke(r.Context(), "/rpc.Web/"+method, request, response, grpc.MaxCallRecvMsgSize(math.MaxInt32)); err != nil {
 				httpRPCError(w, err)
 				return
 			}
