@@ -132,7 +132,7 @@ func (s Skills) Find(query string) string {
 		}))
 	}
 
-	normalizedQuery := normalizeSkillSearchText(query)
+	normalizedQuery := strings.ToLower(query)
 	tokens := strings.FieldsFunc(normalizedQuery, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
 	})
@@ -489,14 +489,10 @@ func renderSkillMatches(skills []Skill) string {
 	return strings.Join(lines, "\n")
 }
 
-func normalizeSkillSearchText(text string) string {
-	return strings.ToLower(text)
-}
-
 func scoreSkill(normalizedQuery string, tokens []string, skill *Skill) int {
-	name := normalizeSkillSearchText(skill.Name)
-	description := normalizeSkillSearchText(skill.Description)
-	content := normalizeSkillSearchText(skill.Content)
+	name := strings.ToLower(skill.Name)
+	description := strings.ToLower(skill.Description)
+	content := strings.ToLower(skill.Content)
 
 	score := 0
 
