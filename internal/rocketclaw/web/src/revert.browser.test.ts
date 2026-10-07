@@ -59,6 +59,9 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     else await action.click();
     await page.waitForFunction(() => document.querySelector("textarea")?.value === "Second request");
     expect(await input.evaluate((node: HTMLTextAreaElement) => node === document.activeElement && node.selectionStart === node.value.length && node.selectionEnd === node.value.length)).toBe(true);
+    // Composer restoration precedes the queue and history refreshes.
+    await page.getByText("Second answer", { exact: true }).waitFor({ state: "detached" });
+    await page.getByText("Waiting request", { exact: true }).waitFor({ state: "detached" });
     expect(await page.getByText("Second answer", { exact: true }).count()).toBe(0);
     expect(await page.getByText("Waiting request", { exact: true }).count()).toBe(0);
     expect(prompts).toHaveLength(0);
