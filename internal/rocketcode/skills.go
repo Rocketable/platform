@@ -471,10 +471,6 @@ func validateSkillFrontmatter(filePath string, frontmatter skillFrontmatter) err
 		return fmt.Errorf("%s: skill description exceeds 1024 characters", filePath)
 	}
 
-	if strings.Contains(frontmatter.Name, "--") {
-		return fmt.Errorf("%s: invalid skill name %q", filePath, frontmatter.Name)
-	}
-
 	return nil
 }
 
