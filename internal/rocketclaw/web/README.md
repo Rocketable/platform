@@ -400,7 +400,8 @@ preserves the current draft and selected agent.
 Select text in the chat and click **Quote** to append a Markdown blockquote to
 the current draft. The composer adds a blank line after the quote and places the
 cursor there for your comment. The browser's right-click menu remains available.
-Use **+** to choose files, or drop files onto the composer. Pending files stay in
+Use **+** to choose files, drop files onto the composer, or paste them, such as a
+screenshot copied to the clipboard. Pending files stay in
 selection order and can be removed individually. Send accepts files without text;
 Enter and **Send** queue later work while a turn is running. The **Steer** button
 immediately left of Send guides the active response; Cmd/Ctrl+Enter does the same.
@@ -698,7 +699,7 @@ caching. Protobuf JSON exposes camelCase fields and string int64 sizes.
 
 The Go HTTP tests compare large files byte-for-byte in both directions and cover
 request identity, metadata mapping, download headers, and cancellation.
-The browser suite also exercises picker/remove/drop, draft retention, failed-send
+The browser suite also exercises picker/remove/drop/paste, draft retention, failed-send
 retry, attachment-only sends and live replies, inline images, downloads, and
 queue versus steer behavior.
 

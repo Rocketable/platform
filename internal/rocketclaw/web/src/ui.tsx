@@ -3084,6 +3084,10 @@ function ComposerAttachments({ files, setFiles, sending, fileInput, children }: 
     if (!event.dataTransfer.types.includes("Files")) return;
     event.preventDefault();
     if (!sending) addFiles(Array.from(event.dataTransfer.files));
+  }} onPaste={(event) => {
+    if (!event.clipboardData.files.length) return;
+    event.preventDefault();
+    if (!sending) addFiles(Array.from(event.clipboardData.files));
   }}>
     <input ref={fileInput} type="file" multiple hidden aria-label="Attach files" disabled={sending} onChange={(event) => { addFiles(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
     {files.length ? <AttachmentGroup aria-label="Pending attachments">{files.map(({ id, file }) => <Attachment key={id} state={sending ? "uploading" : "idle"}>
