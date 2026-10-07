@@ -40,7 +40,7 @@ func TestSessionTagDefinitions(t *testing.T) {
 				require.NoError(t, root.WriteFile(".rocketclaw/agents/main.md", data, 0o644))
 			}
 
-			for _, mode := range []toolMode{toolModePersistent, toolModeCron, toolModeWorkflow} {
+			for _, mode := range []toolMode{toolModePersistent, toolModeWorkflow} {
 				agents, _, err := loadRocketCodeDefinitions(root, workspace, mode)
 
 				valid := tags == "" || tags == "[]" || tags == "example" || strings.HasPrefix(tags, "[[triage") || strings.HasPrefix(tags, "[['*'")
@@ -210,7 +210,7 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	requireRocketClawPermissionAction(t, helper.Permission, attachFilesToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, helper.Permission, updateGoalToolName, rocketcode.PermissionAllow)
 
-	for _, mode := range []toolMode{toolModePersistent, toolModeCron, toolModeWorkflow} {
+	for _, mode := range []toolMode{toolModePersistent, toolModeWorkflow} {
 		prepared, _, err := loadRocketCodeDefinitions(root, workspace, mode)
 		require.NoError(t, err)
 
@@ -243,34 +243,6 @@ func TestLoadRocketCodeDefinitionsResolvesModelTemplate(t *testing.T) {
 	_, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
 	require.ErrorContains(t, err, `main.md: model: execute model template`)
 	require.ErrorContains(t, err, `model "team/coding-high" is not configured`)
-}
-
-func TestLoadRocketCodeDefinitionsPreparesCronAgents(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", `---
-description: Main
-model: gpt-5.4
-mode: primary
----
-Prompt
-`)
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-
-	root, err := os.OpenRoot(workspace)
-	require.NoError(t, err)
-
-	defer func() { require.NoError(t, root.Close()) }()
-
-	agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModeCron)
-	require.NoError(t, err)
-	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, rawRunToolName, rocketcode.PermissionAllow)
-	requireNoRocketClawPermissionMatch(t, agents.Items["main"].Permission, restartToolName)
-	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, reloadToolName, rocketcode.PermissionAllow)
-	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, scheduleMessageToolName, rocketcode.PermissionAllow)
-	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, resetScheduledMessagesToolName, rocketcode.PermissionAllow)
-	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, attachFilesToolName, rocketcode.PermissionAllow)
-	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, updateGoalToolName, rocketcode.PermissionAllow)
-	requireNoRocketClawPermissionMatch(t, agents.Items["main"].Permission, startNewThreadToolName)
 }
 
 func TestLoadRocketCodeDefinitionsPreservesGuardrailReference(t *testing.T) {
@@ -397,28 +369,12 @@ func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *te
 			wantAllowTools: []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
 		},
 		{
-			name:           "exact cron restart allow",
-			mode:           toolModeCron,
-			permission:     "permission:\n  rocketclaw:\n    rocketclaw_restart: allow\n",
-			wantTool:       restartToolName,
-			wantAction:     rocketcode.PermissionAllow,
-			wantAllowTools: []string{reloadToolName, rawRunToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
-		},
-		{
 			name:           "exact persistent restart deny",
 			mode:           toolModePersistent,
 			permission:     "permission:\n  rocketclaw:\n    rocketclaw_restart: deny\n",
 			wantTool:       restartToolName,
 			wantAction:     rocketcode.PermissionDeny,
 			wantAllowTools: []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
-		},
-		{
-			name:           "exact cron restart deny",
-			mode:           toolModeCron,
-			permission:     "permission:\n  rocketclaw:\n    rocketclaw_restart: deny\n",
-			wantTool:       restartToolName,
-			wantAction:     rocketcode.PermissionDeny,
-			wantAllowTools: []string{reloadToolName, rawRunToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
 		},
 		{
 			name:          "wildcard deny",

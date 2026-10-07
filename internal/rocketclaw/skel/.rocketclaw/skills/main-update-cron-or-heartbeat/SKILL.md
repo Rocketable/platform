@@ -58,7 +58,7 @@ channel: "#ops"
 
 The `schedule:` frontmatter value is the cronjob frequency or cadence.
 
-Every active cron definition must set `channel:` to a channel listed in `slack.channels`. Non-empty `rocketclaw_i_want_human_partner_to_see_this` output starts a fresh managed Slack thread in that channel. An empty value completes silently.
+Every active cron definition must set `channel:` to a channel listed in `slack.channels`. A non-empty cron reply starts a fresh managed Slack thread in that channel. An empty reply completes silently.
 
 Use the configured channel exactly as it appears in `slack.channels`.
 
@@ -134,7 +134,7 @@ If `go` is not available, be conservative:
 
 ## Body and instruction updates
 
-When the human asks to change cronjob body/content/instructions (including heartbeat instructions), ask what the expected output should be for `rocketclaw_i_want_human_partner_to_see_this`, specifically:
+When the human asks to change cronjob body/content/instructions (including heartbeat instructions), ask what the cron reply should be, specifically:
 
 - contents
 - structure

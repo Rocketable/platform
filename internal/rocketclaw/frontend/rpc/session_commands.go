@@ -312,5 +312,5 @@ func (s *Server) handoff(ctx context.Context, request *HandoffRequest) (*Handoff
 		return nil, fmt.Errorf("generate web handoff: %w", err)
 	}
 
-	return &HandoffResponse{Document: fmt.Sprintf("# Session handoff\n\nSource session: %s\n\nFor more details, use `rocketclaw_get_session` with `conversation_id` set to the source session ID above.\n\n%s", request.Id, document)}, nil
+	return &HandoffResponse{Document: fmt.Sprintf("# Session handoff\n\nSource session: %s\n\nFor more details, call `rocketclaw_get_session` inside Execute with `conversation_id` set to the source session ID above.\n\n%s", request.Id, document)}, nil
 }

@@ -840,14 +840,14 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 	if found && step.Name == want.Name && step.Hash == want.Hash {
 		switch {
 		case step.Err != "":
-			return ToolResult{}, errors.New(step.Err)
+			return ToolResult{}, errors.Join(errors.New(step.Err), tc.looper.observations.recordHostCall(ctx, tc.callID, key, name, raw, step.Err))
 		case step.Done:
 			result := TextToolResult(step.Output)
 			if step.Bash != nil {
 				result.Data = *step.Bash
 			}
 
-			return result, nil
+			return result, tc.looper.observations.recordHostCall(ctx, tc.callID, key, name, raw, step.Output)
 		case !resumable:
 			return ToolResult{}, errHostCallInterrupted
 		}
@@ -870,11 +870,12 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 		want.Bash = &bash
 	}
 
+	output := want.Output
 	if errRun != nil {
-		want.Err = errRun.Error()
+		want.Err, output = errRun.Error(), errRun.Error()
 	}
 
-	return result, errors.Join(errRun, saveStep(ctx, tc.looper.Journal, key, &want))
+	return result, errors.Join(errRun, saveStep(ctx, tc.looper.Journal, key, &want), tc.looper.observations.recordHostCall(ctx, tc.callID, key, name, raw, output))
 }
 
 // emitNestedExecuteToolDiagnostic reports a nested code-mode tool call into thinking traces.

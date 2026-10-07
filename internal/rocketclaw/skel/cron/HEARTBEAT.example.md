@@ -38,6 +38,6 @@ IMPORTANT FACT: NOW IS
 
 # Additional Instructions
 
-*CRITICAL*: if you decide that you have something to say to the human partner, you are going to use `rocketclaw_i_want_human_partner_to_see_this("FULL MESSAGE GOES HERE, FREE OF MARKDOWNS, INCLUDE LINE BREAKS")` WHEN YOU ARE DONE;
+*CRITICAL*: your reply is posted to the human partner exactly as written. If you have something to say, reply with the FULL MESSAGE, FREE OF MARKDOWNS, INCLUDING LINE BREAKS.
 
-*CRITICAL*: if you decide that you do not have anything to say to the human partner, you are going to use `rocketclaw_i_want_human_partner_to_see_this("")` (empty string) WHEN YOU ARE DONE;
+*CRITICAL*: if you do not have anything to say to the human partner, reply with nothing.

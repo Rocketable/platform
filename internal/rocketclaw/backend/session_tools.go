@@ -320,7 +320,7 @@ AND ($2 = '' OR MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") < $2 COLLATE "C") O
 
 func currentSessionIDTool(conversationID string) rocketcode.Tool {
 	return rocketcode.Tool{
-		Name: currentSessionIDToolName, Description: "Return only the owning RocketClaw bridge's bare stored conversation ID, without a JSON wrapper. Pass it as conversation_id to rocketclaw_get_session to read durable history, including entries before compaction. Child agents inherit this owning conversation ID, not a separate child-run ID. No arguments.",
+		Name: currentSessionIDToolName, Description: "Return only the owning RocketClaw bridge's bare stored conversation ID, without a JSON wrapper. Pass it as conversation_id to rocketclaw_get_session inside execute to read durable history, including entries before compaction. Child agents inherit this owning conversation ID, not a separate child-run ID. No arguments.",
 		Permission: "rocketclaw", VisibilitySubjects: []string{currentSessionIDToolName},
 		Subjects:   func(json.RawMessage) ([]string, error) { return []string{currentSessionIDToolName}, nil },
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}, "additionalProperties": false},

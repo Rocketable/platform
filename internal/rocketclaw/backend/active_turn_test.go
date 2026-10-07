@@ -517,7 +517,7 @@ func TestLegacyCronScheduleResumesIntoCanonical(t *testing.T) {
 			require.NoError(t, store.PutScheduledMessage("legacy-id", &legacy))
 			require.NoError(t, initializeSessionDB(t.Context(), store.db, slog.New(slog.DiscardHandler)))
 
-			// Complete the resumed output decision silently; scheduling must replay.
+			// Finish the resumed job with an empty (silent) reply; scheduling must replay.
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, err := io.ReadAll(r.Body)
 				assert.NoError(t, err)
@@ -528,12 +528,8 @@ func TestLegacyCronScheduleResumesIntoCanonical(t *testing.T) {
 				switch {
 				case strings.Contains(string(body), "Selected canonical instructions"):
 					writeRawRunMessage(t, w, "followup", "followup", "canonical answer")
-				case !strings.Contains(string(body), `"call_id":"call_1"`):
-					writeRawRunFunctionCall(t, w, "decision", "execute", struct {
-						Code string `json:"code"`
-					}{Code: "def main():\n    return " + rawRunToolName + "(payload=\"\")\n"})
 				default:
-					writeRawRunMessage(t, w, "done", "done", "done")
+					writeRawRunMessage(t, w, "done", "done", "")
 				}
 			}))
 			t.Cleanup(server.Close)
@@ -651,13 +647,13 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 		}
 
 		if strings.Contains(string(body), "function_call_output") {
-			writeRawRunMessage(t, w, "done", "done", "done")
+			writeRawRunMessage(t, w, "done", "done", "") // A silent reply.
 			return
 		}
 
 		writeRawRunFunctionCall(t, w, "schedule", "execute", struct {
 			Code string `json:"code"`
-		}{Code: "def main():\n    rocketclaw_schedule_message(message=\"follow up\", send_this_in=\"59m\", recurring=False)\n    rocketclaw_schedule_message(message=\"second follow up\", send_this_in=\"59m200ms\", recurring=False)\n    rocketclaw_schedule_message(message=\"recurring follow up\", send_this_in=\"1h\", recurring=True)\n    return " + rawRunToolName + "(payload=\"\")\n"})
+		}{Code: "def main():\n    rocketclaw_schedule_message(message=\"follow up\", send_this_in=\"59m\", recurring=False)\n    rocketclaw_schedule_message(message=\"second follow up\", send_this_in=\"59m200ms\", recurring=False)\n    rocketclaw_schedule_message(message=\"recurring follow up\", send_this_in=\"1h\", recurring=True)\n    return \"\"\n"})
 	}))
 	t.Cleanup(server.Close)
 	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"job"}}, {Channel: "#current", Agents: []string{"not-loaded", "canonical", "job"}}}}}
@@ -745,8 +741,6 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 			assert.Equal(t, `[System additional_instructions="Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."]`, header)
 			assert.Contains(t, []string{"follow up", "second follow up"}, prompt)
 			t.Logf("scheduled prompt %q, turn %q", prompt, final.TurnID)
-
-			assert.NotContains(t, body, rawRunMissingToolPrompt)
 
 			remaining = slices.DeleteFunc(remaining, func(expected string) bool { return expected == prompt })
 		}
@@ -1177,7 +1171,10 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 			return
 		}
 
-		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_q","name":"ask_user_question","arguments":"{\"question\":\"Ship?\",\"details\":\"\",\"options\":[],\"multiple\":false}"}]}`))
+		// Platform tools run inside execute.
+		writeRawRunFunctionCall(t, w, "resp_1", "execute", struct {
+			Code string `json:"code"`
+		}{Code: "def main():\n    return ask_user_question(question=\"Ship?\", details=\"\", options=[], multiple=False)\n"})
 	}))
 	t.Cleanup(server.Close)
 
@@ -1210,7 +1207,7 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 	questionID := <-asked
 	turns := runningTestTurns(t, service)
 	require.Len(t, turns, 1)
-	assert.Equal(t, turns[0]+"/call/call_q", questionID, "the question ID is the call's journal key")
+	assert.True(t, strings.HasPrefix(questionID, turns[0]+"/call/call_1/host/"), "the question ID is the nested call's journal key, got %q", questionID)
 
 	shutdown()
 	require.Eventually(t, func() bool { return !first.handlingSnapshot() }, 5*time.Second, 10*time.Millisecond)
@@ -1224,6 +1221,25 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 	assert.Equal(t, "answer", readFinal(t, finals).Text)
 	assert.Len(t, bodies, 2, "the recorded model call is not repeated")
 
+	observed, err := service.ObserveEntries(t.Context(), conversationID)
+	require.NoError(t, err)
+
+	asks := 0
+
+	for i := range observed {
+		for _, raw := range observed[i].Entry.OutputTrace {
+			var call struct {
+				Type, Name   string
+				ParentCallID string `json:"parent_call_id"`
+			}
+			if json.Unmarshal(raw, &call) == nil && call.Type == "function_call" && call.ParentCallID != "" && call.Name == "ask_user_question" {
+				asks++
+			}
+		}
+	}
+
+	assert.Equal(t, 1, asks, "the resumed script saves its question once")
+
 	for len(bodies) > 0 {
 		<-bodies
 	}
@@ -1234,7 +1250,7 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 	next := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "anything else", true)
 	next.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.333", ThreadTS: "111.222"}
 	require.NoError(t, later.Submit(t.Context(), next))
-	assert.Contains(t, <-bodies, `"name":"ask_user_question"`, "a later turn can still ask")
+	assert.Contains(t, <-bodies, "- ask_user_question(", "a later turn can still ask inside execute")
 	assert.Equal(t, "answer", readFinal(t, finals).Text)
 }
 
@@ -1397,78 +1413,6 @@ func TestRowRunsBeforeLiveMessage(t *testing.T) {
 
 // An output-decision retry interrupted mid-way resumes that retry without
 // repeating the finished first turn, and delivers once.
-func TestInterruptedOutputDecisionRetryResumes(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-	service := newTestSessionServiceAt(t, workspace)
-
-	requests, blockRetry := make(chan string, 8), make(chan struct{}, 1)
-	blockRetry <- struct{}{}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		requests <- string(body)
-
-		output := `{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"undecided","annotations":[]}]}`
-
-		switch {
-		case strings.Contains(string(body), "function_call_output"):
-			output = `{"id":"msg_2","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"done","annotations":[]}]}`
-		case strings.Contains(string(body), "You did not call the mandatory"):
-			select {
-			case <-blockRetry:
-				<-r.Context().Done()
-				return
-			default:
-			}
-
-			output = `{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_d","name":"` + rawRunToolName + `","arguments":"{\"payload\":\"report\"}"}`
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[` + output + `]}`))
-	}))
-	t.Cleanup(server.Close)
-
-	conversationID := "cron:daily"
-	require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
-
-	finals := make(chan *protocol.OutboundMessage, 4)
-	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
-	newBridge := func() *Bridge {
-		return NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
-	}
-
-	first := newBridge()
-	shutdown := runTestBridge(t, first)
-	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "run the job", false)
-	msg.RequireOutputDecision = true
-	require.NoError(t, first.Submit(t.Context(), msg))
-	<-requests
-	assert.Contains(t, <-requests, "You did not call the mandatory", "the retry is in flight")
-
-	shutdown()
-	require.Eventually(t, func() bool { return !first.handlingSnapshot() }, 5*time.Second, 10*time.Millisecond)
-	assert.Empty(t, finals)
-
-	runTestBridge(t, newBridge())
-	final := readFinal(t, finals)
-	assert.Equal(t, "report", final.Text)
-
-	resumed := 0
-
-	for len(requests) > 0 {
-		assert.Contains(t, <-requests, "You did not call the mandatory", "the finished first turn is not repeated")
-
-		resumed++
-	}
-
-	assert.Equal(t, 2, resumed, "the retry resumes: its model call and its post-decision call")
-	require.Eventually(t, func() bool { return len(runningTestTurns(t, service)) == 0 }, 5*time.Second, 10*time.Millisecond)
-	assert.Empty(t, finals, "the result is delivered once")
-}
-
 // A cron turn mid-flight does not hold up shutdown: once bridges stop, the cron
 // runner's RunTurn and its follow-up sync return, so cron manager Stop does not block.
 func TestShutdownReleasesCronRunnerWait(t *testing.T) {

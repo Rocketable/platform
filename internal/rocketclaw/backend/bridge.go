@@ -52,7 +52,6 @@ import (
 const (
 	restartToolName                = "rocketclaw_restart"
 	reloadToolName                 = "rocketclaw_reload"
-	rawRunToolName                 = "rocketclaw_i_want_human_partner_to_see_this"
 	attachFilesToolName            = "rocketclaw_attach_files_to_response"
 	updateGoalToolName             = "rocketclaw_update_goal"
 	askUserQuestionToolName        = "ask_user_question"
@@ -84,16 +83,10 @@ var errInboundAttachmentReductionFailed = errors.New("inbound attachment image r
 
 var errInboundAttachmentReductionNotEnough = errors.New("inbound attachment image still exceeds size limit after reduction")
 
-// RawRunExposedToolName is the tool cron prompts use for human-visible output.
-const RawRunExposedToolName = rawRunToolName
-
-const rawRunMissingToolPrompt = "You did not call the mandatory " + rawRunToolName + " tool. Normal assistant replies do not count and this background run cannot finish until you call that exact tool. Before this turn ends, call " + rawRunToolName + "(\"full exact message to show the human, or empty string if the human should see nothing\"). If the human partner should see a final message from this background turn, the full final message must be the tool argument. Do not send a summary, paraphrase, or reduced view."
-
 type toolMode string
 
 const (
 	toolModePersistent toolMode = "persistent"
-	toolModeCron       toolMode = "cron"
 	toolModeWorkflow   toolMode = "workflow"
 )
 
@@ -194,7 +187,6 @@ type runResult struct {
 	attribution      rocketcode.ReplayAttribution
 	attachments      []protocol.OutboundAttachment
 	goalCompleted    bool
-	outputDecided    bool
 	workflowTerminal protocol.Terminal
 }
 
@@ -1388,10 +1380,6 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 		result, errTurn = b.runWorkflow(ctx, request, &finish)
 	} else {
 		result, errTurn = b.runTurn(ctx, msg, turnID, turnID, &finish)
-		for retry := 1; msg.RequireOutputDecision && errTurn == nil && !result.outputDecided; retry++ {
-			msg.Text = rawRunMissingToolPrompt
-			result, errTurn = b.runTurn(ctx, msg, turnID, turnID+"/retry/"+strconv.Itoa(retry), &finish)
-		}
 	}
 
 	if errTurn != nil {
@@ -1830,12 +1818,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	defer func() { _ = root.Close() }()
 
-	mode := toolModePersistent
-	if msg.RequireOutputDecision {
-		mode = toolModeCron
-	}
-
-	agents, skills, err := loadRocketCodeDefinitionsIn(root, b.runtime, b.runtime.RuntimeDirName(), mode)
+	agents, skills, err := loadRocketCodeDefinitionsIn(root, b.runtime, b.runtime.RuntimeDirName(), toolModePersistent)
 	if err != nil {
 		return runResult{}, fmt.Errorf("open workspace agent and skills: %w", err)
 	}
@@ -1975,11 +1958,6 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	b.log.Info("prepared rocketcode session history", "conversation_id", b.config.ConversationID, "turn_id", turnID, "entry_count", len(observed), "replay_item_count", replayItemCount, "history_bytes", historyBytes, "compaction_count", compactionCount, "latest_entry_id", latestEntryID, "latest_entry_type", latestEntryType)
 
 	customTools := append(sessionTagTools(b.config.SessionService, cmp.Or(msg.SyncDestination, b.config.ConversationID)), attachments.Tool(root, b.config.SessionService, b.config.ConversationID))
-
-	decision := new(rawRunDecision)
-	if msg.RequireOutputDecision || msg.SyncDestination != "" {
-		customTools = append(customTools, decision.Tool())
-	}
 
 	agent := agents.Items[agentName]
 	if agentExplicitlyAllowsRocketClawTool(&agent, restartToolName) {
@@ -2125,13 +2103,8 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	result.attachments = attachments.Attachments()
-	if payload, ok := decision.Decision(staged.entries); ok {
-		result.text, result.outputDecided = payload, true
-		b.log.Info("background output decided", "event", "output_decided", "conversation_id", b.config.ConversationID, "turn_id", turnID, "intentional_silence", strings.TrimSpace(payload) == "")
-
-		if strings.TrimSpace(payload) == "" {
-			result.attachments = nil
-		}
+	if msg.RequireOutputDecision && strings.TrimSpace(result.text) == "" {
+		result.attachments = nil // An empty cron reply is silent, files included.
 	}
 
 	if msg.GoalTurn {
@@ -2323,10 +2296,6 @@ func loadRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 	var tools []string
 	if mode != toolModeWorkflow {
 		tools = []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName}
-	}
-
-	if mode == toolModeCron {
-		tools = append(tools, rawRunToolName)
 	}
 
 	for name := range agentResult.Agents.Items {

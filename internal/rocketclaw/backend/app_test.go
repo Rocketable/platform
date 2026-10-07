@@ -528,7 +528,7 @@ func TestSlackMessageAtStartupCanAskUserQuestion(t *testing.T) {
 
 	select {
 	case body := <-bodies:
-		assert.Contains(t, body, `"name":"ask_user_question"`)
+		assert.Contains(t, body, "- ask_user_question(", "the question tool is offered inside execute")
 	case err := <-done:
 		t.Fatalf("Run returned before the startup message ran: %v", err)
 	case <-time.After(10 * time.Second):

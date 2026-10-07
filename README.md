@@ -185,7 +185,9 @@ guardrails, and permission reviewers. Missing or empty variables fail that start
 Inserted values are literal; only wildcards written in the pattern grant wildcard
 access. Paired threads retain their stored metadata when continued from the web.
 
-Every active `cron/*.md` definition declares a quoted `channel` that matches a configured Slack channel. Empty completion output is silent; non-empty output starts a fresh managed thread in that channel.
+Every active `cron/*.md` definition declares a quoted `channel` that matches a configured Slack channel. The cron agent's reply is its output: an empty reply is silent; a non-empty reply starts a fresh managed thread in that channel.
+
+Agents call every RocketClaw platform tool inside Execute; the model's top-level tools are only `execute`, `load_execute_result`, `task`, `skill`, and `find_skills` (plus `websearch` when allowed, which the provider runs). Each call made inside an Execute script is saved with the turn and shown in Web history, `rocketclaw_get_session`, and reply attachments like any other tool call.
 
 Scheduled follow-ups run in the destination conversation with its history and
 selected agent, not in the private cron or External MCP run. A silent cron with
@@ -200,7 +202,7 @@ keeps that work saved and tries again after one second while the conversation wo
 #### Agent session inspection
 
 Agents can inspect durable conversations with `rocketclaw_current_session_id`,
-`rocketclaw_list_sessions`, and `rocketclaw_get_session`, directly or inside Execute.
+`rocketclaw_list_sessions`, and `rocketclaw_get_session`, inside Execute only.
 Grant them in the agent's frontmatter; none is allowed by default:
 
 ```yaml
@@ -216,9 +218,9 @@ permissions grant access across the selected State Store, including Slack, exec,
 cron, and private External MCP histories—not just the agent's current conversation.
 
 To look back past compaction, call `rocketclaw_current_session_id()` with no
-arguments (`{}` for a direct call). It returns only the bare conversation ID, with
-no JSON wrapper or added newline. Pass that ID to `rocketclaw_get_session(conversation_id="...")` in the next
-call to read stored entries, including those before the compaction point.
+arguments in an Execute script. It returns only the bare conversation ID, with
+no JSON wrapper or added newline. Pass that ID to `rocketclaw_get_session(conversation_id="...")`
+to read stored entries, including those before the compaction point.
 This is the owning bridge's durable conversation ID: a private External MCP bridge
 returns its private history ID, not its public external ID or managed destination,
 even though its session tag tools act on that destination.
@@ -276,8 +278,8 @@ permission:
       - [customer, internal]
 ```
 
-This exposes `rocketclaw_set_tag(tag)` and `rocketclaw_get_tags()`, directly or
-inside Execute. Each agent, including a child, uses its own configured groups;
+This exposes `rocketclaw_set_tag(tag)` and `rocketclaw_get_tags()` inside
+Execute. Each agent, including a child, uses its own configured groups;
 without groups, neither tool nor its generated guidance is shown. Explicit
 workflow worker tool lists still limit access, and handoff generation has no tools.
 See the opt-in [agent example](internal/rocketclaw/skel/agents/examples/session-tags.example.md).

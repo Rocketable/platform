@@ -468,7 +468,7 @@ func (m *Manager) scheduledStates(definitions []definition, now time.Time) []bac
 	return states
 }
 
-const humanVisibleEmptyCallInstruction = `When you are done YOU MUST CALL ` + backend.RawRunExposedToolName + `("") (empty string)`
+const cronReplyInstruction = "Your reply is posted to the channel exactly as written. If there is nothing worth posting, reply with nothing."
 
 func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 	startedAt := m.now()
@@ -507,19 +507,15 @@ func cronTraceConversationID(prefix, relativePath string, ts time.Time) string {
 
 func (m *Manager) preparePrompt(body string) string {
 	prompt := body
-	if strings.Contains(prompt, backend.RawRunExposedToolName) {
-		return prompt
-	}
-
 	if prompt == "" {
-		return humanVisibleEmptyCallInstruction
+		return cronReplyInstruction
 	}
 
 	if strings.HasSuffix(prompt, "\n") {
-		return prompt + "\n" + humanVisibleEmptyCallInstruction
+		return prompt + "\n" + cronReplyInstruction
 	}
 
-	return prompt + "\n\n" + humanVisibleEmptyCallInstruction
+	return prompt + "\n\n" + cronReplyInstruction
 }
 
 func (m *Manager) logLoadedDefinitions(definitions []definition) {

@@ -1201,11 +1201,13 @@ func TestSessionEntries(t *testing.T) {
 		json.RawMessage(`{"type":"message","id":"msg_one","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer one","annotations":[]}]}`),
 		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Web principal=\"alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]","content":"[Web principal=\"alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhuman two"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":"answer two"}`),
-		json.RawMessage(`{"type":"function_call","call_id":"report","name":"rocketclaw_i_want_human_partner_to_see_this","arguments":"{\"payload\":\"Exact report\\nwith details\"}"}`),
-		json.RawMessage(`{"type":"function_call_output","call_id":"report","output":"queued for verbatim delivery"}`),
-		json.RawMessage(`{"type":"function_call","call_id":"failed","name":"rocketclaw_i_want_human_partner_to_see_this","arguments":"invalid"}`),
-		json.RawMessage(`{"type":"function_call_output","call_id":"failed","output":"invalid arguments"}`),
+		json.RawMessage(`{"type":"function_call","call_id":"script","name":"execute","arguments":"{\"code\":\"tag\"}"}`),
+		json.RawMessage(`{"type":"function_call_output","call_id":"script","output":"tagged"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":""}`),
+	}, OutputTrace: []json.RawMessage{
+		// A tool call made inside the execute script, stored beside replay by RocketCode.
+		json.RawMessage(`{"type":"function_call","call_id":"script/host/1","parent_call_id":"script","name":"rocketclaw_set_tag","arguments":"{\"tag\":\"customer\"}"}`),
+		json.RawMessage(`{"type":"function_call_output","call_id":"script/host/1","parent_call_id":"script","output":"{\"tags\":[\"customer\"]}"}`),
 	}}
 	historyEntry.Agent, historyEntry.Model, historyEntry.ReasoningEffort = "planner", "work/model-a", new("")
 	historyEntry.ReplayAttribution = []rocketcode.ReplayAttribution{{Start: 0, End: 6, Model: "legacy-model"}}
@@ -1213,10 +1215,13 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: "empty-web"})
 	require.NoError(t, err)
-	require.Equal(t, "report", history.Messages[8].ToolCallId)
-	require.Equal(t, "rocketclaw_i_want_human_partner_to_see_this", history.Messages[8].ToolName)
-	require.Equal(t, "report", history.Messages[9].ToolCallId)
-	require.Empty(t, history.Messages[9].ToolName)
+	require.Equal(t, "script", history.Messages[8].ToolCallId)
+	require.Equal(t, "execute", history.Messages[8].ToolName)
+	require.Equal(t, "script/host/1", history.Messages[9].ToolCallId)
+	require.Equal(t, "rocketclaw_set_tag", history.Messages[9].ToolName)
+	require.Equal(t, "script/host/1", history.Messages[10].ToolCallId)
+	require.Empty(t, history.Messages[10].ToolName)
+	require.Equal(t, "script", history.Messages[11].ToolCallId)
 	require.Equal(t, `[Web principal="alice" additional_instructions="Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."]`, history.Messages[6].Header)
 	require.Equal(t, "alice", history.Messages[6].GetPrincipal())
 
@@ -1248,11 +1253,10 @@ func TestSessionEntries(t *testing.T) {
 		{"assistant", "answer one"},
 		{"user", "human two"},
 		{"assistant", "answer two"},
-		{"tool", "rocketclaw_i_want_human_partner_to_see_this\n{\"payload\":\"Exact report\\nwith details\"}"},
-		{"tool", "queued for verbatim delivery"},
-		{"tool", "rocketclaw_i_want_human_partner_to_see_this\ninvalid"},
-		{"tool", "invalid arguments"},
-		{"assistant", "Exact report\nwith details"},
+		{"tool", "execute\n{\"code\":\"tag\"}"},
+		{"tool", "rocketclaw_set_tag\n{\"tag\":\"customer\"}"},
+		{"tool", "{\"tags\":[\"customer\"]}"},
+		{"tool", "tagged"},
 	}, got)
 
 	t.Run("origin search keeps original private metadata and authorization", func(t *testing.T) {
@@ -1280,7 +1284,7 @@ func TestSessionEntries(t *testing.T) {
 	listedSessions, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
 	require.Equal(t, "empty-web", listedSessions.Sessions[0].Id)
-	require.Equal(t, "Exact report\nwith details", listedSessions.Sessions[0].Preview)
+	require.Equal(t, "answer two", listedSessions.Sessions[0].Preview)
 	require.False(t, listedSessions.Sessions[0].Running)
 
 	err = seeded.UpsertActiveTurn(ctx, &testCheckpoint{TurnID: "sidebar-turn", ConversationKey: "empty-web"})
@@ -1697,14 +1701,14 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, preview.Messages)
 	// A preview must not decode replay content belonging to another run.
-	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', '[{"type":"function_call","call_id":"broken","name":"rocketclaw_i_want_human_partner_to_see_this","arguments":"invalid"},{"type":"function_call_output","call_id":"broken","output":"queued for verbatim delivery"}]')::json WHERE id = $1`, observed[3].ID)
+	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', '[{"type":"compaction","content":42}]')::json WHERE id = $1`, observed[3].ID)
 	require.NoError(t, err)
 	preview, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, SourceConversationId: sources[0]})
 	require.NoError(t, err)
 	require.Len(t, preview.Messages, 2)
 
 	_, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, SourceConversationId: sources[1]})
-	require.ErrorContains(t, err, "decode delivery report")
+	require.ErrorContains(t, err, "decode web history")
 	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', (SELECT entry_json::jsonb->'replay_input' FROM session_entries WHERE id = $1))::json WHERE id = $2`, observed[2].ID, observed[3].ID)
 	require.NoError(t, err)
 
@@ -2088,23 +2092,6 @@ func TestSessionEntries(t *testing.T) {
 	require.Positive(t, prefix)
 
 	channels.SidebarChannelAgentChoicesFunc = sidebarChoices
-
-	for i, arguments := range []string{`{}`, `null`, `{"payload":null}`, `{"payload":""}`, `{"payload":"report"}`} {
-		replay := []json.RawMessage{
-			json.RawMessage(`{"type":"message","role":"assistant","content":"report"}`),
-			json.RawMessage(`{"type":"function_call","call_id":"first","name":"rocketclaw_i_want_human_partner_to_see_this","arguments":"{\"payload\":\"superseded\"}"}`),
-			json.RawMessage(`{"type":"function_call_output","call_id":"first","output":"queued for verbatim delivery"}`),
-			json.RawMessage(fmt.Sprintf(`{"type":"function_call","call_id":"last","name":"rocketclaw_i_want_human_partner_to_see_this","arguments":%q}`, arguments)),
-			json.RawMessage(`{"type":"function_call_output","call_id":"last","output":"queued for verbatim delivery"}`),
-		}
-		conversationID := fmt.Sprintf("delivery-%d", i)
-		_, err := sessions.AppendEntryID(ctx, conversationID, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: entry.Timestamp, ReplayInput: replay})
-		require.NoError(t, err)
-		history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversationID})
-		require.NoError(t, err)
-		// The last decision replaces the first, without duplicating an existing reply.
-		require.Len(t, history.Messages, len(replay), "arguments: %s", arguments)
-	}
 
 	// Definition failures must fail both independent choices and enumeration.
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "broken.md"), []byte("---\nmodel: [\n---\nHelp."), 0o600))
@@ -2497,6 +2484,25 @@ func TestSessionEntries(t *testing.T) {
 		stored, err := reopened.LoadAttachment(ctx, conversation, recovered.Id, false)
 		require.NoError(t, err)
 		require.Equal(t, []byte("old image bytes"), stored.Data)
+		// A file attached from inside an execute script shows on that script's attach call.
+		nestedFile := protocol.OutboundAttachment{ID: "nested-generated", Name: "nested.png", MIMEType: "image/png", Data: []byte("nested image")}
+		require.NoError(t, sessions.SaveAttachment(ctx, conversation, &nestedFile, false))
+		_, err = sessions.AppendEntryID(ctx, conversation, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"function_call","call_id":"script","name":"execute","arguments":"{\"code\":\"attach\"}"}`),
+			json.RawMessage(`{"type":"function_call_output","call_id":"script","output":"attached"}`),
+		}, OutputTrace: []json.RawMessage{
+			json.RawMessage(`{"type":"function_call","call_id":"script/host/1","parent_call_id":"script","name":"rocketclaw_attach_files_to_response","arguments":"{}"}`),
+			json.RawMessage(`{"type":"function_call_output","call_id":"script/host/1","parent_call_id":"script","output":"queued attachments for final response: nested-generated"}`),
+		}})
+		require.NoError(t, err)
+		history, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation})
+		require.NoError(t, err)
+
+		nested := history.Messages[len(history.Messages)-2]
+		require.Equal(t, "script/host/1", nested.ToolCallId)
+		require.Len(t, nested.Attachments, 1)
+		require.Equal(t, nestedFile.ID, nested.Attachments[0].Id)
+		require.Equal(t, "attached", history.Messages[len(history.Messages)-1].Text)
 		// A delivered copy authorizes only the original producer's referenced object.
 		producerFile := protocol.OutboundAttachment{ID: "private-generated", Name: "generated.png", MIMEType: "image/png", Data: []byte("private original")}
 		require.NoError(t, sessions.SaveAttachment(ctx, "private-X", &producerFile, false))
@@ -2668,7 +2674,7 @@ func TestSessionEntries(t *testing.T) {
 		document, err := invoke[HandoffResponse](ctx, connection, "Handoff", &HandoffRequest{Id: source})
 		require.NoError(t, err)
 		require.Contains(t, document.Document, "Source session: "+source)
-		require.Contains(t, document.Document, "For more details, use `rocketclaw_get_session` with `conversation_id` set to the source session ID above.")
+		require.Contains(t, document.Document, "For more details, call `rocketclaw_get_session` inside Execute with `conversation_id` set to the source session ID above.")
 		require.Contains(t, document.Document, "Continue the verified work.")
 
 		beforeTurns := len(turns)

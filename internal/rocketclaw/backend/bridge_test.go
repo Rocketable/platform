@@ -2207,7 +2207,10 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedTurn(t *testing.T) {
 
 			requests++
 			if requests == 1 {
-				writeRawRunFunctionCall(t, w, "set-tag", setTagToolName, json.RawMessage(`{"tag":"customer"}`))
+				writeRawRunFunctionCall(t, w, "set-tag", "execute", struct {
+					Code string `json:"code"`
+				}{"def main():\n    return rocketclaw_set_tag(tag=\"customer\")\n"})
+
 				return
 			}
 

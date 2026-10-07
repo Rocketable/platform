@@ -695,10 +695,9 @@ func TestPreparePromptInstructionCases(t *testing.T) {
 		body string
 		want string
 	}{
-		{name: "already mentions tool", body: "Call " + backend.RawRunExposedToolName, want: "Call " + backend.RawRunExposedToolName},
-		{name: "empty", body: "", want: humanVisibleEmptyCallInstruction},
-		{name: "trailing newline", body: "Body\n", want: "Body\n\n" + humanVisibleEmptyCallInstruction},
-		{name: "plain", body: "Body", want: "Body\n\n" + humanVisibleEmptyCallInstruction},
+		{name: "empty", body: "", want: cronReplyInstruction},
+		{name: "trailing newline", body: "Body\n", want: "Body\n\n" + cronReplyInstruction},
+		{name: "plain", body: "Body", want: "Body\n\n" + cronReplyInstruction},
 	}
 
 	for _, tt := range tests {
@@ -786,7 +785,7 @@ func TestLoadOneOffCronjobValidatesTargetsAndPreparesPrompt(t *testing.T) {
 		t.Fatalf("job = %#v; want helper cron/daily.md #triage", job)
 	}
 
-	if !strings.Contains(job.Prompt, "Body") || !strings.Contains(job.Prompt, backend.RawRunExposedToolName) {
+	if !strings.Contains(job.Prompt, "Body") || !strings.Contains(job.Prompt, cronReplyInstruction) {
 		t.Fatalf("prompt = %q; want body plus exposed tool instruction", job.Prompt)
 	}
 

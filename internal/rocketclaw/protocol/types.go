@@ -154,7 +154,7 @@ type InboundMessage struct {
 	// SyncDestination, when set, is a conversation that receives this turn: the turn waits in its queue,
 	// runs in ConversationID, and then its new history and final reply are copied into SyncDestination.
 	SyncDestination string
-	// RequireOutputDecision runs the turn with cron tools and repeats it until the model decides whether to publish its output.
+	// RequireOutputDecision marks a private cron-style background turn; an empty reply posts nothing.
 	RequireOutputDecision bool
 	// Cronjob identifies the cron job that produced the message; nil for other messages.
 	Cronjob *CronjobMessage

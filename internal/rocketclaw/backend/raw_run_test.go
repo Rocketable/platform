@@ -26,33 +26,6 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
-func TestRawRunDecisionToolStoresPayload(t *testing.T) {
-	decision := new(rawRunDecision)
-	_, ok := decision.Decision(nil)
-	assert.False(t, ok)
-
-	recorded := []rocketcode.SessionEntry{{ReplayInput: []json.RawMessage{
-		json.RawMessage(`{"type":"function_call","name":"` + rawRunToolName + `","arguments":"{\"payload\":\"first\"}"}`),
-		json.RawMessage(`{"type":"function_call","name":"other","arguments":"{\"payload\":\"ignored\"}"}`),
-		json.RawMessage(`{"type":"function_call","name":"` + rawRunToolName + `","arguments":"{\"payload\":\"recorded\"}"}`),
-	}}}
-	payload, ok := decision.Decision(recorded)
-	require.True(t, ok)
-	assert.Equal(t, "recorded", payload)
-
-	tool := decision.Tool()
-	_, err := tool.Call(context.Background(), json.RawMessage("{"), make(chan rocketcode.ChatResponse))
-	require.ErrorContains(t, err, "parse raw run decision")
-
-	result, err := tool.Call(context.Background(), json.RawMessage(`{"payload":"ship it"}`), make(chan rocketcode.ChatResponse))
-	require.NoError(t, err)
-	assert.Equal(t, "queued for verbatim delivery", result.Output)
-
-	payload, ok = decision.Decision(recorded)
-	require.True(t, ok)
-	assert.Equal(t, "ship it", payload)
-}
-
 func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: '{{ model \"active\" }}'\npermission:\n  read: {\"*\": allow}\n  edit: allow\n  glob: allow\n  grep: allow\n  bash: {\"*\": allow}\n  webfetch: {\"*\": allow}\n  websearch: allow\n  skill: {\"demo\": allow}\n  task: {\"*\": allow}\n  rocketclaw: {\"rocketclaw_reload\": allow}\n---\nMain prompt\n")
@@ -165,10 +138,7 @@ func TestWorkflowAgentRunnerTagLimits(t *testing.T) {
 	writeMainAgentSkills(t, workspace, "---\nmodel: gpt-5.5\npermission:\n  read: allow\n  rocketclaw:\n    rocketclaw_set_tag: [[customer, internal]]\n---\nBase prompt\n")
 	service := newTestSessionServiceAt(t, workspace)
 
-	var (
-		tools   []string
-		execute bool
-	)
+	var tools []string
 
 	requests := 0
 
@@ -190,7 +160,7 @@ func TestWorkflowAgentRunnerTagLimits(t *testing.T) {
 				present = present || tool.Name == name
 			}
 
-			assert.Equal(t, allowed, present)
+			assert.False(t, present, "platform tools run only inside execute")
 			assert.Equal(t, allowed, strings.Contains(body.Instructions, name))
 		}
 
@@ -210,23 +180,14 @@ func TestWorkflowAgentRunnerTagLimits(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 
 		if requests < 3 {
-			name, args := setTagToolName, `{"tag":"customer"}`
+			code := "def main():\n    return rocketclaw_set_tag(tag=\"customer\")\n"
 			if requests == 2 {
-				name, args = getTagsToolName, `{}`
+				code = "def main():\n    return rocketclaw_get_tags()\n"
 			}
 
-			if execute {
-				code := "def main():\n    return rocketclaw_set_tag(tag=\"customer\")\n"
-				if requests == 2 {
-					code = "def main():\n    return rocketclaw_get_tags()\n"
-				}
-
-				writeRawRunFunctionCall(t, w, strconv.Itoa(requests), "execute", struct {
-					Code string `json:"code"`
-				}{code})
-			} else {
-				writeRawRunFunctionCall(t, w, strconv.Itoa(requests), name, json.RawMessage(args))
-			}
+			writeRawRunFunctionCall(t, w, strconv.Itoa(requests), "execute", struct {
+				Code string `json:"code"`
+			}{code})
 		} else {
 			for i, name := range []string{setTagToolName, getTagsToolName} {
 				if tools == nil || slices.Contains(tools, name) {
@@ -247,24 +208,20 @@ func TestWorkflowAgentRunnerTagLimits(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, run.Close()) }()
 
-	for _, path := range []bool{false, true} {
-		execute = path
+	for _, limit := range [][]string{{"execute", setTagToolName}, {"execute", getTagsToolName}, {}, nil} {
+		tools, requests = limit, 0
+		before, err := sessionTags(t.Context(), service.db, "owning")
+		require.NoError(t, err)
+		_, err = run.Run(t.Context(), &workflow.AgentRequest{Prompt: "tag", Worker: workflow.Worker{Name: "label", Instructions: "Worker instructions", Tools: tools}})
+		require.NoError(t, err)
+		require.Equal(t, 3, requests)
+		after, err := sessionTags(t.Context(), service.db, "owning")
+		require.NoError(t, err)
 
-		for _, limit := range [][]string{{"execute", setTagToolName}, {"execute", getTagsToolName}, {}, nil} {
-			tools, requests = limit, 0
-			before, err := sessionTags(t.Context(), service.db, "owning")
-			require.NoError(t, err)
-			_, err = run.Run(t.Context(), &workflow.AgentRequest{Prompt: "tag", Worker: workflow.Worker{Name: "label", Instructions: "Worker instructions", Tools: tools}})
-			require.NoError(t, err)
-			require.Equal(t, 3, requests)
-			after, err := sessionTags(t.Context(), service.db, "owning")
-			require.NoError(t, err)
-
-			if tools == nil || slices.Contains(tools, setTagToolName) {
-				require.NotEqual(t, before, after)
-			} else {
-				require.Equal(t, before, after)
-			}
+		if tools == nil || slices.Contains(tools, setTagToolName) {
+			require.NotEqual(t, before, after)
+		} else {
+			require.Equal(t, before, after)
 		}
 	}
 }
@@ -305,7 +262,7 @@ func TestWorkflowPermissionReviewerTagGuidance(t *testing.T) {
 			assert.NotContains(t, body.Instructions, `[["worker"]]`)
 
 			for _, name := range []string{setTagToolName, getTagsToolName} {
-				assert.Contains(t, body.Tools, struct{ Name string }{name})
+				assert.NotContains(t, body.Tools, struct{ Name string }{name}, "platform tools run only inside execute")
 				assert.Contains(t, body.Instructions, name)
 			}
 
