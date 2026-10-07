@@ -227,10 +227,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 				}
 			}
 
-			reason := strings.TrimSpace(decision.Reason)
-			if reason == "" {
-				reason = "rejected by inter-agent guardrail"
-			}
+			reason := cmp.Or(strings.TrimSpace(decision.Reason), "rejected by inter-agent guardrail")
 
 			return strings.Join([]string{"<task_result>", "delegation blocked: " + reason, "</task_result>"}, "\n"), nil
 		}
@@ -366,10 +363,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 				}
 			}
 
-			reason := strings.TrimSpace(decision.Reason)
-			if reason == "" {
-				reason = "rejected by inter-agent guardrail"
-			}
+			reason := cmp.Or(strings.TrimSpace(decision.Reason), "rejected by inter-agent guardrail")
 
 			return strings.Join([]string{"<task_result>", "delegation response blocked: " + reason, "</task_result>"}, "\n"), nil
 		}
