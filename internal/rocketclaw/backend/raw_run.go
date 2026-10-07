@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sync"
 
 	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -147,10 +146,11 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 		tools = slices.Collect(maps.Keys(runtime.Tools))
 	}
 
-	// Workflows call agents; agents use execute for FS/shell. Keep execute.
-	// Strip task and any direct host tools if a caller allowlist still names them.
+	// Workflows call agents; agents reach every host and platform tool through execute.
+	// Strip task and names that live inside execute; permissions still govern those.
 	tools = slices.DeleteFunc(tools, func(name string) bool {
-		return name == "task" || rocketcode.CodeModeOnlyHostTool(name)
+		_, nested := runtime.CodeModeHosts[name]
+		return name == "task" || nested || rocketcode.CodeModeOnlyHostTool(name)
 	})
 
 	if _, available := runtime.Tools["find_skills"]; available && slices.Contains(tools, "skill") && !slices.Contains(tools, "find_skills") {
@@ -267,56 +267,4 @@ func prepareRocketCode(cfg *config.Config, agent string, logger *slog.Logger, mo
 
 func rocketcodeSpillDir(cfg *config.Config) string {
 	return filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), ".rocketcode", "spill")
-}
-
-type rawRunDecision struct {
-	mu       sync.Mutex
-	decision *string
-}
-
-type rawRunDecisionInput struct {
-	Payload string `json:"payload"`
-}
-
-func (d *rawRunDecision) Tool() rocketcode.Tool {
-	return rocketcode.Tool{Name: rawRunToolName, Description: "Mandatory decision tool for background turns. If the human partner should see anything from this turn, call this with the full exact message.", Permission: "rocketclaw", VisibilitySubjects: []string{rawRunToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{rawRunToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"payload": map[string]any{"type": "string"}}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
-		var input rawRunDecisionInput
-		if err := json.Unmarshal(raw, &input); err != nil {
-			return rocketcode.ToolResult{}, fmt.Errorf("parse raw run decision: %w", err)
-		}
-
-		d.mu.Lock()
-		d.decision = &input.Payload
-		d.mu.Unlock()
-
-		return rocketcode.TextToolResult("queued for verbatim delivery"), nil
-	}}
-}
-
-// Decision returns this run's decision, falling back to a decision call recorded
-// in its finished turns when a resumed turn reused that call's journaled result.
-func (d *rawRunDecision) Decision(entries []rocketcode.SessionEntry) (string, bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	if d.decision != nil {
-		return *d.decision, true
-	}
-
-	payload, decided := "", false
-
-	for i := range entries {
-		for _, raw := range entries[i].ReplayInput {
-			var call struct {
-				Type, Name, Arguments string
-			}
-
-			var input rawRunDecisionInput
-			if json.Unmarshal(raw, &call) == nil && call.Type == "function_call" && call.Name == rawRunToolName && json.Unmarshal([]byte(call.Arguments), &input) == nil {
-				payload, decided = input.Payload, true
-			}
-		}
-	}
-
-	return payload, decided
 }

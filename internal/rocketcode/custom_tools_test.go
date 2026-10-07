@@ -171,8 +171,8 @@ func TestCustomToolPermissionVisibilitySupportsWildcards(t *testing.T) {
 	}}}})
 
 	model, hosts := factory.assembleTools(agent)
-	if _, ok := model["github_create_issue"]; !ok {
-		t.Fatalf("github_create_issue is hidden from model; want top-level and execute")
+	if _, ok := model["github_create_issue"]; ok {
+		t.Fatalf("github_create_issue is model-facing; want only inside execute")
 	}
 
 	if _, ok := hosts["github_create_issue"]; !ok {
@@ -205,8 +205,8 @@ func TestCustomToolPermissionVisibilityScalarAllowDeny(t *testing.T) {
 	allowedAgent := testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "tools", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}})
 
 	model, hosts := factory.assembleTools(allowedAgent)
-	if _, ok := model["github_create_issue"]; !ok {
-		t.Fatalf("github_create_issue is hidden from model with tools allow; want top-level and execute")
+	if _, ok := model["github_create_issue"]; ok {
+		t.Fatalf("github_create_issue is model-facing with tools allow; want only inside execute")
 	}
 
 	if hosts["github_create_issue"].Call == nil {

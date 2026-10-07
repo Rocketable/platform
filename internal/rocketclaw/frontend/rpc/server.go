@@ -365,18 +365,14 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 		return nil, fmt.Errorf("decode web history: %w", err)
 	}
 
-	deliveryText, deliveryIndex, err := backend.ReplayDeliveryText(items)
-	if err != nil {
-		return nil, fmt.Errorf("web history: %w", err)
-	}
-
 	producer := cmp.Or(entry.SourceConversationID, conversationID)
-	lastReply := ""
 	// Ponytail: replay/progress matching scans each turn; index identities if large turns make this costly.
 	progress := rocketcode.PublicProgressFromTrace(entry.Entry.OutputTrace)
 	replayText := make(map[string]bool)
 	replayResults := make(map[string]bool)
 	replayCalls := make(map[string]bool)
+
+	hostParents, hostCalls := hostCallsByParent(entry.Entry.OutputTrace)
 
 	var messages []*TranscriptEvent
 
@@ -464,30 +460,97 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 			event.MessageId = fmt.Sprintf("%d:%d", entry.ID, i)
 		}
 
-		if event.Role == "assistant" {
-			lastReply = event.Text
-		}
-
 		texts, err := event.publicText(identity.Content, identity.ID, identity.Status, progress, entry)
 		if err != nil {
 			return nil, err
 		}
 
 		messages = append(messages, texts...)
+
+		if identity.Type == "function_call" {
+			hosted, err := s.hostCallEvents(ctx, root, entry, producer, conversationID, calls, hostCalls[identity.CallID], i)
+			if err != nil {
+				return nil, err
+			}
+
+			messages = append(messages, hosted...)
+
+			delete(hostCalls, identity.CallID)
+		}
+	}
+	// A running turn records host calls before its execute call reaches replay.
+	for _, parent := range hostParents {
+		hosted, err := s.hostCallEvents(ctx, root, entry, producer, conversationID, calls, hostCalls[parent], len(items))
+		if err != nil {
+			return nil, err
+		}
+
+		messages = append(messages, hosted...)
 	}
 
 	messages = fallbackProgress(entry, progress, replayText, replayResults, replayCalls, conversationID, messages)
-	if strings.TrimSpace(deliveryText) != "" && deliveryText != lastReply {
-		event := &TranscriptEvent{Role: "assistant", Text: deliveryText, Complete: !entry.Active, EntryKey: entry.Key, ItemId: entry.Key + ":delivery", TurnId: entry.Entry.TurnID}
-		if entry.ID != 0 {
-			event.MessageId = fmt.Sprintf("%d:delivery", entry.ID)
-		}
-
-		event.attribute(entry.Entry.AttributionAt(deliveryIndex), producer, conversationID)
-		messages = append(messages, event)
-	}
 
 	return messages, nil
+}
+
+// hostCallsByParent groups the trace's execute-script calls by their execute call, in trace order.
+func hostCallsByParent(trace []json.RawMessage) (parents []string, calls map[string][]json.RawMessage) {
+	calls = make(map[string][]json.RawMessage)
+
+	for _, raw := range trace {
+		var host struct {
+			Type         string `json:"type"`
+			ParentCallID string `json:"parent_call_id"`
+		}
+		if json.Unmarshal(raw, &host) != nil || host.ParentCallID == "" || host.Type != "function_call" && host.Type != "function_call_output" {
+			continue
+		}
+
+		if _, seen := calls[host.ParentCallID]; !seen {
+			parents = append(parents, host.ParentCallID)
+		}
+
+		calls[host.ParentCallID] = append(calls[host.ParentCallID], raw)
+	}
+
+	return parents, calls
+}
+
+// hostCallEvents projects calls made inside one execute script, after that script's call.
+func (s *Server) hostCallEvents(ctx context.Context, root *os.Root, entry *backend.ObservedSessionEntry, producer, conversationID string, calls map[string]string, raws []json.RawMessage, index int) ([]*TranscriptEvent, error) {
+	var events []*TranscriptEvent
+
+	for k, raw := range raws {
+		attachments, err := s.sessions.ReplayAttachments(ctx, producer, root, raw, calls)
+		if err != nil {
+			return nil, fmt.Errorf("project host call attachments: %w", err)
+		}
+
+		event, err := historyEvent(&responses.ResponseInputItemUnionParam{}, raw)
+		if err != nil {
+			return nil, err
+		}
+
+		if event == nil {
+			continue
+		}
+
+		for j := range attachments {
+			event.Attachments = append(event.Attachments, attachmentMetadata(producer, &attachments[j]))
+		}
+
+		event.attribute(entry.Entry.AttributionAt(index), producer, conversationID)
+		event.EntryKey, event.TurnId, event.ParentId = entry.Key, entry.Entry.TurnID, entry.Key
+		event.ItemId = fmt.Sprintf("%s:%d:host:%d", entry.Key, index, k)
+
+		if entry.ID != 0 {
+			event.MessageId = fmt.Sprintf("%d:%d:host:%d", entry.ID, index, k)
+		}
+
+		events = append(events, event)
+	}
+
+	return events, nil
 }
 
 // publicText reconciles native content parts and locally flattened provider text.

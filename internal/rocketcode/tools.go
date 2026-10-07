@@ -154,15 +154,14 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 			continue
 		}
 
-		// Sandbox host tools are execute-only. Embedder custom tools (rocketclaw_*,
-		// ask_user_question, …) stay model-facing when visible and are also bound into execute.
-		if CodeModeOnlyHostTool(name) {
+		// Sandbox host tools and embedder custom tools run only inside execute.
+		tool := tools[name]
+		if codeModeOnlyTool(name, &tool) {
 			delete(tools, name)
 
 			continue
 		}
 
-		tool := tools[name]
 		if !toolVisible(agent, name, &tool) {
 			delete(tools, name)
 		}

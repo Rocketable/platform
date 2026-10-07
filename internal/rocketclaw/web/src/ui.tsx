@@ -1768,7 +1768,6 @@ function toolTitle(line: Line) {
   }
   if (!input || typeof input !== "object") return name;
   if (name === "skill" && typeof input.name === "string") return `Skill · ${input.name}`;
-  if (name === "rocketclaw_i_want_human_partner_to_see_this") return "Send report";
   if (name === "execute" && typeof input.code === "string") {
     const operation = input.code.match(/\b(bash|read|glob|grep)\(\s*(?:command|filePath|pattern)\s*=\s*r?("""|'''|"|')([\s\S]*?)\2/);
     if (operation) {

@@ -484,8 +484,8 @@ destination and document, then choose **Stash handoff here**. The document waits
 in that session's stash for **Pop**; stashing starts no turn. Cancelling the
 dialog stashes nothing. Generation uses the source agent with tools disabled
 and leaves the source history intact.
-The handoff includes the source session ID and points to `rocketclaw_get_session`
-for reading more details from that session.
+The handoff includes the source session ID and points to `rocketclaw_get_session`,
+called inside Execute, for reading more details from that session.
 After choosing a destination, **Copy Handoff** also copies it without stashing.
 The handoff panel keeps **Preview**, **Copy**, and **Stash** actions visible.
 **Preview** opens the full document; selecting a destination shows its conversation

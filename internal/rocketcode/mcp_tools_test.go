@@ -178,6 +178,9 @@ func TestCustomToolsAreCodeModeOnlyInsideExecute(t *testing.T) {
 	require.NoError(t, permissions.Allow("rocketclaw", "rocketclaw_reload"))
 
 	custom, err := customLooperTools([]Tool{
+		{Name: "rocketclaw_denied", Permission: "rocketclaw", Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
+			return TextToolResult("denied"), nil
+		}},
 		{
 			Name:               "ask_user_question",
 			Description:        "Ask the human a question",
@@ -223,16 +226,14 @@ func TestCustomToolsAreCodeModeOnlyInsideExecute(t *testing.T) {
 	agent := &Agent{Permission: permissions}
 	model, hosts := factory.assembleTools(agent)
 
-	require.Contains(t, model, executeToolName)
-	// Platform tools stay model-facing and are also nested inside execute.
-	assert.Contains(t, model, "ask_user_question")
-	assert.Contains(t, model, "rocketclaw_reload")
-	assert.Contains(t, hosts, "ask_user_question")
-	assert.Contains(t, hosts, "rocketclaw_reload")
+	// Platform tools run only inside execute; the model sees execute and its result loader.
+	assert.ElementsMatch(t, []string{executeToolName, loadExecuteResultToolName}, slices.Collect(maps.Keys(model)))
+	assert.ElementsMatch(t, []string{"ask_user_question", "rocketclaw_reload"}, slices.Collect(maps.Keys(hosts)))
 
 	output := make(chan ChatResponse, 8)
-	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
-	ctx := withToolCallContext(t.Context(), looper, output, "")
+	observations := &turnObservations{journal: InertJournal{}}
+	looper := &looper{Journal: InertJournal{}, observations: observations, Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
+	ctx := withToolCallContext(t.Context(), looper, output, "exec-1")
 	run := model[executeToolName]
 	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return ask_user_question(question=\"ship it?\")\n"}`), output, emptyToolCallMetadata())
 	require.NoError(t, err)
@@ -248,6 +249,20 @@ func TestCustomToolsAreCodeModeOnlyInsideExecute(t *testing.T) {
 	}
 
 	assert.True(t, sawNested, "expected nested ask_user_question diagnostic")
+
+	// The nested call and its result are saved in the turn trace under the execute call.
+	require.Len(t, observations.trace, 2)
+
+	var (
+		call   hostCallTrace
+		answer hostResultTrace
+	)
+
+	require.NoError(t, json.Unmarshal(observations.trace[0], &call))
+	require.NoError(t, json.Unmarshal(observations.trace[1], &answer))
+	assert.Equal(t, hostCallTrace{Type: "function_call", CallID: call.CallID, ParentCallID: "exec-1", Name: "ask_user_question", Arguments: `{"question":"ship it?"}`}, call)
+	assert.Equal(t, hostResultTrace{Type: "function_call_output", CallID: call.CallID, ParentCallID: "exec-1", Output: "answer:ship it?"}, answer)
+	assert.NotEmpty(t, call.CallID)
 }
 
 func TestCodeModeHostToolsIncludesBashWhenAllowed(t *testing.T) {

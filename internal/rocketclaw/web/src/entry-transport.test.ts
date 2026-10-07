@@ -49,10 +49,9 @@ test("transcript and entry HTTP proxy reach Go and reject an unmapped connection
     { role: "thinking", text: "**Planning the answer**" }, { role: "tool", text: "execute\n{\"code\":\"true\"}" },
     { role: "tool", text: "ok" }, { role: "assistant", text: "answer one" },
     { role: "user", text: "human two" }, { role: "assistant", text: "answer two" },
-    { role: "tool", text: "rocketclaw_i_want_human_partner_to_see_this\n{\"payload\":\"Exact report\\nwith details\"}" },
-    { role: "tool", text: "queued for verbatim delivery" },
-    { role: "tool", text: "rocketclaw_i_want_human_partner_to_see_this\ninvalid" },
-    { role: "tool", text: "invalid arguments" }, { role: "assistant", text: "Exact report\nwith details" },
+    { role: "tool", text: "execute\n{\"code\":\"tag\"}" },
+    { role: "tool", text: "rocketclaw_set_tag\n{\"tag\":\"customer\"}" },
+    { role: "tool", text: "{\"tags\":[\"customer\"]}" }, { role: "tool", text: "tagged" },
   ]);
   const config = await call("ListConfig");
   expect(config.config).toEqual({ workspace: process.env.ROCKETCLAW_VIEW_TEST_WORKSPACE, overlays: ["local-overlay"], models: [{ name: "alpha", model: "gpt-5.4" }, { name: "zeta", model: "gpt-5.5" }], slackChannels: [{ channel: "#ops", agents: ["main"] }], mcpServers: ["alpha", "zeta"], loggingLevel: "info", autoApproverModel: "gpt-5.5", instrumentationEnabled: true, mcpExternal: true, webAutoSettleAfter: "1h30m0s", tailscaleUser: "" });
@@ -82,7 +81,7 @@ test("transcript and entry HTTP proxy reach Go and reject an unmapped connection
     for (const [width, filename] of [[1280, "r22-web-desktop.png"], [390, "r22-web-mobile.png"]] as const) {
       const page = await browser.newPage({ hasTouch: width === 390, viewport: { width, height: 844 }, permissions: ["clipboard-read", "clipboard-write"] });
       await page.goto(`http://127.0.0.1:${web.port}/s/${Buffer.from(process.env.ROCKETCLAW_HISTORY_TEST_ID!).toString("base64url")}`);
-      const report = page.getByText("Exact report\nwith details", { exact: true });
+      const report = page.getByText("answer two", { exact: true });
       await report.waitFor();
       const footer = page.locator('[data-slot="message-footer"]').filter({ hasText: "planner (work/model-a)" }).last();
       await footer.waitFor({ state: "attached" });
@@ -101,7 +100,7 @@ test("transcript and entry HTTP proxy reach Go and reject an unmapped connection
       const replyCopy = reply.getByRole("button", { name: "Copy message" });
       await replyCopy.waitFor({ state: "visible" });
       await replyCopy.click();
-      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("Exact report\nwith details");
+      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("answer two");
       expect(await page.locator('[data-slot="message-footer"]').filter({ hasText: "legacy-model" }).count()).toBe(1);
       const userFooters = page.locator('[data-slot="message"][data-align="end"] [data-slot="message-footer"]');
       expect(await userFooters.allInnerTexts()).toEqual([""]);
@@ -124,8 +123,9 @@ test("transcript and entry HTTP proxy reach Go and reject an unmapped connection
       expect(await footer.innerText()).not.toContain("Source:");
       expect(await footer.innerText()).not.toContain("Destination:");
       expect(await page.getByRole("group", { name: "Show messages from" }).count()).toBe(0);
-      const trace = page.getByRole("region", { name: /^Turn \d+$/ }).filter({ hasText: "queued for verbatim delivery" }).locator(":scope > details");
-      const tool = trace.locator("details").filter({ hasText: "Exact report" });
+      const trace = page.getByRole("region", { name: /^Turn \d+$/ }).filter({ hasText: "tagged" }).locator(":scope > details");
+      // The tag call ran inside the execute script and is shown as its own tool row.
+      const tool = trace.locator("details").filter({ hasText: "customer" });
       const toolBody = tool.locator("pre").first();
       // The default Compact level folds each turn's activity into one closed summary row.
       expect(await page.locator('[aria-label^="Turn "] > details[open]').count()).toBe(0);
@@ -133,15 +133,14 @@ test("transcript and entry HTTP proxy reach Go and reject an unmapped connection
       expect(await toolBody.isVisible()).toBe(false);
       expect(await report.isVisible()).toBe(true);
       expect(await report.count()).toBe(1);
-      expect(await page.getByText("answer two", { exact: true }).isVisible()).toBe(true);
       await trace.locator(":scope > summary").press("Enter");
       expect(await trace.getAttribute("open")).not.toBeNull();
-      expect(await tool.locator("summary").innerText()).toContain("Send report");
+      expect(await tool.locator("summary").innerText()).toContain("rocketclaw_set_tag");
       expect(await toolBody.isVisible()).toBe(false);
       await tool.locator("summary").press("Enter");
       expect(await toolBody.isVisible()).toBe(true);
-      expect(await tool.locator("pre").filter({ hasText: "queued for verbatim delivery" }).isVisible()).toBe(true);
-      expect(await tool.locator("pre").allTextContents()).toEqual(['Arguments\n{"payload":"Exact report\\nwith details"}\n\nResult\nqueued for verbatim delivery']);
+      expect(await tool.locator("pre").filter({ hasText: "tags" }).isVisible()).toBe(true);
+      expect(await tool.locator("pre").allTextContents()).toEqual(['Arguments\n{"tag":"customer"}\n\nResult\n{"tags":["customer"]}']);
       await tool.getByRole("button", { name: "Collapse tool" }).click();
       expect(await toolBody.isVisible()).toBe(false);
       await page.screenshot({ path: path.join(screenshots, filename) });

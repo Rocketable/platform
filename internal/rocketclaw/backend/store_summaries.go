@@ -11,7 +11,6 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	harness "github.com/Rocketable/platform/internal/rocketcode"
-	"github.com/openai/openai-go/v3/responses"
 )
 
 // Background backfill shares this transaction lock with history mutation. It
@@ -90,56 +89,11 @@ func projectSessionSummary(summary *protocol.SessionSummary, entry *harness.Sess
 		}
 	}
 
-	delivery, _, err := ReplayDeliveryText(items)
-	if err != nil {
-		return err
-	}
-
-	delivery = strings.ReplaceAll(delivery, "\x00", "")
-
-	if strings.TrimSpace(delivery) != "" {
-		summary.LastMessage = delivery
-	}
-
 	if updated, errParse := time.Parse(time.RFC3339Nano, timestamp); errParse == nil {
 		summary.LastUpdated = updated.UTC().Truncate(time.Microsecond)
 	}
 
 	return nil
-}
-
-// ReplayDeliveryText returns the last successful human-facing delivery and its call index.
-func ReplayDeliveryText(items []responses.ResponseInputItemUnionParam) (text string, index int, err error) {
-	calls := make(map[string]int)
-
-	for i := range items {
-		item := &items[i]
-		if call := item.OfFunctionCall; call != nil && call.Name == "rocketclaw_i_want_human_partner_to_see_this" {
-			calls[call.CallID] = i
-		}
-
-		output := item.OfFunctionCallOutput
-		if output == nil || output.Output.OfString.Value != "queued for verbatim delivery" {
-			continue
-		}
-
-		callIndex, ok := calls[output.CallID.Value]
-		if !ok {
-			continue
-		}
-
-		var delivery struct {
-			Payload string `json:"payload"`
-		}
-		if err := json.Unmarshal([]byte(items[callIndex].OfFunctionCall.Arguments), &delivery); err != nil {
-			return "", 0, fmt.Errorf("decode delivery report: %w", err)
-		}
-
-		text = delivery.Payload
-		index = callIndex
-	}
-
-	return text, index, nil
 }
 
 func saveSessionSummary(ctx context.Context, db stateStoreDB, summary protocol.SessionSummary) error {

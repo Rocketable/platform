@@ -181,6 +181,51 @@ func (o *turnObservations) replaceResponse(ctx context.Context, parentID string,
 	return o.saveTraceLocked(ctx, trace)
 }
 
+// hostCallTrace and hostResultTrace keep a call made inside an execute script in
+// replay item shape, so history readers treat it like a direct call. They live in
+// the turn trace, never in model input; ParentCallID is the execute call's ID.
+type hostCallTrace struct {
+	Type         string `json:"type"`
+	CallID       string `json:"call_id"`
+	ParentCallID string `json:"parent_call_id"`
+	Name         string `json:"name"`
+	Arguments    string `json:"arguments"`
+}
+
+type hostResultTrace struct {
+	Type         string `json:"type"`
+	CallID       string `json:"call_id"`
+	ParentCallID string `json:"parent_call_id"`
+	Output       string `json:"output"`
+}
+
+// recordHostCall stores one execute-script call and its result once; a resumed
+// script replaying the journaled step finds it already recorded.
+// Ponytail: outputs are stored in full beside the script's own result; trim if trace size matters.
+func (o *turnObservations) recordHostCall(ctx context.Context, parentCallID, callID, name string, arguments json.RawMessage, output string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	if o.closed {
+		return nil
+	}
+
+	if o.err != nil {
+		return o.err
+	}
+
+	// String-only records; JSON encoding cannot fail.
+	call, _ := json.Marshal(hostCallTrace{Type: "function_call", CallID: callID, ParentCallID: parentCallID, Name: name, Arguments: string(arguments)})
+
+	if slices.ContainsFunc(o.trace, func(raw json.RawMessage) bool { return bytes.Equal(raw, call) }) {
+		return nil
+	}
+
+	result, _ := json.Marshal(hostResultTrace{Type: "function_call_output", CallID: callID, ParentCallID: parentCallID, Output: output})
+
+	return o.saveTraceLocked(ctx, append(slices.Clone(o.trace), call, result))
+}
+
 func (o *turnObservations) saveTraceLocked(ctx context.Context, trace []json.RawMessage) error {
 	if err := o.journal.SaveTrace(ctx, o.turnID, trace); err != nil {
 		o.err = progressPersistenceError{err: err}

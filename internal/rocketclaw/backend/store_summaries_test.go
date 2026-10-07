@@ -389,7 +389,6 @@ func TestConversationSummaryInitializationRollsBackOnFailure(t *testing.T) {
 		for _, failure := range []struct{ name, message string }{
 			{"orphan decode", "parse session summary history"},
 			{"replay decode", "decode session summary replay input"},
-			{"delivery decode", "decode delivery report"},
 			{"summary write", "write session summary"},
 			{"database unavailable", "database is closed"},
 		} {
@@ -409,9 +408,6 @@ func TestConversationSummaryInitializationRollsBackOnFailure(t *testing.T) {
 					require.NoError(t, err)
 				case "replay decode":
 					_, err = inspection.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{"replay_input":[{"type":"compaction","content":42}]}' WHERE conversation_id = 'history'`)
-					require.NoError(t, err)
-				case "delivery decode":
-					_, err = inspection.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{"replay_input":[{"type":"function_call","call_id":"bad","name":"rocketclaw_i_want_human_partner_to_see_this","arguments":"invalid"},{"type":"function_call_output","call_id":"bad","output":"queued for verbatim delivery"}]}' WHERE conversation_id = 'history'`)
 					require.NoError(t, err)
 				case "summary write":
 					// A real database write rejection must roll back the earlier record/binding inserts.

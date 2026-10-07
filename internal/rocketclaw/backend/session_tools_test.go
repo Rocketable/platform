@@ -38,22 +38,22 @@ func TestSessionTagToolsBridge(t *testing.T) {
 			_, err := service.db.ExecContext(t.Context(), `ALTER TABLE session_tags ADD CONSTRAINT reject_resolved CHECK (NOT (tags ? 'resolved'))`)
 			require.NoError(t, err)
 
-			calls := []struct{ name, args string }{
-				{"rocketclaw_set_tag", `{"tag":"triage"}`},
-				{"execute", `{"code":"def main():\n    return rocketclaw_set_tag(tag=\"customer\")\n"}`},
-				{"rocketclaw_set_tag", `{"tag":"investigating"}`},
-				{"execute", `{"code":"def main():\n    return rocketclaw_set_tag(tag=\"investigating\")\n"}`},
-				{"rocketclaw_get_tags", `{}`},
-				{"execute", `{"code":"def main():\n    return rocketclaw_get_tags()\n"}`},
-				{"rocketclaw_set_tag", `{"tag":"resolved"}`},
-				{"rocketclaw_set_tag", `{"tag":"urgent"}`},
-				{"rocketclaw_set_tag", `{"tag":12}`},
-				{"rocketclaw_set_tag", `{}`},
-				{"rocketclaw_set_tag", `{"tag":"triage","conversation_id":"other"}`},
-				{"rocketclaw_get_tags", `{"conversation_id":"other"}`},
-				{"rocketclaw_get_tags", `{"tag":null}`},
-				{"rocketclaw_get_tags", `null`},
-				{"rocketclaw_set_tag", `{"tag":null}`},
+			// Each call is one execute script; tag tools are reachable only inside execute.
+			calls := []string{
+				`rocketclaw_set_tag(tag="triage")`,
+				`rocketclaw_set_tag(tag="customer")`,
+				`rocketclaw_set_tag(tag="investigating")`,
+				`rocketclaw_set_tag(tag="investigating")`,
+				`rocketclaw_get_tags()`,
+				`rocketclaw_get_tags()`,
+				`rocketclaw_set_tag(tag="resolved")`,
+				`rocketclaw_set_tag(tag="urgent")`,
+				`rocketclaw_set_tag(tag=12)`,
+				`rocketclaw_set_tag()`,
+				`rocketclaw_set_tag(tag="triage", conversation_id="other")`,
+				`rocketclaw_get_tags(conversation_id="other")`,
+				`rocketclaw_get_tags(tag=None)`,
+				`rocketclaw_set_tag(tag=None)`,
 			}
 
 			var outputs []string
@@ -77,21 +77,10 @@ func TestSessionTagToolsBridge(t *testing.T) {
 				}
 
 				for _, name := range []string{"rocketclaw_set_tag", "rocketclaw_get_tags"} {
-					found := false
-
 					for _, tool := range body.Tools {
-						if tool.Name == name {
-							found = true
-
-							if name == setTagToolName {
-								assert.JSONEq(t, `{"type":"object","properties":{"tag":{"type":"string"}},"required":["tag"],"additionalProperties":false}`, string(tool.Parameters))
-							} else {
-								assert.JSONEq(t, `{"type":"object","properties":{},"required":[],"additionalProperties":false}`, string(tool.Parameters))
-							}
-						}
+						assert.NotEqual(t, name, tool.Name, "tag tools run only inside execute")
 					}
 
-					assert.Equal(t, configured, found)
 					assert.Equal(t, configured, strings.Contains(body.Instructions, name))
 				}
 
@@ -106,8 +95,9 @@ func TestSessionTagToolsBridge(t *testing.T) {
 				w.Header().Set("Content-Type", "application/json")
 
 				if requests < len(calls) {
-					call := calls[requests]
-					writeRawRunFunctionCall(t, w, fmt.Sprintf("tag-%d", requests), call.name, json.RawMessage(call.args))
+					writeRawRunFunctionCall(t, w, fmt.Sprintf("tag-%d", requests), "execute", struct {
+						Code string `json:"code"`
+					}{"def main():\n    return " + calls[requests] + "\n"})
 				} else {
 					writeRawRunMessage(t, w, "done", "message", "done")
 				}
@@ -130,8 +120,19 @@ func TestSessionTagToolsBridge(t *testing.T) {
 			require.NoError(t, err)
 
 			for _, name := range []string{"rocketclaw_set_tag", "rocketclaw_get_tags"} {
-				_, present := runtime.CodeModeHosts[name]
+				host, present := runtime.CodeModeHosts[name]
 				require.Equal(t, configured, present)
+
+				if configured {
+					schema, err := json.Marshal(host.Definition.Parameters)
+					require.NoError(t, err)
+
+					if name == setTagToolName {
+						require.JSONEq(t, `{"type":"object","properties":{"tag":{"type":"string"}},"required":["tag"],"additionalProperties":false}`, string(schema))
+					} else {
+						require.JSONEq(t, `{"type":"object","properties":{},"required":[],"additionalProperties":false}`, string(schema))
+					}
+				}
 			}
 
 			input := make(chan rocketcode.PromptInput, 1)
@@ -165,7 +166,7 @@ func TestSessionTagToolsBridge(t *testing.T) {
 				for _, freshCall := range []bool{false, true} {
 					if freshCall {
 						requests = len(calls)
-						calls = append(calls, struct{ name, args string }{setTagToolName, `{"tag":"customer"}`})
+						calls = append(calls, `rocketclaw_set_tag(tag="customer")`)
 					}
 
 					runtimeConfig.CustomTools = sessionTagTools(service, "external_mcp:owning")
@@ -201,7 +202,7 @@ func TestSessionTagToolsBridge(t *testing.T) {
 }
 
 func TestSessionTagChildAuthority(t *testing.T) {
-	for _, mode := range []toolMode{toolModePersistent, toolModeCron} {
+	for _, mode := range []toolMode{toolModePersistent} {
 		for _, tc := range []struct{ root, child bool }{{true, false}, {false, true}, {true, true}} {
 			t.Run(fmt.Sprintf("%v/%v/%v", mode, tc.root, tc.child), func(t *testing.T) {
 				workspace := t.TempDir()
@@ -239,12 +240,10 @@ func TestSessionTagChildAuthority(t *testing.T) {
 					}
 
 					for _, name := range []string{setTagToolName, getTagsToolName} {
-						present := false
 						for _, tool := range body.Tools {
-							present = present || tool.Name == name
+							assert.NotEqual(t, name, tool.Name, "tag tools run only inside execute")
 						}
 
-						assert.Equal(t, enabled, present)
 						assert.Equal(t, enabled, strings.Contains(body.Instructions, name))
 					}
 
@@ -265,10 +264,10 @@ func TestSessionTagChildAuthority(t *testing.T) {
 					if child {
 						switch n {
 						case 1:
-							writeRawRunFunctionCall(t, w, id, setTagToolName, json.RawMessage(`{"tag":"root-only"}`))
+							writeRawRunFunctionCall(t, w, id, "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_set_tag(tag=\"root-only\")\n"}`))
 						case 2:
 							assert.Contains(t, outputs[0], "failed")
-							writeRawRunFunctionCall(t, w, id, setTagToolName, json.RawMessage(`{"tag":"child-only"}`))
+							writeRawRunFunctionCall(t, w, id, "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_set_tag(tag=\"child-only\")\n"}`))
 						case 3:
 							writeRawRunFunctionCall(t, w, id, "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_get_tags()\n"}`))
 						default:
@@ -285,7 +284,7 @@ func TestSessionTagChildAuthority(t *testing.T) {
 					} else {
 						switch n {
 						case 1:
-							writeRawRunFunctionCall(t, w, id, setTagToolName, json.RawMessage(`{"tag":"root-only"}`))
+							writeRawRunFunctionCall(t, w, id, "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_set_tag(tag=\"root-only\")\n"}`))
 						case 2:
 							writeRawRunFunctionCall(t, w, id, "task", struct {
 								Description string `json:"description"`
@@ -457,6 +456,9 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 			json.RawMessage(`{"type":"reasoning","summary":[{"type":"summary_text","text":"thinking"}],"content":[{"type":"reasoning_text","text":"plaintext"}],"encrypted_content":"sealed"}`),
 			json.RawMessage(`{"type":"web_search_call","id":"search","status":"completed","action":{"type":"search","query":"query"}}`),
 			json.RawMessage(`{"type":"unknown_provider_item","encrypted_content":"sealed"}`),
+			// A call made inside an execute script, saved by RocketCode beside the replay.
+			json.RawMessage(`{"type":"function_call","call_id":"script/host/1","parent_call_id":"script","name":"rocketclaw_get_tags","arguments":"{}"}`),
+			json.RawMessage(`{"type":"function_call_output","call_id":"script/host/1","parent_call_id":"script","output":"{\"tags\":[]}"}`),
 		},
 	}
 	// A synced producer schedule stores untyped bookkeeping, not a replay message, in its trace.
@@ -504,7 +506,7 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 		require.NoError(t, err)
 
 		at := entry.Timestamp.Format(time.RFC3339Nano)
-		require.Equal(t, "timestamp\trole\tcontent\n"+at+"\ttool_call\tRead [call] {}\n"+at+"\ttool_result\t[call] line\\nΩ\\t\\\\\\r\n"+at+"\ttool_result\t[parts] text\\n[non-text tool result omitted]\n"+at+"\tuser\t\n"+at+"\treasoning\tthinking\\nplaintext\n"+at+"\tevent\t[web_search_call: stored event not rendered]\n"+at+"\tevent\t[unknown_provider_item: stored event not rendered]\n"+at+"\tevent\t[producer_schedule: stored event not rendered]\n", result.Output)
+		require.Equal(t, "timestamp\trole\tcontent\n"+at+"\ttool_call\tRead [call] {}\n"+at+"\ttool_result\t[call] line\\nΩ\\t\\\\\\r\n"+at+"\ttool_result\t[parts] text\\n[non-text tool result omitted]\n"+at+"\tuser\t\n"+at+"\treasoning\tthinking\\nplaintext\n"+at+"\tevent\t[web_search_call: stored event not rendered]\n"+at+"\tevent\t[unknown_provider_item: stored event not rendered]\n"+at+"\ttool_call\trocketclaw_get_tags [script/host/1] {}\n"+at+"\ttool_result\t[script/host/1] {\"tags\":[]}\n"+at+"\tevent\t[producer_schedule: stored event not rendered]\n", result.Output)
 	}
 
 	require.Equal(t, before, snapshot())
@@ -591,7 +593,7 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 
 			defer unlock()
 
-			requests, approvals := 0, 0
+			requests, approvals, listApprovals := 0, 0, 0
 
 			var outputs []string
 
@@ -604,14 +606,7 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 				var body struct {
 					Model string `json:"model"`
 					Tools []struct {
-						Name       string `json:"name"`
-						Strict     bool   `json:"strict"`
-						Parameters struct {
-							Required             []string        `json:"required"`
-							Type                 string          `json:"type"`
-							Properties           json.RawMessage `json:"properties"`
-							AdditionalProperties json.RawMessage `json:"additionalProperties"`
-						} `json:"parameters"`
+						Name string `json:"name"`
 					} `json:"tools"`
 					Input []struct {
 						Type   string `json:"type"`
@@ -632,6 +627,11 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 				}
 
 				requests++
+				if requests == 2 {
+					// Reviews so far came from the Execute call to rocketclaw_list_sessions alone.
+					listApprovals = approvals
+				}
+
 				if requests == 1 {
 					assert.NotContains(t, string(raw), "secret user")
 					assert.Contains(t, string(raw), `"type":"compaction"`)
@@ -640,18 +640,8 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 
 				for _, tool := range body.Tools {
 					switch tool.Name {
-					case listSessionsToolName:
-						assert.True(t, tool.Strict)
-						assert.Equal(t, []string{"include_message_preview", "limit", "since", "until"}, tool.Parameters.Required)
-					case getSessionToolName:
-						assert.True(t, tool.Strict)
-						assert.Equal(t, []string{"conversation_id"}, tool.Parameters.Required)
-					case "rocketclaw_current_session_id":
-						assert.True(t, tool.Strict)
-						assert.Equal(t, []string{}, tool.Parameters.Required)
-						assert.Equal(t, "object", tool.Parameters.Type)
-						assert.JSONEq(t, `{}`, string(tool.Parameters.Properties))
-						assert.JSONEq(t, `false`, string(tool.Parameters.AdditionalProperties))
+					case listSessionsToolName, getSessionToolName, currentSessionIDToolName:
+						assert.Failf(t, "execute-only tool is model-facing", "%s", tool.Name)
 					}
 				}
 
@@ -678,14 +668,14 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 					writeRawRunFunctionCall(t, w, "direct-current", "rocketclaw_current_session_id", json.RawMessage(`{}`))
 				case 7:
 					if tc.current && tc.get {
-						arguments, err := json.Marshal(struct {
-							ConversationID string `json:"conversation_id"`
-						}{outputs[5]})
+						code, err := json.Marshal(struct {
+							Code string `json:"code"`
+						}{fmt.Sprintf("def main():\n    return rocketclaw_get_session(conversation_id=%q)\n", outputs[4])})
 						if !assert.NoError(t, err) {
 							return
 						}
 
-						writeRawRunFunctionCall(t, w, "current-history", getSessionToolName, json.RawMessage(arguments))
+						writeRawRunFunctionCall(t, w, "current-history", "execute", json.RawMessage(code))
 					} else {
 						writeRawRunMessage(t, w, "done", "message", "done")
 					}
@@ -707,13 +697,23 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
 			require.NoError(t, err)
 
-			_, hasList := runtime.CodeModeHosts[listSessionsToolName]
-			_, hasGet := runtime.CodeModeHosts[getSessionToolName]
+			list, hasList := runtime.CodeModeHosts[listSessionsToolName]
+			get, hasGet := runtime.CodeModeHosts[getSessionToolName]
 			current, hasCurrent := runtime.CodeModeHosts["rocketclaw_current_session_id"]
 
 			require.Equal(t, tc.list, hasList)
 			require.Equal(t, tc.get, hasGet)
 			require.Equal(t, tc.current, hasCurrent)
+
+			if tc.list {
+				require.True(t, list.Definition.Strict.Value)
+				require.Equal(t, []string{"include_message_preview", "limit", "since", "until"}, list.Definition.Parameters["required"])
+			}
+
+			if tc.get {
+				require.True(t, get.Definition.Strict.Value)
+				require.Equal(t, []string{"conversation_id"}, get.Definition.Parameters["required"])
+			}
 
 			if tc.current {
 				schema, err := json.Marshal(current.Definition.Parameters)
@@ -738,32 +738,50 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 				require.Len(t, outputs, 6)
 			}
 
+			// Session tools are execute-only: direct calls never reach them.
+			require.Contains(t, outputs[2], "tool not found")
+			require.Contains(t, outputs[3], "tool not found")
+			require.Contains(t, outputs[5], "tool not found")
+
 			if tc.list {
 				require.Contains(t, outputs[0], "external_mcp:private")
-				require.Equal(t, outputs[0], outputs[2])
 			} else {
 				require.Contains(t, outputs[0], "undefined: rocketclaw_list_sessions")
-				require.Contains(t, outputs[2], "tool not found")
 			}
 
 			if tc.get {
-				require.Equal(t, outputs[1], outputs[3])
 				require.Equal(t, outputs[1], outputs[6])
 				require.Equal(t, "timestamp\trole\tcontent\n1970-01-01T00:00:01Z\tuser\tsecret user\n1970-01-01T00:00:01Z\tassistant\tsecret answer\n0001-01-01T00:00:00Z\tcompaction\tCompaction boundary\n1970-01-01T00:00:01Z\tuser\tafter compaction\n1970-01-01T00:00:01Z\tassistant\trecent answer\n", outputs[1])
 			} else {
 				require.Contains(t, outputs[1], "undefined: rocketclaw_get_session")
-				require.Contains(t, outputs[3], "tool not found")
 			}
 
 			if tc.current {
 				require.Equal(t, "external_mcp:private", outputs[4])
-				require.Equal(t, outputs[4], outputs[5])
 			} else {
 				require.Contains(t, outputs[4], "undefined: rocketclaw_current_session_id")
-				require.Contains(t, outputs[5], "tool not found")
 			}
 
 			require.Equal(t, tc.auto, approvals > 0)
+			require.Equal(t, tc.auto, listApprovals > 0)
+
+			// Calls made inside execute are saved with the turn, under their execute call.
+			var saved []string
+
+			for _, entry := range store.entries {
+				for _, raw := range entry.OutputTrace {
+					var call struct {
+						Type, Name   string
+						ParentCallID string `json:"parent_call_id"`
+					}
+					if json.Unmarshal(raw, &call) == nil && call.Type == "function_call" && call.ParentCallID != "" {
+						saved = append(saved, call.Name)
+					}
+				}
+			}
+
+			require.Equal(t, tc.list, slices.Contains(saved, listSessionsToolName))
+			require.Equal(t, tc.get, slices.Contains(saved, getSessionToolName))
 			require.True(t, service.PairBusyFor("external_mcp:private"))
 		})
 	}

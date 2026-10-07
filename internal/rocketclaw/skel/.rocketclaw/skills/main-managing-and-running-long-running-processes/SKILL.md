@@ -109,7 +109,7 @@ The cron monitor should:
 - run the process-specific health check when one exists
 - update `LONG_RUNNING_PROCESSES.md` with status and last checked time
 - notify the human only when the process is missing, unhealthy, repeatedly failing, or blocked on human action
-- call `rocketclaw_i_want_human_partner_to_see_this("")` when there is nothing actionable to report
+- reply with nothing when there is nothing actionable to report
 
 Keep the cron schedule conservative. If the human did not specify a cadence, ask for one instead of guessing for expensive or noisy checks. For cheap local checks, a short interval such as `5m` is usually reasonable, but still confirm when impact is unclear.
 
@@ -199,7 +199,7 @@ If the monitor cannot update the ledger:
 
 If the monitor is noisy:
 
-- adjust the cron body so normal healthy checks call `rocketclaw_i_want_human_partner_to_see_this("")`
+- adjust the cron body so normal healthy checks reply with nothing
 - notify only for missing, failed, unhealthy, or blocked states
 
 # Final Checklist
