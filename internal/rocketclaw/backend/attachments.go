@@ -60,6 +60,20 @@ func (s *SessionService) LoadAttachment(ctx context.Context, conversationID, id 
 	return attachment, nil
 }
 
+// loadAttachmentData refills the bytes that persisted turn state leaves out.
+func (s *SessionService) loadAttachmentData(ctx context.Context, attachments []protocol.OutboundAttachment) error {
+	for i := range attachments {
+		data, err := s.attachments.Get(ctx, attachments[i].ID)
+		if err != nil {
+			return fmt.Errorf("load attachment %s: %w", attachments[i].ID, err)
+		}
+
+		attachments[i].Data = data
+	}
+
+	return nil
+}
+
 // AttachmentMetadata loads stored metadata without transferring the file bytes.
 // Callers must authorize the reference within its producer scope.
 func (s *SessionService) AttachmentMetadata(ctx context.Context, conversationID, id string, uploadOnly bool) (protocol.OutboundAttachment, error) {

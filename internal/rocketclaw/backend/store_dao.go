@@ -633,6 +633,10 @@ WHERE phase <> $2 AND COALESCE(NULLIF(inbound_json->>'SyncDestination', ''), con
 		if err := json.Unmarshal(outbound, &turn.outbound); err != nil {
 			return activeTurn{}, false, fmt.Errorf("decode active turn outbound: %w", err)
 		}
+
+		if err := s.loadAttachmentData(ctx, turn.outbound.Attachments); err != nil {
+			return activeTurn{}, false, err
+		}
 	}
 
 	return turn, true, nil
@@ -689,7 +693,7 @@ WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntry
 			return nil, fmt.Errorf("decode finished turn outbound: %w", err)
 		}
 
-		return &stored, nil
+		return &stored, s.loadAttachmentData(ctx, stored.Attachments)
 	}
 
 	for i := range finish.entries {
