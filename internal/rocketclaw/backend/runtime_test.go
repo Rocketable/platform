@@ -226,6 +226,66 @@ func TestRuntimeSummaryBackfillLifecycle(t *testing.T) {
 }
 
 func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
+	t.Run("sync does not hold history while waiting for bridge", func(t *testing.T) {
+		store := newTestSessionService(t)
+		manager, _, _, _ := newCronTestManager(t, store)
+		ctx := t.Context()
+		bridges := make([]*Bridge, 0, 2)
+
+		for _, id := range []string{t.Name() + "-source", t.Name() + "-destination"} {
+			require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "job"}))
+			bridge, err := manager.recordedBridge(id)
+			require.NoError(t, err)
+
+			bridges = append(bridges, bridge)
+		}
+
+		source, destination := bridges[0], bridges[1]
+		blocker, err := store.db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+
+		defer func() { _ = blocker.Rollback() }()
+
+		require.NoError(t, lockSessionHistory(ctx, blocker, destination.config.ConversationID))
+
+		var holder int
+		require.NoError(t, blocker.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&holder))
+
+		var syncing errgroup.Group
+		syncing.Go(func() error { return destination.syncConversation(ctx, source) })
+
+		defer func() {
+			_ = blocker.Rollback()
+
+			require.NoError(t, syncing.Wait())
+		}()
+
+		require.Eventually(t, func() bool {
+			var blocked bool
+			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))`, holder).Scan(&blocked))
+
+			return blocked
+		}, 5*time.Second, time.Millisecond)
+
+		// Scheduled claims hold the bridge mutex while waiting for this history lock.
+		destination.mu.Lock()
+		defer destination.mu.Unlock()
+
+		require.NoError(t, blocker.Commit())
+
+		probe, err := store.db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+
+		defer func() { _ = probe.Rollback() }()
+
+		require.Eventually(t, func() bool {
+			var available bool
+			require.NoError(t, probe.QueryRowContext(ctx, `SELECT pg_try_advisory_xact_lock(87901, hashtext($1))`, destination.config.ConversationID).Scan(&available))
+
+			return available
+		}, 5*time.Second, time.Millisecond, "sync must release history without acquiring the bridge mutex")
+	})
+
 	t.Run("history before delivered owner", func(t *testing.T) {
 		store := newTestSessionService(t)
 		store.db.SetMaxOpenConns(1)
