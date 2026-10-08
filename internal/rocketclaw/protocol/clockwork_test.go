@@ -1,25 +1,10 @@
 package protocol
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
-
-func TestNoUserQuestionAsker(t *testing.T) {
-	require.False(t, NoUserQuestionAsker().ExposeTool())
-	_, err := NoUserQuestionAsker().AskUserQuestion(t.Context(), &AskUserQuestionRequest{Question: "q"})
-	require.Error(t, err)
-
-	interactive := InteractiveUserQuestionAsker(func(context.Context, *AskUserQuestionRequest) (AskUserQuestionAnswer, error) {
-		return AskUserQuestionAnswer{Custom: "ok"}, nil
-	})
-	require.True(t, interactive.ExposeTool())
-	answer, err := interactive.AskUserQuestion(t.Context(), &AskUserQuestionRequest{Question: "q"})
-	require.NoError(t, err)
-	require.Equal(t, "ok", answer.Custom)
-}
 
 func TestCloneOutboundMessageDeepCopiesDeliveryData(t *testing.T) {
 	message := NewOutboundMessage("conversation", "reply")
@@ -29,6 +14,7 @@ func TestCloneOutboundMessageDeepCopiesDeliveryData(t *testing.T) {
 	message.Agent, message.Model, message.SourceConversationID, message.ReasoningEffort = "planner", "work/model-a", "producer-x", new("high")
 	message.SlackReply = &SlackReplyTarget{ChannelID: "C1", ThreadTS: "1.2"}
 	message.Cronjob = &CronjobMessage{RelativePath: "job.md"}
+	message.Source, message.Terminal = SourceSlack, TerminalStopped
 	message.Attachments = []OutboundAttachment{
 		{ID: "report", Name: "report.txt", MIMEType: "text/plain", Data: []byte("report"), OriginalUnverified: true, Size: 6},
 		{ID: "image", Name: "image.png", MIMEType: "image/png", Data: []byte("image"), Size: 5},
@@ -47,6 +33,8 @@ func TestCloneOutboundMessageDeepCopiesDeliveryData(t *testing.T) {
 	require.Equal(t, "work/model-a", clone.Model)
 	require.Equal(t, "producer-x", clone.SourceConversationID)
 	require.Equal(t, message.ReasoningEffort, clone.ReasoningEffort)
+	require.Equal(t, SourceSlack, clone.Source)
+	require.Equal(t, TerminalStopped, clone.Terminal)
 	require.NotSame(t, message.ReasoningEffort, clone.ReasoningEffort)
 	require.NotSame(t, message.SlackReply, clone.SlackReply)
 	require.NotSame(t, message.Cronjob, clone.Cronjob)

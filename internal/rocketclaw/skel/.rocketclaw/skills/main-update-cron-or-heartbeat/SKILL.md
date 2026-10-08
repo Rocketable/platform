@@ -82,7 +82,7 @@ channel: "C0123456789"
 
 Do not write `channel: #triage`; YAML parses that as an empty value/comment. If the human gives a channel name without `#`, ask whether to use the configured Slack display form with `#` or a configured channel ID rather than silently rewriting it.
 
-Cron output starts a fresh thread-local conversation. Its first later authorized human reply is the first model-visible conversational turn in that thread.
+Cron output starts a fresh managed thread. That thread is read-only in Slack; follow-up happens in its Web conversation (the report root's footer links it).
 
 Timestamp schedules are one-off crons. A one-off cron is a durable `cron/*.md` file that survives rocketclaw restarts until due, runs through normal cronjob execution and output routing, and self-deletes after one completed run attempt. Do not combine a timestamp schedule with any other schedule.
 

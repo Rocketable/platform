@@ -232,12 +232,10 @@ func (s *SessionService) UpsertThread(conversationID string, thread ThreadState)
 }
 
 // BeginGoal records a new active goal for a managed conversation.
-func (s *SessionService) BeginGoal(conversationID, objective, checkScript string, maxTurns int, recipientTeamID, recipientUserID string) error {
+func (s *SessionService) BeginGoal(conversationID, objective, checkScript string, maxTurns int) error {
 	conversationID = strings.TrimSpace(conversationID)
 	objective = strings.TrimSpace(objective)
 	checkScript = strings.TrimSpace(checkScript)
-	recipientTeamID = strings.TrimSpace(recipientTeamID)
-	recipientUserID = strings.TrimSpace(recipientUserID)
 
 	if conversationID == "" {
 		return errors.New("goal conversation ID is required")
@@ -249,7 +247,7 @@ func (s *SessionService) BeginGoal(conversationID, objective, checkScript string
 
 	maxTurns = max(maxTurns, 0)
 
-	return beginGoalDB(context.Background(), s.db, conversationID, &GoalState{Objective: objective, CheckScript: checkScript, MaxTurns: maxTurns, SlackRecipientTeamID: recipientTeamID, SlackRecipientUserID: recipientUserID})
+	return beginGoalDB(context.Background(), s.db, conversationID, &GoalState{Objective: objective, CheckScript: checkScript, MaxTurns: maxTurns})
 }
 
 func beginGoalDB(ctx context.Context, db stateStoreDB, conversationID string, goal *GoalState) error {
@@ -1236,19 +1234,6 @@ func (s *SessionService) Stop() error {
 	}
 
 	return nil
-}
-
-// PairBusyFor reports whether pairID is reserved or holding a turn.
-func (s *SessionService) PairBusyFor(pairID string) bool {
-	s.turnGatesMu.Lock()
-	defer s.turnGatesMu.Unlock()
-
-	gate := s.turnGates[strings.TrimSpace(pairID)]
-	if gate == nil {
-		return false
-	}
-
-	return gate.reservedFor != "" || len(gate.token) == 0
 }
 
 // pendingProducerIDs discovers completed producers even after their active rows

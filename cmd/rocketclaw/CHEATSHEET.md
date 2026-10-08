@@ -1,28 +1,10 @@
 # RocketClaw Cheatsheet
 
-## Slack Text Controls
+## Slack
 
-Type dollar commands. Emoji in this table are reactions RocketClaw listens to, or markers it posts. They are not typed command prefixes.
+The Web interface is the primary way to work. Slack has three jobs: cron report threads, External MCP threads, and quick help when an allowlisted user @mentions RocketClaw. Slack has no `$` commands, help, agent selector, goals, queue, steering, or reaction controls; its only control is the native Stop on a running mention turn. In a mention, `$stop`, `$agent`, `$<skill>`, and any other `$` text reach the agent as ordinary text. Use Web to run commands and skills, switch agents, start goals, manage queued work, and stop any turn.
 
-| Emoji | Dollar Command | Aliases | Surface | What It Does | Notes |
-| --- | --- | --- | --- | --- | --- |
-|  | `$goal`, `$ goal` |  | Slack | Starts a text goal loop. | Dollar command names are case-insensitive; goal arguments use the existing grammar. Bare `$goal` posts ephemeral parameter help and examples. |
-| `🛑`, `⏹️` | `$stop`, `$ stop` | Slack reactions `:octagonal_sign:`, `:stop_button:` | Slack managed threads | Stops the active managed-conversation turn. | React with 🛑 or ⏹️. Typing those glyphs as a message is not a command. Stop feedback is marker-only: RocketClaw adds `❗` and sends no stop text. Dollar stop takes no arguments. |
-| `❗` |  | Slack `:exclamation:` | Slack | Interruption or rejection marker. | Added by RocketClaw after stop/interruption and for duplicate active-goal rejection. Humans generally do not use this as a command. |
-| `✅` |  | Slack `:white_check_mark:` | Slack | Completion marker. | Added when a goal reaches `complete`. Not added for `blocked`, `stopped`, or `budget_exhausted`. |
-|  | `$agent`, `$ agent` |  | Slack root mentions and managed conversations | Selects the initial root agent or switches the persisted managed-thread agent. | Bare root `$agent` or managed-thread `$agent` opens the selector. Root `$agent name` registers a ready thread; `$agent name message` starts the selected agent with `message` as its first turn. In a managed thread, `$agent name` switches. Only the user who sent the control message can use its selector. |
-| `🤖` |  | Slack `:robot_face:` | Slack | Processing/accepted marker. | Added when RocketClaw accepts a Slack-originated or relayed turn; removed after final response delivery. |
-| `⏳` |  | Slack `:hourglass_flowing_sand:` | Slack | Steer waiting to inject. | Marks a mid-turn Slack Steer. Removed on injection after a tool batch or a no-tool answer. Multiple waiting steers inject together. 🛑 on that hourglass drops the steer and does not stop the turn. |
-| `⏫` |  | Slack reactions `:arrow_double_up:`, `:fast_up_button:`, `:black_up_pointing_double_triangle:` | Slack managed threads | Convert a queued envelope into a Slack Steer. | During an active turn only. Idle or non-envelope ⏫ is ignored. |
-| `✉️` | `$enqueue <message>` | Slack `:envelope:` | Slack managed threads | Stash a later turn. | During an active turn, stashes without placeholders. While idle, posts 📨 then starts that turn now. |
-| `📨` |  | Slack `:incoming_envelope:` | Slack | Enqueued message is starting. | Posted as the consume-card header before the in-progress placeholder. |
-|  | `$queue` |  | Slack managed threads | Show pending steers, then later work. | Ephemeral jump index. Hide closes it; opening `$queue` again dismisses the previous card. Pending-steer rows jump to the hourglass then hide. A Slack `$enqueue` row jumps to the envelope then hides. Envelope 🛑 cancels that enqueue and does not stop the turn. Scheduled and External MCP rows list with no jump and cannot be cancelled from Slack. |
-| `📡` |  | Slack `:satellite_antenna:` | Slack | External MCP relay marker. | Added to Slack relay messages created from External MCP prompts. |
-
-Bare `$` posts built-in commands followed by skills allowed for the selected agent. A root help mention keeps the mention as the thread root and posts help as the first reply without starting an agent turn. Bare root `$agent` is not help: it posts the native agent selector as the first reply. Other non-built-in dollar names are skill calls; missing or disallowed skills fail at execution. Slack has no `$cron` or `$workflow` command (`$workflow` is web-only); in Slack those words reach the agent as ordinary text.
-Agent controls are consumed by RocketClaw and do not route to RocketCode as prompts.
-
-## Skill Calls (Slack and Web)
+## Skill Calls (Web)
 
 | Invocation | Meaning |
 | --- | --- |
@@ -35,7 +17,28 @@ The web dollar picker lists commands before the selected agent's allowed skills.
 
 Arguments use the documented OpenCode command convention: `$ARGUMENTS` retains the complete suffix's internal whitespace and quotes; `$1` and later positions remove single/double grouping quotes. The highest position consumes all remaining parsed arguments, missing positions become empty, and `$0` remains literal. Thus `Compare $1 against $2` with `"first area" second third` becomes `Compare first area against second third`; `$1 / $3 / $0` with `first` becomes `first /  / $0`. A body without placeholders gets nonempty direct arguments after a blank line. Substitution precedes enabled skill-shell expansion.
 
-While idle, sending starts a turn. During active work, a plain Slack call steers, web Send queues, and web Cmd/Ctrl+Enter steers. Queued skills are checked and loaded only when consumed. Promoting an envelope with ⏫ (or the web promotion control) injects the skill before its request once, without a later duplicate; deleting it executes no skill shell blocks. Attachments remain part of the request, not invocation arguments.
+While idle, sending starts a turn. During active work, web Send queues and web Cmd/Ctrl+Enter steers. Queued skills are checked and loaded only when consumed. Promoting a queued call with the web promotion control injects the skill before its request once, without a later duplicate; deleting it executes no skill shell blocks. Attachments remain part of the request, not invocation arguments.
+
+## Slack Event Subscriptions And Scopes
+
+In the Slack app's **Event Subscriptions**, subscribe to the bot event [`app_mention`](https://docs.slack.dev/reference/events/app_mention) (scope `app_mentions:read`), plus the rename events below. RocketClaw no longer handles message events, so the `message.channels`, `message.groups`, `message.im`, and `message.mpim` subscriptions are not needed and can be removed.
+
+Under **OAuth & Permissions**, keep `chat:write` for replies, `reactions:write` for the 🤖 marker, `files:read` and `files:write` for attachments, and `channels:history` to read a thread RocketClaw takes over and natively forwarded threads. When an `@` row covers private channels or group DMs, also keep `groups:history` and `mpim:history`. Reinstall the app after changing scopes.
+
+RocketClaw no longer uses Slack interactivity, so **Interactivity & Shortcuts** can be turned off. RocketClaw ignores presses on buttons posted by earlier versions.
+
+## Slack Native Stop
+
+While a mention turn runs, Slack can show its native working state with a Stop button. That uses Slack's [agent sessions](https://docs.slack.dev/ai/agent-sessions), which only apps declared as agents can create:
+
+1. In the app settings, open **Agents** in the sidebar and turn on the Agent messaging experience (manifest `features.agent_view`). This cannot be undone. It adds the `assistant:write` scope; reinstall the app.
+2. Under **Event Subscriptions**, subscribe to the bot event [`agent_session_stopped`](https://docs.slack.dev/reference/events/agent_session_stopped). Without it, Slack shows a working line with no Stop button.
+
+RocketClaw sets a mention turn's thread to `processing` when the turn starts, and again when it resumes after a restart. It sets `active` when the turn ends, however it ends. Stop from a user on the channel row's allowlist ends the turn and stops the thread's active goal, like Web `$stop`; queued mentions stay queued, and the reply's footer says `stopped`. A press from anyone else changes nothing. A Stop that arrives after a newer turn started interrupts nothing. Only turns started by a Slack mention get the working state: report threads, Web-started turns, goal continuations, and background wakes get none. The 🤖 reaction still marks each accepted mention.
+
+Slack ends the working state after one hour, and RocketClaw does not renew it, so a longer turn loses its Stop button; stop it in Web through the footer link. A workspace without agent sessions answers `feature_disabled` or `not_authorized`. RocketClaw logs that and runs the turn normally, without Stop; the footer link is then the way to stop it.
+
+Before turning on `agent_view`, note that it makes the app's Messages tab an agent chat, and RocketClaw never answers there: it ignores 1:1 DMs. **App Home** → **Show Tabs** → **Messages Tab** (manifest `features.app_home.messages_tab_enabled`) turns that tab off. Slack's docs don't say whether an agent app may keep the tab off, or whether channel-thread sessions still work with it off, so check in your workspace.
 
 ## Slack Channel Rename Subscriptions
 
@@ -49,18 +52,18 @@ Web resolves Slack tags such as `<@U123>` and `<!subteam^S123>` to names, and me
 
 | Scenario | How To Trigger | Notes |
 | --- | --- | --- |
-| Start a conversation | Mention the RocketClaw bot/app in a configured channel. | Starts a fresh managed thread using the first agent in that channel's ordered `agents` list. The mention is the first turn. |
-| Hail outside a listed room | Mention the bot in a joined public channel, private channel, or group DM. | Needs an `@` row in `slack.channels`. Uses that row's first agent and allowlist. 1:1 DMs stay ignored. |
-| Take over a thread | Mention the bot inside an existing unmanaged thread. | Adopts that thread. Bare `@bot` is enough. Includes the newest 50 prior texts. |
-| Start with a selected agent | Mention the RocketClaw bot/app with `$agent agent-name` or `$agent agent-name message`. | The no-message form creates a ready thread for the configured agent; the message form starts that agent with only the remainder as its first user-authored prompt. |
-| Continue a conversation | Reply in a known managed thread. | Uses only that thread's persisted history. |
-| Message with another human mention | Mention RocketClaw too when the message also pings another person, bot, broadcast target, or user group. | Managed-thread replies that ping someone else are suppressed unless RocketClaw is also mentioned. Raw unresolved `@word` text is not treated as a Slack ping. |
-| Agent selection or switch | Root `$agent [agent-name] [message]`, or `$agent [agent-name]` in a managed thread. | Bare `$agent` opens a Slack-native selector in either context. Root named selection uses a configured single-token agent name; the optional message starts its first turn. In a managed thread, the named form switches the persisted agent. |
-| Stash later work | `$enqueue write the changelog`. | During an active turn, marks ✉️ and stashes a separate later turn. While idle, posts 📨 then starts that message now even if the stack is already nonempty. Bare `$enqueue` posts command help. |
-| Review later work | `$queue`. | Posts pending steers, then later work. Hide closes it. Jump to a pending steer or Slack enqueue. ⏫ on an envelope during a turn converts it to a steer. 🛑 on a waiting hourglass drops that steer. Envelope 🛑 drops that enqueue. |
-| External MCP conversation | Call `session_prompt` with an external conversation ID, agent, and configured channel. | The ID owns one private MCP session and one managed Slack session on the same thread. The MCP agent stays fixed. MCP history copies into managed history; Slack history does not copy back. |
+| Ask for quick help | Mention the RocketClaw bot/app in a configured channel. | Starts a fresh managed thread using the first agent in that channel's ordered `agents` list. The mention is the first turn. A bare top-level mention with no text, file, or forward is ignored. |
+| Mention outside a listed room | Mention the bot in a joined public channel, private channel, or group DM. | Needs an `@` row in `slack.channels`. Uses that row's first agent and allowlist. 1:1 DMs stay ignored. |
+| Take over a thread | Mention the bot inside a thread RocketClaw does not know. | Adopts that thread. Bare `@bot` is enough. Includes the newest 50 prior texts. Ignored when RocketClaw posted the thread's root. |
+| Continue a conversation | Mention the bot again in a thread it answers in. | Next turn of that thread's conversation; only the mention is added. Replies without a mention start nothing. |
+| Mention while the agent works | Mention the bot during a running turn. | Waits and runs as the next turn; it never steers. Mentions also wait behind an active goal. Each mention is accepted once, even if Slack delivers it again. |
+| Stop a running turn | Press Slack's Stop on a running mention turn, or use **Stop turn** or `$stop` in Web. | Slack's Stop needs agent sessions (see Slack Native Stop) and an allowlisted user. Report threads and Web-started turns have no Slack stop control. |
+| Cron report thread | Read the report in Slack; follow up from its conversation in Web. | Read-only: replies and mentions in the thread are ignored. |
+| External MCP conversation | Call `session_prompt` with an external conversation ID, agent, and configured channel. | The ID owns one private MCP session and one managed Slack session on the same thread. The MCP agent stays fixed. MCP history copies into managed history; Slack history does not copy back. The Slack thread is read-only. |
 
 ## Goal Examples
+
+Start goals from the Web composer; Slack has no `$goal`.
 
 | Example | Meaning |
 | --- | --- |
@@ -71,7 +74,7 @@ Web resolves Slack tags such as `<@U123>` and `<!subteam^S123>` to names, and me
 | `$goal checkScript:./scripts/check.sh ship the release` | Same as above; `checkScript:` values may attach directly after `:`. |
 | `$goal checkScript: "./scripts/check.sh --full" ship the release` | Uses a quoted simple command for the check script. |
 | `$goal checkScript:"./scripts/check.sh --full" ship the release` | Same as above with the quoted command attached directly after `:`. |
-| `$stop` | Stops the active managed-conversation turn. If an active goal is present, it becomes `stopped`. Reacting with 🛑 or ⏹️ on the in-progress placeholder does the same. |
+| `$stop` | Stops the active managed-conversation turn. If an active goal is present, it becomes `stopped`. |
 | `✅` | Marker RocketClaw adds when a goal reaches `complete`. Humans generally do not send it as a command. |
 
 | Goal Parameter | Accepted Values | Meaning |
@@ -125,7 +128,7 @@ Return the human-visible value directly from `main`: strings render directly, ot
 }
 ```
 
-New `#ops` conversations use agent `main`. Authorized replies can select another listed agent with `$agent factory` or the native selector.
+Mentions in `#ops` start conversations with agent `main`. Switch a conversation to another listed agent, such as `factory`, from Web.
 
 ## Outbound MCP Servers
 
@@ -176,8 +179,8 @@ RocketClaw injects these tools into RocketCode turns as **Code Mode builtins ins
 | `rocketclaw_reset_scheduled_messages` | Persistent bridge turns and raw/cron runs. | Treat as part of the schedule-message permission family. Deny `rocketclaw_schedule_message` to block schedule reset behavior. | Clears scheduled messages for the current conversation. |
 | `rocketclaw_attach_files_to_response` | Persistent bridge turns and raw/cron runs. | Auto-allow unless explicitly denied. | Attaches collected files to the final outbound response through RocketClaw's shared response-attachment path. |
 | `rocketclaw_update_goal` | Persistent bridge turns only, and only when the current text conversation has an active goal. | Auto-allow unless explicitly denied, but hidden when no active goal exists. | Reports goal status as `progress`, `complete`, or `blocked` with an optional note. `complete` runs any configured `checkScript:` before the goal becomes complete. |
-| `rocketclaw_start_new_thread` | Every turn of an agent that explicitly allows it: Slack, Web, cron, external MCP, goal continuations, and scheduled messages alike. | Default-deny. Requires explicit per-agent `allow`; missing, `auto`, or `deny` keeps it unavailable. | Creates a new Web session named by `title` and submits the literal tool prompt as its first turn; nothing is posted to Slack. The new session does not see the caller's history, so the prompt must carry all needed context. Returns `conversation_id` and `url`, which the agent can share: `http://<tailscale-ip>:<port>`, using this machine's Tailscale IPv4 and the port from `web.listen_address`. The permission alone decides whether the tool is offered. Slack turns may only pick agents allowed in their channel, and cron runs are locked to the job's agent. |
-| `ask_user_question` | Qualifying human-originated Slack turns with a native answer path. | Auto-allow unless explicitly denied, but hidden when the turn has no answer path. | Asks the originating human through native UI, blocks until answered or canceled, and returns selected options and/or custom text. Not exposed for cron/raw, MCP, scheduled/system/automation, or automatic goal continuations. A question still waiting at restart stays posted, and answering it continues the turn. |
+| `rocketclaw_start_new_thread` | Every turn of an agent that explicitly allows it: Slack, Web, cron, external MCP, goal continuations, and scheduled messages alike. | Default-deny. Requires explicit per-agent `allow`; missing, `auto`, or `deny` keeps it unavailable. Generated `main` agents include that allow; existing workspaces must add it to their own answering agent. | Creates a new Web session named by `title` and submits the literal tool prompt as its first turn; nothing is posted to Slack. The new session does not see the caller's history, so the prompt must carry all needed context. Returns `conversation_id` and `url`, which the agent can share: `http://<tailscale-ip>:<port>`, using this machine's Tailscale IPv4 and the port from `web.listen_address`. The permission alone decides whether the tool is offered. Slack turns may only pick agents allowed in their channel, and cron runs are locked to the job's agent. |
+| `ask_user_question` | Human Web turns, including Web turns in Slack-thread conversations. | Auto-allow unless explicitly denied, but hidden on every other turn. | Asks the human through a card above the Web composer, blocks until answered or canceled, and returns selected options and/or custom text. Not exposed for Slack mentions, cron/raw, MCP, scheduled/system/automation, or automatic goal continuations. A question still waiting at restart stays listed in Web, and answering it continues the turn. |
 | `rocketclaw_stop_background_job` | Persistent bridge turns, cron runs included, of agents with `allow_background: allow`. | Shown only with the exact `permission.rocketclaw.allow_background: allow` rule; RocketClaw auto-allow and `rocketclaw` wildcards do not show it. | Stops a running Background Job by `job_id`: one of this conversation, of its subagents, or of a hidden cron or External MCP run that reports here. Its note says the job was stopped by agent. A job that already finished returns `had already finished`. |
 | `execute` | Shown when the agent has MCP grants, code-mode host grants (`read`/`edit`/`bash`/…), and/or RocketClaw platform-tool grants. The only model entry for FS/shell/fetch/patch/MCP and every RocketClaw platform tool. Each call made inside a script is saved with the turn and shown in history like a direct call. | `permission.rocketclaw.code_mode_approve` checks the full script before execution; omitted means `allow`. Nested calls re-check real buckets (read/edit/bash/mcp/rocketclaw/…). | Code Mode: runs a short Starlark script with required `code`. Define `def main()`; call host tools as `read(filePath="…")` / `bash(command=r'''…''')`, platform tools as `ask_user_question(question="…")` / `rocketclaw_reload(reason="…")`, MCP as `server_toolname(**kwargs)`, concurrency via `gather`/`map`/`race`/`race_first` (default concurrency 16, max 64), and `search(query="", namespace="", offset=0, limit=10)` to discover tools and concurrency builtins. `bash(command=...)` takes `r'''...'''` only inside the JSON `code` string. Example: `{"code":"def main():\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\n"}`. Parsed before host tools; failed wrappers are not evidence. Example: `def main():\n  return gather([lambda: read(filePath="a"), lambda: read(filePath="b")])`. Connects MCP per call, then closes. |
 
@@ -186,20 +189,15 @@ For general `permission` syntax, action values, guardrails, and approval reviewe
 
 ## Slack Reactions And Markers
 
+RocketClaw reads no reactions. These are markers it posts:
+
 | Emoji | Reaction Name | Meaning |
 | --- | --- | --- |
-| `🛑` | `octagonal_sign` | Stop reaction on an in-progress placeholder, a waiting hourglass, or a queued envelope. |
-| `⏹️` | `stop_button` | Same as 🛑. |
-| `❗` | `exclamation` | Interruption or rejection marker. |
-| `✅` | `white_check_mark` | Completion marker. |
+| `🤖` | `robot_face` | Added when RocketClaw accepts a mention or an External MCP relay; removed after final response delivery. |
+| `✅` | `white_check_mark` | Added when a goal in a Slack thread's conversation reaches `complete`. |
 | `🏁` |  | Goal header RocketClaw posts while a goal is running. |
 | `🔁` |  | Cron result header RocketClaw posts. |
-| `🤖` | `robot_face` | Slack processing/accepted marker. |
-| `⏳` | `hourglass_flowing_sand` | Slack Steer waiting to inject. |
-| `✉️` | `envelope` | Waiting Enqueued Slack Message. |
-| `📨` |  | Enqueued Slack Message consume card. |
-| `📡` | `satellite_antenna` | Slack External MCP relay marker. |
-| `⏫` | `arrow_double_up`, `fast_up_button`, `black_up_pointing_double_triangle` | Convert a queued envelope into a Slack Steer. |
+| `📡` | `satellite_antenna` | External MCP relay marker. `📡 web` also heads Web input mirrored into a Slack thread. |
 
 ## Agent Frontmatter And Permissions
 

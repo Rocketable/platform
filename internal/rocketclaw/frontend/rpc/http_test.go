@@ -62,6 +62,8 @@ func TestHTTPBoundary(t *testing.T) {
 		{"MoveToBackground", `{"conversationId":"chat","jobId":"turn-1/call/a"}`, "invalid field jobId"},
 		{"StopBackgroundJob", `{"conversationId":"chat"}`, "jobId is required"},
 		{"StopBackgroundJob", `{"conversationId":"chat","jobId":"turn-1/call/a","reason":"user"}`, "invalid field reason"},
+		{"AnswerQuestion", `{"askId":"turn-1/call/q"}`, "conversationId is required"},
+		{"AnswerQuestion", `{"conversationId":"chat"}`, "askId is required"},
 	} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/"+tc.method, strings.NewReader(tc.body)))
@@ -92,10 +94,6 @@ func TestHTTPBoundary(t *testing.T) {
 		require.Equal(t, http.StatusBadRequest, response.Code)
 		require.Contains(t, response.Body.String(), `"code":3`)
 	}
-
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/AnswerQuestion", strings.NewReader(`{}`)))
-	require.Equal(t, http.StatusNotFound, response.Code)
 }
 
 func TestHTTPStreams(t *testing.T) {

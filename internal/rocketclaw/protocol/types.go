@@ -3,7 +3,6 @@ package protocol
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"mime"
 	"path/filepath"
@@ -175,14 +174,12 @@ type TextConversationTarget struct{ ChannelID, MessageID, ThreadID string }
 // AskUserQuestionOption is one native UI choice for ask_user_question.
 type AskUserQuestionOption struct{ Label, Value, Description string }
 
-// AskUserQuestionRequest asks the originating text connector human for input.
+// AskUserQuestionRequest asks a Web turn's human for input.
 type AskUserQuestionRequest struct {
-	Source                Source
 	ID, Question, Details string
 	ConversationID        string
 	Options               []AskUserQuestionOption
 	Multiple              bool
-	SlackReply            *SlackReplyTarget
 }
 
 // AskUserQuestionAnswer is returned to RocketCode after a human answers.
@@ -192,31 +189,9 @@ type AskUserQuestionAnswer struct {
 	Source   Source   `json:"source"`
 }
 
-// UserQuestionAsker is the origin-owned ask_user_question capability for one turn path.
-// The zero value is inert (ExposeTool is false).
-type UserQuestionAsker struct {
-	expose bool
-	ask    func(context.Context, *AskUserQuestionRequest) (AskUserQuestionAnswer, error)
-}
-
-// NoUserQuestionAsker returns the inert asker that omits the tool from the model list.
-func NoUserQuestionAsker() UserQuestionAsker { return UserQuestionAsker{} }
-
-// InteractiveUserQuestionAsker returns an asker that exposes the tool and delegates to ask.
-func InteractiveUserQuestionAsker(ask func(context.Context, *AskUserQuestionRequest) (AskUserQuestionAnswer, error)) UserQuestionAsker {
-	return UserQuestionAsker{expose: true, ask: ask}
-}
-
-// ExposeTool reports whether ask_user_question belongs in the model tool list.
-func (a UserQuestionAsker) ExposeTool() bool { return a.expose }
-
-// AskUserQuestion runs the origin ask path, or rejects when the tool is not exposed.
-func (a UserQuestionAsker) AskUserQuestion(ctx context.Context, req *AskUserQuestionRequest) (AskUserQuestionAnswer, error) {
-	if !a.expose {
-		return AskUserQuestionAnswer{}, errors.New("ask_user_question is not available")
-	}
-
-	return a.ask(ctx, req)
+// UserQuestionAsker asks a turn's human an ask_user_question and waits for the answer.
+type UserQuestionAsker interface {
+	AskUserQuestion(context.Context, *AskUserQuestionRequest) (AskUserQuestionAnswer, error)
 }
 
 // StartNewThreadRequest asks RocketClaw to create a new Web session from the current turn.
@@ -249,7 +224,10 @@ type OutboundMessage struct {
 	Attachments                        []OutboundAttachment
 	GoalTurn, GoalComplete, GoalActive bool
 	GoalTurnNumber, GoalMaxTurns       int
-	WorkflowTerminal                   Terminal
+	// Source is the source of the inbound that started the turn.
+	Source Source
+	// Terminal is how a final's turn ended: complete, failed, or stopped.
+	Terminal Terminal
 	// ReplyState is the connector's recorded reply attachment for TurnID, copied
 	// from the turn's journal when the turn finishes, so a delivery after a restart
 	// edits the original placeholder.

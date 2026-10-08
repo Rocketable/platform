@@ -6,19 +6,17 @@ Shared domain vocabulary for this project — entities, named processes, and sta
 
 ### Managed Slack Thread
 
-A Slack thread that RocketClaw persists as a conversation owned by a selected agent and continues across human replies.
+A Slack thread that RocketClaw persists as a conversation owned by a selected agent. In Slack, only mentions start its turns; replies without a mention start nothing.
 
-A Managed Slack Thread has one active turn at a time. A distinct human reply received during that turn is a Slack Steer. An explicit `$enqueue` is an Enqueued Slack Message. A second Slack delivery of the same root message is not a new send.
+A Managed Slack Thread has one active turn at a time. A mention received during that turn waits in the Thread Queue and runs as the next turn; it never steers. Web can also work in the conversation: Web input it consumes and every reply are posted into the thread. A second Slack delivery of an accepted mention is not a new send.
 
 ### Root Slack Mention
 
-An authorized Slack app mention that creates or targets the root message of a Managed Slack Thread.
-
-A Root Slack Mention can begin the first turn immediately or establish a ready thread for a later human reply, depending on its command form.
+An authorized Slack app mention at a channel's top level. It starts a new Managed Slack Thread whose first turn is the mention. A bare Root Slack Mention with no text, file, or forward is ignored.
 
 ### Adhoc Callout
 
-An authorized Slack app mention that starts or takes over a Managed Slack Thread in a public channel, private channel, or group DM the bot has already joined.
+An authorized Slack app mention that starts or takes over a Managed Slack Thread in a public channel, private channel, or group DM the bot has already joined. Taking over a thread RocketClaw does not know includes up to 50 earlier messages, and a bare mention is enough there.
 
 Unmapped conversations use the `@` channel entry. Mapped channels keep that room's agents and allowlist. 1:1 DMs are not Adhoc Callouts.
 
@@ -26,29 +24,31 @@ Unmapped conversations use the `@` channel entry. Mapped channels keep that room
 
 A slack.channels row named `@`. It is not a Slack channel. It supplies agents and an allowlist for Adhoc Callouts in unmapped joined channels.
 
+### Report Thread
+
+A Slack thread that shows a cron report or an External MCP session: a cron-created Slack-thread conversation, a conversation bound to an External MCP session, or an unrecorded thread whose root RocketClaw's own bot posted. The last case covers roots posted before their thread is recorded and threads whose record expired.
+
+A Report Thread is read-only. RocketClaw ignores every reply and mention in it, with no reaction and no reply, while its sessions keep posting into it. Read-only means RocketClaw ignores input, not that Slack locks the thread. Work on it continues in Web.
+
 ### Slack Steer
 
-A human Slack message accepted while a Managed Slack Thread has an active turn, and injected into that same turn after the current parallel tool batch completes, or when the model answers without tools. Every waiting steer injects in one drain.
-
-A Slack Steer is marked with hourglass until injection. It does not create another in-progress placeholder. Adding ⏫ to a live queued envelope during an active turn converts that Enqueued Slack Message into a Slack Steer. Adding 🛑 to a waiting hourglass message drops that steer and does not stop the turn.
+Historical name for a human Slack reply injected into a running turn. Removed: Slack replies and mentions no longer steer. Steering is a Web feature.
 
 ### Enqueued Slack Message
 
-A later-turn prompt stashed on a Managed Slack Thread via `$enqueue`, or via External MCP `session_prompt` while that paired thread has an active turn.
-
-A Slack `$enqueue` is marked with envelope until it is popped. An External MCP stash has no in-thread envelope; it is visible in `$queue` until pop. Pop posts an incoming-envelope Slack Blocks card, then reserves one in-progress placeholder. Enqueued Slack Messages persist across restart. After restart, saved rows that never started run as separate turns without another incoming message.
+Historical name for a later-turn prompt stashed from Slack with `$enqueue`. Removed with Slack's commands. Waiting Slack work is now an accepted mention in the Thread Queue.
 
 ### Thread Queue
 
-The durable, conversation-local stack of Enqueued Slack Messages, shown and managed by `$queue` together with that conversation's scheduled messages. Rows stashed from External MCP on the paired thread appear on the same list.
+The durable, conversation-local list of later work: accepted Slack mentions, work queued or stashed from Web, and External MCP `session_prompt` calls that arrive while the paired thread has an active turn. Saved rows that never started run after a restart without another incoming message.
 
-`$queue` is an ephemeral jump index of pending Slack Steers (at the top) and that later-work list. Opening it dismisses the previous card. Hide closes it. A pending-steer row jumps to the hourglass message and then hides the card. A Slack `$enqueue` row jumps to the envelope message and then hides the card. Adding 🛑 to a waiting hourglass message drops that steer and does not stop the turn. Adding 🛑 to a queued envelope removes the item and does not stop the turn. Adding 🛑 to the in-progress placeholder still stops the turn. Adding ⏫ to a live queued envelope during an active turn converts it to a Slack Steer. Scheduled and External MCP rows list with no jump and cannot be cancelled from Slack. There is no Up / Down / Remove / Steer on the card and no later-work reorder. After a turn ends, a still-continuing goal wins the next slot. Otherwise the next item is the first remaining row that is ready: an Enqueued Slack Message is ready in its list position; a scheduled message is ready at its due time. A not-yet-due scheduled row blocks later rows until it runs or is cancelled.
+Each accepted mention is one item with ID `slack:<channel>:<message ts>`, accepted at most once per conversation. Web shows these rows together with the conversation's scheduled messages and can promote or remove them; Slack is not told. After a turn ends, a still-continuing goal wins the next slot. Otherwise the next item is the first remaining row that is ready: a queued row is ready in its list position; a scheduled message is ready at its due time. A not-yet-due scheduled row blocks later rows until it runs or is cancelled.
 
 ### Buffered Follow-Up
 
 Historical name for a mid-turn Slack message held until the active turn completed, then submitted as the next turn.
 
-Replaced by Slack Steer and Enqueued Slack Message.
+Replaced by Slack Steer, which was later removed. A mid-turn mention now waits in the Thread Queue.
 
 ## Prompt Provenance
 
@@ -162,17 +162,17 @@ The State Store is PostgreSQL.
 
 ### Step Journal
 
-The durable, conversation-local record of every completed step of in-progress work. Steps include model responses, tool call results, Task subagent turns, Code Mode host and MCP calls, workflow worker results, pending questions, and accepted Slack Steers.
+The durable, conversation-local record of every completed step of in-progress work. Steps include model responses, tool call results, Task subagent turns, Code Mode host and MCP calls, workflow worker results, pending questions, and accepted steers.
 
 An interrupted turn resumes from its last recorded step. Completed steps return their recorded results instead of running again. A clean shutdown lets running calls finish, so only a call cut off by a crash or a forced exit, which started without a recorded result, is reported to the model as interrupted. A turn's steps are cleared when it finishes.
 
 ## Relationships
 
-- A Root Slack Mention creates or targets a Managed Slack Thread.
+- A Root Slack Mention creates a Managed Slack Thread.
 - An Adhoc Callout creates or takes over a Managed Slack Thread.
 - A Root Slack Mention in an unmapped joined channel is an Adhoc Callout when an `@` Channel Entry exists.
-- A Slack Steer belongs to one active Managed Slack Thread and is injected into that turn after the current parallel tool batch completes.
-- An Enqueued Slack Message belongs to one Managed Slack Thread's Thread Queue until it is popped, removed, or consumed by an explicit failure path.
+- A mention in a Managed Slack Thread becomes one Thread Queue item and runs as its own turn.
+- A Report Thread ignores Slack input; its conversation continues in Web.
 - A BAR is authored, packed, run, and ranked by Quickbench; an ELO Scorer belongs to one BAR.
 - A Managed Slack Thread, Thread Queue, External MCP binding, and Step Journal persist in the State Store.
 - Reload replaces Overlay Clones.

@@ -21,50 +21,17 @@ var _ protocol.PrimaryTextRouter = &primaryTextRouterMock{}
 //
 //		// make and configure a mocked protocol.PrimaryTextRouter
 //		mockedPrimaryTextRouter := &primaryTextRouterMock{
-//			DeleteThreadQueueItemFunc: func(ctx context.Context, target protocol.TextConversationTarget, id string) (bool, error) {
-//				panic("mock out the DeleteThreadQueueItem method")
-//			},
-//			InterruptConversationFunc: func(conversationID string) *protocol.InboundMessage {
-//				panic("mock out the InterruptConversation method")
-//			},
 //			InterruptThreadFunc: func(target protocol.TextConversationTarget) (*protocol.InboundMessage, error) {
 //				panic("mock out the InterruptThread method")
 //			},
-//			PromoteThreadQueueItemFunc: func(ctx context.Context, target protocol.TextConversationTarget, id string) (bool, error) {
-//				panic("mock out the PromoteThreadQueueItem method")
+//			MentionThreadFunc: func(target protocol.TextConversationTarget) (bool, bool, error) {
+//				panic("mock out the MentionThread method")
 //			},
-//			RegisterThreadFunc: func(target protocol.TextConversationTarget, agent string) (bool, error) {
-//				panic("mock out the RegisterThread method")
+//			SubmitMentionFunc: func(ctx context.Context, agent string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) (bool, error) {
+//				panic("mock out the SubmitMention method")
 //			},
-//			ScheduledMessagesFunc: func(target protocol.TextConversationTarget) (map[string]protocol.ScheduledMessageState, error) {
-//				panic("mock out the ScheduledMessages method")
-//			},
-//			SkillDescriptionsFunc: func(agent string) ([]protocol.SkillDescription, error) {
-//				panic("mock out the SkillDescriptions method")
-//			},
-//			StartGoalInThreadFunc: func(ctx context.Context, agent string, objective string, checkScript string, maxTurns int, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) error {
-//				panic("mock out the StartGoalInThread method")
-//			},
-//			StartThreadFunc: func(ctx context.Context, agent string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) error {
-//				panic("mock out the StartThread method")
-//			},
-//			StashThreadQueueItemFunc: func(ctx context.Context, target protocol.TextConversationTarget, item *protocol.ThreadQueueItem) error {
-//				panic("mock out the StashThreadQueueItem method")
-//			},
-//			SubmitThreadReplyFunc: func(ctx context.Context, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) (bool, error) {
-//				panic("mock out the SubmitThreadReply method")
-//			},
-//			SwitchThreadAgentFunc: func(target protocol.TextConversationTarget, agent string) (bool, error) {
-//				panic("mock out the SwitchThreadAgent method")
-//			},
-//			ThreadAgentFunc: func(target protocol.TextConversationTarget) (string, bool, error) {
-//				panic("mock out the ThreadAgent method")
-//			},
-//			ThreadBusyFunc: func(target protocol.TextConversationTarget) bool {
-//				panic("mock out the ThreadBusy method")
-//			},
-//			ThreadQueueItemsFunc: func(target protocol.TextConversationTarget) ([]protocol.ThreadQueueItem, error) {
-//				panic("mock out the ThreadQueueItems method")
+//			WebURLFunc: func(ctx context.Context, conversationID string) (string, error) {
+//				panic("mock out the WebURL method")
 //			},
 //		}
 //
@@ -73,117 +40,32 @@ var _ protocol.PrimaryTextRouter = &primaryTextRouterMock{}
 //
 //	}
 type primaryTextRouterMock struct {
-	// DeleteThreadQueueItemFunc mocks the DeleteThreadQueueItem method.
-	DeleteThreadQueueItemFunc func(ctx context.Context, target protocol.TextConversationTarget, id string) (bool, error)
-
-	// InterruptConversationFunc mocks the InterruptConversation method.
-	InterruptConversationFunc func(conversationID string) *protocol.InboundMessage
-
 	// InterruptThreadFunc mocks the InterruptThread method.
 	InterruptThreadFunc func(target protocol.TextConversationTarget) (*protocol.InboundMessage, error)
 
-	// PromoteThreadQueueItemFunc mocks the PromoteThreadQueueItem method.
-	PromoteThreadQueueItemFunc func(ctx context.Context, target protocol.TextConversationTarget, id string) (bool, error)
+	// MentionThreadFunc mocks the MentionThread method.
+	MentionThreadFunc func(target protocol.TextConversationTarget) (bool, bool, error)
 
-	// RegisterThreadFunc mocks the RegisterThread method.
-	RegisterThreadFunc func(target protocol.TextConversationTarget, agent string) (bool, error)
+	// SubmitMentionFunc mocks the SubmitMention method.
+	SubmitMentionFunc func(ctx context.Context, agent string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) (bool, error)
 
-	// ScheduledMessagesFunc mocks the ScheduledMessages method.
-	ScheduledMessagesFunc func(target protocol.TextConversationTarget) (map[string]protocol.ScheduledMessageState, error)
-
-	// SkillDescriptionsFunc mocks the SkillDescriptions method.
-	SkillDescriptionsFunc func(agent string) ([]protocol.SkillDescription, error)
-
-	// StartGoalInThreadFunc mocks the StartGoalInThread method.
-	StartGoalInThreadFunc func(ctx context.Context, agent string, objective string, checkScript string, maxTurns int, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) error
-
-	// StartThreadFunc mocks the StartThread method.
-	StartThreadFunc func(ctx context.Context, agent string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) error
-
-	// StashThreadQueueItemFunc mocks the StashThreadQueueItem method.
-	StashThreadQueueItemFunc func(ctx context.Context, target protocol.TextConversationTarget, item *protocol.ThreadQueueItem) error
-
-	// SubmitThreadReplyFunc mocks the SubmitThreadReply method.
-	SubmitThreadReplyFunc func(ctx context.Context, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) (bool, error)
-
-	// SwitchThreadAgentFunc mocks the SwitchThreadAgent method.
-	SwitchThreadAgentFunc func(target protocol.TextConversationTarget, agent string) (bool, error)
-
-	// ThreadAgentFunc mocks the ThreadAgent method.
-	ThreadAgentFunc func(target protocol.TextConversationTarget) (string, bool, error)
-
-	// ThreadBusyFunc mocks the ThreadBusy method.
-	ThreadBusyFunc func(target protocol.TextConversationTarget) bool
-
-	// ThreadQueueItemsFunc mocks the ThreadQueueItems method.
-	ThreadQueueItemsFunc func(target protocol.TextConversationTarget) ([]protocol.ThreadQueueItem, error)
+	// WebURLFunc mocks the WebURL method.
+	WebURLFunc func(ctx context.Context, conversationID string) (string, error)
 
 	// calls tracks calls to the methods.
 	calls struct {
-		// DeleteThreadQueueItem holds details about calls to the DeleteThreadQueueItem method.
-		DeleteThreadQueueItem []struct {
-			// Ctx is the ctx argument value.
-			Ctx context.Context
-			// Target is the target argument value.
-			Target protocol.TextConversationTarget
-			// ID is the id argument value.
-			ID string
-		}
-		// InterruptConversation holds details about calls to the InterruptConversation method.
-		InterruptConversation []struct {
-			// ConversationID is the conversationID argument value.
-			ConversationID string
-		}
 		// InterruptThread holds details about calls to the InterruptThread method.
 		InterruptThread []struct {
 			// Target is the target argument value.
 			Target protocol.TextConversationTarget
 		}
-		// PromoteThreadQueueItem holds details about calls to the PromoteThreadQueueItem method.
-		PromoteThreadQueueItem []struct {
-			// Ctx is the ctx argument value.
-			Ctx context.Context
-			// Target is the target argument value.
-			Target protocol.TextConversationTarget
-			// ID is the id argument value.
-			ID string
-		}
-		// RegisterThread holds details about calls to the RegisterThread method.
-		RegisterThread []struct {
-			// Target is the target argument value.
-			Target protocol.TextConversationTarget
-			// Agent is the agent argument value.
-			Agent string
-		}
-		// ScheduledMessages holds details about calls to the ScheduledMessages method.
-		ScheduledMessages []struct {
+		// MentionThread holds details about calls to the MentionThread method.
+		MentionThread []struct {
 			// Target is the target argument value.
 			Target protocol.TextConversationTarget
 		}
-		// SkillDescriptions holds details about calls to the SkillDescriptions method.
-		SkillDescriptions []struct {
-			// Agent is the agent argument value.
-			Agent string
-		}
-		// StartGoalInThread holds details about calls to the StartGoalInThread method.
-		StartGoalInThread []struct {
-			// Ctx is the ctx argument value.
-			Ctx context.Context
-			// Agent is the agent argument value.
-			Agent string
-			// Objective is the objective argument value.
-			Objective string
-			// CheckScript is the checkScript argument value.
-			CheckScript string
-			// MaxTurns is the maxTurns argument value.
-			MaxTurns int
-			// Target is the target argument value.
-			Target protocol.TextConversationTarget
-			// Inbound is the inbound argument value.
-			Inbound *protocol.InboundMessage
-		}
-		// StartThread holds details about calls to the StartThread method.
-		StartThread []struct {
+		// SubmitMention holds details about calls to the SubmitMention method.
+		SubmitMention []struct {
 			// Ctx is the ctx argument value.
 			Ctx context.Context
 			// Agent is the agent argument value.
@@ -193,134 +75,18 @@ type primaryTextRouterMock struct {
 			// Inbound is the inbound argument value.
 			Inbound *protocol.InboundMessage
 		}
-		// StashThreadQueueItem holds details about calls to the StashThreadQueueItem method.
-		StashThreadQueueItem []struct {
+		// WebURL holds details about calls to the WebURL method.
+		WebURL []struct {
 			// Ctx is the ctx argument value.
 			Ctx context.Context
-			// Target is the target argument value.
-			Target protocol.TextConversationTarget
-			// Item is the item argument value.
-			Item *protocol.ThreadQueueItem
-		}
-		// SubmitThreadReply holds details about calls to the SubmitThreadReply method.
-		SubmitThreadReply []struct {
-			// Ctx is the ctx argument value.
-			Ctx context.Context
-			// Target is the target argument value.
-			Target protocol.TextConversationTarget
-			// Inbound is the inbound argument value.
-			Inbound *protocol.InboundMessage
-		}
-		// SwitchThreadAgent holds details about calls to the SwitchThreadAgent method.
-		SwitchThreadAgent []struct {
-			// Target is the target argument value.
-			Target protocol.TextConversationTarget
-			// Agent is the agent argument value.
-			Agent string
-		}
-		// ThreadAgent holds details about calls to the ThreadAgent method.
-		ThreadAgent []struct {
-			// Target is the target argument value.
-			Target protocol.TextConversationTarget
-		}
-		// ThreadBusy holds details about calls to the ThreadBusy method.
-		ThreadBusy []struct {
-			// Target is the target argument value.
-			Target protocol.TextConversationTarget
-		}
-		// ThreadQueueItems holds details about calls to the ThreadQueueItems method.
-		ThreadQueueItems []struct {
-			// Target is the target argument value.
-			Target protocol.TextConversationTarget
+			// ConversationID is the conversationID argument value.
+			ConversationID string
 		}
 	}
-	lockDeleteThreadQueueItem  sync.RWMutex
-	lockInterruptConversation  sync.RWMutex
-	lockInterruptThread        sync.RWMutex
-	lockPromoteThreadQueueItem sync.RWMutex
-	lockRegisterThread         sync.RWMutex
-	lockScheduledMessages      sync.RWMutex
-	lockSkillDescriptions      sync.RWMutex
-	lockStartGoalInThread      sync.RWMutex
-	lockStartThread            sync.RWMutex
-	lockStashThreadQueueItem   sync.RWMutex
-	lockSubmitThreadReply      sync.RWMutex
-	lockSwitchThreadAgent      sync.RWMutex
-	lockThreadAgent            sync.RWMutex
-	lockThreadBusy             sync.RWMutex
-	lockThreadQueueItems       sync.RWMutex
-}
-
-// DeleteThreadQueueItem calls DeleteThreadQueueItemFunc.
-func (mock *primaryTextRouterMock) DeleteThreadQueueItem(ctx context.Context, target protocol.TextConversationTarget, id string) (bool, error) {
-	if mock.DeleteThreadQueueItemFunc == nil {
-		panic("primaryTextRouterMock.DeleteThreadQueueItemFunc: method is nil but PrimaryTextRouter.DeleteThreadQueueItem was just called")
-	}
-	callInfo := struct {
-		Ctx    context.Context
-		Target protocol.TextConversationTarget
-		ID     string
-	}{
-		Ctx:    ctx,
-		Target: target,
-		ID:     id,
-	}
-	mock.lockDeleteThreadQueueItem.Lock()
-	mock.calls.DeleteThreadQueueItem = append(mock.calls.DeleteThreadQueueItem, callInfo)
-	mock.lockDeleteThreadQueueItem.Unlock()
-	return mock.DeleteThreadQueueItemFunc(ctx, target, id)
-}
-
-// DeleteThreadQueueItemCalls gets all the calls that were made to DeleteThreadQueueItem.
-// Check the length with:
-//
-//	len(mockedPrimaryTextRouter.DeleteThreadQueueItemCalls())
-func (mock *primaryTextRouterMock) DeleteThreadQueueItemCalls() []struct {
-	Ctx    context.Context
-	Target protocol.TextConversationTarget
-	ID     string
-} {
-	var calls []struct {
-		Ctx    context.Context
-		Target protocol.TextConversationTarget
-		ID     string
-	}
-	mock.lockDeleteThreadQueueItem.RLock()
-	calls = mock.calls.DeleteThreadQueueItem
-	mock.lockDeleteThreadQueueItem.RUnlock()
-	return calls
-}
-
-// InterruptConversation calls InterruptConversationFunc.
-func (mock *primaryTextRouterMock) InterruptConversation(conversationID string) *protocol.InboundMessage {
-	if mock.InterruptConversationFunc == nil {
-		panic("primaryTextRouterMock.InterruptConversationFunc: method is nil but PrimaryTextRouter.InterruptConversation was just called")
-	}
-	callInfo := struct {
-		ConversationID string
-	}{
-		ConversationID: conversationID,
-	}
-	mock.lockInterruptConversation.Lock()
-	mock.calls.InterruptConversation = append(mock.calls.InterruptConversation, callInfo)
-	mock.lockInterruptConversation.Unlock()
-	return mock.InterruptConversationFunc(conversationID)
-}
-
-// InterruptConversationCalls gets all the calls that were made to InterruptConversation.
-// Check the length with:
-//
-//	len(mockedPrimaryTextRouter.InterruptConversationCalls())
-func (mock *primaryTextRouterMock) InterruptConversationCalls() []struct {
-	ConversationID string
-} {
-	var calls []struct {
-		ConversationID string
-	}
-	mock.lockInterruptConversation.RLock()
-	calls = mock.calls.InterruptConversation
-	mock.lockInterruptConversation.RUnlock()
-	return calls
+	lockInterruptThread sync.RWMutex
+	lockMentionThread   sync.RWMutex
+	lockSubmitMention   sync.RWMutex
+	lockWebURL          sync.RWMutex
 }
 
 // InterruptThread calls InterruptThreadFunc.
@@ -355,206 +121,42 @@ func (mock *primaryTextRouterMock) InterruptThreadCalls() []struct {
 	return calls
 }
 
-// PromoteThreadQueueItem calls PromoteThreadQueueItemFunc.
-func (mock *primaryTextRouterMock) PromoteThreadQueueItem(ctx context.Context, target protocol.TextConversationTarget, id string) (bool, error) {
-	if mock.PromoteThreadQueueItemFunc == nil {
-		panic("primaryTextRouterMock.PromoteThreadQueueItemFunc: method is nil but PrimaryTextRouter.PromoteThreadQueueItem was just called")
-	}
-	callInfo := struct {
-		Ctx    context.Context
-		Target protocol.TextConversationTarget
-		ID     string
-	}{
-		Ctx:    ctx,
-		Target: target,
-		ID:     id,
-	}
-	mock.lockPromoteThreadQueueItem.Lock()
-	mock.calls.PromoteThreadQueueItem = append(mock.calls.PromoteThreadQueueItem, callInfo)
-	mock.lockPromoteThreadQueueItem.Unlock()
-	return mock.PromoteThreadQueueItemFunc(ctx, target, id)
-}
-
-// PromoteThreadQueueItemCalls gets all the calls that were made to PromoteThreadQueueItem.
-// Check the length with:
-//
-//	len(mockedPrimaryTextRouter.PromoteThreadQueueItemCalls())
-func (mock *primaryTextRouterMock) PromoteThreadQueueItemCalls() []struct {
-	Ctx    context.Context
-	Target protocol.TextConversationTarget
-	ID     string
-} {
-	var calls []struct {
-		Ctx    context.Context
-		Target protocol.TextConversationTarget
-		ID     string
-	}
-	mock.lockPromoteThreadQueueItem.RLock()
-	calls = mock.calls.PromoteThreadQueueItem
-	mock.lockPromoteThreadQueueItem.RUnlock()
-	return calls
-}
-
-// RegisterThread calls RegisterThreadFunc.
-func (mock *primaryTextRouterMock) RegisterThread(target protocol.TextConversationTarget, agent string) (bool, error) {
-	if mock.RegisterThreadFunc == nil {
-		panic("primaryTextRouterMock.RegisterThreadFunc: method is nil but PrimaryTextRouter.RegisterThread was just called")
-	}
-	callInfo := struct {
-		Target protocol.TextConversationTarget
-		Agent  string
-	}{
-		Target: target,
-		Agent:  agent,
-	}
-	mock.lockRegisterThread.Lock()
-	mock.calls.RegisterThread = append(mock.calls.RegisterThread, callInfo)
-	mock.lockRegisterThread.Unlock()
-	return mock.RegisterThreadFunc(target, agent)
-}
-
-// RegisterThreadCalls gets all the calls that were made to RegisterThread.
-// Check the length with:
-//
-//	len(mockedPrimaryTextRouter.RegisterThreadCalls())
-func (mock *primaryTextRouterMock) RegisterThreadCalls() []struct {
-	Target protocol.TextConversationTarget
-	Agent  string
-} {
-	var calls []struct {
-		Target protocol.TextConversationTarget
-		Agent  string
-	}
-	mock.lockRegisterThread.RLock()
-	calls = mock.calls.RegisterThread
-	mock.lockRegisterThread.RUnlock()
-	return calls
-}
-
-// ScheduledMessages calls ScheduledMessagesFunc.
-func (mock *primaryTextRouterMock) ScheduledMessages(target protocol.TextConversationTarget) (map[string]protocol.ScheduledMessageState, error) {
-	if mock.ScheduledMessagesFunc == nil {
-		panic("primaryTextRouterMock.ScheduledMessagesFunc: method is nil but PrimaryTextRouter.ScheduledMessages was just called")
+// MentionThread calls MentionThreadFunc.
+func (mock *primaryTextRouterMock) MentionThread(target protocol.TextConversationTarget) (bool, bool, error) {
+	if mock.MentionThreadFunc == nil {
+		panic("primaryTextRouterMock.MentionThreadFunc: method is nil but PrimaryTextRouter.MentionThread was just called")
 	}
 	callInfo := struct {
 		Target protocol.TextConversationTarget
 	}{
 		Target: target,
 	}
-	mock.lockScheduledMessages.Lock()
-	mock.calls.ScheduledMessages = append(mock.calls.ScheduledMessages, callInfo)
-	mock.lockScheduledMessages.Unlock()
-	return mock.ScheduledMessagesFunc(target)
+	mock.lockMentionThread.Lock()
+	mock.calls.MentionThread = append(mock.calls.MentionThread, callInfo)
+	mock.lockMentionThread.Unlock()
+	return mock.MentionThreadFunc(target)
 }
 
-// ScheduledMessagesCalls gets all the calls that were made to ScheduledMessages.
+// MentionThreadCalls gets all the calls that were made to MentionThread.
 // Check the length with:
 //
-//	len(mockedPrimaryTextRouter.ScheduledMessagesCalls())
-func (mock *primaryTextRouterMock) ScheduledMessagesCalls() []struct {
+//	len(mockedPrimaryTextRouter.MentionThreadCalls())
+func (mock *primaryTextRouterMock) MentionThreadCalls() []struct {
 	Target protocol.TextConversationTarget
 } {
 	var calls []struct {
 		Target protocol.TextConversationTarget
 	}
-	mock.lockScheduledMessages.RLock()
-	calls = mock.calls.ScheduledMessages
-	mock.lockScheduledMessages.RUnlock()
+	mock.lockMentionThread.RLock()
+	calls = mock.calls.MentionThread
+	mock.lockMentionThread.RUnlock()
 	return calls
 }
 
-// SkillDescriptions calls SkillDescriptionsFunc.
-func (mock *primaryTextRouterMock) SkillDescriptions(agent string) ([]protocol.SkillDescription, error) {
-	if mock.SkillDescriptionsFunc == nil {
-		panic("primaryTextRouterMock.SkillDescriptionsFunc: method is nil but PrimaryTextRouter.SkillDescriptions was just called")
-	}
-	callInfo := struct {
-		Agent string
-	}{
-		Agent: agent,
-	}
-	mock.lockSkillDescriptions.Lock()
-	mock.calls.SkillDescriptions = append(mock.calls.SkillDescriptions, callInfo)
-	mock.lockSkillDescriptions.Unlock()
-	return mock.SkillDescriptionsFunc(agent)
-}
-
-// SkillDescriptionsCalls gets all the calls that were made to SkillDescriptions.
-// Check the length with:
-//
-//	len(mockedPrimaryTextRouter.SkillDescriptionsCalls())
-func (mock *primaryTextRouterMock) SkillDescriptionsCalls() []struct {
-	Agent string
-} {
-	var calls []struct {
-		Agent string
-	}
-	mock.lockSkillDescriptions.RLock()
-	calls = mock.calls.SkillDescriptions
-	mock.lockSkillDescriptions.RUnlock()
-	return calls
-}
-
-// StartGoalInThread calls StartGoalInThreadFunc.
-func (mock *primaryTextRouterMock) StartGoalInThread(ctx context.Context, agent string, objective string, checkScript string, maxTurns int, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) error {
-	if mock.StartGoalInThreadFunc == nil {
-		panic("primaryTextRouterMock.StartGoalInThreadFunc: method is nil but PrimaryTextRouter.StartGoalInThread was just called")
-	}
-	callInfo := struct {
-		Ctx         context.Context
-		Agent       string
-		Objective   string
-		CheckScript string
-		MaxTurns    int
-		Target      protocol.TextConversationTarget
-		Inbound     *protocol.InboundMessage
-	}{
-		Ctx:         ctx,
-		Agent:       agent,
-		Objective:   objective,
-		CheckScript: checkScript,
-		MaxTurns:    maxTurns,
-		Target:      target,
-		Inbound:     inbound,
-	}
-	mock.lockStartGoalInThread.Lock()
-	mock.calls.StartGoalInThread = append(mock.calls.StartGoalInThread, callInfo)
-	mock.lockStartGoalInThread.Unlock()
-	return mock.StartGoalInThreadFunc(ctx, agent, objective, checkScript, maxTurns, target, inbound)
-}
-
-// StartGoalInThreadCalls gets all the calls that were made to StartGoalInThread.
-// Check the length with:
-//
-//	len(mockedPrimaryTextRouter.StartGoalInThreadCalls())
-func (mock *primaryTextRouterMock) StartGoalInThreadCalls() []struct {
-	Ctx         context.Context
-	Agent       string
-	Objective   string
-	CheckScript string
-	MaxTurns    int
-	Target      protocol.TextConversationTarget
-	Inbound     *protocol.InboundMessage
-} {
-	var calls []struct {
-		Ctx         context.Context
-		Agent       string
-		Objective   string
-		CheckScript string
-		MaxTurns    int
-		Target      protocol.TextConversationTarget
-		Inbound     *protocol.InboundMessage
-	}
-	mock.lockStartGoalInThread.RLock()
-	calls = mock.calls.StartGoalInThread
-	mock.lockStartGoalInThread.RUnlock()
-	return calls
-}
-
-// StartThread calls StartThreadFunc.
-func (mock *primaryTextRouterMock) StartThread(ctx context.Context, agent string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) error {
-	if mock.StartThreadFunc == nil {
-		panic("primaryTextRouterMock.StartThreadFunc: method is nil but PrimaryTextRouter.StartThread was just called")
+// SubmitMention calls SubmitMentionFunc.
+func (mock *primaryTextRouterMock) SubmitMention(ctx context.Context, agent string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) (bool, error) {
+	if mock.SubmitMentionFunc == nil {
+		panic("primaryTextRouterMock.SubmitMentionFunc: method is nil but PrimaryTextRouter.SubmitMention was just called")
 	}
 	callInfo := struct {
 		Ctx     context.Context
@@ -567,17 +169,17 @@ func (mock *primaryTextRouterMock) StartThread(ctx context.Context, agent string
 		Target:  target,
 		Inbound: inbound,
 	}
-	mock.lockStartThread.Lock()
-	mock.calls.StartThread = append(mock.calls.StartThread, callInfo)
-	mock.lockStartThread.Unlock()
-	return mock.StartThreadFunc(ctx, agent, target, inbound)
+	mock.lockSubmitMention.Lock()
+	mock.calls.SubmitMention = append(mock.calls.SubmitMention, callInfo)
+	mock.lockSubmitMention.Unlock()
+	return mock.SubmitMentionFunc(ctx, agent, target, inbound)
 }
 
-// StartThreadCalls gets all the calls that were made to StartThread.
+// SubmitMentionCalls gets all the calls that were made to SubmitMention.
 // Check the length with:
 //
-//	len(mockedPrimaryTextRouter.StartThreadCalls())
-func (mock *primaryTextRouterMock) StartThreadCalls() []struct {
+//	len(mockedPrimaryTextRouter.SubmitMentionCalls())
+func (mock *primaryTextRouterMock) SubmitMentionCalls() []struct {
 	Ctx     context.Context
 	Agent   string
 	Target  protocol.TextConversationTarget
@@ -589,220 +191,44 @@ func (mock *primaryTextRouterMock) StartThreadCalls() []struct {
 		Target  protocol.TextConversationTarget
 		Inbound *protocol.InboundMessage
 	}
-	mock.lockStartThread.RLock()
-	calls = mock.calls.StartThread
-	mock.lockStartThread.RUnlock()
+	mock.lockSubmitMention.RLock()
+	calls = mock.calls.SubmitMention
+	mock.lockSubmitMention.RUnlock()
 	return calls
 }
 
-// StashThreadQueueItem calls StashThreadQueueItemFunc.
-func (mock *primaryTextRouterMock) StashThreadQueueItem(ctx context.Context, target protocol.TextConversationTarget, item *protocol.ThreadQueueItem) error {
-	if mock.StashThreadQueueItemFunc == nil {
-		panic("primaryTextRouterMock.StashThreadQueueItemFunc: method is nil but PrimaryTextRouter.StashThreadQueueItem was just called")
+// WebURL calls WebURLFunc.
+func (mock *primaryTextRouterMock) WebURL(ctx context.Context, conversationID string) (string, error) {
+	if mock.WebURLFunc == nil {
+		panic("primaryTextRouterMock.WebURLFunc: method is nil but PrimaryTextRouter.WebURL was just called")
 	}
 	callInfo := struct {
-		Ctx    context.Context
-		Target protocol.TextConversationTarget
-		Item   *protocol.ThreadQueueItem
+		Ctx            context.Context
+		ConversationID string
 	}{
-		Ctx:    ctx,
-		Target: target,
-		Item:   item,
+		Ctx:            ctx,
+		ConversationID: conversationID,
 	}
-	mock.lockStashThreadQueueItem.Lock()
-	mock.calls.StashThreadQueueItem = append(mock.calls.StashThreadQueueItem, callInfo)
-	mock.lockStashThreadQueueItem.Unlock()
-	return mock.StashThreadQueueItemFunc(ctx, target, item)
+	mock.lockWebURL.Lock()
+	mock.calls.WebURL = append(mock.calls.WebURL, callInfo)
+	mock.lockWebURL.Unlock()
+	return mock.WebURLFunc(ctx, conversationID)
 }
 
-// StashThreadQueueItemCalls gets all the calls that were made to StashThreadQueueItem.
+// WebURLCalls gets all the calls that were made to WebURL.
 // Check the length with:
 //
-//	len(mockedPrimaryTextRouter.StashThreadQueueItemCalls())
-func (mock *primaryTextRouterMock) StashThreadQueueItemCalls() []struct {
-	Ctx    context.Context
-	Target protocol.TextConversationTarget
-	Item   *protocol.ThreadQueueItem
+//	len(mockedPrimaryTextRouter.WebURLCalls())
+func (mock *primaryTextRouterMock) WebURLCalls() []struct {
+	Ctx            context.Context
+	ConversationID string
 } {
 	var calls []struct {
-		Ctx    context.Context
-		Target protocol.TextConversationTarget
-		Item   *protocol.ThreadQueueItem
+		Ctx            context.Context
+		ConversationID string
 	}
-	mock.lockStashThreadQueueItem.RLock()
-	calls = mock.calls.StashThreadQueueItem
-	mock.lockStashThreadQueueItem.RUnlock()
-	return calls
-}
-
-// SubmitThreadReply calls SubmitThreadReplyFunc.
-func (mock *primaryTextRouterMock) SubmitThreadReply(ctx context.Context, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) (bool, error) {
-	if mock.SubmitThreadReplyFunc == nil {
-		panic("primaryTextRouterMock.SubmitThreadReplyFunc: method is nil but PrimaryTextRouter.SubmitThreadReply was just called")
-	}
-	callInfo := struct {
-		Ctx     context.Context
-		Target  protocol.TextConversationTarget
-		Inbound *protocol.InboundMessage
-	}{
-		Ctx:     ctx,
-		Target:  target,
-		Inbound: inbound,
-	}
-	mock.lockSubmitThreadReply.Lock()
-	mock.calls.SubmitThreadReply = append(mock.calls.SubmitThreadReply, callInfo)
-	mock.lockSubmitThreadReply.Unlock()
-	return mock.SubmitThreadReplyFunc(ctx, target, inbound)
-}
-
-// SubmitThreadReplyCalls gets all the calls that were made to SubmitThreadReply.
-// Check the length with:
-//
-//	len(mockedPrimaryTextRouter.SubmitThreadReplyCalls())
-func (mock *primaryTextRouterMock) SubmitThreadReplyCalls() []struct {
-	Ctx     context.Context
-	Target  protocol.TextConversationTarget
-	Inbound *protocol.InboundMessage
-} {
-	var calls []struct {
-		Ctx     context.Context
-		Target  protocol.TextConversationTarget
-		Inbound *protocol.InboundMessage
-	}
-	mock.lockSubmitThreadReply.RLock()
-	calls = mock.calls.SubmitThreadReply
-	mock.lockSubmitThreadReply.RUnlock()
-	return calls
-}
-
-// SwitchThreadAgent calls SwitchThreadAgentFunc.
-func (mock *primaryTextRouterMock) SwitchThreadAgent(target protocol.TextConversationTarget, agent string) (bool, error) {
-	if mock.SwitchThreadAgentFunc == nil {
-		panic("primaryTextRouterMock.SwitchThreadAgentFunc: method is nil but PrimaryTextRouter.SwitchThreadAgent was just called")
-	}
-	callInfo := struct {
-		Target protocol.TextConversationTarget
-		Agent  string
-	}{
-		Target: target,
-		Agent:  agent,
-	}
-	mock.lockSwitchThreadAgent.Lock()
-	mock.calls.SwitchThreadAgent = append(mock.calls.SwitchThreadAgent, callInfo)
-	mock.lockSwitchThreadAgent.Unlock()
-	return mock.SwitchThreadAgentFunc(target, agent)
-}
-
-// SwitchThreadAgentCalls gets all the calls that were made to SwitchThreadAgent.
-// Check the length with:
-//
-//	len(mockedPrimaryTextRouter.SwitchThreadAgentCalls())
-func (mock *primaryTextRouterMock) SwitchThreadAgentCalls() []struct {
-	Target protocol.TextConversationTarget
-	Agent  string
-} {
-	var calls []struct {
-		Target protocol.TextConversationTarget
-		Agent  string
-	}
-	mock.lockSwitchThreadAgent.RLock()
-	calls = mock.calls.SwitchThreadAgent
-	mock.lockSwitchThreadAgent.RUnlock()
-	return calls
-}
-
-// ThreadAgent calls ThreadAgentFunc.
-func (mock *primaryTextRouterMock) ThreadAgent(target protocol.TextConversationTarget) (string, bool, error) {
-	if mock.ThreadAgentFunc == nil {
-		panic("primaryTextRouterMock.ThreadAgentFunc: method is nil but PrimaryTextRouter.ThreadAgent was just called")
-	}
-	callInfo := struct {
-		Target protocol.TextConversationTarget
-	}{
-		Target: target,
-	}
-	mock.lockThreadAgent.Lock()
-	mock.calls.ThreadAgent = append(mock.calls.ThreadAgent, callInfo)
-	mock.lockThreadAgent.Unlock()
-	return mock.ThreadAgentFunc(target)
-}
-
-// ThreadAgentCalls gets all the calls that were made to ThreadAgent.
-// Check the length with:
-//
-//	len(mockedPrimaryTextRouter.ThreadAgentCalls())
-func (mock *primaryTextRouterMock) ThreadAgentCalls() []struct {
-	Target protocol.TextConversationTarget
-} {
-	var calls []struct {
-		Target protocol.TextConversationTarget
-	}
-	mock.lockThreadAgent.RLock()
-	calls = mock.calls.ThreadAgent
-	mock.lockThreadAgent.RUnlock()
-	return calls
-}
-
-// ThreadBusy calls ThreadBusyFunc.
-func (mock *primaryTextRouterMock) ThreadBusy(target protocol.TextConversationTarget) bool {
-	if mock.ThreadBusyFunc == nil {
-		panic("primaryTextRouterMock.ThreadBusyFunc: method is nil but PrimaryTextRouter.ThreadBusy was just called")
-	}
-	callInfo := struct {
-		Target protocol.TextConversationTarget
-	}{
-		Target: target,
-	}
-	mock.lockThreadBusy.Lock()
-	mock.calls.ThreadBusy = append(mock.calls.ThreadBusy, callInfo)
-	mock.lockThreadBusy.Unlock()
-	return mock.ThreadBusyFunc(target)
-}
-
-// ThreadBusyCalls gets all the calls that were made to ThreadBusy.
-// Check the length with:
-//
-//	len(mockedPrimaryTextRouter.ThreadBusyCalls())
-func (mock *primaryTextRouterMock) ThreadBusyCalls() []struct {
-	Target protocol.TextConversationTarget
-} {
-	var calls []struct {
-		Target protocol.TextConversationTarget
-	}
-	mock.lockThreadBusy.RLock()
-	calls = mock.calls.ThreadBusy
-	mock.lockThreadBusy.RUnlock()
-	return calls
-}
-
-// ThreadQueueItems calls ThreadQueueItemsFunc.
-func (mock *primaryTextRouterMock) ThreadQueueItems(target protocol.TextConversationTarget) ([]protocol.ThreadQueueItem, error) {
-	if mock.ThreadQueueItemsFunc == nil {
-		panic("primaryTextRouterMock.ThreadQueueItemsFunc: method is nil but PrimaryTextRouter.ThreadQueueItems was just called")
-	}
-	callInfo := struct {
-		Target protocol.TextConversationTarget
-	}{
-		Target: target,
-	}
-	mock.lockThreadQueueItems.Lock()
-	mock.calls.ThreadQueueItems = append(mock.calls.ThreadQueueItems, callInfo)
-	mock.lockThreadQueueItems.Unlock()
-	return mock.ThreadQueueItemsFunc(target)
-}
-
-// ThreadQueueItemsCalls gets all the calls that were made to ThreadQueueItems.
-// Check the length with:
-//
-//	len(mockedPrimaryTextRouter.ThreadQueueItemsCalls())
-func (mock *primaryTextRouterMock) ThreadQueueItemsCalls() []struct {
-	Target protocol.TextConversationTarget
-} {
-	var calls []struct {
-		Target protocol.TextConversationTarget
-	}
-	mock.lockThreadQueueItems.RLock()
-	calls = mock.calls.ThreadQueueItems
-	mock.lockThreadQueueItems.RUnlock()
+	mock.lockWebURL.RLock()
+	calls = mock.calls.WebURL
+	mock.lockWebURL.RUnlock()
 	return calls
 }

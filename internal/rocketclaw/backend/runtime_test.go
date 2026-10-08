@@ -767,7 +767,7 @@ func TestRuntimePersistedEnqueueAndProducerArrivalOrder(t *testing.T) {
 				for _, enqueue := range []bool{tt.enqueueFirst, !tt.enqueueFirst} {
 					if enqueue {
 						content := protocol.InboundContent{AttachmentPresence: protocol.AttachmentPresenceImages}
-						require.NoError(t, rt.threads.StashThreadQueueItem(ctx, target, &protocol.ThreadQueueItem{ID: "enqueue", Kind: protocol.InboundKindEnqueue, Source: protocol.SourceSlack, Content: content, Principal: "original author", StashAt: time.Now(), SlackChannel: target.ChannelID, SlackTS: "enqueue", SlackReply: &protocol.SlackReplyTarget{ChannelID: target.ChannelID, MessageTS: "enqueue", ThreadTS: target.ThreadID}}))
+						require.NoError(t, rt.threads.stashQueueItem(ctx, protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID), &protocol.ThreadQueueItem{ID: "enqueue", Kind: protocol.InboundKindEnqueue, Source: protocol.SourceSlack, Content: content, Principal: "original author", StashAt: time.Now(), SlackChannel: target.ChannelID, SlackTS: "enqueue", SlackReply: &protocol.SlackReplyTarget{ChannelID: target.ChannelID, MessageTS: "enqueue", ThreadTS: target.ThreadID}}))
 					} else {
 						waiting.Go(func() error {
 							if err := rt.RunTurn(ctx, competing); err != nil {
@@ -858,20 +858,10 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 		defer cancel()
 
 		rt := &Runtime{Sessions: store, Cfg: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), Log: slog.New(slog.DiscardHandler)}
-		atDrain, resume := make(chan struct{}), make(chan struct{})
-		drains := 0
+		atStart, resume := make(chan struct{}), make(chan struct{})
 
 		rt.threads = newThreadBridgeManager(rt.Cfg, store, rt.Log, func(cfg Config) directBridge {
 			cfg.SessionService = store
-			cfg.SteerDrain = rocketcode.SteerDrain{Fn: func(context.Context, rocketcode.TurnPhase) []rocketcode.PromptInput {
-				drains++
-				if drains == 1 {
-					close(atDrain)
-					<-resume
-				}
-
-				return nil
-			}}
 
 			return NewConversation(rt.Cfg, rt, &cfg, rt.Log)
 		})
@@ -886,10 +876,21 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 
 		var listeners errgroup.Group
 		listeners.Go(func() error {
+			// Holding the first turn's start keeps it running while the next steer arrives.
+			started := false
+
 			for event := range events {
-				if event.Message.Complete {
+				switch {
+				case event.Message.Complete:
 					finals <- event
-				} else {
+				case !started:
+					started = true
+
+					close(atStart)
+					<-resume
+
+					event.Acknowledgement <- nil
+				default:
 					event.Acknowledgement <- nil
 				}
 			}
@@ -915,7 +916,7 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 			})
 
 			if i == 0 {
-				<-atDrain
+				<-atStart
 			}
 
 			synctest.Wait()
@@ -928,7 +929,6 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 				close(resume)
 				synctest.Wait()
 				require.Len(t, finals, 1)
-				require.Equal(t, 2, drains, "active input must trigger provider continuation in the same turn")
 				require.False(t, bridge.inputOpen)
 			}
 		}
@@ -958,7 +958,7 @@ func TestBridgeDrainSteersPreservesAcquiredContent(t *testing.T) {
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), inputOpen: true, requestCh: make(chan bridgeRequest, 2), config: Config{SessionService: newTestSessionService(t)}}
 
 	for _, text := range []string{"first", "second"} {
-		inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$docs-helper " + text, TextAttachments: []string{"attachment text"}, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte(text)}}}, true)
+		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$docs-helper " + text, TextAttachments: []string{"attachment text"}, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte(text)}}}, true)
 		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = "U1"
 		require.NoError(t, bridge.Submit(t.Context(), inbound))
 	}
@@ -1002,7 +1002,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 		require.NoError(t, bridge.Submit(t.Context(), inbound))
 	}
 
-	items, err := manager.ThreadQueueItems(target)
+	items, err := manager.queueItems(conversationID)
 	require.NoError(t, err)
 	require.Len(t, items, 3)
 
@@ -1016,7 +1016,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 	}
 
 	dropped := bridge.steers[1].completion
-	removed, err := manager.DeleteThreadQueueItem(t.Context(), target, items[1].ID)
+	removed, err := manager.deleteQueueItem(t.Context(), conversationID, items[1].ID)
 	require.NoError(t, err)
 	require.True(t, removed)
 	require.ErrorIs(t, dropped.err, context.Canceled)
@@ -1041,12 +1041,12 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 		require.Equal(t, []rocketcode.Attachment{{MIME: "image/png", Filename: "image.png", URL: "data:image/png;base64," + []string{"Zmlyc3Q=", "bGFzdA=="}[i]}}, inputs[i].Attachments)
 	}
 
-	itemsAfter, err := manager.ThreadQueueItems(target)
+	itemsAfter, err := manager.queueItems(conversationID)
 	require.NoError(t, err)
 	require.Empty(t, itemsAfter)
 
 	for _, item := range items {
-		removed, err := manager.DeleteThreadQueueItem(t.Context(), target, item.ID)
+		removed, err := manager.deleteQueueItem(t.Context(), conversationID, item.ID)
 		require.NoError(t, err)
 		require.False(t, removed, "consumed or dropped steer cannot be dropped again")
 	}
@@ -1054,10 +1054,10 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
 
 	content := protocol.InboundContent{Text: "$skill stop \"typed args\"  Next", TextAttachments: []string{"acquired text file", "acquired forwarded thread"}, Attachments: []protocol.InboundAttachment{{Name: "original.png", MIMEType: "image/png", Data: []byte("original")}}}
-	queued := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindEnqueue, &content, true)
+	queued := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindEnqueue, &content, true)
 	queued.Metadata[protocol.InboundPrincipalMetadataKey] = "original author"
 	queued.SlackReply = &protocol.SlackReplyTarget{ChannelID: target.ChannelID, ThreadTS: target.ThreadID, MessageTS: "promoted", RecipientTeamID: "T1", RecipientUserID: "U1"}
-	require.NoError(t, manager.StashThreadQueueItem(t.Context(), target, &protocol.ThreadQueueItem{ID: "q1", Message: content.Text, Content: content, Source: queued.Source, SlackReply: queued.SlackReply, Principal: "original author", SlackChannel: target.ChannelID, SlackTS: "promoted"}))
+	require.NoError(t, manager.stashQueueItem(t.Context(), conversationID, &protocol.ThreadQueueItem{ID: "q1", Message: content.Text, Content: content, Source: queued.Source, SlackReply: queued.SlackReply, Principal: "original author", SlackChannel: target.ChannelID, SlackTS: "promoted"}))
 
 	var (
 		promotions [2]bool
@@ -1067,7 +1067,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 		group.Go(func() error {
 			var err error
 
-			promotions[i], err = manager.PromoteThreadQueueItem(t.Context(), target, "q1")
+			promotions[i], err = manager.promoteQueueItem(t.Context(), conversationID, "q1")
 
 			return err
 		})
@@ -1076,7 +1076,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 	require.NoError(t, group.Wait())
 	require.NotEqual(t, promotions[0], promotions[1], "only one competing promotion may claim the enqueue")
 
-	itemsAfter, err = manager.ThreadQueueItems(target)
+	itemsAfter, err = manager.queueItems(conversationID)
 	require.NoError(t, err)
 	require.Len(t, itemsAfter, 1)
 	require.Equal(t, protocol.InboundKindSteer, itemsAfter[0].Kind)
@@ -1100,10 +1100,6 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 		bridge.requestCh = make(chan bridgeRequest, 1)
 		bridge.stopCh = make(chan struct{})
 		bridge.log = slog.New(slog.DiscardHandler)
-		bridge.config.EnqueueActivation = EnqueueActivation{Fn: func(context.Context, *protocol.ThreadQueueItem, *protocol.InboundMessage) error {
-			t.Error("normal queue consumer activated an already promoted enqueue")
-			return context.Canceled
-		}}
 		require.NoError(t, bridge.submitEnqueuedItem(ctx, &protocol.ThreadQueueItem{ID: "q1", Message: "stale queue snapshot"}))
 
 		var group errgroup.Group
@@ -1126,7 +1122,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 			require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Source: protocol.SourceWeb, Principal: "goal_continuation", Content: protocol.InboundContent{TextAttachments: []string{"$docs-helper attachment-only"}}}))
 		}
 
-		promoted, err := manager.PromoteThreadQueueItem(t.Context(), target, "attachment")
+		promoted, err := manager.promoteQueueItem(t.Context(), conversationID, "attachment")
 		require.NoError(t, err)
 		require.True(t, promoted)
 
@@ -1151,7 +1147,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 		require.Equal(t, "after", remaining[1].ID)
 
 		for _, item := range remaining {
-			removed, err := manager.DeleteThreadQueueItem(t.Context(), target, item.ID)
+			removed, err := manager.deleteQueueItem(t.Context(), conversationID, item.ID)
 			require.NoError(t, err)
 			require.True(t, removed)
 		}
@@ -1299,11 +1295,7 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, promoted)
 
-	require.False(t, manager.ThreadBusy(target))
 	require.NoError(t, manager.PickLaterWork(t.Context(), conversationID))
-	scheduled, err := manager.ScheduledMessages(target)
-	require.NoError(t, err)
-	require.Empty(t, scheduled)
 }
 
 func TestRuntimeHeldQueueManualRelease(t *testing.T) {
@@ -1422,12 +1414,9 @@ func TestAttachSlack(t *testing.T) {
 	})
 	runTestManager(t, manager)
 
-	var asker protocol.UserQuestionAsker
-
 	slack := new(slackFrontendMock)
-	rt := &Runtime{threads: manager, slackAsker: &asker}
+	rt := &Runtime{threads: manager}
 	rt.AttachSlack(slack)
-	require.True(t, asker.ExposeTool())
 	require.Same(t, slack, manager.cronRoots)
 }
 
@@ -1468,15 +1457,15 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-5.5\npermission:\n  task: allow\n  rocketclaw:\n    allow_background: allow\n    ask_user_question: allow\n---\nPrompt\n")
 
 	asked, withdrawn := make(chan string, 1), make(chan error, 1)
-	asker := protocol.InteractiveUserQuestionAsker(func(ctx context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
+	asker := &userQuestionAskerMock{AskUserQuestionFunc: func(ctx context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
 		asked <- req.ID
 
-		<-ctx.Done() // The Slack connector deletes an unanswered question when its wait is cancelled.
+		<-ctx.Done() // The Web asker withdraws an unanswered question when its wait is cancelled.
 
 		withdrawn <- context.Cause(ctx)
 
 		return protocol.AskUserQuestionAnswer{}, ctx.Err()
-	})
+	}}
 
 	var (
 		manager  *threadBridgeManager
@@ -1494,7 +1483,9 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 	runTestManager(t, manager)
 
 	rt := &Runtime{threads: manager, Sessions: nt.service, background: registry}
-	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("ship it")))
+	prompt := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "ship it", true)
+	prompt.ConversationID = nt.conversationID
+	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), prompt))
 
 	executeID, _, _ := strings.Cut(<-asked, "/host/")
 	taskID := strings.TrimSuffix(executeID, "call_e") + "call_t"

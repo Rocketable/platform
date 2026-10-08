@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +13,7 @@ import (
 	"os"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,31 +30,14 @@ import (
 )
 
 const (
-	slackFileDownloadTimeout                                                                                                     = 30 * time.Second
-	maxSlackImageDownloadBytes                                                                                                   = 16 << 20
-	slackTextLimit, slackBlockTextLimit, slackPreferredChunkSize                                                                 = 3800, 3000, 3200
-	slackAdoptHistoryLimit                                                                                                       = 50
-	slackImmediatePlaceholder                                                                                                    = "_Thinking..._"
-	slackQuestionCustomActionID, slackQuestionCustomViewCallbackID, slackQuestionCustomBlockID, slackQuestionCustomInputActionID = "custom_answer", "ask_user_question_custom", "custom_answer", "answer"
-	slackAgentSwitchSelectActionID                                                                                               = "agent_switch_select"
-	slackQueueJumpActionID, slackQueueHideActionID                                                                               = "thread_queue_jump", "thread_queue_hide"
-	slackDollarCommandHelp                                                                                                       = "$goal <objective> - 🏁 Start a goal\n" +
-		"$stop - 🛑 Stop the active turn\n" +
-		"$enqueue <message> - ✉️ Stash a later turn\n" +
-		"$queue - Show later work\n" +
-		"$agent [name] - 🎛 Select or switch an agent; bare opens the selector\n" +
-		"$skill <name> [args] - Invoke a skill, including a built-in name"
+	slackFileDownloadTimeout                                     = 30 * time.Second
+	maxSlackImageDownloadBytes                                   = 16 << 20
+	slackTextLimit, slackBlockTextLimit, slackPreferredChunkSize = 3800, 3000, 3200
+	slackAdoptHistoryLimit                                       = 50
+	slackImmediatePlaceholder                                    = "_Thinking..._"
 )
 
-type slackQueueAction struct {
-	ChannelID, ThreadTS string
-}
-
 var errSlackDownloadLimitExceeded = errors.New("slack file download exceeded size limit")
-
-type slackAgentSwitchMetadata struct {
-	ChannelID, ThreadTS, UserID, SocialChannel string
-}
 
 type limitedBuffer struct {
 	limit int
@@ -87,7 +70,6 @@ type Connector struct {
 	api          *slack.Client
 	botUserID    string
 	teamID       string
-	workspaceURL string
 	socketEvents chan socketmode.Event
 	inboundStop  context.CancelFunc
 
@@ -99,10 +81,6 @@ type Connector struct {
 	mu               sync.Mutex
 	responseMu       sync.Mutex
 	replies, pending map[string]slackReplyState
-	stacks           map[string][]slackBufferedMessage
-	poppedQueue      map[string]struct{}
-	queueCards       map[string]string
-	questions        map[string]*slackPendingQuestion
 	observations     map[string]channelObservation
 
 	facts       channelFactsStore
@@ -132,20 +110,11 @@ type channelFactsStore interface {
 	SaveTurnStep(ctx context.Context, conversationID, key string, value json.RawMessage) error
 }
 
-type slackPendingQuestion struct {
-	conversationID string
-	target         protocol.TextConversationTarget
-	ch             chan protocol.AskUserQuestionAnswer
-}
-
 type slackReplyState struct {
 	ChannelID, MessageTS, Key, ConversationID string
-	cleanupMessageTS                          []string
-}
-
-type slackBufferedMessage struct {
-	Text, Principal string
-	Reply           *protocol.SlackReplyTarget
+	// Processing is when a Slack-started turn set its thread's agent session to processing.
+	Processing       time.Time `json:",omitzero"`
+	cleanupMessageTS []string
 }
 
 type slackNativeForward struct {
@@ -181,7 +150,7 @@ func New(cfg *config.SlackConfig, threadRouter protocol.PrimaryTextRouter, facts
 		log: logger.With("component", "slack"), config: *cfg,
 		threadRouter: threadRouter,
 		facts:        facts, factsWake: make(chan struct{}, 1), refreshWake: make(chan struct{}, 1), observations: make(map[string]channelObservation),
-		api: api, socketEvents: make(chan socketmode.Event, 50), questions: map[string]*slackPendingQuestion{},
+		api: api, socketEvents: make(chan socketmode.Event, 50),
 		newSocketClient: func(api *slack.Client) *socketmode.Client {
 			return socketmode.New(api)
 		},
@@ -192,7 +161,7 @@ func New(cfg *config.SlackConfig, threadRouter protocol.PrimaryTextRouter, facts
 			return client.Ack(req, payload...)
 		},
 		reconnectDelay: time.Second,
-		replies:        map[string]slackReplyState{}, pending: map[string]slackReplyState{}, stacks: map[string][]slackBufferedMessage{}, poppedQueue: map[string]struct{}{}, queueCards: map[string]string{},
+		replies:        map[string]slackReplyState{}, pending: map[string]slackReplyState{},
 		nameByID: map[string]string{},
 	}
 
@@ -309,7 +278,6 @@ func (c *Connector) Authenticate() error {
 
 	c.botUserID = auth.UserID
 	c.teamID = auth.TeamID
-	c.workspaceURL = strings.TrimRight(auth.URL, "/")
 
 	return nil
 }
@@ -328,60 +296,6 @@ func (c *Connector) Start(ctx context.Context) error {
 	c.factsGroup.Go(func() error { return c.refreshChannelFacts(inboundCtx) })
 
 	return nil
-}
-
-// ActivateEnqueue posts the 📨 consume card, then one in-progress placeholder.
-func (c *Connector) ActivateEnqueue(ctx context.Context, item *protocol.ThreadQueueItem, inbound *protocol.InboundMessage) error {
-	replyTarget := inbound.SlackReply
-	if replyTarget == nil {
-		return nil
-	}
-
-	fallback, blocks, _ := titledMessageLayout("📨", inbound.Text, inbound.Text)
-	if _, _, err := c.api.PostMessageContext(ctx, replyTarget.ChannelID, slack.MsgOptionText(fallback, false), slack.MsgOptionTS(replyTarget.ThreadTS), slack.MsgOptionBlocks(blocks...)); err != nil {
-		return fmt.Errorf("post enqueue consume card: %w", err)
-	}
-
-	c.removeReaction(ctx, &protocol.SlackReplyTarget{ChannelID: item.SlackChannel, MessageTS: item.SlackTS, ThreadTS: replyTarget.ThreadTS}, slackEnvelopeReaction, "remove Slack enqueue envelope")
-	c.createReplyPlaceholderOrWarn(ctx, replyTarget, slackImmediatePlaceholder, "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS)
-	c.beginSlackStack(slackThreadStackKey(replyTarget))
-	c.mu.Lock()
-	c.poppedQueue[item.ID] = struct{}{}
-	c.mu.Unlock()
-	c.addReaction(ctx, replyTarget, slackRobotReaction, "add Slack robot reaction")
-
-	return nil
-}
-
-// DrainSteers injects waiting Slack Steers into the current turn.
-func (c *Connector) DrainSteers(ctx context.Context, conversationID string) []string {
-	channelID, threadTS, ok := protocol.SlackThreadTarget(conversationID)
-	if !ok {
-		return nil
-	}
-
-	key := slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: channelID, ThreadTS: threadTS})
-
-	c.mu.Lock()
-
-	pending, active := c.stacks[key]
-	if active {
-		c.stacks[key] = nil
-	}
-	c.mu.Unlock()
-
-	if !active {
-		return nil
-	}
-
-	texts := make([]string, 0, len(pending))
-	for i := range pending {
-		c.removeReaction(ctx, pending[i].Reply, slackBufferedReaction, "remove Slack steer hourglass")
-		texts = append(texts, pending[i].Text)
-		c.log.Info("Slack steer injected", "event", "steer_injected", "conversation_id", conversationID, "channel", pending[i].Reply.ChannelID, "message_ts", pending[i].Reply.MessageTS, "thread_ts", pending[i].Reply.ThreadTS)
-	}
-
-	return texts
 }
 
 // Stop stops Slack socket intake while leaving response delivery usable.
@@ -431,6 +345,7 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 				return fmt.Errorf("decode recorded Slack reply placeholder: %w", err)
 			}
 
+			c.startSession(ctx, msg, &slots)
 			c.setReplyState(msg.TurnID, &slots)
 
 			return nil
@@ -438,10 +353,12 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 
 		slots, ok := c.responseSlots(msg)
 		if !ok {
-			if slots, err = c.createReplyPlaceholder(ctx, msg.SlackReply, slackImmediatePlaceholder); err != nil {
+			_, footer := c.mentionFooter(ctx, msg)
+			if slots, err = c.createReplyPlaceholder(ctx, msg.SlackReply, footer...); err != nil {
 				return err
 			}
 
+			c.startSession(ctx, msg, &slots)
 			c.setReplyState(msg.TurnID, &slots)
 		}
 
@@ -478,9 +395,11 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 		return c.sendCronjobResponse(ctx, msg, &slots, ok)
 	}
 
+	footerText, footer := c.mentionFooter(ctx, msg)
+
 	switch {
 	case msg.Text != "" && msg.GoalTurn:
-		if err := c.sendGoalTurnResponse(ctx, msg, &slots, ok); err != nil {
+		if err := c.sendGoalTurnResponse(ctx, msg, &slots, ok, footer); err != nil {
 			return err
 		}
 
@@ -491,9 +410,12 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 
 	case msg.Text != "":
 		fallbackText, blocks, overflow := titledMessageLayout("💬 "+msg.Agent, slackTruncatedText(msg.Text, slackTextLimit, "..."), msg.Text)
-		if _, _, _, err := c.sendTitledResponse(ctx, msg, &slots, ok, fallbackText, blocks, overflow, "reply"); err != nil {
+		if _, _, _, err := c.sendTitledResponse(ctx, msg, &slots, ok, fallbackText, append(blocks, footer...), overflow, "reply"); err != nil {
 			return err
 		}
+
+	case len(footer) > 0:
+		c.sendFooterOnlyResponse(ctx, msg, &slots, ok, footerText, footer)
 	}
 
 	if msg.Text != "" {
@@ -507,7 +429,9 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 		}
 	}
 
-	c.finishResponse(ctx, msg, &slots, ok, strings.TrimSpace(msg.Text) == "")
+	c.editMCPRootFooter(ctx, msg)
+
+	c.finishResponse(ctx, msg, &slots, ok, strings.TrimSpace(msg.Text) == "" && len(footer) == 0)
 
 	return nil
 }
@@ -563,7 +487,8 @@ func (c *Connector) CleanupExternalMCPRelay(ctx context.Context, replyTarget *pr
 func titledMessageLayout(header, fallback, text string) (fallbackText string, blocks []slack.Block, overflow []string) {
 	header = slackTruncatedText(header, 150, "...")
 	bodyChunks := splitSlackText(text, slackBlockTextLimit, slackBlockTextLimit)
-	rootBodyCount := min(len(bodyChunks), 48)
+	// One of Slack's 50 blocks stays free for the footer.
+	rootBodyCount := min(len(bodyChunks), 47)
 
 	blocks = make([]slack.Block, 0, rootBodyCount+2)
 
@@ -598,10 +523,7 @@ func (c *Connector) SendCronjobRoot(ctx context.Context, msg *protocol.OutboundM
 		return protocol.TextConversationTarget{}, err
 	}
 
-	fallbackText, blocks, overflow := cronjobMessageLayout(*msg.Cronjob, msg.Text)
-
-	key := msg.TurnID + "/cron-root"
-	blocks[0].(*slack.HeaderBlock).BlockID = key
+	key, fallbackText, blocks, overflow := cronjobRootLayout(msg)
 
 	root, posted, err := c.postOnce(ctx, msg.ConversationID, key, key, channelID, "", slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(blocks...))
 	if err != nil {
@@ -620,82 +542,28 @@ func (c *Connector) SendCronjobRoot(ctx context.Context, msg *protocol.OutboundM
 	return root, c.uploadResponseAttachments(ctx, root.ChannelID, root.ThreadID, msg.Attachments)
 }
 
-// AskUserQuestion posts one in-message Slack question and waits for the human answer.
-func (c *Connector) AskUserQuestion(ctx context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
-	text := strings.TrimSpace(req.Question)
-	if details := strings.TrimSpace(req.Details); details != "" {
-		text += "\n\n" + details
+// EditCronjobRootFooter ends a posted cron report root with its footer linking conversationID.
+// It rewrites the root's own blocks, so a repeated edit still leaves one footer.
+func (c *Connector) EditCronjobRootFooter(ctx context.Context, msg *protocol.OutboundMessage, root protocol.TextConversationTarget, conversationID string) error {
+	_, fallbackText, blocks, _ := cronjobRootLayout(msg)
+	_, footer := c.slackFooter(ctx, msg.Agent, slackFooterState(msg), conversationID)
+
+	if _, _, _, err := c.api.UpdateMessageContext(ctx, root.ChannelID, root.MessageID, slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(append(blocks, footer...)...)); err != nil {
+		return fmt.Errorf("edit Slack cronjob root footer: %w", err)
 	}
 
-	blocks := make([]slack.Block, 0, 2)
-	blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, text, false, false), nil, nil))
+	return nil
+}
 
-	elements := make([]slack.BlockElement, 0, len(req.Options)+1)
-	options := make([]*slack.OptionBlockObject, 0, len(req.Options))
+// cronjobRootLayout lays out a cron report root whose header carries the turn's journal key,
+// the block ID a replay finds the posted root by.
+func cronjobRootLayout(msg *protocol.OutboundMessage) (key, fallbackText string, blocks []slack.Block, overflow []string) {
+	fallbackText, blocks, overflow = cronjobMessageLayout(*msg.Cronjob, msg.Text)
 
-	for i, option := range req.Options {
-		elements = append(elements, slack.NewButtonBlockElement(fmt.Sprintf("option_%d", i), option.Value, slack.NewTextBlockObject(slack.PlainTextType, option.Label, false, false)))
-		options = append(options, slack.NewOptionBlockObject(option.Value, slack.NewTextBlockObject(slack.PlainTextType, option.Label, false, false), nil))
-	}
+	key = msg.TurnID + "/cron-root"
+	blocks[0].(*slack.HeaderBlock).BlockID = key
 
-	if req.Multiple && len(options) > 0 {
-		elements = []slack.BlockElement{slack.NewOptionsMultiSelectBlockElement(slack.MultiOptTypeStatic, slack.NewTextBlockObject(slack.PlainTextType, "Select answers", false, false), "options", options...).WithMaxSelectedItems(len(options))}
-	}
-
-	elements = append(elements, slack.NewButtonBlockElement(slackQuestionCustomActionID, slackQuestionCustomActionID, slack.NewTextBlockObject(slack.PlainTextType, "Custom response", false, false)))
-	blocks = append(blocks, slack.NewActionBlock(req.ID, elements...))
-
-	if recorded, answered, err := c.facts.LoadTurnStep(ctx, req.ConversationID, req.ID+"/answer"); err != nil || answered {
-		var answer protocol.AskUserQuestionAnswer
-		if err == nil {
-			err = json.Unmarshal(recorded, &answer)
-		}
-
-		if err != nil {
-			return protocol.AskUserQuestionAnswer{}, fmt.Errorf("load recorded Slack answer: %w", err)
-		}
-
-		return answer, nil
-	}
-
-	p := &slackPendingQuestion{conversationID: req.ConversationID, ch: make(chan protocol.AskUserQuestionAnswer, 1)}
-	channelID, threadTS := slackReplyDestination(req.SlackReply)
-
-	target, _, err := c.postOnce(ctx, req.ConversationID, req.ID+"/question", req.ID, channelID, threadTS, slack.MsgOptionText(text, false), slack.MsgOptionBlocks(blocks...))
-	if err != nil {
-		return protocol.AskUserQuestionAnswer{}, fmt.Errorf("post Slack question: %w", err)
-	}
-
-	p.target = target
-
-	c.mu.Lock()
-	c.questions[req.ID] = p
-	c.mu.Unlock()
-
-	startedAt := time.Now()
-
-	c.log.Info("waiting for human answer", "event", "question_wait_started", "question_id", req.ID, "channel", channelID, "thread_ts", threadTS)
-
-	select {
-	case answer, ok := <-p.ch:
-		c.log.Info("human answer wait returned", "event", "question_wait_finished", "question_id", req.ID, "channel", channelID, "thread_ts", threadTS, "duration_ms", time.Since(startedAt).Milliseconds(), "answered", ok)
-
-		if !ok {
-			return protocol.AskUserQuestionAnswer{}, errors.New("ask_user_question canceled")
-		}
-
-		return answer, nil
-	case <-ctx.Done():
-		c.log.Info("human answer wait returned", "event", "question_wait_finished", "question_id", req.ID, "channel", channelID, "thread_ts", threadTS, "duration_ms", time.Since(startedAt).Milliseconds(), "answered", false, "error_type", fmt.Sprintf("%T", ctx.Err()))
-
-		if !errors.Is(context.Cause(ctx), protocol.ErrBridgeStopped) {
-			if pending := c.takeQuestion(req.ID); pending != nil {
-				c.deleteQuestionMessage(context.WithoutCancel(ctx), pending.target)
-			}
-		}
-
-		return protocol.AskUserQuestionAnswer{}, fmt.Errorf("wait for human answer: %w", ctx.Err())
-	}
+	return key, fallbackText, blocks, overflow
 }
 
 // SendExternalMCPRelay mirrors one external MCP request into a Slack root or thread.
@@ -769,6 +637,12 @@ func (c *Connector) SendExternalMCPRelay(ctx context.Context, channelID, threadT
 		c.CleanupExternalMCPRelay(cleanupCtx, replyTarget)
 	}()
 
+	// A new root's managed conversation is known only now that it is posted.
+	if threadTS == "" {
+		_, footer := c.slackFooter(ctx, relay.Agent, "working", protocol.SlackThreadConversationID(postedChannelID, messageTS))
+		blocks = append(blocks, footer...)
+	}
+
 	if len(relay.Attachments) > 0 {
 		fileIDs := make([]string, 0, len(relay.Attachments))
 		for i := range relay.Attachments {
@@ -790,6 +664,10 @@ func (c *Connector) SendExternalMCPRelay(ctx context.Context, channelID, threadT
 		if _, _, _, err := c.api.UpdateMessageContext(ctx, postedChannelID, messageTS, slack.MsgOptionText(fallbackText, false), slack.MsgOptionFileIDs(fileIDs), slack.MsgOptionBlocks(blocks...)); err != nil {
 			return nil, fmt.Errorf("send Slack external MCP relay attachments: update Slack relay files: %w", err)
 		}
+	} else if threadTS == "" {
+		if _, _, _, err := c.api.UpdateMessageContext(ctx, postedChannelID, messageTS, slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(blocks...)); err != nil {
+			c.log.Warn("add Slack external MCP root footer", "channel", postedChannelID, "message_ts", messageTS, "error", err)
+		}
 	}
 
 	for i := 1; i < len(messages); i++ {
@@ -803,7 +681,7 @@ func (c *Connector) SendExternalMCPRelay(ctx context.Context, channelID, threadT
 		continuationMessageTS = append(continuationMessageTS, continuationTS)
 	}
 
-	slots, err := c.createReplyPlaceholder(ctx, replyTarget, slackImmediatePlaceholder)
+	slots, err := c.createReplyPlaceholder(ctx, replyTarget)
 	if err != nil {
 		return nil, err
 	}
@@ -813,12 +691,6 @@ func (c *Connector) SendExternalMCPRelay(ctx context.Context, channelID, threadT
 
 	c.mu.Lock()
 	c.pending[slots.Key] = slots
-
-	if key := slackThreadStackKey(replyTarget); key != "" {
-		if _, ok := c.stacks[key]; !ok {
-			c.stacks[key] = nil
-		}
-	}
 	c.mu.Unlock()
 
 	c.addReaction(ctx, replyTarget, slackRobotReaction, "add Slack robot reaction")
@@ -829,6 +701,145 @@ func (c *Connector) SendExternalMCPRelay(ctx context.Context, channelID, threadT
 	return replyTarget, nil
 }
 
+// slackFooter renders the "agent · state · Open in Web" footer as fallback text and its
+// context block. A Web link the router cannot build is logged and left out.
+func (c *Connector) slackFooter(ctx context.Context, agent, state, conversationID string) (string, []slack.Block) {
+	text := agent + " · " + state
+
+	if link, err := c.threadRouter.WebURL(ctx, conversationID); err != nil {
+		c.log.Warn("build Slack footer Web link", "conversation_id", conversationID, "error", err)
+	} else {
+		text += " · <" + link + "|Open in Web>"
+	}
+
+	return text, []slack.Block{slack.NewContextBlock("", slack.NewTextBlockObject(slack.MarkdownType, text, false, false))}
+}
+
+// mentionFooter returns the footer of a turn's message in a mention thread, whichever surface
+// started the turn: "working" until its final names how it ended. Report threads, other
+// conversations, and output without a turn get none.
+func (c *Connector) mentionFooter(ctx context.Context, msg *protocol.OutboundMessage) (string, []slack.Block) {
+	channelID, threadTS, ok := protocol.SlackThreadTarget(msg.ConversationID)
+	if !ok || msg.TurnID == "" || msg.ExternalConversationID != "" {
+		return "", nil
+	}
+
+	_, report, err := c.threadRouter.MentionThread(protocol.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS})
+	if err != nil {
+		c.log.Warn("read Slack thread for footer", "conversation_id", msg.ConversationID, "error", err)
+	}
+
+	if err != nil || report {
+		return "", nil
+	}
+
+	return c.slackFooter(ctx, msg.Agent, slackFooterState(msg), msg.ConversationID)
+}
+
+// slackFooterState is "working" until msg is a final, then how its turn ended.
+func slackFooterState(msg *protocol.OutboundMessage) string {
+	switch {
+	case msg.Terminal == protocol.TerminalFailed || msg.Terminal == protocol.TerminalStopped:
+		return string(msg.Terminal)
+	case msg.Complete:
+		return "done"
+	}
+
+	return "working"
+}
+
+// startSession sets a Slack-started turn's thread to processing, so Slack shows its working state
+// and Stop, and notes on slots when, for Stop to check. Other turns make no session calls.
+func (c *Connector) startSession(ctx context.Context, msg *protocol.OutboundMessage, slots *slackReplyState) {
+	if msg.Source != protocol.SourceSlack {
+		return
+	}
+
+	slots.ConversationID, slots.Processing = msg.ConversationID, time.Now()
+	channelID, threadTS := slackReplyDestination(msg.SlackReply)
+	c.setSessionStatus(ctx, channelID, threadTS, slack.AgentSessionStatusProcessing)
+}
+
+// setSessionStatus sets a thread's agent session status. A workspace without agent sessions
+// refuses with feature_disabled or not_authorized; that and every other failure is only logged.
+func (c *Connector) setSessionStatus(ctx context.Context, channelID, threadTS, status string) {
+	if _, err := c.api.SetAgentSessionStatusContext(ctx, slack.AgentSessionSetStatusParameters{Status: status, ChannelID: channelID, ThreadTS: threadTS}); err != nil {
+		c.log.Warn("set Slack agent session status", "channel", channelID, "thread_ts", threadTS, "status", status, "error", err)
+	}
+}
+
+// sessionTurn returns the running Slack-started turn of conversationID and when it set processing.
+func (c *Connector) sessionTurn(conversationID string) (turnID string, processing time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for id, state := range c.replies {
+		if state.ConversationID == conversationID && !state.Processing.IsZero() {
+			return id, state.Processing
+		}
+	}
+
+	return "", time.Time{}
+}
+
+// editMCPRootFooter shows an External MCP final's turn state in its thread root's footer. Such
+// a final arrives in the thread's managed conversation. chat.update replaces every block, so
+// the root's current blocks are read first and only a trailing footer is replaced. A failure
+// is logged.
+func (c *Connector) editMCPRootFooter(ctx context.Context, msg *protocol.OutboundMessage) {
+	channelID, threadTS, managed := protocol.SlackThreadTarget(msg.ConversationID)
+	if !managed || msg.ExternalConversationID == "" {
+		return
+	}
+
+	messages, _, _, err := c.api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{ChannelID: channelID, Timestamp: threadTS, Limit: 1})
+	if err == nil && len(messages) > 0 {
+		blocks := messages[0].Blocks.BlockSet
+		if last := len(blocks) - 1; last >= 0 && blocks[last].BlockType() == slack.MBTContext {
+			blocks = blocks[:last]
+		}
+
+		_, footer := c.slackFooter(ctx, msg.Agent, slackFooterState(msg), msg.ConversationID)
+		options := []slack.MsgOption{slack.MsgOptionText(messages[0].Text, false), slack.MsgOptionBlocks(append(blocks, footer...)...)}
+
+		// The relay's attachments were shared by editing in their file IDs; resend them so the edit keeps them.
+		if len(messages[0].Files) > 0 {
+			fileIDs := make([]string, 0, len(messages[0].Files))
+			for i := range messages[0].Files {
+				fileIDs = append(fileIDs, messages[0].Files[i].ID)
+			}
+
+			options = append(options, slack.MsgOptionFileIDs(fileIDs))
+		}
+
+		_, _, _, err = c.api.UpdateMessageContext(ctx, channelID, threadTS, options...)
+	}
+
+	if err != nil {
+		c.log.Warn("edit Slack external MCP root footer", "conversation_id", msg.ConversationID, "turn_id", msg.TurnID, "error", err)
+	}
+}
+
+// sendFooterOnlyResponse ends a turn without text visibly: its placeholder becomes the
+// footer, or, with none to edit, the footer posts once for the turn. A failure is logged.
+func (c *Connector) sendFooterOnlyResponse(ctx context.Context, msg *protocol.OutboundMessage, slots *slackReplyState, hasSlots bool, footerText string, footer []slack.Block) {
+	options := []slack.MsgOption{slack.MsgOptionText(footerText, false), slack.MsgOptionBlocks(footer...)}
+
+	var err error
+	if hasSlots {
+		_, _, _, err = c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.MessageTS, options...)
+	} else {
+		key := msg.TurnID + "/footer"
+		footer[0].(*slack.ContextBlock).BlockID = key
+		channelID, threadTS := slackReplyDestination(msg.SlackReply)
+		_, _, err = c.postOnce(ctx, msg.ConversationID, key, key, channelID, threadTS, options...)
+	}
+
+	if err != nil {
+		c.log.Warn("send Slack footer-only reply", "conversation_id", msg.ConversationID, "turn_id", msg.TurnID, "error", err)
+	}
+}
+
 // logDelivery owns outcome formatting separately from the reply-recovery flow.
 func (c *Connector) logDelivery(msg *protocol.OutboundMessage, startedAt time.Time, err error) {
 	outcome := "acknowledged"
@@ -836,9 +847,9 @@ func (c *Connector) logDelivery(msg *protocol.OutboundMessage, startedAt time.Ti
 	switch {
 	case err != nil:
 		outcome = "failed"
-	case msg.WorkflowTerminal == protocol.TerminalStopped:
+	case msg.Terminal == protocol.TerminalStopped:
 		outcome = "stopped"
-	case msg.WorkflowTerminal == protocol.TerminalFailed:
+	case msg.Terminal == protocol.TerminalFailed:
 		outcome = "generation_failed"
 	case msg.Cronjob != nil && strings.TrimSpace(msg.Text) == "" && len(msg.Attachments) == 0:
 		outcome = "intentional_silence"
@@ -1074,43 +1085,6 @@ func (c *Connector) findPosted(ctx context.Context, posting *slackPosting, block
 	}
 }
 
-func (c *Connector) completeQuestion(ctx context.Context, id string, answer protocol.AskUserQuestionAnswer) bool {
-	p := c.takeQuestion(id)
-	if p == nil {
-		return false
-	}
-
-	data, err := json.Marshal(answer)
-	if err == nil {
-		err = c.facts.SaveTurnStep(context.WithoutCancel(ctx), p.conversationID, id+"/answer", data)
-	}
-
-	if err != nil {
-		c.log.Error("record Slack answer", "conversation_id", p.conversationID, "question_id", id, "error", err)
-	}
-
-	c.deleteQuestionMessage(ctx, p.target)
-
-	p.ch <- answer
-
-	return true
-}
-
-func (c *Connector) takeQuestion(id string) *slackPendingQuestion {
-	c.mu.Lock()
-	p := c.questions[id]
-	delete(c.questions, id)
-	c.mu.Unlock()
-
-	return p
-}
-
-func (c *Connector) deleteQuestionMessage(ctx context.Context, target protocol.TextConversationTarget) {
-	if _, _, err := c.api.DeleteMessageContext(ctx, target.ChannelID, target.MessageID); err != nil {
-		c.log.Warn("delete Slack question", "channel", target.ChannelID, "message_ts", target.MessageID, "error", err)
-	}
-}
-
 func (c *Connector) responseSlots(msg *protocol.OutboundMessage) (slackReplyState, bool) {
 	slots, ok := c.replyState(msg.TurnID)
 	if !ok && strings.TrimSpace(msg.TurnID) != "" {
@@ -1149,10 +1123,10 @@ func (c *Connector) sendMCPResponse(ctx context.Context, msg *protocol.OutboundM
 	return c.postResponseChunks(ctx, channelID, threadTS, chunks, msg)
 }
 
-func (c *Connector) sendGoalTurnResponse(ctx context.Context, msg *protocol.OutboundMessage, slots *slackReplyState, hasSlots bool) error {
+func (c *Connector) sendGoalTurnResponse(ctx context.Context, msg *protocol.OutboundMessage, slots *slackReplyState, hasSlots bool, footer []slack.Block) error {
 	fallbackText, blocks, overflow := goalMessageLayout(msg.GoalTurnNumber, msg.GoalMaxTurns, msg.GoalComplete, msg.Text)
 
-	channelID, threadTS, posted, err := c.sendTitledResponse(ctx, msg, slots, hasSlots, fallbackText, blocks, overflow, "goal")
+	channelID, threadTS, posted, err := c.sendTitledResponse(ctx, msg, slots, hasSlots, fallbackText, append(blocks, footer...), overflow, "goal")
 	if err != nil {
 		return err
 	}
@@ -1276,17 +1250,12 @@ func (c *Connector) finishResponse(ctx context.Context, msg *protocol.OutboundMe
 
 	c.clearReplyState(msg.TurnID)
 
-	c.removeReaction(ctx, msg.SlackReply, slackRobotReaction, "remove Slack robot reaction")
-
-	if strings.TrimSpace(msg.TurnID) != "" {
-		if threadKey := slackThreadStackKey(msg.SlackReply); threadKey != "" {
-			c.promoteSlackStack(threadKey)
-
-			if msg.GoalActive {
-				c.beginSlackStack(threadKey)
-			}
-		}
+	if msg.Source == protocol.SourceSlack {
+		channelID, threadTS := slackReplyDestination(msg.SlackReply)
+		c.setSessionStatus(ctx, channelID, threadTS, slack.AgentSessionStatusActive)
 	}
+
+	c.removeReaction(ctx, msg.SlackReply, slackRobotReaction, "remove Slack robot reaction")
 }
 
 func (c *Connector) uploadResponseAttachments(ctx context.Context, channelID, threadTS string, attachments []protocol.OutboundAttachment) error {
@@ -1349,74 +1318,6 @@ func (c *Connector) resolveConfiguredChannelID(ctx context.Context, channel stri
 			return "", fmt.Errorf("configured Slack channel %q was not found", channel)
 		}
 	}
-}
-
-func slackThreadStackKey(replyTarget *protocol.SlackReplyTarget) string {
-	if replyTarget == nil {
-		return ""
-	}
-
-	channelID := strings.TrimSpace(replyTarget.ChannelID)
-
-	threadTS := strings.TrimSpace(replyTarget.ThreadTS)
-	if channelID == "" || threadTS == "" {
-		return ""
-	}
-
-	return "thread\x00" + channelID + "\x00" + threadTS
-}
-
-func (c *Connector) beginSlackStack(key string) bool {
-	c.mu.Lock()
-
-	_, exists := c.stacks[key]
-	if !exists {
-		c.stacks[key] = nil
-	}
-	c.mu.Unlock()
-
-	return !exists
-}
-
-func (c *Connector) bufferSlackStack(ctx context.Context, key, text string, replyTarget *protocol.SlackReplyTarget, principal string) bool {
-	c.mu.Lock()
-
-	_, active := c.stacks[key]
-	if active {
-		c.stacks[key] = append(c.stacks[key], slackBufferedMessage{Text: text, Principal: principal, Reply: replyTarget})
-	}
-	c.mu.Unlock()
-
-	if active {
-		c.addReaction(ctx, replyTarget, slackBufferedReaction, "add Slack buffered reaction")
-		c.log.Info("Slack steer admitted", "event", "steer_admitted", "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS, "thread_ts", replyTarget.ThreadTS)
-	}
-
-	return active
-}
-
-func (c *Connector) promoteSlackStack(key string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	buffered, ok := c.stacks[key]
-	if !ok {
-		return
-	}
-
-	if len(buffered) == 0 {
-		delete(c.stacks, key)
-	}
-}
-
-func (c *Connector) finishSlackStack(key string) []slackBufferedMessage {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	buffered := c.stacks[key]
-	delete(c.stacks, key)
-
-	return buffered
 }
 
 func (c *Connector) postResponseChunks(ctx context.Context, channelID, threadTS string, chunks []string, msg *protocol.OutboundMessage) error {
@@ -1506,12 +1407,8 @@ func (c *Connector) eventLoop(ctx context.Context) {
 				c.requestChannelFacts()
 			}
 
-			switch event.Type { //nolint:exhaustive // Only Slack app events and interactions are routed here.
-			case socketmode.EventTypeEventsAPI:
+			if event.Type == socketmode.EventTypeEventsAPI {
 				c.handleEventsAPI(ctx, event)
-			case socketmode.EventTypeInteractive:
-				c.handleInteractive(ctx, event)
-			default:
 			}
 		}
 	}
@@ -1578,95 +1475,6 @@ func (c *Connector) runSocketLoop(ctx context.Context) {
 	}
 }
 
-func (c *Connector) handleInteractive(ctx context.Context, event socketmode.Event) {
-	callback, ok := event.Data.(slack.InteractionCallback)
-	if !ok {
-		return
-	}
-
-	if c.handleQueueInteractive(ctx, &callback) {
-		return
-	}
-
-	var metadata struct {
-		ID, ChannelID string
-	}
-	if callback.Type == slack.InteractionTypeViewSubmission && callback.View.CallbackID == slackQuestionCustomViewCallbackID {
-		if err := json.Unmarshal([]byte(callback.View.PrivateMetadata), &metadata); err != nil {
-			c.log.Warn("parse Slack custom question metadata", "error", err)
-
-			return
-		}
-	}
-
-	channelID := cmp.Or(callback.Channel.ID, metadata.ChannelID, strings.TrimSpace(callback.Container.ChannelID))
-
-	channel, _, ok := c.socialModeChannel(ctx, channelID)
-	allowed := ok && c.socialModeAllowsUser(channel, callback.User.ID)
-
-	if !allowed {
-		return
-	}
-
-	if callback.Type == slack.InteractionTypeViewSubmission && callback.View.CallbackID == slackQuestionCustomViewCallbackID {
-		custom := strings.TrimSpace(callback.View.State.Values[slackQuestionCustomBlockID][slackQuestionCustomInputActionID].Value)
-
-		c.completeQuestion(ctx, metadata.ID, protocol.AskUserQuestionAnswer{Custom: custom, Source: protocol.SourceSlack})
-
-		return
-	}
-
-	for _, action := range callback.ActionCallback.BlockActions {
-		if action.ActionID == slackAgentSwitchSelectActionID {
-			c.handleSlackAgentSwitchSelection(ctx, callback.User.ID, action)
-			return
-		}
-
-		if action.ActionID == slackQuestionCustomActionID {
-			metadata.ID = action.BlockID
-			metadata.ChannelID = cmp.Or(strings.TrimSpace(callback.Container.ChannelID), strings.TrimSpace(callback.Channel.ID))
-
-			encoded, err := json.Marshal(metadata)
-			if err != nil {
-				c.log.Warn("encode Slack custom question metadata", "error", err)
-
-				return
-			}
-
-			input := slack.NewPlainTextInputBlockElement(slack.NewTextBlockObject(slack.PlainTextType, "Type your answer", false, false), slackQuestionCustomInputActionID).WithMultiline(true).WithMinLength(1)
-
-			_, err = c.api.OpenViewContext(ctx, callback.TriggerID, slack.ModalViewRequest{
-				Type:            slack.VTModal,
-				Title:           slack.NewTextBlockObject(slack.PlainTextType, "Custom response", false, false),
-				Submit:          slack.NewTextBlockObject(slack.PlainTextType, "Submit", false, false),
-				Close:           slack.NewTextBlockObject(slack.PlainTextType, "Cancel", false, false),
-				CallbackID:      slackQuestionCustomViewCallbackID,
-				PrivateMetadata: string(encoded),
-				Blocks:          slack.Blocks{BlockSet: []slack.Block{slack.NewInputBlock(slackQuestionCustomBlockID, slack.NewTextBlockObject(slack.PlainTextType, "Answer", false, false), nil, input)}},
-			})
-			if err != nil {
-				c.log.Warn("open Slack custom question view", "error", err)
-			}
-
-			return
-		}
-
-		selected := []string{action.Value}
-
-		if len(action.SelectedOptions) > 0 {
-			selected = nil
-
-			for _, option := range action.SelectedOptions {
-				selected = append(selected, option.Value)
-			}
-		}
-
-		if c.completeQuestion(ctx, action.BlockID, protocol.AskUserQuestionAnswer{Selected: selected, Source: protocol.SourceSlack}) {
-			return
-		}
-	}
-}
-
 func (c *Connector) handleEventsAPI(ctx context.Context, event socketmode.Event) {
 	eventsAPIEvent, ok := event.Data.(slackevents.EventsAPIEvent)
 	if !ok {
@@ -1685,405 +1493,54 @@ func (c *Connector) handleEventsAPI(ctx context.Context, event socketmode.Event)
 		c.queueChannelFact(ev.Channel.ID, ev.Channel.Name, time.Now())
 	case *slackevents.GroupRenameEvent:
 		c.queueChannelFact(ev.Channel.ID, ev.Channel.Name, time.Now())
-	case *slackevents.MessageEvent:
-		c.handleMessageEvent(ctx, ev, forward)
 	case *slackevents.AppMentionEvent:
 		c.handleAppMentionEvent(ctx, ev, forward)
-	case *slackevents.ReactionAddedEvent:
-		c.handleReactionAddedEvent(ctx, ev)
+	case *slackevents.AgentSessionStoppedEvent:
+		c.handleAgentSessionStopped(ctx, ev)
 	}
 }
 
-func (c *Connector) ignoreSlackMessage(ev *slackevents.MessageEvent, reason string, extra ...any) {
-	attrs := []any{"reason", reason}
-	if ev != nil {
-		attrs = append(attrs, "user", ev.User, "channel", ev.Channel, "channel_type", ev.ChannelType)
-	}
+// handleAgentSessionStopped answers Slack's Stop. A press by an allowlisted user of the channel
+// row interrupts the thread's Slack-started turn if that turn set processing before the press;
+// an earlier press was meant for an earlier turn. The session then goes active, unless a
+// Slack-started turn keeps running, which re-sends processing so its working state and Stop stay.
+// responseMu orders these status writes with SendResponse's.
+func (c *Connector) handleAgentSessionStopped(ctx context.Context, ev *slackevents.AgentSessionStoppedEvent) {
+	c.responseMu.Lock()
+	defer c.responseMu.Unlock()
 
-	c.log.Debug("ignored Slack message event", append(attrs, extra...)...)
-}
+	conversationID := protocol.SlackThreadConversationID(ev.Channel, ev.ThreadTimestamp)
+	turnID, processing := c.sessionTurn(conversationID)
+	stopped := ""
 
-func (c *Connector) postDollarHelpOrWarn(ctx context.Context, channelID, threadTS, agent string) {
-	if _, err := c.postSlackDollarCommandHelp(ctx, channelID, threadTS, agent); err != nil {
-		c.log.Warn("post Slack dollar command help", "error", err, "channel", channelID, "thread_ts", threadTS)
-	}
-}
-
-func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.MessageEvent, forward slackNativeForward) { //nolint:gocyclo // Slack event routing is deliberately kept in arrival order.
-	if ev == nil {
-		c.ignoreSlackMessage(ev, "nil_event")
-		return
-	}
-
-	if ev.User == "" {
-		c.ignoreSlackMessage(ev, "empty_user", "bot_id_present", ev.BotID != "")
-
-		return
-	}
-
-	if ev.User == c.botUserID {
-		c.ignoreSlackMessage(ev, "bot_user")
-
-		return
-	}
-
-	if ev.BotID != "" {
-		c.ignoreSlackMessage(ev, "bot_message", "bot_id_present", true)
-
-		return
-	}
-
-	subtype := strings.TrimSpace(ev.SubType)
-	if subtype != "" && subtype != slack.MsgSubTypeFileShare {
-		c.ignoreSlackMessage(ev, "unsupported_subtype", "subtype", subtype)
-
-		return
-	}
-
-	threadTS := strings.TrimSpace(ev.ThreadTimeStamp)
-	socialThreadReply := false
-	socialChannelName := ""
-
-	if threadTS != "" && !strings.HasPrefix(ev.Channel, "D") && c.socialModeCouldAllowUser(ev.User) {
+	if turnID != "" {
 		channel, _, ok := c.socialModeChannel(ctx, ev.Channel)
+		// ponytail: Slack's event clock is compared with ours, so skew larger than the gap between
+		// two turns' starts can misjudge a press; Slack sends no time for the processing it applied.
+		pressedAt, _ := strconv.ParseFloat(ev.EventTimestamp, 64)
 
-		socialThreadReply = ok && c.socialModeAllowsUser(channel, ev.User)
-		if socialThreadReply {
-			socialChannelName = channel
-		}
-	}
+		if ok && c.socialModeAllowsUser(channel, ev.User) && processing.Before(time.UnixMicro(int64(pressedAt*1e6))) {
+			// Interrupting an idle turn delivers its final through SendResponse before returning.
+			c.responseMu.Unlock()
+			_, err := c.threadRouter.InterruptThread(protocol.TextConversationTarget{ChannelID: ev.Channel, ThreadID: ev.ThreadTimestamp})
+			c.responseMu.Lock()
 
-	rawText := strings.TrimLeftFunc(slackMessageEventText(ev), unicode.IsSpace)
-
-	text := rawText
-	if socialThreadReply {
-		text = c.stripSlackBotMention(text)
-	}
-
-	fileCount := len(slackMessageEventFiles(ev))
-	c.log.Debug("received Slack message event", "user", ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "channel_type", ev.ChannelType, "subtype", subtype, "thread_ts_present", threadTS != "", "text_len", len(text), "file_count", fileCount, "dm_channel", strings.HasPrefix(ev.Channel, "D"), "social_thread_reply", socialThreadReply)
-
-	if !socialThreadReply {
-		c.ignoreSlackMessage(ev, "not_allowed_managed_thread", "thread_ts_present", threadTS != "", "dm_channel", strings.HasPrefix(ev.Channel, "D"))
-
-		return
-	}
-
-	if text == "" && fileCount == 0 && len(forward.previews) == 0 && !c.slackMessageMentionsBot(rawText) {
-		c.ignoreSlackMessage(ev, "empty_text_and_no_files", "thread_ts_present", threadTS != "")
-
-		return
-	}
-
-	if socialThreadReply && c.slackSocialThreadReplyPingsAway(rawText) {
-		c.log.Debug("ignored Slack social thread reply", "reason", "pinged_other_without_bot_mention", "user", ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
-
-		return
-	}
-
-	recipientTeamID := cmp.Or(strings.TrimSpace(ev.UserTeam), c.teamID)
-
-	replyTarget := &protocol.SlackReplyTarget{ChannelID: ev.Channel, MessageTS: ev.TimeStamp, ThreadTS: threadTS, RecipientTeamID: recipientTeamID, RecipientUserID: ev.User}
-
-	if threadTS != "" {
-		agent, handled, err := c.threadRouter.ThreadAgent(protocol.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS})
-		if err != nil {
-			c.log.Error("prepare Slack thread reply", "error", err, "channel", ev.Channel, "thread_ts", threadTS)
-			return
-		}
-
-		if !handled {
-			if !c.slackMessageMentionsBot(rawText) {
-				return
+			if err != nil {
+				c.log.Error("interrupt Slack thread on Stop", "conversation_id", conversationID, "turn_id", turnID, "error", err)
+			} else {
+				stopped = turnID
 			}
 
-			c.startAdhocSocialThread(ctx, ev, forward, socialChannelName, text, replyTarget)
-
-			return
-		}
-
-		if command, args, ok := slackDollarCommand(text); ok {
-			switch command {
-			case "agent":
-				c.handleSlackSocialAgentSwitch(ctx, ev.Channel, threadTS, ev.User, socialChannelName, args)
-				return
-			case "stop":
-				if args != "" {
-					c.postDollarHelpOrWarn(ctx, ev.Channel, threadTS, agent)
-
-					return
-				}
-
-				if err := c.stopSlackThread(ctx, ev.Channel, threadTS); err != nil {
-					c.log.Error("stop Slack goal thread", "error", err, "channel", ev.Channel, "thread_ts", threadTS)
-				}
-
-				return
-			case "enqueue":
-				if args == "" {
-					c.postDollarHelpOrWarn(ctx, ev.Channel, threadTS, agent)
-
-					return
-				}
-
-				content := c.inboundContentForMessageEvent(ctx, ev, forward)
-				content.Text = args
-				c.handleEnqueueCommand(ctx, "", &content, ev.User, replyTarget)
-
-				return
-			case "queue":
-				c.handleQueueCommand(ctx, replyTarget)
-
-				return
-			case "goal":
-				goal, rejection := protocol.ParseGoalRequest(args)
-				if rejection != "" {
-					c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, rejection)
-					return
-				}
-
-				content := c.inboundContentForMessageEvent(ctx, ev, forward)
-				content.Text = goal.Objective
-
-				key := slackThreadStackKey(replyTarget)
-
-				principal := c.slackPrincipal(ctx, ev.User)
-				if c.bufferSlackStack(ctx, key, content.Text, replyTarget, principal) {
-					return
-				}
-
-				c.beginSlackStack(key)
-				c.createReplyPlaceholderOrWarn(ctx, replyTarget, slackGoalProgressText(1, goal.MaxTurns), "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
-
-				inbound := newSlackInboundMessage(goal.Objective, &content, replyTarget, principal)
-				if socialThreadReply {
-					protocol.SetInboundAllowedAgents(inbound, c.socialModeAgents(socialChannelName))
-				}
-
-				if !c.startSlackGoal(ctx, key, replyTarget, "", goal, inbound) {
-					return
-				}
-
-				return
-			case "":
-				c.postDollarHelpOrWarn(ctx, ev.Channel, threadTS, agent)
-
-				return
-			}
-		}
-
-		content := c.inboundContentForMessageEvent(ctx, ev, forward)
-		content.Text = text
-
-		key := slackThreadStackKey(replyTarget)
-
-		principal := c.slackPrincipal(ctx, ev.User)
-		if c.hasLiveSlackMessage(replyTarget) {
-			return
-		}
-
-		c.mu.Lock()
-		_, stacked := c.stacks[key]
-		c.mu.Unlock()
-		c.beginSlackStack(key)
-
-		if !stacked && !c.threadRouter.ThreadBusy(protocol.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS}) {
-			c.createReplyPlaceholderOrWarn(ctx, replyTarget, slackImmediatePlaceholder, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
-		}
-
-		inbound := newSlackInboundMessage(content.Text, &content, replyTarget, principal)
-
-		inbound.Kind = protocol.InboundKindSteer
-		if socialThreadReply {
-			protocol.SetInboundAllowedAgents(inbound, c.socialModeAgents(socialChannelName))
-		}
-
-		// Log reading guide: correlate by channel/message_ts/thread_ts. A pre-turn stuck placeholder is proven by a created placeholder, this handoff with pending_placeholder=true, then a submission failure before bridge/rocketcode logs and no later claimed-placeholder log.
-		c.log.Info("handing Slack thread reply to router", "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "pending_placeholder", c.hasLiveSlackMessage(replyTarget))
-
-		handled, err = c.threadRouter.SubmitThreadReply(ctx, protocol.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS}, inbound)
-		if err != nil {
-			c.log.Error("submit Slack thread reply", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "pending_placeholder", c.hasLiveSlackMessage(replyTarget))
-			c.finishSlackStack(key)
-
-			c.warnConsumeReservedPlaceholder(ctx, replyTarget, "I couldn't submit that Slack thread reply: "+err.Error(), "consume Slack thread reply error placeholder")
-
-			return
-		}
-
-		if !handled {
-			c.log.Warn("Slack thread reply was not handled after placeholder", "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "pending_placeholder", c.hasLiveSlackMessage(replyTarget))
-			c.finishSlackStack(key)
-
-			c.warnConsumeReservedPlaceholder(ctx, replyTarget, "I couldn't find an active managed thread for that reply.", "consume unhandled Slack thread reply placeholder")
-
-			return
-		}
-
-		c.addReaction(ctx, replyTarget, slackRobotReaction, "add Slack robot reaction")
-		c.log.Info("accepted Slack thread reply", "user", ev.User, "channel", ev.Channel, "thread_ts", threadTS, "text_len", len(text), "attachment_count", len(content.Attachments))
-
-		return
-	}
-}
-
-func (c *Connector) handleReactionAddedEvent(ctx context.Context, ev *slackevents.ReactionAddedEvent) {
-	if ev == nil {
-		return
-	}
-
-	reaction := strings.TrimSpace(ev.Reaction)
-	convert := reaction == slackFastUpButtonReaction || reaction == slackBlackUpPointingDoubleTriangleReaction || reaction == slackArrowDoubleUpReaction
-
-	stop := reaction == slackGoalStopSignReaction || reaction == slackGoalStopButtonReaction
-	if !convert && !stop {
-		return
-	}
-
-	if ev.Item.Type != "message" {
-		return
-	}
-
-	channelID := strings.TrimSpace(ev.Item.Channel)
-	if strings.HasPrefix(channelID, "D") {
-		return
-	}
-
-	messageTS := strings.TrimSpace(ev.Item.Timestamp)
-	if channelID == "" || messageTS == "" {
-		return
-	}
-
-	if !c.socialModeCouldAllowUser(ev.User) {
-		return
-	}
-
-	channel, _, ok := c.socialModeChannel(ctx, channelID)
-	if !ok || !c.socialModeAllowsUser(channel, ev.User) {
-		return
-	}
-
-	if stop && c.interruptSlackTurnIfPlaceholder(ctx, channelID, messageTS) {
-		return
-	}
-
-	if convert {
-		c.convertQueuedEnvelopeIfActive(ctx, channelID, messageTS)
-		return
-	}
-
-	target, item, found := c.findQueuedEnvelope(ctx, channelID, messageTS)
-	if found {
-		c.deleteQueuedEnvelope(ctx, target, &item)
-		return
-	}
-
-	if target.ThreadID == "" {
-		return
-	}
-
-	if err := c.stopSlackThread(ctx, channelID, target.ThreadID); err != nil {
-		c.log.Error("stop Slack goal thread by reaction", "error", err, "channel", channelID, "thread_ts", target.ThreadID, "message_ts", messageTS)
-	}
-}
-
-func (c *Connector) findQueuedEnvelope(ctx context.Context, channelID, messageTS string) (target protocol.TextConversationTarget, item protocol.ThreadQueueItem, ok bool) {
-	threadTS, handled, err := c.resolveManagedThreadTS(ctx, channelID, messageTS)
-	if err != nil {
-		c.log.Error("resolve Slack managed thread", "error", err, "channel", channelID, "message_ts", messageTS)
-		return protocol.TextConversationTarget{}, item, false
-	}
-
-	if !handled {
-		return protocol.TextConversationTarget{}, item, false
-	}
-
-	target = protocol.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS}
-
-	items, errQueue := c.visibleQueueItems(target)
-	if errQueue != nil {
-		c.log.Error("list Slack queue", "error", errQueue, "channel", channelID, "thread_ts", threadTS)
-		return protocol.TextConversationTarget{}, item, false
-	}
-
-	for i := range items {
-		if items[i].SlackChannel == channelID && items[i].SlackTS == messageTS {
-			return target, items[i], true
+			turnID, _ = c.sessionTurn(conversationID)
 		}
 	}
 
-	return target, item, false
-}
-
-func (c *Connector) deleteQueuedEnvelope(ctx context.Context, target protocol.TextConversationTarget, item *protocol.ThreadQueueItem) bool {
-	removed, err := c.threadRouter.DeleteThreadQueueItem(ctx, target, item.ID)
-	if err != nil {
-		c.log.Error("delete Slack enqueue by envelope stop", "error", err, "channel", target.ChannelID, "thread_ts", target.ThreadID)
-		return false
+	status := slack.AgentSessionStatusProcessing
+	if turnID == "" || turnID == stopped {
+		status = slack.AgentSessionStatusActive
 	}
 
-	if removed {
-		reaction := slackEnvelopeReaction
-		if item.Kind == protocol.InboundKindSteer {
-			reaction = slackRobotReaction
-		}
-
-		c.removeReaction(ctx, &protocol.SlackReplyTarget{ChannelID: item.SlackChannel, MessageTS: item.SlackTS}, reaction, "remove Slack waiting message receipt")
-	}
-
-	return removed
-}
-
-func (c *Connector) convertQueuedEnvelopeIfActive(ctx context.Context, channelID, messageTS string) {
-	target, item, found := c.findQueuedEnvelope(ctx, channelID, messageTS)
-	if !found || item.Kind == protocol.InboundKindSteer || !c.threadRouter.ThreadBusy(target) {
-		return
-	}
-
-	promoted, err := c.threadRouter.PromoteThreadQueueItem(ctx, target, item.ID)
-	if err != nil {
-		c.log.Error("promote Slack enqueue", "error", err, "channel", channelID, "thread_ts", target.ThreadID)
-		return
-	}
-
-	if promoted {
-		reply := &protocol.SlackReplyTarget{ChannelID: item.SlackChannel, MessageTS: item.SlackTS, ThreadTS: target.ThreadID}
-		c.removeReaction(ctx, reply, slackEnvelopeReaction, "remove promoted Slack enqueue envelope")
-		c.addReaction(ctx, reply, slackRobotReaction, "add promoted Slack steer receipt")
-	}
-}
-
-func (c *Connector) slackPlaceholderSlots(channelID, messageTS string) (slackReplyState, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	for turnID := range c.replies {
-		if c.replies[turnID].ChannelID == channelID && c.replies[turnID].MessageTS == messageTS {
-			return c.replies[turnID], true
-		}
-	}
-
-	for key := range c.pending {
-		if c.pending[key].ChannelID == channelID && c.pending[key].MessageTS == messageTS {
-			return c.pending[key], true
-		}
-	}
-
-	return slackReplyState{}, false
-}
-
-func (c *Connector) interruptSlackTurnIfPlaceholder(ctx context.Context, channelID, messageTS string) bool {
-	slots, ok := c.slackPlaceholderSlots(channelID, messageTS)
-	if !ok || slots.ConversationID == "" {
-		return false
-	}
-
-	marker := c.threadRouter.InterruptConversation(slots.ConversationID)
-	if marker != nil && marker.SlackReply != nil {
-		c.addReaction(ctx, marker.SlackReply, slackInterruptionReaction, "add Slack interruption reaction")
-	}
-
-	return true
+	c.setSessionStatus(ctx, ev.Channel, ev.ThreadTimestamp, status)
 }
 
 func (c *Connector) addReaction(ctx context.Context, replyTarget *protocol.SlackReplyTarget, reaction, logMessage string) {
@@ -2101,22 +1558,16 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 		return
 	}
 
-	if ev.User == "" || ev.User == c.botUserID || ev.BotID != "" || strings.HasPrefix(ev.Channel, "D") || !c.socialModeCouldAllowUser(ev.User) {
+	if ev.User == "" || ev.User == c.botUserID || ev.BotID != "" || ev.Edited != nil || strings.HasPrefix(ev.Channel, "D") || !c.socialModeCouldAllowUser(ev.User) {
 		return
 	}
 
 	text := c.stripSlackBotMention(ev.Text)
-	if len(text)+len(ev.Files)+len(forward.previews) == 0 {
-		return
-	}
+	threadTS := cmp.Or(strings.TrimSpace(ev.ThreadTimeStamp), ev.TimeStamp)
 
-	threadTS := strings.TrimSpace(ev.ThreadTimeStamp)
-	if threadTS != "" && threadTS != strings.TrimSpace(ev.TimeStamp) {
+	inThread := threadTS != strings.TrimSpace(ev.TimeStamp)
+	if !inThread && len(text)+len(ev.Files)+len(forward.previews) == 0 {
 		return
-	}
-
-	if threadTS == "" {
-		threadTS = ev.TimeStamp
 	}
 
 	channel, agent, ok := c.socialModeChannel(ctx, ev.Channel)
@@ -2124,163 +1575,75 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 		return
 	}
 
-	recipientTeamID := cmp.Or(strings.TrimSpace(ev.UserTeam), c.teamID)
+	target := protocol.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS}
 
-	replyTarget := &protocol.SlackReplyTarget{ChannelID: ev.Channel, MessageTS: ev.TimeStamp, ThreadTS: threadTS, RecipientTeamID: recipientTeamID, RecipientUserID: ev.User}
+	recorded, report, err := c.threadRouter.MentionThread(target)
+	if err != nil {
+		c.log.Error("read Slack mention thread", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
+		return
+	}
 
-	var goal protocol.GoalRequest
+	if report {
+		return
+	}
 
-	rejection := ""
-	isGoal := false
+	replyTarget := &protocol.SlackReplyTarget{ChannelID: ev.Channel, MessageTS: ev.TimeStamp, ThreadTS: threadTS}
 
-	if command, args, ok := slackDollarCommand(text); ok {
-		switch command {
-		case "agent":
-			if channel != "@" {
-				selectedAgent, prompt, done := c.handleRootAgentCommand(ctx, ev, forward, channel, agent, threadTS, args)
-				if done {
-					return
-				}
+	var history string
 
-				agent = selectedAgent
-				text = prompt
-			}
-		case "goal":
-			goal, rejection = protocol.ParseGoalRequest(args)
-			isGoal = true
-		case "enqueue", "queue":
-			c.handleRootEnqueueOrQueue(ctx, ev, forward, replyTarget, agent, command, args)
-			return
-		case "", "stop":
-			c.handleRootDollarCommandHelp(ctx, ev.Channel, threadTS, agent)
+	if inThread && !recorded {
+		messages, ok := c.slackThreadReplies(ctx, ev.Channel, threadTS)
+		if !ok {
+			c.replyMentionFailure(ctx, replyTarget, "I couldn't read this thread's earlier messages.")
 			return
 		}
+
+		// Cron and External MCP post their root before recording the thread, and old records
+		// are pruned, so a root RocketClaw posted marks a report thread.
+		if slices.ContainsFunc(messages, func(message slack.Message) bool { return message.Timestamp == threadTS && message.User == c.botUserID }) {
+			return
+		}
+
+		history = slackAdoptHistory(messages, ev.TimeStamp)
 	}
 
-	if isGoal && rejection != "" {
-		c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, rejection)
-		return
-	}
-
-	key := slackThreadStackKey(replyTarget)
-	if !c.beginSlackStack(key) {
-		return
-	}
-
-	placeholder := slackImmediatePlaceholder
-	if isGoal {
-		placeholder = slackGoalProgressText(1, goal.MaxTurns)
-	}
-
-	c.createReplyPlaceholderOrWarn(ctx, replyTarget, placeholder, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent)
-
-	content := protocol.InboundContent{Text: ev.Text}
-	if len(ev.Files) > 0 {
-		content.Attachments, content.TextAttachments, content.AttachmentPresence, content.AttachmentWarnings = c.downloadSlackAttachments(ctx, ev.Files)
-	}
-
+	content := protocol.InboundContent{Text: text}
+	content.Attachments, content.TextAttachments, content.AttachmentPresence, content.AttachmentWarnings = c.downloadSlackAttachments(ctx, ev.Files)
 	c.addSlackForward(ctx, &content, forward)
 
-	promptSource := text
-	if isGoal {
-		promptSource = goal.Objective
+	if history != "" {
+		content.TextAttachments = append(content.TextAttachments, history)
 	}
 
-	promptText := promptSource
-	content.Text = promptText
-
-	if isGoal {
-		inbound := newSlackInboundMessage(promptText, &content, replyTarget, c.slackPrincipal(ctx, ev.User))
-		protocol.SetInboundAllowedAgents(inbound, c.socialModeAgents(channel))
-
-		c.startSlackGoal(ctx, key, replyTarget, agent, goal, inbound)
-
-		return
+	inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &content, true)
+	if principal := c.slackPrincipal(ctx, ev.User); principal != "" {
+		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
 	}
 
-	c.log.Info("handing Slack social thread to router", "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent, "pending_placeholder", c.hasLiveSlackMessage(replyTarget))
-
-	inbound := newSlackInboundMessage(promptText, &content, replyTarget, c.slackPrincipal(ctx, ev.User))
+	inbound.SlackReply = new(*replyTarget)
 	protocol.SetInboundAllowedAgents(inbound, c.socialModeAgents(channel))
 
-	if err := c.threadRouter.StartThread(ctx, agent, protocol.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, inbound); err != nil {
-		c.log.Error("start Slack social thread", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent, "pending_placeholder", c.hasLiveSlackMessage(replyTarget))
-		c.finishSlackStack(key)
-
-		c.warnConsumeReservedPlaceholder(ctx, replyTarget, "I couldn't start that managed thread: "+err.Error(), "consume Slack social thread start rejection placeholder")
-
-		return
-	}
-
-	c.addReaction(ctx, replyTarget, slackRobotReaction, "add Slack robot reaction")
-	c.log.Info("accepted Slack social mention", "user", ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent, "text_len", len(text), "attachment_count", len(content.Attachments))
-}
-
-func (c *Connector) handleRootAgentCommand(ctx context.Context, ev *slackevents.AppMentionEvent, forward slackNativeForward, socialChannel, defaultAgent, threadTS, args string) (agent, prompt string, done bool) {
-	if args == "" {
-		if _, err := c.threadRouter.RegisterThread(protocol.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS}, defaultAgent); err != nil {
-			c.log.Error("register Slack root agent selector thread", "error", err, "channel", ev.Channel, "thread_ts", threadTS, "agent", defaultAgent)
-			return "", "", true
-		}
-
-		c.postSlackAgentSwitchSelector(ctx, ev.Channel, threadTS, ev.User, socialChannel, c.socialModeAgents(socialChannel))
-
-		return "", "", true
-	}
-
-	agent, prompt = splitSlackCommandArgs(args)
-
-	if !c.validateSlackAgent(ctx, ev.Channel, threadTS, ev.User, socialChannel, agent) {
-		return "", "", true
-	}
-
-	if prompt == "" && len(ev.Files) == 0 && len(forward.previews) == 0 {
-		if _, err := c.threadRouter.RegisterThread(protocol.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS}, agent); err != nil {
-			c.log.Error("register Slack named agent thread", "error", err, "channel", ev.Channel, "thread_ts", threadTS, "agent", agent)
-		}
-
-		return "", "", true
-	}
-
-	return agent, prompt, false
-}
-
-func splitSlackCommandArgs(args string) (name, remainder string) {
-	name = args
-	if index := strings.IndexFunc(args, unicode.IsSpace); index >= 0 {
-		name, remainder = args[:index], strings.TrimLeftFunc(args[index:], unicode.IsSpace)
-	}
-
-	return name, remainder
-}
-
-func (c *Connector) validateSlackAgent(ctx context.Context, channelID, threadTS, userID, socialChannel, agent string) bool {
-	if slices.Contains(c.socialModeAgents(socialChannel), agent) {
-		return true
-	}
-
-	c.postSlackEphemeral(ctx, channelID, threadTS, userID, "Agent `"+agent+"` is not configured for this channel.")
-
-	return false
-}
-
-func (c *Connector) handleRootDollarCommandHelp(ctx context.Context, channelID, threadTS, agent string) {
-	help, err := c.postSlackDollarCommandHelp(ctx, channelID, threadTS, agent)
-	if err != nil {
-		c.log.Warn("post Slack dollar command help", "error", err, "channel", channelID, "thread_ts", threadTS)
-		return
-	}
-
-	created, err := c.threadRouter.RegisterThread(protocol.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS}, agent)
-	if err != nil {
-		c.deleteSlackMessage(ctx, &help, "delete Slack command help after thread registration failure")
-		c.log.Error("register Slack command help thread", "error", err, "channel", channelID, "thread_ts", threadTS, "agent", agent)
+	accepted, err := c.threadRouter.SubmitMention(ctx, agent, target, inbound)
+	if err != nil && !accepted {
+		c.log.Error("submit Slack mention", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent)
+		c.replyMentionFailure(ctx, replyTarget, "I couldn't take that request: "+err.Error())
 
 		return
 	}
 
-	if !created {
-		c.deleteSlackMessage(ctx, &help, "delete duplicate Slack command help")
+	if err != nil { // Admitted: the queued mention runs at the next pickup.
+		c.log.Warn("pick up accepted Slack mention", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent)
+	}
+
+	if accepted {
+		c.addReaction(ctx, replyTarget, slackRobotReaction, "add Slack robot reaction")
+		c.log.Info("accepted Slack mention", "user", ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent, "text_len", len(text), "attachment_count", len(content.Attachments))
+	}
+}
+
+func (c *Connector) replyMentionFailure(ctx context.Context, replyTarget *protocol.SlackReplyTarget, text string) {
+	if _, _, err := c.api.PostMessageContext(ctx, replyTarget.ChannelID, slack.MsgOptionText(text, false), slack.MsgOptionTS(replyTarget.ThreadTS)); err != nil {
+		c.log.Warn("post Slack mention failure", "error", err, "channel", replyTarget.ChannelID, "thread_ts", replyTarget.ThreadTS)
 	}
 }
 
@@ -2339,43 +1702,6 @@ func (c *Connector) socialModeAgents(channel string) []string {
 	return configured.Agents
 }
 
-func (c *Connector) slackMessageMentionsBot(text string) bool {
-	botUserID := strings.TrimSpace(c.botUserID)
-	return botUserID != "" && strings.Contains(text, "<@"+botUserID)
-}
-
-func (c *Connector) startAdhocSocialThread(ctx context.Context, ev *slackevents.MessageEvent, forward slackNativeForward, socialChannel, text string, replyTarget *protocol.SlackReplyTarget) {
-	agents := c.socialModeAgents(socialChannel)
-	if len(agents) == 0 {
-		return
-	}
-
-	agent := agents[0]
-	key := slackThreadStackKey(replyTarget)
-	c.beginSlackStack(key)
-	c.createReplyPlaceholderOrWarn(ctx, replyTarget, slackImmediatePlaceholder, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent)
-
-	content := c.inboundContentForMessageEvent(ctx, ev, forward)
-
-	content.Text = text
-	if history := c.slackAdoptHistory(ctx, ev.Channel, replyTarget.ThreadTS, ev.TimeStamp); history != "" {
-		content.TextAttachments = append(content.TextAttachments, history)
-	}
-
-	inbound := newSlackInboundMessage(content.Text, &content, replyTarget, c.slackPrincipal(ctx, ev.User))
-	protocol.SetInboundAllowedAgents(inbound, agents)
-
-	if err := c.threadRouter.StartThread(ctx, agent, protocol.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, inbound); err != nil {
-		c.log.Error("start Slack adhoc thread", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent)
-		c.finishSlackStack(key)
-		c.warnConsumeReservedPlaceholder(ctx, replyTarget, "I couldn't start that managed thread: "+err.Error(), "consume Slack adhoc thread start rejection placeholder")
-
-		return
-	}
-
-	c.addReaction(ctx, replyTarget, slackRobotReaction, "add Slack robot reaction")
-}
-
 func (c *Connector) slackThreadReplies(ctx context.Context, channelID, threadTS string) ([]slack.Message, bool) {
 	var (
 		messages []slack.Message
@@ -2409,12 +1735,7 @@ func (c *Connector) slackThreadReplies(ctx context.Context, channelID, threadTS 
 	return messages, true
 }
 
-func (c *Connector) slackAdoptHistory(ctx context.Context, channelID, threadTS, hailTS string) string {
-	messages, ok := c.slackThreadReplies(ctx, channelID, threadTS)
-	if !ok {
-		return ""
-	}
-
+func slackAdoptHistory(messages []slack.Message, hailTS string) string {
 	var texts []string
 
 	for i := range messages {
@@ -2442,408 +1763,6 @@ func (c *Connector) slackAdoptHistory(ctx context.Context, channelID, threadTS, 
 	return packed
 }
 
-func (c *Connector) handleSlackSocialAgentSwitch(ctx context.Context, channelID, threadTS, userID, socialChannel, agent string) {
-	agent = strings.TrimSpace(agent)
-
-	agents := c.socialModeAgents(socialChannel)
-	if agent == "" {
-		_, handled, err := c.threadRouter.ThreadAgent(protocol.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS})
-		if err != nil {
-			c.log.Error("load Slack social thread agent", "error", err, "channel", channelID, "thread_ts", threadTS)
-			c.postSlackEphemeral(ctx, channelID, threadTS, userID, "I couldn't switch this thread's agent.")
-
-			return
-		}
-
-		if !handled {
-			c.postSlackEphemeral(ctx, channelID, threadTS, userID, "I couldn't find an active managed thread for that agent switch.")
-			return
-		}
-
-		c.postSlackAgentSwitchSelector(ctx, channelID, threadTS, userID, socialChannel, agents)
-
-		return
-	}
-
-	if !c.validateSlackAgent(ctx, channelID, threadTS, userID, socialChannel, agent) {
-		return
-	}
-
-	handled, err := c.threadRouter.SwitchThreadAgent(protocol.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS}, agent)
-	if err != nil {
-		c.log.Error("switch Slack social thread agent", "error", err, "channel", channelID, "thread_ts", threadTS, "agent", agent)
-		c.postSlackEphemeral(ctx, channelID, threadTS, userID, "I couldn't switch this thread to `"+agent+"`.")
-
-		return
-	}
-
-	if !handled {
-		c.postSlackEphemeral(ctx, channelID, threadTS, userID, "I couldn't find an active managed thread for that agent switch.")
-		return
-	}
-
-	if err := c.postSlackThreadReply(ctx, channelID, threadTS, "Switched this thread to `"+agent+"`."); err != nil {
-		c.log.Warn("post Slack agent switch acknowledgement", "error", err, "channel", channelID, "thread_ts", threadTS)
-	}
-}
-
-func (c *Connector) postSlackAgentSwitchSelector(ctx context.Context, channelID, threadTS, userID, socialChannel string, agents []string) {
-	metadata := slackAgentSwitchMetadata{ChannelID: channelID, ThreadTS: threadTS, UserID: userID, SocialChannel: socialChannel}
-
-	encoded, err := json.Marshal(metadata)
-	if err != nil {
-		c.log.Warn("encode Slack agent selector metadata", "error", err, "channel", channelID, "thread_ts", threadTS)
-		return
-	}
-
-	options := make([]*slack.OptionBlockObject, 0, len(agents))
-	for _, agent := range agents {
-		options = append(options, slack.NewOptionBlockObject(agent, slack.NewTextBlockObject(slack.PlainTextType, agent, false, false), nil))
-	}
-
-	text := "Select the agent for this thread."
-	selectElement := slack.NewOptionsSelectBlockElement(slack.OptTypeStatic, slack.NewTextBlockObject(slack.PlainTextType, "Select agent", false, false), slackAgentSwitchSelectActionID, options...)
-	blocks := []slack.Block{
-		slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, text, false, false), nil, nil),
-		slack.NewActionBlock(string(encoded), selectElement),
-	}
-
-	if _, _, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(text, false), slack.MsgOptionTS(threadTS), slack.MsgOptionBlocks(blocks...)); err != nil {
-		c.log.Warn("post Slack agent selector", "error", err, "channel", channelID, "thread_ts", threadTS)
-	}
-}
-
-func (c *Connector) handleSlackAgentSwitchSelection(ctx context.Context, userID string, action *slack.BlockAction) {
-	var metadata slackAgentSwitchMetadata
-	if err := json.Unmarshal([]byte(action.BlockID), &metadata); err != nil {
-		c.log.Warn("parse Slack agent selector metadata", "error", err)
-		return
-	}
-
-	if userID != metadata.UserID {
-		c.postSlackEphemeral(ctx, metadata.ChannelID, metadata.ThreadTS, userID, "Only the user who opened this selector can use it.")
-		return
-	}
-
-	agent := strings.TrimSpace(action.SelectedOption.Value)
-	if !c.validateSlackAgent(ctx, metadata.ChannelID, metadata.ThreadTS, userID, metadata.SocialChannel, agent) {
-		return
-	}
-
-	handled, err := c.threadRouter.SwitchThreadAgent(protocol.TextConversationTarget{ChannelID: metadata.ChannelID, ThreadID: metadata.ThreadTS}, agent)
-	if err != nil {
-		c.log.Error("select Slack social thread agent", "error", err, "channel", metadata.ChannelID, "thread_ts", metadata.ThreadTS, "agent", agent)
-		c.postSlackEphemeral(ctx, metadata.ChannelID, metadata.ThreadTS, userID, "I couldn't switch this thread to `"+agent+"`.")
-
-		return
-	}
-
-	if !handled {
-		c.postSlackEphemeral(ctx, metadata.ChannelID, metadata.ThreadTS, userID, "I couldn't find an active managed thread for that agent switch.")
-		return
-	}
-
-	if err := c.postSlackThreadReply(ctx, metadata.ChannelID, metadata.ThreadTS, "Switched this thread to `"+agent+"`."); err != nil {
-		c.log.Warn("post Slack selected agent switch acknowledgement", "error", err, "channel", metadata.ChannelID, "thread_ts", metadata.ThreadTS)
-	}
-}
-
-func slackDollarCommandHelpTable() *slack.TableBlock {
-	return slack.NewTableBlock("").
-		AddRow(slack.NewTableRawTextCell("$goal <objective>"), slack.NewTableRawTextCell("🏁"), slack.NewTableRawTextCell("Start a goal")).
-		AddRow(slack.NewTableRawTextCell("$stop"), slack.NewTableRawTextCell("🛑"), slack.NewTableRawTextCell("Stop the active turn")).
-		AddRow(slack.NewTableRawTextCell("$enqueue <message>"), slack.NewTableRawTextCell("✉️"), slack.NewTableRawTextCell("Stash a later turn")).
-		AddRow(slack.NewTableRawTextCell("$queue"), slack.NewTableRawTextCell("—"), slack.NewTableRawTextCell("Show later work")).
-		AddRow(slack.NewTableRawTextCell("$agent [name]"), slack.NewTableRawTextCell("🎛"), slack.NewTableRawTextCell("Select or switch an agent; bare opens the selector")).
-		AddRow(slack.NewTableRawTextCell("$skill <name> [args]"), slack.NewTableRawTextCell("—"), slack.NewTableRawTextCell("Invoke a skill, including a built-in name"))
-}
-
-func (c *Connector) postSlackDollarCommandHelp(ctx context.Context, channelID, threadTS, agent string) (slackReplyState, error) {
-	skills, err := c.threadRouter.SkillDescriptions(agent)
-	if err != nil {
-		return slackReplyState{}, fmt.Errorf("list Slack skills: %w", err)
-	}
-
-	lines := strings.Split(slackDollarCommandHelp, "\n")
-	table := slackDollarCommandHelpTable()
-
-	for _, skill := range skills {
-		prefix := "$" + skill.Name
-		switch strings.ToLower(skill.Name) {
-		case "goal", "workflow", "stop", "enqueue", "queue", "cron", "agent", "skill":
-			prefix = "$skill " + skill.Name
-		}
-
-		prefix += " [args]"
-		description := slackTruncatedText(skill.Description, 10000-utf8.RuneCountInString(prefix)-1, "...")
-		lines = append(lines, prefix+" - "+description)
-		table.AddRow(slack.NewTableRawTextCell(prefix), slack.NewTableRawTextCell("—"), slack.NewTableRawTextCell(description))
-	}
-
-	// Slack limits each message to 100 rows and 10,000 table-cell characters:
-	// https://docs.slack.dev/reference/block-kit/blocks/table-block/
-	rows := table.Rows
-
-	var reply slackReplyState
-
-	for start := 0; start < len(rows); {
-		end, characters := start, 0
-		for end < len(rows) && end-start < 100 {
-			rowCharacters := 0
-			for _, cell := range rows[end] {
-				rowCharacters += utf8.RuneCountInString(cell.(*slack.TableRawTextCell).Text)
-			}
-
-			if characters+rowCharacters > 10000 {
-				break
-			}
-
-			characters += rowCharacters
-			end++
-		}
-
-		table.Rows = rows[start:end]
-
-		postedChannelID, messageTS, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(strings.Join(lines[start:end], "\n"), false), slack.MsgOptionTS(threadTS), slack.MsgOptionBlocks(table))
-		if err != nil {
-			return reply, fmt.Errorf("post Slack dollar command help: %w", err)
-		}
-
-		if start == 0 {
-			reply = slackReplyState{ChannelID: postedChannelID, MessageTS: messageTS}
-		}
-
-		start = end
-	}
-
-	return reply, nil
-}
-
-func (c *Connector) handleEnqueueCommand(ctx context.Context, agent string, content *protocol.InboundContent, userID string, replyTarget *protocol.SlackReplyTarget) {
-	principal := c.slackPrincipal(ctx, userID)
-
-	if agent != "" {
-		if _, err := c.threadRouter.RegisterThread(protocol.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, agent); err != nil {
-			c.log.Error("register Slack enqueue thread", "error", err, "channel", replyTarget.ChannelID, "thread_ts", replyTarget.ThreadTS)
-
-			return
-		}
-	}
-
-	item := &protocol.ThreadQueueItem{
-		ID:           rand.Text(),
-		Message:      content.Text,
-		Content:      *content,
-		Source:       protocol.SourceSlack,
-		SlackReply:   replyTarget,
-		Principal:    principal,
-		StashAt:      time.Now().UTC(),
-		SlackChannel: replyTarget.ChannelID,
-		SlackTS:      replyTarget.MessageTS,
-	}
-	c.addReaction(ctx, replyTarget, slackEnvelopeReaction, "add Slack enqueue envelope")
-
-	if err := c.threadRouter.StashThreadQueueItem(ctx, protocol.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, item); err != nil {
-		c.log.Error("stash Slack enqueue", "error", err, "channel", replyTarget.ChannelID, "thread_ts", replyTarget.ThreadTS)
-	}
-}
-
-func (c *Connector) handleQueueCommand(ctx context.Context, replyTarget *protocol.SlackReplyTarget) {
-	key := replyTarget.ChannelID + "\x00" + replyTarget.ThreadTS + "\x00" + replyTarget.RecipientUserID
-
-	c.mu.Lock()
-	prev := c.queueCards[key]
-	c.mu.Unlock()
-	c.deleteSlackMessage(ctx, &slackReplyState{ChannelID: replyTarget.ChannelID, MessageTS: prev}, "delete Slack queue card")
-	fallback, blocks := c.queueCard(replyTarget.ChannelID, replyTarget.ThreadTS)
-
-	ts, err := c.api.PostEphemeralContext(ctx, replyTarget.ChannelID, replyTarget.RecipientUserID, slack.MsgOptionText(fallback, false), slack.MsgOptionBlocks(blocks...), slack.MsgOptionTS(replyTarget.ThreadTS))
-	if err != nil {
-		c.log.Warn("post Slack queue card", "error", err, "channel", replyTarget.ChannelID, "thread_ts", replyTarget.ThreadTS)
-	}
-
-	c.mu.Lock()
-	c.queueCards[key] = ts
-	c.mu.Unlock()
-}
-
-func (c *Connector) handleRootEnqueueOrQueue(ctx context.Context, ev *slackevents.AppMentionEvent, forward slackNativeForward, replyTarget *protocol.SlackReplyTarget, agent, command, args string) {
-	if command == "enqueue" {
-		if args == "" {
-			c.handleRootDollarCommandHelp(ctx, ev.Channel, replyTarget.ThreadTS, agent)
-			return
-		}
-
-		content := protocol.InboundContent{Text: args}
-		content.Attachments, content.TextAttachments, content.AttachmentPresence, content.AttachmentWarnings = c.downloadSlackAttachments(ctx, ev.Files)
-		c.addSlackForward(ctx, &content, forward)
-		c.handleEnqueueCommand(ctx, agent, &content, ev.User, replyTarget)
-
-		return
-	}
-
-	c.handleQueueCommand(ctx, replyTarget)
-}
-
-func (c *Connector) handleQueueInteractive(ctx context.Context, callback *slack.InteractionCallback) bool {
-	if callback.Type != slack.InteractionTypeBlockActions {
-		return false
-	}
-
-	var action *slack.BlockAction
-
-	for _, candidate := range callback.ActionCallback.BlockActions {
-		switch candidate.ActionID {
-		case slackQueueJumpActionID, slackQueueHideActionID:
-			action = candidate
-		}
-	}
-
-	if action == nil {
-		return false
-	}
-
-	channelID := cmp.Or(strings.TrimSpace(callback.Channel.ID), strings.TrimSpace(callback.Container.ChannelID))
-	threadTS := cmp.Or(strings.TrimSpace(callback.Message.ThreadTimestamp), strings.TrimSpace(callback.Container.ThreadTs))
-
-	channel, _, ok := c.socialModeChannel(ctx, channelID)
-	if !ok || !c.socialModeAllowsUser(channel, callback.User.ID) {
-		return true
-	}
-
-	var metadata slackQueueAction
-	if err := json.Unmarshal([]byte(action.BlockID), &metadata); err != nil {
-		return true
-	}
-
-	if metadata.ChannelID != channelID || metadata.ThreadTS != threadTS {
-		return true
-	}
-
-	if _, _, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionDeleteOriginal(callback.ResponseURL)); err != nil {
-		c.log.Warn("hide Slack queue card", "error", err, "channel", channelID)
-	}
-
-	return true
-}
-
-func (c *Connector) visibleQueueItems(target protocol.TextConversationTarget) ([]protocol.ThreadQueueItem, error) {
-	items, err := c.threadRouter.ThreadQueueItems(target)
-	if err != nil {
-		return nil, fmt.Errorf("list thread queue: %w", err)
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	visible := make([]protocol.ThreadQueueItem, 0, len(items))
-	for i := range items {
-		if _, popped := c.poppedQueue[items[i].ID]; !popped {
-			visible = append(visible, items[i])
-		}
-	}
-
-	return visible, nil
-}
-
-func (c *Connector) queueCard(channelID, threadTS string) (string, []slack.Block) {
-	target := protocol.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS}
-
-	items, err := c.visibleQueueItems(target)
-	if err != nil {
-		c.log.Error("list Slack queue", "error", err, "channel", channelID, "thread_ts", threadTS)
-	}
-
-	scheduled, errScheduled := c.threadRouter.ScheduledMessages(target)
-	if errScheduled != nil {
-		c.log.Error("list Slack scheduled messages", "error", errScheduled, "channel", channelID, "thread_ts", threadTS)
-	}
-
-	return slackQueueCard(c.workspaceURL, channelID, threadTS, items, scheduled)
-}
-
-func slackQueueRow(message, when, kind, blockID string, acc *slack.Accessory) []slack.Block {
-	return []slack.Block{
-		slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, "*"+slackTruncatedText(message, slackBlockTextLimit-2, "...")+"*", false, false), nil, acc, slack.SectionBlockOptionBlockID(blockID)),
-		slack.NewContextBlock("", slack.NewTextBlockObject(slack.MarkdownType, when, false, false), slack.NewTextBlockObject(slack.MarkdownType, kind, false, false)),
-	}
-}
-
-func slackQueueJumpAccessory(origin, channelID, messageTS, threadTS string) *slack.Accessory {
-	if origin == "" || channelID == "" || messageTS == "" {
-		return nil
-	}
-
-	return slack.NewAccessory(slack.NewButtonBlockElement(slackQueueJumpActionID, "", slack.NewTextBlockObject(slack.PlainTextType, "Jump", false, false)).WithURL(origin + "/archives/" + channelID + "/p" + strings.ReplaceAll(messageTS, ".", "") + "?thread_ts=" + threadTS))
-}
-
-func slackQueueCard(origin, channelID, threadTS string, items []protocol.ThreadQueueItem, scheduled map[string]protocol.ScheduledMessageState) (string, []slack.Block) {
-	var (
-		blocks []slack.Block
-		queued []protocol.ThreadQueueItem
-	)
-
-	for i := range items {
-		item := &items[i]
-		if item.Kind != protocol.InboundKindSteer {
-			queued = append(queued, *item)
-			continue
-		}
-
-		meta, _ := json.Marshal(slackQueueAction{ChannelID: channelID, ThreadTS: threadTS})
-		blocks = append(blocks, slackQueueRow(item.Message, "—", ":hourglass_flowing_sand: Steer", string(meta), slackQueueJumpAccessory(origin, item.SlackChannel, item.SlackTS, threadTS))...)
-	}
-
-	rows := protocol.MixedLaterWork(queued, scheduled)
-
-	if len(rows) == 0 {
-		blocks = append(blocks, slackQueueRow("None", "—", ":envelope: Queued", "", nil)...)
-	}
-
-	now := time.Now().UTC()
-
-	for i := range rows {
-		if rows[i].Kind == protocol.LaterWorkQueued {
-			meta, _ := json.Marshal(slackQueueAction{ChannelID: channelID, ThreadTS: threadTS})
-
-			blocks = append(blocks, slackQueueRow(rows[i].Queue.Message, "—", ":envelope: Queued", string(meta), slackQueueJumpAccessory(origin, rows[i].Queue.SlackChannel, rows[i].Queue.SlackTS, threadTS))...)
-
-			continue
-		}
-
-		meta, _ := json.Marshal(slackQueueAction{ChannelID: channelID, ThreadTS: threadTS})
-		due := rows[i].Scheduled.DueAt.UTC()
-
-		when := due.Format("2006-01-02 15:04 UTC")
-		if due.Year() == now.Year() && due.YearDay() == now.YearDay() {
-			when = due.Format("15:04 UTC")
-		}
-
-		blocks = append(blocks, slackQueueRow(rows[i].Scheduled.Message, when, ":calendar: Scheduled", string(meta), nil)...)
-	}
-
-	hideMeta, _ := json.Marshal(slackQueueAction{ChannelID: channelID, ThreadTS: threadTS})
-	blocks = append(blocks, slack.NewDividerBlock(), slack.NewActionBlock(string(hideMeta), slack.NewButtonBlockElement(slackQueueHideActionID, "", slack.NewTextBlockObject(slack.PlainTextType, "Hide", false, false))))
-
-	return "Later work", blocks
-}
-
-func (c *Connector) postSlackEphemeral(ctx context.Context, channelID, threadTS, userID, text string) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return
-	}
-
-	options := []slack.MsgOption{slack.MsgOptionText(text, false)}
-	if threadTS != "" {
-		options = append(options, slack.MsgOptionTS(threadTS))
-	}
-
-	if _, err := c.api.PostEphemeralContext(ctx, channelID, userID, options...); err != nil {
-		c.log.Warn("post Slack ephemeral", "error", err, "channel", channelID, "user", userID)
-	}
-}
-
 func (c *Connector) stripSlackBotMention(text string) string {
 	text = strings.TrimLeftFunc(text, unicode.IsSpace)
 
@@ -2867,34 +1786,6 @@ func (c *Connector) stripSlackBotMention(text string) string {
 	}
 
 	return text
-}
-
-func (c *Connector) slackSocialThreadReplyPingsAway(text string) bool {
-	botUserID := strings.TrimSpace(c.botUserID)
-	pingedOther := false
-
-	for {
-		start := strings.IndexByte(text, '<')
-		if start < 0 {
-			return pingedOther
-		}
-
-		text = text[start+1:]
-
-		end := strings.IndexByte(text, '>')
-		if end < 0 {
-			return pingedOther
-		}
-
-		token := text[:end]
-		text = text[end+1:]
-
-		if botUserID != "" && strings.HasPrefix(token, "@"+botUserID) && (len(token) == len(botUserID)+1 || token[len(botUserID)+1] == '|') {
-			return false
-		}
-
-		pingedOther = pingedOther || strings.HasPrefix(token, "@") || token == "!channel" || token == "!here" || token == "!everyone" || strings.HasPrefix(token, "!subteam^")
-	}
 }
 
 func (c *Connector) removeReaction(ctx context.Context, replyTarget *protocol.SlackReplyTarget, reaction, logMessage string) {
@@ -2953,25 +1844,6 @@ func (c *Connector) claimPendingState(replyTarget *protocol.SlackReplyTarget) (s
 	return state, true
 }
 
-func (c *Connector) hasLiveSlackMessage(replyTarget *protocol.SlackReplyTarget) bool {
-	key := slackPendingKey(replyTarget)
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if _, ok := c.pending[key]; ok {
-		return true
-	}
-
-	for id := range c.replies {
-		if c.replies[id].Key == key {
-			return true
-		}
-	}
-
-	return false
-}
-
 func (c *Connector) clearReplyState(turnID string) {
 	if strings.TrimSpace(turnID) == "" {
 		return
@@ -2981,32 +1853,6 @@ func (c *Connector) clearReplyState(turnID string) {
 	defer c.mu.Unlock()
 
 	delete(c.replies, turnID)
-}
-
-func newSlackInboundMessage(text string, content *protocol.InboundContent, replyTarget *protocol.SlackReplyTarget, principal string) *protocol.InboundMessage {
-	contentCopy := *content
-	contentCopy.Text = text
-
-	inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &contentCopy, true)
-	if principal = strings.TrimSpace(principal); principal != "" {
-		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
-	}
-
-	if replyTarget != nil && strings.TrimSpace(replyTarget.ThreadTS) != "" {
-		inbound.ConversationID = ""
-	}
-
-	if replyTarget != nil {
-		inbound.SlackReply = &protocol.SlackReplyTarget{
-			ChannelID:       replyTarget.ChannelID,
-			MessageTS:       replyTarget.MessageTS,
-			ThreadTS:        replyTarget.ThreadTS,
-			RecipientTeamID: replyTarget.RecipientTeamID,
-			RecipientUserID: replyTarget.RecipientUserID,
-		}
-	}
-
-	return inbound
 }
 
 // refreshNames reloads the user and group directory when it is 8 hours old
@@ -3083,48 +1929,14 @@ func slackPendingKey(replyTarget *protocol.SlackReplyTarget) string {
 	return channelID + "\x00" + messageTS + "\x00" + threadTS
 }
 
-func slackDollarCommand(text string) (command, args string, ok bool) {
-	after, ok := strings.CutPrefix(strings.TrimLeftFunc(text, unicode.IsSpace), "$")
-	if !ok {
-		return "", "", false
-	}
-
-	after = strings.TrimLeftFunc(after, unicode.IsSpace)
-
-	separator := strings.IndexFunc(after, unicode.IsSpace)
-	if separator < 0 {
-		return strings.ToLower(after), "", true
-	}
-
-	command = strings.ToLower(after[:separator])
-
-	args = strings.TrimLeftFunc(after[separator:], unicode.IsSpace)
-	if command != "enqueue" && command != "agent" {
-		args = strings.TrimSpace(args)
-	}
-
-	return command, args, true
-}
-
-func (c *Connector) consumeReservedPlaceholder(ctx context.Context, replyTarget *protocol.SlackReplyTarget, text string) error {
-	msg := protocol.NewOutboundMessage(protocol.SlackThreadConversationID(replyTarget.ChannelID, replyTarget.ThreadTS), strings.TrimSpace(text))
-	msg.TurnID = fmt.Sprintf("slack-abort-%d", time.Now().UnixNano())
-	msg.Complete = true
-	msg.SlackReply = protocol.Clone(replyTarget)
-
-	return c.SendResponse(ctx, msg)
-}
-
-func (c *Connector) warnConsumeReservedPlaceholder(ctx context.Context, replyTarget *protocol.SlackReplyTarget, text, logMessage string) {
-	if err := c.consumeReservedPlaceholder(ctx, replyTarget, text); err != nil {
-		c.log.Warn(logMessage, "error", err, "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS, "thread_ts", replyTarget.ThreadTS)
-	}
-}
-
-func (c *Connector) createReplyPlaceholder(ctx context.Context, replyTarget *protocol.SlackReplyTarget, placeholder string) (slackReplyState, error) {
+func (c *Connector) createReplyPlaceholder(ctx context.Context, replyTarget *protocol.SlackReplyTarget, footer ...slack.Block) (slackReplyState, error) {
 	channelID, threadTS := slackReplyDestination(replyTarget)
 
-	options := []slack.MsgOption{slack.MsgOptionText(placeholder, false)}
+	options := []slack.MsgOption{slack.MsgOptionText(slackImmediatePlaceholder, false)}
+	if len(footer) > 0 {
+		options = append(options, slack.MsgOptionBlocks(append([]slack.Block{slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, slackImmediatePlaceholder, false, false), nil, nil)}, footer...)...))
+	}
+
 	if threadTS != "" {
 		options = append(options, slack.MsgOptionTS(threadTS))
 	}
@@ -3146,94 +1958,6 @@ func (c *Connector) createReplyPlaceholder(ctx context.Context, replyTarget *pro
 	c.log.Info("created Slack reply placeholder", "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS, "thread_ts", replyTarget.ThreadTS, "placeholder_channel", slots.ChannelID, "placeholder_ts", slots.MessageTS)
 
 	return slots, nil
-}
-
-func (c *Connector) createReplyPlaceholderOrWarn(ctx context.Context, replyTarget *protocol.SlackReplyTarget, placeholder string, attrs ...any) {
-	if _, err := c.createReplyPlaceholder(ctx, replyTarget, placeholder); err != nil {
-		c.log.Warn("create Slack reply placeholder", append([]any{"error", err}, attrs...)...)
-	}
-}
-
-func (c *Connector) resolveManagedThreadTS(ctx context.Context, channelID, messageTS string) (threadTS string, handled bool, err error) {
-	_, handled, err = c.threadRouter.ThreadAgent(protocol.TextConversationTarget{ChannelID: channelID, ThreadID: messageTS})
-	if err != nil {
-		return "", false, fmt.Errorf("prepare Slack thread reply: %w", err)
-	}
-
-	if handled {
-		return messageTS, true, nil
-	}
-
-	item, err := c.api.GetReactionsContext(ctx, slack.NewRefToMessage(channelID, messageTS), slack.GetReactionsParameters{Full: true})
-	if err != nil {
-		return "", false, fmt.Errorf("load Slack message reactions: %w", err)
-	}
-
-	threadTS = strings.TrimSpace(item.Message.ThreadTimestamp)
-
-	_, handled, err = c.threadRouter.ThreadAgent(protocol.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS})
-	if err != nil {
-		return "", false, fmt.Errorf("prepare Slack thread reply: %w", err)
-	}
-
-	return threadTS, handled, nil
-}
-
-func (c *Connector) postSlackThreadReply(ctx context.Context, channelID, threadTS, text string) error {
-	channelID = strings.TrimSpace(channelID)
-	threadTS = strings.TrimSpace(threadTS)
-
-	text = strings.TrimSpace(text)
-	if channelID == "" || threadTS == "" || text == "" {
-		return nil
-	}
-
-	if _, _, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(text, false), slack.MsgOptionTS(threadTS)); err != nil {
-		return fmt.Errorf("send Slack thread reply: %w", err)
-	}
-
-	return nil
-}
-
-func (c *Connector) startSlackGoal(ctx context.Context, key string, replyTarget *protocol.SlackReplyTarget, agent string, goal protocol.GoalRequest, inbound *protocol.InboundMessage) bool {
-	if err := c.threadRouter.StartGoalInThread(ctx, agent, goal.Objective, goal.CheckScript, goal.MaxTurns, protocol.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, inbound); err != nil {
-		c.finishSlackStack(key)
-
-		if errors.Is(err, protocol.ErrGoalAlreadyActive) {
-			c.addReaction(ctx, replyTarget, slackInterruptionReaction, "add Slack duplicate goal rejection reaction")
-			c.warnConsumeReservedPlaceholder(ctx, replyTarget, "A goal is already in progress in this thread. Finish or stop it before starting another.", "consume Slack duplicate goal rejection placeholder")
-		} else {
-			c.warnConsumeReservedPlaceholder(ctx, replyTarget, "I couldn't start that goal: "+err.Error(), "consume Slack goal rejection placeholder")
-		}
-
-		return false
-	}
-
-	c.addReaction(ctx, replyTarget, slackRobotReaction, "add Slack robot reaction")
-
-	return true
-}
-
-func (c *Connector) stopSlackThread(ctx context.Context, channelID, threadTS string) error {
-	marker, err := c.threadRouter.InterruptThread(protocol.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS})
-	if err != nil {
-		return fmt.Errorf("stop Slack thread: %w", err)
-	}
-
-	key := slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: channelID, ThreadTS: threadTS})
-	buffered := c.finishSlackStack(key)
-
-	for i := range buffered {
-		c.removeReaction(ctx, buffered[i].Reply, slackBufferedReaction, "remove discarded Slack buffered reaction")
-		c.addReaction(ctx, buffered[i].Reply, slackInterruptionReaction, "add discarded Slack interruption reaction")
-		c.log.Info("Slack steer removed", "event", "steer_removed", "channel", channelID, "thread_ts", threadTS, "message_ts", buffered[i].Reply.MessageTS, "reason", "thread_stopped")
-	}
-
-	if marker != nil && marker.SlackReply != nil {
-		c.addReaction(ctx, marker.SlackReply, slackInterruptionReaction, "add Slack interruption reaction")
-	}
-
-	return nil
 }
 
 func nativeSlackForward(payload json.RawMessage) (slackNativeForward, bool) {
@@ -3493,21 +2217,6 @@ func truncateUTF8(text string, limit int) string {
 	return text[:limit]
 }
 
-func (c *Connector) inboundContentForMessageEvent(ctx context.Context, ev *slackevents.MessageEvent, forward slackNativeForward) protocol.InboundContent {
-	var content protocol.InboundContent
-
-	content.Text = slackMessageEventText(ev)
-
-	files := slackMessageEventFiles(ev)
-	if len(files) > 0 {
-		content.Attachments, content.TextAttachments, content.AttachmentPresence, content.AttachmentWarnings = c.downloadSlackAttachments(ctx, files)
-	}
-
-	c.addSlackForward(ctx, &content, forward)
-
-	return content
-}
-
 func (c *Connector) downloadSlackAttachments(ctx context.Context, files []slack.File) (attachments []protocol.InboundAttachment, textAttachments []string, presence protocol.AttachmentPresence, warnings []string) {
 	for i := range files {
 		file := &files[i]
@@ -3571,28 +2280,6 @@ func (c *Connector) downloadSlackAttachments(ctx context.Context, files []slack.
 	}
 
 	return attachments, textAttachments, presence, warnings
-}
-
-func slackMessageEventText(ev *slackevents.MessageEvent) string {
-	if ev == nil {
-		return ""
-	}
-
-	if ev.Message != nil {
-		if strings.TrimSpace(ev.Message.Text) != "" {
-			return ev.Message.Text
-		}
-	}
-
-	return ev.Text
-}
-
-func slackMessageEventFiles(ev *slackevents.MessageEvent) []slack.File {
-	if ev == nil || ev.Message == nil || len(ev.Message.Files) == 0 {
-		return nil
-	}
-
-	return append([]slack.File(nil), ev.Message.Files...)
 }
 
 func isSlackImageFile(file *slack.File) bool {

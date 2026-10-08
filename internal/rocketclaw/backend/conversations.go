@@ -344,7 +344,7 @@ func (r *Runtime) StartGoal(ctx context.Context, inbound *protocol.InboundMessag
 		}
 	}
 
-	if err := r.Sessions.BeginGoal(inbound.ConversationID, goal.Objective, goal.CheckScript, goal.MaxTurns, "", ""); err != nil {
+	if err := r.Sessions.BeginGoal(inbound.ConversationID, goal.Objective, goal.CheckScript, goal.MaxTurns); err != nil {
 		return fmt.Errorf("persist goal: %w", err)
 	}
 
@@ -407,7 +407,7 @@ func (r *Runtime) PromoteQueueItem(ctx context.Context, conversationID, id strin
 		return r.mutateWebQueue(ctx, conversationID, id, protocol.InboundKindSteer)
 	}
 
-	return r.threads.promoteQueueItem(ctx, conversationID, id, "")
+	return r.threads.promoteQueueItem(ctx, conversationID, id)
 }
 
 // DeleteQueueItem drops one waiting steer or enqueue so it never runs.
@@ -567,13 +567,8 @@ func (b *Bridge) drainSteers(ctx context.Context, phase rocketcode.TurnPhase) []
 		b.mu.Unlock()
 		return nil
 	}
-	b.mu.Unlock()
-	inputs := b.config.SteerDrain.Drain(ctx, phase)
-	b.mu.Lock()
-	if b.historyMutation {
-		b.mu.Unlock()
-		return inputs
-	}
+
+	var inputs []rocketcode.PromptInput
 
 	// Completion Notes are claimed under b.mu, so a note this last step misses finds notesOpen false
 	// and wakes the conversation. A resumed turn is offered the notes it held once more.

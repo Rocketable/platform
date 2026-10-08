@@ -22,14 +22,8 @@ var _ backend.SlackFrontend = &SlackFrontendMock{}
 //
 //		// make and configure a mocked backend.SlackFrontend
 //		mockedSlackFrontend := &SlackFrontendMock{
-//			ActivateEnqueueFunc: func(context1 context.Context, threadQueueItem *protocol.ThreadQueueItem, inboundMessage *protocol.InboundMessage) error {
-//				panic("mock out the ActivateEnqueue method")
-//			},
-//			AskUserQuestionFunc: func(context1 context.Context, askUserQuestionRequest *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
-//				panic("mock out the AskUserQuestion method")
-//			},
-//			DrainSteersFunc: func(context1 context.Context, s string) []string {
-//				panic("mock out the DrainSteers method")
+//			EditCronjobRootFooterFunc: func(ctx context.Context, msg *protocol.OutboundMessage, root protocol.TextConversationTarget, conversationID string) error {
+//				panic("mock out the EditCronjobRootFooter method")
 //			},
 //			SendCronjobRootFunc: func(context1 context.Context, outboundMessage *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
 //				panic("mock out the SendCronjobRoot method")
@@ -47,14 +41,8 @@ var _ backend.SlackFrontend = &SlackFrontendMock{}
 //
 //	}
 type SlackFrontendMock struct {
-	// ActivateEnqueueFunc mocks the ActivateEnqueue method.
-	ActivateEnqueueFunc func(context1 context.Context, threadQueueItem *protocol.ThreadQueueItem, inboundMessage *protocol.InboundMessage) error
-
-	// AskUserQuestionFunc mocks the AskUserQuestion method.
-	AskUserQuestionFunc func(context1 context.Context, askUserQuestionRequest *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error)
-
-	// DrainSteersFunc mocks the DrainSteers method.
-	DrainSteersFunc func(context1 context.Context, s string) []string
+	// EditCronjobRootFooterFunc mocks the EditCronjobRootFooter method.
+	EditCronjobRootFooterFunc func(ctx context.Context, msg *protocol.OutboundMessage, root protocol.TextConversationTarget, conversationID string) error
 
 	// SendCronjobRootFunc mocks the SendCronjobRoot method.
 	SendCronjobRootFunc func(context1 context.Context, outboundMessage *protocol.OutboundMessage) (protocol.TextConversationTarget, error)
@@ -67,28 +55,16 @@ type SlackFrontendMock struct {
 
 	// calls tracks calls to the methods.
 	calls struct {
-		// ActivateEnqueue holds details about calls to the ActivateEnqueue method.
-		ActivateEnqueue []struct {
-			// Context1 is the context1 argument value.
-			Context1 context.Context
-			// ThreadQueueItem is the threadQueueItem argument value.
-			ThreadQueueItem *protocol.ThreadQueueItem
-			// InboundMessage is the inboundMessage argument value.
-			InboundMessage *protocol.InboundMessage
-		}
-		// AskUserQuestion holds details about calls to the AskUserQuestion method.
-		AskUserQuestion []struct {
-			// Context1 is the context1 argument value.
-			Context1 context.Context
-			// AskUserQuestionRequest is the askUserQuestionRequest argument value.
-			AskUserQuestionRequest *protocol.AskUserQuestionRequest
-		}
-		// DrainSteers holds details about calls to the DrainSteers method.
-		DrainSteers []struct {
-			// Context1 is the context1 argument value.
-			Context1 context.Context
-			// S is the s argument value.
-			S string
+		// EditCronjobRootFooter holds details about calls to the EditCronjobRootFooter method.
+		EditCronjobRootFooter []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// Msg is the msg argument value.
+			Msg *protocol.OutboundMessage
+			// Root is the root argument value.
+			Root protocol.TextConversationTarget
+			// ConversationID is the conversationID argument value.
+			ConversationID string
 		}
 		// SendCronjobRoot holds details about calls to the SendCronjobRoot method.
 		SendCronjobRoot []struct {
@@ -108,123 +84,53 @@ type SlackFrontendMock struct {
 			Context1 context.Context
 		}
 	}
-	lockActivateEnqueue sync.RWMutex
-	lockAskUserQuestion sync.RWMutex
-	lockDrainSteers     sync.RWMutex
-	lockSendCronjobRoot sync.RWMutex
-	lockStart           sync.RWMutex
-	lockStop            sync.RWMutex
+	lockEditCronjobRootFooter sync.RWMutex
+	lockSendCronjobRoot       sync.RWMutex
+	lockStart                 sync.RWMutex
+	lockStop                  sync.RWMutex
 }
 
-// ActivateEnqueue calls ActivateEnqueueFunc.
-func (mock *SlackFrontendMock) ActivateEnqueue(context1 context.Context, threadQueueItem *protocol.ThreadQueueItem, inboundMessage *protocol.InboundMessage) error {
-	if mock.ActivateEnqueueFunc == nil {
-		panic("SlackFrontendMock.ActivateEnqueueFunc: method is nil but SlackFrontend.ActivateEnqueue was just called")
+// EditCronjobRootFooter calls EditCronjobRootFooterFunc.
+func (mock *SlackFrontendMock) EditCronjobRootFooter(ctx context.Context, msg *protocol.OutboundMessage, root protocol.TextConversationTarget, conversationID string) error {
+	if mock.EditCronjobRootFooterFunc == nil {
+		panic("SlackFrontendMock.EditCronjobRootFooterFunc: method is nil but SlackFrontend.EditCronjobRootFooter was just called")
 	}
 	callInfo := struct {
-		Context1        context.Context
-		ThreadQueueItem *protocol.ThreadQueueItem
-		InboundMessage  *protocol.InboundMessage
+		Ctx            context.Context
+		Msg            *protocol.OutboundMessage
+		Root           protocol.TextConversationTarget
+		ConversationID string
 	}{
-		Context1:        context1,
-		ThreadQueueItem: threadQueueItem,
-		InboundMessage:  inboundMessage,
+		Ctx:            ctx,
+		Msg:            msg,
+		Root:           root,
+		ConversationID: conversationID,
 	}
-	mock.lockActivateEnqueue.Lock()
-	mock.calls.ActivateEnqueue = append(mock.calls.ActivateEnqueue, callInfo)
-	mock.lockActivateEnqueue.Unlock()
-	return mock.ActivateEnqueueFunc(context1, threadQueueItem, inboundMessage)
+	mock.lockEditCronjobRootFooter.Lock()
+	mock.calls.EditCronjobRootFooter = append(mock.calls.EditCronjobRootFooter, callInfo)
+	mock.lockEditCronjobRootFooter.Unlock()
+	return mock.EditCronjobRootFooterFunc(ctx, msg, root, conversationID)
 }
 
-// ActivateEnqueueCalls gets all the calls that were made to ActivateEnqueue.
+// EditCronjobRootFooterCalls gets all the calls that were made to EditCronjobRootFooter.
 // Check the length with:
 //
-//	len(mockedSlackFrontend.ActivateEnqueueCalls())
-func (mock *SlackFrontendMock) ActivateEnqueueCalls() []struct {
-	Context1        context.Context
-	ThreadQueueItem *protocol.ThreadQueueItem
-	InboundMessage  *protocol.InboundMessage
+//	len(mockedSlackFrontend.EditCronjobRootFooterCalls())
+func (mock *SlackFrontendMock) EditCronjobRootFooterCalls() []struct {
+	Ctx            context.Context
+	Msg            *protocol.OutboundMessage
+	Root           protocol.TextConversationTarget
+	ConversationID string
 } {
 	var calls []struct {
-		Context1        context.Context
-		ThreadQueueItem *protocol.ThreadQueueItem
-		InboundMessage  *protocol.InboundMessage
+		Ctx            context.Context
+		Msg            *protocol.OutboundMessage
+		Root           protocol.TextConversationTarget
+		ConversationID string
 	}
-	mock.lockActivateEnqueue.RLock()
-	calls = mock.calls.ActivateEnqueue
-	mock.lockActivateEnqueue.RUnlock()
-	return calls
-}
-
-// AskUserQuestion calls AskUserQuestionFunc.
-func (mock *SlackFrontendMock) AskUserQuestion(context1 context.Context, askUserQuestionRequest *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
-	if mock.AskUserQuestionFunc == nil {
-		panic("SlackFrontendMock.AskUserQuestionFunc: method is nil but SlackFrontend.AskUserQuestion was just called")
-	}
-	callInfo := struct {
-		Context1               context.Context
-		AskUserQuestionRequest *protocol.AskUserQuestionRequest
-	}{
-		Context1:               context1,
-		AskUserQuestionRequest: askUserQuestionRequest,
-	}
-	mock.lockAskUserQuestion.Lock()
-	mock.calls.AskUserQuestion = append(mock.calls.AskUserQuestion, callInfo)
-	mock.lockAskUserQuestion.Unlock()
-	return mock.AskUserQuestionFunc(context1, askUserQuestionRequest)
-}
-
-// AskUserQuestionCalls gets all the calls that were made to AskUserQuestion.
-// Check the length with:
-//
-//	len(mockedSlackFrontend.AskUserQuestionCalls())
-func (mock *SlackFrontendMock) AskUserQuestionCalls() []struct {
-	Context1               context.Context
-	AskUserQuestionRequest *protocol.AskUserQuestionRequest
-} {
-	var calls []struct {
-		Context1               context.Context
-		AskUserQuestionRequest *protocol.AskUserQuestionRequest
-	}
-	mock.lockAskUserQuestion.RLock()
-	calls = mock.calls.AskUserQuestion
-	mock.lockAskUserQuestion.RUnlock()
-	return calls
-}
-
-// DrainSteers calls DrainSteersFunc.
-func (mock *SlackFrontendMock) DrainSteers(context1 context.Context, s string) []string {
-	if mock.DrainSteersFunc == nil {
-		panic("SlackFrontendMock.DrainSteersFunc: method is nil but SlackFrontend.DrainSteers was just called")
-	}
-	callInfo := struct {
-		Context1 context.Context
-		S        string
-	}{
-		Context1: context1,
-		S:        s,
-	}
-	mock.lockDrainSteers.Lock()
-	mock.calls.DrainSteers = append(mock.calls.DrainSteers, callInfo)
-	mock.lockDrainSteers.Unlock()
-	return mock.DrainSteersFunc(context1, s)
-}
-
-// DrainSteersCalls gets all the calls that were made to DrainSteers.
-// Check the length with:
-//
-//	len(mockedSlackFrontend.DrainSteersCalls())
-func (mock *SlackFrontendMock) DrainSteersCalls() []struct {
-	Context1 context.Context
-	S        string
-} {
-	var calls []struct {
-		Context1 context.Context
-		S        string
-	}
-	mock.lockDrainSteers.RLock()
-	calls = mock.calls.DrainSteers
-	mock.lockDrainSteers.RUnlock()
+	mock.lockEditCronjobRootFooter.RLock()
+	calls = mock.calls.EditCronjobRootFooter
+	mock.lockEditCronjobRootFooter.RUnlock()
 	return calls
 }
 

@@ -1495,9 +1495,9 @@ func (s *Server) reorderQueue(ctx context.Context, request *ReorderQueueRequest)
 	return &QueueItemResponse{}, nil
 }
 
-// listBackgroundJobs adds the conversation's Background Jobs to response, and whether
-// MoveToBackground has work there.
-func (s *Server) listBackgroundJobs(ctx context.Context, response *HistoryResponse, request *HistoryRequest) error {
+// listPending adds the conversation's Background Jobs, whether MoveToBackground has work there,
+// and its pending Web questions to response.
+func (s *Server) listPending(ctx context.Context, response *HistoryResponse, request *HistoryRequest) error {
 	// Only the History RPC's latest page of a chat carries the running list; cron traces and
 	// internal history reads (search, attachments, session commands) never need it.
 	if request.GetBefore() != 0 || strings.HasPrefix(request.Id, "cron:") || strings.HasPrefix(request.Id, "one-off-cron:") {
@@ -1510,6 +1510,20 @@ func (s *Server) listBackgroundJobs(ctx context.Context, response *HistoryRespon
 	}
 
 	response.Movable, response.BackgroundJobs = movable, backgroundJobs(jobs)
+
+	questions, err := s.backend.PendingQuestions(ctx, request.Id)
+	if err != nil {
+		return fmt.Errorf("read web pending questions: %w", err)
+	}
+
+	for _, question := range questions {
+		listed := &PendingQuestion{Id: question.ID, Question: question.Question, Details: question.Details, Multiple: question.Multiple}
+		for _, option := range question.Options {
+			listed.Options = append(listed.Options, &QuestionOption{Label: option.Label, Value: option.Value, Description: option.Description})
+		}
+
+		response.PendingQuestions = append(response.PendingQuestions, listed)
+	}
 
 	return nil
 }
@@ -1552,6 +1566,23 @@ func (s *Server) stopBackgroundJob(ctx context.Context, request *StopBackgroundJ
 	}
 
 	return &StopBackgroundJobResponse{Stopped: stopped}, nil
+}
+
+func (s *Server) answerQuestion(ctx context.Context, request *AnswerQuestionRequest) (*AnswerQuestionResponse, error) {
+	if err := s.visibleConversation(ctx, request.ConversationId); err != nil {
+		return nil, err
+	}
+
+	err := s.backend.AnswerQuestion(ctx, request.ConversationId, request.AskId, protocol.AskUserQuestionAnswer{Selected: request.Selected, Custom: request.Custom})
+	if notPending, ok := errors.AsType[*backend.QuestionNotPendingError](err); ok {
+		err = status.Error(codes.NotFound, notPending.Error())
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("web answer question: %w", err)
+	}
+
+	return &AnswerQuestionResponse{}, nil
 }
 
 func (s *Server) visibleConversation(ctx context.Context, id string) error {

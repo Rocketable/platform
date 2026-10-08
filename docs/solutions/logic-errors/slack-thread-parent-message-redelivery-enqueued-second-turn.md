@@ -1,8 +1,9 @@
 ---
 title: Slack Thread Parent Message Redelivery Enqueued Second Turn
 date: 2026-08-26
+last_updated: 2026-10-08
 category: docs/solutions/logic-errors/
-module: internal/rocketclaw/slackconnector
+module: internal/rocketclaw/frontend/slack
 problem_type: logic_error
 component: assistant
 symptoms:
@@ -24,6 +25,8 @@ tags:
 ---
 
 # Slack Thread Parent Message Redelivery Enqueued Second Turn
+
+> **Superseded (2026-10-08).** Slack intake is now mention-only. The connector handles only `app_mention` events (`handleAppMentionEvent` in `internal/rocketclaw/frontend/slack/connector.go`), so the parent `message` redelivery described here no longer reaches RocketClaw. Each accepted mention becomes Thread Queue item `slack:<channel>:<ts>`, which `threadBridgeManager.SubmitMention` (`internal/rocketclaw/backend/thread_bridges.go`) admits at most once, refusing a redelivery that is waiting, running, or already in history. Slack Steers and `$enqueue` were removed. Paths and names below are historical.
 
 ## Problem
 

@@ -78,10 +78,6 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			order = append(order, "slack started")
 			return nil
 		},
-		DrainSteersFunc: func(context.Context, string) []string { return []string{"steer"} },
-		ActivateEnqueueFunc: func(context.Context, *protocol.ThreadQueueItem, *protocol.InboundMessage) error {
-			return nil
-		},
 		StopFunc: func(cleanupCtx context.Context) error {
 			require.NoError(t, cleanupCtx.Err())
 			require.NoError(t, ctx.Err(), "restart shuts down without the caller's signal")
@@ -117,15 +113,9 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			require.Same(t, rt.threads, rt.TextRouter)
 			require.Equal(t, map[string]string{"alice": "secret"}, rt.ExternalMCPUsers)
 
-			target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
-			created, err := rt.TextRouter.RegisterThread(target, "main")
+			_, err := rt.threads.ensureStartedThread(&threadStart{conversationID: threadID, agent: "main"})
 			require.NoError(t, err)
-			require.True(t, created)
-			require.False(t, rt.TextRouter.ThreadBusy(target))
-			require.NoError(t, rt.threads.PickLaterWork(rt.RunCtx, protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)))
-			scheduled, err := rt.TextRouter.ScheduledMessages(target)
-			require.NoError(t, err)
-			require.Empty(t, scheduled)
+			require.NoError(t, rt.threads.PickLaterWork(rt.RunCtx, threadID))
 
 			bridge := rt.threads.bridges[threadID].(*Bridge)
 			reloaded, err := bridge.config.RequestReload("test reload")
@@ -175,10 +165,6 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 
 	require.ErrorIs(t, Run(ctx, cfg, configPath, slog.New(slog.DiscardHandler), assembler), ErrRestartRequested)
 	require.Equal(t, []string{"validated", "validated", "assembled", "slack started", "slack stopped", "extra stopped"}, order)
-
-	bridge := assembledRT.threads.bridges[threadID].(*Bridge)
-	require.Equal(t, []rocketcode.PromptInput{{Text: "steer"}}, bridge.config.SteerDrain.Drain(t.Context(), 0), "Slack steers drain once Slack is attached")
-	require.NoError(t, bridge.config.EnqueueActivation.Activate(t.Context(), &protocol.ThreadQueueItem{ID: "q1"}, protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindEnqueue, "later", true)))
 
 	for _, resource := range resources {
 		_, err := resource.Stat()
@@ -244,12 +230,8 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 				}()
 
 				return &slackFrontendMock{
-					StartFunc:       func(context.Context) error { return nil },
-					DrainSteersFunc: func(context.Context, string) []string { return nil },
-					ActivateEnqueueFunc: func(context.Context, *protocol.ThreadQueueItem, *protocol.InboundMessage) error {
-						return nil
-					},
-					StopFunc: func(context.Context) error { return nil },
+					StartFunc: func(context.Context) error { return nil },
+					StopFunc:  func(context.Context) error { return nil },
 				}, copyDone, nil, nil
 			},
 		}
@@ -459,8 +441,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 			runtimes := make(chan *Runtime, 1)
 
 			slack := &slackFrontendMock{
-				StartFunc:       func(context.Context) error { return nil },
-				DrainSteersFunc: func(context.Context, string) []string { return nil },
+				StartFunc: func(context.Context) error { return nil },
 				StopFunc: func(context.Context) error {
 					if background {
 						assert.NoFileExists(t, finished, "background bash is killed")
@@ -476,13 +457,9 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 				AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
 					runtimes <- rt
 
-					target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
-					_, err := rt.TextRouter.RegisterThread(target, "waiter")
-					require.NoError(t, err)
-
-					msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "wait for it", true)
+					msg := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "wait for it"}, true)
 					msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.0", ThreadTS: "111.0"}
-					_, err = rt.TextRouter.SubmitThreadReply(rt.RunCtx, target, msg)
+					_, err := rt.TextRouter.SubmitMention(rt.RunCtx, "waiter", protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}, msg)
 					require.NoError(t, err)
 
 					return slack, nil, []func(context.Context) error{slack.Stop}, nil
@@ -583,9 +560,8 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 	}
 }
 
-// Slack starts accepting input only after it is attached, so a Slack message that
-// arrives as soon as the connector starts still gets ask_user_question.
-func TestSlackMessageAtStartupCanAskUserQuestion(t *testing.T) {
+// A person's Slack mention turn is not offered ask_user_question; Slack cannot show questions.
+func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n"), 0o600))
@@ -611,19 +587,13 @@ func TestSlackMessageAtStartupCanAskUserQuestion(t *testing.T) {
 	var assembled *Runtime
 
 	slack := &slackFrontendMock{
-		DrainSteersFunc: func(context.Context, string) []string { return nil },
-		StopFunc:        func(context.Context) error { return nil },
+		StopFunc: func(context.Context) error { return nil },
 	}
 	slack.StartFunc = func(context.Context) error {
-		target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
-		if _, err := assembled.TextRouter.RegisterThread(target, "main"); err != nil {
-			return fmt.Errorf("register startup thread: %w", err)
-		}
-
-		msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "first message", true)
+		msg := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "first message"}, true)
 		msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.0", ThreadTS: "111.0"}
 
-		if _, err := assembled.TextRouter.SubmitThreadReply(assembled.RunCtx, target, msg); err != nil {
+		if _, err := assembled.TextRouter.SubmitMention(assembled.RunCtx, "main", protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}, msg); err != nil {
 			return fmt.Errorf("submit startup message: %w", err)
 		}
 
@@ -642,7 +612,8 @@ func TestSlackMessageAtStartupCanAskUserQuestion(t *testing.T) {
 
 	select {
 	case body := <-bodies:
-		assert.Contains(t, body, "- ask_user_question(", "the question tool is offered inside execute")
+		assert.Contains(t, body, "- rocketclaw_attach_files_to_response(", "platform tools are listed inside execute")
+		assert.NotContains(t, body, "- ask_user_question(")
 	case err := <-done:
 		t.Fatalf("Run returned before the startup message ran: %v", err)
 	case <-time.After(10 * time.Second):

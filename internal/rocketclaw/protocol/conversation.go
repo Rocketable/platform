@@ -51,26 +51,18 @@ func SlackThreadTarget(conversationID string) (channelID, threadTS string, ok bo
 	return channelID, threadTS, ok && channelID != "" && threadTS != ""
 }
 
-// SkillDescription describes an available skill for human discovery.
-type SkillDescription struct {
-	Name, Description string
-}
-
 // PrimaryTextRouter routes primary text connector conversations.
 type PrimaryTextRouter interface {
-	StartThread(ctx context.Context, agent string, target TextConversationTarget, inbound *InboundMessage) error
-	StartGoalInThread(ctx context.Context, agent, objective, checkScript string, maxTurns int, target TextConversationTarget, inbound *InboundMessage) error
-	SkillDescriptions(agent string) ([]SkillDescription, error)
-	InterruptConversation(conversationID string) *InboundMessage
+	// MentionThread reports whether a conversation records the thread and whether it is a
+	// read-only report thread: a cron report or an External MCP thread.
+	MentionThread(target TextConversationTarget) (recorded, report bool, err error)
+	// SubmitMention records the thread's conversation with agent when absent and queues inbound
+	// as its next turn, at most once per mention; it reports false for a mention already accepted,
+	// and true with an error when the mention was queued but its pickup failed.
+	SubmitMention(ctx context.Context, agent string, target TextConversationTarget, inbound *InboundMessage) (bool, error)
+	// InterruptThread stops the thread's goal and interrupts its active turn without waiting for
+	// a running turn to end.
 	InterruptThread(target TextConversationTarget) (*InboundMessage, error)
-	RegisterThread(target TextConversationTarget, agent string) (created bool, err error)
-	ThreadAgent(target TextConversationTarget) (agent string, handled bool, err error)
-	SwitchThreadAgent(target TextConversationTarget, agent string) (bool, error)
-	SubmitThreadReply(ctx context.Context, target TextConversationTarget, inbound *InboundMessage) (bool, error)
-	StashThreadQueueItem(ctx context.Context, target TextConversationTarget, item *ThreadQueueItem) error
-	ThreadQueueItems(target TextConversationTarget) ([]ThreadQueueItem, error)
-	DeleteThreadQueueItem(ctx context.Context, target TextConversationTarget, id string) (bool, error)
-	PromoteThreadQueueItem(ctx context.Context, target TextConversationTarget, id string) (bool, error)
-	ScheduledMessages(target TextConversationTarget) (map[string]ScheduledMessageState, error)
-	ThreadBusy(target TextConversationTarget) bool
+	// WebURL links to the conversation in the Web Interface.
+	WebURL(ctx context.Context, conversationID string) (string, error)
 }

@@ -23,6 +23,9 @@ var _ frontend.Backend = &mockBackend{}
 //
 //		// make and configure a mocked frontend.Backend
 //		mockedBackend := &mockBackend{
+//			AnswerQuestionFunc: func(context1 context.Context, s string, s1 string, askUserQuestionAnswer protocol.AskUserQuestionAnswer) error {
+//				panic("mock out the AnswerQuestion method")
+//			},
 //			BackgroundJobsFunc: func(context1 context.Context, s string) ([]protocol.BackgroundJob, bool, error) {
 //				panic("mock out the BackgroundJobs method")
 //			},
@@ -43,6 +46,9 @@ var _ frontend.Backend = &mockBackend{}
 //			},
 //			MoveToBackgroundFunc: func(s string) (bool, error) {
 //				panic("mock out the MoveToBackground method")
+//			},
+//			PendingQuestionsFunc: func(context1 context.Context, s string) ([]protocol.AskUserQuestionRequest, error) {
+//				panic("mock out the PendingQuestions method")
 //			},
 //			PopQueueItemFunc: func(context1 context.Context, s string, s1 string) (bool, error) {
 //				panic("mock out the PopQueueItem method")
@@ -90,6 +96,9 @@ var _ frontend.Backend = &mockBackend{}
 //
 //	}
 type mockBackend struct {
+	// AnswerQuestionFunc mocks the AnswerQuestion method.
+	AnswerQuestionFunc func(context1 context.Context, s string, s1 string, askUserQuestionAnswer protocol.AskUserQuestionAnswer) error
+
 	// BackgroundJobsFunc mocks the BackgroundJobs method.
 	BackgroundJobsFunc func(context1 context.Context, s string) ([]protocol.BackgroundJob, bool, error)
 
@@ -110,6 +119,9 @@ type mockBackend struct {
 
 	// MoveToBackgroundFunc mocks the MoveToBackground method.
 	MoveToBackgroundFunc func(s string) (bool, error)
+
+	// PendingQuestionsFunc mocks the PendingQuestions method.
+	PendingQuestionsFunc func(context1 context.Context, s string) ([]protocol.AskUserQuestionRequest, error)
 
 	// PopQueueItemFunc mocks the PopQueueItem method.
 	PopQueueItemFunc func(context1 context.Context, s string, s1 string) (bool, error)
@@ -152,6 +164,17 @@ type mockBackend struct {
 
 	// calls tracks calls to the methods.
 	calls struct {
+		// AnswerQuestion holds details about calls to the AnswerQuestion method.
+		AnswerQuestion []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+			// S1 is the s1 argument value.
+			S1 string
+			// AskUserQuestionAnswer is the askUserQuestionAnswer argument value.
+			AskUserQuestionAnswer protocol.AskUserQuestionAnswer
+		}
 		// BackgroundJobs holds details about calls to the BackgroundJobs method.
 		BackgroundJobs []struct {
 			// Context1 is the context1 argument value.
@@ -198,6 +221,13 @@ type mockBackend struct {
 		}
 		// MoveToBackground holds details about calls to the MoveToBackground method.
 		MoveToBackground []struct {
+			// S is the s argument value.
+			S string
+		}
+		// PendingQuestions holds details about calls to the PendingQuestions method.
+		PendingQuestions []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
 			// S is the s argument value.
 			S string
 		}
@@ -299,6 +329,7 @@ type mockBackend struct {
 		WorkflowDescriptions []struct {
 		}
 	}
+	lockAnswerQuestion          sync.RWMutex
 	lockBackgroundJobs          sync.RWMutex
 	lockClearRevert             sync.RWMutex
 	lockCompletionNotes         sync.RWMutex
@@ -306,6 +337,7 @@ type mockBackend struct {
 	lockDeleteQueueItem         sync.RWMutex
 	lockListConversations       sync.RWMutex
 	lockMoveToBackground        sync.RWMutex
+	lockPendingQuestions        sync.RWMutex
 	lockPopQueueItem            sync.RWMutex
 	lockPromoteQueueItem        sync.RWMutex
 	lockQueueItems              sync.RWMutex
@@ -319,6 +351,50 @@ type mockBackend struct {
 	lockSwitchConversationAgent sync.RWMutex
 	lockSyncConversation        sync.RWMutex
 	lockWorkflowDescriptions    sync.RWMutex
+}
+
+// AnswerQuestion calls AnswerQuestionFunc.
+func (mock *mockBackend) AnswerQuestion(context1 context.Context, s string, s1 string, askUserQuestionAnswer protocol.AskUserQuestionAnswer) error {
+	if mock.AnswerQuestionFunc == nil {
+		panic("mockBackend.AnswerQuestionFunc: method is nil but Backend.AnswerQuestion was just called")
+	}
+	callInfo := struct {
+		Context1              context.Context
+		S                     string
+		S1                    string
+		AskUserQuestionAnswer protocol.AskUserQuestionAnswer
+	}{
+		Context1:              context1,
+		S:                     s,
+		S1:                    s1,
+		AskUserQuestionAnswer: askUserQuestionAnswer,
+	}
+	mock.lockAnswerQuestion.Lock()
+	mock.calls.AnswerQuestion = append(mock.calls.AnswerQuestion, callInfo)
+	mock.lockAnswerQuestion.Unlock()
+	return mock.AnswerQuestionFunc(context1, s, s1, askUserQuestionAnswer)
+}
+
+// AnswerQuestionCalls gets all the calls that were made to AnswerQuestion.
+// Check the length with:
+//
+//	len(mockedBackend.AnswerQuestionCalls())
+func (mock *mockBackend) AnswerQuestionCalls() []struct {
+	Context1              context.Context
+	S                     string
+	S1                    string
+	AskUserQuestionAnswer protocol.AskUserQuestionAnswer
+} {
+	var calls []struct {
+		Context1              context.Context
+		S                     string
+		S1                    string
+		AskUserQuestionAnswer protocol.AskUserQuestionAnswer
+	}
+	mock.lockAnswerQuestion.RLock()
+	calls = mock.calls.AnswerQuestion
+	mock.lockAnswerQuestion.RUnlock()
+	return calls
 }
 
 // BackgroundJobs calls BackgroundJobsFunc.
@@ -570,6 +646,42 @@ func (mock *mockBackend) MoveToBackgroundCalls() []struct {
 	mock.lockMoveToBackground.RLock()
 	calls = mock.calls.MoveToBackground
 	mock.lockMoveToBackground.RUnlock()
+	return calls
+}
+
+// PendingQuestions calls PendingQuestionsFunc.
+func (mock *mockBackend) PendingQuestions(context1 context.Context, s string) ([]protocol.AskUserQuestionRequest, error) {
+	if mock.PendingQuestionsFunc == nil {
+		panic("mockBackend.PendingQuestionsFunc: method is nil but Backend.PendingQuestions was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+	}{
+		Context1: context1,
+		S:        s,
+	}
+	mock.lockPendingQuestions.Lock()
+	mock.calls.PendingQuestions = append(mock.calls.PendingQuestions, callInfo)
+	mock.lockPendingQuestions.Unlock()
+	return mock.PendingQuestionsFunc(context1, s)
+}
+
+// PendingQuestionsCalls gets all the calls that were made to PendingQuestions.
+// Check the length with:
+//
+//	len(mockedBackend.PendingQuestionsCalls())
+func (mock *mockBackend) PendingQuestionsCalls() []struct {
+	Context1 context.Context
+	S        string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+	}
+	mock.lockPendingQuestions.RLock()
+	calls = mock.calls.PendingQuestions
+	mock.lockPendingQuestions.RUnlock()
 	return calls
 }
 

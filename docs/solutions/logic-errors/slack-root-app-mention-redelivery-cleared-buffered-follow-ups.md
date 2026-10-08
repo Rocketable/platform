@@ -1,9 +1,9 @@
 ---
 title: Slack Root App-Mention Redelivery Cleared Buffered Follow-Ups
 date: 2026-08-04
-last_updated: 2026-08-26
+last_updated: 2026-10-08
 category: docs/solutions/logic-errors/
-module: internal/rocketclaw/slackconnector
+module: internal/rocketclaw/frontend/slack
 problem_type: logic_error
 component: assistant
 symptoms:
@@ -23,6 +23,8 @@ tags:
 ---
 
 # Slack Root App-Mention Redelivery Cleared Buffered Follow-Ups
+
+> **Superseded (2026-10-08).** Slack intake is now mention-only, and the Slack thread stack, Slack Steers, and Buffered Follow-Ups no longer exist. The connector handles only `app_mention` events (`handleAppMentionEvent` in `internal/rocketclaw/frontend/slack/connector.go`). Each accepted mention becomes Thread Queue item `slack:<channel>:<ts>`, which `threadBridgeManager.SubmitMention` (`internal/rocketclaw/backend/thread_bridges.go`) admits at most once, so a redelivered mention cannot start a second turn or disturb waiting work. Paths and names below are historical.
 
 ## Problem
 
