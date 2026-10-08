@@ -78,17 +78,40 @@ func TestFlattenCallToolResult(t *testing.T) {
 	}
 }
 
-func TestRegistryNamesHas(t *testing.T) {
+func TestRegistrySnapshot(t *testing.T) {
 	t.Parallel()
 
-	reg, err := New("/ws", map[string]ServerConfig{
-		"beta":  {URL: "http://example"},
+	config := ServerConfig{
+		Command: "echo",
+		Args:    []string{"hello"},
+		Env:     map[string]string{"LANG": "C"},
+		Cwd:     "tools",
+		URL:     "http://example",
+		Headers: map[string]string{"Accept": "application/json"},
+	}
+	servers := map[string]ServerConfig{
+		"beta":  config,
 		"alpha": {Command: "echo"},
-	})
+	}
+	reg, err := New("/ws", servers)
 	require.NoError(t, err)
+
+	config.Args[0] = "changed"
+	config.Env["LANG"] = "changed"
+	config.Headers["Accept"] = "changed"
+	servers["beta"] = ServerConfig{Command: "changed"}
+	servers["gamma"] = ServerConfig{}
+
+	assert.Equal(t, ServerConfig{
+		Command: "echo",
+		Args:    []string{"hello"},
+		Env:     map[string]string{"LANG": "C"},
+		Cwd:     "tools",
+		URL:     "http://example",
+		Headers: map[string]string{"Accept": "application/json"},
+	}, reg.servers["beta"])
 	assert.Equal(t, []string{"alpha", "beta"}, reg.Names())
 	assert.True(t, reg.Has("alpha"))
-	assert.False(t, reg.Has("missing"))
 }
 
 func TestUnknownServer(t *testing.T) {
