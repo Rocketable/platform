@@ -64,7 +64,9 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
     await page.goto(`http://127.0.0.1:${server.port}/?q=private-search`);
     await page.evaluate(() => { document.cookie = "private-cookie=secret"; });
     await page.getByRole("button", { name: "Search sessions" }).waitFor();
-    await page.getByRole("button", { name: "Search sessions" }).click();
+    await page.getByRole("button", { name: "Open command palette", exact: true }).click();
+    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
     await page.waitForURL("**/search");
     await page.getByRole("textbox", { name: "Search sessions" }).waitFor();
     await page.getByRole("textbox", { name: "Search sessions" }).fill("cancelled request");
