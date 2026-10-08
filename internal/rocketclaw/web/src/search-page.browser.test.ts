@@ -518,20 +518,24 @@ test("one SearchOrigins request per needle feeds Cmd+P and /search", async () =>
   }
 }, 30_000);
 
-test("search shows message and row matches while origins are still loading", async () => {
+test("search shows each source's matches while another is still loading", async () => {
   const { chromium: engine } = await import(playwright!);
   const hold = Promise.withResolvers<void>();
+  const stuck = Promise.withResolvers<void>();
+  let summariesComplete = true;
+  let indexComplete: boolean | undefined = false;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "named", name: "Needle row", preview: "" }, { id: "messaged", name: "Plain chat", preview: "" }, { id: "origin", name: "Origin only", preview: "" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "named", name: "Needle row", preview: "" }, { id: "messaged", name: "Plain chat", preview: "" }, { id: "origin", name: "Origin only", preview: "" }], owner: "tester", upstreamSuccess: true, summariesComplete })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-partial" });
     if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "search" } });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [] });
     if (url.pathname === "/api/SearchMessages") {
       const { query } = await request.json() as { query: string };
-      return Response.json({ matches: query === "needle" ? [{ conversationId: "messaged", message: { messageId: "1:0", role: "user", text: "A needle message", complete: true } }] : [] });
+      if (query === "needle-origin") await stuck.promise;
+      return Response.json({ indexComplete, matches: query === "needle" ? [{ conversationId: "messaged", message: { messageId: "1:0", role: "user", text: "A needle message", complete: true } }, { conversationId: "messaged", message: { role: "assistant", text: "A stopped needle reply", complete: true } }] : [] });
     }
     if (url.pathname === "/api/SearchOrigins") {
       const { query } = await request.json() as { query: string };
@@ -556,10 +560,13 @@ test("search shows message and row matches while origins are still loading", asy
     await rows.waitFor({ state: "detached" });
     const results = page.getByLabel("Search results");
     const checking = results.getByRole("status").filter({ hasText: "Still checking chat origins…" });
+    const notice = results.getByRole("status").filter({ hasText: "Message results may be incomplete while chats are still being indexed." });
     await search.fill("needle");
     await results.getByRole("group", { name: "Needle row", exact: true }).waitFor({ timeout: 5000 });
     await results.getByRole("link", { name: /A needle message/ }).waitFor();
     await checking.waitFor();
+    await notice.waitFor();
+    expect(await results.getByRole("link", { name: /A stopped needle reply/ }).getAttribute("href")).toBe("/s/bWVzc2FnZWQ"); // A stopped turn's hit has no message ID.
     expect(await results.getByRole("group", { name: "Origin only", exact: true }).count()).toBe(0);
     await search.fill("absent");
     await results.getByText("Session search is still loading.").waitFor();
@@ -570,7 +577,30 @@ test("search shows message and row matches while origins are still loading", asy
     await results.getByRole("group", { name: "Origin only", exact: true }).waitFor({ timeout: 5000 });
     await checking.waitFor({ state: "detached" });
     expect(await results.getByRole("group").count()).toBe(3);
+    summariesComplete = false;
+    await search.fill("absent");
+    await results.getByText("Session search is still loading.").waitFor({ timeout: 5000 });
+    await notice.waitFor();
+    summariesComplete = true;
+    await results.getByText("Session search is still loading.").waitFor({ state: "detached", timeout: 5000 });
+    expect(await notice.count()).toBe(1);
+    expect(await results.getByText("No matches").count()).toBe(0);
+    indexComplete = true;
+    await search.press("Enter");
+    await results.getByText("No matches").waitFor();
+    expect(await notice.count()).toBe(0);
+    indexComplete = undefined; // Responses without the field count as complete.
+    await search.fill("needle");
+    await results.getByRole("link", { name: /A stopped needle reply/ }).waitFor();
+    expect(await notice.count()).toBe(0);
+    const searching = results.getByRole("status").filter({ hasText: "Searching…" });
+    await search.fill("needle-origin"); // Message search for this needle never answers.
+    await searching.waitFor();
+    await results.getByRole("group", { name: "Origin only", exact: true }).waitFor({ timeout: 5000 });
+    expect(await results.getByRole("group").count()).toBe(1);
+    expect(await searching.count()).toBe(1);
   } finally {
+    stuck.resolve();
     hold.resolve();
     await browser.close();
     server.stop(true);

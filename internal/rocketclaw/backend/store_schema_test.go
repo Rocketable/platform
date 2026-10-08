@@ -2,8 +2,11 @@ package backend
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"log/slog"
+	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -312,7 +315,7 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			}
 
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&n))
-			require.Equal(t, 31, n)
+			require.Equal(t, 32, n)
 			// No migration lock may survive startup and poison later pool users.
 			require.Eventually(t, func() bool {
 				var locks int
@@ -377,7 +380,7 @@ func TestSessionMigrationsSerializeLedgerCreation(t *testing.T) {
 
 			var count int
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-			require.Equal(t, 31, count)
+			require.Equal(t, 32, count)
 		})
 	}
 }
@@ -431,7 +434,7 @@ func TestSessionMigrationRollbackAndCatchup(t *testing.T) {
 
 	var n int
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM pg_migrations`).Scan(&n))
-	require.Equal(t, 29, n)
+	require.Equal(t, 30, n)
 
 	var missing sql.NullString
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT to_regclass('slack_channel_facts')::text`).Scan(&missing))
@@ -614,9 +617,9 @@ func TestBackgroundJobsMigration(t *testing.T) {
 	}
 
 	for range 2 {
-		n, err := set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Down, 2)
+		n, err := set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Down, 3)
 		require.NoError(t, err)
-		require.Equal(t, 2, n)
+		require.Equal(t, 3, n)
 
 		exists, body := schema()
 		require.False(t, exists)
@@ -625,14 +628,144 @@ func TestBackgroundJobsMigration(t *testing.T) {
 		_, err = store.db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('rolled-back', '{}', '')`)
 		require.NoError(t, err, "the restored transcript trigger still runs")
 
-		n, err = set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Up, 2)
+		n, err = set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Up, 3)
 		require.NoError(t, err)
-		require.Equal(t, 2, n)
+		require.Equal(t, 3, n)
 
 		exists, body = schema()
 		require.True(t, exists)
 		require.Contains(t, body, "sync_destination")
 	}
+}
+
+func TestMessageSearchMigrationSharesExtension(t *testing.T) {
+	base, err := url.Parse(os.Getenv("ROCKETCLAW_TEST_DATABASE_URL"))
+	require.NoError(t, err)
+	cfg, err := pgx.ParseConfig(base.String())
+	require.NoError(t, err)
+
+	admin := stdlib.OpenDB(*cfg)
+
+	t.Cleanup(func() { require.NoError(t, admin.Close()) })
+
+	// A fresh database has no pg_trgm yet, so concurrent schemas really race to create it.
+	name := "t_" + strings.ToLower(rand.Text())
+	_, err = admin.ExecContext(t.Context(), `CREATE DATABASE `+name)
+	require.NoError(t, err)
+
+	// Cleanups run in reverse, so this drop follows every schema connection's close.
+	t.Cleanup(func() {
+		_, err := admin.ExecContext(context.Background(), `DROP DATABASE `+name+` WITH (FORCE)`)
+		require.NoError(t, err)
+	})
+
+	base.Path = "/" + name
+	t.Setenv("ROCKETCLAW_TEST_DATABASE_URL", base.String())
+
+	newStore := func(dsn string) error {
+		store, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
+		if err != nil {
+			return err
+		}
+
+		return store.Stop()
+	}
+
+	var callers errgroup.Group
+
+	barriers := make([]*sql.Tx, 0, 2)
+
+	for range 2 {
+		dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+		require.NoError(t, err)
+		cfg, err := pgx.ParseConfig(dsn)
+		require.NoError(t, err)
+
+		db := stdlib.OpenDB(*cfg)
+
+		t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+		// Stop before 030, then hold the first caller after it creates the extension.
+		_, err = (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(t.Context(), db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Up, 31)
+		require.NoError(t, err)
+		barrier, err := db.BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+
+		t.Cleanup(func() { _ = barrier.Rollback() })
+
+		_, err = barrier.ExecContext(t.Context(), `LOCK TABLE session_entries IN ACCESS EXCLUSIVE MODE`)
+		require.NoError(t, err)
+
+		barriers = append(barriers, barrier)
+
+		callers.Go(func() error { return newStore(dsn) })
+	}
+
+	require.Eventually(t, func() bool {
+		var waiting int
+
+		err := admin.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.datname = $1 AND NOT l.granted`, name).Scan(&waiting)
+
+		return err == nil && waiting == 2
+	}, 5*time.Second, time.Millisecond)
+
+	for _, barrier := range barriers {
+		require.NoError(t, barrier.Rollback())
+	}
+
+	require.NoError(t, callers.Wait())
+
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	require.NoError(t, newStore(dsn))
+
+	cfg, err = pgx.ParseConfig(dsn)
+	require.NoError(t, err)
+
+	db := stdlib.OpenDB(*cfg)
+
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	schemas, err := queryStrings(t.Context(), db, `SELECT extnamespace::regnamespace::text FROM pg_extension WHERE extname = 'pg_trgm'`, "pg_trgm schema")
+	require.NoError(t, err)
+	require.Equal(t, []string{"public"}, schemas)
+}
+
+func TestMessageSearchSchema(t *testing.T) {
+	store := newTestSessionService(t)
+	store.db.SetMaxOpenConns(1)
+
+	ctx := t.Context()
+	_, err := store.db.ExecContext(ctx, `
+INSERT INTO session_entries (id, conversation_id, entry_json, entry_timestamp) VALUES (1, 'chat', '{}', ''), (2, 'chat', '{}', '');
+INSERT INTO active_turns (id, conversation_id, inbound_json, output_trace_json, history_anchor_id, created_at_unix_ns, updated_at_unix_ns) VALUES ('turn', 'chat', '{}', '[]', 2, 1, 1);
+INSERT INTO message_search (conversation_id, entry_id, turn_id, replay_index, part_index, role, text, text_lower) VALUES
+    ('chat', 1, NULL, 0, 0, 'user', 'Kept', 'kept'),
+    ('chat', 2, NULL, 0, 0, 'user', 'Deleted entry', 'deleted entry'),
+    ('chat', NULL, 'turn', 0, 0, 'assistant', 'Deleted turn', 'deleted turn');
+DELETE FROM session_entries WHERE id = 2;
+DELETE FROM active_turns WHERE id = 'turn';`)
+	require.NoError(t, err)
+
+	texts, err := queryStrings(ctx, store.db, `SELECT text FROM message_search`, "message search text")
+	require.NoError(t, err)
+	require.Equal(t, []string{"Kept"}, texts)
+
+	_, err = store.db.ExecContext(ctx, `INSERT INTO message_search (conversation_id, entry_id, replay_index, part_index, role, text, text_lower) VALUES ('chat', 1, 0, 0, 'user', 'Again', 'again')`)
+	require.ErrorContains(t, err, `duplicate key value violates unique constraint "message_search_entry"`)
+
+	_, err = store.db.ExecContext(ctx, `
+INSERT INTO session_entries (id, conversation_id, entry_json, entry_timestamp) SELECT n, 'chat', '{}', '' FROM generate_series(3, 4096) n;
+INSERT INTO message_search (conversation_id, entry_id, replay_index, part_index, role, text, text_lower)
+SELECT 'chat', n, 0, 0, 'user', md5(n::text), md5(n::text) FROM generate_series(3, 4096) n;
+ANALYZE message_search;
+-- A table this small is cheaper to scan; prove the trigram index serves the LIKE.
+SET enable_seqscan = off;`)
+	require.NoError(t, err)
+
+	plan, err := queryStrings(ctx, store.db, `EXPLAIN SELECT entry_id FROM message_search WHERE text_lower LIKE '%abc%'`, "message search plan")
+	require.NoError(t, err)
+	require.Contains(t, strings.Join(plan, "\n"), "message_search_text")
 }
 
 func TestSessionMigrationUnlockFailureDiscardsConnection(t *testing.T) {

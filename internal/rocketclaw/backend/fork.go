@@ -100,7 +100,9 @@ func (s *SessionService) ForkConversation(ctx context.Context, source string, de
 
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by, forked_from) VALUES ($1, $2, $3, $4)`, destination.ID, destination.Agent, destination.CreatedBy, source); err != nil {
+	// The new chat's history is copied below through the indexed append.
+	if _, err := tx.ExecContext(ctx, `WITH indexed AS (INSERT INTO message_search_indexed (conversation_id) VALUES ($1))
+INSERT INTO managed_conversations (conversation_id, agent, created_by, forked_from) VALUES ($1, $2, $3, $4)`, destination.ID, destination.Agent, destination.CreatedBy, source); err != nil {
 		return "", fmt.Errorf("create fork: %w", err)
 	}
 
@@ -131,7 +133,7 @@ func (s *SessionService) ForkConversation(ctx context.Context, source string, de
 	}
 
 	for i := range entries {
-		if _, err := appendSessionEntryDB(ctx, tx, destination.ID, &entries[i]); err != nil {
+		if _, err := appendSessionEntryDB(ctx, tx, destination.ID, destination.ID, &entries[i]); err != nil {
 			return "", err
 		}
 	}

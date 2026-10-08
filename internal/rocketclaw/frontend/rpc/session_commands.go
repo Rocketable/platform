@@ -156,51 +156,28 @@ func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequ
 			}
 		}
 
-		// The leader's detached context keeps incoming principal metadata for history.
-		conversations, err := s.backend.ListConversations(scanCtx)
+		hits, complete, err := s.sessions.SearchMessages(scanCtx, needle, slices.Collect(maps.Values(prefixes)))
 		if err != nil {
-			return nil, fmt.Errorf("list message search sessions: %w", err)
+			return nil, fmt.Errorf("web message search: %w", err)
 		}
 
 		seen := map[string]struct{}{}
-		// Ponytail: scans recorded transcripts; add a message index if volume demands it.
-		for _, conversation := range conversations {
-			visible, err := s.humanConversation(conversation.ID)
-			if err != nil {
-				return nil, err
-			}
 
-			if !visible {
-				continue
-			}
-
-			history, err := s.history(scanCtx, &HistoryRequest{Id: conversation.ID})
-			if err != nil {
-				return nil, err
-			}
-
-			for _, message := range history.Messages {
-				if message.Role != "user" && message.Role != "assistant" {
-					continue
-				}
-
-				text := strings.ToLower(message.Text)
-				hit := strings.Contains(text, needle)
-
+		for _, hit := range hits {
+			if len(prefixes) > 0 {
+				text := strings.ToLower(hit.Text)
 				for id, prefix := range prefixes {
 					if strings.Contains(text, prefix) {
-						hit = true
 						seen[id] = struct{}{}
 					}
 				}
-
-				if hit {
-					response.Matches = append(response.Matches, &MessageMatch{ConversationId: conversation.ID, Message: message})
-				}
 			}
+
+			response.Matches = append(response.Matches, &MessageMatch{ConversationId: hit.ConversationID, Message: &TranscriptEvent{Role: hit.Role, Text: hit.Text, MessageId: hit.MessageID}})
 		}
 
 		response.TagIds = slices.Sorted(maps.Keys(seen))
+		response.IndexComplete = complete
 
 		return response, nil
 	})

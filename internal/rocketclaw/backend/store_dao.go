@@ -29,6 +29,10 @@ func (d stateDAO) createConversation(ctx context.Context, conversation protocol.
 		return err
 	}
 
+	if err := markNewChatIndexed(ctx, d.db, conversation.ID); err != nil {
+		return err
+	}
+
 	if _, err := d.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, $2, $3) ON CONFLICT (conversation_id) DO NOTHING`, conversation.ID, conversation.Agent, conversation.CreatedBy); err != nil {
 		return fmt.Errorf("create conversation: %w", err)
 	}
@@ -673,6 +677,11 @@ func (s *SessionService) finishTurn(ctx context.Context, turnID string, finish *
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// commitRevertDB also takes the history lock before the turn row.
+	if err := lockSessionHistory(ctx, tx, finish.store.conversationID); err != nil {
+		return nil, err
+	}
+
 	moved, err := execRows(ctx, tx, "finish active turn", "count finished active turn", `UPDATE active_turns SET phase = $2, terminal = $4, updated_at_unix_ns = $5,
 outbound_json = (SELECT json_object_agg(key, COALESCE(reply.value, payload.value))
     FROM json_each($3::json) payload
@@ -693,11 +702,26 @@ WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntry
 			return nil, fmt.Errorf("decode finished turn outbound: %w", err)
 		}
 
+		// A runner arriving after its turn ended may have rewritten the record.
+		if err := s.indexTurnMessages(ctx, tx, finish.store.conversationID, turnID); err != nil {
+			return nil, err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit late turn finish: %w", err)
+		}
+
 		return &stored, s.loadAttachmentData(ctx, stored.Attachments)
 	}
 
 	for i := range finish.entries {
 		if _, err := finish.store.appendDB(ctx, tx, &finish.entries[i]); err != nil {
+			return nil, err
+		}
+	}
+
+	if finish.terminal != "" {
+		if err := s.indexTurnMessages(ctx, tx, finish.store.conversationID, turnID); err != nil {
 			return nil, err
 		}
 	}

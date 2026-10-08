@@ -97,6 +97,7 @@ type sessionStore struct {
 // SessionService owns runtime PostgreSQL session and state access inside one rocketclaw process.
 type SessionService struct {
 	db          *sql.DB
+	log         *slog.Logger
 	attachments attachmentStorage
 	// jobs is the running process's job registry once its run starts.
 	jobs conversationJobs
@@ -180,7 +181,7 @@ func NewSessionServiceIn(ctx context.Context, cfg *config.Config, logger *slog.L
 		return nil, err
 	}
 
-	return &SessionService{db: db, attachments: attachments, jobs: noConversationJobs{}, spillDir: rocketcodeSpillDir(cfg), turnGates: map[string]*sessionTurnGate{}}, nil
+	return &SessionService{db: db, log: logger, attachments: attachments, jobs: noConversationJobs{}, spillDir: rocketcodeSpillDir(cfg), turnGates: map[string]*sessionTurnGate{}}, nil
 }
 
 // UpsertThread records or updates a text-thread bridge entry.
@@ -208,6 +209,10 @@ func (s *SessionService) UpsertThread(conversationID string, thread ThreadState)
 
 	summary, err := loadSessionSummary(ctx, tx, conversationID)
 	if err != nil {
+		return err
+	}
+
+	if err := markNewChatIndexed(ctx, tx, conversationID); err != nil {
 		return err
 	}
 
@@ -352,6 +357,10 @@ func (s *SessionService) RegisterExternalMCPConversation(externalConversationID,
 
 	summary, err := loadSessionSummary(ctx, tx, session.ManagedConversationID)
 	if err != nil {
+		return err
+	}
+
+	if err := markNewChatIndexed(ctx, tx, session.ManagedConversationID); err != nil {
 		return err
 	}
 
@@ -878,7 +887,7 @@ func (s *SessionService) AppendEntryID(ctx context.Context, conversationID strin
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	id, err := appendSessionEntryDB(ctx, tx, conversationID, entry)
+	id, err := appendSessionEntryDB(ctx, tx, conversationID, conversationID, entry)
 	if err != nil {
 		return 0, err
 	}
@@ -1336,12 +1345,12 @@ func appendPairEntryDB(ctx context.Context, db stateStoreDB, privateConversation
 		return 0, err
 	}
 
-	privateID, err := appendSessionEntryDB(ctx, db, strings.TrimSpace(privateConversationID), entry)
+	privateID, err := appendSessionEntryDB(ctx, db, strings.TrimSpace(privateConversationID), "", entry)
 	if err != nil {
 		return 0, err
 	}
 
-	managedID, err := appendSessionEntryDB(ctx, db, strings.TrimSpace(managedConversationID), &managedEntry)
+	managedID, err := appendSessionEntryDB(ctx, db, strings.TrimSpace(managedConversationID), "", &managedEntry)
 	if err != nil {
 		return 0, fmt.Errorf("append managed external MCP session entry: %w", err)
 	}
@@ -1350,7 +1359,7 @@ func appendPairEntryDB(ctx context.Context, db stateStoreDB, privateConversation
 		return 0, fmt.Errorf("record external MCP entry source: %w", err)
 	}
 
-	return privateID, nil
+	return privateID, indexEntryMessages(ctx, db, strings.TrimSpace(managedConversationID), privateConversationID, managedID, "", managedEntry.ReplayInput)
 }
 
 func (s *SessionService) lockTurnPair(ctx context.Context, pairID, conversationID string) (func(), error) {
@@ -1596,7 +1605,7 @@ func (s sessionStore) appendDB(ctx context.Context, db stateStoreDB, entry *harn
 		return appendPairEntryDB(ctx, db, s.conversationID, s.managedConversationID, entry, s.managedReplayPrefix)
 	}
 
-	return appendSessionEntryDB(ctx, db, s.conversationID, entry)
+	return appendSessionEntryDB(ctx, db, s.conversationID, s.conversationID, entry)
 }
 
 func removeSessionEntryNUL(data []byte) []byte {
@@ -1608,7 +1617,9 @@ func removeSessionEntryNUL(data []byte) []byte {
 	return bytes.Join(parts, []byte(`\\`))
 }
 
-func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID string, entry *harness.SessionEntry) (int64, error) {
+// appendSessionEntryDB indexes the entry's messages with producer's attachments;
+// an empty producer leaves them unindexed.
+func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID, producer string, entry *harness.SessionEntry) (int64, error) {
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return 0, fmt.Errorf("marshal rocketcode session entry: %w", err)
@@ -1632,6 +1643,17 @@ func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID s
 	var id int64
 	if err := db.QueryRowContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, $2, $3) RETURNING id`, conversationID, string(data), entry.Timestamp.UTC().Format(time.RFC3339Nano)).Scan(&id); err != nil {
 		return 0, fmt.Errorf("append rocketcode session entry: %w", err)
+	}
+
+	if err := indexEntryMessages(ctx, db, conversationID, producer, id, "", entry.ReplayInput); err != nil {
+		return 0, err
+	}
+
+	// The unsynced entry hides its turn's record from History (observeTranscriptDB).
+	if entry.TurnID != "" {
+		if _, err := db.ExecContext(ctx, `DELETE FROM message_search WHERE conversation_id = $1 AND turn_id = $2`, conversationID, entry.TurnID); err != nil {
+			return 0, fmt.Errorf("clear hidden turn message search: %w", err)
+		}
 	}
 
 	if err := saveSessionSummary(ctx, db, summary); err != nil {

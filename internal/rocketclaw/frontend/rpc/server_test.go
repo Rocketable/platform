@@ -193,20 +193,26 @@ func TestTailscaleIdentityCache(t *testing.T) {
 }
 
 func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
 	started := make(chan context.Context, 3)
 	release := make(chan struct{})
 	server := &Server{
-		backend: &mockBackend{ListConversationsFunc: func(ctx context.Context) ([]protocol.Conversation, error) {
+		sessions: sessions,
+		channels: &mockChannels{SlackTagsMatchingFunc: func(ctx context.Context, _ string) []string {
 			started <- ctx
 
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
 			case <-release:
-				return []protocol.Conversation{}, nil
 			}
+
+			return nil
 		}},
-		channels:  &mockChannels{SlackTagsMatchingFunc: func(context.Context, string) []string { return nil }},
 		usernames: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice", netip.MustParseAddr("192.0.2.2"): "bob"},
 	}
 	firstCtx, cancelFirst := context.WithCancel(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1")))
@@ -223,7 +229,6 @@ func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
 	}()
 
 	scanCtx := <-started
-	require.Equal(t, []string{"192.0.2.1"}, metadata.ValueFromIncomingContext(scanCtx, "rocketclaw-principal"))
 
 	go func() {
 		_, err := server.searchMessages(secondCtx, &SearchMessagesRequest{Query: "ALPHA "})
@@ -293,12 +298,8 @@ func TestSearchMessagesMatchesSlackTagNames(t *testing.T) {
 
 	matching := map[string][]string{"cs-operators": {"S0BA868QQ90"}, "alan": {"U05MD4PEVHN"}}
 	server := &Server{
-		backend: &mockBackend{ListConversationsFunc: func(context.Context) ([]protocol.Conversation, error) {
-			return []protocol.Conversation{{ID: id}}, nil
-		}},
 		sessions:  sessions,
 		usernames: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice"},
-		cfg:       config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}),
 		channels: &mockChannels{SlackTagsMatchingFunc: func(_ context.Context, needle string) []string {
 			return matching[needle]
 		}},
@@ -330,6 +331,115 @@ func TestSearchMessagesMatchesSlackTagNames(t *testing.T) {
 	require.Len(t, text.Matches, 1)
 	require.Equal(t, "unrelated reply", text.Matches[0].Message.Text)
 	require.Empty(t, text.TagIds)
+}
+
+func TestSearchMessagesFindsHistoryMessages(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	seeded := openTestTurns(t, dsn)
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenAI: config.OpenAIConfig{APIKey: "test"}}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	root, err := os.OpenRoot(cfg.Workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\nmodel: gpt-5.5\n---\nHelp."), 0o600))
+
+	server := &Server{
+		backend:   withoutBackgroundJobs(),
+		sessions:  sessions,
+		cfg:       config.NewLockedConfig(cfg),
+		usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"},
+		channels:  &mockChannels{SlackTagsMatchingFunc: func(context.Context, string) []string { return nil }},
+	}
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+
+	require.NoError(t, sessions.UpsertThread("source", backend.ThreadState{Agent: "main", CreatedBy: "alice"}))
+	require.NoError(t, sessions.SaveAttachment(ctx, "source", &protocol.OutboundAttachment{ID: "parity-file", Name: "notes.txt", MIMEType: "text/plain", Data: []byte("notes")}, true))
+	_, err = sessions.AppendEntryID(ctx, "source", &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Web principal=\"alice\"]","content":"[Web principal=\"alice\"]\n\nheader request"}`),
+		json.RawMessage(`{"type":"message","role":"assistant","content":"plain answer"}`),
+		json.RawMessage(`{"type":"message","role":"user","content":"attached request\n\nattachment:parity-file \"notes.txt\" (workspace path \"artifacts/uploads/parity-file/notes.txt\")"}`),
+		json.RawMessage(`{"type":"message","id":"multi","role":"assistant","status":"completed","content":[{"type":"output_text","text":"first part"},{"type":"refusal","refusal":"refused part"},{"type":"output_text","text":" "},{"type":"output_text","text":"second part"}]}`),
+	}})
+	require.NoError(t, err)
+	require.NoError(t, seeded.UpsertActiveTurn(ctx, &testCheckpoint{TurnID: "stopped", ConversationKey: "source", Agent: "main", ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","content":"stopped request"}`),
+		json.RawMessage(`{"type":"message","role":"assistant","content":"stopped answer"}`),
+	}, OutputTrace: []json.RawMessage{
+		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"kept/0","parent_id":"stopped/response","kind":"text","state":"working","text":"progress only text","agent":"main","model":"root/model"}}`),
+	}}))
+	require.NoError(t, seeded.SetActiveTurnTerminal(ctx, "stopped", protocol.TerminalStopped))
+	// An older binary ended the turn without indexing it; only the backfill reaches it.
+	_, err = seeded.db.ExecContext(ctx, `DELETE FROM message_search_indexed WHERE conversation_id = 'source'`)
+	require.NoError(t, err)
+
+	incomplete, err := server.searchMessages(ctx, &SearchMessagesRequest{Query: "request"})
+	require.NoError(t, err)
+	require.False(t, incomplete.IndexComplete)
+
+	runCtx, cancel := context.WithCancel(t.Context())
+	ready := make(chan *backend.Runtime)
+	assembly := &mockFrontendAssembler{AssembleFunc: func(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+		ready <- rt
+		return nil, rt.RunCtx.Done(), nil, nil // Public assembler permits absent Slack.
+	}, ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil }}
+
+	var running errgroup.Group
+	running.Go(func() error { return backend.Run(runCtx, cfg, "", slog.New(slog.DiscardHandler), assembly) })
+	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
+
+	rt := <-ready
+
+	require.Eventually(t, func() bool {
+		response, err := server.searchMessages(ctx, &SearchMessagesRequest{Query: "request"})
+		return err == nil && response.IndexComplete
+	}, 10*time.Second, 10*time.Millisecond, "the startup backfill indexes the unmarked chat")
+
+	_, err = sessions.ForkConversation(ctx, "source", protocol.Conversation{ID: "fork", Agent: "main", CreatedBy: "alice"}, "")
+	require.NoError(t, err)
+	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "synced", Agent: "main", CreatedBy: "alice"}))
+	require.NoError(t, rt.SyncConversation(ctx, "source", "synced"))
+	require.NoError(t, seeded.UpsertActiveTurn(ctx, &testCheckpoint{TurnID: "running", ConversationKey: "fork", Agent: "main", ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","content":"running request"}`),
+	}}))
+
+	// Running-turn and progress-log-only text shows in History but is not indexed (R6, R7).
+	unindexed := []string{"progress only text", "running request"}
+
+	var shown []string
+
+	for _, id := range []string{"source", "fork", "synced"} {
+		history, err := server.history(ctx, &HistoryRequest{Id: id})
+		require.NoError(t, err)
+
+		for _, message := range history.Messages {
+			if message.Role != "user" && message.Role != "assistant" {
+				continue
+			}
+
+			shown = append(shown, message.Text)
+			found, err := server.searchMessages(ctx, &SearchMessagesRequest{Query: message.Text})
+			require.NoError(t, err)
+
+			if slices.Contains(unindexed, message.Text) {
+				require.Empty(t, found.Matches, message.Text)
+				continue
+			}
+
+			want := &MessageMatch{ConversationId: id, Message: &TranscriptEvent{Role: message.Role, Text: message.Text, MessageId: message.MessageId}}
+			require.True(t, slices.ContainsFunc(found.Matches, func(match *MessageMatch) bool { return proto.Equal(want, match) }), "%s %q %s", id, message.Text, message.MessageId)
+		}
+	}
+
+	require.Equal(t, []string{
+		"header request", "plain answer", "attached request", "first part", "second part", "stopped request", "stopped answer", "progress only text",
+		"header request", "plain answer", "attached request", "first part", "second part", "running request",
+		"header request", "plain answer", "attached request", "first part", "second part",
+	}, shown)
 }
 
 func TestSessionEntries(t *testing.T) {
@@ -2681,10 +2791,16 @@ func TestSessionEntries(t *testing.T) {
 			}{
 				{"ForkSession", &ForkSessionRequest{Id: source}, &ForkSessionResponse{}},
 				{"Handoff", &HandoffRequest{Id: source}, &HandoffResponse{}},
-				{"SearchMessages", &SearchMessagesRequest{Query: "handoff"}, &SearchMessagesResponse{}},
 			} {
 				require.Error(t, connection.Invoke(ctx, "/rpc.Web/"+call.method, call.request, call.response), "corrupt history must not produce partial success: %s, %s", call.method, replay)
 			}
+
+			// Search reads the text indexed when the entry was saved.
+			matches, err = invoke[SearchMessagesResponse](ctx, connection, "SearchMessages", &SearchMessagesRequest{Query: "next handoff step"})
+			require.NoError(t, err)
+			require.Len(t, matches.Matches, 1)
+			require.Equal(t, "next handoff step", matches.Matches[0].Message.Text)
+			require.Equal(t, fmt.Sprintf("%d:2", entryID), matches.Matches[0].Message.MessageId)
 		}
 
 		data, err := json.Marshal(entry)
@@ -2692,7 +2808,7 @@ func TestSessionEntries(t *testing.T) {
 		_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = $1 WHERE id = $2`, string(data), entryID)
 		require.NoError(t, err)
 
-		for _, table := range []string{"session_entries", "attachments", "external_mcp_sessions"} {
+		for _, table := range []string{"session_entries", "attachments", "external_mcp_sessions", "message_search"} {
 			t.Run("unavailable "+table, func(t *testing.T) {
 				_, err := db.ExecContext(ctx, "ALTER TABLE "+table+" RENAME TO unavailable_command_table")
 				require.NoError(t, err)
@@ -2704,12 +2820,17 @@ func TestSessionEntries(t *testing.T) {
 				_, err = invoke[ForkSessionResponse](ctx, connection, "ForkSession", &ForkSessionRequest{Id: source})
 				require.Error(t, err)
 
-				if table != "attachments" {
+				if table == "session_entries" || table == "external_mcp_sessions" {
 					_, err = invoke[HandoffResponse](ctx, connection, "Handoff", &HandoffRequest{Id: source})
 					require.Error(t, err)
+				}
+
+				if table == "external_mcp_sessions" || table == "message_search" {
 					_, err = invoke[SearchMessagesResponse](ctx, connection, "SearchMessages", &SearchMessagesRequest{Query: "handoff"})
 					require.Error(t, err)
-				} else {
+				}
+
+				if table == "attachments" {
 					_, err = invoke[ForkSessionResponse](ctx, connection, "ForkSession", &ForkSessionRequest{Id: target})
 					require.ErrorContains(t, err, "fork attachments")
 				}
@@ -2736,20 +2857,20 @@ func TestSessionEntries(t *testing.T) {
 
 		server.usernames[netip.MustParseAddr("192.0.2.3")] = "bob"
 
-		original := core.ListConversationsFunc
-		defer func() { core.ListConversationsFunc = original }()
+		original := channels.SlackTagsMatchingFunc
+		defer func() { channels.SlackTagsMatchingFunc = original }()
 
 		started := make(chan context.Context, 3)
 		release := make(chan struct{})
-		core.ListConversationsFunc = func(scanCtx context.Context) ([]protocol.Conversation, error) {
+		channels.SlackTagsMatchingFunc = func(scanCtx context.Context, needle string) []string {
 			started <- scanCtx
 
 			select {
 			case <-release:
-				return original(scanCtx)
 			case <-scanCtx.Done():
-				return nil, scanCtx.Err()
 			}
+
+			return original(scanCtx, needle)
 		}
 
 		type result struct {

@@ -1599,7 +1599,7 @@ function SearchResultGroup({ session, hits, text, field, needle, tagIds }: { ses
     <h2 className="flex min-w-0 items-center gap-1 text-sm font-medium"><Link href={sessionPath(session.id)} title={clean} className="min-w-0 truncate py-1 hover:underline focus-visible:outline-2 focus-visible:outline-ring"><InlineText text={label} /></Link><span className="shrink-0 text-muted-foreground">({count})</span>{session.pinned ? <Pin aria-label="Pinned" className="size-3 shrink-0" /> : null}</h2>
     <ul className="mt-1 border-l pl-2 text-sm leading-5">
       {text ? row(sessionPath(session.id), field || "Preview", text) : null}
-      {hits.map((match) => row(`${sessionPath(session.id)}?message=${encodeURIComponent(match.message.messageId!)}`, match.message.role === "user" ? "You" : "Assistant", match.message.text, match.message.messageId))}
+      {hits.map((match, i) => row(sessionPath(session.id) + (match.message.messageId ? `?message=${encodeURIComponent(match.message.messageId)}` : ""), match.message.role === "user" ? "You" : "Assistant", match.message.text, match.message.messageId || String(i)))}
     </ul>
   </li>;
 }
@@ -1619,12 +1619,13 @@ function SearchMatches({ matching, messages, rows, origins, needle, sort, tagIds
   </ul>;
 }
 
-function SearchStatus({ pending, checking, error, originError, empty, incomplete, retry }: { pending: boolean; checking: boolean; error?: string; originError: boolean; empty: boolean; incomplete: boolean; retry: () => void }) {
+function SearchStatus({ pending, checking, error, originError, empty, incomplete, unindexed, retry }: { pending: boolean; checking: boolean; error?: string; originError: boolean; empty: boolean; incomplete: boolean; unindexed: boolean; retry: () => void }) {
   return <>
     {pending || checking ? <p role="status" className="text-muted-foreground">{pending ? "Searching…" : "Still checking chat origins…"}</p> : null}
     {error ? <p role="alert" className="text-destructive">Search failed: {error} <button type="button" className="underline" onClick={retry}>Retry</button></p> : null}
     {originError ? <p role="alert" className="text-destructive">Some chat origins could not be searched.</p> : null}
-    {empty ? <p role="status" className="text-muted-foreground">{incomplete ? "Session search is still loading." : "No matches"}</p> : null}
+    {unindexed ? <p role="status" className="text-muted-foreground">Message results may be incomplete while chats are still being indexed.</p> : null}
+    {empty && (incomplete || !unindexed) ? <p role="status" className="text-muted-foreground">{incomplete ? "Session search is still loading." : "No matches"}</p> : null}
   </>;
 }
 
@@ -1633,7 +1634,7 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
   const filters = sessionSearchTerms(tab.query);
   const searchKey = filters.needle;
   const origins = useSessionOrigins(rows, searchKey);
-  const [result, setResult] = useState<{ query: string; matches: MessageMatch[]; tagIds: string[]; error?: string; pending: boolean }>({ query: "", matches: [], tagIds: [], pending: false });
+  const [result, setResult] = useState<{ query: string; matches: MessageMatch[]; tagIds: string[]; indexComplete?: boolean; error?: string; pending: boolean }>({ query: "", matches: [], tagIds: [], pending: false });
   const request = useRef<AbortController>(null);
   const version = useRef(0);
   const pause = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -1649,8 +1650,8 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
     const current = ++version.current;
     setResult({ query: searchKey, matches: [], tagIds: [], pending: !!searchKey });
     if (!searchKey) return;
-    void rpc<SearchMessagesResponse>("SearchMessages", { query: searchKey }, controller.signal).then(({ matches, tagIds }) => {
-      if (current === version.current) setResult({ query: searchKey, matches: matches ?? [], tagIds: tagIds ?? [], pending: false });
+    void rpc<SearchMessagesResponse>("SearchMessages", { query: searchKey }, controller.signal).then(({ matches, tagIds, indexComplete }) => {
+      if (current === version.current) setResult({ query: searchKey, matches: matches ?? [], tagIds: tagIds ?? [], indexComplete, pending: false });
     }).catch((error: Error) => {
       if (current === version.current && !controller.signal.aborted) setResult({ query: searchKey, matches: [], tagIds: [], error: error.message, pending: false });
     });
@@ -1666,15 +1667,15 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
   const current = !pending && !result.error;
   const matching = rows.filter((row) => sessionMatchesSearch(row, filters, tab.agentFilter, tab.roomFilter, origins.values.get(row.id) ?? ""));
   const visible = new Set(rows.filter((row) => sessionMatchesSearch(row, { ...filters, needle: "" }, tab.agentFilter, tab.roomFilter, "")).map((row) => row.id));
-  const messages = result.matches.filter((match) => visible.has(match.conversationId));
+  const messages = result.query === searchKey ? result.matches.filter((match) => visible.has(match.conversationId)) : [];
   const searching = !!tab.query.trim() || !!tab.agentFilter || !!tab.roomFilter;
   return <>
     <div id="search-tab-panel" role="tabpanel" aria-label="Search" className="min-w-0">
       <SessionSearch rows={rows} catalog={catalog} query={tab.query} setQuery={(query) => edit({ query })} agentFilter={tab.agentFilter} setAgentFilter={(agentFilter) => edit({ agentFilter })} roomFilter={tab.roomFilter} setRoomFilter={(roomFilter) => edit({ roomFilter })} inputRef={input} onKeyDown={(event) => { if (event.key === "Enter") { onFirstSubmit(); submit(); } }} />
     </div>
     <div className="min-h-0 flex-1 overflow-y-auto text-sm" aria-label="Search results">
-      <SearchStatus pending={pending} checking={origins.pending} error={result.query === searchKey ? result.error : undefined} originError={origins.failed} empty={searching && current && matching.length + messages.length === 0} incomplete={!searchIsAuthoritative(sidebar) || origins.failed || origins.pending} retry={submit} />
-      {current && searching ? <SearchMatches matching={matching} messages={messages} rows={rows} origins={origins.values} needle={filters.needle} sort={filters.sort} tagIds={result.tagIds} /> : null}
+      <SearchStatus pending={pending} checking={origins.pending} error={result.query === searchKey ? result.error : undefined} originError={origins.failed} empty={searching && current && matching.length + messages.length === 0} incomplete={!searchIsAuthoritative(sidebar) || origins.failed || origins.pending} unindexed={result.query === searchKey && result.indexComplete === false} retry={submit} />
+      {searching ? <SearchMatches matching={matching} messages={messages} rows={rows} origins={origins.values} needle={filters.needle} sort={filters.sort} tagIds={result.tagIds} /> : null}
       {!searching ? <p className="text-muted-foreground">Type to search messages and conversations.</p> : null}
     </div>
   </>;

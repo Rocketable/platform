@@ -100,12 +100,19 @@ func TestRuntimeSummaryBackfillLifecycle(t *testing.T) {
 				require.NoError(t, err)
 			}
 
+			// A chat saved before message search; its backfill waits on the same held locks.
+			searchID := "search" + strings.ReplaceAll(workspace, "/", ":")
+			_, err = service.db.ExecContext(t.Context(), `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, 'main', '')`, searchID)
+			require.NoError(t, err)
+			insertSessionEntryWithoutSummary(t, service, searchID, testSessionEntry("saved question", "saved answer"))
+
 			tx, err := service.db.BeginTx(t.Context(), nil)
 			require.NoError(t, err)
 
 			defer func() { _ = tx.Rollback() }()
 
 			require.NoError(t, lockSessionHistory(t.Context(), tx, historyID))
+			require.NoError(t, lockSessionHistory(t.Context(), tx, searchID))
 
 			// Another worker in the same database must not count as this backfill.
 			unrelatedID := "unrelated:" + workspace
@@ -139,16 +146,18 @@ func TestRuntimeSummaryBackfillLifecycle(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
-			var backfillPID int
+			var backfillPID, searchPID int
 
 			assembler := &frontendAssemblerMock{
 				ValidateAssetsFunc: func(*config.Config, string, []string) error {
-					// Wait for actual backfill contention, rather than assuming it started.
+					// Wait for actual contention of both backfills, rather than assuming they started.
 					require.Eventually(t, func() bool {
-						err := service.db.QueryRowContext(t.Context(), `SELECT COALESCE((SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND classid = 87901 AND objid = (hashtext($1)::bigint & 4294967295)::oid AND objsubid = 2 AND database = (SELECT oid FROM pg_database WHERE datname = current_database())), 0)`, historyID).Scan(&backfillPID)
-						require.NoError(t, err)
+						for id, pid := range map[string]*int{historyID: &backfillPID, searchID: &searchPID} {
+							err := service.db.QueryRowContext(t.Context(), `SELECT COALESCE((SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND classid = 87901 AND objid = (hashtext($1)::bigint & 4294967295)::oid AND objsubid = 2 AND database = (SELECT oid FROM pg_database WHERE datname = current_database())), 0)`, id).Scan(pid)
+							require.NoError(t, err)
+						}
 
-						return backfillPID != 0
+						return backfillPID != 0 && searchPID != 0
 					}, 5*time.Second, time.Millisecond)
 
 					if mode == "startup failure" {
@@ -171,6 +180,13 @@ func TestRuntimeSummaryBackfillLifecycle(t *testing.T) {
 							require.NoError(t, err)
 
 							return strings.Contains(string(data), wantFailure)
+						}, 5*time.Second, time.Millisecond)
+						// A failed summary backfill leaves the message search backfill running.
+						require.Eventually(t, func() bool {
+							var marked bool
+							require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT EXISTS (SELECT 1 FROM message_search_indexed WHERE conversation_id = $1)`, searchID).Scan(&marked))
+
+							return marked
 						}, 5*time.Second, time.Millisecond)
 					}
 					// Both blocked and failed backfill leave ordinary work and list reads available.
@@ -200,11 +216,11 @@ func TestRuntimeSummaryBackfillLifecycle(t *testing.T) {
 			require.Eventually(t, func() bool {
 				var stopped bool
 
-				err := service.db.QueryRowContext(t.Context(), `SELECT NOT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = $1)`, backfillPID).Scan(&stopped)
+				err := service.db.QueryRowContext(t.Context(), `SELECT NOT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid IN ($1, $2))`, backfillPID, searchPID).Scan(&stopped)
 				require.NoError(t, err)
 
 				return stopped
-			}, 5*time.Second, time.Millisecond, "the observed backfill backend must terminate after Run returns")
+			}, 5*time.Second, time.Millisecond, "the observed backfill backends must terminate after Run returns")
 		})
 	}
 }

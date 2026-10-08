@@ -122,7 +122,7 @@ A RocketCode Turn is not the active-turn slot on a Managed Slack Thread. Slack o
 
 A session history of work one tool call delegated, each a finished turn: its automatic permission reviews, or its Task subagent with the subagent's guardrail checks. Its conversation ID is the producing conversation's ID plus `/<tool call ID>-review-<hash of the reviewed call's tool call key>` for its reviews, before it runs and during it, such as of a Code Mode script's tool calls, or `/<tool call ID>-<hash of the call's tool call key>` for a Task subagent, the ID a later `task` call continues; a delegation inside it adds another such segment. The hash keeps the ID unique when a provider reuses call IDs and the same when a turn resumes. Histories saved before this keep their old `/<tool call ID>`.
 
-A Delegation History has no Managed Slack Thread or web chat of its own. It is deleted and forked with its producing conversation.
+A Delegation History has no Managed Slack Thread or web chat of its own. It is deleted and forked with its producing conversation. That, not a `/` in the ID, is what sets it apart: other conversation IDs can contain a `/` too, such as a web chat continuing a cron run, whose ID includes the job's path.
 
 ### Background Job
 

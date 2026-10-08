@@ -165,6 +165,13 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 
 		return nil
 	})
+	backfill.Go(func() error {
+		if err := rocketcodeSessions.backfillMessageSearch(backfillCtx); err != nil && backfillCtx.Err() == nil {
+			logger.Error("backfill message search", "error", err)
+		}
+
+		return nil
+	})
 
 	defer func() {
 		cancelBackfill()

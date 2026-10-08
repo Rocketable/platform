@@ -259,7 +259,8 @@ func commitRevertDB(ctx context.Context, db stateStoreDB, conversationID, marker
 			return fmt.Errorf("encode revert prefix: %w", err)
 		}
 
-		if _, err := db.ExecContext(ctx, `UPDATE session_entries SET entry_json = $2 WHERE id = $1`, entry.ID, string(data)); err != nil {
+		if _, err := db.ExecContext(ctx, `WITH unindexed AS (DELETE FROM message_search WHERE entry_id = $1 AND replay_index >= $3)
+UPDATE session_entries SET entry_json = $2 WHERE id = $1`, entry.ID, string(data), index); err != nil {
 			return fmt.Errorf("save revert prefix: %w", err)
 		}
 	}
