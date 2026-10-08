@@ -1050,6 +1050,9 @@ func TestExecuteReplaysRecordedHostCalls(t *testing.T) {
 
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
 	journal := recordingJournal()
+	journal.SaveTraceFunc = func(ctx context.Context, _ string, _ []json.RawMessage) error {
+		return ctx.Err()
+	}
 	execute := func(code string) (string, error) {
 		t.Helper()
 
@@ -1130,6 +1133,7 @@ func TestExecuteReplaysRecordedHostCalls(t *testing.T) {
 	_, _ = execute(drainScript)
 
 	require.Equal(t, []string{`drain{"text":"x"}`}, calls)
+	require.NoError(t, journal.SaveTraceCalls()[len(journal.SaveTraceCalls())-1].Ctx.Err(), "a completed host call persists its trace through shutdown")
 
 	calls, base = nil, t.Context()
 

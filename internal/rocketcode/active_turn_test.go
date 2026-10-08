@@ -74,9 +74,31 @@ func TestTurnObservationPersistenceFailure(t *testing.T) {
 	require.Empty(t, owner.trace, "a failed save must not commit the replacement in memory")
 	require.ErrorIs(t, owner.replaceResponse(t.Context(), "", []PublicProgress{progress}), errPersist)
 	require.Len(t, journal.SaveTraceCalls(), 2)
-	require.Same(t, t.Context(), journal.SaveTraceCalls()[1].Ctx)
+	require.NoError(t, journal.SaveTraceCalls()[1].Ctx.Err())
 	require.Equal(t, "turn-2", journal.SaveTraceCalls()[1].TurnID)
 	require.Equal(t, []PublicProgress{progress}, PublicProgressFromTrace(journal.SaveTraceCalls()[1].Trace))
+}
+
+func TestTurnObservationsPersistAfterChildCancellation(t *testing.T) {
+	journal := recordingJournal()
+	journal.SaveTraceFunc = func(ctx context.Context, _ string, _ []json.RawMessage) error {
+		return ctx.Err()
+	}
+	owner := turnObservations{journal: journal, turnID: "turn-1"}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	require.NoError(t, owner.recordHostCall(ctx, "execute-1", "host-1", "note", json.RawMessage(`{"text":"hello"}`), "saved"))
+
+	progress := PublicProgress{ID: "execute-1", Kind: PublicProgressTool, State: PublicProgressWorking}
+	require.NoError(t, owner.observe(ctx, &progress))
+	require.NoError(t, owner.finishCall(t.Context(), &progress, PublicProgressCompleted))
+	require.NoError(t, owner.replaceResponse(t.Context(), "", []PublicProgress{{ID: "answer-1", Kind: PublicProgressText, State: PublicProgressCompleted, Text: "done"}}))
+
+	require.NoError(t, t.Context().Err(), "child cancellation must not cancel the turn")
+	require.Len(t, journal.SaveTraceCalls(), 4)
+	require.Len(t, owner.trace, 4, "host call, result, tool completion, and answer remain stored")
+	require.Equal(t, PublicProgressCompleted, PublicProgressFromTrace(owner.trace)[0].State)
 }
 
 func TestPublicProgressTraceAllowlist(t *testing.T) {

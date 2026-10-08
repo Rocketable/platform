@@ -235,7 +235,8 @@ func (o *turnObservations) recordHostCall(ctx context.Context, parentCallID, cal
 }
 
 func (o *turnObservations) saveTraceLocked(ctx context.Context, trace []json.RawMessage) error {
-	if err := o.journal.SaveTrace(ctx, o.turnID, trace); err != nil {
+	// Like step saves, trace saves must outlive cancellation of the work they record.
+	if err := o.journal.SaveTrace(context.WithoutCancel(ctx), o.turnID, trace); err != nil {
 		o.err = progressPersistenceError{err: err}
 		return o.err
 	}
