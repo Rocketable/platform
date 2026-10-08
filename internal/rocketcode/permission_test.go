@@ -77,8 +77,38 @@ func TestPermissionWildcardMatchOpenCodeSemantics(t *testing.T) {
 		{"./cli", "./cli *", true}, {"./cli foo", "./cli *", true}, {"./client", "./cli *", false},
 		{"README.md", "readme.md", false},
 		{`dir\file.txt`, "dir/file.txt", false},
+		{"", "*", true}, {"line\nnext\x00", "*", true}, {"é\xff", "*", true},
 	} {
 		require.Equal(t, tt.want, permissionWildcardMatch(tt.input, tt.pattern))
+	}
+
+	for _, segments := range [][]ruleSegment{nil, {{Text: "*"}}} {
+		allocs := testing.AllocsPerRun(100, func() {
+			if !permissionWildcardMatch("note.txt", "*", segments...) {
+				t.Fatal("authored wildcard must match")
+			}
+		})
+		require.Zero(t, allocs)
+	}
+
+	require.True(t, permissionWildcardMatch("*", "*", ruleSegment{Text: "*", Literal: true}))
+	require.False(t, permissionWildcardMatch("note.txt", "*", ruleSegment{Text: "*", Literal: true}))
+	require.False(t, permissionWildcardMatch("note.txt", "*suffix", ruleSegment{Text: "*"}, ruleSegment{Text: "suffix", Literal: true}))
+}
+
+func BenchmarkPermissionWildcardMatch(b *testing.B) {
+	for name, segments := range map[string][]ruleSegment{
+		"pattern":  nil,
+		"authored": {{Text: "*"}},
+		"literal":  {{Text: "*", Literal: true}},
+	} {
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+
+			for b.Loop() {
+				permissionWildcardMatch("note.txt", "*", segments...)
+			}
+		})
 	}
 }
 
