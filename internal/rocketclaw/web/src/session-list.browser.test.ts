@@ -1671,7 +1671,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await footer.getByRole("button", { name: "Open command palette" }).click();
       await navPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: ({ Cron: "Cron: Dashboard", Agents: "List Agents", Skills: "List Skills", Config: "Settings" } as Record<string, string>)[name], exact: true }).click();
       await navPage.locator('[data-slot="dialog-overlay"]').waitFor({ state: "hidden" });
-      await navPage.mouse.move(0, 0);
+      // The top-left corner is a tab, whose tooltip would take the next Escape.
+      await navPage.mouse.move(0, navPage.viewportSize()!.height / 2);
       await navPage.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     };
     const navMain = navPage.locator("main");
@@ -2442,7 +2443,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       const control = desktopPage.locator("footer").getByRole("button", { name, exact: true });
       await control.hover();
       await desktopPage.locator('[data-slot="tooltip-content"]').filter({ hasText: name }).waitFor();
-      await desktopPage.mouse.move(0, 0);
+      await desktopPage.mouse.move(0, desktopPage.viewportSize()!.height / 2); // The top-left corner is a tab with its own tooltip.
       await desktopPage.locator('[data-slot="tooltip-content"]').filter({ hasText: name }).waitFor({ state: "hidden" });
     }
     await desktopPage.keyboard.press("Tab");
