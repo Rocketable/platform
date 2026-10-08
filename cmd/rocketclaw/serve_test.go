@@ -22,9 +22,9 @@ func TestRunServeReportsAppStartupError(t *testing.T) {
 		occupied bool
 		want     string
 	}{
-		{name: "disabled with occupied port", occupied: true, want: "start rocketcode session service"},
-		{name: "enabled with occupied port", args: []string{"--pprof"}, occupied: true, want: "start private pprof HTTP"},
-		{name: "enabled with backend startup failure", args: []string{"--pprof"}, want: "start rocketcode session service"},
+		{name: "disabled with occupied port", args: []string{"--pprof=false"}, occupied: true, want: "start rocketcode session service"},
+		{name: "enabled with occupied port", occupied: true, want: "start private pprof HTTP"},
+		{name: "enabled with backend startup failure", want: "start rocketcode session service"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.occupied {
@@ -91,7 +91,7 @@ func TestRunServeReportsAppStartupError(t *testing.T) {
 
 			require.Contains(t, string(output), "go_version=")
 
-			if len(tc.args) > 0 && !tc.occupied {
+			if len(tc.args) == 0 && !tc.occupied {
 				require.Contains(t, string(output), `msg="started private pprof HTTP"`)
 				require.Contains(t, string(output), "address=127.0.0.1:6060")
 			}
@@ -108,7 +108,7 @@ func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
 	)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(configData), 0o600))
 
-	err := runServe(nil)
+	err := runServe([]string{"--pprof=false"})
 	require.ErrorContains(t, err, "run rocketclaw")
 }
 

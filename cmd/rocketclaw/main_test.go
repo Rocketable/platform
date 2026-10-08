@@ -158,9 +158,9 @@ func TestRunDispatchesSubcommandErrorsBeforeDefaultConfig(t *testing.T) {
 func TestRunDispatchesHelp(t *testing.T) {
 	output := captureStdout(t, func() error { return run([]string{"help"}) })
 	assert.Contains(t, output, "Usage:")
-	assert.Contains(t, output, "rocketclaw run [--pprof]")
+	assert.Contains(t, output, "rocketclaw run [--pprof=false]")
 	assert.Contains(t, output, "127.0.0.1:6060")
-	assert.Contains(t, output, "disabled by default")
+	assert.Contains(t, output, "enabled by default")
 	assert.NotContains(t, output, "rocketclaw cli")
 }
 
