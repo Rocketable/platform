@@ -2,7 +2,7 @@
 package main
 
 //go:generate find ../../cmd/rocketclaw ../../internal/rocketclaw ../../internal/rocketcode ( -name mocks_test.go -o -name *_mocks_test.go ) -delete
-//go:generate go run -C ../.. -mod=mod github.com/vektra/mockery/v3@v3.7.4
+//go:generate go run -C ../.. -mod=mod -modfile=tools/go.mod github.com/vektra/mockery/v3
 
 import (
 	"errors"
