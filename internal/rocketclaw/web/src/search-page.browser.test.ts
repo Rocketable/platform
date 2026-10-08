@@ -518,9 +518,10 @@ test("one SearchOrigins request per needle feeds Cmd+P and /search", async () =>
   }
 }, 30_000);
 
-test("search shows message and row matches while origins are still loading", async () => {
+test("search shows each source's matches while another is still loading", async () => {
   const { chromium: engine } = await import(playwright!);
   const hold = Promise.withResolvers<void>();
+  const stuck = Promise.withResolvers<void>();
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -531,6 +532,7 @@ test("search shows message and row matches while origins are still loading", asy
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [] });
     if (url.pathname === "/api/SearchMessages") {
       const { query } = await request.json() as { query: string };
+      if (query === "needle-origin") await stuck.promise;
       return Response.json({ matches: query === "needle" ? [{ conversationId: "messaged", message: { messageId: "1:0", role: "user", text: "A needle message", complete: true } }] : [] });
     }
     if (url.pathname === "/api/SearchOrigins") {
@@ -570,7 +572,14 @@ test("search shows message and row matches while origins are still loading", asy
     await results.getByRole("group", { name: "Origin only", exact: true }).waitFor({ timeout: 5000 });
     await checking.waitFor({ state: "detached" });
     expect(await results.getByRole("group").count()).toBe(3);
+    const searching = results.getByRole("status").filter({ hasText: "Searching…" });
+    await search.fill("needle-origin"); // Message search for this needle never answers.
+    await searching.waitFor();
+    await results.getByRole("group", { name: "Origin only", exact: true }).waitFor({ timeout: 5000 });
+    expect(await results.getByRole("group").count()).toBe(1);
+    expect(await searching.count()).toBe(1);
   } finally {
+    stuck.resolve();
     hold.resolve();
     await browser.close();
     server.stop(true);

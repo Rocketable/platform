@@ -1666,7 +1666,7 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
   const current = !pending && !result.error;
   const matching = rows.filter((row) => sessionMatchesSearch(row, filters, tab.agentFilter, tab.roomFilter, origins.values.get(row.id) ?? ""));
   const visible = new Set(rows.filter((row) => sessionMatchesSearch(row, { ...filters, needle: "" }, tab.agentFilter, tab.roomFilter, "")).map((row) => row.id));
-  const messages = result.matches.filter((match) => visible.has(match.conversationId));
+  const messages = result.query === searchKey ? result.matches.filter((match) => visible.has(match.conversationId)) : [];
   const searching = !!tab.query.trim() || !!tab.agentFilter || !!tab.roomFilter;
   return <>
     <div id="search-tab-panel" role="tabpanel" aria-label="Search" className="min-w-0">
@@ -1674,7 +1674,7 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
     </div>
     <div className="min-h-0 flex-1 overflow-y-auto text-sm" aria-label="Search results">
       <SearchStatus pending={pending} checking={origins.pending} error={result.query === searchKey ? result.error : undefined} originError={origins.failed} empty={searching && current && matching.length + messages.length === 0} incomplete={!searchIsAuthoritative(sidebar) || origins.failed || origins.pending} retry={submit} />
-      {current && searching ? <SearchMatches matching={matching} messages={messages} rows={rows} origins={origins.values} needle={filters.needle} sort={filters.sort} tagIds={result.tagIds} /> : null}
+      {searching ? <SearchMatches matching={matching} messages={messages} rows={rows} origins={origins.values} needle={filters.needle} sort={filters.sort} tagIds={result.tagIds} /> : null}
       {!searching ? <p className="text-muted-foreground">Type to search messages and conversations.</p> : null}
     </div>
   </>;
