@@ -362,6 +362,36 @@ func TestAttachmentMetadata(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
+func TestRemoveSessionEntryNULWithoutNUL(t *testing.T) {
+	data := []byte(`{"text":"quoted \"value\", path \\\\ and newline\n"}`)
+	require.Equal(t, data, removeSessionEntryNUL(data))
+	require.Zero(t, testing.AllocsPerRun(100, func() {
+		removeSessionEntryNUL(data)
+	}))
+}
+
+func BenchmarkRemoveSessionEntryNUL(b *testing.B) {
+	for _, sample := range []struct {
+		name string
+		text string
+	}{
+		{"plain", "ordinary text"},
+		{"escaped", "quoted \"value\", path \\\\ and newline\n"},
+		{"nul", "text\x00 and literal \\u0000"},
+	} {
+		b.Run(sample.name, func(b *testing.B) {
+			data, err := json.Marshal(strings.Repeat(sample.text, 1024))
+			require.NoError(b, err)
+			b.SetBytes(int64(len(data)))
+			b.ReportAllocs()
+
+			for b.Loop() {
+				removeSessionEntryNUL(data)
+			}
+		})
+	}
+}
+
 func TestSessionStoreAppendAndLoad(t *testing.T) {
 	service := newTestSessionService(t)
 	store := newSessionStore("slack-thread:C123:111.222", service)
