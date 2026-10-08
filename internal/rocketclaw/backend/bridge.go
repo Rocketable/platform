@@ -99,8 +99,6 @@ type Config struct {
 	UserQuestionAsker                                                    protocol.UserQuestionAsker
 	StartNewThread                                                       func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadResult, error)
 	SessionService                                                       *SessionService
-	SteerDrain                                                           rocketcode.SteerDrain
-	EnqueueActivation                                                    EnqueueActivation
 }
 
 // Bridge forwards rocketclaw messages into one turn-lived rocketcode run per turn.
@@ -176,21 +174,6 @@ func (request *bridgeRequest) closeWorkflow() error {
 	request.workflow = workflowAgentRunner{}
 
 	return err
-}
-
-// EnqueueActivation posts the consume card for a popped Enqueued Slack Message.
-// The zero value is inert.
-type EnqueueActivation struct {
-	Fn func(context.Context, *protocol.ThreadQueueItem, *protocol.InboundMessage) error
-}
-
-// Activate runs the consume-card hook, or does nothing when the hook is unset.
-func (a EnqueueActivation) Activate(ctx context.Context, item *protocol.ThreadQueueItem, inbound *protocol.InboundMessage) error {
-	if a.Fn == nil {
-		return nil
-	}
-
-	return a.Fn(ctx, item, inbound)
 }
 
 type runResult struct {
@@ -465,9 +448,7 @@ func (b *Bridge) stopIdleTurn() *protocol.InboundMessage {
 	}
 
 	outbound := b.newOutboundMessage(turn.inbound, turn.id, "", true)
-	if turn.inbound.Workflow.Name != "" {
-		outbound.WorkflowTerminal = protocol.TerminalStopped
-	}
+	outbound.Terminal = protocol.TerminalStopped
 
 	finish := turnFinish{store: newSessionStore(turn.conversationID, b.config.SessionService), outbound: outbound, terminal: protocol.TerminalStopped, hidden: hiddenRun(turn.inbound)}
 
@@ -875,8 +856,7 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 		return false, err
 	}
 	// handle already owns settlement. A racing stage waits for that owner,
-	// and runTurn observes the barrier before execution starts. Do not hold
-	// the mutex across EnqueueActivation, which may call back into the bridge.
+	// and runTurn observes the barrier before execution starts.
 	b.mu.Unlock()
 
 	owner := b
@@ -927,10 +907,6 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 		queuedItem, claimed, err = (stateDAO{db: tx}).claimThreadQueueItem(ctx, owner.config.ConversationID, request.queueItemID)
 		if err != nil || !claimed {
 			b.log.Info("queue claim unavailable", "event", "queue_claim_unavailable", "conversation_id", owner.config.ConversationID, "queue_item_id", request.queueItemID, "error_type", fmt.Sprintf("%T", err))
-			return false, err
-		}
-
-		if err := b.config.EnqueueActivation.Activate(ctx, &queuedItem, request.inbound); err != nil {
 			return false, err
 		}
 	}
@@ -1553,7 +1529,7 @@ func (b *Bridge) finish(ctx context.Context, request *bridgeRequest, finish *tur
 
 	outbound := b.newOutboundMessage(msg, result.turnID, result.text, true)
 	outbound.Agent, outbound.Model, outbound.ReasoningEffort = result.attribution.Agent, result.attribution.Model, result.attribution.ReasoningEffort
-	outbound.WorkflowTerminal = result.workflowTerminal
+	outbound.Terminal = cmp.Or(terminal, result.workflowTerminal, protocol.TerminalComplete)
 	outbound.Attachments = protocol.CloneOutboundAttachments(result.attachments)
 	outbound.GoalComplete = result.goalCompleted
 
@@ -1620,7 +1596,8 @@ func (b *Bridge) deliver(ctx context.Context, request *bridgeRequest, outbound *
 }
 
 // postCronRoot posts the report in its configured channel, records the new
-// thread for the channel's first agent, and copies this run's history into it.
+// thread for the channel's first agent, footers the root with the bound
+// destination, and copies this run's history into it.
 func (b *Bridge) postCronRoot(ctx context.Context, outbound *protocol.OutboundMessage) error {
 	runtimeCfg := b.runtime.Clone()
 
@@ -1667,6 +1644,11 @@ func (b *Bridge) postCronRoot(ctx context.Context, outbound *protocol.OutboundMe
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit cron destination binding: %w", err)
+	}
+
+	// The footer links the bound destination; a failed edit never fails or re-posts the report.
+	if err := roots.EditCronjobRootFooter(ctx, outbound, root, destinationID); err != nil {
+		b.log.Warn("edit cronjob root footer", "conversation_id", b.config.ConversationID, "destination", destinationID, "error", err)
 	}
 
 	destination, err := b.threads.recordedBridge(destinationID)
@@ -2120,7 +2102,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		customTools = append(customTools, tool)
 	}
 
-	if b.config.UserQuestionAsker.ExposeTool() && nativeQuestionTurn(msg) {
+	if msg.Human && msg.Source == protocol.SourceWeb {
 		customTools = append(customTools, askUserQuestionTool(b.config.UserQuestionAsker, msg))
 	}
 
@@ -2766,7 +2748,7 @@ func (b *Bridge) resetScheduledMessagesTool(origin *protocol.InboundMessage) roc
 }
 
 func askUserQuestionTool(asker protocol.UserQuestionAsker, msg *protocol.InboundMessage) rocketcode.Tool {
-	return rocketcode.Tool{Name: askUserQuestionToolName, Resumable: true, TurnBound: true, Description: "Ask the human partner a native Slack question and wait for their answer. The options array is only for concrete predefined choices to show as buttons/selects; do not include catch-all choices like Custom, Other, or Free text.", Permission: "rocketclaw", VisibilitySubjects: []string{askUserQuestionToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{askUserQuestionToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"question": map[string]any{"type": "string"}, "details": map[string]any{"type": "string"}, "options": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"label": map[string]any{"type": "string"}, "value": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}, "required": []string{"label", "value", "description"}}}, "multiple": map[string]any{"type": "boolean"}}, "required": []string{"question", "details", "options", "multiple"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+	return rocketcode.Tool{Name: askUserQuestionToolName, Resumable: true, TurnBound: true, Description: "Ask the human partner a question where they started this turn and wait for their answer. The options array is only for concrete predefined choices to show as buttons/selects; do not include catch-all choices like Custom, Other, or Free text.", Permission: "rocketclaw", VisibilitySubjects: []string{askUserQuestionToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{askUserQuestionToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"question": map[string]any{"type": "string"}, "details": map[string]any{"type": "string"}, "options": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"label": map[string]any{"type": "string"}, "value": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}, "required": []string{"label", "value", "description"}}}, "multiple": map[string]any{"type": "boolean"}}, "required": []string{"question", "details", "options", "multiple"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		var req protocol.AskUserQuestionRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return rocketcode.ToolResult{}, fmt.Errorf("parse human question: %w", err)
@@ -2780,8 +2762,7 @@ func askUserQuestionTool(asker protocol.UserQuestionAsker, msg *protocol.Inbound
 			return label == "custom" || label == "custom answer" || label == "custom response" || label == "free text" || label == "other" || value == "custom" || value == "custom answer" || value == "custom response" || value == "free text" || value == "other"
 		})
 
-		req.ID, req.Source, req.ConversationID = rocketcode.ToolCallKey(ctx), msg.Source, msg.ConversationID
-		req.SlackReply = protocol.Clone(msg.SlackReply)
+		req.ID, req.ConversationID = rocketcode.ToolCallKey(ctx), msg.ConversationID
 
 		// Moving the script withdraws its question through the asker's cancellation cleanup.
 		if moved, ok := ctx.Value(backgroundMovedKey{}).(context.Context); ok {
@@ -2874,10 +2855,6 @@ func agentExplicitlyAllowsRocketClawTool(agent *rocketcode.Agent, tool string) b
 	action, matched := agent.Permission.Evaluate("rocketclaw", tool)
 
 	return matched && action == rocketcode.PermissionAllow
-}
-
-func nativeQuestionTurn(msg *protocol.InboundMessage) bool {
-	return msg.Human && msg.Source == protocol.SourceSlack && msg.SlackReply != nil
 }
 
 func updateGoalTool(b *Bridge) rocketcode.Tool {
@@ -3001,7 +2978,7 @@ func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID, text s
 
 	outbound.Complete = complete
 	if msg != nil {
-		outbound.Cronjob = msg.Cronjob
+		outbound.Cronjob, outbound.Source = msg.Cronjob, msg.Source
 	}
 
 	if msg != nil {
@@ -3186,7 +3163,7 @@ func buildPrompt(msg *protocol.InboundMessage, agentFrontmatter map[string]any) 
 }
 
 func inboundDirectSkill(msg *protocol.InboundMessage) *rocketcode.PromptInputDirectSkill {
-	if !msg.Human || (msg.Source != protocol.SourceSlack && msg.Source != protocol.SourceWeb) ||
+	if !msg.Human || msg.Source != protocol.SourceWeb ||
 		(msg.Kind != protocol.InboundKindPrompt && msg.Kind != protocol.InboundKindSteer && msg.Kind != protocol.InboundKindEnqueue) {
 		return nil
 	}

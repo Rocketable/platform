@@ -140,7 +140,7 @@ On start, you must always read:
 
 ## RocketClaw-Specific Requirements
 
-- Slack is RocketClaw's primary text connector.
+- The Web interface is RocketClaw's primary interface. Slack is a convenience surface with three jobs: showing cron reports, showing External MCP sessions, and answering @mentions from allowlisted users. Cron and External MCP threads are read-only in Slack, and nothing else in Slack drives an agent.
 
 ## RocketCode-Specific Requirements
 

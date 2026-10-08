@@ -1,6 +1,6 @@
 # Rocketable Platform
 
-Rocketable Platform runs AI agents inside a repository or folder. People talk to the agents through Slack, a built-in web page, or MCP (Model Context Protocol, a standard way for other AI tools to call this one). Agents can read and edit files, run shell commands, use tools and skills, and run saved workflows, but only as far as their permission rules allow.
+Rocketable Platform runs AI agents inside a repository or folder. People talk to the agents through a built-in web page, Slack, or MCP (Model Context Protocol, a standard way for other AI tools to call this one). Agents can read and edit files, run shell commands, use tools and skills, and run saved workflows, but only as far as their permission rules allow.
 
 It is written in Go and runs inside your own workspace. It is not a hosted service shared by many customers.
 
@@ -16,7 +16,7 @@ See [LICENSE](LICENSE) for the full license terms.
 
 - Runs agents that follow your workspace's instructions, agent definitions, and skills, under permission rules you write.
 - Saves conversations and unfinished work in PostgreSQL. After a restart, work continues from the last finished step.
-- Takes requests from Slack, the web page, MCP, scheduled jobs, and one-off or repeating scheduled messages.
+- Takes requests from the web page, Slack mentions, MCP, scheduled jobs, and one-off or repeating scheduled messages.
 - Runs saved workflows written in Starlark, a small Python-like language.
 - Sends model requests to OpenAI or to any service with the same API, and can use several services side by side.
 - Can send traces of agent runs to OpenTelemetry-compatible tools.
@@ -24,7 +24,7 @@ See [LICENSE](LICENSE) for the full license terms.
 ## Main parts
 
 - `internal/rocketcode` (RocketCode): the agent engine. It builds model requests from the workspace, runs tools, checks permissions, and saves a replayable record of each session.
-- `internal/rocketclaw` (RocketClaw): the long-running service around RocketCode. It connects Slack, the web page, MCP, scheduled jobs, attachments, and the database. Its program is `cmd/rocketclaw`.
+- `internal/rocketclaw` (RocketClaw): the long-running service around RocketCode. It connects the web page, Slack, MCP, scheduled jobs, attachments, and the database. Its program is `cmd/rocketclaw`.
 - `cmd/funneld`: a small HTTPS proxy that forwards public paths to internal URLs listed in `funneld.json`.
 - `cmd/quickweb`: serves small trusted internal web pages, each with one saved JSON document. See [cmd/quickweb/README.md](cmd/quickweb/README.md).
 
@@ -40,30 +40,53 @@ A workspace contains `AGENTS.md` and, optionally, `agents/`, `skills/`, `scripts
 
 ### Web page
 
-The web page is built into RocketClaw and listens on `0.0.0.0:3000`. To change that, set `"web": {"listen_address": "127.0.0.1:3000"}`. Links RocketClaw hands out use this machine's Tailscale address.
+The web page is the main way to work with RocketClaw. It is built into RocketClaw and listens on `0.0.0.0:3000`. To change that, set `"web": {"listen_address": "127.0.0.1:3000"}`. Links RocketClaw hands out use this machine's Tailscale address.
 
 RocketClaw identifies each browser by IP address, using the `web_users` map (for example `"web_users": {"100.64.0.10": "alice"}`) or, failing that, a Tailscale lookup. It refuses browsers it cannot identify. See the [Web README](internal/rocketclaw/web/README.md) for the page's features and optional Sentry error tracking.
 
 ### Slack
 
-Under `slack.channels`, map each channel to a list of agents and the Slack user IDs allowed to use them. Mention the bot in that channel to start a thread. While it works, Slack shows one placeholder message, then the final answer and any files.
+Slack has three jobs: showing cron reports, showing MCP sessions, and quick help when an allowed user mentions the bot. Everything else happens in the web page.
 
-Add these bot scopes, then reinstall the Slack app:
+Under `slack.channels`, map each channel to a list of agents and the Slack user IDs allowed to use them. A row named `@` is not a channel: it gives agents and allowed users for mentions in any other channel or group DM the bot is already in.
+
+Only a mention from an allowed user starts work. Messages without a mention, including replies in threads the bot answers in, reactions, and edited messages start nothing, and 1:1 DMs never start work. A top-level mention in a configured channel starts a new thread answered by the channel's first agent; a top-level mention with no text, file, or forward is ignored. A mention in a thread the bot does not know takes that thread over and reads up to 50 earlier messages. A mention in a thread the bot already answers in is that conversation's next turn and adds only the mention itself. It waits for running work and active goals instead of steering them. Mentions keep their files and forwarded threads. The bot marks each accepted mention with 🤖 and accepts it once, even if Slack delivers it again. If it cannot read the thread or take the request, it replies with a short error.
+
+While it works, Slack shows one placeholder message, then the final answer and any files. Mention replies and cron reports end with a footer: the agent, its state (working, done, failed, or stopped), and an Open in Web link.
+
+Cron report threads and MCP threads are read-only in Slack: the bot ignores every reply and mention in them, even after their record expires. Open the conversation in Web to keep working.
+
+Slack has no commands. `$stop`, `$agent`, `$goal`, `$enqueue`, skill names, and any other `$` text reach the agent as plain text. There is no agent picker, steering, queue card, question button, or reaction control. Mention turns cannot use `ask_user_question`, so the agent asks in its reply or hands the work to Web. Use Web to switch agents, run commands and skills, start goals, manage queued work, and stop any turn. Web messages used in a Slack thread are still posted there, and every reply in that conversation still goes to Slack.
+
+Set up the Slack app with the bot event `app_mention` and these bot scopes, then reinstall it:
 
 - `users:read` and `usergroups:read`, so the web page shows names instead of Slack IDs.
 - `channels:read` and `channels:history`, so the bot can expand threads forwarded from public channels. It never joins channels on its own.
 
-See the [command cheatsheet](cmd/rocketclaw/CHEATSHEET.md) for Slack commands.
+The `message.*` event subscriptions and Interactivity are no longer used and can be removed.
+
+Slack's own Stop button needs two more steps: turn the app into an agent (**Agents** in the app settings, manifest `features.agent_view`), which cannot be undone, and subscribe to the bot event `agent_session_stopped`. Then each turn a mention started shows Slack's working state until it ends, and Stop from an allowed user ends the turn and its goal, like Web `$stop`. Slack drops the working state after one hour, and RocketClaw does not renew it. A workspace without agent sessions logs the refusal and runs turns normally; stop them from the footer's Web link. `agent_view` also adds an agent chat to the app's Messages tab that RocketClaw never answers.
+
+See the [cheatsheet](cmd/rocketclaw/CHEATSHEET.md) for the full Slack app setup.
+
+Release note for mention-only Slack:
+
+- Slack is now mention-only, and cron and MCP threads are read-only.
+- Edited messages don't start work, even when the edit adds a mention.
+- Mentions wait behind an active goal in their conversation.
+- Queue cards and agent-picker buttons posted by earlier versions do nothing, and so do ⏫ and 🛑 reactions.
+- Mention replies and cron reports end with a footer that links to Web. Where the workspace supports Slack agent sessions, an allowed user can stop a running mention turn with Slack's Stop; elsewhere, open the footer link and stop the turn in Web.
+- Slack no longer shows questions. Question buttons posted by earlier versions do nothing, and a question still waiting fails when its turn resumes.
 
 ### MCP and scheduled jobs
 
-MCP clients call `session_prompt` with a conversation ID, an agent, and a configured Slack channel. Each MCP conversation also gets a Slack thread in that channel.
+MCP clients call `session_prompt` with a conversation ID, an agent, and a configured Slack channel. Each MCP conversation also gets a read-only Slack thread in that channel. Switch its agent or continue it from Web.
 
-Each active job file in `cron/` names a Slack `channel`. If the job's reply is empty, nothing is posted. Otherwise the reply starts a new thread in that channel.
+Each active job file in `cron/` names a Slack `channel`. If the job's reply is empty, nothing is posted. Otherwise the reply starts a new read-only thread in that channel; follow up from its conversation in Web.
 
 ## How a request runs
 
-1. A request arrives from Slack, the web page, MCP, a cron job, a scheduled message, or a `$workflow` command.
+1. A request arrives from the web page (including a `$workflow` command), a Slack mention, MCP, a cron job, or a scheduled message.
 2. RocketClaw passes it to RocketCode with the chosen agent.
 3. RocketCode calls the model and runs tools, within the agent's permissions.
 4. RocketClaw saves each finished step and sends the reply back where the request came from.
@@ -101,7 +124,7 @@ permission:
 
 ## Skills
 
-Type `$` in Slack or the web page to list commands and skills for the current agent. `$review some text` runs the skill named `review`, and `$stop` stops the current work. To queue a skill instead of running it now, use `$enqueue $review some text`.
+Type `$` in the web page to list commands and skills for the current agent. `$review some text` runs the skill named `review`, and `$stop` stops the current work. To queue a skill instead of running it now, use `$enqueue $review some text`. In Slack, `$` text is plain text for the agent.
 
 Skill templates read their arguments the same way OpenCode commands do: `$ARGUMENTS` is the whole text, and `$1`, `$2`, and so on are single words or quoted phrases.
 

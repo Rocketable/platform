@@ -43,7 +43,7 @@ func Listen(socketPath string) (net.Listener, error) {
 func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	desc := grpc.ServiceDesc{ServiceName: "rpc.Web", HandlerType: (*any)(nil), Metadata: "web.proto"}
 
-	for _, method := range []string{"Protocol", "Identity", "Prompt", "History", "ForkSession", "StageRevert", "ClearRevert", "SearchMessages", "SearchOrigins", "SlackNames", "Handoff", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "ListWorkflows", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "ReorderQueue", "MoveToBackground", "StopBackgroundJob"} {
+	for _, method := range []string{"Protocol", "Identity", "Prompt", "History", "ForkSession", "StageRevert", "ClearRevert", "SearchMessages", "SearchOrigins", "SlackNames", "Handoff", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "ListWorkflows", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "ReorderQueue", "MoveToBackground", "StopBackgroundJob", "AnswerQuestion"} {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 
@@ -139,6 +139,8 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 		return s.moveToBackground(ctx, request.(*MoveToBackgroundRequest))
 	case "StopBackgroundJob":
 		return s.stopBackgroundJob(ctx, request.(*StopBackgroundJobRequest))
+	case "AnswerQuestion":
+		return s.answerQuestion(ctx, request.(*AnswerQuestionRequest))
 	case "ListSessionEntries":
 		return s.ListSessionEntries(ctx, request.(*SessionEntriesRequest))
 	case "LoadSessionEntries":
@@ -151,14 +153,15 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 }
 
 // historyRPC answers the History RPC: the transcript page plus the conversation's Background
-// Jobs, which internal history reads (search, attachments, session commands) do not need.
+// Jobs and pending Web questions, which internal history reads (search, attachments, session
+// commands) do not need.
 func (s *Server) historyRPC(ctx context.Context, request *HistoryRequest) (*HistoryResponse, error) {
 	response, err := s.history(ctx, request)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := s.listBackgroundJobs(ctx, response, request); err != nil {
+	if err := s.listPending(ctx, response, request); err != nil {
 		return nil, err
 	}
 

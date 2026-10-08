@@ -167,7 +167,7 @@ func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
 	newBridge, service, requests, finals := newResumeTestBridges(t, false)
 	crashed := newBridge()
 	conversationID := crashed.config.ConversationID
-	require.NoError(t, service.BeginGoal(conversationID, "ship it", "", 5, "T1", "U1"))
+	require.NoError(t, service.BeginGoal(conversationID, "ship it", "", 5))
 
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "continue", false)
 	msg.GoalAction, msg.ConversationID = protocol.GoalActionContinue, conversationID
@@ -252,7 +252,7 @@ func TestStopOnWaitingRowPostsStoppedFinalAndDoesNotRun(t *testing.T) {
 	final := readFinal(t, finals)
 	assert.Empty(t, final.Text)
 	assert.Equal(t, "turn-waiting", final.TurnID)
-	assert.Equal(t, protocol.TerminalStopped, final.WorkflowTerminal, "the workflow card shows the run stopped")
+	assert.Equal(t, protocol.TerminalStopped, final.Terminal, "the workflow card shows the run stopped")
 	require.Eventually(t, func() bool { return len(runningTestTurns(t, service)) == 0 }, 5*time.Second, 10*time.Millisecond)
 
 	runTestBridge(t, newBridge())
@@ -284,23 +284,6 @@ func TestShutdownCancelsTurnWithoutPublishing(t *testing.T) {
 	assert.Empty(t, response, "the waiter is not completed")
 	require.Len(t, runningTestTurns(t, service), 1, "the row stays running for resume")
 	assert.NotEmpty(t, testTurnStepKeys(t, service, bridge.config.ConversationID), "recorded steps survive")
-}
-
-// A Slack redelivery while a row waits must be swallowed, not started as a second turn.
-func TestThreadBusyWhileActiveTurnRowWaits(t *testing.T) {
-	service := newTestSessionService(t)
-	manager := newThreadBridgeManager(nil, service, slog.New(slog.DiscardHandler), func(Config) directBridge { return newDirectBridgeMock() })
-	runTestManager(t, manager)
-
-	target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.222"}
-	require.False(t, manager.ThreadBusy(target))
-
-	seedActiveTurn(t, service, protocol.SlackThreadConversationID("C123", "111.222"), "turn-waiting", nil)
-	assert.True(t, manager.ThreadBusy(target))
-
-	reserved := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "333.444"}
-	service.reserveTurnPair(protocol.SlackThreadConversationID(reserved.ChannelID, reserved.ThreadID), "external_mcp:private")
-	assert.True(t, manager.ThreadBusy(reserved), "a pair reserved by its private session is busy")
 }
 
 // A request waiting for its paired session is kept for the next start on
@@ -340,6 +323,7 @@ func TestWaitingForPairedSession(t *testing.T) {
 				final := readFinal(t, finals)
 				assert.Empty(t, final.Text)
 				assert.Equal(t, "turn-waiting", final.TurnID)
+				assert.Equal(t, protocol.TerminalStopped, final.Terminal, "a stopped ordinary turn reports stopped")
 				require.Eventually(t, func() bool { return len(runningTestTurns(t, service)) == 0 }, 5*time.Second, 10*time.Millisecond)
 
 				return
@@ -409,10 +393,15 @@ func newCronTestManager(t *testing.T, service *SessionService) (manager *threadB
 	cfg = &config.Config{Workspace: t.TempDir(), Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"channel-agent"}}}}}
 	roots, finals = make(chan *protocol.OutboundMessage, 4), make(chan *protocol.OutboundMessage, 4)
 	manager, _ = newTestBridgeManager(t, config.NewLockedConfig(cfg), service, finals)
-	manager.cronRoots = &slackFrontendMock{SendCronjobRootFunc: func(_ context.Context, message *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
-		roots <- message
-		return protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, nil
-	}}
+	manager.cronRoots = &slackFrontendMock{
+		SendCronjobRootFunc: func(_ context.Context, message *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
+			roots <- message
+			return protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, nil
+		},
+		EditCronjobRootFooterFunc: func(context.Context, *protocol.OutboundMessage, protocol.TextConversationTarget, string) error {
+			return nil
+		},
+	}
 
 	return manager, cfg, roots, finals
 }
@@ -465,6 +454,13 @@ func TestResumedCronRowPostsRootOnce(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, entries, 1, "the run's history is copied into the report thread")
 	assert.Empty(t, roots, "the root is posted once")
+
+	footers := manager.cronRoots.(*slackFrontendMock).EditCronjobRootFooterCalls()
+	require.Len(t, footers, 1, "the root's footer is edited once, after binding")
+	assert.Equal(t, protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, footers[0].Root)
+	assert.Equal(t, destination, footers[0].ConversationID, "the footer links the bound report thread")
+	assert.Equal(t, "turn-cron", footers[0].Msg.TurnID)
+
 	owner, _, err := (stateDAO{db: service.db}).producer(t.Context(), "cron:daily")
 	require.NoError(t, err)
 	assert.Equal(t, destination, owner.SyncDestination, "the delivered root survives turn close")
@@ -1064,8 +1060,46 @@ func TestFailedCronRunPostsNoRoot(t *testing.T) {
 	bridge.threads = manager
 	require.NoError(t, bridge.finish(t.Context(), &bridgeRequest{inbound: msg, turnID: "turn-cron"}, &turnFinish{store: newSessionStore("cron:daily", service)}, &runResult{turnID: "turn-cron", text: internalErrorResponse}, protocol.TerminalFailed))
 
-	assert.Equal(t, internalErrorResponse, readFinal(t, finals).Text)
+	final := readFinal(t, finals)
+	assert.Equal(t, internalErrorResponse, final.Text)
+	assert.Equal(t, protocol.TerminalFailed, final.Terminal)
 	assert.Empty(t, roots)
+}
+
+// A cron root's footer links the destination binding returns, here an existing one other
+// than the thread just posted. A failed footer edit is only logged: the delivery succeeds,
+// the turn closes, and no second root is posted.
+func TestCronRootFooterLinksBoundDestination(t *testing.T) {
+	for name, errFooter := range map[string]error{"edited": nil, "edit fails": errors.New("message_not_found")} {
+		t.Run(name, func(t *testing.T) {
+			service := newTestSessionService(t)
+			manager, cfg, roots, finals := newCronTestManager(t, service)
+			sender := manager.cronRoots.(*slackFrontendMock)
+			sender.EditCronjobRootFooterFunc = func(context.Context, *protocol.OutboundMessage, protocol.TextConversationTarget, string) error {
+				return errFooter
+			}
+			msg := seedCronRun(t, service, "cron:daily")
+
+			const existing = "web:cron:daily"
+
+			require.NoError(t, (&Runtime{Sessions: service}).CreateConversation(t.Context(), protocol.Conversation{ID: existing, Agent: "selected"}))
+			_, err := (stateDAO{db: service.db}).bindProducer(t.Context(), "cron:daily", existing)
+			require.NoError(t, err)
+
+			bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
+			bridge.threads = manager
+			require.NoError(t, bridge.finish(t.Context(), &bridgeRequest{inbound: msg, turnID: "turn-cron"}, &turnFinish{store: newSessionStore("cron:daily", service)}, &runResult{turnID: "turn-cron", text: "report"}, ""))
+
+			assert.Equal(t, "report", readFinal(t, finals).Text)
+			assert.Equal(t, "report", readFinal(t, roots).Text)
+			assert.Empty(t, roots, "one root")
+			assert.Empty(t, runningTestTurns(t, service), "the turn closes")
+
+			footers := sender.EditCronjobRootFooterCalls()
+			require.Len(t, footers, 1)
+			assert.Equal(t, existing, footers[0].ConversationID)
+		})
+	}
 }
 
 // AE3: an interrupted private External MCP turn, and an External MCP request
@@ -1222,7 +1256,7 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 	require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
 
 	asked, answers := make(chan string, 4), make(chan protocol.AskUserQuestionAnswer, 1)
-	asker := protocol.InteractiveUserQuestionAsker(func(ctx context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
+	asker := &userQuestionAskerMock{AskUserQuestionFunc: func(ctx context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
 		asked <- req.ID
 
 		select {
@@ -1231,7 +1265,7 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 		case <-ctx.Done():
 			return protocol.AskUserQuestionAnswer{}, ctx.Err()
 		}
-	})
+	}}
 	finals := make(chan *protocol.OutboundMessage, 4)
 	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
 	newBridge := func() *Bridge {
@@ -1240,9 +1274,7 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 
 	first := newBridge()
 	shutdown := runTestBridge(t, first)
-	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "ship it?", true)
-	msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}
-	require.NoError(t, first.Submit(t.Context(), msg))
+	require.NoError(t, first.Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "ship it?", true)))
 
 	questionID := <-asked
 	turns := runningTestTurns(t, service)
@@ -1256,7 +1288,7 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 	runTestBridge(t, newBridge())
 	assert.Equal(t, questionID, <-asked, "the resumed turn waits on the same question")
 
-	answers <- protocol.AskUserQuestionAnswer{Selected: []string{"yes"}, Source: protocol.SourceSlack}
+	answers <- protocol.AskUserQuestionAnswer{Selected: []string{"yes"}, Source: protocol.SourceWeb}
 
 	assert.Equal(t, "answer", readFinal(t, finals).Text)
 	assert.Len(t, bodies, 2, "the recorded model call is not repeated")
@@ -1287,9 +1319,7 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 	later := newBridge()
 	runTestBridge(t, later)
 
-	next := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "anything else", true)
-	next.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.333", ThreadTS: "111.222"}
-	require.NoError(t, later.Submit(t.Context(), next))
+	require.NoError(t, later.Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "anything else", true)))
 	assert.Contains(t, <-bodies, "- ask_user_question(", "a later turn can still ask inside execute")
 	assert.Equal(t, "answer", readFinal(t, finals).Text)
 }
@@ -1620,7 +1650,7 @@ def main(args):
 				require.NotNil(t, restarted.InterruptActiveTurn())
 
 				final := readFinal(t, finals)
-				assert.Equal(t, protocol.TerminalStopped, final.WorkflowTerminal)
+				assert.Equal(t, protocol.TerminalStopped, final.Terminal)
 				assert.Equal(t, map[string]int{"a": 1, "b": 1, "c": 1, "d": 2}, workerCalls(), "finished workers are not repeated")
 
 				require.Eventually(t, func() bool {
@@ -1763,9 +1793,14 @@ func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
 	report := protocol.SlackThreadConversationID("C1", "1.2")
 
 	first.mu.Lock()
-	first.cronRoots = &slackFrontendMock{SendCronjobRootFunc: func(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
-		return protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, nil
-	}}
+	first.cronRoots = &slackFrontendMock{
+		SendCronjobRootFunc: func(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
+			return protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, nil
+		},
+		EditCronjobRootFooterFunc: func(context.Context, *protocol.OutboundMessage, protocol.TextConversationTarget, string) error {
+			return nil
+		},
+	}
 	first.mu.Unlock()
 
 	msg := seedCronRun(t, nt.service, "cron:nightly")

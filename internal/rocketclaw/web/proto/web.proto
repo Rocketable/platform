@@ -65,6 +65,24 @@ message HistoryResponse {
   // Background Jobs running or holding an undelivered Completion Note, including those of hidden
   // cron and External MCP runs whose destination is this conversation.
   repeated BackgroundJob background_jobs = 17;
+  // Unanswered ask_user_question calls of this conversation's Web turns, in question ID order.
+  repeated PendingQuestion pending_questions = 18;
+}
+
+// An ask_user_question call a Web turn waits on; AnswerQuestion answers it by ID.
+message PendingQuestion {
+  string id = 1;
+  string question = 2;
+  string details = 3;
+  repeated QuestionOption options = 4;
+  // Several options may be selected.
+  bool multiple = 5;
+}
+
+message QuestionOption {
+  string label = 1;
+  string value = 2;
+  string description = 3;
 }
 
 // A listed Background Job, or the job a Completion Note reports.
@@ -290,9 +308,12 @@ message RunCronJobResponse {
 }
 
 message AnswerQuestionRequest {
-  string ask_id = 1;
-  string answer = 2;
-  bool dismiss = 3;
+  string conversation_id = 1;
+  // The PendingQuestion ID.
+  string ask_id = 2;
+  // Values of the chosen options.
+  repeated string selected = 3;
+  string custom = 4;
 }
 
 message AnswerQuestionResponse {}

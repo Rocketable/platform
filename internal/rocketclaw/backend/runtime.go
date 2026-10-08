@@ -17,9 +17,7 @@ type SlackFrontend interface {
 	Start(context.Context) error
 	Stop(context.Context) error
 	SendCronjobRoot(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error)
-	AskUserQuestion(context.Context, *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error)
-	DrainSteers(context.Context, string) []string
-	ActivateEnqueue(context.Context, *protocol.ThreadQueueItem, *protocol.InboundMessage) error
+	EditCronjobRootFooter(ctx context.Context, msg *protocol.OutboundMessage, root protocol.TextConversationTarget, conversationID string) error
 }
 
 // Runtime is the backend after construction, before frontends.
@@ -34,7 +32,7 @@ type Runtime struct {
 	TextRouter protocol.PrimaryTextRouter
 	threads    *threadBridgeManager
 	background *backgroundRegistry
-	slackAsker *protocol.UserQuestionAsker
+	questions  *webQuestions
 
 	eventsMu    sync.Mutex
 	subscribers map[chan protocol.Event]<-chan struct{}
@@ -112,10 +110,8 @@ func (r *Runtime) PublishOutbound(ctx context.Context, message *protocol.Outboun
 	return errDelivery
 }
 
-// AttachSlack hooks originator Slack methods into backend thread state.
+// AttachSlack makes Slack the cron report root sender.
 func (r *Runtime) AttachSlack(slack SlackFrontend) {
-	*r.slackAsker = protocol.InteractiveUserQuestionAsker(slack.AskUserQuestion)
-
 	r.threads.mu.Lock()
 	r.threads.cronRoots = slack
 	r.threads.mu.Unlock()

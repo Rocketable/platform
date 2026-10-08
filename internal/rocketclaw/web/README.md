@@ -444,11 +444,11 @@ Only the outer delivery command is removed; inner commands and text are preserve
 idle, after the active turn when steered, and as later work when queued. Bare
 `$workflow` privately lists the saved workflows, and typing `$workflow ` in the
 composer suggests them by name. `$goal <objective>` starts a goal
-loop on the conversation, with the same `maxTurns:` and `checkScript:` options as
-Slack; its first turn runs right away when idle, otherwise after the active turn.
+loop on the conversation, with `maxTurns:` and `checkScript:` options; its first turn runs right away when idle, otherwise after the active turn.
 Bare `$goal` privately shows usage, and `$stop` ends the goal.
 The Stash button and shortcut still hold the entire draft literally, including
-any `$command` text. Slack's command language is unchanged.
+any `$command` text. Slack has no commands: `$` text in a Slack mention reaches
+the agent as ordinary text.
 Run cron opens a new session immediately. The job still runs privately, and the chat fills in when it finishes.
 A chat that began as a cron run or an external MCP call starts with a collapsed origin card. Use show more to see its details; the card scrolls with the messages. An ordinary chat has no origin card.
 The composer's session buttons appear only on desktop; on mobile, the command
@@ -646,6 +646,13 @@ detail level. Each Completion Note is one row, `<label> · finished`, `failed`,
 `stopped by user`, `stopped by agent`, or `killed (server restarted)`, shown at
 every level with the full note collapsed beneath it. `$stop` does not stop
 Background Jobs; use Stop.
+When a turn started in Web calls `ask_user_question`, the question shows as a card
+in the same box above the composer, and stays there after a reload or restart until
+answered. Clicking an option answers a single choice; a multiple choice takes the
+checked options and **Submit**. While the card shows, Send answers with the
+composer's text as a custom answer instead of queueing it; Steer, Stash, and `$stop`
+work as usual. If someone else already answered or the turn ended, the card goes
+away and says so.
 A tool row whose call delegated work (an `auto` permission review, a guardrail
 check, or a Task subagent) shows **Open delegation**. A `task` row opens its
 subagent, and a row that continued a subagent opens that subagent. A row whose call

@@ -80,7 +80,7 @@ func TestRevertSettlesAndPreservesWaitingWork(t *testing.T) {
 	go func() { done <- rt.RunTurn(t.Context(), active) }()
 
 	<-requests
-	require.NoError(t, s.BeginGoal("main", "continue forever", "", 0, "", ""))
+	require.NoError(t, s.BeginGoal("main", "continue forever", "", 0))
 
 	for _, id := range []string{"queued-1", "queued-2"} {
 		require.NoError(t, s.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: "main", Message: id, Source: protocol.SourceWeb, Position: 10}))
@@ -1099,43 +1099,4 @@ func TestRevertSavedAttachmentRetryIdentity(t *testing.T) {
 	inbound.Attachments[1].Data = []byte("different bytes")
 	_, err = reconcileWebDB(t.Context(), s.db, inbound)
 	require.ErrorContains(t, err, "different content")
-}
-
-func TestRevertRacingSteerDrainKeepsWaitingOwner(t *testing.T) {
-	s := newTestSessionService(t)
-	draining, release := make(chan struct{}), make(chan struct{})
-	b := &Bridge{config: Config{ConversationID: "main", SessionService: s, SteerDrain: rocketcode.SteerDrain{Fn: func(context.Context, rocketcode.TurnPhase) []rocketcode.PromptInput {
-		close(draining)
-		<-release
-
-		return []rocketcode.PromptInput{{ID: "external", Text: "already drained"}}
-	}}}, log: slog.New(slog.DiscardHandler)}
-	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "waiting"}, true)
-	inbound.ConversationID, inbound.Metadata["web_message_id"] = "main", "waiting"
-	completion := &turnCompletion{done: make(chan struct{})}
-	b.steers = []bridgeRequest{{inbound: inbound, queueItemID: "waiting", completion: completion}}
-
-	inputs := make(chan []rocketcode.PromptInput, 1)
-	go func() { inputs <- b.drainSteers(t.Context(), rocketcode.TurnPhaseFinalAnswer) }()
-
-	<-draining
-	b.mu.Lock()
-	b.historyMutation = true
-	b.mu.Unlock()
-	close(release)
-	require.Equal(t, []rocketcode.PromptInput{{ID: "external", Text: "already drained"}}, <-inputs)
-	require.Zero(t, b.steersRead, "a barrier installed during the external drain must not consume waiting Web inputs")
-	require.NoError(t, b.settleSteers(t.Context(), nil))
-
-	queue, err := s.ThreadQueueForConversation("main")
-	require.NoError(t, err)
-	require.Len(t, queue, 1)
-	require.Equal(t, "waiting", queue[0].ID)
-	require.Same(t, completion, b.waiting[0].completion)
-
-	select {
-	case <-completion.done:
-		t.Fatal("an uninjected steer must not be reported executed")
-	default:
-	}
 }

@@ -103,7 +103,14 @@ refused for private cron and External MCP conversations. History adds a `movable
 flag, true while such a call runs attached to its turn, and a `backgroundJobs`
 list with label, kind, state, tool call ID, subagent key, who stopped it, and a
 `hidden` mark. The list holds jobs that are running or whose Completion Note is
-still pending, including those of hidden runs that report here. Transcript events
+still pending, including those of hidden runs that report here. History also lists
+`pendingQuestions`: the unanswered `ask_user_question` calls of the conversation's
+Web turns, read from their saved turn steps, so they survive a closed tab or a
+restart. `AnswerQuestion` authorizes like the
+queue RPCs, then saves the selected values and custom text as the answer to the
+named question of that conversation and wakes its waiting turn. The first answer
+wins; any other answer, including one naming another conversation's question,
+fails with NotFound "no longer pending" and changes nothing. Transcript events
 that deliver Completion Notes carry them in `completionNotes` with each job ID,
 final state, and note text. They come from the stored jobs whose IDs the system
 input saved as its input ID, never from its text, so output that looks like a note

@@ -191,7 +191,7 @@ func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
 			ConversationID: conversationID, Source: protocol.SourceWeb, Kind: protocol.InboundKindEnqueue,
 			Message: "same text", Principal: "alice", Position: i,
 		}))
-		promoted, err := manager.promoteQueueItem(t.Context(), conversationID, id, "")
+		promoted, err := manager.promoteQueueItem(t.Context(), conversationID, id)
 		require.NoError(t, err)
 		require.True(t, promoted)
 	}
@@ -318,7 +318,7 @@ permission:
 ---
 Prompt
 `, "#!/bin/sh\nprintf passed\n")
-	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh", 3, "", ""))
+	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh", 3))
 
 	result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"complete","note":"finished lint"}`), nil)
 	require.NoError(t, err)
@@ -339,7 +339,7 @@ permission: {}
 ---
 Prompt
 `, "#!/bin/sh\nexit 7\n")
-	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh", 3, "", ""))
+	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh", 3))
 
 	tool := updateGoalTool(bridge)
 	assert.Contains(t, fmt.Sprint(tool.Parameters), "what you are thinking")
@@ -365,7 +365,7 @@ permission:
 ---
 Prompt
 `, "#!/bin/sh\nprintf failed\nexit 7\n")
-	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh", 3, "", ""))
+	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh", 3))
 
 	result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
 	require.NoError(t, err)
@@ -388,7 +388,7 @@ permission:
 ---
 Prompt
 `, "#!/bin/sh\nexit 0\n")
-	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh --dangerous", 3, "", ""))
+	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh --dangerous", 3))
 
 	result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
 	require.NoError(t, err)
@@ -410,7 +410,7 @@ permission:
 ---
 Prompt
 `, "#!/bin/sh\nexit 7\n")
-	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh", 3, "", ""))
+	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh", 3))
 
 	result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"blocked","note":"need credentials"}`), nil)
 	require.NoError(t, err)
@@ -424,7 +424,7 @@ Prompt
 
 func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
 	bridge := newGoalAccountingTestBridge(t)
-	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "ship it", "", 3, "T123", "U456"))
+	require.NoError(t, beginGoalDB(t.Context(), bridge.config.SessionService.db, "thread-1", &GoalState{Objective: "ship it", MaxTurns: 3, SlackRecipientTeamID: "T123", SlackRecipientUserID: "U456"}))
 
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "ship it", false)
 	msg.GoalAction = protocol.GoalActionKickoff
@@ -452,7 +452,7 @@ func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
 
 func TestFinishGoalTurnHumanResteeringDoesNotConsumeBudget(t *testing.T) {
 	bridge := newGoalAccountingTestBridge(t)
-	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "ship it", "", 3, "starter-team", "starter-user"))
+	require.NoError(t, beginGoalDB(t.Context(), bridge.config.SessionService.db, "thread-1", &GoalState{Objective: "ship it", MaxTurns: 3, SlackRecipientTeamID: "starter-team", SlackRecipientUserID: "starter-user"}))
 
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "try this angle", false)
 	msg.ConversationID = "thread-1"
@@ -534,12 +534,7 @@ func TestPickLaterWorkPrefersEarlierStashOverLaterDue(t *testing.T) {
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "A", Principal: "U1", StashAt: stashAt, Position: 0, SlackChannel: "C123", SlackTS: "111.222"}))
 	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "scheduled", DueAt: time.Date(2000, 1, 1, 12, 5, 0, 0, time.UTC)}))
 
-	var popped []string
-
-	bridge := &Bridge{bus: discardPublisher{}, log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store, EnqueueActivation: EnqueueActivation{Fn: func(_ context.Context, item *protocol.ThreadQueueItem, _ *protocol.InboundMessage) error {
-		popped = append(popped, item.Message)
-		return nil
-	}}}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+	bridge := &Bridge{bus: discardPublisher{}, log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 
 	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
 	require.Len(t, bridge.requestCh, 1)
@@ -550,7 +545,6 @@ func TestPickLaterWorkPrefersEarlierStashOverLaterDue(t *testing.T) {
 	admitted, err := bridge.activateInbound(t.Context(), &request)
 	require.NoError(t, err)
 	require.True(t, admitted)
-	assert.Equal(t, []string{"A"}, popped)
 
 	messages, err := store.ScheduledMessagesForConversation(conversationID)
 	require.NoError(t, err)
@@ -595,7 +589,7 @@ func TestActivateInboundReturnsStartedScheduleDeleteError(t *testing.T) {
 func TestPickLaterWorkSkipsWhenGoalStillActive(t *testing.T) {
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, store.BeginGoal(conversationID, "ship it", "", 3, "", ""))
+	require.NoError(t, store.BeginGoal(conversationID, "ship it", "", 3))
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0}))
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
@@ -634,7 +628,7 @@ func TestPickLaterWorkSkipsWhenGoalStillActive(t *testing.T) {
 func TestPickLaterWorkAfterStopGoalStartsLaterWork(t *testing.T) {
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, store.BeginGoal(conversationID, "ship it", "", 3, "", ""))
+	require.NoError(t, store.BeginGoal(conversationID, "ship it", "", 3))
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, SlackChannel: "C123", SlackTS: "111.222"}))
 	require.NoError(t, store.StopGoal(conversationID))
 
@@ -643,10 +637,6 @@ func TestPickLaterWorkAfterStopGoalStartsLaterWork(t *testing.T) {
 	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
 	require.Len(t, bridge.requestCh, 1)
 	assert.Equal(t, "changelog", (<-bridge.requestCh).inbound.Text)
-}
-
-func TestEnqueueActivationZeroValueIsInert(t *testing.T) {
-	require.NoError(t, (EnqueueActivation{}).Activate(t.Context(), &protocol.ThreadQueueItem{}, nil))
 }
 
 func TestPickLaterWorkClaimsDueRecurringSchedule(t *testing.T) {
@@ -904,6 +894,8 @@ func TestPublishFinalPreservesTurnID(t *testing.T) {
 	assert.Equal(t, "turn-1", final.TurnID)
 	assert.Equal(t, "hello back", final.Text)
 	assert.True(t, final.Complete)
+	assert.Equal(t, protocol.TerminalComplete, final.Terminal)
+	assert.Equal(t, protocol.SourceSlack, final.Source, "the final names the source that started its turn")
 	final.MarkDelivered(nil)
 	require.NoError(t, group.Wait())
 }
@@ -934,7 +926,7 @@ func TestPublishFinalDoesNotReuseCompletedGoal(t *testing.T) {
 	defer bus.Close()
 
 	store := newTestSessionService(t)
-	require.NoError(t, store.BeginGoal("thread-1", "ship it", "", 3, "", ""))
+	require.NoError(t, store.BeginGoal("thread-1", "ship it", "", 3))
 	_, err := store.UpdateGoalStatus("thread-1", GoalStatusComplete, "done")
 	require.NoError(t, err)
 
@@ -1989,7 +1981,7 @@ func TestParseDirectSkillTrigger(t *testing.T) {
 		for _, kind := range []protocol.InboundKind{protocol.InboundKindPrompt, protocol.InboundKindSteer, protocol.InboundKindEnqueue, protocol.InboundKindCancel} {
 			for _, text := range []string{"$docs-helper typed", ""} {
 				msg := protocol.NewInboundMessageFromContent(source, kind, &protocol.InboundContent{Text: text, TextAttachments: []string{"$docs-helper attachment"}}, true)
-				if text != "" && (source == protocol.SourceSlack || source == protocol.SourceWeb) && kind != protocol.InboundKindCancel {
+				if text != "" && source == protocol.SourceWeb && kind != protocol.InboundKindCancel {
 					assert.Equal(t, &rocketcode.PromptInputDirectSkill{Name: "docs-helper", Arguments: "typed"}, inboundDirectSkill(msg))
 				} else {
 					assert.Nil(t, inboundDirectSkill(msg))
@@ -2265,7 +2257,7 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedTurn(t *testing.T) {
 					assert.Empty(t, outbound.ConsumedID)
 					assert.Empty(t, outbound.Attachments)
 					assert.Nil(t, outbound.ReasoningEffort)
-					assert.Empty(t, outbound.WorkflowTerminal)
+					assert.Empty(t, outbound.Terminal)
 				}
 
 				outbound.MarkDelivered(nil)
@@ -2625,6 +2617,16 @@ func turnPairReservation(service *SessionService, pairID string) string {
 	return ""
 }
 
+// turnPairBusy reports whether pairID is reserved or holding a turn.
+func turnPairBusy(service *SessionService, pairID string) bool {
+	service.turnGatesMu.Lock()
+	defer service.turnGatesMu.Unlock()
+
+	gate := service.turnGates[pairID]
+
+	return gate != nil && (gate.reservedFor != "" || len(gate.token) == 0)
+}
+
 func TestBridgePairLockFailureReleasesWorkflowReservation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
@@ -2746,25 +2748,23 @@ func TestSubmitEnqueuedItemPreservesSource(t *testing.T) {
 	assert.Equal(t, item.Message, req.inbound.Text)
 	assert.Equal(t, item.Principal, req.inbound.Metadata[protocol.InboundPrincipalMetadataKey])
 
-	for _, source := range []protocol.Source{protocol.SourceSlack, protocol.SourceWeb} {
-		for _, text := range []string{"$docs-helper \"typed args\"  Next", "$skill stop \"typed args\"  Next", ""} {
-			item := &protocol.ThreadQueueItem{ID: "raw-queue", ConversationID: bridge.config.ConversationID, Source: source, Message: text, Principal: "author", Content: protocol.InboundContent{Text: text, TextAttachments: []string{"$docs-helper attachment-only"}, AttachmentWarnings: []string{"warning"}}}
-			require.NoError(t, bridge.config.SessionService.PutThreadQueueItem(item.ID, item))
-			items, err := bridge.config.SessionService.ThreadQueueForConversation(bridge.config.ConversationID)
-			require.NoError(t, err)
-			require.Len(t, items, 1)
-			require.Equal(t, item.Content, items[0].Content)
-			require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &items[0]))
-			inbound := (<-bridge.requestCh).inbound
-			require.Equal(t, text, inbound.Metadata[protocol.InboundRawTextMetadataKey])
-			require.Equal(t, "author", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
-			require.Contains(t, inbound.Text, "$docs-helper attachment-only")
-			require.Equal(t, []string{"warning"}, inbound.AttachmentWarnings)
-			require.Equal(t, parseDirectSkillTrigger(text), inboundDirectSkill(inbound))
-			_, claimed, err := (stateDAO{db: bridge.config.SessionService.db}).claimThreadQueueItem(t.Context(), bridge.config.ConversationID, item.ID)
-			require.NoError(t, err)
-			require.True(t, claimed)
-		}
+	for _, text := range []string{"$docs-helper \"typed args\"  Next", "$skill stop \"typed args\"  Next", ""} {
+		item := &protocol.ThreadQueueItem{ID: "raw-queue", ConversationID: bridge.config.ConversationID, Source: protocol.SourceWeb, Message: text, Principal: "author", Content: protocol.InboundContent{Text: text, TextAttachments: []string{"$docs-helper attachment-only"}, AttachmentWarnings: []string{"warning"}}}
+		require.NoError(t, bridge.config.SessionService.PutThreadQueueItem(item.ID, item))
+		items, err := bridge.config.SessionService.ThreadQueueForConversation(bridge.config.ConversationID)
+		require.NoError(t, err)
+		require.Len(t, items, 1)
+		require.Equal(t, item.Content, items[0].Content)
+		require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &items[0]))
+		inbound := (<-bridge.requestCh).inbound
+		require.Equal(t, text, inbound.Metadata[protocol.InboundRawTextMetadataKey])
+		require.Equal(t, "author", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+		require.Contains(t, inbound.Text, "$docs-helper attachment-only")
+		require.Equal(t, []string{"warning"}, inbound.AttachmentWarnings)
+		require.Equal(t, parseDirectSkillTrigger(text), inboundDirectSkill(inbound))
+		_, claimed, err := (stateDAO{db: bridge.config.SessionService.db}).claimThreadQueueItem(t.Context(), bridge.config.ConversationID, item.ID)
+		require.NoError(t, err)
+		require.True(t, claimed)
 	}
 
 	waiting := protocol.NewInboundMessageFromContent(protocol.SourceExternalMCP, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "source text", Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("image")}}}, true)
@@ -2772,38 +2772,14 @@ func TestSubmitEnqueuedItemPreservesSource(t *testing.T) {
 	item = &protocol.ThreadQueueItem{ID: "q3", ConversationID: bridge.config.ConversationID, Message: "queue display", Principal: "U3", Inbound: waiting}
 	require.NoError(t, bridge.config.SessionService.PutThreadQueueItem(item.ID, item))
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
+	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), item))
 
-	bridge.log = slog.New(slog.DiscardHandler)
-	activated := make(chan *protocol.InboundMessage, 1)
-	errActivation := errors.New("stop at activation")
-	bridge.config.EnqueueActivation = EnqueueActivation{Fn: func(_ context.Context, _ *protocol.ThreadQueueItem, inbound *protocol.InboundMessage) error {
-		activated <- inbound
-
-		// Stopping, unlike canceling ctx, keeps pickLaterWork from requeueing the restored item.
-		assert.NoError(t, bridge.Stop())
-
-		return errActivation
-	}}
-	response := waiting.EnableResponseWait()
-
-	require.NoError(t, bridge.submitEnqueuedItem(ctx, item))
-
-	var group errgroup.Group
-	group.Go(func() error {
-		bridge.loop(ctx)
-		return nil
-	})
-
-	inbound := <-activated
+	inbound := (<-bridge.requestCh).inbound
 	assert.Same(t, waiting, inbound)
 	assert.Equal(t, protocol.InboundKindPrompt, inbound.Kind)
 	assert.Equal(t, "source text", inbound.Text)
 	assert.Equal(t, "external-1", inbound.Metadata["external_conversation_id"])
 	assert.Equal(t, []byte("image"), inbound.Attachments[0].Data)
-	require.ErrorIs(t, (<-response).Err, errActivation)
-	require.NoError(t, group.Wait())
 }
 
 func TestBridgeDeletesEnqueueItemWhenTurnStarts(t *testing.T) {
@@ -3240,70 +3216,55 @@ func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
 }
 
 func TestAskUserQuestionToolAllowsEmptyOptions(t *testing.T) {
-	tool := askUserQuestionTool(protocol.InteractiveUserQuestionAsker(func(_ context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
+	tool := askUserQuestionTool(&userQuestionAskerMock{AskUserQuestionFunc: func(_ context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
 		assert.Equal(t, "Approve?", req.Question)
 		assert.Empty(t, req.Options)
 
-		return protocol.AskUserQuestionAnswer{Custom: "approved", Source: protocol.SourceSlack}, nil
-	}), &protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "C1", MessageTS: "1", ThreadTS: "1"}})
+		return protocol.AskUserQuestionAnswer{Custom: "approved", Source: protocol.SourceWeb}, nil
+	}}, &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true})
 
 	result, err := tool.Call(t.Context(), []byte(`{"question":"Approve?","details":"","options":[],"multiple":false}`), nil)
 
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"selected":null,"custom":"approved","source":"slack"}`, result.Output)
+	assert.JSONEq(t, `{"selected":null,"custom":"approved","source":"web"}`, result.Output)
 }
 
 func TestAskUserQuestionToolDescriptionRejectsCatchAllOptions(t *testing.T) {
-	tool := askUserQuestionTool(protocol.InteractiveUserQuestionAsker(func(context.Context, *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
+	tool := askUserQuestionTool(&userQuestionAskerMock{AskUserQuestionFunc: func(context.Context, *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
 		return protocol.AskUserQuestionAnswer{}, nil
-	}), &protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "C1", MessageTS: "1", ThreadTS: "1"}})
+	}}, &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true})
 
 	assert.Contains(t, tool.Description, "only for concrete predefined choices")
 	assert.Contains(t, tool.Description, "do not include catch-all choices")
 }
 
 func TestAskUserQuestionToolFiltersRedundantCustomOptions(t *testing.T) {
-	tool := askUserQuestionTool(protocol.InteractiveUserQuestionAsker(func(_ context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
+	tool := askUserQuestionTool(&userQuestionAskerMock{AskUserQuestionFunc: func(_ context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
 		require.Len(t, req.Options, 1)
 		assert.Equal(t, "High priority", req.Options[0].Label)
 
-		return protocol.AskUserQuestionAnswer{Selected: []string{"high"}, Source: protocol.SourceSlack}, nil
-	}), &protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "C1", MessageTS: "1", ThreadTS: "1"}})
+		return protocol.AskUserQuestionAnswer{Selected: []string{"high"}, Source: protocol.SourceWeb}, nil
+	}}, &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true})
 
 	result, err := tool.Call(t.Context(), []byte(`{"question":"Approve?","details":"","options":[{"label":"Custom answer","value":"custom_answer","description":"free text"},{"label":"High priority","value":"high","description":"Prioritize now"}],"multiple":false}`), nil)
 
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"selected":["high"],"custom":"","source":"slack"}`, result.Output)
-}
-
-func TestNativeQuestionTurnGate(t *testing.T) {
-	assert.True(t, nativeQuestionTurn(&protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "C1", MessageTS: "1"}}))
-	assert.False(t, nativeQuestionTurn(&protocol.InboundMessage{Source: protocol.SourceSlack, Human: true}))
-	assert.False(t, nativeQuestionTurn(&protocol.InboundMessage{Source: protocol.SourceSlack, Human: false, SlackReply: &protocol.SlackReplyTarget{ChannelID: "C1", MessageTS: "1"}}))
-	assert.False(t, nativeQuestionTurn(&protocol.InboundMessage{Source: protocol.SourceExternalMCP, Human: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "C1", MessageTS: "1"}}))
-	assert.False(t, nativeQuestionTurn(&protocol.InboundMessage{Source: protocol.SourceSystem, Human: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "C1", MessageTS: "1"}}))
+	assert.JSONEq(t, `{"selected":["high"],"custom":"","source":"web"}`, result.Output)
 }
 
 func TestAskUserQuestionToolOmitsResponseChannel(t *testing.T) {
 	var got *protocol.AskUserQuestionRequest
 
-	tool := askUserQuestionTool(protocol.InteractiveUserQuestionAsker(func(_ context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
+	tool := askUserQuestionTool(&userQuestionAskerMock{AskUserQuestionFunc: func(_ context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
 		got = req
 
-		return protocol.AskUserQuestionAnswer{Custom: "ok", Source: protocol.SourceSlack}, nil
-	}), &protocol.InboundMessage{
-		Source:         protocol.SourceSlack,
-		Human:          true,
-		ConversationID: "slack-thread:C1:1",
-		SlackReply:     &protocol.SlackReplyTarget{ChannelID: "C1", MessageTS: "1", ThreadTS: "1"},
-	})
+		return protocol.AskUserQuestionAnswer{Custom: "ok", Source: protocol.SourceWeb}, nil
+	}}, &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, ConversationID: "slack-thread:C1:1"})
 
 	_, err := tool.Call(t.Context(), []byte(`{"question":"Q?","details":"","options":[],"multiple":false}`), nil)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, protocol.SourceSlack, got.Source)
 	assert.Equal(t, "slack-thread:C1:1", got.ConversationID)
-	assert.Equal(t, &protocol.SlackReplyTarget{ChannelID: "C1", MessageTS: "1", ThreadTS: "1"}, got.SlackReply)
 }
 
 func TestAgentExplicitlyAllowsRocketClawToolRequiresAllow(t *testing.T) {
@@ -3563,7 +3524,7 @@ Request: $ARGUMENTS
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
-	for _, source := range []protocol.Source{protocol.SourceSlack, protocol.SourceWeb} {
+	for _, source := range []protocol.Source{protocol.SourceWeb} {
 		for _, kind := range []protocol.InboundKind{protocol.InboundKindPrompt, protocol.InboundKindSteer, protocol.InboundKindEnqueue} {
 			for _, invocation := range []string{"$docs-helper write API docs", "$skill docs-helper write API docs"} {
 				conversationID := fmt.Sprintf("dollar-%s-%s-%s", source, kind, invocation)
@@ -3588,7 +3549,7 @@ Request: $ARGUMENTS
 
 					if promote {
 						bridge.inputOpen = true
-						promoted, err := manager.promoteQueueItem(t.Context(), conversationID, item.ID, "")
+						promoted, err := manager.promoteQueueItem(t.Context(), conversationID, item.ID)
 						require.NoError(t, err)
 						require.True(t, promoted)
 
@@ -3665,6 +3626,22 @@ Request: $ARGUMENTS
 			}
 		}
 	}
+
+	// A Slack mention's $<skill> reaches the agent as ordinary text.
+	mention := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "dollar-slack", Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
+	mentionMsg := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "$docs-helper write API docs"}, true)
+	mentionMsg.ConversationID = mention.config.ConversationID
+	requestBody.Input = nil
+
+	require.NoError(t, root.WriteFile("calls", nil, 0o600))
+	_, err = runTestTurn(t.Context(), mention, mentionMsg, "mention-turn")
+	require.NoError(t, err)
+	mentionCalls, err := root.ReadFile("calls")
+	require.NoError(t, err)
+	require.Empty(t, mentionCalls, "a Slack mention runs no skill")
+	require.Len(t, requestBody.Input, 1)
+	assert.Equal(t, "user", requestBody.Input[0].Role)
+	assert.Contains(t, string(requestBody.Input[0].Content), "$docs-helper write API docs")
 
 	bus := newTestBus()
 	t.Cleanup(bus.Close)
@@ -4124,7 +4101,7 @@ func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
-	require.NoError(t, service.BeginGoal("thread-1", "ship it", "", 5, "", ""))
+	require.NoError(t, service.BeginGoal("thread-1", "ship it", "", 5))
 	_, err = service.UpdateGoalStatus("thread-1", GoalStatusProgress, "patched parser; checking connectors")
 	require.NoError(t, err)
 
@@ -4185,7 +4162,7 @@ func TestRunTurnSkipsActiveGoalDeveloperMessageWithoutNote(t *testing.T) {
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
-	require.NoError(t, service.BeginGoal("thread-1", "ship it", "", 5, "", ""))
+	require.NoError(t, service.BeginGoal("thread-1", "ship it", "", 5))
 
 	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "thread-1", Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "continue", false)
@@ -4278,7 +4255,7 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 	inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.1", RecipientTeamID: "T123", RecipientUserID: "U456"}
 	assert.False(t, bridge.newOutboundMessage(inbound, "turn-1", "reply", false).GoalTurn)
 
-	require.NoError(t, store.BeginGoal("thread-1", "ship it", "", 3, "", ""))
+	require.NoError(t, store.BeginGoal("thread-1", "ship it", "", 3))
 
 	outbound := bridge.newOutboundMessage(inbound, "turn-2", "reply", false)
 	assert.True(t, outbound.GoalTurn)
@@ -4314,7 +4291,7 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 	assert.False(t, outbound.GoalActive)
 	assert.Equal(t, 3, outbound.GoalTurnNumber)
 
-	require.NoError(t, store.BeginGoal("thread-2", "ship it forever", "", 0, "", ""))
+	require.NoError(t, store.BeginGoal("thread-2", "ship it forever", "", 0))
 
 	bridge.config.ConversationID = "thread-2"
 	outbound = bridge.newOutboundMessage(inbound, "turn-5", "reply", false)
@@ -4333,7 +4310,7 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 
 func TestWorkflowFinalOutboundPreservesMetadata(t *testing.T) {
 	store := newTestSessionService(t)
-	require.NoError(t, store.BeginGoal("thread-1", "ship it", "", 3, "", ""))
+	require.NoError(t, store.BeginGoal("thread-1", "ship it", "", 3))
 	bridge := &Bridge{config: Config{ConversationID: "thread-1", ExternalConversationID: "public-1", Agent: "main", SessionService: store}}
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow audit", true)
 	inbound.Workflow = protocol.WorkflowInvocation{Name: "audit"}
@@ -4746,7 +4723,7 @@ func TestBackgroundNoteEntersRunningTurn(t *testing.T) {
 
 			msg := nt.slackPrompt("hello")
 			if goal {
-				require.NoError(t, nt.service.BeginGoal(nt.conversationID, "ship it", "", 1, "", ""))
+				require.NoError(t, nt.service.BeginGoal(nt.conversationID, "ship it", "", 1))
 
 				msg = protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "Continue the active goal loop.", false)
 				msg.GoalAction = protocol.GoalActionContinue
@@ -4939,9 +4916,14 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 		report := protocol.SlackThreadConversationID("C1", "1.2")
 
 		manager.mu.Lock()
-		manager.cronRoots = &slackFrontendMock{SendCronjobRootFunc: func(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
-			return protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, nil
-		}}
+		manager.cronRoots = &slackFrontendMock{
+			SendCronjobRootFunc: func(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
+				return protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, nil
+			},
+			EditCronjobRootFooterFunc: func(context.Context, *protocol.OutboundMessage, protocol.TextConversationTarget, string) error {
+				return nil
+			},
+		}
 		manager.mu.Unlock()
 
 		// The run started a background job, then posted "Report started" as a new thread root.
@@ -4979,10 +4961,15 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 		roots := make(chan struct{}, 4)
 
 		manager.mu.Lock()
-		manager.cronRoots = &slackFrontendMock{SendCronjobRootFunc: func(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
-			roots <- struct{}{}
-			return protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, nil
-		}}
+		manager.cronRoots = &slackFrontendMock{
+			SendCronjobRootFunc: func(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
+				roots <- struct{}{}
+				return protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, nil
+			},
+			EditCronjobRootFooterFunc: func(context.Context, *protocol.OutboundMessage, protocol.TextConversationTarget, string) error {
+				return nil
+			},
+		}
 		manager.mu.Unlock()
 
 		msg := seedCronRun(t, nt.service, "cron:daily")
@@ -5212,7 +5199,7 @@ func TestEmptyProducerWakeLeavesDestinationFree(t *testing.T) {
 
 	nt.waitIdle(t, manager, managed)
 	assert.Empty(t, nt.requests)
-	assert.False(t, nt.service.PairBusyFor(managed), "the destination is not left reserved")
+	assert.False(t, turnPairBusy(nt.service, managed), "the destination is not left reserved")
 }
 
 // After a hidden producer's turn ends, schedules stay private, a nested workflow runs, and turn-bound tools refuse.
@@ -5272,7 +5259,7 @@ func TestBackgroundScriptUsesOriginTurnTools(t *testing.T) {
 func TestTurnBoundPlatformTools(t *testing.T) {
 	origin := new(protocol.InboundMessage)
 	bridge := &Bridge{runtime: new(config.LockedConfig), config: Config{ConversationID: "main", SessionService: newTestSessionService(t)}, log: slog.New(slog.DiscardHandler)}
-	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []rocketcode.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(testNoopRestart), new(outboundAttachmentCollector).Tool(nil, bridge.config.SessionService, "main"), askUserQuestionTool(protocol.UserQuestionAsker{}, origin), startNewThreadTool(testNoopStartNewThread, origin, "main")})
+	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []rocketcode.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(testNoopRestart), new(outboundAttachmentCollector).Tool(nil, bridge.config.SessionService, "main"), askUserQuestionTool(&userQuestionAskerMock{}, origin), startNewThreadTool(testNoopStartNewThread, origin, "main")})
 
 	var bound []string
 

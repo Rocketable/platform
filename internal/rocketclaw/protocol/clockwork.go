@@ -33,7 +33,7 @@ func CloneOutboundMessage(message *OutboundMessage) *OutboundMessage {
 		Complete:   message.Complete,
 		SlackReply: Clone(message.SlackReply), Attachments: CloneOutboundAttachments(message.Attachments),
 		GoalTurn: message.GoalTurn, GoalComplete: message.GoalComplete, GoalActive: message.GoalActive,
-		GoalTurnNumber: message.GoalTurnNumber, GoalMaxTurns: message.GoalMaxTurns, WorkflowTerminal: message.WorkflowTerminal,
+		GoalTurnNumber: message.GoalTurnNumber, GoalMaxTurns: message.GoalMaxTurns, Source: message.Source, Terminal: message.Terminal,
 		Cronjob: Clone(message.Cronjob), ReplyState: slices.Clone(message.ReplyState),
 	}
 }

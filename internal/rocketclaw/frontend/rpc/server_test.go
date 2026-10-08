@@ -480,6 +480,7 @@ func TestSessionEntries(t *testing.T) {
 
 	core := &mockBackend{
 		BackgroundJobsFunc:     withoutBackgroundJobs().BackgroundJobsFunc,
+		PendingQuestionsFunc:   withoutBackgroundJobs().PendingQuestionsFunc,
 		SubscribeFunc:          rt.Subscribe,
 		CreateConversationFunc: rt.CreateConversation,
 		ListConversationsFunc:  rt.ListConversations,
@@ -772,7 +773,7 @@ func TestSessionEntries(t *testing.T) {
 
 	thread := backend.ThreadState{Agent: "main"}
 	require.NoError(t, sessions.UpsertThread(id, thread))
-	require.NoError(t, sessions.BeginGoal(id, "keep goal", "", 3, "", ""))
+	require.NoError(t, sessions.BeginGoal(id, "keep goal", "", 3))
 	goal, exists, err := sessions.Goal(id)
 	require.NoError(t, err)
 	require.True(t, exists)
@@ -3007,9 +3008,12 @@ func TestCronHistoryUsesStoredSourceLabelsAndDestination(t *testing.T) {
 	require.Len(t, cronHistory([]backend.ObservedSessionEntry{{SourceConversationID: colon}, {SourceConversationID: colon + "-another-run"}}, "opaque-human-Y"), 2)
 }
 
-// withoutBackgroundJobs is a backend with no Background Jobs and nothing to move.
+// withoutBackgroundJobs is a backend with no Background Jobs, nothing to move, and no pending questions.
 func withoutBackgroundJobs() *mockBackend {
-	return &mockBackend{BackgroundJobsFunc: func(context.Context, string) ([]protocol.BackgroundJob, bool, error) { return nil, false, nil }}
+	return &mockBackend{
+		BackgroundJobsFunc:   func(context.Context, string) ([]protocol.BackgroundJob, bool, error) { return nil, false, nil },
+		PendingQuestionsFunc: func(context.Context, string) ([]protocol.AskUserQuestionRequest, error) { return nil, nil },
+	}
 }
 
 func invoke[Response any](ctx context.Context, connection *grpc.ClientConn, method string, request any) (*Response, error) {
@@ -3176,7 +3180,8 @@ func TestBackgroundJobRPCs(t *testing.T) {
 		"turn-1/call/b": {ID: "turn-1/call/b", Kind: "task", State: "stopped", Label: `say "hi"`, SubagentKey: "/call_b", StoppedBy: "user", Note: stopped},
 	}
 	core := &mockBackend{
-		BackgroundJobsFunc: func(context.Context, string) ([]protocol.BackgroundJob, bool, error) { return listed, true, nil },
+		BackgroundJobsFunc:   func(context.Context, string) ([]protocol.BackgroundJob, bool, error) { return listed, true, nil },
+		PendingQuestionsFunc: withoutBackgroundJobs().PendingQuestionsFunc,
 		CompletionNotesFunc: func(_ context.Context, _ string, jobIDs []string) (jobs []protocol.BackgroundJob, _ error) {
 			for _, id := range jobIDs {
 				jobs = append(jobs, noted[id])
@@ -3277,4 +3282,72 @@ VALUES ($1, 'turn-9/call/k', '', 'task', 'running', 'main', 'report', 'k', '/k',
 	require.NoError(t, stream.RecvMsg(change))
 	require.Equal(t, "chat", change.ConversationId, "a hidden run's job change wakes its destination")
 	require.NotEmpty(t, change.Revision)
+}
+
+// AnswerQuestion reaches the backend only for visible conversations, and a question no Web turn
+// waits on is NotFound; History lists the pending Web questions.
+func TestQuestionRPCs(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "chat", Agent: "main", SlackChannel: "#ops"}))
+
+	pending := []protocol.AskUserQuestionRequest{{ID: "turn-1/call/q", ConversationID: "chat", Question: "Which?", Details: "Pick any", Options: []protocol.AskUserQuestionOption{{Label: "A", Value: "a", Description: "first"}, {Label: "B", Value: "b"}}, Multiple: true}}
+	core := withoutBackgroundJobs()
+	core.PendingQuestionsFunc = func(context.Context, string) ([]protocol.AskUserQuestionRequest, error) { return pending, nil }
+	core.AnswerQuestionFunc = func(_ context.Context, conversationID, questionID string, _ protocol.AskUserQuestionAnswer) error {
+		if conversationID != "chat" || questionID != "turn-1/call/q" || len(core.AnswerQuestionCalls()) > 1 {
+			return &backend.QuestionNotPendingError{ConversationID: conversationID, QuestionID: questionID}
+		}
+
+		return nil
+	}
+
+	listener, err := Listen(testSocketPath(t))
+	require.NoError(t, err)
+
+	transport := grpc.NewServer()
+	New(core, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+
+	var serving errgroup.Group
+	serving.Go(func() error { return transport.Serve(listener) })
+	t.Cleanup(func() {
+		transport.Stop()
+		require.NoError(t, serving.Wait())
+	})
+
+	connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+
+	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: "chat"})
+	require.NoError(t, err)
+	require.Len(t, history.PendingQuestions, 1)
+	require.True(t, proto.Equal(&PendingQuestion{Id: "turn-1/call/q", Question: "Which?", Details: "Pick any", Options: []*QuestionOption{{Label: "A", Value: "a", Description: "first"}, {Label: "B", Value: "b"}}, Multiple: true}, history.PendingQuestions[0]), "%v", history.PendingQuestions[0])
+
+	_, err = invoke[AnswerQuestionResponse](t.Context(), connection, "AnswerQuestion", &AnswerQuestionRequest{ConversationId: "chat", AskId: "turn-1/call/q", Custom: "no principal"})
+	require.Equal(t, codes.Unauthenticated, status.Code(err))
+	_, err = invoke[AnswerQuestionResponse](ctx, connection, "AnswerQuestion", &AnswerQuestionRequest{ConversationId: "private-X", AskId: "turn-1/call/q"})
+	require.Equal(t, codes.PermissionDenied, status.Code(err))
+	require.Empty(t, core.AnswerQuestionCalls(), "refused callers never reach the backend")
+
+	answer, err := http.Post(startHTTPTestServer(t, connection).URL+"/api/AnswerQuestion", "application/json", strings.NewReader(`{"conversationId":"chat","askId":"turn-1/call/q","selected":["a","b"],"custom":"and c"}`))
+	require.NoError(t, err)
+	require.NoError(t, answer.Body.Close())
+	require.Equal(t, http.StatusOK, answer.StatusCode)
+	require.Equal(t, protocol.AskUserQuestionAnswer{Selected: []string{"a", "b"}, Custom: "and c"}, core.AnswerQuestionCalls()[0].AskUserQuestionAnswer)
+
+	for _, request := range []*AnswerQuestionRequest{{ConversationId: "chat", AskId: "turn-1/call/q", Custom: "second"}, {ConversationId: "web:other", AskId: "turn-1/call/q"}} {
+		_, err = invoke[AnswerQuestionResponse](ctx, connection, "AnswerQuestion", request)
+		require.Equal(t, codes.NotFound, status.Code(err), "%v", request)
+		require.ErrorContains(t, err, "no longer pending")
+	}
+
+	require.Len(t, core.AnswerQuestionCalls(), 3)
+	require.Equal(t, "web:other", core.AnswerQuestionCalls()[2].S)
 }

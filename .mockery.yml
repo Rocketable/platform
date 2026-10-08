@@ -99,6 +99,12 @@ packages:
           pkgname: slackconnector
           structname: primaryTextRouterMock
           inpackage: false
+      UserQuestionAsker:
+        config:
+          dir: '{{.ConfigDir}}/internal/rocketclaw/backend'
+          pkgname: backend
+          structname: userQuestionAskerMock
+          inpackage: false
   github.com/Rocketable/platform/internal/rocketclaw/workflow:
     interfaces:
       AgentRunner:

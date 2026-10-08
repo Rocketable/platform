@@ -36,7 +36,6 @@ type directBridge interface {
 type threadStart struct {
 	conversationID, agent string
 	createdBy             ThreadCreator
-	persistErr            string
 }
 
 type threadBridgeManager struct {
@@ -55,9 +54,11 @@ type threadBridgeManager struct {
 	cronRoots cronRootSender
 }
 
-// cronRootSender posts a delivered cron report as a new Slack thread root.
+// cronRootSender posts a delivered cron report as a new Slack thread root, then ends
+// that root with a footer linking the conversation the report is bound to.
 type cronRootSender interface {
 	SendCronjobRoot(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error)
+	EditCronjobRootFooter(ctx context.Context, msg *protocol.OutboundMessage, root protocol.TextConversationTarget, conversationID string) error
 }
 
 // noCronRoots is the cron root sender before Slack is attached.
@@ -65,6 +66,10 @@ type noCronRoots struct{}
 
 func (noCronRoots) SendCronjobRoot(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
 	return protocol.TextConversationTarget{}, errors.New("slack is not available for cron reports")
+}
+
+func (noCronRoots) EditCronjobRootFooter(context.Context, *protocol.OutboundMessage, protocol.TextConversationTarget, string) error {
+	return errors.New("slack is not available for cron reports")
 }
 
 var _ protocol.PrimaryTextRouter = (*threadBridgeManager)(nil)
@@ -248,73 +253,6 @@ func (m *threadBridgeManager) StartActiveGoals() error {
 	return nil
 }
 
-func (m *threadBridgeManager) SubmitThreadReply(ctx context.Context, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) (bool, error) {
-	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
-	if conversationID == "" {
-		return false, nil
-	}
-
-	thread, ok, err := m.store.Thread(conversationID)
-	if err != nil {
-		return false, fmt.Errorf("load persisted Slack thread state: %w", err)
-	}
-
-	if !ok {
-		return false, nil
-	}
-
-	if inbound.SlackReply != nil {
-		inbound.SlackReply.ThreadTS = strings.TrimSpace(target.ThreadID)
-	}
-
-	managed, err := m.ensureThreadBridge(conversationID, thread)
-	if err != nil {
-		return false, err
-	}
-
-	inbound.ConversationID = conversationID
-
-	if err := managed.Submit(ctx, inbound); err != nil {
-		return true, fmt.Errorf("submit Slack thread reply: %w", err)
-	}
-
-	return true, nil
-}
-
-func (m *threadBridgeManager) StashThreadQueueItem(ctx context.Context, target protocol.TextConversationTarget, item *protocol.ThreadQueueItem) error {
-	return m.stashQueueItem(ctx, protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID), item)
-}
-
-func (m *threadBridgeManager) ThreadQueueItems(target protocol.TextConversationTarget) ([]protocol.ThreadQueueItem, error) {
-	return m.queueItems(protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID))
-}
-
-func (m *threadBridgeManager) DeleteThreadQueueItem(ctx context.Context, target protocol.TextConversationTarget, id string) (bool, error) {
-	return m.deleteQueueItem(ctx, protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID), id)
-}
-
-func (m *threadBridgeManager) PromoteThreadQueueItem(ctx context.Context, target protocol.TextConversationTarget, id string) (bool, error) {
-	return m.promoteQueueItem(ctx, protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID), id, strings.TrimSpace(target.ThreadID))
-}
-
-func (m *threadBridgeManager) ScheduledMessages(target protocol.TextConversationTarget) (map[string]protocol.ScheduledMessageState, error) {
-	messages, err := m.store.ScheduledMessagesForConversation(protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID))
-	if err != nil {
-		return nil, fmt.Errorf("list scheduled messages: %w", err)
-	}
-
-	return messages, nil
-}
-
-func (m *threadBridgeManager) SwitchThreadAgent(target protocol.TextConversationTarget, agent string) (bool, error) {
-	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
-	if conversationID == "" {
-		return false, nil
-	}
-
-	return m.switchConversationAgent(conversationID, agent)
-}
-
 // SwitchConversationAgent persists selection and updates the existing live bridge.
 // Frontends validate their current human/producer policy before calling it.
 func (r *Runtime) SwitchConversationAgent(conversationID, agent string) (bool, error) {
@@ -326,53 +264,84 @@ func (r *Runtime) SwitchConversationAgent(conversationID, agent string) (bool, e
 	return switched, nil
 }
 
-func (m *threadBridgeManager) ThreadAgent(target protocol.TextConversationTarget) (agent string, handled bool, err error) {
+// MentionThread treats a slack-thread: conversation cron created, or one an External MCP
+// session binds, as a report thread; the prefix keeps cron's own web: chats out.
+func (m *threadBridgeManager) MentionThread(target protocol.TextConversationTarget) (recorded, report bool, err error) {
 	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
-	if conversationID == "" {
-		return "", false, nil
-	}
 
-	thread, ok, err := m.store.Thread(conversationID)
+	thread, recorded, err := m.store.Thread(conversationID)
 	if err != nil {
-		return "", false, fmt.Errorf("load persisted Slack thread state: %w", err)
+		return false, false, err
 	}
 
-	if !ok {
-		return "", false, nil
+	_, _, paired, err := m.store.ExternalMCPSessionByConversationID(conversationID)
+	if err != nil {
+		return false, false, err
 	}
 
-	agent = strings.TrimSpace(thread.Agent)
-
-	return agent, true, nil
+	return recorded, thread.CreatedBy == ThreadCreatedByCron || paired, nil
 }
 
-func (m *threadBridgeManager) StartThread(ctx context.Context, agent string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) error {
+// SubmitMention admits a Slack mention under its item ID, the input ID its active turn and
+// history record, so a redelivery that finds the ID waiting, running, or answered is refused.
+// The check, the conversation record, and the queue row share one history transaction.
+func (m *threadBridgeManager) SubmitMention(ctx context.Context, agent string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) (bool, error) {
 	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
-	if conversationID == "" {
-		return errors.New("slack thread target is required")
-	}
+	id := "slack:" + inbound.SlackReply.ChannelID + ":" + inbound.SlackReply.MessageTS
+	inbound.ConversationID, inbound.Metadata["web_message_id"] = conversationID, id
 
-	managed, err := m.ensureStartedThread(&threadStart{conversationID: conversationID, agent: agent, persistErr: "persist Slack thread bridge"})
+	tx, err := m.store.beginStateTx(ctx, "Slack mention admission")
 	if err != nil {
-		return err
+		return false, err
 	}
 
-	inbound.ConversationID = conversationID
+	defer func() { _ = tx.Rollback() }()
 
-	return m.submitInbound(ctx, managed, inbound, "Slack thread start")
+	if err := lockSessionHistory(ctx, tx, conversationID); err != nil {
+		return false, err
+	}
+
+	var seen bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM active_turns WHERE conversation_id = $1 AND inbound_json->'Metadata'->>'web_message_id' = $2)
+    OR EXISTS (SELECT 1 FROM thread_queue WHERE conversation_id = $1 AND queue_item_id = $2)
+    OR EXISTS (SELECT 1 FROM session_entries e CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item
+        WHERE e.conversation_id = $1 AND item->>'input_id' = $2)`, conversationID, id).Scan(&seen); err != nil {
+		return false, fmt.Errorf("read admitted Slack mention: %w", err)
+	}
+
+	if seen {
+		return false, nil
+	}
+
+	if err := (stateDAO{db: tx}).createConversation(ctx, protocol.Conversation{ID: conversationID, Agent: agent}); err != nil {
+		return false, err
+	}
+
+	item := protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Message: inbound.Text, Principal: inbound.Metadata[protocol.InboundPrincipalMetadataKey], Kind: protocol.InboundKindEnqueue, Source: inbound.Source, Inbound: inbound, StashAt: time.Now().UTC()}
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(position), -1) + 1 FROM thread_queue WHERE conversation_id = $1`, conversationID).Scan(&item.Position); err != nil {
+		return false, fmt.Errorf("read Slack mention position: %w", err)
+	}
+
+	if err := putThreadQueueItem(ctx, tx, id, &item); err != nil {
+		return false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit Slack mention admission: %w", err)
+	}
+
+	return true, m.PickLaterWork(ctx, conversationID)
 }
 
 // StartNewThread creates a named Web session, submits its first turn, and
-// links to it at this machine's Tailscale IPv4 on the Web port.
+// links to it with WebURL.
 func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *protocol.StartNewThreadRequest) (protocol.StartNewThreadResult, error) {
-	runtimeCfg := m.runtime.Clone()
-
 	targetAgent := cmp.Or(strings.TrimSpace(req.Agent), strings.TrimSpace(req.CurrentAgent), "main")
 	if len(req.AllowedAgents) > 0 && !slices.Contains(req.AllowedAgents, targetAgent) {
 		return protocol.StartNewThreadResult{}, fmt.Errorf("agent %q is not allowed on this source surface", targetAgent)
 	}
 
-	agents, err := ExternalMCPAgentsIn(m.runtime, runtimeCfg.RuntimeDirName())
+	agents, err := ExternalMCPAgentsIn(m.runtime, m.runtime.Clone().RuntimeDirName())
 	if err != nil {
 		return protocol.StartNewThreadResult{}, fmt.Errorf("load configured agents: %w", err)
 	}
@@ -381,21 +350,14 @@ func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *protocol.
 		return protocol.StartNewThreadResult{}, fmt.Errorf("agent %q is not configured", targetAgent)
 	}
 
-	_, port, err := net.SplitHostPort(runtimeCfg.Web.ListenAddress)
-	if err != nil {
-		return protocol.StartNewThreadResult{}, fmt.Errorf("web.listen_address: %w", err)
-	}
-
-	tailscaleIPs, err := exec.CommandContext(ctx, "tailscale", "ip", "-4").Output()
-	if err != nil {
-		return protocol.StartNewThreadResult{}, fmt.Errorf("find this machine's Tailscale IPv4 for Web links: %w", err)
-	}
-
-	host, _, _ := strings.Cut(strings.TrimSpace(string(tailscaleIPs)), "\n")
-
 	conversationID := rand.Text()
 
-	managed, err := m.ensureStartedThread(&threadStart{conversationID: conversationID, agent: targetAgent, createdBy: ThreadCreator(req.CreatedBy), persistErr: "persist new Web session"})
+	url, err := m.WebURL(ctx, conversationID)
+	if err != nil {
+		return protocol.StartNewThreadResult{}, err
+	}
+
+	managed, err := m.ensureStartedThread(&threadStart{conversationID: conversationID, agent: targetAgent, createdBy: ThreadCreator(req.CreatedBy)})
 	if err != nil {
 		return protocol.StartNewThreadResult{}, err
 	}
@@ -409,68 +371,29 @@ func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *protocol.
 	inbound.ConversationID = conversationID
 	inbound.Metadata = map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text"}
 
-	if err := m.submitInbound(ctx, managed, inbound, "new Web session first prompt"); err != nil {
-		return protocol.StartNewThreadResult{}, err
+	if err := managed.Submit(ctx, inbound); err != nil {
+		return protocol.StartNewThreadResult{}, fmt.Errorf("submit new Web session first prompt: %w", err)
 	}
 
-	return protocol.StartNewThreadResult{ConversationID: conversationID, URL: "http://" + net.JoinHostPort(host, port) + "/s/" + base64.RawURLEncoding.EncodeToString([]byte(conversationID))}, nil
+	return protocol.StartNewThreadResult{ConversationID: conversationID, URL: url}, nil
 }
 
-func (m *threadBridgeManager) StartGoalInThread(ctx context.Context, agent, objective, checkScript string, maxTurns int, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) error {
-	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
-	if conversationID == "" {
-		return errors.New("slack thread target is required")
-	}
-
-	thread, _, err := m.store.Thread(conversationID)
+// WebURL links to conversationID at this machine's Tailscale IPv4 on the Web port. It
+// asks tailscale on every call, so a changed address needs no restart.
+func (m *threadBridgeManager) WebURL(ctx context.Context, conversationID string) (string, error) {
+	_, port, err := net.SplitHostPort(m.runtime.Clone().Web.ListenAddress)
 	if err != nil {
-		return fmt.Errorf("load goal thread state: %w", err)
+		return "", fmt.Errorf("web.listen_address: %w", err)
 	}
 
-	if storedAgent := strings.TrimSpace(thread.Agent); storedAgent != "" {
-		agent = storedAgent
-	}
-
-	if strings.TrimSpace(checkScript) != "" {
-		if err := ValidateGoalCheckScriptStart(m.runtime, agent, checkScript); err != nil {
-			return fmt.Errorf("validate goal check script: %w", err)
-		}
-	}
-
-	managed, err := m.ensureStartedThread(&threadStart{conversationID: conversationID, agent: agent, persistErr: "persist goal thread bridge"})
+	tailscaleIPs, err := exec.CommandContext(ctx, "tailscale", "ip", "-4").Output()
 	if err != nil {
-		return err
+		return "", fmt.Errorf("find this machine's Tailscale IPv4 for Web links: %w", err)
 	}
 
-	if err := m.store.BeginGoal(conversationID, objective, checkScript, maxTurns, inbound.SlackReply.RecipientTeamID, inbound.SlackReply.RecipientUserID); err != nil {
-		return fmt.Errorf("persist goal: %w", err)
-	}
+	host, _, _ := strings.Cut(strings.TrimSpace(string(tailscaleIPs)), "\n")
 
-	inbound.GoalAction = protocol.GoalActionKickoff
-	inbound.ConversationID = conversationID
-
-	return m.submitInbound(ctx, managed, inbound, "goal thread start")
-}
-
-func (m *threadBridgeManager) SkillDescriptions(name string) ([]protocol.SkillDescription, error) {
-	runtimeCfg := m.runtime.Clone()
-
-	agents, skills, err := LoadRuntimeDefinitions(m.runtime, runtimeCfg.RuntimeDirName())
-	if err != nil {
-		return nil, err
-	}
-
-	agent, ok := agents.Items[name]
-	if !ok {
-		return nil, fmt.Errorf("agent %q is not configured", name)
-	}
-
-	var descriptions []protocol.SkillDescription
-	for _, skill := range skills.Available(&agent) {
-		descriptions = append(descriptions, protocol.SkillDescription{Name: skill.Name, Description: skill.Description})
-	}
-
-	return descriptions, nil
+	return "http://" + net.JoinHostPort(host, port) + "/s/" + base64.RawURLEncoding.EncodeToString([]byte(conversationID)), nil
 }
 
 func (m *threadBridgeManager) InterruptThread(target protocol.TextConversationTarget) (*protocol.InboundMessage, error) {
@@ -544,39 +467,6 @@ func (m *threadBridgeManager) InterruptConversation(conversationID string) *prot
 	}
 
 	return managed.InterruptActiveTurn()
-}
-
-// ThreadBusy reports a reserved or running pair, or an unfinished active turn
-// waiting to resume, so Slack redeliveries are swallowed rather than started.
-func (m *threadBridgeManager) ThreadBusy(target protocol.TextConversationTarget) bool {
-	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
-	if m.store.PairBusyFor(conversationID) {
-		return true
-	}
-
-	active, err := m.store.HasActiveTurn(context.Background(), conversationID)
-	if err != nil {
-		m.log.Error("check active turn for busy thread", "conversation_id", conversationID, "error", err)
-	}
-
-	return active
-}
-
-func (m *threadBridgeManager) RegisterThread(target protocol.TextConversationTarget, agent string) (bool, error) {
-	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
-	if conversationID == "" {
-		return false, errors.New("text thread target is required")
-	}
-
-	if _, ok, err := m.store.Thread(conversationID); err != nil {
-		return false, fmt.Errorf("load text thread bridge: %w", err)
-	} else if ok {
-		return false, nil
-	}
-
-	_, err := m.ensureStartedThread(&threadStart{conversationID: conversationID, agent: agent, persistErr: "persist text thread bridge"})
-
-	return err == nil, err
 }
 
 // noteReady has conversationID's bridge, started when needed, deliver a new Completion Note: a
@@ -691,7 +581,7 @@ func (m *threadBridgeManager) queueItems(conversationID string) ([]protocol.Thre
 	return items, nil
 }
 
-func (m *threadBridgeManager) promoteQueueItem(ctx context.Context, conversationID, id, threadTS string) (bool, error) {
+func (m *threadBridgeManager) promoteQueueItem(ctx context.Context, conversationID, id string) (bool, error) {
 	thread, recorded, err := m.store.Thread(conversationID)
 	if err != nil || !recorded {
 		return false, err
@@ -715,7 +605,7 @@ func (m *threadBridgeManager) promoteQueueItem(ctx context.Context, conversation
 		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = item.Principal
 		inbound.Metadata["web_message_id"] = id
 
-		inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: item.SlackChannel, MessageTS: item.SlackTS, ThreadTS: cmp.Or(threadTS, item.SlackTS)}
+		inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: item.SlackChannel, MessageTS: item.SlackTS, ThreadTS: item.SlackTS}
 		if item.SlackReply != nil {
 			inbound.SlackReply = new(*item.SlackReply)
 		}
@@ -842,14 +732,6 @@ func (m *threadBridgeManager) stashQueueItem(ctx context.Context, conversationID
 	return managed.(*Bridge).submitEnqueuedItem(ctx, item)
 }
 
-func (m *threadBridgeManager) submitInbound(ctx context.Context, managed directBridge, inbound *protocol.InboundMessage, wrap string) error {
-	if err := managed.Submit(ctx, inbound); err != nil {
-		return fmt.Errorf("submit %s: %w", wrap, err)
-	}
-
-	return nil
-}
-
 func (m *threadBridgeManager) ensureStartedThread(start *threadStart) (directBridge, error) {
 	thread, recorded, err := m.store.Thread(start.conversationID)
 	if err != nil {
@@ -873,7 +755,7 @@ func (m *threadBridgeManager) ensureStartedThread(start *threadStart) (directBri
 
 			_ = managed.Stop()
 
-			return nil, fmt.Errorf("%s: %w", start.persistErr, err)
+			return nil, fmt.Errorf("persist new Web session: %w", err)
 		}
 	}
 
@@ -883,7 +765,7 @@ func (m *threadBridgeManager) ensureStartedThread(start *threadStart) (directBri
 func (m *threadBridgeManager) switchConversationAgent(conversationID, agent string) (bool, error) {
 	ok, err := m.store.SetThreadAgentIfExists(conversationID, agent)
 	if err != nil {
-		return false, fmt.Errorf("persist Slack thread agent switch: %w", err)
+		return false, fmt.Errorf("persist conversation agent switch: %w", err)
 	}
 
 	if !ok {
@@ -919,7 +801,7 @@ func (m *threadBridgeManager) ensureThreadBridge(conversationID string, thread T
 		return nil, errors.New("text thread agent is required")
 	}
 
-	managed := m.factory(Config{ConversationID: conversationID, Agent: agent, UserQuestionAsker: protocol.NoUserQuestionAsker()})
+	managed := m.factory(Config{ConversationID: conversationID, Agent: agent})
 	if bridge, ok := managed.(*Bridge); ok {
 		bridge.threads = m
 	}

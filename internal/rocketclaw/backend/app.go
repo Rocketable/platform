@@ -141,7 +141,6 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		restartRequested = make(chan struct{})
 		threadBridges    *threadBridgeManager
 		background       *backgroundRegistry
-		slackSink        SlackFrontend
 		stops            []namedStopper
 	)
 
@@ -266,36 +265,12 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		"mcp_external_enabled", cfg.MCPExternal.Enabled,
 	)
 
-	// Starts as No; set to Slack after the connector exists. Factory reads the current value per bridge.
-	slackUserQuestionAsker := protocol.NoUserQuestionAsker()
-	drainSlack := func(context.Context, string) []string { return nil }
+	questions := &webQuestions{store: rocketcodeSessions, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}
 
 	threadBridges = newThreadBridgeManager(s.cfg, rocketcodeSessions, logger, func(Config Config) directBridge {
 		Config.RequestRestart = requestRestart
 		Config.RequestReload = requestReload
-		// ensureStartedThread defaults to NoUserQuestionAsker; Slack-origin overrides with current slack asker.
-		if Config.ExternalConversationID == "" {
-			Config.UserQuestionAsker = slackUserQuestionAsker
-		}
-
-		conversationID := Config.ConversationID
-		Config.SteerDrain = rocketcode.SteerDrain{Fn: func(ctx context.Context, _ rocketcode.TurnPhase) []rocketcode.PromptInput {
-			texts := drainSlack(ctx, conversationID)
-
-			inputs := make([]rocketcode.PromptInput, 0, len(texts))
-			for _, text := range texts {
-				inputs = append(inputs, rocketcode.PromptInput{Text: text, DirectSkill: parseDirectSkillTrigger(text)})
-			}
-
-			return inputs
-		}}
-		Config.EnqueueActivation = EnqueueActivation{Fn: func(ctx context.Context, item *protocol.ThreadQueueItem, inbound *protocol.InboundMessage) error {
-			if slackSink == nil {
-				return nil
-			}
-
-			return slackSink.ActivateEnqueue(ctx, item, inbound)
-		}}
+		Config.UserQuestionAsker = questions
 		Config.StartNewThread = threadBridges.StartNewThread
 		Config.SessionService = rocketcodeSessions
 
@@ -335,7 +310,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		Sessions:                 rocketcodeSessions,
 		ExternalMCPUsers:         externalMCPUsers,
 		RefreshExternalMCPAgents: &refreshExternalMCPAgents, TextRouter: threadBridges, threads: threadBridges, background: background,
-		slackAsker: &slackUserQuestionAsker,
+		questions: questions,
 	}
 
 	resumeJobs, err := background.recoverJobs(runCtx)
@@ -353,8 +328,6 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 	}
 
 	if slack != nil {
-		slackSink = slack
-		drainSlack = slack.DrainSteers
 		rt.AttachSlack(slack)
 
 		if err := slack.Start(runCtx); err != nil {

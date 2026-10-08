@@ -25,10 +25,15 @@ func TestStartEventsRoutesAndAcknowledgesSubscription(t *testing.T) {
 	server := newSlackStackTestServer(t, &posted, &reactions)
 	defer server.Close()
 
-	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), inertThreadRouter{})
+	router := &primaryTextRouterMock{
+		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, bool, error) { return true, false, nil },
+		WebURLFunc:        func(context.Context, string) (string, error) { return testFooterLink, nil },
+	}
+	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), router)
 	messages := []*protocol.OutboundMessage{
 		{ConversationID: "web:private", Text: "not for Slack", Complete: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "CWRONG", MessageTS: "9.9"}},
-		{ConversationID: "slack-thread:C123:111.0", Agent: "main", Text: "first answer", Complete: true},
+		// A Web turn's reply in a mention thread carries the mention footer.
+		{ConversationID: "slack-thread:C123:111.0", TurnID: "turn-web", Agent: "main", Text: "first answer", Complete: true, Source: protocol.SourceWeb, Terminal: protocol.TerminalComplete},
 		{ConversationID: "slack-thread:C456:222.0", Agent: "main", Text: "second answer", Complete: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "CWRONG", ThreadTS: "9.0", MessageTS: "222.1"}},
 	}
 
@@ -54,6 +59,7 @@ func TestStartEventsRoutesAndAcknowledgesSubscription(t *testing.T) {
 	assert.Equal(t, "C123", posted[0].Get("channel"))
 	assert.Equal(t, "111.0", posted[0].Get("thread_ts"))
 	assert.Contains(t, posted[0].Get("blocks"), `"text":"first answer"`)
+	assert.Contains(t, posted[0].Get("blocks"), `{"type":"context","elements":[{"type":"mrkdwn","text":"main · done · \u003c`+testFooterLink+`|Open in Web\u003e"}]}]`)
 	assert.Equal(t, "C456", posted[1].Get("channel"))
 	assert.Equal(t, "222.0", posted[1].Get("thread_ts"))
 	assert.Contains(t, posted[1].Get("blocks"), `"text":"second answer"`)

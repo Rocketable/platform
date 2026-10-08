@@ -11,7 +11,7 @@ For everything you do, after you have defined in precise words what you are goin
 
 # Memory Management
 
-RocketClaw conversations run in configured Slack channels. Each managed Slack thread starts fresh and keeps only its own conversation history. External MCP conversation IDs remain bound to one required-channel Slack thread, and active cron definitions name a configured channel for visible output.
+RocketClaw conversations live in the Web interface; Slack shows cron reports and External MCP threads (read-only) and answers @mentions in configured channels. Each managed Slack thread starts fresh and keeps only its own conversation history. External MCP conversation IDs remain bound to one required-channel Slack thread, and active cron definitions name a configured channel for visible output.
 
 ## Basic Files
 - `MEMORY.md` is a file with curated wisdom, preferences, pattern and anti-patterns, key decisions, technical lessons.

@@ -460,10 +460,8 @@ func TestSessionServiceAppendEntryIDAndObserveEntries(t *testing.T) {
 func TestSessionServiceTurnPairAllowsOnlyOneActiveTurn(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
-		assert.False(t, service.PairBusyFor("slack-thread:C1:1.1"))
 		unlockFirst, err := service.lockTurnPair(t.Context(), "slack-thread:C1:1.1", "external_mcp:private")
 		require.NoError(t, err)
-		assert.True(t, service.PairBusyFor("slack-thread:C1:1.1"))
 
 		secondAcquired := false
 
@@ -489,7 +487,6 @@ func TestSessionServiceTurnPairAllowsOnlyOneActiveTurn(t *testing.T) {
 		synctest.Wait()
 		require.NoError(t, errSecond)
 		assert.True(t, secondAcquired)
-		assert.False(t, service.PairBusyFor("slack-thread:C1:1.1"))
 	})
 }
 
@@ -1085,7 +1082,7 @@ func TestSessionServiceActiveGoalThreads(t *testing.T) {
 			require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
 		}
 
-		require.NoError(t, store.BeginGoal(id, "work", "", 1, "", ""))
+		require.NoError(t, store.BeginGoal(id, "work", "", 1))
 	}
 
 	_, err = store.db.ExecContext(t.Context(), `UPDATE conversation_goals SET status = '' WHERE conversation_id = 'legacy'`)
@@ -1104,21 +1101,19 @@ func TestSessionServiceActiveGoalThreads(t *testing.T) {
 func TestSessionServiceBeginGoalPersistsCheckScript(t *testing.T) {
 	store := newTestSessionService(t)
 
-	require.NoError(t, store.BeginGoal("thread-1", " fix lint ", " ./scripts/check.sh --linter-mode ", 3, " T123 ", " U456 "))
+	require.NoError(t, store.BeginGoal("thread-1", " fix lint ", " ./scripts/check.sh --linter-mode ", 3))
 	goal, ok, err := store.Goal("thread-1")
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "fix lint", goal.Objective)
 	assert.Equal(t, "./scripts/check.sh --linter-mode", goal.CheckScript)
 	assert.Equal(t, 3, goal.MaxTurns)
-	assert.Equal(t, "T123", goal.SlackRecipientTeamID)
-	assert.Equal(t, "U456", goal.SlackRecipientUserID)
 
 	goals, err := store.ActiveGoals()
 	require.NoError(t, err)
 	assert.Equal(t, goal, goals["thread-1"])
 
-	require.NoError(t, store.BeginGoal("thread-2", "write docs", " ", 1, "", ""))
+	require.NoError(t, store.BeginGoal("thread-2", "write docs", " ", 1))
 	goal, ok, err = store.Goal("thread-2")
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -1128,8 +1123,8 @@ func TestSessionServiceBeginGoalPersistsCheckScript(t *testing.T) {
 func TestSessionServiceBeginGoalRejectsActiveGoal(t *testing.T) {
 	store := newTestSessionService(t)
 
-	require.NoError(t, store.BeginGoal("thread-1", "first", "", 3, "", ""))
-	err := store.BeginGoal("thread-1", "second", "", 3, "", "")
+	require.NoError(t, store.BeginGoal("thread-1", "first", "", 3))
+	err := store.BeginGoal("thread-1", "second", "", 3)
 	require.ErrorIs(t, err, protocol.ErrGoalAlreadyActive)
 
 	goal, ok, err := store.Goal("thread-1")
@@ -1141,10 +1136,10 @@ func TestSessionServiceBeginGoalRejectsActiveGoal(t *testing.T) {
 func TestSessionServiceBeginGoalAllowsGoalAfterTerminal(t *testing.T) {
 	store := newTestSessionService(t)
 
-	require.NoError(t, store.BeginGoal("thread-1", "first", "", 3, "old-team", "old-user"))
+	require.NoError(t, store.BeginGoal("thread-1", "first", "", 3))
 	_, err := store.UpdateGoalStatus("thread-1", GoalStatusComplete, "done")
 	require.NoError(t, err)
-	require.NoError(t, store.BeginGoal("thread-1", "second", "./check.sh", 1, "new-team", "new-user"))
+	require.NoError(t, store.BeginGoal("thread-1", "second", "./check.sh", 1))
 
 	goal, ok, err := store.Goal("thread-1")
 	require.NoError(t, err)
@@ -1152,14 +1147,12 @@ func TestSessionServiceBeginGoalAllowsGoalAfterTerminal(t *testing.T) {
 	assert.Equal(t, "second", goal.Objective)
 	assert.Equal(t, GoalStatusActive, goal.Status)
 	assert.Equal(t, 0, goal.TurnsUsed)
-	assert.Equal(t, "new-team", goal.SlackRecipientTeamID)
-	assert.Equal(t, "new-user", goal.SlackRecipientUserID)
 }
 
 func TestSessionServiceProgressGoalKeepsGoalActiveAndRecordsNote(t *testing.T) {
 	store := newTestSessionService(t)
 
-	require.NoError(t, store.BeginGoal("thread-1", "first", "", 3, "", ""))
+	require.NoError(t, store.BeginGoal("thread-1", "first", "", 3))
 	goal, err := store.UpdateGoalStatus("thread-1", GoalStatusProgress, "next step")
 	require.NoError(t, err)
 	assert.Equal(t, GoalStatusActive, goal.Status)
@@ -1435,7 +1428,7 @@ func TestSessionServiceBeginGoalRejectsConcurrentActiveStarts(t *testing.T) {
 		go func(i int) {
 			defer group.Done()
 
-			errCh <- service.BeginGoal("thread", fmt.Sprintf("goal %02d", i), "", 5, "", "")
+			errCh <- service.BeginGoal("thread", fmt.Sprintf("goal %02d", i), "", 5)
 		}(i)
 	}
 
@@ -1462,7 +1455,7 @@ func TestSessionServiceBeginGoalRejectsConcurrentActiveStarts(t *testing.T) {
 
 func TestSessionServiceConcurrentGoalTurnsPreserveAccounting(t *testing.T) {
 	service := newTestSessionService(t)
-	require.NoError(t, service.BeginGoal("thread", "ship it", "", 20, "", ""))
+	require.NoError(t, service.BeginGoal("thread", "ship it", "", 20))
 
 	errCh := make(chan error, 20)
 
@@ -1521,7 +1514,7 @@ func TestDeleteSessionDeletesOnlyTarget(t *testing.T) {
 	_, err = service.AppendEntryID(context.Background(), "thread", testSessionEntry("thread", "assistant"))
 	require.NoError(t, err)
 	require.NoError(t, service.UpsertThread("main", ThreadState{Agent: "ops"}))
-	require.NoError(t, service.BeginGoal("main", "ship it", "", 5, "", ""))
+	require.NoError(t, service.BeginGoal("main", "ship it", "", 5))
 
 	deleted, err := service.DeleteSession(context.Background(), "main")
 	require.NoError(t, err)
@@ -1650,9 +1643,9 @@ func TestSessionServiceRejectsBlankKeys(t *testing.T) {
 
 	require.ErrorContains(t, store.UpsertThread(" ", ThreadState{Agent: "agent"}), "thread conversation ID is required")
 	require.ErrorContains(t, store.UpsertExternalMCPSession(" ", &ExternalMCPSessionState{}), "external MCP conversation ID is required")
-	require.EqualError(t, store.BeginGoal(" ", "obj", "", 1, "", ""), "goal conversation ID is required")
-	require.EqualError(t, store.BeginGoal("thread-1", " ", "", 1, "", ""), "goal objective is required")
-	require.NoError(t, store.BeginGoal("thread-1", "obj", "", -1, "", ""))
+	require.EqualError(t, store.BeginGoal(" ", "obj", "", 1), "goal conversation ID is required")
+	require.EqualError(t, store.BeginGoal("thread-1", " ", "", 1), "goal objective is required")
+	require.NoError(t, store.BeginGoal("thread-1", "obj", "", -1))
 	goal, ok, err := store.Goal("thread-1")
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -1712,8 +1705,8 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	seedActiveTurn(t, store, oldThread, "stale-turn", &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "stale-turn"})
 
 	orphanGoal := protocol.SlackThreadConversationID("DGOAL", slackTestTS(oldTime))
-	require.NoError(t, store.BeginGoal(orphanGoal, "stale goal", "", 1, "", ""))
-	require.NoError(t, store.BeginGoal(activeOldThread, "keep", "", 1, "", ""))
+	require.NoError(t, store.BeginGoal(orphanGoal, "stale goal", "", 1))
+	require.NoError(t, store.BeginGoal(activeOldThread, "keep", "", 1))
 	listed, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM managed_conversations ORDER BY conversation_id`, "managed conversation IDs")
 	require.NoError(t, err)
 	assert.Contains(t, listed, activeOldThread)

@@ -8,9 +8,9 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, Dia
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
-import { queries, mutations, listSessions, rpc } from "./api";
+import { queries, mutations, listSessions, rpc, RPCError } from "./api";
 import { draftContent } from "./drafts";
-import type { ChatOrigin, HistoryView, MessageMatch, PromptDelivery, SearchMessagesResponse } from "./types";
+import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchMessagesResponse } from "./types";
 import { Bot, Check, ChevronDown, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, MessageSquare, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps } from "react";
@@ -308,9 +308,9 @@ function QueuePanel({
 
 const jobState = (job: BackgroundJob) => ({ completed: "finished", stopped: `stopped by ${job.stoppedBy}`, killed: "killed (server restarted)" } as Record<string, string | undefined>)[job.state] ?? job.state;
 
-// jobsSlot is the composer's Background Jobs list, or nothing when the conversation has none.
-function jobsSlot(id: string, jobs: BackgroundJob[] | undefined, onChange: () => Promise<unknown>, openCall: (callId: string) => void) {
-  return jobs?.length ? <BackgroundJobs id={id} jobs={jobs} onChange={onChange} openCall={openCall} /> : null;
+// jobsSlot is the composer's question card and Background Jobs list, or nothing when the conversation has neither.
+function jobsSlot(id: string, jobs: BackgroundJob[] | undefined, onChange: () => Promise<unknown>, openCall: (callId: string) => void, card: ReactNode) {
+  return jobs?.length || card ? <>{card}{jobs?.length ? <BackgroundJobs id={id} jobs={jobs} onChange={onChange} openCall={openCall} /> : null}</> : null;
 }
 
 function BackgroundJobs({ id, jobs, openCall, onChange }: { id: string; jobs: BackgroundJob[]; openCall: (callId: string) => void; onChange: () => Promise<unknown> }) {
@@ -323,6 +323,44 @@ function BackgroundJobs({ id, jobs, openCall, onChange }: { id: string; jobs: Ba
     </li>)}
     {stop.error ? <li role="alert" className="px-2 text-xs text-destructive">{stop.error.message}</li> : null}
   </ul>;
+}
+
+// QuestionCard asks a Web turn's pending question: one click answers a single choice, and a
+// multiple choice submits every checked option.
+function QuestionCard({ question, sending, answer }: { question: PendingQuestion; sending: boolean; answer: (selected: string[]) => void }) {
+  const [checked, setChecked] = useState<Record<string, boolean>>({});
+  return <fieldset aria-label="Question" disabled={sending} className="flex flex-col gap-1 px-2 py-1">
+    <p className="text-sm font-medium">{question.question}</p>
+    {question.details ? <p className="text-xs text-muted-foreground">{question.details}</p> : null}
+    {question.options.map((option) => {
+      const label = <span className="flex min-w-0 flex-col py-1 text-left"><span>{option.label}</span>{option.description ? <span className="text-xs text-muted-foreground">{option.description}</span> : null}</span>;
+      return question.multiple
+        ? <label key={option.value} className="flex items-center gap-2 px-1 text-sm"><input type="checkbox" checked={checked[option.value] ?? false} onChange={(event) => setChecked({ ...checked, [option.value]: event.target.checked })} />{label}</label>
+        : <Button key={option.value} type="button" variant="outline" className="h-auto justify-start whitespace-normal" onClick={() => answer([option.value])}>{label}</Button>;
+    })}
+    {question.multiple ? <Button type="button" size="sm" className="self-start" disabled={!Object.values(checked).includes(true)} onClick={() => answer(question.options.map((option) => option.value).filter((value) => checked[value]))}>Submit</Button> : null}
+    <p className="text-xs text-muted-foreground">Or send your own answer from the message box.</p>
+  </fieldset>;
+}
+
+// useQuestion answers the conversation's first pending Web question, from its card or with Send's
+// text, unless that stops the turn. A question no longer pending leaves its card when History refreshes.
+function useQuestion(id: string, draft: ComposerDraft, onChange: () => Promise<unknown>, setSendError: (value: string) => void) {
+  const mutation = useMutation({ mutationFn: mutations.answerQuestion, onSettled: onChange });
+  const question = draft.questions?.[0];
+  const answer = (input: { selected?: string[]; custom?: string }) => mutation.mutateAsync({ conversationId: id, askId: question!.id, ...input })
+    .then(() => { setSendError(""); return true; }, (err: unknown) => { setSendError(err instanceof RPCError && err.code === 5 ? "This question was already answered or ended" : err instanceof Error ? err.message : "answer failed"); return false; });
+  const card = question ? <QuestionCard key={question.id} question={question} sending={mutation.isPending} answer={(selected) => void answer({ selected })} /> : null;
+  const take = (delivery: PromptDelivery | undefined, setText: (value: string) => void) => question && delivery === undefined && draft.text.trim() && !isStopCommand(draft.text)
+    ? answer({ custom: draft.text }).then((saved) => { if (saved) setText(""); }) : undefined;
+  return { answering: mutation.isPending, pending: !!question, take, card };
+}
+
+// composerLabels says what Send does: answer the pending question, queue behind the running turn, or send.
+function composerLabels(asking: boolean, busy: boolean, id: string) {
+  if (asking) return { placeholder: "Answer the question · ⌘⏎ steers", sendLabel: "Send answer" };
+  if (busy) return { placeholder: "Queue a follow-up · ⌘⏎ steers", sendLabel: "Send to queue" };
+  return { placeholder: id ? "Message or $command" : "Message a new session", sendLabel: "Send message" };
 }
 
 function sessionLabel(id: string) {
@@ -602,7 +640,7 @@ function SidebarOwner({ children }: { children: ReactNode }) {
 }
 
 type PendingFile = { id: string; file: File };
-type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; movable?: boolean; jobs?: BackgroundJob[]; error: string; edit: number; submission: number; historyEpoch?: number; revertEligible?: boolean; revertMessageId?: string; canUndo?: boolean; reverting?: boolean; focus?: number; hydrated?: boolean; persistenceKey?: string; persistedEdit?: number; persistenceError?: string };
+type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; movable?: boolean; jobs?: BackgroundJob[]; questions?: PendingQuestion[]; error: string; edit: number; submission: number; historyEpoch?: number; revertEligible?: boolean; revertMessageId?: string; canUndo?: boolean; reverting?: boolean; focus?: number; hydrated?: boolean; persistenceKey?: string; persistedEdit?: number; persistenceError?: string };
 const RevertActions = createContext<{ available: boolean; pending: boolean; run: (messageId?: string, redo?: boolean) => Promise<void> } | undefined>(undefined);
 const DraftScope = createContext<string | undefined>(undefined);
 
@@ -2282,6 +2320,7 @@ function applyHistoryDelta(draft: ComposerDraft, view: HistoryView) {
   draft.canUndo = view.canUndo;
   draft.movable = view.movable;
   draft.jobs = view.backgroundJobs;
+  draft.questions = view.pendingQuestions;
   draft.revision = view.revision;
   draft.historyError = "";
   return newlyConsumed;
@@ -2304,6 +2343,7 @@ function readHistoryDelta(id: string, draft: ComposerDraft, onDraftChange: () =>
           && draft.terminal === view.terminal && JSON.stringify(draft.origin) === JSON.stringify(view.origin)
           && JSON.stringify(cached?.delegations) === JSON.stringify(view.delegations)
           && draft.movable === view.movable && JSON.stringify(draft.jobs) === JSON.stringify(view.backgroundJobs)
+          && JSON.stringify(draft.questions) === JSON.stringify(view.pendingQuestions)
           && !draft.historyError) continue;
         if (applyHistoryDelta(draft, view)) void queryClient.invalidateQueries({ queryKey: ["queue"] });
         // Main's delegation panel reads a full durable parent view from this cache.
@@ -2842,12 +2882,8 @@ function SessionComposer({
     setAgentOpen(false);
   };
   const { queued, parked } = pendingInputs(draft, queueQuery.data ?? []);
-  let placeholder = "Message a new session";
-  if (busy) {
-    placeholder = "Queue a follow-up · ⌘⏎ steers";
-  } else if (id) {
-    placeholder = "Message or $command";
-  }
+  const question = useQuestion(id, draft, refreshHistory, setSendError);
+  const { placeholder, sendLabel } = composerLabels(question.pending, busy, id);
   const send = (delivery?: PromptDelivery) => {
     const command = /^\p{White_Space}*\$(fork|handoff|undo|redo)\p{White_Space}*$/u.exec(draft.text);
     if (delivery !== "STASH" && command) {
@@ -2857,6 +2893,9 @@ function SessionComposer({
       setText("");
       return Promise.resolve();
     }
+    // A pending question takes Send's text as its custom answer instead of queueing it behind the waiting turn.
+    const answering = question.take(delivery, setText);
+    if (answering) return answering;
     promote(id ? sessionPath(id) : "/");
     return sendComposer({
       draft,
@@ -2897,7 +2936,7 @@ function SessionComposer({
       <Composer
         files={files}
         setFiles={setFiles}
-        sending={[sending, draft.reverting].some(Boolean)}
+        sending={[sending, draft.reverting, question.answering].some(Boolean)}
         focus={draft.focus}
         historyCommand={(redo) => void revert.run(undefined, redo)}
         sessionId={id}
@@ -2915,6 +2954,7 @@ function SessionComposer({
         setDollarPick={setDollarPick}
         placeholder={placeholder}
         busy={busy}
+        sendLabel={sendLabel}
         queued={queued}
         send={send}
         stop={stop}
@@ -2922,7 +2962,7 @@ function SessionComposer({
         popQueued={(itemId) => popComposer({ draft, onDraftChange, id, itemId, selected, currentAgent, prompt, popQueueItem, setSendError })}
         removeQueued={(itemId) => void removeQueueItem.mutateAsync({ id, itemId }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "remove failed"))}
         reorderQueued={(itemIds) => void reorderQueue.mutateAsync({ id, itemIds }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "reorder failed"))}
-        jobs={jobsSlot(id, draft.jobs, refreshHistory, (callId) => void openCall(draft, onDraftChange, scrollToMessage, callId))}
+        jobs={jobsSlot(id, draft.jobs, refreshHistory, (callId) => void openCall(draft, onDraftChange, scrollToMessage, callId), question.card)}
       />
     </>
   );
@@ -2999,6 +3039,7 @@ function Composer({
   setDollarPick,
   placeholder,
   busy,
+  sendLabel,
   queued,
   send,
   stop,
@@ -3028,6 +3069,7 @@ function Composer({
   setDollarPick: (pick: string) => void;
   placeholder: string;
   busy: boolean;
+  sendLabel: string;
   queued: QueueItem[];
   send: (delivery?: PromptDelivery) => Promise<void>;
   stop: () => Promise<void>;
@@ -3156,7 +3198,7 @@ function Composer({
               </Tooltip>
               <Tooltip><TooltipTrigger render={<Button type="button" size="icon" className="size-11 sm:size-8" disabled={sending} />} aria-label={stopping ? "Stop" : "Send"} onClick={() => void (stopping ? stop() : send())}>
                 {stopping ? <Square /> : <Send />}
-              </TooltipTrigger><TooltipContent>{stopping ? "Stop response" : busy ? "Send to queue" : "Send message"}</TooltipContent></Tooltip>
+              </TooltipTrigger><TooltipContent>{stopping ? "Stop response" : sendLabel}</TooltipContent></Tooltip>
             </div>
           </div>
         </ComposerAttachments>

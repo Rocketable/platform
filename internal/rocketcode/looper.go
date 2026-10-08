@@ -76,13 +76,13 @@ const (
 	TurnPhaseFinalAnswer
 )
 
-// SteerDrain collects waiting Slack Steers after a tool batch, or when a no-tool answer would otherwise end the turn.
+// SteerDrain collects waiting steers and Completion Notes after a tool batch, or when a no-tool answer would otherwise end the turn.
 // The zero value is inert.
 type SteerDrain struct {
 	Fn func(context.Context, TurnPhase) []PromptInput
 }
 
-// Drain returns waiting Slack Steer inputs for phase. The zero value returns nil.
+// Drain returns the waiting inputs for phase. The zero value returns nil.
 func (d SteerDrain) Drain(ctx context.Context, phase TurnPhase) []PromptInput {
 	if d.Fn == nil {
 		return nil

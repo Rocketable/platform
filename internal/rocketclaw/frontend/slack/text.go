@@ -7,14 +7,6 @@ import (
 	"unicode"
 )
 
-func slackGoalProgressText(turnNumber, maxTurns int) string {
-	if maxTurns > 0 && turnNumber > 0 {
-		return fmt.Sprintf("_Pursuing Goal (%d/%d)..._", turnNumber, maxTurns)
-	}
-
-	return "_Pursuing Goal..._"
-}
-
 func slackGoalHeaderText(turnNumber, maxTurns int, complete bool) string {
 	if complete {
 		return "✅ Goal complete"

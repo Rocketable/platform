@@ -30,4 +30,6 @@ type Backend interface {
 	StopBackgroundJob(context.Context, string, string) (bool, error)
 	BackgroundJobs(context.Context, string) ([]protocol.BackgroundJob, bool, error)
 	CompletionNotes(context.Context, string, []string) ([]protocol.BackgroundJob, error)
+	PendingQuestions(context.Context, string) ([]protocol.AskUserQuestionRequest, error)
+	AnswerQuestion(context.Context, string, string, protocol.AskUserQuestionAnswer) error
 }

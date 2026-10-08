@@ -468,7 +468,7 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 	service := newTestSessionService(t)
 	require.NoError(t, service.UpsertThread("web:empty", ThreadState{Agent: "main"}))
 	require.NoError(t, service.UpsertThread("web:stored", ThreadState{Agent: "main"}))
-	require.NoError(t, service.BeginGoal("web:stored", "work", "", 3, "", ""))
+	require.NoError(t, service.BeginGoal("web:stored", "work", "", 3))
 
 	entry := &rocketcode.SessionEntry{Version: 1, Type: "replay", Timestamp: time.Now().UTC(), Model: "model", ResponseID: "response",
 		TokenUsage: &rocketcode.TokenUsage{CompletionReasoningTokens: 7},
@@ -810,7 +810,7 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 
 			require.Equal(t, tc.list, slices.Contains(saved, listSessionsToolName))
 			require.Equal(t, tc.get, slices.Contains(saved, getSessionToolName))
-			require.True(t, service.PairBusyFor("external_mcp:private"))
+			require.True(t, turnPairBusy(service, "external_mcp:private"))
 		})
 	}
 }
