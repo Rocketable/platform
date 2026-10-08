@@ -335,11 +335,14 @@ func TestSessionToolsStoredContract(t *testing.T) {
 	service := newTestSessionService(t)
 	list := listSessionsTool(service)
 	get := getSessionTool(service)
-	result, err := list.Call(t.Context(), json.RawMessage(`{"since":"","until":"","limit":0,"include_message_preview":true}`), nil)
+	result, err := list.Call(t.Context(), json.RawMessage(`{"since":"2000-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`), nil)
 	require.NoError(t, err)
 	require.Equal(t, "conversation_id\tturns\tlast_updated\tlast_user_message\tlast_assistant_message\n", result.Output)
 
 	base := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+
+	var privateIDs []int64
+
 	for _, fixture := range []struct {
 		id   string
 		at   time.Time
@@ -350,34 +353,46 @@ func TestSessionToolsStoredContract(t *testing.T) {
 		{"external_mcp:private", base.Add(-time.Hour), "  latest\n user\tΩ\r\\  "},
 		{"exec:last", base.Add(time.Hour), "exec"},
 	} {
-		_, err := service.AppendEntryID(t.Context(), fixture.id, testSessionEntryAt(fixture.at, fixture.user))
+		id, err := service.AppendEntryID(t.Context(), fixture.id, testSessionEntryAt(fixture.at, fixture.user))
 		require.NoError(t, err)
+
+		if fixture.id == "external_mcp:private" {
+			privateIDs = append(privateIDs, id)
+		}
 	}
 
 	for _, tc := range []struct{ input, want string }{
-		{`{"since":"","until":"","limit":1,"include_message_preview":true}`, "conversation_id\tturns\tlast_updated\tlast_user_message\tlast_assistant_message\nexec:last\t1\t2026-09-24T13:00:00Z\texec\tassistant\n"},
-		{`{"since":"2026-09-24T13:00:00Z","until":"","limit":0,"include_message_preview":false}`, "conversation_id\tturns\tlast_updated\nexec:last\t1\t2026-09-24T13:00:00Z\nexternal_mcp:private\t2\t2026-09-24T11:00:00Z\n"},
-		{`{"since":"2026-09-24T12:00:00Z","until":"2026-09-24T13:00:00Z","limit":0,"include_message_preview":false}`, "conversation_id\tturns\tlast_updated\ncron:first\t1\t2026-09-24T12:00:00Z\n"},
-		{`{"since":"2026-09-24T14:00:00Z","until":"2026-09-24T12:00:00Z","limit":0,"include_message_preview":true}`, "conversation_id\tturns\tlast_updated\tlast_user_message\tlast_assistant_message\n"},
+		{`{"since":"2000-01-01T00:00:00Z","until":"","limit":1,"include_message_preview":true}`, "conversation_id\tturns\tlast_updated\tlast_user_message\tlast_assistant_message\nexec:last\t1\t2026-09-24T13:00:00Z\texec\tassistant\n"},
+		{`{"since":"2026-09-24T13:00:00Z","until":"","limit":200,"include_message_preview":false}`, "conversation_id\tturns\tlast_updated\nexec:last\t1\t2026-09-24T13:00:00Z\nexternal_mcp:private\t2\t2026-09-24T11:00:00Z\n"},
+		{`{"since":"2026-09-24T12:00:00Z","until":"2026-09-24T13:00:00Z","limit":200,"include_message_preview":false}`, "conversation_id\tturns\tlast_updated\ncron:first\t1\t2026-09-24T12:00:00Z\n"},
+		{`{"since":"2026-09-24T14:00:00Z","until":"2026-09-24T12:00:00Z","limit":200,"include_message_preview":true}`, "conversation_id\tturns\tlast_updated\tlast_user_message\tlast_assistant_message\n"},
+		{`{"since":" 2000-01-01T00:00:00Z ","until":" ","limit":200,"include_message_preview":true}`, "conversation_id\tturns\tlast_updated\tlast_user_message\tlast_assistant_message\nexec:last\t1\t2026-09-24T13:00:00Z\texec\tassistant\nexternal_mcp:private\t2\t2026-09-24T11:00:00Z\t  latest\\n user\\tΩ\\r\\\\  \tassistant\ncron:first\t1\t2026-09-24T12:00:00Z\told\tassistant\n"},
 	} {
 		result, err := list.Call(t.Context(), json.RawMessage(tc.input), nil)
 		require.NoError(t, err)
 		require.Equal(t, tc.want, result.Output)
 	}
 
-	result, err = get.Call(t.Context(), json.RawMessage(`{"conversation_id":" external_mcp:private "}`), nil)
-	require.NoError(t, err)
+	// Sprintf keeps dupword's autofix from merging the role and the content "assistant".
+	first, latest := fmt.Sprintf("2026-09-24T13:00:00Z\tuser\tfirst\n2026-09-24T13:00:00Z\tassistant\t%s\n", "assistant"), fmt.Sprintf("2026-09-24T11:00:00Z\tuser\t  latest\\n user\\tΩ\\r\\\\  \n2026-09-24T11:00:00Z\tassistant\t%s\n", "assistant")
+	for _, tc := range []struct {
+		limit  int
+		before int64
+		want   string
+	}{
+		{100, 0, first + latest},
+		{1, 0, latest + fmt.Sprintf("[next_before_entry_id=%d]\n", privateIDs[1])},
+		{1, privateIDs[1], first},
+		{100, privateIDs[0], ""},
+	} {
+		result, err = get.Call(t.Context(), json.RawMessage(fmt.Sprintf(`{"conversation_id":" external_mcp:private ","limit":%d,"before_entry_id":%d}`, tc.limit, tc.before)), nil)
+		require.NoError(t, err)
+		require.Equal(t, "timestamp\trole\tcontent\n"+tc.want, result.Output)
+	}
 
-	require.Equal(t, fmt.Sprintf("timestamp\trole\tcontent\n2026-09-24T13:00:00Z\tuser\tfirst\n2026-09-24T13:00:00Z\tassistant\t%s\n2026-09-24T11:00:00Z\tuser\t  latest\\n user\\tΩ\\r\\\\  \n2026-09-24T11:00:00Z\tassistant\t%s\n", "assistant", "assistant"), result.Output)
-	result, err = get.Call(t.Context(), json.RawMessage(`{"conversation_id":"unknown"}`), nil)
+	result, err = get.Call(t.Context(), json.RawMessage(`{"conversation_id":"unknown","limit":100,"before_entry_id":0}`), nil)
 	require.NoError(t, err)
 	require.Equal(t, "timestamp\trole\tcontent\n", result.Output)
-
-	for _, input := range []string{`{"since":"","until":"","limit":0,"include_message_preview":true}`, `{"since":" ","until":" ","limit":0,"include_message_preview":true}`} {
-		result, err := list.Call(t.Context(), json.RawMessage(input), nil)
-		require.NoError(t, err)
-		require.Equal(t, "conversation_id\tturns\tlast_updated\tlast_user_message\tlast_assistant_message\ncron:first\t1\t2026-09-24T12:00:00Z\told\tassistant\nexec:last\t1\t2026-09-24T13:00:00Z\texec\tassistant\nexternal_mcp:private\t2\t2026-09-24T11:00:00Z\t  latest\\n user\\tΩ\\r\\\\  \tassistant\n", result.Output)
-	}
 
 	// The prompt header says who sent a human turn, so readers can tell an operator from a customer.
 	headed := &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: base, ReplayInput: []json.RawMessage{
@@ -386,7 +401,7 @@ func TestSessionToolsStoredContract(t *testing.T) {
 	}}
 	_, err = service.AppendEntryID(t.Context(), "headed", headed)
 	require.NoError(t, err)
-	result, err = get.Call(t.Context(), json.RawMessage(`{"conversation_id":"headed"}`), nil)
+	result, err = get.Call(t.Context(), json.RawMessage(`{"conversation_id":"headed","limit":100,"before_entry_id":0}`), nil)
 	require.NoError(t, err)
 	require.Equal(t, "timestamp\trole\tcontent\n2026-09-24T12:00:00Z\tuser\t[Slack principal=\"Operator\"]\\n\\nsend it\n2026-09-24T12:00:00Z\tuser\tno header\n", result.Output)
 }
@@ -405,9 +420,9 @@ func TestSessionToolsTimePrecisionAndDurations(t *testing.T) {
 		input string
 		ids   []string
 	}{
-		{`{"since":" 2025-12-31T19:00:00.000000001-05:00 ","until":"2026-01-01T00:00:00.000000002Z","limit":0,"include_message_preview":true}`, []string{"1"}},
-		{`{"since":"","until":"2026-01-01T00:00:00.000000001Z","limit":0,"include_message_preview":true}`, []string{"0"}},
-		{`{"since":"","until":"","limit":4,"include_message_preview":true}`, []string{"3", "2", "1", "0"}},
+		{`{"since":" 2025-12-31T19:00:00.000000001-05:00 ","until":"2026-01-01T00:00:00.000000002Z","limit":200,"include_message_preview":true}`, []string{"1"}},
+		{`{"since":"2025-01-01T00:00:00Z","until":"2026-01-01T00:00:00.000000001Z","limit":200,"include_message_preview":true}`, []string{"0"}},
+		{`{"since":"2025-01-01T00:00:00Z","until":"","limit":4,"include_message_preview":true}`, []string{"3", "2", "1", "0"}},
 	} {
 		result, err := list.Call(t.Context(), json.RawMessage(tc.input), nil)
 		require.NoError(t, err)
@@ -435,7 +450,7 @@ func TestSessionToolsTimePrecisionAndDurations(t *testing.T) {
 		since string
 		ids   []string
 	}{{"1h", []string{"future", "near-future", "past"}}, {"0s", []string{"future", "near-future"}}, {"-1h", []string{"future"}}} {
-		result, err := list.Call(t.Context(), json.RawMessage(fmt.Sprintf(`{"since":%q,"until":"","limit":0,"include_message_preview":true}`, tc.since)), nil)
+		result, err := list.Call(t.Context(), json.RawMessage(fmt.Sprintf(`{"since":%q,"until":"","limit":200,"include_message_preview":true}`, tc.since)), nil)
 		require.NoError(t, err)
 
 		rows := strings.Split(strings.TrimSuffix(result.Output, "\n"), "\n")[1:]
@@ -497,7 +512,7 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 	}
 	before := snapshot()
 	list, get := listSessionsTool(service), getSessionTool(service)
-	result, err := list.Call(t.Context(), json.RawMessage(`{"since":"","until":"","limit":0,"include_message_preview":true}`), nil)
+	result, err := list.Call(t.Context(), json.RawMessage(`{"since":"1h","until":"","limit":200,"include_message_preview":true}`), nil)
 	require.NoError(t, err)
 
 	rows := strings.Split(strings.TrimSuffix(result.Output, "\n"), "\n")[1:]
@@ -510,8 +525,10 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 		require.Empty(t, fields[3])
 		require.Empty(t, fields[4])
 		raw, err := json.Marshal(struct {
-			ID string `json:"conversation_id"`
-		}{fields[0]})
+			ID     string `json:"conversation_id"`
+			Limit  int    `json:"limit"`
+			Before int64  `json:"before_entry_id"`
+		}{fields[0], 100, 0})
 		require.NoError(t, err)
 		result, err := get.Call(t.Context(), raw, nil)
 		require.NoError(t, err)
@@ -527,12 +544,12 @@ func TestSessionToolsErrors(t *testing.T) {
 	service := newTestSessionService(t)
 
 	list, get := listSessionsTool(service), getSessionTool(service)
-	for _, input := range []string{`{`, `[]`, `{"since":"","until":"","limit":-1,"include_message_preview":true}`, `{"since":"","until":"","limit":"1","include_message_preview":true}`, `{"since":"","until":"","limit":1.5,"include_message_preview":true}`, `{"since":true,"until":"","limit":0,"include_message_preview":true}`, `{"since":"","until":1,"limit":0,"include_message_preview":true}`, `{"since":"","until":"","limit":0,"include_message_preview":"false"}`, `{"since":"yesterday","until":"","limit":0,"include_message_preview":true}`, `{"since":"","until":"1h","limit":0,"include_message_preview":true}`} {
+	for _, input := range []string{`{`, `[]`, `{"since":"1h","until":"","limit":-1,"include_message_preview":true}`, `{"since":"1h","until":"","limit":0,"include_message_preview":true}`, `{"since":"1h","until":"","limit":201,"include_message_preview":true}`, `{"since":"1h","until":"","limit":"1","include_message_preview":true}`, `{"since":"1h","until":"","limit":1.5,"include_message_preview":true}`, `{"since":true,"until":"","limit":1,"include_message_preview":true}`, `{"since":"1h","until":1,"limit":1,"include_message_preview":true}`, `{"since":"1h","until":"","limit":1,"include_message_preview":"false"}`, `{"since":"yesterday","until":"","limit":1,"include_message_preview":true}`, `{"since":"1h","until":"1h","limit":1,"include_message_preview":true}`, `{"since":"","until":"","limit":1,"include_message_preview":true}`, `{"since":" ","until":"","limit":1,"include_message_preview":true}`} {
 		_, err := list.Call(t.Context(), json.RawMessage(input), nil)
 		require.Error(t, err, input)
 	}
 
-	for _, input := range []string{`{`, `{}`, `{"conversation_id":" "}`, `{"conversation_id":12}`} {
+	for _, input := range []string{`{`, `{}`, `{"conversation_id":" ","limit":1,"before_entry_id":0}`, `{"conversation_id":12,"limit":1,"before_entry_id":0}`, `{"conversation_id":"x"}`, `{"conversation_id":"x","limit":0,"before_entry_id":0}`, `{"conversation_id":"x","limit":101,"before_entry_id":0}`, `{"conversation_id":"x","limit":1,"before_entry_id":-1}`, `{"conversation_id":"x","limit":1,"before_entry_id":"1"}`} {
 		_, err := get.Call(t.Context(), json.RawMessage(input), nil)
 		require.Error(t, err, input)
 	}
@@ -540,31 +557,31 @@ func TestSessionToolsErrors(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	_, err := list.Call(ctx, json.RawMessage(`{"since":"","until":"","limit":0,"include_message_preview":true}`), nil)
+	_, err := list.Call(ctx, json.RawMessage(`{"since":"2000-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`), nil)
 	require.ErrorIs(t, err, context.Canceled)
-	_, err = get.Call(ctx, json.RawMessage(`{"conversation_id":"broken"}`), nil)
+	_, err = get.Call(ctx, json.RawMessage(`{"conversation_id":"broken","limit":100,"before_entry_id":0}`), nil)
 	require.ErrorIs(t, err, context.Canceled)
 	_, err = service.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id,entry_json,entry_timestamp) VALUES ('broken','{"timestamp":false}','2026-01-01T00:00:00Z')`)
 	require.NoError(t, err)
-	_, err = list.Call(t.Context(), json.RawMessage(`{"since":"","until":"","limit":0,"include_message_preview":true}`), nil)
+	_, err = list.Call(t.Context(), json.RawMessage(`{"since":"2000-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`), nil)
 	require.Error(t, err)
-	_, err = get.Call(t.Context(), json.RawMessage(`{"conversation_id":"broken"}`), nil)
+	_, err = get.Call(t.Context(), json.RawMessage(`{"conversation_id":"broken","limit":100,"before_entry_id":0}`), nil)
 	require.Error(t, err)
 	// Bodies outside the selected conversation limit must not be decoded.
 	_, err = service.AppendEntryID(t.Context(), "valid", testSessionEntryAt(time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC), "ok"))
 	require.NoError(t, err)
-	_, err = list.Call(t.Context(), json.RawMessage(`{"since":"","until":"","limit":1,"include_message_preview":true}`), nil)
+	_, err = list.Call(t.Context(), json.RawMessage(`{"since":"2000-01-01T00:00:00Z","until":"","limit":1,"include_message_preview":true}`), nil)
 	require.NoError(t, err)
 	_, err = service.db.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{"replay_input":[false]}' WHERE conversation_id = 'broken'`)
 	require.NoError(t, err)
-	_, err = list.Call(t.Context(), json.RawMessage(`{"since":"","until":"","limit":0,"include_message_preview":true}`), nil)
+	_, err = list.Call(t.Context(), json.RawMessage(`{"since":"2000-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`), nil)
 	require.Error(t, err)
 
 	// Each undecodable stored item is reported in place without hiding the rest of the read.
 	var brokenID int64
 
 	require.NoError(t, service.db.QueryRowContext(t.Context(), `UPDATE session_entries SET entry_json = '{"replay_input":[{"type":"message","role":"user","content":"before"},false,{"type":"message","role":"user","content":"after"}],"output_trace":[false]}' WHERE conversation_id = 'broken' RETURNING id`).Scan(&brokenID))
-	result, err := get.Call(t.Context(), json.RawMessage(`{"conversation_id":"broken"}`), nil)
+	result, err := get.Call(t.Context(), json.RawMessage(`{"conversation_id":"broken","limit":100,"before_entry_id":0}`), nil)
 	require.NoError(t, err)
 
 	undecoded := "0001-01-01T00:00:00Z\tevent\t[entry %d %s item %d: stored event not decoded: unmarshal SDK replay input: apijson: was not able to coerce type as union]\n"
@@ -666,13 +683,13 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 
 				switch requests {
 				case 1:
-					writeRawRunFunctionCall(t, w, "list", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_list_sessions(since=\"\", until=\"\", limit=0, include_message_preview=True)\n"}`))
+					writeRawRunFunctionCall(t, w, "list", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_list_sessions(since=\"1970-01-01T00:00:00Z\", until=\"\", limit=200, include_message_preview=True)\n"}`))
 				case 2:
-					writeRawRunFunctionCall(t, w, "get", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_get_session(conversation_id=\"external_mcp:private\")\n"}`))
+					writeRawRunFunctionCall(t, w, "get", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_get_session(conversation_id=\"external_mcp:private\", limit=100, before_entry_id=0)\n"}`))
 				case 3:
-					writeRawRunFunctionCall(t, w, "direct-list", listSessionsToolName, json.RawMessage(`{"since":"","until":"","limit":0,"include_message_preview":true}`))
+					writeRawRunFunctionCall(t, w, "direct-list", listSessionsToolName, json.RawMessage(`{"since":"1970-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`))
 				case 4:
-					writeRawRunFunctionCall(t, w, "direct-get", getSessionToolName, json.RawMessage(`{"conversation_id":"external_mcp:private"}`))
+					writeRawRunFunctionCall(t, w, "direct-get", getSessionToolName, json.RawMessage(`{"conversation_id":"external_mcp:private","limit":100,"before_entry_id":0}`))
 				case 5:
 					writeRawRunFunctionCall(t, w, "current", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_current_session_id()\n"}`))
 				case 6:
@@ -681,7 +698,7 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 					if tc.current && tc.get {
 						code, err := json.Marshal(struct {
 							Code string `json:"code"`
-						}{fmt.Sprintf("def main():\n    return rocketclaw_get_session(conversation_id=%q)\n", outputs[4])})
+						}{fmt.Sprintf("def main():\n    return rocketclaw_get_session(conversation_id=%q, limit=100, before_entry_id=0)\n", outputs[4])})
 						if !assert.NoError(t, err) {
 							return
 						}
@@ -723,7 +740,7 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 
 			if tc.get {
 				require.True(t, get.Definition.Strict.Value)
-				require.Equal(t, []string{"conversation_id"}, get.Definition.Parameters["required"])
+				require.Equal(t, []string{"before_entry_id", "conversation_id", "limit"}, get.Definition.Parameters["required"])
 			}
 
 			if tc.current {
