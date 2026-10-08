@@ -571,7 +571,7 @@ test("handoff hits and queued items format tags and markup", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("dest")}`);
     const queued = page.locator('[data-queue-id="q1"]');
-    await queued.locator("strong").waitFor();
+    await queued.getByText("@handle").waitFor();
     expect(await queued.locator("strong").textContent()).toBe("bold");
     expect(await queued.getByText("@handle").count()).toBe(1);
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("source")}`);
@@ -581,12 +581,12 @@ test("handoff hits and queued items format tags and markup", async () => {
     const dialog = page.getByRole("dialog", { name: "Session handoff" });
     await dialog.getByRole("textbox", { name: "Search messages" }).fill("bold");
     const hit = dialog.getByRole("button").filter({ has: page.locator("strong") });
-    await hit.locator("strong").waitFor();
+    await hit.getByText("@handle").waitFor();
     expect(await hit.locator("strong").textContent()).toBe("bold");
     expect(await hit.getByText("@handle").count()).toBe(1);
     await hit.click();
     const excerpt = dialog.locator("p.truncate");
-    await excerpt.locator("strong").waitFor();
+    await excerpt.getByText("@handle").waitFor();
     expect(await excerpt.locator("strong").textContent()).toBe("bold");
     expect(await excerpt.getByText("@handle").count()).toBe(1);
   } finally {
