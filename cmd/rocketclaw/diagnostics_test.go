@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"runtime/pprof"
 	"runtime/trace"
 	"strings"
@@ -26,9 +27,31 @@ import (
 )
 
 func TestDiagnosticsRoutes(t *testing.T) {
+	// Runtime samplers are process-wide; keep this test serial.
+	runtime.SetBlockProfileRate(0)
+	previousMutexRate := runtime.SetMutexProfileFraction(0)
+	t.Cleanup(func() {
+		runtime.SetBlockProfileRate(0)
+		runtime.SetMutexProfileFraction(previousMutexRate)
+	})
+
 	var connections sync.WaitGroup
 
 	server := newDiagnosticsServer(t.Context(), &connections)
+	t.Run("mutex sampling", func(t *testing.T) {
+		require.Equal(t, 100, runtime.SetMutexProfileFraction(-1))
+	})
+	t.Run("block sampling", func(t *testing.T) {
+		var before, after bytes.Buffer
+
+		require.NoError(t, pprof.Lookup("block").WriteTo(&before, 1))
+		// A wait longer than the sampling interval records a native blocking event.
+		<-time.After(20 * time.Millisecond)
+		require.NoError(t, pprof.Lookup("block").WriteTo(&after, 1))
+		require.NotEqual(t, before.String(), after.String())
+		require.Contains(t, after.String(), "TestDiagnosticsRoutes")
+	})
+
 	paths := []string{"", "cmdline", "symbol"}
 	for _, profile := range pprof.Profiles() {
 		paths = append(paths, profile.Name())

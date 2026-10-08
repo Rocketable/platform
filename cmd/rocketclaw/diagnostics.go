@@ -8,10 +8,15 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
+	"runtime"
 	"sync"
 )
 
 func newDiagnosticsServer(ctx context.Context, connections *sync.WaitGroup) *http.Server {
+	// Sample one blocking event per 10 ms blocked and one in 100 mutex contention events.
+	runtime.SetBlockProfileRate(10_000_000)
+	runtime.SetMutexProfileFraction(100)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
 	mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
