@@ -81,7 +81,7 @@ test("transcript and entry HTTP proxy reach Go and reject an unmapped connection
     for (const [width, filename] of [[1280, "r22-web-desktop.png"], [390, "r22-web-mobile.png"]] as const) {
       const page = await browser.newPage({ hasTouch: width === 390, viewport: { width, height: 844 }, permissions: ["clipboard-read", "clipboard-write"] });
       await page.goto(`http://127.0.0.1:${web.port}/s/${Buffer.from(process.env.ROCKETCLAW_HISTORY_TEST_ID!).toString("base64url")}`);
-      const report = page.getByText("answer two", { exact: true });
+      const report = page.locator("#transcript-scroll").getByText("answer two", { exact: true });
       await report.waitFor();
       const footer = page.locator('[data-slot="message-footer"]').filter({ hasText: "planner (work/model-a)" }).last();
       await footer.waitFor({ state: "attached" });
