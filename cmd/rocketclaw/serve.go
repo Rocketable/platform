@@ -22,7 +22,7 @@ func runServe(args []string) error {
 	processStart := time.Now().UTC().Format(time.RFC3339Nano)
 	flagSet := flag.NewFlagSet("rocketclaw", flag.ContinueOnError)
 	secretsARN := flagSet.String(secretsARNFlag, "", secretsARNUsage)
-	pprofEnabled := flagSet.Bool("pprof", false, "serve private Go profiles at 127.0.0.1:6060")
+	pprofEnabled := flagSet.Bool("pprof", true, "serve private Go profiles at 127.0.0.1:6060")
 	if err := flagSet.Parse(args); err != nil {
 		return fmt.Errorf("parse serve flags: %w", err)
 	}

@@ -144,7 +144,7 @@ Sign in per provider with `rocketclaw oai login [provider] [--headless]`. Use `r
 
 RocketClaw logs a health line once a minute with memory, Go scheduler, and database connection figures.
 
-`rocketclaw run --pprof` turns on Go profiling at `127.0.0.1:6060`. It is off by default. Any process on the machine can reach that port, and profiles can contain private data, so do not expose the port and do not share downloaded profiles. To inspect a remote machine, forward the port over SSH:
+`rocketclaw run` turns on Go profiling at `127.0.0.1:6060` by default. Use `rocketclaw run --pprof=false` to turn it off. Any process on the machine can reach that port, and profiles can contain private data, so do not expose the port and do not share downloaded profiles. To inspect a remote machine, forward the port over SSH:
 
 ```sh
 ssh -N -L 127.0.0.1:6060:127.0.0.1:6060 trusted-host
