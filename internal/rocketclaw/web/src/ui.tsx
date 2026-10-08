@@ -2713,7 +2713,15 @@ function SessionComposer({
   const invalidateSidebar = useContext(SidebarInvalidation);
   const create = useMutation({ mutationFn: mutations.createSession, onSuccess: invalidateSidebar });
   const { text, files, sending, agent } = draft;
-  const setText = (value: string) => { draft.text = value; draft.edit++; onDraftChange(); };
+  const [, setTyped] = useState(0);
+  // Typing redraws only this composer; a whole-app redraw per keystroke made long chats lag.
+  const setText = (value: string) => {
+    draft.text = value;
+    draft.edit++;
+    setTyped((count) => count + 1);
+    const error = draft.persistenceError ?? "";
+    void persistComposerDraft(draft)?.finally(() => { if (draft.persistenceError !== error) onDraftChange(); });
+  };
   const setFiles = (value: PendingFile[]) => { draft.files = value; draft.edit++; onDraftChange(); };
   const setAgent = (value: string) => { draft.agent = value; draft.edit++; onDraftChange(); };
   const [agentOpen, setAgentOpen] = useState(false);

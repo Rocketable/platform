@@ -43,6 +43,23 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     expect(await page.locator('[data-slot="message"][data-message-id]').count()).toBe(100);
     expect(pages).toEqual([]);
 
+    // Typing redraws only the composer; redrawing a long transcript per keystroke made input lag.
+    // Background polls may still redraw it a few times, so this bounds the count well below one per key.
+    await page.evaluate(() => {
+      const probe = window as unknown as { transcriptRenders: number };
+      probe.transcriptRenders = 0;
+      window.URLSearchParams = class extends URLSearchParams {
+        constructor(init?: ConstructorParameters<typeof URLSearchParams>[0]) {
+          super(init);
+          probe.transcriptRenders++;
+        }
+      };
+    });
+    const typed = "typing in a long chat redraws only the composer";
+    await page.locator("textarea").pressSequentially(typed);
+    expect(await page.locator("textarea").inputValue()).toBe(typed);
+    expect(await page.evaluate(() => (window as unknown as { transcriptRenders: number }).transcriptRenders)).toBeLessThan(typed.length / 2);
+
     await page.locator("#transcript-scroll").hover();
     await page.mouse.wheel(0, -100_000);
     await page.getByText("user 21", { exact: true }).waitFor({ state: "attached" });
