@@ -55,7 +55,7 @@ export function TimelineDetailCard() {
                     {label}
                   </td>
                   <td className="text-center">{hidden ? null : <Switch aria-label={`${label} group`} checked={row.placement === "grouped"} onCheckedChange={(checked) => update(id, { ...row, placement: checked ? "grouped" : "separate" })} />}</td>
-                  <td className="text-center">{hidden || !row.details ? null : <Switch aria-label={`${label} collapse`} checked={row.details === "collapsed"} onCheckedChange={(checked) => update(id, { ...row, details: checked ? "collapsed" : "expanded" })} />}</td>
+                  <td className="text-center">{hidden ? null : <Switch aria-label={`${label} collapse`} checked={row.details === "collapsed"} onCheckedChange={(checked) => update(id, { ...row, details: checked ? "collapsed" : "expanded" })} />}</td>
                 </tr>
               );
             })}

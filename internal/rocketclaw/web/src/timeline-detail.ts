@@ -12,34 +12,35 @@ export const timelineCategories = [
 export type TimelineCategory = (typeof timelineCategories)[number]["id"];
 export type TimelinePlacement = "separate" | "grouped" | "hidden";
 type TimelineDetails = "collapsed" | "expanded";
-export type TimelineRows = Record<TimelineCategory, { placement: TimelinePlacement; details?: TimelineDetails }>;
+export type TimelineRows = Record<TimelineCategory, { placement: TimelinePlacement; details: TimelineDetails }>;
 type TimelineLevel = { id: "messages" | "quiet" | "compact" | "detailed" | "everything"; label: string; description: string; rows: TimelineRows };
 
 const placements: unknown[] = ["separate", "grouped", "hidden"];
 const detailValues: unknown[] = ["collapsed", "expanded"];
 const KEY = "timeline-detail";
 
-// Levels follow OpenCode 7440ff784408a8a095b58ef908de3fc6ee66ca66, packages/session-ui/src/timeline/detail.ts.
+// Levels follow OpenCode 7440ff784408a8a095b58ef908de3fc6ee66ca66, packages/session-ui/src/timeline/detail.ts,
+// except that every category can collapse and Everything expands all of them.
 export const timelineLevels: readonly TimelineLevel[] = [
   { id: "messages", label: "Messages only", description: "Hide all activity.", rows: {
     execute: { placement: "hidden", details: "collapsed" }, thinking: { placement: "hidden", details: "collapsed" },
-    subagents: { placement: "hidden" }, skills: { placement: "hidden" }, notices: { placement: "hidden" }, tools: { placement: "hidden" },
+    subagents: { placement: "hidden", details: "collapsed" }, skills: { placement: "hidden", details: "collapsed" }, notices: { placement: "hidden", details: "collapsed" }, tools: { placement: "hidden", details: "collapsed" },
   } },
   { id: "quiet", label: "Quiet", description: "Group subagents and skills. Hide other activity.", rows: {
     execute: { placement: "hidden", details: "collapsed" }, thinking: { placement: "hidden", details: "collapsed" },
-    subagents: { placement: "grouped" }, skills: { placement: "grouped" }, notices: { placement: "hidden" }, tools: { placement: "hidden" },
+    subagents: { placement: "grouped", details: "collapsed" }, skills: { placement: "grouped", details: "collapsed" }, notices: { placement: "hidden", details: "collapsed" }, tools: { placement: "hidden", details: "collapsed" },
   } },
   { id: "compact", label: "Compact", description: "Group all activity with details collapsed.", rows: {
     execute: { placement: "grouped", details: "collapsed" }, thinking: { placement: "grouped", details: "collapsed" },
-    subagents: { placement: "grouped" }, skills: { placement: "grouped" }, notices: { placement: "grouped" }, tools: { placement: "grouped" },
+    subagents: { placement: "grouped", details: "collapsed" }, skills: { placement: "grouped", details: "collapsed" }, notices: { placement: "grouped", details: "collapsed" }, tools: { placement: "grouped", details: "collapsed" },
   } },
   { id: "detailed", label: "Detailed", description: "Expand execute output. Show subagents separately and group other activity.", rows: {
     execute: { placement: "separate", details: "expanded" }, thinking: { placement: "grouped", details: "collapsed" },
-    subagents: { placement: "separate" }, skills: { placement: "grouped" }, notices: { placement: "grouped" }, tools: { placement: "grouped" },
+    subagents: { placement: "separate", details: "collapsed" }, skills: { placement: "grouped", details: "collapsed" }, notices: { placement: "grouped", details: "collapsed" }, tools: { placement: "grouped", details: "collapsed" },
   } },
-  { id: "everything", label: "Everything", description: "Show all activity separately. Expand execute output and thinking.", rows: {
+  { id: "everything", label: "Everything", description: "Show all activity separately and expanded.", rows: {
     execute: { placement: "separate", details: "expanded" }, thinking: { placement: "separate", details: "expanded" },
-    subagents: { placement: "separate" }, skills: { placement: "separate" }, notices: { placement: "separate" }, tools: { placement: "separate" },
+    subagents: { placement: "separate", details: "expanded" }, skills: { placement: "separate", details: "expanded" }, notices: { placement: "separate", details: "expanded" }, tools: { placement: "separate", details: "expanded" },
   } },
 ];
 
@@ -64,7 +65,6 @@ function parseRows(value: string | null): TimelineRows {
   return Object.fromEntries(timelineCategories.map(({ id }) => {
     const row = stored[id];
     const placement = placements.includes(row?.placement) ? row!.placement : compact[id].placement;
-    if (!compact[id].details) return [id, { placement }];
     return [id, { placement, details: detailValues.includes(row?.details) ? row!.details : compact[id].details }];
   })) as TimelineRows;
 }

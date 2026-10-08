@@ -19,13 +19,13 @@ test("nothing stored reads as Compact, stays stable and writes nothing", () => {
 
 test("levels and categories match R4 in slider order", () => {
   expect(timelineCategories.map(({ id, label }) => `${id}:${label}`)).toEqual(["execute:Execute", "thinking:Thinking", "subagents:Subagents", "skills:Skills", "notices:Notices", "tools:Other tools"]);
-  const cell = (row: TimelineRows[keyof TimelineRows]) => row.placement === "hidden" || !row.details ? row.placement : `${row.placement}, ${row.details === "expanded" ? "open" : "collapsed"}`;
+  const cell = (row: TimelineRows[keyof TimelineRows]) => row.placement === "hidden" ? row.placement : `${row.placement}, ${row.details === "expanded" ? "open" : "collapsed"}`;
   expect(timelineLevels.map((level) => [level.label, level.description, ...timelineCategories.map(({ id }) => cell(level.rows[id]))])).toEqual([
     ["Messages only", "Hide all activity.", "hidden", "hidden", "hidden", "hidden", "hidden", "hidden"],
-    ["Quiet", "Group subagents and skills. Hide other activity.", "hidden", "hidden", "grouped", "grouped", "hidden", "hidden"],
-    ["Compact", "Group all activity with details collapsed.", "grouped, collapsed", "grouped, collapsed", "grouped", "grouped", "grouped", "grouped"],
-    ["Detailed", "Expand execute output. Show subagents separately and group other activity.", "separate, open", "grouped, collapsed", "separate", "grouped", "grouped", "grouped"],
-    ["Everything", "Show all activity separately. Expand execute output and thinking.", "separate, open", "separate, open", "separate", "separate", "separate", "separate"],
+    ["Quiet", "Group subagents and skills. Hide other activity.", "hidden", "hidden", "grouped, collapsed", "grouped, collapsed", "hidden", "hidden"],
+    ["Compact", "Group all activity with details collapsed.", "grouped, collapsed", "grouped, collapsed", "grouped, collapsed", "grouped, collapsed", "grouped, collapsed", "grouped, collapsed"],
+    ["Detailed", "Expand execute output. Show subagents separately and group other activity.", "separate, open", "grouped, collapsed", "separate, collapsed", "grouped, collapsed", "grouped, collapsed", "grouped, collapsed"],
+    ["Everything", "Show all activity separately and expanded.", "separate, open", "separate, open", "separate, open", "separate, open", "separate, open", "separate, open"],
   ]);
   for (const level of timelineLevels) expect(timelineLevel(structuredClone(level.rows))).toBe(level);
 });
@@ -96,7 +96,7 @@ test("rows keep time order, merge grouped runs and split at replies and separate
   expect(shape([call("s1", "skill"), reply("interim"), call("e1", "execute"), call("e2", "execute"), reply("final")], "compact")).toEqual(["Used 1 tool[s1]", "interim", "Used 2 tools[e1,e2]", "final"]);
   expect(shape([thought("t1"), call("e1", "execute"), call("e2", "execute"), call("e3", "execute"), call("s1", "skill"), reply("a1")], "compact")).toEqual(["Used 4 tools[t1,e1,e2,e3,s1]", "a1"]);
   expect(shape([call("s1", "skill"), call("task1", "task"), call("s2", "skill")], "detailed")).toEqual(["Used 1 tool[s1]", "task1", "Used 1 tool[s2]"]);
-  expect(shape([thought("t1"), call("e1", "execute"), call("task1", "task"), notice("n1"), call("w1", "websearch")], "everything")).toEqual(["t1+", "e1+", "task1", "n1", "w1"]);
+  expect(shape([thought("t1"), call("e1", "execute"), call("task1", "task"), notice("n1"), call("w1", "websearch")], "everything")).toEqual(["t1+", "e1+", "task1+", "n1+", "w1+"]);
   expect(shape([thought("t1"), call("e1", "execute"), call("w1", "websearch"), reply("a1")], "messages")).toEqual(["a1"]);
   expect(shape([thought("t1")], "compact")).toEqual(["Thought[t1]"]);
   expect(shape([thought("t1"), thought("t2")], "compact")).toEqual(["Thoughts[t1,t2]"]);
@@ -148,5 +148,5 @@ test("Custom rows open Advanced and offer group and collapse only where they app
   expect(html).toContain('aria-pressed="false" aria-label="Execute visibility"');
   expect(html).not.toContain('aria-label="Execute group"');
   for (const label of ["Thinking", "Subagents", "Skills", "Notices", "Other tools"]) expect(html).toContain(`aria-label="${label} group"`);
-  expect(html.match(/aria-label="[^"]+ collapse"/g)).toEqual(['aria-label="Thinking collapse"']);
+  expect([...html.match(/aria-label="[^"]+ collapse"/g) ?? []]).toEqual(["Thinking", "Subagents", "Skills", "Notices", "Other tools"].map((label) => `aria-label="${label} collapse"`));
 });
