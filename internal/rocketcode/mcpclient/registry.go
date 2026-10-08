@@ -46,14 +46,10 @@ type Registry struct {
 func New(workspace string, servers map[string]ServerConfig) (*Registry, error) {
 	cloned := make(map[string]ServerConfig, len(servers))
 	for name, cfg := range servers {
-		cloned[name] = ServerConfig{
-			Command: cfg.Command,
-			Args:    slices.Clone(cfg.Args),
-			Env:     maps.Clone(cfg.Env),
-			Cwd:     cfg.Cwd,
-			URL:     cfg.URL,
-			Headers: maps.Clone(cfg.Headers),
-		}
+		cfg.Args = slices.Clone(cfg.Args)
+		cfg.Env = maps.Clone(cfg.Env)
+		cfg.Headers = maps.Clone(cfg.Headers)
+		cloned[name] = cfg
 	}
 
 	return &Registry{workspace: workspace, servers: cloned}, nil
