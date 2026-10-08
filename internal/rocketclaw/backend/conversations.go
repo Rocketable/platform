@@ -3,6 +3,7 @@ package backend
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -130,15 +131,21 @@ func (b *Bridge) syncConversation(ctx context.Context, source *Bridge) error {
 
 		data = removeSessionEntryNUL(data)
 
-		added, err := execRows(ctx, tx, "insert synced entry", "count synced entries", `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
+		var id int64
+
+		err = tx.QueryRowContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
 SELECT $1, ($2::jsonb || jsonb_build_object('sync_source_entry_id', $3::bigint, 'sync_source_conversation_id', $5::text))::json, $4
-WHERE NOT EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1 AND entry_json::jsonb->>'sync_source_entry_id' = $3::text)`, b.config.ConversationID, string(data), observed.ID, entry.Timestamp.UTC().Format(time.RFC3339Nano), producer)
-		if err != nil {
-			return err
+WHERE NOT EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1 AND entry_json::jsonb->>'sync_source_entry_id' = $3::text) RETURNING id`, b.config.ConversationID, string(data), observed.ID, entry.Timestamp.UTC().Format(time.RFC3339Nano), producer).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
 		}
 
-		if added == 0 {
-			continue
+		if err != nil {
+			return fmt.Errorf("insert synced entry: %w", err)
+		}
+
+		if err := indexEntryMessages(ctx, tx, b.config.ConversationID, producer, id, "", entry.ReplayInput); err != nil {
+			return err
 		}
 
 		changed = true

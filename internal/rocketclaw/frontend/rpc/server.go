@@ -8,7 +8,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -18,7 +17,6 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -730,30 +728,14 @@ func (s *Server) savedInputEvent(ctx context.Context, producer string, saved *Tr
 }
 
 func (s *Server) inputEvent(ctx context.Context, id, text string) (*TranscriptEvent, error) {
-	var attachments []*Attachment
-
-	for word := range strings.FieldsSeq(text) {
-		if attachmentID, ok := strings.CutPrefix(word, "attachment:"); ok {
-			attachment, err := s.sessions.AttachmentMetadata(ctx, id, attachmentID, true)
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
-			}
-
-			if err != nil {
-				return nil, fmt.Errorf("load input attachment metadata: %w", err)
-			}
-
-			attachments = append(attachments, attachmentMetadata(id, &attachment))
-		}
+	text, stored, err := s.sessions.InputAttachments(ctx, id, text)
+	if err != nil {
+		return nil, fmt.Errorf("strip input attachments: %w", err)
 	}
 
-	for _, file := range slices.Backward(attachments) {
-		reference := fmt.Sprintf("attachment:%s %q (workspace path %q)", file.Id, file.Name, filepath.Join("artifacts", "uploads", file.Id, file.Name))
-		if text == reference {
-			text = ""
-		} else {
-			text = strings.TrimSuffix(text, "\n\n"+reference)
-		}
+	var attachments []*Attachment
+	for i := range stored {
+		attachments = append(attachments, attachmentMetadata(id, &stored[i]))
 	}
 
 	return &TranscriptEvent{Role: "user", Text: text, Attachments: attachments}, nil

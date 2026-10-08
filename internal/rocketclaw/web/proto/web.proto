@@ -126,6 +126,7 @@ message MessageMatch {
 message SearchMessagesResponse {
   repeated MessageMatch matches = 1;
   repeated string tag_ids = 2;
+  bool index_complete = 3;
 }
 message SearchOriginsRequest { string query = 1; }
 message OriginMatch {

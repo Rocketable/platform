@@ -167,7 +167,7 @@ func TestObserveTranscript(t *testing.T) {
 
 	defer func() { _ = tx.Rollback() }()
 
-	id, err := appendSessionEntryDB(ctx, tx, "main", saved)
+	id, err := appendSessionEntryDB(ctx, tx, "main", "main", saved)
 	require.NoError(t, err)
 	uncommitted, err := s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
@@ -473,7 +473,7 @@ func TestTranscriptChanges(t *testing.T) {
 
 	defer func() { _ = tx.Rollback() }()
 
-	_, err = appendSessionEntryDB(ctx, tx, "main", testSessionEntry("hello", "SECRET"))
+	_, err = appendSessionEntryDB(ctx, tx, "main", "main", testSessionEntry("hello", "SECRET"))
 	require.NoError(t, err)
 	require.NoError(t, tx.QueryRowContext(ctx, `SELECT pg_current_xact_id()::text`).Scan(&revision))
 	require.NoError(t, tx.Commit())

@@ -409,10 +409,13 @@ pauses for 250 ms and only when free text remains: empty input, status tokens, p
 and unfinished `agent:`/`room:`/`is:`/`sort:` terms send no origin search. Ordinary
 session-list loading stays independent. Incomplete enumeration or a pending origin search
 shows loading feedback rather than a definitive empty result. The Search page shows
-message and row matches as soon as the message search returns, adds origin matches
-when the origin search returns, and shows “Still checking chat origins…” until then;
+row matches immediately, adds message matches when the message search returns, adds
+origin matches when the origin search returns, and shows “Still checking chat origins…” until then;
 returning to the tab does not recheck origins. A failed origin search
 shows an error while usable row matches remain selectable.
+Until the server finishes indexing existing chats, the Search page says message
+results may be incomplete instead of reporting “No matches”, and a message hit
+from a stopped or failed turn opens its chat without jumping to a message.
 The command button and Cmd/Ctrl+Shift+P open the command palette. It always offers
 **Sessions: New**, **Sessions: Search**, **Cron: Dashboard**, **Cron: Run**,
 **List Agents**, **List Skills**, and **Settings**.

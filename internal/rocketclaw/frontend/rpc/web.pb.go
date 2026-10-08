@@ -1189,6 +1189,7 @@ type SearchMessagesResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Matches       []*MessageMatch        `protobuf:"bytes,1,rep,name=matches,proto3" json:"matches,omitempty"`
 	TagIds        []string               `protobuf:"bytes,2,rep,name=tag_ids,json=tagIds,proto3" json:"tag_ids,omitempty"`
+	IndexComplete bool                   `protobuf:"varint,3,opt,name=index_complete,json=indexComplete,proto3" json:"index_complete,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1235,6 +1236,13 @@ func (x *SearchMessagesResponse) GetTagIds() []string {
 		return x.TagIds
 	}
 	return nil
+}
+
+func (x *SearchMessagesResponse) GetIndexComplete() bool {
+	if x != nil {
+		return x.IndexComplete
+	}
+	return false
 }
 
 type SearchOriginsRequest struct {
@@ -4397,10 +4405,11 @@ const file_web_proto_rawDesc = "" +
 	"\x05query\x18\x01 \x01(\tR\x05query\"g\n" +
 	"\fMessageMatch\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12.\n" +
-	"\amessage\x18\x02 \x01(\v2\x14.rpc.TranscriptEventR\amessage\"^\n" +
+	"\amessage\x18\x02 \x01(\v2\x14.rpc.TranscriptEventR\amessage\"\x85\x01\n" +
 	"\x16SearchMessagesResponse\x12+\n" +
 	"\amatches\x18\x01 \x03(\v2\x11.rpc.MessageMatchR\amatches\x12\x17\n" +
-	"\atag_ids\x18\x02 \x03(\tR\x06tagIds\",\n" +
+	"\atag_ids\x18\x02 \x03(\tR\x06tagIds\x12%\n" +
+	"\x0eindex_complete\x18\x03 \x01(\bR\rindexComplete\",\n" +
 	"\x14SearchOriginsRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\"J\n" +
 	"\vOriginMatch\x12'\n" +

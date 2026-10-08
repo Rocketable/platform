@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -85,6 +87,47 @@ func (s *SessionService) AttachmentMetadata(ctx context.Context, conversationID,
 	}
 
 	return attachment, nil
+}
+
+// InputAttachments returns producer's input text without its trailing upload
+// references, and the uploads it references in text order.
+func (s *SessionService) InputAttachments(ctx context.Context, producer, text string) (string, []protocol.OutboundAttachment, error) {
+	return inputAttachmentsDB(ctx, s.db, producer, text)
+}
+
+func inputAttachmentsDB(ctx context.Context, db stateStoreDB, producer, text string) (string, []protocol.OutboundAttachment, error) {
+	var attachments []protocol.OutboundAttachment
+
+	for word := range strings.FieldsSeq(text) {
+		id, ok := strings.CutPrefix(word, "attachment:")
+		if !ok {
+			continue
+		}
+
+		attachment := protocol.OutboundAttachment{ID: id}
+
+		err := db.QueryRowContext(ctx, `SELECT name, mime_type, size, original_unverified FROM attachments WHERE id=$1 AND conversation_id=$2 AND upload`, id, producer).Scan(&attachment.Name, &attachment.MIMEType, &attachment.Size, &attachment.OriginalUnverified)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+
+		if err != nil {
+			return "", nil, fmt.Errorf("load input attachment metadata: %w", err)
+		}
+
+		attachments = append(attachments, attachment)
+	}
+
+	for _, file := range slices.Backward(attachments) {
+		reference := fmt.Sprintf("attachment:%s %q (workspace path %q)", file.ID, file.Name, filepath.Join("artifacts", "uploads", file.ID, file.Name))
+		if text == reference {
+			text = ""
+		} else {
+			text = strings.TrimSuffix(text, "\n\n"+reference)
+		}
+	}
+
+	return text, attachments, nil
 }
 
 // RevertAttachmentMetadata authorizes only an upload referenced by the current
