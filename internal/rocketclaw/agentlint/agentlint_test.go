@@ -227,7 +227,11 @@ bad
 
 	result, err := Lint(runtimeRoot, new(config.Config))
 	require.NoError(t, err)
-	assertFindingCodes(t, result.Findings, rc000)
+	assert.Equal(t, []Finding{
+		{Code: rc000, Severity: "error", Path: "agents/bad.md", Message: "malformed #nolint comment requires optional code and non-empty reason"},
+		{Code: rc000, Severity: "error", Path: "agents/bad.md", Message: "unknown #nolint code RC999"},
+		{Code: rc003, Severity: "error", Path: "agents/bad.md", Message: "bad participates in a task delegation cycle without bounded maxRecursion", keys: []string{"maxRecursion", "task"}},
+	}, result.Findings)
 }
 
 func TestAgentGraphDOTExpandsWildcardAndMarksCycles(t *testing.T) {
