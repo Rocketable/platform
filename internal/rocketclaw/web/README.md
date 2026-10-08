@@ -279,8 +279,11 @@ active tab.
 - **Context menu.** Right-click a tab, press Shift+F10 or the menu key on a focused
   tab, or use the **…** button on the active tab (for touch) to reach Close,
   Close others, Close to the right, Close all, Pin/Unpin, and Move tabs to
-  left/top. The command palette offers the same commands as **Tabs: …** for the
+  left/top. Session tabs also offer **Rename session**, which opens **Name
+  session**. The command palette offers the same commands as **Tabs: …** for the
   active tab.
+- **New session.** Double-clicking empty space in the strip opens New session,
+  like the New session button.
 - **Closing.** The × button, a middle-click, the menu, a page's close button, or
   Escape on a page closes a tab. Closing the active tab activates its right
   neighbour, or its left one at the end. Closing the last tab opens New session;
@@ -291,7 +294,9 @@ active tab.
   and always on touch screens; on the active tab and on touch screens the dot moves
   before the title instead. Screen readers hear “Turn running”.
 - **Keyboard.** The strip is a `tablist` with one Tab stop. Arrow keys (Left/Right
-  or Up/Down), Home, and End move focus; Enter or Space activates.
+  or Up/Down), Home, and End move focus; Enter or Space activates. Anywhere in
+  the app, Cmd/Ctrl+[ and Cmd/Ctrl+] activate the previous and next tab, wrapping
+  at the ends. This replaces the browser's Back/Forward for those keys.
 - **Placement.** Tabs sit on top by default or in a 14rem column on the left. Switch
   from **Settings → Appearance → Tabs**, the context menu, or the palette. Below the `md` breakpoint, left falls back
   to top, and the top strip scrolls horizontally.

@@ -738,7 +738,8 @@ function useTabs() {
   };
 }
 
-function TabStrip({ tabs: { state, pathname, close, promote, move, commands }, vertical }: { tabs: ReturnType<typeof useTabs>; vertical: boolean }) {
+function TabStrip({ tabs: { state, pathname, close, promote, move, commands }, vertical, newChat }: { tabs: ReturnType<typeof useTabs>; vertical: boolean; newChat: () => void }) {
+  const { setCommand } = useContext(SessionCommands);
   const [menu, setMenu] = useState<{ path: string; anchor: Element | { getBoundingClientRect: () => DOMRect } }>();
   const pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
   const list = useRef<HTMLDivElement>(null), refocus = useRef(false);
@@ -753,6 +754,7 @@ function TabStrip({ tabs: { state, pathname, close, promote, move, commands }, v
         setMenu({ path, anchor: { getBoundingClientRect: () => DOMRect.fromRect({ x: event.clientX, y: event.clientY }) } });
       }}
       onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
+      onDoubleClick={(event) => { if (event.target === event.currentTarget) newChat(); }}
       onAuxClick={(event) => {
         const path = pathOf(event);
         if (event.button !== 1 || !path) return;
@@ -792,7 +794,7 @@ function TabStrip({ tabs: { state, pathname, close, promote, move, commands }, v
     </div>
     <Menu.Root open={!!menu} onOpenChange={(open) => { if (!open) setMenu(undefined); }}>
       <Menu.Portal><Menu.Positioner anchor={menu?.anchor} sideOffset={4} align="start" className="z-50 outline-none"><Menu.Popup finalFocus={() => { const closed = refocus.current; refocus.current = false; return closed ? selected() : true; }} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none">
-        {menu ? commands(menu.path).map(({ key, label, run }) => <Menu.Item key={key} onClick={() => { refocus.current = key.startsWith("close"); run(); }} className="flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent">{label}</Menu.Item>) : null}
+        {menu ? [...menu.path.startsWith("/s/") ? [{ key: "rename", label: "Rename session", run: () => setCommand({ mode: "name", source: decodeSessionId(menu.path.slice(3)) }) }] : [], ...commands(menu.path)].map(({ key, label, run }) => <Menu.Item key={key} onClick={() => { refocus.current = key.startsWith("close"); run(); }} className="flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent">{label}</Menu.Item>) : null}
       </Menu.Popup></Menu.Positioner></Menu.Portal>
     </Menu.Root>
   </>;
@@ -866,7 +868,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const tabs = useTabs();
   const medium = useMedia("(min-width: 48rem)");
   const vertical = tabs.placement === "left" && medium;
-  const { close: closeTab } = tabs;
+  const { close: closeTab, state: { tabs: openTabs }, pathname } = tabs;
   const newChat = useCallback(() => {
     const draft = drafts.get("") ?? drafts.get(conversation.id)!;
     if ([!scope, draft.reverting, !draft.hydrated].some(Boolean)) return;
@@ -902,6 +904,12 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
         newChat();
         return;
       }
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && (event.code === "BracketLeft" || event.code === "BracketRight")) {
+        event.preventDefault();
+        const at = openTabs.findIndex((tab) => tab.path === pathname);
+        const next = openTabs[(at + (event.code === "BracketLeft" ? openTabs.length - 1 : 1)) % openTabs.length].path;
+        if (next !== pathname) navigate(next);
+      }
     };
     const onEscape = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || showChat || event.key !== "Escape") return;
@@ -915,7 +923,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("keydown", onEscape);
     };
-  }, [newChat, showChat, openPalette, closeTab]);
+  }, [newChat, showChat, openPalette, closeTab, openTabs, pathname]);
   if (showChat && conversation.id !== route.id) {
     // Creation assigns this conversation its ID; other navigation starts a fresh subtree.
     const created = conversation.id === "" && conversation.created === route.id;
@@ -942,9 +950,9 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               </div>
             </BottomNavigation>
             <div className="fixed top-2 right-2 z-40 rounded-md bg-background shadow-sm"><ThemeToggle /></div>
-          {vertical ? null : <TabStrip tabs={tabs} vertical={false} />}
+          {vertical ? null : <TabStrip tabs={tabs} vertical={false} newChat={newChat} />}
           <div className="flex min-h-0 min-w-0 flex-1">
-            {vertical ? <TabStrip tabs={tabs} vertical /> : null}
+            {vertical ? <TabStrip tabs={tabs} vertical newChat={newChat} /> : null}
             <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]", command?.target && "pt-[min(75dvh,30rem)]")}>
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
               {route.search ? <SearchPage /> : null}

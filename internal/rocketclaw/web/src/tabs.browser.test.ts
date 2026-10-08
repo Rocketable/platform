@@ -15,15 +15,17 @@ const href = (id: string) => `/s/${Buffer.from(id).toString("base64url")}`;
 async function withPage(options: object, run: (page: any, origin: string, prompts: { id: string; text: string }[]) => Promise<void>) {
   const { chromium: engine } = await import(playwright!);
   const prompts: { id: string; text: string }[] = [];
+  const sessions = structuredClone(rows);
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions, owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
     }
-    const input = await request.json().catch(() => ({})) as { id: string; text: string };
+    const input = await request.json().catch(() => ({})) as { id: string; text: string; name: string };
+    if (url.pathname === "/api/UpdateSession") sessions.find((row) => row.id === input.id)!.name = input.name;
     switch (url.pathname) {
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/Protocol": return Response.json({ protoSha256: "tabs" });
@@ -231,6 +233,36 @@ test("storage reset, deep links, keyboard, page close, palette commands, and pla
   await page.getByRole("option", { name: "Top" }).click();
   await orientation("horizontal");
   expect(await page.evaluate(() => localStorage.getItem("tab-placement"))).toBe("top");
+}), 60_000);
+
+test("tab menu renames sessions, bracket shortcuts cycle tabs, and double-clicking empty strip opens a new session", () => withPage({}, async (page, origin) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  for (const [id, name] of [["alpha", "Alpha"], ["bravo", "Bravo"], ["charlie", "Charlie"]]) {
+    await page.goto(`${origin}${href(id)}`);
+    await tab(name).waitFor();
+  }
+  await page.getByPlaceholder("Message or $command").focus();
+  await page.keyboard.press("Control+BracketRight");
+  await page.waitForURL(`**${href("alpha")}`);
+  await page.keyboard.press("Meta+BracketLeft");
+  await page.waitForURL(`**${href("charlie")}`);
+  await page.keyboard.press("Meta+BracketLeft");
+  await page.waitForURL(`**${href("bravo")}`);
+
+  await menu(page, "Alpha", "Rename session");
+  const dialog = page.getByRole("dialog", { name: "Name session", exact: true });
+  await dialog.getByLabel("Session name").fill("Renamed");
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await dialog.waitFor({ state: "hidden" });
+  await tab("Renamed").waitFor();
+  expect(page.url()).toEndWith(href("bravo"));
+
+  const box = await strip(page).boundingBox();
+  await strip(page).dblclick({ position: { x: box.width - 4, y: box.height / 2 } });
+  await page.waitForURL(`${origin}/`);
+  expect(await names(page)).toEqual(["Renamed", "Bravo", "New session", "Charlie"]);
+  await tab("New session").click({ button: "right" });
+  expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain("Rename session");
 }), 60_000);
 
 test("narrow top strip scrolls and running tabs keep a reachable close control", () => withPage({ viewport: { width: 375, height: 700 }, hasTouch: true }, async (page, origin) => {
