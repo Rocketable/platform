@@ -1600,6 +1600,10 @@ func (s sessionStore) appendDB(ctx context.Context, db stateStoreDB, entry *harn
 }
 
 func removeSessionEntryNUL(data []byte) []byte {
+	if !bytes.Contains(data, []byte(`\u0000`)) {
+		return data
+	}
+
 	parts := bytes.Split(data, []byte(`\\`))
 	for i := range parts {
 		parts[i] = bytes.ReplaceAll(parts[i], []byte(`\u0000`), nil)
