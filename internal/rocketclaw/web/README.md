@@ -521,7 +521,8 @@ The theme toggle floats in the upper-right corner of the page and switches light
 Config's Timeline section has the **Timeline detail** card, following OpenCode v2. A
 five-stop slider picks Messages only, Quiet, Compact, Detailed, or Everything, and an
 Advanced table sets visibility, Group, and Collapse per category; settings that match
-no level read as Custom. A browser that never chose shows Compact. The setting is saved
+no level read as Custom. Everything expands every tool call, thinking trace, and notice,
+and every category has a Collapse switch. A browser that never chose shows Compact. The setting is saved
 in this browser under `timeline-detail`, applies to every open timeline at once,
 including other tabs, and is not sent to the server.
 The down-arrow appears above the chat composer when away from the latest message.
