@@ -643,15 +643,17 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
 
     const putsBeforeLive = await page.evaluate(() => (window as unknown as { __snapshotPuts: number }).__snapshotPuts);
     ctrl.yieldBatches = complete([row("kept", "saved preview"), row("gone", "will vanish"), row("slack-thread:C:1", "filter preview")]);
+    const refreshRequest = page.waitForRequest("**/api/ListSessions*");
     blocked.resolve();
+    blocked = Promise.withResolvers();
     await page.keyboard.press("Control+p");
     await shown(sessionPalette, "saved preview");
     await shown(sessionPalette, "will vanish");
     expect(await page.evaluate(async () => { await document.fonts.ready; return document.fonts.check("16px Inter") && getComputedStyle(document.body).fontFamily.startsWith("Inter"); })).toBe(true);
+    await page.waitForFunction((expected: number) => (window as unknown as { __snapshotPuts: number }).__snapshotPuts >= expected, putsBeforeLive + 1);
     expect(await page.evaluate(() => (window as unknown as { __snapshotPuts: number }).__snapshotPuts)).toBe(putsBeforeLive + 1);
 
-    blocked = Promise.withResolvers();
-    await page.waitForRequest("**/api/ListSessions*");
+    await refreshRequest;
     await hidden(page, "Refreshing");
     await shown(sessionPalette, "saved preview");
     const heldCalls = ctrl.listCalls;
