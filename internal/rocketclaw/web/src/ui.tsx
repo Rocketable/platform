@@ -6,6 +6,7 @@ import { Combobox } from "@base-ui/react/combobox";
 import { Menu } from "@base-ui/react/menu";
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions, rpc } from "./api";
 import { draftContent } from "./drafts";
@@ -702,7 +703,8 @@ function useTabs() {
   const owner = identity.data?.username;
   const pathname = usePathname() || "/";
   const [state, setState] = useState(() => loadTabs(owner, pathname));
-  const [placement, setPlacement] = useState(() => localStorage.getItem("tab-placement") === "left" ? "left" : "top");
+  const [placement, setPlacement] = useState<"top" | "left">(() => localStorage.getItem("tab-placement") === "left" ? "left" : "top");
+  const place = (value: "top" | "left") => { localStorage.setItem("tab-placement", value); setPlacement(value); };
   if (state.owner !== owner) setState(loadTabs(owner, pathname));
   else if (state.active !== pathname) setState(openTab(state, pathname));
   useEffect(() => {
@@ -721,7 +723,7 @@ function useTabs() {
   const unpinned = (tabs: Tab[]) => tabs.flatMap((tab) => tab.pinned ? [] : [tab.path]);
   const next = placement === "left" ? "top" : "left";
   return {
-    state, pathname, placement, close,
+    state, pathname, placement, place, close,
     promote: (path: string) => { if (state.tabs.some((tab) => tab.path === path && tab.preview)) update((tabs) => tabs.map((tab) => tab.path === path ? { ...tab, preview: false } : tab)); },
     move: (from: string, to: string) => update((tabs) => moveQueueId(tabs.map((tab) => tab.path), from, to).map((path) => tabs.find((tab) => tab.path === path)!)),
     create: (id: string) => update((tabs) => tabs.map((tab) => tab.path === "/" ? { path: sessionPath(id), pinned: tab.pinned } : tab)),
@@ -731,7 +733,7 @@ function useTabs() {
       { key: "close-right", label: "Close to the right", run: () => close(unpinned(state.tabs.slice(state.tabs.findIndex((tab) => tab.path === path) + 1)), path) },
       { key: "close-all", label: "Close all", run: () => close(unpinned(state.tabs)) },
       { key: "pin", label: state.tabs.find((tab) => tab.path === path)?.pinned ? "Unpin" : "Pin", run: () => update((tabs) => tabs.map((tab) => tab.path === path ? { path, pinned: !tab.pinned } : tab)) },
-      { key: "placement", label: `Move tabs to ${next}`, run: () => { localStorage.setItem("tab-placement", next); setPlacement(next); } },
+      { key: "placement", label: `Move tabs to ${next}`, run: () => place(next) },
     ],
   };
 }
@@ -3504,8 +3506,11 @@ function ConfigLoaded({ view }: { view: ConfigView }) {
   );
 }
 
+const tabPlacements = [{ value: "top", label: "Top" }, { value: "left", label: "Left sidebar" }];
+
 function ConfigPage() {
   const config = useQuery({ ...queries.config(), staleTime: 60_000 });
+  const tabs = useContext(TabActions);
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 overflow-y-auto p-4">
       <PageTitle>Config</PageTitle>
@@ -3513,6 +3518,13 @@ function ConfigPage() {
         <div className="flex flex-wrap items-center justify-between gap-4 border-b py-2">
           <span className="text-sm text-muted-foreground">Theme</span>
           <PaletteChooser />
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b py-2">
+          <span className="text-sm text-muted-foreground">Tabs</span>
+          <Select items={tabPlacements} value={tabs.placement} onValueChange={(value) => tabs.place(value === "left" ? "left" : "top")}>
+            <SelectTrigger aria-label="Tab placement" className="min-w-40"><SelectValue /></SelectTrigger>
+            <SelectContent align="end"><SelectGroup>{tabPlacements.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectGroup></SelectContent>
+          </Select>
         </div>
       </ConfigSection>
       <ConfigSection title="Timeline">

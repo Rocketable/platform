@@ -212,6 +212,25 @@ test("storage reset, deep links, keyboard, page close, palette commands, and pla
   await page.keyboard.press("Control+Shift+p");
   await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Tabs: Move tabs to top" }).click();
   expect(await page.evaluate(() => localStorage.getItem("tab-placement"))).toBe("top");
+
+  // Settings offers the same placement switch.
+  const orientation = (value: string) => page.waitForFunction((expected: string) => document.querySelector('[role="tablist"][aria-label="Open tabs"]')!.getAttribute("aria-orientation") === expected, value);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.getByRole("dialog").waitFor({ state: "detached" });
+  await page.keyboard.press("Control+Shift+p");
+  await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Settings" }).click();
+  await page.waitForURL("**/config");
+  const placement = page.getByRole("combobox", { name: "Tab placement" });
+  expect(await placement.innerText()).toBe("Top");
+  await placement.click();
+  await page.getByRole("option", { name: "Left sidebar" }).click();
+  await orientation("vertical");
+  expect(await page.evaluate(() => localStorage.getItem("tab-placement"))).toBe("left");
+  expect(await placement.innerText()).toBe("Left sidebar");
+  await placement.click();
+  await page.getByRole("option", { name: "Top" }).click();
+  await orientation("horizontal");
+  expect(await page.evaluate(() => localStorage.getItem("tab-placement"))).toBe("top");
 }), 60_000);
 
 test("narrow top strip scrolls and running tabs keep a reachable close control", () => withPage({ viewport: { width: 375, height: 700 }, hasTouch: true }, async (page, origin) => {

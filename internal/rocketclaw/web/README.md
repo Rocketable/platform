@@ -293,7 +293,7 @@ active tab.
 - **Keyboard.** The strip is a `tablist` with one Tab stop. Arrow keys (Left/Right
   or Up/Down), Home, and End move focus; Enter or Space activates.
 - **Placement.** Tabs sit on top by default or in a 14rem column on the left. Switch
-  from the context menu or the palette. Below the `md` breakpoint, left falls back
+  from **Settings → Appearance → Tabs**, the context menu, or the palette. Below the `md` breakpoint, left falls back
   to top, and the top strip scrolls horizontally.
 - **Storage.** Open tabs, their order, pins, and the preview flag are kept in this
   browser's `localStorage` under `tabs:<user>`, separately for each
