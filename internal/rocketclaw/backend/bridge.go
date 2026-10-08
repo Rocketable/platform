@@ -2358,14 +2358,11 @@ func toMCPClientServers(servers map[string]config.MCPServerConfig) map[string]mc
 
 	out := make(map[string]mcpclient.ServerConfig, len(servers))
 	for name, server := range servers {
-		out[name] = mcpclient.ServerConfig{
-			Command: server.Command,
-			Args:    slices.Clone(server.Args),
-			Env:     maps.Clone(server.Env),
-			Cwd:     server.Cwd,
-			URL:     server.URL,
-			Headers: maps.Clone(server.Headers),
-		}
+		cfg := mcpclient.ServerConfig(server)
+		cfg.Args = slices.Clone(cfg.Args)
+		cfg.Env = maps.Clone(cfg.Env)
+		cfg.Headers = maps.Clone(cfg.Headers)
+		out[name] = cfg
 	}
 
 	return out

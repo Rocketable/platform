@@ -11,6 +11,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/Rocketable/platform/internal/rocketcode/mcpclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,14 +42,28 @@ func TestRocketcodeConfigIncludesMCPServers(t *testing.T) {
 	cfg := &config.Config{
 		Workspace: t.TempDir(),
 		MCPServers: map[string]config.MCPServerConfig{
-			"demo": {URL: "http://127.0.0.1:9"},
+			"demo": {
+				Command: "demo-command",
+				Args:    []string{"--stdio"},
+				Env:     map[string]string{"DEMO": "value"},
+				Cwd:     "demo-dir",
+				URL:     "http://127.0.0.1:9",
+				Headers: map[string]string{"Authorization": "test-token"},
+			},
 		},
 	}
 	bridge := NewConversation(config.NewLockedConfig(cfg), discardPublisher{}, &Config{ConversationID: "c", Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
 	rc := bridge.rocketcodeConfig(t.TempDir(), nil)
 	require.Len(t, rc.MCPServers, 1)
-	assert.Equal(t, "http://127.0.0.1:9", rc.MCPServers["demo"].URL)
+	assert.Equal(t, mcpclient.ServerConfig(cfg.MCPServers["demo"]), rc.MCPServers["demo"])
 	assert.Equal(t, cfg.Workspace, rc.MCPWorkspace)
+
+	converted := toMCPClientServers(cfg.MCPServers)
+	converted["demo"].Args[0] = "changed"
+	converted["demo"].Env["DEMO"] = "changed"
+	converted["demo"].Headers["Authorization"] = "changed"
+
+	assert.Equal(t, rc.MCPServers["demo"], mcpclient.ServerConfig(cfg.MCPServers["demo"]))
 
 	empty := NewConversation(config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), discardPublisher{}, &Config{ConversationID: "c2", Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
 	emptyRC := empty.rocketcodeConfig(t.TempDir(), nil)
