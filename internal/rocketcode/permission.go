@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 	"gopkg.in/yaml.v3"
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -676,7 +677,7 @@ func bashPermissionNodes(file *syntax.File, rule bool) []string {
 }
 
 func bashComponentPatternMatch(subject, pattern string, segments ...ruleSegment) bool {
-	if !permissionWildcardMatch(subject, pattern, segments...) {
+	if !permissionWildcardMatch(subject, pattern, segments...) || !bashExecutablePatternMatch(subject, pattern) {
 		return false
 	}
 
@@ -767,8 +768,42 @@ func bashScriptPatternMatch(command, pattern string, segments ...ruleSegment) bo
 	}
 
 	return slices.EqualFunc(subjects[0], subjects[1], func(subject, pattern string) bool {
-		return permissionWildcardMatch(subject, pattern)
+		return permissionWildcardMatch(subject, pattern) && bashExecutablePatternMatch(subject, pattern)
 	})
+}
+
+func bashExecutablePatternMatch(subject, pattern string) bool {
+	if !strings.Contains(pattern, "/") || !strings.ContainsAny(pattern, "*?") {
+		return true
+	}
+
+	var executables [2]string
+
+	for i, text := range []string{pattern, subject} {
+		file, err := syntax.NewParser().Parse(strings.NewReader(text), "")
+		if err != nil || len(file.Stmts) != 1 {
+			return true // Non-command components keep their text-matching rules.
+		}
+
+		call, ok := file.Stmts[0].Cmd.(*syntax.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return true
+		}
+
+		fields, err := expand.Fields(nil, call.Args[0])
+		if err != nil || len(fields) != 1 {
+			return false
+		}
+
+		executables[i] = fields[0]
+		if i == 0 && (!strings.Contains(executables[0], "/") || !strings.ContainsAny(executables[0], "*?")) {
+			return true
+		}
+	}
+
+	// Path-shaped wildcards must not swallow parent-directory components.
+	// Explicit executable names and unrestricted command grants retain their meaning.
+	return !slices.Contains(strings.Split(executables[1], "/"), "..")
 }
 
 func bashStaticExecutable(word *syntax.Word) bool {

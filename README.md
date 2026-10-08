@@ -84,6 +84,8 @@ permission:
 
 For the `bash` tool, RocketCode checks every command in a script on its own, and each command must be allowed. When several rules match, the last one wins. Scripts it cannot parse are refused, even with `bash: allow`.
 
+Bash rules match command text, not everything a program can do. An executable-path wildcard such as `./scripts/*` does not match executable paths containing `..`; name such an executable explicitly if it is intended. This check is not a shell sandbox: an approved script can still launch other programs or follow symlinks.
+
 Some features are off until you turn them on under `permission.rocketclaw`:
 
 - `rocketclaw_list_sessions`, `rocketclaw_get_session`, `rocketclaw_current_session_id`: let an agent read saved conversations. These can read every conversation in the database, not only the agent's own.
