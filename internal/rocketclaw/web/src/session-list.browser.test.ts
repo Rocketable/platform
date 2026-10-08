@@ -858,6 +858,16 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await page.locator("textarea").fill("");
     for (const width of [1280, 390]) {
       await page.setViewportSize({ width, height: 844 });
+      const longDraft = "A long draft line\n".repeat(100);
+      await page.locator("textarea").fill(longDraft);
+      expect(await page.locator("textarea").evaluate((element: HTMLTextAreaElement) => element.scrollHeight > element.clientHeight)).toBe(true);
+      const sendBounds = await page.getByRole("button", { name: "Send", exact: true }).boundingBox();
+      expect(sendBounds!.y).toBeGreaterThanOrEqual(0);
+      expect(sendBounds!.y + sendBounds!.height).toBeLessThanOrEqual(844);
+      await page.locator("textarea").press("Control+End");
+      expect(await page.locator("textarea").evaluate((element: HTMLTextAreaElement) => element.scrollTop > 0)).toBe(true);
+      expect(await page.locator("textarea").inputValue()).toBe(longDraft);
+      await page.locator("textarea").fill("");
       await page.locator('#transcript-scroll [data-slot="bubble-content"] div').first().click({ trial: true }); // Measure after the responsive layout finishes resizing.
       const word = await page.locator('#transcript-scroll [data-slot="bubble-content"] div').first().evaluate((element: HTMLElement) => {
         const range = document.createRange();

@@ -3100,7 +3100,7 @@ function Composer({
             }}
             placeholder={placeholder}
             variant="embedded"
-            className="min-h-16"
+            className="min-h-16 max-h-[40dvh] overflow-y-auto"
             onKeyDown={(event) => {
               if (event.key === "Enter" && event.altKey && (event.metaKey || event.ctrlKey) && !event.shiftKey) {
                 event.preventDefault();
