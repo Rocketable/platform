@@ -80,6 +80,8 @@ func (r *Runtime) SyncConversation(ctx context.Context, source, destination stri
 
 func (b *Bridge) syncConversation(ctx context.Context, source *Bridge) error {
 	store := b.config.SessionService
+	// Scheduled claims hold b.mu while waiting for history; snapshot before taking history locks.
+	agent := b.agentSnapshot()
 
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -155,7 +157,7 @@ WHERE NOT EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1 AND e
 		}
 	}
 
-	schedules, err := dao.projectProducerEffects(ctx, source.config.ConversationID, b.config.ConversationID, b.agentSnapshot())
+	schedules, err := dao.projectProducerEffects(ctx, source.config.ConversationID, b.config.ConversationID, agent)
 	if err != nil {
 		return err
 	}
