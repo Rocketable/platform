@@ -7,8 +7,9 @@ const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample rate ${rate ?? "disabled"}`, async () => {
   const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
   const envelopes: string[] = [];
-  const spans: { name: string; attributes: { "sentry.op"?: { value: string }; "url.path"?: { value: string } } }[] = [];
+  const spans: { name: string; attributes: { "sentry.op"?: { value: string }; "url.path"?: { value: string }; "url.full"?: { value: string }; "browser.script.invoker_type"?: { value: string } } }[] = [];
   const tracing = Promise.withResolvers<void>();
+  const sessionNavigation = Promise.withResolvers<void>();
   const interaction = Promise.withResolvers<void>();
   const reported = Promise.withResolvers<void>();
   const searchStarted = Promise.withResolvers<void>();
@@ -26,7 +27,8 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
         if (item.exception || item.logentry) events.push(item);
       }
       if (["pageload", "navigation", "http.client"].every((op) => spans.some((span) => span.attributes["sentry.op"]?.value === op))) tracing.resolve();
-      if (["ui.action.click", "ui.long_task"].every((op) => spans.some((span) => span.attributes["sentry.op"]?.value === op))) interaction.resolve();
+      if (spans.some((span) => span.attributes["sentry.op"]?.value === "navigation" && span.name === "/s/:id")) sessionNavigation.resolve();
+      if (["ui.action.click", "ui.long_animation_frame"].every((op) => spans.some((span) => span.attributes["sentry.op"]?.value === op))) interaction.resolve();
       if (["browser exception", "promise rejection", "console failure", "request failure", "clipboard failure"].every((message) => events.some((event) => event.logentry?.formatted === message || event.exception?.values.some((exception) => exception.value === message))) && events.some((event) => event.exception?.values.some((exception) => exception.type === "React ErrorBoundary TypeError"))) reported.resolve();
       return Response.json({});
     }
@@ -53,7 +55,7 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
     const file = Bun.file(path.join(dist, url.pathname));
     if (await file.exists()) return new Response(file);
     let html = await Bun.file(path.join(dist, "index.html")).text();
-    if (rate !== undefined) html = html.replace("</head>", `<script id="sentry-config" type="application/json">${JSON.stringify({ dsn: `http://public@127.0.0.1:${server.port}/1`, environment: "browser-test", traces_sample_rate: rate })}</script></head>`);
+    if (rate !== undefined) html = html.replace("</head>", `<script id="sentry-config" type="application/json">${JSON.stringify({ dsn: `http://public@127.0.0.1:${server.port}/1`, environment: "browser-test", release: "v9.8.7-browser-test", traces_sample_rate: rate })}</script></head>`);
     return new Response(html, { headers: { "Content-Type": "text/html" } });
   } });
   const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM, headless: true });
@@ -83,9 +85,12 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
       }, { once: true }));
       await search.click();
       await interaction.promise;
+      // Chromium reports slow frames with the script that caused them.
+      expect(spans.some((span) => span.attributes["sentry.op"]?.value === "ui.long_animation_frame" && span.attributes["browser.script.invoker_type"]?.value === "event-listener")).toBe(true);
       const data = envelopes.join("\n");
-      expect(spans.some((span) => span.attributes["url.path"]?.value === "/search" && span.attributes["sentry.op"]?.value === "navigation")).toBe(true);
+      expect(spans.some((span) => span.name === "/search" && span.attributes["url.path"]?.value === "/search" && span.attributes["sentry.op"]?.value === "navigation")).toBe(true);
       expect(data).toContain("browser-test");
+      expect(data).toContain("v9.8.7-browser-test");
       expect(data).not.toContain("private-search");
       expect(data).not.toContain('"type":"replay_event"');
       expect(data).not.toContain('"type":"replay_recording"');
@@ -102,6 +107,12 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
     await page.getByText("request failure", { exact: true }).waitFor();
     await page.evaluate(() => { history.pushState({}, "", "/s/c2Vzc2lvbg"); dispatchEvent(new PopStateEvent("popstate")); });
     await page.getByText("private-chat-text", { exact: true }).waitFor();
+    if (rate === 1) {
+      await sessionNavigation.promise;
+      // Requests repeated every two seconds are not user-facing latency and must not hold pageloads and navigations open.
+      expect(spans.filter((span) => ["/api/Protocol", "/api/Identity", "/api/ListSessions", "/api/ListAgents", "/api/ListQueue"].includes(new URL(span.attributes["url.full"]?.value ?? "http://x/").pathname))).toEqual([]);
+      expect(spans.some((span) => span.attributes["url.full"]?.value.endsWith("/api/History"))).toBe(true);
+    }
     await page.evaluate(() => { Object.defineProperty(navigator, "clipboard", { value: { writeText: async () => { throw new Error("clipboard failure"); } } }); });
     const copy = page.getByRole("button", { name: "Copy message", exact: true });
     await page.getByText("private-chat-text", { exact: true }).hover();
