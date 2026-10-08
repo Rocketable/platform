@@ -245,19 +245,13 @@ func addSuppressionsFromNode(filePath, key string, node *yaml.Node, suppressions
 			continue
 		}
 
-		if code != "" {
-			if !validCode(code) {
-				*findings = append(*findings, Finding{Code: rc000, Severity: "error", Path: filePath, Message: "unknown #nolint code " + code})
-				continue
-			}
+		if code != "" && !slices.Contains([]string{rc001, rc002, rc003, rc004, rc005, rc006, rc007, rc008}, code) {
+			*findings = append(*findings, Finding{Code: rc000, Severity: "error", Path: filePath, Message: "unknown #nolint code " + code})
+			continue
 		}
 
 		suppressions[key] = append(suppressions[key], suppression{code: code})
 	}
-}
-
-func validCode(code string) bool {
-	return slices.Contains([]string{rc001, rc002, rc003, rc004, rc005, rc006, rc007, rc008}, code)
 }
 
 func parseNoLint(comment string) (string, bool) {
