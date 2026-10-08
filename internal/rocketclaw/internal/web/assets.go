@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"time"
@@ -17,6 +18,23 @@ import (
 //go:embed dist
 var assets embed.FS
 
+// sentryBootstrap is the browser SDK configuration embedded in the index page.
+type sentryBootstrap struct {
+	config.SentryConfig
+
+	Release string `json:"release,omitempty"`
+}
+
+// release names the running module version so browser reports can be compared across deploys.
+// Local builds without a module version report none.
+func release(build *debug.BuildInfo) string {
+	if build == nil || build.Main.Version == "(devel)" {
+		return ""
+	}
+
+	return build.Main.Version
+}
+
 // Handler serves application routes and compiled assets without a frontend runtime.
 func Handler(sentry config.SentryConfig) http.Handler {
 	files, _ := fs.Sub(assets, "dist")
@@ -26,7 +44,8 @@ func Handler(sentry config.SentryConfig) http.Handler {
 	if sentry.DSN != "" {
 		// The embedded index exists, and validated JSON config contains only serializable values.
 		index, _ = fs.ReadFile(files, "index.html")
-		data, _ := json.Marshal(sentry) // HTML escaping prevents closing the script element.
+		build, _ := debug.ReadBuildInfo()
+		data, _ := json.Marshal(sentryBootstrap{SentryConfig: sentry, Release: release(build)}) // HTML escaping prevents closing the script element.
 		index = []byte(strings.Replace(string(index), "</head>", `<script id="sentry-config" type="application/json">`+string(data)+`</script></head>`, 1))
 	}
 

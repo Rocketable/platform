@@ -1,9 +1,11 @@
 package web
 
 import (
+	"encoding/json"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -58,4 +60,21 @@ func TestSentryBootstrap(t *testing.T) {
 		require.NotContains(t, response.Body.String(), sentry.Environment)
 		require.Contains(t, response.Body.String(), `\u003c/script\u003e`)
 	}
+}
+
+func TestSentryRelease(t *testing.T) {
+	for _, tt := range []struct {
+		build *debug.BuildInfo
+		want  string
+	}{
+		{build: nil, want: ""},
+		{build: &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, want: ""},
+		{build: &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, want: "v1.2.3"},
+	} {
+		require.Equal(t, tt.want, release(tt.build))
+	}
+
+	data, err := json.Marshal(sentryBootstrap{DSN: "https://public@o1.ingest.sentry.io/1", Release: "v1.2.3"})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"dsn":"https://public@o1.ingest.sentry.io/1","release":"v1.2.3"}`, string(data))
 }

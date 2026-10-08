@@ -106,8 +106,10 @@ Set `web.sentry` in either `rocketclaw.json` or `femtoclaw.json`:
 ```
 
 Use the **public DSN** from your Sentry project's Client Keys settings, not an
-auth token or a DSN containing a private key. Only these three settings are
-embedded in the HTML; the rest of the runtime config is not exposed. Restart
+auth token or a DSN containing a private key. Only these three settings and
+the running module version (as the Sentry release, omitted for local
+`(devel)` builds) are embedded in the HTML; the rest of the runtime config is
+not exposed. Restart
 RocketClaw and reload the browser after changing them. No frontend rebuild is
 needed for config changes. When both filenames exist, `femtoclaw.json` takes
 precedence.
@@ -121,10 +123,19 @@ traces; React reports also include component stacks. Errors are not sampled,
 regardless of the performance trace rate. Duplicate reports may be collapsed.
 
 The browser also sends page-load, History API navigation, fetch/XHR,
-click-interaction, long-task, and Web Vitals performance data to Sentry. Long
-tasks show main-thread stalls during active traces; this does not measure every
-freeze or detect a crashed browser. Browser support determines which metrics
+click-interaction, main-thread stall, and Web Vitals performance data to Sentry.
+Stalls are recorded during active traces; this does not measure every freeze or
+detect a crashed browser. Browsers with the Long Animation Frames API (Chromium)
+report slow frames as `ui.long_animation_frame` with the script that caused them
+(`browser.script.invoker`, `code.file.path`, `code.function.name`, and
+`browser.script.source_char_position`); frames with no script attached, such as
+pure layout or style work, are not reported. Other browsers report
+`ui.long_task` without a cause. Browser support determines which metrics
 are available. Click tracing uses Sentry's experimental Interactions integration.
+Page loads and navigations are named by screen (`/s/:id` for any session).
+The two-second background refreshes (`Protocol`, `Identity`, `ListSessions`,
+`ListAgents`, and `ListQueue`) are not traced, so they neither keep page loads
+and navigations open nor start traces of their own.
 
 Performance sampling defaults to `0.1` (10%). Set `1` to trace every operation
 while checking the setup, then lower it to control volume. Rates must be between
@@ -145,7 +156,7 @@ host in `connect-src`.
 To check a deployment, temporarily set the sample rate to `1`, reload, navigate
 between pages, and click a control. Check the browser Network panel for requests
 to Sentry's envelope endpoint, then check the selected project's traces and Web
-Vitals. Main-thread work over 50ms appears as a long task when a trace is active.
+Vitals. Main-thread work over 50ms appears as a stall when a trace is active.
 Blocked ingest requests or an invalid project's client key can prevent delivery;
 local config validation does not verify the Sentry account.
 
