@@ -43,24 +43,28 @@ func (d stateDAO) createConversation(ctx context.Context, conversation protocol.
 func (d stateDAO) observedEntries(ctx context.Context, conversationID string) ([]ObservedSessionEntry, error) {
 	return queryRows(ctx, d.db, `WITH `+sessionHistorySQL+`
 SELECT id, entry_json, source_conversation_id, synced, revert_index FROM effective_entries
-ORDER BY id`, "rocketcode session entries", func(row rowScanner) (ObservedSessionEntry, error) {
-		var (
-			entry ObservedSessionEntry
-			raw   string
-			index int
-		)
-		if err := row.Scan(&entry.ID, &raw, &entry.SourceConversationID, &entry.Synced, &index); err != nil {
-			return ObservedSessionEntry{}, fmt.Errorf("scan rocketcode session entry: %w", err)
-		}
+ORDER BY id`, "rocketcode session entries", scanObservedEntry, conversationID)
+}
 
-		if err := json.Unmarshal([]byte(raw), &entry.Entry); err != nil {
-			return ObservedSessionEntry{}, fmt.Errorf("parse rocketcode session entry: %w", err)
-		}
+// scanObservedEntry reads id, entry_json, source_conversation_id, synced, and
+// revert_index from effective_entries.
+func scanObservedEntry(row rowScanner) (ObservedSessionEntry, error) {
+	var (
+		entry ObservedSessionEntry
+		raw   string
+		index int
+	)
+	if err := row.Scan(&entry.ID, &raw, &entry.SourceConversationID, &entry.Synced, &index); err != nil {
+		return ObservedSessionEntry{}, fmt.Errorf("scan rocketcode session entry: %w", err)
+	}
 
-		clipRevertEntry(&entry.Entry, index)
+	if err := json.Unmarshal([]byte(raw), &entry.Entry); err != nil {
+		return ObservedSessionEntry{}, fmt.Errorf("parse rocketcode session entry: %w", err)
+	}
 
-		return entry, nil
-	}, conversationID)
+	clipRevertEntry(&entry.Entry, index)
+
+	return entry, nil
 }
 
 // producer reads routing and effect progress under the caller's source history lock.

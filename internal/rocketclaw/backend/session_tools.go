@@ -19,6 +19,10 @@ const (
 	currentSessionIDToolName = "rocketclaw_current_session_id"
 	setTagToolName           = "rocketclaw_set_tag"
 	getTagsToolName          = "rocketclaw_get_tags"
+
+	// Store-wide session reads compete with live turns for the State Store, so each call is capped.
+	maxListedSessions = 200
+	maxSessionEntries = 100
 )
 
 func agentTagGroups(agent *rocketcode.Agent) ([][]string, error) {
@@ -175,13 +179,13 @@ type sessionListSummary struct {
 
 func listSessionsTool(service *SessionService) rocketcode.Tool {
 	return rocketcode.Tool{
-		Name: listSessionsToolName, Description: "List durable conversations across this State Store, including private MCP and cron sessions. Supply all four fields: use empty since/until strings for no time bounds, limit 0 for unlimited results, and include_message_preview true or false. Prefer bounded searches. Returns TSV with a header, one session per row, entry counts, timestamps and optional message previews.",
+		Name: listSessionsToolName, Description: fmt.Sprintf("List durable conversations across this State Store, including private MCP and cron sessions, newest first. Supply all four fields: since is required, use an empty until string for no upper bound, limit is 1 to %d, and include_message_preview is true or false. Returns TSV with a header, one session per row, entry counts, timestamps and optional message previews.", maxListedSessions),
 		Permission: "rocketclaw", VisibilitySubjects: []string{listSessionsToolName},
 		Subjects: func(json.RawMessage) ([]string, error) { return []string{listSessionsToolName}, nil },
 		Parameters: map[string]any{"properties": map[string]any{
-			"since":                   map[string]any{"type": "string", "description": "Inclusive latest-entry bound: Go duration relative to now, RFC3339Nano, or empty for no bound."},
+			"since":                   map[string]any{"type": "string", "description": "Required inclusive latest-entry bound: Go duration relative to now or RFC3339Nano."},
 			"until":                   map[string]any{"type": "string", "description": "Exclusive latest-entry bound: RFC3339Nano, or empty for no bound."},
-			"limit":                   map[string]any{"type": "integer", "minimum": 0},
+			"limit":                   map[string]any{"type": "integer", "minimum": 1, "maximum": maxListedSessions},
 			"include_message_preview": map[string]any{"type": "boolean"},
 		}, "required": []string{"since", "until", "limit", "include_message_preview"}},
 		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
@@ -190,13 +194,17 @@ func listSessionsTool(service *SessionService) rocketcode.Tool {
 				return rocketcode.ToolResult{}, fmt.Errorf("parse list sessions: %w", err)
 			}
 
-			if params.Limit < 0 {
-				return rocketcode.ToolResult{}, errors.New("limit must not be negative")
+			if params.Limit < 1 || params.Limit > maxListedSessions {
+				return rocketcode.ToolResult{}, fmt.Errorf("limit must be between 1 and %d", maxListedSessions)
 			}
 
 			now := time.Now().UTC()
 
 			params.Since, params.Until = strings.TrimSpace(params.Since), strings.TrimSpace(params.Until)
+			if params.Since == "" {
+				return rocketcode.ToolResult{}, errors.New("since is required")
+			}
+
 			for _, bound := range []*string{&params.Since, &params.Until} {
 				if *bound == "" {
 					continue
@@ -252,16 +260,10 @@ func listSessionsTool(service *SessionService) rocketcode.Tool {
 func (s *SessionService) sessionToolSummaries(ctx context.Context, params sessionListParams) ([]sessionListSummary, error) {
 	// Stored timestamps are UTC RFC3339Nano. Removing Z makes text order exact
 	// even across whole/fractional seconds, without PostgreSQL's microsecond rounding.
-	query := `SELECT conversation_id FROM session_entries GROUP BY conversation_id
-HAVING ($1 = '' OR MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") >= $1 COLLATE "C")
-AND ($2 = '' OR MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") < $2 COLLATE "C") ORDER BY `
-	if params.Since != "" || params.Until != "" || params.Limit > 0 {
-		query += `MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, `
-	}
-
-	query += `conversation_id COLLATE "C" LIMIT NULLIF($3, 0)`
-
-	ids, err := queryStrings(ctx, s.db, query, "session tool candidates", params.Since, params.Until, params.Limit)
+	ids, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM session_entries GROUP BY conversation_id
+HAVING MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") >= $1 COLLATE "C"
+AND ($2 = '' OR MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") < $2 COLLATE "C")
+ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, conversation_id COLLATE "C" LIMIT $3`, "session tool candidates", params.Since, params.Until, params.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -332,22 +334,44 @@ func currentSessionIDTool(conversationID string) rocketcode.Tool {
 
 func getSessionTool(service *SessionService) rocketcode.Tool {
 	return rocketcode.Tool{
-		Name: getSessionToolName, Description: "Read a durable conversation as timestamp, role and content TSV in stored entry order, including messages, readable reasoning and tool events before compaction. Store-wide access includes private MCP sessions. One snapshot, no polling or read-state changes. Histories can be large; use rocketclaw_current_session_id for your owning conversation or rocketclaw_list_sessions to find another ID.",
+		Name: getSessionToolName, Description: fmt.Sprintf("Read the newest limit (1 to %d) stored entries of a durable conversation older than before_entry_id (0 for the newest) as timestamp, role and content TSV in stored entry order, including messages, readable reasoning and tool events before compaction. When older entries exist, the last line is [next_before_entry_id=N]; pass N to read the previous page. Store-wide access includes private MCP sessions. One snapshot, no polling or read-state changes. Use rocketclaw_current_session_id for your owning conversation or rocketclaw_list_sessions to find another ID.", maxSessionEntries),
 		Permission: "rocketclaw", VisibilitySubjects: []string{getSessionToolName},
-		Subjects:   func(json.RawMessage) ([]string, error) { return []string{getSessionToolName}, nil },
-		Parameters: map[string]any{"properties": map[string]any{"conversation_id": map[string]any{"type": "string"}}, "required": []string{"conversation_id"}},
+		Subjects: func(json.RawMessage) ([]string, error) { return []string{getSessionToolName}, nil },
+		Parameters: map[string]any{"properties": map[string]any{
+			"conversation_id": map[string]any{"type": "string"},
+			"limit":           map[string]any{"type": "integer", "minimum": 1, "maximum": maxSessionEntries},
+			"before_entry_id": map[string]any{"type": "integer", "minimum": 0},
+		}, "required": []string{"conversation_id", "limit", "before_entry_id"}},
 		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 			var params struct {
 				ConversationID string `json:"conversation_id"`
+				Limit          int    `json:"limit"`
+				BeforeEntryID  int64  `json:"before_entry_id"`
 			}
 			if err := json.Unmarshal(raw, &params); err != nil {
 				return rocketcode.ToolResult{}, fmt.Errorf("parse get session: %w", err)
 			}
 
-			observations, err := service.ObserveEntries(ctx, params.ConversationID)
+			params.ConversationID = strings.TrimSpace(params.ConversationID)
+			if params.ConversationID == "" {
+				return rocketcode.ToolResult{}, errors.New("conversation ID is required")
+			}
+
+			if params.Limit < 1 || params.Limit > maxSessionEntries || params.BeforeEntryID < 0 {
+				return rocketcode.ToolResult{}, fmt.Errorf("limit must be between 1 and %d and before_entry_id must not be negative", maxSessionEntries)
+			}
+
+			// The newest limit+1 rows are read, so one extra row reveals whether an older page exists.
+			observations, err := queryRows(ctx, service.db, `WITH `+sessionHistorySQL+`
+SELECT id, entry_json, source_conversation_id, synced, revert_index FROM effective_entries
+WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entries", scanObservedEntry, params.ConversationID, params.BeforeEntryID, params.Limit+1)
 			if err != nil {
 				return rocketcode.ToolResult{}, err
 			}
+
+			older := len(observations) > params.Limit
+			observations = observations[:min(len(observations), params.Limit)]
+			slices.Reverse(observations)
 
 			var output strings.Builder
 
@@ -443,6 +467,10 @@ func getSessionTool(service *SessionService) rocketcode.Tool {
 						fmt.Fprintf(&output, "%s\t%s\t%s\n", timestamp, escape.Replace(role), escape.Replace(text))
 					}
 				}
+			}
+
+			if older {
+				fmt.Fprintf(&output, "[next_before_entry_id=%d]\n", observations[0].ID)
 			}
 
 			return rocketcode.TextToolResult(output.String()), nil
