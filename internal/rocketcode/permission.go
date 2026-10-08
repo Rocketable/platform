@@ -507,6 +507,10 @@ func permissionWildcardMatch(input, pattern string, segments ...ruleSegment) boo
 		segments = []ruleSegment{{Text: pattern}}
 	}
 
+	if len(segments) == 1 && !segments[0].Literal && segments[0].Text == "*" {
+		return true
+	}
+
 	var expression strings.Builder
 
 	for _, segment := range segments {
