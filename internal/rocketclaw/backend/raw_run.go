@@ -52,11 +52,13 @@ type workflowWorkerStep struct {
 	Result json.RawMessage `json:"result"`
 }
 
-func newWorkflowAgentRunner(cfg *config.Config, agent string, journal rocketcode.Journal, logger *slog.Logger, customTools ...rocketcode.Tool) (*workflowAgentRunner, error) {
-	root, agents, skills, resolver, err := prepareRocketCode(cfg, agent, logger, toolModeWorkflow)
+func newWorkflowAgentRunner(locked *config.LockedConfig, agent string, journal rocketcode.Journal, logger *slog.Logger, customTools ...rocketcode.Tool) (*workflowAgentRunner, error) {
+	root, agents, skills, resolver, err := prepareRocketCode(locked, agent, logger, toolModeWorkflow)
 	if err != nil {
 		return nil, err
 	}
+
+	cfg := locked.Clone()
 
 	parent := filepath.ToSlash(filepath.Join(cfg.RuntimeDirName(), ".rocketcode"))
 	if err := root.MkdirAll(parent, 0o755); err != nil {
@@ -248,13 +250,15 @@ func prepareWorkflowTags(agents rocketcode.Agents, worker string, tools []string
 	return nil
 }
 
-func prepareRocketCode(cfg *config.Config, agent string, logger *slog.Logger, mode toolMode) (*os.Root, rocketcode.Agents, rocketcode.Skills, *modelResolver, error) {
+func prepareRocketCode(locked *config.LockedConfig, agent string, logger *slog.Logger, mode toolMode) (*os.Root, rocketcode.Agents, rocketcode.Skills, *modelResolver, error) {
+	cfg := locked.Clone()
+
 	root, err := os.OpenRoot(cfg.Workspace)
 	if err != nil {
 		return nil, rocketcode.Agents{}, rocketcode.Skills{}, nil, fmt.Errorf("open workspace root: %w", err)
 	}
 
-	agents, skills, err := loadRocketCodeDefinitionsIn(root, cfg, cfg.RuntimeDirName(), mode)
+	agents, skills, err := loadRocketCodeDefinitionsIn(root, locked, cfg.RuntimeDirName(), mode)
 	if err != nil {
 		_ = root.Close()
 		return nil, rocketcode.Agents{}, rocketcode.Skills{}, nil, fmt.Errorf("open workspace agent and skills: %w", err)

@@ -46,7 +46,7 @@ type lockedRun struct {
 	cancel     context.CancelFunc
 	detach     func() bool
 	signal     <-chan struct{}
-	cfg        *config.Config
+	cfg        *config.LockedConfig
 	configPath string
 	logger     *slog.Logger
 	assemble   FrontendAssembler
@@ -119,7 +119,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		cancel:     cancel,
 		detach:     detach,
 		signal:     ctx.Done(),
-		cfg:        cfg,
+		cfg:        config.NewLockedConfig(cfg),
 		configPath: configPath,
 		logger:     logger,
 		assemble:   assemble,
@@ -130,7 +130,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same runtime wiring as Run, held under pglock.Do.
 	s.detach()
 
-	cfg, configPath, logger, rocketcodeSessions := s.cfg, s.configPath, s.logger, s.sessions
+	cfg, configPath, logger, rocketcodeSessions := s.cfg.Clone(), s.configPath, s.logger, s.sessions
 	rt := new(Runtime)
 	workCtx, cancelWork := context.WithCancelCause(runCtx)
 
@@ -178,7 +178,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 
 	channels := cfg.Slack.MappedChannels()
 
-	if err := validateRuntimeAssets(cfg, cfg.RuntimeDirName()); err != nil {
+	if err := validateRuntimeAssets(s.cfg, cfg.RuntimeDirName()); err != nil {
 		return err
 	}
 
@@ -236,8 +236,8 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 
 		logger.Info("reload requested", "reason", reason)
 
-		if err := skel.ReplaceRuntimeAssetsAfterValidation(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, logger, func(runtimeDir string) error {
-			if err := validateRuntimeAssets(cfg, runtimeDir); err != nil {
+		if err := skel.ReplaceRuntimeAssetsAfterValidation(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, logger, s.cfg, func(runtimeDir string) error {
+			if err := validateRuntimeAssets(s.cfg, runtimeDir); err != nil {
 				return err
 			}
 
@@ -263,7 +263,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 	slackUserQuestionAsker := protocol.NoUserQuestionAsker()
 	drainSlack := func(context.Context, string) []string { return nil }
 
-	threadBridges = newThreadBridgeManager(cfg, rocketcodeSessions, logger, func(Config Config) directBridge {
+	threadBridges = newThreadBridgeManager(s.cfg, rocketcodeSessions, logger, func(Config Config) directBridge {
 		Config.RequestRestart = requestRestart
 		Config.RequestReload = requestReload
 		// ensureStartedThread defaults to NoUserQuestionAsker; Slack-origin overrides with current slack asker.
@@ -292,7 +292,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		Config.StartNewThread = threadBridges.StartNewThread
 		Config.SessionService = rocketcodeSessions
 
-		bridge := NewConversation(cfg, rt, &Config, logger)
+		bridge := NewConversation(s.cfg, rt, &Config, logger)
 		bridge.background = background
 
 		return bridge
@@ -324,7 +324,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 	}()
 
 	*rt = Runtime{
-		Cfg: cfg, Log: logger, RunCtx: runCtx,
+		Cfg: s.cfg, Log: logger, RunCtx: runCtx,
 		Sessions:                 rocketcodeSessions,
 		ExternalMCPUsers:         externalMCPUsers,
 		RefreshExternalMCPAgents: &refreshExternalMCPAgents, TextRouter: threadBridges, threads: threadBridges, background: background,
@@ -391,12 +391,12 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 	return nil
 }
 
-func validateRuntimeAssets(cfg *config.Config, runtimeDir string) error {
+func validateRuntimeAssets(cfg *config.LockedConfig, runtimeDir string) error {
 	if _, _, err := LoadRuntimeDefinitions(cfg, runtimeDir); err != nil {
 		return fmt.Errorf("validate rocketcode definitions: %w", err)
 	}
 
-	return validateWorkflowDefinitions(cfg, runtimeDir)
+	return validateWorkflowDefinitions(cfg.Clone(), runtimeDir)
 }
 
 func validateWorkflowDefinitions(cfg *config.Config, runtimeDir string) (err error) {

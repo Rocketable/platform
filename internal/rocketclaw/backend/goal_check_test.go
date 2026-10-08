@@ -18,7 +18,7 @@ func TestValidateGoalCheckScriptStartRejectsUnknownAgent(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, runtimeDir, "skills"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, runtimeDir, "agents", "main.md"), []byte("---\ndescription: main\nmodel: gpt-5.5\n---\nmain\n"), 0o644))
 
-	err := ValidateGoalCheckScriptStart(&config.Config{Workspace: workspace}, "missing", `./scripts/check.sh`)
+	err := ValidateGoalCheckScriptStart(config.NewLockedConfig(&config.Config{Workspace: workspace}), "missing", `./scripts/check.sh`)
 	require.ErrorContains(t, err, `goal check script agent "missing" is not configured`)
 }
 

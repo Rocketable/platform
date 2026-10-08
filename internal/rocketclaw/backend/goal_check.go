@@ -17,7 +17,9 @@ import (
 const goalCheckTimeout = 2 * 60 * 1000
 
 // ValidateGoalCheckScriptStart validates a goal check script before goal persistence.
-func ValidateGoalCheckScriptStart(cfg *config.Config, agentName, script string) error {
+func ValidateGoalCheckScriptStart(locked *config.LockedConfig, agentName, script string) error {
+	cfg := locked.Clone()
+
 	root, err := os.OpenRoot(cfg.Workspace)
 	if err != nil {
 		return fmt.Errorf("open workspace root: %w", err)
@@ -25,7 +27,7 @@ func ValidateGoalCheckScriptStart(cfg *config.Config, agentName, script string) 
 
 	defer func() { _ = root.Close() }()
 
-	agents, _, err := loadRocketCodeDefinitionsIn(root, cfg, cfg.RuntimeDirName(), toolModePersistent)
+	agents, _, err := loadRocketCodeDefinitionsIn(root, locked, cfg.RuntimeDirName(), toolModePersistent)
 	if err != nil {
 		return err
 	}

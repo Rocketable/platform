@@ -138,7 +138,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 		require.NoError(t, err)
 
 		transport := grpc.NewServer()
-		New(rt, rt.Sessions, cfg, &mockChannels{}, &mockCronJobs{JobsFunc: func() ([]cronfrontend.Job, error) {
+		New(rt, rt.Sessions, rt.Cfg, &mockChannels{}, &mockCronJobs{JobsFunc: func() ([]cronfrontend.Job, error) {
 			return nil, nil
 		}}).Register(transport)
 
@@ -267,7 +267,7 @@ func TestHistoryReadsActiveReplay(t *testing.T) {
 	}}
 	require.NoError(t, seeded.UpsertActiveTurn(t.Context(), checkpoint))
 
-	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: cfg, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg), usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 	view, err := server.history(ctx, &HistoryRequest{Id: "chat"})
 	require.NoError(t, err)
@@ -368,7 +368,7 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
 	require.NoError(t, err)
 
 	engine := &mockBackend{}
-	server := &Server{sessions: sessions, cfg: cfg, backend: engine, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	server := &Server{sessions: sessions, cfg: config.NewLockedConfig(cfg), backend: engine, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 	initial, err := server.history(ctx, &HistoryRequest{Id: "chat", Limit: 1})
 	require.NoError(t, err)
@@ -479,7 +479,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 
 	transport := grpc.NewServer()
 
-	New(rt, rt.Sessions, cfg, &mockChannels{}, &mockCronJobs{JobsFunc: func() ([]cronfrontend.Job, error) { return nil, nil }}).Register(transport)
+	New(rt, rt.Sessions, rt.Cfg, &mockChannels{}, &mockCronJobs{JobsFunc: func() ([]cronfrontend.Job, error) { return nil, nil }}).Register(transport)
 	go func() { _ = transport.Serve(listener) }()
 
 	t.Cleanup(transport.Stop)
@@ -522,7 +522,7 @@ func TestHistoryFollowsNewestEntries(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
-	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: cfg, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg), usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 
 	var keys []string
@@ -617,7 +617,7 @@ func TestHistoryPublicProgress(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	require.NoError(t, sessions.UpsertThread("public", backend.ThreadState{Agent: "main"}))
-	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: cfg, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg), usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 	checkpoint := &testCheckpoint{TurnID: "turn", ConversationKey: "public", Agent: "main", DisplayModel: "root/model", ReasoningEffort: new("high"), ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","input_id":"input","content":"ask"}`),

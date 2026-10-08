@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 )
 
 const (
@@ -143,7 +145,8 @@ func SyncEffectiveRuntimeAssets(workspace, target string, overlays []string, log
 }
 
 // ReplaceRuntimeAssetsAfterValidation rebuilds runtime assets in a stage and replaces live assets only after validate accepts the staged work dir.
-func ReplaceRuntimeAssetsAfterValidation(workspace, runtimeDir string, overlays []string, logger *slog.Logger, validate func(string) error) error {
+// locked must be shared with definition readers; validation runs outside Do so it can load staged definitions.
+func ReplaceRuntimeAssetsAfterValidation(workspace, runtimeDir string, overlays []string, logger *slog.Logger, locked *config.LockedConfig, validate func(string) error) error {
 	stage, err := os.MkdirTemp(workspace, ".rocketclaw-reload-*")
 	if err != nil {
 		return fmt.Errorf("create rocketclaw reload stage: %w", err)
@@ -164,17 +167,23 @@ func ReplaceRuntimeAssetsAfterValidation(workspace, runtimeDir string, overlays 
 		return err
 	}
 
-	live := filepath.Join(workspace, runtimeDir)
-	if err := resetRuntimeDirectory(live, logger, false); err != nil {
-		return err
-	}
+	if err := locked.Do(func(_ *config.Config) error {
+		live := filepath.Join(workspace, runtimeDir)
+		if err := resetRuntimeDirectory(live, logger, false); err != nil {
+			return err
+		}
 
-	if err := commitStagedRuntimeAssets(stage, live); err != nil {
-		return fmt.Errorf("commit rocketclaw reload stage: %w", err)
-	}
+		if err := commitStagedRuntimeAssets(stage, live); err != nil {
+			return fmt.Errorf("commit rocketclaw reload stage: %w", err)
+		}
 
-	if err := syncWorkspaceScriptSymlinks(workspace, runtimeDir, logger); err != nil {
-		return fmt.Errorf("sync workspace script symlinks: %w", err)
+		if err := syncWorkspaceScriptSymlinks(workspace, runtimeDir, logger); err != nil {
+			return fmt.Errorf("sync workspace script symlinks: %w", err)
+		}
+
+		return nil
+	}); err != nil {
+		return fmt.Errorf("replace runtime assets: %w", err)
 	}
 
 	return nil

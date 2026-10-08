@@ -123,6 +123,7 @@ func (b *Bridge) dynamicWorkflowTool(permissions rocketcode.PermissionSet, agent
 }
 
 func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *rocketcode.Agent, agentName, tagConversationID string) (rocketcode.Tool, bool) {
+	runtimeCfg := b.runtime.Clone()
 	allowed := false
 
 	for _, bucket := range agent.Permission.Buckets {
@@ -141,7 +142,7 @@ func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *rocketcode.Agent
 		return rocketcode.Tool{}, false
 	}
 
-	definitions, err := workflow.Load(root, b.runtime.RuntimeDirName())
+	definitions, err := workflow.Load(root, runtimeCfg.RuntimeDirName())
 	if err != nil {
 		b.log.Warn("skip rocketclaw_dynamic_workflow tool: load workflows", "error", err)
 		return rocketcode.Tool{}, false

@@ -34,7 +34,7 @@ func TestAssembleFrontendsReportsSlackStartError(t *testing.T) {
 	t.Cleanup(cancel)
 	refresh := func() error { return nil }
 	rt := &backend.Runtime{
-		Cfg:                      &config.Config{},
+		Cfg:                      config.NewLockedConfig(&config.Config{}),
 		Log:                      slog.New(slog.DiscardHandler),
 		RunCtx:                   ctx,
 		RefreshExternalMCPAgents: &refresh,
@@ -66,7 +66,7 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 	t.Cleanup(cancel)
 	refresh := func() error { return nil }
 	rt := &backend.Runtime{
-		Cfg: &config.Config{
+		Cfg: config.NewLockedConfig(&config.Config{
 			Workspace: workspace,
 			Slack: config.SlackConfig{
 				BotToken: "xoxb-test", AppToken: "xapp-test",
@@ -74,7 +74,7 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 			},
 			MCPExternal: config.MCPExternalConfig{Enabled: true, ListenAddr: "127.0.0.1:0"},
 			Web:         config.WebConfig{ListenAddress: "127.0.0.1:0"},
-		},
+		}),
 		Log:                      slog.New(slog.DiscardHandler),
 		RunCtx:                   ctx,
 		Sessions:                 sessions,

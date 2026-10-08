@@ -346,13 +346,16 @@ func (r *Runtime) StartGoal(ctx context.Context, inbound *protocol.InboundMessag
 
 // WorkflowDescriptions lists the saved workflows a human can start with $workflow.
 func (r *Runtime) WorkflowDescriptions() (descriptions []protocol.WorkflowDescription, err error) {
-	root, err := os.OpenRoot(r.Cfg.Workspace)
+	runtimeCfg := r.Cfg.Clone()
+
+	root, err := os.OpenRoot(runtimeCfg.Workspace)
 	if err != nil {
 		return nil, fmt.Errorf("open workflow root: %w", err)
 	}
+
 	defer func() { err = errors.Join(err, root.Close()) }()
 
-	definitions, err := workflow.Load(root, r.Cfg.RuntimeDirName())
+	definitions, err := workflow.Load(root, runtimeCfg.RuntimeDirName())
 	if err != nil {
 		return nil, fmt.Errorf("load workflow definitions: %w", err)
 	}

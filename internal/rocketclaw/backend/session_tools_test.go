@@ -107,12 +107,12 @@ func TestSessionTagToolsBridge(t *testing.T) {
 			defer server.Close()
 
 			cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
-			root, agents, skills, resolver, err := prepareRocketCode(cfg, "main", slog.New(slog.DiscardHandler), toolModePersistent)
+			root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(cfg), "main", slog.New(slog.DiscardHandler), toolModePersistent)
 
 			require.NoError(t, err)
 			defer func() { require.NoError(t, root.Close()) }()
 
-			bridge := &Bridge{runtime: cfg, config: Config{ConversationID: "external_mcp:owning", SessionService: service, RequestReload: testNoopRestart}, log: slog.New(slog.DiscardHandler)}
+			bridge := &Bridge{runtime: config.NewLockedConfig(cfg), config: Config{ConversationID: "external_mcp:owning", SessionService: service, RequestReload: testNoopRestart}, log: slog.New(slog.DiscardHandler)}
 			runtimeConfig := bridge.rocketcodeConfig(workspace, nil, sessionTagTools(service, "external_mcp:owning")...)
 			runtimeConfig.Journal = rocketcode.InertJournal{}
 			runtimeConfig.ChildSessions = rocketcode.InertChildSessions{}
@@ -299,12 +299,12 @@ func TestSessionTagChildAuthority(t *testing.T) {
 				defer server.Close()
 
 				cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
-				root, agents, skills, resolver, err := prepareRocketCode(cfg, "main", slog.New(slog.DiscardHandler), mode)
+				root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(cfg), "main", slog.New(slog.DiscardHandler), mode)
 
 				require.NoError(t, err)
 				defer func() { require.NoError(t, root.Close()) }()
 
-				bridge := &Bridge{runtime: cfg, config: Config{ConversationID: "owning", SessionService: service, RequestReload: testNoopRestart}, log: slog.New(slog.DiscardHandler)}
+				bridge := &Bridge{runtime: config.NewLockedConfig(cfg), config: Config{ConversationID: "owning", SessionService: service, RequestReload: testNoopRestart}, log: slog.New(slog.DiscardHandler)}
 				runtimeConfig := bridge.rocketcodeConfig(workspace, nil, sessionTagTools(service, "owning")...)
 				runtimeConfig.Journal = rocketcode.InertJournal{}
 				runtimeConfig.ChildSessions = rocketcode.InertChildSessions{}
@@ -696,12 +696,12 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 			cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, AutoApproverModel: "review-model"}
-			root, agents, skills, resolver, err := prepareRocketCode(cfg, "main", slog.New(slog.DiscardHandler), toolModePersistent)
+			root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(cfg), "main", slog.New(slog.DiscardHandler), toolModePersistent)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, root.Close()) })
 			require.NoError(t, root.MkdirAll("shell", 0o700))
 
-			bridge := &Bridge{runtime: cfg, config: Config{ConversationID: "external_mcp:private", ManagedConversationID: "managed:other", ExternalConversationID: "public-id", SessionService: service, RequestReload: testNoopRestart}, log: slog.New(slog.DiscardHandler)}
+			bridge := &Bridge{runtime: config.NewLockedConfig(cfg), config: Config{ConversationID: "external_mcp:private", ManagedConversationID: "managed:other", ExternalConversationID: "public-id", SessionService: service, RequestReload: testNoopRestart}, log: slog.New(slog.DiscardHandler)}
 			runtimeConfig := bridge.rocketcodeConfig(filepath.Join(workspace, "shell"), nil)
 			runtimeConfig.Journal = rocketcode.InertJournal{}
 			runtimeConfig.ChildSessions = rocketcode.InertChildSessions{}

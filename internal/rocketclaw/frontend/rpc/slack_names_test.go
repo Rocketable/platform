@@ -37,7 +37,7 @@ func TestSlackNames(t *testing.T) {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(&mockBackend{}, nil, cfg, channels, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{}, nil, config.NewLockedConfig(cfg), channels, &mockCronJobs{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error {

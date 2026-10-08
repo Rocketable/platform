@@ -70,7 +70,7 @@ func TestThreadBridgeManagerSkillDescriptions(t *testing.T) {
 	require.NoError(t, root.WriteFile(".rocketclaw/agents/main.md", []byte("---\ndescription: Main\nmodel: test\npermission:\n  skill:\n    '*': allow\n    denied: deny\n    ask: auto(guardian)\n---\nPrompt\n"), 0o600))
 	require.NoError(t, root.WriteFile(".rocketclaw/agents/planner.md", []byte("---\ndescription: Planner\nmodel: test\npermission:\n  skill: deny\n---\nPrompt\n"), 0o600))
 
-	manager := &threadBridgeManager{runtime: &config.Config{Workspace: workspace}}
+	manager := &threadBridgeManager{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace})}
 	descriptions, err := manager.SkillDescriptions("main")
 	require.NoError(t, err)
 	assert.Equal(t, []protocol.SkillDescription{{Name: "review", Description: "About review"}, {Name: "stop", Description: "About stop"}}, descriptions)
@@ -94,11 +94,11 @@ func TestRuntimeWorkflowDescriptionsListsSavedWorkflows(t *testing.T) {
 	require.NoError(t, root.WriteFile(".rocketclaw/workflows/audit.star", []byte("meta = {\"name\": \"audit\", \"description\": \"Audit routes\"}\ndef main(args): return args\n"), 0o600))
 	require.NoError(t, root.Close())
 
-	descriptions, err := (&Runtime{Cfg: &config.Config{Workspace: workspace}}).WorkflowDescriptions()
+	descriptions, err := (&Runtime{Cfg: config.NewLockedConfig(&config.Config{Workspace: workspace})}).WorkflowDescriptions()
 	require.NoError(t, err)
 	assert.Equal(t, []protocol.WorkflowDescription{{Name: "audit", Description: "Audit routes"}}, descriptions)
 
-	_, err = (&Runtime{Cfg: &config.Config{Workspace: filepath.Join(workspace, "missing")}}).WorkflowDescriptions()
+	_, err = (&Runtime{Cfg: config.NewLockedConfig(&config.Config{Workspace: filepath.Join(workspace, "missing")})}).WorkflowDescriptions()
 	require.ErrorContains(t, err, "open workflow root")
 }
 
@@ -118,7 +118,7 @@ func TestWorkflowValidationKeepsLiveAssetsOnInvalidReload(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 			cfg := &config.Config{Workspace: workspace}
-			err = skel.ReplaceRuntimeAssetsAfterValidation(workspace, cfg.RuntimeDirName(), nil, slog.New(slog.DiscardHandler), func(runtimeDir string) error {
+			err = skel.ReplaceRuntimeAssetsAfterValidation(workspace, cfg.RuntimeDirName(), nil, slog.New(slog.DiscardHandler), config.NewLockedConfig(cfg), func(runtimeDir string) error {
 				return validateWorkflowDefinitions(cfg, runtimeDir)
 			})
 			require.ErrorContains(t, err, tt.want)
@@ -157,7 +157,7 @@ func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
 		{ConversationID: protocol.SlackThreadConversationID("D123", "111.222"), Agent: "planner", StartNewThread: inertStartNewThread, SessionService: store},
 		{ConversationID: protocol.SlackThreadConversationID("D123", "333.444"), Agent: "helper", StartNewThread: inertStartNewThread, SessionService: store},
 	} {
-		bridge := NewConversation(&config.Config{Workspace: workspace}, discardPublisher{}, &cfg, slog.New(slog.DiscardHandler))
+		bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), discardPublisher{}, &cfg, slog.New(slog.DiscardHandler))
 		require.NoError(t, store.UpsertThread(cfg.ConversationID, ThreadState{Agent: cfg.Agent}))
 		require.NoError(t, startTestBridge(t.Context(), bridge))
 		require.NoError(t, bridge.ScheduleMessage(new(protocol.InboundMessage), time.Hour, "later", false))
@@ -604,7 +604,7 @@ func TestThreadBridgeManagerStartNewThreadCreatesWebSession(t *testing.T) {
 
 	var created Config
 
-	manager := newThreadBridgeManager(&config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080"}}, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
+	manager := newThreadBridgeManager(config.NewLockedConfig(&config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080"}}), store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
 		created = cfg
 		return bridge
 	})
@@ -650,7 +650,7 @@ func TestThreadBridgeManagerStartNewThreadRejectsUnavailableAgents(t *testing.T)
 	writeAppTestAgent(t, workspace, "main", "---\ndescription: Test agent\nmodel: gpt-5.5\n---\nPrompt\n")
 
 	store := newWorkspaceSessionService(t)
-	manager := newThreadBridgeManager(&config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080"}}, store, slog.New(slog.DiscardHandler), func(Config) directBridge {
+	manager := newThreadBridgeManager(config.NewLockedConfig(&config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080"}}), store, slog.New(slog.DiscardHandler), func(Config) directBridge {
 		t.Fatal("no conversation should start")
 		return nil
 	})

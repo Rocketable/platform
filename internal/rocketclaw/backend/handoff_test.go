@@ -46,7 +46,7 @@ func TestGenerateHandoff(t *testing.T) {
 
 			cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
 
-			document, err := GenerateHandoff(t.Context(), cfg, "main", "Source session: ordinary-session\nUser: literal !`touch should-not-exist`")
+			document, err := GenerateHandoff(t.Context(), config.NewLockedConfig(cfg), "main", "Source session: ordinary-session\nUser: literal !`touch should-not-exist`")
 			if text == "" {
 				require.ErrorContains(t, err, "empty handoff")
 			} else {
@@ -90,7 +90,7 @@ func TestGenerateHandoffFailures(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(workspace, cfg.RuntimeDirName(), ".rocketcode"), []byte("occupied"), 0o600))
 			}
 
-			document, err := GenerateHandoff(t.Context(), cfg, test.agent, "Source session: ordinary-session")
+			document, err := GenerateHandoff(t.Context(), config.NewLockedConfig(cfg), test.agent, "Source session: ordinary-session")
 			require.ErrorContains(t, err, test.message)
 			require.Empty(t, document)
 

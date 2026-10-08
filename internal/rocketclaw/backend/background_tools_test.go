@@ -66,12 +66,12 @@ func TestStopBackgroundJobToolNeedsAllowBackground(t *testing.T) {
 			writeMainAgentSkills(t, workspace, "---\ndescription: Main\nmodel: gpt-5.5\nmode: primary\npermission: "+permission+"\n---\nPrompt\n")
 
 			cfg := &config.Config{Workspace: workspace}
-			root, agents, skills, resolver, err := prepareRocketCode(cfg, "main", slog.New(slog.DiscardHandler), toolModePersistent)
+			root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(cfg), "main", slog.New(slog.DiscardHandler), toolModePersistent)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, root.Close()) })
 			require.NoError(t, root.MkdirAll("shell", 0o700))
 
-			bridge := &Bridge{runtime: cfg, config: Config{ConversationID: "main", SessionService: newTestSessionService(t)}, log: slog.New(slog.DiscardHandler)}
+			bridge := &Bridge{runtime: config.NewLockedConfig(cfg), config: Config{ConversationID: "main", SessionService: newTestSessionService(t)}, log: slog.New(slog.DiscardHandler)}
 			runtimeConfig := bridge.rocketcodeConfig(filepath.Join(workspace, "shell"), nil)
 			runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
 			require.NoError(t, err)

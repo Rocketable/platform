@@ -141,7 +141,7 @@ func (s *Server) uploadContent(ctx context.Context, conversationID, text string,
 		return content, err
 	}
 
-	root, err := os.OpenRoot(s.cfg.Workspace)
+	root, err := os.OpenRoot(s.cfg.Clone().Workspace)
 	if err != nil {
 		return content, fmt.Errorf("open upload workspace: %w", err)
 	}

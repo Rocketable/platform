@@ -24,7 +24,7 @@ type SlackFrontend interface {
 
 // Runtime is the backend after construction, before frontends.
 type Runtime struct {
-	Cfg                      *config.Config
+	Cfg                      *config.LockedConfig
 	Log                      *slog.Logger
 	RunCtx                   context.Context
 	Sessions                 *SessionService

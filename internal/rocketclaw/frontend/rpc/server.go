@@ -46,7 +46,7 @@ type Server struct {
 	backend   frontend.Backend
 	sessions  *backend.SessionService
 	usernames map[netip.Addr]string
-	cfg       *config.Config
+	cfg       *config.LockedConfig
 	channels  ChannelAgentChoices
 	cronjobs  CronJobs
 
@@ -88,8 +88,8 @@ type CronJobs interface {
 // New snapshots WebUsers from the validated startup configuration.
 // The host must restrict RPC access to the trusted Web proxy: the metadata
 // carries the browser IP, not an independently authenticated network peer.
-func New(core frontend.Backend, sessions *backend.SessionService, cfg *config.Config, channels ChannelAgentChoices, cronjobs CronJobs) *Server {
-	return &Server{backend: core, sessions: sessions, usernames: maps.Clone(cfg.WebUsers), cfg: cfg, channels: channels, cronjobs: cronjobs}
+func New(core frontend.Backend, sessions *backend.SessionService, cfg *config.LockedConfig, channels ChannelAgentChoices, cronjobs CronJobs) *Server {
+	return &Server{backend: core, sessions: sessions, usernames: cfg.Clone().WebUsers, cfg: cfg, channels: channels, cronjobs: cronjobs}
 }
 
 // ListSessionEntries returns ordered entry identifiers and metadata.
@@ -289,7 +289,7 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 		}
 	}
 
-	root, err := os.OpenRoot(s.cfg.Workspace)
+	root, err := os.OpenRoot(s.cfg.Clone().Workspace)
 	if err != nil {
 		return nil, fmt.Errorf("open attachment workspace: %w", err)
 	}
@@ -1056,11 +1056,12 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 	}
 
 	// This is the retained UI's allowlist, not serialization of the config.
+	cfg := s.cfg.Clone()
 	view := &ConfigView{
-		Workspace: s.cfg.Workspace, Overlays: slices.Clone(s.cfg.Overlays),
-		LoggingLevel: s.cfg.Logging.Level, AutoApproverModel: s.cfg.AutoApproverModel,
-		InstrumentationEnabled: s.cfg.Instrumentation.Enabled, McpExternal: s.cfg.MCPExternal.Enabled,
-		McpServers: slices.Sorted(maps.Keys(s.cfg.MCPServers)),
+		Workspace: cfg.Workspace, Overlays: cfg.Overlays,
+		LoggingLevel: cfg.Logging.Level, AutoApproverModel: cfg.AutoApproverModel,
+		InstrumentationEnabled: cfg.Instrumentation.Enabled, McpExternal: cfg.MCPExternal.Enabled,
+		McpServers: slices.Sorted(maps.Keys(cfg.MCPServers)),
 	}
 	ip := netip.MustParseAddr(metadata.ValueFromIncomingContext(ctx, "rocketclaw-principal")[0])
 
@@ -1069,11 +1070,11 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 		view.TailscaleUser = username
 	}
 
-	for _, name := range slices.Sorted(maps.Keys(s.cfg.Models)) {
-		view.Models = append(view.Models, &ConfigModel{Name: name, Model: s.cfg.Models[name]})
+	for _, name := range slices.Sorted(maps.Keys(cfg.Models)) {
+		view.Models = append(view.Models, &ConfigModel{Name: name, Model: cfg.Models[name]})
 	}
 
-	for _, channel := range s.cfg.Slack.Channels {
+	for _, channel := range cfg.Slack.Channels {
 		view.SlackChannels = append(view.SlackChannels, &ConfigChannel{Channel: channel.Channel, Agents: slices.Clone(channel.Agents)})
 	}
 
@@ -1104,7 +1105,7 @@ func (s *Server) listSkills(ctx context.Context, request *ListSkillsRequest) (*L
 		return nil, err
 	}
 
-	agents, definitions, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.RuntimeDirName())
+	agents, definitions, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
 		return nil, fmt.Errorf("load web skills: %w", err)
 	}
@@ -1138,7 +1139,7 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 		return nil, err
 	}
 
-	definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.RuntimeDirName())
+	definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
 		return nil, fmt.Errorf("load web agents: %w", err)
 	}
@@ -1185,7 +1186,9 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 }
 
 func (s *Server) agentChoices(ctx context.Context, id string) ([]string, error) {
-	definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.RuntimeDirName())
+	cfg := s.cfg.Clone()
+
+	definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, cfg.RuntimeDirName())
 	if err != nil {
 		return nil, fmt.Errorf("load web agents: %w", err)
 	}
@@ -1206,7 +1209,7 @@ func (s *Server) agentChoices(ctx context.Context, id string) ([]string, error) 
 				continue
 			}
 
-			return s.cfg.CronWebAgentChoices(choices, &job), nil
+			return cfg.CronWebAgentChoices(choices, &job), nil
 		}
 	}
 

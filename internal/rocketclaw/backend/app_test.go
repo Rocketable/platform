@@ -97,7 +97,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	}
 	assembler := &frontendAssemblerMock{
 		ValidateAssetsFunc: func(got *config.Config, runtimeDir string, channels []string) error {
-			require.Same(t, cfg, got)
+			require.Equal(t, cfg, got)
 			require.True(t, runtimeDir == cfg.RuntimeDirName() || strings.HasPrefix(runtimeDir, cfg.RuntimeDirName()+"-reload-"))
 			require.Equal(t, []string{"#general"}, channels)
 
@@ -111,7 +111,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 		},
 		AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
 			assembledRT = rt
-			require.Same(t, cfg, rt.Cfg)
+			require.Equal(t, cfg, rt.Cfg.Clone())
 			require.NoError(t, rt.RunCtx.Err())
 			require.NoError(t, rt.Sessions.db.PingContext(rt.RunCtx))
 			require.Same(t, rt.threads, rt.TextRouter)
