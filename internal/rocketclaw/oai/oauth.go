@@ -3,6 +3,7 @@ package oai
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -697,7 +698,9 @@ func (t *transport) token(ctx context.Context, load tokenLoad, failed Token) (To
 			return false, fmt.Errorf("refresh ChatGPT OAuth token for provider %q; run `%s`: %w", t.provider, loginCommand(t.provider), err)
 		}
 
-		selected = tokenFromRefreshResponse(response, token)
+		selected = tokenFromResponse(response)
+		selected.Refresh = cmp.Or(selected.Refresh, token.Refresh)
+		selected.AccountID = cmp.Or(selected.AccountID, token.AccountID)
 		file.Providers[t.provider] = selected
 
 		return true, nil
@@ -1432,19 +1435,6 @@ func tokenFromResponse(response tokenResponse) Token {
 	}
 
 	return Token{Refresh: response.RefreshToken, Access: response.AccessToken, Expires: time.Now().Add(time.Duration(expiresIn) * time.Second).UnixMilli(), AccountID: extractAccountID(response)}
-}
-
-func tokenFromRefreshResponse(response tokenResponse, previous Token) Token {
-	next := tokenFromResponse(response)
-	if next.Refresh == "" {
-		next.Refresh = previous.Refresh
-	}
-
-	if next.AccountID == "" {
-		next.AccountID = previous.AccountID
-	}
-
-	return next
 }
 
 func extractAccountID(response tokenResponse) string {
