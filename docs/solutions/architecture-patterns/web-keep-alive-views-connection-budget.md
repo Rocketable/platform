@@ -32,7 +32,7 @@ single `MessageScrollerProvider`/`Transcript` on every navigation
 session view mounts fresh and unmounts on the way out. Much of the client
 quietly depends on that.
 
-The warm-tabs variant of the web tabs work (bookmark `tab-warm`, plan
+The warm-tabs variant of the web tabs work (closed PR #212, plan
 `docs/plans/2026-10-07-1521-feat-web-tabs-replace-sidebar-plan.md`, U6) kept
 several session views mounted and hid the inactive ones. Two kinds of breakage
 followed: a connection budget problem, and code that relied on remounting.
