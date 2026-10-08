@@ -290,9 +290,13 @@ active tab.
 - **Context menu.** Right-click a tab, press Shift+F10 or the menu key on a focused
   tab, or use the **…** button on the active tab (for touch) to reach Close,
   Close others, Close to the right, Close all, Pin/Unpin, and Move tabs to
-  left/top. Session tabs also offer **Rename session**, which opens **Name
-  session**. The command palette offers the same commands as **Tabs: …** for the
-  active tab.
+  left/top. Session tabs also offer **Rename session**, which edits the name in
+  the tab itself: Enter or clicking away saves, Escape cancels, and a blank name
+  shows the last message again. The command palette offers the same commands as
+  **Tabs: …** for the active tab.
+- **Width and full names.** Top tabs fit their title up to 20rem, then truncate.
+  Hovering a tab shows its full title in a tooltip; while it shows, the first
+  Escape dismisses it.
 - **New session.** Double-clicking empty space in the strip opens New session,
   like the New session button.
 - **Closing.** The × button, a middle-click, the menu, a page's close button, or
@@ -308,9 +312,12 @@ active tab.
   or Up/Down), Home, and End move focus; Enter or Space activates. Anywhere in
   the app, Cmd/Ctrl+[ and Cmd/Ctrl+] activate the previous and next tab, wrapping
   at the ends. This replaces the browser's Back/Forward for those keys.
-- **Placement.** Tabs sit on top by default or in a 14rem column on the left. Switch
+- **Placement.** Tabs sit on top by default or in a 14rem sidebar on the left. Switch
   from **Settings → Appearance → Tabs**, the context menu, or the palette. Below the `md` breakpoint, left falls back
-  to top, and the top strip scrolls horizontally.
+  to top, and the top strip scrolls horizontally; a mouse wheel scrolls it sideways.
+- **Left sidebar.** Drag its right edge, or focus the edge and press Left/Right, to
+  resize it; the width is kept in this browser. The footer's **Hide sidebar** button
+  or Cmd/Ctrl+B hides and shows it until the next reload.
 - **Storage.** Open tabs, their order, pins, and the preview flag are kept in this
   browser's `localStorage` under `tabs:<user>`, separately for each
   signed-in user. The address is the active tab, so a reload keeps it, and opening

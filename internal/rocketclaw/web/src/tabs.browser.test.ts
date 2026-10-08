@@ -206,9 +206,19 @@ test("storage reset, deep links, keyboard, page close, palette commands, and pla
   expect(await tab("Alpha").innerText()).toBe("Alpha");
   const mainBox = await page.getByRole("main").boundingBox();
   expect((await strip(page).boundingBox()).x + (await strip(page).boundingBox()).width).toBeLessThanOrEqual(mainBox.x);
+  await page.locator("footer").getByRole("button", { name: "Hide sidebar", exact: true }).click();
+  await strip(page).waitFor({ state: "hidden" });
+  await page.keyboard.press("Control+b");
+  await strip(page).waitFor();
+  expect(await page.locator("footer").getByRole("button", { name: "Hide sidebar", exact: true }).getAttribute("aria-expanded")).toBe("true");
+  const width = (await strip(page).boundingBox()).width;
+  await page.getByRole("separator", { name: "Resize tabs" }).focus();
+  await page.keyboard.press("ArrowRight");
+  expect((await strip(page).boundingBox()).width).toBe(width + 16);
   await page.reload();
   await tab("Bravo").waitFor();
   expect(await strip(page).getAttribute("aria-orientation")).toBe("vertical");
+  expect((await strip(page).boundingBox()).width).toBe(width + 16);
   await page.setViewportSize({ width: 375, height: 700 });
   await page.waitForFunction(() => document.querySelector('[role="tablist"][aria-label="Open tabs"]')!.getAttribute("aria-orientation") === "horizontal");
   await page.keyboard.press("Control+Shift+p");
@@ -235,7 +245,7 @@ test("storage reset, deep links, keyboard, page close, palette commands, and pla
   expect(await page.evaluate(() => localStorage.getItem("tab-placement"))).toBe("top");
 }), 60_000);
 
-test("tab menu renames sessions, bracket shortcuts cycle tabs, and double-clicking empty strip opens a new session", () => withPage({}, async (page, origin) => {
+test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and double-clicking empty strip opens a new session", () => withPage({}, async (page, origin) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   for (const [id, name] of [["alpha", "Alpha"], ["bravo", "Bravo"], ["charlie", "Charlie"]]) {
     await page.goto(`${origin}${href(id)}`);
@@ -249,13 +259,29 @@ test("tab menu renames sessions, bracket shortcuts cycle tabs, and double-clicki
   await page.keyboard.press("Meta+BracketLeft");
   await page.waitForURL(`**${href("bravo")}`);
 
+  const field = strip(page).getByRole("textbox", { name: "Session name" });
   await menu(page, "Alpha", "Rename session");
-  const dialog = page.getByRole("dialog", { name: "Name session", exact: true });
-  await dialog.getByLabel("Session name").fill("Renamed");
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
-  await dialog.waitFor({ state: "hidden" });
-  await tab("Renamed").waitFor();
+  expect(await field.evaluate((node: HTMLInputElement) => document.activeElement === node && node.selectionEnd! - node.selectionStart! === node.value.length)).toBe(true);
+  await field.fill("Discarded");
+  await field.press("Escape");
+  await field.waitFor({ state: "detached" });
+  expect(await names(page)).toEqual(["Alpha", "Bravo", "Charlie"]);
+  const long = "A renamed session whose name is much longer than twelve rem";
+  await menu(page, "Alpha", "Rename session");
+  await field.fill(long);
+  await field.press("Enter");
+  await tab(long).waitFor();
+  await field.waitFor({ state: "detached" });
   expect(page.url()).toEndWith(href("bravo"));
+  const width = await tab(long).evaluate((node: HTMLElement) => node.getBoundingClientRect().width);
+  expect(width).toBeGreaterThan(12 * 16);
+  expect(width).toBeLessThanOrEqual(20 * 16);
+  await tab(long).hover();
+  expect(await page.locator('[data-slot="tooltip-content"]').innerText()).toBe(long);
+  await menu(page, long, "Rename session");
+  await field.fill("Renamed");
+  await page.getByPlaceholder("Message or $command").click();
+  await tab("Renamed").waitFor();
 
   const box = await strip(page).boundingBox();
   await strip(page).dblclick({ position: { x: box.width - 4, y: box.height / 2 } });
@@ -274,6 +300,11 @@ test("narrow top strip scrolls and running tabs keep a reachable close control",
   await tab("Delta").waitFor();
   expect(await names(page)).toEqual(["New session", "Alpha", "Bravo", "Charlie", "Delta", "Search"]);
   expect(await strip(page).evaluate((node: HTMLElement) => node.scrollWidth > node.clientWidth && getComputedStyle(node).overflowX === "auto")).toBe(true);
+  await strip(page).evaluate((node: HTMLElement) => { node.scrollLeft = 0; });
+  await strip(page).hover();
+  await page.mouse.wheel(0, 100);
+  await page.waitForFunction(() => document.querySelector('[role="tablist"][aria-label="Open tabs"]')!.scrollLeft === 100);
+  await page.mouse.move(0, 400);
   expect(await strip(page).getByRole("img", { name: "Turn running" }).evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("1");
   const close = strip(page).getByRole("button", { name: "Close Delta" });
   expect(await close.evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("1");
