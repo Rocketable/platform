@@ -1680,7 +1680,9 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       expect(await navTabs.getByRole("tab", { name: name === "Config" ? "Settings" : name, exact: true }).count()).toBe(0);
     };
     // Escape first closes search suggestions without leaving the page.
-    await footer.getByRole("button", { name: "Search sessions", exact: true }).click();
+    await footer.getByRole("button", { name: "Open command palette", exact: true }).click();
+    await navPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
+    await navPage.getByRole("dialog").waitFor({ state: "detached" });
     await navPage.waitForURL("**/search");
     await navMain.getByPlaceholder("Search or agent: or room:").fill("agent:");
     for (let i = 0; i < 10; i++) await navPage.keyboard.press("ArrowDown");

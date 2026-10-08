@@ -930,7 +930,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
                   <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="New session" onClick={newChat}>
                     <SquarePen className="size-[var(--navigation-icon)]" />
                   </TooltipTrigger><TooltipContent side="top">New session</TooltipContent></Tooltip>
-                  <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Search sessions" onClick={() => navigate("/search")}>
+                  <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Search sessions" onClick={() => openPalette("sessions")}>
                     <Search className="size-[var(--navigation-icon)]" />
                   </TooltipTrigger><TooltipContent side="top">Search sessions</TooltipContent></Tooltip>
                   <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Open command palette" onClick={() => openPalette("commands")}>

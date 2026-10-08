@@ -27,14 +27,23 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     const searches = page.getByRole("tablist", { name: "Searches" });
     const tabs = searches.getByRole("tab");
     await page.goto(`http://127.0.0.1:${server.port}/`);
+    // The footer Search button is Cmd/Ctrl+P; the Search page is the "Sessions: Search" command.
     await page.getByRole("button", { name: "Search sessions" }).click();
+    await page.getByRole("dialog", { name: "Go to session" }).getByPlaceholder("Search sessions").waitFor();
+    expect(new URL(page.url()).pathname).toBe("/");
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Open command palette", exact: true }).click();
+    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
     await page.waitForURL("**/search");
     const search = page.getByRole("textbox", { name: "Search sessions" });
     await search.waitFor();
     expect(await tabs.count()).toBe(1);
     expect(await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith("search-tabs:")))).toEqual([]);
     await page.goto(`http://127.0.0.1:${server.port}/`);
-    await page.getByRole("button", { name: "Search sessions" }).click();
+    await page.getByRole("button", { name: "Open command palette", exact: true }).click();
+    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
     expect(await tabs.count()).toBe(1);
     await search.fill("same");
     await page.getByRole("button", { name: "New search" }).click();
@@ -147,6 +156,7 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     await page.keyboard.press("Escape");
     await page.keyboard.press("Control+Shift+p");
     await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
     await page.waitForURL("**/search");
   } finally {
     await browser.close();
@@ -271,7 +281,9 @@ for (const width of [1280, 390]) test(`search editor groups clickable message ma
     expect(await palette.locator('[data-slot="session-title"]').allTextContents()).toEqual(["Origin chat"]);
     await page.keyboard.press("Escape");
     await palette.waitFor({ state: "detached" });
-    await page.getByRole("button", { name: "Search sessions", exact: true }).click();
+    await page.getByRole("button", { name: "Open command palette", exact: true }).click();
+    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
     await search.fill("is:cr");
     await page.getByRole("button", { name: "cron", exact: true }).click();
     await results.getByRole("group", { name: "Origin chat", exact: true }).waitFor();
@@ -620,11 +632,15 @@ test("message matches jump after history loads and last close returns to the las
       return !!viewport && !!target && target.bottom > viewport.top && target.top < viewport.bottom;
     });
     await page.getByRole("button", { name: "sandboxed" }).click();
-    await page.getByRole("button", { name: "Search sessions" }).click();
+    await page.getByRole("button", { name: "Open command palette", exact: true }).click();
+    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
     await page.getByRole("link", { name: /one user 1/ }).click();
     await page.waitForFunction(() => document.querySelector('[data-message-id="one-u1"]')?.getBoundingClientRect().height !== 0);
     expect(await page.getByRole("button", { name: "sandboxed" }).getAttribute("aria-pressed")).toBe("true");
-    await page.getByRole("button", { name: "Search sessions" }).click();
+    await page.getByRole("button", { name: "Open command palette", exact: true }).click();
+    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
     await page.getByRole("link", { name: /one assistant 1/ }).click();
     await page.waitForURL("**/s/b25l?message=one-a1");
     await page.waitForFunction(() => {
@@ -659,7 +675,9 @@ test("message matches jump after history loads and last close returns to the las
       return viewport.scrollTop === 0 && localStorage.getItem("last-seen:tester") === `/s/dHdv?message=${visible.at(-1)?.dataset.messageId}`;
     });
     const lastSeen = await page.evaluate(() => localStorage.getItem("last-seen:tester"));
-    await page.getByRole("button", { name: "Search sessions" }).click();
+    await page.getByRole("button", { name: "Open command palette", exact: true }).click();
+    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
     await page.getByRole("button", { name: "Close search 1" }).click();
     await page.waitForURL(root + lastSeen);
     expect(await page.getByRole("textbox", { name: "Search sessions" }).count()).toBe(0);

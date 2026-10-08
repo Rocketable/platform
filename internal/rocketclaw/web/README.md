@@ -333,6 +333,7 @@ Touch devices and narrow screens use 48px navigation targets and 8px gaps;
 desktop uses 32px targets and 4px gaps. Icons are 24px in both layouts.
 The centered bar has New session, Search sessions, and Open command palette.
 Cmd/Ctrl+Alt+N opens a new session. The magnifying glass beside New session opens
+the session palette, like Cmd/Ctrl+P. The **Sessions: Search** command opens
 the Search page. Each search has its own editable tab, saved in this browser for
 the confirmed user. Click another tab to switch searches; click the selected tab
 to edit its name in place. Enter or clicking away saves; Escape cancels.
