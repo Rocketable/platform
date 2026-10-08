@@ -497,8 +497,8 @@ func TestLegacyCronScheduleResumesIntoCanonical(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			// Back to before 027_producer_handoff, which 028_background_jobs follows.
-			_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(t.Context(), store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 2)
+			// Back to before 027_producer_handoff and the two migrations that follow it.
+			_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(t.Context(), store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 3)
 			require.NoError(t, err)
 			require.NoError(t, store.UpsertThread("cron:legacy", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
 

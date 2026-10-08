@@ -139,6 +139,49 @@ FROM pg_prepared_statements WHERE statement LIKE 'SELECT id, entry_json FROM ses
 	t.Log(strings.Join(plan, "\n"))
 }
 
+func TestHistoryVisibilityUsesRevertedParentIndex(t *testing.T) {
+	store := newTestSessionService(t)
+	store.db.SetMaxOpenConns(1)
+
+	ctx := t.Context()
+	_, err := store.db.ExecContext(ctx, `
+INSERT INTO managed_conversations (conversation_id, agent, created_by)
+SELECT 'unrelated-' || n, 'main', '' FROM generate_series(1, 4096) n;
+INSERT INTO managed_conversations (conversation_id, agent, created_by, revert_message_id)
+VALUES ('parent', 'main', '', '10:1');
+INSERT INTO session_entries (id, conversation_id, entry_json, entry_timestamp) VALUES
+    (10, 'parent', '{"replay_input":[{"type":"function_call","call_id":"kept"},{"type":"function_call","call_id":"discarded"}]}', ''),
+    (20, 'parent/kept', '{}', ''), (30, 'parent/discarded', '{}', ''), (40, 'ordinary', '{}', '');
+ANALYZE managed_conversations;
+ANALYZE session_entries;
+SET plan_cache_mode = force_generic_plan;`)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		conversationID string
+		id             int64
+	}{
+		{"parent/kept", 20}, {"parent/discarded", 0}, {"ordinary", 40}, {"missing", 0},
+	} {
+		start, oldest, err := store.TranscriptPage(ctx, tc.conversationID, 0, 1)
+		require.NoError(t, err)
+		require.Equal(t, tc.id, start)
+		require.Equal(t, tc.id, oldest)
+	}
+
+	// Explain the actual prepared history query, including its shared visibility check.
+	queries, err := queryStrings(ctx, store.db, `SELECT format('EXPLAIN EXECUTE %I(%s)', name,
+    (SELECT string_agg('NULL', ',') FROM unnest(parameter_types)))
+FROM pg_prepared_statements WHERE statement = $1`, "history statement", transcriptPageSQL)
+	require.NoError(t, err)
+	require.Len(t, queries, 1)
+	plan, err := queryStrings(ctx, store.db, queries[0], "history visibility plan")
+	require.NoError(t, err)
+	require.Contains(t, strings.Join(plan, "\n"), "managed_conversations_reverted")
+	require.NotContains(t, strings.Join(plan, "\n"), "Seq Scan on managed_conversations parent")
+	t.Log(strings.Join(plan, "\n"))
+}
+
 func TestHistoryDeletionUsesConversationRangeIndexes(t *testing.T) {
 	store := newTestSessionService(t)
 	_, err := store.db.ExecContext(t.Context(), `
@@ -269,7 +312,7 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			}
 
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&n))
-			require.Equal(t, 30, n)
+			require.Equal(t, 31, n)
 			// No migration lock may survive startup and poison later pool users.
 			require.Eventually(t, func() bool {
 				var locks int
@@ -334,7 +377,7 @@ func TestSessionMigrationsSerializeLedgerCreation(t *testing.T) {
 
 			var count int
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-			require.Equal(t, 30, count)
+			require.Equal(t, 31, count)
 		})
 	}
 }
@@ -388,7 +431,7 @@ func TestSessionMigrationRollbackAndCatchup(t *testing.T) {
 
 	var n int
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM pg_migrations`).Scan(&n))
-	require.Equal(t, 28, n)
+	require.Equal(t, 29, n)
 
 	var missing sql.NullString
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT to_regclass('slack_channel_facts')::text`).Scan(&missing))
@@ -571,9 +614,9 @@ func TestBackgroundJobsMigration(t *testing.T) {
 	}
 
 	for range 2 {
-		n, err := set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Down, 1)
+		n, err := set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Down, 2)
 		require.NoError(t, err)
-		require.Equal(t, 1, n)
+		require.Equal(t, 2, n)
 
 		exists, body := schema()
 		require.False(t, exists)
@@ -582,9 +625,9 @@ func TestBackgroundJobsMigration(t *testing.T) {
 		_, err = store.db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('rolled-back', '{}', '')`)
 		require.NoError(t, err, "the restored transcript trigger still runs")
 
-		n, err = set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Up, 1)
+		n, err = set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Up, 2)
 		require.NoError(t, err)
-		require.Equal(t, 1, n)
+		require.Equal(t, 2, n)
 
 		exists, body = schema()
 		require.True(t, exists)
