@@ -12,14 +12,15 @@ import (
 type processAssembler struct{}
 
 func (processAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+	cfg := rt.Cfg.Clone()
 	var stops []func(context.Context) error
 
 	rt.Log.Info("starting Slack connector")
 
-	channels := rt.Cfg.Slack.MappedChannels()
-	runner := &cronRunner{backend: rt, config: rt.Cfg}
-	cronjobs := cronfrontend.New(rt.Cfg.Workspace, rt.Cfg.RuntimeDirName(), channels, rt.Sessions, runner, rt.Log)
-	slack := slackconnector.New(&rt.Cfg.Slack, rt.TextRouter, rt.Sessions, rt.Log)
+	channels := cfg.Slack.MappedChannels()
+	runner := &cronRunner{backend: rt, config: cfg}
+	cronjobs := cronfrontend.New(cfg.Workspace, cfg.RuntimeDirName(), channels, rt.Sessions, runner, rt.Log)
+	slack := slackconnector.New(&cfg.Slack, rt.TextRouter, rt.Sessions, rt.Log)
 
 	if err := slack.Authenticate(); err != nil {
 		return nil, nil, nil, fmt.Errorf("start Slack connector: %w", err)
@@ -32,14 +33,14 @@ func (processAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-
 	}
 	stops = append(stops, cronjobs.Stop)
 
-	if rt.Cfg.MCPExternal.Enabled {
+	if cfg.MCPExternal.Enabled {
 		agents := &mcpAgentIndex{cfg: rt.Cfg}
 		*rt.RefreshExternalMCPAgents = agents.Refresh
 		if err := agents.Refresh(); err != nil {
 			return nil, nil, nil, err
 		}
 
-		externalMCP, err := startExternalMCPServer(rt.RunCtx, rt.Cfg, slack, rt.ExternalMCPUsers, agents, rt.Sessions, rt, rt.Log)
+		externalMCP, err := startExternalMCPServer(rt.RunCtx, cfg, slack, rt.ExternalMCPUsers, agents, rt.Sessions, rt, rt.Log)
 		if err != nil {
 			return nil, nil, nil, err
 		}

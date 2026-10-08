@@ -28,14 +28,14 @@ type mcpRelay interface {
 }
 
 type mcpAgentIndex struct {
-	cfg *config.Config
+	cfg *config.LockedConfig
 
 	mu    sync.Mutex
 	names []string
 }
 
 func (i *mcpAgentIndex) Refresh() error {
-	agents, err := backend.ExternalMCPAgentsIn(i.cfg, i.cfg.RuntimeDirName())
+	agents, err := backend.ExternalMCPAgentsIn(i.cfg, i.cfg.Clone().RuntimeDirName())
 	if err != nil {
 		return fmt.Errorf("load external MCP agents: %w", err)
 	}

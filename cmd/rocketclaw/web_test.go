@@ -59,12 +59,14 @@ func TestWebRPC(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
-	rt := &backend.Runtime{Sessions: sessions, Cfg: &config.Config{Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}, Log: logger}
+	rt := &backend.Runtime{Sessions: sessions, Cfg: config.NewLockedConfig(&config.Config{Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}), Log: logger}
 
 	httpListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = httpListener.Close() })
-	require.NoError(t, json.Unmarshal([]byte(`{"web":{"listen_address":"`+httpListener.Addr().String()+`","sentry":{"dsn":"https://public@o1.ingest.sentry.io/1"}}}`), rt.Cfg))
+	cfg := rt.Cfg.Clone()
+	require.NoError(t, json.Unmarshal([]byte(`{"web":{"listen_address":"`+httpListener.Addr().String()+`","sentry":{"dsn":"https://public@o1.ingest.sentry.io/1"}}}`), cfg))
+	rt.Cfg.Store(cfg)
 
 	_, err = startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
 	require.ErrorContains(t, err, "start Web HTTP")
@@ -73,7 +75,7 @@ func TestWebRPC(t *testing.T) {
 	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, stop(t.Context())) }()
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+rt.Cfg.Web.ListenAddress+"/api/Identity", strings.NewReader("{}"))
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+cfg.Web.ListenAddress+"/api/Identity", strings.NewReader("{}"))
 	require.NoError(t, err)
 	responseHTTP, err := http.DefaultClient.Do(request)
 	require.NoError(t, err)
@@ -84,7 +86,7 @@ func TestWebRPC(t *testing.T) {
 	require.NoError(t, responseHTTP.Body.Close())
 	require.Equal(t, http.StatusOK, responseHTTP.StatusCode)
 	require.Equal(t, "alice", identity.Username)
-	request, err = http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+rt.Cfg.Web.ListenAddress+"/", nil)
+	request, err = http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+cfg.Web.ListenAddress+"/", nil)
 	require.NoError(t, err)
 	responseHTTP, err = http.DefaultClient.Do(request)
 	require.NoError(t, err)

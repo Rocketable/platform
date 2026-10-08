@@ -107,7 +107,7 @@ type Config struct {
 type Bridge struct {
 	log       *slog.Logger
 	config    Config
-	runtime   *config.Config
+	runtime   *config.LockedConfig
 	bus       protocol.OutboundPublisher
 	requestCh chan bridgeRequest
 	stopCh    chan struct{}
@@ -242,7 +242,7 @@ func (s childSessions) ChildEntries(ctx context.Context, key string) ([]rocketco
 }
 
 // NewConversation constructs a rocketcode bridge for one conversation.
-func NewConversation(cfg *config.Config, publisher protocol.OutboundPublisher, bridgeCfg *Config, logger *slog.Logger) *Bridge {
+func NewConversation(cfg *config.LockedConfig, publisher protocol.OutboundPublisher, bridgeCfg *Config, logger *slog.Logger) *Bridge {
 	return &Bridge{log: logger.With("component", "rocketcode"), config: normalizeConfig(bridgeCfg), runtime: cfg, bus: publisher, requestCh: make(chan bridgeRequest, defaultQueueSize), stopCh: make(chan struct{})}
 }
 
@@ -1123,6 +1123,7 @@ WHERE a.phase <> $2 AND c.producer_inbound_json->>'SyncDestination' = $1)`, b.co
 // handoffProducer resolves only completed original work, then projects it before
 // the canonical worker can admit a scheduled prompt.
 func (b *Bridge) handoffProducer(ctx context.Context) error {
+	runtimeCfg := b.runtime.Clone()
 	store, source := b.config.SessionService, b.config.ConversationID
 	web := "web:" + source
 
@@ -1209,7 +1210,7 @@ func (b *Bridge) handoffProducer(ctx context.Context) error {
 		}
 
 		if !recorded {
-			definitions, _, err := LoadRuntimeDefinitions(b.runtime, b.runtime.RuntimeDirName())
+			definitions, _, err := LoadRuntimeDefinitions(b.runtime, runtimeCfg.RuntimeDirName())
 			if err != nil {
 				return fmt.Errorf("load web agents: %w", err)
 			}
@@ -1217,8 +1218,8 @@ func (b *Bridge) handoffProducer(ctx context.Context) error {
 			choices := slices.Sorted(maps.Keys(definitions.Items))
 
 			stem := strings.TrimSuffix(strings.TrimPrefix(inbound.Cronjob.RelativePath, "cron/"), ".md")
-			if job, err := config.LoadOneOffCronjob(b.runtime.Workspace, b.runtime.RuntimeDirName(), stem); err == nil {
-				choices = b.runtime.CronWebAgentChoices(choices, &job)
+			if job, err := config.LoadOneOffCronjob(runtimeCfg.Workspace, runtimeCfg.RuntimeDirName(), stem); err == nil {
+				choices = runtimeCfg.CronWebAgentChoices(choices, &job)
 			}
 
 			if len(choices) == 0 {
@@ -1621,7 +1622,9 @@ func (b *Bridge) deliver(ctx context.Context, request *bridgeRequest, outbound *
 // postCronRoot posts the report in its configured channel, records the new
 // thread for the channel's first agent, and copies this run's history into it.
 func (b *Bridge) postCronRoot(ctx context.Context, outbound *protocol.OutboundMessage) error {
-	channel, ok := b.runtime.Slack.Channel(outbound.SlackReply.ChannelID)
+	runtimeCfg := b.runtime.Clone()
+
+	channel, ok := runtimeCfg.Slack.Channel(outbound.SlackReply.ChannelID)
 	if !ok || len(channel.Agents) == 0 {
 		return fmt.Errorf("cron destination %q has no configured agents", outbound.SlackReply.ChannelID)
 	}
@@ -1705,14 +1708,16 @@ func (b *Bridge) settleSteers(ctx context.Context, err error) error {
 // prepareWorkflow retains the definition and open runner until execution owns
 // them. Admission must not discard this preparation and repeat it after pruning.
 func (b *Bridge) prepareWorkflow(request *bridgeRequest) error {
-	root, errRoot := os.OpenRoot(b.runtime.Workspace)
+	runtimeCfg := b.runtime.Clone()
+
+	root, errRoot := os.OpenRoot(runtimeCfg.Workspace)
 	if errRoot != nil {
 		return fmt.Errorf("open workspace root: %w", errRoot)
 	}
 
 	defer func() { _ = root.Close() }()
 
-	definitions, errLoad := workflow.Load(root, b.runtime.RuntimeDirName())
+	definitions, errLoad := workflow.Load(root, runtimeCfg.RuntimeDirName())
 	if errLoad != nil {
 		return fmt.Errorf("load workflow definitions: %w", errLoad)
 	}
@@ -1910,6 +1915,8 @@ func appendSessionEntry(entries iter.Seq2[rocketcode.SessionEntry, error], added
 
 //nolint:gocyclo // Turn execution coordinates model, tools, progress, and goal accounting.
 func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turnID, journalKey string, finish *turnFinish) (result runResult, err error) {
+	runtimeCfg := b.runtime.Clone()
+
 	var header string
 	defer func() {
 		if header == "" {
@@ -1921,7 +1928,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	ctx = instrumentation.WithSession(ctx, b.config.ConversationID)
 
 	tracer := noop.NewTracerProvider().Tracer("rocketclaw")
-	if b.runtime.Instrumentation.Enabled {
+	if runtimeCfg.Instrumentation.Enabled {
 		tracer = otel.Tracer("rocketclaw")
 	}
 
@@ -1936,20 +1943,20 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		attribute.String("rocketclaw.source", string(msg.Source)),
 		attribute.String("rocketclaw.kind", string(msg.Kind)),
 		attribute.Int("rocketclaw.attachment_count", len(msg.Attachments)),
-		rocketclawInputValue(b.runtime, msg.Text),
+		rocketclawInputValue(runtimeCfg, msg.Text),
 	)
 
 	defer func() {
 		recordRocketClawSpanError(span, err)
 		span.SetAttributes(
-			rocketclawOutputValue(b.runtime, result.text),
+			rocketclawOutputValue(runtimeCfg, result.text),
 			attribute.String("rocketclaw.response_id", result.responseID),
 			attribute.String("rocketclaw.model", result.attribution.Model),
 		)
 		span.End()
 	}()
 
-	root, err := os.OpenRoot(b.runtime.Workspace)
+	root, err := os.OpenRoot(runtimeCfg.Workspace)
 	if err != nil {
 		return runResult{}, fmt.Errorf("open workspace root: %w", err)
 	}
@@ -1957,19 +1964,19 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	shared := &turnRoot{root: root, users: 1}
 	defer shared.release()
 
-	agents, skills, err := loadRocketCodeDefinitionsIn(root, b.runtime, b.runtime.RuntimeDirName(), toolModePersistent)
+	agents, skills, err := loadRocketCodeDefinitionsIn(root, b.runtime, runtimeCfg.RuntimeDirName(), toolModePersistent)
 	if err != nil {
 		return runResult{}, fmt.Errorf("open workspace agent and skills: %w", err)
 	}
 
-	appendOverlayPromptToAgent(agents, agentName, b.runtime)
+	appendOverlayPromptToAgent(agents, agentName, runtimeCfg)
 
-	shellTempRel := rocketcodeShellTempRel(b.runtime.RuntimeDirName(), b.config.ConversationID)
+	shellTempRel := rocketcodeShellTempRel(runtimeCfg.RuntimeDirName(), b.config.ConversationID)
 	if err := root.MkdirAll(shellTempRel, 0o700); err != nil {
 		return runResult{}, fmt.Errorf("create rocketcode shell temp dir: %w", err)
 	}
 
-	shellTempDir, store := filepath.Join(b.runtime.Workspace, filepath.FromSlash(shellTempRel)), newSessionStore(b.config.ConversationID, b.config.SessionService)
+	shellTempDir, store := filepath.Join(runtimeCfg.Workspace, filepath.FromSlash(shellTempRel)), newSessionStore(b.config.ConversationID, b.config.SessionService)
 	if msg.SyncDestination == "" && b.config.ManagedConversationID != b.config.ConversationID {
 		store.managedConversationID = b.config.ManagedConversationID
 	}
@@ -2064,7 +2071,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	providerLog := b.log.With("conversation_id", b.config.ConversationID, "turn_id", turnID, "agent", agentName, "source", string(msg.Source), "kind", string(msg.Kind), "human", msg.Human, "goal_turn", msg.GoalTurn, "attachment_count", len(msg.Attachments))
-	resolver := newModelResolver(b.runtime, providerLog)
+	resolver := newModelResolver(runtimeCfg, providerLog)
 
 	attachments := &outboundAttachmentCollector{key: journalKey + "/attachments"}
 	if queued, found, err := b.config.SessionService.LoadTurnStep(ctx, b.config.ConversationID, attachments.key); err != nil {
@@ -2331,6 +2338,7 @@ func sanitizeShellTempSegment(conversationID string) string {
 }
 
 func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]string, customTools ...rocketcode.Tool) rocketcode.Config {
+	runtimeCfg := b.runtime.Clone()
 	tools := make([]rocketcode.Tool, 0, 6+len(customTools))
 
 	tools = append(tools, reloadTool(b.config.RequestReload), listSessionsTool(b.config.SessionService), getSessionTool(b.config.SessionService), currentSessionIDTool(b.config.ConversationID), stopBackgroundJobTool(b.background, b.config.ConversationID))
@@ -2340,7 +2348,7 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 
 	tools = append(tools, customTools...)
 
-	return rocketcode.Config{Model: "", AutoApproverModel: b.runtime.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(b.runtime), RetainedResultDir: rocketcodeRetainedDir(b.config.ConversationID), Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: b.runtime.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: b.runtime.Instrumentation.HideInputs, HideOutputs: b.runtime.Instrumentation.HideOutputs}}, ChildSessions: childSessions{store: b.config.SessionService, conversationID: b.config.ConversationID}, Journal: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, BackgroundJobs: rocketcode.InertBackgroundJobs{}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(b.runtime.MCPServers), MCPWorkspace: b.runtime.Workspace}
+	return rocketcode.Config{Model: "", AutoApproverModel: runtimeCfg.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(runtimeCfg), RetainedResultDir: rocketcodeRetainedDir(b.config.ConversationID), Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: runtimeCfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: runtimeCfg.Instrumentation.HideInputs, HideOutputs: runtimeCfg.Instrumentation.HideOutputs}}, ChildSessions: childSessions{store: b.config.SessionService, conversationID: b.config.ConversationID}, Journal: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, BackgroundJobs: rocketcode.InertBackgroundJobs{}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(runtimeCfg.MCPServers), MCPWorkspace: runtimeCfg.Workspace}
 }
 
 func toMCPClientServers(servers map[string]config.MCPServerConfig) map[string]mcpclient.ServerConfig {
@@ -2419,7 +2427,16 @@ func overlayPromptSection(cfg *config.Config, overlays []skel.OverlayInfo) strin
 	return strings.Join(lines, "\n")
 }
 
-func loadRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir string, mode toolMode) (rocketcode.Agents, rocketcode.Skills, error) {
+func loadRocketCodeDefinitionsIn(root *os.Root, locked *config.LockedConfig, runtimeDir string, mode toolMode) (agents rocketcode.Agents, skills rocketcode.Skills, err error) {
+	err = locked.Do(func(cfg *config.Config) error {
+		agents, skills, err = readRocketCodeDefinitionsIn(root, cfg, runtimeDir, mode)
+		return err
+	})
+
+	return agents, skills, err
+}
+
+func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir string, mode toolMode) (rocketcode.Agents, rocketcode.Skills, error) {
 	rootFS := root.FS()
 
 	agentsFS, err := fs.Sub(rootFS, filepath.ToSlash(filepath.Join(runtimeDir, "agents")))
@@ -2490,8 +2507,8 @@ func loadRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 }
 
 // LoadRuntimeDefinitions loads RocketCode definitions from runtimeDir without starting a run.
-func LoadRuntimeDefinitions(cfg *config.Config, runtimeDir string) (rocketcode.Agents, rocketcode.Skills, error) {
-	root, err := os.OpenRoot(cfg.Workspace)
+func LoadRuntimeDefinitions(cfg *config.LockedConfig, runtimeDir string) (rocketcode.Agents, rocketcode.Skills, error) {
+	root, err := os.OpenRoot(cfg.Clone().Workspace)
 	if err != nil {
 		return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("open workspace root: %w", err)
 	}
@@ -2502,7 +2519,7 @@ func LoadRuntimeDefinitions(cfg *config.Config, runtimeDir string) (rocketcode.A
 }
 
 // ExternalMCPAgentsIn returns agents externally selectable through MCP in runtimeDir.
-func ExternalMCPAgentsIn(cfg *config.Config, runtimeDir string) ([]string, error) {
+func ExternalMCPAgentsIn(cfg *config.LockedConfig, runtimeDir string) ([]string, error) {
 	agents, _, err := LoadRuntimeDefinitions(cfg, runtimeDir)
 	if err != nil {
 		return nil, err
@@ -2907,14 +2924,16 @@ func updateGoalTool(b *Bridge) rocketcode.Tool {
 }
 
 func (b *Bridge) runGoalCheck(ctx context.Context, script string) (string, bool) {
-	root, err := os.OpenRoot(b.runtime.Workspace)
+	runtimeCfg := b.runtime.Clone()
+
+	root, err := os.OpenRoot(runtimeCfg.Workspace)
 	if err != nil {
 		return "goal check failed before execution: " + err.Error(), false
 	}
 
 	defer func() { _ = root.Close() }()
 
-	agents, _, err := loadRocketCodeDefinitionsIn(root, b.runtime, b.runtime.RuntimeDirName(), toolModePersistent)
+	agents, _, err := loadRocketCodeDefinitionsIn(root, b.runtime, runtimeCfg.RuntimeDirName(), toolModePersistent)
 	if err != nil {
 		return "goal check failed before execution: " + err.Error(), false
 	}
@@ -2926,17 +2945,17 @@ func (b *Bridge) runGoalCheck(ctx context.Context, script string) (string, bool)
 		return "goal check failed before execution: active agent " + agentName + " is not configured", false
 	}
 
-	command, err := validateGoalCheckScript(root, b.runtime.Workspace, script, agent.Permission)
+	command, err := validateGoalCheckScript(root, runtimeCfg.Workspace, script, agent.Permission)
 	if err != nil {
 		return "goal check failed before execution: " + err.Error(), false
 	}
 
-	shellTempRel := rocketcodeShellTempRel(b.runtime.RuntimeDirName(), b.config.ConversationID)
+	shellTempRel := rocketcodeShellTempRel(runtimeCfg.RuntimeDirName(), b.config.ConversationID)
 	if err := root.MkdirAll(shellTempRel, 0o700); err != nil {
 		return "goal check failed before execution: " + err.Error(), false
 	}
 
-	result, err := rocketcode.RunBash(ctx, root, filepath.Join(b.runtime.Workspace, filepath.FromSlash(shellTempRel)), nil, rocketcode.BashCommand{Command: command, TimeoutMillisecond: goalCheckTimeout, Workdir: "", Description: "Run goal completion check"})
+	result, err := rocketcode.RunBash(ctx, root, filepath.Join(runtimeCfg.Workspace, filepath.FromSlash(shellTempRel)), nil, rocketcode.BashCommand{Command: command, TimeoutMillisecond: goalCheckTimeout, Workdir: "", Description: "Run goal completion check"})
 	if err != nil {
 		return "goal check failed before execution: " + err.Error(), false
 	}

@@ -86,7 +86,7 @@ func newResumeTestBridges(t *testing.T, blocked bool) (newBridge func() *Bridge,
 
 	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
 	newBridge = func() *Bridge {
-		return NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
+		return NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
 	}
 
 	return newBridge, service, requests, finals
@@ -313,7 +313,7 @@ func TestWaitingForPairedSession(t *testing.T) {
 			service.reserveTurnPair(pairID, "external_mcp:private")
 
 			finals := make(chan *protocol.OutboundMessage, 4)
-			bridge := NewConversation(&config.Config{Workspace: t.TempDir()}, finalsPublisher{finals: finals}, &Config{ConversationID: pairID, Agent: "main", ManagedConversationID: pairID, RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
+			bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), finalsPublisher{finals: finals}, &Config{ConversationID: pairID, Agent: "main", ManagedConversationID: pairID, RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
 
 			if stop {
 				seedActiveTurn(t, service, pairID, "turn-waiting", nil)
@@ -390,7 +390,7 @@ func TestStartActiveTurnsStartsRowWorkers(t *testing.T) {
 
 // newTestBridgeManager returns a running manager of real bridges that publish to
 // finals, and the shutdown that stops its loops.
-func newTestBridgeManager(t *testing.T, cfg *config.Config, service *SessionService, finals chan *protocol.OutboundMessage) (manager *threadBridgeManager, shutdown func() error) {
+func newTestBridgeManager(t *testing.T, cfg *config.LockedConfig, service *SessionService, finals chan *protocol.OutboundMessage) (manager *threadBridgeManager, shutdown func() error) {
 	t.Helper()
 
 	manager = newThreadBridgeManager(cfg, service, slog.New(slog.DiscardHandler), func(bridgeCfg Config) directBridge {
@@ -408,7 +408,7 @@ func newCronTestManager(t *testing.T, service *SessionService) (manager *threadB
 
 	cfg = &config.Config{Workspace: t.TempDir(), Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"channel-agent"}}}}}
 	roots, finals = make(chan *protocol.OutboundMessage, 4), make(chan *protocol.OutboundMessage, 4)
-	manager, _ = newTestBridgeManager(t, cfg, service, finals)
+	manager, _ = newTestBridgeManager(t, config.NewLockedConfig(cfg), service, finals)
 	manager.cronRoots = &slackFrontendMock{SendCronjobRootFunc: func(_ context.Context, message *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
 		roots <- message
 		return protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, nil
@@ -438,7 +438,7 @@ func TestResumedCronRowPostsRootOnce(t *testing.T) {
 	manager, cfg, roots, finals := newCronTestManager(t, service)
 	msg := seedCronRun(t, service, "cron:daily")
 
-	crashed := NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
+	crashed := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
 	replay, err := replayInputForMessage("user", "job prompt")
 	require.NoError(t, err)
 	_, err = service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", service), entries: []rocketcode.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replay}}, outbound: crashed.newOutboundMessage(msg, "turn-cron", "exact report", true)})
@@ -492,8 +492,8 @@ func TestLegacyCronScheduleResumesIntoCanonical(t *testing.T) {
 		t.Run(owner, func(t *testing.T) {
 			newBridge, store, calls, finals := newResumeTestBridges(t, false)
 			runtime := newBridge().runtime
-			writeAgent(t, runtime.Workspace, "a-selected", "---\ndescription: Selected\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nSelected canonical instructions\n")
-			writeAgent(t, runtime.Workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  rocketclaw: allow\n---\nProducer instructions\n")
+			writeAgent(t, runtime.Clone().Workspace, "a-selected", "---\ndescription: Selected\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nSelected canonical instructions\n")
+			writeAgent(t, runtime.Clone().Workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  rocketclaw: allow\n---\nProducer instructions\n")
 
 			destination := owner
 			if destination == "" {
@@ -570,7 +570,10 @@ func TestLegacyCronScheduleResumesIntoCanonical(t *testing.T) {
 				}
 			}))
 			t.Cleanup(server.Close)
-			runtime.OpenAI.APIBaseURL = server.URL
+			require.NoError(t, runtime.Do(func(cfg *config.Config) error {
+				cfg.OpenAI.APIBaseURL = server.URL
+				return nil
+			}))
 			manager, _ := newTestBridgeManager(t, runtime, store, finals)
 			roots := make(chan *protocol.OutboundMessage, 1)
 			manager.cronRoots = &slackFrontendMock{SendCronjobRootFunc: func(_ context.Context, message *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
@@ -694,7 +697,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"job"}}, {Channel: "#current", Agents: []string{"not-loaded", "canonical", "job"}}}}}
-	manager, shutdown := newTestBridgeManager(t, cfg, service, finals)
+	manager, shutdown := newTestBridgeManager(t, config.NewLockedConfig(cfg), service, finals)
 	roots := make(chan *protocol.OutboundMessage, 4)
 	manager.cronRoots = &slackFrontendMock{SendCronjobRootFunc: func(_ context.Context, message *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
 		roots <- message
@@ -820,7 +823,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 		require.NoError(t, service.PutScheduledMessage(id, &message))
 	}
 
-	manager, _ = newTestBridgeManager(t, cfg, service, finals)
+	manager, _ = newTestBridgeManager(t, config.NewLockedConfig(cfg), service, finals)
 	manager.cronRoots = &slackFrontendMock{SendCronjobRootFunc: func(_ context.Context, message *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
 		roots <- message
 		return protocol.TextConversationTarget{ChannelID: "C1", ThreadID: "1.2"}, nil
@@ -855,7 +858,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 
 			runtime := newBridge().runtime
 			if state == "completed before Sync" {
-				writeAgent(t, runtime.Workspace, "a-loaded", "---\ndescription: First loaded\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nSorted fallback instructions\n")
+				writeAgent(t, runtime.Clone().Workspace, "a-loaded", "---\ndescription: First loaded\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nSorted fallback instructions\n")
 			}
 
 			require.NoError(t, store.UpsertThread("cron:pending", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
@@ -891,7 +894,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 			}
 
 			if state == "existing Web" || state == "binding before projection" {
-				writeAgent(t, runtime.Workspace, "selected", "---\ndescription: Selected\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nSelected Web instructions\n")
+				writeAgent(t, runtime.Clone().Workspace, "selected", "---\ndescription: Selected\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nSelected Web instructions\n")
 				require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "web:cron:pending", Agent: "selected"}))
 
 				if state == "binding before projection" {
@@ -1057,7 +1060,7 @@ func TestFailedCronRunPostsNoRoot(t *testing.T) {
 	manager, cfg, roots, finals := newCronTestManager(t, service)
 	msg := seedCronRun(t, service, "cron:daily")
 
-	bridge := NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
 	bridge.threads = manager
 	require.NoError(t, bridge.finish(t.Context(), &bridgeRequest{inbound: msg, turnID: "turn-cron"}, &turnFinish{store: newSessionStore("cron:daily", service)}, &runResult{turnID: "turn-cron", text: internalErrorResponse}, protocol.TerminalFailed))
 
@@ -1081,7 +1084,7 @@ func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 
 			manager, _ := newTestBridgeManager(t, newBridge().runtime, service, finals)
 			if stored != "row" && stored != "queued" {
-				writeAgent(t, newBridge().runtime.Workspace, "selected", "---\ndescription: Selected\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nSelected canonical instructions\n")
+				writeAgent(t, newBridge().runtime.Clone().Workspace, "selected", "---\ndescription: Selected\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nSelected canonical instructions\n")
 				require.NoError(t, startTurnDB(t.Context(), service.db, "turn-private", privateID, msg))
 				data, err := json.Marshal(protocol.ScheduledMessageState{ConversationID: privateID, Agent: "main", Message: "scheduled follow up", DueAt: time.Now().Add(-time.Minute)})
 				require.NoError(t, err)
@@ -1232,7 +1235,7 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 	finals := make(chan *protocol.OutboundMessage, 4)
 	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
 	newBridge := func() *Bridge {
-		return NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service, UserQuestionAsker: asker}, slog.New(slog.DiscardHandler))
+		return NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service, UserQuestionAsker: asker}, slog.New(slog.DiscardHandler))
 	}
 
 	first := newBridge()
@@ -1377,7 +1380,7 @@ func TestResumedTurnFailurePostsInternalErrorFinal(t *testing.T) {
 
 		return nil
 	}}
-	runTestBridge(t, NewConversation(cfg, publisher, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler)))
+	runTestBridge(t, NewConversation(config.NewLockedConfig(cfg), publisher, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler)))
 
 	for {
 		message := readFinal(t, outbound)
@@ -1571,7 +1574,7 @@ def main(args):
 			finals := make(chan *protocol.OutboundMessage, 4)
 			cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
 			newBridge := func() *Bridge {
-				return NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
+				return NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
 			}
 			submit := func(bridge *Bridge) {
 				msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow audit", true)

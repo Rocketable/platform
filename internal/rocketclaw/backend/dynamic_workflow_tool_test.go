@@ -75,7 +75,7 @@ def main(args): return None
 	definitions, err := workflow.Load(root, ".rocketclaw")
 	require.NoError(t, err)
 
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace}, log: slog.New(slog.DiscardHandler)}
+	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace}), log: slog.New(slog.DiscardHandler)}
 
 	output := make(chan rocketcode.ChatResponse, 4)
 	tool, ok := bridge.dynamicWorkflowTool(permissions, "main", "main", definitions)
@@ -121,7 +121,7 @@ def main(args):
 `)
 
 	root := openWorkspaceRoot(t, workspace)
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace}, log: slog.New(slog.DiscardHandler)}
+	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace}), log: slog.New(slog.DiscardHandler)}
 
 	// Nested run with turn-start definitions (same freeze as production Call).
 	definitions, err := workflow.Load(root, ".rocketclaw")
@@ -164,7 +164,7 @@ def main(args):
 
 	var star rocketcode.PermissionSet
 	require.NoError(t, star.Allow("workflow", "*"))
-	_, ok = (&Bridge{runtime: &config.Config{Workspace: bad}, log: slog.New(slog.DiscardHandler)}).maybeDynamicWorkflowTool(badRoot, &rocketcode.Agent{Permission: star}, "main", "main")
+	_, ok = (&Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: bad}), log: slog.New(slog.DiscardHandler)}).maybeDynamicWorkflowTool(badRoot, &rocketcode.Agent{Permission: star}, "main", "main")
 	assert.False(t, ok)
 }
 
@@ -204,7 +204,7 @@ func TestNestedWorkflowSessionTags(t *testing.T) {
 	defer server.Close()
 
 	// A nested workflow inside a producer turn tags the turn's visible destination.
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: "external_mcp:owning", SessionService: service}, log: slog.New(slog.DiscardHandler)}
+	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "external_mcp:owning", SessionService: service}, log: slog.New(slog.DiscardHandler)}
 	definitions, err := workflow.Load(root, ".rocketclaw")
 	require.NoError(t, err)
 
@@ -249,7 +249,7 @@ def main(args):
 `)
 
 	cfg := &config.Config{Workspace: workspace}
-	root, agents, skills, resolver, err := prepareRocketCode(cfg, "main", slog.New(slog.DiscardHandler), toolModeWorkflow)
+	root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(cfg), "main", slog.New(slog.DiscardHandler), toolModeWorkflow)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 

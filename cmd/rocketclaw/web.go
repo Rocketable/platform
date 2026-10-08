@@ -16,9 +16,10 @@ import (
 )
 
 func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs rpc.CronJobs) (func(context.Context) error, error) {
+	cfg := rt.Cfg.Clone()
 	// Only HTTP is network-accessible; principal metadata stays inside the process.
 	listener := bufconn.Listen(1 << 20)
-	httpListener, err := net.Listen("tcp", rt.Cfg.Web.ListenAddress)
+	httpListener, err := net.Listen("tcp", cfg.Web.ListenAddress)
 	if err != nil {
 		_ = listener.Close()
 		return nil, fmt.Errorf("start Web HTTP: %w", err)
@@ -35,7 +36,7 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 		return nil, fmt.Errorf("connect Web HTTP to RPC: %w", err)
 	}
 
-	httpServer := &http.Server{Handler: rpc.NewHTTPHandler(connection, rt.Cfg.Web.Sentry)}
+	httpServer := &http.Server{Handler: rpc.NewHTTPHandler(connection, cfg.Web.Sentry)}
 	server := grpc.NewServer()
 	rpc.New(rt, rt.Sessions, rt.Cfg, channels, cronjobs).Register(server)
 

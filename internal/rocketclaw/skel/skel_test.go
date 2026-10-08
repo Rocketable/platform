@@ -10,6 +10,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -734,7 +735,7 @@ func TestReplaceRuntimeAssetsAfterValidationLeavesLiveAssetsUnchangedOnValidatio
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot, "main.md"), []byte("broken"), 0o644))
 
 	errValidate := errors.New("invalid staged assets")
-	err := ReplaceRuntimeAssetsAfterValidation(workspace, targetRoot, nil, testLogger(), func(string) error { return errValidate })
+	err := ReplaceRuntimeAssetsAfterValidation(workspace, targetRoot, nil, testLogger(), new(config.LockedConfig), func(string) error { return errValidate })
 	require.ErrorIs(t, err, errValidate)
 
 	data, err := os.ReadFile(filepath.Join(liveAgents, "main.md"))
@@ -771,7 +772,7 @@ func TestReplaceRuntimeAssetsAfterValidationCommitsFreshOverlayAndRefreshesScrip
 	repoGit(t, repo, "add", ".")
 	repoGit(t, repo, "commit", "-m", "new")
 
-	require.NoError(t, ReplaceRuntimeAssetsAfterValidation(workspace, targetRoot, []string{repo}, testLogger(), func(stagedWorkDir string) error {
+	require.NoError(t, ReplaceRuntimeAssetsAfterValidation(workspace, targetRoot, []string{repo}, testLogger(), new(config.LockedConfig), func(stagedWorkDir string) error {
 		data, err := os.ReadFile(filepath.Join(workspace, stagedWorkDir, agentsRoot, "remote.md"))
 		require.NoError(t, err)
 		assert.Equal(t, "new remote", string(data))

@@ -41,7 +41,7 @@ type threadStart struct {
 
 type threadBridgeManager struct {
 	log     *slog.Logger
-	runtime *config.Config
+	runtime *config.LockedConfig
 	store   *SessionService
 	factory func(Config) directBridge
 
@@ -69,7 +69,7 @@ func (noCronRoots) SendCronjobRoot(context.Context, *protocol.OutboundMessage) (
 
 var _ protocol.PrimaryTextRouter = (*threadBridgeManager)(nil)
 
-func newThreadBridgeManager(runtime *config.Config, store *SessionService, logger *slog.Logger, factory func(Config) directBridge) *threadBridgeManager {
+func newThreadBridgeManager(runtime *config.LockedConfig, store *SessionService, logger *slog.Logger, factory func(Config) directBridge) *threadBridgeManager {
 	return &threadBridgeManager{
 		log: logger.With("component", "thread_bridges"), runtime: runtime, store: store, factory: factory,
 		wake:    make(chan struct{}, 1),
@@ -365,12 +365,14 @@ func (m *threadBridgeManager) StartThread(ctx context.Context, agent string, tar
 // StartNewThread creates a named Web session, submits its first turn, and
 // links to it at this machine's Tailscale IPv4 on the Web port.
 func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *protocol.StartNewThreadRequest) (protocol.StartNewThreadResult, error) {
+	runtimeCfg := m.runtime.Clone()
+
 	targetAgent := cmp.Or(strings.TrimSpace(req.Agent), strings.TrimSpace(req.CurrentAgent), "main")
 	if len(req.AllowedAgents) > 0 && !slices.Contains(req.AllowedAgents, targetAgent) {
 		return protocol.StartNewThreadResult{}, fmt.Errorf("agent %q is not allowed on this source surface", targetAgent)
 	}
 
-	agents, err := ExternalMCPAgentsIn(m.runtime, m.runtime.RuntimeDirName())
+	agents, err := ExternalMCPAgentsIn(m.runtime, runtimeCfg.RuntimeDirName())
 	if err != nil {
 		return protocol.StartNewThreadResult{}, fmt.Errorf("load configured agents: %w", err)
 	}
@@ -379,7 +381,7 @@ func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *protocol.
 		return protocol.StartNewThreadResult{}, fmt.Errorf("agent %q is not configured", targetAgent)
 	}
 
-	_, port, err := net.SplitHostPort(m.runtime.Web.ListenAddress)
+	_, port, err := net.SplitHostPort(runtimeCfg.Web.ListenAddress)
 	if err != nil {
 		return protocol.StartNewThreadResult{}, fmt.Errorf("web.listen_address: %w", err)
 	}
@@ -451,7 +453,9 @@ func (m *threadBridgeManager) StartGoalInThread(ctx context.Context, agent, obje
 }
 
 func (m *threadBridgeManager) SkillDescriptions(name string) ([]protocol.SkillDescription, error) {
-	agents, skills, err := LoadRuntimeDefinitions(m.runtime, m.runtime.RuntimeDirName())
+	runtimeCfg := m.runtime.Clone()
+
+	agents, skills, err := LoadRuntimeDefinitions(m.runtime, runtimeCfg.RuntimeDirName())
 	if err != nil {
 		return nil, err
 	}
@@ -587,6 +591,8 @@ func (m *threadBridgeManager) noteReady(conversationID string) {
 // resumes the turn it journaled, with the settings and tools a turn of its conversation gives
 // subagents.
 func (m *threadBridgeManager) continueSubagent(ctx context.Context, job *backgroundJob, input string) (string, error) {
+	runtimeCfg := m.runtime.Clone()
+
 	bridge, err := m.recordedBridge(job.conversationID)
 	if err != nil {
 		return "", err
@@ -602,12 +608,12 @@ func (m *threadBridgeManager) continueSubagent(ctx context.Context, job *backgro
 	shared := &turnRoot{root: root, users: 1}
 	defer shared.release()
 
-	shellTempRel := rocketcodeShellTempRel(m.runtime.RuntimeDirName(), job.conversationID)
+	shellTempRel := rocketcodeShellTempRel(runtimeCfg.RuntimeDirName(), job.conversationID)
 	if err := root.MkdirAll(shellTempRel, 0o700); err != nil {
 		return "", fmt.Errorf("create rocketcode shell temp dir: %w", err)
 	}
 
-	rocketcodeConfig := bridge.rocketcodeConfig(filepath.Join(m.runtime.Workspace, filepath.FromSlash(shellTempRel)), nil, append(sessionTagTools(m.store, cmp.Or(job.origin.SyncDestination, job.conversationID)), bridge.scheduleMessageTool(job.origin), bridge.resetScheduledMessagesTool(job.origin))...)
+	rocketcodeConfig := bridge.rocketcodeConfig(filepath.Join(runtimeCfg.Workspace, filepath.FromSlash(shellTempRel)), nil, append(sessionTagTools(m.store, cmp.Or(job.origin.SyncDestination, job.conversationID)), bridge.scheduleMessageTool(job.origin), bridge.resetScheduledMessagesTool(job.origin))...)
 	rocketcodeConfig.BackgroundJobs = backgroundTurn{registry: bridge.background, root: shared, conversationID: job.conversationID, origin: job.origin}
 
 	runtime, err := rocketcode.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agentName, io.Discard)

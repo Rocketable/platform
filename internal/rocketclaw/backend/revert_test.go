@@ -494,12 +494,13 @@ func TestRevertCompletedFallbackAndPreparationFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, marker, current)
 
-	root, err := os.OpenRoot(b.runtime.Workspace)
+	cfg := b.runtime.Clone()
+	root, err := os.OpenRoot(cfg.Workspace)
 
 	require.NoError(t, err)
 	defer func() { require.NoError(t, root.Close()) }()
 
-	workflowDir := filepath.Join(b.runtime.RuntimeDirName(), "workflows")
+	workflowDir := filepath.Join(cfg.RuntimeDirName(), "workflows")
 	require.NoError(t, root.MkdirAll(workflowDir, 0o700))
 	definition := filepath.Join(workflowDir, "audit.star")
 	require.NoError(t, root.WriteFile(definition, []byte("meta = {\"name\": \"audit\", \"description\": \"Audit\", \"phases\": []}\ndef main(args): return \"workflow completed\"\n"), 0o600))

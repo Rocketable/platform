@@ -94,7 +94,7 @@ func TestTailscaleBrowserIdentity(t *testing.T) {
 
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "tailscale"), []byte(script), 0o700))
 
-			server := &Server{cfg: &config.Config{}, usernames: map[netip.Addr]string{netip.MustParseAddr("100.64.0.1"): "configured-user"}}
+			server := &Server{cfg: new(config.LockedConfig), usernames: map[netip.Addr]string{netip.MustParseAddr("100.64.0.1"): "configured-user"}}
 			username, principal, err := server.principal(ctx)
 			require.NoError(t, err)
 			require.Equal(t, "configured-user", username)
@@ -133,7 +133,7 @@ func TestTailscaleIdentityCache(t *testing.T) {
 	require.NoError(t, os.WriteFile(command, []byte(script), 0o700))
 
 	synctest.Test(t, func(t *testing.T) {
-		server := &Server{cfg: &config.Config{}}
+		server := &Server{cfg: new(config.LockedConfig)}
 		ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "100.64.0.1"))
 
 		var requests errgroup.Group
@@ -298,7 +298,7 @@ func TestSearchMessagesMatchesSlackTagNames(t *testing.T) {
 		}},
 		sessions:  sessions,
 		usernames: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice"},
-		cfg:       &config.Config{Workspace: t.TempDir()},
+		cfg:       config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}),
 		channels: &mockChannels{SlackTagsMatchingFunc: func(_ context.Context, needle string) []string {
 			return matching[needle]
 		}},
@@ -506,7 +506,7 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, cronjobs.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, cronjobs.Stop(context.Background())) })
 
-	server := New(core, sessions, cfg, channels, cronjobs)
+	server := New(core, sessions, config.NewLockedConfig(cfg), channels, cronjobs)
 	socketPath := testSocketPath(t)
 	listener, err := Listen(socketPath)
 	require.NoError(t, err)
@@ -1292,6 +1292,8 @@ func TestSessionEntries(t *testing.T) {
 		"zeta":  {URL: "https://secret-endpoint", Headers: map[string]string{"Authorization": "secret-header"}},
 		"alpha": {Command: "secret-command", Args: []string{"secret-argument"}, Env: map[string]string{"TOKEN": "secret-server-env"}},
 	}
+	server.cfg.Store(cfg)
+
 	view, err := invoke[ListConfigResponse](ctx, connection, "ListConfig", &ListConfigRequest{})
 	require.NoError(t, err)
 
@@ -1742,9 +1744,14 @@ func TestSessionEntries(t *testing.T) {
 		defer func() { require.NoError(t, root.Remove(path)) }()
 
 		originalAgents := cfg.Slack.Channels[0].Agents
-		defer func() { cfg.Slack.Channels[0].Agents = originalAgents }()
+		defer func() {
+			cfg.Slack.Channels[0].Agents = originalAgents
+			server.cfg.Store(cfg)
+		}()
 
 		cfg.Slack.Channels[0].Agents = []string{"missing", "selected", "main"}
+		server.cfg.Store(cfg)
+
 		request := &CreateSessionRequest{SourceConversationId: undelivered}
 		core.SyncConversationFunc = func(context.Context, string, string) error { return errors.New("sync interrupted") }
 		_, err = invoke[CreateSessionResponse](ctx, connection, "CreateSession", request)
@@ -1866,6 +1873,8 @@ func TestSessionEntries(t *testing.T) {
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				cfg.Slack.Channels[0].Agents = test.agents
+				server.cfg.Store(cfg)
+
 				if test.channel == "" {
 					require.NoError(t, root.Remove(path))
 					defer func() { require.NoError(t, root.WriteFile(path, []byte("removed definition"), 0o600)) }()
@@ -2613,7 +2622,12 @@ func TestSessionEntries(t *testing.T) {
 		original := cfg.OpenAI.APIBaseURL
 
 		cfg.OpenAI.APIBaseURL = provider.URL
-		defer func() { cfg.OpenAI.APIBaseURL = original }()
+
+		server.cfg.Store(cfg)
+		defer func() {
+			cfg.OpenAI.APIBaseURL = original
+			server.cfg.Store(cfg)
+		}()
 
 		document, err := invoke[HandoffResponse](ctx, connection, "Handoff", &HandoffRequest{Id: source})
 		require.NoError(t, err)
@@ -2643,6 +2657,8 @@ func TestSessionEntries(t *testing.T) {
 		require.Len(t, history.Messages, 3, "handoff generation must leave source history intact")
 
 		cfg.OpenAI.APIBaseURL = ":invalid"
+		server.cfg.Store(cfg)
+
 		_, err = invoke[HandoffResponse](ctx, connection, "Handoff", &HandoffRequest{Id: source})
 		require.ErrorContains(t, err, "generate web handoff")
 		history, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: source})
@@ -2650,6 +2666,7 @@ func TestSessionEntries(t *testing.T) {
 		require.Len(t, history.Messages, 3, "failed handoffs must also leave source history intact")
 
 		cfg.OpenAI.APIBaseURL = provider.URL
+		server.cfg.Store(cfg)
 
 		for _, replay := range []string{
 			`[{"type":"compaction","content":42}]`,
@@ -3054,7 +3071,7 @@ func TestBackgroundJobRPCs(t *testing.T) {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(core, sessions, cfg, &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(core, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })

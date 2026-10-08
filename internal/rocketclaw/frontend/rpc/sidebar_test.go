@@ -44,7 +44,7 @@ func TestSidebarSendFailures(t *testing.T) {
 
 	// This test-only limit rejects both the owner-bearing terminal and a session row.
 	transport := grpc.NewServer(grpc.MaxSendMsgSize(1))
-	New(&mockBackend{}, sessions, cfg, &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error {
@@ -144,7 +144,7 @@ func TestSidebarHTTPStreamsBeforeGoTailAndCancels(t *testing.T) {
 
 		return nil
 	}}
-	New(core, sessions, cfg, channels, &mockCronJobs{}).Register(transport)
+	New(core, sessions, config.NewLockedConfig(cfg), channels, &mockCronJobs{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })
