@@ -153,7 +153,7 @@ func TestWebTurnQuestionContinuesAfterRestart(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 
 		if strings.Contains(string(body), "function_call_output") {
-			_, _ = w.Write([]byte(`{"id":"resp_2","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}]}`))
+			writeRawRunMessage(t, w, "resp_2", "msg_1", "answer")
 			return
 		}
 

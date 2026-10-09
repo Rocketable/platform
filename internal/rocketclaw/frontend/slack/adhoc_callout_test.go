@@ -61,10 +61,7 @@ func TestHandleAppMentionEventGroupDMUsesAtFallback(t *testing.T) {
 	server := newAdhocSlackServer(t, "mpdm-users", nil)
 	defer server.Close()
 
-	connector := newTestConnectorWithOptions(server.URL, []config.SlackChannelConfig{
-		{Channel: "@", Agents: []string{"adhoc"}, AllowedUserIDs: []string{"U123"}},
-	}, router)
-	connector.botUserID = "U999"
+	connector := newAdhocConnector(server.URL, router)
 	ev := newSlackAppMentionEvent()
 	ev.Channel = "G123"
 	connector.handleAppMentionEvent(context.Background(), ev, slackNativeForward{})
@@ -86,10 +83,7 @@ func TestHandleAppMentionEventAdoptsUnknownThreadWithHistory(t *testing.T) {
 	}, &writes)
 	defer server.Close()
 
-	connector := newTestConnectorWithOptions(server.URL, []config.SlackChannelConfig{
-		{Channel: "@", Agents: []string{"adhoc"}, AllowedUserIDs: []string{"U123"}},
-	}, router)
-	connector.botUserID = "U999"
+	connector := newAdhocConnector(server.URL, router)
 	connector.handleAppMentionEvent(context.Background(), newThreadMention("<@U999> $review jump in"), slackNativeForward{})
 
 	started := router.SubmitMentionCalls()
@@ -141,10 +135,7 @@ func TestHandleAppMentionEventIgnoresThreadUnderBotRoot(t *testing.T) {
 			}, &writes)
 			defer server.Close()
 
-			connector := newTestConnectorWithOptions(server.URL, []config.SlackChannelConfig{
-				{Channel: "@", Agents: []string{"adhoc"}, AllowedUserIDs: []string{"U123"}},
-			}, router)
-			connector.botUserID = "U999"
+			connector := newAdhocConnector(server.URL, router)
 			connector.handleAppMentionEvent(context.Background(), newThreadMention("<@U999> why did this fail?"), slackNativeForward{})
 
 			assert.Empty(t, router.SubmitMentionCalls())
@@ -161,10 +152,7 @@ func TestHandleAppMentionEventRepliesWhenHistoryFetchFails(t *testing.T) {
 	server := newAdhocSlackServer(t, "random", []map[string]any{{"ok": false, "error": "internal_error"}}, &writes)
 	defer server.Close()
 
-	connector := newTestConnectorWithOptions(server.URL, []config.SlackChannelConfig{
-		{Channel: "@", Agents: []string{"adhoc"}, AllowedUserIDs: []string{"U123"}},
-	}, router)
-	connector.botUserID = "U999"
+	connector := newAdhocConnector(server.URL, router)
 	connector.handleAppMentionEvent(context.Background(), newThreadMention("<@U999> jump in"), slackNativeForward{})
 
 	assert.Empty(t, router.SubmitMentionCalls())
@@ -186,10 +174,7 @@ func TestHandleAppMentionEventAdoptHistoryKeepsNewestFifty(t *testing.T) {
 	server := newAdhocSlackServer(t, "random", replies)
 	defer server.Close()
 
-	connector := newTestConnectorWithOptions(server.URL, []config.SlackChannelConfig{
-		{Channel: "@", Agents: []string{"adhoc"}, AllowedUserIDs: []string{"U123"}},
-	}, router)
-	connector.botUserID = "U999"
+	connector := newAdhocConnector(server.URL, router)
 	ev := newThreadMention("<@U999> jump in")
 	ev.ThreadTimeStamp = "171234.0000"
 	connector.handleAppMentionEvent(context.Background(), ev, slackNativeForward{})
@@ -221,10 +206,7 @@ func TestHandleAppMentionEventRepliesWhenSubmitFails(t *testing.T) {
 			server := newAdhocSlackServer(t, "random", []map[string]any{{"ts": "171234.0001", "user": "U555", "text": "parent"}}, &writes)
 			defer server.Close()
 
-			connector := newTestConnectorWithOptions(server.URL, []config.SlackChannelConfig{
-				{Channel: "@", Agents: []string{"adhoc"}, AllowedUserIDs: []string{"U123"}},
-			}, router)
-			connector.botUserID = "U999"
+			connector := newAdhocConnector(server.URL, router)
 			connector.handleAppMentionEvent(context.Background(), newThreadMention("<@U999> jump in"), slackNativeForward{})
 
 			require.Len(t, router.SubmitMentionCalls(), 1)
@@ -250,10 +232,7 @@ func TestHandleAppMentionEventIgnoresUnallowlistedAtHail(t *testing.T) {
 
 func TestHandleAppMentionEventIgnoresDirectMessageWithAtRow(t *testing.T) {
 	router := newMentionRouter(false, nil)
-	connector := newTestConnectorWithOptions("http://127.0.0.1", []config.SlackChannelConfig{
-		{Channel: "@", Agents: []string{"adhoc"}, AllowedUserIDs: []string{"U123"}},
-	}, router)
-	connector.botUserID = "U999"
+	connector := newAdhocConnector("http://127.0.0.1", router)
 	ev := newSlackAppMentionEvent()
 	ev.Channel = "D123"
 	connector.handleAppMentionEvent(context.Background(), ev, slackNativeForward{})
@@ -267,10 +246,7 @@ func TestHandleAppMentionEventBareRootStillIgnored(t *testing.T) {
 	server := newAdhocSlackServer(t, "random", nil)
 	defer server.Close()
 
-	connector := newTestConnectorWithOptions(server.URL, []config.SlackChannelConfig{
-		{Channel: "@", Agents: []string{"adhoc"}, AllowedUserIDs: []string{"U123"}},
-	}, router)
-	connector.botUserID = "U999"
+	connector := newAdhocConnector(server.URL, router)
 	ev := newSlackAppMentionEvent()
 	ev.Text = "<@U999>"
 	connector.handleAppMentionEvent(context.Background(), ev, slackNativeForward{})
@@ -318,6 +294,13 @@ func newAdhocSlackServer(t *testing.T, channelName string, replies []map[string]
 			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
 		}
 	}))
+}
+
+func newAdhocConnector(apiURL string, router protocol.PrimaryTextRouter) *Connector {
+	c := newTestConnectorWithOptions(apiURL, []config.SlackChannelConfig{{Channel: "@", Agents: []string{"adhoc"}, AllowedUserIDs: []string{"U123"}}}, router)
+	c.botUserID = "U999"
+
+	return c
 }
 
 func newThreadMention(text string) *slackevents.AppMentionEvent {

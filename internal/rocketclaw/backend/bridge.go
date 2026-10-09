@@ -1862,9 +1862,9 @@ func (b *Bridge) finishGoalTurn(ctx context.Context, request *bridgeRequest) err
 	inbound.GoalAction = protocol.GoalActionContinue
 	inbound.ConversationID = b.config.ConversationID
 
-	inbound.SlackReply = &protocol.SlackReplyTarget{RecipientTeamID: goal.SlackRecipientTeamID, RecipientUserID: goal.SlackRecipientUserID}
+	inbound.SlackReply = &protocol.SlackReplyTarget{}
 	if msg != nil && msg.SlackReply != nil {
-		inbound.SlackReply.ChannelID, inbound.SlackReply.MessageTS, inbound.SlackReply.ThreadTS = msg.SlackReply.ChannelID, msg.SlackReply.MessageTS, msg.SlackReply.ThreadTS
+		*inbound.SlackReply = *msg.SlackReply
 	}
 
 	if err := b.enqueue(ctx, &bridgeRequest{inbound: inbound, completion: request.completion}, "submit goal continuation"); err != nil {

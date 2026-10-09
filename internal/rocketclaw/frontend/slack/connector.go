@@ -112,8 +112,8 @@ type channelFactsStore interface {
 
 type slackReplyState struct {
 	ChannelID, MessageTS, Key, ConversationID string
-	// Processing is when a Slack-started turn set its thread's agent session to processing.
-	Processing       time.Time `json:",omitzero"`
+	// processing is when a Slack-started turn set its thread's agent session to processing.
+	processing       time.Time
 	cleanupMessageTS []string
 }
 
@@ -755,7 +755,7 @@ func (c *Connector) startSession(ctx context.Context, msg *protocol.OutboundMess
 		return
 	}
 
-	slots.ConversationID, slots.Processing = msg.ConversationID, time.Now()
+	slots.ConversationID, slots.processing = msg.ConversationID, time.Now()
 	channelID, threadTS := slackReplyDestination(msg.SlackReply)
 	c.setSessionStatus(ctx, channelID, threadTS, slack.AgentSessionStatusProcessing)
 }
@@ -774,8 +774,8 @@ func (c *Connector) sessionTurn(conversationID string) (turnID string, processin
 	defer c.mu.Unlock()
 
 	for id, state := range c.replies {
-		if state.ConversationID == conversationID && !state.Processing.IsZero() {
-			return id, state.Processing
+		if state.ConversationID == conversationID && !state.processing.IsZero() {
+			return id, state.processing
 		}
 	}
 

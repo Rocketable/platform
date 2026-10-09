@@ -667,7 +667,7 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 		AttachmentPresence: protocol.AttachmentPresenceImages,
 		AttachmentWarnings: []string{"original warning"},
 	}
-	reply := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.333", ThreadTS: "111.222", RecipientTeamID: "T1", RecipientUserID: "U1"}
+	reply := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.333", ThreadTS: "111.222"}
 
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ConversationID: conversationID, Message: "write tests", Content: content, Source: protocol.SourceSlack, SlackReply: reply, Principal: "U1", StashAt: firstStash, Position: 0, ParkAfter: "s1", SlackChannel: reply.ChannelID, SlackTS: reply.MessageTS}))
 	require.NoError(t, store.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{Kind: "steer", ConversationID: conversationID, Message: "write changelog", Principal: "U2", StashAt: secondStash, Position: 1, ParkAfter: "s1", SlackChannel: "D123", SlackTS: "333.444"}))
@@ -1108,10 +1108,6 @@ func TestSessionServiceBeginGoalPersistsCheckScript(t *testing.T) {
 	assert.Equal(t, "fix lint", goal.Objective)
 	assert.Equal(t, "./scripts/check.sh --linter-mode", goal.CheckScript)
 	assert.Equal(t, 3, goal.MaxTurns)
-
-	goals, err := store.ActiveGoals()
-	require.NoError(t, err)
-	assert.Equal(t, goal, goals["thread-1"])
 
 	require.NoError(t, store.BeginGoal("thread-2", "write docs", " ", 1))
 	goal, ok, err = store.Goal("thread-2")

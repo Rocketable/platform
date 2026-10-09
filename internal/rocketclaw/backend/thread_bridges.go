@@ -220,11 +220,6 @@ func (m *threadBridgeManager) StartActiveGoals() error {
 		return fmt.Errorf("load active goal bridges: %w", err)
 	}
 
-	goals, err := m.store.ActiveGoals()
-	if err != nil {
-		return fmt.Errorf("load active goals: %w", err)
-	}
-
 	for conversationID, thread := range threads {
 		resuming, err := m.store.HasActiveTurn(context.Background(), conversationID)
 		if err != nil {
@@ -243,7 +238,7 @@ func (m *threadBridgeManager) StartActiveGoals() error {
 		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "Continue the active goal loop.", false)
 		inbound.GoalAction = protocol.GoalActionContinue
 		inbound.ConversationID = conversationID
-		inbound.SlackReply = &protocol.SlackReplyTarget{RecipientTeamID: goals[conversationID].SlackRecipientTeamID, RecipientUserID: goals[conversationID].SlackRecipientUserID}
+		inbound.SlackReply = &protocol.SlackReplyTarget{}
 
 		if err := managed.Submit(context.Background(), inbound); err != nil {
 			return fmt.Errorf("submit active goal continuation: %w", err)
@@ -301,11 +296,15 @@ func (m *threadBridgeManager) SubmitMention(ctx context.Context, agent string, t
 		return false, err
 	}
 
-	var seen bool
+	var (
+		seen     bool
+		position int
+	)
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM active_turns WHERE conversation_id = $1 AND inbound_json->'Metadata'->>'web_message_id' = $2)
     OR EXISTS (SELECT 1 FROM thread_queue WHERE conversation_id = $1 AND queue_item_id = $2)
     OR EXISTS (SELECT 1 FROM session_entries e CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item
-        WHERE e.conversation_id = $1 AND item->>'input_id' = $2)`, conversationID, id).Scan(&seen); err != nil {
+        WHERE e.conversation_id = $1 AND item->>'input_id' = $2),
+    (SELECT COALESCE(MAX(position), -1) + 1 FROM thread_queue WHERE conversation_id = $1)`, conversationID, id).Scan(&seen, &position); err != nil {
 		return false, fmt.Errorf("read admitted Slack mention: %w", err)
 	}
 
@@ -317,11 +316,7 @@ func (m *threadBridgeManager) SubmitMention(ctx context.Context, agent string, t
 		return false, err
 	}
 
-	item := protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Message: inbound.Text, Principal: inbound.Metadata[protocol.InboundPrincipalMetadataKey], Kind: protocol.InboundKindEnqueue, Source: inbound.Source, Inbound: inbound, StashAt: time.Now().UTC()}
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(position), -1) + 1 FROM thread_queue WHERE conversation_id = $1`, conversationID).Scan(&item.Position); err != nil {
-		return false, fmt.Errorf("read Slack mention position: %w", err)
-	}
-
+	item := protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Message: inbound.Text, Principal: inbound.Metadata[protocol.InboundPrincipalMetadataKey], Kind: protocol.InboundKindEnqueue, Source: inbound.Source, Inbound: inbound, Position: position, StashAt: time.Now().UTC()}
 	if err := putThreadQueueItem(ctx, tx, id, &item); err != nil {
 		return false, err
 	}

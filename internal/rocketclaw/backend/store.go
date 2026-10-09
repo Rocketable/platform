@@ -76,16 +76,14 @@ type CronScheduleState struct {
 
 // GoalState records one active or terminal managed-thread goal loop.
 type GoalState struct {
-	Objective            string    `json:"objective,omitempty"`
-	CheckScript          string    `json:"check_script,omitempty"`
-	MaxTurns             int       `json:"max_turns,omitempty"`
-	TurnsUsed            int       `json:"turns_used,omitempty"`
-	Status               string    `json:"status,omitempty"`
-	Note                 string    `json:"note,omitempty"`
-	SlackRecipientTeamID string    `json:"slack_recipient_team_id,omitempty"`
-	SlackRecipientUserID string    `json:"slack_recipient_user_id,omitempty"`
-	CreatedAt            time.Time `json:"created_at,omitzero"`
-	UpdatedAt            time.Time `json:"updated_at,omitzero"`
+	Objective   string    `json:"objective,omitempty"`
+	CheckScript string    `json:"check_script,omitempty"`
+	MaxTurns    int       `json:"max_turns,omitempty"`
+	TurnsUsed   int       `json:"turns_used,omitempty"`
+	Status      string    `json:"status,omitempty"`
+	Note        string    `json:"note,omitempty"`
+	CreatedAt   time.Time `json:"created_at,omitzero"`
+	UpdatedAt   time.Time `json:"updated_at,omitzero"`
 }
 
 type sessionStore struct {
@@ -253,7 +251,7 @@ func (s *SessionService) BeginGoal(conversationID, objective, checkScript string
 func beginGoalDB(ctx context.Context, db stateStoreDB, conversationID string, goal *GoalState) error {
 	now := time.Now().UTC()
 
-	rows, err := execRows(ctx, db, "begin goal", "count goal start", `INSERT INTO conversation_goals (conversation_id, objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT(conversation_id) DO UPDATE SET objective = excluded.objective, check_script = excluded.check_script, max_turns = excluded.max_turns, turns_used = excluded.turns_used, status = excluded.status, note = excluded.note, slack_recipient_team_id = excluded.slack_recipient_team_id, slack_recipient_user_id = excluded.slack_recipient_user_id, created_at_unix_ns = excluded.created_at_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns WHERE conversation_goals.status NOT IN ('', $12)`, conversationID, goal.Objective, goal.CheckScript, goal.MaxTurns, 0, GoalStatusActive, "", goal.SlackRecipientTeamID, goal.SlackRecipientUserID, timeUnixNano(now), timeUnixNano(now), GoalStatusActive)
+	rows, err := execRows(ctx, db, "begin goal", "count goal start", `INSERT INTO conversation_goals (conversation_id, objective, check_script, max_turns, turns_used, status, note, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT(conversation_id) DO UPDATE SET objective = excluded.objective, check_script = excluded.check_script, max_turns = excluded.max_turns, turns_used = excluded.turns_used, status = excluded.status, note = excluded.note, created_at_unix_ns = excluded.created_at_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns WHERE conversation_goals.status NOT IN ('', $10)`, conversationID, goal.Objective, goal.CheckScript, goal.MaxTurns, 0, GoalStatusActive, "", timeUnixNano(now), timeUnixNano(now), GoalStatusActive)
 	if err != nil {
 		return err
 	}

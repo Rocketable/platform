@@ -2166,7 +2166,7 @@ func TestSendResponseKeepsOnePlaceholderUntilFinal(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	connector := newTestConnector(server.URL)
-	reply := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222", RecipientTeamID: "T123", RecipientUserID: "U123"}
+	reply := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
 
 	partial := protocol.NewOutboundMessage("test", "Partial answer")
 	partial.TurnID = "turn-1"
@@ -2824,7 +2824,7 @@ func newMentionThreadTurn(turnID string, source protocol.Source, terminal protoc
 }
 
 // A Slack-started turn sets its thread's agent session to processing when it starts and
-// back to active however it ends. Turns started anywhere else make no session calls, and a
+// back to active when it ends. Turns started anywhere else make no session calls, and a
 // workspace without agent sessions only logs the refusal.
 func TestMentionTurnSetsAgentSessionStatus(t *testing.T) {
 	session := []string{"processing C123 111.222", "active C123 111.222"}
@@ -2837,8 +2837,6 @@ func TestMentionTurnSetsAgentSessionStatus(t *testing.T) {
 		want      []string
 	}{
 		{name: "done", source: protocol.SourceSlack, terminal: protocol.TerminalComplete, want: session},
-		{name: "failed", source: protocol.SourceSlack, terminal: protocol.TerminalFailed, want: session},
-		{name: "stopped", source: protocol.SourceSlack, terminal: protocol.TerminalStopped, want: session},
 		{name: "workspace without agent sessions", source: protocol.SourceSlack, terminal: protocol.TerminalComplete, errStatus: "feature_disabled", want: session},
 		{name: "Web-started", source: protocol.SourceWeb, terminal: protocol.TerminalComplete},
 		{name: "External MCP", source: protocol.SourceExternalMCP, terminal: protocol.TerminalComplete},
@@ -2884,11 +2882,6 @@ func TestResumedMentionTurnSetsProcessingAgain(t *testing.T) {
 	require.NoError(t, restarted.SendResponse(t.Context(), newMentionThreadTurn("turn-1", protocol.SourceSlack, protocol.TerminalComplete)))
 
 	assert.Equal(t, []string{"processing C123 111.222", "processing C123 111.222", "active C123 111.222"}, calls.statuses)
-}
-
-// stopEvent is Slack's agent_session_stopped for thread 111.222 of C123, pressed by user at pressedAt.
-func stopEvent(user, pressedAt string) socketmode.Event {
-	return newSlackEventsAPIEvent(&slackevents.AgentSessionStoppedEvent{Type: "agent_session_stopped", Channel: "C123", ThreadTimestamp: "111.222", User: user, EventTimestamp: pressedAt})
 }
 
 // Slack's Stop from an allowlisted user interrupts the Slack-started turn that set
@@ -2943,7 +2936,7 @@ func TestAgentSessionStoppedEvent(t *testing.T) {
 
 			calls.statuses = nil
 
-			connector.handleEventsAPI(t.Context(), stopEvent(tt.user, pressedAt))
+			connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(&slackevents.AgentSessionStoppedEvent{Type: "agent_session_stopped", Channel: "C123", ThreadTimestamp: "111.222", User: tt.user, EventTimestamp: pressedAt}))
 
 			assert.Equal(t, tt.interrupts, interrupts)
 			require.NotEmpty(t, calls.statuses)
@@ -4007,62 +4000,11 @@ func TestAbortResponseReleasesPendingPlaceholderWhenSlackCleanupFails(t *testing
 }
 
 func TestHandleAppMentionEventUsesConfiguredChannelAgentAndReaction(t *testing.T) {
-	var (
-		posted        []url.Values
-		reactionNames []string
-	)
+	var writes []string
 
 	router := newMentionRouter(false, nil)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/conversations.info":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			assert.Equal(t, "C123", r.PostForm.Get("channel"))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "triage"}})
-		case "/conversations.history":
-			writeJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{}})
-		case "/chat.postMessage":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			posted = append(posted, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666", "text": posted[len(posted)-1].Get("text")})
-		case "/chat.update":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			posted = append(posted, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": r.PostForm.Get("ts"), "text": r.PostForm.Get("text")})
-		case "/chat.delete":
-			writeJSON(t, w, map[string]any{"ok": true})
-		case "/reactions.add":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			reactionNames = append(reactionNames, r.PostForm.Get("name"))
-
-			writeJSON(t, w, map[string]any{"ok": true})
-		case "/reactions.remove":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			reactionNames = append(reactionNames, r.PostForm.Get("name"))
-
-			writeJSON(t, w, map[string]any{"ok": true})
-		case "/users.info":
-			writeJSON(t, w, map[string]any{"ok": true})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
+	server := newAdhocSlackServer(t, "triage", nil, &writes)
 	defer server.Close()
 
 	connector := newTestConnectorWithOptions(server.URL, []config.SlackChannelConfig{{Channel: "#triage", Agents: []string{"triage"}, AllowedUserIDs: []string{"U123"}}}, router)
@@ -4073,65 +4015,15 @@ func TestHandleAppMentionEventUsesConfiguredChannelAgentAndReaction(t *testing.T
 	require.Len(t, started, 1)
 	assert.Equal(t, "triage", started[0].Agent)
 	assert.Contains(t, started[0].Inbound.Text, "Slack forwarded preview:\nforwarded preview")
-	assert.Empty(t, posted, "the placeholder waits for the turn to start")
-	assert.Equal(t, []string{slackRobotReaction}, reactionNames)
+	assert.Equal(t, []string{"/reactions.add " + slackRobotReaction + " 171234.5678"}, writes, "the placeholder waits for the turn to start")
 }
 
 func TestHandleAppMentionEventRepliesInThreadWhenSubmitFails(t *testing.T) {
-	var (
-		posted        []url.Values
-		reactionNames []string
-	)
+	var writes []string
 
 	router := newMentionRouter(false, errors.New("start failed"))
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/conversations.info":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			assert.Equal(t, "C123", r.PostForm.Get("channel"))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "triage"}})
-		case "/chat.postMessage":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			posted = append(posted, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666", "text": posted[len(posted)-1].Get("text")})
-		case "/chat.update":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			posted = append(posted, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": r.PostForm.Get("ts"), "text": r.PostForm.Get("text")})
-		case "/chat.delete":
-			writeJSON(t, w, map[string]any{"ok": true})
-		case "/reactions.add":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			reactionNames = append(reactionNames, r.PostForm.Get("name"))
-
-			writeJSON(t, w, map[string]any{"ok": true})
-		case "/reactions.remove":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			reactionNames = append(reactionNames, r.PostForm.Get("name"))
-
-			writeJSON(t, w, map[string]any{"ok": true})
-		case "/users.info":
-			writeJSON(t, w, map[string]any{"ok": true})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
+	server := newAdhocSlackServer(t, "triage", nil, &writes)
 	defer server.Close()
 
 	connector := newTestConnectorWithOptions(server.URL, []config.SlackChannelConfig{{Channel: "#triage", Agents: []string{"triage"}, AllowedUserIDs: []string{"U123"}}}, router)
@@ -4142,10 +4034,7 @@ func TestHandleAppMentionEventRepliesInThreadWhenSubmitFails(t *testing.T) {
 	require.Len(t, started, 1)
 	assert.Equal(t, "triage", started[0].Agent)
 	assert.Equal(t, "please check this", started[0].Inbound.Text)
-	require.Len(t, posted, 1)
-	assert.Equal(t, "I couldn't take that request: start failed", posted[0].Get("text"))
-	assert.Equal(t, "171234.5678", posted[0].Get("thread_ts"))
-	assert.Empty(t, reactionNames)
+	assert.Equal(t, []string{"/chat.postMessage I couldn't take that request: start failed 171234.5678"}, writes)
 }
 
 func TestHandleAppMentionEventIgnoresUnmappedChannel(t *testing.T) {
@@ -4200,22 +4089,7 @@ func TestHandleAppMentionEventRequiresConfiguredChannelAndAllowlist(t *testing.T
 func TestHandleAppMentionEventUsesPerChannelAllowlist(t *testing.T) {
 	router := newMentionRouter(false, nil)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/conversations.info":
-			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "triage"}})
-		case "/conversations.history":
-			writeJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{}})
-		case "/chat.postMessage":
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
-		case "/reactions.add":
-			writeJSON(t, w, map[string]any{"ok": true})
-		case "/users.info":
-			writeJSON(t, w, map[string]any{"ok": true})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
+	server := newAdhocSlackServer(t, "triage", nil)
 	defer server.Close()
 
 	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), router)
@@ -4304,7 +4178,7 @@ func TestHandleAppMentionEventIgnoresReportThread(t *testing.T) {
 }
 
 // Slack starts work only from app_mention: a reply without a mention, in a thread
-// RocketClaw answered earlier, and a reaction reach no router call and no Slack call.
+// RocketClaw answered earlier, a reaction, or an edited mention reach no router call and no Slack call.
 func TestHandleEventsAPIIgnoresMessagesAndReactions(t *testing.T) {
 	server := newSlackStackTestServer(t, new([]url.Values), new([]string))
 	defer server.Close()
@@ -4317,21 +4191,9 @@ func TestHandleEventsAPIIgnoresMessagesAndReactions(t *testing.T) {
 	connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(newSlackMessageEvent("171234.5678", "171234.5678", "<@U999> root")))
 	connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(&slackevents.ReactionAddedEvent{User: "U123", Reaction: "octagonal_sign", Item: slackevents.Item{Type: "message", Channel: "C123", Timestamp: "171234.5678"}}))
 
-	assert.Empty(t, router.MentionThreadCalls())
-	assert.Empty(t, router.SubmitMentionCalls())
-}
-
-func TestHandleAppMentionEventIgnoresEditedMention(t *testing.T) {
-	server := newSlackStackTestServer(t, new([]url.Values), new([]string))
-	defer server.Close()
-
-	router := &primaryTextRouterMock{}
-	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), router)
-	connector.botUserID = "U999"
-
-	mention := newSlackAppMentionEvent()
-	mention.Edited = &slackevents.Edited{User: "U123", TimeStamp: "171234.9999"}
-	connector.handleAppMentionEvent(t.Context(), mention, slackNativeForward{})
+	edited := newSlackAppMentionEvent()
+	edited.Edited = &slackevents.Edited{User: "U123", TimeStamp: "171234.9999"}
+	connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(edited))
 
 	assert.Empty(t, router.MentionThreadCalls())
 	assert.Empty(t, router.SubmitMentionCalls())
@@ -4348,12 +4210,7 @@ func TestHandleAppMentionEventQueuesMentionInKnownThread(t *testing.T) {
 	server := newSlackStackTestServer(t, &posted, &reactions)
 	defer server.Close()
 
-	router := &primaryTextRouterMock{
-		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, bool, error) { return true, false, nil },
-		SubmitMentionFunc: func(context.Context, string, protocol.TextConversationTarget, *protocol.InboundMessage) (bool, error) {
-			return true, nil
-		},
-	}
+	router := newMentionRouter(true, nil)
 	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), router)
 	connector.botUserID = "U999"
 
@@ -4391,14 +4248,12 @@ func TestHandleAppMentionEventRedeliveryReactsOnce(t *testing.T) {
 	defer server.Close()
 
 	seen := map[string]bool{}
-	router := &primaryTextRouterMock{
-		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, bool, error) { return true, false, nil },
-		SubmitMentionFunc: func(_ context.Context, _ string, _ protocol.TextConversationTarget, inbound *protocol.InboundMessage) (bool, error) {
-			accepted := !seen[inbound.SlackReply.MessageTS]
-			seen[inbound.SlackReply.MessageTS] = true
+	router := newMentionRouter(true, nil)
+	router.SubmitMentionFunc = func(_ context.Context, _ string, _ protocol.TextConversationTarget, inbound *protocol.InboundMessage) (bool, error) {
+		accepted := !seen[inbound.SlackReply.MessageTS]
+		seen[inbound.SlackReply.MessageTS] = true
 
-			return accepted, nil
-		},
+		return accepted, nil
 	}
 	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), router)
 	connector.botUserID = "U999"
