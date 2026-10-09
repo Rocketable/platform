@@ -2,11 +2,13 @@ package backend
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -163,6 +165,7 @@ func sessionTagTools(service *SessionService, conversationID string) []rocketcod
 }
 
 type sessionListParams struct {
+	Criteria              string `json:"criteria"`
 	Since                 string `json:"since"`
 	Until                 string `json:"until"`
 	Limit                 int    `json:"limit"`
@@ -177,17 +180,24 @@ type sessionListSummary struct {
 	LastAssistantMessage string
 }
 
-func listSessionsTool(service *SessionService) rocketcode.Tool {
+func listSessionsTool(service *SessionService, threads *threadBridgeManager) rocketcode.Tool {
 	return rocketcode.Tool{
-		Name: listSessionsToolName, Description: fmt.Sprintf("List durable conversations across this State Store, including private MCP and cron sessions, newest first. Supply all four fields: since is required, use an empty until string for no upper bound, limit is 1 to %d, and include_message_preview is true or false. Returns TSV with a header, one session per row, entry counts, timestamps and optional message previews.", maxListedSessions),
+		Name: listSessionsToolName, Description: fmt.Sprintf("List durable conversations of this State Store, newest first. Supply all five fields: criteria, since (required), until (empty for no upper bound), limit (1 to %d) and include_message_preview. Returns TSV with a header, one session per row with entry counts, timestamps and optional message previews. "+
+			"Empty criteria lists every stored conversation by latest entry, including private MCP and cron sessions. "+
+			"Other criteria is a Web /search query and returns what /search would: only the chats Web lists, never private External MCP or cron producer chats, filtered before the limit; since, until and order then use each chat's summary time. "+
+			"Query language: tag:V, cron:V, agent:V and room:V match V exactly and case-sensitively, and V may be a JSON-quoted string such as tag:\"Needs review\"; is:pinned, is:forked and is:cron; sort:newest or sort:oldest. Unknown or malformed terms are searched as text. "+
+			"All remaining text is ONE case-insensitive phrase, not separate keywords, matched against name, room, agent, preview, session label, chat origin and message text. "+
+			"With criteria, rows add name, agent, room, tags and matched (the field holding the phrase, or messages when only message text did), and a messages block lists up to 3 matching messages per listed chat; rocketclaw_get_session with a row's before_entry_id and limit 1 shows that message. Messages of stopped turns are not listed. "+
+			"Trailing lines show how criteria was read and whether the limit cut results or the message index or session summaries were incomplete.", maxListedSessions),
 		Permission: "rocketclaw", VisibilitySubjects: []string{listSessionsToolName},
 		Subjects: func(json.RawMessage) ([]string, error) { return []string{listSessionsToolName}, nil },
 		Parameters: map[string]any{"properties": map[string]any{
-			"since":                   map[string]any{"type": "string", "description": "Required inclusive latest-entry bound: Go duration relative to now or RFC3339Nano."},
-			"until":                   map[string]any{"type": "string", "description": "Exclusive latest-entry bound: RFC3339Nano, or empty for no bound."},
+			"criteria":                map[string]any{"type": "string", "description": "Web session search query, or empty for every stored conversation."},
+			"since":                   map[string]any{"type": "string", "description": "Required inclusive bound on the latest entry, or on the summary time with criteria: Go duration relative to now or RFC3339Nano."},
+			"until":                   map[string]any{"type": "string", "description": "Exclusive bound like since: RFC3339Nano, or empty for no bound."},
 			"limit":                   map[string]any{"type": "integer", "minimum": 1, "maximum": maxListedSessions},
 			"include_message_preview": map[string]any{"type": "boolean"},
-		}, "required": []string{"since", "until", "limit", "include_message_preview"}},
+		}, "required": []string{"criteria", "since", "until", "limit", "include_message_preview"}},
 		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 			var params sessionListParams
 			if err := json.Unmarshal(raw, &params); err != nil {
@@ -225,7 +235,38 @@ func listSessionsTool(service *SessionService) rocketcode.Tool {
 				*bound = strings.TrimSuffix(at.UTC().Format(time.RFC3339Nano), "Z")
 			}
 
-			summaries, err := service.sessionToolSummaries(ctx, params)
+			var (
+				ids     []string
+				search  *SessionSearch
+				matches []SessionMatch
+				shown   = make(map[string]int) // Message rows printed per listed chat.
+				err     error
+			)
+
+			if criteria := strings.TrimSpace(params.Criteria); criteria == "" {
+				// Stored timestamps are UTC RFC3339Nano. Removing Z makes text order exact
+				// even across whole/fractional seconds, without PostgreSQL's microsecond rounding.
+				ids, err = queryStrings(ctx, service.db, `SELECT conversation_id FROM session_entries GROUP BY conversation_id
+HAVING MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") >= $1 COLLATE "C"
+AND ($2 = '' OR MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") < $2 COLLATE "C")
+ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, conversation_id COLLATE "C" LIMIT $3`, "session tool candidates", params.Since, params.Until, params.Limit)
+			} else {
+				threads.mu.Lock()
+				slack := threads.slackLookups
+				threads.mu.Unlock()
+
+				search, matches, err = service.searchSessionsWithin(ctx, criteria, &params, slack)
+				for i := range matches[:min(len(matches), params.Limit)] {
+					ids = append(ids, matches[i].Chat.Session.Conversation.ID)
+					shown[ids[i]] = 0
+				}
+			}
+
+			if err != nil {
+				return rocketcode.ToolResult{}, err
+			}
+
+			summaries, err := service.sessionToolSummaries(ctx, ids, params.IncludeMessagePreview)
 			if err != nil {
 				return rocketcode.ToolResult{}, err
 			}
@@ -236,14 +277,32 @@ func listSessionsTool(service *SessionService) rocketcode.Tool {
 
 			output.WriteString("conversation_id\tturns\tlast_updated")
 
+			if search != nil {
+				output.WriteString("\tname\tagent\troom\ttags\tmatched")
+			}
+
 			if params.IncludeMessagePreview {
 				output.WriteString("\tlast_user_message\tlast_assistant_message")
 			}
 
 			output.WriteByte('\n')
 
-			for _, summary := range summaries {
-				fmt.Fprintf(&output, "%s\t%d\t%s", escape.Replace(summary.ConversationID), summary.Turns, summary.LastUpdated)
+			for i, summary := range summaries {
+				var columns string
+
+				if search != nil {
+					chat := &matches[i].Chat
+
+					matched := cmp.Or(string(matches[i].Field), "messages")
+					if search.Needle == "" {
+						matched = ""
+					}
+
+					summary.LastUpdated = chat.Session.Summary.LastUpdated.Format(time.RFC3339)
+					columns = fmt.Sprintf("\t%s\t%s\t%s\t%s\t%s", escape.Replace(chat.Session.Name), escape.Replace(chat.Session.Conversation.Agent), escape.Replace(chat.Room), escape.Replace(strings.Join(chat.Session.Tags, ",")), matched)
+				}
+
+				fmt.Fprintf(&output, "%s\t%d\t%s%s", escape.Replace(summary.ConversationID), summary.Turns, summary.LastUpdated, columns)
 
 				if params.IncludeMessagePreview {
 					fmt.Fprintf(&output, "\t%s\t%s", escape.Replace(summary.LastUserMessage), escape.Replace(summary.LastAssistantMessage))
@@ -252,21 +311,82 @@ func listSessionsTool(service *SessionService) rocketcode.Tool {
 				output.WriteByte('\n')
 			}
 
+			if search != nil {
+				var hits strings.Builder
+
+				for _, hit := range search.Hits {
+					// A stopped turn's hit has no message ID, so rocketclaw_get_session cannot open it.
+					if count, listed := shown[hit.ConversationID]; !listed || count == 3 || hit.MessageID == "" {
+						continue
+					}
+
+					shown[hit.ConversationID]++
+					entry, _, _ := strings.Cut(hit.MessageID, ":")
+					id, _ := strconv.ParseInt(entry, 10, 64) // The store builds message IDs from entry IDs.
+
+					text := []rune(hit.Text)
+					fmt.Fprintf(&hits, "%s\t%s\t%d\t%s\t%s\n", escape.Replace(hit.ConversationID), hit.MessageID, id+1, hit.Role, escape.Replace(string(text[:min(len(text), 300)])))
+				}
+
+				if hits.Len() > 0 {
+					output.WriteString("\nmessages\nconversation_id\tmessage_id\tbefore_entry_id\trole\ttext\n" + hits.String())
+				}
+
+				terms := make([]string, 0, len(search.Terms))
+				for _, term := range search.Terms {
+					terms = append(terms, term.Text)
+				}
+
+				fmt.Fprintf(&output, "[criteria: terms=%s; text=%s]\n", escape.Replace(strings.Join(terms, ",")), escape.Replace(search.Text))
+
+				if more := len(matches) - len(ids); more > 0 {
+					fmt.Fprintf(&output, "[truncated: %d more matching sessions]\n", more)
+				}
+
+				if !search.IndexComplete {
+					output.WriteString("[message index incomplete]\n")
+				}
+
+				if !search.SummariesComplete {
+					output.WriteString("[session summaries incomplete]\n")
+				}
+			}
+
 			return rocketcode.TextToolResult(output.String()), nil
 		},
 	}
 }
 
-func (s *SessionService) sessionToolSummaries(ctx context.Context, params sessionListParams) ([]sessionListSummary, error) {
-	// Stored timestamps are UTC RFC3339Nano. Removing Z makes text order exact
-	// even across whole/fractional seconds, without PostgreSQL's microsecond rounding.
-	ids, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM session_entries GROUP BY conversation_id
-HAVING MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") >= $1 COLLATE "C"
-AND ($2 = '' OR MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") < $2 COLLATE "C")
-ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, conversation_id COLLATE "C" LIMIT $3`, "session tool candidates", params.Since, params.Until, params.Limit)
+// searchSessionsWithin runs SearchSessions for criteria with message search and
+// keeps the matches whose summary time is within the normalized since and until
+// bounds, newest first unless criteria has a sort: term.
+func (s *SessionService) searchSessionsWithin(ctx context.Context, criteria string, params *sessionListParams, slack slackLookup) (*SessionSearch, []SessionMatch, error) {
+	search, err := s.SearchSessions(ctx, criteria, true, slack)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+
+	var matches []SessionMatch
+
+	for i := range search.Matches {
+		// Summary times compare as the bounds do: UTC RFC3339Nano text without Z.
+		if summary := search.Matches[i].Chat.Session.Summary; summary != nil {
+			if at := strings.TrimSuffix(summary.LastUpdated.Format(time.RFC3339Nano), "Z"); at >= params.Since && (params.Until == "" || at < params.Until) {
+				matches = append(matches, search.Matches[i])
+			}
+		}
+	}
+
+	if !slices.ContainsFunc(search.Terms, func(term SearchTerm) bool { return term.Key == keySort }) {
+		slices.SortFunc(matches, func(a, b SessionMatch) int {
+			return cmp.Or(b.Chat.Session.Summary.LastUpdated.Compare(a.Chat.Session.Summary.LastUpdated), strings.Compare(a.Chat.Session.Conversation.ID, b.Chat.Session.Conversation.ID))
+		})
+	}
+
+	return search, matches, nil
+}
+
+func (s *SessionService) sessionToolSummaries(ctx context.Context, ids []string, preview bool) ([]sessionListSummary, error) {
 	// Selected conversations still require a full-history scan. A dedicated summary
 	// projection is the upgrade path if measured inspection cost warrants it.
 	summaries := make([]sessionListSummary, 0, len(ids))
@@ -295,7 +415,7 @@ ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, conversation_id COLL
 			entry := &entries[i]
 			summary.LastUpdated = entry.Timestamp.Format(time.RFC3339)
 
-			if !params.IncludeMessagePreview {
+			if !preview {
 				continue
 			}
 

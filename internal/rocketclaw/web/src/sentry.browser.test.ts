@@ -35,14 +35,14 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
       return Response.json({});
     }
     if (url.pathname.startsWith("/api/")) headers.push(request.headers);
-    if (url.pathname === "/api/SearchMessages") {
+    if (url.pathname === "/api/SearchSessions") {
       const input = await request.json();
       if (input.query === "cancelled request") {
         request.signal.addEventListener("abort", () => searchCancelled.resolve(), { once: true });
         searchStarted.resolve();
         await searchCancelled.promise;
       }
-      return Response.json({ matches: [] });
+      return Response.json({ terms: [], text: input.query, needle: input.query, matches: [], messages: [], mentionIds: [], indexComplete: true, summariesComplete: true });
     }
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });

@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions, rpc, RPCError } from "./api";
 import { draftContent } from "./drafts";
-import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchMessagesResponse } from "./types";
+import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse } from "./types";
 import { Bot, Check, ChevronDown, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, MessageSquare, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps } from "react";
@@ -80,44 +80,26 @@ function slackSession(id: string) {
   return id.startsWith("slack-thread:");
 }
 
-function typedPrefix(query: string, prefix: string) {
-  if (!query.toLowerCase().startsWith(prefix)) {
-    return null;
-  }
-  return query.slice(prefix.length);
-}
-
 function slackRooms(sessions: { id: string; title?: string }[]) {
   return [...new Set(sessions.flatMap((session) =>
     slackSession(session.id) && session.title ? [session.title] : []
   ))];
 }
 
-function overlayChoices(
-  agentPrefix: string | null,
-  roomPrefix: string | null,
-  catalog: { name: string; model?: string; reasoning?: string }[],
-  rooms: string[],
-) {
-  const items: { key: string; label: string; detail?: string }[] = [];
-  if (agentPrefix !== null) {
-    const needle = agentPrefix.trim().toLowerCase();
-    for (const item of catalog) {
-      if (item.name.toLowerCase().includes(needle)) {
-        items.push({ key: item.name, label: item.name, detail: [item.model, item.reasoning].filter(Boolean).join(" · ") });
-      }
-    }
-    return items;
-  }
-  if (roomPrefix !== null) {
-    const needle = roomPrefix.trim().toLowerCase();
-    for (const name of rooms) {
-      if (name.toLowerCase().includes(needle)) {
-        items.push({ key: name, label: name });
-      }
-    }
-  }
-  return items;
+// The query's last word, and whether it is an unfinished operator: a bare key, a strict prefix of an is:/sort: keyword, or an unclosed quote.
+function typingWord(query: string) {
+  const word = /(?:^|\s)((?:tag|cron|agent|room):"(?:[^"\\]|\\.)*\\?|\S*)$/i.exec(query)![1];
+  const lower = word.toLowerCase();
+  return { word, unfinished: /^(?:tag|cron|agent|room):(?:"(?:[^"\\]|\\.)*\\?)?$/.test(lower) || /^(?:is|sort):/.test(lower) && ["is:pinned", "is:forked", "is:cron", "sort:newest", "sort:oldest"].some((keyword) => keyword !== lower && keyword.startsWith(lower)) };
+}
+
+function termValue(value: string) {
+  return /\s/.test(value) || value.startsWith('"') ? JSON.stringify(value) : value;
+}
+
+// cutTerms removes each term, with the whitespace after it, from text.
+function cutTerms(text: string, terms: { start: number; end: number }[]) {
+  return terms.reduceRight((rest, term) => rest.slice(0, term.start) + rest.slice(term.end + 1), text);
 }
 
 function FilterPill({ label, onClear }: { label: string; onClear: () => void }) {
@@ -1181,15 +1163,11 @@ function paletteRows(
   newChat: () => void,
   openCron: () => void,
   runStem: (stem: string) => void,
-  origins: ReadonlyMap<string, string>,
   actions: { key: string; label: string; detail?: string; keep?: boolean; disabled?: boolean; run: () => void }[],
-  filters: ReturnType<typeof sessionSearchTerms>,
-  agentFilter: string,
-  roomFilter: string,
   recent: string[],
 ): { key: string; label?: string; detail?: string; session?: Session; loading?: boolean; keep?: boolean; disabled?: boolean; run: () => void }[] {
   if (mode === "sessions") {
-    return sidebar.rows.filter((session) => sessionMatchesSearch(session, filters, agentFilter, roomFilter, origins.get(session.id) ?? "")).sort((a, b) => compareSessions(filters.sort, a, b)).map((session) => ({
+    return sidebar.rows.map((session) => ({
       key: session.id,
       session, loading: sidebar.loadingIds.has(session.id),
       run: () => navigate(sessionPath(session.id)),
@@ -1230,27 +1208,78 @@ function usePendingCron(id: string) {
   );
 }
 
-// The server searches every visible chat origin in one request; values maps matching chats to their origin text.
-function useSessionOrigins(rows: Session[], needle: string) {
-  const identity = useQuery(queries.identity());
-  const protocol = useQuery(queries.protocol());
-  // New sidebar conversations start a fresh origin search for the same needle.
-  const ids = useMemo(() => rows.map(({ id }) => id).toSorted(), [rows]);
-  const [settled, setSettled] = useState(needle);
+// The server reads and matches the query. While typing, an unfinished last word is left out; Enter sends everything.
+// Requests start after a 250 ms pause (and by 1 s with messages), a newer one aborts the older, and they rerun when sidebar chats change.
+function useSessionSearch(query: string, messages: boolean, entered: boolean) {
+  const { rows } = useContext(Sidebar);
+  const ids = useMemo(() => rows.map(({ id }) => id).toSorted().join(" "), [rows]);
+  const { word, unfinished } = typingWord(query);
+  const sent = (entered || !unfinished ? query : query.slice(0, query.length - word.length)).trimEnd();
+  const [result, setResult] = useState<{ query: string; response?: SearchSessionsResponse; error?: string }>({ query: "" });
+  const request = useRef<{ key: string; version: number; failed?: boolean; controller?: AbortController; pending?: Promise<SearchSessionsResponse | undefined> }>({ key: "", version: 0 });
+  const waiting = useRef<((read: string, response: SearchSessionsResponse) => void)[]>([]);
+  const pause = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const deadline = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const firstEdit = useRef(0);
+  const run = useCallback((text: string) => {
+    clearTimeout(pause.current);
+    clearTimeout(deadline.current);
+    firstEdit.current = 0;
+    const key = `${text}\n${ids}`;
+    if (request.current.key === key && request.current.pending) return request.current.pending;
+    request.current.controller?.abort();
+    const controller = new AbortController(), version = request.current.version + 1;
+    const current = () => request.current.version === version;
+    const pending = text ? rpc<SearchSessionsResponse>("SearchSessions", { query: text, messages }, controller.signal).then((response) => {
+      if (!current()) return undefined;
+      setResult({ query: text, response });
+      for (const resolve of waiting.current.splice(0)) resolve(text, response);
+      return response;
+    }, (error: Error) => {
+      if (current()) { request.current.failed = true; setResult({ query: text, error: error.message }); }
+      return undefined;
+    }).finally(() => { if (current()) request.current.pending = undefined; }) : undefined;
+    request.current = { key, version, controller, pending };
+    if (!text) setResult((previous) => previous.query === "" ? previous : { query: "" });
+    return pending ?? Promise.resolve(undefined);
+  }, [ids, messages]);
   useEffect(() => {
-    const timer = setTimeout(() => setSettled(needle), 250);
-    return () => clearTimeout(timer);
-  }, [needle]);
-  const query = useQuery<Map<string, string>>({
-    queryKey: ["searchOrigins", identity.data?.username, protocol.data, settled, ids],
-    enabled: settled !== "",
-    placeholderData: (previous) => previous,
-    staleTime: 10_000,
-    refetchOnWindowFocus: false,
-    retry: false,
-    queryFn: async ({ signal }) => new Map((await rpc<{ matches: { conversationId: string; text: string }[] }>("SearchOrigins", { query: settled }, signal)).matches.map(({ conversationId, text }) => [conversationId, text])),
-  });
-  return { values: query.data ?? new Map<string, string>(), pending: needle !== "" && (needle !== settled || query.isPending || query.isFetching), failed: needle !== "" && needle === settled && query.isError };
+    // A failed search retries on the next keystroke.
+    if (request.current.key === `${sent}\n${ids}` && !request.current.failed) return;
+    if (!firstEdit.current) firstEdit.current = Date.now();
+    pause.current = setTimeout(() => void run(sent), sent ? 250 : 0);
+    if (messages) deadline.current = setTimeout(() => void run(sent), Math.max(0, 1000 - (Date.now() - firstEdit.current)));
+    return () => { clearTimeout(pause.current); clearTimeout(deadline.current); };
+  }, [query, sent, ids, messages, run]);
+  useEffect(() => () => { request.current.controller?.abort(); request.current.version++; }, []);
+  const pending = !!sent && result.query !== sent;
+  const { found, missing } = useMemo(() => matchedRows(result.response, rows), [result.response, rows]);
+  return {
+    word, sent, result, found, missing, run, pending,
+    error: sent && result.query === sent ? result.error : undefined,
+    // Before any response for typed text the rows are the sidebar's, in its order.
+    rows: sent && result.query ? found.map(({ session }) => session) : rows,
+    // enter acts on the shown rows when they are the response for the whole query, never on a dimmed older list;
+    // otherwise it sends the query at once, or waits for it in flight, and opens the first row of that response.
+    enter: (shown: () => void, open: (session: Session) => void) => {
+      const text = query.trimEnd();
+      if (!text || text === sent && !pending) return shown();
+      void run(text).then((response) => {
+        const first = matchedRows(response, rows).found[0];
+        if (first) open(first.session);
+      });
+    },
+    // next calls resolve with the next response and the text it read.
+    next: (resolve: (read: string, response: SearchSessionsResponse) => void) => { waiting.current.push(resolve); },
+  };
+}
+
+// Server matches in server order with their sidebar rows; missing reports a match the sidebar has not loaded yet.
+function matchedRows(response: SearchSessionsResponse | undefined, rows: Session[]) {
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const matches = response?.matches ?? [];
+  const found = matches.flatMap((match) => byId.has(match.conversationId) ? [{ match, session: byId.get(match.conversationId)! }] : []);
+  return { found, missing: found.length < matches.length };
 }
 
 const paletteCopy = { sessions: { title: "Go to session", desc: "Search and open a session.", placeholder: "Search sessions" }, commands: { title: "Run command", desc: "Search and run a command.", placeholder: "Type a command" },
@@ -1271,8 +1300,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
   const [query, setQuery] = useState("");
   const [recent, setRecent] = useState<string[]>(() => JSON.parse(localStorage.getItem("command-history") ?? "[]"));
   const [pick, setPick] = useState(0);
-  const [agentFilter, setAgentFilter] = useState("");
-  const [roomFilter, setRoomFilter] = useState("");
+  const [entered, setEntered] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => {
     const viewport = window.visualViewport;
@@ -1294,9 +1322,8 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
   }, [mode]);
   useLayoutEffect(() => { input.current?.focus(); }, []);
   const agents = useQuery({ ...queries.agents(), staleTime: 60_000, enabled: mode === "sessions" });
-  const filters = sessionSearchTerms(query);
   const active = useRef<HTMLButtonElement>(null);
-  const origins = useSessionOrigins(sidebar.rows, mode === "sessions" ? filters.needle : "");
+  const search = useSessionSearch(mode === "sessions" ? query : "", false, entered);
   const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000, enabled: mode === "commands" || mode === "cron" });
   const runCron = useMutation({
     mutationFn: mutations.runCron,
@@ -1309,7 +1336,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
       setMode(undefined);
     },
   });
-  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.values, [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands, ...tabCommands], filters, agentFilter, roomFilter, recent);
+  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), { rows: search.rows, loadingIds: sidebar.loadingIds }, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands, ...tabCommands], recent);
   const selected = items.length === 0 ? 0 : pick % items.length;
   const choose = (item: (typeof items)[number]) => {
     if (item.disabled) return;
@@ -1325,7 +1352,10 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
   useEffect(() => { active.current?.scrollIntoView({ block: "nearest" }); }, [selected, mode]);
   const copy = paletteCopy[mode ?? "sessions"];
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    const next = paletteMove(event, selected, items.length, () => { if (items[selected]) choose(items[selected]); });
+    const next = paletteMove(event, selected, items.length, () => {
+      setEntered(true);
+      search.enter(() => { if (items[selected]) choose(items[selected]); }, (session) => choose({ key: session.id, run: () => navigate(sessionPath(session.id)) }));
+    });
     if (event.key !== "Enter") setPick(next);
   };
   return (
@@ -1333,7 +1363,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
       <DialogContent initialFocus={input} showCloseButton={false} className="top-[20%] flex max-h-[75vh] translate-y-0 flex-col overflow-hidden sm:max-w-lg [@media(pointer:coarse)]:top-[var(--search-top,1rem)] [@media(pointer:coarse)]:max-h-[var(--search-height,75vh)]">
         <DialogTitle className="sr-only">{copy.title}</DialogTitle>
         <DialogDescription className="sr-only">{copy.desc}</DialogDescription>
-        {mode === "sessions" ? <SessionSearch rows={sidebar.rows} catalog={agents.data?.agents ?? []} query={query} setQuery={(value) => { setPick(0); setQuery(value); }} agentFilter={agentFilter} setAgentFilter={(value) => { setPick(0); setAgentFilter(value); }} roomFilter={roomFilter} setRoomFilter={(value) => { setPick(0); setRoomFilter(value); }} inputRef={input} placeholder={copy.placeholder} onKeyDown={onKeyDown} /> : <Input
+        {mode === "sessions" ? <SessionSearch rows={sidebar.rows} catalog={agents.data?.agents ?? []} query={query} setQuery={(update) => { setPick(0); setEntered(false); setQuery(update); }} search={search} inputRef={input} placeholder={copy.placeholder} onKeyDown={onKeyDown} /> : <Input
           ref={input}
           value={query}
           onChange={(event) => { setPick(0); setQuery(event.target.value); }}
@@ -1342,9 +1372,9 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
           onKeyDown={onKeyDown}
         />}
         {runCron.error || actions.error ? <p role="alert" className="px-3 text-sm text-destructive">{(runCron.error ?? actions.error)?.message}</p> : null}
-        {origins.failed ? <p role="alert" className="px-3 text-sm text-destructive">Could not search all chat origins.</p> : null}
-        <ul className="max-h-[min(24rem,50vh)] overflow-y-auto p-1 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
-          {items.length === 0 ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, origins.pending, origins.failed, jobs.isLoading)}</li> : items.map((item, index) => (
+        {search.error ? <p role="alert" className="px-3 text-sm text-destructive">Search failed: {search.error}</p> : null}
+        <ul data-pending={search.pending} className="max-h-[min(24rem,50vh)] overflow-y-auto p-1 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent] data-[pending=true]:opacity-50">
+          {items.length === 0 ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, search, jobs.isLoading)}</li> : items.map((item, index) => (
             <li key={item.key}>
               <button disabled={item.disabled} ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start justify-center rounded-md px-3 text-left text-sm disabled:opacity-50", mode === "commands" ? "min-h-9 py-1.5 [@media(pointer:coarse)]:min-h-11" : "py-2", index === selected && "bg-accent")} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item)}>
                 {item.session ? <SessionRowContent session={item.session} loading={item.loading} /> : <><span className="font-medium">{item.label}</span>{item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}</>}
@@ -1357,9 +1387,9 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
   );
 }
 
-function paletteEmpty(mode: "sessions" | "commands" | "cron" | undefined, sidebar: SidebarView, originsPending: boolean, originsFailed: boolean, loadingJobs: boolean) {
-  if (mode === "sessions" && originsFailed) return "Search incomplete";
-  if (mode === "sessions" && (!searchIsAuthoritative(sidebar) || originsPending)) return "loading...";
+function paletteEmpty(mode: "sessions" | "commands" | "cron" | undefined, sidebar: SidebarView, search: ReturnType<typeof useSessionSearch>, loadingJobs: boolean) {
+  if (mode === "sessions" && search.error) return "Search incomplete";
+  if (mode === "sessions" && (!searchIsAuthoritative(sidebar) || search.pending || search.missing)) return "loading...";
   return mode === "cron" && loadingJobs ? "Loading…" : "No matches";
 }
 
@@ -1450,53 +1480,12 @@ function NameSessionDialog({ id }: { id: string }) {
     </Dialog>;
 }
 
-function matchesSession(session: Session, needle: string, agentFilter: string, roomFilter: string) {
-  if (agentFilter !== "" && (session.agent ?? "") !== agentFilter) return false;
-  if (roomFilter !== "" && (slackSession(session.id) ? (session.title ?? "") : "") !== roomFilter) return false;
-  return needle === "" || `${session.name ?? ""} ${session.title ?? ""} ${session.preview ?? ""} ${session.agent ?? ""} ${sessionLabel(session.id)}`.toLowerCase().includes(needle);
-}
+type SavedSearch = { id: string; name?: string; query: string };
 
-function sessionSearchTerms(query: string) {
-  const tags: string[] = [], cronNames: string[] = [], filterTerms: string[] = [];
-  let pinnedOnly = false, forkedOnly = false, cronOnly = false, sort = "";
-  const text = query.replace(/(?:^|\s)(is:(?:pinned|forked|cron)|sort:(?:newest|oldest)|(?:tag|cron):("(?:[^"\\]|\\.)*"|\S+))(?=\s|$)/gi, (term, filter: string, value?: string) => {
-    const lower = filter.toLowerCase();
-    if (value !== undefined) {
-      let name = value;
-      if (value.startsWith('"')) {
-        try { name = JSON.parse(value); } catch { return term; }
-      }
-      if (name === "") return term;
-      (lower.startsWith("cron:") ? cronNames : tags).push(name);
-    } else if (lower.startsWith("sort:")) {
-      sort = lower.slice(5);
-    } else {
-      pinnedOnly ||= lower === "is:pinned";
-      forkedOnly ||= lower === "is:forked";
-      cronOnly ||= lower === "is:cron";
-    }
-    filterTerms.push(filter);
-    return "";
-  }).trim();
-  // A trailing operator prefix is being typed, not searched.
-  const typing = /(?:^|\s)((?:is|sort|cron):\S*)$/i.exec(text);
-  const rest = typing && " is:pinned is:forked is:cron sort:newest sort:oldest cron:".includes(` ${typing[1].toLowerCase()}`) ? text.slice(0, typing.index).trim() : text;
-  const needle = typedPrefix(text, "agent:") === null && typedPrefix(text, "room:") === null ? rest.toLowerCase() : "";
-  return { pinnedOnly, forkedOnly, cronOnly, cronNames, sort, tags, filterTerms, text, needle };
+// Legacy agent and room filters fold into the query once, in one canonical form.
+function foldFilters(query: string, agent?: string | null, room?: string | null) {
+  return [agent ? `agent:${termValue(agent)}` : "", room ? `room:${termValue(room)}` : "", query].filter(Boolean).join(" ");
 }
-
-function sessionMatchesSearch(session: Session, filters: ReturnType<typeof sessionSearchTerms>, agentFilter: string, roomFilter: string, origin: string) {
-  const tags = new Set(session.tags);
-  return filters.tags.every((tag) => tags.has(tag)) && filters.cronNames.every((name) => session.cronName === name) && (!filters.pinnedOnly || session.pinned) && (!filters.forkedOnly || session.forkedFrom) && (!filters.cronOnly || session.cron) && matchesSession(session, "", agentFilter, roomFilter) && (matchesSession(session, filters.needle, "", "") || origin.includes(filters.needle));
-}
-
-// sort: orders by last activity (missing last, then ID); otherwise pinned rows come first.
-function compareSessions(sort: string, a: Session, b: Session) {
-  const time = (session: Session) => Date.parse(session.updatedAt ?? "") * (sort === "newest" ? -1 : 1) || Infinity;
-  return sort ? time(a) - time(b) || a.id.localeCompare(b.id) : Number(!!b.pinned) - Number(!!a.pinned);
-}
-
-type SavedSearch = { id: string; name?: string; query: string; agentFilter: string; roomFilter: string };
 type SavedSearches = { tabs: SavedSearch[]; active: string };
 
 function SearchPage() {
@@ -1509,15 +1498,18 @@ function SearchTabs({ owner }: { owner: string }) {
   const storageKey = `search-tabs:${owner}`;
   const [rename, setRename] = useState<string | null>(null);
   const [saved, setSaved] = useState<SavedSearches>(() => {
-    const stored = JSON.parse(localStorage.getItem(storageKey) ?? '{"tabs":[]}') as SavedSearches;
+    const stored = JSON.parse(localStorage.getItem(storageKey) ?? '{"tabs":[]}') as { tabs: (SavedSearch & { agentFilter?: string; roomFilter?: string })[]; active: string };
+    const tabs = stored.tabs.map(({ agentFilter, roomFilter, ...tab }) => ({ ...tab, query: foldFilters(tab.query, agentFilter, roomFilter) }));
     const params = new URLSearchParams(location.search);
-    const link = { query: params.get("q") ?? "", agentFilter: params.get("agent") ?? "", roomFilter: params.get("room") ?? "" };
-    const linked = !!(link.query || link.agentFilter || link.roomFilter);
-    if (stored.tabs.length && !linked) return stored;
-    const match = stored.tabs.toSorted((a, b) => Number(b.id === stored.active) - Number(a.id === stored.active)).find((item) => item.query === link.query && item.agentFilter === link.agentFilter && item.roomFilter === link.roomFilter);
+    const query = foldFilters(params.get("q") ?? "", params.get("agent"), params.get("room"));
+    if (tabs.length && !query) {
+      localStorage.setItem(storageKey, JSON.stringify({ tabs, active: stored.active }));
+      return { tabs, active: stored.active };
+    }
+    const match = tabs.toSorted((a, b) => Number(b.id === stored.active) - Number(a.id === stored.active)).find((item) => item.query === query);
     const id = match?.id ?? crypto.getRandomValues(new Uint32Array(4)).join("-");
-    const next = { tabs: match ? stored.tabs : [...stored.tabs, { id, ...link }], active: id };
-    if (linked) localStorage.setItem(storageKey, JSON.stringify(next));
+    const next = { tabs: match ? tabs : [...tabs, { id, query }], active: id };
+    if (query) localStorage.setItem(storageKey, JSON.stringify(next));
     return next;
   });
   const draft = useRef(localStorage.getItem(storageKey) === null);
@@ -1532,7 +1524,7 @@ function SearchTabs({ owner }: { owner: string }) {
   const tab = saved.tabs[selected];
   const search = useSearch();
   useEffect(() => {
-    const params = new URLSearchParams(Object.entries({ q: tab.query, agent: tab.agentFilter, room: tab.roomFilter }).filter(([, value]) => value));
+    const params = new URLSearchParams(tab.query ? { q: tab.query } : {});
     history.replaceState(history.state, "", `/search${params.size ? `?${params}` : ""}`);
   }, [tab, search]);
   useLayoutEffect(() => {
@@ -1548,7 +1540,7 @@ function SearchTabs({ owner }: { owner: string }) {
     draft.current = false;
     localStorage.setItem(storageKey, JSON.stringify(next));
   };
-  const edit = (change: Partial<SavedSearch>) => update({ ...savedRef.current, tabs: savedRef.current.tabs.map((item) => item.id === tab.id ? { ...item, ...change } : item) });
+  const edit = (change: (item: SavedSearch) => Partial<SavedSearch>) => update({ ...savedRef.current, tabs: savedRef.current.tabs.map((item) => item.id === tab.id ? { ...item, ...change(item) } : item) });
   const select = (active: string) => {
     const next = { ...savedRef.current, active };
     savedRef.current = next;
@@ -1574,7 +1566,7 @@ function SearchTabs({ owner }: { owner: string }) {
             if (item.id !== saved.active || rename === null) return;
             const name = event.currentTarget.textContent!.trim();
             event.currentTarget.textContent = name || item.query || `Search ${index + 1}`;
-            edit({ name }); setRename(null);
+            edit(() => ({ name })); setRename(null);
           }} onKeyDown={(event) => {
             if (item.id === saved.active && rename !== null) {
               if (event.nativeEvent.isComposing) return;
@@ -1601,7 +1593,7 @@ function SearchTabs({ owner }: { owner: string }) {
       </div>
       <Button variant="outline" size="icon" aria-label="New search" onClick={() => {
         const id = crypto.getRandomValues(new Uint32Array(4)).join("-");
-        update({ tabs: [...saved.tabs, { id, query: "", agentFilter: "", roomFilter: "" }], active: id });
+        update({ tabs: [...saved.tabs, { id, query: "" }], active: id });
         requestAnimationFrame(() => input.current?.focus());
       }}><Plus className="size-4" /></Button>
     </div>
@@ -1628,156 +1620,123 @@ function windowed(text: string, needle: string, tagIds: string[]) {
   return `${start ? "…\n" : ""}${lines.slice(start, end).join("\n")}${end < lines.length ? "\n…" : ""}`;
 }
 
-function SearchResultGroup({ session, hits, text, field, needle, tagIds }: { session: Session; hits: MessageMatch[]; text: string; field?: string; needle: string; tagIds: string[] }) {
-  const count = hits.length + Number(!!text);
+function SearchResultGroup({ session, hits, text, field, needle, tagIds }: { session: Session; hits: MessageMatch[]; text: string; field: string; needle: string; tagIds: string[] }) {
+  const count = hits.length + Number(!!field);
   const label = sessionTitle(session, false);
   const clean = useCleanText(label);
   const row = (href: string, kind: string, body: string, key?: string) => <li key={key}><Link href={href} className="flex min-h-11 min-w-0 items-start gap-3 px-2 py-1 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring sm:min-h-7"><span className="w-16 shrink-0 text-xs text-muted-foreground">{kind}</span><div className="min-w-0"><TranscriptText text={windowed(body, needle, tagIds)} needle={needle} interactive={false} /></div></Link></li>;
   return <li role="group" aria-label={clean} className="min-w-0">
     <h2 className="flex min-w-0 items-center gap-1 text-sm font-medium"><Link href={sessionPath(session.id)} title={clean} className="min-w-0 truncate py-1 hover:underline focus-visible:outline-2 focus-visible:outline-ring"><InlineText text={label} /></Link><span className="shrink-0 text-muted-foreground">({count})</span>{session.pinned ? <Pin aria-label="Pinned" className="size-3 shrink-0" /> : null}</h2>
     <ul className="mt-1 border-l pl-2 text-sm leading-5">
-      {text ? row(sessionPath(session.id), field || "Preview", text) : null}
+      {field ? row(sessionPath(session.id), field, text) : null}
       {hits.map((match, i) => row(sessionPath(session.id) + (match.message.messageId ? `?message=${encodeURIComponent(match.message.messageId)}` : ""), match.message.role === "user" ? "You" : "Assistant", match.message.text, match.message.messageId || String(i)))}
     </ul>
   </li>;
 }
 
-function SearchMatches({ matching, messages, rows, origins, needle, sort, tagIds }: { matching: Session[]; messages: MessageMatch[]; rows: Session[]; origins: Map<string, string>; needle: string; sort: string; tagIds: string[] }) {
-  const bySession = Map.groupBy(messages, (match) => match.conversationId);
-  const matched = new Set(matching);
-  const sessions = rows.filter((session) => bySession.has(session.id) || matched.has(session)).sort((a, b) => (!sort && Number(bySession.has(b.id)) - Number(bySession.has(a.id))) || compareSessions(sort, a, b));
-  return <ul className="flex min-w-0 flex-col gap-4">
-    {sessions.map((session) => {
-      const origin = origins.get(session.id) ?? "";
-      const hits = bySession.get(session.id) ?? [];
-      const field = needle ? [["Name", session.name], ["Room", session.title], ["Agent", session.agent], ["Session", sessionLabel(session.id)], ["Origin", origin]].find(([, value]) => value?.toLowerCase().includes(needle)) : undefined;
-      const text = field?.[1] || (!hits.length && matched.has(session) ? session.preview || sessionLabel(session.id) : "");
-      return <SearchResultGroup key={session.id} session={session} hits={hits} text={text} field={field?.[0]} needle={needle} tagIds={tagIds} />;
-    })}
-  </ul>;
-}
-
-function SearchStatus({ pending, checking, error, originError, empty, incomplete, unindexed, retry }: { pending: boolean; checking: boolean; error?: string; originError: boolean; empty: boolean; incomplete: boolean; unindexed: boolean; retry: () => void }) {
+function SearchStatus({ pending, error, empty, incomplete, unindexed, unsummarized, retry }: { pending: boolean; error?: string; empty: boolean; incomplete: boolean; unindexed: boolean; unsummarized: boolean; retry: () => void }) {
   return <>
-    {pending || checking ? <p role="status" className="text-muted-foreground">{pending ? "Searching…" : "Still checking chat origins…"}</p> : null}
+    {pending ? <p role="status" className="text-muted-foreground">Searching…</p> : null}
     {error ? <p role="alert" className="text-destructive">Search failed: {error} <button type="button" className="underline" onClick={retry}>Retry</button></p> : null}
-    {originError ? <p role="alert" className="text-destructive">Some chat origins could not be searched.</p> : null}
     {unindexed ? <p role="status" className="text-muted-foreground">Message results may be incomplete while chats are still being indexed.</p> : null}
-    {empty && (incomplete || !unindexed) ? <p role="status" className="text-muted-foreground">{incomplete ? "Session search is still loading." : "No matches"}</p> : null}
+    {unsummarized ? <p role="status" className="text-muted-foreground">Results may be incomplete while chat summaries are still loading.</p> : null}
+    {empty && (incomplete || !unindexed && !unsummarized) ? <p role="status" className="text-muted-foreground">{incomplete ? "Session search is still loading." : "No matches"}</p> : null}
   </>;
 }
 
-function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab: SavedSearch; rows: Session[]; catalog: { name: string }[]; edit: (change: Partial<SavedSearch>) => void; input: React.Ref<HTMLInputElement>; onFirstSubmit: () => void }) {
+function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab: SavedSearch; rows: Session[]; catalog: Agent[]; edit: (change: (item: SavedSearch) => Partial<SavedSearch>) => void; input: RefObject<HTMLInputElement | null>; onFirstSubmit: () => void }) {
   const sidebar = useContext(Sidebar);
-  const filters = sessionSearchTerms(tab.query);
-  const searchKey = filters.needle;
-  const origins = useSessionOrigins(rows, searchKey);
-  const [result, setResult] = useState<{ query: string; matches: MessageMatch[]; tagIds: string[]; indexComplete?: boolean; error?: string; pending: boolean }>({ query: "", matches: [], tagIds: [], pending: false });
-  const request = useRef<AbortController>(null);
-  const version = useRef(0);
-  const pause = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const deadline = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const firstEdit = useRef(0);
-  const submit = useCallback(() => {
-    clearTimeout(pause.current);
-    clearTimeout(deadline.current);
-    firstEdit.current = 0;
-    request.current?.abort();
-    const controller = new AbortController();
-    request.current = controller;
-    const current = ++version.current;
-    setResult({ query: searchKey, matches: [], tagIds: [], pending: !!searchKey });
-    if (!searchKey) return;
-    void rpc<SearchMessagesResponse>("SearchMessages", { query: searchKey }, controller.signal).then(({ matches, tagIds, indexComplete }) => {
-      if (current === version.current) setResult({ query: searchKey, matches: matches ?? [], tagIds: tagIds ?? [], indexComplete, pending: false });
-    }).catch((error: Error) => {
-      if (current === version.current && !controller.signal.aborted) setResult({ query: searchKey, matches: [], tagIds: [], error: error.message, pending: false });
-    });
-  }, [searchKey]);
-  useEffect(() => {
-    if (!firstEdit.current) firstEdit.current = Date.now();
-    pause.current = setTimeout(submit, 250);
-    deadline.current = setTimeout(submit, Math.max(0, 1000 - (Date.now() - firstEdit.current)));
-    return () => { clearTimeout(pause.current); clearTimeout(deadline.current); };
-  }, [submit]);
-  useEffect(() => () => { request.current?.abort(); version.current++; }, []);
-  const pending = result.pending || result.query !== searchKey;
-  const current = !pending && !result.error;
-  const matching = rows.filter((row) => sessionMatchesSearch(row, filters, tab.agentFilter, tab.roomFilter, origins.values.get(row.id) ?? ""));
-  const visible = new Set(rows.filter((row) => sessionMatchesSearch(row, { ...filters, needle: "" }, tab.agentFilter, tab.roomFilter, "")).map((row) => row.id));
-  const messages = result.query === searchKey ? result.matches.filter((match) => visible.has(match.conversationId)) : [];
-  const searching = !!tab.query.trim() || !!tab.agentFilter || !!tab.roomFilter;
+  // Opening a saved search or a link sends its whole query.
+  const [entered, setEntered] = useState(true);
+  const search = useSessionSearch(tab.query, true, entered);
+  const { response } = search.result;
+  const hits = Map.groupBy(response?.messages ?? [], (match) => match.conversationId);
   return <>
     <div id="search-tab-panel" role="tabpanel" aria-label="Search" className="min-w-0">
-      <SessionSearch rows={rows} catalog={catalog} query={tab.query} setQuery={(query) => edit({ query })} agentFilter={tab.agentFilter} setAgentFilter={(agentFilter) => edit({ agentFilter })} roomFilter={tab.roomFilter} setRoomFilter={(roomFilter) => edit({ roomFilter })} inputRef={input} onKeyDown={(event) => { if (event.key === "Enter") { onFirstSubmit(); submit(); } }} />
+      <SessionSearch rows={rows} catalog={catalog} query={tab.query} setQuery={(update) => { setEntered(false); edit((item) => ({ query: update(item.query) })); }} search={search} inputRef={input} onKeyDown={(event) => { if (event.key === "Enter") { onFirstSubmit(); setEntered(true); void search.run(tab.query.trimEnd()); } }} />
     </div>
     <div className="min-h-0 flex-1 overflow-y-auto text-sm" aria-label="Search results">
-      <SearchStatus pending={pending} checking={origins.pending} error={result.query === searchKey ? result.error : undefined} originError={origins.failed} empty={searching && current && matching.length + messages.length === 0} incomplete={!searchIsAuthoritative(sidebar) || origins.failed || origins.pending} unindexed={result.query === searchKey && result.indexComplete === false} retry={submit} />
-      {searching ? <SearchMatches matching={matching} messages={messages} rows={rows} origins={origins.values} needle={filters.needle} sort={filters.sort} tagIds={result.tagIds} /> : null}
-      {!searching ? <p className="text-muted-foreground">Type to search messages and conversations.</p> : null}
+      <SearchStatus pending={search.pending} error={search.error} empty={!!search.sent && !search.pending && !search.error && search.found.length === 0} incomplete={!searchIsAuthoritative(sidebar) || search.missing} unindexed={!search.pending && response?.indexComplete === false} unsummarized={!search.pending && response?.summariesComplete === false} retry={() => void search.run(search.sent)} />
+      {search.sent ? <ul data-pending={search.pending} className="flex min-w-0 flex-col gap-4 data-[pending=true]:opacity-50">
+        {search.found.map(({ match, session }) => <SearchResultGroup key={session.id} session={session} hits={hits.get(session.id) ?? []} text={match.text} field={match.field} needle={response!.needle} tagIds={response!.mentionIds} />)}
+      </ul> : <p className="text-muted-foreground">Type to search messages and conversations.</p>}
     </div>
   </>;
 }
 
-// Pills are the committed filter terms; the input keeps free text and the term still being typed.
-function searchInput(query: string, typed: string, rows: Session[], catalog: { name: string }[]) {
-  const { text, filterTerms } = sessionSearchTerms(query);
-  const input = query.trimEnd().endsWith(typed.trimEnd()) && sessionSearchTerms(typed).text === text ? typed : text;
-  const pills = [...new Set(filterTerms.slice(0, filterTerms.length - sessionSearchTerms(input).filterTerms.length))];
-  const token = input.slice(input.search(/\S*$/));
-  const tagPrefix = typedPrefix(token, "tag:"), cronPrefix = typedPrefix(token, "cron:"), isPrefix = typedPrefix(token, "is:"), sortPrefix = typedPrefix(token, "sort:");
-  const agentPrefix = typedPrefix(text, "agent:"), roomPrefix = typedPrefix(text, "room:");
-  const needle = ((tagPrefix ?? cronPrefix)?.replace(/^"|"$/g, "") ?? isPrefix ?? sortPrefix)?.toLowerCase();
-  const names = roomPrefix !== null ? slackRooms(rows) : cronPrefix !== null ? [...new Set(rows.flatMap((row) => row.cronName ? [row.cronName] : []))] : tagPrefix !== null ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : sortPrefix !== null ? ["newest", "oldest"] : ["pinned", "forked", "cron"];
-  const offered = overlayChoices(agentPrefix, roomPrefix ?? needle ?? null, catalog, names);
-  const completed = cronPrefix !== null ? sessionSearchTerms(token).cronNames[0] : needle;
-  // A completed filter term commits on space or Enter instead of offering itself again.
-  const choices = agentPrefix === null && roomPrefix === null && offered.some((item) => (cronPrefix !== null ? item.key : item.key.toLowerCase()) === completed) ? [] : offered;
-  return { text, filterTerms, input, pills, token, tagPrefix, cronPrefix, sortPrefix, agentPrefix, roomPrefix, choices };
+// Values offered for the operator word being typed; a completed value commits on space or Enter instead of offering itself again.
+function searchChoices(word: string, rows: Session[], catalog: Agent[]) {
+  const typed = /^(tag|cron|agent|room|is|sort):"?(.*?)"?$/is.exec(word);
+  const key = typed?.[1].toLowerCase() ?? "", needle = typed?.[2].toLowerCase() ?? "";
+  const names = key === "room" ? slackRooms(rows) : key === "cron" ? [...new Set(rows.flatMap((row) => row.cronName ? [row.cronName] : []))] : key === "tag" ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : key === "sort" ? ["newest", "oldest"] : ["pinned", "forked", "cron"];
+  const offered = !key ? [] : (key === "agent" ? catalog.map(({ name, model, reasoning }) => ({ key: name, detail: [model, reasoning].filter(Boolean).join(" · ") })) : names.map((name) => ({ key: name, detail: "" }))).filter((item) => item.key.toLowerCase().includes(needle));
+  return { key, choices: offered.some((item) => item.key.toLowerCase() === needle) ? [] : offered };
 }
 
-function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFilter, roomFilter, setRoomFilter, inputRef, placeholder, onKeyDown }: {
+// Pills are the filter terms the server read in a query this one still starts with, each followed by whitespace; the input edits the rest.
+function usePills(query: string, setQuery: (update: (query: string) => string) => void, search: ReturnType<typeof useSessionSearch>, inputRef: RefObject<HTMLInputElement | null>) {
+  const caret = useRef(query.length); // In query positions.
+  const { query: read, response } = search.result;
+  const terms = useMemo(() => (response?.terms ?? []).filter((term) => query.slice(0, term.end) === read.slice(0, term.end)), [query, read, response]);
+  const pills = useMemo(() => terms.filter((term) => /\s/.test(query[term.end] ?? "")), [query, terms]);
+  const input = cutTerms(query, pills);
+  // Keep the caret in place when pills take text out of the input.
+  useLayoutEffect(() => {
+    const at = cutTerms(query.slice(0, caret.current), pills).length;
+    if (inputRef.current === document.activeElement) inputRef.current!.setSelectionRange(at, at);
+  }, [inputRef, pills, query]);
+  const toQuery = (at: number, after: boolean) => pills.reduce((position, term) => term.start < position || after && term.start === position ? position + term.end + 1 - term.start : position, at);
+  const change = (next: string, at = next.length) => {
+    caret.current = at;
+    setQuery(() => next);
+  };
+  const head = query.slice(0, query.length - search.word.length);
+  return {
+    pills, input, change, head,
+    select: (at: number) => { caret.current = toQuery(at, true); },
+    edit: (value: string, at: number) => {
+      let same = 0, tail = 0;
+      while (same < at && value[same] === input[same]) same++;
+      while (tail < value.length - at && tail < input.length - same && value.at(-1 - tail) === input.at(-1 - tail)) tail++;
+      // Hidden pills in or right after the edited text are kept, moved in front of the free text after the previous pill, so an edit never deletes or glues a term.
+      const start = toQuery(same, true), end = toQuery(input.length - tail, true), front = pills.reduce((position, term) => term.end < start ? term.end + 1 : position, 0);
+      const kept = pills.filter((term) => term.start >= start && term.end < end).map((term) => query.slice(term.start, term.end + 1)).join("");
+      change(query.slice(0, front) + kept + query.slice(front, start) + value.slice(same, value.length - tail) + query.slice(end), start + kept.length + at - same);
+    },
+    remove: (term: { start: number; end: number }) => change(cutTerms(query, [term]), cutTerms(query.slice(0, caret.current), [term]).length),
+    // Picking an agent: or room: value removes earlier terms of its key, by the offsets of the response for the sent text once it is here.
+    pick: (key: string, name: string) => {
+      const term = `${key}:${key === "is" || key === "sort" ? name : termValue(name)} `;
+      if (key !== "agent" && key !== "room") return change(head + term);
+      if (search.result.query === search.sent && response) return change(cutTerms(head, terms.filter((item) => item.key === key && item.end < head.length)) + term);
+      change(head + term);
+      search.next((text, later) => setQuery((latest) => {
+        const valid = later.terms.filter((item) => latest.slice(0, item.end) === text.slice(0, item.end));
+        return valid.some((item) => item.key === key && item.start === head.length) ? cutTerms(latest, valid.filter((item) => item.key === key && item.start < head.length)) : latest;
+      }));
+      void search.run((head + term).trimEnd());
+    },
+  };
+}
+
+function SessionSearch({ rows, catalog, query, setQuery, search, inputRef, placeholder, onKeyDown }: {
   rows: Session[];
-  catalog: { name: string }[];
+  catalog: Agent[];
   query: string;
-  setQuery: (value: string) => void;
-  agentFilter: string;
-  setAgentFilter: (value: string) => void;
-  roomFilter: string;
-  setRoomFilter: (value: string) => void;
-  inputRef?: React.Ref<HTMLInputElement>;
+  setQuery: (update: (query: string) => string) => void;
+  search: ReturnType<typeof useSessionSearch>;
+  inputRef: RefObject<HTMLInputElement | null>;
   placeholder?: string;
   onKeyDown?: React.KeyboardEventHandler<HTMLInputElement>;
 }) {
   const sidebar = useContext(Sidebar);
   const stale = !sidebar.refreshing && rows.length > 0 && !searchIsAuthoritative(sidebar);
   const [overlayPick, setOverlayPick] = useState(0);
-  const [typed, setTyped] = useState("");
-  const { text, filterTerms, input, pills, token, tagPrefix, cronPrefix, sortPrefix, agentPrefix, roomPrefix, choices } = searchInput(query, typed, rows, catalog);
+  const { key, choices } = searchChoices(search.word, rows, catalog);
+  const { pills, input, change, head, select, edit, remove, pick: choose } = usePills(query, setQuery, search, inputRef);
   const pick = choices.length === 0 ? 0 : overlayPick % choices.length;
   const active = useRef<HTMLButtonElement>(null);
-  useEffect(() => { active.current?.scrollIntoView({ block: "nearest" }); }, [pick, text]);
-  const change = (terms: string[], rest: string) => {
-    setTyped(rest);
-    setQuery([...terms, rest].filter(Boolean).join(" "));
-  };
-  const edit = (value: string, all = false) => {
-    const cut = all ? value.length : value.search(/\s\S*$/) + 1;
-    const head = sessionSearchTerms(value.slice(0, cut));
-    change([...pills, ...head.filterTerms], head.filterTerms.length ? [head.text, value.slice(cut)].filter(Boolean).join(" ") : value);
-  };
-  const applyOverlay = (name: string) => {
-    if (agentPrefix === null && roomPrefix === null) {
-      change([...pills, tagPrefix !== null || cronPrefix !== null ? `${cronPrefix !== null ? "cron" : "tag"}:${/\s/.test(name) || name.startsWith('"') ? JSON.stringify(name) : name}` : `${sortPrefix !== null ? "sort" : "is"}:${name}`], input.slice(0, input.length - token.length).trim());
-    } else if (agentPrefix !== null) {
-      setAgentFilter(name);
-      change(filterTerms, "");
-    } else {
-      setRoomFilter(name);
-      change(filterTerms, "");
-    }
-    setOverlayPick(0);
-  };
+  useEffect(() => { active.current?.scrollIntoView({ block: "nearest" }); }, [pick, key]);
   return (
         <div className="min-w-0 flex-1 shrink-0">
           <div className="flex min-h-8 min-w-0 flex-wrap items-center gap-1 rounded-md border border-sidebar-border bg-background pr-2 pl-2">
@@ -1789,18 +1748,14 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
                 <TooltipContent side="bottom">Conversation list may be out of date</TooltipContent>
               </Tooltip> : <Search className="size-3.5" />}
             </span>
-            {agentFilter ? <FilterPill label={`agent:${agentFilter}`} onClear={() => setAgentFilter("")} /> : null}
-            {roomFilter ? <FilterPill label={`room:${roomFilter}`} onClear={() => setRoomFilter("")} /> : null}
-            {pills.map((term) => <FilterPill key={term} label={term} onClear={() => change(pills.filter((pill) => pill !== term), input)} />)}
+            {pills.map((term) => <FilterPill key={term.start} label={term.text} onClear={() => remove(term)} />)}
             <Input
               ref={inputRef}
               value={input}
-              onChange={(event) => {
-                setOverlayPick(0);
-                edit(event.target.value);
-              }}
+              onChange={(event) => { setOverlayPick(0); edit(event.target.value, event.target.selectionStart ?? event.target.value.length); }}
+              onSelect={(event) => select(event.currentTarget.selectionStart ?? 0)}
               aria-label={placeholder ?? "Search sessions"}
-              placeholder={placeholder ?? (agentFilter || roomFilter || pills.length ? "Search" : "Search or agent: or room:")}
+              placeholder={placeholder ?? (pills.length ? "Search" : "Search or agent: or room:")}
               variant="embedded"
               className="h-8 min-w-24 flex-1"
               onKeyDown={(event) => {
@@ -1812,21 +1767,17 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
                   }
                   if (event.key === "Tab" || event.key === "Enter") {
                     event.preventDefault();
-                    applyOverlay(choices[pick].key);
+                    setOverlayPick(0);
+                    choose(key, choices[pick].key);
                     return;
                   }
                   if (event.key === "Escape") {
                     event.preventDefault();
                     event.stopPropagation();
-                    change(pills, "");
+                    change(head);
                     return;
                   }
                 }
-                if (event.key === "Enter" && (agentPrefix !== null || roomPrefix !== null)) {
-                  event.preventDefault();
-                  return;
-                }
-                if (event.key === "Enter") edit(input, true);
                 onKeyDown?.(event);
               }}
             />
@@ -1834,8 +1785,8 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
           {choices.length > 0 ? <ul className="mt-1 max-h-[min(12rem,25vh)] overflow-y-auto rounded-lg border bg-popover text-popover-foreground shadow-md">
             {choices.map((item, index) => (
               <li key={item.key}>
-                <button ref={index === pick ? active : null} type="button" className={cn("flex w-full flex-col items-start px-3 py-2 text-left text-sm", index === pick && "bg-accent")} onMouseDown={(event) => event.preventDefault()} onClick={() => applyOverlay(item.key)}>
-                  <span className="font-medium">{item.label}</span>
+                <button ref={index === pick ? active : null} type="button" className={cn("flex w-full flex-col items-start px-3 py-2 text-left text-sm", index === pick && "bg-accent")} onMouseDown={(event) => event.preventDefault()} onClick={() => { setOverlayPick(0); choose(key, item.key); }}>
+                  <span className="font-medium">{item.key}</span>
                   {item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}
                 </button>
               </li>

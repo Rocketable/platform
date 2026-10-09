@@ -52,11 +52,11 @@ type Server struct {
 	tailscaleUsers map[netip.Addr]tailscaleUser
 
 	searchMu    sync.Mutex
-	searches    map[string]*messageSearchFlight
+	searches    map[string]*searchFlight
 	searchGroup singleflight.Group
 }
 
-type messageSearchFlight struct {
+type searchFlight struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	waiters int
@@ -155,66 +155,34 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 	}
 
 	complete := true
-	metadataByChannel := make(map[string]*Session)
 
-	var cronOrigins map[string]string
+	var (
+		allChoices []string
+		loaded     bool
+	)
 
-	for row, err := range s.sessions.SidebarSessions(ctx) {
+	for chat, err := range s.sessions.SidebarChats(ctx, s.channels) {
 		if err != nil {
 			return err
 		}
 
-		// Read origins after the row snapshot: a first cron sync must not add
-		// a listed chat newer than its origin facts.
-		if cronOrigins == nil {
-			cronOrigins = make(map[string]string)
-
-			for facts, err := range s.sessions.ChatOriginFacts(ctx, "") {
-				if err != nil {
-					return err
-				}
-
-				origin, _ := decideOrigin(&facts)
-				if cron, ok := origin.(cronOrigin); ok {
-					cronOrigins[facts.ConversationID] = cron.Stem
-				}
-			}
-		}
-
+		row := &chat.Session
 		conversation := row.Conversation
 		complete = complete && row.Summary != nil
 
-		allChoices, loaded := metadataByChannel[""]
 		if !loaded {
-			choices, err := s.agentChoices(ctx, "")
-			if err != nil {
+			if allChoices, err = s.agentChoices(ctx, ""); err != nil {
 				return err
 			}
 
-			allChoices = &Session{AllowedAgents: choices}
-			metadataByChannel[""] = allChoices
+			loaded = true
 		}
 
-		channel, _, slack := protocol.SlackThreadTarget(conversation.ID)
-		if !slack {
-			channel = ""
+		session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, AllowedAgents: allChoices, Running: row.Running, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName}
+
+		if _, _, slack := protocol.SlackThreadTarget(conversation.ID); slack {
+			session.AllowedAgents = slices.DeleteFunc(slices.Clone(allChoices), func(name string) bool { return !slices.Contains(chat.RoomAgents, name) })
 		}
-
-		channelMetadata, loaded := metadataByChannel[channel]
-		if !loaded {
-			name, allowed, err := s.channels.SidebarChannelAgentChoices(ctx, channel)
-			if err != nil {
-				return fmt.Errorf("web channel choices: %w", err)
-			}
-
-			choices := slices.DeleteFunc(slices.Clone(allChoices.AllowedAgents), func(name string) bool { return !slices.Contains(allowed, name) })
-			channelMetadata = &Session{Title: name, AllowedAgents: choices}
-			metadataByChannel[channel] = channelMetadata
-		}
-
-		cronName, cronOn := cronOrigins[conversation.ID]
-
-		session := &Session{Id: conversation.ID, Title: channelMetadata.Title, Agent: conversation.Agent, AllowedAgents: channelMetadata.AllowedAgents, Running: row.Running, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: cronOn, CronName: cronName}
 
 		if strings.HasPrefix(conversation.ID, "web:") {
 			session.AllowedAgents, err = s.agentChoices(ctx, conversation.ID)
@@ -695,7 +663,7 @@ func (e *TranscriptEvent) attribute(snapshot rocketcode.ReplayAttribution, sourc
 	e.Agent, e.Model, e.ReasoningEffort = snapshot.Agent, snapshot.Model, snapshot.ReasoningEffort
 	e.Origin = "canonical"
 
-	_, cron := parseCronRun(source)
+	_, cron := backend.ParseCronRun(source)
 	if source != destination || cron {
 		e.Origin = "sandboxed"
 	}
@@ -945,13 +913,13 @@ func cronHistory(entries []backend.ObservedSessionEntry, destination string) []*
 			continue
 		}
 
-		run, ok := parseCronRun(source)
+		run, ok := backend.ParseCronRun(source)
 		if !ok {
 			continue
 		}
 
 		seen[source] = true
-		runs = append(runs, &CronJob{Stem: run.stem, Status: "ran", LastRun: run.at.Format("2006-01-02T15:04:05.000000000Z"), NextRun: destination, Origin: source})
+		runs = append(runs, &CronJob{Stem: run.Stem, Status: "ran", LastRun: run.At.Format("2006-01-02T15:04:05.000000000Z"), NextRun: destination, Origin: source})
 	}
 
 	return runs
@@ -1676,48 +1644,6 @@ func (s *Server) entries(ctx context.Context, id string) ([]backend.ObservedSess
 	return slices.DeleteFunc(entries, func(entry backend.ObservedSessionEntry) bool { return entry.Synced && entry.SourceConversationID == "" }), nil
 }
 
-type originKind string
-
-const (
-	originCron        originKind = "cron"
-	originExternalMCP originKind = "external_mcp"
-)
-
-type cronRunKind string
-
-const (
-	cronScheduled cronRunKind = "scheduled"
-	cronOneOff    cronRunKind = "one-off"
-)
-
-type cronRun struct {
-	kind       cronRunKind
-	path, stem string
-	at         time.Time
-}
-
-type originPair struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
-}
-
-type cronOrigin struct {
-	Agent      string      `json:"agent"`
-	Kind       originKind  `json:"kind"`
-	RanAt      string      `json:"ranAt"`
-	RunID      string      `json:"runId"`
-	RunKind    cronRunKind `json:"runKind"`
-	SourcePath string      `json:"sourcePath"`
-	Stem       string      `json:"stem"`
-}
-
-type externalMCPOrigin struct {
-	Agent                  string       `json:"agent"`
-	ExternalConversationID string       `json:"externalConversationId"`
-	Kind                   originKind   `json:"kind"`
-	Pairs                  []originPair `json:"pairs"`
-}
-
 // chatOrigin reads only this session's physical origin, independent of its cutoff.
 func (s *Server) chatOrigin(ctx context.Context, id string) (string, error) {
 	for facts, err := range s.sessions.ChatOriginFacts(ctx, id) {
@@ -1725,7 +1651,7 @@ func (s *Server) chatOrigin(ctx context.Context, id string) (string, error) {
 			return "", fmt.Errorf("read origin facts: %w", err)
 		}
 
-		origin, _ := decideOrigin(&facts)
+		origin, _ := backend.DecideOrigin(&facts)
 		if origin == nil {
 			return "", nil
 		}
@@ -1739,76 +1665,4 @@ func (s *Server) chatOrigin(ctx context.Context, id string) (string, error) {
 	}
 
 	return "", nil
-}
-
-// decideOrigin applies the origin rules to stored facts and returns the origin with the
-// lowercased text origin search matches; a nil origin means none.
-func decideOrigin(facts *backend.ChatOriginFacts) (origin any, text string) {
-	locator, cronOn := creatingCronLocator(facts.ConversationID, facts.CreatedBy, facts.CreatingSource)
-
-	mcpOn := facts.Binding.ManagedConversationID == facts.ConversationID
-	if mcpOn == cronOn {
-		return nil, ""
-	}
-
-	if mcpOn {
-		pairs := make([]originPair, 0, len(facts.Binding.OriginPairs))
-		texts := make([]string, 0, len(facts.Binding.OriginPairs))
-
-		for _, key := range slices.Sorted(maps.Keys(facts.Binding.OriginPairs)) {
-			pairs = append(pairs, originPair{Key: key, Value: facts.Binding.OriginPairs[key]})
-			texts = append(texts, key+"="+facts.Binding.OriginPairs[key])
-		}
-
-		return externalMCPOrigin{Kind: originExternalMCP, ExternalConversationID: facts.ExternalConversationID, Agent: facts.Binding.Agent, Pairs: pairs},
-			strings.ToLower(fmt.Sprintf("External MCP External conversation: %s Agent: %s %s", facts.ExternalConversationID, facts.Binding.Agent, strings.Join(texts, " ")))
-	}
-
-	run, _ := parseCronRun(locator)
-	cron := cronOrigin{Kind: originCron, SourcePath: run.path, Stem: run.stem, RunKind: run.kind, RunID: locator, Agent: facts.ProducerAgent, RanAt: run.at.Format(time.RFC3339Nano)}
-
-	return cron, strings.ToLower(fmt.Sprintf("Cron Source: %s Stem: %s Run kind: %s Run ID: %s Agent: %s Ran at: %s", cron.SourcePath, cron.Stem, cron.RunKind, cron.RunID, cron.Agent, cron.RanAt))
-}
-
-func creatingCronLocator(id string, createdBy backend.ThreadCreator, creatingSource string) (string, bool) {
-	if source, ok := strings.CutPrefix(id, "web:"); ok {
-		if _, parsed := parseCronRun(source); parsed {
-			return source, true
-		}
-	}
-
-	if _, _, slack := protocol.SlackThreadTarget(id); slack && createdBy != backend.ThreadCreatedByCron {
-		return "", false
-	}
-
-	if _, ok := parseCronRun(creatingSource); ok {
-		return creatingSource, true
-	}
-
-	return "", false
-}
-
-func parseCronRun(source string) (cronRun, bool) {
-	kind, path, ok := cronScheduled, "", false
-	if rest, cut := strings.CutPrefix(source, "cron:"); cut {
-		path, ok = rest, true
-	} else if rest, cut := strings.CutPrefix(source, "one-off-cron:"); cut {
-		kind, path, ok = cronOneOff, rest, true
-	}
-
-	end := strings.LastIndex(path, ":")
-
-	start := strings.LastIndex(path[:max(end, 0)], ":")
-	if !ok || start < 0 {
-		return cronRun{}, false
-	}
-
-	at, err := time.Parse("20060102T150405.000000000Z", path[start+1:end])
-	if err != nil {
-		return cronRun{}, false
-	}
-
-	relative := path[:start]
-
-	return cronRun{kind: kind, path: relative, stem: strings.TrimSuffix(strings.TrimPrefix(relative, "cron/"), ".md"), at: at}, true
 }

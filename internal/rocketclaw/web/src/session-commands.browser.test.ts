@@ -75,6 +75,8 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
         if (failHandoff) return Response.json({ message: "Handoff provider failed", code: 13 }, { status: 500 });
         await handoffReady.promise;
         return Response.json({ document: handoffDocument });
+      // Fixed fixture: the server reads IS:FORKED as the fork filter.
+      case "/api/SearchSessions": return Response.json({ terms: [], text: "", needle: "", matches: input.query === "IS:FORKED" ? [{ conversationId: "forked", field: "Preview", text: "" }] : [], messages: [], mentionIds: [], indexComplete: true, summariesComplete: true });
       case "/api/SearchMessages": searches.push(input.query); return Response.json({ matches: Object.entries(histories).flatMap(([conversationId, messages]) => messages.filter((item) => item.text.toLowerCase().includes(input.query.toLowerCase())).map((message) => ({ conversationId, message }))) });
       case "/api/CreateSession": await newSessionReady.promise; histories.created = []; return Response.json({ id: "created" });
       case "/api/Prompt": {
@@ -296,13 +298,9 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     }
     await Bun.write(path.resolve(import.meta.dir, `../../../../.tmp/palette-rows-${width}.png`), await page.screenshot());
     await search.fill("IS:FORKED");
-    await palette.getByRole("button", { name: /forked/ }).waitFor();
+    await palette.locator('ul[data-pending="false"]').waitFor();
     expect(await palette.getByRole("img", { name: "Forked session", exact: true }).count()).toBe(1);
     expect(await palette.locator("li > button").count()).toBe(1);
-    await search.fill("is:forked forked");
-    expect(await palette.locator("li > button").count()).toBe(1);
-    await search.fill("is:forked source");
-    expect(await palette.locator("li > button").count()).toBe(0);
     await page.keyboard.press("Escape");
     if (width >= 768) {
       await page.locator("main").getByRole("button", { name: "Open original conversation", exact: true }).click();

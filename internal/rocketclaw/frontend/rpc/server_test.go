@@ -333,6 +333,155 @@ func TestSearchMessagesMatchesSlackTagNames(t *testing.T) {
 	require.Empty(t, text.TagIds)
 }
 
+func TestSearchSessionsSharedFlightCancellation(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	started := make(chan context.Context, 3)
+	release := make(chan struct{})
+	server := &Server{
+		sessions: sessions,
+		channels: &mockChannels{SlackTagsMatchingFunc: func(ctx context.Context, _ string) []string {
+			started <- ctx
+
+			select {
+			case <-ctx.Done():
+			case <-release:
+			}
+
+			return nil
+		}},
+		usernames: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice"},
+	}
+
+	type result struct {
+		response *SearchSessionsResponse
+		err      error
+	}
+
+	search := func(ctx context.Context, query string) chan result {
+		done := make(chan result, 1)
+
+		go func() {
+			response, err := server.searchSessions(ctx, &SearchSessionsRequest{Query: query, Messages: true})
+			done <- result{response, err}
+		}()
+
+		return done
+	}
+	waiters := func() {
+		require.Eventually(t, func() bool {
+			server.searchMu.Lock()
+			defer server.searchMu.Unlock()
+
+			return server.searches[" true tag:A x"].waiters == 2
+		}, time.Second, time.Millisecond)
+	}
+	principal := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
+	firstCtx, cancelFirst := context.WithCancel(principal)
+	secondCtx, cancelSecond := context.WithCancel(principal)
+	thirdCtx, cancelThird := context.WithCancel(principal)
+	fourthCtx, cancelFourth := context.WithCancel(principal)
+
+	defer cancelFirst()
+	defer cancelSecond()
+	defer cancelThird()
+	defer cancelFourth()
+
+	first := search(firstCtx, "tag:A x")
+	scanCtx := <-started
+	second := search(secondCtx, "tag:A x ")
+
+	waiters()
+
+	third := search(thirdCtx, "tag:a x")
+
+	<-started // Filter values are case-sensitive, so tag:a runs its own search.
+	cancelThird()
+	require.ErrorIs(t, (<-third).err, context.Canceled)
+	cancelFirst()
+	require.ErrorIs(t, (<-first).err, context.Canceled)
+	require.NoError(t, scanCtx.Err(), "the other waiter still needs the search")
+	cancelSecond()
+	require.ErrorIs(t, (<-second).err, context.Canceled)
+	<-scanCtx.Done()
+
+	fourth := search(fourthCtx, "tag:A x")
+
+	<-started
+
+	fifth := search(principal, "tag:A x")
+
+	waiters()
+	cancelFourth()
+	require.ErrorIs(t, (<-fourth).err, context.Canceled)
+	close(release)
+
+	shared := <-fifth
+	require.NoError(t, shared.err)
+	require.Equal(t, "x", shared.response.Needle)
+	require.Empty(t, started, "identical searches run once")
+}
+
+func TestSearchSessionsResponse(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	db, err := sql.Open("pgx", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
+	entries := make(map[string]int64)
+
+	for _, chat := range []struct{ id, user string }{{"slack-thread:C1:1.1", "ping <@U7> about billing"}, {"web-session:desk", "hello"}, {"web-session:lower", "billing question"}} {
+		require.NoError(t, sessions.UpsertThread(chat.id, backend.ThreadState{Agent: "main", CreatedBy: "alice"}))
+		entries[chat.id], err = sessions.AppendEntryID(ctx, chat.id, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+			json.RawMessage(fmt.Sprintf(`{"type":"message","role":"user","content":%q}`, chat.user)),
+			json.RawMessage(`{"type":"message","role":"assistant","content":"done"}`),
+		}})
+		require.NoError(t, err)
+	}
+
+	_, err = sessions.UpdateConversationDetails(ctx, "web-session:desk", nil, new("Billing desk"))
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO session_tags (conversation_id, tags) VALUES ('slack-thread:C1:1.1', '["A"]'), ('web-session:desk', '["A"]'), ('web-session:lower', '["a"]')`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `DELETE FROM session_summaries WHERE conversation_id = 'web-session:lower'`)
+	require.NoError(t, err)
+
+	channels := &mockChannels{
+		SidebarChannelAgentChoicesFunc: func(context.Context, string) (string, []string, error) { return "support", []string{"main"}, nil },
+		SlackTagsMatchingFunc:          func(context.Context, string) []string { return []string{"U7"} },
+	}
+	server := &Server{sessions: sessions, channels: channels, usernames: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice"}}
+
+	_, err = server.searchSessions(t.Context(), &SearchSessionsRequest{Query: "billing", Messages: true})
+	require.Equal(t, codes.Unauthenticated, status.Code(err))
+	require.Empty(t, channels.SidebarChannelAgentChoicesCalls(), "no search runs for an unauthenticated caller")
+	require.Empty(t, channels.SlackTagsMatchingCalls(), "no search runs for an unauthenticated caller")
+
+	response, err := server.searchSessions(ctx, &SearchSessionsRequest{Query: "tag:A Billing", Messages: true})
+	require.NoError(t, err)
+	require.True(t, proto.Equal(&SearchSessionsResponse{
+		Terms:   []*SearchTerm{{Key: "tag", Text: "tag:A", Start: 0, End: 5}},
+		Text:    "Billing",
+		Needle:  "billing",
+		Matches: []*SessionMatch{{ConversationId: "slack-thread:C1:1.1"}, {ConversationId: "web-session:desk", Field: "Name", Text: "Billing desk"}},
+		Messages: []*MessageMatch{{ConversationId: "slack-thread:C1:1.1", Message: &TranscriptEvent{
+			Role: "user", Text: "ping <@U7> about billing", MessageId: fmt.Sprintf("%d:0", entries["slack-thread:C1:1.1"]),
+		}}},
+		MentionIds:    []string{"U7"},
+		IndexComplete: true,
+	}, response), "%v", response)
+}
+
 func TestSearchMessagesFindsHistoryMessages(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -1316,7 +1465,7 @@ func TestSessionEntries(t *testing.T) {
 		{"tool", "tagged"},
 	}, got)
 
-	t.Run("origin search keeps original private metadata and authorization", func(t *testing.T) {
+	t.Run("History keeps original private metadata and session search keeps it hidden", func(t *testing.T) {
 		binding, found, err := sessions.ExternalMCPSession("external")
 		require.NoError(t, err)
 		require.True(t, found)
@@ -1328,13 +1477,11 @@ func TestSessionEntries(t *testing.T) {
 		require.NoError(t, err)
 		require.JSONEq(t, `{"kind":"external_mcp","externalConversationId":"external","agent":"producer","pairs":[{"key":"Original-Key","value":"Value <&> Unicode Ω"}]}`, full.Origin)
 
-		origins, err := invoke[SearchOriginsResponse](ctx, connection, "SearchOrigins", &SearchOriginsRequest{Query: "PRODUCER"})
+		origins, err := invoke[SearchSessionsResponse](ctx, connection, "SearchSessions", &SearchSessionsRequest{Query: "PRODUCER"})
 		require.NoError(t, err)
-		require.Len(t, origins.GetMatches(), 1, "the private conversation stays hidden")
-		require.Equal(t, id, origins.GetMatches()[0].GetConversationId())
-		require.Equal(t, "external mcp external conversation: external agent: producer original-key=value <&> unicode ω", origins.GetMatches()[0].GetText())
+		require.Empty(t, origins.GetMatches(), "the private conversation stays hidden, and the destination has no history to list")
 
-		_, err = invoke[SearchOriginsResponse](t.Context(), connection, "SearchOrigins", &SearchOriginsRequest{Query: "producer"})
+		_, err = invoke[SearchSessionsResponse](t.Context(), connection, "SearchSessions", &SearchSessionsRequest{Query: "producer"})
 		require.Equal(t, codes.Unauthenticated, status.Code(err))
 	})
 
@@ -1964,7 +2111,7 @@ func TestSessionEntries(t *testing.T) {
 
 		var broken int64
 		require.NoError(t, db.QueryRowContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, '{"version":"broken"}', '') RETURNING id`, webID).Scan(&broken))
-		origins, err := invoke[SearchOriginsResponse](ctx, connection, "SearchOrigins", &SearchOriginsRequest{Query: "CRON/SILENT.MD"})
+		origins, err := invoke[SearchSessionsResponse](ctx, connection, "SearchSessions", &SearchSessionsRequest{Query: "CRON/SILENT.MD"})
 		require.NoError(t, err, "origin search reads only the creating entry")
 		require.Len(t, origins.GetMatches(), 1, "the cron run itself stays hidden")
 		require.Equal(t, webID, origins.GetMatches()[0].GetConversationId())
@@ -2972,7 +3119,7 @@ func TestSessionEntries(t *testing.T) {
 		{"History", &HistoryRequest{Id: id}, &HistoryResponse{}},
 		{"ForkSession", &ForkSessionRequest{Id: id}, &ForkSessionResponse{}},
 		{"SearchMessages", &SearchMessagesRequest{Query: "handoff"}, &SearchMessagesResponse{}},
-		{"SearchOrigins", &SearchOriginsRequest{Query: "handoff"}, &SearchOriginsResponse{}},
+		{"SearchSessions", &SearchSessionsRequest{Query: "handoff"}, &SearchSessionsResponse{}},
 		{"Handoff", &HandoffRequest{Id: id}, &HandoffResponse{}},
 		{"UpdateSession", &UpdateSessionRequest{Id: id, Name: new("Retain this name")}, &UpdateSessionResponse{}},
 		{"ListQueue", &ListQueueRequest{Id: id}, &ListQueueResponse{}},

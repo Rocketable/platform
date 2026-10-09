@@ -371,51 +371,66 @@ each side, widened to keep a code block whole; without one it shows the whole
 message. Message search also matches Slack tags by name: `cs-operators` finds
 messages that tag `@cs-operators`, and the tag is highlighted. Message matches
 jump to the recorded user or assistant message, including after a reload;
-name and origin matches open the conversation. Message groups come before
-metadata-only matches, with pinned conversations first within each group.
+other matches open the conversation and are labeled with the field that matched
+(Name, Room, Agent, Session, Origin, or Preview). Conversations with message
+matches come first, pinned conversations first within each group.
 An empty search asks for a query instead of listing conversations. Closing a tab
 removes that search; closing the last returns to the last message visible in any chat, or Home
 if none was seen. Opening Search again starts an empty tab. The address follows the
-selected tab as `/search?q=…&agent=…&room=…`, omitting empty values and adding no
+selected tab as `/search?q=…`, omitting an empty query and adding no
 history entries, so it can be copied and shared. Opening such a URL selects a tab
-with the same query, agent, and room, or saves a new one, so Back from a result
-reuses that tab. `agent:` or `room:` typed inside `q` stays query text rather than
-a filter; use the `agent` and `room` parameters. Cmd/Ctrl+P still opens
+with the same query, or saves a new one, so Back from a result
+reuses that tab. Older links and saved searches with `agent=` or `room=` filters are
+read once as the query `agent:<value> room:<value> <query>`, quoting values that
+contain spaces, and saved searches are rewritten that way. Cmd/Ctrl+P still opens
 the session-search dialog, which lists every conversation. Each dialog opening
 clears text, pills, and result selection and focuses the input.
+
+Matching happens on the server: Cmd/Ctrl+P and the Search page send the typed
+query once typing pauses for 250 ms (the Search page also at least once a second
+while typing), Enter sends it at once, and a newer query cancels the older request.
+Results refresh when conversations appear in the session list. An empty
+Cmd/Ctrl+P lists the session list without a request. Until new results arrive,
+the previous list stays visible, dimmed. Enter in Cmd/Ctrl+P opens the first
+result for the text typed so far, waiting for it if needed; with no result, or
+after a failed search, it does nothing.
 Search matches names, titles, previews, agents, session labels, origin card fields,
-and original MCP metadata keys and values, case-insensitively. Type `agent:` or
-`room:` to choose a removable filter pill by click, arrows, Tab, or Enter.
+and original MCP metadata keys and values, case-insensitively, as one phrase.
+`agent:main` and `room:general` are filters in the query text: exact,
+case-sensitive matches on the agent or on a Slack thread's room; quote values
+with spaces, such as `room:"general chat"`. Typing `agent:` or `room:` suggests
+values; choosing one by click, arrows, Tab, or Enter writes the filter into the
+query and replaces any earlier filter for the same key.
 Suggestion keys take priority over results; Escape dismisses suggestions first,
 then closes the dialog. Both Cmd/Ctrl+P and the Search page accept exact,
 case-sensitive tag filters: `tag:customer`, or `tag:"Needs review"` for a name
 containing spaces. Quoted values use JSON escaping, such as `tag:"say \"hello\""`.
 Repeated filters use AND: `tag:customer tag:triage` requires both tags. Unknown
 tags match nothing. Bare `tag:`, unclosed quotes, and invalid quoted values stay
-ordinary search text. A tag-only query loads no transcript; `tag:customer outage`
-sends only `outage` to transcript search and keeps hits from tagged sessions.
-Agent and room selections preserve tag filters, and saved queries keep their raw
-syntax without a migration. Agent, room, tag, `is:pinned`, and `is:forked`
-filters constrain both row and origin matches. The session-search dialog lists each conversation
+ordinary search text. A filter-only query lists every conversation it keeps;
+`tag:customer outage` keeps message hits only from tagged conversations.
+Filters constrain both row and message matches. The session-search dialog lists each conversation
 once, pinned first, retaining recent-first order within each group.
 `sort:newest` or `sort:oldest` instead orders results by last activity on every
 search surface, overriding pinned-first and message-hit grouping; rows without
 activity come last, equal times order by conversation ID, and the last `sort:` wins.
 Typing `is:` suggests `pinned`, `forked`, and `cron`; typing `sort:` suggests
-`newest` and `oldest`. A trailing unfinished `is:` or `sort:` term (such as `is:pin`)
-is not searched; unknown complete terms such as `is:foo` stay ordinary text.
-The server searches every visible chat's origin in one request, sent once typing
-pauses for 250 ms and only when free text remains: empty input, status tokens, pills,
-and unfinished `agent:`/`room:`/`is:`/`sort:` terms send no origin search. Ordinary
-session-list loading stays independent. Incomplete enumeration or a pending origin search
-shows loading feedback rather than a definitive empty result. The Search page shows
-row matches immediately, adds message matches when the message search returns, adds
-origin matches when the origin search returns, and shows “Still checking chat origins…” until then;
-returning to the tab does not recheck origins. A failed origin search
-shows an error while usable row matches remain selectable.
-Until the server finishes indexing existing chats, the Search page says message
-results may be incomplete instead of reporting “No matches”, and a message hit
-from a stopped or failed turn opens its chat without jumping to a message.
+`newest` and `oldest`. While typing, a last word that is an unfinished filter
+(a bare `tag:`, `cron:`, `agent:`, or `room:`, a partial `is:` or `sort:` term
+such as `is:pin`, or an unclosed quote) is not sent; Enter, opening a saved
+search, and following a link send the whole query. Unknown complete terms such
+as `is:foo` stay ordinary text. Filter pills show the server's reading of the
+query: a filter becomes a pill once it is followed by a space and the results
+for it arrive. The word being typed stays in the input, and removing a pill
+removes exactly that filter. Editing the text never removes a pill or joins
+text to it; a pill inside or right after the edited text moves in front of it.
+A conversation the server finds before the session list has loaded it shows
+loading feedback rather than “No matches”. Until the server finishes indexing
+existing chats, the Search page says message results may be incomplete, and
+until every chat has a summary it says results may be incomplete, instead of
+reporting “No matches”. A message hit from a stopped or failed turn opens its
+chat without jumping to a message. A failed search shows an error: the Search
+page offers Retry, and Cmd/Ctrl+P retries on the next keystroke.
 The command button and Cmd/Ctrl+Shift+P open the command palette. It always offers
 **Sessions: New**, **Sessions: Search**, **Cron: Dashboard**, **Cron: Run**,
 **List Agents**, **List Skills**, and **Settings**.
@@ -584,7 +599,7 @@ messages keeps automatic scrolling paused.
 
 Pin a session with the pin button in the composer or from the command palette.
 Pinned sessions sort first and keep their normal recent-first order within that
-group. Search `is:pinned` to find only pinned sessions; text, agent, and room
+group. Search `is:pinned` to find only pinned sessions; text and other
 filters still apply.
 The session age stays visible beside the agent; hover it for the exact
 last-update date and time in your local time zone.

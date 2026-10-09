@@ -24,92 +24,37 @@ async function* batchesOf(rows: SessionBatch[]) {
   yield* rows;
 }
 
-// Keep the shared UI parser private; browser tests cover its mounted callers.
+// Keep the last-word check private; browser tests cover its mounted callers.
 const source = ts.createSourceFile("ui.tsx", await Bun.file(new URL("./ui.tsx", import.meta.url)).text(), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const functions = source.statements.filter((node) => ts.isFunctionDeclaration(node) && ["slackSession", "sessionLabel", "typedPrefix", "matchesSession", "sessionSearchTerms", "sessionMatchesSearch", "compareSessions"].includes(node.name?.text ?? "")).map((node) => node.getText(source)).join("\n");
-const javascript = new Bun.Transpiler({ loader: "tsx" }).transformSync(`${functions}\nexport { sessionSearchTerms, sessionMatchesSearch, compareSessions };`);
-const { sessionSearchTerms, sessionMatchesSearch, compareSessions } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
+const functions = source.statements.filter((node) => ts.isFunctionDeclaration(node) && node.name?.text === "typingWord").map((node) => node.getText(source)).join("\n");
+const javascript = new Bun.Transpiler({ loader: "tsx" }).transformSync(`${functions}\nexport { typingWord };`);
+const { typingWord } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 
-test("session tag filters are literal AND matches with only valid filters removed from text", () => {
-  const row: Session = { id: "slack-thread:C:one", agent: "main", title: "room", preview: "Outage", pinned: true, forkedFrom: "original", tags: ["customer", "Needs review", 'say "hello"', "is:pinned", "*"] };
-  for (const [query, tags, text, matches] of [
-    ["tag:customer", ["customer"], "", true],
-    ["tag:customer tag:customer is:pinned is:forked outage", ["customer", "customer"], "outage", true],
-    ['tag:"Needs review" tag:"say \\"hello\\""', ["Needs review", 'say "hello"'], "", true],
-    ['tag:"is:pinned"', ["is:pinned"], "", true],
-    ["tag:*", ["*"], "", true],
-    ["tag:Customer", ["Customer"], "", false],
-    ["tag:unknown", ["unknown"], "", false],
-    ["tag:customer tag:internal", ["customer", "internal"], "", false],
-    ["prefix-tag:customer", [], "prefix-tag:customer", false],
-    ["tag:", [], "tag:", false],
-    ['tag:"Needs review', [], 'tag:"Needs review', false],
-    ['tag:"bad\\q"', [], 'tag:"bad\\q"', false],
-    ['tag:""', [], 'tag:""', false],
-    ['tag:"customer"suffix', [], 'tag:"customer"suffix', false],
-  ] as const) {
-    const filters = sessionSearchTerms(query);
-    expect(filters.tags).toEqual(tags);
-    expect(filters.text).toBe(text);
-    expect(!!sessionMatchesSearch(row, filters, "main", "room", "")).toBe(matches);
-  }
-  const filters = sessionSearchTerms("tag:customer");
-  for (const tags of [undefined, [], ["Customer"]]) expect(!!sessionMatchesSearch({ ...row, tags }, filters, "", "", "")).toBe(false);
-  expect(!!sessionMatchesSearch(row, filters, "other", "", "")).toBe(false);
-  expect(!!sessionMatchesSearch(row, filters, "", "other", "")).toBe(false);
-  expect(!!sessionMatchesSearch({ ...row, pinned: false }, sessionSearchTerms("tag:customer is:pinned"), "", "", "")).toBe(false);
-  expect(!!sessionMatchesSearch({ ...row, forkedFrom: undefined }, sessionSearchTerms("tag:customer is:forked"), "", "", "")).toBe(false);
-  expect(sessionSearchTerms('tag:"Needs is:pinned review" agent:ma')).toMatchObject({ pinnedOnly: false, text: "agent:ma", needle: "", filterTerms: ['tag:"Needs is:pinned review"'] });
-});
-
-test("sort: orders rows, and an unfinished operator token is not free text", () => {
-  for (const [query, needle, pinnedOnly, sort] of [
-    ["is:pinned tag:x outage", "outage", true, ""],
-    ["IS:PINNED SORT:OLDEST", "", true, "oldest"],
-    ["sort:oldest sort:newest", "", false, "newest"],
-    ["is:", "", false, ""],
-    ["is:pin", "", false, ""],
-    ["sort:", "", false, ""],
-    ["sort:ne", "", false, ""],
-    ["outage is:pin", "outage", false, ""],
-    ["is:foo", "is:foo", false, ""],
-    ["sort:bogus", "sort:bogus", false, ""],
-  ] as const) expect(sessionSearchTerms(query)).toMatchObject({ needle, pinnedOnly, sort });
-  const rows: Session[] = [{ id: "c" }, { id: "e", updatedAt: "2026-01-02T00:00:00Z" }, { id: "d", updatedAt: "" }, { id: "b", updatedAt: "2026-01-01T00:00:00.5Z", pinned: true }, { id: "a", updatedAt: "2026-01-02T00:00:00Z" }];
-  const order = (sort: string) => rows.toSorted((a, b) => compareSessions(sort, a, b)).map((row) => row.id);
-  expect(order("oldest")).toEqual(["b", "a", "e", "c", "d"]);
-  expect(order("newest")).toEqual(["a", "e", "b", "c", "d"]);
-  expect(order("")).toEqual(["b", "c", "e", "d", "a"]);
-});
-
-test("is:cron filters by recorded origin, not agent or text", () => {
-  const rows: Session[] = [{ id: "slack-thread:C:1", cron: true, cronName: "daily" }, { id: "web:one-off-cron:run", cron: true, cronName: "Weekly report" }, { id: "human", agent: "cron", preview: "cron daily report" }];
-  for (const query of ["is:cron", "IS:CRON"]) {
-    const filters = sessionSearchTerms(query);
-    expect(filters).toMatchObject({ cronOnly: true, needle: "", filterTerms: [query] });
-    expect(rows.filter((row) => sessionMatchesSearch(row, filters, "", "", "")).map((row) => row.id)).toEqual(rows.slice(0, 2).map((row) => row.id));
-  }
-  expect(rows.filter((row) => sessionMatchesSearch(row, sessionSearchTerms(""), "", "", ""))).toEqual(rows);
-  expect(sessionSearchTerms("is:cr")).toMatchObject({ cronOnly: false, needle: "" });
-  expect(sessionMatchesSearch(rows[0], sessionSearchTerms("is:cron is:pinned"), "", "", "")).toBeFalsy();
-  for (const [query, ids, needle] of [
-    ["cron:daily", [rows[0].id], ""],
-    ["is:cron CRON:daily", [rows[0].id], ""],
-    ['cron:"Weekly report"', [rows[1].id], ""],
-    ["cron:dai", [], ""],
-    ["cron:Daily", [], ""],
-    ["cron:unknown", [], ""],
-    ["cron:daily cron:daily", [rows[0].id], ""],
-    ['cron:daily cron:"Weekly report"', [], ""],
-    ["cron:daily report", [], "report"],
-    ["cron:", rows.map((row) => row.id), ""],
-  ] as const) {
-    const filters = sessionSearchTerms(query);
-    expect(filters.needle).toBe(needle);
-    expect(rows.filter((row) => sessionMatchesSearch(row, filters, "", "", "")).map((row) => row.id)).toEqual([...ids]);
-  }
-  expect(sessionSearchTerms('cron:""')).toMatchObject({ cronNames: [], needle: 'cron:""' });
-  expect(sessionSearchTerms('cron:"bad\\q"')).toMatchObject({ cronNames: [], needle: 'cron:"bad\\q"' });
+test("only an unfinished operator as the last word is left out while typing", () => {
+  for (const [query, word, unfinished] of [
+    ["is:", "is:", true],
+    ["is:pin", "is:pin", true],
+    ["IS:PINNE", "IS:PINNE", true],
+    ["sort:", "sort:", true],
+    ["sort:ne", "sort:ne", true],
+    ["outage is:pin", "is:pin", true],
+    ["cron:", "cron:", true],
+    ["outage TAG:", "TAG:", true],
+    ["agent:", "agent:", true],
+    ["room:", "room:", true],
+    ['tag:"Needs rev', 'tag:"Needs rev', true],
+    ['outage room:"general \\"ch', 'room:"general \\"ch', true],
+    ["tag:bug", "tag:bug", false],
+    ["tag:bu", "tag:bu", false],
+    ["agent:ma", "agent:ma", false],
+    ["is:pinned", "is:pinned", false],
+    ["sort:oldest", "sort:oldest", false],
+    ["is:foo", "is:foo", false],
+    ['tag:"Needs review"', 'review"', false],
+    ["tag:bug ", "", false],
+    ["outage", "outage", false],
+    ["", "", false],
+  ] as const) expect(typingWord(query)).toEqual({ word, unfinished });
 });
 
 describe("session list reconciliation", () => {

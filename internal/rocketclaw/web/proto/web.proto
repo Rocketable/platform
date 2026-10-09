@@ -146,13 +146,32 @@ message SearchMessagesResponse {
   repeated string tag_ids = 2;
   bool index_complete = 3;
 }
-message SearchOriginsRequest { string query = 1; }
-message OriginMatch {
-  string conversation_id = 1;
-  // Lowercased origin search text containing the query.
+message SearchSessionsRequest { string query = 1; bool messages = 2; }
+// A filter term; start and end are UTF-16 code-unit offsets in the submitted query.
+message SearchTerm {
+  string key = 1;
   string text = 2;
+  int32 start = 3;
+  int32 end = 4;
 }
-message SearchOriginsResponse { repeated OriginMatch matches = 1; }
+// A found chat and the field (Name, Room, Agent, Session, Origin or Preview)
+// whose text holds the needle; an empty field means only message text did.
+message SessionMatch {
+  string conversation_id = 1;
+  string field = 2;
+  string text = 3;
+}
+message SearchSessionsResponse {
+  repeated SearchTerm terms = 1;
+  // The query without its terms; needle is text lowercased.
+  string text = 2;
+  string needle = 3;
+  repeated SessionMatch matches = 4;
+  repeated MessageMatch messages = 5;
+  repeated string mention_ids = 6;
+  bool index_complete = 7;
+  bool summaries_complete = 8;
+}
 
 // SlackNamesRequest asks for display names of Slack IDs.
 message SlackNamesRequest {
@@ -455,7 +474,7 @@ service Web {
   rpc StageRevert(StageRevertRequest) returns (StageRevertResponse);
   rpc ClearRevert(ClearRevertRequest) returns (ClearRevertResponse);
   rpc SearchMessages(SearchMessagesRequest) returns (SearchMessagesResponse);
-  rpc SearchOrigins(SearchOriginsRequest) returns (SearchOriginsResponse);
+  rpc SearchSessions(SearchSessionsRequest) returns (SearchSessionsResponse);
   rpc SlackNames(SlackNamesRequest) returns (SlackNamesResponse);
   rpc Handoff(HandoffRequest) returns (HandoffResponse);
   rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);

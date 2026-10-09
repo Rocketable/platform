@@ -47,11 +47,12 @@ type threadBridgeManager struct {
 	// wake tells Run that a bridge is waiting for its loop.
 	wake chan struct{}
 
-	mu        sync.Mutex
-	bridges   map[string]directBridge
-	pending   map[string]directBridge
-	stopping  bool
-	cronRoots cronRootSender
+	mu           sync.Mutex
+	bridges      map[string]directBridge
+	pending      map[string]directBridge
+	stopping     bool
+	cronRoots    cronRootSender
+	slackLookups slackLookup
 }
 
 // cronRootSender posts a delivered cron report as a new Slack thread root, then ends
@@ -72,6 +73,24 @@ func (noCronRoots) EditCronjobRootFooter(context.Context, *protocol.OutboundMess
 	return errors.New("slack is not available for cron reports")
 }
 
+// slackLookup gives session search the stored Slack room names and the Slack
+// user and group IDs whose names contain a needle.
+type slackLookup interface {
+	SidebarChannelAgentChoices(context.Context, string) (string, []string, error)
+	SlackTagsMatching(context.Context, string) []string
+}
+
+// noSlackLookups is the Slack lookup before Slack is attached: no room names, no tag IDs.
+type noSlackLookups struct{}
+
+func (noSlackLookups) SidebarChannelAgentChoices(context.Context, string) (name string, choices []string, err error) {
+	return "", nil, nil
+}
+
+func (noSlackLookups) SlackTagsMatching(context.Context, string) []string {
+	return nil
+}
+
 var _ protocol.PrimaryTextRouter = (*threadBridgeManager)(nil)
 
 func newThreadBridgeManager(runtime *config.LockedConfig, store *SessionService, logger *slog.Logger, factory func(Config) directBridge) *threadBridgeManager {
@@ -79,6 +98,7 @@ func newThreadBridgeManager(runtime *config.LockedConfig, store *SessionService,
 		log: logger.With("component", "thread_bridges"), runtime: runtime, store: store, factory: factory,
 		wake:    make(chan struct{}, 1),
 		bridges: map[string]directBridge{}, pending: map[string]directBridge{}, cronRoots: noCronRoots{},
+		slackLookups: noSlackLookups{},
 	}
 }
 

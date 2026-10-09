@@ -10,7 +10,6 @@ import (
 	"os"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
@@ -22,66 +21,6 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
-
-func TestParseCronRun(t *testing.T) {
-	scheduled := "cron:cron/inbox-delta-monitor.md:20260902T030027.554785000Z:GV4ST"
-	run, ok := parseCronRun(scheduled)
-	require.True(t, ok)
-	require.Equal(t, cronScheduled, run.kind)
-	require.Equal(t, "cron/inbox-delta-monitor.md", run.path)
-	require.Equal(t, "inbox-delta-monitor", run.stem)
-	require.Equal(t, "2026-09-02T03:00:27.554785Z", run.at.Format(time.RFC3339Nano))
-
-	oneOff := "one-off-cron:cron/report_daily.md:20260905T020000.000000002Z:second"
-	run, ok = parseCronRun(oneOff)
-	require.True(t, ok)
-	require.Equal(t, cronOneOff, run.kind)
-	require.Equal(t, "report_daily", run.stem)
-
-	_, ok = parseCronRun("slack-thread:C1:1")
-	require.False(t, ok)
-}
-
-func TestOriginJSON(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		origin any
-		want   string
-	}{
-		{"cron", cronOrigin{Kind: originCron, RunKind: cronScheduled}, `{"agent":"","kind":"cron","ranAt":"","runId":"","runKind":"scheduled","sourcePath":"","stem":""}`},
-		{"missing pairs", externalMCPOrigin{Kind: originExternalMCP}, `{"agent":"","externalConversationId":"","kind":"external_mcp","pairs":null}`},
-		{"empty pairs", externalMCPOrigin{Kind: originExternalMCP, Pairs: []originPair{}}, `{"agent":"","externalConversationId":"","kind":"external_mcp","pairs":[]}`},
-		{"caller text", externalMCPOrigin{Kind: originExternalMCP, ExternalConversationID: "id<1>", Pairs: []originPair{{Key: "ticket-id", Value: "<script>"}}}, `{"agent":"","externalConversationId":"id\u003c1\u003e","kind":"external_mcp","pairs":[{"key":"ticket-id","value":"\u003cscript\u003e"}]}`},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := json.Marshal(test.origin)
-			require.NoError(t, err)
-			require.Equal(t, test.want, string(got))
-		})
-	}
-}
-
-func TestCreatingCronLocator(t *testing.T) {
-	run := "one-off-cron:cron/daily.md:20260905T020000.000000002Z:second"
-
-	for _, test := range []struct {
-		name, id, source string
-		createdBy        backend.ThreadCreator
-		want             string
-	}{
-		{"slack thread not created by cron", "slack-thread:C1:1.2", run, "", ""},
-		{"slack thread created by cron", "slack-thread:C1:1.2", run, backend.ThreadCreatedByCron, run},
-		{"web chat opened from cron", "web:" + run, "", "", run},
-		{"web chat created by cron entry", "web-chat", run, "alice", run},
-		{"web chat created by a person", "web-chat", "", "alice", ""},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			locator, ok := creatingCronLocator(test.id, test.createdBy, test.source)
-			require.Equal(t, test.want != "", ok)
-			require.Equal(t, test.want, locator)
-		})
-	}
-}
 
 // The bulk origin facts and History's per-conversation facts must decide the same origins.
 func TestChatOriginFactsMatchHistory(t *testing.T) {
@@ -165,7 +104,7 @@ VALUES ('early-reply', $1, '{}', '[]', 1, 1, 0)`, cronSlack)
 		require.NoError(t, err)
 
 		var raw []byte
-		if origin, _ := decideOrigin(&facts); origin != nil {
+		if origin, _ := backend.DecideOrigin(&facts); origin != nil {
 			raw, err = json.Marshal(origin)
 			require.NoError(t, err)
 
@@ -213,13 +152,15 @@ VALUES ('early-reply', $1, '{}', '[]', 1, 1, 0)`, cronSlack)
 	}
 
 	search := func(ctx context.Context, query string) (map[string]string, error) {
-		response, err := server.searchOrigins(ctx, &SearchOriginsRequest{Query: query})
+		response, err := server.searchSessions(ctx, &SearchSessionsRequest{Query: query})
 		if err != nil {
 			return nil, err
 		}
 
 		matches := make(map[string]string)
+
 		for _, match := range response.GetMatches() {
+			require.Equal(t, "Origin", match.GetField(), query)
 			matches[match.GetConversationId()] = match.GetText()
 		}
 
@@ -231,7 +172,6 @@ VALUES ('early-reply', $1, '{}', '[]', 1, 1, 0)`, cronSlack)
 	}{
 		{" T-1 ", map[string]string{destination: "external mcp external conversation: ext-1 agent: producer ticket=t-1 b=two"}},
 		{"Report-Agent", map[string]string{"web:" + oneOff: "cron source: cron/report.md stem: report run kind: one-off run id: one-off-cron:cron/report.md:20260905t020000.000000002z:second agent: report-agent ran at: 2026-09-05t02:00:00.000000002z"}},
-		{" \t ", map[string]string{}},
 	} {
 		matches, err := search(ctx, test.query)
 		require.NoError(t, err)
@@ -240,7 +180,7 @@ VALUES ('early-reply', $1, '{}', '[]', 1, 1, 0)`, cronSlack)
 
 	matches, err := search(ctx, "CRON-AGENT")
 	require.NoError(t, err)
-	require.ElementsMatch(t, []string{cronSlack, "web:" + scheduled, "web-cron-synced"}, slices.Collect(maps.Keys(matches)))
+	require.ElementsMatch(t, []string{cronSlack, "web-cron-synced"}, slices.Collect(maps.Keys(matches)), "chats without history are not searched")
 
 	_, err = search(t.Context(), "producer")
 	require.Equal(t, codes.Unauthenticated, status.Code(err))

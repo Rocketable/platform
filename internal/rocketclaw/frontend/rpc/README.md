@@ -23,10 +23,9 @@ shown, not on the whole chat. `start` is where the returned entries begin and `m
 exist. A positive `before` reads a settled, unfollowed page of older entries: the
 newest `limit` of them, or every entry from `from` onward. If older history is
 cleared, the next limited read resets. A chat's origin still comes from its first
-entry when that entry is not returned. SearchOrigins applies the same origin rules
-to every chat the caller may see in one database query and returns the chats whose
-lowercased origin text contains the query; cron runs and private External MCP
-conversations never match.
+entry when that entry is not returned. SearchSessions applies the same origin rules
+when it matches the query against every chat the caller may see; cron runs and
+private External MCP conversations never match.
 
 `StageRevert` accepts a visible session ID and an optional recorded user
 `message_id`; omission selects Undo's predecessor from complete effective

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -333,9 +334,9 @@ func TestSessionTagChildAuthority(t *testing.T) {
 
 func TestSessionToolsStoredContract(t *testing.T) {
 	service := newTestSessionService(t)
-	list := listSessionsTool(service)
+	list := listSessionsTool(service, &threadBridgeManager{slackLookups: noSlackLookups{}})
 	get := getSessionTool(service)
-	result, err := list.Call(t.Context(), json.RawMessage(`{"since":"2000-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`), nil)
+	result, err := list.Call(t.Context(), json.RawMessage(`{"criteria":"","since":"2000-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`), nil)
 	require.NoError(t, err)
 	require.Equal(t, "conversation_id\tturns\tlast_updated\tlast_user_message\tlast_assistant_message\n", result.Output)
 
@@ -368,9 +369,12 @@ func TestSessionToolsStoredContract(t *testing.T) {
 		{`{"since":"2026-09-24T14:00:00Z","until":"2026-09-24T12:00:00Z","limit":200,"include_message_preview":true}`, "conversation_id\tturns\tlast_updated\tlast_user_message\tlast_assistant_message\n"},
 		{`{"since":" 2000-01-01T00:00:00Z ","until":" ","limit":200,"include_message_preview":true}`, "conversation_id\tturns\tlast_updated\tlast_user_message\tlast_assistant_message\nexec:last\t1\t2026-09-24T13:00:00Z\texec\tassistant\nexternal_mcp:private\t2\t2026-09-24T11:00:00Z\t  latest\\n user\\tΩ\\r\\\\  \tassistant\ncron:first\t1\t2026-09-24T12:00:00Z\told\tassistant\n"},
 	} {
-		result, err := list.Call(t.Context(), json.RawMessage(tc.input), nil)
-		require.NoError(t, err)
-		require.Equal(t, tc.want, result.Output)
+		// Empty criteria lists every stored conversation, private MCP and cron included.
+		for _, criteria := range []string{`""`, `"   "`} {
+			result, err := list.Call(t.Context(), json.RawMessage(`{"criteria":`+criteria+`,`+tc.input[1:]), nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, result.Output)
+		}
 	}
 
 	// Sprintf keeps dupword's autofix from merging the role and the content "assistant".
@@ -415,7 +419,7 @@ func TestSessionToolsTimePrecisionAndDurations(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	list := listSessionsTool(service)
+	list := listSessionsTool(service, &threadBridgeManager{slackLookups: noSlackLookups{}})
 	for _, tc := range []struct {
 		input string
 		ids   []string
@@ -511,7 +515,7 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 		return values
 	}
 	before := snapshot()
-	list, get := listSessionsTool(service), getSessionTool(service)
+	list, get := listSessionsTool(service, &threadBridgeManager{slackLookups: noSlackLookups{}}), getSessionTool(service)
 	result, err := list.Call(t.Context(), json.RawMessage(`{"since":"1h","until":"","limit":200,"include_message_preview":true}`), nil)
 	require.NoError(t, err)
 
@@ -543,7 +547,7 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 func TestSessionToolsErrors(t *testing.T) {
 	service := newTestSessionService(t)
 
-	list, get := listSessionsTool(service), getSessionTool(service)
+	list, get := listSessionsTool(service, &threadBridgeManager{slackLookups: noSlackLookups{}}), getSessionTool(service)
 	for _, input := range []string{`{`, `[]`, `{"since":"1h","until":"","limit":-1,"include_message_preview":true}`, `{"since":"1h","until":"","limit":0,"include_message_preview":true}`, `{"since":"1h","until":"","limit":201,"include_message_preview":true}`, `{"since":"1h","until":"","limit":"1","include_message_preview":true}`, `{"since":"1h","until":"","limit":1.5,"include_message_preview":true}`, `{"since":true,"until":"","limit":1,"include_message_preview":true}`, `{"since":"1h","until":1,"limit":1,"include_message_preview":true}`, `{"since":"1h","until":"","limit":1,"include_message_preview":"false"}`, `{"since":"yesterday","until":"","limit":1,"include_message_preview":true}`, `{"since":"1h","until":"1h","limit":1,"include_message_preview":true}`, `{"since":"","until":"","limit":1,"include_message_preview":true}`, `{"since":" ","until":"","limit":1,"include_message_preview":true}`} {
 		_, err := list.Call(t.Context(), json.RawMessage(input), nil)
 		require.Error(t, err, input)
@@ -623,6 +627,11 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 
 			requests, approvals, listApprovals := 0, 0, 0
 
+			probe := 7
+			if tc.current && tc.get {
+				probe = 8
+			}
+
 			var outputs []string
 
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -681,13 +690,20 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 					}
 				}
 
+				if requests == probe {
+					// The strict schema stops a call without criteria before the tool runs.
+					writeRawRunFunctionCall(t, w, "missing-criteria", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_list_sessions(since=\"1h\", until=\"\", limit=1, include_message_preview=False)\n"}`))
+
+					return
+				}
+
 				switch requests {
 				case 1:
-					writeRawRunFunctionCall(t, w, "list", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_list_sessions(since=\"1970-01-01T00:00:00Z\", until=\"\", limit=200, include_message_preview=True)\n"}`))
+					writeRawRunFunctionCall(t, w, "list", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_list_sessions(criteria=\"\", since=\"1970-01-01T00:00:00Z\", until=\"\", limit=200, include_message_preview=True)\n"}`))
 				case 2:
 					writeRawRunFunctionCall(t, w, "get", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_get_session(conversation_id=\"external_mcp:private\", limit=100, before_entry_id=0)\n"}`))
 				case 3:
-					writeRawRunFunctionCall(t, w, "direct-list", listSessionsToolName, json.RawMessage(`{"since":"1970-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`))
+					writeRawRunFunctionCall(t, w, "direct-list", listSessionsToolName, json.RawMessage(`{"criteria":"","since":"1970-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`))
 				case 4:
 					writeRawRunFunctionCall(t, w, "direct-get", getSessionToolName, json.RawMessage(`{"conversation_id":"external_mcp:private","limit":100,"before_entry_id":0}`))
 				case 5:
@@ -695,18 +711,14 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 				case 6:
 					writeRawRunFunctionCall(t, w, "direct-current", "rocketclaw_current_session_id", json.RawMessage(`{}`))
 				case 7:
-					if tc.current && tc.get {
-						code, err := json.Marshal(struct {
-							Code string `json:"code"`
-						}{fmt.Sprintf("def main():\n    return rocketclaw_get_session(conversation_id=%q, limit=100, before_entry_id=0)\n", outputs[4])})
-						if !assert.NoError(t, err) {
-							return
-						}
-
-						writeRawRunFunctionCall(t, w, "current-history", "execute", json.RawMessage(code))
-					} else {
-						writeRawRunMessage(t, w, "done", "message", "done")
+					code, err := json.Marshal(struct {
+						Code string `json:"code"`
+					}{fmt.Sprintf("def main():\n    return rocketclaw_get_session(conversation_id=%q, limit=100, before_entry_id=0)\n", outputs[4])})
+					if !assert.NoError(t, err) {
+						return
 					}
+
+					writeRawRunFunctionCall(t, w, "current-history", "execute", json.RawMessage(code))
 				default:
 					writeRawRunMessage(t, w, "done", "message", "done")
 				}
@@ -735,7 +747,7 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 
 			if tc.list {
 				require.True(t, list.Definition.Strict.Value)
-				require.Equal(t, []string{"include_message_preview", "limit", "since", "until"}, list.Definition.Parameters["required"])
+				require.Equal(t, []string{"criteria", "include_message_preview", "limit", "since", "until"}, list.Definition.Parameters["required"])
 			}
 
 			if tc.get {
@@ -758,13 +770,8 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			store := &memoryStore{}
 			require.NoError(t, runtime.Loop(t.Context(), input, history.in(), store.out, make(chan os.Signal)))
 
-			if tc.current && tc.get {
-				require.Equal(t, 8, requests)
-				require.Len(t, outputs, 7)
-			} else {
-				require.Equal(t, 7, requests)
-				require.Len(t, outputs, 6)
-			}
+			require.Equal(t, probe+1, requests)
+			require.Len(t, outputs, probe)
 
 			// Session tools are execute-only: direct calls never reach them.
 			require.Contains(t, outputs[2], "tool not found")
@@ -773,8 +780,11 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 
 			if tc.list {
 				require.Contains(t, outputs[0], "external_mcp:private")
+				require.Contains(t, outputs[probe-1], "invalid arguments")
+				require.Contains(t, outputs[probe-1], "criteria")
 			} else {
 				require.Contains(t, outputs[0], "undefined: rocketclaw_list_sessions")
+				require.Contains(t, outputs[probe-1], "undefined: rocketclaw_list_sessions")
 			}
 
 			if tc.get {
@@ -812,5 +822,145 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			require.Equal(t, tc.get, slices.Contains(saved, getSessionToolName))
 			require.True(t, turnPairBusy(service, "external_mcp:private"))
 		})
+	}
+}
+
+func TestSessionToolsCriteria(t *testing.T) {
+	s, slack := newSessionSearchFixture(t)
+	ctx := t.Context()
+	// The private External MCP chat and the cron producer match, but Web never lists them.
+	for _, id := range []string{searchChatH, searchChatB, searchChatW, "external_mcp:private", "cron:cron/daily.md:20260102T030405.000000000Z:run"} {
+		_, err := s.toggleSessionTag(ctx, id, "billing", []string{"billing"})
+		require.NoError(t, err)
+	}
+
+	list, get := listSessionsTool(s, &threadBridgeManager{slackLookups: slack}), getSessionTool(s)
+	call := func(params *sessionListParams) string {
+		t.Helper()
+
+		raw, err := json.Marshal(params)
+		require.NoError(t, err)
+		result, err := list.Call(ctx, raw, nil)
+		require.NoError(t, err)
+
+		return result.Output
+	}
+
+	const (
+		epoch  = "1970-01-01T00:00:00Z"
+		header = "conversation_id\tturns\tlast_updated\tname\tagent\troom\ttags\tmatched\n"
+		rowH   = "human\t1\t2026-01-06T00:00:00Z\t\tcron\t\tbilling\t\n"
+		rowB   = "slack-thread:C9:2.2\t1\t2026-01-04T00:00:00Z\t\ttwo words\tC9\tbilling\t\n"
+		rowW   = "web-session:quarter\t1\t2026-01-03T00:00:00Z\tsupport\tother\t\tbilling\t\n"
+	)
+
+	for _, tc := range []struct {
+		params sessionListParams
+		want   string
+	}{
+		{sessionListParams{Criteria: "tag:billing", Since: epoch, Limit: 200}, header + rowH + rowB + rowW + "[criteria: terms=tag:billing; text=]\n"},
+		{sessionListParams{Criteria: " tag:billing ", Since: epoch, Limit: 2, IncludeMessagePreview: true}, strings.TrimSuffix(header, "\n") + "\tlast_user_message\tlast_assistant_message\n" +
+			"human\t1\t2026-01-06T00:00:00Z\t\tcron\t\tbilling\t\thuman\tcron daily report\n" +
+			"slack-thread:C9:2.2\t1\t2026-01-04T00:00:00Z\t\ttwo words\tC9\tbilling\t\tping <@U7> on support billing\tplain\n" +
+			"[criteria: terms=tag:billing; text=]\n[truncated: 1 more matching sessions]\n"},
+		{sessionListParams{Criteria: "tag:billing sort:oldest", Since: epoch, Limit: 2}, header + rowW + rowB + "[criteria: terms=tag:billing,sort:oldest; text=]\n[truncated: 1 more matching sessions]\n"},
+		{sessionListParams{Criteria: "tag:billing", Since: "2026-01-04T00:00:00Z", Until: "2026-01-06T00:00:00Z", Limit: 200}, header + rowB + "[criteria: terms=tag:billing; text=]\n"},
+		{sessionListParams{Criteria: "status:open tag:billing", Since: epoch, Limit: 200}, header + "[criteria: terms=tag:billing; text=status:open]\n"},
+		// Newest first, even though the sidebar puts the pinned chat first.
+		{sessionListParams{Criteria: "agent:main", Since: epoch, Limit: 2}, header + "mcp-dest\t1\t2026-01-07T00:00:00Z\t\tmain\t\t\t\n" +
+			"slack-thread:C1:1.1\t1\t2026-01-05T00:00:00Z\t\tmain\tsupport\t*,Needs review,customer,is:pinned,say \"hello\"\t\n" +
+			"[criteria: terms=agent:main; text=]\n[truncated: 2 more matching sessions]\n"},
+	} {
+		require.Equal(t, tc.want, call(&tc.params), tc.params.Criteria)
+	}
+
+	// Free text also matches message text. A stopped turn's hit has no message ID, so it is left out.
+	seedActiveTurn(t, s, searchChatW, "stopped-turn", testReplayEntry(`{"type":"message","role":"user","content":"billing stopped"}`))
+	endTestTurn(t, s, searchChatW, "stopped-turn", protocol.TerminalStopped)
+
+	more := testReplayEntry(`{"type":"message","role":"user","content":"billing two"}`, `{"type":"message","role":"assistant","content":`+jsonString("billing three\t"+strings.Repeat("ω", 400))+`}`, `{"type":"message","role":"user","content":"billing four"}`)
+	more.Timestamp = time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+	second, err := s.AppendEntryID(ctx, searchChatW, more)
+	require.NoError(t, err)
+
+	var firstB, firstW int64
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT min(id) FILTER (WHERE conversation_id = $1), min(id) FILTER (WHERE conversation_id = $2) FROM session_entries`, searchChatB, searchChatW).Scan(&firstB, &firstW))
+
+	// The fixture's Delegation History also holds billing, but is never listed.
+	output := call(&sessionListParams{Criteria: "billing", Since: epoch, Limit: 200})
+	require.Equal(t, header+
+		"slack-thread:C9:2.2\t1\t2026-01-04T00:00:00Z\t\ttwo words\tC9\tbilling\tmessages\n"+
+		"web-session:quarter\t2\t2026-01-03T00:00:00Z\tsupport\tother\t\tbilling\tmessages\n"+
+		"\nmessages\nconversation_id\tmessage_id\tbefore_entry_id\trole\ttext\n"+
+		fmt.Sprintf("slack-thread:C9:2.2\t%d:0\t%d\tuser\tping <@U7> on support billing\n", firstB, firstB+1)+
+		fmt.Sprintf("web-session:quarter\t%d:0\t%d\tuser\tbilling question\n", firstW, firstW+1)+
+		fmt.Sprintf("web-session:quarter\t%d:0\t%d\tuser\tbilling two\n", second, second+1)+
+		fmt.Sprintf("web-session:quarter\t%d:1\t%d\tassistant\tbilling three\\t%s\n", second, second+1, strings.Repeat("ω", 286))+
+		"[criteria: terms=; text=billing]\n", output)
+
+	require.Equal(t, header+
+		"slack-thread:C9:2.2\t1\t2026-01-04T00:00:00Z\t\ttwo words\tC9\tbilling\tmessages\n"+
+		"\nmessages\nconversation_id\tmessage_id\tbefore_entry_id\trole\ttext\n"+
+		fmt.Sprintf("slack-thread:C9:2.2\t%d:0\t%d\tuser\tping <@U7> on support billing\n", firstB, firstB+1)+
+		"[criteria: terms=; text=billing]\n[truncated: 1 more matching sessions]\n",
+		call(&sessionListParams{Criteria: "billing", Since: epoch, Limit: 1}), "a chat cut by the limit prints no messages")
+
+	// Each printed before_entry_id opens a page whose last entry holds the message.
+	_, block, _ := strings.Cut(output, "\nmessages\n")
+	for _, row := range strings.Split(strings.TrimSuffix(block, "\n"), "\n")[1:5] {
+		fields := strings.Split(row, "\t")
+		result, err := get.Call(ctx, json.RawMessage(fmt.Sprintf(`{"conversation_id":%q,"limit":1,"before_entry_id":%s}`, fields[0], fields[2])), nil)
+		require.NoError(t, err)
+		require.Contains(t, result.Output, "\t"+fields[3]+"\t"+fields[4], row)
+	}
+
+	// The window and the last_updated column use the summary time, not a later entry the summary missed.
+	insertSessionEntryWithoutSummary(t, s, searchChatW, testSessionEntryAt(time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC), "late"))
+	require.Equal(t, header+rowH+rowB+"[criteria: terms=tag:billing; text=]\n", call(&sessionListParams{Criteria: "tag:billing", Since: "2026-01-04T00:00:00Z", Limit: 200}))
+	require.Equal(t, header+rowH+rowB+strings.Replace(rowW, "\t1\t", "\t3\t", 1)+"[criteria: terms=tag:billing; text=]\n", call(&sessionListParams{Criteria: "tag:billing", Since: epoch, Limit: 200}))
+
+	unindexMessageSearch(t, s)
+	require.NoError(t, s.UpsertThread("missing", ThreadState{Agent: "main"}))
+	insertSessionEntryWithoutSummary(t, s, "missing", testSessionEntry("old", "answer"))
+	_, err = s.db.ExecContext(ctx, `DELETE FROM session_summaries WHERE conversation_id = 'missing'`)
+	require.NoError(t, err)
+	require.Equal(t, header+"[criteria: terms=; text=missing]\n[message index incomplete]\n[session summaries incomplete]\n", call(&sessionListParams{Criteria: "missing", Since: epoch, Limit: 200}), "a chat without a summary is never listed")
+}
+
+// The tool returns the chats SearchSessions finds, so it lists what /search shows.
+func TestSessionToolsCriteriaParity(t *testing.T) {
+	s, slack := newSessionSearchFixture(t)
+	list := listSessionsTool(s, &threadBridgeManager{slackLookups: slack})
+
+	for _, query := range []string{"tag:customer", "outage", "outage tag:", "billing", "support sort:oldest", "is:cron", "is:pinned is:forked", "agent:main", "room:support", "room:C9", "cron:daily", "t-1", "ada", "status:open"} {
+		search, err := s.SearchSessions(t.Context(), query, true, slack)
+		require.NoError(t, err)
+
+		want := make([]string, 0, len(search.Matches))
+		for i := range search.Matches {
+			want = append(want, search.Matches[i].Chat.Session.Conversation.ID)
+		}
+
+		result, err := list.Call(t.Context(), json.RawMessage(fmt.Sprintf(`{"criteria":%q,"since":"1970-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":false}`, query)), nil)
+		require.NoError(t, err)
+
+		got := []string{}
+
+		for _, row := range strings.Split(result.Output, "\n")[1:] {
+			if row == "" || strings.HasPrefix(row, "[") {
+				break
+			}
+
+			id, _, _ := strings.Cut(row, "\t")
+			got = append(got, id)
+		}
+
+		if strings.Contains(query, "sort:") {
+			require.Equal(t, want, got, query)
+		}
+
+		slices.Sort(want)
+		slices.Sort(got)
+		require.Equal(t, want, got, query)
 	}
 }

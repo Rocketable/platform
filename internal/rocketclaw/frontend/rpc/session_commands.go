@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -116,15 +116,80 @@ func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequ
 		return response, nil
 	}
 
-	// All authenticated Web callers share the same humanConversation visibility set.
+	found, err := s.sharedSearch(ctx, needle, func(scanCtx context.Context) (any, error) {
+		hits, mentions, complete, err := s.sessions.SearchMessagesMentioning(scanCtx, needle, s.channels)
+		if err != nil {
+			return nil, fmt.Errorf("web message search: %w", err)
+		}
+
+		response.Matches = messageMatches(hits)
+		response.TagIds = backend.MentionedIDs(hits, mentions)
+		response.IndexComplete = complete
+
+		return response, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return found.(*SearchMessagesResponse), nil
+}
+
+func (s *Server) searchSessions(ctx context.Context, request *SearchSessionsRequest) (*SearchSessionsResponse, error) {
+	if _, _, err := s.principal(ctx); err != nil {
+		return nil, err
+	}
+
+	// Leading whitespace moves term offsets, so only trailing whitespace is dropped.
+	query := strings.TrimRightFunc(request.Query, unicode.IsSpace)
+
+	// A leading space keeps this key apart from SearchMessages' trimmed needles.
+	found, err := s.sharedSearch(ctx, fmt.Sprintf(" %t %s", request.Messages, query), func(scanCtx context.Context) (any, error) {
+		search, err := s.sessions.SearchSessions(scanCtx, query, request.Messages, s.channels)
+		if err != nil {
+			return nil, fmt.Errorf("web session search: %w", err)
+		}
+
+		response := &SearchSessionsResponse{Text: search.Text, Needle: search.Needle, Messages: messageMatches(search.Hits), MentionIds: search.MentionIDs, IndexComplete: search.IndexComplete, SummariesComplete: search.SummariesComplete}
+		for _, term := range search.Terms {
+			response.Terms = append(response.Terms, &SearchTerm{Key: string(term.Key), Text: term.Text, Start: int32(term.Start), End: int32(term.End)})
+		}
+
+		for i := range search.Matches {
+			match := &search.Matches[i]
+			response.Matches = append(response.Matches, &SessionMatch{ConversationId: match.Chat.Session.Conversation.ID, Field: string(match.Field), Text: match.Text})
+		}
+
+		return response, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return found.(*SearchSessionsResponse), nil
+}
+
+func messageMatches(hits []backend.MessageSearchHit) []*MessageMatch {
+	matches := make([]*MessageMatch, 0, len(hits))
+	for _, hit := range hits {
+		matches = append(matches, &MessageMatch{ConversationId: hit.ConversationID, Message: &TranscriptEvent{Role: hit.Role, Text: hit.Text, MessageId: hit.MessageID}})
+	}
+
+	return matches
+}
+
+// sharedSearch runs search once for the callers waiting on key and stops it only
+// when all of them stop waiting. All authenticated Web callers share the same
+// humanConversation visibility set.
+func (s *Server) sharedSearch(ctx context.Context, key string, search func(context.Context) (any, error)) (any, error) {
 	s.searchMu.Lock()
 	scanCtx := ctx
 
-	flight := s.searches[needle]
+	flight := s.searches[key]
 	if flight != nil {
 		select {
 		case <-flight.done:
-			s.searchGroup.Forget(needle)
+			s.searchGroup.Forget(key)
 
 			flight = nil
 		default:
@@ -136,50 +201,19 @@ func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequ
 
 		scanCtx, cancel = context.WithCancel(context.WithoutCancel(ctx))
 
-		flight = &messageSearchFlight{cancel: cancel, done: make(chan struct{})}
+		flight = &searchFlight{cancel: cancel, done: make(chan struct{})}
 		if s.searches == nil {
-			s.searches = make(map[string]*messageSearchFlight)
+			s.searches = make(map[string]*searchFlight)
 		}
 
-		s.searches[needle] = flight
+		s.searches[key] = flight
 	}
 
 	flight.waiters++
-	result := s.searchGroup.DoChan(needle, func() (any, error) {
+	result := s.searchGroup.DoChan(key, func() (any, error) {
 		defer close(flight.done)
 
-		prefixes := make(map[string]string)
-		for _, id := range s.channels.SlackTagsMatching(scanCtx, needle) {
-			prefixes[id] = "<@" + strings.ToLower(id)
-			if strings.HasPrefix(id, "S") {
-				prefixes[id] = "<!subteam^" + strings.ToLower(id)
-			}
-		}
-
-		hits, complete, err := s.sessions.SearchMessages(scanCtx, needle, slices.Collect(maps.Values(prefixes)))
-		if err != nil {
-			return nil, fmt.Errorf("web message search: %w", err)
-		}
-
-		seen := map[string]struct{}{}
-
-		for _, hit := range hits {
-			if len(prefixes) > 0 {
-				text := strings.ToLower(hit.Text)
-				for id, prefix := range prefixes {
-					if strings.Contains(text, prefix) {
-						seen[id] = struct{}{}
-					}
-				}
-			}
-
-			response.Matches = append(response.Matches, &MessageMatch{ConversationId: hit.ConversationID, Message: &TranscriptEvent{Role: hit.Role, Text: hit.Text, MessageId: hit.MessageID}})
-		}
-
-		response.TagIds = slices.Sorted(maps.Keys(seen))
-		response.IndexComplete = complete
-
-		return response, nil
+		return search(scanCtx)
 	})
 	s.searchMu.Unlock()
 
@@ -189,22 +223,22 @@ func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequ
 
 		flight.waiters--
 		if flight.waiters == 0 {
-			if s.searches[needle] == flight {
-				delete(s.searches, needle)
-				s.searchGroup.Forget(needle)
+			if s.searches[key] == flight {
+				delete(s.searches, key)
+				s.searchGroup.Forget(key)
 			}
 
 			flight.cancel()
 		}
 		s.searchMu.Unlock()
 
-		return nil, fmt.Errorf("wait for message search: %w", ctx.Err())
+		return nil, fmt.Errorf("wait for search: %w", ctx.Err())
 	case outcome := <-result:
 		s.searchMu.Lock()
 
 		flight.waiters--
-		if s.searches[needle] == flight {
-			delete(s.searches, needle)
+		if s.searches[key] == flight {
+			delete(s.searches, key)
 		}
 
 		if flight.waiters == 0 {
@@ -212,11 +246,7 @@ func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequ
 		}
 		s.searchMu.Unlock()
 
-		if outcome.Err != nil {
-			return nil, outcome.Err
-		}
-
-		return outcome.Val.(*SearchMessagesResponse), nil
+		return outcome.Val, outcome.Err
 	}
 }
 
@@ -226,32 +256,6 @@ func (s *Server) slackNames(ctx context.Context, request *SlackNamesRequest) (*S
 	}
 
 	return &SlackNamesResponse{Names: s.channels.SlackNames(ctx, request.GetIds())}, nil
-}
-
-// searchOrigins reads every visible conversation's origin facts in one query.
-func (s *Server) searchOrigins(ctx context.Context, request *SearchOriginsRequest) (*SearchOriginsResponse, error) {
-	if _, _, err := s.principal(ctx); err != nil {
-		return nil, err
-	}
-
-	response := &SearchOriginsResponse{}
-
-	needle := strings.ToLower(strings.TrimSpace(request.GetQuery()))
-	if needle == "" {
-		return response, nil
-	}
-
-	for facts, err := range s.sessions.ChatOriginFacts(ctx, "") {
-		if err != nil {
-			return nil, err
-		}
-
-		if _, text := decideOrigin(&facts); strings.Contains(text, needle) { // No origin has empty text.
-			response.Matches = append(response.Matches, &OriginMatch{ConversationId: facts.ConversationID, Text: text})
-		}
-	}
-
-	return response, nil
 }
 
 func (s *Server) handoff(ctx context.Context, request *HandoffRequest) (*HandoffResponse, error) {
