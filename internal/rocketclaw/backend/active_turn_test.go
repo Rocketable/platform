@@ -393,17 +393,22 @@ func newCronTestManager(t *testing.T, service *SessionService) (manager *threadB
 	cfg = &config.Config{Workspace: t.TempDir(), Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"channel-agent"}}}}}
 	roots, finals = make(chan *protocol.OutboundMessage, 4), make(chan *protocol.OutboundMessage, 4)
 	manager, _ = newTestBridgeManager(t, config.NewLockedConfig(cfg), service, finals)
-	manager.cronRoots = &slackFrontendMock{
+	manager.cronRoots = newCronRoots(func(message *protocol.OutboundMessage) { roots <- message })
+
+	return manager, cfg, roots, finals
+}
+
+// newCronRoots posts every cron root as C1 1.2, reports each to sent, and accepts footer edits.
+func newCronRoots(sent func(*protocol.OutboundMessage)) *slackFrontendMock {
+	return &slackFrontendMock{
 		SendCronjobRootFunc: func(_ context.Context, message *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
-			roots <- message
+			sent(message)
 			return protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, nil
 		},
 		EditCronjobRootFooterFunc: func(context.Context, *protocol.OutboundMessage, protocol.TextConversationTarget, string) error {
 			return nil
 		},
 	}
-
-	return manager, cfg, roots, finals
 }
 
 func seedCronRun(t *testing.T, service *SessionService, runID string) *protocol.InboundMessage {
@@ -1793,14 +1798,7 @@ func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
 	report := protocol.SlackThreadConversationID("C1", "1.2")
 
 	first.mu.Lock()
-	first.cronRoots = &slackFrontendMock{
-		SendCronjobRootFunc: func(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
-			return protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, nil
-		},
-		EditCronjobRootFooterFunc: func(context.Context, *protocol.OutboundMessage, protocol.TextConversationTarget, string) error {
-			return nil
-		},
-	}
+	first.cronRoots = newCronRoots(func(*protocol.OutboundMessage) {})
 	first.mu.Unlock()
 
 	msg := seedCronRun(t, nt.service, "cron:nightly")

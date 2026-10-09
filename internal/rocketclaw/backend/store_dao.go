@@ -291,7 +291,7 @@ func originPairsJSON(metadata map[string]string) []byte {
 }
 
 func (d stateDAO) goal(ctx context.Context, conversationID string) (GoalState, bool, error) {
-	_, goal, err := scanGoal(d.db.QueryRowContext(ctx, `SELECT conversation_id, objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns FROM conversation_goals WHERE conversation_id = $1`, strings.TrimSpace(conversationID)))
+	_, goal, err := scanGoal(d.db.QueryRowContext(ctx, `SELECT conversation_id, objective, check_script, max_turns, turns_used, status, note, created_at_unix_ns, updated_at_unix_ns FROM conversation_goals WHERE conversation_id = $1`, strings.TrimSpace(conversationID)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return GoalState{}, false, nil
 	}
@@ -303,23 +303,13 @@ func (d stateDAO) goal(ctx context.Context, conversationID string) (GoalState, b
 	return goal, true, nil
 }
 
-// ActiveGoals returns persisted active goals keyed by conversation ID.
-func (s *SessionService) ActiveGoals() (map[string]GoalState, error) {
-	goals, err := queryMap(context.Background(), s.db, `SELECT conversation_id, objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns FROM conversation_goals WHERE status = '' OR status = $1 ORDER BY conversation_id`, "active goals", scanGoal, GoalStatusActive)
-	if err != nil || len(goals) == 0 {
-		return nil, err
-	}
-
-	return goals, nil
-}
-
 func scanGoal(scanner rowScanner) (string, GoalState, error) {
 	var (
 		conversationID       string
 		goal                 GoalState
 		createdAt, updatedAt int64
 	)
-	if err := scanner.Scan(&conversationID, &goal.Objective, &goal.CheckScript, &goal.MaxTurns, &goal.TurnsUsed, &goal.Status, &goal.Note, &goal.SlackRecipientTeamID, &goal.SlackRecipientUserID, &createdAt, &updatedAt); err != nil {
+	if err := scanner.Scan(&conversationID, &goal.Objective, &goal.CheckScript, &goal.MaxTurns, &goal.TurnsUsed, &goal.Status, &goal.Note, &createdAt, &updatedAt); err != nil {
 		return "", GoalState{}, fmt.Errorf("scan goal: %w", err)
 	}
 

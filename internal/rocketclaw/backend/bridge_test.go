@@ -424,7 +424,7 @@ Prompt
 
 func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
 	bridge := newGoalAccountingTestBridge(t)
-	require.NoError(t, beginGoalDB(t.Context(), bridge.config.SessionService.db, "thread-1", &GoalState{Objective: "ship it", MaxTurns: 3, SlackRecipientTeamID: "T123", SlackRecipientUserID: "U456"}))
+	require.NoError(t, beginGoalDB(t.Context(), bridge.config.SessionService.db, "thread-1", &GoalState{Objective: "ship it", MaxTurns: 3}))
 
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "ship it", false)
 	msg.GoalAction = protocol.GoalActionKickoff
@@ -438,7 +438,7 @@ func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
 	require.Len(t, bridge.requestCh, 1)
 	continuation := (<-bridge.requestCh).inbound
 	assert.Equal(t, protocol.GoalActionContinue, continuation.GoalAction)
-	assert.Equal(t, &protocol.SlackReplyTarget{RecipientTeamID: "T123", RecipientUserID: "U456"}, continuation.SlackReply)
+	assert.Equal(t, &protocol.SlackReplyTarget{}, continuation.SlackReply)
 
 	msg = protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "continue", false)
 	msg.GoalAction = protocol.GoalActionContinue
@@ -452,24 +452,19 @@ func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
 
 func TestFinishGoalTurnHumanResteeringDoesNotConsumeBudget(t *testing.T) {
 	bridge := newGoalAccountingTestBridge(t)
-	require.NoError(t, beginGoalDB(t.Context(), bridge.config.SessionService.db, "thread-1", &GoalState{Objective: "ship it", MaxTurns: 3, SlackRecipientTeamID: "starter-team", SlackRecipientUserID: "starter-user"}))
+	require.NoError(t, beginGoalDB(t.Context(), bridge.config.SessionService.db, "thread-1", &GoalState{Objective: "ship it", MaxTurns: 3}))
 
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "try this angle", false)
 	msg.ConversationID = "thread-1"
-	msg.SlackReply = &protocol.SlackReplyTarget{RecipientTeamID: "resteer-team", RecipientUserID: "resteer-user"}
 	finishTestGoalTurn(t, bridge, msg)
 
 	goal, ok, err := bridge.config.SessionService.Goal("thread-1")
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, 0, goal.TurnsUsed)
-	assert.Equal(t, "starter-team", goal.SlackRecipientTeamID)
-	assert.Equal(t, "starter-user", goal.SlackRecipientUserID)
 	require.Len(t, bridge.requestCh, 1)
 	continuation := (<-bridge.requestCh).inbound
 	assert.Equal(t, protocol.GoalActionContinue, continuation.GoalAction)
-	assert.Equal(t, "starter-team", continuation.SlackReply.RecipientTeamID)
-	assert.Equal(t, "starter-user", continuation.SlackReply.RecipientUserID)
 }
 
 func TestGoalSteeringPromptRequiresProgressSummaryAndNote(t *testing.T) {
@@ -4252,7 +4247,7 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "hello", true)
 	inbound.ConversationID = "thread-1"
-	inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.1", RecipientTeamID: "T123", RecipientUserID: "U456"}
+	inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.1"}
 	assert.False(t, bridge.newOutboundMessage(inbound, "turn-1", "reply", false).GoalTurn)
 
 	require.NoError(t, store.BeginGoal("thread-1", "ship it", "", 3))
@@ -4314,7 +4309,7 @@ func TestWorkflowFinalOutboundPreservesMetadata(t *testing.T) {
 	bridge := &Bridge{config: Config{ConversationID: "thread-1", ExternalConversationID: "public-1", Agent: "main", SessionService: store}}
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow audit", true)
 	inbound.Workflow = protocol.WorkflowInvocation{Name: "audit"}
-	inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.1", RecipientTeamID: "T123", RecipientUserID: "U456"}
+	inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.1"}
 
 	outbound := bridge.newOutboundMessage(inbound, "turn-1", "finished", true)
 	assert.Equal(t, "thread-1", outbound.ConversationID)
@@ -4916,14 +4911,7 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 		report := protocol.SlackThreadConversationID("C1", "1.2")
 
 		manager.mu.Lock()
-		manager.cronRoots = &slackFrontendMock{
-			SendCronjobRootFunc: func(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
-				return protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, nil
-			},
-			EditCronjobRootFooterFunc: func(context.Context, *protocol.OutboundMessage, protocol.TextConversationTarget, string) error {
-				return nil
-			},
-		}
+		manager.cronRoots = newCronRoots(func(*protocol.OutboundMessage) {})
 		manager.mu.Unlock()
 
 		// The run started a background job, then posted "Report started" as a new thread root.
@@ -4961,15 +4949,7 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 		roots := make(chan struct{}, 4)
 
 		manager.mu.Lock()
-		manager.cronRoots = &slackFrontendMock{
-			SendCronjobRootFunc: func(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
-				roots <- struct{}{}
-				return protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, nil
-			},
-			EditCronjobRootFooterFunc: func(context.Context, *protocol.OutboundMessage, protocol.TextConversationTarget, string) error {
-				return nil
-			},
-		}
+		manager.cronRoots = newCronRoots(func(*protocol.OutboundMessage) { roots <- struct{}{} })
 		manager.mu.Unlock()
 
 		msg := seedCronRun(t, nt.service, "cron:daily")

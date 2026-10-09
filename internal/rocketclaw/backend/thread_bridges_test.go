@@ -295,7 +295,7 @@ func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "planner"}))
-	require.NoError(t, beginGoalDB(t.Context(), store.db, conversationID, &GoalState{Objective: "ship it", MaxTurns: 5, SlackRecipientTeamID: "T123", SlackRecipientUserID: "U456"}))
+	require.NoError(t, beginGoalDB(t.Context(), store.db, conversationID, &GoalState{Objective: "ship it", MaxTurns: 5}))
 
 	bridge := newDirectBridgeMock()
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
@@ -310,7 +310,7 @@ func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
 	assert.Equal(t, protocol.GoalActionContinue, submittedMessages(bridge)[0].GoalAction)
 	assert.Equal(t, "Continue the active goal loop.", submittedMessages(bridge)[0].Text)
 	assert.Equal(t, conversationID, submittedMessages(bridge)[0].ConversationID)
-	assert.Equal(t, &protocol.SlackReplyTarget{RecipientTeamID: "T123", RecipientUserID: "U456"}, submittedMessages(bridge)[0].SlackReply)
+	assert.Equal(t, &protocol.SlackReplyTarget{}, submittedMessages(bridge)[0].SlackReply)
 }
 
 // A resumed turn continues its goal itself when it finishes; a startup kick would double it.

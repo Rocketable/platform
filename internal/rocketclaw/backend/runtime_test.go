@@ -1056,7 +1056,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 	content := protocol.InboundContent{Text: "$skill stop \"typed args\"  Next", TextAttachments: []string{"acquired text file", "acquired forwarded thread"}, Attachments: []protocol.InboundAttachment{{Name: "original.png", MIMEType: "image/png", Data: []byte("original")}}}
 	queued := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindEnqueue, &content, true)
 	queued.Metadata[protocol.InboundPrincipalMetadataKey] = "original author"
-	queued.SlackReply = &protocol.SlackReplyTarget{ChannelID: target.ChannelID, ThreadTS: target.ThreadID, MessageTS: "promoted", RecipientTeamID: "T1", RecipientUserID: "U1"}
+	queued.SlackReply = &protocol.SlackReplyTarget{ChannelID: target.ChannelID, ThreadTS: target.ThreadID, MessageTS: "promoted"}
 	require.NoError(t, manager.stashQueueItem(t.Context(), conversationID, &protocol.ThreadQueueItem{ID: "q1", Message: content.Text, Content: content, Source: queued.Source, SlackReply: queued.SlackReply, Principal: "original author", SlackChannel: target.ChannelID, SlackTS: "promoted"}))
 
 	var (
