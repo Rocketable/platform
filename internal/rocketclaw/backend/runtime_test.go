@@ -1414,10 +1414,17 @@ func TestAttachSlack(t *testing.T) {
 	})
 	runTestManager(t, manager)
 
+	room, choices, err := manager.slackLookups.SidebarChannelAgentChoices(t.Context(), "C1")
+	require.NoError(t, err)
+	require.Empty(t, room)
+	require.Empty(t, choices)
+	require.Empty(t, manager.slackLookups.SlackTagsMatching(t.Context(), "alan"))
+
 	slack := new(slackFrontendMock)
 	rt := &Runtime{threads: manager}
 	rt.AttachSlack(slack)
 	require.Same(t, slack, manager.cronRoots)
+	require.Same(t, slack, manager.slackLookups)
 }
 
 // The turn learns, after the calls' background results, which of its calls moved.

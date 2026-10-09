@@ -24,7 +24,7 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
     }
-    const input = await request.json().catch(() => ({})) as { id: string; text: string; name: string };
+    const input = await request.json().catch(() => ({})) as { id: string; text: string; name: string; query: string };
     if (url.pathname === "/api/UpdateSession") sessions.find((row) => row.id === input.id)!.name = input.name;
     switch (url.pathname) {
       case "/api/Identity": return Response.json({ username: "tester" });
@@ -34,7 +34,8 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
       case "/api/History": return Response.json({ messages: [], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
       case "/api/CreateSession": return Response.json({ id: "fresh" });
       case "/api/Prompt": prompts.push(input); return Response.json({ privateText: "" });
-      case "/api/SearchMessages": case "/api/SearchOrigins": return Response.json({ matches: [] });
+      // Fixed fixture: searching a row's exact name returns that row.
+      case "/api/SearchSessions": return Response.json({ terms: [], text: input.query, needle: input.query.toLowerCase(), matches: rows.filter((row) => row.name === input.query).map((row) => ({ conversationId: row.id, field: "Name", text: row.name })), messages: [], mentionIds: [], indexComplete: true, summariesComplete: true });
       default: return Response.json({});
     }
   } });

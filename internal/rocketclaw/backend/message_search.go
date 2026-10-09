@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	harness "github.com/Rocketable/platform/internal/rocketcode"
@@ -203,6 +205,41 @@ func (s *SessionService) SearchMessages(ctx context.Context, needle string, tagP
 	}
 
 	return hits, complete, nil
+}
+
+// SearchMessagesMentioning is SearchMessages for needle and the mentions of the
+// Slack users and groups slack finds for it; mentions maps their IDs to the
+// lowercased mention prefixes.
+func (s *SessionService) SearchMessagesMentioning(ctx context.Context, needle string, slack slackLookup) (hits []MessageSearchHit, mentions map[string]string, complete bool, err error) {
+	mentions = make(map[string]string)
+
+	for _, id := range slack.SlackTagsMatching(ctx, needle) {
+		mentions[id] = "<@" + strings.ToLower(id)
+		if strings.HasPrefix(id, "S") {
+			mentions[id] = "<!subteam^" + strings.ToLower(id)
+		}
+	}
+
+	hits, complete, err = s.SearchMessages(ctx, needle, slices.Collect(maps.Values(mentions)))
+
+	return hits, mentions, complete, err
+}
+
+// MentionedIDs returns, sorted, the IDs of mentions whose prefix a hit's
+// lowercased text holds.
+func MentionedIDs(hits []MessageSearchHit, mentions map[string]string) []string {
+	seen := make(map[string]struct{}, len(mentions))
+
+	for _, hit := range hits {
+		text := strings.ToLower(hit.Text)
+		for id, prefix := range mentions {
+			if strings.Contains(text, prefix) {
+				seen[id] = struct{}{}
+			}
+		}
+	}
+
+	return slices.Sorted(maps.Keys(seen))
 }
 
 func (s *SessionService) backfillMessageSearch(ctx context.Context) error {

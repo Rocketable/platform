@@ -27,6 +27,12 @@ var _ SlackFrontend = &slackFrontendMock{}
 //			SendCronjobRootFunc: func(context1 context.Context, outboundMessage *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
 //				panic("mock out the SendCronjobRoot method")
 //			},
+//			SidebarChannelAgentChoicesFunc: func(context1 context.Context, s string) (string, []string, error) {
+//				panic("mock out the SidebarChannelAgentChoices method")
+//			},
+//			SlackTagsMatchingFunc: func(context1 context.Context, s string) []string {
+//				panic("mock out the SlackTagsMatching method")
+//			},
 //			StartFunc: func(context1 context.Context) error {
 //				panic("mock out the Start method")
 //			},
@@ -45,6 +51,12 @@ type slackFrontendMock struct {
 
 	// SendCronjobRootFunc mocks the SendCronjobRoot method.
 	SendCronjobRootFunc func(context1 context.Context, outboundMessage *protocol.OutboundMessage) (protocol.TextConversationTarget, error)
+
+	// SidebarChannelAgentChoicesFunc mocks the SidebarChannelAgentChoices method.
+	SidebarChannelAgentChoicesFunc func(context1 context.Context, s string) (string, []string, error)
+
+	// SlackTagsMatchingFunc mocks the SlackTagsMatching method.
+	SlackTagsMatchingFunc func(context1 context.Context, s string) []string
 
 	// StartFunc mocks the Start method.
 	StartFunc func(context1 context.Context) error
@@ -72,6 +84,20 @@ type slackFrontendMock struct {
 			// OutboundMessage is the outboundMessage argument value.
 			OutboundMessage *protocol.OutboundMessage
 		}
+		// SidebarChannelAgentChoices holds details about calls to the SidebarChannelAgentChoices method.
+		SidebarChannelAgentChoices []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+		}
+		// SlackTagsMatching holds details about calls to the SlackTagsMatching method.
+		SlackTagsMatching []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+		}
 		// Start holds details about calls to the Start method.
 		Start []struct {
 			// Context1 is the context1 argument value.
@@ -83,10 +109,12 @@ type slackFrontendMock struct {
 			Context1 context.Context
 		}
 	}
-	lockEditCronjobRootFooter sync.RWMutex
-	lockSendCronjobRoot       sync.RWMutex
-	lockStart                 sync.RWMutex
-	lockStop                  sync.RWMutex
+	lockEditCronjobRootFooter      sync.RWMutex
+	lockSendCronjobRoot            sync.RWMutex
+	lockSidebarChannelAgentChoices sync.RWMutex
+	lockSlackTagsMatching          sync.RWMutex
+	lockStart                      sync.RWMutex
+	lockStop                       sync.RWMutex
 }
 
 // EditCronjobRootFooter calls EditCronjobRootFooterFunc.
@@ -166,6 +194,78 @@ func (mock *slackFrontendMock) SendCronjobRootCalls() []struct {
 	mock.lockSendCronjobRoot.RLock()
 	calls = mock.calls.SendCronjobRoot
 	mock.lockSendCronjobRoot.RUnlock()
+	return calls
+}
+
+// SidebarChannelAgentChoices calls SidebarChannelAgentChoicesFunc.
+func (mock *slackFrontendMock) SidebarChannelAgentChoices(context1 context.Context, s string) (string, []string, error) {
+	if mock.SidebarChannelAgentChoicesFunc == nil {
+		panic("slackFrontendMock.SidebarChannelAgentChoicesFunc: method is nil but SlackFrontend.SidebarChannelAgentChoices was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+	}{
+		Context1: context1,
+		S:        s,
+	}
+	mock.lockSidebarChannelAgentChoices.Lock()
+	mock.calls.SidebarChannelAgentChoices = append(mock.calls.SidebarChannelAgentChoices, callInfo)
+	mock.lockSidebarChannelAgentChoices.Unlock()
+	return mock.SidebarChannelAgentChoicesFunc(context1, s)
+}
+
+// SidebarChannelAgentChoicesCalls gets all the calls that were made to SidebarChannelAgentChoices.
+// Check the length with:
+//
+//	len(mockedSlackFrontend.SidebarChannelAgentChoicesCalls())
+func (mock *slackFrontendMock) SidebarChannelAgentChoicesCalls() []struct {
+	Context1 context.Context
+	S        string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+	}
+	mock.lockSidebarChannelAgentChoices.RLock()
+	calls = mock.calls.SidebarChannelAgentChoices
+	mock.lockSidebarChannelAgentChoices.RUnlock()
+	return calls
+}
+
+// SlackTagsMatching calls SlackTagsMatchingFunc.
+func (mock *slackFrontendMock) SlackTagsMatching(context1 context.Context, s string) []string {
+	if mock.SlackTagsMatchingFunc == nil {
+		panic("slackFrontendMock.SlackTagsMatchingFunc: method is nil but SlackFrontend.SlackTagsMatching was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+	}{
+		Context1: context1,
+		S:        s,
+	}
+	mock.lockSlackTagsMatching.Lock()
+	mock.calls.SlackTagsMatching = append(mock.calls.SlackTagsMatching, callInfo)
+	mock.lockSlackTagsMatching.Unlock()
+	return mock.SlackTagsMatchingFunc(context1, s)
+}
+
+// SlackTagsMatchingCalls gets all the calls that were made to SlackTagsMatching.
+// Check the length with:
+//
+//	len(mockedSlackFrontend.SlackTagsMatchingCalls())
+func (mock *slackFrontendMock) SlackTagsMatchingCalls() []struct {
+	Context1 context.Context
+	S        string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+	}
+	mock.lockSlackTagsMatching.RLock()
+	calls = mock.calls.SlackTagsMatching
+	mock.lockSlackTagsMatching.RUnlock()
 	return calls
 }
 

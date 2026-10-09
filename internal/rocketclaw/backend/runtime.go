@@ -18,6 +18,8 @@ type SlackFrontend interface {
 	Stop(context.Context) error
 	SendCronjobRoot(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error)
 	EditCronjobRootFooter(ctx context.Context, msg *protocol.OutboundMessage, root protocol.TextConversationTarget, conversationID string) error
+	SidebarChannelAgentChoices(context.Context, string) (string, []string, error)
+	SlackTagsMatching(context.Context, string) []string
 }
 
 // Runtime is the backend after construction, before frontends.
@@ -110,9 +112,10 @@ func (r *Runtime) PublishOutbound(ctx context.Context, message *protocol.Outboun
 	return errDelivery
 }
 
-// AttachSlack makes Slack the cron report root sender.
+// AttachSlack makes Slack the cron report root sender and the session search's Slack lookup.
 func (r *Runtime) AttachSlack(slack SlackFrontend) {
 	r.threads.mu.Lock()
 	r.threads.cronRoots = slack
+	r.threads.slackLookups = slack
 	r.threads.mu.Unlock()
 }

@@ -43,7 +43,7 @@ func Listen(socketPath string) (net.Listener, error) {
 func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	desc := grpc.ServiceDesc{ServiceName: "rpc.Web", HandlerType: (*any)(nil), Metadata: "web.proto"}
 
-	for _, method := range []string{"Protocol", "Identity", "Prompt", "History", "ForkSession", "StageRevert", "ClearRevert", "SearchMessages", "SearchOrigins", "SlackNames", "Handoff", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "ListWorkflows", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "ReorderQueue", "MoveToBackground", "StopBackgroundJob", "AnswerQuestion"} {
+	for _, method := range []string{"Protocol", "Identity", "Prompt", "History", "ForkSession", "StageRevert", "ClearRevert", "SearchMessages", "SearchSessions", "SlackNames", "Handoff", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "ListWorkflows", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "ReorderQueue", "MoveToBackground", "StopBackgroundJob", "AnswerQuestion"} {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 
@@ -121,8 +121,8 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 		return s.clearRevert(ctx, request.(*ClearRevertRequest))
 	case "SearchMessages":
 		return s.searchMessages(ctx, request.(*SearchMessagesRequest))
-	case "SearchOrigins":
-		return s.searchOrigins(ctx, request.(*SearchOriginsRequest))
+	case "SearchSessions":
+		return s.searchSessions(ctx, request.(*SearchSessionsRequest))
 	case "SlackNames":
 		return s.slackNames(ctx, request.(*SlackNamesRequest))
 	case "Handoff":

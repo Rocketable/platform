@@ -2321,7 +2321,7 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 	runtimeCfg := b.runtime.Clone()
 	tools := make([]rocketcode.Tool, 0, 6+len(customTools))
 
-	tools = append(tools, reloadTool(b.config.RequestReload), listSessionsTool(b.config.SessionService), getSessionTool(b.config.SessionService), currentSessionIDTool(b.config.ConversationID), stopBackgroundJobTool(b.background, b.config.ConversationID))
+	tools = append(tools, reloadTool(b.config.RequestReload), listSessionsTool(b.config.SessionService, b.threads), getSessionTool(b.config.SessionService), currentSessionIDTool(b.config.ConversationID), stopBackgroundJobTool(b.background, b.config.ConversationID))
 	if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err == nil && ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
 		tools = append(tools, updateGoalTool(b))
 	}

@@ -57,6 +57,7 @@ func TestHTTPBoundary(t *testing.T) {
 		{"RemoveQueueItem", `{"id":"chat"}`, "itemId is required"},
 		{"ReorderQueue", `{"id":"chat"}`, "itemIds is required"},
 		{"SlackNames", `{}`, "ids is required"},
+		{"SearchSessions", `{"messages":true}`, "query is required"},
 		{"ListSkills", `{"agent":""}`, "agent must not be empty"},
 		{"MoveToBackground", `{}`, "conversationId is required"},
 		{"MoveToBackground", `{"conversationId":"chat","jobId":"turn-1/call/a"}`, "invalid field jobId"},
