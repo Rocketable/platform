@@ -708,28 +708,18 @@ func seekSequence(lines, pattern []string, startIndex int, eof bool) int {
 func tryMatch(lines, pattern []string, startIndex int, compare func(string, string) bool, eof bool) int {
 	if eof {
 		fromEnd := len(lines) - len(pattern)
-		if fromEnd >= startIndex && sequenceMatches(lines[fromEnd:], pattern, compare) {
+		if fromEnd >= startIndex && slices.EqualFunc(lines[fromEnd:], pattern, compare) {
 			return fromEnd
 		}
 	}
 
 	for i := startIndex; i <= len(lines)-len(pattern); i++ {
-		if sequenceMatches(lines[i:], pattern, compare) {
+		if slices.EqualFunc(lines[i:i+len(pattern)], pattern, compare) {
 			return i
 		}
 	}
 
 	return -1
-}
-
-func sequenceMatches(lines, pattern []string, compare func(string, string) bool) bool {
-	for i := range pattern {
-		if !compare(lines[i], pattern[i]) {
-			return false
-		}
-	}
-
-	return true
 }
 
 func normalizeUnicode(text string) string {
