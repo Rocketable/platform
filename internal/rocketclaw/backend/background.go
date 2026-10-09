@@ -366,8 +366,6 @@ func (r *backgroundRegistry) work(ctx context.Context, key backgroundKey, run *b
 		end.status, end.result = backgroundFailed, errWork.Error()
 	}
 
-	// Ponytail: a failed write leaves the job running without its note, so it is retried briefly;
-	// an outage outlasting the retries leaves the job to the next start's recovery.
 	finished, err := r.store.finishBackgroundJob(context.WithoutCancel(ctx), &end)
 	for attempt := 1; err != nil && attempt < 3; attempt++ {
 		time.Sleep(time.Duration(attempt) * 100 * time.Millisecond)
