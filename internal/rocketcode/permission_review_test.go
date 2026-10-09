@@ -224,9 +224,9 @@ func TestPermissionReviewTranscriptMarksAttachmentOnlyMessages(t *testing.T) {
 	}}}
 	request := &permissionReviewRequest{
 		ReviewContext: []responses.ResponseInputItemUnionParam{
-			inputMessageParam(responses.EasyInputMessageRoleUser, easyInputListContent(responses.ResponseInputMessageContentListParam{
-				{OfInputImage: &responses.ResponseInputImageParam{ImageURL: openai.String("data:image/png;base64,SECRET_IMAGE"), Detail: responses.ResponseInputImageDetailAuto}},
-			})),
+			promptInputMessage(&PromptInput{Attachments: []Attachment{
+				{MIME: "image/png", URL: "data:image/png;base64,SECRET_IMAGE"},
+			}}),
 			{OfFunctionCallOutput: &toolResult},
 		},
 	}
