@@ -1417,8 +1417,6 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 	}()
 
 	if request.delivery != nil {
-		// Ponytail: a delivery a restart cut no longer knows its turn's retry, so a failed retry
-		// of a hidden run's wake cut there posts once; store the retry with the outbound if that matters.
 		if err := b.deliver(ctx, request, request.delivery, 0); err != nil {
 			return err
 		}

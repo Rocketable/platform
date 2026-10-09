@@ -37,7 +37,6 @@ BEGIN
     IF TG_OP <> 'INSERT' THEN
         PERFORM pg_notify(channel, json_build_object('conversationId', OLD.conversation_id, 'revision', revision)::text);
         IF TG_TABLE_NAME = 'session_entries' THEN
-            -- Ponytail: this scans saved rows per mutation; index the sync source ID if history size warrants it.
             FOR destination IN
                 SELECT DISTINCT conversation_id FROM session_entries
                 WHERE entry_json::jsonb->>'sync_source_entry_id' = OLD.id::text
@@ -79,7 +78,6 @@ BEGIN
     IF TG_OP <> 'INSERT' THEN
         PERFORM pg_notify(channel, json_build_object('conversationId', OLD.conversation_id, 'revision', revision)::text);
         IF TG_TABLE_NAME = 'session_entries' THEN
-            -- Ponytail: this scans saved rows per mutation; index the sync source ID if history size warrants it.
             FOR destination IN
                 SELECT DISTINCT conversation_id FROM session_entries
                 WHERE entry_json::jsonb->>'sync_source_entry_id' = OLD.id::text

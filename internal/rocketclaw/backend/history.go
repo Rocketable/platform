@@ -54,7 +54,6 @@ func (s *SessionService) ObserveHistory(ctx context.Context, id, source string, 
 		switch {
 		case limit == 0:
 		case before == 0 && previous.Entries != nil && previous.Oldest == oldest:
-			// Ponytail: follow the open range; slide it forward if long-lived tabs grow too large.
 			from = previous.From
 		default:
 			from = start

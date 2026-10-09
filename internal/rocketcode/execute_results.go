@@ -226,8 +226,6 @@ func (l *looper) loadExecuteResult(ctx context.Context, retainedRel string, para
 
 	limit = min(limit, executeHeadMaxLines)
 
-	// Ponytail: pages serialize under the lifetime lock and scan the prefix.
-	// Add indexing or shorten lock scope only if measured demand requires it.
 	l.spillMu.Lock()
 	defer l.spillMu.Unlock()
 

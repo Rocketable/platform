@@ -518,8 +518,6 @@ func (r *Runtime) BackgroundJobs(ctx context.Context, conversationID string) ([]
 // at history delivers, by the job IDs it stored, with each note's text. A Delegation History's
 // notes are rows of its conversation, owned by its subagent.
 func (r *Runtime) CompletionNotes(ctx context.Context, history string, jobIDs []string) ([]protocol.BackgroundJob, error) {
-	// Ponytail: a Delegation History's conversation ID is not stored, so each ancestor ID is
-	// tried in turn, one query per nesting level; store it with the history if this gets costly.
 	for conversationID := history; ; {
 		jobs, err := r.Sessions.notedBackgroundJobs(ctx, conversationID, jobIDs)
 		if err != nil {
