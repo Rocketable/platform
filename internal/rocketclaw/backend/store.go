@@ -1184,10 +1184,11 @@ type CronRunSource struct {
 	SourceConversationID string
 }
 
-// CronRunSources returns, in one query, every cron run with effective history paired
-// with itself, and with each conversation people may see whose effective history holds
-// its synced output, following chained syncs. Managed conversations are never
-// delegation children, so only their own revert cutoff applies.
+// CronRunSources returns, in one query, every cron run with effective history
+// (including checkpoints) paired with itself, and with each conversation people
+// may see whose effective history holds its synced output, following chained syncs.
+// Managed conversations are never delegation children, so only their own revert
+// cutoff applies.
 func (s *SessionService) CronRunSources(ctx context.Context) ([]CronRunSource, error) {
 	// = ANY rules out hash and merge joins, so each hop stays an index probe of
 	// session_entries_sync_source_id; those joins read every synced entry_json
@@ -1206,7 +1207,20 @@ LEFT JOIN external_mcp_sessions p ON p.private_conversation_id = d.conversation_
 WHERE (c.revert_message_id = '' OR d.id < split_part(c.revert_message_id, ':', 1)::bigint
         OR d.id = split_part(c.revert_message_id, ':', 1)::bigint AND split_part(c.revert_message_id, ':', 2)::integer > 0)
     AND (d.conversation_id = d.source OR d.conversation_id NOT LIKE 'cron:%' AND d.conversation_id NOT LIKE 'one-off-cron:%'
-        AND p.private_conversation_id IS NULL)`, "cron run sources", func(row rowScanner) (CronRunSource, error) {
+        AND p.private_conversation_id IS NULL)
+UNION
+SELECT a.conversation_id, a.conversation_id FROM active_turns a
+JOIN managed_conversations c ON c.conversation_id = a.conversation_id
+WHERE (a.conversation_id LIKE 'cron:%' OR a.conversation_id LIKE 'one-off-cron:%')
+    AND (a.phase <> 'done' OR a.terminal <> '')
+    AND (c.revert_message_id = '' OR a.history_anchor_id < split_part(c.revert_message_id, ':', 1)::bigint)
+    AND NOT EXISTS (
+        SELECT 1 FROM session_entries e
+        LEFT JOIN session_entries source ON source.id = (e.entry_json->>'sync_source_entry_id')::bigint
+        WHERE e.conversation_id = a.conversation_id AND e.entry_json->>'turn_id' = a.id
+            AND (NOT e.entry_json::jsonb ? 'sync_source_entry_id'
+                OR COALESCE(e.entry_json->>'sync_source_conversation_id', source.conversation_id, '') = a.conversation_id)
+    )`, "cron run sources", func(row rowScanner) (CronRunSource, error) {
 		var source CronRunSource
 		if err := row.Scan(&source.ConversationID, &source.SourceConversationID); err != nil {
 			return CronRunSource{}, fmt.Errorf("scan cron run source: %w", err)

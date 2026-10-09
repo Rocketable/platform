@@ -182,7 +182,10 @@ path label is used as-is, including previously stored underscores, without match
 current definitions. Runs are deduplicated by source X within each recorded human Y
 and link only to Y. Rows sort newest-first by the source run timestamp, with Y and X
 as tie-breakers. A synced row proves a copy, not successful model execution or delivery.
-Recorded private Cron conversations with session entries also supply run timestamps.
+Recorded private Cron conversations with saved entries or visible turn checkpoints
+also supply run timestamps through the same metadata query, without reading replay
+content. Checkpoint visibility follows the transcript's terminal, supersession, and
+revert rules.
 When no human destination has a copy, Web shows “No delivered chat” with an
 **Open chat** action. `CreateSession.source_conversation_id` accepts a recorded Cron
 producer and creates or reuses `web:<source ID>`, then calls `SyncConversation`.

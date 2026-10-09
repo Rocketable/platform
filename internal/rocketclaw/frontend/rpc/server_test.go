@@ -1984,6 +1984,88 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, "Nothing to deliver", trace.Messages[1].Text)
 	_, err = invoke[HistoryResponse](t.Context(), connection, "History", &HistoryRequest{Id: undelivered})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
+
+	for _, prefix := range []string{"cron:", "one-off-cron:"} {
+		t.Run(prefix+"checkpoint-only run is listed", func(t *testing.T) {
+			source := prefix + "cron/checkpoint.md:20000102T030405.000000006Z:pending"
+			require.NoError(t, sessions.UpsertThread(source, backend.ThreadState{Agent: "producer"}))
+			require.NoError(t, seeded.UpsertActiveTurn(ctx, &testCheckpoint{TurnID: source, ConversationKey: source, Agent: "producer", ReplayInput: []json.RawMessage{
+				json.RawMessage(`{"type":"message","role":"assistant","content":"Private checkpoint content"}`),
+			}}))
+			t.Cleanup(func() { require.NoError(t, seeded.ClearActiveTurn(ctx, source)) })
+
+			saved, err := sessions.ObserveEntries(ctx, source)
+			require.NoError(t, err)
+			require.Empty(t, saved)
+
+			transcript, err := sessions.ObserveTranscript(ctx, source, 0, 0, nil)
+			require.NoError(t, err)
+			require.Len(t, transcript, 1)
+			require.True(t, transcript[0].Active)
+
+			trace, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: source})
+			require.NoError(t, err)
+			require.Len(t, trace.Messages, 1)
+			require.Equal(t, "Private checkpoint content", trace.Messages[0].Text)
+
+			listed, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+			require.NoError(t, err)
+
+			want := &ListCronJobsResponse{Jobs: append(slices.Clone(withSilent.Jobs), &CronJob{Stem: "checkpoint", Status: "ran", LastRun: "2000-01-02T03:04:05.000000006Z", Origin: source})}
+			require.True(t, proto.Equal(want, listed), "checkpoint-only run missing or inventory changed: %v", listed)
+
+			for _, terminal := range []protocol.Terminal{protocol.TerminalFailed, protocol.TerminalStopped, ""} {
+				require.NoError(t, seeded.SetActiveTurnTerminal(ctx, source, terminal))
+				transcript, err := sessions.ObserveTranscript(ctx, source, 0, 0, nil)
+				require.NoError(t, err)
+				listed, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+				require.NoError(t, err)
+
+				if terminal == "" {
+					require.Empty(t, transcript)
+					require.True(t, proto.Equal(withSilent, listed), "completed checkpoint changed inventory: %v", listed)
+				} else {
+					require.Len(t, transcript, 1)
+					require.True(t, proto.Equal(want, listed), "terminal checkpoint missing or inventory changed: %v", listed)
+				}
+			}
+
+			require.NoError(t, seeded.SetActiveTurnTerminal(ctx, source, protocol.TerminalFailed))
+			_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = '0:0' WHERE conversation_id = $1`, source)
+			require.NoError(t, err)
+			reverted, err := sessions.ObserveTranscript(ctx, source, 0, 0, nil)
+			require.NoError(t, err)
+			require.Empty(t, reverted)
+
+			listed, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+			require.NoError(t, err)
+			require.True(t, proto.Equal(withSilent, listed), "reverted checkpoint changed inventory: %v", listed)
+
+			_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = '' WHERE conversation_id = $1`, source)
+			require.NoError(t, err)
+			savedID, err := sessions.AppendEntryID(ctx, source, &transcript[0].Entry)
+			require.NoError(t, err)
+
+			for _, marker := range []string{fmt.Sprintf("%d:1", savedID), fmt.Sprintf("%d:0", savedID), "0:0"} {
+				_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = $1 WHERE conversation_id = $2`, marker, source)
+				require.NoError(t, err)
+				transcript, err := sessions.ObserveTranscript(ctx, source, 0, 0, nil)
+				require.NoError(t, err)
+				listed, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+				require.NoError(t, err)
+
+				if marker == fmt.Sprintf("%d:1", savedID) {
+					require.Len(t, transcript, 1)
+					require.False(t, transcript[0].Active)
+					require.True(t, proto.Equal(want, listed), "saved turn changed inventory: %v", listed)
+				} else {
+					require.Empty(t, transcript)
+					require.True(t, proto.Equal(withSilent, listed), "reverted checkpoint reappeared: %v", listed)
+				}
+			}
+		})
+	}
+
 	t.Run("open cron as writable web chat", func(t *testing.T) {
 		producer := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "silent cron", false)
 		producer.ConversationID, producer.RequireOutputDecision = undelivered, true
