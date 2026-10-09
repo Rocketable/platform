@@ -860,13 +860,20 @@ func TestApplyPatchParity(t *testing.T) {
 
 	t.Run("trailing whitespace differences", func(t *testing.T) {
 		seed := map[string][]byte{"trailing_ws.txt": []byte("line1  \nline2\nline3   \n")}
-		patch := "*** Begin Patch\n*** Update File: trailing_ws.txt\n@@\n-line2\n+changed\n*** End Patch"
+		patch := "*** Begin Patch\n*** Update File: trailing_ws.txt\n@@\n line1\n-line2\n+changed\n line3\n*** End Patch"
 		requireParity(t, patch, seed)
 	})
 
 	t.Run("leading whitespace differences", func(t *testing.T) {
 		seed := map[string][]byte{"leading_ws.txt": []byte("  line1\nline2\n  line3\n")}
-		patch := "*** Begin Patch\n*** Update File: leading_ws.txt\n@@\n-line2\n+changed\n*** End Patch"
+		patch := "*** Begin Patch\n*** Update File: leading_ws.txt\n@@\n line1\n-line2\n+changed\n line3\n*** End Patch"
+		requireParity(t, patch, seed)
+	})
+
+	t.Run("exact match wins over earlier whitespace match", func(t *testing.T) {
+		// OpenCode packages/opencode/src/patch/index.ts tries exact matches before whitespace fallbacks.
+		seed := map[string][]byte{"repeated.txt": []byte("  marker\nmiddle\nmarker\nend\n")}
+		patch := "*** Begin Patch\n*** Update File: repeated.txt\n@@\n-marker\n+changed\n*** End Patch"
 		requireParity(t, patch, seed)
 	})
 
