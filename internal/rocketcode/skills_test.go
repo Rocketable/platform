@@ -459,12 +459,10 @@ metadata:
 
 		got := result.Output
 
-		baseURL := fileURL(filepath.Join(root, "git-release"))
-
 		require.Contains(t, got, `<skill_content name="git-release">`)
 		require.Contains(t, got, "# skill: git-release")
 		require.Contains(t, got, "## What I do\n- Draft release notes")
-		require.Contains(t, got, "Base directory for this skill: "+baseURL)
+		require.Contains(t, got, "Base directory for this skill: file://"+filepath.ToSlash(filepath.Join(root, "git-release")))
 		require.Contains(t, got, "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.")
 		require.Contains(t, got, "Note: file list is sampled.")
 		require.Contains(t, got, "<skill_files>")

@@ -565,7 +565,3 @@ func (s Skills) skillFiles(dir string) ([]string, error) {
 
 	return wrapped, nil
 }
-
-func fileURL(filePath string) string {
-	return "file://" + filepath.ToSlash(filePath)
-}
