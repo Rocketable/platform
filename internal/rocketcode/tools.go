@@ -510,7 +510,7 @@ func (f *toolFactory) renderSkillToolOutput(ctx context.Context, raw json.RawMes
 	lines = append(lines,
 		renderSkillArguments(strings.TrimSpace(skill.Content), input.Arguments, input.Direct),
 		"",
-		"Base directory for this skill: "+fileURL(filepath.Join(f.skills.Root, filepath.FromSlash(dir))),
+		"Base directory for this skill: file://"+filepath.ToSlash(filepath.Join(f.skills.Root, filepath.FromSlash(dir))),
 		"Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
 		"Note: file list is sampled.",
 		"",
