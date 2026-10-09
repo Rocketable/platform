@@ -297,7 +297,8 @@ func (m *Manager) runOneOffTimer(ctx context.Context, definition *definition, in
 }
 
 func (m *Manager) deleteOneOffCronjob(definition *definition) {
-	if err := os.Remove(filepath.Join(m.workspace, m.cronRelativePath(filepath.Base(definition.relativePath)))); err != nil && !errors.Is(err, os.ErrNotExist) {
+	relativePath := filepath.ToSlash(filepath.Join(m.runtimeDir, "cron", filepath.Base(definition.relativePath)))
+	if err := os.Remove(filepath.Join(m.workspace, relativePath)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		m.log.Warn("delete one-off cronjob", "file", definition.relativePath, "error", err)
 	}
 
@@ -582,10 +583,6 @@ func loadDefinitionsIn(workspace, runtimeDir string) ([]definition, error) {
 	}
 
 	return definitions, nil
-}
-
-func (m *Manager) cronRelativePath(name string) string {
-	return filepath.ToSlash(filepath.Join(m.runtimeDir, "cron", name))
 }
 
 func loadDefinition(data []byte, relativePath string) (definition, error) {
