@@ -1178,6 +1178,44 @@ LEFT JOIN managed_conversations producer ON producer.conversation_id = c.produce
 	}
 }
 
+// CronRunSource pairs a conversation with the cron run conversation its effective history came from.
+type CronRunSource struct {
+	ConversationID       string
+	SourceConversationID string
+}
+
+// CronRunSources returns, in one query, every cron run with effective history paired
+// with itself, and with each conversation people may see whose effective history holds
+// its synced output, following chained syncs. Managed conversations are never
+// delegation children, so only their own revert cutoff applies.
+func (s *SessionService) CronRunSources(ctx context.Context) ([]CronRunSource, error) {
+	// = ANY rules out hash and merge joins, so each hop stays an index probe of
+	// session_entries_sync_source_id; those joins read every synced entry_json
+	// from TOAST to compare the key.
+	return queryRows(ctx, s.db, `WITH RECURSIVE deliveries AS (
+    SELECT id, conversation_id, conversation_id AS source FROM session_entries
+    WHERE conversation_id COLLATE "C" >= 'cron:' AND conversation_id COLLATE "C" < 'cron;'
+        OR conversation_id COLLATE "C" >= 'one-off-cron:' AND conversation_id COLLATE "C" < 'one-off-cron;'
+    UNION ALL
+    SELECT copy.id, copy.conversation_id, d.source FROM deliveries d
+    JOIN session_entries copy ON copy.entry_json::jsonb->>'sync_source_entry_id' = ANY(ARRAY[d.id::text])
+)
+SELECT DISTINCT d.conversation_id, d.source FROM deliveries d
+JOIN managed_conversations c ON c.conversation_id = d.conversation_id
+LEFT JOIN external_mcp_sessions p ON p.private_conversation_id = d.conversation_id
+WHERE (c.revert_message_id = '' OR d.id < split_part(c.revert_message_id, ':', 1)::bigint
+        OR d.id = split_part(c.revert_message_id, ':', 1)::bigint AND split_part(c.revert_message_id, ':', 2)::integer > 0)
+    AND (d.conversation_id = d.source OR d.conversation_id NOT LIKE 'cron:%' AND d.conversation_id NOT LIKE 'one-off-cron:%'
+        AND p.private_conversation_id IS NULL)`, "cron run sources", func(row rowScanner) (CronRunSource, error) {
+		var source CronRunSource
+		if err := row.Scan(&source.ConversationID, &source.SourceConversationID); err != nil {
+			return CronRunSource{}, fmt.Errorf("scan cron run source: %w", err)
+		}
+
+		return source, nil
+	})
+}
+
 // ChannelFact returns a stored Slack name, never derived channel policy.
 func (s *SessionService) ChannelFact(ctx context.Context, workspaceID, channelID string) (name string, found bool, err error) {
 	err = s.db.QueryRowContext(ctx, `SELECT name FROM slack_channel_facts WHERE workspace_id = $1 AND channel_id = $2`, workspaceID, channelID).Scan(&name)
