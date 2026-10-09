@@ -14,6 +14,14 @@ if (sentryConfig) {
     release: config.release,
     sampleRate: 1,
     tracesSampleRate: config.traces_sample_rate ?? 0.1,
+    beforeSendSpan: (span) => {
+      // Slow-frame script URLs bypass the SDK's query-string filtering.
+      for (const key of ["browser.script.invoker", "code.file.path"]) {
+        const value = span.attributes[key];
+        if (typeof value === "string") span.attributes[key] = value.replace(/^([^?#]*)\?[^#]*/, "$1");
+      }
+      return span;
+    },
     beforeSendLog: () => null,
     defaultIntegrations: false,
     integrations: [globalHandlersIntegration(), linkedErrorsIntegration(), dedupeIntegration(), captureConsoleIntegration({ levels: ["error"] }), browserTracingIntegration({
