@@ -484,18 +484,27 @@ func TestOneOffCronjobRunsAfterFutureDueTime(t *testing.T) {
 func TestOneOffCronjobDeletesFileAfterRunError(t *testing.T) {
 	workspace := t.TempDir()
 
-	cronDir := filepath.Join(workspace, "cron")
-	if err := os.Mkdir(cronDir, 0o755); err != nil {
-		t.Fatal(err)
+	runtimeDir := ".runtime/nested"
+	cronDir := filepath.Join(workspace, runtimeDir, "cron")
+
+	localCronDir := filepath.Join(workspace, "cron")
+	for _, dir := range []string{cronDir, localCronDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	cronPath := filepath.Join(cronDir, "error.md")
-	if err := os.WriteFile(cronPath, []byte("---\nschedule: \"2000-01-01T00:00:00Z\"\nchannel: '#ops'\n---\nBody"), 0o644); err != nil {
-		t.Fatal(err)
+
+	localCronPath := filepath.Join(localCronDir, "error.md")
+	for _, path := range []string{cronPath, localCronPath} {
+		if err := os.WriteFile(path, []byte("---\nschedule: \"2000-01-01T00:00:00Z\"\nchannel: '#ops'\n---\nBody"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	runDone := make(chan struct{})
-	m := New(workspace, ".", []string{"#ops", "#triage"}, newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(workspace, runtimeDir, []string{"#ops", "#triage"}, newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		close(runDone)
 
 		return protocol.CronRunResult{}, errors.New("boom")
@@ -513,13 +522,16 @@ func TestOneOffCronjobDeletesFileAfterRunError(t *testing.T) {
 	}
 
 	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if _, err := os.Stat(cronPath); errors.Is(err, os.ErrNotExist) {
+		_, errRuntime := os.Stat(cronPath)
+
+		_, errLocal := os.Stat(localCronPath)
+		if errors.Is(errRuntime, os.ErrNotExist) && errors.Is(errLocal, os.ErrNotExist) {
 			stopCronManager(t, m)
 			return
 		}
 	}
 
-	t.Fatal("one-off cronjob file was not deleted after run error")
+	t.Fatal("runtime and local one-off cronjob files were not both deleted after run error")
 }
 
 func stopCronManager(t *testing.T, m *Manager) {
