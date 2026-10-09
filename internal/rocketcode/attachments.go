@@ -146,7 +146,7 @@ func promptInputMessage(input *PromptInput) responses.ResponseInputItemUnionPara
 			parts = append(parts, responses.ResponseInputContentUnionParam{OfInputText: &responses.ResponseInputTextParam{Text: input.Text}})
 		}
 
-		content = easyInputListContent(appendAttachmentContent(parts, input.Attachments...))
+		content = responses.EasyInputMessageContentUnionParam{OfInputItemContentList: appendAttachmentContent(parts, input.Attachments...)}
 	}
 
 	message := inputMessageParam(role, content)
@@ -177,10 +177,6 @@ func inputMessageParam(role responses.EasyInputMessageRole, content responses.Ea
 
 func easyInputStringContent(text string) responses.EasyInputMessageContentUnionParam {
 	return responses.EasyInputMessageContentUnionParam{OfString: openai.String(text)}
-}
-
-func easyInputListContent(items responses.ResponseInputMessageContentListParam) responses.EasyInputMessageContentUnionParam {
-	return responses.EasyInputMessageContentUnionParam{OfInputItemContentList: items}
 }
 
 func promptInputMessageRole(role PromptInputRole) responses.EasyInputMessageRole {
