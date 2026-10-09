@@ -895,9 +895,9 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 		response.Jobs = append(response.Jobs, row)
 	}
 
-	conversations, err := s.backend.ListConversations(ctx)
+	sources, err := s.sessions.CronRunSources(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list cron history destinations: %w", err)
+		return nil, fmt.Errorf("read cron history provenance: %w", err)
 	}
 
 	var (
@@ -907,34 +907,14 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 
 	delivered := map[string]bool{}
 
-	for _, conversation := range conversations {
-		visible, err := s.humanConversation(conversation.ID)
-		if err != nil {
-			return nil, err
-		}
-
-		if !visible {
-			// Private cron records contribute timing only, never replay content.
-			if strings.HasPrefix(conversation.ID, "cron:") || strings.HasPrefix(conversation.ID, "one-off-cron:") {
-				entries, err := s.sessions.ObserveEntries(ctx, conversation.ID)
-				if err != nil {
-					return nil, fmt.Errorf("read cron execution: %w", err)
-				}
-
-				if len(entries) > 0 {
-					executions = append(executions, cronHistory([]backend.ObservedSessionEntry{{SourceConversationID: conversation.ID}}, "")...)
-				}
-			}
-
+	for _, source := range sources {
+		// Private cron records contribute timing only, never replay content.
+		if source.ConversationID == source.SourceConversationID {
+			executions = append(executions, cronHistory([]backend.ObservedSessionEntry{{SourceConversationID: source.SourceConversationID}}, "")...)
 			continue
 		}
 
-		entries, err := s.sessions.ObserveEntries(ctx, conversation.ID)
-		if err != nil {
-			return nil, fmt.Errorf("read cron history provenance: %w", err)
-		}
-
-		for _, run := range cronHistory(entries, conversation.ID) {
+		for _, run := range cronHistory([]backend.ObservedSessionEntry{{SourceConversationID: source.SourceConversationID}}, source.ConversationID) {
 			delivered[run.Origin] = true
 			runs = append(runs, run)
 		}

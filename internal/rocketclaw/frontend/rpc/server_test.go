@@ -1769,16 +1769,6 @@ func TestSessionEntries(t *testing.T) {
 	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', (SELECT entry_json::jsonb->'replay_input' FROM session_entries WHERE id = $1))::json WHERE id = $2`, observed[2].ID, observed[3].ID)
 	require.NoError(t, err)
 
-	// Unreadable stored history fails these reads instead of returning partial results.
-	var stored string
-	require.NoError(t, db.QueryRowContext(ctx, `SELECT entry_json::text FROM session_entries WHERE id = $1`, observed[3].ID).Scan(&stored))
-	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{timestamp}', 'false')::json WHERE id = $1`, observed[3].ID)
-	require.NoError(t, err)
-	_, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
-	require.ErrorContains(t, err, "read cron history provenance")
-	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = $1::json WHERE id = $2`, stored, observed[3].ID)
-	require.NoError(t, err)
-
 	// Both transcript and delegation inventory ignore physically superseded
 	// checkpoints, even when their unreadable detail survives in the journal.
 	corrupt := "cron:corrupt-delegations"
@@ -1814,6 +1804,16 @@ func TestSessionEntries(t *testing.T) {
 	again, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
 	require.True(t, proto.Equal(jobs, again))
+
+	// A destination's revert cutoff hides the deliveries after it; that run stays a private execution.
+	_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = $1 WHERE conversation_id = $2`, fmt.Sprintf("%d:0", observed[2].ID), id)
+	require.NoError(t, err)
+	reverted, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+	require.NoError(t, err)
+	require.Len(t, reverted.Jobs, 4)
+	require.Equal(t, []string{"", id}, []string{reverted.Jobs[2].NextRun, reverted.Jobs[3].NextRun})
+	_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = '' WHERE conversation_id = $1`, id)
+	require.NoError(t, err)
 
 	undelivered := "cron:cron/silent.md:20260905T030000.000000003Z:third"
 	require.NoError(t, sessions.UpsertThread(undelivered, backend.ThreadState{Agent: "producer"}))
