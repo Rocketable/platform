@@ -362,12 +362,29 @@ func TestAttachmentMetadata(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
-func TestRemoveSessionEntryNULWithoutNUL(t *testing.T) {
-	data := []byte(`{"text":"quoted \"value\", path \\\\ and newline\n"}`)
-	require.Equal(t, data, removeSessionEntryNUL(data))
-	require.Zero(t, testing.AllocsPerRun(100, func() {
-		removeSessionEntryNUL(data)
-	}))
+func TestRemoveSessionEntryNUL(t *testing.T) {
+	for _, sample := range []struct {
+		text      string
+		maxAllocs float64
+	}{
+		{"quoted \"value\", path \\\\ and newline\n", 0},
+		{"literal \\u0000", 1},
+		{"first\x00\x00\\\x00\\\\\x00\n\t😀", 1},
+		{strings.Repeat("text\x00 and literal \\u0000", 1024), 1},
+	} {
+		data, err := json.Marshal(sample.text)
+		require.NoError(t, err)
+
+		original := string(data)
+
+		var text string
+		require.NoError(t, json.Unmarshal(removeSessionEntryNUL(data), &text))
+		require.Equal(t, strings.ReplaceAll(sample.text, "\x00", ""), text)
+		require.Equal(t, original, string(data))
+		require.LessOrEqual(t, testing.AllocsPerRun(100, func() {
+			removeSessionEntryNUL(data)
+		}), sample.maxAllocs)
+	}
 }
 
 func BenchmarkRemoveSessionEntryNUL(b *testing.B) {

@@ -1613,12 +1613,15 @@ func removeSessionEntryNUL(data []byte) []byte {
 		return data
 	}
 
-	parts := bytes.Split(data, []byte(`\\`))
-	for i := range parts {
-		parts[i] = bytes.ReplaceAll(parts[i], []byte(`\u0000`), nil)
+	output := make([]byte, 0, len(data))
+	// Split after escaped backslashes so literal \u0000 text survives.
+	for part := range bytes.SplitAfterSeq(data, []byte(`\\`)) {
+		for text := range bytes.SplitSeq(part, []byte(`\u0000`)) {
+			output = append(output, text...)
+		}
 	}
 
-	return bytes.Join(parts, []byte(`\\`))
+	return output
 }
 
 // appendSessionEntryDB indexes the entry's messages with producer's attachments;
