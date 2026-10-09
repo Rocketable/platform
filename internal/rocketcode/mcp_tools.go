@@ -896,7 +896,7 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 }
 
 // emitNestedExecuteToolDiagnostic reports a nested code-mode tool call into thinking traces.
-// Uses emitChatResponse (blocking fallback) so nested steps are not dropped when the output
+// Uses emitChatResponse (blocking send) so nested steps are not dropped when the output
 // buffer is full — unlike emitDiagnosticChatResponse, which drops under backpressure.
 func emitNestedExecuteToolDiagnostic(ctx context.Context, path []string, nestedName string, args map[string]any) {
 	tc, ok := toolCallContextFrom(ctx)
