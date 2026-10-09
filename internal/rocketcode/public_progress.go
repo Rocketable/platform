@@ -145,7 +145,7 @@ func (o *turnObservations) observeLocked(ctx context.Context, progress *PublicPr
 
 		trace[index] = raw
 	}
-	// Ponytail: one synchronous write per changed public event. Coalescing needs measurements.
+
 	return o.saveTraceLocked(ctx, trace)
 }
 
@@ -209,7 +209,6 @@ type hostResultTrace struct {
 
 // recordHostCall stores one execute-script call and its result once; a resumed
 // script replaying the journaled step finds it already recorded.
-// Ponytail: outputs are stored in full beside the script's own result; trim if trace size matters.
 func (o *turnObservations) recordHostCall(ctx context.Context, parentCallID, callID, name string, arguments json.RawMessage, output string) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()

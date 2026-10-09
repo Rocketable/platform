@@ -557,7 +557,6 @@ func (j conversationJournal) SaveTrace(ctx context.Context, turnID string, trace
 
 	defer func() {
 		// These are repeated snapshots, not tool starts/finishes or execution durations.
-		// Ponytail: full snapshots repeat prior operations; a delta API needs separate approval.
 		observed := harness.PublicProgressFromTrace(trace)
 		for i := range observed {
 			progress := &observed[i]

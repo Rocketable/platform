@@ -281,8 +281,6 @@ func (sss *sandboxedShellSystem) deniedBashPath(command, hostDir string) string 
 			return false
 		}
 
-		// Ponytail: only explicit paths are blocked; scripts can construct paths.
-		// OS-level isolation is needed if indirect access must also be blocked.
 		if word, ok := node.(*syntax.Word); ok {
 			for part := range syntax.Preorder(word) {
 				switch part.(type) {

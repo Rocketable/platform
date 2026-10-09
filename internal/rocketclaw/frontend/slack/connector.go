@@ -1515,8 +1515,6 @@ func (c *Connector) handleAgentSessionStopped(ctx context.Context, ev *slackeven
 
 	if turnID != "" {
 		channel, _, ok := c.socialModeChannel(ctx, ev.Channel)
-		// ponytail: Slack's event clock is compared with ours, so skew larger than the gap between
-		// two turns' starts can misjudge a press; Slack sends no time for the processing it applied.
 		pressedAt, _ := strconv.ParseFloat(ev.EventTimestamp, 64)
 
 		if ok && c.socialModeAllowsUser(channel, ev.User) && processing.Before(time.UnixMicro(int64(pressedAt*1e6))) {

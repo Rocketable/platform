@@ -1,6 +1,4 @@
 export type DraftContent = { text: string; files: { id: string; file: File }[]; agent: string };
-// Ponytail: serialize these small operations globally; use per-key ordering if
-// draft traffic grows enough to contend. Late writes cannot resurrect a sent draft.
 let pending: Promise<unknown> = Promise.resolve();
 
 // IndexedDB clones File bytes; transcript and execution state never enter this store.

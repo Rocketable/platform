@@ -356,7 +356,6 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 	}
 
 	producer := cmp.Or(entry.SourceConversationID, conversationID)
-	// Ponytail: replay/progress matching scans each turn; index identities if large turns make this costly.
 	progress := rocketcode.PublicProgressFromTrace(entry.Entry.OutputTrace)
 	replayText := make(map[string]bool)
 	replayResults := make(map[string]bool)
@@ -636,8 +635,6 @@ func fallbackProgress(entry *backend.ObservedSessionEntry, progress []rocketcode
 		}
 
 		position := len(messages)
-		// Ponytail: O(progress² × rows) anchoring keeps no extra index; index
-		// identities if long compacted turns make this scan expensive.
 		for j := i + 1; j < len(progress); j++ {
 			id := entry.Key + ":" + progress[j].ParentID + "/" + progress[j].ID
 
