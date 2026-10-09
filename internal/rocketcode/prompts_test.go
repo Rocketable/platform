@@ -104,9 +104,9 @@ func TestPromptExpansionEnvironmentRunsCommandsInRoot(t *testing.T) {
 	env, err := newPromptExpansionEnvironment(root, shellTemp, nil, DefaultShellCommand)
 	require.NoError(t, err)
 
-	got := env.expandShellCommands(context.Background(), "!`cat MEMORY.md`")
+	got := env.expandShellCommands(context.Background(), "before !`cat MEMORY.md` middle !`cat MEMORY.md; exit 7` after")
 
-	require.Equal(t, "expanded", got)
+	require.Equal(t, "before expanded middle expanded after", got)
 }
 
 func TestPromptExpansionEnvironmentAppliesShellEnv(t *testing.T) {

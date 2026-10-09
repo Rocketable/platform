@@ -62,9 +62,8 @@ func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, pr
 		var stdout bytes.Buffer
 
 		cmd.Stdout = &stdout
-		if err := cmd.Run(); err != nil {
-			return stdout.String()
-		}
+		// Keep captured stdout even when the command fails.
+		_ = cmd.Run()
 
 		return stdout.String()
 	})
