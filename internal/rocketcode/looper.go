@@ -1678,11 +1678,7 @@ func emitChatResponse(output chan<- ChatResponse, item ChatResponse) {
 		return
 	}
 
-	select {
-	case output <- item:
-	default:
-		output <- item
-	}
+	output <- item
 }
 
 func emitDiagnosticChatResponse(output chan<- ChatResponse, item ChatResponse) {

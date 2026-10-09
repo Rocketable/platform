@@ -2505,6 +2505,25 @@ func TestLooperEmitsHostedWebSearchDiagnosticsWhenEnabled(t *testing.T) {
 	}, collectResponses(output))
 }
 
+func TestEmitChatResponseDeliversInOrder(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		output := make(chan ChatResponse, 1)
+		want := []ChatResponse{assistantMessage("first"), assistantMessage("second"), assistantMessage("third")}
+
+		go func() {
+			for _, item := range want {
+				emitChatResponse(output, item)
+			}
+		}()
+
+		synctest.Wait()
+
+		for _, item := range want {
+			require.Equal(t, item, <-output)
+		}
+	})
+}
+
 func TestEmitDiagnosticChatResponseDropsWhenUnavailable(t *testing.T) {
 	emitDiagnosticChatResponse(nil, toolDiagnosticResponse(testToolDiagnostic("", "nil")))
 
