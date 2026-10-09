@@ -89,7 +89,7 @@ func RunBash(ctx context.Context, root *os.Root, shellTempDir string, shellEnv m
 
 	sss := newSandboxedShellSystem(root, &shellTemp, env, DefaultShellCommand)
 
-	return sss.runBash(ctx, bashParams(command)), nil
+	return sss.Bash(ctx, bashParams(command)), nil
 }
 
 func shellEnvList(shellEnv map[string]string) ([]string, error) {
@@ -121,10 +121,6 @@ func shellEnvList(shellEnv map[string]string) ([]string, error) {
 }
 
 func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) BashResult {
-	return sss.runBash(ctx, params)
-}
-
-func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams) BashResult {
 	sss.mu.Lock()
 	defer sss.mu.Unlock()
 
