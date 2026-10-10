@@ -3213,19 +3213,19 @@ function cronAxisTime(ms: number) {
 }
 
 function CronMarker({ label, tooltip, pct, ran, onClick }: { label: string; tooltip: string; pct: number; ran: boolean; onClick?: () => void }) {
-  const [position, setPosition] = useState<{ left: number } | null>(null);
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   const id = useId();
   function showTooltip(event: SyntheticEvent<HTMLElement>) {
     const bounds = event.currentTarget.getBoundingClientRect();
-    setPosition({ left: Math.max(8, Math.min(bounds.left, window.innerWidth - 232)) - bounds.left });
+    setPosition({ left: Math.max(8, Math.min(bounds.left, window.innerWidth - 232)), top: bounds.bottom });
   }
   return (
-    <span className={cn("absolute top-0 h-4 w-3 -translate-x-1/2", position && "z-50")} style={{ left: `${pct}%` }} onPointerEnter={(event) => { if (event.pointerType === "mouse") showTooltip(event); }} onPointerLeave={() => setPosition(null)}>
+    <span className={cn("absolute top-0 h-4 w-3", position && "z-50")} style={{ left: `calc(${pct}% - 0.375rem)` }} onPointerEnter={(event) => { if (event.pointerType === "mouse") showTooltip(event); }} onPointerLeave={() => setPosition(null)}>
       <button type="button" aria-label={label} aria-describedby={position ? id : undefined} className="flex h-4 w-3 items-center justify-center rounded-sm focus-visible:outline-2"
         onFocus={showTooltip} onBlur={() => setPosition(null)} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setPosition(null); } }} onClick={(event) => { showTooltip(event); onClick?.(); }}>
         <span className={ran ? "h-3 w-2 rounded-sm bg-cyan-600 dark:bg-cyan-400" : "h-3 w-2 rounded-sm border-2 border-amber-600 dark:border-amber-400"} />
       </button>
-      {position ? <span id={id} role="tooltip" style={position} className="absolute top-full z-50 w-max max-w-56 break-words rounded-md border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md">{tooltip}</span> : null}
+      {position ? <span id={id} role="tooltip" style={position} className="fixed z-50 w-max max-w-56 break-words rounded-md border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md">{tooltip}</span> : null}
     </span>
   );
 }

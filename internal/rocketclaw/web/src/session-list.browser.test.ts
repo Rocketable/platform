@@ -1765,6 +1765,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       const bounds = await cronPage.getByRole("tooltip").boundingBox();
       expect(bounds.x).toBeGreaterThanOrEqual(0);
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+      await expected.press("Escape");
+      await cronPage.getByRole("button", { name: /^Expected daily at / }).last().hover();
+      // The page scroller clips overflow, so the tooltip's far edge must be painted, not just laid out.
+      expect(await cronPage.getByRole("tooltip").evaluate((node: HTMLElement) => { const box = node.getBoundingClientRect(); return node.contains(document.elementFromPoint(box.right - 1, box.top + box.height / 2)); })).toBe(true);
       const silent = cronPage.getByRole("button", { name: /^Preview silent at / });
       await silent.tap();
       const silentPreview = cronPage.getByRole("region", { name: "Run preview", exact: true });
