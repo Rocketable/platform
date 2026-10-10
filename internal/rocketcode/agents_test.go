@@ -7,7 +7,81 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
+
+const benchmarkAgentFrontmatter = `description: Reviews proposed changes
+model: example-model
+reasoningEffort: high
+verbosity: low
+maxRecursion: 2
+permission:
+  edit: deny
+schema:
+  output:
+    type: object
+    properties:
+      answer:
+        type: string
+    required: [answer]
+`
+
+func BenchmarkDecodeAgentFrontmatter(b *testing.B) {
+	for b.Loop() {
+		_, _, err := decodeAgentFrontmatter(benchmarkAgentFrontmatter)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestDecodeAgentFrontmatterAllocations(t *testing.T) {
+	allocs := testing.AllocsPerRun(100, func() {
+		_, _, err := decodeAgentFrontmatter(benchmarkAgentFrontmatter)
+		require.NoError(t, err)
+	})
+	// Leave headroom for decoder changes, but not a second YAML parser pass.
+	require.Less(t, allocs, float64(300))
+}
+
+func TestDecodeAgentFrontmatter(t *testing.T) {
+	for _, text := range []string{
+		benchmarkAgentFrontmatter,
+		"{}",
+		"value: &value example\nalias: *value",
+		"defaults: &defaults {enabled: true, count: 2}\nmerged: {<<: *defaults, count: 3}",
+		"string: yes\nquoted: '2'\ninteger: 2\nfloat: 0.1\nbool: true\nnull: null\ndate: 2026-01-01",
+		"nested: {1: value}\nsequence: [one, 2, false]",
+		"key: first\nkey: second",
+		"nested: {key: first, key: second}",
+		"value: *missing",
+		"value: &value [*value]",
+		"value: [unterminated",
+		"? [one, two]\n: value",
+	} {
+		t.Run(text, func(t *testing.T) {
+			var want map[string]any
+
+			errWant := yaml.Unmarshal([]byte(text), &want)
+
+			got, node, err := decodeAgentFrontmatter(text)
+			if errWant != nil {
+				require.EqualError(t, err, "unmarshal YAML frontmatter: "+errWant.Error())
+				require.Nil(t, got)
+				require.Nil(t, node)
+
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, want, got)
+
+			var document yaml.Node
+			require.NoError(t, yaml.Unmarshal([]byte(text), &document))
+			require.Equal(t, document.Content[0], node)
+		})
+	}
+}
 
 func testMapFile(data string) *fstest.MapFile {
 	return &fstest.MapFile{Data: []byte(data), Mode: 0, ModTime: time.Time{}, Sys: nil}
