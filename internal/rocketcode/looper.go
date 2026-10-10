@@ -2366,7 +2366,7 @@ func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion) (respo
 			return responses.ResponseInputItemUnionParam{}, false
 		}
 
-		return webSearchReplayInput(item.ID, item.Status, action), true
+		return responses.ResponseInputItemUnionParam{OfWebSearchCall: &responses.ResponseFunctionWebSearchParam{ID: item.ID, Action: action, Status: responses.ResponseFunctionWebSearchStatus(item.Status)}}, true
 	default:
 		return responses.ResponseInputItemUnionParam{}, false
 	}
@@ -2475,10 +2475,6 @@ func compactionReplayFields(compaction *responses.ResponseCompactionItemParam) c
 
 func functionCallReplayInput(id, callID, name, arguments string) responses.ResponseInputItemUnionParam {
 	return responses.ResponseInputItemUnionParam{OfFunctionCall: &responses.ResponseFunctionToolCallParam{Arguments: arguments, CallID: callID, Name: name, ID: openai.String(id), Type: "function_call"}}
-}
-
-func webSearchReplayInput(id, status string, action responses.ResponseFunctionWebSearchActionUnionParam) responses.ResponseInputItemUnionParam {
-	return responses.ResponseInputItemUnionParam{OfWebSearchCall: &responses.ResponseFunctionWebSearchParam{ID: id, Action: action, Status: responses.ResponseFunctionWebSearchStatus(status)}}
 }
 
 func webSearchOutputActionParam(action *responses.ResponseOutputItemUnionAction) (responses.ResponseFunctionWebSearchActionUnionParam, bool) {
