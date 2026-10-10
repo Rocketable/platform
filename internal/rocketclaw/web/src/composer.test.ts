@@ -1,12 +1,15 @@
 import { expect, test } from "bun:test";
-import ts from "typescript";
+import { API } from "typescript/unstable/async";
+import { isFunctionDeclaration, isIdentifier, isVariableStatement } from "typescript/unstable/ast/is";
 
 // Exercise the actual picker matcher without introducing a UI-only export.
 // Browser acceptance covers the real composer, query changes and gestures.
-const source = ts.createSourceFile("ui.tsx", await Bun.file(new URL("./ui.tsx", import.meta.url)).text(), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const api = new API({ cwd: import.meta.dir });
+const source = (await (await api.updateSnapshot({ openProject: "../tsconfig.json" })).getProjects()[0].program.getSourceFile(`${import.meta.dir}/ui.tsx`))!;
+await api.close();
 const picker = source.statements.filter((node) =>
-  (ts.isFunctionDeclaration(node) && node.name?.text === "dollarMatches") ||
-  (ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === "dollarCommands")),
+  (isFunctionDeclaration(node) && node.name?.text === "dollarMatches") ||
+  (isVariableStatement(node) && node.declarationList.declarations.some((declaration) => isIdentifier(declaration.name) && declaration.name.text === "dollarCommands")),
 ).map((node) => node.getText(source)).join("\n");
 const javascript = new Bun.Transpiler({ loader: "tsx" }).transformSync(`${picker}\nexport { dollarMatches };`);
 const { dollarMatches } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import ts from "typescript";
+import { API } from "typescript/unstable/async";
+import { isFunctionDeclaration } from "typescript/unstable/ast/is";
 import { RPCError } from "./api";
 import type { Session, SessionBatch } from "./types";
 import {
@@ -25,8 +26,10 @@ async function* batchesOf(rows: SessionBatch[]) {
 }
 
 // Keep the last-word check private; browser tests cover its mounted callers.
-const source = ts.createSourceFile("ui.tsx", await Bun.file(new URL("./ui.tsx", import.meta.url)).text(), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const functions = source.statements.filter((node) => ts.isFunctionDeclaration(node) && node.name?.text === "typingWord").map((node) => node.getText(source)).join("\n");
+const api = new API({ cwd: import.meta.dir });
+const source = (await (await api.updateSnapshot({ openProject: "../tsconfig.json" })).getProjects()[0].program.getSourceFile(`${import.meta.dir}/ui.tsx`))!;
+await api.close();
+const functions = source.statements.filter((node) => isFunctionDeclaration(node) && node.name?.text === "typingWord").map((node) => node.getText(source)).join("\n");
 const javascript = new Bun.Transpiler({ loader: "tsx" }).transformSync(`${functions}\nexport { typingWord };`);
 const { typingWord } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 
