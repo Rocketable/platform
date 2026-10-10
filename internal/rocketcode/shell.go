@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -205,8 +206,26 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) Ba
 	cmd.Env = append(os.Environ(), sss.env...)
 	cmd.Env = append(cmd.Env, "TMPDIR="+sss.shellTemp.tmpDir)
 
-	cmd.Stdout = &bytes.Buffer{}
-	cmd.Stderr = cmd.Stdout
+	// The command writes to a pipe this call owns, so a child that leaves the
+	// process group and keeps the output open cannot hold the call past its timeout.
+	outputReader, outputWriter, err := os.Pipe()
+	if err != nil {
+		return bashFailure(fmt.Errorf("create output pipe: %w", err).Error())
+	}
+	defer func() { _ = outputReader.Close() }()
+
+	var output bytes.Buffer
+
+	copied := make(chan struct{})
+
+	go func() {
+		_, _ = io.Copy(&output, outputReader)
+
+		close(copied)
+	}()
+
+	cmd.Stdout = outputWriter
+	cmd.Stderr = outputWriter
 	cmd.Cancel = func() error {
 		timedOut = true
 
@@ -228,10 +247,26 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) Ba
 	sysProcAttr.Setpgid = true
 	cmd.SysProcAttr = &sysProcAttr
 
-	stdoutBuf, _ := cmd.Stdout.(*bytes.Buffer)
-	err := cmd.Run()
+	err = cmd.Run()
+	_ = outputWriter.Close()
 
-	full := stdoutBuf.String()
+	select {
+	case <-copied:
+	case <-commandCtx.Done():
+		if !timedOut {
+			_ = cmd.Cancel()
+		}
+
+		select {
+		case <-copied:
+		case <-time.After(shellForceKillTimeout):
+			_ = outputReader.Close()
+
+			<-copied
+		}
+	}
+
+	full := output.String()
 	if full == "" {
 		full = "(no output)"
 	}
