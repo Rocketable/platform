@@ -260,7 +260,10 @@ func decodePortablePayload(raw json.RawMessage, missing, expected, decodeString,
 			return "", nil, fmt.Errorf("%s: %w", decodeArray, err)
 		}
 
-		return "", portableContentParts(content), nil
+		return "", slices.DeleteFunc(content, func(part portableContent) bool {
+			portable := part.Type == "input_text" || part.Type == "output_text" || part.Type == "input_image" && strings.TrimSpace(part.ImageURL) != "" || part.Type == "input_file" && (strings.TrimSpace(part.FileData) != "" || strings.TrimSpace(part.FileURL) != "")
+			return !portable
+		}), nil
 	default:
 		return "", nil, errors.New(expected)
 	}
@@ -346,13 +349,6 @@ func portableFunctionOutput(callID string, raw json.RawMessage) (responses.Respo
 	output.OfFunctionCallOutput.Type = "function_call_output"
 
 	return output, true, nil
-}
-
-func portableContentParts(parts []portableContent) []portableContent {
-	return slices.DeleteFunc(parts, func(part portableContent) bool {
-		portable := part.Type == "input_text" || part.Type == "output_text" || part.Type == "input_image" && strings.TrimSpace(part.ImageURL) != "" || part.Type == "input_file" && (strings.TrimSpace(part.FileData) != "" || strings.TrimSpace(part.FileURL) != "")
-		return !portable
-	})
 }
 
 func nonblankText(texts []string) []string {
