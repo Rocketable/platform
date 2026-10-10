@@ -78,6 +78,11 @@ func TestPermissionWildcardMatchOpenCodeSemantics(t *testing.T) {
 		{"README.md", "readme.md", false},
 		{`dir\file.txt`, "dir/file.txt", false},
 		{"", "*", true}, {"line\nnext\x00", "*", true}, {"é\xff", "*", true},
+		{"", "", true}, {"note.txt", "", false},
+		{"é\n\x00", "é\n\x00", true}, {"é", "e\u0301", false},
+		{`.+^${}()|[]\`, `.+^${}()|[]\`, true},
+		{"é", "?", true}, {"ab", "?", false},
+		{"\xff", "\ufffd", true}, {"\ufffd", "\xff", false}, {"\xff", "\xff", false},
 	} {
 		require.Equal(t, tt.want, permissionWildcardMatch(tt.input, tt.pattern))
 	}
@@ -91,22 +96,38 @@ func TestPermissionWildcardMatchOpenCodeSemantics(t *testing.T) {
 		require.Zero(t, allocs)
 	}
 
+	for _, input := range []string{"note.txt", "other.txt", "é\n\x00", ""} {
+		allocs := testing.AllocsPerRun(100, func() {
+			if got := permissionWildcardMatch(input, "note.txt"); got != (input == "note.txt") {
+				t.Fatalf("exact match %q: got %t", input, got)
+			}
+		})
+		require.Zero(t, allocs, input)
+	}
+
 	require.True(t, permissionWildcardMatch("*", "*", ruleSegment{Text: "*", Literal: true}))
 	require.False(t, permissionWildcardMatch("note.txt", "*", ruleSegment{Text: "*", Literal: true}))
 	require.False(t, permissionWildcardMatch("note.txt", "*suffix", ruleSegment{Text: "*"}, ruleSegment{Text: "suffix", Literal: true}))
+	require.True(t, permissionWildcardMatch("note.txt", "other.txt", ruleSegment{Text: "note.txt", Literal: true}))
 }
 
 func BenchmarkPermissionWildcardMatch(b *testing.B) {
-	for name, segments := range map[string][]ruleSegment{
-		"pattern":  nil,
-		"authored": {{Text: "*"}},
-		"literal":  {{Text: "*", Literal: true}},
+	for name, tc := range map[string]struct {
+		input, pattern string
+		segments       []ruleSegment
+	}{
+		"pattern":        {"note.txt", "*", nil},
+		"authored":       {"note.txt", "*", []ruleSegment{{Text: "*"}}},
+		"literal":        {"note.txt", "*", []ruleSegment{{Text: "*", Literal: true}}},
+		"exact":          {"note.txt", "note.txt", nil},
+		"exact-mismatch": {"other.txt", "note.txt", nil},
+		"wildcard":       {"note.txt", "*.txt", nil},
 	} {
 		b.Run(name, func(b *testing.B) {
 			b.ReportAllocs()
 
 			for b.Loop() {
-				permissionWildcardMatch("note.txt", "*", segments...)
+				permissionWildcardMatch(tc.input, tc.pattern, tc.segments...)
 			}
 		})
 	}
