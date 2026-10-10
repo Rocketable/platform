@@ -14,13 +14,6 @@ type bashStarlarkResult struct {
 	errorCode string
 }
 
-func newBashStarlarkResult(result BashResult) *bashStarlarkResult {
-	return &bashStarlarkResult{
-		output:    result.Output,
-		errorCode: result.ErrorCode,
-	}
-}
-
 func (b *bashStarlarkResult) String() string       { return b.output }
 func (b *bashStarlarkResult) Type() string         { return "bash_result" }
 func (b *bashStarlarkResult) Freeze()              {}
