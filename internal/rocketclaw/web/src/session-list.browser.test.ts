@@ -508,7 +508,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
           }
           return historyResponse(input.id, ctrl.history, "", input.revision);
         case "/api/ListAgents": return Response.json({ agents: input.conversationId === "web:cron:silent-source" ? [{ name: "other", model: "gpt" }] : [{ name: "other", model: "gpt" }, { name: "main", model: "gpt" }], currentAgent: input.conversationId ? ctrl.currentAgents.get(input.conversationId) ?? "main" : "" });
-        case "/api/ListSkills": return Response.json({ skills: input.agent === "main" ? [{ name: "review", description: "Review changes" }, { name: "stop", description: "Inspect logs" }] : [] });
+        case "/api/ListSkills": return Response.json({ skills: input.agent === "main" ? [{ name: "review", description: "Review changes" }, { name: "stop", description: "Inspect logs" }] : input.agent ? [] : [{ name: "release", description: "Ship a release", content: "release steps" }] });
         case "/api/ListConfig": return Response.json({ config: { tailscaleUser: "connected@example.com" } });
         case "/api/UpdateSession":
           if (ctrl.updateError) throw new RPCError("Could not save session", 13);
@@ -731,7 +731,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const commandPalette = page.getByRole("dialog", { name: "Run command", exact: true });
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
     expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
-    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "List Agents", "List Skills", "Sessions: New", "Sessions: Search", "Settings", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Move tabs to left", "Tabs: Pin", "Timeline: Compact", "Timeline: Detailed", "Timeline: Everything", "Timeline: Messages only", "Timeline: Quiet"]);
+    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "List Agents", "List Skills", "Sessions: New", "Sessions: Search", "Settings", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Move tabs to left", "Tabs: Pin",
+      // Timeline levels follow the Config slider, with its descriptions, and mark the active level.
+      "Timeline: Messages onlyHide all activity.", "Timeline: QuietGroup subagents and skills. Hide other activity.", "Timeline: CompactCurrent · Group all activity with details collapsed.",
+      "Timeline: DetailedExpand execute output. Show subagents and skills separately and group other activity.", "Timeline: EverythingShow all activity separately and expanded."]);
     await page.keyboard.press("Escape");
     await commandPalette.waitFor({ state: "hidden" });
     await navigationCommands.click();
@@ -2002,14 +2005,35 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await grouped.evaluate((el: HTMLElement) => (el.parentElement as HTMLDetailsElement).open)).toBe(true);
     const palette = async (name: string) => {
       await detailPage.locator("footer").getByRole("button", { name: "Open command palette" }).click();
-      await detailPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name, exact: true }).click();
+      await detailPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: new RegExp(`^${name}`) }).click();
     };
     await palette("Timeline: Everything");
     await detailPage.locator('pre[aria-label="Run · make test"]').waitFor();
     expect(JSON.parse((await detailPage.evaluate(() => localStorage.getItem("timeline-detail")))!).rows.execute).toEqual({ placement: "separate", details: "expanded" });
+    // A skill row opens its skill in the right panel, which links to the skill's own page and back to the list.
+    await detailPage.getByRole("link", { name: "View skill: release", exact: true }).click();
+    const skillPanel = detailPage.getByRole("complementary", { name: "Skill", exact: true });
+    await skillPanel.getByText("release steps", { exact: true }).waitFor();
+    expect(new URL(detailPage.url()).searchParams.get("skill")).toBe("release");
+    await skillPanel.getByRole("link", { name: "Open page", exact: true }).click();
+    await detailPage.waitForURL(`${origin}/skills/release`);
+    await detailPage.getByRole("tab", { name: "release", exact: true }).waitFor();
     await detailPage.reload();
+    await detailPage.getByRole("heading", { name: "release", exact: true }).waitFor();
+    await detailPage.getByText("release steps", { exact: true }).waitFor();
+    await detailPage.getByRole("link", { name: "All skills", exact: true }).click();
+    await detailPage.waitForURL(`${origin}/skills`);
+    expect(await detailPage.getByText("release steps", { exact: true }).count()).toBe(0);
+    await detailPage.getByRole("link", { name: "release", exact: true }).click();
+    await detailPage.waitForURL(`${origin}/skills/release`);
+    await detailPage.goto(`${origin}/s/${Buffer.from("timeline-detail").toString("base64url")}`);
     await detailPage.locator('pre[aria-label="Run · make test"]').waitFor();
-    await palette("Timeline: Messages only");
+    await detailPage.locator("footer").getByRole("button", { name: "Open command palette" }).click();
+    const levels = detailPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: /^Timeline: / });
+    expect(await levels.filter({ hasText: "Current · " }).allTextContents()).toEqual(["Timeline: EverythingCurrent · Show all activity separately and expanded."]);
+    // Running a level does not move it to the top with recent commands.
+    expect((await levels.allTextContents()).map((text: string) => text.match(/^Timeline: (Messages only|Quiet|Compact|Detailed|Everything)/)![1])).toEqual(["Messages only", "Quiet", "Compact", "Detailed", "Everything"]);
+    await levels.filter({ hasText: "Messages only" }).click();
     await detailPage.getByText("Build is green", { exact: true }).waitFor();
     expect(await detailPage.locator("#transcript-scroll summary").count()).toBe(0);
     // Pointer input reaches the Config slider: clicking its far end selects Everything.

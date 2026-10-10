@@ -3,7 +3,7 @@ import { Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
-import { setTimelineRows, timelineCategories, timelineLevel, timelineLevels, useTimelineDetail, type TimelineCategory, type TimelinePlacement, type TimelineRows } from "./timeline-detail";
+import { collapsible, setTimelineRows, timelineCategories, timelineLevel, timelineLevels, useTimelineDetail, type TimelineCategory, type TimelinePlacement, type TimelineRows } from "./timeline-detail";
 
 // Follows OpenCode 7440ff784408a8a095b58ef908de3fc6ee66ca66, packages/app/src/settings/timeline-detail.tsx.
 export function TimelineDetailCard() {
@@ -55,7 +55,7 @@ export function TimelineDetailCard() {
                     {label}
                   </td>
                   <td className="text-center">{hidden ? null : <Switch aria-label={`${label} group`} checked={row.placement === "grouped"} onCheckedChange={(checked) => update(id, { ...row, placement: checked ? "grouped" : "separate" })} />}</td>
-                  <td className="text-center">{hidden ? null : <Switch aria-label={`${label} collapse`} checked={row.details === "collapsed"} onCheckedChange={(checked) => update(id, { ...row, details: checked ? "collapsed" : "expanded" })} />}</td>
+                  <td className="text-center">{hidden || !collapsible.has(id) ? null : <Switch aria-label={`${label} collapse`} checked={row.details === "collapsed"} onCheckedChange={(checked) => update(id, { ...row, details: checked ? "collapsed" : "expanded" })} />}</td>
                 </tr>
               );
             })}
