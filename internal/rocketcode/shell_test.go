@@ -6,8 +6,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -132,6 +135,30 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 		require.Contains(t, got.String(), "started")
 		require.Equal(t, "timeout", got.ErrorCode)
 		require.False(t, got.Success)
+	})
+
+	t.Run("timeout ends the call when an escaped child keeps the output open", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			command string
+		}{
+			{name: "shell already exited", command: "set -m; sleep 30 & echo $!"},
+			{name: "shell still running", command: "set -m; sleep 30 & echo $!; sleep 10"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				start := time.Now()
+				got := sss.Bash(context.Background(), bashParams{Command: tt.command, TimeoutMillisecond: 100, Workdir: "", Description: "escaped child"})
+				elapsed := time.Since(start)
+
+				pid, err := strconv.Atoi(strings.TrimSpace(strings.SplitN(got.Output, "\n", 2)[0]))
+				require.NoError(t, err)
+				require.NoError(t, syscall.Kill(pid, syscall.SIGKILL))
+				require.Equal(t, "timeout", got.ErrorCode)
+				require.Less(t, elapsed, 10*time.Second)
+			})
+		}
 	})
 
 	t.Run("sets tmpdir to shell temp dir", func(t *testing.T) {
