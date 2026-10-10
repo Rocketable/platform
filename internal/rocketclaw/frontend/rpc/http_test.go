@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/stretchr/testify/require"
@@ -95,6 +97,17 @@ func TestHTTPBoundary(t *testing.T) {
 		require.Equal(t, http.StatusBadRequest, response.Code)
 		require.Contains(t, response.Body.String(), `"code":3`)
 	}
+
+	for _, tc := range []struct{ method, path, message string }{
+		{http.MethodGet, "/stream", "id is required"},
+		{http.MethodPost, "/api/UploadAttachment?conversationId=x", "name is required"},
+		{http.MethodGet, "/api/DownloadAttachment?id=file", "conversationId is required"},
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(tc.method, tc.path, http.NoBody))
+		require.Equal(t, http.StatusBadRequest, response.Code, tc.path)
+		require.JSONEq(t, fmt.Sprintf(`{"code":3,"message":%q}`, tc.message), response.Body.String())
+	}
 }
 
 func TestHTTPStreams(t *testing.T) {
@@ -104,7 +117,7 @@ func TestHTTPStreams(t *testing.T) {
 		httpCode int
 	}{
 		{name: "unary"}, {name: "large-history"}, {name: "stash"}, {name: "pop"}, {name: "complete"}, {name: "post-terminal-error"}, {name: "wirecut"}, {name: "oversized"}, {name: "invalid-text"},
-		{name: "cancel"}, {name: "idle-cancel"}, {name: "upload"}, {name: "download"}, {name: "inline"}, {name: "forced-download"}, {name: "truncated"},
+		{name: "cancel"}, {name: "idle-cancel"}, {name: "upload"}, {name: "upload-read-error"}, {name: "download"}, {name: "invalid-mime"}, {name: "inline"}, {name: "forced-download"}, {name: "truncated"},
 		{"auth", codes.Unauthenticated, http.StatusUnauthorized},
 		{"permission", codes.PermissionDenied, http.StatusForbidden},
 		{"not-found", codes.NotFound, http.StatusNotFound},
@@ -135,6 +148,8 @@ func TestHTTPStreams(t *testing.T) {
 				}
 
 				switch scenario {
+				case "upload-read-error":
+					return stream.RecvMsg(&Attachment{})
 				case "invalid-text":
 					return nil
 				case "large-history":
@@ -199,12 +214,16 @@ func TestHTTPStreams(t *testing.T) {
 					}
 
 					return nil
-				case "download", "inline", "forced-download", "truncated":
+				case "download", "invalid-mime", "inline", "forced-download", "truncated":
 					request := &Attachment{}
 					require.NoError(t, stream.RecvMsg(request))
 					require.Equal(t, "visible", request.ConversationId)
 
 					mimeType := "image/svg+xml"
+					if scenario == "invalid-mime" {
+						mimeType = "invalid mime"
+					}
+
 					if scenario == "inline" || scenario == "forced-download" {
 						mimeType = "image/png"
 					}
@@ -280,6 +299,17 @@ func TestHTTPStreams(t *testing.T) {
 				return
 			}
 
+			if scenario == "upload-read-error" {
+				request := httptest.NewRequest(http.MethodPost, "/api/UploadAttachment?conversationId=visible&name=original.bin", iotest.ErrReader(errors.New("broken body")))
+				request.RemoteAddr = "127.0.0.1:1234"
+				response := httptest.NewRecorder()
+				NewHTTPHandler(connection, config.SentryConfig{}).ServeHTTP(response, request)
+				require.Equal(t, http.StatusBadRequest, response.Code)
+				require.JSONEq(t, `{"code":3,"message":"read upload body: rpc error: code = InvalidArgument desc = broken body"}`, response.Body.String())
+
+				return
+			}
+
 			server := httptest.NewServer(NewHTTPHandler(connection, config.SentryConfig{}))
 			t.Cleanup(server.Close)
 
@@ -290,7 +320,7 @@ func TestHTTPStreams(t *testing.T) {
 				path = "/stream?id=visible"
 			case "upload", "upload-rejected", "upload-metadata", "upload-final-error":
 				path, method = "/api/UploadAttachment?conversationId=visible&name=original.bin", http.MethodPost
-			case "download", "inline", "forced-download", "truncated":
+			case "download", "invalid-mime", "inline", "forced-download", "truncated":
 				path = "/api/DownloadAttachment?conversationId=visible&id=file"
 				if scenario == "forced-download" {
 					path += "&download=1"
@@ -418,9 +448,14 @@ func TestHTTPStreams(t *testing.T) {
 				require.NotContains(t, string(body), "event: complete")
 			case "upload":
 				require.Contains(t, string(body), `"id":"receipt"`)
-			case "download", "inline", "forced-download":
+			case "download", "invalid-mime", "inline", "forced-download":
+				require.Equal(t, http.StatusOK, response.StatusCode)
 				require.Equal(t, data, body)
 				require.Equal(t, "nosniff", response.Header.Get("X-Content-Type-Options"))
+
+				if scenario == "invalid-mime" {
+					require.Equal(t, "application/octet-stream", response.Header.Get("Content-Type"))
+				}
 
 				if scenario == "inline" {
 					require.Contains(t, response.Header.Get("Content-Disposition"), "inline;")
