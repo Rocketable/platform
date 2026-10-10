@@ -2,6 +2,7 @@ package rocketcode
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/openai/openai-go/v3/responses"
@@ -80,6 +81,50 @@ func TestReplayInputPreservesCompactionPayload(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	require.JSONEq(t, string(raw[0]), string(got[0]))
+}
+
+func TestReplayInputDecodeErrors(t *testing.T) {
+	for _, tt := range []struct {
+		name, raw, kind, operation string
+	}{
+		{"malformed JSON", `{`, "", "unmarshal SDK replay input"},
+		{"message metadata", `{"type":"message","role":"user","content":"body","prompt_header":123}`, "message", "decode replay message metadata"},
+		{"compaction content", `{"type":"compaction","encrypted_content":"sealed","content":123}`, "compaction", "decode compaction replay extras"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			items, err := ReplayInputToParams([]json.RawMessage{
+				json.RawMessage(`{"type":"message","role":"user","content":"valid"}`),
+				json.RawMessage(tt.raw),
+			})
+			require.Nil(t, items, "invalid replay must not return a partial history")
+
+			errReplay, ok := errors.AsType[*ReplayDecodeError](err)
+			require.True(t, ok, "expected ReplayDecodeError, got %v", err)
+			require.Equal(t, -1, errReplay.EntryIndex)
+			require.Equal(t, 1, errReplay.ItemIndex)
+			require.Equal(t, tt.kind, errReplay.Kind)
+			require.ErrorContains(t, err, tt.operation)
+			require.Same(t, errReplay.Cause, errors.Unwrap(errReplay))
+		})
+	}
+}
+
+func TestReplayInputEncodeError(t *testing.T) {
+	message := responses.EasyInputMessageParam{Role: "user", Type: "message"}
+	message.SetExtraFields(map[string]any{"broken": json.RawMessage(`{`)})
+	raw, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		{OfMessage: &responses.EasyInputMessageParam{Role: "user", Type: "message"}},
+		{OfMessage: &message},
+	})
+	require.Nil(t, raw, "invalid replay must not return a partial history")
+
+	errReplay, ok := errors.AsType[*ReplayDecodeError](err)
+	require.True(t, ok, "expected ReplayDecodeError, got %v", err)
+	require.Equal(t, -1, errReplay.EntryIndex)
+	require.Equal(t, 1, errReplay.ItemIndex)
+	require.Equal(t, "message", errReplay.Kind)
+	require.ErrorContains(t, err, "marshal SDK replay input")
+	require.Same(t, errReplay.Cause, errors.Unwrap(errReplay))
 }
 
 func TestReplayInputPreservesMessageHeaderLocally(t *testing.T) {
