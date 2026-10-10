@@ -13,7 +13,7 @@ import { draftContent } from "./drafts";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse } from "./types";
 import { Bot, Check, ChevronDown, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, MessageSquare, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
-import { createContext, memo, use, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps } from "react";
+import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
@@ -940,44 +940,46 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
     newChatOwner.current = newChat;
     return () => { newChatOwner.current = undefined; };
   }, [newChat]);
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.repeat) return;
-      if ((event.metaKey || event.ctrlKey) && !event.altKey && event.code === "KeyP") {
-        event.preventDefault();
-        openPalette(event.shiftKey ? "commands" : "sessions");
-        return;
-      }
-      if (vertical && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.code === "KeyB") {
-        event.preventDefault();
-        setTabsOpen((open) => !open);
-        return;
-      }
-      if ((event.metaKey || event.ctrlKey) && event.altKey && !event.shiftKey && event.code === "KeyN") {
-        event.preventDefault();
-        newChat();
-        return;
-      }
-      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && (event.code === "BracketLeft" || event.code === "BracketRight")) {
-        event.preventDefault();
-        const at = openTabs.findIndex((tab) => tab.path === pathname);
-        const next = openTabs[(at + (event.code === "BracketLeft" ? openTabs.length - 1 : 1)) % openTabs.length].path;
-        if (next !== pathname) navigate(next);
-      }
-    };
-    const onEscape = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.repeat || showChat || event.key !== "Escape") return;
-      if (document.querySelector('[role="dialog"], [role="listbox"], [role="menu"], [role="tooltip"]')) return;
+  const onKey = useEffectEvent((event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.repeat) return;
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && event.code === "KeyP") {
       event.preventDefault();
-      closeTab([location.pathname]);
-    };
-    window.addEventListener("keydown", onKey, true);
-    window.addEventListener("keydown", onEscape);
+      openPalette(event.shiftKey ? "commands" : "sessions");
+      return;
+    }
+    if (vertical && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.code === "KeyB") {
+      event.preventDefault();
+      setTabsOpen((open) => !open);
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.altKey && !event.shiftKey && event.code === "KeyN") {
+      event.preventDefault();
+      newChat();
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && (event.code === "BracketLeft" || event.code === "BracketRight")) {
+      event.preventDefault();
+      const at = openTabs.findIndex((tab) => tab.path === pathname);
+      const next = openTabs[(at + (event.code === "BracketLeft" ? openTabs.length - 1 : 1)) % openTabs.length].path;
+      if (next !== pathname) navigate(next);
+    }
+  });
+  const onEscape = useEffectEvent((event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.repeat || showChat || event.key !== "Escape") return;
+    if (document.querySelector('[role="dialog"], [role="listbox"], [role="menu"], [role="tooltip"]')) return;
+    event.preventDefault();
+    closeTab([location.pathname]);
+  });
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => onKey(event);
+    const escape = (event: KeyboardEvent) => onEscape(event);
+    window.addEventListener("keydown", key, true);
+    window.addEventListener("keydown", escape);
     return () => {
-      window.removeEventListener("keydown", onKey, true);
-      window.removeEventListener("keydown", onEscape);
+      window.removeEventListener("keydown", key, true);
+      window.removeEventListener("keydown", escape);
     };
-  }, [newChat, showChat, openPalette, closeTab, openTabs, pathname, vertical]);
+  }, []);
   if (showChat && conversation.id !== route.id) {
     // Creation assigns this conversation its ID; other navigation starts a fresh subtree.
     const created = conversation.id === "" && conversation.created === route.id;
