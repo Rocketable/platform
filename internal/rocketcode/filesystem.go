@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -110,7 +111,7 @@ func (sfs *sandboxedFileSystem) ReadResult(filename string, offset int) ToolResu
 		return TextToolResult("failed to read file: " + filename)
 	}
 
-	mimeType := sniffAttachmentMIME(content, mimeFromFilename(filename))
+	mimeType := sniffAttachmentMIME(content, cmp.Or(mime.TypeByExtension(filepath.Ext(filename)), "application/octet-stream"))
 	if isSupportedAttachmentMIME(mimeType) {
 		attachment, err := attachmentFromBytes(filepath.Base(filename), mimeType, content)
 		if err != nil {
