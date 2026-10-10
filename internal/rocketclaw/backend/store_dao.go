@@ -358,17 +358,15 @@ func (d stateDAO) clearParkAfter(ctx context.Context, scheduledID string) error 
 	return nil
 }
 
-func (d stateDAO) deleteScheduledMessage(ctx context.Context, id string) error {
+func (d stateDAO) deleteScheduledMessage(ctx context.Context, id string) (bool, error) {
 	id = strings.TrimSpace(id)
 	if err := d.clearParkAfter(ctx, id); err != nil {
-		return err
+		return false, err
 	}
 
-	if _, err := d.db.ExecContext(ctx, `DELETE FROM scheduled_messages WHERE scheduled_message_id = $1`, id); err != nil {
-		return fmt.Errorf("delete scheduled message: %w", err)
-	}
+	deleted, err := execRows(ctx, d.db, "delete scheduled message", "count deleted scheduled messages", `DELETE FROM scheduled_messages WHERE scheduled_message_id = $1`, id)
 
-	return nil
+	return deleted > 0, err
 }
 
 func (d stateDAO) resetScheduledMessages(ctx context.Context, conversationID string) error {

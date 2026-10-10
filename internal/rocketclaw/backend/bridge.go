@@ -912,7 +912,8 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 	}
 
 	if request.scheduledMessageID != "" && !request.scheduledMessageRecurring {
-		if err := (stateDAO{db: tx}).deleteScheduledMessage(ctx, request.scheduledMessageID); err != nil {
+		deleted, err := (stateDAO{db: tx}).deleteScheduledMessage(ctx, request.scheduledMessageID)
+		if err != nil || !deleted {
 			return false, err
 		}
 	}

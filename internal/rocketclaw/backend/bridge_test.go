@@ -563,7 +563,9 @@ func TestPickLaterWorkStartsParkedQueueAfterScheduledCancel(t *testing.T) {
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "Ship README", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, ParkAfter: "s1", SlackChannel: "C123", SlackTS: "111.222"}))
 	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "scheduled", DueAt: time.Now().UTC().Add(time.Hour)}))
-	require.NoError(t, (stateDAO{db: store.db}).deleteScheduledMessage(t.Context(), "s1"))
+	deleted, err := (stateDAO{db: store.db}).deleteScheduledMessage(t.Context(), "s1")
+	require.NoError(t, err)
+	require.True(t, deleted)
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 
@@ -579,6 +581,31 @@ func TestActivateInboundReturnsStartedScheduleDeleteError(t *testing.T) {
 	admitted, err := bridge.activateInbound(t.Context(), &bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "later", false), scheduledMessageID: "s1"})
 	require.Error(t, err)
 	assert.False(t, admitted)
+}
+
+func TestOneShotScheduleActivatesOnce(t *testing.T) {
+	store := newTestSessionService(t)
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "thread-1", SessionService: store}, requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
+	now := time.Now().UTC()
+	scheduled := protocol.ScheduledMessageState{ConversationID: "thread-1", Agent: "main", Message: "follow up", DueAt: now}
+	require.NoError(t, store.PutScheduledMessage("s1", &scheduled))
+
+	// Both timers can enqueue before either request consumes the one-shot.
+	for range 2 {
+		require.NoError(t, bridge.submitDueScheduled(t.Context(), "s1", &scheduled, now))
+	}
+
+	first := <-bridge.requestCh
+	admitted, err := bridge.activateInbound(t.Context(), &first)
+	require.NoError(t, err)
+	require.True(t, admitted)
+	require.NoError(t, store.closeTurn(t.Context(), first.turnID))
+
+	second := <-bridge.requestCh
+	admitted, err = bridge.activateInbound(t.Context(), &second)
+	require.NoError(t, err)
+	assert.False(t, admitted, "a consumed schedule cannot start another turn")
+	assert.Empty(t, runningTestTurns(t, store))
 }
 
 func TestPickLaterWorkSkipsWhenGoalStillActive(t *testing.T) {
