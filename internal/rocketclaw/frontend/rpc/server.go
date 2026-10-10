@@ -1106,7 +1106,7 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 			continue
 		}
 
-		response.Agents = append(response.Agents, &Agent{Name: name, Model: agent.Model, Reasoning: agent.ReasoningEffort, Description: agent.Description, Verbosity: agent.Verbosity, Prompt: agent.Prompt})
+		response.Agents = append(response.Agents, &Agent{Name: name, Model: agent.Model, Reasoning: agent.ReasoningEffort, Description: agent.Description, Verbosity: agent.Verbosity, Prompt: agent.Prompt, CustomShell: agent.CustomShell})
 	}
 
 	return response, nil

@@ -25,7 +25,7 @@ Define literal `meta` with matching non-empty `name` and `description`, plus an 
 - `pipeline(items, fn)` concurrently applies one callback per item in input order.
 - `phase(name, fn)` executes one unique named phase once and records its terminal counts and status. Calls outside named phases use the implicit `run` phase even when strict metadata does not declare it. Declared, dynamic, and implicit phases count toward a limit of 100 total phases.
 
-Instructions, models, and tools are workflow-local. `tools` only narrows the invoking agent; workers never receive RocketClaw behavior tools.
+Instructions, models, and tools are workflow-local. `tools` only narrows the invoking agent; workers never receive RocketClaw behavior tools. Workers run their shell commands through the invoking agent's `customShell` when it sets one.
 
 ## Safety
 

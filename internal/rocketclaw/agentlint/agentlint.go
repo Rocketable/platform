@@ -19,7 +19,7 @@ import (
 const (
 	rc000, rc001, rc002, rc003 = "RC000", "RC001", "RC002", "RC003"
 	rc004, rc005, rc006, rc007 = "RC004", "RC005", "RC006", "RC007"
-	rc008                      = "RC008"
+	rc008, rc009, rc010        = "RC008", "RC009", "RC010"
 )
 
 // Finding is one lint result line.
@@ -75,6 +75,7 @@ func Lint(runtimeRoot string, cfg *config.Config) (Result, error) {
 	findings = append(findings, lintDelegationEscalation(infos)...)
 	findings = append(findings, lintGuardrailReferences(infos)...)
 	findings = append(findings, lintReasoningEffort(infos)...)
+	findings = append(findings, lintCustomShellEdits(infos, cfg.Workspace)...)
 	findings = slices.DeleteFunc(findings, func(finding Finding) bool {
 		return suppressed(&finding, infos)
 	})
@@ -108,6 +109,10 @@ func AgentGraphDOT(runtimeRoot string, cfg *config.Config) (string, error) {
 
 	for _, name := range names {
 		label := name + "\nmaxRecursion=" + maxRecursionLabel(infos[name].agent.MaxRecursion)
+		if customShell := infos[name].agent.CustomShell; customShell != "" {
+			label += "\ncustomShell=" + customShell
+		}
+
 		fmt.Fprintf(&b, "  %s [label=%s];\n", strconv.Quote(name), strconv.Quote(label))
 	}
 
@@ -212,6 +217,10 @@ func collectMetadata(filePath string, frontmatter *yaml.Node, suppressions map[s
 			findings = append(findings, Finding{Code: rc006, Severity: "error", Path: filePath, Message: "plural permissions frontmatter is ignored; use permission", keys: []string{"permissions"}})
 		}
 
+		if key.Value != "customShell" && strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(key.Value)) == "customshell" {
+			findings = append(findings, Finding{Code: rc009, Severity: "error", Path: filePath, Message: key.Value + " is ignored; the field is customShell", keys: []string{key.Value}})
+		}
+
 		collectSuppressions(filePath, key.Value, value, suppressions, &findings)
 	}
 
@@ -245,7 +254,7 @@ func addSuppressionsFromNode(filePath, key string, node *yaml.Node, suppressions
 			continue
 		}
 
-		if code != "" && !slices.Contains([]string{rc001, rc002, rc003, rc004, rc005, rc006, rc007, rc008}, code) {
+		if code != "" && !slices.Contains([]string{rc001, rc002, rc003, rc004, rc005, rc006, rc007, rc008, rc009, rc010}, code) {
 			*findings = append(*findings, Finding{Code: rc000, Severity: "error", Path: filePath, Message: "unknown #nolint code " + code})
 			continue
 		}
@@ -366,6 +375,29 @@ func lintReasoningEffort(infos map[string]*agentInfo) []Finding {
 	for name, info := range infos {
 		if info.agent.ReasoningEffort == "xhigh" {
 			findings = append(findings, Finding{Code: rc008, Severity: "error", Path: info.filePath, Message: name + " uses reasoningEffort xhigh, which may be excessive", keys: []string{"reasoningEffort"}})
+		}
+	}
+
+	return findings
+}
+
+// lintCustomShellEdits reports edit grants that could rewrite a sandboxed agent's wrapper or agent file.
+func lintCustomShellEdits(infos map[string]*agentInfo, workspace string) []Finding {
+	findings := []Finding{}
+
+	for _, write := range capabilities(infos, "edit") {
+		for name, info := range infos {
+			if info.agent.CustomShell == "" {
+				continue
+			}
+
+			if wrapper, err := filepath.Rel(workspace, info.agent.CustomShell); err == nil && filepath.IsLocal(wrapper) && pathsOverlap(write.pattern, filepath.ToSlash(wrapper)) {
+				findings = append(findings, Finding{Code: rc010, Severity: "error", Path: write.file, Message: fmt.Sprintf("%s can edit %s, the customShell of %s", write.agent, filepath.ToSlash(wrapper), name), keys: []string{write.bucket, write.pattern}})
+			}
+
+			if pathsOverlap(write.pattern, info.filePath) {
+				findings = append(findings, Finding{Code: rc010, Severity: "error", Path: write.file, Message: fmt.Sprintf("%s can edit %s, which defines %s and its customShell", write.agent, info.filePath, name), keys: []string{write.bucket, write.pattern}})
+			}
 		}
 	}
 

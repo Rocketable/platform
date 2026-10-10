@@ -368,6 +368,6 @@ func TestMakeSandboxedToolsHasRead(t *testing.T) {
 	tmp := filepath.Join(dir, "tmp")
 
 	require.NoError(t, root.Mkdir("tmp", 0o755))
-	tools := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, tmp), nil, DefaultShellCommand)
+	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, tmp), nil, DefaultShellCommand)
 	require.NotNil(t, tools["read"].Call)
 }

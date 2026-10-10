@@ -21,6 +21,7 @@ type promptExpansionEnvironment struct {
 	shellTemp    shellTempConfig
 	env          []string
 	shellCommand ShellCommandFunc
+	customShell  string
 }
 
 func newPromptExpansionEnvironment(root *os.Root, shellTemp shellTempConfig, env []string, shellCommand ShellCommandFunc) (promptExpansionEnvironment, error) {
@@ -53,7 +54,7 @@ func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, pr
 			return ""
 		}
 
-		shell, args := e.shellCommand(command)
+		shell, args := e.shellCommand.withCustomShell(e.customShell, command)
 		cmd := exec.CommandContext(context.WithoutCancel(ctx), shell, args...)
 		cmd.Dir = e.hostDir
 		cmd.Env = append(os.Environ(), e.env...)
@@ -103,7 +104,9 @@ func expandAgentPrompt(ctx context.Context, agent *Agent, enabled bool, env *pro
 		return
 	}
 
-	agent.Prompt = env.expandShellCommands(ctx, agent.Prompt)
+	agentEnv := *env
+	agentEnv.customShell = agent.CustomShell
+	agent.Prompt = agentEnv.expandShellCommands(ctx, agent.Prompt)
 }
 
 // DefaultShellCommand uses Bash to match the permission parser's grammar.

@@ -2507,6 +2507,7 @@ type Agent struct {
 	Prompt        string                 `protobuf:"bytes,6,opt,name=prompt,proto3" json:"prompt,omitempty"`
 	Permissions   string                 `protobuf:"bytes,7,opt,name=permissions,proto3" json:"permissions,omitempty"`
 	Origin        string                 `protobuf:"bytes,8,opt,name=origin,proto3" json:"origin,omitempty"`
+	CustomShell   string                 `protobuf:"bytes,9,opt,name=custom_shell,json=customShell,proto3" json:"custom_shell,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2593,6 +2594,13 @@ func (x *Agent) GetPermissions() string {
 func (x *Agent) GetOrigin() string {
 	if x != nil {
 		return x.Origin
+	}
+	return ""
+}
+
+func (x *Agent) GetCustomShell() string {
+	if x != nil {
+		return x.CustomShell
 	}
 	return ""
 }
@@ -4819,7 +4827,7 @@ const file_web_proto_rawDesc = "" +
 	"\achannel\x18\b \x01(\tR\achannel\x12\x1a\n" +
 	"\bupcoming\x18\t \x03(\tR\bupcoming\x12\x16\n" +
 	"\x06origin\x18\n" +
-	" \x01(\tR\x06origin\"\xe1\x01\n" +
+	" \x01(\tR\x06origin\"\x84\x02\n" +
 	"\x05Agent\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05model\x18\x02 \x01(\tR\x05model\x12\x1c\n" +
@@ -4828,7 +4836,8 @@ const file_web_proto_rawDesc = "" +
 	"\tverbosity\x18\x05 \x01(\tR\tverbosity\x12\x16\n" +
 	"\x06prompt\x18\x06 \x01(\tR\x06prompt\x12 \n" +
 	"\vpermissions\x18\a \x01(\tR\vpermissions\x12\x16\n" +
-	"\x06origin\x18\b \x01(\tR\x06origin\"<\n" +
+	"\x06origin\x18\b \x01(\tR\x06origin\x12!\n" +
+	"\fcustom_shell\x18\t \x01(\tR\vcustomShell\"<\n" +
 	"\x11ListAgentsRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\"]\n" +
 	"\x12ListAgentsResponse\x12\"\n" +

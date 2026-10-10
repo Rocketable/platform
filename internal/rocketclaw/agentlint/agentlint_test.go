@@ -172,6 +172,31 @@ expensive
 	}, result.Findings)
 }
 
+func TestLintCustomShell(t *testing.T) {
+	runtimeRoot, workspace := t.TempDir(), t.TempDir()
+	writeAgent(t, runtimeRoot, "boxed.md", "---\ndescription: boxed\ncustomShell: "+filepath.Join(workspace, "bin", "enter.sh")+"\n---\nboxed\n")
+	writeAgent(t, runtimeRoot, "outside.md", "---\ndescription: outside\ncustomShell: /usr/local/bin/agent-sandbox\n---\noutside\n")
+	writeAgent(t, runtimeRoot, "editor.md", `---
+description: editor
+permission:
+  edit:
+    "bin/*": allow
+    "agents/boxed.md": allow
+---
+editor
+`)
+	writeAgent(t, runtimeRoot, "typo.md", "---\ndescription: typo\ncustom_shell: /usr/local/bin/agent-sandbox\n---\ntypo\n")
+
+	result, err := Lint(runtimeRoot, &config.Config{Workspace: workspace})
+	require.NoError(t, err)
+
+	assert.Equal(t, []Finding{
+		{Code: rc009, Severity: "error", Path: "agents/typo.md", Message: "custom_shell is ignored; the field is customShell", keys: []string{"custom_shell"}},
+		{Code: rc010, Severity: "error", Path: "agents/editor.md", Message: "editor can edit agents/boxed.md, which defines boxed and its customShell", keys: []string{"edit", "agents/boxed.md"}},
+		{Code: rc010, Severity: "error", Path: "agents/editor.md", Message: "editor can edit bin/enter.sh, the customShell of boxed", keys: []string{"edit", "bin/*"}},
+	}, result.Findings)
+}
+
 func TestLintReasoningEffortXHighError(t *testing.T) {
 	runtimeRoot := t.TempDir()
 	writeAgent(t, runtimeRoot, "expensive.md", `---
@@ -249,6 +274,7 @@ alpha
 description: beta
 maxRecursion: 2
 guardrail: hub
+customShell: /usr/local/bin/agent-sandbox
 ---
 beta
 `)
@@ -266,7 +292,7 @@ hub
 	require.NoError(t, err)
 	assert.Equal(t, `digraph agent_graph {
   "alpha" [label="alpha\nmaxRecursion=0"];
-  "beta" [label="beta\nmaxRecursion=2"];
+  "beta" [label="beta\nmaxRecursion=2\ncustomShell=/usr/local/bin/agent-sandbox"];
   "hub" [label="hub\nmaxRecursion=unbounded"];
   "alpha" -> "hub" [color="red", label="cycle"];
   "hub" -> "alpha" [color="red", label="cycle"];

@@ -225,31 +225,54 @@ Prompt
 		require.Equal(t, 3, *result.Agents.Items["positive"].MaxRecursion)
 	})
 
-	t.Run("rejects invalid max recursion values", func(t *testing.T) {
+	t.Run("rejects invalid typed frontmatter values", func(t *testing.T) {
 		tests := []struct {
 			name  string
+			field string
 			value string
+			want  string
 		}{
-			{name: "below unlimited", value: "-2"},
-			{name: "float", value: "1.0"},
-			{name: "string", value: "\"1\""},
-			{name: "bool", value: "true"},
-			{name: "null", value: "null"},
-			{name: "sequence", value: "[]"},
-			{name: "map", value: "{}"},
+			{name: "max recursion below unlimited", field: "maxRecursion", value: "-2", want: "main.md: parse maxRecursion:"},
+			{name: "max recursion float", field: "maxRecursion", value: "1.0", want: "main.md: parse maxRecursion:"},
+			{name: "max recursion string", field: "maxRecursion", value: "\"1\"", want: "main.md: parse maxRecursion:"},
+			{name: "max recursion bool", field: "maxRecursion", value: "true", want: "main.md: parse maxRecursion:"},
+			{name: "max recursion null", field: "maxRecursion", value: "null", want: "main.md: parse maxRecursion:"},
+			{name: "max recursion sequence", field: "maxRecursion", value: "[]", want: "main.md: parse maxRecursion:"},
+			{name: "max recursion map", field: "maxRecursion", value: "{}", want: "main.md: parse maxRecursion:"},
+			{name: "custom shell relative path", field: "customShell", value: "sandbox/enter", want: "main.md: customShell:"},
+			{name: "custom shell bare name", field: "customShell", value: "enter", want: "main.md: customShell:"},
+			{name: "custom shell empty", field: "customShell", value: "\"\"", want: "main.md: customShell:"},
+			{name: "custom shell null", field: "customShell", value: "null", want: "main.md: customShell:"},
+			{name: "custom shell number", field: "customShell", value: "123", want: "main.md: customShell:"},
+			{name: "custom shell sequence", field: "customShell", value: "[/a]", want: "main.md: customShell:"},
+			{name: "custom shell map", field: "customShell", value: "{a: b}", want: "main.md: customShell:"},
 		}
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				result := LoadAgents(fstest.MapFS{
-					"main.md": testMapFile("---\ndescription: Main\nmodel: gpt-5.4\nmaxRecursion: " + tt.value + "\n---\nPrompt\n"),
+					"main.md": testMapFile("---\ndescription: Main\nmodel: gpt-5.4\n" + tt.field + ": " + tt.value + "\n---\nPrompt\n"),
 				}, passThroughAgentModel)
 
 				require.Empty(t, result.Agents.Items)
 				require.Len(t, result.Errors, 1)
-				require.Contains(t, result.Errors[0].Error(), "main.md: parse maxRecursion:")
+				require.Contains(t, result.Errors[0].Error(), tt.want)
 			})
 		}
+	})
+
+	t.Run("loads custom shell values", func(t *testing.T) {
+		result := LoadAgents(fstest.MapFS{
+			"sandboxed.md": testMapFile("---\ndescription: Sandboxed\nmodel: gpt-5.4\ncustomShell: /opt/sandbox/enter\n---\nPrompt\n"),
+			"host.md":      testMapFile("---\ndescription: Host\nmodel: gpt-5.4\n---\nPrompt\n"),
+			"fallback.md":  testMapFile("---\ndescription: Review: code\nmodel: gpt-5.4\ncustomShell: /opt/sandbox/enter\n---\nPrompt\n"),
+		}, passThroughAgentModel)
+
+		require.Empty(t, result.Errors)
+		require.Equal(t, "/opt/sandbox/enter", result.Agents.Items["sandboxed"].CustomShell)
+		require.Empty(t, result.Agents.Items["host"].CustomShell)
+		require.Equal(t, "Review: code", result.Agents.Items["fallback"].Description)
+		require.Equal(t, "/opt/sandbox/enter", result.Agents.Items["fallback"].CustomShell)
 	})
 
 	t.Run("supports fallback yaml sanitization", func(t *testing.T) {

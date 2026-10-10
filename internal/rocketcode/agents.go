@@ -24,6 +24,7 @@ type Agent struct {
 	Verbosity       string
 	MaxRecursion    *int
 	Guardrail       string
+	CustomShell     string
 	Prompt          string
 	Location        string
 	Permission      PermissionSet
@@ -158,6 +159,16 @@ func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, e
 		return Agent{}, fmt.Errorf("%s: model: required non-empty string", filePath)
 	}
 
+	var customShell string
+
+	if field := frontmatterField(frontmatterNode, "customShell"); field != nil {
+		if field.Kind != yaml.ScalarNode || field.ShortTag() != "!!str" || !filepath.IsAbs(field.Value) {
+			return Agent{}, fmt.Errorf("%s: customShell: must be an absolute path", filePath)
+		}
+
+		customShell = field.Value
+	}
+
 	outputSchema, err := parseAgentOutputSchema(frontmatterField(frontmatterNode, "schema"))
 	if err != nil {
 		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
@@ -171,6 +182,7 @@ func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, e
 		Verbosity:       frontmatterString(frontmatter, "verbosity"),
 		MaxRecursion:    maxRecursion,
 		Guardrail:       frontmatterString(frontmatter, "guardrail"),
+		CustomShell:     customShell,
 		Prompt:          strings.TrimSpace(prompt),
 		Location:        filePath,
 		Permission:      permission,

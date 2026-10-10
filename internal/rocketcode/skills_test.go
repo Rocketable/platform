@@ -640,6 +640,38 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 		require.NoError(t, err)
 		require.Equal(t, "ran", string(effect))
 	})
+
+	t.Run("skill expands through the loading agent shell", func(t *testing.T) {
+		env, err := newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, DefaultShellCommand)
+		require.NoError(t, err)
+
+		shell := writeCustomShell(t, root)
+		boxed := agentWithSkillPermission()
+		boxed.CustomShell = shell
+
+		for _, tc := range []struct {
+			name  string
+			agent *Agent
+			want  string
+		}{
+			{name: "sandboxed", agent: boxed, want: "Generated: custom:1:cat 'MEMORY.md'; printf ran > EFFECT\n"},
+			{name: "default", agent: agentWithSkillPermission(), want: "Generated: dynamic-output\n"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				factory := testSkillFactory(t, loaded, nil)
+				factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
+				factory.promptExpansion = env
+				// A factory scoped to a sandboxed parent carries the parent's shell.
+				factory.promptExpansion.customShell = shell
+
+				model, _ := factory.assembleTools(tc.agent)
+				got, err := model["skill"].Call(context.Background(), json.RawMessage(`{"name":"dynamic-skill","arguments":"MEMORY.md"}`), nil, emptyToolCallMetadata())
+
+				require.NoError(t, err)
+				require.Contains(t, got.Output, tc.want)
+			})
+		}
+	})
 }
 
 func agentWithSkillPermission() *Agent {

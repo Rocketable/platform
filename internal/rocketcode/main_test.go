@@ -402,6 +402,98 @@ func TestNewShellEnvAppliesToPromptExpansion(t *testing.T) {
 	require.Contains(t, diagnostics.String(), "prompt/note.txt")
 }
 
+// writeCustomShell writes a wrapper that reports its argument count and first argument.
+func writeCustomShell(t *testing.T, root *os.Root) string {
+	t.Helper()
+
+	require.NoError(t, root.WriteFile("enter.sh", []byte("#!/bin/sh\nprintf 'custom:%s:%s' \"$#\" \"$1\""), 0o755))
+
+	return filepath.Join(root.Name(), "enter.sh")
+}
+
+func TestNewBindsBashToEachAgentCustomShell(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	shell := writeCustomShell(t, root)
+	agents := LoadAgents(fstest.MapFS{
+		"boxed.md": {Data: []byte("---\nmodel: gpt-5.4\ncustomShell: " + shell + "\npermission: {bash: allow, task: allow}\n---\nBOXED")},
+		"plain.md": {Data: []byte("---\nmodel: gpt-5.4\npermission: {bash: allow, task: allow}\n---\nPLAIN")},
+	}, passThroughAgentModel)
+	require.Empty(t, agents.Errors)
+
+	run := func(t *testing.T, tool looperTool) string {
+		t.Helper()
+
+		result, err := tool.Call(t.Context(), json.RawMessage(`{"command":"printf plain"}`), nil, emptyToolCallMetadata())
+		require.NoError(t, err)
+
+		return result.Output
+	}
+
+	const wrapped = "custom:1:printf plain"
+
+	for _, tc := range []struct {
+		name, root, other   string
+		rootWant, otherWant string
+	}{
+		{name: "sandboxed root", root: "boxed", other: "plain", rootWant: wrapped, otherWant: "plain"},
+		{name: "unsandboxed root", root: "plain", other: "boxed", rootWant: "plain", otherWant: wrapped},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loop, err := NewWithModelResolver(testResolverForResponsesAPI(mockResponses()), testWorkspaceConfig(t, dir), root, agents.Agents, Skills{Items: map[string]Skill{}}, tc.root, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.rootWant, run(t, loop.CodeModeHosts["bash"]))
+
+			factory := loop.PermissionReviewer.(*toolFactory)
+			other := factory.agents.Items[tc.other]
+
+			child, _, _, err := factory.subagent(t.Context(), &other, "/call-1", false, false)
+			require.NoError(t, err)
+			require.Equal(t, tc.otherWant, run(t, child.CodeModeHosts["bash"]), "a task subagent uses its own shell")
+			require.Equal(t, other.CustomShell, child.promptExpansion.customShell, "a task subagent expands prompts with its own shell")
+
+			for _, bash := range []looperTool{loop.CodeModeHosts["bash"], child.CodeModeHosts["bash"]} {
+				require.Equal(t, strings.Contains(run(t, bash), "custom:"), strings.Contains(bash.Definition.Description.Value, shell), "the bash description names the program only when one is used")
+			}
+
+			// runGuardrail and permission reviews bind tools through the same assembleTools.
+			_, guardrailHosts := factory.assembleTools(&other)
+			require.Equal(t, tc.otherWant, run(t, guardrailHosts["bash"]), "a guardrail uses its own shell")
+
+			require.Equal(t, "plain", run(t, factory.baseTools["bash"]), "the shared tool keeps default bash")
+			require.Equal(t, tc.rootWant, run(t, loop.CodeModeHosts["bash"]))
+		})
+	}
+}
+
+func TestNewExpandsPromptsThroughRootAgentCustomShell(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	var diagnostics bytes.Buffer
+
+	config := testWorkspaceConfig(t, dir)
+	config.Diagnostics = true
+	config.ExpandPromptShellCommands.PrimaryPrompts = true
+	config.ExpandPromptShellCommands.InputPrompts = true
+	client := openai.NewClient()
+	loop, err := New(&client, config, root, Agents{Items: map[string]Agent{
+		"main": {Name: "main", Model: "gpt-5.4", Prompt: "remember !`echo hi`", CustomShell: writeCustomShell(t, root)},
+	}}, Skills{Items: map[string]Skill{}}, "main", &diagnostics)
+	require.NoError(t, err)
+	require.Contains(t, diagnostics.String(), "remember custom:1:echo hi\n")
+
+	input := PromptInput{Role: PromptInputRoleUser, Text: "input !`echo there`"}
+	_, err = loop.promptTurnItems(t.Context(), &input)
+	require.NoError(t, err)
+	require.Equal(t, "input custom:1:echo there", input.Text)
+}
+
 func TestNewAllowsReadingFilesFromAllowedSkills(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)

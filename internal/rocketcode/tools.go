@@ -40,6 +40,7 @@ type toolFactory struct {
 	agents                     Agents
 	skills                     Skills
 	baseTools                  map[string]looperTool
+	shellSystem                *sandboxedShellSystem // Shared by every agent's bash tool in this runtime.
 	childContext               []SessionEntry
 	shellTemp                  shellTempConfig
 	spillRel                   string
@@ -86,12 +87,12 @@ type webFetchToolParams struct {
 	TimeoutSecond int    `json:"timeout_s"`
 }
 
-func newSandboxedTools(root *os.Root, spillRel string, shellTemp shellTempConfig, shellEnv []string, shellCommand ShellCommandFunc) map[string]looperTool {
+func newSandboxedTools(root *os.Root, spillRel string, shellTemp shellTempConfig, shellEnv []string, shellCommand ShellCommandFunc) (map[string]looperTool, *sandboxedShellSystem) {
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root, spillRel: spillRel}
 	sss := newSandboxedShellSystem(root, &shellTemp, shellEnv, shellCommand)
 	sss.spillRel = spillRel
 
-	return makeSandboxedTools(sfs, sss)
+	return makeSandboxedTools(sfs, sss), sss
 }
 
 // CodeModeOnlyHostTool reports whether name is a sandbox host tool available
@@ -121,13 +122,19 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 	tools := make(map[string]looperTool, len(f.baseTools)+4)
 	maps.Copy(tools, f.baseTools)
 
+	scoped := *f
+
 	if agent != nil {
 		scopedAgent := *agent
 		scopedAgent.Permission = f.shellTemp.effectivePermissions(scopedAgent.Permission)
 		agent = &scopedAgent
+		scoped.promptExpansion.customShell = agent.CustomShell
+
+		if agent.CustomShell != "" {
+			tools["bash"] = bashTool(f.shellSystem, agent.CustomShell)
+		}
 	}
 
-	scoped := *f
 	scoped.agent = agent
 	tools["find_skills"] = scoped.findSkillsTool()
 	tools["skill"] = scoped.skillTool()
@@ -179,6 +186,7 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 func (f *toolFactory) configureSpill(loop *looper) {
 	loop.spillRel = f.spillRel
 	loop.promptExpansion = f.promptExpansion
+	loop.promptExpansion.customShell = loop.agent.CustomShell
 }
 
 func toolVisible(agent *Agent, name string, tool *looperTool) bool {
@@ -343,32 +351,41 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 				return webFetch(ctx, params)
 			},
 		},
-		"bash": {
-			Definition: *functionTool("bash", "Run a shell script in the workspace. Every operation needs permission, including declarations, assignments, redirections, expansions, and nested commands. Whole-script rules support wildcards within the same operation tree; last matching rule wins per operation. Invalid syntax and unresolved executable names are denied. Inside execute JSON code, bash(command=...) takes r'''...''' only.\nExample: {\"code\":\"def main():\\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\\n\"}", map[string]any{
-				"command":     map[string]any{"type": "string"},
-				"timeout_ms":  map[string]any{"type": "integer"},
-				"workdir":     map[string]any{"type": "string"},
-				"description": map[string]any{"type": "string"},
-			}),
-			Permission: "bash",
-			Subjects: func(raw json.RawMessage) ([]string, error) {
-				var params bashParams
-				if err := decodeToolParams(raw, &params); err != nil {
-					return nil, err
-				}
+		"bash": bashTool(sss, ""),
+	}
+}
 
-				return BashPermissionSubjects(params.Command), nil
-			},
-			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
-				var params bashParams
-				if err := decodeToolParams(raw, &params); err != nil {
-					return ToolResult{}, err
-				}
+func bashTool(sss *sandboxedShellSystem, customShell string) looperTool {
+	description := "Run a shell script in the workspace. Every operation needs permission, including declarations, assignments, redirections, expansions, and nested commands. Whole-script rules support wildcards within the same operation tree; last matching rule wins per operation. Invalid syntax and unresolved executable names are denied. Inside execute JSON code, bash(command=...) takes r'''...''' only.\nExample: {\"code\":\"def main():\\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\\n\"}"
+	if customShell != "" {
+		description += "\nCommands run through this agent's customShell program, " + customShell + ", which may limit what they can reach."
+	}
 
-				result := sss.Bash(ctx, params)
+	return looperTool{
+		Definition: *functionTool("bash", description, map[string]any{
+			"command":     map[string]any{"type": "string"},
+			"timeout_ms":  map[string]any{"type": "integer"},
+			"workdir":     map[string]any{"type": "string"},
+			"description": map[string]any{"type": "string"},
+		}),
+		Permission: "bash",
+		Subjects: func(raw json.RawMessage) ([]string, error) {
+			var params bashParams
+			if err := decodeToolParams(raw, &params); err != nil {
+				return nil, err
+			}
 
-				return ToolResult{Output: result.String(), Data: result}, nil
-			},
+			return BashPermissionSubjects(params.Command), nil
+		},
+		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
+			var params bashParams
+			if err := decodeToolParams(raw, &params); err != nil {
+				return ToolResult{}, err
+			}
+
+			result := sss.Bash(ctx, customShell, params)
+
+			return ToolResult{Output: result.String(), Data: result}, nil
 		},
 	}
 }

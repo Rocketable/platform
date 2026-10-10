@@ -91,6 +91,24 @@ func TestExpandAgentPrompt(t *testing.T) {
 		require.Equal(t, "review workspace memory", got.Prompt)
 		require.Equal(t, "review !`cat MEMORY.md`", original.Prompt)
 	})
+
+	t.Run("expands through the agent custom shell", func(t *testing.T) {
+		env := testPromptExpansionEnvironment(t)
+		got := Agent{Name: "review", Prompt: "review !`echo hi`", CustomShell: writeCustomShell(t, env.root)}
+
+		expandAgentPrompt(context.Background(), &got, true, &env)
+
+		require.Equal(t, "review custom:1:echo hi", got.Prompt)
+	})
+
+	t.Run("missing custom shell expands to empty text", func(t *testing.T) {
+		env := testPromptExpansionEnvironment(t)
+		got := Agent{Name: "review", Prompt: "review !`echo hi` done", CustomShell: filepath.Join(env.root.Name(), "missing")}
+
+		expandAgentPrompt(context.Background(), &got, true, &env)
+
+		require.Equal(t, "review  done", got.Prompt)
+	})
 }
 
 func TestPromptExpansionEnvironmentRunsCommandsInRoot(t *testing.T) {

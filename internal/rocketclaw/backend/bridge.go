@@ -2928,7 +2928,7 @@ func (b *Bridge) runGoalCheck(ctx context.Context, script string) (string, bool)
 		return "goal check failed before execution: " + err.Error(), false
 	}
 
-	result, err := rocketcode.RunBash(ctx, root, filepath.Join(runtimeCfg.Workspace, filepath.FromSlash(shellTempRel)), nil, rocketcode.BashCommand{Command: command, TimeoutMillisecond: goalCheckTimeout, Workdir: "", Description: "Run goal completion check"})
+	result, err := rocketcode.RunBash(ctx, root, filepath.Join(runtimeCfg.Workspace, filepath.FromSlash(shellTempRel)), nil, agent.CustomShell, rocketcode.BashCommand{Command: command, TimeoutMillisecond: goalCheckTimeout, Workdir: "", Description: "Run goal completion check"})
 	if err != nil {
 		return "goal check failed before execution: " + err.Error(), false
 	}

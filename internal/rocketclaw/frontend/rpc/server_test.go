@@ -1587,7 +1587,7 @@ func TestSessionEntries(t *testing.T) {
 		require.True(t, proto.Equal(want, skills.Skills[i]), "unexpected skill: %v", skills.Skills[i])
 	}
 
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md"), []byte("---\nmodel: gpt-5.5\npermission:\n  skill: {alpha: allow, zeta: auto}\n---\nHelp."), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md"), []byte("---\nmodel: gpt-5.5\ncustomShell: /usr/local/bin/agent-sandbox\npermission:\n  skill: {alpha: allow, zeta: auto}\n---\nHelp."), 0o600))
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "selected.md"), []byte("---\nmodel: gpt-5.5\npermission:\n  skill: {alpha: deny, zeta: allow}\n---\nHelp."), 0o600))
 
 	for _, tc := range []struct {
@@ -1687,6 +1687,8 @@ func TestSessionEntries(t *testing.T) {
 	for i, name := range []string{"main", "planner", "selected"} {
 		require.Equal(t, name, catalog.Agents[i].Name)
 	}
+
+	require.Equal(t, []string{"", "/usr/local/bin/agent-sandbox", ""}, []string{catalog.Agents[0].CustomShell, catalog.Agents[1].CustomShell, catalog.Agents[2].CustomShell})
 
 	created, err := invoke[CreateSessionResponse](ctx, connection, "CreateSession", &CreateSessionRequest{Agent: "planner"})
 	require.NoError(t, err)

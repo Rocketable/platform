@@ -142,7 +142,7 @@ Account for these rocketcode runtime facts when designing agent instructions and
 - The shell tool statically denies common direct env-file and external-path attempts such as `cat .env`, `cat ../outside`, and `cd /tmp`, but this is only a preflight guardrail, not an OS-enforced shell sandbox for dynamically generated paths.
 - `task` subagents never get `ask_user_question`, whatever their permissions.
 - Prompt shell expansion with ``!`command` `` is opt-in per prompt source. Do not rely on it unless the runtime enables it.
-- Prompt shell expansion runs from the workspace root and captures stdout only. The default runner uses `/bin/bash`, ignores `$SHELL`, and disables startup files and inherited shell functions/options.
+- Prompt shell expansion runs from the workspace root and captures stdout only. The default runner uses `/bin/bash`, ignores `$SHELL`, and disables startup files and inherited shell functions/options. For an agent that sets `customShell`, these lines run through that program instead.
 
 ## Name and path handling
 
@@ -197,6 +197,24 @@ The optional `maxRecursion` frontmatter field controls task subdelegation depth 
 - `0` disables subdelegation
 - a positive integer caps delegation to that many task levels
 - invalid values fail agent loading
+
+The optional `customShell` frontmatter field is an absolute path to a program that runs every shell command for that agent instead of `/bin/bash`, called as `<customShell> <command>`. That includes the agent's ``!`…` `` prompt lines and those in the skills it loads. A value that is not an absolute path string fails agent loading. When handling it:
+- set, change, or remove `customShell` only when the human explicitly asks, and use the exact value they give
+- never create or edit a `customShell` program inside the workspace
+- carry `customShell` over unchanged on updates and renames
+- never give an agent `edit` permission over a sandboxed agent's file or its wrapper program; editing either can remove the sandboxing, and `rocketclaw lint` reports it
+- the setting covers only the agent that declares it: task subagents, the guardrail, and permission reviewers without their own `customShell` run plain `/bin/bash`, and workflow workers and goal checks use the root agent's. When the human asks to sandbox an agent, list the agents it delegates to and its guardrail, and ask whether each needs `customShell` too
+
+A `customShell` program must:
+- take the whole command as its only argument (there is no `-c`) and run it with bash, for example `bash --noprofile --norc -p -c "$1"`, because permission checks parse every command as bash
+- treat that argument as data even when it starts with `-`: pass it as the `-c` argument or after `--`, never where the program or a sandbox tool parses options
+- start with `#!/bin/bash -p` when it is itself a bash script
+- carry its working directory and `TMPDIR` into the sandbox, with the workspace at the same path inside it
+- forward only the environment variables commands need, because it receives the full RocketClaw environment, which can include provider credentials
+- stop the sandboxed command when it receives `SIGTERM` at the timeout
+- live, with any file it reads for configuration, outside the workspace and outside every path an agent can write
+
+A missing program makes ``!`…` `` lines expand to empty text and makes `bash` calls fail with the start error. File tools and MCP servers still run outside the program.
 
 The optional `schema.output` frontmatter field is a YAML JSON Schema for that agent's own final response. When present, RocketCode requests OpenAI structured output. Do not put it on guardrail or permission-reviewer agents; those runs keep fixed decision schemas. Invalid schemas fail agent loading.
 
