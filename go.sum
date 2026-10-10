@@ -110,8 +110,8 @@ github.com/modelcontextprotocol/go-sdk v1.8.0 h1:KIvahhYqwtbeniWVPs3TcXEA7b8jEtw
 github.com/modelcontextprotocol/go-sdk v1.8.0/go.mod h1:dL7u98E/zjJTGzEq+j30jQ8K2k1mb6LeAH4inEcSGts=
 github.com/ncruces/go-strftime v1.1.0 h1:vtPmPWMkb539RGV9WpWT9EwJGvrOCKvMNI4obWL47Hk=
 github.com/ncruces/go-strftime v1.1.0/go.mod h1:yVaq7iwCN09vHRrKBrrflXT0M9tTMG2KmZ9Fj7xeG/g=
-github.com/openai/openai-go/v3 v3.75.0 h1:VL634YIquwcUHFSQHhmzlz/0FofepXtIq3v2F3LuT5g=
-github.com/openai/openai-go/v3 v3.75.0/go.mod h1:OHCyuBWptTsxCYQY2WaqdtcbS22WYx2C9yG0CzZ0BU8=
+github.com/openai/openai-go/v3 v3.76.0 h1:QYJqbvNueO0rgKIyCMdWt4xI/NWjSs13Yih0ZNbJQ8A=
+github.com/openai/openai-go/v3 v3.76.0/go.mod h1:OHCyuBWptTsxCYQY2WaqdtcbS22WYx2C9yG0CzZ0BU8=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/poy/onpar v1.1.2 h1:QaNrNiZx0+Nar5dLgTVp5mXkyoVFIbepjyEoGSnhbAY=
