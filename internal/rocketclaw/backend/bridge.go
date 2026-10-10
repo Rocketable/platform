@@ -3162,7 +3162,7 @@ func buildPrompt(msg *protocol.InboundMessage, agentFrontmatter map[string]any) 
 }
 
 func inboundDirectSkill(msg *protocol.InboundMessage) *rocketcode.PromptInputDirectSkill {
-	if !msg.Human || msg.Source != protocol.SourceWeb ||
+	if !msg.Human || msg.Source != protocol.SourceWeb || msg.Metadata[protocol.InboundMediaMetadataKey] == "Voice" ||
 		(msg.Kind != protocol.InboundKindPrompt && msg.Kind != protocol.InboundKindSteer && msg.Kind != protocol.InboundKindEnqueue) {
 		return nil
 	}
@@ -3179,7 +3179,7 @@ func inboundDirectSkill(msg *protocol.InboundMessage) *rocketcode.PromptInputDir
 // message yields the zero invocation. A workflow cannot join a running turn,
 // so the caller never treats it as a steer.
 func inboundWorkflow(msg *protocol.InboundMessage) protocol.WorkflowInvocation {
-	if !msg.Human || msg.Source != protocol.SourceWeb ||
+	if !msg.Human || msg.Source != protocol.SourceWeb || msg.Metadata[protocol.InboundMediaMetadataKey] == "Voice" ||
 		(msg.Kind != protocol.InboundKindPrompt && msg.Kind != protocol.InboundKindSteer && msg.Kind != protocol.InboundKindEnqueue) {
 		return protocol.WorkflowInvocation{}
 	}
@@ -3262,7 +3262,7 @@ func provenanceFromInbound(msg *protocol.InboundMessage) promptProvenance {
 		provenance.origin = origin
 	}
 
-	if media := canonicalOverride(msg.Metadata[protocol.InboundMediaMetadataKey], "Text"); media != "" {
+	if media := canonicalOverride(msg.Metadata[protocol.InboundMediaMetadataKey], "Text", "Voice"); media != "" {
 		provenance.media = media
 	}
 

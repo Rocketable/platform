@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
+	"tailscale.com/client/tailscale/apitype"
 )
 
 // NewHTTPHandler bridges the browser API to the local Web service.
@@ -41,12 +42,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 		mux.HandleFunc("POST /api/"+method, func(w http.ResponseWriter, r *http.Request) {
 			request, response := requestType.New().Interface(), responseType.New().Interface()
 
-			body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
-			if err == nil {
-				err = httpInput(body, request, method)
-			}
-
-			if err != nil {
+			if err := httpInput(w, r, request, method); err != nil {
 				httpRPCError(w, status.Error(codes.InvalidArgument, err.Error()))
 				return
 			}
@@ -57,7 +53,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 				return
 			}
 
-			body, err = (protojson.MarshalOptions{EmitDefaultValues: true}).Marshal(response)
+			body, err := (protojson.MarshalOptions{EmitDefaultValues: true}).Marshal(response)
 			if err != nil {
 				httpRPCError(w, err)
 				return
@@ -68,7 +64,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 		})
 	}
 
-	for _, route := range []string{"GET /api/ListSessions", "GET /stream", "GET /api/DownloadAttachment", "POST /api/UploadAttachment"} {
+	for _, route := range []string{"GET /api/ListSessions", "GET /stream", "GET /api/DownloadAttachment", "POST /api/UploadAttachment", "POST /api/Voice"} {
 		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
 			method := strings.TrimPrefix(r.URL.Path, "/api/")
 
@@ -83,6 +79,12 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 			case "DownloadAttachment", "UploadAttachment":
 				request = &Attachment{ConversationId: r.URL.Query().Get("conversationId"), Id: r.URL.Query().Get("id"), Name: r.URL.Query().Get("name")}
 				response = &Attachment{}
+			case "Voice":
+				request, response = &VoiceRequest{}, &VoiceEvent{}
+				if err := httpInput(w, r, request, method); err != nil {
+					httpRPCError(w, status.Error(codes.InvalidArgument, err.Error()))
+					return
+				}
 			}
 
 			required := ""
@@ -164,11 +166,31 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 			return
 		}
 
-		ctx, cancel := context.WithCancel(metadata.NewOutgoingContext(r.Context(), metadata.Pairs("rocketclaw-principal", address.Addr().Unmap().String())))
+		ctx, cancel := context.WithCancel(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-principal", address.Addr().Unmap().String()))
 		defer cancel()
 
 		mux.ServeHTTP(w, r.WithContext(ctx))
 	}))
+}
+
+// tailnetWhoIs is satisfied by *local.Client.
+type tailnetWhoIs interface {
+	WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error)
+}
+
+// NewTailnetHandler signs each request in by its tailnet connection and refuses tagged or unknown callers.
+// next must be NewHTTPHandler, which appends the IP principal to this identity.
+func NewTailnetHandler(client tailnetWhoIs, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		who, err := client.WhoIs(r.Context(), r.RemoteAddr)
+		if err != nil || who.Node.IsTagged() || who.UserProfile.LoginName == "" {
+			httpRPCError(w, status.Error(codes.Unauthenticated, "tailnet caller has no Tailscale user"))
+			return
+		}
+
+		// Names may be non-ASCII, which only -bin metadata carries.
+		next.ServeHTTP(w, r.WithContext(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-tailnet-login-bin", who.UserProfile.LoginName, "rocketclaw-tailnet-name-bin", who.UserProfile.DisplayName)))
+	})
 }
 
 func httpUpload(body io.Reader, stream grpc.ClientStream) error {
@@ -264,7 +286,13 @@ func httpEvents(w http.ResponseWriter, stream grpc.ClientStream, response proto.
 	}
 }
 
-func httpInput(body []byte, request proto.Message, method string) error {
+// httpInput decodes a JSON request body of at most 4 MiB.
+func httpInput(w http.ResponseWriter, r *http.Request, request proto.Message, method string) error {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+	if err != nil {
+		return fmt.Errorf("read request body: %w", err)
+	}
+
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
 		return fmt.Errorf("decode request fields: %w", err)
@@ -287,7 +315,7 @@ func httpInput(body []byte, request proto.Message, method string) error {
 		required = "ids"
 	case "RunCronJob":
 		required = "stem"
-	case "MoveToBackground", "StopBackgroundJob", "AnswerQuestion":
+	case "MoveToBackground", "StopBackgroundJob", "AnswerQuestion", "Voice":
 		required = "conversationId"
 	}
 
@@ -300,6 +328,8 @@ func httpInput(body []byte, request proto.Message, method string) error {
 		required += " jobId"
 	case "AnswerQuestion":
 		required += " askId"
+	case "Voice":
+		required += " sdp"
 	}
 
 	for name := range strings.FieldsSeq(required) {

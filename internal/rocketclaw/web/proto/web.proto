@@ -278,6 +278,8 @@ message Agent {
   string permissions = 7;
   string origin = 8;
   string custom_shell = 9;
+  // Voices a call with this agent may use, the default first; empty when its provider offers none.
+  repeated string voices = 10;
 }
 
 message ListAgentsRequest { string conversation_id = 1; }
@@ -460,12 +462,48 @@ message IdentityRequest {}
 
 message IdentityResponse { string username = 1; string principal = 2; }
 
+message VoiceRequest {
+  string conversation_id = 1;
+  string sdp = 2;
+  // One of the agent's voices; empty uses the provider's default.
+  string voice = 3;
+}
+
+// The first event answers the browser's SDP offer; the last ends the call.
+// A notice in between reports a hand-off the agent could not accept; typed
+// says a typed message superseded voice, so the browser mutes the voice
+// model until it answers the person's next speech. reply is a final reply
+// too long to speak, for the browser to show as written. reconnecting is
+// true while a Codex sideband reconnects and false once it is back.
+message VoiceEvent {
+  oneof event {
+    VoiceAnswer answer = 1;
+    VoiceEnded ended = 2;
+    string notice = 3;
+    bool typed = 4;
+    string reply = 5;
+    bool reconnecting = 6;
+  }
+}
+
+// route names the GPT-Live wire dialect: public or codex.
+message VoiceAnswer {
+  string sdp = 1;
+  string route = 2;
+}
+
+// reason is stopped, replaced, expired, safety, closed, lost or error.
+message VoiceEnded {
+  string reason = 1;
+}
+
 service Web {
   rpc UploadAttachment(stream Attachment) returns (Attachment);
   rpc DownloadAttachment(Attachment) returns (stream Attachment);
   rpc ListSessions(ListSessionsRequest) returns (stream ListSessionsResponse);
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
   rpc Join(JoinRequest) returns (stream ConversationChange);
+  rpc Voice(VoiceRequest) returns (stream VoiceEvent);
   rpc Prompt(PromptRequest) returns (PromptResponse);
   rpc ListCronJobs(ListCronJobsRequest) returns (ListCronJobsResponse);
   rpc RunCronJob(RunCronJobRequest) returns (RunCronJobResponse);

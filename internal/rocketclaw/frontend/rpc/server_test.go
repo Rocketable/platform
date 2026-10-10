@@ -41,6 +41,9 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"tailscale.com/client/local"
+	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/tailcfg"
 )
 
 func TestRevertWireContract(t *testing.T) {
@@ -120,6 +123,121 @@ func TestTailscaleBrowserIdentity(t *testing.T) {
 			require.Equal(t, tt.wantPrincipal, principal)
 			_, err = server.listConfig(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "100.64.0.2")))
 			require.Equal(t, codes.Unauthenticated, status.Code(err))
+		})
+	}
+}
+
+// No request header chooses the user: a loopback request that looks proxied by
+// `tailscale serve` signs in through the 127.0.0.1 mapping or not at all.
+func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // No tailscale executable: WhoIs identifies nobody.
+
+	forwarded := netip.MustParseAddr("192.0.2.99")
+	for _, tt := range []struct {
+		name  string
+		users map[netip.Addr]string
+		code  int
+	}{
+		{"mapped", map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "owner", forwarded: "forwarded"}, http.StatusOK},
+		{"unmapped", map[netip.Addr]string{forwarded: "forwarded"}, http.StatusUnauthorized},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			listener, err := Listen(testSocketPath(t))
+			require.NoError(t, err)
+
+			transport := grpc.NewServer()
+			New(&mockBackend{}, nil, config.NewLockedConfig(&config.Config{WebUsers: tt.users}), &mockChannels{}, &mockCronJobs{}).Register(transport)
+
+			var serving errgroup.Group
+			serving.Go(func() error { return transport.Serve(listener) })
+			t.Cleanup(func() { transport.Stop(); require.NoError(t, serving.Wait()) })
+
+			connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, connection.Close()) })
+
+			request := httptest.NewRequest(http.MethodPost, "/api/Identity", strings.NewReader(`{}`))
+			request.RemoteAddr = "127.0.0.1:1234"
+			request.Header.Set("X-Forwarded-For", forwarded.String())
+			request.Header.Set("Tailscale-User-Login", "alice@example.com")
+			request.Header.Set("Tailscale-User-Name", "Alice")
+
+			response := httptest.NewRecorder()
+			NewHTTPHandler(connection, config.SentryConfig{}).ServeHTTP(response, request)
+			require.Equal(t, tt.code, response.Code, response.Body.String())
+
+			if tt.code == http.StatusOK {
+				require.JSONEq(t, `{"username":"owner","principal":"owner"}`, response.Body.String())
+			}
+		})
+	}
+}
+
+// A tsnet caller is signed in by its connection; web_users and the tailscale CLI are never consulted.
+func TestTailnetIdentity(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tailscale"), []byte("#!/bin/sh\nexit 1\n"), 0o700))
+
+	listener, err := Listen(testSocketPath(t))
+	require.NoError(t, err)
+
+	transport := grpc.NewServer()
+	New(&mockBackend{}, nil, config.NewLockedConfig(&config.Config{WebUsers: map[netip.Addr]string{netip.MustParseAddr("100.64.0.7"): "someone-else"}}), &mockChannels{}, &mockCronJobs{}).Register(transport)
+
+	var serving errgroup.Group
+	serving.Go(func() error { return transport.Serve(listener) })
+	t.Cleanup(func() { transport.Stop(); require.NoError(t, serving.Wait()) })
+
+	connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+
+	for _, tt := range []struct {
+		name     string
+		who      *apitype.WhoIsResponse
+		err      error
+		identity string
+	}{
+		{"user", &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: "zoë@example.com", DisplayName: "Zoë Ørsted 日本"}}, nil, `{"username":"zoë@example.com","principal":"Zoë Ørsted 日本"}`},
+		{"blank display", &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: "zoë@example.com", DisplayName: " "}}, nil, `{"username":"zoë@example.com","principal":"zoë@example.com"}`},
+		{"tagged", &apitype.WhoIsResponse{Node: &tailcfg.Node{Tags: []string{"tag:server"}}, UserProfile: &tailcfg.UserProfile{LoginName: "tagged-devices"}}, nil, ""},
+		{"empty login", &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{DisplayName: "Nobody"}}, nil, ""},
+		{"unknown", nil, local.ErrPeerNotFound, ""},
+		{"error", nil, errors.New("LocalAPI unavailable"), ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			whois := &mockTailnetWhoIs{WhoIsFunc: func(context.Context, string) (*apitype.WhoIsResponse, error) { return tt.who, tt.err }}
+
+			next := NewHTTPHandler(connection, config.SentryConfig{})
+			if tt.identity == "" {
+				next = http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("refused caller reached the Web handler") })
+			}
+
+			handler := NewTailnetHandler(whois, next)
+
+			for _, method := range []string{"Identity", "ListConfig"} {
+				request := httptest.NewRequest(http.MethodPost, "/api/"+method, strings.NewReader(`{}`))
+				request.RemoteAddr = "100.64.0.7:41641"
+
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, request)
+
+				if tt.identity == "" {
+					require.Equal(t, http.StatusUnauthorized, response.Code, response.Body.String())
+					continue
+				}
+
+				require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+
+				if method == "Identity" {
+					require.JSONEq(t, tt.identity, response.Body.String())
+				} else {
+					require.Contains(t, response.Body.String(), `"tailscaleUser":"zoë@example.com"`)
+				}
+			}
+
+			require.Equal(t, "100.64.0.7:41641", whois.WhoIsCalls()[0].RemoteAddr)
 		})
 	}
 }
@@ -1689,6 +1807,7 @@ func TestSessionEntries(t *testing.T) {
 	}
 
 	require.Equal(t, []string{"", "/usr/local/bin/agent-sandbox", ""}, []string{catalog.Agents[0].CustomShell, catalog.Agents[1].CustomShell, catalog.Agents[2].CustomShell})
+	require.Equal(t, "marin", catalog.Agents[0].Voices[0], "an API-key agent offers the public voices, its default first")
 
 	created, err := invoke[CreateSessionResponse](ctx, connection, "CreateSession", &CreateSessionRequest{Agent: "planner"})
 	require.NoError(t, err)

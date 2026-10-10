@@ -83,8 +83,7 @@ func (r *modelResolver) Resolve(model string) (*openai.Client, rocketcode.Provid
 
 	options = append(options, option.WithAPIKey(providerConfig.APIKey))
 	if strings.TrimSpace(providerConfig.APIBaseURL) != "" {
-		// openai-go rejects authenticated HTTP unless loopback plaintext is explicit.
-		// The option still refuses remote HTTP; HTTPS keeps the configured client.
+		// WithUnsafeAllowHTTP keeps plain-HTTP base URLs working, local or remote.
 		options = append(options, option.WithBaseURL(providerConfig.APIBaseURL), option.WithUnsafeAllowHTTP())
 	}
 

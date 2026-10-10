@@ -40,9 +40,48 @@ A workspace contains `AGENTS.md` and, optionally, `agents/`, `skills/`, `scripts
 
 ### Web page
 
-The web page is the main way to work with RocketClaw. It is built into RocketClaw and listens on `0.0.0.0:3000`. To change that, set `"web": {"listen_address": "127.0.0.1:3000"}`. Links RocketClaw hands out use this machine's Tailscale address.
+The web page is the main way to work with RocketClaw. It is built into RocketClaw and listens on `0.0.0.0:3000`. To change that, set `"web": {"listen_address": "127.0.0.1:3000"}`. Links RocketClaw hands out use the tsnet node's HTTPS name once that node serves (see [Voice](#voice)), and this machine's Tailscale address otherwise.
 
 RocketClaw identifies each browser by IP address, using the `web_users` map (for example `"web_users": {"100.64.0.10": "alice"}`) or, failing that, a Tailscale lookup. It refuses browsers it cannot identify. See the [Web README](internal/rocketclaw/web/README.md) for the page's features and optional Sentry error tracking.
+
+#### Voice
+
+The Voice page (`/voice`) and the voice button in each session's composer let you talk to an agent out loud. The browser sends audio straight to OpenAI's GPT-Live voice model. Each task the voice model hands off becomes a Web message in the conversation, marked `media=Voice`. Hand-offs enter the conversation in the order they arrive, without waiting for the agent: each one joins the running turn or starts the next. The voice model hears nothing about the agent's work while it runs. When a turn the call handed off finishes, its final reply is spoken once, as written. A reply over about 990 tokens (3,960 bytes) is not spoken: the voice says it is on the screen, and the Voice page switches to its transcript and shows the reply there as written. A message typed during the call cancels the spoken reply of every earlier hand-off; only a later hand-off is spoken again. It also mutes the voice at once, mid-sentence if need be, until the voice answers something you say after it. When the agent asks a question, the voice model says "I need your input. Please respond in the app." and reads the question and its options. Answer it in the app: spoken words never answer a question. A conversation has one live call at a time: starting voice on the desk ends the call on the phone. Ending a call never stops the agent's work.
+
+Voice has no settings of its own. It uses the provider behind the conversation agent's model:
+
+- `rocketcode_auth: api_key`: the public GPT-Live API, model `gpt-live-1`. It costs about $0.05 per minute, silence included. An `api_base_url` must use HTTPS unless its host is `localhost` or a loopback IP; otherwise voice refuses to send the API key.
+- `rocketcode_auth: chatgpt`: Codex's internal voice route, model `gpt-live-1-codex`, with the provider's ChatGPT login. This route is unofficial and may stop working at any time. The ChatGPT account's data settings apply.
+
+On both routes, a redirect to another scheme, host, or port drops the voice credentials.
+
+Per call, OpenAI receives your microphone audio; up to 40 of the conversation's recent messages, as written, each cut to 600 bytes and 12,000 bytes in total; the final replies it speaks; and the question notices. It never receives tool names, tool arguments, tool results, progress, reasoning, or attachments.
+
+A call ends when you stop it, when the page closes or stays hidden for 30 seconds, when the page loses its connection to RocketClaw, when the browser's audio connection fails, or when OpenAI ends the call. There are no idle or no-speech timers. If the audio connection is not up 20 seconds after OpenAI answers, the browser retries once on the same microphone. If RocketClaw's connection to OpenAI drops, the `chatgpt` route reconnects, as Codex does, and the Voice page shows "Reconnecting to the agent…" meanwhile; the `api_key` route ends the call as lost.
+
+The microphone needs a secure page: HTTPS, or `http://127.0.0.1:3000` on the RocketClaw machine. For a phone or another device, RocketClaw can join your tailnet as its own Tailscale node (tsnet) and serve the web page over HTTPS. Turn on MagicDNS and HTTPS certificates for the tailnet, then add `web.tsnet`:
+
+```json
+"web": {"tsnet": {"hostname": "rocketclaw", "tags": ["tag:rocketclaw"]}}
+```
+
+`"tsnet": {}` also works: the hostname defaults to `rocketclaw` and may use only `a-z`, `0-9`, and `-`. Each tag must start with `tag:`.
+
+1. With RocketClaw stopped, run `rocketclaw ts login`. It prints a login link (and asks for device approval if your tailnet requires it), waits until the node is running, and exits. With `"auth_key": "tskey-auth-…"` under `web.tsnet`, it logs in with that key instead, and so does the server when the node is logged out. Prefer a single-use, pre-approved, tagged key; the key sits in the config file like other secrets.
+2. In the Tailscale admin console, confirm that the node appears in your own tailnet. The login link adds the node to whichever tailnet signs in with it.
+3. Start RocketClaw. It never prints a login link or waits for one: a logged-out node without a key only logs "Tailscale authentication unavailable", and the Web serves its plain listener.
+4. On the phone, with Tailscale connected, open `https://<hostname>.<tailnet>.ts.net/voice`.
+
+- Tag the node, for example `tag:rocketclaw` (the tailnet policy must list the tag under `tagOwners`). Add a tailnet rule that lets only named users reach it and lets it reach nothing. An untagged node acts as the Tailscale user who logged it in.
+- The node signs each phone in as the phone's Tailscale user. It refuses tagged devices, and no request header can choose the user.
+- Node keys expire after 180 days unless the node is tagged or key expiry is disabled for it in the admin console. An expired node needs `rocketclaw ts login` again.
+- Turning on tailnet HTTPS publishes machine names, including this node's, in public certificate-transparency logs.
+- The node keeps its state outside the workspace, in `rocketclaw/tsnet-<hostname>` under the OS user config directory (`~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` or `~/.config` on Linux). Tailscale's log upload is off.
+- Never use `tailscale funnel`: it would put RocketClaw on the public internet.
+
+The `listen_address` listener keeps its IP rules: `web_users`, then a Tailscale lookup. It never trusts `Tailscale-User-*` headers. A browser on the RocketClaw machine can use `http://127.0.0.1:3000` after mapping `127.0.0.1` to yourself: `"web_users": {"127.0.0.1": "you@example.com"}` (`localhost` may connect from `::1`, which needs its own mapping). Tailscale logins and `web_users` names are separate, so one person may appear under two names.
+
+Processes on this machine, including agent tools and MCP servers, can still act as the owner: through the `listen_address` listener, or through this machine's own Tailscale address. See the [transport README](internal/rocketclaw/frontend/rpc/README.md#identity-boundary) for the identity details.
 
 ### Slack
 

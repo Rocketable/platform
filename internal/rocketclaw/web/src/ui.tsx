@@ -10,8 +10,9 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions, rpc, RPCError } from "./api";
 import { draftContent } from "./drafts";
+import { holdWakeLock, rememberVoice, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse } from "./types";
-import { Bot, Check, ChevronDown, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, MessageSquare, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
+import { Bot, Captions, Check, ChevronDown, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -371,6 +372,7 @@ function useRoute() {
   const skill = pathname.startsWith("/skills/") ? pathname.slice("/skills/".length) : "";
   const config = pathname === "/config";
   const search = pathname === "/search";
+  const voice = pathname === "/voice";
   const id = pathname.startsWith("/s/") ? decodeSessionId(pathname.slice(3)) : "";
   return {
     cron,
@@ -379,6 +381,7 @@ function useRoute() {
     skill,
     config,
     search,
+    voice,
     id,
     goHome: () => navigate("/"),
     goCron: () => navigate("/cron"),
@@ -705,7 +708,7 @@ function ResizableAside({ side, className, children, ...props }: ComponentProps<
 type Tab = { path: string; pinned?: boolean; preview?: boolean };
 type TabState = { owner?: string; tabs: Tab[]; active: string };
 const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
-const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/search": ["Search", Search], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings] };
+const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/search": ["Search", Search], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings] };
 
 // A skill's page tab is titled with its name.
 function pageTab(path: string): [string, typeof Search] | undefined {
@@ -912,7 +915,10 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const composer = useRef<((command: string) => void) | null>(null);
   const commands = useMemo(() => ({ command, setCommand, composer }), [command]);
   const route = useRoute();
-  const showChat = ![route.cron, route.agents, route.skills, route.skill, route.config, route.search].some(Boolean);
+  const showChat = ![route.cron, route.agents, route.skills, route.skill, route.config, route.search, route.voice].some(Boolean);
+  // The screen stays on while the Voice page is open or a call runs.
+  const awake = useSyncExternalStore(subscribeVoice, () => route.voice || !["idle", "error"].includes(voiceView().state));
+  useEffect(() => awake ? holdWakeLock() : undefined, [awake]);
   const [palette, setPalette] = useState<{ mode: "sessions" | "commands" | "cron" | undefined; key: number }>({ mode: undefined, key: 0 });
   const openPalette = useCallback((mode: "sessions" | "commands") => setPalette((current) => ({ mode, key: current.key + 1 })), []);
   const drafts = useMemo(() => new Map<string, ComposerDraft>(), [scope]);
@@ -1012,6 +1018,9 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
                   <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Search sessions" onClick={() => openPalette("sessions")}>
                     <Search className="size-[var(--navigation-icon)]" />
                   </TooltipTrigger><TooltipContent side="top">Search sessions</TooltipContent></Tooltip>
+                  <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Voice" onClick={() => navigate("/voice")}>
+                    <Mic className="size-[var(--navigation-icon)]" />
+                  </TooltipTrigger><TooltipContent side="top">Voice</TooltipContent></Tooltip>
                   <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Open command palette" onClick={() => openPalette("commands")}>
                     <Command className="size-[var(--navigation-icon)]" />
                   </TooltipTrigger><TooltipContent side="top">Open command palette</TooltipContent></Tooltip>
@@ -1025,6 +1034,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
             <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]", command?.target && "pt-[min(75dvh,30rem)]")}>
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
               {route.search ? <SearchPage /> : null}
+              {route.voice ? <VoicePage /> : null}
               <SkillPage name={route.skill} />
               <TabPane show={showChat}>
                 <MessageScrollerProvider key={conversation.key} autoScroll scrollEdgeThreshold={48}>
@@ -1198,7 +1208,7 @@ function paletteRows(
     { key: "new", label: "Sessions: New", run: newChat },
     { key: "search", label: "Sessions: Search", run: () => navigate("/search") },
     { key: "run-cron", label: "Cron: Run", keep: true, run: openCron },
-    ...([["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
+    ...([["voice", "Voice"], ["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
     // VS Code: src/vs/platform/quickinput/browser/commandsQuickAccess.ts, _getPicks.
   ].filter((item) => needle === "" || item.label.toLowerCase().includes(needle)).sort((a, b) => {
     // Recently run commands come first, except Timeline levels, which always keep the Config slider's order.
@@ -2860,8 +2870,10 @@ function SessionComposer({
   const [agentOpen, setAgentOpen] = useState(false);
   const [dollarOff, setDollarOff] = useState(false);
   const [dollarPick, setDollarPick] = useState("");
-  const sendError = draft.error;
-  const setSendError = (value: string) => { draft.error = value; onDraftChange(); };
+  const voice = useOwnVoice(id);
+  const sendError = draft.error || voice.error;
+  // Clearing the send error also dismisses this composer's failed call.
+  const setSendError = (value: string) => { draft.error = value; onDraftChange(); if (!value && voice.state === "error") stopVoice(); };
   const currentAgent = id === "" ? "main" : agents.data?.currentAgent ?? "";
   const catalog = agents.data?.agents ?? [];
   // Sends switch to the shown agent, so an unlisted current agent moves to the first listed one.
@@ -3190,6 +3202,7 @@ function Composer({
                 </TooltipTrigger>
                 <TooltipContent>Guide the current response <ModEnterKeys mac={mac} /></TooltipContent>
               </Tooltip>
+              <VoiceToggle sessionId={sessionId} />
               <Tooltip><TooltipTrigger render={<Button type="button" size="icon" className="size-11 sm:size-8" disabled={sending} />} aria-label={stopping ? "Stop" : "Send"} onClick={() => void (stopping ? stop() : send())}>
                 {stopping ? <Square /> : <Send />}
               </TooltipTrigger><TooltipContent>{stopping ? "Stop response" : sendLabel}</TooltipContent></Tooltip>
@@ -3435,6 +3448,189 @@ function CronPage() {
       </Dialog>
     </div>
   );
+}
+
+function VoicePage() {
+  const identity = useQuery(queries.identity());
+  if (!identity.isSuccess) return null;
+  return <VoiceCall key={identity.data.username} storageKey={`voice:${identity.data.username}`} />;
+}
+
+// useOwnVoice is the tab's one call as seen from conversation id: idle unless the call is on id.
+function useOwnVoice(id: string): VoiceView {
+  const voice = useVoice();
+  return voice.conversationId === id ? voice : { state: "idle", conversationId: id, error: "", notice: "", captions: [] };
+}
+
+function VoiceClock({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
+  return ` · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+// VoiceOrb is the Voice page's call button. It ebbs and flows while a call is active,
+// and swells with the voice model's speech through --level, set every frame.
+function VoiceOrb({ state, ...props }: { state: VoiceState } & ComponentProps<"button">) {
+  const orb = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const element = orb.current;
+    if (state !== "live" || !element) return;
+    let frame = 0, level = 0;
+    const tick = () => {
+      level = Math.max(voiceLevel(), level * 0.9); // Rises at once, falls slowly.
+      element.style.setProperty("--level", level.toFixed(3));
+      frame = requestAnimationFrame(tick);
+    };
+    tick();
+    return () => {
+      cancelAnimationFrame(frame);
+      element.style.setProperty("--level", "0");
+    };
+  }, [state]);
+  return <button ref={orb} type="button" data-state={state} className="voice-orb" {...props}><span aria-hidden className="voice-orb-core" /><span aria-hidden className="voice-orb-rings" /></button>;
+}
+
+// VoicePicker chooses among the voices an agent's provider offers.
+function VoicePicker({ voices, value, disabled, onPick }: { voices: string[]; value: string; disabled: boolean; onPick: (voice: string) => void }) {
+  const items = voices.map((name) => ({ value: name, label: name.charAt(0).toUpperCase() + name.slice(1) }));
+  return <Select items={items} value={value} disabled={disabled} onValueChange={(name) => { if (typeof name === "string") onPick(name); }}>
+    <SelectTrigger aria-label="Choose voice" className="data-[size=default]:h-11 sm:data-[size=default]:h-8"><SelectValue /></SelectTrigger>
+    <SelectContent><SelectGroup>{items.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectGroup></SelectContent>
+  </Select>;
+}
+
+// VoiceTranscript shows the call's captions as a chat, following the newest line.
+function VoiceTranscript({ captions }: { captions: VoiceCaption[] }) {
+  const scroller = useRef<HTMLElement>(null);
+  useEffect(() => { scroller.current?.scrollTo({ top: scroller.current.scrollHeight }); }, [captions]);
+  return <section ref={scroller} aria-label="Transcript" className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto text-sm">
+    {captions.length === 0 ? <p className="m-auto text-muted-foreground">Nothing said yet.</p> : captions.map(({ id, role, text, written }) => written
+      // A reply too long to speak, formatted as in the conversation.
+      ? <div key={id} className="max-w-[85%] self-start rounded-2xl bg-muted px-3 py-2 whitespace-pre-wrap"><span className="sr-only">Agent: </span><TranscriptText text={text} /></div>
+      : <p key={id} className={cn("max-w-[85%] rounded-2xl px-3 py-2 whitespace-pre-wrap", role === "user" ? "self-end bg-primary text-primary-foreground" : "self-start bg-muted")}><span className="sr-only">{role === "user" ? "You: " : "Voice: "}</span>{text}</p>
+    )}
+  </section>;
+}
+
+const voiceStatus: Record<VoiceState, string> = { idle: "Tap to talk", connecting: "Connecting…", live: "Listening", ending: "Ending…", error: "Tap to try again" };
+
+// VoiceStage is the orb with the call's status under it: big and centered, or small
+// at the bottom beside the transcript. It is one orb either way, so it shrinks rather than reappearing.
+function VoiceStage({ voice, compact, busy, error, onPress }: { voice: VoiceView; compact: boolean; busy: boolean; error?: string; onPress: () => void }) {
+  const active = voice.state !== "idle" && voice.state !== "error";
+  return <div className={cn("flex flex-col items-center", compact ? "shrink-0 gap-2" : "flex-1 justify-center gap-10 py-10")}>
+    <VoiceOrb state={voice.state} data-size={compact ? "small" : "large"} aria-label={active ? "End voice call" : "Start voice call"} aria-pressed={active} disabled={busy || voice.state === "ending"} onClick={onPress} />
+    <span role="status" aria-live="polite" className="text-sm tracking-wide text-muted-foreground">{voiceStatus[voice.state]}{voice.state === "live" ? <VoiceClock startedAt={voice.startedAt!} /> : null}</span>
+    <span aria-live="polite" className="text-center text-sm">{voice.notice}</span>
+    {error ? <p role="alert" className="text-center text-sm text-destructive">{error}</p> : null}
+  </div>;
+}
+
+function VoiceCall({ storageKey }: { storageKey: string }) {
+  const sidebar = useContext(Sidebar);
+  const [id, setId] = useState(() => localStorage.getItem(storageKey) ?? "");
+  const voice = useOwnVoice(id);
+  const [agent, setAgent] = useState("");
+  const [picking, setPicking] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  const [transcript, setTranscript] = useState(() => localStorage.getItem("voice:transcript") === "on");
+  // A reply too long to speak turns the transcript on, as the button does, so it is on screen.
+  useEffect(() => {
+    const newest = () => voiceView().conversationId === id ? voiceView().captions.findLast((caption) => caption.written) : undefined;
+    let shown = newest();
+    return subscribeVoice(() => {
+      const written = newest();
+      if (written === shown) return;
+      shown = written;
+      if (!written) return; // A new call's empty transcript.
+      localStorage.setItem("voice:transcript", "on");
+      setTranscript(true);
+    });
+  }, [id]);
+  const agents = useQuery(queries.agents(id ? { conversationId: id } : undefined));
+  const catalog = agents.data?.agents ?? [];
+  const selected = [agent, id ? agents.data?.currentAgent : "main"].find((name) => catalog.some((item) => item.name === name)) ?? catalog[0]?.name ?? "";
+  const active = voice.state !== "idle" && voice.state !== "error";
+  const agentInfo = catalog.find((item) => item.name === selected);
+  const voices = agentInfo?.voices ?? [];
+  const [picked, setPicked] = useState("");
+  const speaker = voices.includes(picked) ? picked : voiceChoice(agentInfo);
+  // The page owns its call: Reset and leaving the page hang it up, and leaving cancels a start still creating its conversation.
+  useEffect(() => () => { if (voiceView().conversationId === id) stopVoice(); }, [id]);
+  const left = useRef(false);
+  useEffect(() => () => { left.current = true; }, []);
+  const start = useMutation({ mutationFn: async () => {
+    let next = id;
+    if (!next) {
+      next = await mutations.createSession({ agent: selected });
+      localStorage.setItem(storageKey, next);
+      setId(next);
+      sidebar.invalidateQueries();
+    }
+    if (!left.current) void startVoice(next, speaker);
+  } });
+  const pick = useMutation({ mutationFn: async (name: string) => {
+    setAgent(name);
+    if (!id) return;
+    await mutations.prompt({ id, text: `$agent ${name}` });
+    await queryClient.invalidateQueries({ queryKey: ["agents"] });
+  } });
+  const reset = () => {
+    localStorage.removeItem(storageKey);
+    setId("");
+    setAgent(selected);
+    setConfirm(false);
+  };
+  const error = [voice.error, start.error?.message, pick.error?.message].find(Boolean);
+  return (
+    <div className="mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col gap-4 p-4">
+      <PageTitle>Voice</PageTitle>
+      <div className="flex items-center gap-2">
+        <AgentPicker catalog={catalog} selected={selected} setAgent={(name) => pick.mutate(name)} open={picking} setOpen={setPicking} disabled={[active, start.isPending, pick.isPending, catalog.length === 0].some(Boolean)} />
+        {agentInfo && voices.length > 0 ? <VoicePicker voices={voices} value={speaker} disabled={active || start.isPending} onPick={(name) => { rememberVoice(agentInfo, name); setPicked(name); }} /> : null}
+        <div className="ml-auto flex items-center gap-1">
+          <Button variant={transcript ? "secondary" : "ghost"} size="icon" className="size-11 sm:size-8" aria-label="Show transcript" title="Show transcript" aria-pressed={transcript} onClick={() => { localStorage.setItem("voice:transcript", transcript ? "off" : "on"); setTranscript(!transcript); }}><Captions /></Button>
+          {id ? <>
+            <Button variant="ghost" size="icon" className="size-11 sm:size-8" role="link" nativeButton={false} render={<Link href={sessionPath(id)} />} aria-label="Open conversation" title="Open conversation"><MessageSquare /></Button>
+            <Button variant="ghost" size="icon" className="size-11 sm:size-8" aria-label="Reset" title="Start a new voice conversation" onClick={() => sidebar.rows.find((row) => row.id === id)?.running ? setConfirm(true) : reset()}><RotateCcw /></Button>
+          </> : null}
+        </div>
+      </div>
+      {transcript ? <VoiceTranscript captions={voice.captions} /> : null}
+      <VoiceStage voice={voice} compact={transcript} busy={start.isPending} error={error} onPress={() => active ? stopVoice() : start.mutate()} />
+      <Dialog open={confirm} onOpenChange={setConfirm}>
+        <DialogContent>
+          <DialogTitle>Reset voice conversation?</DialogTitle>
+          <DialogDescription>The agent is still working. Its turn keeps running in the old conversation.</DialogDescription>
+          <div className="mt-6 flex justify-end gap-2">
+            <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+            <Button onClick={reset}>Reset</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function VoiceToggle({ sessionId }: { sessionId: string }) {
+  const route = useRoute();
+  const { state, notice } = useOwnVoice(sessionId);
+  const calling = state !== "idle" && state !== "error";
+  const choices = useQuery({ ...queries.agents({ conversationId: sessionId }), enabled: sessionId !== "" });
+  const speaker = voiceChoice(choices.data?.agents.find((item) => item.name === choices.data?.currentAgent));
+  // The session pane stays mounted on page routes, so leaving the session ends its call as unmounting does.
+  useEffect(() => () => { if (voiceView().conversationId === sessionId) stopVoice(); }, [route.id, sessionId]);
+  // Phones talk on the Voice page: a narrow composer row has no room for another button.
+  return <>
+    <span aria-live="polite" title={notice} className="hidden max-w-48 truncate text-xs text-muted-foreground empty:absolute sm:inline">{notice}</span>
+    <Tooltip><TooltipTrigger render={<Button type="button" variant={calling ? "secondary" : "ghost"} size="icon" className="hidden sm:inline-flex sm:size-8" disabled={sessionId === ""} />} aria-label="Voice call" aria-pressed={calling} onClick={() => void (calling ? stopVoice() : startVoice(sessionId, speaker))}>
+      {state === "connecting" ? <LoaderCircle className="animate-spin" /> : calling ? <MicOff /> : <Mic />}
+    </TooltipTrigger><TooltipContent>{calling ? `End voice call (${state})` : "Start voice call"}</TooltipContent></Tooltip>
+  </>;
 }
 
 function AgentsPage() {

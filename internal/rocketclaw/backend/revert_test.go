@@ -894,6 +894,59 @@ func TestRevertLegacyQueuePromotionAndEnqueue(t *testing.T) {
 	require.Contains(t, <-requests, "new queue request")
 }
 
+func TestRevertStashKeepsVoiceInbound(t *testing.T) {
+	newBridge, s, requests, finals := newResumeTestBridges(t, false)
+	crashed := newBridge()
+	crashed.config.ConversationID = "main"
+
+	workspace := crashed.runtime.Clone().Workspace
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  skill:\n    docs-helper: allow\n---\nPrompt\n")
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, root.Close()) }()
+
+	require.NoError(t, root.MkdirAll(".rocketclaw/skills/docs-helper", 0o755))
+	require.NoError(t, root.WriteFile(".rocketclaw/skills/docs-helper/SKILL.md", []byte("---\nname: docs-helper\ndescription: Write docs\n---\n\nUse this skill for docs.\n"), 0o644))
+	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	manager := newThreadBridgeManager(crashed.runtime, s, crashed.log, func(Config) directBridge { return crashed })
+	manager.bridges["main"] = crashed
+	rt := &Runtime{Sessions: s, threads: manager, Cfg: crashed.runtime}
+	voice := func(id, text string) protocol.ThreadQueueItem {
+		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: text}, true)
+		inbound.ConversationID, inbound.Metadata["web_message_id"], inbound.Metadata[protocol.InboundPrincipalMetadataKey] = "main", id, "alice"
+		inbound.Metadata[protocol.InboundMediaMetadataKey] = "Voice"
+
+		return protocol.ThreadQueueItem{ID: id, Source: protocol.SourceWeb, Principal: "alice", Kind: protocol.InboundKindSteer, Message: text, Inbound: inbound}
+	}
+
+	for range 2 {
+		item := voice("stored", "$workflow deploy")
+		require.NoError(t, rt.StashQueueItem(t.Context(), "main", &item), "spoken $workflow text starts no workflow")
+	}
+
+	require.Len(t, crashed.requestCh, 1, "a re-delivered hand-off is admitted once")
+
+	restarted := newBridge()
+	restarted.config.ConversationID = "main"
+	manager.bridges["main"] = restarted
+	runTestBridge(t, restarted)
+	require.NoError(t, restarted.PickLaterWork(t.Context()))
+
+	// Request bodies are JSON, so the prompt's quotes and newlines arrive escaped.
+	header := `[Web media=Voice principal=\"alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\n`
+	require.Contains(t, <-requests, header+"$workflow deploy", "the stored voice item keeps its header across the restart")
+	require.Equal(t, "answer", readFinal(t, finals).Text)
+
+	item := voice("skill", "$docs-helper do it")
+	require.NoError(t, rt.StashQueueItem(t.Context(), "main", &item))
+
+	request := <-requests
+	require.Contains(t, request, header+"$docs-helper do it")
+	require.NotContains(t, request, "Use this skill for docs.", "spoken $skill text loads no skill")
+	require.Equal(t, "answer", readFinal(t, finals).Text)
+}
+
 func TestRevertAdmissionRollbackAtEveryWrite(t *testing.T) {
 	for _, failure := range []struct{ table, operation string }{
 		{"session_entries", "DELETE"}, {"session_entries", "UPDATE"},

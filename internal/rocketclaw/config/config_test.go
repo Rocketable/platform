@@ -132,6 +132,35 @@ func TestLoadSentry(t *testing.T) {
 	}
 }
 
+func TestLoadTsnet(t *testing.T) {
+	for _, tt := range []struct {
+		name, web string
+		want      *TsnetConfig
+		wantErr   bool
+	}{
+		{name: "off", web: `{}`},
+		{name: "default hostname", web: `{"tsnet":{}}`, want: &TsnetConfig{Hostname: "rocketclaw"}},
+		{name: "configured", web: `{"tsnet":{"hostname":"phone-1","tags":["tag:rocketclaw"],"origin":"https://evil.example"}}`, want: &TsnetConfig{Hostname: "phone-1", Tags: []string{"tag:rocketclaw"}}},
+		{name: "path hostname", web: `{"tsnet":{"hostname":"../state"}}`, wantErr: true},
+		{name: "untagged tag", web: `{"tsnet":{"tags":["rocketclaw"]}}`, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "rocketclaw.json")
+			content := `{"database_url":"postgres://localhost/test","openai":{"api_key":"test"},"slack":{"bot_token":"test","app_token":"test","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"web":` + tt.web + `}`
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+			cfg, err := Load(path, "", AWSFetcher{})
+			if tt.wantErr {
+				require.ErrorContains(t, err, "web.tsnet")
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tt.want, cfg.Web.Tsnet)
+		})
+	}
+}
+
 func TestLoadPreservesModelConfig(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "workspace": ".",

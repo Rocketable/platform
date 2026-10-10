@@ -54,6 +54,10 @@ type Server struct {
 	searchMu    sync.Mutex
 	searches    map[string]*searchFlight
 	searchGroup singleflight.Group
+
+	// voiceCalls holds each conversation's live voice call; a newer call replaces it.
+	voiceMu    sync.Mutex
+	voiceCalls map[string]*context.CancelCauseFunc
 }
 
 type searchFlight struct {
@@ -87,7 +91,7 @@ type CronJobs interface {
 // The host must restrict RPC access to the trusted Web proxy: the metadata
 // carries the browser IP, not an independently authenticated network peer.
 func New(core frontend.Backend, sessions *backend.SessionService, cfg *config.LockedConfig, channels ChannelAgentChoices, cronjobs CronJobs) *Server {
-	return &Server{backend: core, sessions: sessions, usernames: cfg.Clone().WebUsers, cfg: cfg, channels: channels, cronjobs: cronjobs}
+	return &Server{backend: core, sessions: sessions, usernames: cfg.Clone().WebUsers, cfg: cfg, channels: channels, cronjobs: cronjobs, voiceCalls: map[string]*context.CancelCauseFunc{}}
 }
 
 // ListSessionEntries returns ordered entry identifiers and metadata.
@@ -990,10 +994,10 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 		InstrumentationEnabled: cfg.Instrumentation.Enabled, McpExternal: cfg.MCPExternal.Enabled,
 		McpServers: slices.Sorted(maps.Keys(cfg.MCPServers)),
 	}
-	ip := netip.MustParseAddr(metadata.ValueFromIncomingContext(ctx, "rocketclaw-principal")[0])
 
-	username, _, errWhoIs := s.tailscaleUsername(ctx, ip)
-	if errWhoIs == nil {
+	if login := metadata.ValueFromIncomingContext(ctx, "rocketclaw-tailnet-login-bin"); len(login) == 1 {
+		view.TailscaleUser = login[0]
+	} else if username, _, errWhoIs := s.tailscaleUsername(ctx, netip.MustParseAddr(metadata.ValueFromIncomingContext(ctx, "rocketclaw-principal")[0])); errWhoIs == nil {
 		view.TailscaleUser = username
 	}
 
@@ -1099,6 +1103,8 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 		return nil, fmt.Errorf("web channel choices: %w", err)
 	}
 
+	cfg := s.cfg.Clone()
+
 	// Keep the allowed order: Slack channels list their default agent first.
 	for _, name := range allowed {
 		agent, ok := definitions.Items[name]
@@ -1106,7 +1112,17 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 			continue
 		}
 
-		response.Agents = append(response.Agents, &Agent{Name: name, Model: agent.Model, Reasoning: agent.ReasoningEffort, Description: agent.Description, Verbosity: agent.Verbosity, Prompt: agent.Prompt, CustomShell: agent.CustomShell})
+		var voices []string
+
+		if provider, ok := cfg.Provider(voiceProvider(agent.Model)); ok {
+			if provider.RocketCodeAuth == "chatgpt" {
+				voices = newCodexVoice().voices()
+			} else if public, err := newPublicVoice(provider); err == nil {
+				voices = public.voices()
+			}
+		}
+
+		response.Agents = append(response.Agents, &Agent{Name: name, Model: agent.Model, Reasoning: agent.ReasoningEffort, Description: agent.Description, Verbosity: agent.Verbosity, Prompt: agent.Prompt, CustomShell: agent.CustomShell, Voices: voices})
 	}
 
 	return response, nil
@@ -1570,6 +1586,15 @@ func (s *Server) join(request *JoinRequest, stream grpc.ServerStream) error {
 }
 
 func (s *Server) principal(ctx context.Context) (username, principal string, err error) {
+	if login := metadata.ValueFromIncomingContext(ctx, "rocketclaw-tailnet-login-bin"); len(login) == 1 {
+		principal = metadata.ValueFromIncomingContext(ctx, "rocketclaw-tailnet-name-bin")[0]
+		if strings.TrimSpace(principal) == "" {
+			principal = login[0]
+		}
+
+		return login[0], principal, nil
+	}
+
 	values := metadata.ValueFromIncomingContext(ctx, "rocketclaw-principal")
 	if len(values) != 1 {
 		return "", "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "browser IP is required"))

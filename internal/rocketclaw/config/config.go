@@ -101,6 +101,18 @@ func (c *Config) RuntimeDirName() string {
 type WebConfig struct {
 	ListenAddress string       `json:"listen_address,omitempty"`
 	Sentry        SentryConfig `json:"sentry,omitzero"`
+	Tsnet         *TsnetConfig `json:"tsnet,omitempty"`
+}
+
+// TsnetConfig runs an embedded Tailscale node serving the Web over tailnet HTTPS.
+// Its auth key comes only from TS_AUTHKEY, never from config.
+type TsnetConfig struct {
+	Hostname string   `json:"hostname,omitempty"`
+	Tags     []string `json:"tags,omitempty"`
+	// AuthKey logs the node in without a login link; it is used only while the node is logged out.
+	AuthKey string `json:"auth_key,omitempty"`
+	// Origin is the node's HTTPS origin, set at runtime once it serves.
+	Origin string `json:"-"`
 }
 
 // SentryConfig contains only public browser tracing settings, never an auth token.
@@ -345,6 +357,14 @@ func (c *Config) Validate() error {
 
 	if err := c.Web.Sentry.validate(); err != nil {
 		return err
+	}
+
+	if tsnet := c.Web.Tsnet; tsnet != nil {
+		// The hostname names the state directory, so it must stay a DNS label.
+		tsnet.Hostname = cmp.Or(tsnet.Hostname, "rocketclaw")
+		if strings.Trim(tsnet.Hostname, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" || slices.ContainsFunc(tsnet.Tags, func(tag string) bool { return !strings.HasPrefix(tag, "tag:") }) {
+			return errors.New(`web.tsnet.hostname must use only a-z, 0-9 and -, and each web.tsnet.tags entry must start with "tag:"`)
+		}
 	}
 
 	if c.Workspace == "" {
