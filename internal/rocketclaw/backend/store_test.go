@@ -717,7 +717,9 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 	assert.Equal(t, "q1", rows[1].Queue.ID)
 	assert.Equal(t, "q2", rows[2].Queue.ID)
 
-	require.NoError(t, (stateDAO{db: store.db}).deleteScheduledMessage(t.Context(), "missing"))
+	deleted, err := (stateDAO{db: store.db}).deleteScheduledMessage(t.Context(), "missing")
+	require.NoError(t, err)
+	assert.False(t, deleted)
 	require.NoError(t, store.ResetScheduledMessages(conversationID))
 
 	items, err = store.ThreadQueueForConversation(conversationID)
