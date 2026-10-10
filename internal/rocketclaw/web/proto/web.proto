@@ -460,12 +460,37 @@ message IdentityRequest {}
 
 message IdentityResponse { string username = 1; string principal = 2; }
 
+message VoiceRequest {
+  string conversation_id = 1;
+  string sdp = 2;
+}
+
+// The first event answers the browser's SDP offer; the last ends the call.
+message VoiceEvent {
+  oneof event {
+    VoiceAnswer answer = 1;
+    VoiceEnded ended = 2;
+  }
+}
+
+// route names the GPT-Live wire dialect: public or codex.
+message VoiceAnswer {
+  string sdp = 1;
+  string route = 2;
+}
+
+// reason is stopped, replaced, idle, no_media, expired, safety, closed or error.
+message VoiceEnded {
+  string reason = 1;
+}
+
 service Web {
   rpc UploadAttachment(stream Attachment) returns (Attachment);
   rpc DownloadAttachment(Attachment) returns (stream Attachment);
   rpc ListSessions(ListSessionsRequest) returns (stream ListSessionsResponse);
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
   rpc Join(JoinRequest) returns (stream ConversationChange);
+  rpc Voice(VoiceRequest) returns (stream VoiceEvent);
   rpc Prompt(PromptRequest) returns (PromptResponse);
   rpc ListCronJobs(ListCronJobsRequest) returns (ListCronJobsResponse);
   rpc RunCronJob(RunCronJobRequest) returns (RunCronJobResponse);

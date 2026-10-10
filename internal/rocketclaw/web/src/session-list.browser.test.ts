@@ -664,7 +664,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const navigation = page.locator("footer");
     const compactHeight = (await navigation.boundingBox())!.height;
     const navigationCommands = navigation.getByRole("button", { name: "Open command palette", exact: true });
-    expect(await navigation.locator("#bottom-navigation button:visible").count()).toBe(3);
+    expect(await navigation.locator("#bottom-navigation button:visible").count()).toBe(4);
     expect(await navigation.getByRole("link").count()).toBe(0);
     expect((await navigationCommands.boundingBox())!.width).toBe(48);
     expect((await navigationCommands.locator("svg").boundingBox())!.width).toBe(24);
@@ -734,7 +734,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "List Agents", "List Skills", "Sessions: New", "Sessions: Search", "Settings", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Move tabs to left", "Tabs: Pin",
       // Timeline levels follow the Config slider, with its descriptions, and mark the active level.
       "Timeline: Messages onlyHide all activity.", "Timeline: QuietGroup subagents and skills. Hide other activity.", "Timeline: CompactCurrent · Group all activity with details collapsed.",
-      "Timeline: DetailedExpand execute output. Show subagents and skills separately and group other activity.", "Timeline: EverythingShow all activity separately and expanded."]);
+      "Timeline: DetailedExpand execute output. Show subagents and skills separately and group other activity.", "Timeline: EverythingShow all activity separately and expanded.", "Voice"]);
     await page.keyboard.press("Escape");
     await commandPalette.waitFor({ state: "hidden" });
     await navigationCommands.click();
@@ -1683,7 +1683,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       } else {
         expect(Math.abs(groupBox!.x + groupBox!.width / 2 - width / 2)).toBeLessThan(1);
       }
-      expect(await newChat.locator("..").getByRole("button").count()).toBe(3);
+      expect(await newChat.locator("..").getByRole("button").count()).toBe(4);
       const creations = ctrl.createdAgents.length;
       await newChat.click();
       await navPage.waitForURL(`${origin}/`);

@@ -87,7 +87,34 @@ See [Web conversation transport](../frontend/rpc/README.md)
 for startup commands, browser IP mappings and the transport contract. The Go
 handler takes identity from the browser connection; forwarded headers cannot
 select a user. Serve it directly to browsers rather than through another HTTP
-reverse proxy.
+reverse proxy. The one exception is `tailscale serve`, for voice on a phone; see
+[Voice](#voice).
+
+## Voice
+
+The **Voice** page (`/voice`, also in the bottom navigation and the command
+palette) holds one voice conversation, remembered in this browser for the signed-in
+user. Pick an agent and press **Start** to talk, **Stop** to hang up. The first
+Start creates the conversation and later visits reuse it. Picking another agent
+while idle switches the conversation's agent with `$agent`. **Reset** hangs up and
+forgets the conversation, asking first while its turn runs, so the next Start begins
+a fresh one; the old one stays in the session list and search, and a running turn
+keeps running there. The page shows the call state, elapsed time, live captions
+(not saved), and an **Open conversation** link, and keeps the screen awake while it
+is open. Leaving the page hangs up.
+
+Each session's composer has a voice button that starts and ends a call on that
+session. It is not dictation: nothing is typed into the composer. It is unavailable
+on New session until the conversation exists, and leaving the session ends its call.
+
+A tab runs one call at a time, and a conversation has one live call: starting voice
+for it elsewhere ends the older call with "Voice moved to another device or tab."
+A call also ends when the page closes, stays hidden for 30 seconds, or loses its
+connection to RocketClaw. Failures show a message and are never retried. Voice
+needs microphone permission and a secure page: HTTPS, or `http://127.0.0.1` on
+the RocketClaw machine. See the
+[root README](../../../README.md#voice) for `tailscale serve`, credentials, cost,
+and what OpenAI receives.
 
 ## Frontend error and performance tracking
 
@@ -273,7 +300,7 @@ those paths. Keep temporary test artifacts under the repository's `.tmp/`.
 ## Tabs
 
 Tabs follow editor semantics.
-Sessions and pages (New session, Search, Cron, Agents, Skills, Settings) open in
+Sessions and pages (New session, Search, Voice, Cron, Agents, Skills, Settings) open in
 one strip, and a location never appears in two tabs. The URL always names the
 active tab.
 
@@ -354,7 +381,7 @@ retaining a 44px touch target. The handle stays
 visible when the controls are hidden and supports Enter/Space when focused.
 Touch devices and narrow screens use 48px navigation targets and 8px gaps;
 desktop uses 32px targets and 4px gaps. Icons are 24px in both layouts.
-The centered bar has New session, Search sessions, and Open command palette.
+The centered bar has New session, Search sessions, Voice, and Open command palette.
 Cmd/Ctrl+Alt+N opens a new session. The magnifying glass beside New session opens
 the session palette, like Cmd/Ctrl+P. The **Sessions: Search** command opens
 the Search page. Each search has its own editable tab, saved in this browser for
@@ -432,7 +459,7 @@ reporting “No matches”. A message hit from a stopped or failed turn opens it
 chat without jumping to a message. A failed search shows an error: the Search
 page offers Retry, and Cmd/Ctrl+P retries on the next keystroke.
 The command button and Cmd/Ctrl+Shift+P open the command palette. It always offers
-**Sessions: New**, **Sessions: Search**, **Cron: Dashboard**, **Cron: Run**,
+**Sessions: New**, **Sessions: Search**, **Voice**, **Cron: Dashboard**, **Cron: Run**,
 **List Agents**, **List Skills**, and **Settings**.
 Timeline detail levels are also available, from `Timeline: Messages only` through
 `Timeline: Everything`.
@@ -729,6 +756,10 @@ delta read from the last applied revision; opening or reconnecting also catches 
   Add `&download=1` to force a download for an image too.
 - `POST /api/Prompt` accepts `attachmentIds` in selection order alongside unchanged
   `id`, `text`, and `delivery`. The backend adds attachment references to the text.
+- `POST /api/Voice` takes `{"conversationId":"<visible-id>","sdp":"<offer>"}` and
+  answers with SSE: `{"answer":{"sdp","route"}}`, then one `{"ended":{"reason"}}`.
+  Errors before the answer are JSON errors. The call lasts as long as the request;
+  aborting it hangs up. See the [transport README](../frontend/rpc/README.md#voice).
 
 All JSON RPCs use PascalCase method names, camelCase protobuf fields, and
 protobuf response envelopes. History includes `messages`, `revision`, `reset`,

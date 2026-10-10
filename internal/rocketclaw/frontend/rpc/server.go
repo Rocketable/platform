@@ -54,6 +54,10 @@ type Server struct {
 	searchMu    sync.Mutex
 	searches    map[string]*searchFlight
 	searchGroup singleflight.Group
+
+	// voiceCalls holds each conversation's live voice call; a newer call replaces it.
+	voiceMu    sync.Mutex
+	voiceCalls map[string]*context.CancelCauseFunc
 }
 
 type searchFlight struct {
@@ -87,7 +91,7 @@ type CronJobs interface {
 // The host must restrict RPC access to the trusted Web proxy: the metadata
 // carries the browser IP, not an independently authenticated network peer.
 func New(core frontend.Backend, sessions *backend.SessionService, cfg *config.LockedConfig, channels ChannelAgentChoices, cronjobs CronJobs) *Server {
-	return &Server{backend: core, sessions: sessions, usernames: cfg.Clone().WebUsers, cfg: cfg, channels: channels, cronjobs: cronjobs}
+	return &Server{backend: core, sessions: sessions, usernames: cfg.Clone().WebUsers, cfg: cfg, channels: channels, cronjobs: cronjobs, voiceCalls: map[string]*context.CancelCauseFunc{}}
 }
 
 // ListSessionEntries returns ordered entry identifiers and metadata.

@@ -240,7 +240,7 @@ func TestTransportRefreshUpdatesOnlySelectedProvider(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	got, err := (&transport{log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "work"}).token(context.Background(), tokenLoadFresh, Token{})
+	got, err := FreshTokenIn(context.Background(), workspace, config.DefaultRuntimeDir, "work", Token{})
 	require.NoError(t, err)
 	require.Equal(t, "work-next", got.Access)
 
@@ -269,7 +269,7 @@ func TestConcurrentRefreshAndLoginDoesNotOverwriteNewLogin(t *testing.T) {
 	refreshDone := make(chan error, 1)
 
 	go func() {
-		_, err := (&transport{log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai"}).token(context.Background(), tokenLoadFresh, Token{})
+		_, err := FreshTokenIn(context.Background(), workspace, config.DefaultRuntimeDir, "openai", Token{})
 		refreshDone <- err
 	}()
 
@@ -295,6 +295,56 @@ func TestConcurrentRefreshAndLoginDoesNotOverwriteNewLogin(t *testing.T) {
 	work, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "work")
 	require.NoError(t, err)
 	require.Equal(t, "work-refresh", work.Refresh)
+}
+
+func TestFreshTokenInRefreshesOnlyInsideSkew(t *testing.T) {
+	access := testJWT(map[string]any{"chatgpt_account_id": "acc-next"})
+	base := http.DefaultClient.Transport
+
+	t.Cleanup(func() { http.DefaultClient.Transport = base })
+
+	for _, refreshes := range []int{0, 1} {
+		workspace := t.TempDir()
+
+		stored := Token{Refresh: "refresh", Access: "stored", Expires: time.Now().Add(2 * refreshSkew).UnixMilli(), AccountID: "acc-old"}
+		if refreshes == 1 {
+			stored.Expires = time.Now().Add(refreshSkew / 2).UnixMilli()
+		}
+
+		requireSaveToken(t, workspace, "openai", stored)
+
+		calls := 0
+		http.DefaultClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+			calls++
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"` + access + `","refresh_token":"next-refresh","expires_in":3600}`)), Header: make(http.Header)}, nil
+		})
+
+		got, err := FreshTokenIn(t.Context(), workspace, config.DefaultRuntimeDir, "openai", Token{})
+		require.NoError(t, err)
+		require.Equal(t, refreshes, calls)
+
+		want := stored
+		if refreshes == 1 {
+			want = Token{Refresh: "next-refresh", Access: access, Expires: got.Expires, AccountID: "acc-next"}
+		}
+
+		require.Equal(t, want, got)
+
+		persisted, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
+		require.NoError(t, err)
+		require.Equal(t, got, persisted)
+	}
+}
+
+func TestFreshTokenInReportsMissingToken(t *testing.T) {
+	workspace := t.TempDir()
+	requireSaveToken(t, workspace, "openai", Token{Refresh: "refresh"})
+
+	_, err := FreshTokenIn(t.Context(), workspace, config.DefaultRuntimeDir, "work", Token{})
+	missing, ok := errors.AsType[*MissingTokenError](err)
+	require.True(t, ok, "%v", err)
+	require.Equal(t, "work", missing.Provider)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestNewChatGPTClientInRequiresSelectedProviderToken(t *testing.T) {
@@ -1803,7 +1853,7 @@ func TestNamedProviderSessionEndingRefreshUsesProviderGuidance(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	_, err := (&transport{log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "work"}).token(context.Background(), tokenLoadFresh, Token{})
+	_, err := FreshTokenIn(context.Background(), workspace, config.DefaultRuntimeDir, "work", Token{})
 	require.ErrorContains(t, err, "refresh_token_reused")
 	require.ErrorContains(t, err, "`rocketclaw oai login work`")
 	require.NotContains(t, err.Error(), "run `rocketclaw oai login`")
