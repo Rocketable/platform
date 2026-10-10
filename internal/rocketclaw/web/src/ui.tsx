@@ -18,7 +18,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
 import { CodeBlock, InlineText, TranscriptText, copyText, useCleanText } from "./transcript-text";
-import { projectTimeline, setTimelineRows, timelineLevels, useTimelineDetail, type TimelineRows } from "./timeline-detail";
+import { projectTimeline, setTimelineRows, timelineLevel, timelineLevels, useTimelineDetail, type TimelineRows } from "./timeline-detail";
 import { TimelineDetailCard } from "./timeline-detail-card";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
@@ -60,10 +60,12 @@ function sessionPath(id: string) {
 
 const Delegations = createContext<string[] | undefined>(undefined);
 
-function delegationHref(id?: string) {
+// The right panel shows one delegation or one skill, so opening either replaces the other.
+function panelHref(id?: string, panel: "delegation" | "skill" = "delegation") {
   const params = new URLSearchParams(location.search);
-  if (id) params.set("delegation", id);
-  else params.delete("delegation");
+  params.delete("delegation");
+  params.delete("skill");
+  if (id) params.set(panel, id);
   return `${location.pathname}${params.size ? `?${params}` : ""}`;
 }
 
@@ -300,7 +302,7 @@ function BackgroundJobs({ id, jobs, openCall, onChange }: { id: string; jobs: Ba
   return <ul aria-label="Background jobs" className={cn("flex flex-col gap-0.5", jobs.length > 3 && "max-h-32 overflow-y-auto")}>
     {jobs.map((job) => <li key={job.jobId} className="flex items-center gap-2 rounded-md px-2 py-1">
       <span className="min-w-0 flex-1 truncate text-sm">{job.label} · {jobState(job)}</span>
-      {job.hidden ? null : <Button type="button" variant="ghost" size="sm" aria-label={`Open ${job.label}`} onClick={() => job.subagentKey ? navigate(delegationHref(id + job.subagentKey)) : openCall(job.toolCallId)}>Open</Button>}
+      {job.hidden ? null : <Button type="button" variant="ghost" size="sm" aria-label={`Open ${job.label}`} onClick={() => job.subagentKey ? navigate(panelHref(id + job.subagentKey)) : openCall(job.toolCallId)}>Open</Button>}
       {job.state === "running" ? <Button type="button" variant="ghost" size="sm" aria-label={`Stop ${job.label}`} disabled={stop.isPending} onClick={() => stop.mutate({ conversationId: id, jobId: job.jobId })}>Stop</Button> : null}
     </li>)}
     {stop.error ? <li role="alert" className="px-2 text-xs text-destructive">{stop.error.message}</li> : null}
@@ -365,6 +367,8 @@ function useRoute() {
   const cron = pathname === "/cron";
   const agents = pathname === "/agents";
   const skills = pathname === "/skills";
+  // Skill names are lowercase letters, digits and hyphens (internal/rocketcode skills.go), so paths hold them as-is.
+  const skill = pathname.startsWith("/skills/") ? pathname.slice("/skills/".length) : "";
   const config = pathname === "/config";
   const search = pathname === "/search";
   const id = pathname.startsWith("/s/") ? decodeSessionId(pathname.slice(3)) : "";
@@ -372,6 +376,7 @@ function useRoute() {
     cron,
     agents,
     skills,
+    skill,
     config,
     search,
     id,
@@ -702,6 +707,11 @@ type TabState = { owner?: string; tabs: Tab[]; active: string };
 const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
 const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/search": ["Search", Search], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings] };
 
+// A skill's page tab is titled with its name.
+function pageTab(path: string): [string, typeof Search] | undefined {
+  return pageTabs[path] ?? (path.startsWith("/skills/") ? [path.slice("/skills/".length), Sparkles] : undefined);
+}
+
 function pinnedFirst(tabs: Tab[]) {
   return tabs.toSorted((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
 }
@@ -835,7 +845,7 @@ function TabItem({ tab, active, vertical, editing, endEdit, promote, close, open
   const sidebar = useContext(Sidebar);
   const id = tab.path.startsWith("/s/") ? decodeSessionId(tab.path.slice(3)) : "";
   const session = sidebar.rows.find((row) => row.id === id) ?? { id };
-  const [label, Icon] = pageTabs[tab.path] ?? [sessionTitle(session, sidebar.loadingIds.has(id)), MessageSquare];
+  const [label, Icon] = pageTab(tab.path) ?? [sessionTitle(session, sidebar.loadingIds.has(id)), MessageSquare];
   const title = useCleanText(label);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
@@ -900,7 +910,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const composer = useRef<((command: string) => void) | null>(null);
   const commands = useMemo(() => ({ command, setCommand, composer }), [command]);
   const route = useRoute();
-  const showChat = ![route.cron, route.agents, route.skills, route.config, route.search].some(Boolean);
+  const showChat = ![route.cron, route.agents, route.skills, route.skill, route.config, route.search].some(Boolean);
   const [palette, setPalette] = useState<{ mode: "sessions" | "commands" | "cron" | undefined; key: number }>({ mode: undefined, key: 0 });
   const openPalette = useCallback((mode: "sessions" | "commands") => setPalette((current) => ({ mode, key: current.key + 1 })), []);
   const drafts = useMemo(() => new Map<string, ComposerDraft>(), [scope]);
@@ -1013,13 +1023,14 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
             <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]", command?.target && "pt-[min(75dvh,30rem)]")}>
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
               {route.search ? <SearchPage /> : null}
+              <SkillPage name={route.skill} />
               <TabPane show={showChat}>
                 <MessageScrollerProvider key={conversation.key} autoScroll scrollEdgeThreshold={48}>
                   <Transcript id={conversation.id} drafts={drafts} scopeError={scopeError} onDraftChange={onDraftChange} onCreated={(id) => { tabs.create(id); setConversation((current) => ({ ...current, created: id })); }} />
                 </MessageScrollerProvider>
               </TabPane>
              </main>
-             {showChat ? <DelegationPanel id={route.id} /> : null}
+             {showChat ? <><DelegationPanel id={route.id} /><SkillPanel /></> : null}
            </div>
           </div>
           </TabActions></SessionCommands></DraftScope>
@@ -1186,9 +1197,13 @@ function paletteRows(
     { key: "search", label: "Sessions: Search", run: () => navigate("/search") },
     { key: "run-cron", label: "Cron: Run", keep: true, run: openCron },
     ...([["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
-    ...timelineLevels.map(({ id, label, rows }) => ({ key: `timeline-${id}`, label: `Timeline: ${label}`, run: () => setTimelineRows(rows) })),
     // VS Code: src/vs/platform/quickinput/browser/commandsQuickAccess.ts, _getPicks.
-  ].filter((item) => needle === "" || item.label.toLowerCase().includes(needle)).sort((a, b) => (recent.indexOf(a.key) + 1 || Infinity) - (recent.indexOf(b.key) + 1 || Infinity) || a.label.localeCompare(b.label));
+  ].filter((item) => needle === "" || item.label.toLowerCase().includes(needle)).sort((a, b) => {
+    // Recently run commands come first, except Timeline levels, which always keep the Config slider's order.
+    const level = (key: string) => timelineLevels.findIndex(({ id }) => key === `timeline-${id}`);
+    const rank = (key: string) => level(key) >= 0 ? Infinity : recent.indexOf(key) + 1 || Infinity;
+    return rank(a.key) - rank(b.key) || (level(a.key) >= 0 && level(b.key) >= 0 ? level(a.key) - level(b.key) : a.label.localeCompare(b.label));
+  });
 }
 
 const pendingCronRuns = new Map<string, string>();
@@ -1299,6 +1314,9 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
     if (name === "fork" || name === "handoff") setCommand({ mode: name, source: id });
     else composer.current!(name);
   } })) : [];
+  const level = timelineLevel(useTimelineDetail());
+  // The same levels and descriptions as the Config slider; the active one is marked.
+  const timeline = timelineLevels.map(({ id: key, label, description, rows }) => ({ key: `timeline-${key}`, label: `Timeline: ${label}`, detail: key === level?.id ? `Current · ${description}` : description, run: () => setTimelineRows(rows) }));
   const [query, setQuery] = useState("");
   const [recent, setRecent] = useState<string[]>(() => JSON.parse(localStorage.getItem("command-history") ?? "[]"));
   const [pick, setPick] = useState(0);
@@ -1338,7 +1356,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
       setMode(undefined);
     },
   });
-  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), { rows: search.rows, loadingIds: sidebar.loadingIds }, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands, ...tabCommands], recent);
+  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), { rows: search.rows, loadingIds: sidebar.loadingIds }, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands, ...tabCommands, ...timeline], recent);
   const selected = items.length === 0 ? 0 : pick % items.length;
   const choose = (item: (typeof items)[number]) => {
     if (item.disabled) return;
@@ -1991,6 +2009,8 @@ function delegationOf(line: Line, delegations?: string[]) {
 
 function ToolLine({ line, conversationId, hasSandboxed, open }: { line: Line; conversationId: string; hasSandboxed: boolean; open?: boolean }) {
   const title = toolTitle(line);
+  // toolTitle names a skill call's skill as "Skill · name".
+  const skill = line.toolName === "skill" && title.startsWith("Skill · ") ? title.slice("Skill · ".length) : "";
   const delegations = use(Delegations);
   const delegation = delegationOf(line, delegations);
   // A reviewed call's row opens its permission review once the delegations list it; an older task row, the one ending in its call ID.
@@ -2006,8 +2026,9 @@ function ToolLine({ line, conversationId, hasSandboxed, open }: { line: Line; co
         <span className="ml-1 inline-block max-w-[calc(100%-1.5rem)] truncate align-middle font-mono">{title}</span>
         {line.state ? <span aria-live="polite" className="ml-2 text-muted-foreground">{line.state}</span> : null}
       </summary>
-      {delegation ? <Link href={delegationHref(delegation)} aria-label={`Open delegation: ${title}`} className="block w-fit px-3 pb-2 text-xs text-muted-foreground underline hover:text-foreground">Open delegation</Link> : null}
-      {review ? <Link href={delegationHref(review)} aria-label={`Open permission review: ${title}`} className="block w-fit px-3 pb-2 text-xs text-muted-foreground underline hover:text-foreground">Open permission review</Link> : null}
+      {delegation ? <Link href={panelHref(delegation)} aria-label={`Open delegation: ${title}`} className="block w-fit px-3 pb-2 text-xs text-muted-foreground underline hover:text-foreground">Open delegation</Link> : null}
+      {review ? <Link href={panelHref(review)} aria-label={`Open permission review: ${title}`} className="block w-fit px-3 pb-2 text-xs text-muted-foreground underline hover:text-foreground">Open permission review</Link> : null}
+      {skill ? <Link href={panelHref(skill, "skill")} aria-label={`View skill: ${skill}`} className="block w-fit px-3 pb-2 text-xs text-muted-foreground underline hover:text-foreground">View skill</Link> : null}
       {line.state ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
       <CodeBlock label={title} text={text} />
       {parts.map((part) => (
@@ -2488,11 +2509,10 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
 
 function DelegationPanel({ id }: { id: string }) {
   const child = new URLSearchParams(useSearch()).get("delegation") ?? "";
-  const wide = useMedia("(min-width: 64rem)");
   const main = useQuery({ ...queries.history({ id }), enabled: false });
   const history = useQuery({ ...queries.history({ id: child }), enabled: child !== "" });
   useEffect(() => {
-    if (child && main.data?.revertMessageId && !main.data.delegations.some((level) => child === level || child.startsWith(`${level}/`))) navigate(delegationHref());
+    if (child && main.data?.revertMessageId && !main.data.delegations.some((level) => child === level || child.startsWith(`${level}/`))) navigate(panelHref());
   }, [child, main.data]);
   if (!child) return null;
   const opened = historyLines(main.data?.messages ?? []).map((line) => delegationOf(line, main.data?.delegations));
@@ -2505,12 +2525,12 @@ function DelegationPanel({ id }: { id: string }) {
   const parent = levels.at(-2);
   const lines = historyLines(history.data?.messages ?? []);
   const sandboxed = lines.some((line) => line.origin === "sandboxed");
-  const close = () => navigate(delegationHref());
+  const close = () => navigate(panelHref());
   const body = <>
     <header className="flex shrink-0 items-center gap-1 border-b p-2 text-xs lg:pr-12">
       <nav aria-label="Delegation breadcrumbs" className="flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap">
-        <Link href={delegationHref()} className="shrink-0 hover:underline">Conversation</Link>
-        {levels.map(({ level, label }, index) => <span key={level} className="flex min-w-0 items-center gap-1"><span aria-hidden="true">/</span>{index === levels.length - 1 ? <span aria-current="page" title={label} className="min-w-0 truncate font-medium">{label}</span> : <Link href={delegationHref(level)} title={label} className="min-w-0 truncate hover:underline">{label}</Link>}</span>)}
+        <Link href={panelHref()} className="shrink-0 hover:underline">Conversation</Link>
+        {levels.map(({ level, label }, index) => <span key={level} className="flex min-w-0 items-center gap-1"><span aria-hidden="true">/</span>{index === levels.length - 1 ? <span aria-current="page" title={label} className="min-w-0 truncate font-medium">{label}</span> : <Link href={panelHref(level)} title={label} className="min-w-0 truncate hover:underline">{label}</Link>}</span>)}
       </nav>
       <Button variant="ghost" size="icon-sm" aria-label="Close delegation" onClick={close}><X /></Button>
     </header>
@@ -2521,12 +2541,31 @@ function DelegationPanel({ id }: { id: string }) {
       <Delegations value={history.data?.delegations}>
         {transcriptTurns(lines).flatMap((turn) => [...turn.user, ...turn.items]).map((line) => <TranscriptLine key={line.id} line={line} conversationId={child} hasSandboxed={sandboxed} />)}
       </Delegations>
-      {history.isSuccess ? <Link href={delegationHref(parent?.level)} className="block w-fit text-xs text-muted-foreground underline hover:text-foreground">{parent ? `Back to ${parent.label}` : "Back to conversation"}</Link> : null}
+      {history.isSuccess ? <Link href={panelHref(parent?.level)} className="block w-fit text-xs text-muted-foreground underline hover:text-foreground">{parent ? `Back to ${parent.label}` : "Back to conversation"}</Link> : null}
     </div></ScrollArea>
   </>;
-  return wide ? <ResizableAside side="delegation" aria-label="Delegation" className="flex flex-col border-l bg-background">{body}</ResizableAside> : <Sheet open onOpenChange={(open) => { if (!open) close(); }}>
-    <SheetContent side="right" showCloseButton={false} className="data-[side=right]:w-full data-[side=right]:sm:max-w-none"><SheetTitle className="sr-only">Delegation</SheetTitle>{body}</SheetContent>
+  return <SidePanel label="Delegation" close={close}>{body}</SidePanel>;
+}
+
+function SidePanel({ label, close, children }: { label: string; close: () => void; children: ReactNode }) {
+  const wide = useMedia("(min-width: 64rem)");
+  return wide ? <ResizableAside side="delegation" aria-label={label} className="flex flex-col border-l bg-background">{children}</ResizableAside> : <Sheet open onOpenChange={(open) => { if (!open) close(); }}>
+    <SheetContent side="right" showCloseButton={false} className="data-[side=right]:w-full data-[side=right]:sm:max-w-none"><SheetTitle className="sr-only">{label}</SheetTitle>{children}</SheetContent>
   </Sheet>;
+}
+
+function SkillPanel() {
+  const name = new URLSearchParams(useSearch()).get("skill") ?? "";
+  if (!name) return null;
+  const close = () => navigate(panelHref());
+  return <SidePanel label="Skill" close={close}>
+    <header className="flex shrink-0 items-center gap-2 border-b p-2 text-xs lg:pr-12">
+      <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
+      <Link href={`/skills/${name}`} className="shrink-0 underline hover:text-foreground">Open page</Link>
+      <Button variant="ghost" size="icon-sm" aria-label="Close skill" onClick={close}><X /></Button>
+    </header>
+    <ScrollArea className="min-h-0 flex-1"><div className="p-3"><SkillView name={name} /></div></ScrollArea>
+  </SidePanel>;
 }
 
 async function sendComposer(input: {
@@ -3437,7 +3476,6 @@ function AgentsPage() {
 
 function SkillsPage() {
   const skills = useQuery({ ...queries.skills(), staleTime: 60_000 });
-  const [open, setOpen] = useState<string | null>(null);
   const rows = skills.data ?? [];
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 overflow-y-auto p-4">
@@ -3447,14 +3485,40 @@ function SkillsPage() {
       {rows.length === 0 && !skills.isLoading && !skills.error ? <p className="text-sm text-muted-foreground">No skills configured.</p> : null}
       {rows.map((skill) => (
         <section key={skill.name} className="border-b pb-4">
-          <button type="button" className="w-full text-left" onClick={() => setOpen(open === skill.name ? null : skill.name)}>
+          <Link href={`/skills/${skill.name}`} className="block w-full text-left hover:underline">
             <h2 className="text-sm font-medium">{skill.name}</h2>
-            <p className="text-xs text-muted-foreground">{[skill.license, skill.compatibility, skill.origin].filter(Boolean).join(" · ")}</p>
-            {skill.description ? <p className="mt-1 text-sm leading-relaxed">{skill.description}</p> : null}
-          </button>
-          {open === skill.name && skill.content ? <pre className="mt-3 whitespace-pre-wrap text-xs leading-relaxed">{skill.content}</pre> : null}
+          </Link>
+          <p className="text-xs text-muted-foreground">{[skill.license, skill.compatibility, skill.origin].filter(Boolean).join(" · ")}</p>
+          {skill.description ? <p className="mt-1 text-sm leading-relaxed">{skill.description}</p> : null}
         </section>
       ))}
+    </div>
+  );
+}
+
+function SkillPage({ name }: { name: string }) {
+  if (!name) return null;
+  return (
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 overflow-y-auto p-4">
+      <Link href="/skills" className="w-fit text-xs text-muted-foreground underline hover:text-foreground">All skills</Link>
+      <PageTitle>{name}</PageTitle>
+      <SkillView name={name} />
+    </div>
+  );
+}
+
+// The skill's current definition, shown on its page and in the right panel.
+function SkillView({ name }: { name: string }) {
+  const skills = useQuery({ ...queries.skills(), staleTime: 60_000 });
+  const skill = skills.data?.find((item) => item.name === name);
+  if (skills.isLoading) return <p role="status" className="text-sm text-muted-foreground">Loading…</p>;
+  if (skills.error) return <p role="alert" className="text-sm text-destructive">{skills.error.message}</p>;
+  if (!skill) return <p className="text-sm text-muted-foreground">No skill named {name}.</p>;
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-xs text-muted-foreground">{[skill.license, skill.compatibility, skill.origin].filter(Boolean).join(" · ")}</p>
+      {skill.description ? <p className="text-sm leading-relaxed">{skill.description}</p> : null}
+      {skill.content ? <pre className="whitespace-pre-wrap text-xs leading-relaxed">{skill.content}</pre> : null}
     </div>
   );
 }
