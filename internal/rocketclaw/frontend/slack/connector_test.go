@@ -3657,15 +3657,22 @@ func TestPreviewOnlyNativeForwardRoutesAuthorizedAppMention(t *testing.T) {
 
 func TestNativeForwardRequiresAllMarkersAndAgreeingSource(t *testing.T) {
 	tests := []struct {
-		name    string
-		payload string
-		want    bool
+		name      string
+		payload   string
+		want      bool
+		channelID string
+		threadTS  string
 	}{
-		{name: "all markers", payload: `{"event":{"attachments":[{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C1","ts":"100.1","from_url":"https://x.slack.com/archives/C1/p1001?thread_ts=100.1","text":"preview"}]}}`, want: true},
+		{name: "all markers", payload: `{"event":{"attachments":[{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C1","ts":"100.1","from_url":"https://x.slack.com/archives/C1/p1001?thread_ts=100.1","text":"preview"}]}}`, want: true, channelID: "C1", threadTS: "100.1"},
 		{name: "missing marker", payload: `{"event":{"attachments":[{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"channel_id":"C1","ts":"100.1","text":"preview"}]}}`},
 		{name: "conflicting permalink keeps preview", payload: `{"event":{"attachments":[{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C1","ts":"100.1","from_url":"https://x.slack.com/archives/C2/p1001?thread_ts=100.1","text":"preview"}]}}`, want: true},
 		{name: "conflicting permalink path timestamp keeps preview", payload: `{"event":{"attachments":[{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C1","ts":"100.1","from_url":"https://x.slack.com/archives/C1/p200100","text":"preview"}]}}`, want: true},
 		{name: "ordinary unfurl", payload: `{"event":{"attachments":[{"is_msg_unfurl":true,"channel_id":"C1","ts":"100.1","text":"preview"}]}}`},
+		{name: "malformed permalink keeps preview", payload: `{"event":{"attachments":[{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C1","ts":"100.1","from_url":"https://%","text":"preview"}]}}`, want: true},
+		{name: "invalid permalink path keeps preview", payload: `{"event":{"attachments":[{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C1","ts":"100.1","from_url":"https://x.slack.com/archives/C1/1001?thread_ts=100.1","text":"preview"}]}}`, want: true},
+		{name: "channel from permalink", payload: `{"event":{"attachments":[{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"ts":"100.1","from_url":"https://x.slack.com/archives/C1/p1001?thread_ts=100.1","text":"preview"}]}}`, want: true, channelID: "C1", threadTS: "100.1"},
+		{name: "thread from permalink", payload: `{"event":{"attachments":[{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C1","from_url":"https://x.slack.com/archives/C1/p1001?thread_ts=100.1","text":"preview"}]}}`, want: true, channelID: "C1", threadTS: "100.1"},
+		{name: "missing thread keeps preview", payload: `{"event":{"attachments":[{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C1","text":"preview"}]}}`, want: true},
 	}
 
 	for _, tt := range tests {
@@ -3676,9 +3683,8 @@ func TestNativeForwardRequiresAllMarkersAndAgreeingSource(t *testing.T) {
 			if ok {
 				require.Equal(t, []string{"preview"}, forward.previews)
 
-				if strings.HasPrefix(tt.name, "conflicting permalink") {
-					assert.Empty(t, forward.channelID)
-				}
+				assert.Equal(t, tt.channelID, forward.channelID)
+				assert.Equal(t, tt.threadTS, forward.threadTS)
 			}
 		})
 	}
