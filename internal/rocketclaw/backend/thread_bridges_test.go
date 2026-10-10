@@ -516,6 +516,21 @@ func TestThreadBridgeManagerStartNewThreadCreatesWebSession(t *testing.T) {
 	assert.NotEqual(t, conversationID, second.ConversationID)
 }
 
+func TestThreadBridgeManagerWebURLUsesTsnetOrigin(t *testing.T) {
+	// No tailscale binary on PATH: the tsnet link must not ask for the IP.
+	t.Setenv("PATH", t.TempDir())
+
+	cfg := &config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rocketclaw", Origin: "https://rocketclaw.example.ts.net"}}}
+	manager := newThreadBridgeManager(config.NewLockedConfig(cfg), nil, slog.New(slog.DiscardHandler), func(Config) directBridge {
+		t.Fatal("no conversation should start")
+		return nil
+	})
+
+	url, err := manager.WebURL(t.Context(), "web:1")
+	require.NoError(t, err)
+	assert.Equal(t, "https://rocketclaw.example.ts.net/s/"+base64.RawURLEncoding.EncodeToString([]byte("web:1")), url)
+}
+
 func TestThreadBridgeManagerStartNewThreadRejectsUnavailableAgents(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, config.DefaultRuntimeDir, "skills"), 0o755))

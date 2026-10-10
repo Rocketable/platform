@@ -393,10 +393,18 @@ func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *protocol.
 	return protocol.StartNewThreadResult{ConversationID: conversationID, URL: url}, nil
 }
 
-// WebURL links to conversationID at this machine's Tailscale IPv4 on the Web port. It
-// asks tailscale on every call, so a changed address needs no restart.
+// WebURL links to conversationID at the tsnet node's HTTPS origin once it serves.
+// Before that it uses this machine's Tailscale IPv4 on the Web port, asking
+// tailscale on every call, so a changed address needs no restart.
 func (m *threadBridgeManager) WebURL(ctx context.Context, conversationID string) (string, error) {
-	_, port, err := net.SplitHostPort(m.runtime.Clone().Web.ListenAddress)
+	cfg := m.runtime.Clone()
+	path := "/s/" + base64.RawURLEncoding.EncodeToString([]byte(conversationID))
+
+	if cfg.Web.Tsnet != nil && cfg.Web.Tsnet.Origin != "" {
+		return cfg.Web.Tsnet.Origin + path, nil
+	}
+
+	_, port, err := net.SplitHostPort(cfg.Web.ListenAddress)
 	if err != nil {
 		return "", fmt.Errorf("web.listen_address: %w", err)
 	}
@@ -408,7 +416,7 @@ func (m *threadBridgeManager) WebURL(ctx context.Context, conversationID string)
 
 	host, _, _ := strings.Cut(strings.TrimSpace(string(tailscaleIPs)), "\n")
 
-	return "http://" + net.JoinHostPort(host, port) + "/s/" + base64.RawURLEncoding.EncodeToString([]byte(conversationID)), nil
+	return "http://" + net.JoinHostPort(host, port) + path, nil
 }
 
 func (m *threadBridgeManager) InterruptThread(target protocol.TextConversationTarget) (*protocol.InboundMessage, error) {

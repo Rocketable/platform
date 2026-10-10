@@ -383,3 +383,195 @@
     color-scheme: dark;
   }
 }
+
+/* The Voice page's orb. It ebbs and flows while a call is active and swells with the
+   voice model's speech; --level (0 to 1) is set every frame from that speech. */
+@layer components {
+  .voice-orb {
+    --level: 0;
+    position: relative;
+    isolation: isolate;
+    width: min(16rem, 62vw);
+    aspect-ratio: 1;
+    border-radius: 50%;
+    cursor: pointer;
+    background: radial-gradient(circle at 50% 50%, oklch(0.34 0.13 275), oklch(0.13 0.05 275));
+    box-shadow:
+      0 0 calc(2rem + var(--level) * 4rem) calc(var(--level) * 0.75rem) oklch(0.72 0.19 220 / calc(0.3 + var(--level) * 0.6)),
+      inset 0 0 2.5rem oklch(0.08 0.04 275 / 0.85);
+    transform: scale(calc(1 + var(--level) * 0.1));
+    filter: saturate(0.55) brightness(0.8);
+    transition: width 450ms ease, transform 90ms linear, box-shadow 90ms linear, filter 700ms ease;
+  }
+  /* Beside the transcript, the orb sits small at the bottom with a tighter glow. */
+  .voice-orb[data-size="small"] {
+    width: 4.5rem;
+    box-shadow:
+      0 0 calc(0.75rem + var(--level) * 1.5rem) calc(var(--level) * 0.25rem) oklch(0.72 0.19 220 / calc(0.3 + var(--level) * 0.6)),
+      inset 0 0 0.75rem oklch(0.08 0.04 275 / 0.85);
+  }
+  .voice-orb[data-size="small"]::before {
+    filter: blur(6px);
+  }
+  .voice-orb::before {
+    content: "";
+    position: absolute;
+    inset: -8%;
+    z-index: -1;
+    border-radius: inherit;
+    background: conic-gradient(from 0deg, oklch(0.78 0.18 195 / 0), oklch(0.78 0.18 195 / 0.7), oklch(0.66 0.25 305 / 0.7), oklch(0.78 0.18 195 / 0));
+    filter: blur(16px);
+    opacity: 0.35;
+    animation: voice-orb-swirl 14s linear infinite;
+  }
+  /* The light inside the orb: three color blobs that drift apart and together while it turns. */
+  .voice-orb-core {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background-image:
+      radial-gradient(circle, oklch(0.6 0.26 305 / 0.95), transparent 42%),
+      radial-gradient(circle, oklch(0.75 0.19 195 / 0.95), transparent 42%),
+      radial-gradient(circle, oklch(0.62 0.2 255 / 0.85), transparent 45%);
+    background-size: 120% 120%, 125% 125%, 110% 110%;
+    background-position: 85% 85%, 15% 85%, 50% 15%;
+    background-repeat: no-repeat;
+  }
+  .voice-orb[data-state="connecting"] .voice-orb-core,
+  .voice-orb[data-state="live"] .voice-orb-core {
+    animation: voice-orb-churn 6s ease-in-out infinite alternate, voice-orb-swirl 16s linear infinite;
+  }
+  /* The orb's hot heart: lit while active, beating, and flaring with the model's voice. */
+  .voice-orb-core::after {
+    content: "";
+    position: absolute;
+    inset: 26%;
+    border-radius: 50%;
+    background: radial-gradient(circle, oklch(0.99 0.04 200 / 0.95), oklch(0.82 0.15 215 / 0.45) 45%, transparent 70%);
+    filter: blur(6px);
+    opacity: 0;
+    transform: scale(calc(0.85 + var(--level) * 0.6));
+    transition: opacity 600ms ease, transform 90ms linear;
+  }
+  .voice-orb[data-state="connecting"] .voice-orb-core::after,
+  .voice-orb[data-state="live"] .voice-orb-core::after {
+    opacity: 1;
+    animation: voice-orb-heart 2.6s ease-in-out infinite;
+  }
+  /* Two glowing orbit rings, tilted like a gyroscope and spinning opposite ways while active. */
+  .voice-orb-rings {
+    position: absolute;
+    inset: -16%;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 600ms ease;
+    filter: drop-shadow(0 0 4px oklch(0.8 0.16 205 / 0.9));
+  }
+  .voice-orb-rings::before,
+  .voice-orb-rings::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: conic-gradient(from 0deg, transparent 0 10%, oklch(0.9 0.14 200) 22%, transparent 34% 60%, oklch(0.75 0.24 305) 72%, transparent 84%);
+    mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+    animation: voice-orb-orbit-a 5s linear infinite;
+  }
+  .voice-orb-rings::after {
+    inset: 7%;
+    animation: voice-orb-orbit-b 7s linear infinite;
+  }
+  .voice-orb[data-state="connecting"] .voice-orb-rings {
+    opacity: 0.9;
+  }
+  .voice-orb[data-state="connecting"] .voice-orb-rings::before,
+  .voice-orb[data-state="connecting"] .voice-orb-rings::after {
+    animation-duration: 1.4s;
+  }
+  .voice-orb[data-state="live"] .voice-orb-rings {
+    opacity: calc(0.55 + var(--level) * 0.45);
+  }
+  .voice-orb::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background:
+      radial-gradient(circle at 30% 20%, oklch(1 0 0 / 0.5), transparent 16%),
+      radial-gradient(circle at 50% 115%, transparent 58%, oklch(1 0 0 / 0.1));
+  }
+  .voice-orb:focus-visible {
+    outline: 3px solid var(--ring);
+    outline-offset: 8px;
+  }
+  .voice-orb:disabled {
+    cursor: default;
+  }
+  .voice-orb[data-state="connecting"] {
+    filter: none;
+    animation: voice-orb-ebb 1.4s ease-in-out infinite;
+  }
+  .voice-orb[data-state="connecting"]::before {
+    opacity: 0.8;
+    animation-duration: 2.5s;
+  }
+  .voice-orb[data-state="live"] {
+    filter: none;
+    animation: voice-orb-ebb 5s ease-in-out infinite;
+  }
+  .voice-orb[data-state="live"]::before {
+    opacity: calc(0.6 + var(--level) * 0.4);
+    animation-duration: 7s;
+  }
+  .voice-orb[data-state="ending"] {
+    filter: saturate(0.4) brightness(0.6);
+  }
+  .voice-orb[data-state="error"] {
+    filter: hue-rotate(150deg) saturate(0.8) brightness(0.8);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .voice-orb,
+    .voice-orb::before,
+    .voice-orb .voice-orb-core,
+    .voice-orb .voice-orb-core::after,
+    .voice-orb .voice-orb-rings::before,
+    .voice-orb .voice-orb-rings::after {
+      animation: none;
+      transition: width 450ms ease, filter 700ms ease;
+    }
+  }
+}
+
+@keyframes voice-orb-churn {
+  0% { background-position: 85% 85%, 15% 85%, 50% 15%; }
+  33% { background-position: 20% 75%, 70% 20%, 85% 70%; }
+  66% { background-position: 55% 15%, 85% 60%, 15% 45%; }
+  100% { background-position: 15% 35%, 40% 90%, 80% 25%; }
+}
+
+@keyframes voice-orb-heart {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+@keyframes voice-orb-orbit-a {
+  from { transform: rotateX(70deg) rotateZ(0turn); }
+  to { transform: rotateX(70deg) rotateZ(1turn); }
+}
+
+@keyframes voice-orb-orbit-b {
+  from { transform: rotateY(64deg) rotateZ(0turn); }
+  to { transform: rotateY(64deg) rotateZ(-1turn); }
+}
+
+@keyframes voice-orb-swirl {
+  to { rotate: 1turn; }
+}
+
+/* A slow, liquid swell: size and outline drift so the orb never looks still. */
+@keyframes voice-orb-ebb {
+  0%, 100% { scale: 1; border-radius: 50% 50% 50% 50% / 50% 50% 50% 50%; }
+  25% { scale: 1.03; border-radius: 53% 47% 51% 49% / 48% 53% 47% 52%; }
+  50% { scale: 1.05; border-radius: 48% 52% 46% 54% / 52% 47% 53% 48%; }
+  75% { scale: 1.02; border-radius: 51% 49% 53% 47% / 47% 52% 48% 53%; }
+}

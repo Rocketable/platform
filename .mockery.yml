@@ -80,6 +80,9 @@ packages:
             pkgname: main
             structname: mockWebCron
             inpackage: false
+      tailnetWhoIs:
+        config:
+          structname: mockTailnetWhoIs
   github.com/Rocketable/platform/internal/rocketclaw/frontend/slack:
     interfaces:
       channelFactsStore:
@@ -141,4 +144,12 @@ packages:
           dir: '{{.ConfigDir}}/internal/rocketclaw/frontend/rpc'
           pkgname: rpc
           structname: mockServerStream
+          inpackage: false
+  net/http:
+    interfaces:
+      RoundTripper:
+        config:
+          dir: '{{.ConfigDir}}/internal/rocketclaw/frontend/rpc'
+          pkgname: rpc
+          structname: mockRoundTripper
           inpackage: false

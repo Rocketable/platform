@@ -461,13 +461,6 @@ type transport struct {
 	sessionID                       string
 }
 
-type tokenLoad int
-
-const (
-	tokenLoadFresh tokenLoad = iota
-	tokenLoadAfterUnauthorized
-)
-
 type codexRequestMetadata struct {
 	compactThreshold float64
 	hasCompact       bool
@@ -491,7 +484,7 @@ func (e *codexStreamError) Error() string {
 }
 
 func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	token, err := t.token(req.Context(), tokenLoadFresh, Token{})
+	token, err := FreshTokenIn(req.Context(), t.workspace, t.runtimeDir, t.provider, Token{})
 	if err != nil {
 		return nil, err
 	}
@@ -546,7 +539,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 
-		token, err = t.token(req.Context(), tokenLoadAfterUnauthorized, token)
+		token, err = FreshTokenIn(req.Context(), t.workspace, t.runtimeDir, t.provider, token)
 		if err != nil {
 			if retryBody != nil {
 				_ = retryBody.Close()
@@ -663,25 +656,39 @@ func (t *transport) codexSessionID() (string, error) {
 	return t.sessionID, nil
 }
 
-func (t *transport) token(ctx context.Context, load tokenLoad, failed Token) (Token, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+// MissingTokenError reports that no ChatGPT OAuth token is stored for Provider.
+type MissingTokenError struct {
+	Provider string
+}
 
+func (e *MissingTokenError) Error() string {
+	return fmt.Sprintf("OpenAI OAuth token for provider %q is missing refresh token", e.Provider)
+}
+
+// Unwrap reports a missing token as os.ErrNotExist.
+func (e *MissingTokenError) Unwrap() error {
+	return os.ErrNotExist
+}
+
+// FreshTokenIn returns the provider's ChatGPT OAuth token from runtimeDir,
+// refreshing and persisting it under the auth file lock when needed.
+// With a zero rejected token, the stored token is reused while it expires
+// more than 120 s out. With the token a server just rejected, the stored token
+// is reused only if another writer already replaced it for the same account.
+// It returns a *MissingTokenError when the auth file has no token for the
+// provider; a missing auth file also matches os.ErrNotExist.
+func FreshTokenIn(ctx context.Context, workspace, runtimeDir, provider string, rejected Token) (Token, error) {
 	var selected Token
 
-	_, err := updateAuthFileIn(t.workspace, t.runtimeDir, false, func(file *authFile) (bool, error) {
-		token := file.Providers[t.provider]
+	_, err := updateAuthFileIn(workspace, runtimeDir, false, func(file *authFile) (bool, error) {
+		token := file.Providers[provider]
 		if strings.TrimSpace(token.Refresh) == "" {
-			return false, fmt.Errorf("OpenAI OAuth token for provider %q is missing refresh token", t.provider)
+			return false, &MissingTokenError{Provider: provider}
 		}
 
-		var reuse bool
-
-		switch load {
-		case tokenLoadAfterUnauthorized:
-			reuse = token.Access != "" && token.Access != failed.Access && token.AccountID == failed.AccountID
-		case tokenLoadFresh:
-			reuse = token.Access != "" && token.Expires > time.Now().Add(refreshSkew).UnixMilli()
+		reuse := token.Access != "" && token.Expires > time.Now().Add(refreshSkew).UnixMilli()
+		if rejected.Access != "" {
+			reuse = token.Access != "" && token.Access != rejected.Access && token.AccountID == rejected.AccountID
 		}
 
 		if reuse {
@@ -691,17 +698,17 @@ func (t *transport) token(ctx context.Context, load tokenLoad, failed Token) (To
 
 		response, err := refreshToken(ctx, token.Refresh)
 		if err != nil {
-			if load == tokenLoadAfterUnauthorized {
-				return false, fmt.Errorf("refresh ChatGPT OAuth token after Codex 401 for provider %q; run `%s`: %w", t.provider, loginCommand(t.provider), err)
+			if rejected.Access != "" {
+				return false, fmt.Errorf("refresh ChatGPT OAuth token after Codex 401 for provider %q; run `%s`: %w", provider, loginCommand(provider), err)
 			}
 
-			return false, fmt.Errorf("refresh ChatGPT OAuth token for provider %q; run `%s`: %w", t.provider, loginCommand(t.provider), err)
+			return false, fmt.Errorf("refresh ChatGPT OAuth token for provider %q; run `%s`: %w", provider, loginCommand(provider), err)
 		}
 
 		selected = tokenFromResponse(response)
 		selected.Refresh = cmp.Or(selected.Refresh, token.Refresh)
 		selected.AccountID = cmp.Or(selected.AccountID, token.AccountID)
-		file.Providers[t.provider] = selected
+		file.Providers[provider] = selected
 
 		return true, nil
 	})

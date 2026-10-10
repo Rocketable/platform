@@ -440,11 +440,15 @@ func (r *Runtime) StashQueueItem(ctx context.Context, conversationID string, ite
 				return err
 			}
 
-			content := item.Content
-			content.Text = item.Message
-			inbound := protocol.NewInboundMessageFromContent(item.Source, item.Kind, &content, true)
-			inbound.ConversationID = conversationID
-			inbound.Metadata["web_message_id"], inbound.Metadata[protocol.InboundPrincipalMetadataKey] = item.ID, item.Principal
+			inbound := item.Inbound
+			if inbound == nil {
+				content := item.Content
+				content.Text = item.Message
+				inbound = protocol.NewInboundMessageFromContent(item.Source, item.Kind, &content, true)
+				inbound.ConversationID = conversationID
+				inbound.Metadata["web_message_id"], inbound.Metadata[protocol.InboundPrincipalMetadataKey] = item.ID, item.Principal
+			}
+
 			inbound.Workflow = inboundWorkflow(inbound)
 
 			request := bridgeRequest{inbound: inbound}

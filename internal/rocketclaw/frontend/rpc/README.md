@@ -262,6 +262,76 @@ are omitted. This is a snapshot of available bytes, not a claim to recover an ol
 file version. Originals are never resized in storage. Unreferenced blobs remain
 stored but cannot be downloaded; garbage collection is not part of this transport.
 
+## Voice
+
+`Voice(VoiceRequest) -> stream VoiceEvent` runs one GPT-Live call for exactly as
+long as its request lives. HTTP serves it only as `POST /api/Voice`, so
+`CrossOriginProtection` blocks cross-site starts; it is not a GET stream route. The
+body is `{"conversationId":"<visible-id>","sdp":"<offer>","voice":"<name>"}`; `voice`
+is optional and must be one the agent's provider offers (`ListAgents` lists them per
+agent, the default first: Codex's voices on `chatgpt`, the public API's on `api_key`),
+else the call is refused with `InvalidArgument`. The handler checks
+identity and visibility, takes credentials from the provider of the conversation
+agent's model (`api_key` uses the public API and honors `api_base_url`; `chatgpt`
+uses the saved login on Codex's fixed internal URLs), creates the call, and attaches
+its sideband socket before answering. SSE frames are `{"answer":{"sdp":"…","route":"public"|"codex"}}`
+first, then any `{"notice":"…"}` frames, then one `{"ended":{"reason":"…"}}` with
+reason `stopped`, `replaced`, `expired`, `safety`, `closed`, `lost`, or `error`. A
+notice reports a hand-off the agent refused; the call continues. Errors before the
+answer are ordinary JSON errors: `NotFound` for an unrecorded conversation, and
+`FailedPrecondition` (HTTP 400, code 9) for missing credentials, a failed ChatGPT
+token refresh (naming its `rocketclaw oai login` command), a plain-HTTP
+`api_base_url` whose host is not `localhost` or a loopback IP, or an OpenAI
+rejection, which reports only the upstream HTTP status. Voice requests to OpenAI
+drop `Authorization` and `Chatgpt-Account-Id` on any redirect to another scheme,
+host, or port.
+
+A conversation has one live call; the newest wins, and the older stream ends with
+`replaced`. The server has no idle or no-speech timers. Aborting the request ends
+the call: over a live sideband the server sends `session.close` and waits up to 3 s;
+it then hangs up a public session that did not confirm, and closes the socket. The
+handler returns right after `ended`. OpenAI's `session.closed` ends the call as
+`expired`, `safety` (a content stop), or `closed`.
+
+When the sideband drops, a public call ends as `lost`. A Codex call reconnects as
+Codex does: it waits 200 ms, doubling to 5 s (reset after 30 s connected), then
+dials up to 5 times. A 404 or 410 ends it as `closed`, and 5 failed dials as `lost`.
+As in Codex, a normal close (1000) of a Codex sideband is no drop: it ends the call
+as `closed` at once. Stop cancels a dial in progress at once. While the sideband is
+down the browser gets `reconnecting: true`, and `false` once it is back; it shows
+"Reconnecting to the agent…" meanwhile. Audio keeps flowing, since it never passes
+through RocketClaw.
+Messages that failed to send go out first after reconnecting. A Codex call stopped
+while disconnected sends no `session.close`; the browser closing its audio ends it.
+
+Each hand-off is admitted in arrival order through `StashQueueItem`, without waiting
+for the turn: it joins the running turn as a Web steer or starts the next turn. It
+carries `media=Voice`, the caller's principal, and the hand-off ID as both the queue
+item ID and `web_message_id`, so a re-delivered hand-off is admitted once. It
+bypasses `Prompt`: `$` text in it never runs commands, skills, or workflows. Its
+text is taken the moment the hand-off arrives and written exactly as Codex wraps it:
+`<realtime_delegation>` with the request in `<input>` and the voice conversation
+since the previous hand-off in `<transcript_delta>` (`user:`/`assistant:` lines; the
+request is added as a user line unless already said), XML-escaped and each cut to
+4 KiB behind a "…" (the request keeps its start, the transcript its end). Public
+hand-offs carry no request text, so that conversation is the request too. A hand-off with nothing to send is ignored, and talk after the last
+hand-off is not stored. A stopping runtime ends the call as `error`.
+
+Nothing is sent to the voice model while the agent works. When a turn this call
+handed off finishes, its final reply is sent once, as written, unless it is over
+3,960 bytes (about 990 tokens). Then, as Codex shows such a reply on screen, the
+browser gets it in a `reply` event and the voice model hears that it is on the
+screen. A user message typed during the call cancels the
+reply of every earlier hand-off, as Codex does; only a later hand-off speaks again. It
+also sends the browser a `typed` event: the browser mutes the voice model at once and
+unmutes it when the model begins a reply after the person spoke again, as Codex
+suppresses its speaker. Each pending
+question in the conversation is sent once as "I need your input. Please respond in
+the app." with its text and options; spoken words never answer it. OpenAI receives only the audio, the seed (up to 40 recent
+user messages and complete assistant replies as written, each cut to 600 bytes, 12,000
+bytes in total), those final replies, and those question notices: no tool names,
+arguments, or results, no progress, reasoning, or attachments.
+
 ## Start
 
 ### History summary backfill
@@ -310,7 +380,10 @@ Web always starts. Its HTTP listener defaults to `0.0.0.0:3000`; set
 `web.listen_address` in `rocketclaw.json` or `femtoclaw.json` to change it.
 The HTTP adapter connects to gRPC entirely in memory inside the same process.
 No Web environment variables or filesystem sockets are needed. Browser identity
-still comes from the connecting IP, using `web_users` first and Tailscale WhoIs otherwise.
+on that listener still comes from the connecting IP, using `web_users` first and
+Tailscale WhoIs otherwise. When `web.tsnet` is set, RocketClaw also runs a
+`tailscale.com/tsnet` node that serves the same handler over HTTPS on port 443 of
+its tailnet name; see [Identity boundary](#identity-boundary).
 
 The normal RocketClaw command still starts its existing Slack/Cron runtime. The
 isolated transport tests below do not start Slack or touch runtime configuration.
@@ -347,9 +420,34 @@ The private Unix socket trusts that OS user, including other processes running a
 Do not expose the socket through a general-purpose relay.
 
 The HTTP proxy forwards only the connection's remote IP. It ignores
-`X-Forwarded-For`, `X-Real-IP`, and client-supplied principal headers. Do not put
-another HTTP reverse proxy in front of it: that would identify the proxy rather
-than the browser. Go snapshots configured `web_users` IP-to-username mappings at
+`X-Forwarded-For`, `X-Real-IP`, `Tailscale-User-*`, and client-supplied principal
+headers. Do not put another HTTP reverse proxy in front of it: that would identify
+the proxy rather than the browser.
+
+Phones get the secure page that voice needs from the `web.tsnet` listener (see the
+root README for setup). There, a wrapping handler asks the node's `LocalClient().WhoIs`
+about the connection's remote address and refuses tagged or unknown callers. It
+passes the login and display name to gRPC as `-bin` metadata keys, because names
+may be non-ASCII. When those keys are present, `principal` and `ListConfig` use them
+and never consult `web_users` or `tailscale whois`. The `listen_address` listener
+never sets those keys and keeps the IP rules below. Tailscale logins and `web_users`
+names are separate namespaces, so one person may appear under two names. The node
+stores its state under `os.UserConfigDir()/rocketclaw/tsnet-<hostname>`, outside the
+workspace. `rocketclaw ts login` logs it in, with `web.tsnet.auth_key` or a printed
+login link; the server never prints a link or waits for one. A logged-out node without
+a key is closed at startup with one "Tailscale authentication unavailable" warning, and
+a node that loses its login later stops serving the same way. Tailscale's log upload is
+off. Never use `tailscale funnel`.
+
+Local processes can still act as the owner. On an untagged host signed in to
+Tailscale as the owner, a connection from the host to its own Tailscale IP arrives
+from that IP, and `tailscale whois` names the host's own user (checked on macOS). A
+connection from the host to the tsnet name likewise arrives from the owner's device.
+A `127.0.0.1` mapping, for a browser on the host, adds the direct loopback path but
+no new local authority there. On a tagged host, where WhoIs rejects every local
+caller, it does add authority.
+
+Go snapshots configured `web_users` IP-to-username mappings at
 startup. An explicit mapping takes precedence; otherwise Go runs `tailscale whois
 --json` for the browser IP and uses `UserProfile.LoginName` as its identity.
 New prompts instead record `UserProfile.DisplayName` as their principal, with the

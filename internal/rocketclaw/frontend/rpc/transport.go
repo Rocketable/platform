@@ -76,6 +76,13 @@ func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 		}
 
 		return s.join(request, stream)
+	}}, {StreamName: "Voice", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
+		request := &VoiceRequest{}
+		if err := stream.RecvMsg(request); err != nil {
+			return fmt.Errorf("receive web voice: %w", err)
+		}
+
+		return s.voice(request, stream)
 	}}, {StreamName: "ListSessions", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
 		if err := stream.RecvMsg(&ListSessionsRequest{}); err != nil {
 			return fmt.Errorf("receive web session list: %w", err)

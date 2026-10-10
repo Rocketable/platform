@@ -41,6 +41,19 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 	rpc.New(rt, rt.Sessions, rt.Cfg, channels, cronjobs).Register(server)
 
 	var serving errgroup.Group
+
+	closeTailnet := func() error { return nil }
+
+	if tailnet := cfg.Web.Tsnet; tailnet != nil {
+		if closeTailnet, err = startTailnet(rt, tailnet, httpServer.Handler, &serving); err != nil {
+			_ = httpListener.Close()
+			_ = listener.Close()
+			_ = connection.Close()
+
+			return nil, fmt.Errorf("start Web Tailscale node: %w", err)
+		}
+	}
+
 	serving.Go(func() error {
 		if err := server.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 			return fmt.Errorf("serve web RPC: %w", err)
@@ -60,10 +73,11 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 	return func(context.Context) error {
 		errHTTP := httpServer.Close()
 		_ = httpListener.Close()
+		errTailnet := closeTailnet()
 
 		server.Stop()
 
-		if err := errors.Join(errHTTP, serving.Wait(), connection.Close()); err != nil {
+		if err := errors.Join(errHTTP, errTailnet, serving.Wait(), connection.Close()); err != nil {
 			return fmt.Errorf("stop Web: %w", err)
 		}
 

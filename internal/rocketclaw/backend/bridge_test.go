@@ -2050,6 +2050,21 @@ func TestInboundWorkflowReadsWebCommands(t *testing.T) {
 	}
 }
 
+func TestVoiceInboundRunsNoDollarCommands(t *testing.T) {
+	skill := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$docs-helper do it"}, true)
+	command := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$workflow deploy"}, true)
+
+	require.Equal(t, &rocketcode.PromptInputDirectSkill{Name: "docs-helper", Arguments: "do it"}, inboundDirectSkill(skill))
+	require.Equal(t, protocol.WorkflowInvocation{Name: "deploy"}, inboundWorkflow(command))
+
+	for _, msg := range []*protocol.InboundMessage{skill, command} {
+		msg.Metadata[protocol.InboundMediaMetadataKey] = "Voice"
+		assert.Nil(t, inboundDirectSkill(msg), msg.Text)
+		assert.Zero(t, inboundWorkflow(msg), msg.Text)
+		assert.Equal(t, msg.Text, msg.Metadata[protocol.InboundRawTextMetadataKey])
+	}
+}
+
 func TestBridgeQueuesWebWorkflowInsteadOfSteering(t *testing.T) {
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), stopCh: make(chan struct{}), inputOpen: true, requestCh: make(chan bridgeRequest, 1), config: Config{SessionService: newTestSessionService(t)}}
 
@@ -2071,6 +2086,7 @@ func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
 	assert.Equal(t, "[Slack]", provenanceHeader(promptProvenance{origin: "Slack", media: "Text", principal: "   "}))
 	assert.Equal(t, "[External_(MCP)-x media=Voice_(note)-clip]", provenanceHeader(promptProvenance{origin: "External [MCP]=x", media: "Voice [note]=clip"}))
 	assert.Equal(t, promptProvenance{origin: "System", media: "Text"}, provenanceFromInbound(&protocol.InboundMessage{Source: protocol.SourceSystem, Metadata: map[string]string{protocol.InboundOriginMetadataKey: "Mallory", protocol.InboundMediaMetadataKey: "Dance"}}))
+	assert.Equal(t, `[Web media=Voice principal="Alice"]`, provenanceHeader(provenanceFromInbound(&protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundMediaMetadataKey: "Voice", protocol.InboundPrincipalMetadataKey: "Alice"}})))
 }
 
 func TestBridgeScheduleMessageSubmitsAfterDelay(t *testing.T) {

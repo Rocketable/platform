@@ -77,5 +77,11 @@ func clone(source *Config) Config {
 		cfg.Web.Sentry.TracesSampleRate = &rate
 	}
 
+	if cfg.Web.Tsnet != nil {
+		tsnet := *cfg.Web.Tsnet
+		tsnet.Tags = slices.Clone(tsnet.Tags)
+		cfg.Web.Tsnet = &tsnet
+	}
+
 	return cfg
 }

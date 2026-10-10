@@ -138,6 +138,16 @@ The system message that tells a Background Job's owner how the job ended. It ent
 
 A hidden conversation that runs work for a human-visible destination conversation, such as an External MCP case or a one-off cron run. Its turns carry that destination as their sync destination: Sync copies the history there, Web lists only the destination, and session tags set during the turn land on the destination.
 
+## Web Voice
+
+### Voice Session
+
+A live spoken call between a person on the Web and OpenAI's voice model, attached to one conversation. Audio flows between the browser and OpenAI; RocketClaw creates the call with the conversation agent's Provider credentials and holds its control connection while the browser's request stays open. The call ends when that request ends, or earlier when RocketClaw or OpenAI ends it; it has no idle or no-speech timers. Its end reason is one of `stopped`, `replaced`, `expired`, `safety`, `closed`, `lost`, or `error`. On the Codex route RocketClaw reconnects a dropped control connection; on the API-key route a drop ends the call as `lost`. A conversation has at most one live Voice Session: starting another ends the older one. Ending a Voice Session never stops the conversation's turns.
+
+### Voice Hand-off
+
+A task the voice model passes to the conversation's agent during a Voice Session. Each one becomes a Web user message marked `media=Voice`: Codex's `<realtime_delegation>` block, holding the request and what the person and the voice model said since the previous hand-off, taken the moment the hand-off arrives. Hand-offs are admitted in arrival order without waiting for the agent. Nothing about the agent's work reaches the voice model while it runs; the final reply of a turn the session handed off is spoken once, as written, unless it is over about 990 tokens or a message typed later in the call supersedes it. A pending question is announced once and answered in the app, never by a hand-off. Not to be confused with a Delegation History, which is work a tool call delegated inside RocketCode.
+
 ## Process layout
 
 ### Backend
