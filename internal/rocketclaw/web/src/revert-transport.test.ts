@@ -34,7 +34,7 @@ test("real HTTP Revert commits only retained context and converges across viewer
     expect(await second.locator('[data-slot="message"]').getByText("abandoned answer", { exact: true }).count()).toBe(0);
     await first.locator("textarea").fill("$undo"); await first.locator("textarea").press("Enter");
     await first.waitForFunction(() => document.querySelector("textarea")?.value === "retained request");
-    await first.getByText("retained-upload.txt", { exact: true }).waitFor();
+    await first.getByLabel("Pending attachments").getByText("retained-upload.txt", { exact: true }).waitFor();
     expect(await first.getByText("boundary-upload.txt", { exact: true }).count()).toBe(0);
     const undone = await context.request.get(`${url}/api/DownloadAttachment?conversationId=chat&id=retained-upload`);
     expect(undone.ok()).toBe(true);
