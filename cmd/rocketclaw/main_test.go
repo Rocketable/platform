@@ -137,9 +137,19 @@ func TestSelectRuntimeConfigFileReportsStatErrors(t *testing.T) {
 
 	_, err := selectRuntimeConfigFile()
 	require.ErrorContains(t, err, "stat")
+	require.ErrorIs(t, err, os.ErrPermission)
+
+	_, _, err = loadRuntimeConfig("")
+	require.ErrorIs(t, err, os.ErrPermission)
+
+	err = run(nil)
+	require.ErrorContains(t, err, "stat config path")
+	require.ErrorIs(t, err, os.ErrPermission)
 }
 
 func TestRunDispatchesSubcommandErrorsBeforeDefaultConfig(t *testing.T) {
+	t.Chdir(t.TempDir())
+
 	for _, tt := range []struct {
 		name string
 		args []string
@@ -147,10 +157,17 @@ func TestRunDispatchesSubcommandErrorsBeforeDefaultConfig(t *testing.T) {
 	}{
 		{name: "serve", args: []string{"run", "--bad-flag"}, want: "parse serve flags"},
 		{name: "oai", args: []string{"oai", "bogus"}, want: `unknown oai command "bogus"`},
+		{name: "lint flags", args: []string{"lint", "--bad-flag"}, want: "parse lint flags"},
+		{name: "agent graph flags", args: []string{"agent-graph", "--bad-flag"}, want: "parse agent-graph flags"},
+		{name: "lint config", args: []string{"lint", "current"}, want: "load config"},
+		{name: "agent graph config", args: []string{"agent-graph", "current"}, want: "load config"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			err := run(tt.args)
 			require.ErrorContains(t, err, tt.want)
+			if tt.name == "lint config" || tt.name == "agent graph config" {
+				require.ErrorIs(t, err, os.ErrNotExist)
+			}
 		})
 	}
 }
