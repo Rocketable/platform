@@ -461,6 +461,23 @@ func TestTaskTool(t *testing.T) {
 		require.Equal(t, "review !`cat MEMORY.md`", factory.agents.Items["review"].Prompt)
 	})
 
+	t.Run("expands subagent prompt through the subagent custom shell", func(t *testing.T) {
+		env := testPromptExpansionEnvironment(t)
+		review := testAgentWithPrompt("review", "review !`echo hi`")
+		review.CustomShell = writeCustomShell(t, env.root)
+
+		mock := mockResponses(responseWithTaskMessages())
+		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"review": review}})
+		factory.rootInstructions = "base prompt"
+		factory.expandPromptShellCommands = testPromptExpansion(false, true, false)
+		factory.promptExpansion = env
+
+		_, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
+
+		require.NoError(t, err)
+		require.Equal(t, "base prompt\n\nreview custom:1:echo hi", newParams(mock)[0].Instructions.Value)
+	})
+
 	t.Run("primary expansion does not enable subagent expansion", func(t *testing.T) {
 		mock := mockResponses(responseWithTaskMessages())
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{

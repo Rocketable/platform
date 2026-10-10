@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -131,6 +132,66 @@ func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 	require.NotContains(t, fmt.Sprint(second["input"])+" "+fmt.Sprint(second["previous_response_id"]), "first")
 	require.Empty(t, noTools["tools"])
 	assert.NotEmpty(t, recorder.Ended(), "workflow run should emit configured tracing spans")
+}
+
+func TestWorkflowAgentRunnerUsesRootCustomShell(t *testing.T) {
+	workspace := t.TempDir()
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
+	require.NoError(t, root.WriteFile("enter.sh", []byte("#!/bin/sh\nprintf 'custom:%s:%s' \"$#\" \"$1\""), 0o755))
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\ncustomShell: "+filepath.Join(workspace, "enter.sh")+"\npermission:\n  bash: {\"*\": allow}\n---\nMain prompt\n")
+
+	var (
+		mu          sync.Mutex
+		toolOutputs []string
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if !assert.NoError(t, err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if strings.Contains(string(body), "function_call_output") {
+			mu.Lock()
+
+			toolOutputs = append(toolOutputs, string(body))
+			mu.Unlock()
+			writeRawRunMessage(t, w, "response_done", "message", "done")
+
+			return
+		}
+
+		arguments, _ := json.Marshal(struct {
+			Code        string `json:"code"`
+			Description string `json:"description"`
+		}{"def main():\n    return bash(command=r'''printf plain''')\n", "probe"}) // Encoding strings cannot fail.
+
+		_, err = fmt.Fprintf(w, `{"id":"response_call","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_bash","name":"execute","arguments":%q}]}`, arguments)
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+
+	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(cfg), "main", rocketcode.InertJournal{}, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, run.Close()) })
+
+	result, err := run.Run(t.Context(), &workflow.AgentRequest{Prompt: "probe"})
+	require.NoError(t, err)
+	require.JSONEq(t, `"done"`, string(result))
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Len(t, toolOutputs, 1)
+	require.Contains(t, toolOutputs[0], "custom:1:printf plain")
 }
 
 func TestWorkflowAgentRunnerTagLimits(t *testing.T) {

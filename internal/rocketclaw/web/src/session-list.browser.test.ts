@@ -507,7 +507,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
             return historyResponse(input.id, [{ role: "assistant", text: "Daily run report", complete: true, turnId: "", entryKey: "daily", itemId: "daily:0", inputId: "" }], "", input.revision);
           }
           return historyResponse(input.id, ctrl.history, "", input.revision);
-        case "/api/ListAgents": return Response.json({ agents: input.conversationId === "web:cron:silent-source" ? [{ name: "other", model: "gpt" }] : [{ name: "other", model: "gpt" }, { name: "main", model: "gpt" }], currentAgent: input.conversationId ? ctrl.currentAgents.get(input.conversationId) ?? "main" : "" });
+        case "/api/ListAgents": return Response.json({ agents: input.conversationId === "web:cron:silent-source" ? [{ name: "other", model: "gpt" }] : [{ name: "other", model: "gpt", customShell: "/usr/local/bin/agent-sandbox" }, { name: "main", model: "gpt" }], currentAgent: input.conversationId ? ctrl.currentAgents.get(input.conversationId) ?? "main" : "" });
         case "/api/ListSkills": return Response.json({ skills: input.agent === "main" ? [{ name: "review", description: "Review changes" }, { name: "stop", description: "Inspect logs" }] : input.agent ? [] : [{ name: "release", description: "Ship a release", content: "release steps" }] });
         case "/api/ListConfig": return Response.json({ config: { tailscaleUser: "connected@example.com" } });
         case "/api/UpdateSession":
@@ -799,6 +799,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await navigationCommands.click();
     await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "List Agents" }).click();
     await page.waitForURL("**/agents");
+    await page.getByRole("button", { name: /^other/ }).click();
+    expect(await page.getByRole("heading", { name: "Shell" }).locator("..").getByText("/usr/local/bin/agent-sandbox").textContent()).toBe("/usr/local/bin/agent-sandbox");
     await page.goBack();
     await page.waitForURL(origin + "/");
     expect(await skillComposer.inputValue()).toBe("retained through browser history");

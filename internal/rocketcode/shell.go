@@ -73,7 +73,8 @@ func newSandboxedShellSystem(root *os.Root, shellTemp *shellTempConfig, env []st
 }
 
 // RunBash runs command through the same implementation used by RocketCode's bash tool.
-func RunBash(ctx context.Context, root *os.Root, shellTempDir string, shellEnv map[string]string, command BashCommand) (BashResult, error) {
+// A non-empty customShell runs the command as <customShell> <command>.
+func RunBash(ctx context.Context, root *os.Root, shellTempDir string, shellEnv map[string]string, customShell string, command BashCommand) (BashResult, error) {
 	if root == nil {
 		return BashResult{}, errors.New("root is required")
 	}
@@ -90,7 +91,7 @@ func RunBash(ctx context.Context, root *os.Root, shellTempDir string, shellEnv m
 
 	sss := newSandboxedShellSystem(root, &shellTemp, env, DefaultShellCommand)
 
-	return sss.Bash(ctx, bashParams(command)), nil
+	return sss.Bash(ctx, customShell, bashParams(command)), nil
 }
 
 func shellEnvList(shellEnv map[string]string) ([]string, error) {
@@ -121,7 +122,7 @@ func shellEnvList(shellEnv map[string]string) ([]string, error) {
 	return env, nil
 }
 
-func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) BashResult {
+func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell string, params bashParams) BashResult {
 	sss.mu.Lock()
 	defer sss.mu.Unlock()
 
@@ -195,7 +196,7 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) Ba
 
 	timedOut := false
 
-	shell, args := sss.shellCommand(params.Command)
+	shell, args := sss.shellCommand.withCustomShell(customShell, params.Command)
 	if strings.TrimSpace(shell) == "" {
 		return bashFailure("shell command path is required")
 	}
@@ -249,6 +250,10 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) Ba
 
 	err = cmd.Run()
 	_ = outputWriter.Close()
+
+	if cmd.Process == nil {
+		return bashFailure(err.Error())
+	}
 
 	select {
 	case <-copied:

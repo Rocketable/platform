@@ -3454,6 +3454,12 @@ function AgentsPage() {
           </button>
           {open === agent.name ? (
             <div className="mt-3 flex flex-col gap-3">
+              {agent.customShell ? (
+                <div>
+                  <h3 className="text-xs font-medium text-muted-foreground">Shell</h3>
+                  <pre className="mt-1 whitespace-pre-wrap text-xs">{agent.customShell}</pre>
+                </div>
+              ) : null}
               {agent.permissions ? (
                 <div>
                   <h3 className="text-xs font-medium text-muted-foreground">Permissions</h3>

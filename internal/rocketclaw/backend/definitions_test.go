@@ -303,18 +303,31 @@ func TestLoadRocketCodeDefinitionsPreservesGuardrailReference(t *testing.T) {
 	require.Equal(t, rocketcode.PermissionAllow, action)
 }
 
-func TestLoadRocketCodeDefinitionsReportsInvalidMaxRecursion(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\nmaxRecursion: nope\n---\nPrompt\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+func TestLoadRocketCodeDefinitionsReportsInvalidTypedFrontmatter(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want string
+	}{
+		{name: "max recursion", line: "maxRecursion: nope", want: "main.md: parse maxRecursion:"},
+		{name: "custom shell", line: "customShell: sandbox/enter", want: "main.md: customShell: must be an absolute path"},
+	}
 
-	root, err := os.OpenRoot(workspace)
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\n"+tt.line+"\n---\nPrompt\n")
+			require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
-	defer func() { require.NoError(t, root.Close()) }()
+			root, err := os.OpenRoot(workspace)
+			require.NoError(t, err)
 
-	_, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
-	require.ErrorContains(t, err, "main.md: parse maxRecursion:")
+			defer func() { require.NoError(t, root.Close()) }()
+
+			_, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
 }
 
 func TestLoadRocketCodeDefinitionsReportsMissingModel(t *testing.T) {

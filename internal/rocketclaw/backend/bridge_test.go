@@ -331,6 +331,51 @@ Prompt
 	assert.Equal(t, "finished lint", goal.Note)
 }
 
+func TestUpdateGoalToolRunsCheckThroughActiveAgentCustomShell(t *testing.T) {
+	tests := []struct {
+		name       string
+		wrapperRun string
+		wantOutput string
+		wantStatus string
+	}{
+		{name: "wrapper exits zero", wrapperRun: "exec /bin/bash -c \"$1\"\n", wantOutput: "goal marked complete", wantStatus: GoalStatusComplete},
+		{name: "wrapper exits nonzero", wrapperRun: "/bin/bash -c \"$1\"\nexit 9\n", wantOutput: "goal check did not pass. Continue working from this output:\n\npassed", wantStatus: GoalStatusActive},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// A customShell lives outside the agent workspace, so the wrapper is written with host filesystem APIs.
+			shellDir := t.TempDir()
+			shell := filepath.Join(shellDir, "enter.sh")
+			require.NoError(t, os.WriteFile(shell, []byte("#!/bin/sh\nprintf '%s:%s' \"$#\" \"$1\" > '"+filepath.Join(shellDir, "args")+"'\n"+tt.wrapperRun), 0o755))
+
+			bridge := newGoalCheckTestBridge(t, `---
+description: Main
+model: gpt-5.4
+customShell: `+shell+`
+permission:
+  bash:
+    "./scripts/check.sh": allow
+---
+Prompt
+`, "#!/bin/sh\nprintf passed\n")
+			require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh", 3))
+
+			result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantOutput, result.Output)
+
+			args, err := os.ReadFile(filepath.Join(shellDir, "args"))
+			require.NoError(t, err)
+			assert.Equal(t, "1:./scripts/check.sh", string(args))
+
+			goal, ok, err := bridge.config.SessionService.Goal("thread-1")
+			require.NoError(t, err)
+			require.True(t, ok)
+			assert.Equal(t, tt.wantStatus, goal.Status)
+		})
+	}
+}
+
 func TestUpdateGoalToolRecordsProgressNoteWithoutEndingGoal(t *testing.T) {
 	bridge := newGoalCheckTestBridge(t, `---
 description: Main

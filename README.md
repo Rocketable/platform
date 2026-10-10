@@ -107,7 +107,7 @@ permission:
 
 For the `bash` tool, RocketCode checks every command in a script on its own, and each command must be allowed. When several rules match, the last one wins. Scripts it cannot parse are refused, even with `bash: allow`.
 
-Bash rules match command text, not everything a program can do. An executable-path wildcard such as `./scripts/*` does not match executable paths containing `..`; name such an executable explicitly if it is intended. This check is not a shell sandbox: an approved script can still launch other programs or follow symlinks.
+Bash rules match command text, not everything a program can do. An executable-path wildcard such as `./scripts/*` does not match executable paths containing `..`; name such an executable explicitly if it is intended. This check is not a shell sandbox: an approved script can still launch other programs or follow symlinks. To put a sandbox in front of one agent's shell commands, set `customShell` in that agent's frontmatter to the absolute path of a wrapper program; see the [cheatsheet](cmd/rocketclaw/CHEATSHEET.md#agent-frontmatter-and-permissions) for what the wrapper must do.
 
 Some features are off until you turn them on under `permission.rocketclaw`:
 

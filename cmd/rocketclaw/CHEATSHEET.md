@@ -210,6 +210,7 @@ model: gpt-5.5
 reasoningEffort: high
 verbosity: medium
 maxRecursion: 2
+customShell: /usr/local/bin/agent-sandbox
 guardrail: safety-agent
 additionalInstructions: Reply in plain text suitable for Slack.
 schema:
@@ -256,10 +257,26 @@ Known frontmatter fields:
 | `reasoningEffort` | Optional model reasoning effort. Avoid `xhigh`; `rocketclaw lint` reports it. |
 | `verbosity` | Optional model verbosity. |
 | `maxRecursion` | Optional task delegation depth for inferences started with this agent. Omitted or `-1` is unlimited, `0` disables `task`, and positive integers allow that many levels. |
+| `customShell` | Optional program that runs this agent's shell commands instead of `/bin/bash`, called as `<customShell> <command>`. The value must be a string holding an absolute path; any other value stops this agent from loading. It names one program; the value cannot carry extra arguments. Omit it to keep default bash. See the wrapper contract below. |
 | `guardrail` | Optional loaded agent name that gates task delegations to this agent before the child runs and after its response. The guardrail must approve or reject with strict JSON containing `approved` and `reason`; it does not transform the delegated prompt or child response. |
 | `additionalInstructions` | Optional RocketClaw normal-reply prompt-header override for this selected agent. Use it for response-format guidance, such as telling an agent to avoid Markdown for Slack, prefer Markdown for technical answers, keep answers terse, or follow another surface-specific style. When omitted, RocketClaw uses `Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.` It does not affect internal notes or raw cron runs. |
 | `schema.output` | Optional JSON Schema mapping. When set, that agent's own turns (including `task` children) use OpenAI structured output. Guardrail and permission-review child runs keep their fixed decision schemas. Workflow `agent(..., schema=...)` still overrides for that call. Object schemas are sent with `additionalProperties: false`; list every property in `required`. |
 | `permission` | Optional singular permission map. Omit it when the agent needs no tools. Do not use plural `permissions`; RocketCode ignores it and `rocketclaw lint` reports it. |
+
+When an agent sets `customShell`, RocketCode runs each shell command made on that agent's behalf as `<customShell> <command>`: its `bash` tool calls, the ``!`…` `` lines in its prompt and in the skills it loads, and, for the root agent, input-prompt expansion. RocketCode does not check at load time that the program exists. If it cannot start, the `bash` tool reports the error to the agent and does not fall back to bash. A wrapper program must follow this contract:
+
+- It receives the whole command string as its only argument. There is no `-c`. The command can start with `-`, so treat `$1` as data: pass it as the `-c` argument or after `--`, never where the wrapper or a sandbox tool parses options.
+- It should run that string with bash, for example `bash --noprofile --norc -p -c "$1"`. The permission check still parses every command as bash, so running it with anything else makes the check describe a different command than the one that runs.
+- A wrapper that is itself a bash script should start with `#!/bin/bash -p`, so an inherited `BASH_ENV` or exported functions cannot change it before it hands off the command.
+- The working directory and `TMPDIR` are set on the wrapper process. Carry both into the sandbox, and make the workspace available at the same path inside it.
+- The environment is the full RocketClaw process environment, which can include provider credentials. Forward only the variables commands need.
+- Goal checks, background subagent wakes, and workflow workers get no RocketClaw extra env such as `ROCKETCLAW_CONVERSATION_ID`. Do not depend on it.
+- Keep the wrapper, and any file it reads to configure the sandbox, outside the workspace and outside every path the agent can write. An agent that can modify its wrapper can turn it into plain host bash.
+- Do not let agents edit a sandboxed agent's file. Editing it can remove `customShell`, and goal checks reread the file each time they run. `rocketclaw lint` reports `edit` permissions that cover a sandboxed agent's file or a wrapper inside the workspace.
+- The wrapper gets the same timeout and termination signals bash would. At the timeout RocketCode stops the wrapper's process group, and a few seconds later the `bash` call ends even if a program outside that group still holds its output open. Stopping work inside the sandbox is the wrapper's job.
+- ``!`…` `` expansion has no timeout and ignores errors. A missing wrapper produces empty text, and a hung wrapper blocks the turn.
+- The field applies only to the agent that declares it. A subagent, guardrail, or permission reviewer without its own `customShell` runs default bash. Workflow workers and goal checks use the root agent's `customShell`.
+- File tools and MCP servers still run on the host. `customShell` covers shell commands only.
 
 Deployment-specific model names can be kept out of shared agents:
 
@@ -304,7 +321,7 @@ Permission buckets:
 | `workflow` | Workflow stems for `rocketclaw_dynamic_workflow`. |
 | `mcp` | Outbound MCP as `server.tool` or wildcards such as `demo.*`. Gates nested MCP builtins inside `execute`. Host grants alone can still surface `execute` without mcp. |
 
-Run `rocketclaw lint` after agent, skill, or script edits. It checks write-to-execute risk, read-plus-execute leakage, task delegation cycles, delegation-chain escalation, external-content contamination, plural `permissions`, missing guardrails, and excessive `reasoningEffort`.
+Run `rocketclaw lint` after agent, skill, or script edits. It checks write-to-execute risk, read-plus-execute leakage, task delegation cycles, delegation-chain escalation, external-content contamination, plural `permissions`, missing guardrails, excessive `reasoningEffort`, a misspelled `customShell` key, and `edit` permissions that could change a sandboxed agent's file or wrapper.
 
 ## Subcommands
 

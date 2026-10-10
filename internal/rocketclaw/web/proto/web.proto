@@ -277,6 +277,7 @@ message Agent {
   string prompt = 6;
   string permissions = 7;
   string origin = 8;
+  string custom_shell = 9;
 }
 
 message ListAgentsRequest { string conversation_id = 1; }

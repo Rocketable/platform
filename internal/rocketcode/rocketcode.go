@@ -22,8 +22,18 @@ import (
 
 // ShellCommandFunc selects the process used to run a bash tool command string.
 // The returned path and args are passed to exec.Command (for example
-// "/bin/bash", []string{"-lc", command}).
+// DefaultShellCommand returns "/bin/bash" with --noprofile --norc -p -c and the command).
 type ShellCommandFunc func(command string) (path string, args []string)
+
+// withCustomShell runs command as the only argument of an agent's customShell,
+// or through f when the agent declares none.
+func (f ShellCommandFunc) withCustomShell(customShell, command string) (path string, args []string) {
+	if customShell != "" {
+		return customShell, []string{command}
+	}
+
+	return f(command)
+}
 
 // Config contains runtime settings supplied by the embedding application.
 type Config struct {
@@ -57,6 +67,7 @@ type Config struct {
 	// ShellCommand builds the executable used for bash tool (and prompt !`…`)
 	// commands. Required; pass DefaultShellCommand to match permission validation.
 	// Custom implementations must preserve the validated Bash syntax and semantics.
+	// An agent's customShell overrides it for that agent.
 	ShellCommand ShellCommandFunc
 	MCPServers   map[string]mcpclient.ServerConfig
 	MCPWorkspace string
@@ -375,7 +386,7 @@ func NewWithModelResolver(
 	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, string(config.ReasoningEffort)))
 	agentForTools := &activeAgent
 	activeAgent.Permission = shellTemp.effectivePermissions(activeAgent.Permission)
-	baseTools := newSandboxedTools(root, spillRel, shellTemp, shellEnv, config.ShellCommand)
+	baseTools, shellSystem := newSandboxedTools(root, spillRel, shellTemp, shellEnv, config.ShellCommand)
 
 	customTools, err := customLooperTools(config.CustomTools, baseTools)
 	if err != nil {
@@ -407,6 +418,7 @@ func NewWithModelResolver(
 		agents:                     agents,
 		skills:                     skills,
 		baseTools:                  baseTools,
+		shellSystem:                shellSystem,
 		childContext:               config.ChildContext,
 		shellTemp:                  shellTemp,
 		spillRel:                   spillRel,
@@ -454,6 +466,7 @@ func NewWithModelResolver(
 		promptExpansion:        promptExpansion,
 		spillRel:               spillRel,
 	}
+	looper.promptExpansion.customShell = activeAgent.CustomShell
 
 	if config.Diagnostics {
 		if err := printRuntimeDiagnostics(diagnosticsWriter, &activeAgent, looper.Tools, skills, runtimeSystemPrompt); err != nil {
