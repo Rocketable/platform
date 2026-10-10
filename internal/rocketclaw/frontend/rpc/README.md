@@ -292,7 +292,7 @@ Configure rename subscriptions using
 Build the browser assets before compiling Go. Frontend source lives in `internal/rocketclaw/web/`;
 the build writes compiled assets to `internal/rocketclaw/internal/web/dist/`,
 which Go embeds in the binary. `make build`, `make lint`, and `make test` build
-these assets as a prerequisite. Bun 1.4.0 or newer is needed for builds and tests,
+these assets as a prerequisite. Bun 1.4.2 or newer is needed for builds and tests,
 but the deployed binary needs no Bun or Next.js process.
 
 From the repository root:
