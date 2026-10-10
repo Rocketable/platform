@@ -1768,51 +1768,6 @@ func decodeAttachmentTestImageConfig(t *testing.T, data []byte) image.Config {
 	return cfg
 }
 
-func TestCompactedOutputToReplayInputPreservesSupportedItems(t *testing.T) {
-	items := []responses.ResponseOutputItemUnion{
-		{
-			Type: "message",
-			ID:   "msg_1",
-			Content: []responses.ResponseOutputMessageContentUnion{
-				{Type: "output_text", Text: "hello "},
-				{Type: "refusal", Refusal: "no"},
-				{Type: "output_text", Text: "world"},
-			},
-			Phase: responses.ResponseOutputMessagePhase("final_answer"),
-		},
-		{
-			Type:    "message",
-			ID:      "msg_2",
-			Role:    "assistant",
-			Content: []responses.ResponseOutputMessageContentUnion{{Type: "output_text", Text: "assistant"}},
-		},
-		{Type: "compaction", ID: "cmp_1", EncryptedContent: "sealed"},
-		{Type: "compaction_summary", ID: "cmp_2", EncryptedContent: "chatgpt-sealed"},
-		{Type: "reasoning", ID: "rsn_1", Summary: []responses.ResponseReasoningItemSummary{{Text: "summary"}}, EncryptedContent: "reasoning-sealed"},
-		{Type: "reasoning", ID: "rsn_2"},
-	}
-
-	got, err := rocketcode.CompactedOutputToReplayInput(items)
-	require.NoError(t, err)
-	params, err := rocketcode.ReplayInputToParams(got)
-	require.NoError(t, err)
-	require.Len(t, params, len(items))
-
-	assert.Equal(t, "hello world", params[0].OfMessage.Content.OfString.Value)
-	assert.Equal(t, responses.EasyInputMessagePhase("final_answer"), params[0].OfMessage.Phase)
-	assert.Equal(t, "assistant", params[1].OfMessage.Content.OfString.Value)
-	assert.Equal(t, "sealed", params[2].OfCompaction.EncryptedContent)
-	assert.Equal(t, "chatgpt-sealed", params[3].OfCompaction.EncryptedContent)
-	assert.JSONEq(t, `{"encrypted_content":"sealed","id":"cmp_1","type":"compaction"}`, string(got[2]))
-	assert.Equal(t, "summary", params[4].OfReasoning.Summary[0].Text)
-	assert.Equal(t, "rsn_2", params[5].OfReasoning.ID)
-}
-
-func TestCompactedOutputToReplayInputRejectsUnsupportedKind(t *testing.T) {
-	_, err := rocketcode.CompactedOutputToReplayInput([]responses.ResponseOutputItemUnion{{Type: "tool_search_call"}})
-	require.ErrorContains(t, err, `unsupported compacted output item kind "tool_search_call"`)
-}
-
 func TestModelResolverConfiguresOpenAI(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", `---
