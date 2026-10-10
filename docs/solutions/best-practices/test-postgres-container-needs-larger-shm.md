@@ -76,4 +76,3 @@ After: `docker run -d --shm-size=1g ... postgres:18`. The same suite passed.
 ## Related
 
 - `docs/solutions/best-practices/postgres-extension-in-migration-with-shared-test-database.md`: another consequence of every test sharing one database.
-- `docs/solutions/best-practices/coverage-baseline-is-working-copy-parent.md`: other `make test` behavior in `internal/rocketclaw`.
