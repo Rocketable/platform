@@ -814,7 +814,7 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 				}
 
 				if bashResult, ok := result.Data.(BashResult); ok {
-					return newBashStarlarkResult(bashResult), nil
+					return &bashStarlarkResult{output: bashResult.Output, errorCode: bashResult.ErrorCode}, nil
 				}
 
 				return starlark.String(attachmentOutputMessage(result)), nil

@@ -8,11 +8,7 @@ import (
 )
 
 func TestBashStarlarkResult(t *testing.T) {
-	value := newBashStarlarkResult(BashResult{
-		Output:    "full",
-		ErrorCode: "7",
-		Success:   false,
-	})
+	value := &bashStarlarkResult{output: "full", errorCode: "7"}
 
 	require.Equal(t, "bash_result", value.Type())
 	require.Equal(t, "full", value.String())
