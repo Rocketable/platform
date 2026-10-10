@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
 	"gopkg.in/yaml.v3"
@@ -504,12 +505,17 @@ func joinRuleSegments(segments []ruleSegment) string {
 }
 
 func permissionWildcardMatch(input, pattern string, segments ...ruleSegment) bool {
-	if len(segments) == 0 {
-		segments = []ruleSegment{{Text: pattern}}
+	if len(segments) == 0 && pattern == "*" || len(segments) == 1 && !segments[0].Literal && segments[0].Text == "*" {
+		return true
 	}
 
-	if len(segments) == 1 && !segments[0].Literal && segments[0].Text == "*" {
-		return true
+	if len(segments) == 0 {
+		// Invalid UTF-8 must retain regexp's replacement-rune matching.
+		if !strings.ContainsAny(pattern, "*?") && utf8.ValidString(pattern) && utf8.ValidString(input) {
+			return input == pattern
+		}
+
+		segments = []ruleSegment{{Text: pattern}}
 	}
 
 	var expression strings.Builder
