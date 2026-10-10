@@ -1,17 +1,21 @@
 import { expect, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import ts from "typescript";
+import { API } from "typescript/unstable/async";
+import type { StringLiteral } from "typescript/unstable/ast";
+import { isFunctionDeclaration, isImportDeclaration } from "typescript/unstable/ast/is";
 
 // Behavior reference: OpenCode 048a47e89e859f9928f5f04a56eebf013063152a,
 // packages/session-ui/src/message/message-content.tsx, CurrentUserMessageDisplay and AssistantTextContent.
-const source = ts.createSourceFile("ui.tsx", await Bun.file(new URL("./ui.tsx", import.meta.url)).text(), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const footer = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "MessageFooter")!;
-const imports = source.statements.filter(ts.isImportDeclaration).filter((node) => ["lucide-react", "@/components/ui/button", "@/components/ui/dialog", "@/components/ui/tooltip", "@/lib/utils"].includes((node.moduleSpecifier as ts.StringLiteral).text)).map((node) => {
-  const module = (node.moduleSpecifier as ts.StringLiteral).text;
+const api = new API({ cwd: import.meta.dir });
+const source = (await (await api.updateSnapshot({ openProject: "../tsconfig.json" })).getProjects()[0].program.getSourceFile(`${import.meta.dir}/ui.tsx`))!;
+await api.close();
+const footer = source.statements.find((node) => isFunctionDeclaration(node) && node.name?.text === "MessageFooter")!;
+const imports = source.statements.filter(isImportDeclaration).filter((node) => ["lucide-react", "@/components/ui/button", "@/components/ui/dialog", "@/components/ui/tooltip", "@/lib/utils"].includes((node.moduleSpecifier as StringLiteral).text)).map((node) => {
+  const module = (node.moduleSpecifier as StringLiteral).text;
   return `import ${node.importClause!.getText(source)} from ${JSON.stringify(Bun.resolveSync(module.replace(/^@\//, "./"), import.meta.dir))};`;
 }).join("\n");
-const javascript = ts.transpileModule(`import React from ${JSON.stringify(Bun.resolveSync("react", import.meta.dir))};\n${imports}\n${footer.getText(source)}\nexport { MessageFooter };`, { compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
+const javascript = new Bun.Transpiler({ loader: "tsx", tsconfig: { compilerOptions: { jsx: "react" } } }).transformSync(`import React from ${JSON.stringify(Bun.resolveSync("react", import.meta.dir))};\n${imports}\n${footer.getText(source)}\nexport { MessageFooter };`);
 const { MessageFooter } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 
 test("footer shows compact settings and aligns with ghost message text", () => {

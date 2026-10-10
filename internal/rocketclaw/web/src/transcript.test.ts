@@ -1,12 +1,17 @@
 import { expect, test } from "bun:test";
-import ts from "typescript";
+import { API } from "typescript/unstable/async";
+import type { CallExpression, Expression, FunctionDeclaration, Node } from "typescript/unstable/ast";
+import { isBinaryExpression, isFunctionDeclaration, isVariableStatement } from "typescript/unstable/ast/is";
 import type { HistoryView, TranscriptEvent } from "./types";
 
 // Execute the retained UI's actual private functions without exporting non-components.
-const source = ts.createSourceFile("ui.tsx", await Bun.file(new URL("./ui.tsx", import.meta.url)).text(), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const api = new API({ cwd: import.meta.dir });
+const source = (await (await api.updateSnapshot({ openProject: "../tsconfig.json" })).getProjects()[0].program.getSourceFile(`${import.meta.dir}/ui.tsx`))!;
+await api.close();
+const transpiler = new Bun.Transpiler({ loader: "tsx" });
 const names = ["historyPage", "applyHistoryDelta", "readHistoryDelta", "readEarlierHistory", "sendComposer", "revertComposer", "restoreFiles", "promoteComposer", "popComposer", "switchQueueAgent", "stopComposer", "historyLines", "pendingInputs", "lineId", "isStopCommand", "transcriptTurns", "toolTitle"];
-const functions = source.statements.filter((node) => (ts.isFunctionDeclaration(node) ? names.includes(node.name?.text ?? "") : ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) => names.includes(declaration.name.getText(source))))).map((node) => node.getText(source)).join("\n");
-const javascript = ts.transpileModule(`import { QueryClient } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nimport { captureException } from ${JSON.stringify(Bun.resolveSync("@sentry/react", import.meta.dir))};\nimport { queries, mutations } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};\nconst queryClient = new QueryClient();\n${functions}\nexport { ${names.filter((name) => !["historyPage", "lineId", "isStopCommand", "switchQueueAgent"].includes(name)).join(", ")}, queryClient };`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
+const functions = source.statements.filter((node) => (isFunctionDeclaration(node) ? names.includes(node.name?.text ?? "") : isVariableStatement(node) && node.declarationList.declarations.some((declaration) => names.includes(declaration.name.getText(source))))).map((node) => node.getText(source)).join("\n");
+const javascript = transpiler.transformSync(`import { QueryClient } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nimport { captureException } from ${JSON.stringify(Bun.resolveSync("@sentry/react", import.meta.dir))};\nimport { queries, mutations } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};\nconst queryClient = new QueryClient();\n${functions}\nexport { ${names.filter((name) => !["historyPage", "lineId", "isStopCommand", "switchQueueAgent"].includes(name)).join(", ")}, queryClient };`);
 const { applyHistoryDelta, readHistoryDelta, readEarlierHistory, sendComposer, revertComposer, promoteComposer, popComposer, stopComposer, historyLines, pendingInputs, transcriptTurns, toolTitle, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 type Line = { id: string; role: string; text: string; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; origin?: string; principal?: string };
 const event = (entryKey: string, itemId: string, role: string, text: string, extra: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ entryKey, itemId, inputId: "", role, text, turnId: "", complete: true, ...extra });
@@ -52,9 +57,9 @@ test("active items become stored without changing render identity or losing mess
   expect(draft.lines.map((line) => line.messageId)).toEqual(["83:0", "83:1"]);
   expect(draft.lines[0]).toMatchObject(metadata);
   expect(historyLines([event("legacy", "", "assistant", "saved", { messageId: "1:0" })])[0].id).toBe("1:0");
-  const row = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "TranscriptLine")!.getText(source);
+  const row = source.statements.find((node) => isFunctionDeclaration(node) && node.name?.text === "TranscriptLine")!.getText(source);
   expect(row).toContain("data-message-id={line.messageId || undefined}");
-  const fork = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "ForkDialog")!.getText(source);
+  const fork = source.statements.find((node) => isFunctionDeclaration(node) && node.name?.text === "ForkDialog")!.getText(source);
   expect(fork).toContain('message.role === "user" && message.messageId');
 });
 
@@ -256,28 +261,28 @@ test("revert replaces only the captured untouched draft, Redo leaves it alone, a
 });
 
 test("actual stream handlers use metadata only as a hint, including on the first open", () => {
-  let onmessage: ts.Expression | undefined, onopen: ts.Expression | undefined;
-  const visit = (node: ts.Node) => {
-    if (ts.isBinaryExpression(node) && node.left.getText(source) === "stream.onmessage") onmessage = node.right;
-    if (ts.isBinaryExpression(node) && node.left.getText(source) === "stream.onopen") onopen = node.right;
-    ts.forEachChild(node, visit);
+  let onmessage: Expression | undefined, onopen: Expression | undefined;
+  const visit = (node: Node): undefined => {
+    if (isBinaryExpression(node) && node.left.getText(source) === "stream.onmessage") onmessage = node.right;
+    if (isBinaryExpression(node) && node.left.getText(source) === "stream.onopen") onopen = node.right;
+    node.forEachChild(visit);
   };
   visit(source);
   let reads = 0;
   const refreshHistory = () => { reads++; };
-  const compile = (node: ts.Expression) => new Function("id", "refreshHistory", ts.transpileModule(`return ${node.getText(source)};`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText)("session", refreshHistory);
+  const compile = (node: Expression) => new Function("id", "refreshHistory", transpiler.transformSync(`return ${node.getText(source)};`))("session", refreshHistory);
   const opened = compile(onopen!), signaled = compile(onmessage!);
   opened(); opened();
   signaled({ data: JSON.stringify({ conversationId: "other", revision: "future" }) });
   signaled({ data: JSON.stringify({ conversationId: "session", revision: "older" }) });
   expect(reads).toBe(3);
   expect(onmessage!.getText(source)).not.toContain("change.revision");
-  const hook = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "useSessionStream") as ts.FunctionDeclaration;
-  const refresh = hook.body!.statements.filter(ts.isVariableStatement).flatMap((node) => [...node.declarationList.declarations]).find((node) => node.name.getText(source) === "refreshHistory")!;
-  const callback = (refresh.initializer as ts.CallExpression).arguments[0];
+  const hook = source.statements.find((node) => isFunctionDeclaration(node) && node.name?.text === "useSessionStream") as FunctionDeclaration;
+  const refresh = hook.body!.statements.filter(isVariableStatement).flatMap((node) => [...node.declarationList.declarations]).find((node) => node.name.getText(source) === "refreshHistory")!;
+  const callback = (refresh.initializer as CallExpression).arguments[0];
   const draft = { sessionId: "" };
   const ids: string[] = [];
-  const read = new Function("draft", "onDraftChange", "readHistoryDelta", ts.transpileModule(`return ${callback.getText(source)};`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText)(draft, () => {}, (id: string) => { ids.push(id); });
+  const read = new Function("draft", "onDraftChange", "readHistoryDelta", transpiler.transformSync(`return ${callback.getText(source)};`))(draft, () => {}, (id: string) => { ids.push(id); });
   // The composer can finish after its original new-chat component unmounts.
   draft.sessionId = "created";
   read();
@@ -295,12 +300,12 @@ test("pending delivery classification uses consumed input IDs, not render or sto
 });
 
 test("thinking rows top-align the robot beside multiline text", () => {
-  const row = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "TraceLine")!;
-  expect((row as ts.FunctionDeclaration).body!.statements[0].getText(source)).toContain("flex items-start gap-1.5");
+  const row = source.statements.find((node) => isFunctionDeclaration(node) && node.name?.text === "TraceLine")!;
+  expect((row as FunctionDeclaration).body!.statements[0].getText(source)).toContain("flex items-start gap-1.5");
 });
 
 test("the in-progress status shows whenever the session is busy, whatever the newest line", () => {
-  const text = (name: string) => source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name)!.getText(source);
+  const text = (name: string) => source.statements.find((node) => isFunctionDeclaration(node) && node.name?.text === name)!.getText(source);
   expect(text("Transcript")).toContain("working={!previewing && busy}");
   expect(text("TranscriptLog")).toContain("{working ? <WorkingStatus ");
   expect(text("WorkingStatus")).toMatch(/<MessageScrollerItem>[^{]*<p role="status"[^>]*>Working…<\/p>/);
@@ -526,7 +531,7 @@ test("stopping leaves busy status to History, which may already contain a runnin
 });
 
 test("a terminal thinking row cannot keep the composer busy after History reports idle", () => {
-  const composer = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "SessionComposer")!.getText(source);
+  const composer = source.statements.find((node) => isFunctionDeclaration(node) && node.name?.text === "SessionComposer")!.getText(source);
   expect(composer).not.toContain('lines.at(-1)?.role === "thinking"');
   const draft = { lines: [], busy: true };
   applyHistoryDelta(draft, view([event("turn", "turn:0", "thinking", "last trace")], { terminal: "stopped" }));
