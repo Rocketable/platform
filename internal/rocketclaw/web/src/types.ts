@@ -22,3 +22,7 @@ export type Skill = { name: string; description?: string; license?: string; comp
 export type Workflow = { name: string; description?: string };
 export type ConfigView = { workspace?: string; overlays?: string[]; models?: { name?: string; model?: string }[]; slackChannels?: { channel?: string; agents?: string[] }[]; mcpServers?: string[]; loggingLevel?: string; autoApproverModel?: string; instrumentationEnabled?: boolean; mcpExternal?: boolean; tailscaleUser?: string };
 export type SlackNamesResponse = { names?: Record<string, string> };
+// The first Voice frame carries the answer SDP and its wire dialect; a call ends with at most one ended frame.
+export type VoiceRoute = "public" | "codex";
+export type VoiceEndReason = "stopped" | "replaced" | "idle" | "no_media" | "expired" | "safety" | "closed" | "error";
+export type VoiceEvent = { answer?: { sdp: string; route: VoiceRoute }; ended?: { reason: VoiceEndReason } };

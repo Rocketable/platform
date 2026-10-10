@@ -44,6 +44,30 @@ The web page is the main way to work with RocketClaw. It is built into RocketCla
 
 RocketClaw identifies each browser by IP address, using the `web_users` map (for example `"web_users": {"100.64.0.10": "alice"}`) or, failing that, a Tailscale lookup. It refuses browsers it cannot identify. See the [Web README](internal/rocketclaw/web/README.md) for the page's features and optional Sentry error tracking.
 
+#### Voice
+
+The Voice page (`/voice`) and the voice button in each session's composer let you talk to an agent out loud. The browser sends audio straight to OpenAI's GPT-Live voice model. Each task the voice model hands off becomes a Web message in the conversation, marked `media=Voice`. The agent's progress reaches the voice model silently, and the final reply is spoken. A conversation has one live call at a time: starting voice on the desk ends the call on the phone. Ending a call never stops the agent's work.
+
+Voice has no settings of its own. It uses the provider behind the conversation agent's model:
+
+- `rocketcode_auth: api_key`: the public GPT-Live API, model `gpt-live-1`. It costs about $0.05 per minute, silence included.
+- `rocketcode_auth: chatgpt`: Codex's internal voice route, model `gpt-live-1-codex`, with the provider's ChatGPT login. This route is unofficial and may stop working at any time. The ChatGPT account's data settings apply.
+
+Per call, OpenAI receives your microphone audio, up to about 12,000 characters of the conversation's recent messages, the agent's public progress (tool names with their state, and partial reply text), its replies, and its questions. It never receives tool arguments, tool results, reasoning, or attachments. A call ends when you stop it, when the page closes or stays hidden for 30 seconds, when nobody speaks within a minute of starting, and after 5 minutes with nothing said and no work running.
+
+The microphone needs a secure page. A browser on the RocketClaw machine itself can use `http://127.0.0.1:3000`, with the `127.0.0.1` mapping below; `localhost` may connect from `::1`, which needs its own mapping. Phones and other devices need HTTPS, which Tailscale can provide (the tailnet needs HTTPS certificates turned on):
+
+```sh
+tailscale serve --bg http://127.0.0.1:3000
+```
+
+- Point `serve` at `127.0.0.1`, not `localhost`, which may resolve to `::1`.
+- Every request through `serve` comes from `127.0.0.1`, so map it to yourself, using your Tailscale login: `"web_users": {"127.0.0.1": "you@example.com"}`.
+- Never use `tailscale funnel`: it would put RocketClaw on the public internet.
+- Limit who can reach the `serve` port with tailnet ACLs.
+
+With that mapping, every process on this machine and every tailnet device that can reach the `serve` port acts as you. Agent tools and MCP servers running here are such processes. Optionally set `"web": {"listen_address": "127.0.0.1:3000"}` to close the direct path. That also breaks the Tailscale-IP links RocketClaw hands out. See the [transport README](internal/rocketclaw/frontend/rpc/README.md#identity-boundary) for the identity details.
+
 ### Slack
 
 Slack has three jobs: showing cron reports, showing MCP sessions, and quick help when an allowed user mentions the bot. Everything else happens in the web page.

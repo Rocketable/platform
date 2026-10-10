@@ -19,9 +19,12 @@ export async function rpc<T>(method: string, input: object = {}, signal?: AbortS
 
 // Completion belongs to the transport, not the terminal snapshot's flag.
 // Read through EOF so errors after the terminal snapshot cannot commit a cache.
-export async function* listSessions(signal?: AbortSignal, url = "/api/ListSessions"): AsyncGenerator<SessionBatch> {
+export const listSessions = (signal?: AbortSignal, url = "/api/ListSessions") => sse<SessionBatch>(url, { signal });
+
+export async function* sse<T>(url: string, init: RequestInit): AsyncGenerator<T> {
+  const signal = init.signal;
   try {
-    const response = await fetch(url, { signal });
+    const response = await fetch(url, init);
     if (!response.ok) {
       const body = await response.json();
       throw new RPCError(body.message, body.code);
@@ -58,7 +61,7 @@ export async function* listSessions(signal?: AbortSignal, url = "/api/ListSessio
       reader.releaseLock();
     }
   } catch (error) {
-    if (!signal?.aborted) captureException(error, { tags: { rpc: "ListSessions" } });
+    if (!signal?.aborted) captureException(error, { tags: { rpc: url.split("/").at(-1) } });
     throw error;
   }
 }

@@ -167,6 +167,17 @@ Attachment originals use the top-level `attachments` setting: `{"driver":"filesy
 | `rocketclaw oai list` | Show provider, default marker, configured auth mode, and local credential presence. |
 | `rocketclaw oai logout [provider]` | Remove only the selected local credential; it does not revoke a remote token. |
 
+## Web Voice
+
+Voice has no config fields. A call uses the provider behind the conversation agent's model: `api_key` providers use the public GPT-Live API (`gpt-live-1`, about $0.05 per minute including silence); `chatgpt` providers use their `rocketclaw oai login` credential on Codex's unofficial route (`gpt-live-1-codex`). The microphone needs HTTPS, or a browser on the RocketClaw machine at `http://127.0.0.1:3000` (with the mapping below). For a phone or another device:
+
+| Step | Setting |
+| --- | --- |
+| HTTPS | `tailscale serve --bg http://127.0.0.1:3000`: use `127.0.0.1`, not `localhost`. Never `tailscale funnel`. |
+| Identity | `"web_users": {"127.0.0.1": "<your Tailscale login>"}`. Every local process and every tailnet device that reaches `serve` then acts as you. |
+| Reach | Limit who can reach the `serve` port with tailnet ACLs. |
+| Optional | `"web": {"listen_address": "127.0.0.1:3000"}` closes the direct path, but breaks the Tailscale-IP links RocketClaw hands out. |
+
 ## RocketClaw Tools
 
 RocketClaw injects these tools into RocketCode turns as **Code Mode builtins inside `execute` only**; none is a top-level tool. Call them from Starlark by name, e.g. `ask_user_question(question="…")` or `rocketclaw_update_goal(status="progress", note="…")`. Most are auto-allowed by RocketClaw unless a per-agent permission rule explicitly denies them. `rocketclaw_restart` and `rocketclaw_start_new_thread` are default-deny and require an explicit per-agent `allow`. `rocketclaw_dynamic_workflow` is not RocketClaw auto-allowed; it is gated by `permission.workflow.<stem>`, not by `task`. Workflow workers still do not receive these platform tools.

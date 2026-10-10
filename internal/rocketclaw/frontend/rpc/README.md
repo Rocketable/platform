@@ -262,6 +262,39 @@ are omitted. This is a snapshot of available bytes, not a claim to recover an ol
 file version. Originals are never resized in storage. Unreferenced blobs remain
 stored but cannot be downloaded; garbage collection is not part of this transport.
 
+## Voice
+
+`Voice(VoiceRequest) -> stream VoiceEvent` runs one GPT-Live call for exactly as
+long as its request lives. HTTP serves it only as `POST /api/Voice`, so
+`CrossOriginProtection` blocks cross-site starts; it is not a GET stream route. The
+body is `{"conversationId":"<visible-id>","sdp":"<offer>"}`. The handler checks
+identity and visibility, takes credentials from the provider of the conversation
+agent's model (`api_key` uses the public API and honors `api_base_url`; `chatgpt`
+uses the saved login on Codex's fixed internal URLs), creates the call, and attaches
+its sideband socket before answering. SSE frames are `{"answer":{"sdp":"…","route":"public"|"codex"}}`
+first, then one `{"ended":{"reason":"…"}}` with reason `stopped`, `replaced`,
+`idle`, `no_media`, `expired`, `safety`, `closed`, or `error`. Errors before the
+answer are ordinary JSON errors: `NotFound` for an unrecorded conversation, and
+`FailedPrecondition` (HTTP 400, code 9) for missing credentials, a failed ChatGPT
+token refresh (naming its `rocketclaw oai login` command), or an OpenAI rejection,
+which reports only the upstream HTTP status.
+
+A conversation has one live call; the newest wins, and the older stream ends with
+`replaced`. The server also ends a call when no speech is heard within 60 s, and after 5 minutes
+without speech or hand-off while no turn runs. Aborting the request ends the call:
+the server sends `session.close`, waits up to 3 s, hangs up a public session that did
+not confirm, and closes the socket. After `ended`, the stream stays open until the
+call's hand-off turns finish; clients treat `ended` as the end of the call.
+
+Each hand-off runs through `RunTurn` as a Web steer with `media=Voice`, the caller's
+principal, and the hand-off ID as `web_message_id`, bypassing `Prompt`: `$` text in
+it never runs commands, skills, or workflows. Its text is the request plus the voice
+conversation since the previous hand-off as quoted context, each part capped at
+4 KiB. When a question this call read out is pending, the request answers it instead.
+OpenAI receives only the seed (up to 40 recent complete user and assistant messages,
+12,000 bytes), throttled public progress, replies, and questions; replies to turns
+this call did not hand off are sent as silent context.
+
 ## Start
 
 ### History summary backfill
@@ -347,9 +380,28 @@ The private Unix socket trusts that OS user, including other processes running a
 Do not expose the socket through a general-purpose relay.
 
 The HTTP proxy forwards only the connection's remote IP. It ignores
-`X-Forwarded-For`, `X-Real-IP`, and client-supplied principal headers. Do not put
-another HTTP reverse proxy in front of it: that would identify the proxy rather
-than the browser. Go snapshots configured `web_users` IP-to-username mappings at
+`X-Forwarded-For`, `X-Real-IP`, the `Tailscale-User-*` headers, and client-supplied
+principal headers. Do not put another HTTP reverse proxy in front of it: that would
+identify the proxy rather than the browser.
+
+The one supported exception is `tailscale serve`, which gives phones the secure page
+that voice needs (see the root README). Point it at `http://127.0.0.1:<port>` and map
+`127.0.0.1` to the owner in `web_users`. Every request through `serve` then arrives
+from `127.0.0.1` and acts as the owner, and so does every local process: agent
+`execute` tools, MCP servers, and anything else on the host. So does every tailnet
+device whose ACLs reach the `serve` port, whatever its own Tailscale user. Never use
+`tailscale funnel`. The direct Tailscale-IP path keeps per-device WhoIs identity, so
+two identity rules coexist. A `web.listen_address` of `127.0.0.1:<port>` closes the
+direct path, but also breaks the `http://<tailscale-ip>:<port>` links RocketClaw hands out.
+
+On an untagged host signed in to Tailscale as the owner, local processes already act
+as the owner without the mapping: a connection from the host to its own Tailscale IP
+arrives from that IP, and `tailscale whois` names the host's own user (checked on
+macOS). There the mapping adds the loopback path, not new local authority. It adds
+real authority on a tagged host, where WhoIs rejects every local caller, and for
+tailnet peers, which `serve` turns into the owner.
+
+Go snapshots configured `web_users` IP-to-username mappings at
 startup. An explicit mapping takes precedence; otherwise Go runs `tailscale whois
 --json` for the browser IP and uses `UserProfile.LoginName` as its identity.
 New prompts instead record `UserProfile.DisplayName` as their principal, with the

@@ -10,8 +10,9 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions, rpc, RPCError } from "./api";
 import { draftContent } from "./drafts";
+import { holdWakeLock, startVoice, stopVoice, useVoice, voiceView, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse } from "./types";
-import { Bot, Check, ChevronDown, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, MessageSquare, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
+import { Bot, Check, ChevronDown, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -371,6 +372,7 @@ function useRoute() {
   const skill = pathname.startsWith("/skills/") ? pathname.slice("/skills/".length) : "";
   const config = pathname === "/config";
   const search = pathname === "/search";
+  const voice = pathname === "/voice";
   const id = pathname.startsWith("/s/") ? decodeSessionId(pathname.slice(3)) : "";
   return {
     cron,
@@ -379,6 +381,7 @@ function useRoute() {
     skill,
     config,
     search,
+    voice,
     id,
     goHome: () => navigate("/"),
     goCron: () => navigate("/cron"),
@@ -705,7 +708,7 @@ function ResizableAside({ side, className, children, ...props }: ComponentProps<
 type Tab = { path: string; pinned?: boolean; preview?: boolean };
 type TabState = { owner?: string; tabs: Tab[]; active: string };
 const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
-const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/search": ["Search", Search], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings] };
+const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/search": ["Search", Search], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings] };
 
 // A skill's page tab is titled with its name.
 function pageTab(path: string): [string, typeof Search] | undefined {
@@ -910,7 +913,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const composer = useRef<((command: string) => void) | null>(null);
   const commands = useMemo(() => ({ command, setCommand, composer }), [command]);
   const route = useRoute();
-  const showChat = ![route.cron, route.agents, route.skills, route.skill, route.config, route.search].some(Boolean);
+  const showChat = ![route.cron, route.agents, route.skills, route.skill, route.config, route.search, route.voice].some(Boolean);
   const [palette, setPalette] = useState<{ mode: "sessions" | "commands" | "cron" | undefined; key: number }>({ mode: undefined, key: 0 });
   const openPalette = useCallback((mode: "sessions" | "commands") => setPalette((current) => ({ mode, key: current.key + 1 })), []);
   const drafts = useMemo(() => new Map<string, ComposerDraft>(), [scope]);
@@ -1010,6 +1013,9 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
                   <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Search sessions" onClick={() => openPalette("sessions")}>
                     <Search className="size-[var(--navigation-icon)]" />
                   </TooltipTrigger><TooltipContent side="top">Search sessions</TooltipContent></Tooltip>
+                  <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Voice" onClick={() => navigate("/voice")}>
+                    <Mic className="size-[var(--navigation-icon)]" />
+                  </TooltipTrigger><TooltipContent side="top">Voice</TooltipContent></Tooltip>
                   <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Open command palette" onClick={() => openPalette("commands")}>
                     <Command className="size-[var(--navigation-icon)]" />
                   </TooltipTrigger><TooltipContent side="top">Open command palette</TooltipContent></Tooltip>
@@ -1023,6 +1029,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
             <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]", command?.target && "pt-[min(75dvh,30rem)]")}>
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
               {route.search ? <SearchPage /> : null}
+              {route.voice ? <VoicePage /> : null}
               <SkillPage name={route.skill} />
               <TabPane show={showChat}>
                 <MessageScrollerProvider key={conversation.key} autoScroll scrollEdgeThreshold={48}>
@@ -1196,7 +1203,7 @@ function paletteRows(
     { key: "new", label: "Sessions: New", run: newChat },
     { key: "search", label: "Sessions: Search", run: () => navigate("/search") },
     { key: "run-cron", label: "Cron: Run", keep: true, run: openCron },
-    ...([["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
+    ...([["voice", "Voice"], ["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
     // VS Code: src/vs/platform/quickinput/browser/commandsQuickAccess.ts, _getPicks.
   ].filter((item) => needle === "" || item.label.toLowerCase().includes(needle)).sort((a, b) => {
     // Recently run commands come first, except Timeline levels, which always keep the Config slider's order.
@@ -2858,8 +2865,10 @@ function SessionComposer({
   const [agentOpen, setAgentOpen] = useState(false);
   const [dollarOff, setDollarOff] = useState(false);
   const [dollarPick, setDollarPick] = useState("");
-  const sendError = draft.error;
-  const setSendError = (value: string) => { draft.error = value; onDraftChange(); };
+  const voice = useOwnVoice(id);
+  const sendError = draft.error || voice.error;
+  // Clearing the send error also dismisses this composer's failed call.
+  const setSendError = (value: string) => { draft.error = value; onDraftChange(); if (!value && voice.state === "error") stopVoice(); };
   const currentAgent = id === "" ? "main" : agents.data?.currentAgent ?? "";
   const catalog = agents.data?.agents ?? [];
   // Sends switch to the shown agent, so an unlisted current agent moves to the first listed one.
@@ -3188,6 +3197,7 @@ function Composer({
                 </TooltipTrigger>
                 <TooltipContent>Guide the current response <ModEnterKeys mac={mac} /></TooltipContent>
               </Tooltip>
+              <VoiceToggle sessionId={sessionId} />
               <Tooltip><TooltipTrigger render={<Button type="button" size="icon" className="size-11 sm:size-8" disabled={sending} />} aria-label={stopping ? "Stop" : "Send"} onClick={() => void (stopping ? stop() : send())}>
                 {stopping ? <Square /> : <Send />}
               </TooltipTrigger><TooltipContent>{stopping ? "Stop response" : sendLabel}</TooltipContent></Tooltip>
@@ -3433,6 +3443,102 @@ function CronPage() {
       </Dialog>
     </div>
   );
+}
+
+function VoicePage() {
+  const identity = useQuery(queries.identity());
+  useEffect(() => holdWakeLock(), []);
+  if (!identity.isSuccess) return null;
+  return <VoiceCall key={identity.data.username} storageKey={`voice:${identity.data.username}`} />;
+}
+
+// useOwnVoice is the tab's one call as seen from conversation id: idle unless the call is on id.
+function useOwnVoice(id: string): VoiceView {
+  const voice = useVoice();
+  return voice.conversationId === id ? voice : { state: "idle", conversationId: id, error: "", captions: [] };
+}
+
+function VoiceClock({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
+  return ` · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function VoiceCall({ storageKey }: { storageKey: string }) {
+  const sidebar = useContext(Sidebar);
+  const [id, setId] = useState(() => localStorage.getItem(storageKey) ?? "");
+  const voice = useOwnVoice(id);
+  const [agent, setAgent] = useState("");
+  const [picking, setPicking] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  const agents = useQuery(queries.agents(id ? { conversationId: id } : undefined));
+  const catalog = agents.data?.agents ?? [];
+  const selected = [agent, id ? agents.data?.currentAgent : "main"].find((name) => catalog.some((item) => item.name === name)) ?? catalog[0]?.name ?? "";
+  const active = voice.state !== "idle" && voice.state !== "error";
+  // The page owns its call: Reset and leaving the page hang it up.
+  useEffect(() => () => { if (voiceView().conversationId === id) stopVoice(); }, [id]);
+  const start = useMutation({ mutationFn: async () => {
+    let next = id;
+    if (!next) {
+      next = await mutations.createSession({ agent: selected });
+      localStorage.setItem(storageKey, next);
+      setId(next);
+      sidebar.invalidateQueries();
+    }
+    void startVoice(next);
+  } });
+  const pick = useMutation({ mutationFn: async (name: string) => {
+    setAgent(name);
+    if (!id) return;
+    await mutations.prompt({ id, text: `$agent ${name}` });
+    await queryClient.invalidateQueries({ queryKey: ["agents"] });
+  } });
+  const reset = () => {
+    localStorage.removeItem(storageKey);
+    setId("");
+    setConfirm(false);
+  };
+  const error = [voice.error, start.error?.message, pick.error?.message].find(Boolean);
+  return (
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 overflow-y-auto p-4">
+      <PageTitle>Voice</PageTitle>
+      <div className="flex flex-wrap items-center gap-2">
+        <AgentPicker catalog={catalog} selected={selected} setAgent={(name) => pick.mutate(name)} open={picking} setOpen={setPicking} disabled={[active, start.isPending, pick.isPending, catalog.length === 0].some(Boolean)} />
+        <Button className="h-11 sm:h-8" disabled={start.isPending || voice.state === "ending"} onClick={() => active ? stopVoice() : start.mutate()}>{active ? <><MicOff />Stop</> : <><Mic />Start</>}</Button>
+        <Button variant="outline" className="h-11 sm:h-8" disabled={!id} onClick={() => sidebar.rows.find((row) => row.id === id)?.running ? setConfirm(true) : reset()}>Reset</Button>
+        <span role="status" aria-live="polite" className="text-sm text-muted-foreground">{voice.state}{voice.state === "live" ? <VoiceClock startedAt={voice.startedAt!} /> : null}</span>
+        {id ? <Link href={sessionPath(id)} className="ml-auto text-sm underline">Open conversation</Link> : null}
+      </div>
+      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+      <section aria-label="Captions" className="whitespace-pre-wrap text-sm">{voice.captions.map(({ role, text }) => `${role === "user" ? "You" : "Voice"}: ${text}`).join("\n")}</section>
+      <Dialog open={confirm} onOpenChange={setConfirm}>
+        <DialogContent>
+          <DialogTitle>Reset voice conversation?</DialogTitle>
+          <DialogDescription>The agent is still working. Its turn keeps running in the old conversation.</DialogDescription>
+          <div className="mt-6 flex justify-end gap-2">
+            <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+            <Button onClick={reset}>Reset</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function VoiceToggle({ sessionId }: { sessionId: string }) {
+  const route = useRoute();
+  const { state } = useOwnVoice(sessionId);
+  const calling = state !== "idle" && state !== "error";
+  // The session pane stays mounted on page routes, so leaving the session ends its call as unmounting does.
+  useEffect(() => () => { if (voiceView().conversationId === sessionId) stopVoice(); }, [route.id, sessionId]);
+  // Phones talk on the Voice page: a narrow composer row has no room for another button.
+  return <Tooltip><TooltipTrigger render={<Button type="button" variant={calling ? "secondary" : "ghost"} size="icon" className="hidden sm:inline-flex sm:size-8" disabled={sessionId === ""} />} aria-label="Voice call" aria-pressed={calling} onClick={() => void (calling ? stopVoice() : startVoice(sessionId))}>
+    {state === "connecting" ? <LoaderCircle className="animate-spin" /> : calling ? <MicOff /> : <Mic />}
+  </TooltipTrigger><TooltipContent>{calling ? `End voice call (${state})` : "Start voice call"}</TooltipContent></Tooltip>;
 }
 
 function AgentsPage() {

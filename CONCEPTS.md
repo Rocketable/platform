@@ -138,6 +138,16 @@ The system message that tells a Background Job's owner how the job ended. It ent
 
 A hidden conversation that runs work for a human-visible destination conversation, such as an External MCP case or a one-off cron run. Its turns carry that destination as their sync destination: Sync copies the history there, Web lists only the destination, and session tags set during the turn land on the destination.
 
+## Web Voice
+
+### Voice Session
+
+A live spoken call between a person on the Web and OpenAI's voice model, attached to one conversation. Audio flows between the browser and OpenAI; RocketClaw creates the call with the conversation agent's Provider credentials and holds its control connection while the browser's request stays open. The call ends when that request ends, or earlier when RocketClaw or OpenAI ends it. A conversation has at most one live Voice Session: starting another ends the older one. Ending a Voice Session never stops the conversation's turns.
+
+### Voice Hand-off
+
+A task the voice model passes to the conversation's agent during a Voice Session. Each one becomes a Web user message marked `media=Voice`: the request, plus what the person and the voice model said since the previous hand-off as quoted context. A hand-off made while a question the session read out is pending answers that question instead. The agent's progress returns to the voice model as silent context, and the final reply of a turn the session handed off is spoken once. Not to be confused with a Delegation History, which is work a tool call delegated inside RocketCode.
+
 ## Process layout
 
 ### Backend

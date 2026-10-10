@@ -297,6 +297,8 @@ test("narrow top strip scrolls and running tabs keep a reachable close control",
   for (const [link, name] of [["/", "New session"], [href("alpha"), "Alpha"], [href("bravo"), "Bravo"], [href("charlie"), "Charlie"], [href("delta"), "Delta"], ["/search", "Search"]]) {
     await page.goto(`${origin}${link}`);
     await tab(name).waitFor();
+    // The strip draws before Identity loads, but only an owner's tabs are saved; leaving earlier drops this tab.
+    await page.waitForFunction((path: string) => JSON.parse(localStorage.getItem("tabs:tester") ?? "[]").some((saved: { path: string }) => saved.path === path), link);
   }
   await tab("Delta").waitFor();
   expect(await names(page)).toEqual(["New session", "Alpha", "Bravo", "Charlie", "Delta", "Search"]);

@@ -41,12 +41,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 		mux.HandleFunc("POST /api/"+method, func(w http.ResponseWriter, r *http.Request) {
 			request, response := requestType.New().Interface(), responseType.New().Interface()
 
-			body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
-			if err == nil {
-				err = httpInput(body, request, method)
-			}
-
-			if err != nil {
+			if err := httpInput(w, r, request, method); err != nil {
 				httpRPCError(w, status.Error(codes.InvalidArgument, err.Error()))
 				return
 			}
@@ -57,7 +52,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 				return
 			}
 
-			body, err = (protojson.MarshalOptions{EmitDefaultValues: true}).Marshal(response)
+			body, err := (protojson.MarshalOptions{EmitDefaultValues: true}).Marshal(response)
 			if err != nil {
 				httpRPCError(w, err)
 				return
@@ -68,7 +63,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 		})
 	}
 
-	for _, route := range []string{"GET /api/ListSessions", "GET /stream", "GET /api/DownloadAttachment", "POST /api/UploadAttachment"} {
+	for _, route := range []string{"GET /api/ListSessions", "GET /stream", "GET /api/DownloadAttachment", "POST /api/UploadAttachment", "POST /api/Voice"} {
 		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
 			method := strings.TrimPrefix(r.URL.Path, "/api/")
 
@@ -83,6 +78,12 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 			case "DownloadAttachment", "UploadAttachment":
 				request = &Attachment{ConversationId: r.URL.Query().Get("conversationId"), Id: r.URL.Query().Get("id"), Name: r.URL.Query().Get("name")}
 				response = &Attachment{}
+			case "Voice":
+				request, response = &VoiceRequest{}, &VoiceEvent{}
+				if err := httpInput(w, r, request, method); err != nil {
+					httpRPCError(w, status.Error(codes.InvalidArgument, err.Error()))
+					return
+				}
 			}
 
 			required := ""
@@ -264,7 +265,13 @@ func httpEvents(w http.ResponseWriter, stream grpc.ClientStream, response proto.
 	}
 }
 
-func httpInput(body []byte, request proto.Message, method string) error {
+// httpInput decodes a JSON request body of at most 4 MiB.
+func httpInput(w http.ResponseWriter, r *http.Request, request proto.Message, method string) error {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+	if err != nil {
+		return fmt.Errorf("read request body: %w", err)
+	}
+
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
 		return fmt.Errorf("decode request fields: %w", err)
@@ -287,7 +294,7 @@ func httpInput(body []byte, request proto.Message, method string) error {
 		required = "ids"
 	case "RunCronJob":
 		required = "stem"
-	case "MoveToBackground", "StopBackgroundJob", "AnswerQuestion":
+	case "MoveToBackground", "StopBackgroundJob", "AnswerQuestion", "Voice":
 		required = "conversationId"
 	}
 
@@ -300,6 +307,8 @@ func httpInput(body []byte, request proto.Message, method string) error {
 		required += " jobId"
 	case "AnswerQuestion":
 		required += " askId"
+	case "Voice":
+		required += " sdp"
 	}
 
 	for name := range strings.FieldsSeq(required) {
