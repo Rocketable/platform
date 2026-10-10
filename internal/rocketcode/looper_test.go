@@ -1012,44 +1012,51 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 }
 
 func TestLooperProgressiveCompactionKeepsToolCallWithOutput(t *testing.T) {
-	toolCall := functionCallReplayInput("tool-1", "call-1", "lookup", `{"q":"x"}`)
-	toolOutputParam := toolCallOutput("call-1", TextToolResult("result"))
-	toolOutput := responses.ResponseInputItemUnionParam{OfFunctionCallOutput: &toolOutputParam}
-	replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
-		testInputMessage(responses.EasyInputMessageRole("user"), "old question", ""),
-		toolCall,
-		toolOutput,
-	})
-	require.NoError(t, err)
+	for _, failedResponse := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failed_response=%t", failedResponse), func(t *testing.T) {
+			toolCall := functionCallReplayInput("tool-1", "call-1", "lookup", `{"q":"x"}`)
+			toolOutputParam := toolCallOutput("call-1", TextToolResult("result"))
+			toolOutput := responses.ResponseInputItemUnionParam{OfFunctionCallOutput: &toolOutputParam}
+			replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+				testInputMessage(responses.EasyInputMessageRole("user"), "old question", ""),
+				toolCall,
+				toolOutput,
+			})
+			require.NoError(t, err)
 
-	mock := mockResponses()
-	queueCompactResponses(mock, compactedResponse("cmp-one", "encrypted-one"), compactedResponse("cmp-two", "encrypted-two"))
+			mock := mockResponses()
+			queueCompactResponses(mock, compactedResponse("cmp-one", "encrypted-one"), compactedResponse("cmp-two", "encrypted-two"))
 
-	contextErr := contextLengthExceededError()
-	mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ responseObserver, _ ...option.RequestOption) (*responses.Response, error) {
-		if len(newParams(mock)) < 3 {
-			return nil, contextErr
-		}
+			mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ responseObserver, _ ...option.RequestOption) (*responses.Response, error) {
+				if len(newParams(mock)) < 3 {
+					if failedResponse {
+						return failedResponseWithCode("resp-large", responses.ResponseErrorCode("context_length_exceeded"), "too large"), nil
+					}
 
-		return responseWithMessage("resp-final", "answer"), nil
+					return nil, contextLengthExceededError()
+				}
+
+				return responseWithMessage("resp-final", "answer"), nil
+			}
+			looper := testLooper(mock)
+			output := make(chan ChatResponse, 10)
+
+			input := make(chan PromptInput, 1)
+			input <- testPromptInput(PromptInputRoleUser, "new question", output)
+
+			close(input)
+
+			err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
+
+			require.NoError(t, err)
+			require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
+			require.Len(t, compactParams(mock), 2)
+			secondCompactInput := marshalJSON(t, compactParams(mock)[1].Input.OfResponseInputItemArray)
+			require.Contains(t, secondCompactInput, `"type":"function_call"`)
+			require.Contains(t, secondCompactInput, `"type":"function_call_output"`)
+			require.Contains(t, secondCompactInput, `"call_id":"call-1"`)
+		})
 	}
-	looper := testLooper(mock)
-	output := make(chan ChatResponse, 10)
-
-	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "new question", output)
-
-	close(input)
-
-	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
-
-	require.NoError(t, err)
-	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
-	require.Len(t, compactParams(mock), 2)
-	secondCompactInput := marshalJSON(t, compactParams(mock)[1].Input.OfResponseInputItemArray)
-	require.Contains(t, secondCompactInput, `"type":"function_call"`)
-	require.Contains(t, secondCompactInput, `"type":"function_call_output"`)
-	require.Contains(t, secondCompactInput, `"call_id":"call-1"`)
 }
 
 func TestLooperDoesNotCompactUnansweredToolCall(t *testing.T) {

@@ -1317,7 +1317,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 			message:    resp.Error.Message,
 		}
 
-		if isResponseContextLengthExceeded(resp) {
+		if isContextLengthExceeded(err) {
 			resp, err := l.newResponseAfterContextCompaction(ctx, params, observer, err, output, checkpointCompacted)
 			if err != nil {
 				return nil, err
@@ -1431,7 +1431,7 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 		}
 
 		errLast = &responseFailureError{responseID: resp.ID, status: resp.Status, code: resp.Error.Code, message: resp.Error.Message}
-		if isResponseContextLengthExceeded(resp) {
+		if isContextLengthExceeded(errLast) {
 			continue
 		}
 
@@ -1526,10 +1526,6 @@ func isContextLengthExceeded(err error) bool {
 	}
 
 	return false
-}
-
-func isResponseContextLengthExceeded(resp *responses.Response) bool {
-	return resp.Error.Code == responses.ResponseErrorCode("context_length_exceeded")
 }
 
 func providerDiagnosticFromFailedResponse(resp *responses.Response, phase string, attempt int, retryAfter time.Duration, raw *http.Response) ProviderDiagnostic {
