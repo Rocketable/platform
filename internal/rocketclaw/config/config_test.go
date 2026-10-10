@@ -445,6 +445,19 @@ func TestValidateMCPServers(t *testing.T) {
 			wantErr: `mcp_servers["git hub"]: name contains invalid characters`,
 		},
 		{
+			name: "name exceeds length limit",
+			servers: map[string]MCPServerConfig{
+				strings.Repeat("a", 129): {Command: "npx"},
+			},
+			wantErr: "name exceeds maximum length of 128 characters (current: 129)",
+		},
+		{
+			name: "name at length limit",
+			servers: map[string]MCPServerConfig{
+				strings.Repeat("a", 128): {Command: "npx"},
+			},
+		},
+		{
 			name: "dash and underscore names (MCP charset)",
 			servers: map[string]MCPServerConfig{
 				"git-hub":             {Command: "npx"},
