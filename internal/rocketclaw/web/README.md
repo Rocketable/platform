@@ -213,7 +213,7 @@ After correcting credentials, rerun the failed workflow from the Actions tab.
 
 ## Local checks
 
-Use Bun 1.4.0 or newer. From this directory, run:
+Use Bun 1.4.2 or newer. From this directory, run:
 
 ```sh
 bun install --frozen-lockfile
