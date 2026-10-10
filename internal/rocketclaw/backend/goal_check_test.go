@@ -11,15 +11,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestValidateGoalCheckScriptStartRejectsUnknownAgent(t *testing.T) {
+func TestValidateGoalCheckScriptStartRejectsInvalidInput(t *testing.T) {
 	workspace := t.TempDir()
 	runtimeDir := config.DefaultRuntimeDir
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, runtimeDir, "agents"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, runtimeDir, "skills"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, runtimeDir, "agents", "main.md"), []byte("---\ndescription: main\nmodel: gpt-5.5\n---\nmain\n"), 0o644))
 
-	err := ValidateGoalCheckScriptStart(config.NewLockedConfig(&config.Config{Workspace: workspace}), "missing", `./scripts/check.sh`)
-	require.ErrorContains(t, err, `goal check script agent "missing" is not configured`)
+	for _, test := range []struct {
+		agent, script, message string
+	}{
+		{"missing", "./scripts/check.sh", `goal check script agent "missing" is not configured`},
+		{"main", "", "goal check script is required"},
+	} {
+		t.Run(test.agent, func(t *testing.T) {
+			err := ValidateGoalCheckScriptStart(config.NewLockedConfig(&config.Config{Workspace: workspace}), test.agent, test.script)
+			require.ErrorContains(t, err, test.message)
+		})
+	}
 }
 
 func TestValidateGoalCheckScriptAcceptsSafeSimpleCommand(t *testing.T) {
@@ -44,6 +53,8 @@ func TestValidateGoalCheckScriptRejectsUnsafeShapes(t *testing.T) {
 	require.NoError(t, permission.Allow("bash", "*"))
 
 	for _, script := range []string{
+		`./scripts/check.sh "unterminated`,
+		`''`,
 		`./scripts/check.sh && ./banana.sh`,
 		`./scripts/check.sh ; ./banana.sh`,
 		`./scripts/check.sh || ./banana.sh`,
@@ -78,6 +89,7 @@ func TestValidateGoalCheckScriptRequiresWorkspaceExecutable(t *testing.T) {
 		`/bin/echo ok`,
 		`../outside.sh`,
 		`./scripts/not-executable.sh`,
+		`./scripts`,
 	} {
 		t.Run(script, func(t *testing.T) {
 			_, err := validateGoalCheckScript(root, workspace, script, permission)
