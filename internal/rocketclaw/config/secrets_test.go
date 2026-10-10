@@ -73,7 +73,22 @@ func TestSecretFieldRejectsNonObjectAndNonString(t *testing.T) {
 	require.ErrorIs(t, err, errSecretKeyNotString)
 }
 
-func TestSecretsManagerRegionRejectsWrongService(t *testing.T) {
-	_, err := secretsManagerRegion("arn:aws:s3:us-east-1:123456789012:secret:femto")
-	require.ErrorIs(t, err, errIncompleteARN)
+func TestSecretsManagerRegion(t *testing.T) {
+	for _, tt := range []struct {
+		name, arn, region string
+	}{
+		{"wrong service", "arn:aws:s3:us-east-1:123456789012:secret:femto", ""},
+		{"complete ARN", "arn:aws:secretsmanager:eu-west-1:123456789012:secret:femto", "eu-west-1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			region, err := secretsManagerRegion(tt.arn)
+			if tt.region == "" {
+				require.ErrorIs(t, err, errIncompleteARN)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tt.region, region)
+		})
+	}
 }
