@@ -8,7 +8,6 @@ import (
 	"io"
 	"mime"
 	"net/url"
-	"path/filepath"
 	"strings"
 
 	openai "github.com/openai/openai-go/v3"
@@ -124,16 +123,6 @@ func sniffAttachmentMIME(data []byte, fallback string) string {
 	}
 
 	return normalizeMIME(fallback)
-}
-
-func mimeFromFilename(filename string) string {
-	if ext := filepath.Ext(filename); ext != "" {
-		if mimeType := mime.TypeByExtension(ext); mimeType != "" {
-			return normalizeMIME(mimeType)
-		}
-	}
-
-	return "application/octet-stream"
 }
 
 func promptInputMessage(input *PromptInput) responses.ResponseInputItemUnionParam {

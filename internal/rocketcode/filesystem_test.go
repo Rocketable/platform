@@ -189,7 +189,11 @@ func TestTSandboxedFileSystem(t *testing.T) {
 	root, err := os.OpenRoot(dir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
-	require.NoError(t, root.WriteFile("small.txt", []byte("hello world"), 0o644))
+
+	for _, name := range []string{"small.txt", "extensionless", "small.rocketcode-unknown"} {
+		require.NoError(t, root.WriteFile(name, []byte("hello world"), 0o644))
+	}
+
 	require.NoError(t, root.WriteFile("offset.txt", []byte("line1\nline2\nline3"), 0o644))
 	require.NoError(t, root.WriteFile(".env", []byte("SECRET=value"), 0o644))
 	require.NoError(t, root.WriteFile(".env.example", []byte("SECRET=example"), 0o644))
@@ -197,8 +201,6 @@ func TestTSandboxedFileSystem(t *testing.T) {
 	require.NoError(t, root.Mkdir("secret", 0o755))
 	require.NoError(t, root.WriteFile("secret/value.txt", []byte("hidden"), 0o644))
 	require.NoError(t, root.Symlink("secret", "linked-secret"))
-	require.NoError(t, root.WriteFile("image.png", []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, 0o644))
-	require.NoError(t, root.WriteFile("doc.pdf", []byte("%PDF-1.7\n"), 0o644))
 
 	var manyLines strings.Builder
 	for i := 1; i <= 2100; i++ {
@@ -216,12 +218,9 @@ func TestTSandboxedFileSystem(t *testing.T) {
 		root: root,
 	}
 
-	{
-		file := sfs.ReadResult("small.txt", 1).Output
-		require.Contains(t, file, "<path>small.txt</path>")
-		require.Contains(t, file, "<type>file</type>")
-		require.Contains(t, file, "1: hello world")
-		require.Contains(t, file, "(End of file - total 1 lines)")
+	for _, name := range []string{"small.txt", "extensionless", "small.rocketcode-unknown"} {
+		result := sfs.ReadResult(name, 1)
+		require.Equal(t, TextToolResult("<path>"+name+"</path>\n<type>file</type>\n<content>\n1: hello world\n\n(End of file - total 1 lines)\n</content>"), result)
 	}
 
 	{
@@ -300,20 +299,24 @@ func TestTSandboxedFileSystem(t *testing.T) {
 		require.Equal(t, "symlink access denied: linked-secret", file)
 	}
 
-	{
-		result := sfs.ReadResult("image.png", 1)
-		require.Equal(t, "Image read successfully", result.Output)
-		require.Len(t, result.Attachments, 1)
-		require.Equal(t, "image/png", result.Attachments[0].MIME)
-		require.Contains(t, result.Attachments[0].URL, "data:image/png;base64,")
-	}
-
-	{
-		result := sfs.ReadResult("doc.pdf", 1)
-		require.Equal(t, "PDF read successfully", result.Output)
-		require.Len(t, result.Attachments, 1)
-		require.Equal(t, "application/pdf", result.Attachments[0].MIME)
-		require.Contains(t, result.Attachments[0].URL, "data:application/pdf;base64,")
+	const png = "\x89PNG\r\n\x1a\n"
+	for _, tc := range []struct {
+		name, data, output, mime string
+	}{
+		{"image.png", png, "Image read successfully", "image/png"},
+		{"doc.pdf", "%PDF-1.7\n", "PDF read successfully", "application/pdf"},
+		{"filename.png", "filename only", "Image read successfully", "image/png"},
+		{"filename.PNG", "filename only", "Image read successfully", "image/png"},
+		{"image", png, "Image read successfully", "image/png"},
+		{"mislabeled.pdf", png, "Image read successfully", "image/png"},
+	} {
+		require.NoError(t, root.WriteFile(tc.name, []byte(tc.data), 0o644))
+		result := sfs.ReadResult(tc.name, 1)
+		require.Equal(t, ToolResult{Output: tc.output, Attachments: []Attachment{{
+			MIME:     tc.mime,
+			Filename: tc.name,
+			URL:      "data:" + tc.mime + ";base64," + base64.StdEncoding.EncodeToString([]byte(tc.data)),
+		}}}, result, tc.name)
 	}
 }
 
