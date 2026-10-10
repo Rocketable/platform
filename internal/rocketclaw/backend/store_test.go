@@ -1012,6 +1012,17 @@ func TestSessionServiceSyncCronSchedulesInsertsUpdatesAndDeletes(t *testing.T) {
 	dueSchedules, err := store.DueCronSchedules(now)
 	require.NoError(t, err)
 	assert.Contains(t, dueSchedules, CronScheduleState{ScheduleID: "empty#0", RelativePath: "empty.md"})
+	_, claimed, err = store.ClaimCronSchedule(dueSchedules[0], due, now)
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	require.NoError(t, store.ResetCronSchedules())
+	ids, err := queryStrings(t.Context(), store.db, `SELECT schedule_id FROM cron_schedules`, "cron schedules after reset")
+	require.NoError(t, err)
+	require.Empty(t, ids)
+	paths, err = queryStrings(t.Context(), store.db, `SELECT relative_path FROM cron_schedule_runs`, "cron run paths after reset")
+	require.NoError(t, err)
+	require.Empty(t, paths, "reset removes running state too")
 }
 
 func TestSessionServiceDueCronSchedulesHonorsDueTime(t *testing.T) {
