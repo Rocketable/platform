@@ -172,6 +172,11 @@ func TestRunRejectsInvalidValues(t *testing.T) {
 		{name: "worker result", body: "w = worker(name=\"w\", instructions=\"i\")\ndef main(args): return w", want: "worker"},
 		{name: "callable result", body: `def main(args): return main`, want: "function"},
 		{name: "set result", body: `def main(args): return set([1])`, want: "set"},
+		{name: "missing phase callback", body: `def main(args): return phase("work")`, want: "phase arguments"},
+		{name: "missing parallel callables", body: `def main(args): return parallel()`, want: "parallel arguments"},
+		{name: "non-sequence parallel callables", body: `def main(args): return parallel(1)`, want: "parallel callables must be a list or tuple"},
+		{name: "missing pipeline callback", body: `def main(args): return pipeline([])`, want: "pipeline arguments"},
+		{name: "missing agent prompt", body: `def main(args): return agent()`, want: "agent arguments"},
 		{name: "cyclic result", body: `def main(args):
     x = []
     x.append(x)
@@ -629,6 +634,9 @@ def main(args):
 
 	for _, tt := range []struct{ name, source, want string }{
 		{name: "callback limit", source: `def main(args): return pipeline(range(1001), lambda item: item)`, want: "callback limit"},
+		{name: "cumulative callback limit", source: `def main(args):
+    pipeline(range(1000), lambda item: item)
+    return parallel([lambda: "extra"])`, want: "test.star:4:20 in main: callback limit exceeded"},
 		{name: "agent limit", source: `def main(args):
     for item in range(1001): agent(str(item))
     return None`, want: "agent limit"},
