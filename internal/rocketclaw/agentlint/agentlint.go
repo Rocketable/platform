@@ -485,17 +485,13 @@ func suppressed(finding *Finding, infos map[string]*agentInfo) bool {
 			continue
 		}
 
-		for _, key := range finding.keys {
-			for _, suppression := range info.suppressions[key] {
-				if suppression.code == "" || suppression.code == finding.Code {
-					return true
+		for _, keys := range [2][]string{finding.keys, {"*"}} {
+			for _, key := range keys {
+				for _, suppression := range info.suppressions[key] {
+					if suppression.code == "" || suppression.code == finding.Code {
+						return true
+					}
 				}
-			}
-		}
-
-		for _, suppression := range info.suppressions["*"] {
-			if suppression.code == "" || suppression.code == finding.Code {
-				return true
 			}
 		}
 	}
