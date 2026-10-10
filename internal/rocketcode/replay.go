@@ -4,9 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
-	"strings"
 
-	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 )
 
@@ -40,76 +38,6 @@ func projectReplayForOpenAI(items []responses.ResponseInputItemUnionParam) []res
 	}
 
 	return projected
-}
-
-// CompactedOutputToReplayInput converts provider compaction output into durable replay input.
-func CompactedOutputToReplayInput(items []responses.ResponseOutputItemUnion) ([]json.RawMessage, error) {
-	input := make([]responses.ResponseInputItemUnionParam, 0, len(items))
-	for i := range items {
-		item, ok := compactedOutputItemToReplayInput(&items[i])
-		if !ok {
-			return nil, fmt.Errorf("unsupported compacted output item kind %q", items[i].Type)
-		}
-
-		input = append(input, item)
-	}
-
-	raw, err := ReplayInputFromParams(input)
-	if err != nil {
-		return nil, fmt.Errorf("encode compacted replay input: %w", err)
-	}
-
-	return raw, nil
-}
-
-func compactedOutputItemToReplayInput(item *responses.ResponseOutputItemUnion) (responses.ResponseInputItemUnionParam, bool) {
-	switch item.Type {
-	case "message":
-		role := strings.TrimSpace(item.Role)
-		if role == "" {
-			role = "user"
-		}
-
-		message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRole(role), Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(responseItemText(item))}, Type: "message"}
-		if item.Phase != "" {
-			message.Phase = responses.EasyInputMessagePhase(item.Phase)
-		}
-
-		return responses.ResponseInputItemUnionParam{OfMessage: &message}, true
-	case "compaction", "compaction_summary":
-		parts := []string{responseItemText(item)}
-
-		for i := range item.Summary {
-			parts = append(parts, item.Summary[i].Text)
-		}
-
-		compaction := responses.ResponseCompactionItemParam{ID: openai.String(item.ID), EncryptedContent: item.EncryptedContent, Type: "compaction"}
-
-		extra := map[string]any{}
-
-		if content := strings.Join(parts, ""); content != "" {
-			extra["content"] = content
-			extra["summary"] = content
-		}
-
-		compaction.SetExtraFields(extra)
-
-		return responses.ResponseInputItemUnionParam{OfCompaction: &compaction}, true
-	case "reasoning":
-		summary := ""
-		if len(item.Summary) > 0 {
-			summary = item.Summary[0].Text
-		}
-
-		reasoning := responses.ResponseReasoningItemParam{ID: item.ID, Summary: []responses.ResponseReasoningItemSummaryParam{{Text: summary}}, Type: "reasoning"}
-		if item.EncryptedContent != "" {
-			reasoning.EncryptedContent = openai.String(item.EncryptedContent)
-		}
-
-		return responses.ResponseInputItemUnionParam{OfReasoning: &reasoning}, true
-	default:
-		return responses.ResponseInputItemUnionParam{}, false
-	}
 }
 
 // ReplayDecodeError describes one durable replay item that could not be decoded
