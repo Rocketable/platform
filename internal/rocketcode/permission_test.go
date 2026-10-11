@@ -160,6 +160,9 @@ websearch: allow
 	})
 
 	for input, want := range map[string]string{
+		"[]":                             "permission must be a scalar or mapping",
+		"read: []":                       `permission "read": permission rule must be a scalar or mapping`,
+		"read: &rule allow\nedit: *rule": `permission "edit": permission rule must be a scalar or mapping`,
 		"websearch: {openai.com: allow}": `permission "websearch" only supports coarse allow or deny`,
 		"read: ask":                      `permission action "ask" is not supported`,
 		"doom_loop: deny":                `permission "doom_loop" is not supported`,

@@ -194,10 +194,9 @@ func parsePermissionNode(node *yaml.Node) (PermissionSet, error) {
 
 		return PermissionSet{Buckets: buckets}, nil
 	case yaml.DocumentNode, yaml.SequenceNode, yaml.AliasNode:
-		return PermissionSet{}, errors.New("permission must be a scalar or mapping")
-	default:
-		return PermissionSet{}, errors.New("permission must be a scalar or mapping")
 	}
+
+	return PermissionSet{}, errors.New("permission must be a scalar or mapping")
 }
 
 func parsePermissionRules(permission string, node *yaml.Node) ([]PermissionRule, error) {
@@ -250,10 +249,9 @@ func parsePermissionRules(permission string, node *yaml.Node) ([]PermissionRule,
 
 		return rules, nil
 	case yaml.DocumentNode, yaml.SequenceNode, yaml.AliasNode:
-		return nil, errors.New("permission rule must be a scalar or mapping")
-	default:
-		return nil, errors.New("permission rule must be a scalar or mapping")
 	}
+
+	return nil, errors.New("permission rule must be a scalar or mapping")
 }
 
 func parsePermissionAction(value string) (PermissionAction, string, error) {
