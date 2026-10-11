@@ -119,6 +119,8 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     if (width >= 640) await headerMessage.hover();
     else await headerMessage.getByText("First request", { exact: true }).tap();
     await headerButton.waitFor();
+    // A tap focuses the message to show its actions; only keyboard focus draws the ring.
+    if (width < 640) expect(await headerMessage.evaluate((node: HTMLElement) => document.activeElement === node && getComputedStyle(node).outlineStyle)).toBe("none");
     expect(await copyButton.isVisible()).toBe(true);
     expect(await page.getByRole("button", { name: "Show message header", exact: true, includeHidden: true }).count()).toBe(1);
     if (width >= 640) {
