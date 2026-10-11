@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -130,6 +131,7 @@ func TestStartSessionPromptServerReturnsAttachments(t *testing.T) {
 		return SessionResult{ExternalConversationID: "test-conversation", Agent: "main", Answer: "plain text reply", Attachments: []SessionAttachment{
 			{Name: "chart.png", MIMEType: "image/png; charset=binary", DataBase64: base64.StdEncoding.EncodeToString([]byte("png"))},
 			{Name: "report.txt", MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte("report"))},
+			{MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte("unnamed"))},
 		}}, nil
 	})
 	require.NoError(t, err)
@@ -137,7 +139,7 @@ func TestStartSessionPromptServerReturnsAttachments(t *testing.T) {
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
 	result := callSessionPrompt(t, server.url, "", "", "", "return attachments", nil)
-	require.Len(t, result.Content, 3)
+	require.Len(t, result.Content, 4)
 	content, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	assert.Equal(t, "plain text reply", content.Text)
@@ -153,7 +155,56 @@ func TestStartSessionPromptServerReturnsAttachments(t *testing.T) {
 	assert.Equal(t, "attachment://2/report.txt", resource.Resource.URI)
 	assert.Equal(t, "text/plain", resource.Resource.MIMEType)
 	assert.Equal(t, []byte("report"), resource.Resource.Blob)
-	assert.Equal(t, map[string]any{"external_conversation_id": "test-conversation", "agent": "main", "answer": "plain text reply", "attachments": []any{map[string]any{"name": "chart.png", "mime_type": "image/png; charset=binary", "data_base64": base64.StdEncoding.EncodeToString([]byte("png"))}, map[string]any{"name": "report.txt", "mime_type": "text/plain", "data_base64": base64.StdEncoding.EncodeToString([]byte("report"))}}}, structuredContentMap(t, result))
+
+	unnamed, ok := result.Content[3].(*mcp.EmbeddedResource)
+	require.True(t, ok)
+	require.NotNil(t, unnamed.Resource)
+	assert.Equal(t, "attachment://3/attachment-3", unnamed.Resource.URI)
+	assert.Equal(t, "text/plain", unnamed.Resource.MIMEType)
+	assert.Equal(t, []byte("unnamed"), unnamed.Resource.Blob)
+
+	data, err := json.Marshal(result.StructuredContent)
+	require.NoError(t, err)
+
+	assert.JSONEq(t, `{
+		"external_conversation_id": "test-conversation", "agent": "main", "answer": "plain text reply",
+		"attachments": [
+			{"name": "chart.png", "mime_type": "image/png; charset=binary", "data_base64": "cG5n"},
+			{"name": "report.txt", "mime_type": "text/plain", "data_base64": "cmVwb3J0"},
+			{"mime_type": "text/plain", "data_base64": "dW5uYW1lZA=="}
+		]
+	}`, string(data))
+}
+
+func TestStartSessionPromptServerReturnsErrors(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		reply   SessionResult
+		err     error
+		wantErr string
+	}{
+		{name: "handler", err: errors.New("turn failed"), wantErr: "turn failed"},
+		{name: "attachment", reply: SessionResult{Answer: "partial reply", Attachments: []SessionAttachment{
+			{MIMEType: "image/png", DataBase64: "eA=="},
+			{DataBase64: "!"},
+		}}, wantErr: "decode session result attachment 2: illegal base64 data at input byte 0"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(context.Context, string, string, string, string, map[string]string, []SessionAttachment, string) (SessionResult, error) {
+				return tt.reply, tt.err
+			})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
+
+			result := callSessionPrompt(t, server.url, "", "", "main", "hello", nil)
+			require.True(t, result.IsError)
+			require.Len(t, result.Content, 1)
+			content, ok := result.Content[0].(*mcp.TextContent)
+			require.True(t, ok)
+			assert.Equal(t, tt.wantErr, content.Text)
+			assert.Nil(t, result.StructuredContent)
+		})
+	}
 }
 
 func TestStartSessionPromptServerContinuesSession(t *testing.T) {
