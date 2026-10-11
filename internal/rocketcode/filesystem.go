@@ -17,7 +17,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"unicode/utf8"
 )
 
 type sandboxedFileSystem struct {
@@ -258,7 +257,7 @@ func previewApplyPatchLocked(sfs *sandboxedFileSystem, patchText string) (previe
 				nextContent += "\n"
 			}
 
-			text, bom := splitBOM(nextContent)
+			text, bom := strings.CutPrefix(nextContent, "\ufeff")
 			changes = append(changes, fileChange{typ: "add", path: cleanPath, newContent: text, bom: bom})
 		case "update":
 			info, err := sfs.root.Stat(cleanPath)
@@ -514,17 +513,8 @@ func stripHeredoc(input string) string {
 	return strings.Join(lines[1:len(lines)-1], "\n")
 }
 
-func splitBOM(text string) (string, bool) {
-	r, _ := utf8.DecodeRuneInString(text)
-	if text == "" || r != '\ufeff' {
-		return text, false
-	}
-
-	return strings.TrimPrefix(text, "\ufeff"), true
-}
-
 func joinBOM(text string, bom bool) string {
-	text, _ = splitBOM(text)
+	text = strings.TrimPrefix(text, "\ufeff")
 	if !bom {
 		return text
 	}
@@ -547,7 +537,7 @@ func readTextFile(sfs *sandboxedFileSystem, name string) (text string, bom bool,
 		return "", false, fmt.Errorf("read text file %q: %w", name, err)
 	}
 
-	text, bom = splitBOM(string(data))
+	text, bom = strings.CutPrefix(string(data), "\ufeff")
 
 	return text, bom, nil
 }
@@ -611,7 +601,7 @@ func deriveNewContentsFromChunks(sfs *sandboxedFileSystem, name string, chunks [
 		newLines = append(newLines, "")
 	}
 
-	text, bom = splitBOM(strings.Join(newLines, "\n"))
+	text, bom = strings.CutPrefix(strings.Join(newLines, "\n"), "\ufeff")
 
 	return text, originalBOM || bom, nil
 }
