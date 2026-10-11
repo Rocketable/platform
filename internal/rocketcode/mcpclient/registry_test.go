@@ -42,6 +42,13 @@ func TestFlattenCallToolResult(t *testing.T) {
 			wantErr: "mcp tool error",
 		},
 		{
+			name: "isError with structured content",
+			result: &mcp.CallToolResult{IsError: true, StructuredContent: struct {
+				Message string `json:"message"`
+			}{Message: "boom"}},
+			wantErr: `{"message":"boom"}`,
+		},
+		{
 			name:   "structured only",
 			result: &mcp.CallToolResult{StructuredContent: map[string]any{"ok": true}},
 			want:   `{"ok":true}`,
@@ -64,6 +71,8 @@ func TestFlattenCallToolResult(t *testing.T) {
 			got, err := flattenCallToolResult(tt.result)
 			if tt.wantErr != "" {
 				require.EqualError(t, err, tt.wantErr)
+				assert.Empty(t, got)
+
 				return
 			}
 
@@ -311,9 +320,20 @@ func buildStdioHelper(t *testing.T) string {
 
 func TestChildEnvMinimal(t *testing.T) {
 	t.Setenv("SECRET_SHOULD_NOT_LEAK", "x")
+	t.Setenv("LANG", "parent-lang")
 
-	env := childEnv(map[string]string{"MCPCLIENT_MARKER": "from-env"})
+	env := childEnv(map[string]string{"MCPCLIENT_MARKER": "from-env", "LANG": "C"})
 	joined := strings.Join(env, "\n")
+
+	var langs []string
+
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "LANG=") {
+			langs = append(langs, entry)
+		}
+	}
+
+	assert.Equal(t, []string{"LANG=C"}, langs)
 	assert.Contains(t, joined, "MCPCLIENT_MARKER=from-env")
 	assert.NotContains(t, joined, "SECRET_SHOULD_NOT_LEAK")
 	assert.Contains(t, joined, "PATH=")
