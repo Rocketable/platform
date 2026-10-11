@@ -284,6 +284,7 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
   await page.locator('[data-slot="tooltip-content"]').waitFor({ state: "hidden" });
   await tab("Bravo").focus();
   await page.keyboard.press("ArrowLeft");
+  await page.locator('[data-slot="tooltip-content"]').filter({ hasText: long }).waitFor();
   expect(await tab(long).evaluate((node: HTMLElement) => document.activeElement === node && getComputedStyle(node).outlineStyle)).toBe("solid");
   await menu(page, long, "Rename session");
   await field.fill("Renamed");

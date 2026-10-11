@@ -850,11 +850,13 @@ function TabItem({ tab, active, vertical, editing, endEdit, promote, close, open
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
   return <div data-tab={tab.path} draggable={!editing} className={cn("group flex shrink-0 items-center", vertical ? "rounded-md" : "border-r", active ? "bg-sidebar-row-active" : "hover:bg-accent")}>
-    <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div ref={ref} role="tab" aria-selected={active} aria-label={title} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm last:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", vertical ? "flex-1" : "max-w-80", tab.preview && "italic")}
-      onClick={() => { if (!active) navigate(tab.path); }} onDoubleClick={promote} />}>
-      <Icon aria-hidden="true" className="size-4 shrink-0" />
-      {session.running ? <span role="img" aria-label="Turn running" className="hidden size-2 shrink-0 rounded-full bg-foreground in-aria-selected:block [@media(hover:none)]:block" /> : null}
-      {editing ? <TabRename session={session} placeholder={title} endEdit={endEdit} /> : tab.pinned && !vertical ? null : <span className="truncate">{title}</span>}
+    <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className={cn("flex min-w-0", vertical ? "flex-1" : "max-w-80")} />}>
+      <div ref={ref} role="tab" aria-selected={active} aria-label={title} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
+        onClick={() => { if (!active) navigate(tab.path); }} onDoubleClick={promote}>
+        <Icon aria-hidden="true" className="size-4 shrink-0" />
+        {session.running ? <span role="img" aria-label="Turn running" className="hidden size-2 shrink-0 rounded-full bg-foreground in-aria-selected:block [@media(hover:none)]:block" /> : null}
+        {editing ? <TabRename session={session} placeholder={title} endEdit={endEdit} /> : tab.pinned && !vertical ? null : <span className="truncate">{title}</span>}
+      </div>
     </TooltipTrigger><TooltipContent side="bottom">{title}</TooltipContent></Tooltip>
     {active ? <button type="button" aria-label="Tab actions" className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground last:mr-1 hover:bg-accent hover:text-foreground" onClick={(event) => openMenu(event.currentTarget)}><Ellipsis className="size-3.5" /></button> : null}
     {tab.pinned ? null : <TabClose title={title} running={!!session.running} active={active} close={close} />}
@@ -1442,7 +1444,7 @@ function SessionRowContent({ session, loading = false, age = relativeTime(sessio
   const updated = session.updatedAt ? `Updated ${new Date(session.updatedAt).toLocaleString(undefined, { timeZoneName: "short" })}` : "";
   return <span className="flex min-w-0 w-full flex-1 flex-col gap-0.5">
     <span className="flex items-center gap-1.5 text-sm font-medium">{session.forkedFrom ? <GitFork role="img" aria-label="Forked session" className="size-3.5 shrink-0" /> : null}<span data-slot="session-title" className="truncate" title={clean}><InlineText text={title} /></span></span>
-    <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"><span className="min-w-0 flex-1 truncate" title={meta}>{meta}</span>{session.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 shrink-0 animate-spin motion-reduce:animate-none" /> : null}{age ? <Tooltip><TooltipTrigger render={<time dateTime={session.updatedAt} />} aria-label={updated} className="shrink-0 tabular-nums">{age}</TooltipTrigger><TooltipContent>{updated}</TooltipContent></Tooltip> : null}</span>
+    <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"><span className="min-w-0 flex-1 truncate" title={meta}>{meta}</span>{session.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 shrink-0 animate-spin motion-reduce:animate-none" /> : null}{age ? <Tooltip><TooltipTrigger render={<time dateTime={session.updatedAt} />} aria-label={updated} className="shrink-0"><span className="tabular-nums">{age}</span></TooltipTrigger><TooltipContent>{updated}</TooltipContent></Tooltip> : null}</span>
   </span>;
 }
 
