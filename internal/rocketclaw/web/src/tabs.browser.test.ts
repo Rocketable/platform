@@ -88,6 +88,7 @@ test("preview tabs, promotion, pins, close commands, middle-click, and drag surv
   expect(await italic(tab("fresh"))).toBe(false);
   await tab("Bravo").dblclick();
   expect(await italic(tab("Bravo"))).toBe(false);
+  expect(await tab("Bravo").evaluate((node: HTMLElement) => document.activeElement === node && getComputedStyle(node).outlineStyle)).toBe("none");
   await openFromPalette(page, "Alpha");
   expect(await names(page)).toEqual(["fresh", "Bravo", "Alpha"]);
   expect(await italic(tab("Alpha"))).toBe(true);
@@ -279,6 +280,11 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
   expect(width).toBeLessThanOrEqual(20 * 16);
   await tab(long).hover();
   expect(await page.locator('[data-slot="tooltip-content"]').innerText()).toBe(long);
+  await page.mouse.move(640, 700);
+  await page.locator('[data-slot="tooltip-content"]').waitFor({ state: "hidden" });
+  await tab("Bravo").focus();
+  await page.keyboard.press("ArrowLeft");
+  expect(await tab(long).evaluate((node: HTMLElement) => document.activeElement === node && getComputedStyle(node).outlineStyle)).toBe("solid");
   await menu(page, long, "Rename session");
   await field.fill("Renamed");
   await page.getByPlaceholder("Message or $command").click();
@@ -318,7 +324,8 @@ test("narrow top strip scrolls and running tabs keep a reachable close control",
   await page.keyboard.press("Shift+F10");
   await page.getByRole("menuitem", { name: "Close", exact: true }).press("Enter");
   await page.waitForURL(`**${href("charlie")}`);
-  expect(await tab("Charlie").evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
+  // The menu hands focus back as it finishes closing, which can land after the URL changes.
+  await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Open tabs"] [role="tab"][aria-label="Charlie"]'));
 }), 60_000);
 
 test("running tab shows a dot instead of close until hover or focus at desktop width", () => withPage({}, async (page, origin) => {

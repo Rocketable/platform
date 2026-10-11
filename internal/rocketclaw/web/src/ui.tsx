@@ -850,7 +850,7 @@ function TabItem({ tab, active, vertical, editing, endEdit, promote, close, open
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
   return <div data-tab={tab.path} draggable={!editing} className={cn("group flex shrink-0 items-center", vertical ? "rounded-md" : "border-r", active ? "bg-sidebar-row-active" : "hover:bg-accent")}>
-    <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div ref={ref} role="tab" aria-selected={active} aria-label={title} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm outline-none last:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", vertical ? "flex-1" : "max-w-80", tab.preview && "italic")}
+    <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div ref={ref} role="tab" aria-selected={active} aria-label={title} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm last:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", vertical ? "flex-1" : "max-w-80", tab.preview && "italic")}
       onClick={() => { if (!active) navigate(tab.path); }} onDoubleClick={promote} />}>
       <Icon aria-hidden="true" className="size-4 shrink-0" />
       {session.running ? <span role="img" aria-label="Turn running" className="hidden size-2 shrink-0 rounded-full bg-foreground in-aria-selected:block [@media(hover:none)]:block" /> : null}
@@ -2054,7 +2054,7 @@ function TranscriptLine({ line, conversationId, hasSandboxed, open }: { line: Li
   const align = line.role === "user" ? "end" : undefined;
   return (
     <Message data-message-id={line.messageId || undefined} align={align} className="mb-4" tabIndex={0} onPointerDown={(event) => {
-      if (event.pointerType === "touch" && !(event.target as Element).closest("button, a, input, textarea, summary")) event.currentTarget.focus({ preventScroll: true });
+      if (event.pointerType === "touch" && !(event.target as Element).closest("button, a, input, textarea, summary")) event.currentTarget.focus({ preventScroll: true, focusVisible: false });
     }}>
       <MessageContent>
         <Bubble variant={line.role === "user" ? "secondary" : "ghost"} align={align}>
