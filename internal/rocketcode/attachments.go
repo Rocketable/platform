@@ -126,7 +126,10 @@ func sniffAttachmentMIME(data []byte, fallback string) string {
 }
 
 func promptInputMessage(input *PromptInput) responses.ResponseInputItemUnionParam {
-	role := promptInputMessageRole(input.Role)
+	role := responses.EasyInputMessageRoleUser
+	if input.Role == PromptInputRoleDeveloper {
+		role = responses.EasyInputMessageRoleDeveloper
+	}
 
 	content := easyInputStringContent(input.Text)
 	if len(input.Attachments) > 0 {
@@ -166,14 +169,6 @@ func inputMessageParam(role responses.EasyInputMessageRole, content responses.Ea
 
 func easyInputStringContent(text string) responses.EasyInputMessageContentUnionParam {
 	return responses.EasyInputMessageContentUnionParam{OfString: openai.String(text)}
-}
-
-func promptInputMessageRole(role PromptInputRole) responses.EasyInputMessageRole {
-	if role == PromptInputRoleDeveloper {
-		return responses.EasyInputMessageRoleDeveloper
-	}
-
-	return responses.EasyInputMessageRoleUser
 }
 
 func appendAttachmentContent(content responses.ResponseInputMessageContentListParam, attachments ...Attachment) responses.ResponseInputMessageContentListParam {
