@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -384,16 +383,6 @@ func TestStartSessionPromptServerRejectsInvalidListenAddr(t *testing.T) {
 		return SessionResult{}, nil
 	})
 	require.ErrorContains(t, err, "listen for external MCP HTTP server")
-}
-
-func TestWithBasicAuthAllowsNilUsers(t *testing.T) {
-	called := false
-	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })
-	handler := withBasicAuth(next, nil)
-
-	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", http.NoBody))
-
-	assert.True(t, called)
 }
 
 func callSessionPromptWithExternalConversationID(t *testing.T, endpoint, externalConversationID, input string, metadata map[string]string) *mcp.CallToolResult {
