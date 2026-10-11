@@ -10,6 +10,7 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
   const spans: { name: string; attributes: { "sentry.op"?: { value: string }; "url.path"?: { value: string }; "url.full"?: { value: string }; "browser.script.invoker_type"?: { value: string }; "browser.script.invoker"?: { value: string }; "code.file.path"?: { value: string } } }[] = [];
   const slowScript = Promise.withResolvers<void>();
   const tracing = Promise.withResolvers<void>();
+  const cronNavigation = Promise.withResolvers<void>();
   const sessionNavigation = Promise.withResolvers<void>();
   const interaction = Promise.withResolvers<void>();
   const reported = Promise.withResolvers<void>();
@@ -29,8 +30,9 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
       }
       if (spans.some((span) => span.attributes["sentry.op"]?.value === "ui.long_animation_frame" && span.attributes["browser.script.invoker_type"]?.value === "classic-script")) slowScript.resolve();
       if (["pageload", "navigation", "http.client"].every((op) => spans.some((span) => span.attributes["sentry.op"]?.value === op))) tracing.resolve();
+      if (spans.some((span) => span.attributes["sentry.op"]?.value === "navigation" && span.name === "/cron")) cronNavigation.resolve();
       if (spans.some((span) => span.attributes["sentry.op"]?.value === "navigation" && span.name === "/s/:id")) sessionNavigation.resolve();
-      if (["ui.action.click", "ui.long_animation_frame"].every((op) => spans.some((span) => span.attributes["sentry.op"]?.value === op))) interaction.resolve();
+      if (spans.some((span) => span.attributes["sentry.op"]?.value === "ui.action.click") && spans.some((span) => span.attributes["sentry.op"]?.value === "ui.long_animation_frame" && span.attributes["browser.script.invoker_type"]?.value === "event-listener" && /^INPUT(?:#.*)?\.onclick$/.test(span.attributes["browser.script.invoker"]?.value ?? ""))) interaction.resolve();
       if (["browser exception", "promise rejection", "console failure", "request failure", "clipboard failure"].every((message) => events.some((event) => event.logentry?.formatted === message || event.exception?.values.some((exception) => exception.value === message))) && events.some((event) => event.exception?.values.some((exception) => exception.type === "React ErrorBoundary TypeError"))) reported.resolve();
       return Response.json({});
     }
@@ -58,8 +60,6 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
     if (await file.exists()) return new Response(file);
     let html = await Bun.file(path.join(dist, "index.html")).text();
     if (rate !== undefined) html = html.replace("</head>", `<script id="sentry-config" type="application/json">${JSON.stringify({ dsn: `http://public@127.0.0.1:${server.port}/1`, environment: "browser-test", release: "v9.8.7-browser-test", traces_sample_rate: rate })}</script></head>`);
-    // Inline scripts inherit the document URL, including its query string.
-    if (rate === 1) html = html.replace("</head>", `<script>const until = performance.now() + 150; while (performance.now() < until) {}</script></head>`);
     return new Response(html, { headers: { "Content-Type": "text/html" } });
   } });
   const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM, headless: true });
@@ -70,6 +70,13 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
     await page.goto(`http://127.0.0.1:${server.port}/?q=private-search`);
     await page.evaluate(() => { document.cookie = "private-cookie=secret"; });
     await page.getByRole("button", { name: "Search sessions" }).waitFor();
+    if (rate === 1) {
+      // Let startup requests and rendering settle before measuring the inline script.
+      await page.waitForLoadState("networkidle");
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      // Trigger a paint while the document still has a query string.
+      await page.addScriptTag({ content: `const until = performance.now() + 150; while (performance.now() < until) {} document.body.append("slow script");` });
+    }
     await page.getByRole("button", { name: "Open command palette", exact: true }).click();
     await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
     await page.getByRole("dialog").waitFor({ state: "detached" });
@@ -112,6 +119,7 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
       dispatchEvent(new PopStateEvent("popstate"));
     ` });
     await page.getByText("request failure", { exact: true }).waitFor();
+    if (rate === 1) await cronNavigation.promise; // Finish this navigation so the next one is not classified as a redirect.
     await page.evaluate(() => { history.pushState({}, "", "/s/c2Vzc2lvbg"); dispatchEvent(new PopStateEvent("popstate")); });
     await page.getByText("private-chat-text", { exact: true }).waitFor();
     if (rate === 1) {
