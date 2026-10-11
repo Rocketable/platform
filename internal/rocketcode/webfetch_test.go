@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -63,6 +65,29 @@ func TestWebFetchRejectsInvalidURL(t *testing.T) {
 	_, err := webFetch(context.Background(), testWebFetchParams("file:///tmp/image.png", ""))
 
 	require.EqualError(t, err, "URL must start with http:// or https://")
+}
+
+func TestWebFetchBodyLimit(t *testing.T) {
+	for _, size := range []int{maxAttachmentBytes, maxAttachmentBytes + 1} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			body := strings.Repeat("x", size)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/plain")
+				w.(http.Flusher).Flush() // Exercise the body limit without Content-Length.
+				_, _ = w.Write([]byte(body))
+			}))
+			t.Cleanup(server.Close)
+
+			got, err := webFetch(t.Context(), testWebFetchParams(server.URL, "text"))
+			if size > maxAttachmentBytes {
+				require.EqualError(t, err, "response too large (exceeds 5MB limit)")
+				require.Empty(t, got.Output)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, body, got.Output)
+			}
+		})
+	}
 }
 
 func testWebFetchParams(url, format string) webFetchToolParams {

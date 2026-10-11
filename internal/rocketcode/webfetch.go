@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -90,9 +91,13 @@ func webFetch(ctx context.Context, params webFetchToolParams) (ToolResult, error
 		}
 	}
 
-	body, err := readLimited(resp.Body, maxAttachmentBytes)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAttachmentBytes+1))
 	if err != nil {
-		return ToolResult{}, err
+		return ToolResult{}, fmt.Errorf("read limited body: %w", err)
+	}
+
+	if len(body) > maxAttachmentBytes {
+		return ToolResult{}, errors.New("response too large (exceeds 5MB limit)")
 	}
 
 	return webFetchToolResult(params.URL, format, resp.Header.Get("Content-Type"), body)
