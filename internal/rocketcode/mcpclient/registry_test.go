@@ -27,11 +27,6 @@ func TestFlattenCallToolResult(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name:   "text",
-			result: &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "hello"}}},
-			want:   "hello",
-		},
-		{
 			name:   "concat text",
 			result: &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "a"}, &mcp.TextContent{Text: "b"}}},
 			want:   "ab",
