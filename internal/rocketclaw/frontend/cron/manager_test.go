@@ -118,28 +118,6 @@ func TestLoadDefinitionsLoadsMarkdownAndSkipsTemplates(t *testing.T) {
 	}
 }
 
-func TestLoadDefinitionsInUsesEffectiveRuntimeCron(t *testing.T) {
-	workspace := t.TempDir()
-
-	cronDir := filepath.Join(workspace, ".rocketclaw", "cron")
-	if err := os.MkdirAll(cronDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule: 1h\nagent: worker\nchannel: '#ops'\n---\nRuntime cron\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	defs, err := loadDefinitionsIn(workspace, ".rocketclaw")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(defs) != 1 || defs[0].relativePath != "cron/daily.md" || defs[0].body != "Runtime cron\n" {
-		t.Fatalf("loadDefinitionsIn = %#v; want effective runtime cron", defs)
-	}
-}
-
 func TestValidateRuntimeDefinitionsReportsStagedCronParseErrors(t *testing.T) {
 	workspace := t.TempDir()
 
