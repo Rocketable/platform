@@ -463,6 +463,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await commandSearch.fill("Stop turn");
     await commands.getByRole("button", { name: "Sessions: Stop turn" }).click();
     await commands.waitFor({ state: "hidden" });
+    await stoppedTurn.promise;
     expect(prompts.at(-1)?.text).toBe("$stop");
     expect(await composer.inputValue()).toBe("draft during turn");
     handoffReady = Promise.withResolvers<void>();
