@@ -109,6 +109,8 @@ func TestSyncReportsWorkspaceDirectoryConflicts(t *testing.T) {
 		{name: "agents file", path: agentsRoot, want: "unpack embedded rocketclaw overlay agents"},
 		{name: "skills file", path: skillsRoot, want: "create rocketclaw skills overlay directory"},
 		{name: "target file", path: targetRoot, want: "reset rocketclaw target"},
+		{name: "scripts file", path: scriptsRoot, want: "apply rocketclaw overlay: rocketclaw overlay path is not a directory"},
+		{name: "overlay clones file", path: targetRoot + "/" + overlaysRoot, want: "reconcile configured rocketclaw overlays: configured overlay clone path is not a directory"},
 	}
 
 	for _, tt := range tests {
@@ -602,15 +604,40 @@ func TestSyncWorkspaceScriptSymlinksRemovesStaleGitExcludeBlock(t *testing.T) {
 	assert.Equal(t, "keep\nafter\n", string(data))
 }
 
-func TestSyncWorkspaceScriptSymlinksSkipsGitExcludeOutsideGitRepo(t *testing.T) {
-	workspace := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, targetRoot, "scripts"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, targetRoot, "scripts", "tool.sh"), []byte("tool"), 0o644))
+func TestSyncWorkspaceScriptSymlinksSkipsGitExcludeWithoutGitDirectory(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		gitFile bool
+	}{
+		{name: "no repository"},
+		{name: "worktree git file", gitFile: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(workspace, targetRoot, "scripts"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(workspace, targetRoot, "scripts", "tool.sh"), []byte("tool"), 0o644))
 
-	require.NoError(t, syncWorkspaceScriptSymlinks(workspace, targetRoot, testLogger()))
+			gitPath := filepath.Join(workspace, ".git")
+			if tt.gitFile {
+				require.NoError(t, os.WriteFile(gitPath, []byte("gitdir: ../repository/.git/worktrees/test\n"), 0o644))
+			}
 
-	_, err := os.Stat(filepath.Join(workspace, ".git"))
-	require.ErrorIs(t, err, os.ErrNotExist)
+			require.NoError(t, syncWorkspaceScriptSymlinks(workspace, targetRoot, testLogger()))
+
+			if tt.gitFile {
+				data, err := os.ReadFile(gitPath)
+				require.NoError(t, err)
+				assert.Equal(t, "gitdir: ../repository/.git/worktrees/test\n", string(data))
+			} else {
+				_, err := os.Stat(gitPath)
+				require.ErrorIs(t, err, os.ErrNotExist)
+			}
+
+			link, err := os.Readlink(filepath.Join(workspace, "scripts", "tool.sh"))
+			require.NoError(t, err)
+			assert.Equal(t, filepath.Join("..", targetRoot, "scripts", "tool.sh"), link)
+		})
+	}
 }
 
 func TestSyncWorkspaceScriptSymlinksDoesNotExcludeRegularWorkspaceScripts(t *testing.T) {
