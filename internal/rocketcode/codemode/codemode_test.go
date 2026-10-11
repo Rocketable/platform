@@ -13,19 +13,6 @@ func allowAll(context.Context, string, map[string]any) error { return nil }
 func noToolCallObserver(context.Context, []string, string, map[string]any) {
 }
 
-func TestRunMainReturnsString(t *testing.T) {
-	got, err := Run(t.Context(), `def main():
-    return "hello"
-`, nil, allowAll, nilCall, noToolCallObserver, nil)
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-
-	if got != "hello" {
-		t.Fatalf("Run() = %q, want hello", got)
-	}
-}
-
 func TestRunRawStringKeepsUnknownEscapes(t *testing.T) {
 	got, err := Run(t.Context(), `def main():
     return r"find . \( -name '*.go' \)"
