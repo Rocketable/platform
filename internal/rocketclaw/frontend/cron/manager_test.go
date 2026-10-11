@@ -133,6 +133,10 @@ func TestValidateRuntimeDefinitionsReportsStagedCronParseErrors(t *testing.T) {
 	if err := ValidateRuntimeDefinitions(workspace, ".rocketclaw-stage", []string{"#ops"}); err == nil || !strings.Contains(err.Error(), "yaml frontmatter is required") {
 		t.Fatalf("ValidateRuntimeDefinitions() error = %v; want frontmatter error", err)
 	}
+
+	m := New(workspace, ".rocketclaw-stage", []string{"#ops"}, newCronScheduleStore(t), &runnerMock{}, slog.New(slog.DiscardHandler))
+	require.ErrorContains(t, m.Start(t.Context()), "yaml frontmatter is required")
+	require.ErrorContains(t, m.scanScheduled(t.Context()), "yaml frontmatter is required")
 }
 
 func TestLoadOneOffCronjobUsesEffectiveRuntimeCron(t *testing.T) {

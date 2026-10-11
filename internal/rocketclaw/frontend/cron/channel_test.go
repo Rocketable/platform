@@ -1,6 +1,7 @@
 package cronfrontend
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,6 +30,12 @@ func TestValidateRuntimeDefinitionsRequiresConfiguredChannel(t *testing.T) {
 
 	require.ErrorContains(t, ValidateRuntimeDefinitions(workspace, ".", []string{"#release"}), "is not configured")
 	require.NoError(t, ValidateRuntimeDefinitions(workspace, ".", []string{"#ops"}))
+
+	m := New(workspace, ".", []string{"#release"}, newCronScheduleStore(t), &runnerMock{}, slog.New(slog.DiscardHandler))
+	require.ErrorContains(t, m.Start(t.Context()), "channel \"#ops\" is not configured")
+	jobs, err := m.Jobs()
+	require.ErrorContains(t, err, "channel \"#ops\" is not configured")
+	require.Nil(t, jobs)
 }
 
 func TestLoadDefinitionNormalizesConfiguredChannel(t *testing.T) {
