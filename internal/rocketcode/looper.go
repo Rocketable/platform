@@ -743,9 +743,7 @@ func (l *looper) Loop(
 
 func (l *looper) setPhase(phase TurnPhase) {
 	l.phaseMu.Lock()
-	if l.turnPhase != phase {
-		l.turnPhase = phase
-	}
+	l.turnPhase = phase
 	l.phaseMu.Unlock()
 }
 
