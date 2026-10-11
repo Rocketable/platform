@@ -147,12 +147,27 @@ func TestRunMainReturnsDictJSON(t *testing.T) {
 	}
 }
 
-func TestRunMainReturnsNoneError(t *testing.T) {
-	_, err := Run(t.Context(), `def main():
-    return None
-`, nil, allowAll, nilCall, noToolCallObserver, nil)
-	if err == nil || !strings.Contains(err.Error(), "None") {
-		t.Fatalf("Run() error = %v, want None error", err)
+func TestRunRejectsInvalidProgram(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, want string
+	}{
+		{"None result", "def main():\n    return None\n", "main returned None"},
+		{"missing main", "def other():\n    return 'unused'\n", "main is required"},
+		{"noncallable main", "main = 1\n", "main must be a function"},
+		{"initialization fails", "x = 1 // 0\ndef main():\n    return 'unused'\n", "execute codemode:"},
+		{"undefined name", "def main():\n    return unknown\n", "execute codemode:"},
+		{"unencodable result", "def main():\n    return lambda: 'unused'\n", "encode main result:"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Run(t.Context(), tc.source, nil, allowAll, nilCall, noToolCallObserver, nil)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Run() error = %v, want %q", err, tc.want)
+			}
+
+			if got != "" {
+				t.Fatalf("Run() = %q, want no result for an invalid program", got)
+			}
+		})
 	}
 }
 
