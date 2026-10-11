@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"mime"
 	"net/url"
 	"strings"
@@ -265,17 +264,4 @@ func originForURL(raw string) string {
 	}
 
 	return u.Scheme + "://" + u.Host
-}
-
-func readLimited(r io.Reader, limit int64) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(r, limit+1))
-	if err != nil {
-		return nil, fmt.Errorf("read limited body: %w", err)
-	}
-
-	if int64(len(data)) > limit {
-		return nil, errors.New("response too large (exceeds 5MB limit)")
-	}
-
-	return data, nil
 }
