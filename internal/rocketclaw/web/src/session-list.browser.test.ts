@@ -1455,12 +1455,18 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await matrixPills.first().click();
     const operatorChoices = matrixDialog.getByRole("button", { name: /^(?:pinned|forked|newest|oldest)$/ });
     await matrixSearch.fill("is:");
+    await matrixDialog.getByRole("button", { name: "pinned", exact: true }).waitFor();
     expect(await operatorChoices.allTextContents()).toEqual(["pinned", "forked"]);
     await matrixSearch.fill("sort:");
+    await matrixDialog.getByRole("button", { name: "newest", exact: true }).waitFor();
     expect(await operatorChoices.allTextContents()).toEqual(["newest", "oldest"]);
     await matrixSearch.fill("agent:");
-    for (let i = 0; i < 10; i++) await matrixSearch.press("ArrowDown");
     const lastSuggestion = matrixDialog.getByRole("button", { name: "agent9", exact: true });
+    await lastSuggestion.waitFor();
+    for (let i = 0; i < 10; i++) {
+      await matrixSearch.press("ArrowDown");
+      await matrixDialog.getByRole("button", { name: `agent${i}`, exact: true }).and(matrixDialog.locator(".bg-accent")).waitFor();
+    }
     expect(await lastSuggestion.evaluate((node: HTMLElement) => {
       const bounds = node.getBoundingClientRect();
       return node.classList.contains("bg-accent") && node.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
