@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -43,18 +44,37 @@ func TestLoadConfigFromArgs(t *testing.T) {
 	}
 }
 
-func TestLoadConfigRejectsDuplicatePaths(t *testing.T) {
-	path := writeConfig(t, `{
-		"host": "example.ts.net",
-		"routes": [
-			{"path": "/hook", "target": "http://localhost:7070/hook"},
-			{"path": "/hook", "target": "http://localhost:7071/hook"}
-		]
-	}`)
+func TestLoadConfigRejectsInvalidConfig(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{"duplicate paths", `{"host":"example.ts.net","routes":[{"path":"/hook","target":"http://localhost:7070/hook"},{"path":"/hook","target":"http://localhost:7071/hook"}]}`, `duplicate route path "/hook"`},
+		{"invalid JSON", `{`, "parse config"},
+		{"missing host", `{"routes":[{"path":"/hook","target":"http://localhost:7070/hook"}]}`, "host is required"},
+		{"malformed host URL", `{"host":"https://%zz","routes":[{"path":"/hook","target":"http://localhost:7070/hook"}]}`, `parse host "https://%zz"`},
+		{"host path", `{"host":"example.ts.net/path","routes":[{"path":"/hook","target":"http://localhost:7070/hook"}]}`, `host "example.ts.net/path" must not include a path`},
+		{"URL without host", `{"host":"https:///path","routes":[{"path":"/hook","target":"http://localhost:7070/hook"}]}`, "host is required"},
+		{"empty address", `{"host":"example.ts.net","addr":"","routes":[{"path":"/hook","target":"http://localhost:7070/hook"}]}`, "addr is required"},
+		{"empty cert cache", `{"host":"example.ts.net","cert_cache":"","routes":[{"path":"/hook","target":"http://localhost:7070/hook"}]}`, "cert_cache is required"},
+		{"missing routes", `{"host":"example.ts.net"}`, "at least one route is required"},
+		{"relative route path", `{"host":"example.ts.net","routes":[{"path":"hook","target":"http://localhost:7070/hook"}]}`, `route path "hook" must start with /`},
+		{"malformed target", `{"host":"example.ts.net","routes":[{"path":"/hook","target":"http://%zz/hook"}]}`, "parse target for /hook"},
+		{"unsupported target scheme", `{"host":"example.ts.net","routes":[{"path":"/hook","target":"ftp://localhost:7070/hook"}]}`, "route /hook target must use http or https"},
+		{"target without path", `{"host":"example.ts.net","routes":[{"path":"/hook","target":"http://localhost:7070"}]}`, "route /hook target must include host and path"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeConfig(t, tt.content)
+			cfg, err := loadConfigFromArgs([]string{"--config", path}, os.Getenv)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("loadConfigFromArgs error = %v; want %q", err, tt.want)
+			}
 
-	_, err := loadConfigFromArgs([]string{"--config", path}, func(string) string { return "" })
-	if err == nil || !strings.Contains(err.Error(), `duplicate route path "/hook"`) {
-		t.Fatalf("loadConfigFromArgs error = %v; want duplicate route path", err)
+			if !reflect.DeepEqual(cfg, config{}) {
+				t.Fatalf("loadConfigFromArgs config = %+v; want zero config on error", cfg)
+			}
+		})
 	}
 }
 
