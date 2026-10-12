@@ -659,6 +659,7 @@ test("search formats rows, windows around matches, and resolves tag names", asyn
   const preview = "<!subteam^S0BA868QQ90> *Allen now says he would buy a Windows computer if memory is the cause.*\n\nsee [docs](https://example.com/a)\n```\ncode line\n```";
   const long = ["alpha", "bravo", "charlie", "delta", "echo", "the windows line", "foxtrot", "golf", "hotel", "india"].join("\n");
   const tagged = ["keep-out-before", "pad-a", "pad-b", "<!subteam^S0BA868QQ90> tagged here", "pad-c", "pad-d", "keep-out-after"].join("\n");
+  const code = ["before 0", "before 1", "before 2", "MATCH", "after 0", "after 1", "after 2"];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -672,6 +673,7 @@ test("search formats rows, windows around matches, and resolves tag names", asyn
       if (query === "tag:x") return Response.json(response(query, [{ conversationId: "formatted", text: preview }], ["tag:x"], { needle: "" }));
       if (query === "windows") return Response.json(response(query, [{ conversationId: "long", field: "" }], [], { messages: [{ conversationId: "long", message: { messageId: "1:0", role: "assistant", text: "*found windows here*", complete: true } }, { conversationId: "long", message: { messageId: "1:1", role: "assistant", text: long, complete: true } }] }));
       if (query === "cs-operators") return Response.json(response(query, [{ conversationId: "long", field: "" }], [], { messages: [{ conversationId: "long", message: { messageId: "2:0", role: "assistant", text: tagged, complete: true } }], mentionIds: ["S0BA868QQ90"] }));
+      if (query === "fenced" || query === "streaming") return Response.json(response(query, [{ conversationId: "long", field: "" }], [], { messages: [{ conversationId: "long", message: { messageId: "3:0", role: "assistant", text: ["keep-out-before", "padding", "```text", ...code.map((line) => line.replace("MATCH", query)), ...(query === "fenced" ? ["```", "padding", "keep-out-after"] : [])].join("\n"), complete: query === "fenced" } }] }));
       return Response.json(response(query));
     }
     if (url.pathname.startsWith("/api/")) return Response.json({});
@@ -709,6 +711,14 @@ test("search formats rows, windows around matches, and resolves tag names", asyn
     expect(await results.getByText("pad-d").count()).toBe(1);
     expect(await results.getByText("keep-out-before").count()).toBe(0);
     expect(await results.getByText("keep-out-after").count()).toBe(0);
+    for (const query of ["fenced", "streaming"]) {
+      await page.getByRole("textbox", { name: "Search sessions" }).fill(query);
+      await results.locator("pre").filter({ hasText: query }).waitFor();
+      expect(await results.locator("pre code").textContent()).toBe(code.join("\n").replace("MATCH", query) + (query === "fenced" ? "\n" : ""));
+      expect(await results.locator("pre mark").textContent()).toBe(query);
+      expect(await results.getByText("keep-out-before").count()).toBe(0);
+      expect(await results.getByText("keep-out-after").count()).toBe(0);
+    }
     await page.goto(`${root}/search?q=tag:x`);
     await results.locator("pre").waitFor();
     await results.locator("pre").click();
