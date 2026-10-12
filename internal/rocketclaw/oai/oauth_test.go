@@ -2244,6 +2244,16 @@ func TestCodexStreamingResponseReportsStreamErrors(t *testing.T) {
 			want: "parse Codex completed response",
 		},
 		{
+			name: "malformed failed response",
+			body: io.NopCloser(strings.NewReader(`data: {"type":"response.failed","response":[]}`)),
+			want: "parse Codex failed response",
+		},
+		{
+			name: "malformed incomplete response",
+			body: io.NopCloser(strings.NewReader(`data: {"type":"response.incomplete","response":[]}`)),
+			want: "parse Codex incomplete response",
+		},
+		{
 			name: "missing completion",
 			body: io.NopCloser(strings.NewReader(`data: {"type":"response.in_progress"}`)),
 			want: "missing completion event",
