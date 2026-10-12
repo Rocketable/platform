@@ -6,8 +6,5 @@
     ".": "./index.ts",
     "./tui": "./tui.tsx",
     "./rpc": "./rpc.ts"
-  },
-  "dependencies": {
-    "@opencode-ai/plugin": "beta"
   }
 }
