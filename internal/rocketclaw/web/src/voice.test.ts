@@ -98,7 +98,6 @@ async function live(conversationId: string, route: "public" | "codex" = "public"
   wire.push({ answer: { sdp: "answer-sdp", route } });
   await until(() => peer.remote);
   peer.channel.onopen!();
-  peer.channel.emit({ type: "session.started" });
   return { done, wire, peer };
 }
 
@@ -115,8 +114,10 @@ test("a call goes idle, connecting, live, then ending and idle on Stop", async (
   await until(() => peer.remote);
   expect(peer.remote).toEqual({ type: "answer", sdp: "answer-sdp" });
   expect(voiceView().state).toBe("connecting");
-  const before = Date.now();
   peer.channel.emit({ type: "session.started" });
+  expect(voiceView().state).toBe("connecting"); // Only the open channel makes the call live.
+  const before = Date.now();
+  peer.channel.onopen!();
   expect(voiceView().state).toBe("live");
   expect(voiceView().startedAt).toBeGreaterThanOrEqual(before);
   stopVoice();
@@ -188,7 +189,6 @@ test("an audio connection that opens while the answer is applied starts no retry
     await until(() => peers[0].remote);
     await new Promise((resolve) => setImmediate(resolve)); // The answer is applied.
     jest.advanceTimersByTime(60_000);
-    peers[0].channel.emit({ type: "session.started" });
     expect(voiceView()).toMatchObject({ state: "live", notice: "" });
     expect(wires.map((wire) => wire.aborted)).toEqual([false]);
     stopVoice();
@@ -236,7 +236,6 @@ test("the retry shows its note and goes live once its channel opens", async () =
     await until(() => peers[1].remote);
     peers[1].channel.onopen!();
     jest.advanceTimersByTime(60_000);
-    peers[1].channel.emit({ type: "session.started" });
     expect(voiceView()).toMatchObject({ state: "live", error: "" });
     expect(wires.length).toBe(2);
     stopVoice();

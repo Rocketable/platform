@@ -125,11 +125,15 @@ export async function startVoice(conversationId: string, voice = "") {
       pc.onconnectionstatechange = () => { if (pc.connectionState === "failed") fail("Voice call failed: audio connection lost."); };
       let names: Record<string, VoiceCaption["role"]> = {};
       const channel = pc.createDataChannel("oai-events");
-      channel.onopen = () => clearTimeout(opening);
+      // The call is live once its event channel opens, not on OpenAI's session.started: Chrome
+      // drops messages that arrive before the channel reports open, so that one can be lost.
+      channel.onopen = () => {
+        clearTimeout(opening);
+        if (!signal.aborted) set({ state: "live", startedAt: Date.now() });
+      };
       channel.onmessage = ({ data }) => {
         const event: { type: string; delta?: string; item?: { text: string } } = JSON.parse(data);
         if (signal.aborted) return;
-        if (event.type === "session.started") set({ state: "live", startedAt: Date.now() });
         const role = names[event.type], last = view.captions.at(-1);
         if (!role) return;
         const text = event.delta ?? event.item!.text;
