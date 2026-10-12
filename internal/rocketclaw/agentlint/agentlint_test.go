@@ -136,6 +136,17 @@ browser
 	}
 }
 
+func TestLintRejectsInvalidSkills(t *testing.T) {
+	runtimeRoot := t.TempDir()
+	skillsRoot := filepath.Join(runtimeRoot, "skills", "broken")
+	require.NoError(t, os.MkdirAll(skillsRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(skillsRoot, "SKILL.md"), []byte("no frontmatter"), 0o644))
+
+	result, err := Lint(runtimeRoot, new(config.Config))
+	require.EqualError(t, err, "load skills: broken/SKILL.md: missing YAML frontmatter")
+	assert.Equal(t, Result{}, result)
+}
+
 func TestLintSuppressions(t *testing.T) {
 	runtimeRoot := t.TempDir()
 	writeAgent(t, runtimeRoot, "same.md", `---
@@ -275,6 +286,9 @@ description: beta
 maxRecursion: 2
 guardrail: hub
 customShell: /usr/local/bin/agent-sandbox
+permission:
+  task:
+    "alpha": allow
 ---
 beta
 `)
@@ -295,6 +309,7 @@ hub
   "beta" [label="beta\nmaxRecursion=2\ncustomShell=/usr/local/bin/agent-sandbox"];
   "hub" [label="hub\nmaxRecursion=unbounded"];
   "alpha" -> "hub" [color="red", label="cycle"];
+  "beta" -> "alpha";
   "hub" -> "alpha" [color="red", label="cycle"];
   "hub" -> "hub" [color="red", label="cycle"];
   "beta" -> "hub" [label="guardrail"];
@@ -329,6 +344,10 @@ func TestLintResolvesModelTemplate(t *testing.T) {
 
 	_, err = Lint(runtimeRoot, new(config.Config))
 	require.ErrorContains(t, err, `model "coding-high" is not configured`)
+
+	dot, err := AgentGraphDOT(runtimeRoot, new(config.Config))
+	require.ErrorContains(t, err, `model "coding-high" is not configured`)
+	assert.Empty(t, dot)
 }
 
 func writeAgent(t *testing.T, runtimeRoot, name, content string, models ...string) {
