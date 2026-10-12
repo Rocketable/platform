@@ -1,4 +1,4 @@
-import { Plugin } from "@opencode-ai/plugin/tui"
+import { Plugin } from "@opencode/plugin/tui"
 import { createEffect, Show } from "solid-js"
 import { decodePublicGoal, editedStatus, footerLabel, type PublicGoal, type Status } from "./goal.js"
 import { GoalRpc } from "./rpc.js"

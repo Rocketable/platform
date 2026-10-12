@@ -3,7 +3,7 @@ import { expect, mock, test } from "bun:test"
 type Invocation = { sessionID: string; prompt: { text: string }; delivery: "steer" | "queue" }
 type Message = { sessionID: string; text: string; resume?: boolean; delivery?: string }
 
-mock.module("@opencode-ai/plugin", () => ({ Plugin: { define: (plugin: unknown) => plugin } }))
+mock.module("@opencode/plugin", () => ({ Plugin: { define: (plugin: unknown) => plugin } }))
 const { default: plugin } = await import("../index")
 
 test("goal submissions are visible and status remains a non-resuming notice", async () => {
