@@ -13,6 +13,7 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
   // A second page plays OpenAI: it answers each offer and drives the oai-events channel.
   const openai = await browser.newPage();
   const created: { agent: string }[] = [], prompts: object[] = [], calls: string[] = [], spoken: string[] = [], agents: Record<string, string> = {};
+  const serverTrace: string[] = []; // PROBE
   let voiceFails = false, creating: PromiseWithResolvers<void> | undefined, voiceStream: ReadableStreamDefaultController | undefined;
   const notice = "The agent could not accept that request. Try again.";
   const rows = [{ id: "voice-1", name: "First voice", agent: "main" }, { id: "voice-2", name: "Second voice", agent: "main", running: true }];
@@ -42,28 +43,39 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
     }
     if (url.pathname === "/api/Voice") {
       const { conversationId, sdp, voice } = await request.json() as { conversationId: string; sdp: string; voice: string };
+      serverTrace.push(`${Date.now()} server Voice received; offer candidates=${sdp.split("a=candidate").length - 1}`);
       calls.push(conversationId);
       spoken.push(voice);
       if (voiceFails) return Response.json({ code: 9, message: "provider has no usable voice credentials" }, { status: 400 });
       const answer = await openai.evaluate(async (offer: string) => {
+        const log = (m: string) => ((window as unknown as { __t?: string[] }).__t ??= []).push(`${Date.now()} fake ${m}`);
         const pc = new RTCPeerConnection(), counts = window as unknown as { closes?: number; messages?: number };
         pc.ondatachannel = ({ channel }) => {
           Object.assign(window, { channel }); // The test speaks on the newest call's channel.
+          log(`datachannel readyState=${channel.readyState}`);
           channel.onopen = () => {
+            log("channel open; sending session.started");
             for (const event of [{ type: "session.started" }, { type: "session.input_transcript.delta", delta: "Hello" }, { type: "session.input_transcript.delta", delta: " there" }, { type: "session.output_transcript.delta", delta: "Hi!" }]) channel.send(JSON.stringify(event));
           };
           channel.onmessage = () => { counts.messages = (counts.messages ?? 0) + 1; };
           channel.onclose = () => { counts.closes = (counts.closes ?? 0) + 1; };
         };
+        for (const name of ["icegatheringstatechange", "iceconnectionstatechange", "connectionstatechange"]) pc.addEventListener(name, () => log(`${name} gather=${pc.iceGatheringState} ice=${pc.iceConnectionState} conn=${pc.connectionState}`));
+        pc.addEventListener("icecandidate", (event) => log(`candidate ${event.candidate?.candidate.split(" ").slice(2, 8).join(" ") ?? "end"}`));
+        log("setRemote");
         await pc.setRemoteDescription({ type: "offer", sdp: offer });
+        log("setRemote done");
         const sound = new AudioContext(), tone = sound.createOscillator(), output = sound.createMediaStreamDestination(), voice = output.stream; // The model's voice: an incoming, audible track.
         tone.connect(output);
         tone.start();
         for (const track of voice.getTracks()) pc.addTrack(track, voice);
         await pc.setLocalDescription(await pc.createAnswer());
+        log("setLocal done");
         while (pc.iceGatheringState !== "complete") await new Promise((resolve) => setTimeout(resolve, 50));
+        log("gathered");
         return pc.localDescription!.sdp;
       }, sdp);
+      serverTrace.push(`${Date.now()} server answer; candidates=${answer.split("a=candidate").length - 1}`);
       return new Response(new ReadableStream({ start(controller) { voiceStream = controller; controller.enqueue(`data: ${JSON.stringify({ answer: { sdp: answer, route: "public" } })}\n\ndata: ${JSON.stringify({ notice })}\n\n`); } }), { headers: { "Content-Type": "text/event-stream" } });
     }
     if (url.pathname.startsWith("/api/")) return Response.json({});
@@ -73,6 +85,28 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
   const origin = `http://127.0.0.1:${server.port}`;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    await page.addInitScript(() => { // PROBE: a timeline of the call setup.
+      const log = (m: string) => ((window as unknown as { __t?: string[] }).__t ??= []).push(`${Date.now()} app ${m}`);
+      const Base = RTCPeerConnection;
+      class Traced extends Base {
+        constructor(config?: RTCConfiguration) {
+          super(config);
+          log("pc new");
+          for (const name of ["icegatheringstatechange", "iceconnectionstatechange", "connectionstatechange"]) this.addEventListener(name, () => log(`${name} gather=${this.iceGatheringState} ice=${this.iceConnectionState} conn=${this.connectionState}`));
+          this.addEventListener("icecandidate", (event) => log(`candidate ${event.candidate?.candidate.split(" ").slice(2, 8).join(" ") ?? "end"}`));
+        }
+        override createDataChannel(label: string, init?: RTCDataChannelInit) {
+          const channel = super.createDataChannel(label, init);
+          channel.addEventListener("open", () => log("channel open"));
+          channel.addEventListener("message", ({ data }) => log(`message ${String(data).slice(0, 40)} readyState=${channel.readyState}`));
+          return channel;
+        }
+        override async setRemoteDescription(description: RTCSessionDescriptionInit) { log("setRemote"); await super.setRemoteDescription(description); log("setRemote done"); }
+      }
+      Object.assign(window, { RTCPeerConnection: Traced });
+      const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = async (constraints) => { log("getUserMedia"); const stream = await gum(constraints); log("getUserMedia done"); return stream; };
+    });
     await page.addInitScript(() => { // Count held wake locks, microphone requests and incoming audio tracks played.
       const probe = Object.assign(window, { locks: 0, mics: 0, heard: 0 });
       Object.defineProperty(navigator, "wakeLock", { value: { request: async () => { probe.locks++; return { release: async () => { probe.locks--; } }; } } });
@@ -84,7 +118,18 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
     const held = (count: number) => page.waitForFunction((count: number) => (window as unknown as Probe).locks === count, count);
     const probe = () => page.evaluate(() => { const { locks, mics, heard } = window as unknown as Probe; return { locks, mics, heard }; });
     const status = page.getByRole("status").filter({ hasText: /^(Tap to talk|Connecting…|Listening|Ending…|Tap to try again)/ });
-    const live = () => page.waitForFunction(() => /^Listening · 0:\d\d$/.test(document.querySelector('[role="status"][aria-live="polite"]')?.textContent ?? ""));
+    const live = async () => {
+      const started = Date.now();
+      try {
+        await page.waitForFunction(() => /^Listening · 0:\d\d$/.test(document.querySelector('[role="status"][aria-live="polite"]')?.textContent ?? ""));
+      } catch (failure) { // PROBE
+        const read = (target: typeof page) => target.evaluate(() => (window as unknown as { __t?: string[] }).__t ?? []).catch(() => ["unreadable"]);
+        const lines = [...serverTrace, ...await read(page), ...await read(openai)].filter((line) => Number(line.split(" ")[0]) >= started - 1000).sort();
+        const shown = await page.evaluate(() => document.querySelector('[role="status"][aria-live="polite"]')?.parentElement?.textContent ?? "").catch(() => "?");
+        console.log(`FLAKE-TRACE start=${started} shown=${JSON.stringify(shown)}\n${lines.map((line) => `  +${Number(line.split(" ")[0]) - started} ${line.split(" ").slice(1).join(" ")}`).join("\n")}\nFLAKE-TRACE-END`);
+        throw failure;
+      }
+    };
     const closes = (count: number) => openai.waitForFunction((count: number) => (window as unknown as { closes?: number }).closes === count, count);
     const stored = () => page.evaluate(() => localStorage.getItem("voice:tester"));
     const picker = page.getByRole("combobox", { name: "Choose agent" });

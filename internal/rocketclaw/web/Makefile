@@ -38,8 +38,8 @@ build:
 
 test: build
 	# Transport tests need the live PostgreSQL/provider fixtures owned by Go.
-	bash -o pipefail -c 'find ./src -type f \( -name "*.test.ts" -o -name "*.test.tsx" \) ! -name "*-transport.test.ts" -print0 | sort -z | xargs -0 -n 1 -P 4 bun test'
-	go -C .. test ./frontend/rpc -run 'Test(PublicProgressRealBrowser|RevertRealBackendBrowser|SessionEntries|SidebarHTTPStreamsBeforeGoTailAndCancels)$$' -count=1
-	$(MAKE) check-cloc-budget
+	# PROBE: run only the voice page test, 40 times, 4 at a time.
+	bash -c 'seq 40 | xargs -P 4 -I{} bun test src/voice-page.browser.test.ts 2>&1 | grep -E "FLAKE-TRACE|^  \\+|\\((pass|fail)\\) Voice page|TimeoutError|voice-page.browser.test.ts:[0-9]+:"'
+	false # PROBE: never let this branch pass.
 
 .PHONY: cloc check-cloc-budget lint build test
