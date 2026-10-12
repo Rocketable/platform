@@ -221,10 +221,10 @@ github.com/dgryski/go-metro
 # github.com/dustin/go-humanize v1.1.0
 ## explicit; go 1.21
 github.com/dustin/go-humanize
-# github.com/fxamacker/cbor/v2 v2.9.3
+# github.com/fxamacker/cbor/v2 v2.9.6
 ## explicit; go 1.20
 github.com/fxamacker/cbor/v2
-# github.com/gaissmai/bart v0.29.0
+# github.com/gaissmai/bart v0.30.0
 ## explicit; go 1.24.0
 github.com/gaissmai/bart
 github.com/gaissmai/bart/internal/allot
@@ -258,7 +258,7 @@ github.com/go-logr/stdr
 # github.com/go4org/hashtriemap v0.0.0-20260925222741-44e5305f85d9
 ## explicit; go 1.25.1
 github.com/go4org/hashtriemap
-# github.com/godbus/dbus/v5 v5.2.2
+# github.com/godbus/dbus/v5 v5.2.3
 ## explicit; go 1.20
 github.com/godbus/dbus/v5
 # github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8
@@ -331,13 +331,14 @@ github.com/jsimonetti/rtnetlink/internal/unix
 # github.com/kamstrup/intmap v0.5.2
 ## explicit; go 1.23
 github.com/kamstrup/intmap
-# github.com/klauspost/compress v1.20.0
+# github.com/klauspost/compress v1.20.3
 ## explicit; go 1.25
 github.com/klauspost/compress
 github.com/klauspost/compress/fse
 github.com/klauspost/compress/huff0
 github.com/klauspost/compress/internal/cpuinfo
 github.com/klauspost/compress/internal/le
+github.com/klauspost/compress/internal/regmask
 github.com/klauspost/compress/internal/snapref
 github.com/klauspost/compress/zstd
 github.com/klauspost/compress/zstd/internal/xxhash
@@ -616,7 +617,7 @@ golang.org/x/crypto/nacl/box
 golang.org/x/crypto/nacl/secretbox
 golang.org/x/crypto/poly1305
 golang.org/x/crypto/salsa20/salsa
-# golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba
+# golang.org/x/exp v0.0.0-20261011100332-faecfb24eb49
 ## explicit; go 1.26.0
 golang.org/x/exp/constraints
 golang.org/x/exp/maps
@@ -694,7 +695,7 @@ golang.org/x/time/rate
 # golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 ## explicit; go 1.17
 golang.zx2c4.com/wintun
-# golang.zx2c4.com/wireguard/windows v1.0.1
+# golang.zx2c4.com/wireguard/windows v1.1.1
 ## explicit; go 1.25.0
 golang.zx2c4.com/wireguard/windows/tunnel/winipcfg
 # google.golang.org/genproto/googleapis/api v0.0.0-20261005182115-fad411399dd8
