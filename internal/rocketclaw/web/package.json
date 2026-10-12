@@ -21,7 +21,7 @@
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",
     "lucide-react": "^1.55.0",
-    "postcss": "^8.5.29",
+    "postcss": "^8.5.30",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "shadcn": "^4.21.4",
