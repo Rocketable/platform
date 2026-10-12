@@ -3520,10 +3520,11 @@ const voiceStatus: Record<VoiceState, string> = { idle: "Tap to talk", connectin
 
 // VoiceStage is the orb with the call's status under it: big and centered, or small
 // at the bottom beside the transcript. It is one orb either way, so it shrinks rather than reappearing.
-function VoiceStage({ voice, compact, busy, error, onPress }: { voice: VoiceView; compact: boolean; busy: boolean; error?: string; onPress: () => void }) {
+// A call starts only once the agents have loaded, since they decide its voice; hanging up never waits.
+function VoiceStage({ voice, compact, busy, loading, error, onPress }: { voice: VoiceView; compact: boolean; busy: boolean; loading: boolean; error?: string; onPress: () => void }) {
   const active = voice.state !== "idle" && voice.state !== "error";
   return <div className={cn("flex flex-col items-center", compact ? "shrink-0 gap-2" : "flex-1 justify-center gap-10 py-10")}>
-    <VoiceOrb state={voice.state} data-size={compact ? "small" : "large"} aria-label={active ? "End voice call" : "Start voice call"} aria-pressed={active} disabled={busy || voice.state === "ending"} onClick={onPress} />
+    <VoiceOrb state={voice.state} data-size={compact ? "small" : "large"} aria-label={active ? "End voice call" : "Start voice call"} aria-pressed={active} disabled={busy || voice.state === "ending" || (!active && loading)} onClick={onPress} />
     <span role="status" aria-live="polite" className="text-sm tracking-wide text-muted-foreground">{voiceStatus[voice.state]}{voice.state === "live" ? <VoiceClock startedAt={voice.startedAt!} /> : null}</span>
     <span aria-live="polite" className="text-center text-sm">{voice.notice}</span>
     {error ? <p role="alert" className="text-center text-sm text-destructive">{error}</p> : null}
@@ -3601,7 +3602,7 @@ function VoiceCall({ storageKey }: { storageKey: string }) {
         </div>
       </div>
       {transcript ? <VoiceTranscript captions={voice.captions} /> : null}
-      <VoiceStage voice={voice} compact={transcript} busy={start.isPending} error={error} onPress={() => active ? stopVoice() : start.mutate()} />
+      <VoiceStage voice={voice} compact={transcript} busy={start.isPending} loading={agents.isPending} error={error} onPress={() => active ? stopVoice() : start.mutate()} />
       <Dialog open={confirm} onOpenChange={setConfirm}>
         <DialogContent>
           <DialogTitle>Reset voice conversation?</DialogTitle>

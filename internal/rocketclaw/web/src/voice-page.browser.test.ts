@@ -13,7 +13,7 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
   // A second page plays OpenAI: it answers each offer and drives the oai-events channel.
   const openai = await browser.newPage();
   const created: { agent: string }[] = [], prompts: object[] = [], calls: string[] = [], spoken: string[] = [], agents: Record<string, string> = {};
-  let voiceFails = false, creating: PromiseWithResolvers<void> | undefined, voiceStream: ReadableStreamDefaultController | undefined;
+  let voiceFails = false, creating: PromiseWithResolvers<void> | undefined, listing: PromiseWithResolvers<void> | undefined, voiceStream: ReadableStreamDefaultController | undefined;
   const notice = "The agent could not accept that request. Try again.";
   const rows = [{ id: "voice-1", name: "First voice", agent: "main" }, { id: "voice-2", name: "Second voice", agent: "main", running: true }];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
@@ -25,6 +25,7 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
     if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "voice" } });
     if (url.pathname === "/api/ListAgents") {
       const { conversationId = "" } = JSON.parse(await request.text() || "{}");
+      await listing?.promise;
       return Response.json({ agents: [{ name: "main", model: "openai/gpt", voices: ["cove", "juniper"] }, { name: "helper", model: "keyed/gpt", voices: ["marin", "cedar"] }], currentAgent: agents[conversationId] ?? "main" });
     }
     if (url.pathname === "/api/History") return Response.json({ messages: [], origin: "", revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
@@ -48,10 +49,7 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
       const answer = await openai.evaluate(async (offer: string) => {
         const pc = new RTCPeerConnection(), counts = window as unknown as { closes?: number; messages?: number };
         pc.ondatachannel = ({ channel }) => {
-          Object.assign(window, { channel }); // The test speaks on the newest call's channel.
-          channel.onopen = () => {
-            for (const event of [{ type: "session.started" }, { type: "session.input_transcript.delta", delta: "Hello" }, { type: "session.input_transcript.delta", delta: " there" }, { type: "session.output_transcript.delta", delta: "Hi!" }]) channel.send(JSON.stringify(event));
-          };
+          Object.assign(window, { channel }); // The test speaks on the newest call's channel, once the page says it opened.
           channel.onmessage = () => { counts.messages = (counts.messages ?? 0) + 1; };
           channel.onclose = () => { counts.closes = (counts.closes ?? 0) + 1; };
         };
@@ -73,6 +71,21 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
   const origin = `http://127.0.0.1:${server.port}`;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    // Chrome drops what reaches the page's channel before it reports open, so OpenAI speaks first only after that.
+    await page.exposeFunction("channelOpened", () => openai.evaluate(async () => {
+      const fake = window as unknown as { channel?: RTCDataChannel & { spoke?: boolean } };
+      while (!fake.channel || fake.channel.spoke || fake.channel.readyState !== "open") await new Promise((resolve) => setTimeout(resolve, 10));
+      fake.channel.spoke = true;
+      for (const event of [{ type: "session.started" }, { type: "session.input_transcript.delta", delta: "Hello" }, { type: "session.input_transcript.delta", delta: " there" }, { type: "session.output_transcript.delta", delta: "Hi!" }]) fake.channel.send(JSON.stringify(event));
+    }));
+    await page.addInitScript(() => {
+      const createDataChannel = RTCPeerConnection.prototype.createDataChannel;
+      RTCPeerConnection.prototype.createDataChannel = function (...args) {
+        const channel = createDataChannel.apply(this, args);
+        channel.addEventListener("open", () => void (window as unknown as { channelOpened(): Promise<void> }).channelOpened());
+        return channel;
+      };
+    });
     await page.addInitScript(() => { // Count held wake locks, microphone requests and incoming audio tracks played.
       const probe = Object.assign(window, { locks: 0, mics: 0, heard: 0 });
       Object.defineProperty(navigator, "wakeLock", { value: { request: async () => { probe.locks++; return { release: async () => { probe.locks--; } }; } } });
@@ -110,7 +123,11 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
     creating.resolve();
     await page.waitForFunction(() => localStorage.getItem("voice:tester") === "voice-1");
     expect({ created, calls, mics: (await probe()).mics }).toEqual({ created: [{ agent: "main" }], calls: [], mics: 0 });
+    listing = Promise.withResolvers(); // Until its agents load, the orb cannot start the call: they decide its voice.
     await page.goBack();
+    expect(await page.getByRole("button", { name: "Start voice call", exact: true }).isDisabled()).toBe(true);
+    listing.resolve();
+    listing = undefined;
     await page.getByRole("button", { name: "Start voice call", exact: true }).click(); // The created conversation stayed.
     await live();
     expect(created).toHaveLength(1);
