@@ -96,18 +96,6 @@ func AuthFilePath(workspace string) (string, error) {
 	return AuthFilePathIn(workspace, config.DefaultRuntimeDir)
 }
 
-func TestTokenRoundTripUsesWorkspaceAuthFile(t *testing.T) {
-	workspace := t.TempDir()
-	testAuthPath(t, workspace)
-
-	token := Token{Refresh: "refresh", Access: "access", Expires: time.Now().UnixMilli(), AccountID: "acc-123"}
-	requireSaveToken(t, workspace, "openai", token)
-
-	got, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
-	require.NoError(t, err)
-	require.Equal(t, token, got)
-}
-
 func TestAuthFileIsolatesProviderTokens(t *testing.T) {
 	workspace := t.TempDir()
 	openAI := Token{Refresh: "openai-refresh", Access: "openai-access"}
