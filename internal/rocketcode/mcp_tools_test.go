@@ -250,19 +250,8 @@ func TestCustomToolsAreCodeModeOnlyInsideExecute(t *testing.T) {
 
 	assert.True(t, sawNested, "expected nested ask_user_question diagnostic")
 
-	// The nested call and its result are saved in the turn trace under the execute call.
-	require.Len(t, observations.trace, 2)
-
-	var (
-		call   hostCallTrace
-		answer hostResultTrace
-	)
-
-	require.NoError(t, json.Unmarshal(observations.trace[0], &call))
-	require.NoError(t, json.Unmarshal(observations.trace[1], &answer))
-	assert.Equal(t, hostCallTrace{Type: "function_call", CallID: call.CallID, ParentCallID: "exec-1", Name: "ask_user_question", Arguments: `{"question":"ship it?"}`}, call)
-	assert.Equal(t, hostResultTrace{Type: "function_call_output", CallID: call.CallID, ParentCallID: "exec-1", Output: "answer:ship it?"}, answer)
-	assert.NotEmpty(t, call.CallID)
+	// Only the script's own result is kept; calls made inside it are never saved with the turn.
+	assert.Empty(t, observations.trace)
 }
 
 func TestCodeModeHostToolsIncludesBashWhenAllowed(t *testing.T) {
@@ -1133,7 +1122,6 @@ func TestExecuteReplaysRecordedHostCalls(t *testing.T) {
 	_, _ = execute(drainScript)
 
 	require.Equal(t, []string{`drain{"text":"x"}`}, calls)
-	require.NoError(t, journal.SaveTraceCalls()[len(journal.SaveTraceCalls())-1].Ctx.Err(), "a completed host call persists its trace through shutdown")
 
 	calls, base = nil, t.Context()
 

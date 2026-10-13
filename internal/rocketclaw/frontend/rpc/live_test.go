@@ -460,7 +460,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "chat", Agent: "main", CreatedBy: "alice"}))
 
 	for _, id := range []string{"retained-upload", "boundary-upload", "hidden-upload"} {
-		require.NoError(t, rt.Sessions.SaveAttachment(ctx, "chat", &protocol.OutboundAttachment{ID: id, Name: id + ".txt", MIMEType: "text/plain", Data: []byte(id + " bytes")}, true))
+		require.NoError(t, rt.Sessions.SaveAttachment(ctx, "chat", "", &protocol.OutboundAttachment{ID: id, Name: id + ".txt", MIMEType: "text/plain", Data: []byte(id + " bytes")}, true))
 	}
 
 	_, err = rt.Sessions.AppendEntryID(ctx, "chat", &rocketcode.SessionEntry{Type: "turn", TurnID: "old", ReplayInput: []json.RawMessage{

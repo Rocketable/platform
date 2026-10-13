@@ -102,7 +102,7 @@ func TestAttachmentStorage(t *testing.T) {
 			for i := range 8 {
 				writers.Go(func() error {
 					attachment := protocol.OutboundAttachment{ID: "shared", Name: strconv.Itoa(i), Data: bytes.Repeat([]byte{byte(i)}, i+1)}
-					return service.SaveAttachment(t.Context(), "producer", &attachment, true)
+					return service.SaveAttachment(t.Context(), "producer", "", &attachment, true)
 				})
 			}
 
@@ -112,7 +112,7 @@ func TestAttachmentStorage(t *testing.T) {
 			require.Equal(t, strconv.Itoa(int(stored.Data[0])), stored.Name)
 			require.Equal(t, int64(len(stored.Data)), stored.Size)
 			require.Equal(t, bytes.Repeat(stored.Data[:1], int(stored.Data[0])+1), stored.Data)
-			require.NoError(t, service.SaveAttachment(t.Context(), "other", &protocol.OutboundAttachment{ID: "shared", Name: "changed", Data: []byte("changed")}, false))
+			require.NoError(t, service.SaveAttachment(t.Context(), "other", "", &protocol.OutboundAttachment{ID: "shared", Name: "changed", Data: []byte("changed")}, false))
 			again, err := service.LoadAttachment(t.Context(), "producer", "shared", true)
 			require.NoError(t, err)
 			require.Equal(t, stored, again)
@@ -122,7 +122,7 @@ func TestAttachmentStorage(t *testing.T) {
 			// An earlier storage success followed by a failed DB commit leaves an orphan,
 			// which must never be paired with this new name, scope, size, or upload flag.
 			require.NoError(t, service.attachments.Put(t.Context(), "orphan", []byte("original")))
-			err = service.SaveAttachment(t.Context(), "producer", &protocol.OutboundAttachment{ID: "orphan", Name: "replacement", Data: []byte("different")}, true)
+			err = service.SaveAttachment(t.Context(), "producer", "", &protocol.OutboundAttachment{ID: "orphan", Name: "replacement", Data: []byte("different")}, true)
 			require.Error(t, err)
 
 			if driver == config.S3Attachments {

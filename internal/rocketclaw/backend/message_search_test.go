@@ -48,7 +48,7 @@ WHERE conversation_id = $1 ORDER BY entry_id NULLS FIRST, replay_index, part_ind
 func uploadTestAttachment(t *testing.T, s *SessionService, conversationID, id string) string {
 	t.Helper()
 
-	require.NoError(t, s.SaveAttachment(t.Context(), conversationID, &protocol.OutboundAttachment{ID: id, Name: "notes.txt", MIMEType: "text/plain", Data: []byte("notes")}, true))
+	require.NoError(t, s.SaveAttachment(t.Context(), conversationID, "", &protocol.OutboundAttachment{ID: id, Name: "notes.txt", MIMEType: "text/plain", Data: []byte("notes")}, true))
 
 	return fmt.Sprintf(`attachment:%s "notes.txt" (workspace path "artifacts/uploads/%s/notes.txt")`, id, id)
 }

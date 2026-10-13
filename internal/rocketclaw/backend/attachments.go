@@ -17,7 +17,8 @@ import (
 )
 
 // SaveAttachment stores immutable original bytes before publishing a reference.
-func (s *SessionService) SaveAttachment(ctx context.Context, conversationID string, attachment *protocol.OutboundAttachment, upload bool) error {
+// turnID names the turn whose final reply sends the file, or is empty.
+func (s *SessionService) SaveAttachment(ctx context.Context, conversationID, turnID string, attachment *protocol.OutboundAttachment, upload bool) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin attachment: %w", err)
@@ -26,7 +27,7 @@ func (s *SessionService) SaveAttachment(ctx context.Context, conversationID stri
 
 	var id string
 
-	err = tx.QueryRowContext(ctx, `INSERT INTO attachments (id, conversation_id, name, mime_type, size, original_unverified, upload) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING RETURNING id`, attachment.ID, conversationID, attachment.Name, attachment.MIMEType, len(attachment.Data), attachment.OriginalUnverified, upload).Scan(&id)
+	err = tx.QueryRowContext(ctx, `INSERT INTO attachments (id, conversation_id, name, mime_type, size, original_unverified, upload, turn_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING RETURNING id`, attachment.ID, conversationID, attachment.Name, attachment.MIMEType, len(attachment.Data), attachment.OriginalUnverified, upload, turnID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -87,6 +88,18 @@ func (s *SessionService) AttachmentMetadata(ctx context.Context, conversationID,
 	}
 
 	return attachment, nil
+}
+
+// TurnAttachments returns, in the order they were attached, the files turnID's final reply sends.
+func (s *SessionService) TurnAttachments(ctx context.Context, conversationID, turnID string) ([]protocol.OutboundAttachment, error) {
+	return queryRows(ctx, s.db, `SELECT id, name, mime_type, size, original_unverified FROM attachments WHERE conversation_id = $1 AND turn_id = $2 ORDER BY seq`, "turn attachments", func(row rowScanner) (protocol.OutboundAttachment, error) {
+		var attachment protocol.OutboundAttachment
+		if err := row.Scan(&attachment.ID, &attachment.Name, &attachment.MIMEType, &attachment.Size, &attachment.OriginalUnverified); err != nil {
+			return protocol.OutboundAttachment{}, fmt.Errorf("scan turn attachment: %w", err)
+		}
+
+		return attachment, nil
+	}, conversationID, turnID)
 }
 
 // InputAttachments returns producer's input text without its trailing upload
@@ -218,7 +231,7 @@ func (s *SessionService) ReplayAttachments(ctx context.Context, conversationID s
 			}
 
 			attachment.ID, attachment.OriginalUnverified = id, true
-			if err := s.SaveAttachment(ctx, conversationID, &attachment, false); err != nil {
+			if err := s.SaveAttachment(ctx, conversationID, "", &attachment, false); err != nil {
 				return nil, err
 			}
 

@@ -486,9 +486,6 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 			json.RawMessage(`{"type":"reasoning","summary":[{"type":"summary_text","text":"thinking"}],"content":[{"type":"reasoning_text","text":"plaintext"}],"encrypted_content":"sealed"}`),
 			json.RawMessage(`{"type":"web_search_call","id":"search","status":"completed","action":{"type":"search","query":"query"}}`),
 			json.RawMessage(`{"type":"unknown_provider_item","encrypted_content":"sealed"}`),
-			// A call made inside an execute script, saved by RocketCode beside the replay.
-			json.RawMessage(`{"type":"function_call","call_id":"script/host/1","parent_call_id":"script","name":"rocketclaw_get_tags","arguments":"{}"}`),
-			json.RawMessage(`{"type":"function_call_output","call_id":"script/host/1","parent_call_id":"script","output":"{\"tags\":[]}"}`),
 		},
 	}
 	// A synced producer schedule stores untyped bookkeeping, not a replay message, in its trace.
@@ -538,7 +535,7 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 		require.NoError(t, err)
 
 		at := entry.Timestamp.Format(time.RFC3339Nano)
-		require.Equal(t, "timestamp\trole\tcontent\n"+at+"\ttool_call\tRead [call] {}\n"+at+"\ttool_result\t[call] line\\nΩ\\t\\\\\\r\n"+at+"\ttool_result\t[parts] text\\n[non-text tool result omitted]\n"+at+"\tuser\t\n"+at+"\treasoning\tthinking\\nplaintext\n"+at+"\tevent\t[web_search_call: stored event not rendered]\n"+at+"\tevent\t[unknown_provider_item: stored event not rendered]\n"+at+"\ttool_call\trocketclaw_get_tags [script/host/1] {}\n"+at+"\ttool_result\t[script/host/1] {\"tags\":[]}\n"+at+"\tevent\t[producer_schedule: stored event not rendered]\n", result.Output)
+		require.Equal(t, "timestamp\trole\tcontent\n"+at+"\ttool_call\tRead [call] {}\n"+at+"\ttool_result\t[call] line\\nΩ\\t\\\\\\r\n"+at+"\ttool_result\t[parts] text\\n[non-text tool result omitted]\n"+at+"\tuser\t\n"+at+"\treasoning\tthinking\\nplaintext\n"+at+"\tevent\t[web_search_call: stored event not rendered]\n"+at+"\tevent\t[unknown_provider_item: stored event not rendered]\n"+at+"\tevent\t[producer_schedule: stored event not rendered]\n", result.Output)
 	}
 
 	require.Equal(t, before, snapshot())
@@ -803,23 +800,13 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			require.Equal(t, tc.auto, approvals > 0)
 			require.Equal(t, tc.auto, listApprovals > 0)
 
-			// Calls made inside execute are saved with the turn, under their execute call.
-			var saved []string
-
+			// Calls made inside execute are never saved with the turn.
 			for _, entry := range store.entries {
 				for _, raw := range entry.OutputTrace {
-					var call struct {
-						Type, Name   string
-						ParentCallID string `json:"parent_call_id"`
-					}
-					if json.Unmarshal(raw, &call) == nil && call.Type == "function_call" && call.ParentCallID != "" {
-						saved = append(saved, call.Name)
-					}
+					require.NotContains(t, string(raw), `"parent_call_id"`)
 				}
 			}
 
-			require.Equal(t, tc.list, slices.Contains(saved, listSessionsToolName))
-			require.Equal(t, tc.get, slices.Contains(saved, getSessionToolName))
 			require.True(t, turnPairBusy(service, "external_mcp:private"))
 		})
 	}
