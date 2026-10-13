@@ -9,6 +9,13 @@ import (
 )
 
 func TestInboundAttachmentCopy(t *testing.T) {
+	for _, empty := range [][]InboundAttachment{nil, {}} {
+		content := InboundContent{Attachments: empty}
+		inbound := NewInboundMessageFromContent(SourceSlack, InboundKindPrompt, &content, true)
+		require.Nil(t, inbound.Attachments, "both empty inputs keep the same nil output")
+		require.Zero(t, inbound.AttachmentPresence)
+	}
+
 	content := InboundContent{Attachments: []InboundAttachment{
 		{Name: "one.png", MIMEType: "image/png", Data: []byte("one")},
 		{Name: "two.png", MIMEType: "image/png", Data: []byte("two")},

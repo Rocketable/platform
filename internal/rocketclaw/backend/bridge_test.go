@@ -1154,8 +1154,16 @@ func TestNewConversationKeepsInjectedSessionService(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()
 
-	bridge := NewConversation(new(config.LockedConfig), bus, &Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
+	input := Config{ConversationID: "  slack-thread:C123:111.222  ", Agent: "  main  ", ManagedConversationID: "  managed  ", ExternalConversationID: "  external  ", RequestRestart: testNoopRestart, RequestReload: testNoopRestart, UserQuestionAsker: &webQuestions{store: service, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}, StartNewThread: testNoopStartNewThread, SessionService: service}
+	bridge := NewConversation(new(config.LockedConfig), bus, &input, slog.New(slog.DiscardHandler))
 	assert.Same(t, service, bridge.config.SessionService)
+	assert.Equal(t, "slack-thread:C123:111.222", bridge.config.ConversationID)
+	assert.Equal(t, "main", bridge.config.Agent)
+	assert.Equal(t, "managed", bridge.config.ManagedConversationID)
+	assert.Equal(t, "external", bridge.config.ExternalConversationID)
+	assert.Equal(t, "  main  ", input.Agent)
+	input.Agent = "other"
+	assert.Equal(t, "main", bridge.config.Agent, "the bridge owns its config value")
 }
 
 // A submission during shutdown is stored in the Thread Queue with its full
@@ -1588,29 +1596,31 @@ func TestAttachmentFallbackAndImageAttachments(t *testing.T) {
 
 func TestNormalizeInboundAttachmentsCentralizesModelPolicy(t *testing.T) {
 	msg := &protocol.InboundMessage{Attachments: []protocol.InboundAttachment{
-		{Name: "tiny.png", MIMEType: "application/octet-stream", Data: tinyPNG()},
+		{Name: " tiny.png ", MIMEType: "application/octet-stream", Data: tinyPNG()},
 		{Name: "not-image.png", MIMEType: "image/png", Data: []byte("not an image")},
 		{Name: "empty.png", MIMEType: "image/png"},
+		{Name: "photo.jpg", MIMEType: " Image/PNG; Charset=UTF-8 "},
+		{Name: "photo.jpg", MIMEType: " "},
+		{Name: "photo", MIMEType: " "},
+		{Name: " ", MIMEType: "image/png"},
+		{Name: "second.png", MIMEType: "image/jpeg", Data: tinyPNG()},
 	}}
 
 	normalizeInboundAttachments(msg)
 
-	require.Len(t, msg.Attachments, 1)
 	assert.Equal(t, protocol.AttachmentPresenceImages, msg.AttachmentPresence)
-	assert.Equal(t, "tiny.png", msg.Attachments[0].Name)
-	assert.Equal(t, "image/png", msg.Attachments[0].MIMEType)
-	assert.Equal(t, tinyPNG(), msg.Attachments[0].Data)
+	assert.Equal(t, []protocol.InboundAttachment{
+		{Name: "tiny.png", MIMEType: "image/png", Data: tinyPNG()},
+		{Name: "second.png", MIMEType: "image/png", Data: tinyPNG()},
+	}, msg.Attachments)
 	assert.Equal(t, []string{
 		"Skipped attachment not-image.png because text/plain is not supported.",
 		"Skipped attachment empty.png because it was empty.",
+		"Skipped attachment photo.jpg because it was empty.",
+		"Skipped attachment photo.jpg because it was empty.",
+		"Skipped attachment photo because it was empty.",
+		"Skipped attachment attachment-7 because it was empty.",
 	}, msg.AttachmentWarnings)
-}
-
-func TestModelAttachmentMIMETypePrecedence(t *testing.T) {
-	assert.Equal(t, "text/plain", modelAttachmentMIMEType([]byte("plain text"), "image/png", "photo.png"))
-	assert.Equal(t, "image/png", modelAttachmentMIMEType(nil, " Image/PNG; Charset=UTF-8 ", "photo.jpg"))
-	assert.Equal(t, "image/jpeg", modelAttachmentMIMEType(nil, " ", "photo.jpg"))
-	assert.Empty(t, modelAttachmentMIMEType(nil, " ", "photo"))
 }
 
 func TestNormalizeInboundAttachmentsRejectsAttachmentsTooLargeToReduce(t *testing.T) {
@@ -1725,6 +1735,25 @@ func TestFitInboundImageWithinLimitFallsBackToJPEG(t *testing.T) {
 	cfg := decodeAttachmentTestImageConfig(t, transformed)
 	assert.NotZero(t, cfg.Width)
 	assert.NotZero(t, cfg.Height)
+
+	oversized := encodeAttachmentTestPNG(t, newAttachmentTestImage(65536, 1), png.NoCompression)
+	transformed, transformedMIMEType, changed, err = fitInboundImageWithinLimit("image/webp", oversized, 1)
+	assert.Nil(t, transformed)
+	assert.Empty(t, transformedMIMEType)
+	assert.False(t, changed)
+	require.ErrorIs(t, err, errInboundAttachmentReductionFailed)
+
+	errJPEGText := "jpeg: image is too large to encode"
+	require.EqualError(t, err, errInboundAttachmentReductionFailed.Error()+": "+strings.Repeat("encode jpeg: ", 2)+errJPEGText)
+	chain, ok := errors.AsType[interface {
+		Error() string
+		Unwrap() []error
+	}](err)
+	require.True(t, ok)
+	require.Len(t, chain.Unwrap(), 2)
+	assert.Same(t, errInboundAttachmentReductionFailed, chain.Unwrap()[0])
+	require.EqualError(t, chain.Unwrap()[1], "encode jpeg: "+errJPEGText)
+	require.EqualError(t, errors.Unwrap(chain.Unwrap()[1]), errJPEGText)
 }
 
 func TestFitInboundImageWithinLimitReportsDecodeFailure(t *testing.T) {
@@ -2081,6 +2110,7 @@ func TestBridgeQueuesWebWorkflowInsteadOfSteering(t *testing.T) {
 }
 
 func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
+	assert.Equal(t, "[System]", provenanceHeader(promptProvenance{origin: " \t\n ", media: " \n "}))
 	assert.Equal(t, "[ExternalMCP principal=\"Alice [ops]=lead\" additional_instructions=\"line \\\"one\\\"\\nnext\"]", provenanceHeader(promptProvenance{origin: "ExternalMCP", media: "Text", principal: " Alice [ops]=lead ", additionalInstructions: "line \"one\"\nnext"}))
 	assert.Equal(t, `[Slack principal="a\"b\\c"]`, provenanceHeader(promptProvenance{origin: "Slack", media: "Text", principal: "a\"b\\c"}))
 	assert.Equal(t, "[Slack]", provenanceHeader(promptProvenance{origin: "Slack", media: "Text", principal: "   "}))
@@ -4314,7 +4344,9 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 	assert.Equal(t, 3, outbound.GoalMaxTurns)
 
 	inbound.GoalAction = protocol.GoalActionContinue
-	_, _, err := store.AccountGoalTurn("thread-1")
+
+	seedActiveTurn(t, store, "thread-1", "turn-2", nil)
+	_, err := store.finishTurn(t.Context(), "turn-2", &turnFinish{store: newSessionStore("thread-1", store), accountGoal: true, outbound: outbound})
 	require.NoError(t, err)
 
 	outbound = bridge.newOutboundMessage(inbound, "turn-3", "reply", false)
@@ -4331,7 +4363,9 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 	assert.Equal(t, 3, outbound.GoalMaxTurns)
 
 	inbound.GoalAction = protocol.GoalActionContinue
-	_, _, err = store.AccountGoalTurn("thread-1")
+
+	seedActiveTurn(t, store, "thread-1", "turn-3", nil)
+	_, err = store.finishTurn(t.Context(), "turn-3", &turnFinish{store: newSessionStore("thread-1", store), accountGoal: true, outbound: outbound})
 	require.NoError(t, err)
 
 	outbound = bridge.newOutboundMessage(inbound, "turn-4b", "reply", false)

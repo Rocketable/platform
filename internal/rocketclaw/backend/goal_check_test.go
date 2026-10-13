@@ -73,6 +73,20 @@ func TestValidateGoalCheckScriptRejectsUnsafeShapes(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+
+	_, err := validateGoalCheckScript(root, workspace, `./missing.sh "$(./banana.sh)"`, permission)
+	require.ErrorContains(t, err, "goal check script")
+	require.NotContains(t, err.Error(), "stat goal check executable", "all arguments are validated before filesystem access")
+
+	for _, test := range []struct {
+		script, message string
+	}{
+		{"FOO=bar", "goal check script must not set environment assignments"},
+		{"# no command", "goal check script must be exactly one command"},
+	} {
+		_, err := validateGoalCheckScript(root, workspace, test.script, permission)
+		require.EqualError(t, err, test.message)
+	}
 }
 
 func TestValidateGoalCheckScriptRequiresWorkspaceExecutable(t *testing.T) {

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -197,19 +198,34 @@ func TestLoadRejectsSecretThatIsNotAnObject(t *testing.T) {
 }
 
 func TestLoadRejectsMalformedAWSObject(t *testing.T) {
-	local := `{
+	for _, tt := range []struct {
+		name, ref, arn, key string
+	}{
+		{name: "non-object", ref: `"nope"`},
+		{name: "null", ref: `null`},
+		{name: "missing ARN", ref: `{"key":"token"}`, key: "token"},
+		{name: "missing key", ref: `{"arn":"` + otherARN + `"}`, arn: otherARN},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			local := `{
 	  "workspace": ".",
 	  "openai": {"api_key": "test-key"},
 	  "slack": {
-	    "bot_token": {"aws": "nope"},
+	    "bot_token": {"aws": ` + tt.ref + `},
 	    "app_token": "xapp-test",
 	    "channels": [{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]
 	  }
 	}`
-	path := filepath.Join(t.TempDir(), "rocketclaw.json")
-	require.NoError(t, os.WriteFile(path, []byte(local), 0o600))
-	_, err := Load(path, "", mapSecrets{})
-	require.ErrorIs(t, err, errInvalidAWSRef)
+			path := filepath.Join(t.TempDir(), "rocketclaw.json")
+			require.NoError(t, os.WriteFile(path, []byte(local), 0o600))
+			_, err := Load(path, "", mapSecrets{})
+			require.ErrorIs(t, err, errInvalidAWSRef)
+			errFetch, ok := errors.AsType[*SecretFetchError](err)
+			require.True(t, ok)
+			assert.Equal(t, tt.arn, errFetch.ARN)
+			assert.Equal(t, tt.key, errFetch.Key)
+		})
+	}
 }
 
 func TestDecodeObjectRejectsArray(t *testing.T) {

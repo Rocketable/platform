@@ -563,7 +563,7 @@ func TestScanScheduledUsesLatestDefinitionAndPersistsState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m.now = func() time.Time { return start.Add(time.Second) }
+	m.now = func() time.Time { return start.Add(10 * time.Second) }
 
 	if err := m.scanScheduled(t.Context()); err != nil {
 		t.Fatal(err)
@@ -577,6 +577,12 @@ func TestScanScheduledUsesLatestDefinitionAndPersistsState(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("scheduled cronjob did not run")
 	}
+
+	m.wg.Wait()
+
+	triggers, err := store.DueCronSchedules(start.Add(time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, []backend.CronScheduleState{{ScheduleID: "cron/daily.md#0#1s", RelativePath: "cron/daily.md", NextDue: start.Add(11 * time.Second)}}, triggers)
 }
 
 func TestScanScheduledInvalidLiveChannelRunsNothingUntilRepaired(t *testing.T) {
@@ -691,6 +697,8 @@ func TestPreparePromptInstructionCases(t *testing.T) {
 	}{
 		{name: "empty", body: "", want: cronReplyInstruction},
 		{name: "trailing newline", body: "Body\n", want: "Body\n\n" + cronReplyInstruction},
+		{name: "several trailing newlines", body: "Body\n\n\n", want: "Body\n\n\n\n" + cronReplyInstruction},
+		{name: "CRLF", body: "Body\r\n", want: "Body\r\n\n" + cronReplyInstruction},
 		{name: "plain", body: "Body", want: "Body\n\n" + cronReplyInstruction},
 	}
 
@@ -713,6 +721,7 @@ func TestLoadDefinitionRejectsInvalidFrontmatter(t *testing.T) {
 		{name: "missing closing delimiter", data: "---\nschedule: 1h\nbody", want: "yaml frontmatter closing delimiter is required"},
 		{name: "invalid yaml", data: "---\nschedule: [\n---\nbody", want: "unmarshal frontmatter yaml"},
 		{name: "missing schedule", data: "---\nagent: main\nchannel: '#ops'\n---\nbody", want: "schedule is required"},
+		{name: "null schedule", data: "---\nschedule: null\nchannel: '#ops'\n---\nbody", want: "schedule is required"},
 		{name: "invalid schedule list item", data: "---\nschedule:\n  - 1h\n  - 3\nchannel: '#ops'\n---\nbody", want: "schedule must be a string or list of strings"},
 		{name: "invalid schedule scalar", data: "---\nschedule: 123\nchannel: '#ops'\n---\nbody", want: "schedule must be a string or list of strings"},
 		{name: "blank duration", data: "---\nschedule: ''\nchannel: '#ops'\n---\nbody", want: "schedule must not be blank"},
@@ -744,6 +753,11 @@ func TestLoadDefinitionLeavesNonStringAgentForValidation(t *testing.T) {
 }
 
 func TestLoadDefinitionDefaultsBlankAgent(t *testing.T) {
+	defEmpty, err := loadDefinition([]byte("---\nschedule: []\nchannel: '#ops'\n---\nBody"), "cron/test.md")
+	require.NoError(t, err)
+	require.NotNil(t, defEmpty.schedules)
+	require.Empty(t, defEmpty.schedules)
+
 	def, err := loadDefinition([]byte("---\nschedule: 1h\nagent: '  \t  '\nchannel: '  #ops  '\n---\nBody"), "cron/test.md")
 	if err != nil {
 		t.Fatal(err)

@@ -2,6 +2,7 @@
 package skel
 
 import (
+	"cmp"
 	"embed"
 	"errors"
 	"fmt"
@@ -41,10 +42,7 @@ var payload embed.FS
 
 // SyncInWithOverlays materializes embedded setup files, configured git overlays, and local overlays into runtimeDir.
 func SyncInWithOverlays(workspace, runtimeDir string, overlays []string, logger *slog.Logger) error {
-	entries, err := fs.ReadDir(payload, ".")
-	if err != nil {
-		return fmt.Errorf("read embedded root setup files: %w", err)
-	}
+	entries, _ := fs.ReadDir(payload, ".") // The embedded root always exists.
 
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -67,10 +65,7 @@ func SyncInWithOverlays(workspace, runtimeDir string, overlays []string, logger 
 			return fmt.Errorf("stat root setup path %s: %w", dst, err)
 		}
 
-		data, err := fs.ReadFile(payload, name)
-		if err != nil {
-			return fmt.Errorf("read embedded root setup file %s: %w", name, err)
-		}
+		data, _ := fs.ReadFile(payload, name) // Enumerated regular files in an immutable embed.FS.
 
 		if err := os.WriteFile(dst, data, embeddedFileMode(name)); err != nil {
 			return fmt.Errorf("write root setup file %s: %w", dst, err)
@@ -252,10 +247,7 @@ func syncWorkspaceScriptSymlinks(workspace, runtimeDir string, logger *slog.Logg
 			return nil
 		}
 
-		rel, err := filepath.Rel(runtimeScripts, path)
-		if err != nil {
-			return fmt.Errorf("compute runtime script relative path %s: %w", path, err)
-		}
+		rel, _ := filepath.Rel(runtimeScripts, path)
 
 		dst := filepath.Join(workspaceScripts, rel)
 		if info, err := os.Lstat(dst); err == nil {
@@ -283,10 +275,7 @@ func syncWorkspaceScriptSymlinks(workspace, runtimeDir string, logger *slog.Logg
 			return fmt.Errorf("create workspace script symlink %s: %w", dst, err)
 		}
 
-		workspaceRel, err := filepath.Rel(workspace, dst)
-		if err != nil {
-			return fmt.Errorf("compute workspace script path %s: %w", dst, err)
-		}
+		workspaceRel, _ := filepath.Rel(workspace, dst)
 
 		generated = append(generated, filepath.ToSlash(workspaceRel))
 
@@ -371,17 +360,7 @@ func syncScriptSymlinkGitExclude(workspace string, generated []string, logger *s
 			content += "\n"
 		}
 
-		var block strings.Builder
-		block.WriteString(scriptSymlinkExcludeBegin + "\n")
-
-		for _, path := range generated {
-			block.WriteByte('/')
-			block.WriteString(path)
-			block.WriteByte('\n')
-		}
-
-		block.WriteString(scriptSymlinkExcludeEnd + "\n")
-		content += block.String()
+		content += scriptSymlinkExcludeBegin + "\n/" + strings.Join(generated, "\n/") + "\n" + scriptSymlinkExcludeEnd + "\n"
 	}
 
 	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
@@ -514,7 +493,16 @@ func overlayInfosIn(target string, overlays []string) []OverlayInfo {
 	for _, spec := range overlays {
 		spec = strings.TrimSpace(spec)
 
-		url, ref := parseGitOverlaySpec(spec)
+		url, ref := spec, ""
+		if i := strings.LastIndex(spec, "@"); i > 0 && !strings.Contains(spec[i+1:], "/") && strings.Contains(spec[:i], "/") {
+			url, ref = spec[:i], strings.TrimSpace(spec[i+1:])
+		}
+
+		url = strings.TrimSpace(url)
+		if !strings.Contains(url, "://") && !strings.HasPrefix(url, "git@") && !filepath.IsAbs(url) && !strings.HasPrefix(url, "./") && !strings.HasPrefix(url, "../") && strings.Contains(url, "/") {
+			url = "https://" + url
+		}
+
 		if url == "" {
 			continue
 		}
@@ -574,10 +562,6 @@ func reconcileGitOverlays(target string, overlays []OverlayInfo, logger *slog.Lo
 }
 
 func applyGitOverlay(target string, overlay OverlayInfo, logger *slog.Logger) error {
-	if overlay.URL == "" {
-		return errors.New("overlay repository is required")
-	}
-
 	if err := os.RemoveAll(overlay.ClonePath); err != nil {
 		return fmt.Errorf("clean configured overlay clone %s: %w", overlay.ClonePath, err)
 	}
@@ -597,10 +581,7 @@ func applyGitOverlay(target string, overlay OverlayInfo, logger *slog.Logger) er
 		}
 	}
 
-	fetchRef := overlay.Ref
-	if fetchRef == "" {
-		fetchRef = "HEAD"
-	}
+	fetchRef := cmp.Or(overlay.Ref, "HEAD")
 
 	if err := runGit(overlay.ClonePath, "fetch", "--depth=1", "--filter=blob:none", "origin", fetchRef); err != nil {
 		return err
@@ -627,64 +608,17 @@ func applyGitOverlay(target string, overlay OverlayInfo, logger *slog.Logger) er
 	return nil
 }
 
-func parseGitOverlaySpec(spec string) (url, ref string) {
-	spec = strings.TrimSpace(spec)
-	if i := strings.LastIndex(spec, "@"); i > 0 && !strings.Contains(spec[i+1:], "/") && strings.Contains(spec[:i], "/") {
-		return normalizeGitOverlayURL(spec[:i]), strings.TrimSpace(spec[i+1:])
-	}
-
-	return normalizeGitOverlayURL(spec), ""
-}
-
-func normalizeGitOverlayURL(url string) string {
-	url = strings.TrimSpace(url)
-	if strings.Contains(url, "://") || strings.HasPrefix(url, "git@") {
-		return url
-	}
-
-	if filepath.IsAbs(url) || strings.HasPrefix(url, "./") || strings.HasPrefix(url, "../") {
-		return url
-	}
-
-	if strings.Contains(url, "/") {
-		return "https://" + url
-	}
-
-	return url
-}
-
 func gitOverlaySlug(url, ref string) string {
 	value := strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(url, "https://"), "ssh://"), ".git")
 	if ref != "" {
 		value += "-" + ref
 	}
 
-	var slug strings.Builder
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '.' && r != '_'
+	})
 
-	lastHyphen := false
-
-	for _, r := range value {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '.' || r == '_' {
-			slug.WriteRune(r)
-
-			lastHyphen = false
-
-			continue
-		}
-
-		if !lastHyphen {
-			slug.WriteByte('-')
-
-			lastHyphen = true
-		}
-	}
-
-	result := strings.Trim(slug.String(), "-")
-	if result == "" {
-		return "overlay"
-	}
-
-	return result
+	return cmp.Or(strings.Join(parts, "-"), "overlay")
 }
 
 func runGit(dir string, args ...string) error {
@@ -760,11 +694,9 @@ func syncFSFiltered(src fs.FS, root, target, message string, logger *slog.Logger
 			return nil
 		}
 
-		rel := relativePath(root, name)
-
 		dst := target
-		if rel != "." {
-			dst = filepath.Join(target, filepath.FromSlash(rel))
+		if name != root {
+			dst = filepath.Join(target, filepath.FromSlash(strings.TrimPrefix(name, root+"/")))
 		}
 
 		if d.IsDir() {
@@ -823,18 +755,6 @@ func syncFSFiltered(src fs.FS, root, target, message string, logger *slog.Logger
 	}
 
 	return nil
-}
-
-func relativePath(root, name string) string {
-	if name == root {
-		return "."
-	}
-
-	if root == "." {
-		return name
-	}
-
-	return strings.TrimPrefix(name, root+"/")
 }
 
 func embeddedFileMode(name string) os.FileMode {

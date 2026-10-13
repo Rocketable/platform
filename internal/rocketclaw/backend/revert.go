@@ -173,15 +173,9 @@ func stageRevertDB(ctx context.Context, db stateStoreDB, conversationID, before 
 		}
 	}
 
-	items, err := rocketcode.ReplayInputToParams(entry.Entry.ReplayInput[index : index+1])
-	if err != nil {
-		return "", "", fmt.Errorf("decode reverted request: %w", err)
-	}
-
+	// revertBoundary already decoded and projected this same, unchanged user item.
+	items, _ := rocketcode.ReplayInputToParams(entry.Entry.ReplayInput[index : index+1])
 	_, text, _, err := ReplayInputMessageRoleText(&items[0], entry.Entry.ReplayInput[index])
-	if err != nil {
-		return "", "", err
-	}
 	// Goal replay includes generated steering instructions. Its existing durable
 	// owner keeps the editable command and the exact admission identity.
 	var goalPrompt string
@@ -198,7 +192,7 @@ func stageRevertDB(ctx context.Context, db stateStoreDB, conversationID, before 
 		return "", "", fmt.Errorf("stage revert: %w", err)
 	}
 
-	return before, text, nil
+	return before, text, err
 }
 
 // commitRevertDB is called only inside prepared durable admission's transaction.
@@ -551,10 +545,8 @@ func (r *Runtime) mutateWebQueue(ctx context.Context, conversationID, id string,
 	}
 
 	var marker string
-
-	err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT revert_message_id FROM managed_conversations WHERE conversation_id = $1), '')`, conversationID).Scan(&marker)
-	if err != nil {
-		return false, fmt.Errorf("read queue mutation cutoff: %w", err)
+	if err := queryScalar(ctx, tx, "read queue mutation cutoff", `SELECT COALESCE((SELECT revert_message_id FROM managed_conversations WHERE conversation_id = $1), '')`, &marker, conversationID); err != nil {
+		return false, err
 	}
 
 	if marker != "" {
@@ -668,10 +660,8 @@ func (r *Runtime) admitWeb(ctx context.Context, b *Bridge, request *bridgeReques
 	}
 
 	var marker string
-
-	err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT revert_message_id FROM managed_conversations WHERE conversation_id = $1), '')`, inbound.ConversationID).Scan(&marker)
-	if err != nil {
-		return false, fmt.Errorf("read admission cutoff: %w", err)
+	if err := queryScalar(ctx, tx, "read admission cutoff", `SELECT COALESCE((SELECT revert_message_id FROM managed_conversations WHERE conversation_id = $1), '')`, &marker, inbound.ConversationID); err != nil {
+		return false, err
 	}
 
 	if marker != "" {
@@ -721,8 +711,8 @@ func reconcileWebDB(ctx context.Context, db stateStoreDB, inbound *protocol.Inbo
 
 	var raw []byte
 
-	err := db.QueryRowContext(ctx, `SELECT inbound_json FROM active_turns WHERE conversation_id = $1 AND inbound_json->'Metadata'->>'web_message_id' = $2
-    UNION ALL SELECT inbound_json FROM thread_queue WHERE conversation_id = $1 AND queue_item_id = $2 LIMIT 1`, inbound.ConversationID, id).Scan(&raw)
+	err := queryScalar(ctx, db, "read admitted Web input", `SELECT inbound_json FROM active_turns WHERE conversation_id = $1 AND inbound_json->'Metadata'->>'web_message_id' = $2
+    UNION ALL SELECT inbound_json FROM thread_queue WHERE conversation_id = $1 AND queue_item_id = $2 LIMIT 1`, &raw, inbound.ConversationID, id)
 	if err == nil && raw != nil {
 		var stored protocol.InboundMessage
 		if err := json.Unmarshal(raw, &stored); err != nil {
@@ -738,7 +728,7 @@ func reconcileWebDB(ctx context.Context, db stateStoreDB, inbound *protocol.Inbo
 	}
 
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return false, fmt.Errorf("read admitted Web input: %w", err)
+		return false, err
 	}
 
 	err = db.QueryRowContext(ctx, `SELECT item::text FROM session_entries e

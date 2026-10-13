@@ -2057,6 +2057,7 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, "ran", run.Status)
 		require.Equal(t, stem, run.Stem)
 		require.Equal(t, id, run.NextRun)
+		require.Equal(t, sources[len(sources)-1-i], run.Origin)
 		require.Empty(t, run.Body)
 	}
 
@@ -2066,6 +2067,26 @@ func TestSessionEntries(t *testing.T) {
 	again, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
 	require.True(t, proto.Equal(jobs, again))
+	t.Run("cron run lists every public destination without its private execution", func(t *testing.T) {
+		const destination = "opaque-human-Y"
+		require.NoError(t, sessions.UpsertThread(destination, backend.ThreadState{Agent: "main"}))
+		source, err := sessions.ObserveEntries(ctx, sources[0])
+		require.NoError(t, err)
+		require.Len(t, source, 1)
+		copied, err := sessions.AppendEntryID(ctx, destination, &source[0].Entry)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint))::json WHERE id = $2`, source[0].ID, copied)
+		require.NoError(t, err)
+
+		listed, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+		require.NoError(t, err)
+
+		want := &ListCronJobsResponse{Jobs: append(slices.Clone(jobs.Jobs[:3]), &CronJob{Stem: "report:daily", Status: "ran", LastRun: "2026-09-05T01:00:00.000000001Z", NextRun: destination, Origin: sources[0]}, jobs.Jobs[3])}
+		require.True(t, proto.Equal(want, listed), "unexpected cron destinations: %v", listed)
+
+		_, err = sessions.DeleteSession(ctx, destination)
+		require.NoError(t, err)
+	})
 
 	// A destination's revert cutoff hides the deliveries after it; that run stays a private execution.
 	_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = $1 WHERE conversation_id = $2`, fmt.Sprintf("%d:0", observed[2].ID), id)
@@ -3330,24 +3351,6 @@ func TestSessionEntries(t *testing.T) {
 	catalog, err = invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{})
 	require.NoError(t, err)
 	require.Len(t, catalog.Agents, 3, "the unselected catalog is independent of the database")
-}
-
-func TestCronHistoryUsesStoredSourceLabelsAndDestination(t *testing.T) {
-	colon := "cron:cron/report:daily.md:20260905T010000.000000001Z:first"
-	underscore := "one-off-cron:cron/report_daily.md:20260905T020000.000000002Z:second"
-	entries := []backend.ObservedSessionEntry{{SourceConversationID: colon}, {SourceConversationID: colon}, {SourceConversationID: underscore}, {}, {SourceConversationID: "external_mcp:unrelated"}, {SourceConversationID: "cron:invalid"}, {SourceConversationID: "cron:cron/invalid.md:not-time:random"}}
-	runs := cronHistory(entries, "opaque-human-Y")
-	require.Len(t, runs, 2)
-
-	for i, want := range []*CronJob{
-		{Stem: "report:daily", Status: "ran", LastRun: "2026-09-05T01:00:00.000000001Z", NextRun: "opaque-human-Y", Origin: colon},
-		{Stem: "report_daily", Status: "ran", LastRun: "2026-09-05T02:00:00.000000002Z", NextRun: "opaque-human-Y", Origin: underscore},
-	} {
-		require.True(t, proto.Equal(want, runs[i]))
-	}
-
-	require.Empty(t, cronHistory(nil, "opaque-human-Y"))
-	require.Len(t, cronHistory([]backend.ObservedSessionEntry{{SourceConversationID: colon}, {SourceConversationID: colon + "-another-run"}}, "opaque-human-Y"), 2)
 }
 
 // withoutBackgroundJobs is a backend with no Background Jobs, nothing to move, and no pending questions.

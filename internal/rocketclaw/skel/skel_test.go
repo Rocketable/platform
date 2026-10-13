@@ -2,6 +2,8 @@ package skel
 
 import (
 	"errors"
+	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -494,9 +496,20 @@ func TestSyncInWithOverlaysTreatsGuardrailAsNormalAgent(t *testing.T) {
 }
 
 func TestSyncWorkspaceScriptSymlinksReplacesRuntimeSymlinks(t *testing.T) {
-	for _, runtimeRoot := range []string{".rocketclaw", ".femtoclaw"} {
-		t.Run(runtimeRoot, func(t *testing.T) {
+	for _, tt := range []struct {
+		runtimeRoot string
+		relative    bool
+	}{{".rocketclaw", false}, {".femtoclaw", false}, {".rocketclaw", true}} {
+		t.Run(fmt.Sprintf("%s/relative=%t", tt.runtimeRoot, tt.relative), func(t *testing.T) {
 			workspace := t.TempDir()
+
+			if tt.relative {
+				cwd, err := os.Getwd()
+				require.NoError(t, err)
+				workspace, err = filepath.Rel(cwd, workspace)
+				require.NoError(t, err)
+			}
+
 			runtimeScripts := filepath.Join(workspace, targetRoot, "scripts")
 			workspaceScripts := filepath.Join(workspace, "scripts")
 
@@ -504,7 +517,7 @@ func TestSyncWorkspaceScriptSymlinksReplacesRuntimeSymlinks(t *testing.T) {
 			require.NoError(t, os.MkdirAll(workspaceScripts, 0o755))
 			require.NoError(t, os.WriteFile(filepath.Join(runtimeScripts, "tool.sh"), []byte("runtime script"), 0o644))
 
-			staleTarget := filepath.Join("..", runtimeRoot, "scripts", "tool.sh")
+			staleTarget := filepath.Join("..", tt.runtimeRoot, "scripts", "tool.sh")
 			require.NoError(t, os.Symlink(staleTarget, filepath.Join(workspaceScripts, "tool.sh")))
 
 			require.NoError(t, syncWorkspaceScriptSymlinks(workspace, targetRoot, testLogger()))
@@ -657,7 +670,7 @@ func TestSyncWorkspaceScriptSymlinksDoesNotExcludeRegularWorkspaceScripts(t *tes
 	assert.Equal(t, "keep\n", string(data))
 }
 
-func TestParseGitOverlaySpec(t *testing.T) {
+func TestOverlayInfosParsesGitSpec(t *testing.T) {
 	for _, tt := range []struct {
 		spec, wantURL, wantRef string
 	}{
@@ -668,11 +681,17 @@ func TestParseGitOverlaySpec(t *testing.T) {
 		{spec: "https://github.com/Rocketable/alitu-cs.git@main", wantURL: "https://github.com/Rocketable/alitu-cs.git", wantRef: "main"},
 		{spec: "ssh://git@github.com/rocketable/overlay.git", wantURL: "ssh://git@github.com/rocketable/overlay.git"},
 		{spec: "ssh://git@github.com/Rocketable/alitu-cs.git@main", wantURL: "ssh://git@github.com/Rocketable/alitu-cs.git", wantRef: "main"},
+		{spec: "./overlay", wantURL: "./overlay"},
+		{spec: "../overlay", wantURL: "../overlay"},
+		{spec: "/local/overlay", wantURL: "/local/overlay"},
+		{spec: "overlay", wantURL: "overlay"},
+		{spec: "github.com/rocketable/overlay @ main ", wantURL: "https://github.com/rocketable/overlay", wantRef: "main"},
 	} {
 		t.Run(tt.spec, func(t *testing.T) {
-			gotURL, gotRef := parseGitOverlaySpec(tt.spec)
-			assert.Equal(t, tt.wantURL, gotURL)
-			assert.Equal(t, tt.wantRef, gotRef)
+			infos := OverlayInfos("workspace", targetRoot, []string{tt.spec})
+			require.Len(t, infos, 1)
+			assert.Equal(t, tt.wantURL, infos[0].URL)
+			assert.Equal(t, tt.wantRef, infos[0].Ref)
 		})
 	}
 }
@@ -686,6 +705,16 @@ func TestOverlayInfos(t *testing.T) {
 	assert.Equal(t, "https://github.com/rocketable/overlay", infos[0].URL)
 	assert.Equal(t, "main", infos[0].Ref)
 	assert.Equal(t, filepath.Join(workspace, targetRoot, "overlays", "github.com-rocketable-overlay-main"), infos[0].ClonePath)
+
+	for _, tt := range []struct {
+		url, ref, want string
+	}{
+		{"https://École.example//a+++项目.git", "--β /٢--", "École.example-a-项目-β-٢"},
+		{"---///+++", "", "overlay"},
+		{"ssh://git@EXAMPLE/a._b.git", "", "git-EXAMPLE-a._b"},
+	} {
+		assert.Equal(t, tt.want, gitOverlaySlug(tt.url, tt.ref))
+	}
 }
 
 func repoGit(t *testing.T, dir string, args ...string) {
@@ -818,7 +847,7 @@ func TestReplaceRuntimeAssetsAfterValidationCommitsFreshOverlayAndRefreshesScrip
 	assert.Equal(t, "new script", string(data))
 }
 
-func TestRelativePath(t *testing.T) {
+func TestSyncFSRootMapping(t *testing.T) {
 	tests := []struct {
 		name string
 		root string
@@ -832,7 +861,25 @@ func TestRelativePath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, relativePath(tt.root, tt.path))
+			src := fstest.MapFS{tt.path: {Data: []byte("mapped")}}
+			if tt.path == tt.root {
+				src[tt.path] = &fstest.MapFile{Mode: fs.ModeDir | 0o755}
+			}
+
+			target := filepath.Join(t.TempDir(), "target")
+			require.NoError(t, syncFSFiltered(src, tt.root, target, "test sync", testLogger(), true, false, nil))
+
+			if tt.want == "." {
+				info, err := os.Stat(target)
+				require.NoError(t, err)
+				assert.True(t, info.IsDir())
+
+				return
+			}
+
+			data, err := os.ReadFile(filepath.Join(target, filepath.FromSlash(tt.want)))
+			require.NoError(t, err)
+			assert.Equal(t, "mapped", string(data))
 		})
 	}
 }

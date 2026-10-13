@@ -175,7 +175,7 @@ func (m *threadBridgeManager) Run(ctx context.Context) error {
 // StartActiveTurns starts every conversation worker that owns an unfinished
 // active turn; each runs that turn before any other work.
 func (m *threadBridgeManager) StartActiveTurns(ctx context.Context) error {
-	workers, err := m.store.activeTurnWorkers(ctx)
+	workers, err := queryStrings(ctx, m.store.db, `SELECT DISTINCT COALESCE(NULLIF(inbound_json->>'SyncDestination', ''), conversation_id) FROM active_turns WHERE phase <> $1 ORDER BY 1`, "active turn workers", turnDone)
 	if err != nil {
 		return err
 	}
@@ -433,7 +433,7 @@ func (m *threadBridgeManager) InterruptThread(target protocol.TextConversationTa
 }
 
 func (m *threadBridgeManager) StartQueuedConversations() error {
-	conversationIDs, err := m.store.queuedConversationIDs(context.Background())
+	conversationIDs, err := queryStrings(context.Background(), m.store.db, `SELECT DISTINCT conversation_id FROM thread_queue ORDER BY conversation_id`, "queued conversation IDs")
 	if err != nil {
 		return fmt.Errorf("load queued conversations: %w", err)
 	}
@@ -562,14 +562,8 @@ func (m *threadBridgeManager) recordedBridge(conversationID string) (*Bridge, er
 
 func (m *threadBridgeManager) queueItems(conversationID string) ([]protocol.ThreadQueueItem, error) {
 	var marker string
-
-	err := m.store.db.QueryRowContext(context.Background(), `SELECT COALESCE((SELECT revert_message_id FROM managed_conversations WHERE conversation_id = $1), '')`, conversationID).Scan(&marker)
-	if err != nil {
-		return nil, fmt.Errorf("read queue cutoff: %w", err)
-	}
-
-	if marker != "" {
-		return nil, nil
+	if err := queryScalar(context.Background(), m.store.db, "read queue cutoff", `SELECT COALESCE((SELECT revert_message_id FROM managed_conversations WHERE conversation_id = $1), '')`, &marker, conversationID); err != nil || marker != "" {
+		return nil, err
 	}
 
 	items, err := m.store.ThreadQueueForConversation(conversationID)

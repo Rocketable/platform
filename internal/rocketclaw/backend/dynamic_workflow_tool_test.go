@@ -8,10 +8,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
@@ -38,22 +38,6 @@ func openWorkspaceRoot(t *testing.T, workspace string) *os.Root {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	return root
-}
-
-func TestAllowedWorkflowDescriptionsFiltersWorkflowAllow(t *testing.T) {
-	t.Parallel()
-
-	var permissions rocketcode.PermissionSet
-	require.NoError(t, permissions.Allow("workflow", "audit-routes"))
-	require.NoError(t, permissions.Allow("workflow", "secret-*"))
-	require.NoError(t, permissions.Deny("workflow", "secret-flow"))
-
-	got := allowedWorkflowDescriptions(permissions, []protocol.WorkflowDescription{
-		{Name: "audit-routes", Description: "Audit"},
-		{Name: "secret-flow", Description: "Secret"},
-		{Name: "other", Description: "Other"},
-	})
-	require.Equal(t, []protocol.WorkflowDescription{{Name: "audit-routes", Description: "Audit"}}, got)
 }
 
 func TestDynamicWorkflowToolSchemaAndCall(t *testing.T) {
@@ -83,8 +67,9 @@ def main(args): return None
 	assert.Equal(t, "workflow", tool.Permission)
 	assert.True(t, tool.Resumable)
 	assert.Equal(t, []string{"audit"}, tool.VisibilitySubjects)
-	assert.Contains(t, tool.Description, "audit")
-	assert.NotContains(t, tool.Description, "secret")
+
+	wantDescription := "Run a saved Starlark workflow as a nested tool call inside this turn and return its final result text.\nThis does not start a second managed conversation turn.\nPass args as an empty string when the workflow needs no arguments.\n\nAvailable workflows (permission.workflow subjects):\n- audit: Audit routes"
+	assert.Equal(t, wantDescription, tool.Description)
 
 	subjects, err := tool.Subjects(json.RawMessage(`{"name":"audit","args":""}`))
 	require.NoError(t, err)
@@ -100,6 +85,34 @@ def main(args): return None
 
 	_, ok = bridge.dynamicWorkflowTool(rocketcode.PermissionSet{}, "main", "main", definitions)
 	assert.False(t, ok)
+
+	for _, definitions := range []map[string]*workflow.Definition{nil, {}} {
+		_, ok := bridge.dynamicWorkflowTool(permissions, "main", "main", definitions)
+		assert.False(t, ok)
+	}
+
+	require.NoError(t, permissions.Allow("workflow", "sec*"))
+	tool, ok = bridge.dynamicWorkflowTool(permissions, "main", "main", definitions)
+	require.True(t, ok)
+	assert.Equal(t, []string{"audit", "secret"}, tool.VisibilitySubjects)
+	assert.Equal(t, wantDescription+"\n- secret: Secret", tool.Description)
+	require.NoError(t, permissions.Deny("workflow", "secret"))
+	tool, ok = bridge.dynamicWorkflowTool(permissions, "main", "main", definitions)
+	require.True(t, ok)
+	assert.Equal(t, []string{"audit"}, tool.VisibilitySubjects)
+	assert.Equal(t, wantDescription, tool.Description)
+	assert.Equal(t, "Secret", definitions["secret"].Description)
+
+	require.NoError(t, permissions.Allow("workflow", "secret"))
+
+	definitions["audit"].Description = "\t Audit routes \n"
+	definitions["secret"].Description = "\n\t "
+	tool, ok = bridge.dynamicWorkflowTool(permissions, "main", "main", definitions)
+	require.True(t, ok)
+	assert.Equal(t, []string{"audit", "secret"}, tool.VisibilitySubjects)
+	assert.Equal(t, wantDescription+"\n- secret: Saved Starlark workflow.", tool.Description)
+	assert.Equal(t, "\t Audit routes \n", definitions["audit"].Description)
+	assert.Equal(t, "\n\t ", definitions["secret"].Description)
 }
 
 func TestRunNestedWorkflowAndMaybeTool(t *testing.T) {
@@ -164,8 +177,19 @@ def main(args):
 
 	var star rocketcode.PermissionSet
 	require.NoError(t, star.Allow("workflow", "*"))
-	_, ok = (&Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: bad}), log: slog.New(slog.DiscardHandler)}).maybeDynamicWorkflowTool(badRoot, &rocketcode.Agent{Permission: star}, "main", "main")
+
+	var logs strings.Builder
+
+	badBridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: bad}), log: slog.New(slog.NewTextHandler(&logs, nil))}
+	_, ok = badBridge.maybeDynamicWorkflowTool(badRoot, &rocketcode.Agent{Permission: star}, "main", "main")
 	assert.False(t, ok)
+	assert.Contains(t, logs.String(), "load workflows")
+
+	logs.Reset()
+	require.NoError(t, star.Deny("workflow", "*"))
+	_, ok = badBridge.maybeDynamicWorkflowTool(badRoot, &rocketcode.Agent{Permission: star}, "main", "main")
+	assert.False(t, ok)
+	assert.Contains(t, logs.String(), "load workflows", "an overridden allow rule still triggers workflow loading")
 }
 
 func TestNestedWorkflowSessionTags(t *testing.T) {

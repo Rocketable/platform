@@ -27,13 +27,13 @@ func (s *SessionService) SaveAttachment(ctx context.Context, conversationID, tur
 
 	var id string
 
-	err = tx.QueryRowContext(ctx, `INSERT INTO attachments (id, conversation_id, name, mime_type, size, original_unverified, upload, turn_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING RETURNING id`, attachment.ID, conversationID, attachment.Name, attachment.MIMEType, len(attachment.Data), attachment.OriginalUnverified, upload, turnID).Scan(&id)
+	err = queryScalar(ctx, tx, "save attachment", `INSERT INTO attachments (id, conversation_id, name, mime_type, size, original_unverified, upload, turn_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING RETURNING id`, &id, attachment.ID, conversationID, attachment.Name, attachment.MIMEType, len(attachment.Data), attachment.OriginalUnverified, upload, turnID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 
 	if err != nil {
-		return fmt.Errorf("save attachment: %w", err)
+		return err
 	}
 
 	if err := s.attachments.Put(ctx, id, attachment.Data); err != nil {
@@ -148,12 +148,12 @@ func inputAttachmentsDB(ctx context.Context, db stateStoreDB, producer, text str
 func (s *SessionService) RevertAttachmentMetadata(ctx context.Context, conversationID, id string) (protocol.OutboundAttachment, error) {
 	var raw json.RawMessage
 
-	err := s.db.QueryRowContext(ctx, `SELECT e.entry_json->'replay_input'->split_part(m.revert_message_id, ':', 2)::integer
+	err := queryScalar(ctx, s.db, "read reverted attachment owner", `SELECT e.entry_json->'replay_input'->split_part(m.revert_message_id, ':', 2)::integer
     FROM managed_conversations m JOIN session_entries e ON e.conversation_id = m.conversation_id
         AND e.id = NULLIF(split_part(m.revert_message_id, ':', 1), '')::bigint
-    WHERE m.conversation_id = $1 AND m.revert_message_id <> ''`, conversationID).Scan(&raw)
+    WHERE m.conversation_id = $1 AND m.revert_message_id <> ''`, &raw, conversationID)
 	if err != nil {
-		return protocol.OutboundAttachment{}, fmt.Errorf("read reverted attachment owner: %w", err)
+		return protocol.OutboundAttachment{}, err
 	}
 
 	items, err := rocketcode.ReplayInputToParams([]json.RawMessage{raw})

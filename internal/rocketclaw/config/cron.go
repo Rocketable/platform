@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -91,7 +92,7 @@ func ParseCronDefinition(data []byte, relativePath string) (protocol.OneOffCronj
 		return protocol.OneOffCronjob{}, nil, fmt.Errorf("parse cronjob %s frontmatter: unmarshal frontmatter yaml: %w", relativePath, err)
 	}
 
-	if !raw.Schedule.present {
+	if raw.Schedule.values == nil {
 		return protocol.OneOffCronjob{}, nil, fmt.Errorf("parse cronjob %s frontmatter: schedule is required", relativePath)
 	}
 
@@ -116,12 +117,7 @@ func ParseCronDefinition(data []byte, relativePath string) (protocol.OneOffCronj
 		return protocol.OneOffCronjob{}, nil, fmt.Errorf("parse cronjob %s schedules: timestamp schedules cannot be combined with other schedules", relativePath)
 	}
 
-	agent := string(raw.Agent)
-	if agent == "" {
-		agent = "main"
-	}
-
-	return protocol.OneOffCronjob{RelativePath: relativePath, Agent: agent, TextChannel: string(raw.Channel), Prompt: body}, schedules, nil
+	return protocol.OneOffCronjob{RelativePath: relativePath, Agent: cmp.Or(string(raw.Agent), "main"), TextChannel: string(raw.Channel), Prompt: body}, schedules, nil
 }
 
 type cronFrontmatter struct {
@@ -131,8 +127,7 @@ type cronFrontmatter struct {
 }
 
 type cronFrontmatterSchedule struct {
-	present bool
-	values  []string
+	values []string
 }
 
 func (s *cronFrontmatterSchedule) UnmarshalJSON(data []byte) error {
@@ -142,13 +137,13 @@ func (s *cronFrontmatterSchedule) UnmarshalJSON(data []byte) error {
 
 	var single string
 	if err := json.Unmarshal(data, &single); err == nil {
-		s.present, s.values = true, []string{single}
+		s.values = []string{single}
 		return nil
 	}
 
 	var list []string
 	if err := json.Unmarshal(data, &list); err == nil {
-		s.present, s.values = true, slices.Clone(list)
+		s.values = list
 		return nil
 	}
 
@@ -163,12 +158,11 @@ func (a *cronFrontmatterAgent) UnmarshalJSON(data []byte) error {
 	}
 
 	var text string
-	if err := json.Unmarshal(data, &text); err == nil {
-		*a = cronFrontmatterAgent(strings.TrimSpace(text))
-		return nil
+	if err := json.Unmarshal(data, &text); err != nil {
+		text = string(data)
 	}
 
-	*a = cronFrontmatterAgent(strings.TrimSpace(string(data)))
+	*a = cronFrontmatterAgent(strings.TrimSpace(text))
 
 	return nil
 }

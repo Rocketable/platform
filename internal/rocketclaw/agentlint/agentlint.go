@@ -2,6 +2,7 @@
 package agentlint
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"maps"
@@ -39,7 +40,7 @@ type Result struct {
 type agentInfo struct {
 	agent        rocketcode.Agent
 	filePath     string
-	suppressions map[string][]suppression
+	suppressions map[string][]string
 }
 
 type capability struct {
@@ -47,10 +48,6 @@ type capability struct {
 	file    string
 	bucket  string
 	pattern string
-}
-
-type suppression struct {
-	code string
 }
 
 // Lint checks the effective agent system rooted at runtimeRoot.
@@ -70,25 +67,69 @@ func Lint(runtimeRoot string, cfg *config.Config) (Result, error) {
 		return Result{}, err
 	}
 
-	findings = append(findings, lintCapabilities(infos)...)
-	findings = append(findings, lintTaskCycles(infos)...)
-	findings = append(findings, lintDelegationEscalation(infos)...)
-	findings = append(findings, lintGuardrailReferences(infos)...)
-	findings = append(findings, lintReasoningEffort(infos)...)
-	findings = append(findings, lintCustomShellEdits(infos, cfg.Workspace)...)
+	writes, executes := capabilities(infos, "edit"), capabilities(infos, "bash")
+	reads := append(capabilities(infos, "read"), writes...)
+
+	edges := taskEdges(infos)
+	for name, info := range infos {
+		if reaches(edges, name, name, map[string]bool{}) && info.agent.MaxRecursion == nil {
+			findings = append(findings, Finding{Code: rc003, Severity: "error", Path: info.filePath, Message: name + " participates in a task delegation cycle without bounded maxRecursion", keys: []string{"maxRecursion", "task"}})
+		}
+
+		if guardrail := info.agent.Guardrail; guardrail != "" {
+			if _, ok := infos[guardrail]; !ok {
+				findings = append(findings, Finding{Code: rc007, Severity: "error", Path: info.filePath, Message: fmt.Sprintf("%s references missing guardrail agent %s", name, guardrail), keys: []string{"guardrail"}})
+			}
+		}
+
+		if info.agent.ReasoningEffort == "xhigh" {
+			findings = append(findings, Finding{Code: rc008, Severity: "error", Path: info.filePath, Message: name + " uses reasoningEffort xhigh, which may be excessive", keys: []string{"reasoningEffort"}})
+		}
+	}
+
+	for _, write := range writes {
+		for _, execute := range executes {
+			if !pathsOverlap(write.pattern, commandPath(execute.pattern)) {
+				continue
+			}
+
+			if write.agent == execute.agent {
+				findings = append(findings, Finding{Code: rc001, Severity: "error", Path: write.file, Message: fmt.Sprintf("%s can edit %s and execute %s", write.agent, cleanSubject(write.pattern), cleanSubject(execute.pattern)), keys: []string{write.bucket, write.pattern, execute.bucket, execute.pattern}})
+			} else if reaches(edges, write.agent, execute.agent, map[string]bool{}) {
+				findings = append(findings, Finding{Code: rc004, Severity: "error", Path: write.file + " -> " + execute.file, Message: fmt.Sprintf("%s can edit %s and delegate to %s, which can execute %s", write.agent, cleanSubject(write.pattern), execute.agent, cleanSubject(execute.pattern)), keys: []string{write.bucket, write.pattern, "task", execute.bucket, execute.pattern}})
+			}
+		}
+
+		permission := infos[write.agent].agent.Permission
+		if !slices.ContainsFunc(permission.Buckets, func(bucket rocketcode.PermissionBucket) bool {
+			return (bucket.Name == "websearch" || bucket.Name == "webfetch") && slices.ContainsFunc(bucket.Rules, func(rule rocketcode.PermissionRule) bool {
+				return rule.Action == rocketcode.PermissionAllow
+			})
+		}) {
+			continue
+		}
+
+		for _, read := range reads {
+			if write.agent != read.agent && pathsOverlap(write.pattern, read.pattern) {
+				findings = append(findings, Finding{Code: rc005, Severity: "error", Path: write.file + " -> " + read.file, Message: fmt.Sprintf("%s can write external content to %s that %s can read", write.agent, cleanSubject(write.pattern), read.agent), keys: []string{write.bucket, write.pattern, read.bucket, read.pattern}})
+			}
+		}
+	}
+
+	for _, read := range reads {
+		for _, execute := range executes {
+			if read.agent == execute.agent && pathsOverlap(read.pattern, commandPath(execute.pattern)) && read.pattern != execute.pattern {
+				findings = append(findings, Finding{Code: rc002, Severity: "error", Path: read.file, Message: fmt.Sprintf("%s can read %s and execute constrained command %s", read.agent, cleanSubject(read.pattern), cleanSubject(execute.pattern)), keys: []string{read.bucket, read.pattern, execute.bucket, execute.pattern}})
+			}
+		}
+	}
+
+	findings = append(findings, lintCustomShellEdits(infos, cfg.Workspace, writes)...)
 	findings = slices.DeleteFunc(findings, func(finding Finding) bool {
 		return suppressed(&finding, infos)
 	})
 	slices.SortFunc(findings, func(a, b Finding) int {
-		if n := strings.Compare(a.Code, b.Code); n != 0 {
-			return n
-		}
-
-		if n := strings.Compare(a.Path, b.Path); n != 0 {
-			return n
-		}
-
-		return strings.Compare(a.Message, b.Message)
+		return cmp.Or(strings.Compare(a.Code, b.Code), strings.Compare(a.Path, b.Path), strings.Compare(a.Message, b.Message))
 	})
 
 	return Result{Findings: findings}, nil
@@ -108,7 +149,12 @@ func AgentGraphDOT(runtimeRoot string, cfg *config.Config) (string, error) {
 	b.WriteString("digraph agent_graph {\n")
 
 	for _, name := range names {
-		label := name + "\nmaxRecursion=" + maxRecursionLabel(infos[name].agent.MaxRecursion)
+		maxRecursion := "unbounded"
+		if limit := infos[name].agent.MaxRecursion; limit != nil {
+			maxRecursion = strconv.Itoa(*limit)
+		}
+
+		label := name + "\nmaxRecursion=" + maxRecursion
 		if customShell := infos[name].agent.CustomShell; customShell != "" {
 			label += "\ncustomShell=" + customShell
 		}
@@ -117,7 +163,7 @@ func AgentGraphDOT(runtimeRoot string, cfg *config.Config) (string, error) {
 	}
 
 	for _, from := range names {
-		for _, to := range slices.Sorted(slices.Values(edges[from])) {
+		for _, to := range edges[from] {
 			if reaches(edges, to, from, map[string]bool{}) {
 				fmt.Fprintf(&b, "  %s -> %s [color=%s, label=%s];\n", strconv.Quote(from), strconv.Quote(to), strconv.Quote("red"), strconv.Quote("cycle"))
 				continue
@@ -151,15 +197,11 @@ func loadRuntimeAgentInfos(runtimeRoot string, cfg *config.Config) (map[string]*
 		return nil, nil, fmt.Errorf("load agents: %w", agentLoad.Errors[0])
 	}
 
-	return loadAgentInfos(agentsRoot, agentLoad.Agents)
-}
-
-func loadAgentInfos(agentsRoot string, agents rocketcode.Agents) (map[string]*agentInfo, []Finding, error) {
 	infos := map[string]*agentInfo{}
 	findings := []Finding{}
 
-	for name := range agents.Items {
-		agent := agents.Items[name]
+	for name := range agentLoad.Agents.Items {
+		agent := agentLoad.Agents.Items[name]
 		filePath := filepath.ToSlash(filepath.Join("agents", agent.Location))
 
 		data, err := os.ReadFile(filepath.Join(agentsRoot, agent.Location))
@@ -172,7 +214,7 @@ func loadAgentInfos(agentsRoot string, agents rocketcode.Agents) (map[string]*ag
 			return nil, nil, fmt.Errorf("parse agent metadata %s: %w", agent.Location, err)
 		}
 
-		suppressions := map[string][]suppression{}
+		suppressions := map[string][]string{}
 		findings = append(findings, collectMetadata(filePath, frontmatter, suppressions)...)
 		infos[name] = &agentInfo{agent: agent, filePath: filePath, suppressions: suppressions}
 	}
@@ -202,7 +244,7 @@ func parseFrontmatter(content string) (*yaml.Node, error) {
 	return root.Content[0], nil
 }
 
-func collectMetadata(filePath string, frontmatter *yaml.Node, suppressions map[string][]suppression) []Finding {
+func collectMetadata(filePath string, frontmatter *yaml.Node, suppressions map[string][]string) []Finding {
 	if frontmatter == nil || frontmatter.Kind != yaml.MappingNode {
 		return nil
 	}
@@ -227,7 +269,7 @@ func collectMetadata(filePath string, frontmatter *yaml.Node, suppressions map[s
 	return findings
 }
 
-func collectSuppressions(filePath, key string, node *yaml.Node, suppressions map[string][]suppression, findings *[]Finding) {
+func collectSuppressions(filePath, key string, node *yaml.Node, suppressions map[string][]string, findings *[]Finding) {
 	addSuppressionsFromNode(filePath, key, node, suppressions, findings)
 
 	if node.Kind != yaml.MappingNode {
@@ -241,7 +283,7 @@ func collectSuppressions(filePath, key string, node *yaml.Node, suppressions map
 	}
 }
 
-func addSuppressionsFromNode(filePath, key string, node *yaml.Node, suppressions map[string][]suppression, findings *[]Finding) {
+func addSuppressionsFromNode(filePath, key string, node *yaml.Node, suppressions map[string][]string, findings *[]Finding) {
 	comments := []string{node.LineComment, node.HeadComment, node.FootComment}
 	for _, comment := range comments {
 		if !strings.Contains(comment, "#nolint") {
@@ -259,7 +301,7 @@ func addSuppressionsFromNode(filePath, key string, node *yaml.Node, suppressions
 			continue
 		}
 
-		suppressions[key] = append(suppressions[key], suppression{code: code})
+		suppressions[key] = append(suppressions[key], code)
 	}
 }
 
@@ -282,110 +324,11 @@ func parseNoLint(comment string) (string, bool) {
 	return code, afterCode != ""
 }
 
-func lintCapabilities(infos map[string]*agentInfo) []Finding {
-	findings := []Finding{}
-	writes := capabilities(infos, "edit")
-	reads := append(capabilities(infos, "read"), writes...)
-	executes := capabilities(infos, "bash")
-
-	for _, write := range writes {
-		for _, execute := range executes {
-			if write.agent == execute.agent && pathsOverlap(write.pattern, commandPath(execute.pattern)) {
-				findings = append(findings, Finding{Code: rc001, Severity: "error", Path: write.file, Message: fmt.Sprintf("%s can edit %s and execute %s", write.agent, cleanSubject(write.pattern), cleanSubject(execute.pattern)), keys: []string{write.bucket, write.pattern, execute.bucket, execute.pattern}})
-			}
-		}
-	}
-
-	for _, read := range reads {
-		for _, execute := range executes {
-			if read.agent == execute.agent && pathsOverlap(read.pattern, commandPath(execute.pattern)) && read.pattern != execute.pattern {
-				findings = append(findings, Finding{Code: rc002, Severity: "error", Path: read.file, Message: fmt.Sprintf("%s can read %s and execute constrained command %s", read.agent, cleanSubject(read.pattern), cleanSubject(execute.pattern)), keys: []string{read.bucket, read.pattern, execute.bucket, execute.pattern}})
-			}
-		}
-	}
-
-	for _, write := range writes {
-		permission := infos[write.agent].agent.Permission
-		if len(allowPatterns(permission, "websearch")) == 0 && len(allowPatterns(permission, "webfetch")) == 0 {
-			continue
-		}
-
-		for _, read := range reads {
-			if write.agent != read.agent && pathsOverlap(write.pattern, read.pattern) {
-				findings = append(findings, Finding{Code: rc005, Severity: "error", Path: write.file + " -> " + read.file, Message: fmt.Sprintf("%s can write external content to %s that %s can read", write.agent, cleanSubject(write.pattern), read.agent), keys: []string{write.bucket, write.pattern, read.bucket, read.pattern}})
-			}
-		}
-	}
-
-	return findings
-}
-
-func lintTaskCycles(infos map[string]*agentInfo) []Finding {
-	edges := taskEdges(infos)
-	findings := []Finding{}
-
-	for name := range infos {
-		if reaches(edges, name, name, map[string]bool{}) && infos[name].agent.MaxRecursion == nil {
-			findings = append(findings, Finding{Code: rc003, Severity: "error", Path: infos[name].filePath, Message: name + " participates in a task delegation cycle without bounded maxRecursion", keys: []string{"maxRecursion", "task"}})
-		}
-	}
-
-	return findings
-}
-
-func lintDelegationEscalation(infos map[string]*agentInfo) []Finding {
-	edges := taskEdges(infos)
-	writes := capabilities(infos, "edit")
-	executes := capabilities(infos, "bash")
-	findings := []Finding{}
-
-	for _, write := range writes {
-		for _, execute := range executes {
-			if write.agent == execute.agent || !reaches(edges, write.agent, execute.agent, map[string]bool{}) || !pathsOverlap(write.pattern, commandPath(execute.pattern)) {
-				continue
-			}
-
-			findings = append(findings, Finding{Code: rc004, Severity: "error", Path: write.file + " -> " + execute.file, Message: fmt.Sprintf("%s can edit %s and delegate to %s, which can execute %s", write.agent, cleanSubject(write.pattern), execute.agent, cleanSubject(execute.pattern)), keys: []string{write.bucket, write.pattern, "task", execute.bucket, execute.pattern}})
-		}
-	}
-
-	return findings
-}
-
-func lintGuardrailReferences(infos map[string]*agentInfo) []Finding {
-	findings := []Finding{}
-
-	for name, info := range infos {
-		guardrail := info.agent.Guardrail
-		if guardrail == "" {
-			continue
-		}
-
-		if _, ok := infos[guardrail]; !ok {
-			findings = append(findings, Finding{Code: rc007, Severity: "error", Path: info.filePath, Message: fmt.Sprintf("%s references missing guardrail agent %s", name, guardrail), keys: []string{"guardrail"}})
-		}
-	}
-
-	return findings
-}
-
-func lintReasoningEffort(infos map[string]*agentInfo) []Finding {
-	findings := []Finding{}
-
-	for name, info := range infos {
-		if info.agent.ReasoningEffort == "xhigh" {
-			findings = append(findings, Finding{Code: rc008, Severity: "error", Path: info.filePath, Message: name + " uses reasoningEffort xhigh, which may be excessive", keys: []string{"reasoningEffort"}})
-		}
-	}
-
-	return findings
-}
-
 // lintCustomShellEdits reports edit grants that could rewrite a sandboxed agent's wrapper or agent file.
-func lintCustomShellEdits(infos map[string]*agentInfo, workspace string) []Finding {
+func lintCustomShellEdits(infos map[string]*agentInfo, workspace string, writes []capability) []Finding {
 	findings := []Finding{}
 
-	for _, write := range capabilities(infos, "edit") {
+	for _, write := range writes {
 		for name, info := range infos {
 			if info.agent.CustomShell == "" {
 				continue
@@ -404,30 +347,20 @@ func lintCustomShellEdits(infos map[string]*agentInfo, workspace string) []Findi
 	return findings
 }
 
-func allowPatterns(permission rocketcode.PermissionSet, bucket string) []string {
-	var patterns []string
-
-	for _, permissionBucket := range permission.Buckets {
-		if permissionBucket.Name != bucket {
-			continue
-		}
-
-		for _, rule := range permissionBucket.Rules {
-			if rule.Action == rocketcode.PermissionAllow {
-				patterns = append(patterns, rule.Pattern)
-			}
-		}
-	}
-
-	return patterns
-}
-
 func capabilities(infos map[string]*agentInfo, bucket string) []capability {
 	var caps []capability
 
 	for name, info := range infos {
-		for _, pattern := range allowPatterns(info.agent.Permission, bucket) {
-			caps = append(caps, capability{agent: name, file: info.filePath, bucket: bucket, pattern: pattern})
+		for _, permissionBucket := range info.agent.Permission.Buckets {
+			if permissionBucket.Name != bucket {
+				continue
+			}
+
+			for _, rule := range permissionBucket.Rules {
+				if rule.Action == rocketcode.PermissionAllow {
+					caps = append(caps, capability{agent: name, file: info.filePath, bucket: bucket, pattern: rule.Pattern})
+				}
+			}
 		}
 	}
 
@@ -465,19 +398,11 @@ func reaches(edges map[string][]string, from, to string, seen map[string]bool) b
 	return false
 }
 
-func maxRecursionLabel(maxRecursion *int) string {
-	if maxRecursion == nil {
-		return "unbounded"
-	}
-
-	return strconv.Itoa(*maxRecursion)
-}
-
 func pathsOverlap(a, b string) bool {
-	a = normalizeSubject(a)
+	a = cleanSubject(commandPath(a))
 
-	b = normalizeSubject(b)
-	if a == "*" || b == "*" || a == "" || b == "" {
+	b = cleanSubject(commandPath(b))
+	if a == "*" || b == "*" || a == "" || b == "" || a == "." || b == "." {
 		return true
 	}
 
@@ -497,15 +422,6 @@ func commandPath(pattern string) string {
 	return fields[0]
 }
 
-func normalizeSubject(subject string) string {
-	subject = cleanSubject(commandPath(subject))
-	if subject == "." {
-		return ""
-	}
-
-	return subject
-}
-
 func cleanSubject(subject string) string {
 	subject = strings.TrimPrefix(filepath.ToSlash(subject), "./")
 	return strings.TrimPrefix(subject, "/")
@@ -519,10 +435,9 @@ func suppressed(finding *Finding, infos map[string]*agentInfo) bool {
 
 		for _, keys := range [2][]string{finding.keys, {"*"}} {
 			for _, key := range keys {
-				for _, suppression := range info.suppressions[key] {
-					if suppression.code == "" || suppression.code == finding.Code {
-						return true
-					}
+				codes := info.suppressions[key]
+				if slices.Contains(codes, "") || slices.Contains(codes, finding.Code) {
+					return true
 				}
 			}
 		}

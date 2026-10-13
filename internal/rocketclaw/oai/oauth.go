@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -220,10 +219,7 @@ func updateAuthFileIn(workspace, runtimeDir string, create bool, update func(*au
 }
 
 func writeAuthFile(path string, file authFile, syncDir func(string) error) (bool, error) {
-	data, err := json.MarshalIndent(file, "", "  ")
-	if err != nil {
-		return false, fmt.Errorf("marshal OpenAI OAuth token: %w", err)
-	}
+	data, _ := json.MarshalIndent(file, "", "  ")
 
 	data = append(data, '\n')
 
@@ -282,15 +278,8 @@ func AcquireBrowserToken(ctx context.Context, out io.Writer) (Token, error) {
 func acquireBrowserToken(ctx context.Context, out io.Writer, listener net.Listener) (Token, error) {
 	defer func() { _ = listener.Close() }()
 
-	pkce, err := generatePKCE()
-	if err != nil {
-		return Token{}, err
-	}
-
-	state, err := randomString(32)
-	if err != nil {
-		return Token{}, err
-	}
+	pkce := generatePKCE()
+	state := randomString(32)
 
 	codeCh := make(chan string, 1)
 	errCh := make(chan error, 1)
@@ -303,12 +292,7 @@ func acquireBrowserToken(ctx context.Context, out io.Writer, listener net.Listen
 		}
 
 		if value := req.URL.Query().Get("error"); value != "" {
-			description := req.URL.Query().Get("error_description")
-			if description == "" {
-				description = value
-			}
-
-			errCh <- errors.New(description)
+			errCh <- errors.New(cmp.Or(req.URL.Query().Get("error_description"), value))
 
 			_, _ = io.WriteString(w, "Authorization failed. You can close this window.")
 
@@ -374,15 +358,9 @@ func acquireBrowserToken(ctx context.Context, out io.Writer, listener net.Listen
 
 // AcquireDeviceToken completes the headless device OAuth flow without persisting the token.
 func AcquireDeviceToken(ctx context.Context, out io.Writer) (Token, error) {
-	body, err := json.Marshal(map[string]string{"client_id": clientID})
-	if err != nil {
-		return Token{}, fmt.Errorf("marshal device authorization request: %w", err)
-	}
+	body, _ := json.Marshal(map[string]string{"client_id": clientID})
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, issuer+"/api/accounts/deviceauth/usercode", bytes.NewReader(body))
-	if err != nil {
-		return Token{}, fmt.Errorf("create device authorization request: %w", err)
-	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, issuer+"/api/accounts/deviceauth/usercode", bytes.NewReader(body))
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "rocketclaw")
@@ -457,13 +435,7 @@ type transport struct {
 	base                            http.RoundTripper
 	log                             *slog.Logger
 	workspace, runtimeDir, provider string
-	mu                              sync.Mutex
 	sessionID                       string
-}
-
-type codexRequestMetadata struct {
-	compactThreshold float64
-	hasCompact       bool
 }
 
 type codexStreamError struct {
@@ -471,10 +443,7 @@ type codexStreamError struct {
 }
 
 func (e *codexStreamError) Error() string {
-	message := "response.failed event received"
-	if text := strings.TrimSpace(e.Message); text != "" {
-		message = text
-	}
+	message := cmp.Or(strings.TrimSpace(e.Message), "response.failed event received")
 
 	if code := strings.TrimSpace(e.Code); code != "" && message != "response.failed event received" {
 		message = code + ": " + message
@@ -491,12 +460,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	cloned := req.Clone(req.Context())
 
-	sessionID, err := t.codexSessionID()
-	if err != nil {
-		return nil, err
-	}
-
-	setCodexHeaders(cloned, token, sessionID)
+	setCodexHeaders(cloned, token, t.sessionID)
 
 	codexPath := strings.TrimRight(cloned.URL.Path, "/")
 
@@ -504,12 +468,12 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	codexCompact := strings.HasSuffix(codexPath, "/responses/compact")
 
-	var metadata codexRequestMetadata
+	var threshold *float64
 
 	if codexResponse || codexCompact {
 		var err error
 
-		metadata, err = cleanCodexRequest(cloned, codexResponse)
+		threshold, err = cleanCodexRequest(cloned, codexResponse)
 		if err != nil {
 			return nil, err
 		}
@@ -550,7 +514,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 		retry := cloned.Clone(req.Context())
 		retry.Body = retryBody
-		setCodexHeaders(retry, token, sessionID)
+		setCodexHeaders(retry, token, t.sessionID)
 
 		resp, err = t.roundTrip(retry, "authorization_retry")
 		if err != nil {
@@ -574,7 +538,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			if streamErr, ok := errors.AsType[*codexStreamError](errStream); ok && strings.TrimSpace(streamErr.Code) == "context_length_exceeded" {
 				var retried bool
 
-				resp, retried, err = t.retryCodexAfterCompaction(req.Context(), activeReq, &metadata)
+				resp, retried, err = t.retryCodexAfterCompaction(req.Context(), activeReq, threshold)
 				if retried {
 					if err != nil {
 						return nil, fmt.Errorf("adapt Codex stream response after compaction retry: %w", err)
@@ -587,7 +551,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, fmt.Errorf("adapt Codex stream response: %w", errStream)
 		}
 
-		resp, err = t.codexCompaction(req.Context(), activeReq, resp, &metadata)
+		resp, err = t.codexCompaction(req.Context(), activeReq, resp, threshold)
 		if err != nil {
 			return nil, fmt.Errorf("compact Codex response: %w", err)
 		}
@@ -631,7 +595,6 @@ func (t *transport) roundTrip(req *http.Request, reason string) (*http.Response,
 }
 
 func setCodexHeaders(req *http.Request, token Token, sessionID string) {
-	req.Header.Del("Authorization")
 	req.Header.Set("Authorization", "Bearer "+token.Access)
 	req.Header.Set("Originator", originator)
 	req.Header.Set("User-Agent", codexUserAgent)
@@ -641,19 +604,6 @@ func setCodexHeaders(req *http.Request, token Token, sessionID string) {
 	if token.AccountID != "" {
 		req.Header.Set("Chatgpt-Account-Id", token.AccountID)
 	}
-}
-
-func (t *transport) codexSessionID() (string, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if t.sessionID != "" {
-		return t.sessionID, nil
-	}
-
-	t.sessionID = uuid.NewString()
-
-	return t.sessionID, nil
 }
 
 // MissingTokenError reports that no ChatGPT OAuth token is stored for Provider.
@@ -696,7 +646,12 @@ func FreshTokenIn(ctx context.Context, workspace, runtimeDir, provider string, r
 			return false, nil
 		}
 
-		response, err := refreshToken(ctx, token.Refresh)
+		form := url.Values{}
+		form.Set("grant_type", "refresh_token")
+		form.Set("refresh_token", token.Refresh)
+		form.Set("client_id", clientID)
+
+		response, err := postToken(ctx, form)
 		if err != nil {
 			if rejected.Access != "" {
 				return false, fmt.Errorf("refresh ChatGPT OAuth token after Codex 401 for provider %q; run `%s`: %w", provider, loginCommand(provider), err)
@@ -719,19 +674,20 @@ func FreshTokenIn(ctx context.Context, workspace, runtimeDir, provider string, r
 	return selected, nil
 }
 
-func cleanCodexRequest(req *http.Request, streaming bool) (codexRequestMetadata, error) {
+// cleanCodexRequest returns the first decoded compaction threshold; nil denotes absence, not zero.
+func cleanCodexRequest(req *http.Request, streaming bool) (*float64, error) {
 	if req.Method != http.MethodPost || req.Body == nil {
-		return codexRequestMetadata{}, nil
+		return nil, nil
 	}
 
 	contentType := req.Header.Get("Content-Type")
 	if contentType != "" && !strings.Contains(contentType, "application/json") {
-		return codexRequestMetadata{}, nil
+		return nil, nil
 	}
 
 	data, err := io.ReadAll(req.Body)
 	if err != nil {
-		return codexRequestMetadata{}, fmt.Errorf("read OpenAI request body: %w", err)
+		return nil, fmt.Errorf("read OpenAI request body: %w", err)
 	}
 
 	_ = req.Body.Close()
@@ -739,15 +695,22 @@ func cleanCodexRequest(req *http.Request, streaming bool) (codexRequestMetadata,
 	var body map[string]json.RawMessage
 	if err := json.Unmarshal(data, &body); err != nil {
 		req.Body = io.NopCloser(bytes.NewReader(data))
-		return codexRequestMetadata{}, nil
+		return nil, nil
 	}
 
-	var metadata codexRequestMetadata
+	var threshold *float64
 
 	if raw, ok := body["context_management"]; ok {
-		if threshold, ok := codexCompactionThreshold(raw); ok {
-			metadata.compactThreshold = threshold
-			metadata.hasCompact = true
+		var contextManagement []struct {
+			CompactThreshold *float64 `json:"compact_threshold"`
+		}
+		if err := json.Unmarshal(raw, &contextManagement); err == nil {
+			for i := range contextManagement {
+				if contextManagement[i].CompactThreshold != nil {
+					threshold = contextManagement[i].CompactThreshold
+					break
+				}
+			}
 		}
 	}
 
@@ -774,102 +737,50 @@ func cleanCodexRequest(req *http.Request, streaming bool) (codexRequestMetadata,
 		}
 	}
 
-	stripIDs := true
+	var store bool
 
-	if raw, ok := body["store"]; ok {
-		var store bool
-		if err := json.Unmarshal(raw, &store); err == nil && store {
-			stripIDs = false
+	_ = json.Unmarshal(body["store"], &store)
+
+	var items []json.RawMessage
+	if err := json.Unmarshal(body["input"], &items); err == nil {
+		inputChanged := false
+
+		for i := range items {
+			if item, ok := cleanCodexInputItem(items[i], !store); ok {
+				items[i] = item
+				inputChanged = true
+			}
 		}
-	}
 
-	if raw, ok := body["input"]; ok {
-		input, ok, err := cleanCodexInput(raw, stripIDs)
-		if err != nil {
-			return codexRequestMetadata{}, err
-		}
-
-		if ok {
-			body["input"] = input
+		if inputChanged {
+			body["input"], _ = json.Marshal(items)
 			changed = true
 		}
 	}
 
 	if changed {
-		data, err = json.Marshal(body)
-		if err != nil {
-			return codexRequestMetadata{}, fmt.Errorf("marshal OpenAI request body: %w", err)
-		}
+		data, _ = json.Marshal(body)
 	}
 
 	req.Body = io.NopCloser(bytes.NewReader(data))
 	req.ContentLength = int64(len(data))
 	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }
 
-	return metadata, nil
+	return threshold, nil
 }
 
-func codexCompactionThreshold(raw json.RawMessage) (float64, bool) {
-	var contextManagement []struct {
-		CompactThreshold *float64 `json:"compact_threshold"`
-	}
-	if err := json.Unmarshal(raw, &contextManagement); err != nil {
-		return 0, false
-	}
-
-	for i := range contextManagement {
-		if contextManagement[i].CompactThreshold != nil {
-			return *contextManagement[i].CompactThreshold, true
-		}
-	}
-
-	return 0, false
-}
-
-func cleanCodexInput(raw json.RawMessage, stripIDs bool) (cleaned json.RawMessage, changed bool, err error) {
-	var items []json.RawMessage
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil, false, nil
-	}
-
-	changed = false
-
-	for i := range items {
-		item, ok, err := cleanCodexInputItem(items[i], stripIDs)
-		if err != nil {
-			return nil, false, err
-		}
-
-		if ok {
-			items[i] = item
-			changed = true
-		}
-	}
-
-	if !changed {
-		return nil, false, nil
-	}
-
-	data, err := json.Marshal(items)
-	if err != nil {
-		return nil, false, fmt.Errorf("marshal Codex input items: %w", err)
-	}
-
-	return data, true, nil
-}
-
-func cleanCodexInputItem(raw json.RawMessage, stripIDs bool) (cleaned json.RawMessage, changed bool, err error) {
+func cleanCodexInputItem(raw json.RawMessage, stripIDs bool) (json.RawMessage, bool) {
 	var item struct {
 		Type string `json:"type"`
 	}
 	if err := json.Unmarshal(raw, &item); err != nil {
-		return nil, false, nil
+		return nil, false
 	}
 
 	if item.Type == "compaction" {
 		var compaction responses.ResponseCompactionItemParam
 		if err := json.Unmarshal(raw, &compaction); err != nil {
-			return nil, false, nil
+			return nil, false
 		}
 
 		projected := responses.ResponseCompactionItemParam{EncryptedContent: compaction.EncryptedContent, Type: compaction.Type}
@@ -877,38 +788,31 @@ func cleanCodexInputItem(raw json.RawMessage, stripIDs bool) (cleaned json.RawMe
 			projected.ID = compaction.ID
 		}
 
-		data, err := json.Marshal(projected)
-		if err != nil {
-			return nil, false, fmt.Errorf("marshal Codex compaction input: %w", err)
-		}
+		data, _ := json.Marshal(projected)
 
-		return data, true, nil
+		return data, true
 	}
 
 	if !stripIDs {
-		return nil, false, nil
+		return nil, false
 	}
 
 	var object map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &object); err != nil {
-		return nil, false, nil
-	}
+	// The type decode above already established a valid JSON object or null.
+	_ = json.Unmarshal(raw, &object)
 
 	if _, ok := object["id"]; !ok {
-		return nil, false, nil
+		return nil, false
 	}
 
 	delete(object, "id")
 
-	data, err := json.Marshal(object)
-	if err != nil {
-		return nil, false, fmt.Errorf("marshal Codex input item: %w", err)
-	}
+	data, _ := json.Marshal(object)
 
-	return data, true, nil
+	return data, true
 }
 
-func (t *transport) codexCompaction(ctx context.Context, req *http.Request, resp *http.Response, metadata *codexRequestMetadata) (*http.Response, error) {
+func (t *transport) codexCompaction(ctx context.Context, req *http.Request, resp *http.Response, threshold *float64) (*http.Response, error) {
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read Codex response: %w", err)
@@ -918,7 +822,7 @@ func (t *transport) codexCompaction(ctx context.Context, req *http.Request, resp
 	resp.Body = io.NopCloser(bytes.NewReader(data))
 	resp.ContentLength = int64(len(data))
 
-	if !metadata.hasCompact {
+	if threshold == nil {
 		return resp, nil
 	}
 
@@ -934,7 +838,7 @@ func (t *transport) codexCompaction(ctx context.Context, req *http.Request, resp
 		return resp, nil
 	}
 
-	if usage.TotalTokens < metadata.compactThreshold {
+	if usage.TotalTokens < *threshold {
 		return resp, nil
 	}
 
@@ -965,15 +869,9 @@ func (t *transport) codexCompaction(ctx context.Context, req *http.Request, resp
 		return resp, nil
 	}
 
-	body["output"], err = json.Marshal(append([]json.RawMessage{data}, output...))
-	if err != nil {
-		return nil, fmt.Errorf("marshal Codex output: %w", err)
-	}
+	body["output"], _ = json.Marshal(append([]json.RawMessage{data}, output...))
 
-	data, err = json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("marshal Codex response: %w", err)
-	}
+	data, _ = json.Marshal(body)
 
 	resp.Body = io.NopCloser(bytes.NewReader(data))
 	resp.ContentLength = int64(len(data))
@@ -981,8 +879,8 @@ func (t *transport) codexCompaction(ctx context.Context, req *http.Request, resp
 	return resp, nil
 }
 
-func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Request, metadata *codexRequestMetadata) (*http.Response, bool, error) {
-	if !metadata.hasCompact {
+func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Request, threshold *float64) (*http.Response, bool, error) {
+	if threshold == nil {
 		return nil, false, nil
 	}
 
@@ -991,41 +889,25 @@ func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Req
 		return nil, false, nil
 	}
 
-	requestBody, err := req.GetBody()
-	if err != nil {
-		return nil, false, nil
-	}
-
-	data, err := io.ReadAll(requestBody)
+	// A compaction threshold comes only from cleanCodexRequest's buffered JSON.
+	requestBody, _ := req.GetBody()
+	data, _ := io.ReadAll(requestBody)
 	_ = requestBody.Close()
 
-	if err != nil {
-		return nil, false, nil
-	}
-
 	var retryBody map[string]json.RawMessage
-	if err := json.Unmarshal(data, &retryBody); err != nil {
-		return nil, false, nil
-	}
+
+	_ = json.Unmarshal(data, &retryBody)
 
 	retryItem := compactItem
-	if item, ok, err := cleanCodexInputItem(compactItem, false); err != nil {
-		return nil, false, err
-	} else if ok {
+	if item, ok := cleanCodexInputItem(compactItem, false); ok {
 		retryItem = item
 	}
 
-	input, err := json.Marshal([]json.RawMessage{retryItem})
-	if err != nil {
-		return nil, false, fmt.Errorf("marshal Codex compaction retry input: %w", err)
-	}
+	input, _ := json.Marshal([]json.RawMessage{retryItem})
 
 	retryBody["input"] = input
 
-	data, err = json.Marshal(retryBody)
-	if err != nil {
-		return nil, false, fmt.Errorf("marshal Codex compaction retry request: %w", err)
-	}
+	data, _ = json.Marshal(retryBody)
 
 	retry := req.Clone(ctx)
 	retry.Body = io.NopCloser(bytes.NewReader(data))
@@ -1042,51 +924,33 @@ func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Req
 	}
 
 	resp, err = codexStreamingResponse(resp)
-	if err != nil {
-		return nil, true, err
-	}
 
-	return resp, true, nil
+	return resp, true, err
 }
 
 func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (item json.RawMessage, ok bool, err error) {
-	requestBody, err := req.GetBody()
-	if err != nil {
-		return nil, false, fmt.Errorf("read Codex compact source request: %w", err)
-	}
-
-	data, err := io.ReadAll(requestBody)
+	// Both callers use cleanCodexRequest's owned, valid JSON and byte-backed GetBody.
+	requestBody, _ := req.GetBody()
+	data, _ := io.ReadAll(requestBody)
 	_ = requestBody.Close()
 
-	if err != nil {
-		return nil, false, fmt.Errorf("read Codex compact source request: %w", err)
-	}
-
 	compactSource := map[string]json.RawMessage{}
-	if err := json.Unmarshal(data, &compactSource); err != nil {
-		return nil, false, fmt.Errorf("parse Codex compact source request: %w", err)
-	}
+	_ = json.Unmarshal(data, &compactSource)
 
 	if codexInputHasUnansweredFunctionCall(compactSource["input"]) {
 		return nil, false, nil
 	}
 
+	// Streaming request preparation always supplies instructions, even when empty.
 	compactRequest := map[string]json.RawMessage{
-		"input": compactSource["input"],
-		"model": compactSource["model"],
-	}
-	if instructions := compactSource["instructions"]; len(instructions) > 0 {
-		compactRequest["instructions"] = instructions
+		"input":        compactSource["input"],
+		"model":        compactSource["model"],
+		"instructions": compactSource["instructions"],
 	}
 
-	data, err = json.Marshal(compactRequest)
-	if err != nil {
-		return nil, false, fmt.Errorf("marshal Codex compact request: %w", err)
-	}
+	data, _ = json.Marshal(compactRequest)
 
 	compactReq := req.Clone(ctx)
-	compactURL := *req.URL
-	compactReq.URL = &compactURL
 	compactReq.URL.Path = strings.TrimRight(compactReq.URL.Path, "/") + "/compact"
 	compactReq.Body = io.NopCloser(bytes.NewReader(data))
 	compactReq.ContentLength = int64(len(data))
@@ -1117,9 +981,8 @@ func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (it
 
 	for _, item := range compactBody.Output {
 		var itemType string
-		if err := json.Unmarshal(item["type"], &itemType); err != nil {
-			continue
-		}
+		// Types are valid JSON; non-string values leave "", rejected by the discriminator.
+		_ = json.Unmarshal(item["type"], &itemType)
 
 		if itemType != "compaction" && itemType != "compaction_summary" {
 			continue
@@ -1128,10 +991,7 @@ func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (it
 		item["type"] = json.RawMessage(`"compaction"`)
 		delete(item, "recent")
 
-		data, err = json.Marshal(item)
-		if err != nil {
-			return nil, false, fmt.Errorf("marshal Codex compact item: %w", err)
-		}
+		data, _ = json.Marshal(item)
 
 		return data, true, nil
 	}
@@ -1238,9 +1098,7 @@ func codexStreamingResponse(resp *http.Response) (*http.Response, error) {
 					return nil, fmt.Errorf("parse Codex incomplete response: %w", err)
 				}
 
-				if text := strings.TrimSpace(response.IncompleteDetails.Reason); text != "" {
-					reason = text
-				}
+				reason = cmp.Or(strings.TrimSpace(response.IncompleteDetails.Reason), "unknown")
 			}
 
 			errResponse = fmt.Errorf("codex stream response incomplete: %s", reason)
@@ -1258,17 +1116,11 @@ func codexStreamingResponse(resp *http.Response) (*http.Response, error) {
 		}
 
 		if len(outputs) > 0 {
-			outputData, err := json.Marshal(outputs)
-			if err != nil {
-				return nil, fmt.Errorf("marshal Codex output items: %w", err)
-			}
+			outputData, _ := json.Marshal(outputs)
 
 			response["output"] = outputData
 
-			event.Response, err = json.Marshal(response)
-			if err != nil {
-				return nil, fmt.Errorf("marshal Codex completed response: %w", err)
-			}
+			event.Response, _ = json.Marshal(response)
 		}
 
 		resp.Body = io.NopCloser(bytes.NewReader(event.Response))
@@ -1301,24 +1153,19 @@ func authorizeURL(redirectURI string, pkce pkceCodes, state string) string {
 	return issuer + "/oauth/authorize?" + params.Encode()
 }
 
-func generatePKCE() (pkceCodes, error) {
-	verifier, err := randomString(43)
-	if err != nil {
-		return pkceCodes{}, err
-	}
+func generatePKCE() pkceCodes {
+	verifier := randomString(43)
 
 	sum := sha256.Sum256([]byte(verifier))
 
-	return pkceCodes{verifier: verifier, challenge: base64.RawURLEncoding.EncodeToString(sum[:])}, nil
+	return pkceCodes{verifier: verifier, challenge: base64.RawURLEncoding.EncodeToString(sum[:])}
 }
 
-func randomString(length int) (string, error) {
+func randomString(length int) string {
 	buf := make([]byte, length)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("generate random string: %w", err)
-	}
+	_, _ = rand.Read(buf)
 
-	return base64.RawURLEncoding.EncodeToString(buf), nil
+	return base64.RawURLEncoding.EncodeToString(buf)
 }
 
 func exchangeCode(ctx context.Context, code, redirectURI, verifier string) (tokenResponse, error) {
@@ -1332,15 +1179,6 @@ func exchangeCode(ctx context.Context, code, redirectURI, verifier string) (toke
 	return postToken(ctx, form)
 }
 
-func refreshToken(ctx context.Context, refresh string) (tokenResponse, error) {
-	form := url.Values{}
-	form.Set("grant_type", "refresh_token")
-	form.Set("refresh_token", refresh)
-	form.Set("client_id", clientID)
-
-	return postToken(ctx, form)
-}
-
 func loginCommand(provider string) string {
 	if provider == "openai" {
 		return "rocketclaw oai login"
@@ -1350,10 +1188,7 @@ func loginCommand(provider string) string {
 }
 
 func postToken(ctx context.Context, form url.Values) (tokenResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, issuer+"/oauth/token", strings.NewReader(form.Encode()))
-	if err != nil {
-		return tokenResponse{}, fmt.Errorf("create token request: %w", err)
-	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, issuer+"/oauth/token", strings.NewReader(form.Encode()))
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
@@ -1378,15 +1213,9 @@ func postToken(ctx context.Context, form url.Values) (tokenResponse, error) {
 }
 
 func pollDeviceToken(ctx context.Context, deviceAuthID, userCode string) (Token, bool, error) {
-	body, err := json.Marshal(map[string]string{"device_auth_id": deviceAuthID, "user_code": userCode})
-	if err != nil {
-		return Token{}, false, fmt.Errorf("marshal device token request: %w", err)
-	}
+	body, _ := json.Marshal(map[string]string{"device_auth_id": deviceAuthID, "user_code": userCode})
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, issuer+"/api/accounts/deviceauth/token", bytes.NewReader(body))
-	if err != nil {
-		return Token{}, false, fmt.Errorf("create device token request: %w", err)
-	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, issuer+"/api/accounts/deviceauth/token", bytes.NewReader(body))
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "rocketclaw")
@@ -1451,12 +1280,8 @@ func extractAccountID(response tokenResponse) string {
 			continue
 		}
 
-		if claims.ChatGPTAccountID != "" {
-			return claims.ChatGPTAccountID
-		}
-
-		if claims.OpenAIAuth.ChatGPTAccountID != "" {
-			return claims.OpenAIAuth.ChatGPTAccountID
+		if id := cmp.Or(claims.ChatGPTAccountID, claims.OpenAIAuth.ChatGPTAccountID); id != "" {
+			return id
 		}
 
 		if len(claims.Organizations) > 0 {

@@ -266,11 +266,10 @@ func NewInboundMessageFromContent(source Source, kind InboundKind, content *Inbo
 	inbound := NewInboundMessage(source, kind, text, human)
 
 	inbound.Metadata = map[string]string{InboundRawTextMetadataKey: content.Text}
-	if len(content.Attachments) > 0 {
-		inbound.Attachments = slices.Clip(slices.Clone(content.Attachments))
-		for i := range inbound.Attachments {
-			inbound.Attachments[i].Data = append([]byte(nil), inbound.Attachments[i].Data...)
-		}
+	// Empty sources become nil; populated copies retain no spare append capacity.
+	inbound.Attachments = slices.Clip(append([]InboundAttachment(nil), content.Attachments...))
+	for i := range inbound.Attachments {
+		inbound.Attachments[i].Data = append([]byte(nil), inbound.Attachments[i].Data...)
 	}
 
 	inbound.AttachmentPresence = content.AttachmentPresence

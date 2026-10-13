@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/Rocketable/platform/internal/rocketcode/mcpclient"
 	"github.com/stretchr/testify/assert"
@@ -52,20 +53,22 @@ func TestRocketcodeConfigIncludesMCPServers(t *testing.T) {
 			},
 		},
 	}
-	bridge := NewConversation(config.NewLockedConfig(cfg), discardPublisher{}, &Config{ConversationID: "c", Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
+	store := newTestSessionService(t)
+	bridge := NewConversation(config.NewLockedConfig(cfg), discardPublisher{}, &Config{ConversationID: "c", Agent: "main", RequestReload: testNoopRestart, RequestRestart: testNoopRestart, UserQuestionAsker: &webQuestions{store: store, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}, StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.DiscardHandler))
 	rc := bridge.rocketcodeConfig(t.TempDir(), nil)
 	require.Len(t, rc.MCPServers, 1)
 	assert.Equal(t, mcpclient.ServerConfig(cfg.MCPServers["demo"]), rc.MCPServers["demo"])
 	assert.Equal(t, cfg.Workspace, rc.MCPWorkspace)
 
-	converted := toMCPClientServers(cfg.MCPServers)
+	converted := bridge.rocketcodeConfig(t.TempDir(), nil).MCPServers
 	converted["demo"].Args[0] = "changed"
 	converted["demo"].Env["DEMO"] = "changed"
 	converted["demo"].Headers["Authorization"] = "changed"
 
 	assert.Equal(t, rc.MCPServers["demo"], mcpclient.ServerConfig(cfg.MCPServers["demo"]))
+	assert.Equal(t, rc.MCPServers, bridge.rocketcodeConfig(t.TempDir(), nil).MCPServers)
 
-	empty := NewConversation(config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), discardPublisher{}, &Config{ConversationID: "c2", Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
+	empty := NewConversation(config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), discardPublisher{}, &Config{ConversationID: "c2", Agent: "main", RequestReload: testNoopRestart, RequestRestart: testNoopRestart, UserQuestionAsker: &webQuestions{store: store, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}, StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.DiscardHandler))
 	emptyRC := empty.rocketcodeConfig(t.TempDir(), nil)
 	assert.Nil(t, emptyRC.MCPServers)
 }

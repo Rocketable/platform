@@ -33,7 +33,6 @@ type Worker struct {
 // RunRequest identifies one foreground workflow invocation.
 type RunRequest struct {
 	RunID, Args string
-	Definition  *Definition
 }
 
 // AgentRequest describes one isolated agent call. Key is the call's
@@ -72,7 +71,6 @@ type engine struct {
 
 	mu                sync.Mutex
 	phases            map[string]*protocol.PhaseUpdate
-	phaseSequence     int
 	active            map[*starlark.Thread]uint64
 	callbacks, agents int
 	remaining         uint64
@@ -83,7 +81,7 @@ func Run(ctx context.Context, definition *Definition, request RunRequest, agent 
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
-	e := &engine{agent: agent, cancel: cancel, runID: request.RunID, phases: make(map[string]*protocol.PhaseUpdate), phaseSequence: len(definition.Phases), strict: len(definition.Phases) > 0, active: make(map[*starlark.Thread]uint64), remaining: 10_000_000}
+	e := &engine{agent: agent, cancel: cancel, runID: request.RunID, phases: make(map[string]*protocol.PhaseUpdate), strict: len(definition.Phases) > 0, active: make(map[*starlark.Thread]uint64), remaining: 10_000_000}
 	defer func() {
 		e.finishPhase("run", err)
 
@@ -278,8 +276,7 @@ func (e *engine) builtins() starlark.StringDict {
 				return nil, errors.New("workflow may have at most 100 phases")
 			}
 
-			state = &protocol.PhaseUpdate{PhaseID: fmt.Sprintf("%s/phase/%06d/%s", e.runID, e.phaseSequence, name), Name: name, Status: protocol.PhasePending}
-			e.phaseSequence++
+			state = &protocol.PhaseUpdate{PhaseID: fmt.Sprintf("%s/phase/%06d/%s", e.runID, len(e.phases), name), Name: name, Status: protocol.PhasePending}
 			e.phases[name] = state
 		}
 
@@ -317,7 +314,7 @@ func (e *engine) builtins() starlark.StringDict {
 		case *starlark.List:
 			callbacks = slices.Collect(values.Elements())
 		case starlark.Tuple:
-			callbacks = slices.Clone(values)
+			callbacks = values
 		default:
 			return nil, errors.New("parallel callables must be a list or tuple")
 		}
@@ -379,32 +376,28 @@ func (e *engine) builtins() starlark.StringDict {
 		"agent":    e.agentBuiltin(),
 		"phase":    starlark.NewBuiltin("phase", phase),
 		"parallel": starlark.NewBuiltin("parallel", parallel),
-		"pipeline": e.pipelineBuiltin(fanout),
+		"pipeline": starlark.NewBuiltin("pipeline", func(thread *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+			var items starlark.Iterable
+
+			fn := starlark.Callable(nil)
+			if err := starlark.UnpackArgs("pipeline", args, kwargs, "items", &items, "fn", &fn); err != nil {
+				return nil, fmt.Errorf("pipeline arguments: %w", err)
+			}
+
+			fn.Freeze()
+
+			ctx := thread.Local(localContext).(context.Context)
+
+			values, err := pipelineItems(ctx, items)
+			if err != nil {
+				return nil, err
+			}
+
+			return fanout(thread, values, func(child *starlark.Thread, value starlark.Value) (starlark.Value, error) {
+				return starlark.Call(child, fn, starlark.Tuple{value}, nil)
+			})
+		}),
 	}
-}
-
-func (e *engine) pipelineBuiltin(fanout func(*starlark.Thread, []starlark.Value, func(*starlark.Thread, starlark.Value) (starlark.Value, error)) (starlark.Value, error)) *starlark.Builtin {
-	return starlark.NewBuiltin("pipeline", func(thread *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-		var items starlark.Iterable
-
-		fn := starlark.Callable(nil)
-		if err := starlark.UnpackArgs("pipeline", args, kwargs, "items", &items, "fn", &fn); err != nil {
-			return nil, fmt.Errorf("pipeline arguments: %w", err)
-		}
-
-		fn.Freeze()
-
-		ctx := thread.Local(localContext).(context.Context)
-
-		values, err := pipelineItems(ctx, items)
-		if err != nil {
-			return nil, err
-		}
-
-		return fanout(thread, values, func(child *starlark.Thread, value starlark.Value) (starlark.Value, error) {
-			return starlark.Call(child, fn, starlark.Tuple{value}, nil)
-		})
-	})
 }
 
 func pipelineItems(ctx context.Context, items starlark.Iterable) ([]starlark.Value, error) {
@@ -536,9 +529,8 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 			return nil, errResult
 		}
 
-		if err := e.phaseCount(phase, 0, -1, 1); err != nil {
-			return nil, err
-		}
+		// The initial count installed this phase, and phases are never removed.
+		_ = e.phaseCount(phase, 0, -1, 1)
 
 		if schema == starlark.None {
 			text, _ := starlark.AsString(decoded)
@@ -559,8 +551,7 @@ func (e *engine) phaseCount(name string, scheduled, running, complete int) error
 			return errors.New("workflow may have at most 100 phases")
 		}
 
-		state = &protocol.PhaseUpdate{PhaseID: fmt.Sprintf("%s/phase/%06d/%s", e.runID, e.phaseSequence, name), Name: name, Status: protocol.PhaseInProgress}
-		e.phaseSequence++
+		state = &protocol.PhaseUpdate{PhaseID: fmt.Sprintf("%s/phase/%06d/%s", e.runID, len(e.phases), name), Name: name, Status: protocol.PhaseInProgress}
 		e.phases[name] = state
 	}
 
@@ -609,24 +600,16 @@ func (e *engine) encode(thread *starlark.Thread, value starlark.Value) ([]byte, 
 }
 
 func containsSet(value starlark.Value) bool {
-	if _, ok := value.(*starlark.Set); ok {
-		return true
-	}
-
-	var values []starlark.Value
-
 	switch value := value.(type) {
+	case *starlark.Set:
+		return true
 	case *starlark.List:
-		for i := range value.Len() {
-			values = append(values, value.Index(i))
-		}
+		return slices.ContainsFunc(slices.Collect(value.Elements()), containsSet)
 	case starlark.Tuple:
-		values = value
+		return slices.ContainsFunc(value, containsSet)
 	case *starlark.Dict:
-		for _, item := range value.Items() {
-			values = append(values, item[1])
-		}
+		return slices.ContainsFunc(value.Items(), func(item starlark.Tuple) bool { return containsSet(item[1]) })
+	default:
+		return false
 	}
-
-	return slices.ContainsFunc(values, containsSet)
 }

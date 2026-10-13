@@ -279,31 +279,29 @@ func portableMessage(role, phase string, raw json.RawMessage) (responses.Respons
 		return responses.ResponseInputItemUnionParam{}, false, err
 	}
 
-	if text != "" || content == nil {
-		message := responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRole(role))
-		message.OfMessage.Phase = responses.EasyInputMessagePhase(phase)
-		message.OfMessage.Type = "message"
-
-		return message, true, nil
-	}
-
-	parts := make(responses.ResponseInputMessageContentListParam, 0, len(content))
-	for _, part := range content {
-		switch part.Type {
-		case "input_text", "output_text":
-			parts = append(parts, responses.ResponseInputContentUnionParam{OfInputText: &responses.ResponseInputTextParam{Text: part.Text, Type: "input_text"}})
-		case "input_image":
-			parts = append(parts, responses.ResponseInputContentUnionParam{OfInputImage: &responses.ResponseInputImageParam{ImageURL: openai.String(part.ImageURL), Detail: responses.ResponseInputImageDetail(part.Detail), Type: "input_image"}})
-		case "input_file":
-			parts = append(parts, responses.ResponseInputContentUnionParam{OfInputFile: &responses.ResponseInputFileParam{FileData: openai.String(part.FileData), FileURL: openai.String(part.FileURL), Filename: openai.String(part.Filename), Detail: responses.ResponseInputFileDetail(part.Detail), Type: "input_file"}})
+	var message responses.ResponseInputItemUnionParam
+	if content == nil {
+		message = responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRole(role))
+	} else {
+		parts := make(responses.ResponseInputMessageContentListParam, 0, len(content))
+		for _, part := range content {
+			switch part.Type {
+			case "input_text", "output_text":
+				parts = append(parts, responses.ResponseInputContentUnionParam{OfInputText: &responses.ResponseInputTextParam{Text: part.Text, Type: "input_text"}})
+			case "input_image":
+				parts = append(parts, responses.ResponseInputContentUnionParam{OfInputImage: &responses.ResponseInputImageParam{ImageURL: openai.String(part.ImageURL), Detail: responses.ResponseInputImageDetail(part.Detail), Type: "input_image"}})
+			case "input_file":
+				parts = append(parts, responses.ResponseInputContentUnionParam{OfInputFile: &responses.ResponseInputFileParam{FileData: openai.String(part.FileData), FileURL: openai.String(part.FileURL), Filename: openai.String(part.Filename), Detail: responses.ResponseInputFileDetail(part.Detail), Type: "input_file"}})
+			}
 		}
+
+		if len(parts) == 0 {
+			return responses.ResponseInputItemUnionParam{}, false, nil
+		}
+
+		message = responses.ResponseInputItemParamOfMessage(parts, responses.EasyInputMessageRole(role))
 	}
 
-	if len(parts) == 0 {
-		return responses.ResponseInputItemUnionParam{}, false, nil
-	}
-
-	message := responses.ResponseInputItemParamOfMessage(parts, responses.EasyInputMessageRole(role))
 	message.OfMessage.Phase = responses.EasyInputMessagePhase(phase)
 	message.OfMessage.Type = "message"
 
@@ -320,31 +318,29 @@ func portableFunctionOutput(callID string, raw json.RawMessage) (responses.Respo
 		return responses.ResponseInputItemUnionParam{}, false, err
 	}
 
-	if text != "" || content == nil {
-		output := responses.ResponseInputItemParamOfFunctionCallOutput(text)
-		output.OfFunctionCallOutput.CallID = openai.String(callID)
-		output.OfFunctionCallOutput.Type = "function_call_output"
-
-		return output, true, nil
-	}
-
-	parts := make(responses.ResponseFunctionCallOutputItemListParam, 0, len(content))
-	for _, part := range content {
-		switch part.Type {
-		case "input_text", "output_text":
-			parts = append(parts, responses.ResponseFunctionCallOutputItemUnionParam{OfInputText: &responses.ResponseInputTextContentParam{Text: part.Text, Type: "input_text"}})
-		case "input_image":
-			parts = append(parts, responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: &responses.ResponseInputImageContentParam{ImageURL: openai.String(part.ImageURL), Detail: responses.ResponseInputImageContentDetail(part.Detail), Type: "input_image"}})
-		case "input_file":
-			parts = append(parts, responses.ResponseFunctionCallOutputItemUnionParam{OfInputFile: &responses.ResponseInputFileContentParam{FileData: openai.String(part.FileData), FileURL: openai.String(part.FileURL), Filename: openai.String(part.Filename), Detail: responses.ResponseInputFileContentDetail(part.Detail), Type: "input_file"}})
+	var output responses.ResponseInputItemUnionParam
+	if content == nil {
+		output = responses.ResponseInputItemParamOfFunctionCallOutput(text)
+	} else {
+		parts := make(responses.ResponseFunctionCallOutputItemListParam, 0, len(content))
+		for _, part := range content {
+			switch part.Type {
+			case "input_text", "output_text":
+				parts = append(parts, responses.ResponseFunctionCallOutputItemUnionParam{OfInputText: &responses.ResponseInputTextContentParam{Text: part.Text, Type: "input_text"}})
+			case "input_image":
+				parts = append(parts, responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: &responses.ResponseInputImageContentParam{ImageURL: openai.String(part.ImageURL), Detail: responses.ResponseInputImageContentDetail(part.Detail), Type: "input_image"}})
+			case "input_file":
+				parts = append(parts, responses.ResponseFunctionCallOutputItemUnionParam{OfInputFile: &responses.ResponseInputFileContentParam{FileData: openai.String(part.FileData), FileURL: openai.String(part.FileURL), Filename: openai.String(part.Filename), Detail: responses.ResponseInputFileContentDetail(part.Detail), Type: "input_file"}})
+			}
 		}
+
+		if len(parts) == 0 {
+			return responses.ResponseInputItemUnionParam{}, false, nil
+		}
+
+		output = responses.ResponseInputItemParamOfFunctionCallOutput(parts)
 	}
 
-	if len(parts) == 0 {
-		return responses.ResponseInputItemUnionParam{}, false, nil
-	}
-
-	output := responses.ResponseInputItemParamOfFunctionCallOutput(parts)
 	output.OfFunctionCallOutput.CallID = openai.String(callID)
 	output.OfFunctionCallOutput.Type = "function_call_output"
 

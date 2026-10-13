@@ -177,6 +177,8 @@ func TestReplayForProviderRejectsMalformedKnownReadableData(t *testing.T) {
 
 func TestReplayForProviderDropsContentArrayItemsWithoutPortableParts(t *testing.T) {
 	for _, raw := range []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","content":[]}`),
+		json.RawMessage(`{"type":"function_call_output","call_id":"call","output":[]}`),
 		json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_image","file_id":"hosted-image"},{"type":"input_file","file_id":"hosted-file"}]}`),
 		json.RawMessage(`{"type":"function_call_output","call_id":"call","output":[{"type":"input_image","file_id":"hosted-image"},{"type":"input_file","file_id":"hosted-file"}]}`),
 	} {
@@ -193,6 +195,16 @@ func TestReplayForProviderDropsContentArrayItemsWithoutPortableParts(t *testing.
 	assert.NotContains(t, string(replay[0]), `file_id`)
 	assert.Contains(t, string(replay[0]), "base64,keep")
 	assert.Contains(t, string(replay[0]), "keep-data")
+
+	for _, raw := range []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"assistant","phase":"final_answer","content":""}`),
+		json.RawMessage(`{"type":"function_call_output","call_id":"call","output":""}`),
+	} {
+		replay, err := replayForProvider([]json.RawMessage{raw})
+		require.NoError(t, err)
+		require.Len(t, replay, 1, "empty strings survive even though empty content arrays do not")
+		require.JSONEq(t, string(raw), string(replay[0]))
+	}
 }
 
 func TestReplayForProviderCompactionFallsBackAfterBlankContent(t *testing.T) {

@@ -109,11 +109,20 @@ func TestExitCodeForError(t *testing.T) {
 	assert.Equal(t, 1, exitCodeForError(errors.New("boom")))
 }
 
-func TestParseLogLevel(t *testing.T) {
-	assert.Equal(t, slog.LevelDebug, parseLogLevel(""))
-	assert.Equal(t, slog.LevelWarn, parseLogLevel(" warning "))
-	assert.Equal(t, slog.LevelError, parseLogLevel("ERROR"))
-	assert.Equal(t, slog.LevelDebug, parseLogLevel("bogus"))
+func TestNewLoggerLevel(t *testing.T) {
+	previous := slog.Default()
+
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	for _, test := range []struct {
+		text  string
+		level slog.Level
+	}{{"", slog.LevelDebug}, {" warning ", slog.LevelWarn}, {"ERROR", slog.LevelError}, {"bogus", slog.LevelDebug}} {
+		logger := newLogger(test.text)
+		assert.Same(t, logger, slog.Default())
+		assert.True(t, logger.Enabled(t.Context(), test.level))
+		assert.False(t, logger.Enabled(t.Context(), test.level-1))
+	}
 }
 
 func TestRunServeRequiresConfig(t *testing.T) {

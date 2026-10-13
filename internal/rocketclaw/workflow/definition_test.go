@@ -274,6 +274,7 @@ func TestLoadRejectsInvalidDefinitions(t *testing.T) {
 		{name: "empty worker model", file: "test.star", source: validMeta + "\nw = worker(name = \"researcher\", instructions = \"Find\", model = \"\")\n" + validMain, want: "model"},
 		{name: "invalid worker model", file: "test.star", source: validMeta + "\nw = worker(name = \"researcher\", instructions = \"Find\", model = 1)\n" + validMain, want: "model"},
 		{name: "positional worker arguments", file: "test.star", source: validMeta + "\nw = worker(\"researcher\", \"Find\")\n" + validMain, want: "worker arguments must be named literals"},
+		{name: "malformed worker keyword", file: "test.star", source: validMeta + "\nw = worker(\"name\" = \"researcher\", instructions = \"Find\")\n" + validMain, want: "validate top-level syntax"},
 		{name: "duplicate worker argument", file: "test.star", source: validMeta + "\nw = worker(name = \"researcher\", name = \"other\", instructions = \"Find\")\n" + validMain, want: "worker argument name is duplicated"},
 		{name: "dynamic worker model", file: "test.star", source: validMeta + "\nmodel = \"fast\"\nw = worker(name = \"researcher\", instructions = \"Find\", model = model)\n" + validMain, want: "worker model must be a literal string or None"},
 		{name: "computed worker model", file: "test.star", source: validMeta + "\nw = worker(name = \"researcher\", instructions = \"Find\", model = \"fast\" + \"model\")\n" + validMain, want: "worker model must be a literal string or None"},

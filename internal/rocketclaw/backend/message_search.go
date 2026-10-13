@@ -92,12 +92,10 @@ func indexEntryMessages(ctx context.Context, db stateStoreDB, conversationID, pr
 		return nil
 	}
 
-	if _, err := db.ExecContext(ctx, `INSERT INTO message_search (conversation_id, entry_id, turn_id, replay_index, part_index, role, text, text_lower)
-SELECT $1, NULLIF($2::bigint, 0), NULLIF($3::text, ''), * FROM unnest($4::integer[], $5::integer[], $6::text[], $7::text[], $8::text[])`, conversationID, entryID, turnID, positions, parts, roles, texts, lowers); err != nil {
-		return fmt.Errorf("index message search: %w", err)
-	}
+	_, err = execState(ctx, db, "index message search", `INSERT INTO message_search (conversation_id, entry_id, turn_id, replay_index, part_index, role, text, text_lower)
+SELECT $1, NULLIF($2::bigint, 0), NULLIF($3::text, ''), * FROM unnest($4::integer[], $5::integer[], $6::text[], $7::text[], $8::text[])`, conversationID, entryID, turnID, positions, parts, roles, texts, lowers)
 
-	return nil
+	return err
 }
 
 // indexTurnMessages replaces the rows of turnID, a turn of conversationID, with
@@ -111,16 +109,16 @@ func (s *SessionService) indexTurnMessages(ctx context.Context, db stateStoreDB,
 
 	var raw []byte
 
-	err := db.QueryRowContext(ctx, `WITH `+sessionHistorySQL+`
+	err := queryScalar(ctx, db, "load turn record", `WITH `+sessionHistorySQL+`
 SELECT COALESCE(s.value::jsonb->'record', '{}') FROM active_turns a JOIN turn_steps s ON s.conversation_id = a.conversation_id AND s.key = a.id
 WHERE a.id = $2 AND a.conversation_id = $1 AND a.terminal <> ''
-    AND NOT EXISTS (SELECT 1 FROM physical_entries WHERE entry->>'turn_id' = a.id AND (NOT synced OR source_conversation_id = $1))`, conversationID, turnID).Scan(&raw)
+    AND NOT EXISTS (SELECT 1 FROM physical_entries WHERE entry->>'turn_id' = a.id AND (NOT synced OR source_conversation_id = $1))`, &raw, conversationID, turnID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 
 	if err != nil {
-		return fmt.Errorf("load turn record: %w", err)
+		return err
 	}
 
 	var record struct {
@@ -144,14 +142,12 @@ WHERE a.id = $2 AND a.conversation_id = $1 AND a.terminal <> ''
 // history lock, unless it already exists or has history an older binary may
 // have saved unindexed. Every later write to the chat indexes itself.
 func markNewChatIndexed(ctx context.Context, db stateStoreDB, conversationID string) error {
-	if _, err := db.ExecContext(ctx, `INSERT INTO message_search_indexed (conversation_id) SELECT $1::text
+	_, err := execState(ctx, db, "mark new chat message search", `INSERT INTO message_search_indexed (conversation_id) SELECT $1::text
 WHERE NOT EXISTS (SELECT 1 FROM managed_conversations WHERE conversation_id = $1) AND NOT EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1)
     AND NOT EXISTS (SELECT 1 FROM active_turns WHERE conversation_id = $1)
-ON CONFLICT DO NOTHING`, conversationID); err != nil {
-		return fmt.Errorf("mark new chat message search: %w", err)
-	}
+ON CONFLICT DO NOTHING`, conversationID)
 
-	return nil
+	return err
 }
 
 // visibleChatsSQL keeps the managed_conversations rows c that Web shows
@@ -279,12 +275,8 @@ func (s *SessionService) backfillChatMessageSearch(ctx context.Context, conversa
 	}
 
 	var unindexed bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (`+unindexedChatsSQL+`)`, conversationID).Scan(&unindexed); err != nil {
-		return fmt.Errorf("check message search backfill: %w", err)
-	}
-
-	if !unindexed {
-		return nil
+	if err := queryScalar(ctx, tx, "check message search backfill", `SELECT EXISTS (`+unindexedChatsSQL+`)`, &unindexed, conversationID); err != nil || !unindexed {
+		return err
 	}
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM message_search WHERE conversation_id = $1`, conversationID); err != nil {

@@ -2470,22 +2470,6 @@ func TestSlackGoalTextWithoutTurnBudget(t *testing.T) {
 	assert.Equal(t, "🏁 Pursuing Goal...", slackGoalHeaderText(1, 0, false))
 }
 
-func TestSetMCPAttachmentOnlyResponseText(t *testing.T) {
-	msg := protocol.NewOutboundMessage("conversation", "")
-	msg.Complete = true
-	msg.ExternalConversationID = "public-1"
-	msg.Attachments = []protocol.OutboundAttachment{{Name: "a.txt"}}
-	setMCPAttachmentOnlyResponseText(msg)
-	assert.NotEmpty(t, msg.Text)
-
-	empty := protocol.NewOutboundMessage("conversation", "")
-	empty.Complete = true
-	empty.ExternalConversationID = "public-1"
-	empty.Attachments = []protocol.OutboundAttachment{{}}
-	setMCPAttachmentOnlyResponseText(empty)
-	assert.Equal(t, "Attached files.", empty.Text)
-}
-
 func TestSendResponseSplitsLongFinalAnswerIntoThreadMessages(t *testing.T) {
 	var posted, deleted, updated []url.Values
 
@@ -3278,6 +3262,12 @@ func TestSendResponseUploadsAttachmentOnlyMCPResponseToSlackThread(t *testing.T)
 	assert.Equal(t, "report body", uploadedContent)
 	assert.Equal(t, "D123", completed.Get("channel_id"))
 	assert.Equal(t, "111.222", completed.Get("thread_ts"))
+
+	msg.Text = ""
+	msg.Attachments = []protocol.OutboundAttachment{{}}
+	require.NoError(t, connector.SendResponse(t.Context(), msg))
+	assert.Equal(t, "Attached files.", posted.Get("text"))
+	assert.Equal(t, "111.222", posted.Get("thread_ts"))
 }
 
 func TestSendResponseDoesNotFailWhenAttachmentUploadFails(t *testing.T) {
@@ -3747,6 +3737,8 @@ func TestNativeForwardDeduplicatesMatchingPreviewsAndKeepsConflictsWithoutSource
 		wantSource   bool
 	}{
 		{name: "duplicate", payload: `{"event":{"attachments":[{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C1","ts":"1.1","text":"same"},{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C1","ts":"1.1","text":"same"}]}}`, wantPreviews: []string{"same"}, wantSource: true},
+		{name: "empty qualifying preview", payload: `{"event":{"attachments":[{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C1","ts":"1.1","text":"  "}]}}`, wantPreviews: []string{""}, wantSource: true},
+		{name: "empty conflicting source", payload: `{"event":{"attachments":[{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C1","ts":"1.1"},{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C2","ts":"2.2"}]}}`, wantPreviews: []string{""}},
 		{name: "conflict", payload: `{"event":{"attachments":[{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C1","ts":"1.1","text":"first"},{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C2","ts":"2.2","text":"second"}]}}`, wantPreviews: []string{"first", "second"}},
 	}
 

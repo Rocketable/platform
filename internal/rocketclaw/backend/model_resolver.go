@@ -24,10 +24,8 @@ type modelResolver struct {
 }
 
 func newModelResolver(cfg *config.Config, logger *slog.Logger) *modelResolver {
-	providers := maps.Clone(cfg.Providers)
-	if providers == nil {
-		providers = make(map[string]config.OpenAIConfig, 1)
-	}
+	providers := make(map[string]config.OpenAIConfig, len(cfg.Providers)+1)
+	maps.Copy(providers, cfg.Providers)
 
 	providers["openai"] = cfg.OpenAI
 

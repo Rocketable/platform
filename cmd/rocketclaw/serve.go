@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -104,21 +105,12 @@ func runServe(args []string) error {
 
 	logger.Info("rocketclaw stopped")
 
-	if err := ctx.Err(); err != nil && !errors.Is(err, context.Canceled) {
-		return fmt.Errorf("wait for rocketclaw shutdown: %w", err)
-	}
-
 	return nil
 }
 
 // logBuildIdentity uses only metadata embedded in the running binary, not checkout history.
 func logBuildIdentity(logger *slog.Logger, build *debug.BuildInfo) {
-	version := "(unknown)"
-	if build.Main.Version != "" {
-		version = build.Main.Version
-	}
-
-	attrs := []slog.Attr{slog.String("version", version)}
+	attrs := []slog.Attr{slog.String("version", cmp.Or(build.Main.Version, "(unknown)"))}
 	if build.GoVersion != "" {
 		attrs = append(attrs, slog.String("go_version", build.GoVersion))
 	}

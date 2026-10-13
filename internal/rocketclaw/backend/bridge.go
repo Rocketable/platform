@@ -43,6 +43,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace/noop"
 	xdraw "golang.org/x/image/draw"
 	_ "golang.org/x/image/webp" // Registers a WebP decoder for image.Decode.
@@ -117,7 +118,6 @@ type Bridge struct {
 	mu                    sync.Mutex
 	handling, stopped     bool
 	activeReply           *protocol.InboundMessage
-	activeLooper          *rocketcode.Runtime
 	activeAttribution     rocketcode.ReplayAttribution
 	activeTurnInterrupts  chan os.Signal
 	activeTurnCancel      context.CancelFunc
@@ -226,17 +226,13 @@ func (s childSessions) ChildEntries(ctx context.Context, key string) ([]rocketco
 
 // NewConversation constructs a rocketcode bridge for one conversation.
 func NewConversation(cfg *config.LockedConfig, publisher protocol.OutboundPublisher, bridgeCfg *Config, logger *slog.Logger) *Bridge {
-	return &Bridge{log: logger.With("component", "rocketcode"), config: normalizeConfig(bridgeCfg), runtime: cfg, bus: publisher, requestCh: make(chan bridgeRequest, defaultQueueSize), stopCh: make(chan struct{})}
-}
-
-func normalizeConfig(cfg *Config) Config {
-	normalized := *cfg
+	normalized := *bridgeCfg
 	normalized.ConversationID = strings.TrimSpace(normalized.ConversationID)
 	normalized.Agent = strings.TrimSpace(normalized.Agent)
 	normalized.ManagedConversationID = strings.TrimSpace(normalized.ManagedConversationID)
 	normalized.ExternalConversationID = strings.TrimSpace(normalized.ExternalConversationID)
 
-	return normalized
+	return &Bridge{log: logger.With("component", "rocketcode"), config: normalized, runtime: cfg, bus: publisher, requestCh: make(chan bridgeRequest, defaultQueueSize), stopCh: make(chan struct{})}
 }
 
 // Run handles the conversation's unfinished active turn, then its requests,
@@ -532,12 +528,8 @@ func (b *Bridge) saveSteersLocked(ctx context.Context) {
 		steers = append(steers, journaledSteer{ID: steer.queueItemID, Inbound: steer.inbound})
 	}
 
-	data, err := json.Marshal(steers)
-	if err == nil {
-		err = b.config.SessionService.SaveTurnStep(context.WithoutCancel(ctx), b.config.ConversationID, b.activeTurnID+"/steers", data)
-	}
-
-	if err != nil {
+	data, _ := json.Marshal(steers)
+	if err := b.config.SessionService.SaveTurnStep(context.WithoutCancel(ctx), b.config.ConversationID, b.activeTurnID+"/steers", data); err != nil {
 		b.log.Error("record accepted steers", "conversation_id", b.config.ConversationID, "turn_id", b.activeTurnID, "error", err)
 	}
 }
@@ -622,9 +614,7 @@ func (b *Bridge) slipSteer(request *bridgeRequest) (bool, error) {
 		}
 	}
 
-	if data, err = json.Marshal(append(steers, journaledSteer{ID: request.queueItemID, Inbound: request.inbound})); err != nil {
-		return false, fmt.Errorf("encode accepted steers: %w", err)
-	}
+	data, _ = json.Marshal(append(steers, journaledSteer{ID: request.queueItemID, Inbound: request.inbound}))
 
 	if err := b.config.SessionService.SaveTurnStep(ctx, b.config.ConversationID, key, data); err != nil {
 		return false, err
@@ -1734,7 +1724,7 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 	runner := &incoming.workflow
 	defer func() { err = errors.Join(err, incoming.closeWorkflow()) }()
 
-	request := workflow.RunRequest{RunID: turnID, Args: msg.Workflow.Args, Definition: runner.definition}
+	request := workflow.RunRequest{RunID: turnID, Args: msg.Workflow.Args}
 
 	turnCtx, cancel := context.WithCancel(ctx)
 
@@ -1757,7 +1747,7 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 		return result, fmt.Errorf("publish workflow start: %w", err)
 	}
 
-	workflowResult, errRun := workflow.Run(turnCtx, request.Definition, request, runner)
+	workflowResult, errRun := workflow.Run(turnCtx, runner.definition, request, runner)
 
 	b.mu.Lock()
 	interrupted := b.activeTurnInterrupted
@@ -1774,7 +1764,7 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 		terminal = protocol.TerminalFailed
 	}
 
-	summary := workflowRunSummary{Workflow: request.Definition.Name, RunID: turnID, Terminal: terminal, Phases: make([]workflowRunPhaseSummary, 0, len(workflowResult.Phases))}
+	summary := workflowRunSummary{Workflow: runner.definition.Name, RunID: turnID, Terminal: terminal, Phases: make([]workflowRunPhaseSummary, 0, len(workflowResult.Phases))}
 	for _, phase := range workflowResult.Phases {
 		summary.Phases = append(summary.Phases, workflowRunPhaseSummary{Name: phase.Name, Status: phase.Status, Scheduled: phase.Scheduled, Complete: phase.Complete})
 	}
@@ -1799,10 +1789,7 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 		}
 	}
 
-	payload, err := json.Marshal(summary)
-	if err != nil {
-		return runResult{turnID: turnID, workflowTerminal: protocol.TerminalFailed}, fmt.Errorf("encode workflow run summary: %w", err)
-	}
+	payload, _ := json.Marshal(summary)
 
 	summaryReplay, err := replayInputForMessage("developer", workflowRunSummaryPrefix+string(payload))
 	if err != nil {
@@ -1914,6 +1901,8 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	ctx, span := tracer.Start(ctx, "rocketclaw.turn")
+	traceConfig := instrumentation.TraceConfig{HideInputs: runtimeCfg.Instrumentation.HideInputs, HideOutputs: runtimeCfg.Instrumentation.HideOutputs}
+
 	instrumentation.ApplyContextAttributes(ctx, span)
 	span.SetAttributes(attribute.String(semconv.OpenInferenceSpanKind, semconv.SpanKindAgent))
 	span.SetAttributes(
@@ -1924,13 +1913,17 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		attribute.String("rocketclaw.source", string(msg.Source)),
 		attribute.String("rocketclaw.kind", string(msg.Kind)),
 		attribute.Int("rocketclaw.attachment_count", len(msg.Attachments)),
-		rocketclawInputValue(runtimeCfg, msg.Text),
+		attribute.String(semconv.InputValue, traceConfig.MaskInputValue(msg.Text)),
 	)
 
 	defer func() {
-		recordRocketClawSpanError(span, err)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+
 		span.SetAttributes(
-			rocketclawOutputValue(runtimeCfg, result.text),
+			attribute.String(semconv.OutputValue, traceConfig.MaskOutputValue(result.text)),
 			attribute.String("rocketclaw.response_id", result.responseID),
 			attribute.String("rocketclaw.model", result.attribution.Model),
 		)
@@ -2136,7 +2129,6 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	b.mu.Lock()
 	b.activeReply = activeReply
-	b.activeLooper = looper
 	b.activeAttribution = result.attribution
 	b.activeTurnInterrupts = interrupts
 	b.activeTurnCancel = cancelTurn
@@ -2150,7 +2142,6 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	defer func() {
 		b.mu.Lock()
 		b.activeReply = nil
-		b.activeLooper = nil
 		b.activeAttribution = rocketcode.ReplayAttribution{}
 		b.activeTurnInterrupts = nil
 		b.activeTurnCancel = nil
@@ -2300,22 +2291,20 @@ func providerLogAttrs(req *http.Request, resp *http.Response, status int, durati
 // rocketcodeShellTempRel returns the workspace-relative shell temp directory for a conversation.
 // Layout: <runtimeDir>/.rocketcode/tmp/<sanitized-conversation-id>.
 func rocketcodeShellTempRel(runtimeDir, conversationID string) string {
-	return filepath.ToSlash(filepath.Join(runtimeDir, ".rocketcode", "tmp", sanitizeShellTempSegment(conversationID)))
-}
-
-func sanitizeShellTempSegment(conversationID string) string {
 	id := strings.TrimSpace(conversationID)
 	if id == "" {
-		return "anonymous"
+		id = "anonymous"
 	}
 
-	return strings.Map(func(r rune) rune {
+	id = strings.Map(func(r rune) rune {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' {
 			return r
 		}
 
 		return '_'
 	}, id)
+
+	return filepath.ToSlash(filepath.Join(runtimeDir, ".rocketcode", "tmp", id))
 }
 
 func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]string, customTools ...rocketcode.Tool) rocketcode.Config {
@@ -2332,6 +2321,7 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 	return rocketcode.Config{Model: "", AutoApproverModel: runtimeCfg.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(runtimeCfg), RetainedResultDir: rocketcodeRetainedDir(b.config.ConversationID), Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: runtimeCfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: runtimeCfg.Instrumentation.HideInputs, HideOutputs: runtimeCfg.Instrumentation.HideOutputs}}, ChildSessions: childSessions{store: b.config.SessionService, conversationID: b.config.ConversationID}, Journal: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, BackgroundJobs: rocketcode.InertBackgroundJobs{}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(runtimeCfg.MCPServers), MCPWorkspace: runtimeCfg.Workspace}
 }
 
+// toMCPClientServers consumes the bridge's independent runtime snapshot.
 func toMCPClientServers(servers map[string]config.MCPServerConfig) map[string]mcpclient.ServerConfig {
 	if len(servers) == 0 {
 		return nil
@@ -2340,9 +2330,6 @@ func toMCPClientServers(servers map[string]config.MCPServerConfig) map[string]mc
 	out := make(map[string]mcpclient.ServerConfig, len(servers))
 	for name, server := range servers {
 		cfg := mcpclient.ServerConfig(server)
-		cfg.Args = slices.Clone(cfg.Args)
-		cfg.Env = maps.Clone(cfg.Env)
-		cfg.Headers = maps.Clone(cfg.Headers)
 		out[name] = cfg
 	}
 
@@ -2378,15 +2365,10 @@ func overlayPromptSection(cfg *config.Config, overlays []skel.OverlayInfo) strin
 	}
 
 	for _, info := range overlays {
-		ref := info.Ref
-		if ref == "" {
-			ref = "HEAD"
-		}
-
 		lines = append(lines,
 			"- "+info.Spec,
 			"  Git URL: "+info.URL,
-			"  Ref: "+ref,
+			"  Ref: "+cmp.Or(info.Ref, "HEAD"),
 			"  Clone path: "+info.ClonePath,
 		)
 	}
@@ -2448,10 +2430,10 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 			return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("%s: permission.rocketclaw.rocketclaw_set_tag: %w", agent.Location, err)
 		}
 
-		agent.Permission.Buckets = slices.DeleteFunc(slices.Clone(agent.Permission.Buckets), func(bucket rocketcode.PermissionBucket) bool { return bucket.Name == "rocketclaw_tags" })
+		agent.Permission.Buckets = slices.DeleteFunc(agent.Permission.Buckets, func(bucket rocketcode.PermissionBucket) bool { return bucket.Name == "rocketclaw_tags" })
 		for i, bucket := range agent.Permission.Buckets {
 			if bucket.Name == "rocketclaw" {
-				agent.Permission.Buckets[i].Rules = slices.DeleteFunc(slices.Clone(bucket.Rules), func(rule rocketcode.PermissionRule) bool {
+				agent.Permission.Buckets[i].Rules = slices.DeleteFunc(bucket.Rules, func(rule rocketcode.PermissionRule) bool {
 					return rule.Pattern == setTagToolName || rule.Pattern == getTagsToolName
 				})
 			}
@@ -2473,9 +2455,7 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 				continue
 			}
 
-			if err := agent.Permission.Allow("rocketclaw", tool); err != nil {
-				return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("prepare agent %q permission: %w", name, err)
-			}
+			_ = agent.Permission.Allow("rocketclaw", tool) // The fixed category and allow action cannot fail.
 		}
 
 		agentResult.Agents.Items[name] = agent
@@ -2667,12 +2647,8 @@ func (c *outboundAttachmentCollector) Tool(root *os.Root, sessions *SessionServi
 
 		c.mu.Lock()
 		c.attachments = append(c.attachments, attachments...)
-		queued, err := json.Marshal(c.attachments)
+		queued, _ := json.Marshal(c.attachments)
 		c.mu.Unlock()
-
-		if err != nil {
-			return rocketcode.ToolResult{}, fmt.Errorf("encode response attachments: %w", err)
-		}
 
 		if err := sessions.SaveTurnStep(ctx, conversationID, c.turnID+"/attachments", queued); err != nil {
 			return rocketcode.ToolResult{}, err
@@ -2714,16 +2690,12 @@ func outboundAttachment(root *os.Root, input *outboundAttachmentInput) (protocol
 
 		data = read
 
-		if name == "" {
-			name = filepath.Base(path)
-		}
+		name = cmp.Or(name, filepath.Base(path))
 	default:
 		return protocol.OutboundAttachment{}, fmt.Errorf("attachment %q has no content or path", name)
 	}
 
-	if name == "" {
-		name = "attachment"
-	}
+	name = cmp.Or(name, "attachment")
 
 	if mimeType == "" {
 		mimeType = mime.TypeByExtension(filepath.Ext(name))
@@ -2781,10 +2753,7 @@ func askUserQuestionTool(asker protocol.UserQuestionAsker, msg *protocol.Inbound
 			return rocketcode.ToolResult{}, fmt.Errorf("ask user question: %w", err)
 		}
 
-		data, err := json.Marshal(answer)
-		if err != nil {
-			return rocketcode.ToolResult{}, fmt.Errorf("encode human answer: %w", err)
-		}
+		data, _ := json.Marshal(answer)
 
 		return rocketcode.TextToolResult(string(data)), nil
 	}}
@@ -2840,10 +2809,7 @@ func startNewThreadTool(start func(context.Context, *protocol.StartNewThreadRequ
 				return rocketcode.ToolResult{}, err
 			}
 
-			data, err := json.Marshal(result)
-			if err != nil {
-				return rocketcode.ToolResult{}, fmt.Errorf("encode new thread result: %w", err)
-			}
+			data, _ := json.Marshal(result)
 
 			return rocketcode.TextToolResult(string(data)), nil
 		},
@@ -2978,26 +2944,20 @@ func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID, text s
 	outbound.Complete = complete
 	if msg != nil {
 		outbound.Cronjob, outbound.Source = msg.Cronjob, msg.Source
-	}
 
-	if msg != nil {
 		if msg.Workflow.Name == "" {
 			goal, goalOK, err := b.config.SessionService.Goal(b.config.ConversationID)
 			accounted := msg.GoalAction != protocol.GoalActionNone
 			statusActive := err == nil && goalOK && strings.TrimSpace(goal.Status) == GoalStatusActive
 
-			if accounted || msg.GoalTurn || statusActive {
-				outbound.GoalTurn = true
-			}
+			outbound.GoalTurn = accounted || msg.GoalTurn || statusActive
 
 			if outbound.GoalTurn && err == nil && goalOK && goal.MaxTurns > 0 {
 				outbound.GoalTurnNumber = goal.TurnsUsed + 1
 				outbound.GoalMaxTurns = goal.MaxTurns
 			}
 
-			if outbound.GoalTurn && statusActive && (!accounted || goal.MaxTurns <= 0 || goal.TurnsUsed+1 < goal.MaxTurns) {
-				outbound.GoalActive = true
-			}
+			outbound.GoalActive = outbound.GoalTurn && statusActive && (!accounted || goal.MaxTurns <= 0 || goal.TurnsUsed+1 < goal.MaxTurns)
 		}
 
 		outbound.SlackReply = protocol.Clone(msg.SlackReply)
@@ -3218,22 +3178,15 @@ func parseDirectSkillTrigger(text string) *rocketcode.PromptInputDirectSkill {
 		return nil
 	}
 
-	name := rest
-	arguments := ""
-
-	if i := strings.IndexFunc(rest, unicode.IsSpace); i >= 0 {
-		name = rest[:i]
-		arguments = strings.TrimLeftFunc(rest[i:], unicode.IsSpace)
-	}
+	name, arguments := splitFirstWord(rest)
+	arguments = strings.TrimLeftFunc(arguments, unicode.IsSpace)
 
 	switch strings.ToLower(name) {
 	case "", "agent", "cron", "workflow", "stop", "enqueue", "queue", "goal":
 		return nil
 	case "skill":
-		name, arguments = arguments, ""
-		if i := strings.IndexFunc(name, unicode.IsSpace); i >= 0 {
-			name, arguments = name[:i], strings.TrimLeftFunc(name[i:], unicode.IsSpace)
-		}
+		name, arguments = splitFirstWord(arguments)
+		arguments = strings.TrimLeftFunc(arguments, unicode.IsSpace)
 	}
 
 	return &rocketcode.PromptInputDirectSkill{Name: name, Arguments: arguments}
@@ -3305,10 +3258,6 @@ func provenanceHeader(provenance promptProvenance) string {
 
 func provenanceToken(value string) string {
 	fields := strings.Fields(value)
-	if len(fields) == 0 {
-		return ""
-	}
-
 	value = strings.Join(fields, "_")
 	value = strings.ReplaceAll(value, "=", "-")
 	value = strings.ReplaceAll(value, "[", "(")
@@ -3340,20 +3289,17 @@ func externalMCPMetadataEnv(conversationID string, metadata map[string]string) m
 			continue
 		}
 
-		env[rocketclawMetadataEnvPrefix+externalMCPMetadataEnvKey(key)] = value
+		key = strings.Map(func(r rune) rune {
+			if 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' {
+				return r
+			}
+
+			return '_'
+		}, strings.ToUpper(key))
+		env[rocketclawMetadataEnvPrefix+key] = value
 	}
 
 	return env
-}
-
-func externalMCPMetadataEnvKey(key string) string {
-	return strings.Map(func(r rune) rune {
-		if 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' {
-			return r
-		}
-
-		return '_'
-	}, strings.ToUpper(key))
 }
 
 func externalMCPStoredMetadataEnv(conversationID string, entries []ObservedSessionEntry) (map[string]string, bool) {
@@ -3448,19 +3394,16 @@ func normalizeInboundAttachments(msg *protocol.InboundMessage) {
 	for i := range msg.Attachments {
 		attachment := msg.Attachments[i]
 
-		name := strings.TrimSpace(attachment.Name)
-		if name == "" {
-			name = fmt.Sprintf("attachment-%d", i+1)
-		}
+		name := cmp.Or(strings.TrimSpace(attachment.Name), fmt.Sprintf("attachment-%d", i+1))
 
 		data := append([]byte(nil), attachment.Data...)
 
-		mimeType := modelAttachmentMIMEType(data, attachment.MIMEType, name)
 		if len(data) == 0 {
 			msg.AttachmentWarnings = append(msg.AttachmentWarnings, "Skipped attachment "+name+" because it was empty.")
 			continue
 		}
 
+		mimeType := protocol.NormalizeMIMEType(http.DetectContentType(data))
 		if !slices.Contains([]string{"image/jpeg", "image/jpg", "image/png", "image/webp"}, protocol.NormalizeMIMEType(mimeType)) {
 			msg.AttachmentWarnings = append(msg.AttachmentWarnings, "Skipped attachment "+name+" because "+mimeType+" is not supported.")
 			continue
@@ -3490,18 +3433,6 @@ func normalizeInboundAttachments(msg *protocol.InboundMessage) {
 	msg.Attachments = attachments
 }
 
-func modelAttachmentMIMEType(data []byte, declaredMIMEType, name string) string {
-	if len(data) > 0 {
-		return protocol.NormalizeMIMEType(http.DetectContentType(data))
-	}
-
-	if mimeType := protocol.NormalizeMIMEType(declaredMIMEType); mimeType != "" {
-		return mimeType
-	}
-
-	return protocol.NormalizeMIMEType(mime.TypeByExtension(filepath.Ext(name)))
-}
-
 func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (transformedData []byte, transformedMIMEType string, changed bool, err error) {
 	mimeType = protocol.NormalizeMIMEType(mimeType)
 	if len(data) <= targetLimit {
@@ -3528,12 +3459,21 @@ func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (
 		return nil, "", false, fmt.Errorf("%w: decode image: %w", errInboundAttachmentReductionFailed, err)
 	}
 
-	transformed, transformedMIMEType, err := lossyReduceInboundImageWithinLimit(img, targetLimit)
+	flattened := flattenInboundImageForJPEG(img)
+
+	candidate, candidateSize, err := encodeInboundImageAsJPEGWithinLimit(flattened, targetLimit)
 	if err != nil {
 		return nil, "", false, err
 	}
 
-	return transformed, transformedMIMEType, true, nil
+	if candidate == nil {
+		candidate, err = reduceResizedImageWithinLimit(flattened, candidateSize, targetLimit, encodeInboundImageAsJPEGWithinLimit)
+		if err != nil {
+			return nil, "", false, err
+		}
+	}
+
+	return candidate, "image/jpeg", true, nil
 }
 
 func resizePNGWithinLimit(data []byte, targetLimit int) (transformed []byte, changed bool, err error) {
@@ -3546,27 +3486,14 @@ func resizePNGWithinLimit(data []byte, targetLimit int) (transformed []byte, cha
 		return nil, false, fmt.Errorf("%w: decode png: %w", errInboundAttachmentReductionFailed, err)
 	}
 
-	encoded, err := encodeInboundPNG(src)
-	if err != nil {
-		return nil, false, fmt.Errorf("%w: encode png: %w", errInboundAttachmentReductionFailed, err)
-	}
+	encoded := encodeInboundPNG(src)
 
 	if len(encoded) <= targetLimit {
 		return encoded, !bytes.Equal(encoded, data), nil
 	}
 
-	originalBounds := src.Bounds()
-
-	originalWidth, originalHeight := originalBounds.Dx(), originalBounds.Dy()
-	if originalWidth <= 1 || originalHeight <= 1 {
-		return nil, false, errInboundAttachmentReductionNotEnough
-	}
-
 	transformed, err = reduceResizedImageWithinLimit(src, len(encoded), targetLimit, func(img image.Image, targetLimit int) ([]byte, int, error) {
-		encoded, err := encodeInboundPNG(img)
-		if err != nil {
-			return nil, 0, fmt.Errorf("%w: encode resized png: %w", errInboundAttachmentReductionFailed, err)
-		}
+		encoded := encodeInboundPNG(img)
 
 		if len(encoded) <= targetLimit {
 			return encoded, len(encoded), nil
@@ -3576,26 +3503,6 @@ func resizePNGWithinLimit(data []byte, targetLimit int) (transformed []byte, cha
 	})
 
 	return transformed, transformed != nil, err
-}
-
-func lossyReduceInboundImageWithinLimit(img image.Image, targetLimit int) (transformed []byte, transformedMIMEType string, err error) {
-	flattened := flattenInboundImageForJPEG(img)
-
-	candidate, candidateSize, err := encodeInboundImageAsJPEGWithinLimit(flattened, targetLimit)
-	if err != nil {
-		return nil, "", err
-	}
-
-	if candidate != nil {
-		return candidate, "image/jpeg", nil
-	}
-
-	candidate, err = reduceResizedImageWithinLimit(flattened, candidateSize, targetLimit, encodeInboundImageAsJPEGWithinLimit)
-	if err != nil {
-		return nil, "", err
-	}
-
-	return candidate, "image/jpeg", nil
 }
 
 func reduceResizedImageWithinLimit(src image.Image, currentSize, targetLimit int, encode func(image.Image, int) ([]byte, int, error)) ([]byte, error) {
@@ -3649,51 +3556,37 @@ func flattenInboundImageForJPEG(src image.Image) *image.NRGBA {
 }
 
 func encodeInboundImageAsJPEGWithinLimit(img image.Image, targetLimit int) (candidate []byte, candidateSize int, err error) {
-	bestSize := 0
+	bestSize := math.MaxInt
 
 	for quality := 95; quality >= 50; quality -= 5 {
-		candidate, err := encodeInboundJPEG(img, quality)
-		if err != nil {
-			return nil, 0, fmt.Errorf("%w: encode jpeg: %w", errInboundAttachmentReductionFailed, err)
+		var buffer bytes.Buffer
+
+		options := jpeg.Options{Quality: quality}
+		if err := jpeg.Encode(&buffer, img, &options); err != nil {
+			return nil, 0, fmt.Errorf("%w: encode jpeg: %w", errInboundAttachmentReductionFailed, fmt.Errorf("encode jpeg: %w", err))
 		}
 
+		candidate := buffer.Bytes()
 		candidateSize := len(candidate)
-		if bestSize == 0 || candidateSize < bestSize {
-			bestSize = candidateSize
-		}
+		bestSize = min(bestSize, candidateSize)
 
 		if candidateSize <= targetLimit {
 			return candidate, candidateSize, nil
 		}
 	}
 
-	if bestSize == 0 {
-		return nil, 0, errInboundAttachmentReductionFailed
-	}
-
 	return nil, bestSize, nil
 }
 
-func encodeInboundJPEG(img image.Image, quality int) (data []byte, err error) {
+// encodeInboundPNG receives decoded PNGs or positive-sized resized NRGBA images;
+// their dimensions and palettes are valid, and bytes.Buffer cannot return write errors.
+func encodeInboundPNG(img image.Image) []byte {
 	var buffer bytes.Buffer
 
-	options := jpeg.Options{Quality: quality}
-	if err := jpeg.Encode(&buffer, img, &options); err != nil {
-		return nil, fmt.Errorf("encode jpeg: %w", err)
-	}
+	encoder := png.Encoder{CompressionLevel: png.BestCompression}
+	_ = encoder.Encode(&buffer, img)
 
-	return buffer.Bytes(), nil
-}
-
-func encodeInboundPNG(img image.Image) (data []byte, err error) {
-	var buffer bytes.Buffer
-
-	encoder := png.Encoder{CompressionLevel: png.BestCompression, BufferPool: nil}
-	if err := encoder.Encode(&buffer, img); err != nil {
-		return nil, fmt.Errorf("encode png: %w", err)
-	}
-
-	return buffer.Bytes(), nil
+	return buffer.Bytes()
 }
 
 func nextImageResizeDimensions(currentWidth, currentHeight, currentSize, targetLimit int) (nextWidth, nextHeight int) {

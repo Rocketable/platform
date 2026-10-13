@@ -539,11 +539,20 @@ func TestSessionServiceScheduledMessages(t *testing.T) {
 	store := newTestSessionService(t)
 	dueAt := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
 
-	require.NoError(t, store.PutScheduledMessage("schedule-1", &protocol.ScheduledMessageState{ConversationID: "slack-thread:D123:111.222", Agent: "helper", Message: "later", DueAt: dueAt}))
+	for _, test := range []struct {
+		recurring bool
+		stored    int
+	}{{false, 0}, {true, 1}} {
+		message := protocol.ScheduledMessageState{ConversationID: "slack-thread:D123:111.222", Agent: "helper", Message: "later", DueAt: dueAt, Recurring: test.recurring, Interval: time.Minute}
+		require.NoError(t, store.PutScheduledMessage("schedule-1", &message))
+		messages, err := store.ScheduledMessages()
+		require.NoError(t, err)
+		assert.Equal(t, map[string]protocol.ScheduledMessageState{"schedule-1": message}, messages)
 
-	messages, err := store.ScheduledMessages()
-	require.NoError(t, err)
-	assert.Equal(t, map[string]protocol.ScheduledMessageState{"schedule-1": {ConversationID: "slack-thread:D123:111.222", Agent: "helper", Message: "later", DueAt: dueAt}}, messages)
+		var stored int
+		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT recurring FROM scheduled_messages WHERE scheduled_message_id = $1`, "schedule-1").Scan(&stored))
+		assert.Equal(t, test.stored, stored)
+	}
 }
 
 func TestLegacyProducerScheduleWaitsForResetHandoff(t *testing.T) {
@@ -1470,9 +1479,11 @@ func TestSessionServiceConcurrentGoalTurnsPreserveAccounting(t *testing.T) {
 
 	var group sync.WaitGroup
 
-	for range 20 {
+	for i := range 20 {
+		turnID := fmt.Sprintf("turn-%d", i)
+		seedActiveTurn(t, service, "thread", turnID, nil)
 		group.Go(func() {
-			_, _, err := service.AccountGoalTurn("thread")
+			_, err := service.finishTurn(t.Context(), turnID, &turnFinish{store: newSessionStore("thread", service), accountGoal: true, outbound: protocol.NewOutboundMessage("thread", "")})
 			errCh <- err
 		})
 	}
@@ -1645,6 +1656,16 @@ func TestSessionServicePersistsExternalMCPSessionMapping(t *testing.T) {
 		require.Len(t, entries, 1)
 		assert.Equal(t, entryID, entries[0].ID)
 	}
+
+	for _, id := range []string{"optional-1", "optional-2"} {
+		require.NoError(t, store.UpsertExternalMCPSession(id, &ExternalMCPSessionState{PrivateConversationID: " \t ", ManagedConversationID: id}))
+		require.NoError(t, store.UpsertExternalMCPSession(id, &ExternalMCPSessionState{ManagedConversationID: id}))
+	}
+
+	var unmapped int
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM external_mcp_sessions WHERE private_conversation_id IS NULL`).Scan(&unmapped))
+	assert.Equal(t, 2, unmapped)
+	require.Error(t, store.UpsertExternalMCPSession("duplicate-private", &ExternalMCPSessionState{PrivateConversationID: session.PrivateConversationID, ManagedConversationID: "duplicate-managed"}))
 }
 
 func TestSessionServiceRejectsBlankKeys(t *testing.T) {

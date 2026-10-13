@@ -749,10 +749,7 @@ func headerPrincipal(header string) string {
 			}
 
 			if name == "principal" {
-				principal, err := strconv.Unquote(quoted)
-				if err != nil {
-					return ""
-				}
+				principal, _ := strconv.Unquote(quoted) // QuotedPrefix already validated this string.
 
 				return principal
 			}
@@ -818,16 +815,22 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 	delivered := map[string]bool{}
 
 	for _, source := range sources {
-		// Private cron records contribute timing only, never replay content.
-		if source.ConversationID == source.SourceConversationID {
-			executions = append(executions, cronHistory([]backend.ObservedSessionEntry{{SourceConversationID: source.SourceConversationID}}, "")...)
+		run, ok := backend.ParseCronRun(source.SourceConversationID)
+		if !ok {
 			continue
 		}
 
-		for _, run := range cronHistory([]backend.ObservedSessionEntry{{SourceConversationID: source.SourceConversationID}}, source.ConversationID) {
-			delivered[run.Origin] = true
-			runs = append(runs, run)
+		row := &CronJob{Stem: run.Stem, Status: "ran", LastRun: run.At.Format("2006-01-02T15:04:05.000000000Z"), NextRun: source.ConversationID, Origin: source.SourceConversationID}
+		// Private cron records contribute timing only, never replay content.
+		if source.ConversationID == source.SourceConversationID {
+			row.NextRun = ""
+			executions = append(executions, row)
+
+			continue
 		}
+
+		delivered[row.Origin] = true
+		runs = append(runs, row)
 	}
 
 	for _, run := range executions {
@@ -842,29 +845,6 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 	response.Jobs = append(response.Jobs, runs...)
 
 	return response, nil
-}
-
-func cronHistory(entries []backend.ObservedSessionEntry, destination string) []*CronJob {
-	var runs []*CronJob
-
-	seen := map[string]bool{}
-
-	for i := range entries {
-		source := entries[i].SourceConversationID
-		if seen[source] {
-			continue
-		}
-
-		run, ok := backend.ParseCronRun(source)
-		if !ok {
-			continue
-		}
-
-		seen[source] = true
-		runs = append(runs, &CronJob{Stem: run.Stem, Status: "ran", LastRun: run.At.Format("2006-01-02T15:04:05.000000000Z"), NextRun: destination, Origin: source})
-	}
-
-	return runs
 }
 
 func (s *Server) runCronJob(ctx context.Context, request *RunCronJobRequest) (*RunCronJobResponse, error) {
@@ -1084,13 +1064,11 @@ func (s *Server) agentChoices(ctx context.Context, id string) ([]string, error) 
 
 		choices = slices.DeleteFunc(choices, func(name string) bool { return !slices.Contains(allowed, name) })
 	} else if id != "" {
-		for _, run := range cronHistory([]backend.ObservedSessionEntry{{SourceConversationID: strings.TrimPrefix(id, "web:")}}, "") {
+		if run, ok := backend.ParseCronRun(strings.TrimPrefix(id, "web:")); ok {
 			job, err := s.cronjobs.LoadOneOffCronjob(run.Stem)
-			if err != nil {
-				continue
+			if err == nil {
+				return cfg.CronWebAgentChoices(choices, &job), nil
 			}
-
-			return cfg.CronWebAgentChoices(choices, &job), nil
 		}
 	}
 
@@ -1104,7 +1082,7 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 	}
 
 	source := request.SourceConversationId
-	if source != "" && len(cronHistory([]backend.ObservedSessionEntry{{SourceConversationID: source}}, "")) == 0 {
+	if _, ok := backend.ParseCronRun(source); source != "" && !ok {
 		return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.InvalidArgument, "source must be a recorded cron run"))
 	}
 
@@ -1619,10 +1597,7 @@ func (s *Server) chatOrigin(ctx context.Context, id string) (string, error) {
 			return "", nil
 		}
 
-		raw, err := json.Marshal(origin)
-		if err != nil {
-			return "", fmt.Errorf("encode chat origin: %w", err)
-		}
+		raw, _ := json.Marshal(origin) // DecideOrigin returns only string fields and slices of string pairs.
 
 		return string(raw), nil
 	}
