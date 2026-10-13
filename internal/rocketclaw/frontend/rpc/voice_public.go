@@ -59,10 +59,8 @@ func (v *publicVoice) create(ctx context.Context, header http.Header, sdp, agent
 
 	body.Session = newVoiceSession("gpt-live-1", agent, voice)
 	body.Session.Input, body.Transport.Type, body.Transport.SDP = voiceSeed(history), "webrtc", sdp
-	// The browser may only end or mute the call; results come from the server's sideband.
-	body.Session.Client = json.RawMessage(`{"data_channel":{"allowed_client_events":["session.close","session.input_audio.mute","session.input_audio.unmute"]}}`)
 
-	data, _ := json.Marshal(body) // Strings, string items and a fixed raw message always encode.
+	data, _ := json.Marshal(body) // Strings and string items always encode.
 
 	resp, err := voicePost(ctx, v.createURL, header, data)
 	if err != nil {
