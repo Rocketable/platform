@@ -1770,7 +1770,8 @@ func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, convers
 		if err := queryScalar(ctx, db, "read empty managed conversation", `SELECT EXISTS (
     SELECT 1 FROM managed_conversations m WHERE m.conversation_id = $1
         AND NOT EXISTS (SELECT 1 FROM session_entries e WHERE e.conversation_id = m.conversation_id)
-        AND NOT EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = m.conversation_id)
+        AND NOT EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = m.conversation_id
+            OR a.phase <> 'done' AND a.inbound_json->>'SyncDestination' = m.conversation_id)
 )`, &emptyManaged, conversationID); err != nil {
 			return false, err
 		}

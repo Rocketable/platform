@@ -2015,6 +2015,11 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	require.NoError(t, store.UpsertThread("empty-recorded", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
 	require.NoError(t, store.UpsertThread("empty-running", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
 	seedActiveTurn(t, store, "empty-running", "running", &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "running"})
+	require.NoError(t, store.UpsertThread("empty-destination", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
+
+	producer := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "write a report", false)
+	producer.SyncDestination = "empty-destination"
+	require.NoError(t, startTurnDB(t.Context(), store.db, "report-turn", "report-producer", producer))
 	require.NoError(t, store.UpsertThread(activeOldThread, ThreadState{Agent: "selected", CreatedBy: ThreadCreatedByCron}))
 
 	for conversationID, ts := range map[string]time.Time{
@@ -2061,6 +2066,7 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	assert.NotContains(t, threadIDs, oldThread)
 	assert.NotContains(t, threadIDs, "empty-recorded")
 	assert.Contains(t, threadIDs, "empty-running")
+	assert.Contains(t, threadIDs, "empty-destination")
 
 	thread, ok, err := store.Thread(activeOldThread)
 	require.NoError(t, err)
@@ -2090,6 +2096,14 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, entries, 1, conversationID)
 	}
+
+	_, err = store.db.ExecContext(t.Context(), `UPDATE active_turns SET phase = 'done' WHERE id = 'report-turn'`)
+	require.NoError(t, err)
+	_, err = store.PruneStateBefore(t.Context(), cutoff)
+	require.NoError(t, err)
+	_, ok, err = store.Thread("empty-destination")
+	require.NoError(t, err)
+	assert.False(t, ok)
 }
 
 func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
