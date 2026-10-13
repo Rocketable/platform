@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net/http"
@@ -42,7 +43,7 @@ func startTailnet(rt *backend.Runtime, tailnet *config.TsnetConfig, handler http
 	}
 
 	ctxUp, cancelUp := context.WithCancel(context.Background())
-	tailnetServer := &http.Server{Handler: rpc.NewTailnetHandler(node.client, handler)}
+	tailnetServer := &http.Server{Handler: rpc.NewTailnetHandler(node.client, handler), TLSConfig: &tls.Config{GetCertificate: node.client.GetCertificate}}
 
 	serving.Go(func() error {
 		err := serveTailnet(ctxUp, rt, node, tailnetServer)
@@ -167,12 +168,16 @@ func serveTailnet(ctx context.Context, rt *backend.Runtime, node *tailnetNode, s
 		return fmt.Errorf("bring up Tailscale node: %w", err)
 	}
 
-	listener, err := node.server.ListenTLS("tcp", ":443")
+	domains := node.server.CertDomains()
+	if len(domains) == 0 {
+		return errors.New("tailscale node has no HTTPS name: enable MagicDNS and HTTPS in the admin console")
+	}
+
+	listener, err := node.server.Listen("tcp", ":443")
 	if err != nil {
 		return fmt.Errorf("listen for Web HTTPS on the tailnet: %w", err)
 	}
 
-	domains := node.server.CertDomains()
 	rt.Log.Info("started Web HTTPS on the tailnet", "domains", domains)
 
 	_ = rt.Cfg.Do(func(cfg *config.Config) error {
@@ -180,7 +185,7 @@ func serveTailnet(ctx context.Context, rt *backend.Runtime, node *tailnetNode, s
 		return nil
 	})
 
-	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := server.ServeTLS(listener, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve Web HTTPS on the tailnet: %w", err)
 	}
 
