@@ -85,7 +85,8 @@ backfilled or guessed from their text. Model-facing text still includes the gene
 header; local header metadata is never sent to the provider. Assistant text is unchanged.
 `TranscriptEvent.principal` decodes only the stored header's top-level quoted
 principal, including on attachment-bearing inputs. `QueueItem.principal` copies
-the item's recorded author. Web shows it above human text inside the existing
+the item's recorded author; an item another session's agent wrote has none and
+shows `agent <name> (session <ID>)` instead. Web shows it above human text inside the existing
 bubble and above queue-row text, without replacing it with the viewer's identity.
 Missing or malformed stored principals stay unlabeled; raw headers remain intact.
 Previews use the latest nonempty user or assistant message, including the same
@@ -96,9 +97,10 @@ Session `running` is true while the conversation has an unfinished turn.
 `MoveToBackground` moves every running `execute` and `task` call of agents with
 `permission.rocketclaw.allow_background: allow` in the conversation into Background
 Jobs and reports `moved`; with nothing eligible it changes nothing.
-`StopBackgroundJob` stops one job by ID, records it as stopped by user, and
-reports `stopped`, false when the job had already finished. It reaches the conversation's own jobs,
-its subagents' jobs, and jobs of hidden cron or External MCP runs whose sync
+`StopBackgroundJob` stops one running job by ID, records it as stopped by user, and
+reports `stopped`, false when the job had already finished. Stopping a `task` job also
+stops its subagent session's running turn and that subagent's own jobs. It reaches the conversation's own jobs
+and jobs of hidden cron or External MCP runs whose sync
 destination is this conversation, the same scope as the agent's
 `rocketclaw_stop_background_job`. Both authorize like the queue RPCs and are
 refused for private cron and External MCP conversations. History adds a `movable`

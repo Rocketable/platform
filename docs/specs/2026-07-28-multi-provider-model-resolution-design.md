@@ -49,7 +49,7 @@ Resolve("work/gpt-6.1-sol")
 
 RocketClaw implements this interface. It parses the model name, selects the provider configuration, and returns the configured SDK client. An unknown provider is an error. It never falls back to another provider.
 
-RocketCode calls the resolver when it creates the root looper and whenever it creates a subagent, guardrail, workflow worker, or automatic permission reviewer. The resulting looper receives one client and one API model name. It does not switch clients during that run.
+RocketCode calls the resolver when it creates a session's looper, a subagent session's included, and whenever it creates a guardrail, workflow worker, or automatic permission reviewer, or switches a turn to another agent type. The resulting looper receives one client and one API model name. It does not switch clients during that run.
 
 The existing `New(client, ...)` and single-OpenAI `NewWithProviders(...)` APIs remain available. They adapt their existing client to a resolver that accepts unqualified models and the explicit `openai/` prefix. Existing single-provider consumers, including Quickbench, do not change. RocketClaw uses a resolver-based constructor.
 
@@ -108,7 +108,7 @@ Examples:
 
 An unqualified model, `openai/...`, an empty model, or a missing model means the default `openai` provider. A `work/...` model means provider `work`.
 
-Every looper converts at the one place each turn reads saved history (`loadSession` in `Loop`), so root agents and continued subagents share the same handling. For each saved replay item, RocketCode compares the provider of the model that produced it (the entry's model, or its attribution range's model) with the provider of the looper's own display model.
+Every looper converts at the one place each turn reads saved history (`loadSession` in `Loop`). A subagent is a session like any other, so top-level and subagent sessions share the same handling. For each saved replay item, RocketCode compares the provider of the model that produced it (the entry's model, or its attribution range's model) with the provider of the looper's own display model.
 
 - If the names match, RocketCode uses the item unchanged.
 - If the names differ, RocketCode replaces the item with only data that can be sent to another provider and moves the entry's attribution ranges to the replaced items. Saved history is not rewritten.
@@ -125,7 +125,7 @@ For a different provider, RocketCode:
 
 There is no retry or special state when data is removed. If a saved entry has no provider information, RocketCode treats it as belonging to the default provider.
 
-The same conversion is applied when `openTurn` resumes an interrupted turn's checkpoint, root or subagent, to each item whose display model or attribution range belongs to a different provider. The resumed turn continues from, and later saves, the converted items.
+The same conversion is applied when `openTurn` resumes an interrupted turn's checkpoint, and when a steer switches a running turn to an agent type on another provider, to each item whose display model or attribution range belongs to a different provider. The resumed turn continues from, and later saves, the converted items.
 
 ## Saving New Turns
 
@@ -200,7 +200,7 @@ Behavioral tests cover:
 - different-provider function calls and outputs preserving their portable fields;
 - different-provider reasoning and compaction retaining readable text but not encrypted content or provider item IDs;
 - entries with missing or unqualified models being treated as default-provider entries;
-- continued subagent history and interrupted-turn recovery using the same conversion;
+- continued subagent session history, interrupted-turn recovery, and a steer's mid-turn type switch using the same conversion;
 - provider-specific API-key and ChatGPT client construction;
 - login, list, and logout changing only the selected provider;
 - concurrent auth updates preserving every provider's credential;

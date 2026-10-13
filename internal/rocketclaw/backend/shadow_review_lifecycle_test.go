@@ -94,17 +94,14 @@ func TestShadowReviewClearRetainsPendingAttachments(t *testing.T) {
 	id := crashed.config.ConversationID
 	files := []protocol.OutboundAttachment{{ID: "stashed-upload", Name: "upload.txt", Data: []byte("upload")}, {ID: "journal-result", Name: "result.txt", Data: []byte("result")}, {ID: "old-history", Name: "old.txt", Data: []byte("old")}}
 
-	for i := range files {
-		require.NoError(t, store.SaveAttachment(t.Context(), id, "", &files[i], i == 0))
+	for i, turnID := range []string{"", "unfinished", ""} {
+		require.NoError(t, store.SaveAttachment(t.Context(), id, turnID, &files[i], i == 0))
 	}
 
 	require.NoError(t, store.PutThreadQueueItem("stash", &protocol.ThreadQueueItem{ID: "stash", ConversationID: id, Kind: protocol.InboundKindHeld, Source: protocol.SourceWeb, Content: protocol.InboundContent{TextAttachments: []string{"attachment:stashed-upload"}}}))
 	require.NoError(t, startTurnDB(t.Context(), store.db, "unfinished", id, protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "work", true)))
 
-	data, err := json.Marshal(files[1:2])
-	require.NoError(t, err)
-	require.NoError(t, store.SaveTurnStep(t.Context(), id, "unfinished/attachments", data))
-	_, err = store.DeleteSession(t.Context(), id)
+	_, err := store.DeleteSession(t.Context(), id)
 	require.NoError(t, err)
 	upload, err := store.LoadAttachment(t.Context(), id, files[0].ID, true)
 	require.NoError(t, err)
@@ -120,7 +117,8 @@ func TestShadowReviewClearRetainsPendingAttachments(t *testing.T) {
 	require.Error(t, err, "unreferenced history originals are removed")
 	runTestBridge(t, newBridge())
 	final := readFinal(t, finals)
-	require.Equal(t, files[1:2], final.Attachments, "restart reloads the journal-owned original")
+	files[1].Size = int64(len(files[1].Data))
+	require.Equal(t, files[1:2], final.Attachments, "restart reloads the original the unfinished turn's reply sends")
 }
 
 func TestShadowReviewPayloadRelease(t *testing.T) {

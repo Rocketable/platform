@@ -25,6 +25,14 @@ const (
 	InboundPrincipalMetadataKey = "rocketclaw_principal"
 	// InboundAllowedAgentsMetadataKey lists source-surface allowed agents for model-created child conversations.
 	InboundAllowedAgentsMetadataKey = "rocketclaw_allowed_agents"
+	// InboundSenderSessionMetadataKey names the session whose agent wrote the inbound.
+	InboundSenderSessionMetadataKey = "rocketclaw_sender_session"
+	// InboundSenderAgentMetadataKey names the agent that wrote the inbound.
+	InboundSenderAgentMetadataKey = "rocketclaw_sender_agent"
+	// InboundSenderActionMetadataKey records what the sender did before the inbound; see SenderActionStopped.
+	InboundSenderActionMetadataKey = "rocketclaw_sender_action"
+	// SenderActionStopped means the sender stopped the target's previous turn and sent the inbound to run next.
+	SenderActionStopped = "stopped"
 )
 
 // InboundKind describes how an inbound message should be handled.
@@ -33,7 +41,8 @@ type InboundKind string
 const (
 	// InboundKindPrompt is a normal conversational prompt.
 	InboundKindPrompt InboundKind = "prompt"
-	// InboundKindSteer joins an open human turn or runs next after input closes.
+	// InboundKindSteer joins the running turn while it accepts input, whoever sent it or
+	// started the turn, and otherwise runs next.
 	InboundKindSteer InboundKind = "steer"
 	// InboundKindEnqueue waits for its own turn.
 	InboundKindEnqueue InboundKind = "enqueue"
@@ -190,18 +199,6 @@ type AskUserQuestionAnswer struct {
 // UserQuestionAsker asks a turn's human an ask_user_question and waits for the answer.
 type UserQuestionAsker interface {
 	AskUserQuestion(context.Context, *AskUserQuestionRequest) (AskUserQuestionAnswer, error)
-}
-
-// StartNewThreadRequest asks RocketClaw to create a new Web session from the current turn.
-type StartNewThreadRequest struct {
-	CurrentAgent, Agent, Title, Prompt, CreatedBy string
-	AllowedAgents                                 []string
-}
-
-// StartNewThreadResult reports the created Web session and its address.
-type StartNewThreadResult struct {
-	ConversationID string `json:"conversation_id"`
-	URL            string `json:"url"`
 }
 
 // OutboundMessage is a text message headed to enabled connectors.

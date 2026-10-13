@@ -83,6 +83,8 @@ var wildcardMeta = regexp.MustCompile(`[.+^${}()|[\]\\]`)
 
 var permissionEnvPattern = regexp.MustCompile(`\$\{(ROCKETCLAW_[A-Za-z0-9_]+)\}`)
 
+var errRocketClawExactNames = errors.New("name each rocketclaw tool; wildcards and the scalar form are not supported")
+
 func interpolatePermissions(agent *Agent, env []string) {
 	values := make(map[string]string)
 
@@ -202,6 +204,10 @@ func parsePermissionNode(node *yaml.Node) (PermissionSet, error) {
 func parsePermissionRules(permission string, node *yaml.Node) ([]PermissionRule, error) {
 	switch node.Kind {
 	case yaml.ScalarNode:
+		if permission == "rocketclaw" {
+			return nil, errRocketClawExactNames
+		}
+
 		action, reviewer, err := parsePermissionAction(node.Value)
 		if err != nil {
 			return nil, err
@@ -216,9 +222,22 @@ func parsePermissionRules(permission string, node *yaml.Node) ([]PermissionRule,
 				continue
 			}
 
+			if permission == "rocketclaw" && node.Content[i].Value == "session" {
+				return nil, errors.New("session.spawn_mode is removed; use rocketclaw_sessions_write")
+			}
+
+			if permission == "rocketclaw" && strings.ContainsAny(node.Content[i].Value, "*?") {
+				return nil, errRocketClawExactNames
+			}
+
 			value := node.Content[i+1]
 
 			actionValue := value.Value
+			if permission == "rocketclaw" && node.Content[i].Value == "rocketclaw_sessions_write" && actionValue == "children" {
+				// RocketClaw reads the children scope from the frontmatter when the tool runs.
+				actionValue = string(permissionAllow)
+			}
+
 			if permission == "rocketclaw" && node.Content[i].Value == "load_agents_md" {
 				if value.Kind != yaml.ScalarNode || value.ShortTag() != "!!bool" {
 					return nil, errors.New("load_agents_md must be a boolean")
@@ -360,7 +379,7 @@ func (ps *PermissionSet) Set(permission, pattern string, action PermissionAction
 // The matched result reports whether a configured rule explicitly matched.
 // When matched is false, action defaults to PermissionDeny, except that
 // rocketclaw.code_mode_approve and rocketclaw.load_agents_md default to PermissionAllow.
-// Those two and rocketclaw.allow_background change only through an exact rule.
+// Only exact rules match rocketclaw subjects.
 func (ps PermissionSet) Evaluate(permission, subject string) (action PermissionAction, matched bool) {
 	decision := ps.evaluate(permission, subject)
 	return decision.Action, decision.Matched
@@ -406,8 +425,7 @@ func (ps PermissionSet) evaluate(permission, subject string, scripts ...string) 
 func (ps PermissionSet) evaluateRules(permission, subject string, folded bool, scripts ...string) permissionDecision {
 	decision := permissionDecision{Action: permissionDeny, Bucket: "", Rule: PermissionRule{Pattern: "", Action: ""}, Matched: false, Permission: permission, Subject: subject}
 
-	exactRocketClawSetting := permission == "rocketclaw" && (subject == codeModeApproveSubject || subject == "load_agents_md" || subject == AllowBackgroundSubject)
-	if exactRocketClawSetting && subject != AllowBackgroundSubject {
+	if permission == "rocketclaw" && (subject == codeModeApproveSubject || subject == "load_agents_md") {
 		decision.Action = permissionAllow
 	}
 
@@ -430,8 +448,8 @@ func (ps PermissionSet) evaluateRules(permission, subject string, folded bool, s
 			var matches bool
 
 			switch {
-			case exactRocketClawSetting:
-				// Only an exact rule can change these settings.
+			case permission == "rocketclaw":
+				// Only an exact rule names a rocketclaw tool or setting.
 				matches = rule.Pattern == subject
 			case permission == "bash" && len(scripts) > 0:
 				matches = bashComponentPatternMatch(input, pattern, segments...) ||

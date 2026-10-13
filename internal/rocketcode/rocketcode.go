@@ -83,14 +83,29 @@ const (
 	ChildRunStageResponse ChildRunStage = "response"
 )
 
-// ChildSessions stores finished Task, guardrail, and permission review turns.
+// ChildSessions stores finished guardrail and permission review turns, and runs Task subagents as
+// sessions of the embedder, on the turn runner its other sessions use.
 type ChildSessions interface {
 	AppendChildEntry(ctx context.Context, key string, entry *SessionEntry) error
-	// ChildEntries returns the entries saved under key, oldest first.
-	ChildEntries(ctx context.Context, key string) ([]SessionEntry, error)
+	// WriteSubagent delivers write to its subagent session, which it starts when new, and reports
+	// whether write joined the session's running turn. A replayed write delivers nothing again.
+	WriteSubagent(ctx context.Context, write *SubagentWrite) (steered bool, err error)
+	// AwaitSubagent waits for the turn of the subagent session at key that runs the write of the task
+	// call callKey, and returns its answer and the agent type and model it ended as.
+	AwaitSubagent(ctx context.Context, key, callKey string) (string, ReplayAttribution, error)
 }
 
-// InertChildSessions discards child session entries.
+// SubagentWrite is a task call's prompt to a subagent session.
+type SubagentWrite struct {
+	// Key is the session's child key; CallKey is the task call's tool call key, which identifies the write.
+	Key, CallKey string
+	// Agent is the subagent type that runs Prompt, and Delegator the agent that wrote it.
+	Agent, Delegator, Prompt string
+	// Mode is a continue's mode; empty for a new subagent.
+	Mode ContinueMode
+}
+
+// InertChildSessions discards child session entries and runs no subagents.
 type InertChildSessions struct{}
 
 // AppendChildEntry discards one child session entry.
@@ -98,9 +113,14 @@ func (InertChildSessions) AppendChildEntry(context.Context, string, *SessionEntr
 	return nil
 }
 
-// ChildEntries returns no entries.
-func (InertChildSessions) ChildEntries(context.Context, string) ([]SessionEntry, error) {
-	return nil, nil
+// WriteSubagent refuses to run a subagent.
+func (InertChildSessions) WriteSubagent(context.Context, *SubagentWrite) (bool, error) {
+	return false, errSubagentsUnavailable
+}
+
+// AwaitSubagent refuses to run a subagent.
+func (InertChildSessions) AwaitSubagent(context.Context, string, string) (string, ReplayAttribution, error) {
+	return "", ReplayAttribution{}, errSubagentsUnavailable
 }
 
 // ObservabilityConfig controls OpenInference-compatible tracing for RocketCode.
@@ -117,7 +137,10 @@ type Providers struct {
 
 // PromptShellCommandExpansion controls which prompt sources expand !`command` snippets.
 type PromptShellCommandExpansion struct {
-	PrimaryPrompts  bool
+	// PrimaryPrompts covers the agent prompt of every session, a Task subagent's included, since a
+	// subagent runs as a session of the embedder (ChildSessions).
+	PrimaryPrompts bool
+	// SubagentPrompts covers the prompts of guardrail and permission review agents.
 	SubagentPrompts bool
 	SkillPrompts    bool
 	InputPrompts    bool
@@ -361,22 +384,12 @@ func NewWithModelResolver(
 		}
 	}
 
-	expandAgentPrompt(context.Background(), &activeAgent, config.ExpandPromptShellCommands.PrimaryPrompts, &promptExpansion)
-	systemPrompt := activeAgent.Prompt
-
 	rootInstructions, err := loadRootInstructions(root)
 	if err != nil {
 		return nil, err
 	}
 
 	workspaceInstructions := fmt.Sprintf("<current-workspace>\nWorkspace root: %s\n</current-workspace>", promptExpansion.hostDir)
-
-	preloadedInstructions := ""
-	if activeAgent.Permission.evaluate("rocketclaw", "load_agents_md").Action == permissionAllow {
-		preloadedInstructions = strings.TrimSpace(rootInstructions)
-	}
-
-	systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + strings.TrimSpace(preloadedInstructions+"\n\n"+workspaceInstructions))
 
 	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, string(config.ReasoningEffort)))
 	agentForTools := &activeAgent
@@ -425,7 +438,7 @@ func NewWithModelResolver(
 		mcpRegistry:                mcpRegistry,
 	}
 
-	looper, err := factory.newLooper(agentForTools, systemPrompt)
+	looper, err := factory.newLooper(agentForTools, factory.sessionSystemPrompt(context.Background(), agentForTools))
 	if err != nil {
 		return nil, fmt.Errorf("agent %q model: %w", activeAgent.Name, err)
 	}

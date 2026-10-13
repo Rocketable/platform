@@ -22,8 +22,11 @@ var _ ChildSessions = &mockChildSessions{}
 //			AppendChildEntryFunc: func(ctx context.Context, key string, entry *SessionEntry) error {
 //				panic("mock out the AppendChildEntry method")
 //			},
-//			ChildEntriesFunc: func(ctx context.Context, key string) ([]SessionEntry, error) {
-//				panic("mock out the ChildEntries method")
+//			AwaitSubagentFunc: func(ctx context.Context, key string, callKey string) (string, ReplayAttribution, error) {
+//				panic("mock out the AwaitSubagent method")
+//			},
+//			WriteSubagentFunc: func(ctx context.Context, write *SubagentWrite) (bool, error) {
+//				panic("mock out the WriteSubagent method")
 //			},
 //		}
 //
@@ -35,8 +38,11 @@ type mockChildSessions struct {
 	// AppendChildEntryFunc mocks the AppendChildEntry method.
 	AppendChildEntryFunc func(ctx context.Context, key string, entry *SessionEntry) error
 
-	// ChildEntriesFunc mocks the ChildEntries method.
-	ChildEntriesFunc func(ctx context.Context, key string) ([]SessionEntry, error)
+	// AwaitSubagentFunc mocks the AwaitSubagent method.
+	AwaitSubagentFunc func(ctx context.Context, key string, callKey string) (string, ReplayAttribution, error)
+
+	// WriteSubagentFunc mocks the WriteSubagent method.
+	WriteSubagentFunc func(ctx context.Context, write *SubagentWrite) (bool, error)
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -49,16 +55,26 @@ type mockChildSessions struct {
 			// Entry is the entry argument value.
 			Entry *SessionEntry
 		}
-		// ChildEntries holds details about calls to the ChildEntries method.
-		ChildEntries []struct {
+		// AwaitSubagent holds details about calls to the AwaitSubagent method.
+		AwaitSubagent []struct {
 			// Ctx is the ctx argument value.
 			Ctx context.Context
 			// Key is the key argument value.
 			Key string
+			// CallKey is the callKey argument value.
+			CallKey string
+		}
+		// WriteSubagent holds details about calls to the WriteSubagent method.
+		WriteSubagent []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// Write is the write argument value.
+			Write *SubagentWrite
 		}
 	}
 	lockAppendChildEntry sync.RWMutex
-	lockChildEntries     sync.RWMutex
+	lockAwaitSubagent    sync.RWMutex
+	lockWriteSubagent    sync.RWMutex
 }
 
 // AppendChildEntry calls AppendChildEntryFunc.
@@ -101,38 +117,78 @@ func (mock *mockChildSessions) AppendChildEntryCalls() []struct {
 	return calls
 }
 
-// ChildEntries calls ChildEntriesFunc.
-func (mock *mockChildSessions) ChildEntries(ctx context.Context, key string) ([]SessionEntry, error) {
-	if mock.ChildEntriesFunc == nil {
-		panic("mockChildSessions.ChildEntriesFunc: method is nil but ChildSessions.ChildEntries was just called")
+// AwaitSubagent calls AwaitSubagentFunc.
+func (mock *mockChildSessions) AwaitSubagent(ctx context.Context, key string, callKey string) (string, ReplayAttribution, error) {
+	if mock.AwaitSubagentFunc == nil {
+		panic("mockChildSessions.AwaitSubagentFunc: method is nil but ChildSessions.AwaitSubagent was just called")
 	}
 	callInfo := struct {
-		Ctx context.Context
-		Key string
+		Ctx     context.Context
+		Key     string
+		CallKey string
 	}{
-		Ctx: ctx,
-		Key: key,
+		Ctx:     ctx,
+		Key:     key,
+		CallKey: callKey,
 	}
-	mock.lockChildEntries.Lock()
-	mock.calls.ChildEntries = append(mock.calls.ChildEntries, callInfo)
-	mock.lockChildEntries.Unlock()
-	return mock.ChildEntriesFunc(ctx, key)
+	mock.lockAwaitSubagent.Lock()
+	mock.calls.AwaitSubagent = append(mock.calls.AwaitSubagent, callInfo)
+	mock.lockAwaitSubagent.Unlock()
+	return mock.AwaitSubagentFunc(ctx, key, callKey)
 }
 
-// ChildEntriesCalls gets all the calls that were made to ChildEntries.
+// AwaitSubagentCalls gets all the calls that were made to AwaitSubagent.
 // Check the length with:
 //
-//	len(mockedChildSessions.ChildEntriesCalls())
-func (mock *mockChildSessions) ChildEntriesCalls() []struct {
-	Ctx context.Context
-	Key string
+//	len(mockedChildSessions.AwaitSubagentCalls())
+func (mock *mockChildSessions) AwaitSubagentCalls() []struct {
+	Ctx     context.Context
+	Key     string
+	CallKey string
 } {
 	var calls []struct {
-		Ctx context.Context
-		Key string
+		Ctx     context.Context
+		Key     string
+		CallKey string
 	}
-	mock.lockChildEntries.RLock()
-	calls = mock.calls.ChildEntries
-	mock.lockChildEntries.RUnlock()
+	mock.lockAwaitSubagent.RLock()
+	calls = mock.calls.AwaitSubagent
+	mock.lockAwaitSubagent.RUnlock()
+	return calls
+}
+
+// WriteSubagent calls WriteSubagentFunc.
+func (mock *mockChildSessions) WriteSubagent(ctx context.Context, write *SubagentWrite) (bool, error) {
+	if mock.WriteSubagentFunc == nil {
+		panic("mockChildSessions.WriteSubagentFunc: method is nil but ChildSessions.WriteSubagent was just called")
+	}
+	callInfo := struct {
+		Ctx   context.Context
+		Write *SubagentWrite
+	}{
+		Ctx:   ctx,
+		Write: write,
+	}
+	mock.lockWriteSubagent.Lock()
+	mock.calls.WriteSubagent = append(mock.calls.WriteSubagent, callInfo)
+	mock.lockWriteSubagent.Unlock()
+	return mock.WriteSubagentFunc(ctx, write)
+}
+
+// WriteSubagentCalls gets all the calls that were made to WriteSubagent.
+// Check the length with:
+//
+//	len(mockedChildSessions.WriteSubagentCalls())
+func (mock *mockChildSessions) WriteSubagentCalls() []struct {
+	Ctx   context.Context
+	Write *SubagentWrite
+} {
+	var calls []struct {
+		Ctx   context.Context
+		Write *SubagentWrite
+	}
+	mock.lockWriteSubagent.RLock()
+	calls = mock.calls.WriteSubagent
+	mock.lockWriteSubagent.RUnlock()
 	return calls
 }

@@ -56,7 +56,6 @@ const (
 	attachFilesToolName            = "rocketclaw_attach_files_to_response"
 	updateGoalToolName             = "rocketclaw_update_goal"
 	askUserQuestionToolName        = "ask_user_question"
-	startNewThreadToolName         = "rocketclaw_start_new_thread"
 	scheduleMessageToolName        = "rocketclaw_schedule_message"
 	resetScheduledMessagesToolName = "rocketclaw_reset_scheduled_messages"
 
@@ -98,7 +97,6 @@ type Config struct {
 	RequestRestart        func(string) (string, error)
 	RequestReload         runtimeReloader
 	UserQuestionAsker     protocol.UserQuestionAsker
-	StartNewThread        func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadResult, error)
 	SessionService        *SessionService
 }
 
@@ -114,8 +112,11 @@ type Bridge struct {
 	threads *threadBridgeManager
 	// background runs the turns' execute and task calls of agents allowed to background them.
 	background *backgroundRegistry
-	// shadow is explicit stored ownership, fixed before the worker starts.
-	shadow bool
+	// shadow is explicit stored ownership, fixed before the worker starts. underShadow marks a subagent
+	// session of a shadow, which runs as a session of its own but under the shadow's tool limits.
+	shadow, underShadow bool
+	// parent is the session a subagent session belongs to; empty for a top-level session.
+	parent string
 
 	mu                    sync.Mutex
 	handling, stopped     bool
@@ -163,6 +164,9 @@ type bridgeRequest struct {
 	syncSource                string
 	// backgroundWake has activation claim the conversation's pending Completion Notes for a wake turn.
 	backgroundWake bool
+	// released marks a held input a person's write released (releaseHeld): it runs before that write,
+	// so the goal that write begins does not hold it.
+	released bool
 }
 
 // closeWorkflow releases prepared data ownership; an unprepared request has no
@@ -202,38 +206,6 @@ type workflowRunPhaseSummary struct {
 	Complete  int                  `json:"complete"`
 }
 
-type childSessions struct {
-	store          *SessionService
-	conversationID string
-}
-
-// AppendChildEntry saves each turn once: a turn's journal outlives its save until the parent
-// settles, so a restart in between resumes the turn and saves it again.
-func (s childSessions) AppendChildEntry(ctx context.Context, key string, entry *rocketcode.SessionEntry) error {
-	var saved bool
-	if err := queryScalar(ctx, s.store.db, "find saved child turn", `SELECT COUNT(*) > 0 FROM session_entries WHERE conversation_id = $1 AND entry_json->>'turn_id' = $2`, &saved, s.conversationID+key, entry.TurnID); err != nil || saved {
-		return err
-	}
-
-	_, err := s.store.AppendEntryID(ctx, s.conversationID+key, entry)
-
-	return err
-}
-
-func (s childSessions) ChildEntries(ctx context.Context, key string) ([]rocketcode.SessionEntry, error) {
-	observed, err := s.store.ObserveEntries(ctx, s.conversationID+key)
-	if err != nil {
-		return nil, err
-	}
-
-	entries := make([]rocketcode.SessionEntry, len(observed))
-	for i := range observed {
-		entries[i] = observed[i].Entry
-	}
-
-	return entries, nil
-}
-
 // NewConversation constructs a rocketcode bridge for one conversation.
 func NewConversation(cfg *config.LockedConfig, publisher protocol.OutboundPublisher, bridgeCfg *Config, logger *slog.Logger) *Bridge {
 	normalized := *bridgeCfg
@@ -243,6 +215,44 @@ func NewConversation(cfg *config.LockedConfig, publisher protocol.OutboundPublis
 	return &Bridge{log: logger.With("component", "rocketcode"), config: normalized, runtime: cfg, bus: publisher, requestCh: make(chan bridgeRequest, defaultQueueSize), stopCh: make(chan struct{})}
 }
 
+// AppendChildEntry saves a guardrail or permission review turn under b's conversation ID plus key.
+func (b *Bridge) AppendChildEntry(ctx context.Context, key string, entry *rocketcode.SessionEntry) error {
+	_, err := b.config.SessionService.AppendEntryID(ctx, b.config.ConversationID+key, entry)
+	return err
+}
+
+// WriteSubagent delivers write into the subagent session at b's conversation ID plus write.Key, as
+// rocketclaw_sessions_write delivers into a session, after starting the session when new and switching
+// it to write.Agent. A replayed write delivers nothing again.
+func (b *Bridge) WriteSubagent(ctx context.Context, write *rocketcode.SubagentWrite) (bool, error) {
+	target := b.config.ConversationID + write.Key
+
+	if err := b.config.SessionService.startSubagent(ctx, target, b.config.ConversationID, write.Agent, write.Mode == ""); err != nil {
+		return false, err
+	}
+
+	if _, err := b.threads.switchConversationAgent(target, write.Agent); err != nil {
+		return false, err
+	}
+
+	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, write.Prompt, false)
+	inbound.PreserveWhitespace = true
+	inbound.Metadata = map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text", protocol.InboundSenderSessionMetadataKey: b.config.ConversationID, protocol.InboundSenderAgentMetadataKey: write.Delegator, inboundAgentMetadataKey: write.Agent}
+
+	outcome, _, err := b.threads.writeSession(ctx, target, b.config.ConversationID+"/"+write.CallKey, sessionWriteMode(cmp.Or(write.Mode, rocketcode.ContinueEnqueue)), inbound)
+	if errors.Is(err, errWriteDelivered) {
+		return false, nil
+	}
+
+	return outcome == sessionSteered, err
+}
+
+// AwaitSubagent waits for the turn of the subagent session at b's conversation ID plus key that runs
+// the write of the task call callKey.
+func (b *Bridge) AwaitSubagent(ctx context.Context, key, callKey string) (string, rocketcode.ReplayAttribution, error) {
+	return b.background.awaitSubagent(ctx, b.config.ConversationID+key, b.config.ConversationID+"/"+callKey)
+}
+
 // Run handles the conversation's unfinished active turn, then its requests,
 // until ctx is canceled or the bridge stops.
 func (b *Bridge) Run(ctx context.Context) error {
@@ -250,7 +260,12 @@ func (b *Bridge) Run(ctx context.Context) error {
 		return err
 	}
 
-	head, ok, err := b.headRequest(ctx)
+	if err := b.config.SessionService.postStopLines(context.WithoutCancel(ctx), b.config.ConversationID); err != nil {
+		return err
+	}
+
+	// A shutdown during startup reaches the head's handling, as one after startup does, not Run's caller.
+	head, ok, err := b.headRequest(context.WithoutCancel(ctx))
 	if err != nil {
 		return err
 	}
@@ -511,9 +526,15 @@ func (b *Bridge) enqueue(ctx context.Context, request *bridgeRequest, operation 
 		return err
 	}
 
-	if !stopped && request.inbound != nil && request.inbound.Workflow.Name == "" && request.inbound.Kind == protocol.InboundKindSteer && request.inbound.Human && b.inputOpen {
+	if !stopped && request.inbound != nil && request.inbound.Workflow.Name == "" && request.inbound.Kind == protocol.InboundKindSteer && b.inputOpen {
 		if request.queueItemID == "" {
 			request.queueItemID = cmp.Or(request.inbound.Metadata["web_message_id"], rand.Text())
+		}
+
+		// An agent's steer joins the turn when written, so later work submitting its stored row adds nothing.
+		if slices.ContainsFunc(b.steers, func(steer bridgeRequest) bool { return steer.queueItemID == request.queueItemID }) {
+			b.mu.Unlock()
+			return nil
 		}
 
 		if request.completion == nil {
@@ -574,7 +595,7 @@ func (b *Bridge) storeStopped(request *bridgeRequest, operation string) error {
 		return fmt.Errorf("%s: %w", operation, protocol.ErrBridgeStopped)
 	}
 
-	if msg.Kind == protocol.InboundKindSteer && msg.Human && msg.Workflow.Name == "" {
+	if msg.Kind == protocol.InboundKindSteer && msg.Workflow.Name == "" {
 		if slipped, err := b.slipSteer(request); err != nil || slipped {
 			return err
 		}
@@ -603,7 +624,7 @@ func (b *Bridge) storeStopped(request *bridgeRequest, operation string) error {
 	return nil
 }
 
-// slipSteer adds a human steer submitted during shutdown to the interrupted
+// slipSteer adds a steer submitted during shutdown to the interrupted
 // turn's accepted steers, as if it had arrived before the restart, so the
 // resumed turn injects it. It reports false when no interrupted turn takes steers.
 func (b *Bridge) slipSteer(request *bridgeRequest) (bool, error) {
@@ -626,7 +647,7 @@ func (b *Bridge) slipSteer(request *bridgeRequest) (bool, error) {
 	}
 
 	turn, found, err := b.config.SessionService.headTurn(ctx, b.config.ConversationID)
-	if err != nil || !found || turn.phase != turnRunning || turn.conversationID != b.config.ConversationID || !turn.inbound.Human || turn.inbound.SyncDestination != "" || turn.inbound.Workflow.Name != "" {
+	if err != nil || !found || turn.phase != turnRunning || turn.conversationID != b.config.ConversationID || hiddenRun(turn.inbound) || turn.inbound.Workflow.Name != "" {
 		return false, err
 	}
 
@@ -746,6 +767,10 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 	b.mu.Unlock()
 
 	defer func() {
+		if err := b.config.SessionService.postStopLines(context.WithoutCancel(ctx), b.config.ConversationID); err != nil {
+			b.log.Error("post stop lines", "conversation_id", b.config.ConversationID, "error", err)
+		}
+
 		b.mu.Lock()
 		b.activeReply = nil
 		b.activeCompletion = nil
@@ -878,12 +903,12 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 		owner = request.producer
 	}
 
-	agent := cmp.Or(request.workflow.agent, owner.agentSnapshot())
+	agent := cmp.Or(request.workflow.agent, request.inbound.Metadata[inboundAgentMetadataKey], owner.agentSnapshot())
 
 	if request.queueItemID != "" && request.producer == nil && request.inbound.GoalAction != protocol.GoalActionKickoff {
-		goal, active, err := b.config.SessionService.Goal(b.config.ConversationID)
-		if err != nil || active && goal.Status == GoalStatusActive {
-			b.log.Info("queue activation unavailable", "event", "queue_blocked", "conversation_id", b.config.ConversationID, "queue_item_id", request.queueItemID, "goal_active", active && goal.Status == GoalStatusActive, "error_type", fmt.Sprintf("%T", err))
+		goal, found, err := b.config.SessionService.Goal(b.config.ConversationID)
+		if held := found && goal.Status == GoalStatusActive && !request.released; err != nil || held {
+			b.log.Info("queue activation unavailable", "event", "queue_blocked", "conversation_id", b.config.ConversationID, "queue_item_id", request.queueItemID, "goal_active", held, "error_type", fmt.Sprintf("%T", err))
 			return false, err
 		}
 	}
@@ -975,7 +1000,7 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 // claimWakeNotes claims, in tx, the Completion Notes a wake turn delivers and records their jobs
 // in its inbound. It reports false when no note left wakes the conversation now.
 func claimWakeNotes(ctx context.Context, tx stateStoreDB, conversationID, turnID string, inbound *protocol.InboundMessage) (bool, error) {
-	notes, err := claimBackgroundNotes(ctx, tx, conversationID, "", turnID, false)
+	notes, err := claimBackgroundNotes(ctx, tx, conversationID, turnID, false)
 	if err != nil || !slices.ContainsFunc(notes, func(note backgroundJob) bool { return note.wake && !note.wakeAfter.After(time.Now()) }) {
 		return false, err
 	}
@@ -1062,7 +1087,7 @@ WHERE a.phase <> $2 AND c.producer_inbound_json->>'SyncDestination' = $1)`, b.co
 	// A Completion Note wakes the conversation with a system turn that replies where the job's
 	// turn did; a hidden producer's runs for its destination again. A note a hidden run's failed
 	// turn released wakes it once its delay ends.
-	note, wake, err := b.config.SessionService.backgroundWake(ctx, b.config.ConversationID, "")
+	note, wake, err := b.config.SessionService.backgroundWake(ctx, b.config.ConversationID)
 	if err != nil {
 		return fmt.Errorf("load background notes for later work: %w", err)
 	}
@@ -1427,7 +1452,7 @@ func (b *Bridge) openInputWindow(ctx context.Context, request *bridgeRequest) (b
 
 	b.mu.Lock()
 
-	b.inputOpen, b.activeTurnID = msg.Human && msg.SyncDestination == "" && !b.historyMutation && !canonical.Closed && request.delivery == nil, request.turnID
+	b.inputOpen, b.activeTurnID = !hiddenRun(msg) && msg.Workflow.Name == "" && !b.historyMutation && !canonical.Closed && request.delivery == nil, request.turnID
 	b.notesOffered = strings.Fields(msg.Metadata[backgroundNotesMetadataKey])
 
 	for _, steer := range recorded {
@@ -2091,6 +2116,30 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	appendOverlayPromptToAgent(agents, agentName, runtimeCfg)
 
+	// A subagent session acts as it did inside its top-level session's running turn: for that session, by
+	// that turn's agent and inbound, into that turn's reply. It delegates as deep as that agent allows.
+	self, rootAgent, replyTurn, origin := b.config.ConversationID, agentName, journalKey, msg
+
+	var jobs []backgroundKey
+
+	if agent, ok := agents.Items[agentName]; ok && b.parent != "" {
+		if self, replyTurn, origin, jobs, err = b.config.SessionService.subagentLineage(ctx, b.config.ConversationID); err != nil {
+			return runResult{}, err
+		}
+
+		var owner *Bridge
+		if owner, err = b.threads.recordedBridge(ctx, self); err != nil {
+			return runResult{}, err
+		}
+
+		rootAgent, agent.MaxRecursion = owner.agentSnapshot(), nil
+		if limit := agents.Items[rootAgent].MaxRecursion; limit != nil {
+			agent.MaxRecursion = new(max(*limit-len(jobs), 0))
+		}
+
+		agents.Items[agentName] = agent
+	}
+
 	shellTempRel := rocketcodeShellTempRel(runtimeCfg.RuntimeDirName(), b.config.ConversationID)
 	if err := root.MkdirAll(shellTempRel, 0o700); err != nil {
 		return runResult{}, fmt.Errorf("create rocketcode shell temp dir: %w", err)
@@ -2185,19 +2234,6 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	providerLog := b.log.With("conversation_id", b.config.ConversationID, "turn_id", turnID, "agent", agentName, "source", string(msg.Source), "kind", string(msg.Kind), "human", msg.Human, "goal_turn", msg.GoalTurn, "attachment_count", len(msg.Attachments))
 	resolver := newModelResolver(runtimeCfg, providerLog)
 
-	attachments := &outboundAttachmentCollector{turnID: journalKey}
-	if queued, found, err := b.config.SessionService.LoadTurnStep(ctx, b.config.ConversationID, journalKey+"/attachments"); err != nil {
-		return runResult{}, err
-	} else if found {
-		if err := json.Unmarshal(queued, &attachments.attachments); err != nil {
-			return runResult{}, fmt.Errorf("decode queued response attachments: %w", err)
-		}
-
-		if err := b.config.SessionService.loadAttachmentData(ctx, attachments.attachments); err != nil {
-			return runResult{}, err
-		}
-	}
-
 	observed, err := b.config.SessionService.ObserveEntries(ctx, b.config.ConversationID)
 	if err != nil {
 		return runResult{}, fmt.Errorf("load rocketcode session history metrics: %w", err)
@@ -2242,13 +2278,36 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		sessionIn = appendSessionEntry(sessionIn, &snapshot.ContextEntries[i])
 	}
 
-	// Tools that act on the turn's routing read msg, so its background work keeps it.
-	tagConversationID := cmp.Or(msg.SyncDestination, b.config.ConversationID)
-	customTools := append(sessionTagTools(b.config.SessionService, tagConversationID), attachments.Tool(root, b.config.SessionService, b.config.ConversationID), b.scheduleMessageTool(msg), b.resetScheduledMessagesTool(msg))
+	// Tools that act on the turn's routing read origin, so its background work keeps it.
+	tagConversationID := cmp.Or(origin.SyncDestination, self)
+
+	// A subagent's turn under a task call that runs in the background, the job writing its input or an ancestor's,
+	// has left the turn it acts for, as that call has: its turn-bound tools refuse, as in other background work,
+	// even once that turn ended.
+	customTools := append(sessionTagTools(b.config.SessionService, tagConversationID), currentSessionIDTool(self))
+	if b.parent == "" {
+		customTools = append(customTools, b.scheduleMessageTool(origin), b.resetScheduledMessagesTool(origin))
+	}
+
+	if replyTurn != "" || slices.ContainsFunc(jobs, b.background.detached) {
+		customTools = append(customTools, attachFilesTool(root, b.config.SessionService, b.config.ConversationID, replyTurn))
+	}
 
 	agent := agents.Items[agentName]
-	if agentExplicitlyAllowsRocketClawTool(&agent, restartToolName) {
+	if action, matched := agent.Permission.Evaluate("rocketclaw", restartToolName); matched && action == rocketcode.PermissionAllow {
 		customTools = append(customTools, restartTool(b.config.RequestRestart))
+	}
+
+	for i := range customTools {
+		if tool := customTools[i]; tool.TurnBound && b.parent != "" {
+			customTools[i].Call = func(ctx context.Context, raw json.RawMessage, output chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+				if slices.ContainsFunc(jobs, b.background.detached) {
+					return rocketcode.TextToolResult(fmt.Sprintf(rocketcode.TurnBoundRefused, tool.Name)), nil
+				}
+
+				return tool.Call(ctx, raw, output)
+			}
+		}
 	}
 
 	if tool, ok := b.maybeDynamicWorkflowTool(root, &agent, agentName, tagConversationID); ok {
@@ -2259,15 +2318,13 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		customTools = append(customTools, askUserQuestionTool(b.config.UserQuestionAsker, msg))
 	}
 
-	if agentExplicitlyAllowsRocketClawTool(&agent, startNewThreadToolName) {
-		customTools = append(customTools, startNewThreadTool(b.config.StartNewThread, msg, agentName))
-	}
+	customTools = append(customTools, sessionsWriteTool(b, origin, rootAgent, self))
 
 	rocketcodeConfig := b.rocketcodeConfig(shellTempDir, shellEnv, customTools...)
 
 	rocketcodeConfig.ChildContext = childContext
-	if !b.shadow {
-		rocketcodeConfig.BackgroundJobs = backgroundTurn{registry: b.background, root: shared, conversationID: b.config.ConversationID, origin: msg, turnID: turnID}
+	if !b.shadow && !b.underShadow {
+		rocketcodeConfig.BackgroundJobs = backgroundTurn{registry: b.background, root: shared, conversationID: b.config.ConversationID, origin: msg}
 	}
 
 	looper, err := rocketcode.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agentName, io.Discard)
@@ -2443,9 +2500,15 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		result.responseID = staged.entries[len(staged.entries)-1].ResponseID
 	}
 
-	result.attachments = attachments.Attachments()
-	if msg.RequireOutputDecision && strings.TrimSpace(result.text) == "" {
-		result.attachments = nil // An empty cron reply is silent, files included.
+	// The reply sends the files the turn and its subagents attached; an empty cron reply is silent, files included.
+	if !msg.RequireOutputDecision || strings.TrimSpace(result.text) != "" {
+		if result.attachments, err = b.config.SessionService.TurnAttachments(ctx, b.config.ConversationID, journalKey); err != nil {
+			return result, err
+		}
+
+		if err := b.config.SessionService.loadAttachmentData(ctx, result.attachments); err != nil {
+			return result, err
+		}
 	}
 
 	if msg.GoalTurn {
@@ -2526,14 +2589,14 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 	runtimeCfg := b.runtime.Clone()
 	tools := make([]rocketcode.Tool, 0, 6+len(customTools))
 
-	tools = append(tools, reloadTool(b.config.RequestReload), listSessionsTool(b.config.SessionService, b.threads), getSessionTool(b.config.SessionService), currentSessionIDTool(b.config.ConversationID), stopBackgroundJobTool(b.background, b.config.ConversationID))
+	tools = append(tools, reloadTool(b.config.RequestReload), listSessionsTool(b.config.SessionService, b.threads), getSessionTool(b.config.SessionService), sessionsGetURLTool(b.threads), stopBackgroundJobTool(b.background, b.config.ConversationID))
 	if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err == nil && ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
 		tools = append(tools, updateGoalTool(b))
 	}
 
 	tools = append(tools, customTools...)
 
-	if b.shadow {
+	if b.shadow || b.underShadow {
 		env := make(map[string]string, len(shellEnv)+1)
 		maps.Copy(env, shellEnv)
 
@@ -2545,11 +2608,11 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 		shellEnv = env
 
 		tools = slices.DeleteFunc(tools, func(tool rocketcode.Tool) bool {
-			return slices.Contains([]string{askUserQuestionToolName, startNewThreadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, updateGoalToolName, reloadToolName, restartToolName}, tool.Name)
+			return slices.Contains([]string{askUserQuestionToolName, sessionsWriteToolName, scheduleMessageToolName, resetScheduledMessagesToolName, updateGoalToolName, reloadToolName, restartToolName}, tool.Name)
 		})
 	}
 
-	return rocketcode.Config{Model: "", AutoApproverModel: runtimeCfg.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(runtimeCfg), RetainedResultDir: rocketcodeRetainedDir(b.config.ConversationID), Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: runtimeCfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: runtimeCfg.Instrumentation.HideInputs, HideOutputs: runtimeCfg.Instrumentation.HideOutputs}}, ChildSessions: childSessions{store: b.config.SessionService, conversationID: b.config.ConversationID}, Journal: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, BackgroundJobs: rocketcode.InertBackgroundJobs{}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(runtimeCfg.MCPServers), MCPWorkspace: runtimeCfg.Workspace}
+	return rocketcode.Config{Model: "", AutoApproverModel: runtimeCfg.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(runtimeCfg), RetainedResultDir: rocketcodeRetainedDir(b.config.ConversationID), Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: runtimeCfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: runtimeCfg.Instrumentation.HideInputs, HideOutputs: runtimeCfg.Instrumentation.HideOutputs}}, ChildSessions: b, Journal: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, BackgroundJobs: rocketcode.InertBackgroundJobs{}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(runtimeCfg.MCPServers), MCPWorkspace: runtimeCfg.Workspace}
 }
 
 // toMCPClientServers consumes the bridge's independent runtime snapshot.
@@ -2668,11 +2731,13 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 			return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("%s: permission.rocketclaw.rocketclaw_set_tag: %w", agent.Location, err)
 		}
 
-		agent.Permission.Buckets = slices.DeleteFunc(agent.Permission.Buckets, func(bucket rocketcode.PermissionBucket) bool { return bucket.Name == "rocketclaw_tags" })
+		agent.Permission.Buckets = slices.DeleteFunc(agent.Permission.Buckets, func(bucket rocketcode.PermissionBucket) bool {
+			return bucket.Name == "rocketclaw_tags"
+		})
 		for i, bucket := range agent.Permission.Buckets {
 			if bucket.Name == "rocketclaw" {
 				agent.Permission.Buckets[i].Rules = slices.DeleteFunc(bucket.Rules, func(rule rocketcode.PermissionRule) bool {
-					return rule.Pattern == setTagToolName || rule.Pattern == getTagsToolName
+					return slices.Contains([]string{setTagToolName, getTagsToolName}, rule.Pattern)
 				})
 			}
 		}
@@ -2836,14 +2901,6 @@ func (b *Bridge) scheduleMessageTool(origin *protocol.InboundMessage) rocketcode
 	}}
 }
 
-// outboundAttachmentCollector queues a turn's response attachments and records
-// them under the turn's attachments step so a resumed turn keeps the ones queued before a restart.
-type outboundAttachmentCollector struct {
-	turnID      string
-	mu          sync.Mutex
-	attachments []protocol.OutboundAttachment
-}
-
 type outboundAttachmentInput struct {
 	Path          string `json:"path"`
 	Name          string `json:"name"`
@@ -2856,7 +2913,9 @@ type attachFilesInput struct {
 	Attachments []outboundAttachmentInput `json:"attachments"`
 }
 
-func (c *outboundAttachmentCollector) Tool(root *os.Root, sessions *SessionService, conversationID string) rocketcode.Tool {
+// attachFilesTool queues files, saved as conversationID's, for the reply of turnID, which sends the
+// files saved for it, a resumed turn's included.
+func attachFilesTool(root *os.Root, sessions *SessionService, conversationID, turnID string) rocketcode.Tool {
 	parameters := map[string]any{
 		"properties": map[string]any{
 			"attachments": map[string]any{
@@ -2884,8 +2943,6 @@ func (c *outboundAttachmentCollector) Tool(root *os.Root, sessions *SessionServi
 			return rocketcode.ToolResult{}, fmt.Errorf("parse response attachments: %w", err)
 		}
 
-		attachments := make([]protocol.OutboundAttachment, 0, len(input.Attachments))
-
 		ids := make([]string, 0, len(input.Attachments))
 		for i := range input.Attachments {
 			attachment, err := outboundAttachment(root, &input.Attachments[i])
@@ -2894,32 +2951,15 @@ func (c *outboundAttachmentCollector) Tool(root *os.Root, sessions *SessionServi
 			}
 
 			attachment.ID = rand.Text()
-			if err := sessions.SaveAttachment(ctx, conversationID, c.turnID, &attachment, false); err != nil {
+			if err := sessions.SaveAttachment(ctx, conversationID, turnID, &attachment, false); err != nil {
 				return rocketcode.ToolResult{}, err
 			}
 
-			attachments = append(attachments, attachment)
 			ids = append(ids, attachment.ID)
-		}
-
-		c.mu.Lock()
-		c.attachments = append(c.attachments, attachments...)
-		queued, _ := json.Marshal(c.attachments)
-		c.mu.Unlock()
-
-		if err := sessions.SaveTurnStep(ctx, conversationID, c.turnID+"/attachments", queued); err != nil {
-			return rocketcode.ToolResult{}, err
 		}
 
 		return rocketcode.TextToolResult("queued attachments for final response: " + strings.Join(ids, " ")), nil
 	}}
-}
-
-func (c *outboundAttachmentCollector) Attachments() []protocol.OutboundAttachment {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	return protocol.CloneOutboundAttachments(c.attachments)
 }
 
 func outboundAttachment(root *os.Root, input *outboundAttachmentInput) (protocol.OutboundAttachment, error) {
@@ -3007,69 +3047,6 @@ func askUserQuestionTool(asker protocol.UserQuestionAsker, msg *protocol.Inbound
 
 		return rocketcode.TextToolResult(string(data)), nil
 	}}
-}
-
-func startNewThreadTool(start func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadResult, error), msg *protocol.InboundMessage, currentAgent string) rocketcode.Tool {
-	parameters := map[string]any{
-		"properties": map[string]any{
-			"title":  map[string]any{"type": "string"},
-			"prompt": map[string]any{"type": "string"},
-			"agent":  map[string]any{"type": "string"},
-		},
-		"required": []string{"title", "prompt"},
-	}
-
-	return rocketcode.Tool{
-		Name:               startNewThreadToolName,
-		Description:        "Start a new RocketClaw Web session and give it prompt as its first task. The new session starts empty: it cannot see this conversation's history, so prompt must carry all the context its first task needs. title names the session in the Web sidebar. Use agent only when a specific configured agent should handle it. Returns conversation_id and url; share url with the human so they can open the session.",
-		Permission:         "rocketclaw",
-		VisibilitySubjects: []string{startNewThreadToolName},
-		Subjects:           func(json.RawMessage) ([]string, error) { return []string{startNewThreadToolName}, nil },
-		Parameters:         parameters,
-		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
-			var input struct {
-				Title  string `json:"title"`
-				Prompt string `json:"prompt"`
-				Agent  string `json:"agent"`
-			}
-			if err := json.Unmarshal(raw, &input); err != nil {
-				return rocketcode.ToolResult{}, fmt.Errorf("parse new thread request: %w", err)
-			}
-
-			title, prompt := strings.TrimSpace(input.Title), input.Prompt
-			if title == "" {
-				return rocketcode.ToolResult{}, errors.New("title is required")
-			}
-
-			if strings.TrimSpace(prompt) == "" {
-				return rocketcode.ToolResult{}, errors.New("prompt is required")
-			}
-
-			allowedAgents := strings.FieldsFunc(msg.Metadata[protocol.InboundAllowedAgentsMetadataKey], func(r rune) bool { return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' ' })
-			createdBy := msg.Metadata[protocol.InboundPrincipalMetadataKey]
-
-			if msg.Cronjob != nil {
-				allowedAgents, createdBy = []string{currentAgent}, string(ThreadCreatedByCron)
-			}
-
-			req := protocol.StartNewThreadRequest{CurrentAgent: currentAgent, Agent: strings.TrimSpace(input.Agent), Title: title, Prompt: prompt, CreatedBy: createdBy, AllowedAgents: allowedAgents}
-
-			result, err := start(ctx, &req)
-			if err != nil {
-				return rocketcode.ToolResult{}, err
-			}
-
-			data, _ := json.Marshal(result)
-
-			return rocketcode.TextToolResult(string(data)), nil
-		},
-	}
-}
-
-func agentExplicitlyAllowsRocketClawTool(agent *rocketcode.Agent, tool string) bool {
-	action, matched := agent.Permission.Evaluate("rocketclaw", tool)
-
-	return matched && action == rocketcode.PermissionAllow
 }
 
 func updateGoalTool(b *Bridge) rocketcode.Tool {
@@ -3321,7 +3298,7 @@ func replayInputRawKind(raw json.RawMessage) string {
 const defaultReplyInstruction = "Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."
 
 func (b *Bridge) buildPrompt(msg *protocol.InboundMessage, agentFrontmatter map[string]any) (string, error) {
-	prompt := buildPrompt(msg, agentFrontmatter)
+	prompt := buildPrompt(msg, agentFrontmatter, false)
 
 	goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID)
 	if err != nil {
@@ -3335,7 +3312,9 @@ func (b *Bridge) buildPrompt(msg *protocol.InboundMessage, agentFrontmatter map[
 	return prompt + "\n\n" + goalSteeringPrompt(&goal), nil
 }
 
-func buildPrompt(msg *protocol.InboundMessage, agentFrontmatter map[string]any) string {
+// buildPrompt frames msg for the model; steer reports whether msg joins a running turn
+// rather than starting one.
+func buildPrompt(msg *protocol.InboundMessage, agentFrontmatter map[string]any, steer bool) string {
 	instruction := defaultReplyInstruction
 	if override, ok := agentFrontmatter["additionalInstructions"].(string); ok && strings.TrimSpace(override) != "" {
 		instruction = override
@@ -3364,7 +3343,19 @@ func buildPrompt(msg *protocol.InboundMessage, agentFrontmatter map[string]any) 
 	provenance := provenanceFromInbound(msg)
 	provenance.additionalInstructions = instruction
 
-	return provenanceHeader(provenance) + "\n\n" + body
+	if session := msg.Metadata[protocol.InboundSenderSessionMetadataKey]; session != "" {
+		sender := "session " + session + " (agent " + msg.Metadata[protocol.InboundSenderAgentMetadataKey] + ")"
+		switch {
+		case msg.Metadata[protocol.InboundSenderActionMetadataKey] == protocol.SenderActionStopped:
+			provenance.sender = sender + " stopped your previous turn and sent this"
+		case steer:
+			provenance.sender = "steer from " + sender
+		default:
+			provenance.sender = "message from " + sender
+		}
+	}
+
+	return provenanceHeader(&provenance) + "\n\n" + body
 }
 
 func inboundDirectSkill(msg *protocol.InboundMessage) *rocketcode.PromptInputDirectSkill {
@@ -3439,7 +3430,7 @@ func parseDirectSkillTrigger(text string) *rocketcode.PromptInputDirectSkill {
 }
 
 type promptProvenance struct {
-	origin, media, principal, additionalInstructions string
+	origin, media, principal, sender, additionalInstructions string
 }
 
 func provenanceFromInbound(msg *protocol.InboundMessage) promptProvenance {
@@ -3480,7 +3471,7 @@ func canonicalOverride(value string, allowed ...string) string {
 	return ""
 }
 
-func provenanceHeader(provenance promptProvenance) string {
+func provenanceHeader(provenance *promptProvenance) string {
 	origin := provenanceToken(provenance.origin)
 	if origin == "" {
 		origin = "System"
@@ -3493,6 +3484,10 @@ func provenanceHeader(provenance promptProvenance) string {
 
 	if principal := strings.TrimSpace(provenance.principal); principal != "" {
 		header += " principal=" + strconv.Quote(principal)
+	}
+
+	if provenance.sender != "" {
+		header += " sender=" + strconv.Quote(provenance.sender)
 	}
 
 	if provenance.additionalInstructions != "" {

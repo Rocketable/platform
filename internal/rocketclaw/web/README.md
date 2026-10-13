@@ -12,7 +12,9 @@ screens, tap a message instead. User messages show Copy and, when recorded, a
 message-header info button, but no agent or model label.
 Human messages also show their recorded author as a small, always-visible label
 above the text inside the bubble. Queued/stashed rows and pending steers retain
-their own author across viewers, reloads, and promotion. The info control keeps
+their own author across viewers, reloads, and promotion. Rows another session's
+agent wrote with `rocketclaw_sessions_write` show `agent <name> (session <ID>)`
+as their author. The info control keeps
 the exact raw prompt header. Historical messages without author metadata stay
 unlabeled; text that looks like a header is not treated as attribution.
 New composer and handoff previews snapshot the server-resolved author only when
@@ -706,7 +708,7 @@ destination and document, then choose **Stash handoff here**. The document waits
 in that session's stash for **Pop**; stashing starts no turn. Cancelling the
 dialog stashes nothing. Generation uses the source agent with tools disabled
 and leaves the source history intact.
-The handoff includes the source session ID and points to `rocketclaw_get_session`,
+The handoff includes the source session ID and points to `rocketclaw_sessions_get`,
 called inside Execute, for reading more details from that session.
 After choosing a destination, **Copy Handoff** also copies it without stashing.
 The handoff panel keeps **Preview**, **Copy**, and **Stash** actions visible.
@@ -795,8 +797,10 @@ agent gets a system note that you moved the work, and a script waiting on a
 question loses that question and continues in the background. Work of other
 agents stays in the foreground. Running Background Jobs, and finished ones whose
 Completion Note the agent has not read yet, are listed above the composer, in the
-queue's box, with their state and **Open**; running ones also get **Stop**. Open shows a subagent's Delegation
-History or scrolls to a script's call, loading earlier turns when needed. Jobs
+queue's box, with their state and **Open**; running ones also get **Stop**. Prompts a
+parent sends a busy subagent wait in that subagent's own queue. Open shows a subagent's Delegation
+History, which lists that subagent's own jobs with Open and Stop, or scrolls to a
+script's call, loading earlier turns when needed. Jobs
 started by hidden cron or External MCP runs that report to this chat are listed
 too, without Open. Calls running in the background stay visible at every Timeline
 detail level. Background Jobs and Completion Notes are Trace lines too: a running

@@ -149,17 +149,11 @@ func PromptPrincipal(header string) string {
 
 func (s *SessionService) messagePrincipals(ctx context.Context) (principals map[string][]string, complete bool, err error) {
 	principals = make(map[string][]string)
-	err = readRows(ctx, s.db, `WITH visible AS (
-    SELECT c.conversation_id, c.revert_message_id FROM managed_conversations c
-    LEFT JOIN shadow_bindings b ON b.child_conversation_id = c.conversation_id
-    LEFT JOIN external_mcp_sessions p ON p.private_conversation_id = c.conversation_id
-    WHERE c.conversation_id NOT LIKE 'cron:%' AND c.conversation_id NOT LIKE 'one-off-cron:%'
-        AND b.child_conversation_id IS NULL AND p.private_conversation_id IS NULL
-), index_state AS (
-    SELECT count(c.conversation_id) = count(i.conversation_id) AS complete FROM visible c
+	err = readRows(ctx, s.db, `WITH `+visibleChatsSQL+`, index_state AS (
+    SELECT count(c.conversation_id) = count(i.conversation_id) AS complete FROM visible_chats c
     LEFT JOIN message_search_indexed i ON i.conversation_id = c.conversation_id
 ), principals AS (
-    SELECT DISTINCT m.conversation_id, m.principal FROM message_search m JOIN visible c USING (conversation_id)
+    SELECT DISTINCT m.conversation_id, m.principal FROM message_search m JOIN visible_chats c USING (conversation_id)
     LEFT JOIN active_turns a ON a.id = m.turn_id
     WHERE m.principal <> '' AND (c.revert_message_id = '' OR COALESCE(m.entry_id, a.history_anchor_id) < split_part(c.revert_message_id, ':', 1)::bigint
         OR m.entry_id = split_part(c.revert_message_id, ':', 1)::bigint AND m.replay_index < split_part(c.revert_message_id, ':', 2)::integer)
@@ -176,7 +170,7 @@ LEFT JOIN principals p ON TRUE ORDER BY p.conversation_id COLLATE "C", p.princip
 		}
 
 		return nil
-	})
+	}, "")
 
 	return principals, complete, err
 }
@@ -234,12 +228,13 @@ ON CONFLICT DO NOTHING`, conversationID)
 }
 
 // visibleChatsSQL is the CTE visible_chats of the managed_conversations rows
-// Web shows (ChatOriginFacts); a nonempty $1 restricts it to that chat.
+// Web shows (ChatOriginFacts), never a subagent session; a nonempty $1 restricts it to that chat.
 const visibleChatsSQL = `visible_chats AS NOT MATERIALIZED (SELECT c.* FROM managed_conversations c
     LEFT JOIN shadow_bindings b ON b.child_conversation_id = c.conversation_id
     LEFT JOIN external_mcp_sessions p ON p.private_conversation_id = c.conversation_id
+    LEFT JOIN managed_conversations parent ON parent.conversation_id = c.parent_conversation_id
     WHERE ($1 = '' OR c.conversation_id = $1) AND c.conversation_id NOT LIKE 'cron:%' AND c.conversation_id NOT LIKE 'one-off-cron:%'
-        AND b.child_conversation_id IS NULL AND p.private_conversation_id IS NULL)`
+        AND b.child_conversation_id IS NULL AND p.private_conversation_id IS NULL AND parent.conversation_id IS NULL)`
 
 // unindexedChatsSQL starts a WITH of visible_chats and unindexed_chats, the
 // chats Web shows that have no message search marker.

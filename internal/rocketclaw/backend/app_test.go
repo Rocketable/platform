@@ -21,7 +21,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -113,8 +112,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			require.Same(t, rt.threads, rt.TextRouter)
 			require.Equal(t, map[string]string{"alice": "secret"}, rt.ExternalMCPUsers)
 
-			_, err := rt.threads.ensureStartedThread(t.Context(), &threadStart{conversationID: threadID, agent: "main"})
-			require.NoError(t, err)
+			require.NoError(t, rt.threads.store.UpsertThread(threadID, ThreadState{Agent: "main"}))
 			require.NoError(t, rt.threads.PickLaterWork(rt.RunCtx, threadID))
 
 			bridge := rt.threads.bridges[threadID].(*Bridge)
@@ -123,7 +121,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, "rocketclaw runtime assets reloaded", reloaded)
 
-			_, err = bridge.config.StartNewThread(rt.RunCtx, &protocol.StartNewThreadRequest{CurrentAgent: "missing"})
+			_, err = bridge.threads.createSession(rt.RunCtx, &threadStart{agent: "missing"}, nil, "", nil)
 			require.ErrorContains(t, err, `agent "missing" is not configured`)
 
 			msg, err := bridge.config.RequestRestart("test restart")
@@ -289,43 +287,6 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 	require.NoError(t, seed.Stop())
 	require.Equal(t, []string{"answer", "answer"}, runQueuedStartup(t, 20*time.Second))
 	require.Empty(t, runQueuedStartup(t, time.Second))
-}
-
-// A turn continuing a subagent that resumes after a restart is refused instead of running it twice.
-func TestStartupResumedSubagentIsBusyForFrontends(t *testing.T) {
-	t.Parallel()
-
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
-
-	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-	require.NoError(t, err)
-
-	seed, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
-	require.NoError(t, err)
-
-	task := testBackgroundJob("web-a", "turn-1/call/a")
-	task.kind, task.subagentKey = backgroundTask, "/a"
-	createTestBackgroundJob(t, seed, task)
-	require.NoError(t, seed.Stop())
-
-	var errContinue error
-
-	copyDone := make(chan struct{})
-	close(copyDone)
-
-	assembler := &frontendAssemblerMock{
-		ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil },
-		AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
-			turn := backgroundTurn{registry: rt.background, root: testTurnRoot(t), conversationID: "web-a", origin: &protocol.InboundMessage{}}
-			_, errContinue = turn.Run(rt.RunCtx, &rocketcode.BackgroundJob{ID: "turn-2/call/c", Kind: rocketcode.BackgroundKindTask, SubagentKey: "/a"}, &backgroundWorkMock{RunBackgroundFunc: func(context.Context) (string, error) { return "second turn", nil }})
-
-			return nil, copyDone, nil, nil
-		},
-	}
-
-	require.NoError(t, Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler), assembler))
-	require.EqualError(t, errContinue, "subagent /a is still running; wait for its note before continuing it")
 }
 
 func TestConfigureInstrumentationStartsAndStopsExporter(t *testing.T) {

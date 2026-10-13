@@ -238,7 +238,6 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		Config.RequestRestart = requestRestart
 		Config.RequestReload = rt
 		Config.UserQuestionAsker = questions
-		Config.StartNewThread = threadBridges.StartNewThread
 		Config.SessionService = rocketcodeSessions
 
 		bridge := NewConversation(s.cfg, rt, &Config, logger)

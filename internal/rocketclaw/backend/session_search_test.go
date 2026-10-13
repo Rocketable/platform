@@ -118,6 +118,7 @@ func TestSearchSessionsPrincipalCriteria(t *testing.T) {
 	ctx := t.Context()
 	require.NoError(t, s.UpsertThread("written-web", ThreadState{Agent: "main"}))
 	require.NoError(t, s.UpsertThread(searchChatW, ThreadState{Agent: "other", CreatedBy: ThreadCreator(`Writer "One"`)}))
+	require.NoError(t, s.startSubagent(ctx, "written-web/call-1", "written-web", "main", true), "an unindexed subagent session leaves search complete")
 
 	var authored int64
 

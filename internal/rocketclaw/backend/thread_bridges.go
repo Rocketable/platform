@@ -24,6 +24,20 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// errWriteDelivered refuses an agent write that a replayed call already delivered.
+var errWriteDelivered = errors.New("this write was already delivered")
+
+// inboundAgentMetadataKey names, in a task's write to a subagent session, the agent type its turn runs as.
+const inboundAgentMetadataKey = "rocketclaw_agent"
+
+// subagentPublisher delivers nothing: a subagent session's turns reach its parent through its history.
+type subagentPublisher struct{}
+
+func (subagentPublisher) PublishOutbound(_ context.Context, message *protocol.OutboundMessage) error {
+	message.MarkDelivered(nil)
+	return nil
+}
+
 type directBridge interface {
 	Run(ctx context.Context) error
 	Stop() error
@@ -34,8 +48,8 @@ type directBridge interface {
 }
 
 type threadStart struct {
-	conversationID, agent string
-	createdBy             ThreadCreator
+	conversationID, agent, spawnedBy string
+	createdBy                        ThreadCreator
 }
 
 type threadBridgeManager struct {
@@ -366,51 +380,6 @@ func (m *threadBridgeManager) SubmitMention(ctx context.Context, agent string, t
 	return true, m.PickLaterWork(ctx, conversationID)
 }
 
-// StartNewThread creates a named Web session, submits its first turn, and
-// links to it with WebURL.
-func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *protocol.StartNewThreadRequest) (protocol.StartNewThreadResult, error) {
-	targetAgent := cmp.Or(strings.TrimSpace(req.Agent), strings.TrimSpace(req.CurrentAgent), "main")
-	if len(req.AllowedAgents) > 0 && !slices.Contains(req.AllowedAgents, targetAgent) {
-		return protocol.StartNewThreadResult{}, fmt.Errorf("agent %q is not allowed on this source surface", targetAgent)
-	}
-
-	agents, err := ExternalMCPAgentsIn(m.runtime, m.runtime.Clone().RuntimeDirName())
-	if err != nil {
-		return protocol.StartNewThreadResult{}, fmt.Errorf("load configured agents: %w", err)
-	}
-
-	if !slices.Contains(agents, targetAgent) {
-		return protocol.StartNewThreadResult{}, fmt.Errorf("agent %q is not configured", targetAgent)
-	}
-
-	conversationID := rand.Text()
-
-	url, err := m.WebURL(ctx, conversationID)
-	if err != nil {
-		return protocol.StartNewThreadResult{}, err
-	}
-
-	managed, err := m.ensureStartedThread(ctx, &threadStart{conversationID: conversationID, agent: targetAgent, createdBy: ThreadCreator(req.CreatedBy)})
-	if err != nil {
-		return protocol.StartNewThreadResult{}, err
-	}
-
-	if _, err := m.store.UpdateConversationDetails(ctx, conversationID, nil, &req.Title); err != nil {
-		return protocol.StartNewThreadResult{}, fmt.Errorf("name new Web session: %w", err)
-	}
-
-	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, req.Prompt, false)
-	inbound.PreserveWhitespace = true
-	inbound.ConversationID = conversationID
-	inbound.Metadata = map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text"}
-
-	if err := managed.Submit(ctx, inbound); err != nil {
-		return protocol.StartNewThreadResult{}, fmt.Errorf("submit new Web session first prompt: %w", err)
-	}
-
-	return protocol.StartNewThreadResult{ConversationID: conversationID, URL: url}, nil
-}
-
 // WebURL links to conversationID at the tsnet node's HTTPS origin once it serves.
 // Before that it uses this machine's Tailscale IPv4 on the Web port, asking
 // tailscale on every call, so a changed address needs no restart.
@@ -493,11 +462,7 @@ func (m *threadBridgeManager) PickLaterWork(ctx context.Context, conversationID 
 }
 
 func (m *threadBridgeManager) InterruptConversation(conversationID string) *protocol.InboundMessage {
-	m.store.turnGatesMu.Lock()
-	if gate := m.store.turnGates[conversationID]; gate != nil && gate.reservedFor != "" {
-		conversationID = gate.reservedFor
-	}
-	m.store.turnGatesMu.Unlock()
+	conversationID = cmp.Or(m.store.reservedFor(conversationID), conversationID)
 
 	m.mu.Lock()
 	managed := m.bridges[conversationID]
@@ -510,6 +475,208 @@ func (m *threadBridgeManager) InterruptConversation(conversationID string) *prot
 	return managed.InterruptActiveTurn()
 }
 
+// createSession creates a Web session named title for start's agent, unless allowed excludes it, and
+// submits inbound as its first turn. It mints start.conversationID and returns its WebURL, looked up
+// before any side effect.
+func (m *threadBridgeManager) createSession(ctx context.Context, start *threadStart, allowed []string, title string, inbound *protocol.InboundMessage) (string, error) {
+	if len(allowed) > 0 && !slices.Contains(allowed, start.agent) {
+		return "", fmt.Errorf("agent %q is not allowed on this source surface", start.agent)
+	}
+
+	agents, err := ExternalMCPAgentsIn(m.runtime, m.runtime.Clone().RuntimeDirName())
+	if err != nil {
+		return "", fmt.Errorf("load configured agents: %w", err)
+	}
+
+	if !slices.Contains(agents, start.agent) {
+		return "", fmt.Errorf("agent %q is not configured", start.agent)
+	}
+
+	start.conversationID = rand.Text()
+
+	url, err := m.WebURL(ctx, start.conversationID)
+	if err != nil {
+		return "", err
+	}
+
+	thread := ThreadState{Agent: start.agent, CreatedBy: start.createdBy, spawnedBy: start.spawnedBy}
+
+	managed, err := m.ensureThreadBridge(ctx, start.conversationID, thread)
+	if err != nil {
+		return "", err
+	}
+
+	if err := m.store.UpsertThread(start.conversationID, thread); err != nil {
+		m.mu.Lock()
+		delete(m.bridges, start.conversationID)
+		m.mu.Unlock()
+
+		_ = managed.Stop()
+
+		return "", fmt.Errorf("persist new Web session: %w", err)
+	}
+
+	if _, err := m.store.UpdateConversationDetails(ctx, start.conversationID, nil, &title); err != nil {
+		return "", fmt.Errorf("name new Web session: %w", err)
+	}
+
+	if err := managed.Submit(ctx, inbound); err != nil {
+		return "", fmt.Errorf("submit new Web session first prompt: %w", err)
+	}
+
+	return url, nil
+}
+
+// writeSession delivers an agent's write, inbound under queue item ID id, to the session target
+// without waiting for its turn. It returns what became of the write and, for a stop write, whether a
+// turn was running.
+func (m *threadBridgeManager) writeSession(ctx context.Context, target, id string, mode sessionWriteMode, inbound *protocol.InboundMessage) (sessionWriteOutcome, bool, error) {
+	b, err := m.recordedBridge(ctx, target)
+	if err != nil {
+		return "", false, err
+	}
+
+	inbound.ConversationID, inbound.Metadata["web_message_id"] = target, id
+	if mode == sessionWriteStop {
+		inbound.Metadata[protocol.InboundSenderActionMetadataKey] = protocol.SenderActionStopped
+	}
+
+	outcome, resubmit, err := b.admitAgentWrite(ctx, mode, inbound)
+	for i := range resubmit {
+		select {
+		case b.requestCh <- resubmit[i]:
+		case <-b.stopCh:
+			err = errors.Join(err, b.storeStopped(&resubmit[i], "store waiting request"))
+		}
+	}
+
+	if err != nil || inbound.Kind != protocol.InboundKindEnqueue {
+		return outcome, false, err
+	}
+
+	var running bool
+	if mode == sessionWriteStop {
+		if running, err = m.stopSession(target); err != nil {
+			return "", false, err
+		}
+	}
+
+	return outcome, running, m.PickLaterWork(ctx, target)
+}
+
+// admitAgentWrite stores inbound, an agent's write, as a Thread Queue row first, so it outlives a
+// staged revert and a replayed write adds nothing, and a steer joins the running turn while its input
+// is open. A stop write's row goes first, and queued requests already handed to the loop wait behind
+// it, as StageRevert's do; it returns the loop's other requests to resubmit.
+func (b *Bridge) admitAgentWrite(ctx context.Context, mode sessionWriteMode, inbound *protocol.InboundMessage) (outcome sessionWriteOutcome, resubmit []bridgeRequest, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.historyMutation {
+		return "", nil, errors.New("conversation history is busy; retry the write later")
+	}
+
+	outcome, inbound.Kind = sessionQueued, protocol.InboundKindEnqueue
+
+	switch {
+	case mode == sessionWriteStop:
+		outcome = sessionStopped
+	case mode == sessionWriteStash:
+		outcome, inbound.Kind = sessionStashed, protocol.InboundKindHeld
+	case mode == sessionWriteSteer && b.inputOpen && !b.stopped:
+		outcome, inbound.Kind = sessionSteered, protocol.InboundKindSteer
+	}
+
+	for draining := mode == sessionWriteStop; draining; {
+		select {
+		case request := <-b.requestCh:
+			if request.queueItemID != "" && request.producer == nil {
+				b.waiting = append(b.waiting, request)
+			} else {
+				resubmit = append(resubmit, request)
+			}
+		default:
+			draining = false
+		}
+	}
+
+	tx, err := b.config.SessionService.beginStateTx(ctx, "agent write")
+	if err != nil {
+		return "", resubmit, err
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	if err := lockSessionHistory(ctx, tx, b.config.ConversationID); err != nil {
+		return "", resubmit, err
+	}
+
+	if accepted, err := reconcileWebDB(ctx, tx, inbound); err != nil {
+		return "", resubmit, err
+	} else if accepted {
+		return "", resubmit, errWriteDelivered
+	}
+
+	item := protocol.ThreadQueueItem{ID: inbound.Metadata["web_message_id"], ConversationID: b.config.ConversationID, Message: inbound.Text, Kind: inbound.Kind, Source: inbound.Source, Inbound: inbound, StashAt: time.Now().UTC()}
+
+	if err := tx.QueryRowContext(ctx, `SELECT CASE WHEN $2 THEN COALESCE(MIN(position) - 1, 0) ELSE COALESCE(MAX(position) + 1, 0) END FROM thread_queue WHERE conversation_id = $1`, b.config.ConversationID, mode == sessionWriteStop).Scan(&item.Position); err != nil {
+		return "", resubmit, fmt.Errorf("read agent write position: %w", err)
+	}
+
+	if mode != sessionWriteStash {
+		if _, err := releaseHeldInputs(ctx, tx, b.config.ConversationID, &item.Position); err != nil {
+			return "", resubmit, err
+		}
+	}
+
+	if err := putThreadQueueItem(ctx, tx, item.ID, &item); err != nil {
+		return "", resubmit, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", resubmit, fmt.Errorf("commit agent write: %w", err)
+	}
+
+	if inbound.Kind == protocol.InboundKindSteer {
+		b.steers = append(b.steers, bridgeRequest{inbound: inbound, queueItemID: item.ID, completion: &turnCompletion{done: make(chan struct{})}})
+		b.saveSteersLocked(ctx)
+	}
+
+	return outcome, resubmit, nil
+}
+
+// releaseHeldInputs releases the inputs stopped parents held in conversationID's queue (awaitSubagent): held
+// rows whose inbound is still an enqueue, unlike a stash's. At position, a newer write's, they run before it,
+// as older rows; with no position they keep theirs. It returns them in queue order.
+func releaseHeldInputs(ctx context.Context, db stateStoreDB, conversationID string, position *int) ([]protocol.ThreadQueueItem, error) {
+	return queryRows(ctx, db, `WITH released AS (UPDATE thread_queue SET kind = $3, position = COALESCE($4, position)
+    WHERE conversation_id = $1 AND kind = $2 AND inbound_json->>'Kind' = $3
+    RETURNING queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply, inbound_json)
+SELECT * FROM released ORDER BY position, stash_at_unix_ns, queue_item_id COLLATE "C"`, "released held inputs", scanThreadQueueItem, conversationID, protocol.InboundKindHeld, protocol.InboundKindEnqueue, position)
+}
+
+// releaseHeld releases the inputs stopped parents held in b's queue (releaseHeldInputs) for a person's
+// write, which reaches the loop directly, and hands them to the loop first. Later work would hand over
+// only the queue's head, and only once the loop holds no request, so after that write.
+func (b *Bridge) releaseHeld(ctx context.Context) error {
+	held, err := releaseHeldInputs(ctx, b.config.SessionService.db, b.config.ConversationID, nil)
+	for i := range held {
+		err = errors.Join(err, b.enqueue(ctx, &bridgeRequest{inbound: held[i].Inbound, queueItemID: held[i].ID, released: true}, "release held input"))
+	}
+
+	return err
+}
+
+// stopSession stops target's goal and current turn without waiting, as Slack's stop does, and reports
+// whether a turn was running.
+func (m *threadBridgeManager) stopSession(target string) (bool, error) {
+	if err := m.store.StopGoal(target); err != nil {
+		return false, fmt.Errorf("stop goal: %w", err)
+	}
+
+	return m.InterruptConversation(target) != nil, nil
+}
+
 // noteReady has conversationID's bridge, started when needed, deliver a new Completion Note: a
 // running turn takes it at its next step, and otherwise the bridge's later work wakes the conversation.
 func (m *threadBridgeManager) noteReady(conversationID string) {
@@ -518,10 +685,9 @@ func (m *threadBridgeManager) noteReady(conversationID string) {
 	}
 }
 
-// continueSubagent runs input as a new turn of the subagent a subagent job runs, or without input
-// resumes the turn it journaled, with the settings and tools a turn of its conversation gives
-// subagents.
-func (m *threadBridgeManager) continueSubagent(ctx context.Context, job *backgroundJob, input string) (string, error) {
+// continueSubagent answers, after a restart, the task job awaiting a turn of its subagent session, once
+// that turn ends, as the job's task call would have.
+func (m *threadBridgeManager) continueSubagent(ctx context.Context, job *backgroundJob) (string, error) {
 	runtimeCfg := m.runtime.Clone()
 
 	bridge, err := m.recordedBridge(ctx, job.conversationID)
@@ -536,25 +702,23 @@ func (m *threadBridgeManager) continueSubagent(ctx context.Context, job *backgro
 		return "", err
 	}
 
-	shared := &turnRoot{root: root, users: 1}
-	defer shared.release()
+	defer func() { _ = root.Close() }()
 
 	shellTempRel := rocketcodeShellTempRel(runtimeCfg.RuntimeDirName(), job.conversationID)
 	if err := root.MkdirAll(shellTempRel, 0o700); err != nil {
 		return "", fmt.Errorf("create rocketcode shell temp dir: %w", err)
 	}
 
-	rocketcodeConfig := bridge.rocketcodeConfig(filepath.Join(runtimeCfg.Workspace, filepath.FromSlash(shellTempRel)), nil, append(sessionTagTools(m.store, cmp.Or(job.origin.SyncDestination, job.conversationID)), bridge.scheduleMessageTool(job.origin), bridge.resetScheduledMessagesTool(job.origin))...)
-	rocketcodeConfig.BackgroundJobs = backgroundTurn{registry: bridge.background, root: shared, conversationID: job.conversationID, origin: job.origin}
+	rocketcodeConfig := bridge.rocketcodeConfig(filepath.Join(runtimeCfg.Workspace, filepath.FromSlash(shellTempRel)), nil)
 
 	runtime, err := rocketcode.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agentName, io.Discard)
 	if err != nil {
-		return "", fmt.Errorf("prepare subagent wake: %w", err)
+		return "", fmt.Errorf("prepare task resume: %w", err)
 	}
 
-	output, err := runtime.ContinueSubagent(ctx, job.jobID, job.subagentKey, job.agent, input)
+	output, err := runtime.AwaitTask(ctx, job.jobID, job.subagentKey, job.agent, job.input)
 	if err != nil {
-		return "", fmt.Errorf("continue subagent: %w", err)
+		return "", fmt.Errorf("await subagent: %w", err)
 	}
 
 	return output, nil
@@ -589,7 +753,10 @@ func (m *threadBridgeManager) queueItems(conversationID string) ([]protocol.Thre
 		return nil, fmt.Errorf("list thread queue: %w", err)
 	}
 
-	items = slices.DeleteFunc(items, func(item protocol.ThreadQueueItem) bool { return item.Inbound != nil && !item.Inbound.Human })
+	// Shutdown stores other system prompts here; agent writes carry their sender.
+	items = slices.DeleteFunc(items, func(item protocol.ThreadQueueItem) bool {
+		return item.Inbound != nil && !item.Inbound.Human && item.Inbound.Metadata[protocol.InboundSenderSessionMetadataKey] == ""
+	})
 
 	m.mu.Lock()
 	managed := m.bridges[conversationID]
@@ -603,7 +770,7 @@ func (m *threadBridgeManager) queueItems(conversationID string) ([]protocol.Thre
 			items = slices.DeleteFunc(items, func(item protocol.ThreadQueueItem) bool { return item.ID == request.queueItemID })
 			inbound := request.inbound
 
-			item := protocol.ThreadQueueItem{ID: request.queueItemID, ConversationID: conversationID, Kind: protocol.InboundKindSteer, Message: inbound.Text, Principal: inbound.Metadata[protocol.InboundPrincipalMetadataKey]}
+			item := protocol.ThreadQueueItem{ID: request.queueItemID, ConversationID: conversationID, Kind: protocol.InboundKindSteer, Message: inbound.Text, Principal: inbound.Metadata[protocol.InboundPrincipalMetadataKey], Inbound: inbound}
 			if inbound.SlackReply != nil {
 				item.SlackChannel, item.SlackTS = inbound.SlackReply.ChannelID, inbound.SlackReply.MessageTS
 			}
@@ -646,11 +813,11 @@ func (m *threadBridgeManager) promoteQueueItem(ctx context.Context, conversation
 		}
 	}
 
-	kind, human := inbound.Kind, inbound.Human
+	kind := inbound.Kind
 
-	inbound.Kind, inbound.Human = protocol.InboundKindSteer, true
+	inbound.Kind = protocol.InboundKindSteer
 	if err := managed.Submit(ctx, inbound); err != nil {
-		inbound.Kind, inbound.Human = kind, human
+		inbound.Kind = kind
 
 		return false, errors.Join(err, m.store.PutThreadQueueItem(id, &item))
 	}
@@ -742,6 +909,12 @@ func (m *threadBridgeManager) stashQueueItem(ctx context.Context, conversationID
 	}))
 	item.ParkAfter = ""
 
+	if item.Kind != protocol.InboundKindHeld {
+		if _, err := releaseHeldInputs(ctx, m.store.db, conversationID, &item.Position); err != nil {
+			return err
+		}
+	}
+
 	startedAt := time.Now()
 	if err := m.store.PutThreadQueueItem(item.ID, item); err != nil {
 		m.log.Error("queue persistence failed", "event", "queue_persist_failed", "conversation_id", conversationID, "queue_item_id", item.ID, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
@@ -765,36 +938,6 @@ func (m *threadBridgeManager) stashQueueItem(ctx context.Context, conversationID
 	}
 
 	return managed.(*Bridge).submitEnqueuedItem(ctx, item)
-}
-
-func (m *threadBridgeManager) ensureStartedThread(ctx context.Context, start *threadStart) (directBridge, error) {
-	thread, recorded, err := m.store.Thread(start.conversationID)
-	if err != nil {
-		return nil, err
-	}
-
-	if !recorded {
-		thread = ThreadState{Agent: start.agent, CreatedBy: start.createdBy}
-	}
-
-	managed, err := m.ensureThreadBridge(ctx, start.conversationID, thread)
-	if err != nil {
-		return nil, err
-	}
-
-	if !recorded {
-		if err := m.store.UpsertThread(start.conversationID, thread); err != nil {
-			m.mu.Lock()
-			delete(m.bridges, start.conversationID)
-			m.mu.Unlock()
-
-			_ = managed.Stop()
-
-			return nil, fmt.Errorf("persist new Web session: %w", err)
-		}
-	}
-
-	return managed, nil
 }
 
 func (m *threadBridgeManager) switchConversationAgent(conversationID, agent string) (bool, error) {
@@ -837,8 +980,8 @@ func (m *threadBridgeManager) ensureThreadBridge(ctx context.Context, conversati
 		return nil, errors.New("text thread agent is required")
 	}
 
-	var shadow bool
-	if err := m.store.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM shadow_bindings WHERE child_conversation_id = $1)`, conversationID).Scan(&shadow); err != nil {
+	var shadow, underShadow bool
+	if err := m.store.db.QueryRowContext(ctx, `SELECT COALESCE(bool_or(child_conversation_id = $1), FALSE), COALESCE(bool_or(child_conversation_id <> $1), FALSE) FROM shadow_bindings WHERE child_conversation_id = $1 OR starts_with($1, child_conversation_id || '/')`, conversationID).Scan(&shadow, &underShadow); err != nil {
 		return nil, fmt.Errorf("load worker ownership: %w", err)
 	}
 
@@ -851,7 +994,10 @@ func (m *threadBridgeManager) ensureThreadBridge(ctx context.Context, conversati
 
 	managed = m.factory(Config{ConversationID: conversationID, Agent: agent})
 	if bridge, ok := managed.(*Bridge); ok {
-		bridge.threads, bridge.shadow = m, shadow
+		bridge.threads, bridge.shadow, bridge.underShadow, bridge.parent = m, shadow, underShadow, thread.parent
+		if thread.parent != "" {
+			bridge.bus = subagentPublisher{}
+		}
 	}
 
 	m.bridges[conversationID] = managed

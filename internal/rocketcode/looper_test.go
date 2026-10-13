@@ -287,7 +287,6 @@ func testLooper(client responsesAPI) *looper {
 	l.Model = openai.ChatModelGPT6Luna
 	l.PermissionReviewer = inertPermissionReviewer{}
 	l.Journal = InertJournal{}
-	l.notes = InertBackgroundJobs{}
 	l.SteerDrain = InertSteerDrain{}
 	l.observations = &turnObservations{journal: l.Journal}
 
@@ -300,7 +299,6 @@ func emptyTestLooper() *looper {
 	l.ProviderOrigin = ProviderOrigin{Provider: "openai", Model: openai.ChatModelGPT6Luna}
 	l.PermissionReviewer = inertPermissionReviewer{}
 	l.Journal = InertJournal{}
-	l.notes = InertBackgroundJobs{}
 	l.SteerDrain = InertSteerDrain{}
 	l.observations = &turnObservations{journal: l.Journal}
 
@@ -395,18 +393,6 @@ func testToolDiagnostic(phase, name string) *ToolDiagnostic {
 
 	diagnostic.Phase = phase
 	diagnostic.Name = name
-
-	return &diagnostic
-}
-
-func testReviewSubagentDiagnostic(label string, index, total int, text string) *SubagentDiagnostic {
-	var diagnostic SubagentDiagnostic
-
-	diagnostic.Name = "review"
-	diagnostic.Label = label
-	diagnostic.Index = index
-	diagnostic.Total = total
-	diagnostic.Text = text
 
 	return &diagnostic
 }
@@ -637,7 +623,7 @@ func TestLooperExecuteResultTurnExit(t *testing.T) {
 			loop := testLooper(mockResponses())
 			journal := recordingJournal()
 			loop.Journal = journal
-			loop.agent = Agent{Name: "main", Permission: parsePermissionYAML(t, "read: {'*': deny}\nglob: {'*': allow}\nrocketclaw: {'*': allow}")}
+			loop.agent = Agent{Name: "main", Permission: parsePermissionYAML(t, "read: {'*': deny}\nglob: {'*': allow}")}
 			loop.Permissions = loop.agent.Permission
 			factory := &toolFactory{baseTools: makeSandboxedTools(&sandboxedFileSystem{root: root}, nil), spillRel: defaultSpillRel, promptExpansion: promptExpansionEnvironment{root: root}}
 			loop.Tools, loop.CodeModeHosts = factory.assembleTools(&loop.agent)

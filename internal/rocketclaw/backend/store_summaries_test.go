@@ -26,7 +26,7 @@ func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	header := provenanceHeader(promptProvenance{origin: "Web", media: "Text", principal: "alice", additionalInstructions: defaultReplyInstruction})
+	header := provenanceHeader(&promptProvenance{origin: "Web", media: "Text", principal: "alice", additionalInstructions: defaultReplyInstruction})
 	body, err := json.Marshal(header + "\n\n" + header + "\n\nbody")
 	require.NoError(t, err)
 	headerJSON, err := json.Marshal(header)

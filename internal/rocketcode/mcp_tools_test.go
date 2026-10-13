@@ -673,7 +673,7 @@ func TestLoadExecuteResultDispatchWithoutRead(t *testing.T) {
 	})
 	reg, err := mcpclient.New(root.Name(), map[string]mcpclient.ServerConfig{"demo": {URL: url}})
 	require.NoError(t, err)
-	permissions := parsePermissionYAML(t, "mcp: {'demo.*': allow}\nrocketclaw: {'*': auto}")
+	permissions := parsePermissionYAML(t, "mcp: {'demo.*': allow}")
 	factory := &toolFactory{mcpRegistry: reg, baseTools: makeSandboxedTools(&sandboxedFileSystem{root: root}, nil), spillRel: defaultSpillRel, promptExpansion: promptExpansionEnvironment{root: root}}
 	loop := testLooper(mockResponses())
 	loop.agent = Agent{Name: "main", Permission: permissions}
@@ -776,12 +776,11 @@ func TestExecuteWholeScriptApproval(t *testing.T) {
 		wantCalls             int
 		wantReview            bool
 	}{
-		{"unset with wildcard auto", "rocketclaw: {'*': auto}\nread: {allowed: allow}", "", permissionReviewOutcomeAllow, 1, false},
-		{"unset with wildcard deny", "rocketclaw: {'*': deny}\nread: {allowed: allow}", "", permissionReviewOutcomeAllow, 1, false},
-		{"explicit allow overrides wildcard auto", "rocketclaw: {code_mode_approve: allow, '*': auto}\nread: {allowed: allow}", "", permissionReviewOutcomeAllow, 1, false},
+		{"unset", "read: {allowed: allow}", "", permissionReviewOutcomeAllow, 1, false},
+		{"explicit allow", "rocketclaw: {code_mode_approve: allow}\nread: {allowed: allow}", "", permissionReviewOutcomeAllow, 1, false},
 		{"built-in reviewer", "rocketclaw: {code_mode_approve: auto}\nread: {allowed: allow}", "", permissionReviewOutcomeAllow, 1, true},
-		{"custom reviewer overrides wildcard allow", "rocketclaw: {code_mode_approve: 'auto(release-reviewer)', '*': allow}\nread: {allowed: allow}", "release-reviewer", permissionReviewOutcomeAllow, 1, true},
-		{"last exact rule wins", "rocketclaw: {code_mode_approve: allow, code_mode_approve: 'auto(release-reviewer)', '*': deny}\nread: {allowed: allow}", "release-reviewer", permissionReviewOutcomeAllow, 1, true},
+		{"custom reviewer", "rocketclaw: {code_mode_approve: 'auto(release-reviewer)'}\nread: {allowed: allow}", "release-reviewer", permissionReviewOutcomeAllow, 1, true},
+		{"last exact rule wins", "rocketclaw: {code_mode_approve: allow, code_mode_approve: 'auto(release-reviewer)'}\nread: {allowed: allow}", "release-reviewer", permissionReviewOutcomeAllow, 1, true},
 		{"review denial prevents script", "rocketclaw: {code_mode_approve: 'auto(release-reviewer)'}\nread: {allowed: allow}", "release-reviewer", permissionReviewOutcomeDeny, 0, true},
 		{"entry approval does not grant nested read", "rocketclaw: {code_mode_approve: auto}\nread: {another: allow}", "", permissionReviewOutcomeAllow, 0, true},
 	} {

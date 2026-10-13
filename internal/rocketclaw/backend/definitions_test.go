@@ -36,7 +36,7 @@ func TestSessionTagDefinitions(t *testing.T) {
 				frontmatter = "    rocketclaw_set_tag: " + tags + "\n"
 			}
 
-			require.NoError(t, root.WriteFile(".rocketclaw/agents/main.md", []byte("---\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    rocketclaw_get_tags: allow\n    rocketclaw_get_session: allow\n"+frontmatter+"---\nPrompt\n"), 0o644))
+			require.NoError(t, root.WriteFile(".rocketclaw/agents/main.md", []byte("---\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    rocketclaw_get_tags: allow\n    rocketclaw_sessions_get: allow\n"+frontmatter+"---\nPrompt\n"), 0o644))
 
 			if tags == "example" {
 				// Read the shipped example, then install the fixture through the sandbox root.
@@ -83,7 +83,7 @@ func TestSessionTagDefinitions(t *testing.T) {
 					require.False(t, matched)
 				}
 
-				require.Equal(t, tags != "example", permissionSetAllows(agent.Permission, "rocketclaw", "rocketclaw_get_session"))
+				require.Equal(t, tags != "example", permissionSetAllows(agent.Permission, "rocketclaw", "rocketclaw_sessions_get"))
 			}
 		})
 	}
@@ -92,7 +92,7 @@ func TestSessionTagDefinitions(t *testing.T) {
 func TestSessionTagsExistingPermissions(t *testing.T) {
 	t.Parallel()
 
-	for _, permission := range []string{"allow", "rocketclaw: allow", "rocketclaw: {load_agents_md: false}", "rocketclaw: {rocketclaw_set_tag: deny, rocketclaw_get_tags: allow}", `rocketclaw:
+	for _, permission := range []string{"allow", "rocketclaw: {load_agents_md: false}", "rocketclaw: {rocketclaw_set_tag: deny, rocketclaw_get_tags: allow}", `rocketclaw:
     rocketclaw_set_tag:
       - ["red", "yellow", "green"]
   webfetch: allow
@@ -181,7 +181,6 @@ func TestLoadRocketCodeDefinitionsKeepsBackgroundExact(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "broad", "---\nmodel: gpt-5.4\npermission:\n  rocketclaw: allow\n---\nPrompt\n")
 	writeAgent(t, workspace, "background", "---\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    allow_background: allow\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
@@ -194,10 +193,7 @@ func TestLoadRocketCodeDefinitionsKeepsBackgroundExact(t *testing.T) {
 		agents, _, err := loadRocketCodeDefinitions(root, workspace, mode)
 		require.NoError(t, err)
 
-		action, _ := agents.Items["broad"].Permission.Evaluate("rocketclaw", "allow_background")
-		require.Equal(t, rocketcode.PermissionDeny, action)
-
-		action, _ = agents.Items["background"].Permission.Evaluate("rocketclaw", "allow_background")
+		action, _ := agents.Items["background"].Permission.Evaluate("rocketclaw", "allow_background")
 		require.Equal(t, rocketcode.PermissionAllow, action)
 	}
 
@@ -205,6 +201,53 @@ func TestLoadRocketCodeDefinitionsKeepsBackgroundExact(t *testing.T) {
 
 	_, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
 	require.ErrorContains(t, err, "allow_background must be allow or deny")
+}
+
+// Only an exact rule offers rocketclaw_sessions_write; wildcards, the scalar form, and session.spawn_mode fail to load.
+func TestLoadRocketCodeDefinitionsSessionsWrite(t *testing.T) {
+	workspace := t.TempDir()
+	cases := []struct {
+		name, rule string
+		want       rocketcode.PermissionAction
+	}{
+		{"missing", "", rocketcode.PermissionDeny},
+		{"deny", "rocketclaw_sessions_write: deny", rocketcode.PermissionDeny},
+		{"children", "rocketclaw_sessions_write: children", rocketcode.PermissionAllow},
+		{"auto", "rocketclaw_sessions_write: auto", rocketcode.PermissionAuto},
+		{"reviewed", "rocketclaw_sessions_write: auto(guardian)", rocketcode.PermissionAuto},
+		{"allow", "rocketclaw_sessions_write: allow", rocketcode.PermissionAllow},
+	}
+
+	for _, tc := range cases {
+		writeAgent(t, workspace, tc.name, "---\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[red]]\n    "+tc.rule+"\n---\nPrompt\n")
+	}
+
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, root.Close()) }()
+
+	agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+	require.NoError(t, err)
+
+	for _, tc := range cases {
+		action, _ := agents.Items[tc.name].Permission.Evaluate("rocketclaw", sessionsWriteToolName)
+		require.Equal(t, tc.want, action, tc.name)
+	}
+
+	for permission, message := range map[string]string{
+		"rocketclaw: allow":                          "name each rocketclaw tool",
+		"rocketclaw: {'*': allow}":                   "name each rocketclaw tool",
+		"rocketclaw: {rocketclaw_sessions_*: allow}": "name each rocketclaw tool",
+		"rocketclaw: {session: {spawn_mode: all}}":   "session.spawn_mode is removed; use rocketclaw_sessions_write",
+	} {
+		writeAgent(t, workspace, "bad", "---\nmodel: gpt-5.4\npermission:\n  "+permission+"\n---\nPrompt\n")
+
+		_, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+		require.ErrorContains(t, err, `bad.md: parse permission: permission "rocketclaw": `+message)
+	}
 }
 
 func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
@@ -258,9 +301,9 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 		require.NoError(t, err)
 
 		for _, agent := range prepared.Items {
-			requireNoRocketClawPermissionMatch(t, agent.Permission, listSessionsToolName)
-			requireNoRocketClawPermissionMatch(t, agent.Permission, getSessionToolName)
-			requireNoRocketClawPermissionMatch(t, agent.Permission, currentSessionIDToolName)
+			requireNoRocketClawPermissionMatch(t, agent.Permission, sessionsListToolName)
+			requireNoRocketClawPermissionMatch(t, agent.Permission, sessionsGetToolName)
+			requireNoRocketClawPermissionMatch(t, agent.Permission, sessionsCurrentIDToolName)
 		}
 	}
 
@@ -490,7 +533,6 @@ func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *te
 		wantTool       string
 		wantAction     rocketcode.PermissionAction
 		wantAllowTools []string
-		wantDenyTools  []string
 	}{
 		{
 			name:           "exact persistent restart allow",
@@ -498,6 +540,14 @@ func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *te
 			permission:     "permission:\n  rocketclaw:\n    rocketclaw_restart: allow\n",
 			wantTool:       restartToolName,
 			wantAction:     rocketcode.PermissionAllow,
+			wantAllowTools: []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
+		},
+		{
+			name:           "exact persistent restart auto",
+			mode:           toolModePersistent,
+			permission:     "permission:\n  rocketclaw:\n    rocketclaw_restart: auto\n",
+			wantTool:       restartToolName,
+			wantAction:     rocketcode.PermissionAuto,
 			wantAllowTools: []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
 		},
 		{
@@ -509,20 +559,12 @@ func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *te
 			wantAllowTools: []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
 		},
 		{
-			name:          "wildcard deny",
-			mode:          toolModePersistent,
-			permission:    "permission:\n  rocketclaw:\n    rocketclaw_*: deny\n",
-			wantTool:      restartToolName,
-			wantAction:    rocketcode.PermissionDeny,
-			wantDenyTools: []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
-		},
-		{
-			name:          "broad deny followed by narrow allow",
-			mode:          toolModePersistent,
-			permission:    "permission:\n  rocketclaw:\n    '*': deny\n    rocketclaw_restart: allow\n",
-			wantTool:      restartToolName,
-			wantAction:    rocketcode.PermissionAllow,
-			wantDenyTools: []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
+			name:           "exact deny keeps other defaults",
+			mode:           toolModePersistent,
+			permission:     "permission:\n  rocketclaw:\n    rocketclaw_reload: deny\n",
+			wantTool:       reloadToolName,
+			wantAction:     rocketcode.PermissionDeny,
+			wantAllowTools: []string{scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
 		},
 	}
 
@@ -544,10 +586,6 @@ func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *te
 
 			for _, tool := range tt.wantAllowTools {
 				requireRocketClawPermissionAction(t, agents.Items["main"].Permission, tool, rocketcode.PermissionAllow)
-			}
-
-			for _, tool := range tt.wantDenyTools {
-				requireRocketClawPermissionAction(t, agents.Items["main"].Permission, tool, rocketcode.PermissionDeny)
 			}
 		})
 	}

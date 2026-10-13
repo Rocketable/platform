@@ -3,6 +3,8 @@ package backend
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -50,14 +52,14 @@ const (
 	questionWithdrawn = "No answer: the user moved this script to the background while ask_user_question waited, so the question was withdrawn and nobody will answer it. This text is not the user's answer. Decide without it, or ask in the turn that receives this job's result."
 )
 
-// backgroundNotes delivers Completion Notes outside the registry: a main agent's through its
-// conversation's bridge, and a sleeping subagent's as a new turn of that subagent.
+// backgroundNotes reaches the sessions jobs report to and wait for: it delivers Completion Notes through
+// a session's bridge, and stops the turn of a subagent session whose task call stopped.
 type backgroundNotes interface {
-	// noteReady learns that conversationID has a new Completion Note for its main agent.
+	// noteReady learns that conversationID has a new Completion Note.
 	noteReady(conversationID string)
-	// continueSubagent runs input as a new turn of the subagent a subagent_wake job runs; without
-	// input it resumes the turn a task job's subagent journaled before a restart.
-	continueSubagent(ctx context.Context, job *backgroundJob, input string) (string, error)
+	// continueSubagent waits again, after a restart, for the subagent turn a task job awaited.
+	continueSubagent(ctx context.Context, job *backgroundJob) (string, error)
+	InterruptConversation(conversationID string) *protocol.InboundMessage
 }
 
 // backgroundNotesMetadataKey lists, in a wake turn's inbound, the jobs whose notes the turn delivers.
@@ -96,19 +98,23 @@ func backgroundNotesText(notes []backgroundJob) string {
 // systemPromptInput is text entering a turn with a system origin, never a human one. Each
 // Completion Note uses its job ID as input ID, so a resumed turn offered it again injects it once.
 func systemPromptInput(id, text string) rocketcode.PromptInput {
-	header := provenanceHeader(promptProvenance{origin: "System"})
+	header := provenanceHeader(&promptProvenance{origin: "System"})
 	return rocketcode.PromptInput{ID: id, Texts: []string{header + "\n\n" + text}, Header: header}
 }
 
-// conversationJobs kills a conversation's running jobs before its rows are deleted.
+// conversationJobs kills a conversation's running jobs before its rows are deleted, and wakes the task
+// calls waiting for subagent turns once a turn finishes.
 type conversationJobs interface {
 	abandon(conversationID string)
+	turnFinished()
 }
 
 // noConversationJobs is the session service's conversationJobs before a run attaches its registry.
 type noConversationJobs struct{}
 
 func (noConversationJobs) abandon(string) {}
+
+func (noConversationJobs) turnFinished() {}
 
 type backgroundKey struct{ conversationID, jobID string }
 
@@ -139,13 +145,14 @@ type backgroundRegistry struct {
 	runnerID string
 	group    errgroup.Group
 
-	mu      sync.Mutex
-	runs    map[backgroundKey]*backgroundRun
-	stopped bool // Set by shutdown; no subagent wakes after it.
+	mu   sync.Mutex
+	runs map[backgroundKey]*backgroundRun
+	// finished closes, and is replaced, whenever a turn finishes, for the task calls awaiting subagent turns.
+	finished chan struct{}
 }
 
 func newBackgroundRegistry(store *SessionService, notes backgroundNotes, log *slog.Logger) *backgroundRegistry {
-	return &backgroundRegistry{store: store, notes: notes, log: log, runnerID: rand.Text(), runs: map[backgroundKey]*backgroundRun{}}
+	return &backgroundRegistry{store: store, notes: notes, log: log, runnerID: rand.Text(), runs: map[backgroundKey]*backgroundRun{}, finished: make(chan struct{})}
 }
 
 // turnRoot is a turn's workspace root. The jobs the turn starts keep using it through their
@@ -181,71 +188,31 @@ type backgroundTurn struct {
 	conversationID string
 	// origin is the turn's inbound; each job's row freezes it when the row is created.
 	origin *protocol.InboundMessage
-	// turnID is the turn's active-turn row; it claims the notes of the subagents it runs attached.
-	turnID string
 }
 
 func (backgroundTurn) Enabled() bool { return true }
-
-// DrainNotes claims the Completion Notes waiting for the running subagent at subagentKey for the
-// nearest detached job among it and its ancestors, which outlives the subagent's turn, or else for the turn.
-func (t backgroundTurn) DrainNotes(ctx context.Context, subagentKey string) []rocketcode.PromptInput {
-	claim, nearest := t.turnID, ""
-
-	t.registry.mu.Lock()
-	for key, run := range t.registry.runs {
-		owner := run.row.subagentKey
-		if key.conversationID == t.conversationID && !run.attached && owner != "" && len(owner) > len(nearest) && (owner == subagentKey || strings.HasPrefix(subagentKey, owner+"/")) {
-			claim, nearest = key.jobID, owner
-		}
-	}
-	t.registry.mu.Unlock()
-
-	notes, err := claimBackgroundNotes(context.WithoutCancel(ctx), t.registry.store.db, t.conversationID, subagentKey, claim, false)
-	if err != nil {
-		t.registry.log.Error("claim subagent notes", "conversation_id", t.conversationID, "subagent_key", subagentKey, "error", err)
-	}
-
-	inputs := make([]rocketcode.PromptInput, len(notes))
-	for i := range notes {
-		inputs[i] = systemPromptInput(notes[i].jobID, backgroundNote(&notes[i]))
-	}
-
-	return inputs
-}
 
 // Run runs work on a context detached from ctx. Until the job moves, ctx's cancellation
 // reaches the work with its cause, and Run waits for the work to finish.
 func (t backgroundTurn) Run(ctx context.Context, job *rocketcode.BackgroundJob, work rocketcode.BackgroundWork) (rocketcode.BackgroundResult, error) {
 	r, key := t.registry, backgroundKey{t.conversationID, job.ID}
 
-	var exists bool
-	if err := r.store.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM background_jobs WHERE conversation_id = $1 AND job_id = $2)`, key.conversationID, key.jobID).Scan(&exists); err != nil {
-		return rocketcode.BackgroundResult{}, fmt.Errorf("look up background job: %w", err)
+	rows, err := r.store.notedBackgroundJobs(ctx, key.conversationID, []string{key.jobID})
+	if err != nil {
+		return rocketcode.BackgroundResult{}, err
 	}
 
-	if exists { // A resumed turn's call whose job already left it.
+	if len(rows) > 0 { // A resumed turn's call whose job already left it.
 		work.Detach()
+
 		return rocketcode.BackgroundResult{Moved: true}, nil
 	}
 
-	r.mu.Lock()
-	for _, other := range r.runs {
-		if job.Kind == rocketcode.BackgroundKindTask && other.row.conversationID == key.conversationID && other.row.subagentKey == job.SubagentKey {
-			// Only a background task reports with a note; any other run is a turn to wait out.
-			busy := "subagent %s is busy with another turn; continue it again later"
-			if other.row.kind == backgroundTask && !other.attached {
-				busy = "subagent %s is still running; wait for its note before continuing it"
-			}
-
-			r.mu.Unlock()
-
-			return rocketcode.BackgroundResult{}, fmt.Errorf(busy, job.SubagentKey)
-		}
-	}
-
 	workCtx, cancel := context.WithCancelCause(context.WithoutCancel(ctx))
-	run := &backgroundRun{row: &backgroundJob{conversationID: key.conversationID, jobID: job.ID, childKey: job.ChildKey, kind: backgroundJobKind(job.Kind), agent: job.Agent, label: job.Label, callID: job.CallID, subagentKey: job.SubagentKey, origin: t.origin, runnerID: r.runnerID}, cancel: cancel, recorded: make(chan struct{}), done: make(chan struct{}), attached: !job.Detached}
+
+	run := &backgroundRun{row: &backgroundJob{conversationID: key.conversationID, jobID: job.ID, kind: backgroundJobKind(job.Kind), agent: job.Agent, label: job.Label, callID: job.CallID, subagentKey: job.SubagentKey, origin: t.origin, runnerID: r.runnerID, input: job.Prompt}, cancel: cancel, recorded: make(chan struct{}), done: make(chan struct{}), attached: !job.Detached}
+
+	r.mu.Lock()
 	flipped := run.attached && !r.attachedLocked(key.conversationID)
 
 	var moved context.Context
@@ -311,6 +278,10 @@ func (t backgroundTurn) Run(ctx context.Context, job *rocketcode.BackgroundJob, 
 		<-run.done
 	}
 
+	if stop, ok := errors.AsType[backgroundStopError](context.Cause(workCtx)); ok && run.err != nil {
+		return rocketcode.BackgroundResult{}, stop
+	}
+
 	if run.err != nil {
 		return rocketcode.BackgroundResult{}, fmt.Errorf("run background work: %w", run.err)
 	}
@@ -318,9 +289,8 @@ func (t backgroundTurn) Run(ctx context.Context, job *rocketcode.BackgroundJob, 
 	return rocketcode.BackgroundResult{Output: run.output}, nil
 }
 
-// work runs one job. A job that ended detached records its final state with a pending,
-// wakeable Completion Note for its owner, unless it was abandoned; a subagent wake records
-// none. A subagent that stops running is woken for the notes that reached it after its last step.
+// work runs one job. A job that ended detached records its final state with a pending, wakeable
+// Completion Note for its owner, unless it was abandoned.
 func (r *backgroundRegistry) work(ctx context.Context, key backgroundKey, run *backgroundRun, work rocketcode.BackgroundWork) {
 	defer close(run.done)
 
@@ -339,20 +309,13 @@ func (r *backgroundRegistry) work(ctx context.Context, key backgroundKey, run *b
 	}
 
 	cause := context.Cause(ctx)
-	if errors.Is(cause, errBackgroundAbandoned) {
-		return
-	}
-
-	stop, stopped := errors.AsType[backgroundStopError](cause)
-	if run.row.kind != backgroundExecute && !stopped {
-		defer r.wakeSubagent(key.conversationID, run.row.subagentKey)
-	}
-
-	if attached {
+	if attached || errors.Is(cause, errBackgroundAbandoned) { // An attached call has no row, and an abandoned job records nothing.
 		return
 	}
 
 	<-run.recorded
+
+	stop, stopped := errors.AsType[backgroundStopError](cause)
 
 	end := *run.row
 	end.status, end.noteState, end.wake, end.result = backgroundCompleted, notePending, true, output
@@ -378,26 +341,15 @@ func (r *backgroundRegistry) work(ctx context.Context, key backgroundKey, run *b
 		return
 	}
 
-	if finished && end.noteState != noteNone {
-		r.wakeOwner(key.conversationID, end.childKey)
+	if finished && end.noteState == notePending {
+		r.notes.noteReady(key.conversationID)
 	}
-}
-
-// wakeOwner delivers the pending notes of the owner at childKey: its conversation's bridge takes a
-// main agent's, and a subagent_wake job a subagent's.
-func (r *backgroundRegistry) wakeOwner(conversationID, childKey string) {
-	if childKey == "" {
-		r.notes.noteReady(conversationID)
-		return
-	}
-
-	r.wakeSubagent(conversationID, childKey)
 }
 
 // recoverJobs settles, before any frontend can start a turn, the jobs a stopped process left running.
 // A script is killed, and its note waits for its owner's next turn or, in a hidden run, wakes the run.
-// A task's subagent resumes its journaled turn; a subagent wake ends and its note wakes the subagent again.
-// Resuming subagents hold their keys at once but run, like the wakes, only once resume is called.
+// A task waits again for its subagent session's turn, which resumes on that session's bridge. Its run
+// holds its row at once but waits only once resume is called, which also wakes the owners of notes.
 func (r *backgroundRegistry) recoverJobs(ctx context.Context) (resume func(context.Context) error, err error) {
 	if err := r.store.releaseStaleBackgroundClaims(ctx); err != nil {
 		return nil, err
@@ -454,84 +406,132 @@ func (r *backgroundRegistry) recoverJobs(ctx context.Context) (resume func(conte
 			})
 		}
 
-		owners, err := queryRows(ctx, r.store.db, `SELECT DISTINCT ON (conversation_id, child_key) `+backgroundJobColumns+` FROM background_jobs WHERE note_state = $1 AND wake AND claimed_turn_id = '' ORDER BY conversation_id, child_key`, "background wake owners", scanBackgroundJob, notePending)
+		owners, err := queryStrings(ctx, r.store.db, `SELECT DISTINCT conversation_id FROM background_jobs WHERE note_state = $1 AND wake AND claimed_turn_id = '' ORDER BY 1`, "background wake owners", notePending)
 		if err != nil {
 			return err
 		}
 
-		for i := range owners {
-			r.wakeOwner(owners[i].conversationID, owners[i].childKey)
+		for _, owner := range owners {
+			r.notes.noteReady(owner)
 		}
 
 		return nil
 	}, nil
 }
 
-// subagentTurn is a subagent job's work: a wake's new turn of its subagent with the notes it
-// claimed, or, without input, the resumed turn of a task's subagent.
+// subagentTurn is a recovered task job's work: it waits again for its subagent session's turn.
 type subagentTurn struct {
 	notes backgroundNotes
 	job   *backgroundJob
-	input string
 }
 
 func (w subagentTurn) RunBackground(ctx context.Context) (string, error) {
-	return w.notes.continueSubagent(ctx, w.job, w.input)
+	return w.notes.continueSubagent(ctx, w.job)
 }
 
 func (subagentTurn) Detach() bool { return true }
 
-// wakeSubagent delivers the pending notes of the subagent at subagentKey as a subagent_wake job that
-// runs one new turn of it, unless the subagent runs: then its next step takes them, or its
-// end wakes it again. The turn's output stays in the subagent's history; its parent is not told.
-func (r *backgroundRegistry) wakeSubagent(conversationID, subagentKey string) {
-	// Only a pending note may hold the subagent busy for a following task continue.
-	if _, wake, err := r.store.backgroundWake(context.Background(), conversationID, subagentKey); err != nil || !wake {
-		if err != nil {
-			r.log.Error("look up subagent notes", "conversation_id", conversationID, "subagent_key", subagentKey, "error", err)
-		}
+// subagentTurnSQL finds, in session $1, the turn running its input $2: saved with its entries, ended
+// stopped or failed, running, or not yet started. It also returns the session's parent and the input of
+// the turn the session runs.
+const subagentTurnSQL = `WITH saved AS (
+    SELECT e.entry_json FROM session_entries e
+    CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item
+    WHERE e.conversation_id = $1 AND item->>'input_id' = $2 ORDER BY e.id DESC LIMIT 1
+), turns AS (
+    SELECT terminal, COALESCE(outbound_json->>'Text', '') AS text FROM active_turns
+    WHERE conversation_id = $1 AND inbound_json->'Metadata'->>'web_message_id' = $2 ORDER BY created_at_unix_ns DESC LIMIT 1
+), queued AS (
+    SELECT count(*) AS rows FROM thread_queue WHERE conversation_id = $1 AND queue_item_id = $2
+), running AS (
+    SELECT c.parent_conversation_id AS parent, a.inbound_json->'Metadata'->>'web_message_id' AS input
+    FROM active_turns a JOIN managed_conversations c USING (conversation_id) WHERE a.conversation_id = $1 AND a.phase = $3
+)
+SELECT s.entry_json, t.terminal, t.text, q.rows, r.parent, r.input FROM queued q LEFT JOIN saved s ON true LEFT JOIN turns t ON true LEFT JOIN running r ON true`
 
-		return
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if r.stopped {
-		return
-	}
-
-	for key, run := range r.runs {
-		if key.conversationID == conversationID && run.row.subagentKey == subagentKey {
-			return
-		}
-	}
-
-	ctx, cancel := context.WithCancelCause(context.Background())
-	key := backgroundKey{conversationID, subagentKey + "/wake/" + rand.Text()}
-	run := &backgroundRun{row: &backgroundJob{conversationID: conversationID, jobID: key.jobID, childKey: subagentKey, kind: backgroundSubagentWake, subagentKey: subagentKey, runnerID: r.runnerID}, cancel: cancel, recorded: make(chan struct{}), done: make(chan struct{})}
-	r.runs[key] = run
-
-	r.group.Go(func() error {
-		notes, err := r.store.startSubagentWake(ctx, run.row)
-		if err == nil && len(notes) > 0 {
-			close(run.recorded)
-			r.work(ctx, key, run, subagentTurn{notes: r.notes, job: run.row, input: systemPromptInput("", backgroundNotesText(notes)).Texts[0]})
-
-			return nil
-		}
-
-		if err != nil {
-			r.log.Error("start subagent wake", "conversation_id", conversationID, "subagent_key", subagentKey, "error", err)
-		}
-
+// awaitSubagent waits until the turn of the subagent session conversationID that runs its input inputID
+// ends, and returns that turn's final answer, as a top-level turn's (runTurn), and attribution. A call that
+// stops waiting, other than for a shutdown, stops that turn once it runs. A stopped parent's call, unlike a
+// stopped job's, also stops the turn running ahead of its input, unless a background job waits for that
+// turn (OpenCode packages/core/src/tool/plugin/subagent.ts). Its input is not withdrawn but held, and it
+// leaves no note.
+func (r *backgroundRegistry) awaitSubagent(ctx context.Context, conversationID, inputID string) (string, rocketcode.ReplayAttribution, error) {
+	for {
 		r.mu.Lock()
-		delete(r.runs, key)
+		finished := r.finished
 		r.mu.Unlock()
-		close(run.done)
 
-		return nil
-	})
+		var (
+			saved, terminal, text, parent, running sql.NullString
+			queued                                 int
+		)
+		if err := r.store.db.QueryRowContext(context.WithoutCancel(ctx), subagentTurnSQL, conversationID, inputID, turnRunning).Scan(&saved, &terminal, &text, &queued, &parent, &running); err != nil {
+			return "", rocketcode.ReplayAttribution{}, fmt.Errorf("read subagent turn: %w", err)
+		}
+
+		switch {
+		case saved.Valid:
+			var entry rocketcode.SessionEntry
+			if err := json.Unmarshal([]byte(saved.String), &entry); err != nil {
+				return "", rocketcode.ReplayAttribution{}, fmt.Errorf("decode subagent turn: %w", err)
+			}
+
+			items, err := rocketcode.ReplayInputToParams(entry.ReplayInput)
+			if err != nil {
+				return "", rocketcode.ReplayAttribution{}, fmt.Errorf("decode subagent turn: %w", err)
+			}
+
+			answer := ""
+
+			for i := range items {
+				role, text, ok, err := ReplayInputMessageRoleText(&items[i], entry.ReplayInput[i])
+				if err != nil {
+					return "", rocketcode.ReplayAttribution{}, err
+				}
+
+				if commentary := items[i].OfMessage != nil && items[i].OfMessage.Phase == "commentary" || items[i].OfOutputMessage != nil && items[i].OfOutputMessage.Phase == "commentary"; ok && role == "assistant" && !commentary {
+					answer = appendText(answer, text)
+				}
+			}
+
+			return answer, rocketcode.ReplayAttribution{Agent: entry.Agent, Model: entry.Model, ReasoningEffort: entry.ReasoningEffort}, nil
+		case terminal.String != "":
+			return "", rocketcode.ReplayAttribution{}, fmt.Errorf("subagent turn %s: %s", terminal.String, text.String)
+		case !terminal.Valid && queued == 0:
+			return "", rocketcode.ReplayAttribution{}, fmt.Errorf("the prompt to subagent %q was removed before it ran", conversationID)
+		}
+
+		select {
+		case <-finished:
+		case <-ctx.Done():
+			cause := context.Cause(ctx)
+			_, jobStopped := errors.AsType[backgroundStopError](cause)
+			stopped := !errors.Is(cause, rocketcode.ErrShutdown) && !errors.Is(cause, errBackgroundAbandoned)
+
+			// A stopped parent's queued input is held, before its turn ahead stops, until the next write
+			// releases it (releaseHeldInputs). Unlike a stash's, its inbound stays an enqueue.
+			if stopped && !jobStopped {
+				if _, err := execState(context.WithoutCancel(ctx), r.store.db, "hold subagent input", `UPDATE thread_queue SET kind = $3 WHERE conversation_id = $1 AND queue_item_id = $2 AND kind = $4`, conversationID, inputID, protocol.InboundKindHeld, protocol.InboundKindEnqueue); err != nil {
+					return "", rocketcode.ReplayAttribution{}, err
+				}
+			}
+
+			ahead := !jobStopped && !r.detached(backgroundKey{parent.String, strings.TrimPrefix(running.String, parent.String+"/")})
+			if stopped && (terminal.Valid || ahead) {
+				r.notes.InterruptConversation(conversationID)
+			}
+
+			return "", rocketcode.ReplayAttribution{}, fmt.Errorf("wait for subagent %q: %w", conversationID, cause)
+		}
+	}
+}
+
+// turnFinished wakes the task calls awaiting subagent turns once a turn finished.
+func (r *backgroundRegistry) turnFinished() {
+	r.mu.Lock()
+	close(r.finished)
+	r.finished = make(chan struct{})
+	r.mu.Unlock()
 }
 
 // move moves every attached job of conversationID into the background and returns them in job
@@ -564,6 +564,16 @@ func (r *backgroundRegistry) movable(conversationID string) bool {
 	return r.attachedLocked(conversationID)
 }
 
+// detached reports whether the job at key runs in the background: started there, moved, or recovered.
+func (r *backgroundRegistry) detached(key backgroundKey) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	run, ok := r.runs[key]
+
+	return ok && !run.attached
+}
+
 // attachedLocked reports whether conversationID has an attached job. Callers hold r.mu.
 func (r *backgroundRegistry) attachedLocked(conversationID string) bool {
 	for key, run := range r.runs {
@@ -582,9 +592,8 @@ func (r *backgroundRegistry) movableChanged(ctx context.Context, conversationID 
 	}
 }
 
-// stop stops a running job listed at conversationID, its own or one of a hidden run whose
-// destination it is, and waits until its stopped note is recorded. It reports false when
-// the job had already finished.
+// stop stops a running job listed at conversationID, its own or one of a hidden run whose destination
+// it is, and waits until its stopped note is recorded. It reports false when the job had already finished.
 func (r *backgroundRegistry) stop(ctx context.Context, conversationID, jobID string, reason backgroundStopError) (bool, error) {
 	jobs, err := r.store.backgroundJobs(ctx, conversationID)
 	if err != nil {
@@ -601,7 +610,7 @@ func (r *backgroundRegistry) stop(ctx context.Context, conversationID, jobID str
 
 	// A stopped subagent's own detached jobs stop with it, so none of them wakes it again.
 	for key, owned := range r.runs {
-		if running && run.row.subagentKey != "" && key.conversationID == jobs[i].conversationID && !owned.attached && (owned.row.childKey == run.row.subagentKey || strings.HasPrefix(owned.row.childKey, run.row.subagentKey+"/")) {
+		if subagent := jobs[i].conversationID + jobs[i].subagentKey; running && jobs[i].subagentKey != "" && !owned.attached && (key.conversationID == subagent || strings.HasPrefix(key.conversationID, subagent+"/")) {
 			owned.cancel(errStoppedWithOwner)
 		}
 	}
@@ -643,8 +652,6 @@ func (r *backgroundRegistry) abandon(conversationID string) {
 // shutdown kills the detached jobs and waits for every job; attached calls follow their turns.
 func (r *backgroundRegistry) shutdown() {
 	r.mu.Lock()
-
-	r.stopped = true
 	for _, run := range r.runs {
 		if !run.attached {
 			run.cancel(errBackgroundAbandoned)

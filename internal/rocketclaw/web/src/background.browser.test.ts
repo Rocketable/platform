@@ -41,7 +41,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`background jobs a
       case "/api/StopBackgroundJob": calls.push({ path: url.pathname, body: input }); return Response.json({ stopped: true });
       case "/api/History": {
         const base = { origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [] };
-        if (input.id !== "chat") return Response.json({ ...base, messages: [], revision: input.id, reset: true, entryKeys: [], running: false, start: "0", more: false });
+        if (input.id !== "chat") return Response.json({ ...base, backgroundJobs: input.id === "chat/call-sub" ? [job("j-own", "execute", "running", "subagent script", { toolCallId: "call-own" })] : [], messages: [], revision: input.id, reset: true, entryKeys: [], running: false, start: "0", more: false });
         if (input.before) {
           calls.push({ path: "earlier", body: input });
           return Response.json({ ...base, messages: range(1, 10).flatMap(entry), revision: "", reset: false, entryKeys: range(1, 10).map(String), running: false, start: "1", more: false });
@@ -90,6 +90,9 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`background jobs a
 
     await page.getByRole("button", { name: "Open research", exact: true }).click();
     await page.waitForFunction(() => new URLSearchParams(location.search).get("delegation") === "chat/call-sub");
+    // The subagent's own jobs list and stop in its panel, at its session.
+    await Promise.all([page.waitForResponse("**/api/StopBackgroundJob").then((response: { finished(): Promise<unknown> }) => response.finished()), page.getByRole("button", { name: "Stop subagent script", exact: true }).click()]);
+    expect(calls.at(-1)).toEqual({ path: "/api/StopBackgroundJob", body: { conversationId: "chat/call-sub", jobId: "j-own" } });
     await page.goBack();
     await page.waitForFunction(() => !new URLSearchParams(location.search).has("delegation"));
 

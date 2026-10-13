@@ -272,26 +272,27 @@ UPDATE session_entries SET entry_json = $2 WHERE id = $1`, entry.ID, string(data
 	return saveSessionSummary(ctx, db, summary)
 }
 
-// Delegations are histories, never handles for undoing tool effects. Running
-// parent Background Jobs keep theirs; shadow lineages cannot start such jobs.
+// Delegations are histories, never handles for undoing tool effects. Running parent
+// Background Jobs keep theirs; shadow lineages cannot start such jobs. A discarded
+// subagent session goes with its history.
 func pruneRevertDelegations(ctx context.Context, db stateStoreDB, conversationID string) error {
-	children, err := queryStrings(ctx, db, `WITH `+sessionHistorySQL+`
-    SELECT DISTINCT child.conversation_id FROM (
-        SELECT conversation_id FROM session_entries UNION SELECT conversation_id FROM active_turns
-    ) child
-    WHERE starts_with(child.conversation_id, $1 || '/') AND NOT EXISTS (
-        SELECT 1 FROM effective_entries e CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry->'replay_input', 'null'::jsonb)) WITH ORDINALITY AS items(item, ordinal)
-        WHERE item->>'type' = 'function_call' AND (e.revert_index < 0 OR ordinal <= e.revert_index)
-            AND (starts_with(child.conversation_id || '/', $1 || '/' || (item->>'call_id') || '/') OR starts_with(child.conversation_id, $1 || '/' || (item->>'call_id') || '-')))
-    AND NOT EXISTS (SELECT 1 FROM background_jobs j WHERE j.conversation_id = $1 AND j.status = 'running' AND j.subagent_key <> ''
-        AND starts_with(child.conversation_id || '/', $1 || j.subagent_key || '/'))`, "discarded revert delegations", conversationID)
+	children, err := queryStrings(ctx, db, `WITH `+sessionHistorySQL+`, children AS (
+    SELECT conversation_id FROM session_entries WHERE starts_with(conversation_id, $1 || '/')
+    UNION SELECT conversation_id FROM active_turns WHERE starts_with(conversation_id, $1 || '/')
+), kept_prefixes AS (
+    SELECT $1 || '/' || (item->>'call_id') || suffix AS prefix FROM effective_entries e
+    CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry->'replay_input', 'null'::jsonb)) WITH ORDINALITY AS items(item, ordinal), unnest(ARRAY['/', '-']) suffix
+    WHERE item->>'type' = 'function_call' AND (e.revert_index < 0 OR ordinal <= e.revert_index)
+    UNION ALL SELECT $1 || subagent_key || '/' FROM background_jobs WHERE conversation_id = $1 AND status = 'running' AND subagent_key <> ''
+)
+SELECT c.conversation_id FROM children c LEFT JOIN kept_prefixes k ON starts_with(c.conversation_id || '/', k.prefix) WHERE k.prefix IS NULL`, "discarded revert delegations", conversationID)
 	if err != nil {
 		return err
 	}
 
 	for _, child := range children {
-		for _, query := range []string{`DELETE FROM session_entries WHERE conversation_id = $1`, `DELETE FROM active_turns WHERE conversation_id = $1`, `DELETE FROM turn_steps WHERE conversation_id = $1`} {
-			if _, err := db.ExecContext(ctx, query, child); err != nil {
+		for _, table := range []string{"session_entries", "active_turns", "turn_steps", "thread_queue", "background_jobs", "managed_conversations"} {
+			if _, err := db.ExecContext(ctx, `DELETE FROM `+table+` WHERE conversation_id = $1`, child); err != nil {
 				return fmt.Errorf("prune revert delegation: %w", err)
 			}
 		}
@@ -936,7 +937,7 @@ func reconcileWebDB(ctx context.Context, db stateStoreDB, inbound *protocol.Inbo
 		}
 	}
 
-	header, expected, _ := strings.Cut(buildPrompt(inbound, nil), "\n\n")
+	header, expected, _ := strings.Cut(buildPrompt(inbound, nil, false), "\n\n")
 	expectedIdentity, _, _ := strings.Cut(header, " additional_instructions=")
 
 	identity, _, _ := strings.Cut(message.Header, " additional_instructions=")

@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -19,21 +18,16 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const (
-	// askUserQuestionToolName is RocketClaw's tool that asks the human partner (bridge.go).
-	askUserQuestionToolName = "ask_user_question"
-	// taskTurnSuffix ends the turn IDs of task subagents, apart from the timestamp turn IDs of
-	// guardrail runs saved under the same child key.
-	taskTurnSuffix = "/task"
-)
+// guardrailEntryType marks the guardrail runs saved in a subagent session, which its turns do not read.
+const guardrailEntryType = "guardrail"
 
 type taskParams struct {
 	Description  string `json:"description"`
 	Prompt       string `json:"prompt"`
 	SubagentType string `json:"subagent_type"`
 	Command      string `json:"command"`
-	// Continue is the continue ID of a saved subagent; backgroundTool checks it is a direct child.
-	Continue string `json:"continue"`
+	// Continue names a saved subagent; backgroundTool checks it is a direct child.
+	Continue taskContinue `json:"continue"`
 }
 
 type guardrailDecision struct {
@@ -170,8 +164,8 @@ func (f *toolFactory) availableSubagentsDescription() string {
 	return strings.Join(lines, "\n")
 }
 
-// childSystemPrompt puts the instructions agent may load ahead of its prompt; the main agent's
-// prompt comes first instead (NewWithModelResolver).
+// childSystemPrompt puts the instructions a guardrail agent may load ahead of its prompt; a session's
+// agent has its prompt first instead (sessionSystemPrompt).
 func (f *toolFactory) childSystemPrompt(agent *Agent) string {
 	rootInstructions := ""
 	if agent.Permission.evaluate("rocketclaw", "load_agents_md").Action == permissionAllow {
@@ -181,15 +175,21 @@ func (f *toolFactory) childSystemPrompt(agent *Agent) string {
 	return strings.TrimSpace(strings.TrimSpace(rootInstructions+"\n\n"+f.workspaceInstructions) + "\n\n" + agent.Prompt)
 }
 
-// taskChildJournal journals a Task child under its parent call; outside a tool call there is nothing to resume.
-func taskChildJournal(ctx context.Context) TracelessJournal {
-	if parent, ok := toolCallContextFrom(ctx); ok {
-		return TracelessJournal{Parent: parent.looper.Journal}
+// sessionSystemPrompt expands the prompt of agent, which runs a session, and follows it with the
+// instructions agent may load and the workspace.
+func (f *toolFactory) sessionSystemPrompt(ctx context.Context, agent *Agent) string {
+	expandAgentPrompt(ctx, agent, f.expandPromptShellCommands.PrimaryPrompts, &f.promptExpansion)
+
+	rootInstructions := ""
+	if agent.Permission.evaluate("rocketclaw", "load_agents_md").Action == permissionAllow {
+		rootInstructions = f.rootInstructions
 	}
 
-	return TracelessJournal{Parent: InertJournal{}}
+	return strings.TrimSpace(agent.Prompt + "\n\n" + strings.TrimSpace(rootInstructions+"\n\n"+f.workspaceInstructions))
 }
 
+// runTask delegates params to a subagent session: a new one, which it writes the prompt to, or the
+// continued one backgroundTool already wrote it to. It answers once that session's turn ends.
 func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata toolCallMetadata, parentOutput chan<- ChatResponse) (string, error) {
 	if f.recursionRemaining != nil && *f.recursionRemaining == 0 {
 		return "", errors.New("maxRecursion limit reached: task delegation is unavailable")
@@ -197,13 +197,13 @@ func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata 
 
 	agent, ok := f.agents.Items[params.SubagentType]
 	if !ok {
-		return "", fmt.Errorf("unknown agent type: %s is not a valid agent type", params.SubagentType)
+		return "", fmt.Errorf(unknownAgentType, params.SubagentType)
 	}
 
 	progress := *metadata.progress
-	// The model stays absent until resolution; neither aliases nor parent attribution leak.
+	// The model stays absent until the turn ends; neither aliases nor parent attribution leak.
 	progress.Kind, progress.Agent, progress.Model = PublicProgressDelegation, agent.Name, ""
-	progress.SubagentKey = cmp.Or(params.Continue, f.childKey+"/"+delegationName(metadata.callID, ToolCallKey(ctx)))
+	progress.SubagentKey = cmp.Or(params.Continue.SessionID, f.childKey+"/"+delegationName(metadata.callID, ToolCallKey(ctx)))
 
 	progress.State = PublicProgressReview
 	if err := metadata.observations.observe(ctx, &progress); err != nil {
@@ -215,120 +215,82 @@ func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata 
 		originatingAgent = f.agent.Name
 	}
 
-	if agent.Guardrail != "" && !f.inGuardrailRun {
-		guardrailAgent := f.agents.Items[agent.Guardrail]
-		message := strings.Join([]string{
-			"Current Action: delegation",
-			fmt.Sprintf("The agent %s wants to delegate to %s:", originatingAgent, agent.Name),
-			params.Prompt,
-		}, "\n")
+	if params.Continue.SessionID == "" {
+		if blocked, err := f.guardTask(ctx, &agent, ChildRunStageDelegation, originatingAgent, params.Prompt, "", &progress, metadata, parentOutput); err != nil || blocked != "" {
+			return blocked, err
+		}
 
-		decision := f.runGuardrail(ctx, &guardrailAgent, ChildRunStageDelegation, message, agent.Name, progress.SubagentKey, metadata, parentOutput)
-		if !decision.Approved {
-			// Cancellation retains the canonical result; the parent records stopped.
-			if ctx.Err() == nil {
-				progress.State = PublicProgressBlocked
-				if err := metadata.observations.observe(ctx, &progress); err != nil {
-					return "", err
-				}
-			}
-
-			reason := cmp.Or(strings.TrimSpace(decision.Reason), "rejected by inter-agent guardrail")
-
-			return strings.Join([]string{"<task_result>", "delegation blocked: " + reason, "</task_result>"}, "\n"), nil
+		if _, err := f.childSessions.WriteSubagent(ctx, &SubagentWrite{Key: progress.SubagentKey, CallKey: ToolCallKey(ctx), Agent: agent.Name, Delegator: originatingAgent, Prompt: params.Prompt}); err != nil {
+			return "", fmt.Errorf("write subagent: %w", err)
 		}
 	}
-
-	child, sessionIn, sessionOut, err := f.subagent(ctx, &agent, progress.SubagentKey, params.Continue != "", false)
-	if err != nil {
-		return "", err
-	}
-
-	progress.Model = child.DisplayModel
 
 	progress.State = PublicProgressWorking
 	if err := metadata.observations.observe(ctx, &progress); err != nil {
 		return "", err
 	}
 
-	var (
-		childDiagnostics              = &subagentDiagnostics{agent: agent.Name, metadata: metadata}
-		observer         chatObserver = inertChatObserver{}
-	)
+	return f.awaitTask(ctx, originatingAgent, params.Prompt, ToolCallKey(ctx), &progress, metadata, parentOutput)
+}
 
-	if f.diagnostics {
-		observer = childDiagnostics
-
-		emitSubagentDiagnostic(parentOutput, &SubagentDiagnostic{
-			Name:  agent.Name,
-			Label: "delegation",
-			Index: metadata.subagentIndex,
-			Total: metadata.subagentTotal,
-			Text:  "started: " + params.Description,
-		})
+// awaitTask answers the task call callKey by which originatingAgent delegated prompt to the subagent
+// session progress names, once that session's turn running it ends and the response guardrail of the
+// type the turn ended as, which a steer may have switched it to, approves its answer.
+func (f *toolFactory) awaitTask(ctx context.Context, originatingAgent, prompt, callKey string, progress *PublicProgress, metadata toolCallMetadata, parentOutput chan<- ChatResponse) (string, error) {
+	last, final, err := f.childSessions.AwaitSubagent(ctx, progress.SubagentKey, callKey)
+	if err != nil {
+		return "", fmt.Errorf("await subagent: %w", err)
 	}
 
-	last, err := child.runPrompt(ctx, ToolCallKey(ctx)+taskTurnSuffix, []string{params.Prompt}, sessionIn, sessionOut, observer)
-	if err != nil {
+	progress.Agent, progress.Model = final.Agent, final.Model
+	if err := metadata.observations.observe(ctx, progress); err != nil {
 		return "", err
 	}
 
-	if agent.Guardrail != "" && !f.inGuardrailRun {
-		progress.State = PublicProgressReview
-		if err := metadata.observations.observe(ctx, &progress); err != nil {
-			return "", err
-		}
-
-		if blocked, rejected := f.guardResponse(ctx, &agent, originatingAgent, params.Prompt, last, progress.SubagentKey, metadata, parentOutput); rejected {
-			if ctx.Err() == nil {
-				progress.State = PublicProgressBlocked
-				if err := metadata.observations.observe(ctx, &progress); err != nil {
-					return "", err
-				}
-			}
-
-			return blocked, nil
-		}
-	}
-
-	if f.diagnostics {
-		for _, diagnostic := range childDiagnostics.items {
-			emitDiagnosticChatResponse(parentOutput, diagnostic)
-		}
-
-		emitSubagentDiagnostic(parentOutput, &SubagentDiagnostic{
-			Name:  agent.Name,
-			Label: "delegation",
-			Index: metadata.subagentIndex,
-			Total: metadata.subagentTotal,
-			Text:  "finished",
-		})
+	agent := f.agents.Items[final.Agent]
+	if blocked, err := f.guardTask(ctx, &agent, ChildRunStageResponse, originatingAgent, prompt, last, progress, metadata, parentOutput); err != nil || blocked != "" {
+		return blocked, err
 	}
 
 	return strings.Join([]string{"<task_result>", last, "</task_result>"}, "\n"), nil
 }
 
-// guardResponse runs agent's response-stage guardrail on the answer last to the prompt
-// originatingAgent delegated, and returns the blocked task result when the guardrail rejects it.
-func (f *toolFactory) guardResponse(ctx context.Context, agent *Agent, originatingAgent, prompt, last, subagentKey string, metadata toolCallMetadata, parentOutput chan<- ChatResponse) (blocked string, rejected bool) {
-	guardrailAgent := f.agents.Items[agent.Guardrail]
-	message := strings.Join([]string{
-		"Current Action: response",
-		fmt.Sprintf("The agent %s wants to delegate to %s:", originatingAgent, agent.Name),
-		prompt,
-		"",
-		fmt.Sprintf("And the response from %s to %s:", agent.Name, originatingAgent),
-		last,
-	}, "\n")
+// guardTask runs agent's guardrail, if any, at stage of the task by which originatingAgent delegated
+// prompt to the subagent progress names, reviewing at the response stage the subagent's answer last
+// too, and returns the blocked task result when the guardrail rejects it.
+func (f *toolFactory) guardTask(ctx context.Context, agent *Agent, stage ChildRunStage, originatingAgent, prompt, last string, progress *PublicProgress, metadata toolCallMetadata, parentOutput chan<- ChatResponse) (blocked string, err error) {
+	if agent.Guardrail == "" || f.inGuardrailRun {
+		return "", nil
+	}
 
-	decision := f.runGuardrail(ctx, &guardrailAgent, ChildRunStageResponse, message, agent.Name, subagentKey, metadata, parentOutput)
+	progress.State = PublicProgressReview
+	if err := metadata.observations.observe(ctx, progress); err != nil {
+		return "", err
+	}
+
+	lines, outcome := []string{"Current Action: " + string(stage), fmt.Sprintf("The agent %s wants to delegate to %s:", originatingAgent, agent.Name), prompt}, "delegation blocked: "
+	if stage == ChildRunStageResponse {
+		lines, outcome = append(lines, "", fmt.Sprintf("And the response from %s to %s:", agent.Name, originatingAgent), last), "delegation response blocked: "
+	}
+
+	guardrailAgent := f.agents.Items[agent.Guardrail]
+
+	decision := f.runGuardrail(ctx, &guardrailAgent, stage, strings.Join(lines, "\n"), agent.Name, progress.SubagentKey, metadata, parentOutput)
 	if decision.Approved {
-		return "", false
+		return "", nil
+	}
+
+	// Cancellation retains the canonical result; the parent records stopped.
+	if ctx.Err() == nil {
+		progress.State = PublicProgressBlocked
+		if err := metadata.observations.observe(ctx, progress); err != nil {
+			return "", err
+		}
 	}
 
 	reason := cmp.Or(strings.TrimSpace(decision.Reason), "rejected by inter-agent guardrail")
 
-	return strings.Join([]string{"<task_result>", "delegation response blocked: " + reason, "</task_result>"}, "\n"), true
+	return strings.Join([]string{"<task_result>", outcome + reason, "</task_result>"}, "\n"), nil
 }
 
 // delegationName is the child-session key segment of a Delegation History a call starts: the
@@ -346,126 +308,69 @@ func ReviewKey(turnID, callID string) string {
 	return delegationName(callID+"-review", turnID+"/call/"+callID)
 }
 
-// subagent rebuilds the looper of the subagent saved at childKey the way task first built it,
-// with the turns it saved so far when continued. Only a resumed turn may continue a
-// subagent that saved none: it is the subagent's first.
-func (f *toolFactory) subagent(ctx context.Context, base *Agent, childKey string, continued, resumed bool) (child *looper, sessionIn iter.Seq2[SessionEntry, error], sessionOut func(SessionEntry) error, err error) {
-	agent := *base
+// asRecordAgent returns l, or, once a steer switched the turn record to another agent type, a looper
+// that runs as that type for the turn's remaining steps, as OpenCode packages/core/src/session/context.ts
+// selects the session's agent at every step. l stays as it was for the jobs its calls left running. When
+// the type runs on another provider than l, the turn's items and the history before them, which l's input
+// holds, are converted for it as loadSession and openTurn convert saved turns.
+func (l *looper) asRecordAgent(ctx context.Context, record *SessionEntry, history *[]responses.ResponseInputItemUnionParam, attribution *[]ReplayAttribution, turnItems *[]responses.ResponseInputItemUnionParam) (*looper, error) {
+	if record.Agent == l.agent.Name || record.Agent == "" { // A turn journaled before records named their agent keeps l.
+		return l, nil
+	}
 
-	var history []SessionEntry
+	f := l.PermissionReviewer.(*toolFactory) // newLooper installs its factory as the reviewer.
 
-	if continued {
-		saved, errLoad := f.childSessions.ChildEntries(ctx, childKey)
-		if errLoad != nil {
-			return nil, nil, nil, fmt.Errorf("load subagent history: %w", errLoad)
-		}
-
-		// Guardrail runs save under the same key with their own turn IDs.
-		history = slices.DeleteFunc(saved, func(entry SessionEntry) bool { return !strings.HasSuffix(entry.TurnID, taskTurnSuffix) })
-		if len(history) == 0 && !resumed {
-			return nil, nil, nil, fmt.Errorf(continueWithoutTurn, childKey)
-		}
-
-		// Another agent type would continue that subagent outside its own prompt and guardrail.
-		if i := slices.IndexFunc(history, func(entry SessionEntry) bool { return entry.Agent != base.Name }); i >= 0 {
-			return nil, nil, nil, fmt.Errorf(continueOtherAgent, childKey, history[i].Agent)
-		}
+	agent, ok := f.agents.Items[record.Agent]
+	if !ok {
+		return nil, fmt.Errorf(unknownAgentType, record.Agent)
 	}
 
 	agent.Permission = f.shellTemp.effectivePermissions(agent.Permission)
-	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
 
-	childFactory := *f
-	childFactory.childKey = childKey
-	// Only the root agent asks the human partner.
-	childFactory.baseTools = maps.Clone(f.baseTools)
-	delete(childFactory.baseTools, askUserQuestionToolName)
-
-	if f.recursionRemaining != nil {
-		// A woken subagent can sit several levels below the factory that runs it.
-		remaining := max(*f.recursionRemaining-strings.Count(childKey, "/")+strings.Count(f.childKey, "/"), 0)
-		childFactory.recursionRemaining = &remaining
+	next, err := f.newLooper(&agent, f.sessionSystemPrompt(ctx, &agent))
+	if err != nil {
+		return nil, err
 	}
 
-	if child, err = childFactory.newLooper(&agent, childFactory.childSystemPrompt(&agent)); err != nil {
-		return nil, nil, nil, err
+	next.Journal, next.observations, next.SteerDrain, next.expandInputPrompts = l.Journal, l.observations, l.SteerDrain, l.expandInputPrompts
+	next.restoreTurnExecuteResults(record.TurnID)
+	// The items the new type adds name its model, so a switch back converts them in turn.
+	record.Model, record.ReasoningEffort = next.DisplayModel, new(string(next.ReasoningEffort))
+
+	provider := providerForModel(next.DisplayModel)
+	if provider == providerForModel(l.DisplayModel) {
+		return next, nil
 	}
 
-	child.Journal, child.notes, child.subagentKey, child.InPermissionReview = taskChildJournal(ctx), f.backgroundJobs, childKey, false
+	base := SessionEntry{ReplayAttribution: *attribution}
+	if base.ReplayInput, err = ReplayInputFromParams(*history); err != nil {
+		return nil, err
+	}
 
-	sessionIn = func(yield func(SessionEntry, error) bool) {
-		for i := range history {
-			if !yield(history[i], nil) {
-				return
-			}
+	for _, entry := range []*SessionEntry{&base, record} {
+		if err := entry.forProvider(provider); err != nil {
+			return nil, fmt.Errorf("convert switched turn for provider %s: %w", provider, err)
 		}
 	}
 
-	return child, sessionIn, childFactory.childSessionOut(ctx), nil
+	if *history, err = ReplayInputToParams(base.ReplayInput); err != nil {
+		return nil, err
+	}
+
+	*attribution = base.ReplayAttribution
+
+	if *turnItems, err = ReplayInputToParams(record.ReplayInput); err != nil {
+		return nil, err
+	}
+
+	return next, nil
 }
 
-// ContinueSubagent runs input as a new turn of the subagent saved at subagentKey (a
-// BackgroundJob.SubagentKey), as agentName, journaled under jobID, and returns its final answer.
-// The turn joins the subagent's saved history and never reaches its parent. Without input it
-// instead resumes, as the agent that ran it, the turn journaled under jobID before a restart, which
-// agentName delegated; its answer reaches agentName, so the subagent's guardrail reviews it as task does.
-func (r *Runtime) ContinueSubagent(ctx context.Context, jobID, subagentKey, agentName, input string) (string, error) {
-	f := r.PermissionReviewer.(*toolFactory) // NewWithModelResolver installs its tool factory as the reviewer.
-	turnID := jobID + taskTurnSuffix
-
-	var step turnStep
-
-	resumed, originatingAgent := input == "", agentName
-	if resumed {
-		found, err := loadStep(ctx, r.Journal, turnID, &step)
-		if err != nil {
-			return "", err
-		}
-
-		if !found {
-			return "", fmt.Errorf(resumeWithoutTurn, subagentKey)
-		}
-
-		// The journaled turn replaces the input, which Loop only needs to be non-empty.
-		agentName, input = step.Record.Agent, turnID
-	}
-
-	agent, ok := f.agents.Items[agentName]
-	if !ok {
-		return "", fmt.Errorf("unknown agent type: %s is not a valid agent type", agentName)
-	}
-
-	child, sessionIn, sessionOut, err := f.subagent(ctx, &agent, subagentKey, true, resumed)
-	if err != nil {
-		return "", err
-	}
-
-	child.Journal = TracelessJournal{Parent: r.Journal}
-
-	last, err := child.runPrompt(ctx, turnID, []string{input}, sessionIn, sessionOut, inertChatObserver{})
-	if err != nil || !resumed {
-		return last, err
-	}
-
-	// A resumed task answers its parent's Completion Note the way the task call would have.
-	if agent.Guardrail != "" {
-		items, err := ReplayInputToParams(step.Record.ReplayInput[:1])
-		if err != nil {
-			return "", err
-		}
-
-		// The turn starts with the task prompt, unless a context overflow recovery compacted it away.
-		prompt := ""
-		if message := items[0].OfMessage; message != nil {
-			prompt = message.Content.OfString.Value
-		}
-
-		if blocked, rejected := f.guardResponse(ctx, &agent, originatingAgent, prompt, last, subagentKey, toolCallMetadata{}, nil); rejected {
-			return blocked, nil
-		}
-	}
-
-	return strings.Join([]string{"<task_result>", last, "</task_result>"}, "\n"), nil
+// AwaitTask answers, after a restart, the background task call jobID by which delegator delegated prompt
+// to the subagent session at subagentKey, once that session's turn running it ends.
+func (r *Runtime) AwaitTask(ctx context.Context, jobID, subagentKey, delegator, prompt string) (string, error) {
+	// NewWithModelResolver installs its tool factory as the reviewer.
+	return r.PermissionReviewer.(*toolFactory).awaitTask(ctx, delegator, prompt, jobID, &PublicProgress{SubagentKey: subagentKey}, toolCallMetadata{observations: &turnObservations{journal: InertJournal{}}}, nil)
 }
 
 func (f *toolFactory) childSession(yield func(SessionEntry, error) bool) {
@@ -485,30 +390,9 @@ type inertChatObserver struct{}
 
 func (inertChatObserver) observe(ChatResponse) {}
 
-// subagentDiagnostics collects a task subagent's output items as diagnostics, which runTask emits
-// only once the subagent's guardrail approves its answer.
-type subagentDiagnostics struct {
-	agent    string
-	metadata toolCallMetadata
-	items    []ChatResponse
-}
-
-func (d *subagentDiagnostics) observe(item ChatResponse) {
-	d.items = append(d.items, ChatResponse{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{
-		Name:     d.agent,
-		Label:    nestedDiagnosticLabel(item),
-		Index:    d.metadata.subagentIndex,
-		Total:    d.metadata.subagentTotal,
-		Text:     item.Text,
-		Tool:     item.Tool,
-		Subagent: item.Subagent,
-		Provider: item.Provider,
-	}})
-}
-
 // runPrompt runs texts as the only turn of l, journaled under turnID, passes each output item to
 // observer as it arrives, and returns the turn's last assistant message.
-func (l *looper) runPrompt(ctx context.Context, turnID string, texts []string, sessionIn iter.Seq2[SessionEntry, error], sessionOut func(SessionEntry) error, observer chatObserver) (string, error) {
+func (l *looper) runPrompt(ctx context.Context, turnID string, texts []string, sessionIn iter.Seq2[SessionEntry, error], sessionOut func(SessionEntry) error, observer chatObserver) (last string, err error) {
 	output := make(chan ChatResponse)
 
 	input := make(chan PromptInput, 1)
@@ -516,10 +400,7 @@ func (l *looper) runPrompt(ctx context.Context, turnID string, texts []string, s
 
 	close(input)
 
-	var (
-		group errgroup.Group
-		last  string
-	)
+	var group errgroup.Group
 
 	group.Go(func() error {
 		for item := range output {
@@ -533,14 +414,16 @@ func (l *looper) runPrompt(ctx context.Context, turnID string, texts []string, s
 		return nil
 	})
 
-	err := l.Loop(ctx, input, sessionIn, sessionOut, make(chan os.Signal, 1))
+	err = l.Loop(ctx, input, sessionIn, sessionOut, make(chan os.Signal, 1))
 	_ = group.Wait() // The collector cannot fail.
 
 	return last, err
 }
 
-func (f *toolFactory) childSessionOut(ctx context.Context) func(SessionEntry) error {
+// childSessionOut saves the entries of a hidden run under f.childKey, as entryType when not empty.
+func (f *toolFactory) childSessionOut(ctx context.Context, entryType string) func(SessionEntry) error {
 	return func(entry SessionEntry) error {
+		entry.Type = cmp.Or(entryType, entry.Type)
 		if err := f.childSessions.AppendChildEntry(ctx, f.childKey, &entry); err != nil {
 			return fmt.Errorf("append child session entry: %w", err)
 		}
@@ -571,7 +454,7 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 		observer = &guardrailDiagnostics{output: parentOutput, guardedAgent: guardedAgent, guardrailAgent: agent.Name, stage: stage, metadata: metadata}
 	}
 
-	last, err := child.runPrompt(ctx, "", []string{message}, f.childSession, childFactory.childSessionOut(ctx), observer)
+	last, err := child.runPrompt(ctx, "", []string{message}, f.childSession, childFactory.childSessionOut(ctx, guardrailEntryType), observer)
 	if err != nil {
 		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail failed: " + err.Error()}
 	}

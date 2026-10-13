@@ -2833,7 +2833,9 @@ function DelegationPanel({ id }: { id: string }) {
       </nav>
       <Button variant="ghost" size="icon-sm" aria-label="Close delegation" onClick={close}><X /></Button>
     </header>
-    <ScrollArea className="min-h-0 flex-1"><div className="p-3">
+    <ScrollArea className="min-h-0 flex-1"><div className="p-3" data-delegation-transcript>
+      {/* A subagent is a session, so its own Background Jobs list and stop here as a chat's do. */}
+      {history.data?.backgroundJobs.length ? <BackgroundJobs id={child} jobs={history.data.backgroundJobs} onChange={history.refetch} openCall={(callId) => document.querySelector(`[data-delegation-transcript] [data-tool-call-id="${CSS.escape(callId)}"]`)?.scrollIntoView({ block: "center" })} /> : null}
       {history.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading delegation…</p> : null}
       {history.error ? <p role="alert" className="text-sm text-destructive">{history.error.message}</p> : null}
       {history.data?.messages.length === 0 ? <p role="status" className="text-sm text-muted-foreground">No saved transcript</p> : null}

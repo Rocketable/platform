@@ -32,7 +32,7 @@ A Report Thread is read-only. RocketClaw ignores every reply and mention in it, 
 
 ### Slack Steer
 
-Historical name for a human Slack reply injected into a running turn. Removed: Slack replies and mentions no longer steer. Steering is a Web feature.
+Historical name for a human Slack reply injected into a running turn. Removed: Slack replies and mentions no longer steer. Steers come from Web and from agents through `rocketclaw_sessions_write`.
 
 ### Enqueued Slack Message
 
@@ -40,7 +40,9 @@ Historical name for a later-turn prompt stashed from Slack with `$enqueue`. Remo
 
 ### Thread Queue
 
-The durable, conversation-local list of later work: accepted Slack mentions, work queued or stashed from Web, and External MCP `session_prompt` calls that arrive while the paired thread has an active turn. Saved rows that never started run after a restart without another incoming message.
+The durable, conversation-local list of later work: accepted Slack mentions, work queued or stashed from Web, messages another session's agent queues, stashes, or sends with `stop` through `rocketclaw_sessions_write` or, into a Subagent Session, through `task`, and External MCP `session_prompt` calls that arrive while the paired thread has an active turn. Saved rows that never started run after a restart without another incoming message.
+
+An agent-written item carries its sender: the sending session and agent. Web shows that sender where a person's Principal would be, and the item can be popped, promoted, reordered, or removed like any other. It is never a person's input, even after a person promotes it. A `stop` write goes ahead of every earlier item. A `stop` write without a prompt adds no item: it only posts a line naming the sender into the transcript, once the stopped turn has saved.
 
 Each accepted mention is one item with ID `slack:<channel>:<message ts>`, accepted at most once per conversation. Web shows these rows together with the conversation's scheduled messages and can promote or remove them; Slack is not told. After a turn ends, a still-continuing goal wins the next slot. Otherwise the next item is the first remaining row that is ready: a queued row is ready in its list position; a scheduled message is ready at its due time. A not-yet-due scheduled row blocks later rows until it runs or is cancelled.
 
@@ -120,15 +122,19 @@ A RocketCode Turn is not the active-turn slot on a Managed Slack Thread. Slack o
 
 ### Delegation History
 
-A session history of work one tool call delegated, each a finished turn: its automatic permission reviews, or its Task subagent with the subagent's guardrail checks. Its conversation ID is the producing conversation's ID plus `/<tool call ID>-review-<hash of the reviewed call's tool call key>` for its reviews, before it runs and during it, such as of a Code Mode script's tool calls, or `/<tool call ID>-<hash of the call's tool call key>` for a Task subagent, the ID a later `task` call continues; a delegation inside it adds another such segment. The hash keeps the ID unique when a provider reuses call IDs and the same when a turn resumes. Histories saved before this keep their old `/<tool call ID>`.
+A session history of work one tool call delegated: its automatic permission reviews, or its Task subagent with the subagent's guardrail checks. Its conversation ID is the producing conversation's ID plus `/<tool call ID>-review-<hash of the reviewed call's tool call key>` for its reviews, before it runs and during it, such as of a Code Mode script's tool calls, or `/<tool call ID>-<hash of the call's tool call key>` for a Task subagent, the ID a later `task` call continues; a delegation inside it adds another such segment. The hash keeps the ID unique when a provider reuses call IDs and the same when a turn resumes. Histories saved before this keep their old `/<tool call ID>`.
 
-A Delegation History has no Managed Slack Thread or web chat of its own. It is deleted and forked with its producing conversation. That, not a `/` in the ID, is what sets it apart: other conversation IDs can contain a `/` too, such as a web chat continuing a cron run, whose ID includes the job's path.
+A Task subagent's Delegation History is a Subagent Session. Review histories have no Managed Slack Thread or web chat of their own. All of them are deleted and forked with their producing conversation. That, not a `/` in the ID, is what sets them apart: other conversation IDs can contain a `/` too, such as a web chat continuing a cron run, whose ID includes the job's path.
+
+### Subagent Session
+
+A Task subagent run as a session like any other, on the same turn runner as top-level sessions: the same Thread Queue for steer, enqueue, and stop, the same restart recovery, and the same history saving. It differs only in data: it records its parent session, and it is not listed in the sidebar or message search, nor can `rocketclaw_sessions_write` target it. A `task` call writes its prompt into the session, as `rocketclaw_sessions_write` does, and answers with the turn that runs it; its guardrail checks are saved in the session's history but never read back by its turns. It acts for its top-level session's running turn: session tags and `rocketclaw_sessions_write` land on that session, sessions it creates keep that turn's agent, creator, and agent limits, files it attaches go out with that turn's reply, and its delegation depth counts from that session's agent. It is not offered `rocketclaw_schedule_message` or `rocketclaw_reset_scheduled_messages`. Stopping a session's turn while its foreground `task` call waits stops the subagent's current turn too, unless a background job waits for that turn; the prompt the call sent, if still queued, is not withdrawn but held in the subagent's Thread Queue until the next message sent there releases it to run just before that message, or a `$goal` before the goal, and no note reaches the stopped session.
 
 ### Background Job
 
-An Execute script or Task subagent that keeps running after its tool call returned, owned by the conversation (or subagent) that started it. Only agents allowed by `permission.rocketclaw.allow_background` can start one, and a human can move running work into one from Web.
+An Execute script or Task subagent that keeps running after its tool call returned, owned by the conversation (a Subagent Session included) that started it. Only agents allowed by `permission.rocketclaw.allow_background` can start one, and a human can move running work into one from Web.
 
-A Background Job's ID is the tool call key that started it. It ends as completed, failed, stopped, or killed, and each ending produces one Completion Note. An oversized result of a background Execute is retained privately for 7 days instead of becoming a Spill, and `load_execute_result` reads it from any turn of the owning conversation.
+A Background Job's ID is the tool call key that started it. It ends as completed, failed, stopped, or killed, and each ending produces one Completion Note. An oversized result of a background Execute is retained privately for 7 days instead of becoming a Spill, and `load_execute_result` reads it from any turn of the owning conversation. A background Task job waits for its Subagent Session's turn; stopping it stops that turn and the subagent's own jobs.
 
 ### Completion Note
 
@@ -191,7 +197,7 @@ The State Store is PostgreSQL.
 
 ### Step Journal
 
-The durable, conversation-local record of every completed step of in-progress work. Steps include model responses, tool call results, Task subagent turns, Code Mode host and MCP calls, workflow worker results, pending questions, and accepted steers.
+The durable, conversation-local record of every completed step of in-progress work. Steps include model responses, tool call results, Code Mode host and MCP calls, workflow worker results, pending questions, and accepted steers.
 
 An interrupted turn resumes from its last recorded step. Completed steps return their recorded results instead of running again. A clean shutdown lets running calls finish, so only a call cut off by a crash or a forced exit, which started without a recorded result, is reported to the model as interrupted. A turn's steps are cleared when it finishes.
 

@@ -194,13 +194,9 @@ type looper struct {
 	Journal                Journal
 	observations           *turnObservations // Root-owned lifetime; workers receive the turn-local pointer.
 	SteerDrain             SteerDrain
-	// notes drains Completion Notes for the subagent at subagentKey with the steers; the main
-	// agent's notes arrive through SteerDrain, so it and hidden review runs hold inert notes.
-	notes              BackgroundJobs
-	subagentKey        string
-	expandInputPrompts bool
-	promptExpansion    promptExpansionEnvironment
-	spillRel           string
+	expandInputPrompts     bool
+	promptExpansion        promptExpansionEnvironment
+	spillRel               string
 
 	spillMu      sync.Mutex
 	spillTurnID  string
@@ -837,6 +833,11 @@ func (l *looper) runTurn(
 	doomLoop := doomLoopTrap{recent: nil}
 
 	for {
+		// Each step, a resumed turn's first too, runs as the type the last steer naming one switched the turn to.
+		if l, err = l.asRecordAgent(turnCtx, &record, &baseHistory, &baseAttribution, &turnItems); err != nil {
+			return emptyRecord, nil, false, err
+		}
+
 		resp := pending
 		pending = nil
 
@@ -1061,13 +1062,18 @@ func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnIte
 		return false, fmt.Errorf("drain turn input: %w", err)
 	}
 
-	inputs = append(inputs, l.notes.DrainNotes(ctx, l.subagentKey)...)
 	injected := false
 
 	for i := range inputs {
 		input := &inputs[i]
 		if input.ID != "" && slices.Contains(*applied, input.ID) {
 			continue
+		}
+
+		// A steer naming another agent type switches the turn to it from its next step; the steps so far keep theirs.
+		if input.Agent != "" && input.Agent != record.Agent {
+			record.ReplayAttribution = append(record.ReplayAttribution, ReplayAttribution{End: len(record.ReplayInput), Agent: record.Agent, Model: record.Model, ReasoningEffort: record.ReasoningEffort})
+			record.Agent = input.Agent
 		}
 
 		if input.DirectSkill != nil {
@@ -2358,6 +2364,10 @@ func loadSession(entries iter.Seq2[SessionEntry, error], provider string) ([]res
 
 		if err != nil {
 			return nil, nil, fmt.Errorf("load session entry %d: %w", entryNumber, err)
+		}
+
+		if turn.Type == guardrailEntryType {
+			continue
 		}
 
 		if err := turn.forProvider(provider); err != nil {

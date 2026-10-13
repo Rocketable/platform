@@ -23,27 +23,30 @@ func (noHistoryWorkers) pauseHistory(context.Context, []string) ([]*Bridge, erro
 }
 
 // ownedHistoryIDs enumerates bindings before any cascade can erase ownership.
-// Delegation paths remain scoped to these explicit roots, not shadow names.
+// Delegation paths remain scoped to these explicit roots, not shadow names. The
+// histories under another top-level session are its own; subagent sessions belong to their root.
 func ownedHistoryIDs(ctx context.Context, db stateStoreDB, roots []string) ([]string, error) {
-	return queryStrings(ctx, db, `WITH owners AS (
+	return queryStrings(ctx, db, `WITH shadow_parents AS (
+    SELECT DISTINCT parent_conversation_id AS id FROM shadow_bindings
+), owners AS (
     SELECT unnest($1::text[]) AS id
-    UNION SELECT m.conversation_id FROM managed_conversations m
+    UNION SELECT m.conversation_id FROM managed_conversations m JOIN shadow_parents p ON p.id = m.conversation_id
         WHERE m.producer_inbound_json->>'SyncDestination' = ANY($1)
-        AND EXISTS (SELECT 1 FROM shadow_bindings b WHERE b.parent_conversation_id = m.conversation_id)
-    UNION SELECT e.private_conversation_id FROM external_mcp_sessions e
-        WHERE e.managed_conversation_id = ANY($1) AND EXISTS (SELECT 1 FROM shadow_bindings b
-            WHERE b.parent_conversation_id IN (e.private_conversation_id, e.managed_conversation_id))
+    UNION SELECT e.private_conversation_id FROM external_mcp_sessions e JOIN shadow_parents p ON p.id IN (e.private_conversation_id, e.managed_conversation_id)
+        WHERE e.managed_conversation_id = ANY($1)
 ), roots AS (
-    SELECT id FROM owners UNION SELECT child_conversation_id FROM shadow_bindings WHERE parent_conversation_id IN (SELECT id FROM owners)
+    SELECT id FROM owners UNION SELECT b.child_conversation_id FROM shadow_bindings b JOIN owners o ON o.id = b.parent_conversation_id
 ), histories AS (
     SELECT conversation_id FROM session_entries UNION SELECT conversation_id FROM active_turns
     UNION SELECT conversation_id FROM turn_steps UNION SELECT conversation_id FROM attachments
     UNION SELECT conversation_id FROM background_jobs UNION SELECT conversation_id FROM session_summaries
+), nested AS (
+    SELECT h.conversation_id, r.id AS root FROM histories h JOIN roots r ON starts_with(h.conversation_id, r.id || '/')
+), claimed AS (
+    SELECT DISTINCT n.conversation_id, n.root FROM nested n JOIN managed_conversations m ON m.conversation_id <> n.root AND m.parent_conversation_id = ''
+        AND (m.conversation_id = n.conversation_id OR starts_with(n.conversation_id, m.conversation_id || '/'))
 )
-SELECT id FROM roots UNION SELECT h.conversation_id FROM histories h JOIN roots r
-    ON starts_with(h.conversation_id, r.id || '/')
-    WHERE NOT EXISTS (SELECT 1 FROM managed_conversations m WHERE m.conversation_id <> r.id
-        AND (m.conversation_id = h.conversation_id OR starts_with(h.conversation_id, m.conversation_id || '/')))
+SELECT id FROM roots UNION SELECT n.conversation_id FROM nested n LEFT JOIN claimed c USING (conversation_id, root) WHERE c.conversation_id IS NULL
 ORDER BY 1`, "owned history IDs", roots)
 }
 

@@ -4,28 +4,115 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
 const (
-	listSessionsToolName     = "rocketclaw_list_sessions"
-	getSessionToolName       = "rocketclaw_get_session"
-	currentSessionIDToolName = "rocketclaw_current_session_id"
-	setTagToolName           = "rocketclaw_set_tag"
-	getTagsToolName          = "rocketclaw_get_tags"
+	sessionsListToolName      = "rocketclaw_sessions_list"
+	sessionsGetToolName       = "rocketclaw_sessions_get"
+	sessionsCurrentIDToolName = "rocketclaw_sessions_current_id"
+	setTagToolName            = "rocketclaw_set_tag"
+	getTagsToolName           = "rocketclaw_get_tags"
+	sessionsWriteToolName     = "rocketclaw_sessions_write"
+	sessionsGetURLToolName    = "rocketclaw_sessions_get_url"
 
 	// Store-wide session reads compete with live turns for the State Store, so each call is capped.
 	maxListedSessions = 200
 	maxSessionEntries = 100
 )
+
+// topLevelSessionCreator returns who created id when id is a top-level session: a chat Web shows.
+func (s *SessionService) topLevelSessionCreator(ctx context.Context, id string) (string, error) {
+	var spawnedBy string
+
+	err := queryScalar(ctx, s.db, fmt.Sprintf("read session %q", id), `WITH `+visibleChatsSQL+` SELECT spawned_by FROM visible_chats WHERE conversation_id = $1`, &spawnedBy, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("session %q is not a top-level session", id)
+	}
+
+	return spawnedBy, err
+}
+
+// startSubagent records the subagent session conversationID of parent, run by agent, unless recorded. A
+// continue, unlike a new subagent, needs a session saved before: recorded, or a Delegation History older
+// than subagent sessions.
+func (s *SessionService) startSubagent(ctx context.Context, conversationID, parent, agent string, isNew bool) error {
+	started, err := execRows(ctx, s.db, "start subagent session", "count started subagent session", `WITH saved AS (
+    SELECT count(*) AS entries FROM session_entries WHERE conversation_id = $1
+)
+INSERT INTO managed_conversations (conversation_id, agent, created_by, parent_conversation_id) SELECT $1, $3, '', $2 FROM saved WHERE $4 OR entries > 0
+ON CONFLICT (conversation_id) DO NOTHING`, conversationID, parent, agent, isNew)
+	if err != nil || started > 0 || isNew {
+		return err
+	}
+
+	if _, recorded, err := s.Thread(conversationID); err != nil || recorded {
+		return err
+	}
+
+	return fmt.Errorf("continue ID %q has no saved subagent history in this conversation", strings.TrimPrefix(conversationID, parent))
+}
+
+// subagentLineage returns the top-level session the subagent session conversationID belongs to, the turn
+// the subagent acts for: that session's running turn and its inbound or, with no turn running, the routing
+// that session keeps as a hidden run, and, for each delegation from that session down to conversationID, the
+// task job whose input the delegated session's running turn runs, with no job ID when it runs no turn.
+func (s *SessionService) subagentLineage(ctx context.Context, conversationID string) (root, turnID string, origin *protocol.InboundMessage, jobs []backgroundKey, err error) {
+	var inbound, inputs []byte
+	if err := s.db.QueryRowContext(ctx, `WITH RECURSIVE lineage AS (
+    SELECT conversation_id, parent_conversation_id, producer_inbound_json FROM managed_conversations WHERE conversation_id = $1
+    UNION ALL SELECT c.conversation_id, c.parent_conversation_id, c.producer_inbound_json FROM managed_conversations c JOIN lineage l ON c.conversation_id = l.parent_conversation_id
+), turns AS (
+    SELECT l.*, t.id, t.inbound_json FROM lineage l LEFT JOIN active_turns t ON t.conversation_id = l.conversation_id AND t.phase = $2
+), inputs AS (
+    SELECT COALESCE(jsonb_agg(jsonb_build_array(parent_conversation_id, COALESCE(inbound_json->'Metadata'->>'web_message_id', ''))) FILTER (WHERE parent_conversation_id <> ''), '[]') AS pairs FROM turns
+)
+SELECT t.conversation_id, COALESCE(t.id, ''), COALESCE(t.inbound_json, t.producer_inbound_json, '{}'), i.pairs
+FROM turns t CROSS JOIN inputs i WHERE t.parent_conversation_id = ''`, conversationID, turnRunning).Scan(&root, &turnID, &inbound, &inputs); err != nil {
+		return "", "", nil, nil, fmt.Errorf("read subagent lineage: %w", err)
+	}
+
+	var pairs [][2]string
+	if err := errors.Join(json.Unmarshal(inbound, &origin), json.Unmarshal(inputs, &pairs)); err != nil {
+		return "", "", nil, nil, fmt.Errorf("decode subagent lineage: %w", err)
+	}
+
+	for _, pair := range pairs {
+		jobs = append(jobs, backgroundKey{pair[0], strings.TrimPrefix(pair[1], pair[0]+"/")})
+	}
+
+	return root, turnID, origin, jobs, nil
+}
+
+// checkSessionTarget refuses a write target that is not a top-level session, that is the
+// calling turn's own session, or, for children, that the caller's top-level session did not create.
+func (s *SessionService) checkSessionTarget(ctx context.Context, children bool, owner, syncDestination, target string) error {
+	spawnedBy, err := s.topLevelSessionCreator(ctx, target)
+	if err != nil {
+		return err
+	}
+
+	if target == owner || target == syncDestination || s.reservedFor(target) == owner {
+		return fmt.Errorf("session %q is this session", target)
+	}
+
+	if children && spawnedBy != cmp.Or(syncDestination, owner) {
+		return fmt.Errorf("session %q was not created by this session", target)
+	}
+
+	return nil
+}
 
 func agentTagGroups(agent *rocketcode.Agent) ([][]string, error) {
 	permission, _ := agent.Frontmatter["permission"].(map[string]any)
@@ -182,15 +269,15 @@ type sessionListSummary struct {
 
 func listSessionsTool(service *SessionService, threads *threadBridgeManager) rocketcode.Tool {
 	return rocketcode.Tool{
-		Name: listSessionsToolName, Description: fmt.Sprintf("List durable conversations of this State Store, newest first. Supply all five fields: criteria, since (required), until (empty for no upper bound), limit (1 to %d) and include_message_preview. Returns TSV with a header, one session per row with entry counts, timestamps and optional message previews. "+
+		Name: sessionsListToolName, Description: fmt.Sprintf("List durable conversations of this State Store, newest first. Supply all five fields: criteria, since (required), until (empty for no upper bound), limit (1 to %d) and include_message_preview. Returns TSV with a header, one session per row with entry counts, timestamps and optional message previews. "+
 			"Empty criteria lists every stored conversation by latest entry, including private MCP and cron sessions. "+
 			"Other criteria is a Web /search query and returns what /search would: only the chats Web lists, never private External MCP or cron producer chats, filtered before the limit; since, until and order then use each chat's summary time. "+
 			"Query language: tag:V, cron:V, agent:V and room:V match V exactly and case-sensitively, and V may be a JSON-quoted string such as tag:\"Needs review\"; is:pinned, is:forked and is:cron; sort:newest or sort:oldest. Room terms match either room; other filters use AND. Unknown or malformed terms are searched as text. "+
 			"All remaining text is ONE case-insensitive phrase, not separate keywords, matched against name, room, agent, preview, session label, chat origin and message text. "+
-			"With criteria, rows add name, agent, room, tags and matched (the field holding the phrase, or messages when only message text did), and a messages block lists up to 3 matching messages per listed chat; rocketclaw_get_session with a row's before_entry_id and limit 1 shows that message. Messages of stopped turns are not listed. "+
+			"With criteria, rows add name, agent, room, tags and matched (the field holding the phrase, or messages when only message text did), and a messages block lists up to 3 matching messages per listed chat; rocketclaw_sessions_get with a row's before_entry_id and limit 1 shows that message. Messages of stopped turns are not listed. "+
 			"Trailing lines show how criteria was read and whether the limit cut results or the message index or session summaries were incomplete.", maxListedSessions),
-		Permission: "rocketclaw", VisibilitySubjects: []string{listSessionsToolName},
-		Subjects: func(json.RawMessage) ([]string, error) { return []string{listSessionsToolName}, nil },
+		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsListToolName},
+		Subjects: func(json.RawMessage) ([]string, error) { return []string{sessionsListToolName}, nil },
 		Parameters: map[string]any{"properties": map[string]any{
 			"criteria":                map[string]any{"type": "string", "description": "Web session search query, or empty for every stored conversation."},
 			"since":                   map[string]any{"type": "string", "description": "Required inclusive bound on the latest entry, or on the summary time with criteria: Go duration relative to now or RFC3339Nano."},
@@ -317,7 +404,7 @@ ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, conversation_id COLL
 				var hits strings.Builder
 
 				for _, hit := range search.Hits {
-					// A stopped turn's hit has no message ID, so rocketclaw_get_session cannot open it.
+					// A stopped turn's hit has no message ID, so rocketclaw_sessions_get cannot open it.
 					if count, listed := shown[hit.ConversationID]; !listed || count == 3 || hit.MessageID == "" {
 						continue
 					}
@@ -444,9 +531,9 @@ func (s *SessionService) sessionToolSummaries(ctx context.Context, ids []string,
 
 func currentSessionIDTool(conversationID string) rocketcode.Tool {
 	return rocketcode.Tool{
-		Name: currentSessionIDToolName, Description: "Return only the owning RocketClaw bridge's bare stored conversation ID, without a JSON wrapper. Pass it as conversation_id to rocketclaw_get_session inside execute to read durable history, including entries before compaction. Child agents inherit this owning conversation ID, not a separate child-run ID. No arguments.",
-		Permission: "rocketclaw", VisibilitySubjects: []string{currentSessionIDToolName},
-		Subjects:   func(json.RawMessage) ([]string, error) { return []string{currentSessionIDToolName}, nil },
+		Name: sessionsCurrentIDToolName, Description: "Return only the owning RocketClaw bridge's bare stored conversation ID, without a JSON wrapper. Pass it as conversation_id to rocketclaw_sessions_get inside execute to read durable history, including entries before compaction. Child agents inherit this owning conversation ID, not a separate child-run ID. No arguments.",
+		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsCurrentIDToolName},
+		Subjects:   func(json.RawMessage) ([]string, error) { return []string{sessionsCurrentIDToolName}, nil },
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}, "additionalProperties": false},
 		Call: func(context.Context, json.RawMessage, chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 			return rocketcode.TextToolResult(conversationID), nil
@@ -454,11 +541,226 @@ func currentSessionIDTool(conversationID string) rocketcode.Tool {
 	}
 }
 
+func sessionsGetURLTool(threads *threadBridgeManager) rocketcode.Tool {
+	return rocketcode.Tool{
+		Name: sessionsGetURLToolName, Description: "Return only the clickable Web URL of a top-level session, one Web lists. Fails for Delegation Histories, private External MCP and cron producer conversations, and unknown IDs.",
+		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsGetURLToolName},
+		Subjects:   func(json.RawMessage) ([]string, error) { return []string{sessionsGetURLToolName}, nil },
+		Parameters: map[string]any{"properties": map[string]any{"session_id": map[string]any{"type": "string"}}, "required": []string{"session_id"}},
+		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+			var params struct {
+				SessionID string `json:"session_id"`
+			}
+			if err := json.Unmarshal(raw, &params); err != nil {
+				return rocketcode.ToolResult{}, fmt.Errorf("parse get session URL: %w", err)
+			}
+
+			if _, err := threads.store.topLevelSessionCreator(ctx, params.SessionID); err != nil {
+				return rocketcode.ToolResult{}, err
+			}
+
+			url, err := threads.WebURL(ctx, params.SessionID)
+			if err != nil {
+				return rocketcode.ToolResult{}, err
+			}
+
+			return rocketcode.TextToolResult(url), nil
+		},
+	}
+}
+
+// sessionWriteMode is how rocketclaw_sessions_write delivers into an existing session.
+type sessionWriteMode string
+
+const (
+	sessionWriteStop    sessionWriteMode = "stop"
+	sessionWriteSteer   sessionWriteMode = "steer"
+	sessionWriteEnqueue sessionWriteMode = "enqueue"
+	sessionWriteStash   sessionWriteMode = "stash"
+)
+
+// sessionWriteOutcome is what became of a rocketclaw_sessions_write call.
+type sessionWriteOutcome string
+
+const (
+	sessionCreated sessionWriteOutcome = "created"
+	sessionSteered sessionWriteOutcome = "steered"
+	sessionQueued  sessionWriteOutcome = "queued"
+	sessionStashed sessionWriteOutcome = "stashed"
+	sessionStopped sessionWriteOutcome = "stopped"
+)
+
+// stopLineStep prefixes the turn steps that park a stop write's "Stopped by" line for its session.
+const stopLineStep = "stopped_by/"
+
+// postStopLines moves conversationID's parked "Stopped by" lines into its history unless a turn
+// still runs there. Under the history lock a turn's finish also takes, each line posts once, after
+// the turn it stopped; the bridge calls this when it starts and after each request.
+func (s *SessionService) postStopLines(ctx context.Context, conversationID string) error {
+	tx, err := s.beginStateTx(ctx, "post stop lines")
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	if err := lockSessionHistory(ctx, tx, conversationID); err != nil {
+		return err
+	}
+
+	lines, err := queryRows(ctx, tx, `WITH running AS (SELECT count(*) AS turns FROM active_turns WHERE conversation_id = $1 AND phase = $3),
+parked AS (DELETE FROM turn_steps USING running WHERE conversation_id = $1 AND starts_with(key, $2) AND turns = 0 RETURNING value)
+SELECT value FROM parked ORDER BY (value::jsonb->>'timestamp')::timestamptz`, "parked stop lines", func(row rowScanner) (line rocketcode.SessionEntry, err error) {
+		var raw []byte
+		if err := row.Scan(&raw); err != nil {
+			return line, fmt.Errorf("scan parked stop line: %w", err)
+		}
+
+		if err := json.Unmarshal(raw, &line); err != nil {
+			return line, fmt.Errorf("decode parked stop line: %w", err)
+		}
+
+		return line, nil
+	}, conversationID, stopLineStep, turnRunning)
+	if err != nil {
+		return err
+	}
+
+	for i := range lines {
+		if _, err := appendSessionEntryDB(ctx, tx, conversationID, conversationID, &lines[i]); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit stop lines: %w", err)
+	}
+
+	return nil
+}
+
+// sessionsWriteTool builds rocketclaw_sessions_write for a turn of b acting as the turn agentName runs
+// for msg in the session self: b's own turn or, for a subagent session, its top-level session's, and for
+// the destination msg reports to as a hidden run. It never waits for the target's turn.
+func sessionsWriteTool(b *Bridge, msg *protocol.InboundMessage, agentName, self string) rocketcode.Tool {
+	owner := cmp.Or(msg.SyncDestination, self)
+	properties := map[string]any{"session_id": map[string]any{"type": "string"}, "mode": map[string]any{"type": "string", "enum": []sessionWriteMode{sessionWriteStop, sessionWriteSteer, sessionWriteEnqueue, sessionWriteStash}}}
+
+	for _, field := range []string{"prompt", "title", "agent"} {
+		properties[field] = map[string]any{"type": "string"}
+	}
+
+	return rocketcode.Tool{Name: sessionsWriteToolName, Permission: "rocketclaw", VisibilitySubjects: []string{sessionsWriteToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{sessionsWriteToolName}, nil },
+		Description: "Create a top-level RocketClaw Web session, or write prompt to an existing one, without waiting for its turn. Supply every field. " +
+			"With an empty session_id, create a session named title, run by agent (empty for this turn's agent), whose first task is prompt; mode is ignored. The new session cannot see this conversation, so prompt must carry all the context it needs. " +
+			"With session_id, deliver prompt to that session; title and agent are ignored. steer joins its running turn while that turn still takes input, otherwise runs as its next turn; enqueue runs after the work already queued; stash waits in its Web queue until a person releases it; stop stops its current turn and goal, then runs prompt before anything already queued. " +
+			"Only stop takes an empty prompt: it then just stops the turn and goal, queues nothing, and posts that this session stopped it into that session's transcript without starting a turn. " +
+			"The receiver is told this session and agent sent it. Returns JSON with outcome (created, steered, queued, stashed or stopped), session_id, url, queue_item_id when a prompt was delivered and, for stop, turn_was_running. Share url so a person can open the session.",
+		Parameters: map[string]any{"properties": properties, "required": slices.Sorted(maps.Keys(properties))},
+		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+			var input struct {
+				SessionID string           `json:"session_id"`
+				Mode      sessionWriteMode `json:"mode"`
+				Prompt    string           `json:"prompt"`
+				Title     string           `json:"title"`
+				Agent     string           `json:"agent"`
+			}
+			if err := json.Unmarshal(raw, &input); err != nil {
+				return rocketcode.ToolResult{}, fmt.Errorf("parse %s: %w", sessionsWriteToolName, err)
+			}
+
+			stopOnly := strings.TrimSpace(input.Prompt) == ""
+			if stopOnly && (input.SessionID == "" || input.Mode != sessionWriteStop) {
+				return rocketcode.ToolResult{}, errors.New("prompt is required")
+			}
+
+			agent, _ := rocketcode.ToolCallAgent(ctx)
+			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, input.Prompt, false)
+			inbound.PreserveWhitespace = true
+			inbound.Metadata = map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text", protocol.InboundSenderSessionMetadataKey: owner, protocol.InboundSenderAgentMetadataKey: agent.Name}
+
+			var (
+				result struct {
+					Outcome        sessionWriteOutcome `json:"outcome"`
+					SessionID      string              `json:"session_id"`
+					URL            string              `json:"url"`
+					QueueItemID    string              `json:"queue_item_id,omitempty"`
+					TurnWasRunning *bool               `json:"turn_was_running,omitempty"`
+				}
+				running bool
+				err     error
+			)
+
+			if input.SessionID == "" {
+				title := strings.TrimSpace(input.Title)
+				if title == "" {
+					return rocketcode.ToolResult{}, errors.New("title is required to create a session")
+				}
+
+				allowed := strings.FieldsFunc(msg.Metadata[protocol.InboundAllowedAgentsMetadataKey], func(r rune) bool { return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' ' })
+				start := threadStart{agent: cmp.Or(strings.TrimSpace(input.Agent), agentName), createdBy: ThreadCreator(msg.Metadata[protocol.InboundPrincipalMetadataKey]), spawnedBy: owner}
+
+				if msg.Cronjob != nil {
+					allowed, start.createdBy = []string{agentName}, ThreadCreatedByCron
+				}
+
+				result.Outcome = sessionCreated
+				result.URL, err = b.threads.createSession(ctx, &start, allowed, title, inbound)
+				result.SessionID = start.conversationID
+			} else {
+				// RocketCode loaded permission.rocketclaw.rocketclaw_sessions_write: children as allow.
+				permission, _ := agent.Frontmatter["permission"].(map[string]any)
+				rocketclaw, _ := permission["rocketclaw"].(map[string]any)
+
+				if err := b.config.SessionService.checkSessionTarget(ctx, rocketclaw[sessionsWriteToolName] == "children", self, msg.SyncDestination, input.SessionID); err != nil {
+					return rocketcode.ToolResult{}, err
+				}
+
+				// The link is looked up before delivery, so a failed lookup delivers nothing.
+				result.SessionID = input.SessionID
+				if result.URL, err = b.threads.WebURL(ctx, input.SessionID); err != nil {
+					return rocketcode.ToolResult{}, err
+				}
+
+				result.Outcome = sessionStopped
+
+				if stopOnly {
+					// A developer message is history the next turn reads and Web shows; posting it starts no turn.
+					// It is parked only after the stop succeeds and posts once no turn runs there: here if the
+					// stopped turn already ended, otherwise when the bridge flushes at that turn's end.
+					line, _ := json.Marshal(&rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now().UTC(), ReplayInput: replayInputForMessage("developer", fmt.Sprintf("Stopped by session %s (agent %s)", owner, agent.Name))}) // Strings and messages cannot fail to encode.
+					if running, err = b.threads.stopSession(input.SessionID); err == nil {
+						err = b.config.SessionService.SaveTurnStep(ctx, input.SessionID, stopLineStep+b.config.ConversationID+"/"+rocketcode.ToolCallKey(ctx), line)
+					}
+
+					if err == nil {
+						err = b.config.SessionService.postStopLines(ctx, input.SessionID)
+					}
+				} else {
+					result.QueueItemID = b.config.ConversationID + "/" + rocketcode.ToolCallKey(ctx)
+					result.Outcome, running, err = b.threads.writeSession(ctx, input.SessionID, result.QueueItemID, input.Mode, inbound)
+				}
+
+				if result.Outcome == sessionStopped {
+					result.TurnWasRunning = &running
+				}
+			}
+
+			if err != nil {
+				return rocketcode.ToolResult{}, err
+			}
+
+			data, _ := json.Marshal(result) // Strings and a bool cannot fail to encode.
+
+			return rocketcode.TextToolResult(string(data)), nil
+		}}
+}
+
 func getSessionTool(service *SessionService) rocketcode.Tool {
 	return rocketcode.Tool{
-		Name: getSessionToolName, Description: fmt.Sprintf("Read the newest limit (1 to %d) stored entries of a durable conversation older than before_entry_id (0 for the newest) as timestamp, role and content TSV in stored entry order, including messages, readable reasoning and tool events before compaction. When older entries exist, the last line is [next_before_entry_id=N]; pass N to read the previous page. Store-wide access includes private MCP sessions. One snapshot, no polling or read-state changes. Use rocketclaw_current_session_id for your owning conversation or rocketclaw_list_sessions to find another ID.", maxSessionEntries),
-		Permission: "rocketclaw", VisibilitySubjects: []string{getSessionToolName},
-		Subjects: func(json.RawMessage) ([]string, error) { return []string{getSessionToolName}, nil },
+		Name: sessionsGetToolName, Description: fmt.Sprintf("Read the newest limit (1 to %d) stored entries of a durable conversation older than before_entry_id (0 for the newest) as timestamp, role and content TSV in stored entry order, including messages, readable reasoning and tool events before compaction. When older entries exist, the last line is [next_before_entry_id=N]; pass N to read the previous page. Store-wide access includes private MCP sessions. One snapshot, no polling or read-state changes. Use rocketclaw_sessions_current_id for your owning conversation or rocketclaw_sessions_list to find another ID.", maxSessionEntries),
+		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsGetToolName},
+		Subjects: func(json.RawMessage) ([]string, error) { return []string{sessionsGetToolName}, nil },
 		Parameters: map[string]any{"properties": map[string]any{
 			"conversation_id": map[string]any{"type": "string"},
 			"limit":           map[string]any{"type": "integer", "minimum": 1, "maximum": maxSessionEntries},

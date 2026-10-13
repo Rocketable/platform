@@ -103,7 +103,7 @@ func customLooperTool(tool *Tool) (looperTool, error) {
 	call := func(ctx context.Context, raw json.RawMessage, output chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 		// A result, not an error, so a background script keeps running past the refusal.
 		if tool.TurnBound && backgroundDetached(ctx) {
-			return TextToolResult(fmt.Sprintf(turnBoundRefused, tool.Name)), nil
+			return TextToolResult(fmt.Sprintf(TurnBoundRefused, tool.Name)), nil
 		}
 
 		return tool.Call(ctx, raw, output)

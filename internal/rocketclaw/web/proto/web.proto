@@ -111,13 +111,13 @@ message QuestionOption {
 // A listed Background Job, or the job a Completion Note reports.
 message BackgroundJob {
   string job_id = 1;
-  // execute, task, or subagent_wake.
+  // execute or task.
   string kind = 2;
   // running, completed, failed, stopped, or killed.
   string state = 3;
   string label = 4;
   string tool_call_id = 5;
-  // Child-session key of the subagent a task or subagent_wake job runs.
+  // Child-session key of the subagent a task job runs.
   string subagent_key = 6;
   // user or agent, for a stopped job.
   string stopped_by = 7;

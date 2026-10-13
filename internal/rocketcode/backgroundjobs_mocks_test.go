@@ -19,9 +19,6 @@ var _ BackgroundJobs = &mockBackgroundJobs{}
 //
 //		// make and configure a mocked BackgroundJobs
 //		mockedBackgroundJobs := &mockBackgroundJobs{
-//			DrainNotesFunc: func(ctx context.Context, subagentKey string) []PromptInput {
-//				panic("mock out the DrainNotes method")
-//			},
 //			EnabledFunc: func() bool {
 //				panic("mock out the Enabled method")
 //			},
@@ -35,9 +32,6 @@ var _ BackgroundJobs = &mockBackgroundJobs{}
 //
 //	}
 type mockBackgroundJobs struct {
-	// DrainNotesFunc mocks the DrainNotes method.
-	DrainNotesFunc func(ctx context.Context, subagentKey string) []PromptInput
-
 	// EnabledFunc mocks the Enabled method.
 	EnabledFunc func() bool
 
@@ -46,13 +40,6 @@ type mockBackgroundJobs struct {
 
 	// calls tracks calls to the methods.
 	calls struct {
-		// DrainNotes holds details about calls to the DrainNotes method.
-		DrainNotes []struct {
-			// Ctx is the ctx argument value.
-			Ctx context.Context
-			// SubagentKey is the subagentKey argument value.
-			SubagentKey string
-		}
 		// Enabled holds details about calls to the Enabled method.
 		Enabled []struct {
 		}
@@ -66,45 +53,8 @@ type mockBackgroundJobs struct {
 			Work BackgroundWork
 		}
 	}
-	lockDrainNotes sync.RWMutex
-	lockEnabled    sync.RWMutex
-	lockRun        sync.RWMutex
-}
-
-// DrainNotes calls DrainNotesFunc.
-func (mock *mockBackgroundJobs) DrainNotes(ctx context.Context, subagentKey string) []PromptInput {
-	if mock.DrainNotesFunc == nil {
-		panic("mockBackgroundJobs.DrainNotesFunc: method is nil but BackgroundJobs.DrainNotes was just called")
-	}
-	callInfo := struct {
-		Ctx         context.Context
-		SubagentKey string
-	}{
-		Ctx:         ctx,
-		SubagentKey: subagentKey,
-	}
-	mock.lockDrainNotes.Lock()
-	mock.calls.DrainNotes = append(mock.calls.DrainNotes, callInfo)
-	mock.lockDrainNotes.Unlock()
-	return mock.DrainNotesFunc(ctx, subagentKey)
-}
-
-// DrainNotesCalls gets all the calls that were made to DrainNotes.
-// Check the length with:
-//
-//	len(mockedBackgroundJobs.DrainNotesCalls())
-func (mock *mockBackgroundJobs) DrainNotesCalls() []struct {
-	Ctx         context.Context
-	SubagentKey string
-} {
-	var calls []struct {
-		Ctx         context.Context
-		SubagentKey string
-	}
-	mock.lockDrainNotes.RLock()
-	calls = mock.calls.DrainNotes
-	mock.lockDrainNotes.RUnlock()
-	return calls
+	lockEnabled sync.RWMutex
+	lockRun     sync.RWMutex
 }
 
 // Enabled calls EnabledFunc.
