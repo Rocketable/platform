@@ -1457,7 +1457,7 @@ func TestAttachFilesToolReadsWorkspacePath(t *testing.T) {
 	data := bytes.Repeat([]byte("report body"), 400000)
 	require.NoError(t, root.WriteFile("reports/latest.txt", data, 0o644))
 
-	attachments := &outboundAttachmentCollector{key: "turn-1/attachments"}
+	attachments := &outboundAttachmentCollector{turnID: "turn-1"}
 	sessions := newTestSessionService(t)
 	tool := attachments.Tool(root, sessions, "attachment-test")
 	parameters := tool.Parameters

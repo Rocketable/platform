@@ -65,7 +65,7 @@ func (s *Server) uploadAttachment(stream grpc.ServerStream) error {
 	}
 
 	attachment.MIMEType = protocol.NormalizeMIMEType(http.DetectContentType(attachment.Data))
-	if err := s.sessions.SaveAttachment(ctx, first.ConversationId, &attachment, true); err != nil {
+	if err := s.sessions.SaveAttachment(ctx, first.ConversationId, "", &attachment, true); err != nil {
 		return fmt.Errorf("store upload: %w", err)
 	}
 

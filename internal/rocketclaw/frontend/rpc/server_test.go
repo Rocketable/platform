@@ -625,7 +625,7 @@ func TestSearchMessagesFindsHistoryMessages(t *testing.T) {
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 
 	require.NoError(t, sessions.UpsertThread("source", backend.ThreadState{Agent: "main", CreatedBy: "alice"}))
-	require.NoError(t, sessions.SaveAttachment(ctx, "source", &protocol.OutboundAttachment{ID: "parity-file", Name: "notes.txt", MIMEType: "text/plain", Data: []byte("notes")}, true))
+	require.NoError(t, sessions.SaveAttachment(ctx, "source", "", &protocol.OutboundAttachment{ID: "parity-file", Name: "notes.txt", MIMEType: "text/plain", Data: []byte("notes")}, true))
 	_, err = sessions.AppendEntryID(ctx, "source", &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Web principal=\"alice\"]","content":"[Web principal=\"alice\"]\n\nheader request"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":"plain answer"}`),
@@ -1236,7 +1236,7 @@ func TestSessionEntries(t *testing.T) {
 		require.Contains(t, rejected.PrivateText, "`maxTurns:`")
 
 		file := protocol.OutboundAttachment{ID: "goal-file", Name: "goal.txt", MIMEType: "text/plain", Data: []byte("goal context")}
-		require.NoError(t, sessions.SaveAttachment(ctx, id, &file, true))
+		require.NoError(t, sessions.SaveAttachment(ctx, id, "", &file, true))
 		started, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: " $Goal maxTurns: 2 ship it", Delivery: PromptDelivery_QUEUE, MessageId: "goal-message", AttachmentIds: []string{file.ID}})
 		require.NoError(t, err)
 		require.Empty(t, started.PrivateText)
@@ -1529,7 +1529,7 @@ func TestSessionEntries(t *testing.T) {
 		json.RawMessage(`{"type":"function_call_output","call_id":"script","output":"tagged"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":""}`),
 	}, OutputTrace: []json.RawMessage{
-		// A tool call made inside the execute script, stored beside replay by RocketCode.
+		// A tool call made inside the execute script, as stored before such calls were dropped.
 		json.RawMessage(`{"type":"function_call","call_id":"script/host/1","parent_call_id":"script","name":"rocketclaw_set_tag","arguments":"{\"tag\":\"customer\"}"}`),
 		json.RawMessage(`{"type":"function_call_output","call_id":"script/host/1","parent_call_id":"script","output":"{\"tags\":[\"customer\"]}"}`),
 	}}
@@ -1541,11 +1541,7 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "script", history.Messages[8].ToolCallId)
 	require.Equal(t, "execute", history.Messages[8].ToolName)
-	require.Equal(t, "script/host/1", history.Messages[9].ToolCallId)
-	require.Equal(t, "rocketclaw_set_tag", history.Messages[9].ToolName)
-	require.Equal(t, "script/host/1", history.Messages[10].ToolCallId)
-	require.Empty(t, history.Messages[10].ToolName)
-	require.Equal(t, "script", history.Messages[11].ToolCallId)
+	require.Equal(t, "script", history.Messages[9].ToolCallId, "calls made inside a script are never shown")
 	require.Equal(t, `[Web principal="alice" additional_instructions="Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."]`, history.Messages[6].Header)
 	require.Equal(t, "alice", history.Messages[6].GetPrincipal())
 
@@ -1578,8 +1574,6 @@ func TestSessionEntries(t *testing.T) {
 		{"user", "human two"},
 		{"assistant", "answer two"},
 		{"tool", "execute\n{\"code\":\"tag\"}"},
-		{"tool", "rocketclaw_set_tag\n{\"tag\":\"customer\"}"},
-		{"tool", "{\"tags\":[\"customer\"]}"},
 		{"tool", "tagged"},
 	}, got)
 
@@ -2737,7 +2731,7 @@ func TestSessionEntries(t *testing.T) {
 
 		t.Run("filename attachment tokens do not hide the generated suffix", func(t *testing.T) {
 			upload := protocol.OutboundAttachment{ID: "filename-reference", Name: "photo attachment:" + file.Id + " extra.png", MIMEType: "image/png", Data: imageData}
-			require.NoError(t, sessions.SaveAttachment(ctx, conversation, &upload, true))
+			require.NoError(t, sessions.SaveAttachment(ctx, conversation, "", &upload, true))
 			_, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: conversation, Text: exact, AttachmentIds: []string{imageFile.Id, upload.ID}})
 			require.NoError(t, err)
 
@@ -2898,28 +2892,26 @@ func TestSessionEntries(t *testing.T) {
 		stored, err := reopened.LoadAttachment(ctx, conversation, recovered.Id, false)
 		require.NoError(t, err)
 		require.Equal(t, []byte("old image bytes"), stored.Data)
-		// A file attached from inside an execute script shows on that script's attach call.
+		// A file attached from inside an execute script shows on its turn's final reply.
 		nestedFile := protocol.OutboundAttachment{ID: "nested-generated", Name: "nested.png", MIMEType: "image/png", Data: []byte("nested image")}
-		require.NoError(t, sessions.SaveAttachment(ctx, conversation, &nestedFile, false))
-		_, err = sessions.AppendEntryID(ctx, conversation, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+		require.NoError(t, sessions.SaveAttachment(ctx, conversation, "attaching-turn", &nestedFile, false))
+		_, err = sessions.AppendEntryID(ctx, conversation, &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "attaching-turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"function_call","call_id":"script","name":"execute","arguments":"{\"code\":\"attach\"}"}`),
 			json.RawMessage(`{"type":"function_call_output","call_id":"script","output":"attached"}`),
-		}, OutputTrace: []json.RawMessage{
-			json.RawMessage(`{"type":"function_call","call_id":"script/host/1","parent_call_id":"script","name":"rocketclaw_attach_files_to_response","arguments":"{}"}`),
-			json.RawMessage(`{"type":"function_call_output","call_id":"script/host/1","parent_call_id":"script","output":"queued attachments for final response: nested-generated"}`),
+			json.RawMessage(`{"type":"message","role":"assistant","content":"here it is"}`),
 		}})
 		require.NoError(t, err)
 		history, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation})
 		require.NoError(t, err)
 
-		nested := history.Messages[len(history.Messages)-2]
-		require.Equal(t, "script/host/1", nested.ToolCallId)
-		require.Len(t, nested.Attachments, 1)
-		require.Equal(t, nestedFile.ID, nested.Attachments[0].Id)
-		require.Equal(t, "attached", history.Messages[len(history.Messages)-1].Text)
+		reply := history.Messages[len(history.Messages)-1]
+		require.Equal(t, "here it is", reply.Text)
+		require.Len(t, reply.Attachments, 1)
+		require.Equal(t, nestedFile.ID, reply.Attachments[0].Id)
+		require.Empty(t, history.Messages[len(history.Messages)-2].Attachments, "the script's own row carries no files")
 		// A delivered copy authorizes only the original producer's referenced object.
 		producerFile := protocol.OutboundAttachment{ID: "private-generated", Name: "generated.png", MIMEType: "image/png", Data: []byte("private original")}
-		require.NoError(t, sessions.SaveAttachment(ctx, "private-X", &producerFile, false))
+		require.NoError(t, sessions.SaveAttachment(ctx, "private-X", "", &producerFile, false))
 		sourceID, err := sessions.AppendEntryID(ctx, "private-X", &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"function_call","call_id":"private-file","name":"rocketclaw_attach_files_to_response","arguments":"{}"}`),
 			json.RawMessage(`{"type":"function_call_output","call_id":"private-file","output":"queued attachments for final response: private-generated"}`),
@@ -2958,7 +2950,7 @@ func TestSessionEntries(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, filtered.Messages)
 		// Unreferenced immutable objects cannot be downloaded by knowing their ID.
-		require.NoError(t, sessions.SaveAttachment(ctx, conversation, &protocol.OutboundAttachment{ID: "orphan", Name: "orphan", Data: []byte("private")}, false))
+		require.NoError(t, sessions.SaveAttachment(ctx, conversation, "", &protocol.OutboundAttachment{ID: "orphan", Name: "orphan", Data: []byte("private")}, false))
 
 		for _, test := range []struct {
 			name, conversation, id, principal string
@@ -3014,7 +3006,7 @@ func TestSessionEntries(t *testing.T) {
 		}
 
 		file := protocol.OutboundAttachment{ID: "handoff-notes", Name: "notes.txt", MIMEType: "text/plain", Data: []byte("verified notes")}
-		require.NoError(t, sessions.SaveAttachment(ctx, source, &file, true))
+		require.NoError(t, sessions.SaveAttachment(ctx, source, "", &file, true))
 
 		entry := rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"message","role":"user","content":"unique handoff request attachment:handoff-notes"}`),

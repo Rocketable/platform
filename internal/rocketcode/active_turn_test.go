@@ -88,16 +88,14 @@ func TestTurnObservationsPersistAfterChildCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	require.NoError(t, owner.recordHostCall(ctx, "execute-1", "host-1", "note", json.RawMessage(`{"text":"hello"}`), "saved"))
-
 	progress := PublicProgress{ID: "execute-1", Kind: PublicProgressTool, State: PublicProgressWorking}
 	require.NoError(t, owner.observe(ctx, &progress))
 	require.NoError(t, owner.finishCall(t.Context(), &progress, PublicProgressCompleted))
 	require.NoError(t, owner.replaceResponse(t.Context(), "", []PublicProgress{{ID: "answer-1", Kind: PublicProgressText, State: PublicProgressCompleted, Text: "done"}}))
 
 	require.NoError(t, t.Context().Err(), "child cancellation must not cancel the turn")
-	require.Len(t, journal.SaveTraceCalls(), 4)
-	require.Len(t, owner.trace, 4, "host call, result, tool completion, and answer remain stored")
+	require.Len(t, journal.SaveTraceCalls(), 3)
+	require.Len(t, owner.trace, 2, "tool completion and answer remain stored")
 	require.Equal(t, PublicProgressCompleted, PublicProgressFromTrace(owner.trace)[0].State)
 }
 

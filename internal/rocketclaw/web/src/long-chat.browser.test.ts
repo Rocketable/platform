@@ -14,6 +14,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
   ];
   const view = (first: number, last: number, extra: object) => ({ messages: Array.from({ length: last - first + 1 }, (_, i) => entry(first + i)).flat(), origin: "", delegations: [], revision: "", reset: true, replacedKeys: [], removedKeys: [], entryKeys: Array.from({ length: last - first + 1 }, (_, i) => String(first + i)), running: false, terminal: "", start: String(first), more: first > 1, ...extra });
   const pages: { before?: string; from?: string; limit?: number }[] = [];
+  const opened = Promise.withResolvers<void>();
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -24,6 +25,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
     if (url.pathname === "/api/History") {
       const input = await request.json() as { revision?: string; limit?: number; before?: string; from?: string };
+      await opened.promise;
       if (!input.before) return Response.json(view(turns - input.limit! + 1, turns, { revision: "tail", reset: !input.revision, ...(input.revision ? { messages: [], replacedKeys: [] } : {}) }));
       pages.push({ before: input.before, from: input.from, limit: input.limit });
       const before = Number(input.before);
@@ -39,6 +41,10 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     const cdp = await page.context().newCDPSession(page);
     await cdp.send("Emulation.setCPUThrottlingRate", { rate: 8 });
     await page.goto(`http://127.0.0.1:${server.port}/s/bG9uZw`);
+    // A slow first read shows that the chat is loading, not an empty chat.
+    await page.getByText("Loading conversation…").waitFor();
+    expect(await page.getByText("Send a message to start the conversation.").count()).toBe(0);
+    opened.resolve();
     await page.getByText(`assistant ${turns}`).waitFor();
     expect(await page.locator('[data-slot="message"][data-message-id]').count()).toBe(100);
     expect(pages).toEqual([]);

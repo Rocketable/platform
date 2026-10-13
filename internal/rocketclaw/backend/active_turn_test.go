@@ -140,7 +140,7 @@ func TestClaimedQueueItemRunsExactlyOnceAfterCrash(t *testing.T) {
 	require.Equal(t, []string{request.turnID}, runningTestTurns(t, service))
 
 	queued := []protocol.OutboundAttachment{{ID: "queued-report", Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}
-	require.NoError(t, service.SaveAttachment(t.Context(), conversationID, &queued[0], false))
+	require.NoError(t, service.SaveAttachment(t.Context(), conversationID, "", &queued[0], false))
 	data, err := json.Marshal(queued)
 	require.NoError(t, err)
 	require.NotContains(t, string(data), base64.StdEncoding.EncodeToString(queued[0].Data), "journaled attachments keep only their stored ID")
@@ -175,7 +175,7 @@ func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
 
 	outbound := crashed.newOutboundMessage(msg, "turn-finished", "finished answer", true)
 	outbound.Attachments = []protocol.OutboundAttachment{{ID: "finished-report", Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}
-	require.NoError(t, service.SaveAttachment(t.Context(), conversationID, &outbound.Attachments[0], false))
+	require.NoError(t, service.SaveAttachment(t.Context(), conversationID, "", &outbound.Attachments[0], false))
 	outbound.ReplyState = json.RawMessage(`{"ChannelID":"C456","MessageTS":"777.2"}`)
 
 	require.NoError(t, service.SaveTurnStep(t.Context(), conversationID, protocol.ReplyStepKey("turn-finished"), []byte(`{"ChannelID":"C123","MessageTS":"555.1"}`)))
@@ -221,7 +221,7 @@ func TestFinishTurnKeepsLargeAttachment(t *testing.T) {
 	outbound := protocol.NewOutboundMessage(inbound.ConversationID, "file ready")
 	// 192 MiB in base64 exceeds jsonb's string limit; the finished turn stores the attachment ID and reloads the bytes.
 	outbound.Attachments = []protocol.OutboundAttachment{{ID: "large-file", Name: "file.bin", Data: bytes.Repeat([]byte{0x61}, 192<<20)}}
-	require.NoError(t, service.SaveAttachment(t.Context(), inbound.ConversationID, &outbound.Attachments[0], false))
+	require.NoError(t, service.SaveAttachment(t.Context(), inbound.ConversationID, "", &outbound.Attachments[0], false))
 
 	require.NoError(t, service.SaveTurnStep(t.Context(), inbound.ConversationID, protocol.ReplyStepKey("attachment-turn"), []byte(`{"ChannelID":"C789","MessageTS":"888.3"}`)))
 
@@ -508,8 +508,8 @@ func TestLegacyCronScheduleResumesIntoCanonical(t *testing.T) {
 			}
 
 			require.NoError(t, store.UpsertThread("cron:legacy", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
-			// Back to before 027_producer_handoff and the four migrations that follow it.
-			_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(t.Context(), store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 5)
+			// Back to before 027_producer_handoff and the five migrations that follow it.
+			_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(t.Context(), store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 6)
 			require.NoError(t, err)
 
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "original legacy job", false)
@@ -1315,7 +1315,7 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 		}
 	}
 
-	assert.Equal(t, 1, asks, "the resumed script saves its question once")
+	assert.Zero(t, asks, "calls made inside a script, including its question, are never stored")
 
 	for len(bodies) > 0 {
 		<-bodies

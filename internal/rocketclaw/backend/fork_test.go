@@ -24,7 +24,7 @@ func TestForkConversation(t *testing.T) {
 	require.NoError(t, err)
 
 	attachment := protocol.OutboundAttachment{ID: "original-file", Name: "notes.txt", MIMEType: "text/plain", Data: []byte("notes")}
-	require.NoError(t, sessions.SaveAttachment(t.Context(), "source", &attachment, true))
+	require.NoError(t, sessions.SaveAttachment(t.Context(), "source", "", &attachment, true))
 
 	entry := rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ResponseID: "response", ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Slack]","content":"[Slack]\n\nfirst"}`),
@@ -195,7 +195,7 @@ func TestForkConversationRollsBackFailedCopies(t *testing.T) {
 			runtime := &Runtime{Sessions: sessions}
 			require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "source", Agent: "main"}))
 			attachment := protocol.OutboundAttachment{ID: "original", Name: "notes.txt", MIMEType: "text/plain", Data: []byte("notes")}
-			require.NoError(t, sessions.SaveAttachment(t.Context(), "source", &attachment, true))
+			require.NoError(t, sessions.SaveAttachment(t.Context(), "source", "", &attachment, true))
 
 			entry := rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"attachment:original"}`)}}
 			_, err = sessions.AppendEntryID(t.Context(), "source", &entry)

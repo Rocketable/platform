@@ -2054,8 +2054,8 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	providerLog := b.log.With("conversation_id", b.config.ConversationID, "turn_id", turnID, "agent", agentName, "source", string(msg.Source), "kind", string(msg.Kind), "human", msg.Human, "goal_turn", msg.GoalTurn, "attachment_count", len(msg.Attachments))
 	resolver := newModelResolver(runtimeCfg, providerLog)
 
-	attachments := &outboundAttachmentCollector{key: journalKey + "/attachments"}
-	if queued, found, err := b.config.SessionService.LoadTurnStep(ctx, b.config.ConversationID, attachments.key); err != nil {
+	attachments := &outboundAttachmentCollector{turnID: journalKey}
+	if queued, found, err := b.config.SessionService.LoadTurnStep(ctx, b.config.ConversationID, journalKey+"/attachments"); err != nil {
 		return runResult{}, err
 	} else if found {
 		if err := json.Unmarshal(queued, &attachments.attachments); err != nil {
@@ -2600,9 +2600,9 @@ func (b *Bridge) scheduleMessageTool(origin *protocol.InboundMessage) rocketcode
 }
 
 // outboundAttachmentCollector queues a turn's response attachments and records
-// them under key so a resumed turn keeps the ones queued before a restart.
+// them under the turn's attachments step so a resumed turn keeps the ones queued before a restart.
 type outboundAttachmentCollector struct {
-	key         string
+	turnID      string
 	mu          sync.Mutex
 	attachments []protocol.OutboundAttachment
 }
@@ -2657,7 +2657,7 @@ func (c *outboundAttachmentCollector) Tool(root *os.Root, sessions *SessionServi
 			}
 
 			attachment.ID = rand.Text()
-			if err := sessions.SaveAttachment(ctx, conversationID, &attachment, false); err != nil {
+			if err := sessions.SaveAttachment(ctx, conversationID, c.turnID, &attachment, false); err != nil {
 				return rocketcode.ToolResult{}, err
 			}
 
@@ -2674,7 +2674,7 @@ func (c *outboundAttachmentCollector) Tool(root *os.Root, sessions *SessionServi
 			return rocketcode.ToolResult{}, fmt.Errorf("encode response attachments: %w", err)
 		}
 
-		if err := sessions.SaveTurnStep(ctx, conversationID, c.key, queued); err != nil {
+		if err := sessions.SaveTurnStep(ctx, conversationID, c.turnID+"/attachments", queued); err != nil {
 			return rocketcode.ToolResult{}, err
 		}
 

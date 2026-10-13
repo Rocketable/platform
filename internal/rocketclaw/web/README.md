@@ -560,7 +560,7 @@ as usual. Stashed rows can be reordered or removed, but cannot steer directly.
 Failed Stash keeps the draft and files for retry. If Pop shows an error, check
 the refreshed queue: the message may already be queued if starting work failed.
 Live updates and refresh read the same persisted transcript. A chat opens with
-its newest 50 turns. Scrolling near the top loads the 50 before them without moving
+its newest 50 turns, showing **Loading conversation…** until they arrive. Scrolling near the top loads the 50 before them without moving
 what is on screen, and a link to an older message loads everything from that
 message onward. Live updates follow only the turns loaded at open, and finished
 turns are not redrawn. Reconnect fetches changes since the last applied revision; pending steers remain separate until their
@@ -734,7 +734,10 @@ saved. On wide screens the delegation panel can be resized by dragging its
 inner edge, and the width is remembered.
 Each tool call has one labeled disclosure containing its arguments and matching
 result. Loaded skill instructions fold with their skill call. Long results have a
-collapse control at the bottom as well as the header. Cron run previews and the
+collapse control at the bottom as well as the header. An Execute call shows only
+the script's final result; the tool calls the script made are neither shown nor
+kept. Files the script attached with `rocketclaw_attach_files_to_response` show
+on the turn's final reply. Cron run previews and the
 delegation panel keep every disclosure open.
 The transcript has a visible scrollbar and a side rail with one jump marker per
 loaded turn. Hovering or focusing the rail opens a scrollable box of message previews;

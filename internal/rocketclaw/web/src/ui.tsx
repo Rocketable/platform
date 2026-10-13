@@ -2166,9 +2166,16 @@ function WorkingStatus({ conversationId, movable, onChange }: { conversationId: 
   </div></MessageScrollerItem>;
 }
 
+function emptyTranscriptMessage(opening: boolean, empty: boolean, running: string) {
+  if (opening) return "Loading conversation…";
+  if (!empty) return "No messages for selected origins.";
+  return running ? `${running} is running` : "Send a message to start the conversation.";
+}
+
 function TranscriptLog({
   conversationId,
   lines,
+  opening,
   working,
   terminal,
   origin,
@@ -2181,6 +2188,7 @@ function TranscriptLog({
 }: {
   lines: Line[];
   conversationId: string;
+  opening: boolean;
   working: boolean;
   movable: boolean;
   refreshHistory: () => Promise<unknown>;
@@ -2218,9 +2226,7 @@ function TranscriptLog({
     return () => cancelAnimationFrame(frame);
   }, [lines, nearTop]);
   const running = usePendingCron(conversationId);
-  const emptyMessage = lines.length === 0
-    ? (running ? `${running} is running` : "Send a message to start the conversation.")
-    : "No messages for selected origins.";
+  const emptyMessage = emptyTranscriptMessage(opening, lines.length === 0, running);
   useEffect(() => { if (running && lines.length > 0) notePendingCron(conversationId, ""); }, [running, lines.length, conversationId]);
   const jumpToTurn = (turn: Turn) => {
     scrollToMessage(`turn-${turnKey(turn)}`, { align: "start", behavior: "instant" });
@@ -2500,7 +2506,7 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
   return (
     <RevertActions value={revert}>
       {draft.revertMessageId ? <div role="status" className="flex flex-wrap items-center gap-2 px-12 py-2 text-xs text-muted-foreground md:px-3"><span>History reverted. Files and external effects are unchanged.</span><Button size="sm" variant="outline" className="min-h-11 sm:min-h-8" disabled={revert.pending} onClick={() => void revert.run(undefined, true)}>Redo</Button></div> : null}
-      <Delegations value={previewing ? preview.data?.delegations : delegations}><TranscriptLog conversationId={id} lines={previewLines ?? lines} working={!previewing && busy} terminal={previewing ? undefined : terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} more={!previewing && more} loadEarlier={loadEarlier} movable={movable} refreshHistory={refreshHistory} /></Delegations>
+      <Delegations value={previewing ? preview.data?.delegations : delegations}><TranscriptLog conversationId={id} lines={previewLines ?? lines} opening={opening} working={!previewing && busy} terminal={previewing ? undefined : terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} more={!previewing && more} loadEarlier={loadEarlier} movable={movable} refreshHistory={refreshHistory} /></Delegations>
       {error ? <p role="alert" className="px-3 text-sm text-destructive">{error}</p> : null}
       {hasSandboxed ? <ButtonGroup aria-label="Show messages from" className="mx-auto my-2.5">
         {(["sandboxed", "canonical"] as const).map((choice) => (

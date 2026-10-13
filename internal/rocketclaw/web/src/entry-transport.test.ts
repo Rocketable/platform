@@ -50,8 +50,7 @@ test("transcript and entry HTTP proxy reach Go and reject an unmapped connection
     { role: "tool", text: "ok" }, { role: "assistant", text: "answer one" },
     { role: "user", text: "human two" }, { role: "assistant", text: "answer two" },
     { role: "tool", text: "execute\n{\"code\":\"tag\"}" },
-    { role: "tool", text: "rocketclaw_set_tag\n{\"tag\":\"customer\"}" },
-    { role: "tool", text: "{\"tags\":[\"customer\"]}" }, { role: "tool", text: "tagged" },
+    { role: "tool", text: "tagged" },
   ]);
   const config = await call("ListConfig");
   expect(config.config).toEqual({ workspace: process.env.ROCKETCLAW_VIEW_TEST_WORKSPACE, overlays: ["local-overlay"], models: [{ name: "alpha", model: "gpt-5.4" }, { name: "zeta", model: "gpt-5.5" }], slackChannels: [{ channel: "#ops", agents: ["main"] }], mcpServers: ["alpha", "zeta"], loggingLevel: "info", autoApproverModel: "gpt-5.5", instrumentationEnabled: true, mcpExternal: true, tailscaleUser: "" });
@@ -124,23 +123,20 @@ test("transcript and entry HTTP proxy reach Go and reject an unmapped connection
       expect(await footer.innerText()).not.toContain("Destination:");
       expect(await page.getByRole("group", { name: "Show messages from" }).count()).toBe(0);
       const trace = page.getByRole("region", { name: /^Turn \d+$/ }).filter({ hasText: "tagged" }).locator(":scope > details");
-      // The tag call ran inside the execute script and is shown as its own tool row.
-      const tool = trace.locator("details").filter({ hasText: "customer" });
+      // The tag call ran inside the execute script; only the script's own row is shown.
+      const tool = trace.locator("details").filter({ hasText: "tagged" });
       const toolBody = tool.locator("pre").first();
       // The default Compact level folds each turn's activity into one closed summary row.
       expect(await page.locator('[aria-label^="Turn "] > details[open]').count()).toBe(0);
-      expect(await trace.locator(":scope > summary").innerText()).toContain("Used 2 tools");
+      expect(await trace.locator(":scope > summary").innerText()).toContain("Used 1 tool");
       expect(await toolBody.isVisible()).toBe(false);
       expect(await report.isVisible()).toBe(true);
       expect(await report.count()).toBe(1);
       await trace.locator(":scope > summary").press("Enter");
       expect(await trace.getAttribute("open")).not.toBeNull();
-      expect(await tool.locator("summary").innerText()).toContain("rocketclaw_set_tag");
-      expect(await toolBody.isVisible()).toBe(false);
+      expect(await trace.innerText()).not.toContain("rocketclaw_set_tag");
       await tool.locator("summary").press("Enter");
       expect(await toolBody.isVisible()).toBe(true);
-      expect(await tool.locator("pre").filter({ hasText: "tags" }).isVisible()).toBe(true);
-      expect(await tool.locator("pre").allTextContents()).toEqual(['Arguments\n{"tag":"customer"}\n\nResult\n{"tags":["customer"]}']);
       await tool.getByRole("button", { name: "Collapse tool" }).click();
       expect(await toolBody.isVisible()).toBe(false);
       await page.screenshot({ path: path.join(screenshots, filename) });
