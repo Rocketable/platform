@@ -72,15 +72,17 @@ check-coverage:
 			-e POSTGRES_USER=postgres \
 			-e POSTGRES_PASSWORD=postgres \
 			-e POSTGRES_DB=rocketclaw_test \
-			-p 127.0.0.1:55432:5432 \
+			-p 127.0.0.1::5432 \
 			postgres:$$latest >/dev/null; \
+		port=$$(docker port "$$name" 5432/tcp); \
+		port=$${port##*:}; \
 		i=0; \
 		while [ "$$i" -lt 30 ]; do \
 			if docker exec "$$name" pg_isready -U postgres -d rocketclaw_test >/dev/null 2>&1; then break; fi; \
 			i=$$((i + 1)); \
 			sleep 1; \
 		done; \
-		export ROCKETCLAW_TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:55432/rocketclaw_test?sslmode=disable"; \
+		export ROCKETCLAW_TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:$$port/rocketclaw_test?sslmode=disable"; \
 	fi; \
 	go test -race -count 1 -covermode=atomic -coverpkg=$(COVERPKG) -coverprofile=$(COVERPROFILE) github.com/Rocketable/platform/cmd/rocketclaw/... ./...; \
 	current=$$(go tool cover -func="$(COVERPROFILE)" | awk '/^total:/ { gsub("%", "", $$3); print $$3 }'); \

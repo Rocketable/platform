@@ -8,10 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -30,15 +28,7 @@ import (
 func startHTTPTestServer(t *testing.T, connection *grpc.ClientConn) *httptest.Server {
 	t.Helper()
 
-	server := httptest.NewUnstartedServer(NewHTTPHandler(connection, config.SentryConfig{}))
-	require.NoError(t, server.Listener.Close())
-
-	listener, err := net.Listen("tcp", ":0")
-	require.NoError(t, err)
-
-	server.Listener = listener
-	server.Start()
-	server.URL = "http://127.0.0.1:" + strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+	server := httptest.NewServer(NewHTTPHandler(connection, config.SentryConfig{}))
 	t.Cleanup(server.Close)
 
 	return server

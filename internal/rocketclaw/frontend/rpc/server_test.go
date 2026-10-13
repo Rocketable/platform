@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -142,11 +143,19 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 		{"unmapped", map[netip.Addr]string{forwarded: "forwarded"}, http.StatusUnauthorized},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+			require.NoError(t, err)
+
+			cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: tt.users}
+			sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
 			listener, err := Listen(testSocketPath(t))
 			require.NoError(t, err)
 
 			transport := grpc.NewServer()
-			New(&mockBackend{}, nil, config.NewLockedConfig(&config.Config{WebUsers: tt.users}), &mockChannels{}, &mockCronJobs{}).Register(transport)
+			New(&mockBackend{}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
 
 			var serving errgroup.Group
 			serving.Go(func() error { return transport.Serve(listener) })
@@ -156,18 +165,36 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-			request := httptest.NewRequest(http.MethodPost, "/api/Identity", strings.NewReader(`{}`))
-			request.RemoteAddr = "127.0.0.1:1234"
-			request.Header.Set("X-Forwarded-For", forwarded.String())
-			request.Header.Set("Tailscale-User-Login", "alice@example.com")
-			request.Header.Set("Tailscale-User-Name", "Alice")
+			calls := map[string]string{"Identity": `{}`, "Protocol": `{}`}
+			if tt.code == http.StatusUnauthorized {
+				maps.Copy(calls, map[string]string{"SearchSessions": `{"query":"x"}`, "ListSessionEntries": `{"id":"chat"}`, "LoadSessionEntries": `{"id":"chat"}`, "DeleteSessionEntries": `{"id":"chat"}`, "UpdateSession": `{"id":"chat"}`, "ListConfig": `{}`, "ListSkills": `{}`})
+			}
 
-			response := httptest.NewRecorder()
-			NewHTTPHandler(connection, config.SentryConfig{}).ServeHTTP(response, request)
-			require.Equal(t, tt.code, response.Code, response.Body.String())
+			for method, body := range calls {
+				request := httptest.NewRequest(http.MethodPost, "/api/"+method, strings.NewReader(body))
 
-			if tt.code == http.StatusOK {
-				require.JSONEq(t, `{"username":"owner","principal":"owner"}`, response.Body.String())
+				request.RemoteAddr = "127.0.0.1:1234"
+				for _, header := range []string{"X-Forwarded-For", "X-Real-Ip", "Rocketclaw-Principal"} {
+					request.Header.Set(header, forwarded.String())
+				}
+
+				request.Header.Set("Tailscale-User-Login", "alice@example.com")
+				request.Header.Set("Tailscale-User-Name", "Alice")
+
+				response := httptest.NewRecorder()
+				NewHTTPHandler(connection, config.SentryConfig{}).ServeHTTP(response, request)
+
+				// Protocol negotiation answers any caller; every other method needs the mapping.
+				code := tt.code
+				if method == "Protocol" {
+					code = http.StatusOK
+				}
+
+				require.Equal(t, code, response.Code, "%s: %s", method, response.Body.String())
+
+				if method == "Identity" && code == http.StatusOK {
+					require.JSONEq(t, `{"username":"owner","principal":"owner"}`, response.Body.String())
+				}
 			}
 		})
 	}

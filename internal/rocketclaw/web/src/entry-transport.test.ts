@@ -6,19 +6,16 @@ import type { Session, TranscriptEvent } from "./types";
 const screenshots = path.resolve(import.meta.dir, "../../../../.tmp/web-screenshots");
 
 // Invoked by Go's TestSessionEntries with real isolated PostgreSQL storage.
-test("transcript and entry HTTP proxy reach Go and reject an unmapped connection", async () => {
+test("transcript and entry HTTP proxy reach Go", async () => {
   const url = process.env.ROCKETCLAW_ENTRY_TEST_URL!;
   const id = process.env.ROCKETCLAW_ENTRY_TEST_ID!;
-  const call = async (method: string, input: object = {}, denied = false) => {
-    const target = new URL(`/api/${method}`, url);
-    if (denied) target.hostname = "[::1]";
-    const response = await fetch(target, { method: "POST", body: JSON.stringify(input), headers: { "content-type": "application/json", "rocketclaw-principal": "192.0.2.1", "x-forwarded-for": "192.0.2.1", "x-real-ip": "192.0.2.1" } });
-    expect(response.status).toBe(denied && method !== "Protocol" ? 401 : 200);
+  const call = async (method: string, input: object = {}) => {
+    const response = await fetch(new URL(`/api/${method}`, url), { method: "POST", body: JSON.stringify(input), headers: { "content-type": "application/json", "rocketclaw-principal": "192.0.2.1", "x-forwarded-for": "192.0.2.1", "x-real-ip": "192.0.2.1" } });
+    expect(response.status).toBe(200);
     return response.json();
   };
   const hash = new Bun.CryptoHasher("sha256").update(await Bun.file(new URL("../proto/web.proto", import.meta.url)).arrayBuffer()).digest("hex");
   expect(await call("Protocol")).toEqual({ protoSha256: hash });
-  expect(await call("Protocol", {}, true)).toEqual({ protoSha256: hash });
   expect(await call("Identity")).toEqual({ username: "alice", principal: "alice" });
   const batches = await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`));
   expect(batches.flatMap((batch) => batch.sessions.map((session) => session.id))).toEqual(["empty-web", id]);
@@ -43,7 +40,6 @@ test("transcript and entry HTTP proxy reach Go and reject an unmapped connection
   expect(copied.messages.at(-1)).toMatchObject({ agent: "producer", reasoningEffort: "high", origin: "sandboxed" });
   expect(JSON.parse(copied.origin).pairs).toEqual([{ key: "Original-Key", value: "Value <&> Unicode Ω" }]);
   expect(await call("SearchSessions", { query: "unicode Ω" })).toMatchObject({ needle: "unicode ω", matches: [{ conversationId: id, field: "Origin", text: "external mcp external conversation: external agent: producer original-key=value <&> unicode ω" }] });
-  expect(await call("SearchSessions", { query: "unicode" }, true)).toMatchObject({ code: 16 });
   expect(history.messages.map(({ role, text }) => ({ role, text }))).toEqual([
     { role: "developer", text: "private instructions" }, { role: "user", text: "human one" },
     { role: "thinking", text: "**Planning the answer**" }, { role: "tool", text: "execute\n{\"code\":\"true\"}" },
@@ -63,7 +59,6 @@ test("transcript and entry HTTP proxy reach Go and reject an unmapped connection
   const loaded = await call("LoadSessionEntries", { id });
   expect(loaded.entries[0].id).toBe(listed.entries[0].id);
   expect(JSON.parse(loaded.entries[0].json).type).toBe("turn");
-  for (const method of ["ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "UpdateSession", "ListConfig", "ListSkills"]) expect(await call(method, method.startsWith("ListC") || method === "ListSkills" ? {} : { id }, true)).toMatchObject({ code: 16 });
 
   // Serve the compiled App while the actual Go handler supplies its data.
   const playwrightModule = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!;
