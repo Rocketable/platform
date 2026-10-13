@@ -157,3 +157,53 @@ test("Custom rows open Advanced and offer group and collapse only where they app
   // As in OpenCode, only Execute and Thinking offer Collapse.
   expect([...html.match(/aria-label="[^"]+ collapse"/g) ?? []]).toEqual(['aria-label="Thinking collapse"']);
 });
+
+test("visibility restores the previous placement and preserves collapse settings", async () => {
+  const build = await Bun.build({ entrypoints: ["timeline-test"], target: "browser", plugins: [{ name: "timeline-test", setup(builder) {
+    builder.onResolve({ filter: /^timeline-test$/ }, () => ({ path: "timeline-test", namespace: "timeline-test" }));
+    builder.onLoad({ filter: /.*/, namespace: "timeline-test" }, () => ({ loader: "tsx", contents: `
+      import { createRoot } from ${JSON.stringify(Bun.resolveSync("react-dom/client", import.meta.dir))};
+      import { TimelineDetailCard } from ${JSON.stringify(`${import.meta.dir}/timeline-detail-card.tsx`)};
+      createRoot(document.getElementById("root")).render(<TimelineDetailCard />);
+    ` }));
+  } }] });
+  expect(build.success).toBe(true);
+  const script = await build.outputs[0].text();
+  const style = Bun.file([...new Bun.Glob("styles-*.css").scanSync({ cwd: "../internal/web/dist/assets", absolute: true })][0]);
+  const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
+  const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM, headless: true });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    if (new URL(request.url).pathname === "/card.css") return new Response(style, { headers: { "Content-Type": "text/css" } });
+    return new URL(request.url).pathname === "/card.js"
+      ? new Response(script, { headers: { "Content-Type": "text/javascript" } })
+      : new Response('<!doctype html><link rel="stylesheet" href="/card.css"><div id="root"></div><script type="module" src="/card.js"></script>', { headers: { "Content-Type": "text/html" } });
+  } });
+  try {
+    for (const level of ["quiet", "everything"]) {
+      const page = await browser.newPage();
+      await page.addInitScript((rows: TimelineRows) => localStorage.setItem("timeline-detail", JSON.stringify({ version: 1, rows })), levelRows(level));
+      await page.goto(`http://127.0.0.1:${server.port}`);
+      await page.getByText("Advanced", { exact: true }).click();
+      const visibility = page.getByRole("button", { name: "Execute visibility", exact: true });
+      if (level === "everything") await visibility.click();
+      expect(await visibility.getAttribute("aria-pressed")).toBe("false");
+      expect(await page.getByRole("switch", { name: "Execute group", exact: true }).count()).toBe(0);
+      await visibility.click();
+      const group = page.getByRole("switch", { name: "Execute group", exact: true });
+      const collapse = page.getByRole("switch", { name: "Execute collapse", exact: true });
+      expect(await group.getAttribute("aria-checked")).toBe(level === "quiet" ? "true" : "false");
+      expect(await collapse.getAttribute("aria-checked")).toBe(level === "quiet" ? "true" : "false");
+      await group.click();
+      await collapse.click();
+      await visibility.click();
+      await visibility.click();
+      expect(await page.evaluate(() => JSON.parse(localStorage.getItem("timeline-detail")!).rows.execute)).toEqual({
+        placement: level === "quiet" ? "separate" : "grouped", details: level === "quiet" ? "expanded" : "collapsed",
+      });
+      await page.close();
+    }
+  } finally {
+    server.stop(true);
+    await browser.close();
+  }
+});
