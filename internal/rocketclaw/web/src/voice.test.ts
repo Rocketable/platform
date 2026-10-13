@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, expect, jest, spyOn, test } from "bun:test";
-import { holdWakeLock, startVoice, stopVoice, subscribeVoice, voiceView } from "./voice";
+import { holdWakeLock, rememberVoice, startVoice, stopVoice, subscribeVoice, voiceChoice, voiceView } from "./voice";
 
 // Minimal stand-ins for the browser media, WebRTC and page APIs a call touches.
 class FakeChannel {
@@ -363,4 +363,22 @@ test("the wake lock is held until released and requested again when visible; a c
   stopVoice();
   await call.done;
   expect(locks.length).toBe(2);
+});
+
+test("voice choices stay with their provider and fall back when no longer offered", () => {
+  const saved = new Map<string, string>();
+  globals.localStorage = { getItem: (key: string) => saved.get(key) ?? null, setItem: (key: string, value: string) => { saved.set(key, value); } };
+  try {
+    const openai = { name: "main", voices: ["cove", "juniper"] }, keyed = { name: "helper", model: "keyed/gpt", voices: ["marin", "cedar"] };
+    expect(voiceChoice()).toBe("");
+    expect(voiceChoice({ name: "empty" })).toBe("");
+    for (const agent of [openai, keyed]) expect(voiceChoice(agent)).toBe(agent.voices[0]);
+    rememberVoice(openai, "juniper");
+    rememberVoice(keyed, "cedar");
+    expect([...saved]).toEqual([["voice:choice:openai", "juniper"], ["voice:choice:keyed", "cedar"]]);
+    for (const model of [undefined, "gpt", "openai/gpt"]) expect(voiceChoice({ ...openai, name: "other", model })).toBe("juniper");
+    expect(voiceChoice(keyed)).toBe("cedar");
+    expect(voiceChoice({ ...openai, voices: ["cove"] })).toBe("cove");
+    expect(voiceChoice({ ...keyed, voices: [] })).toBe("");
+  } finally { delete globals.localStorage; }
 });
