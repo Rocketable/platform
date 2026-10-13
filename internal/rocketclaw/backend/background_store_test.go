@@ -276,20 +276,20 @@ func TestBackgroundNoteClaimSucceedsOnce(t *testing.T) {
 
 	defer func() { _ = second.Rollback() }()
 
-	claimed, err := claimBackgroundNotes(ctx, first, "main", "", "turn-2", false)
+	claimed, err := claimBackgroundNotes(ctx, first, "main", "turn-2", false)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1)
 	require.Equal(t, "turn-2", claimed[0].claimedTurnID)
-	claimed, err = claimBackgroundNotes(ctx, second, "main", "", "turn-3", false)
+	claimed, err = claimBackgroundNotes(ctx, second, "main", "turn-3", false)
 	require.NoError(t, err)
 	require.Empty(t, claimed)
 	require.NoError(t, first.Commit())
 	require.NoError(t, second.Rollback())
 
-	claimed, err = claimBackgroundNotes(ctx, store.db, "main", "", "turn-3", true)
+	claimed, err = claimBackgroundNotes(ctx, store.db, "main", "turn-3", true)
 	require.NoError(t, err)
 	require.Empty(t, claimed, "a turn gets back only the notes it holds")
-	claimed, err = claimBackgroundNotes(ctx, store.db, "main", "", "turn-2", true)
+	claimed, err = claimBackgroundNotes(ctx, store.db, "main", "turn-2", true)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1, "a resumed turn gets back the notes it holds")
 }
@@ -310,7 +310,7 @@ func TestFinishTurnConsumesOrReleasesNoteClaims(t *testing.T) {
 			createTestBackgroundJob(t, store, job)
 			finishTestBackgroundJob(t, store, job, backgroundCompleted, true)
 			seedActiveTurn(t, store, "main", "turn-2", nil)
-			claimed, err := claimBackgroundNotes(ctx, store.db, "main", "", "turn-2", false)
+			claimed, err := claimBackgroundNotes(ctx, store.db, "main", "turn-2", false)
 			require.NoError(t, err)
 			require.Len(t, claimed, 1)
 
@@ -365,7 +365,7 @@ func TestHiddenRunTurnRetriesItsNotes(t *testing.T) {
 		for i, delay := range []time.Duration{time.Minute, 5 * time.Minute, 30 * time.Minute, 30 * time.Minute} {
 			turnID := "turn-" + strconv.Itoa(i+2)
 			seedActiveTurn(t, store, "main", turnID, nil)
-			claimed, err := claimBackgroundNotes(ctx, store.db, "main", "", turnID, false)
+			claimed, err := claimBackgroundNotes(ctx, store.db, "main", turnID, false)
 			require.NoError(t, err)
 			require.Len(t, claimed, 1)
 
@@ -389,12 +389,12 @@ func TestHiddenRunTurnRetriesItsNotes(t *testing.T) {
 		fresh := testBackgroundJob("main", "turn-6/call/b")
 		createTestBackgroundJob(t, store, fresh)
 		finishTestBackgroundJob(t, store, fresh, backgroundCompleted, true)
-		next, _, err := store.backgroundWake(ctx, "main", "")
+		next, _, err := store.backgroundWake(ctx, "main")
 		require.NoError(t, err)
 		require.Equal(t, fresh.jobID, next.jobID, "a new note wakes the run before a waiting retry")
 
 		seedActiveTurn(t, store, "main", "running", nil)
-		claimed, err := claimBackgroundNotes(ctx, store.db, "main", "", "running", true)
+		claimed, err := claimBackgroundNotes(ctx, store.db, "main", "running", true)
 		require.NoError(t, err)
 		require.Len(t, claimed, 2, "a running turn takes the notes before their delay")
 
@@ -405,38 +405,6 @@ func TestHiddenRunTurnRetriesItsNotes(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []string{"consumed", "consumed"}, notes)
 	})
-}
-
-// Unless its job completes, a subagent's drained notes go back to its next turn (OpenCode packages/core/src/session/input.ts).
-func TestBackgroundJobFinishConsumesOrReleasesNoteClaims(t *testing.T) {
-	t.Parallel()
-
-	for _, status := range []backgroundJobStatus{backgroundCompleted, backgroundFailed, backgroundStopped} {
-		t.Run(string(status), func(t *testing.T) {
-			store := newTestSessionService(t)
-			note := testBackgroundJob("main", "turn-1/call/a/x")
-			note.childKey = "/a"
-			createTestBackgroundJob(t, store, note)
-			finishTestBackgroundJob(t, store, note, backgroundCompleted, false)
-
-			task := testBackgroundJob("main", "turn-1/call/a")
-			task.kind, task.subagentKey = backgroundTask, "/a"
-			createTestBackgroundJob(t, store, task)
-			claimed, err := claimBackgroundNotes(t.Context(), store.db, "main", "/a", task.jobID, false)
-			require.NoError(t, err)
-			require.Len(t, claimed, 1)
-			finishTestBackgroundJob(t, store, task, status, true)
-
-			want := "pending false "
-			if status == backgroundCompleted {
-				want = "consumed false turn-1/call/a"
-			}
-
-			notes, err := queryStrings(t.Context(), store.db, `SELECT note_state || ' ' || wake::text || ' ' || claimed_turn_id FROM background_jobs WHERE job_id = $1`, "background note", note.jobID)
-			require.NoError(t, err)
-			require.Equal(t, []string{want}, notes)
-		})
-	}
 }
 
 func TestReleaseStaleBackgroundClaims(t *testing.T) {
@@ -450,7 +418,7 @@ func TestReleaseStaleBackgroundClaims(t *testing.T) {
 		job := testBackgroundJob("main", jobID)
 		createTestBackgroundJob(t, store, job)
 		finishTestBackgroundJob(t, store, job, backgroundCompleted, true)
-		_, err := claimBackgroundNotes(ctx, store.db, "main", "", turnID, false)
+		_, err := claimBackgroundNotes(ctx, store.db, "main", turnID, false)
 		require.NoError(t, err)
 	}
 
@@ -479,32 +447,7 @@ func TestTurnCleanupKeepsBackgroundJournal(t *testing.T) {
 
 	require.NoError(t, store.SaveTurnStep(ctx, "main", "turn-1/reply", json.RawMessage(`{}`)))
 	require.NoError(t, store.closeTurn(ctx, "turn-1"))
-	require.Equal(t, []string{"turn-1/call/a/task"}, testTurnStepKeys(t, store, "main"))
-}
-
-func TestBackgroundSubagentRunsOnce(t *testing.T) {
-	t.Parallel()
-
-	store := newTestSessionService(t)
-	ctx := t.Context()
-	subagent := func(jobID, subagentKey string, kind backgroundJobKind) *backgroundJob {
-		job := testBackgroundJob("main", jobID)
-		job.kind, job.subagentKey = kind, subagentKey
-
-		return job
-	}
-
-	first := subagent("turn-1/call/a", "/a", backgroundTask)
-	createTestBackgroundJob(t, store, first)
-	createTestBackgroundJob(t, store, subagent("turn-1/call/b", "/b", backgroundTask))
-	createTestBackgroundJob(t, store, testBackgroundJob("main", "turn-1/call/c"))
-	createTestBackgroundJob(t, store, testBackgroundJob("main", "turn-1/call/d"))
-
-	_, _, err := createBackgroundJob(ctx, store.db, subagent("turn-2/wake", "/a", backgroundSubagentWake))
-	require.Error(t, err)
-
-	finishTestBackgroundJob(t, store, first, backgroundCompleted, true)
-	createTestBackgroundJob(t, store, subagent("turn-2/wake", "/a", backgroundSubagentWake))
+	require.Equal(t, []string{"turn-1/call/a/task"}, testTurnStepKeys(t, store, "main"), "running jobs keep their journals")
 }
 
 func TestBackgroundJobsListOwnAndDestinationJobs(t *testing.T) {
@@ -742,7 +685,7 @@ func TestBackgroundJobChangeNotices(t *testing.T) {
 	finishTestBackgroundJob(t, store, hidden, backgroundCompleted, true)
 	require.ElementsMatch(t, []string{"cron:daily", "visible"}, notices(), "status and note")
 
-	_, err = claimBackgroundNotes(ctx, store.db, "cron:daily", "", "turn-2", false)
+	_, err = claimBackgroundNotes(ctx, store.db, "cron:daily", "turn-2", false)
 	require.NoError(t, err)
 	require.Empty(t, notices(), "claims carry no transcript change")
 

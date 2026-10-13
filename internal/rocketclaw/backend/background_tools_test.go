@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,23 +14,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The tool stops its conversation's jobs, its subagents', and those of hidden runs reporting there; no others.
+// The tool stops its conversation's jobs and those of hidden runs reporting there; no others.
 func TestStopBackgroundJobTool(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
 	started, release := make(chan struct{}, 4), make(chan struct{})
-	// The wake of subagent /a holds its note until the test ends, so the note stays listed.
-	registry := newBackgroundRegistry(store, &backgroundNotesMock{noteReadyFunc: func(string) {}, continueSubagentFunc: func(context.Context, *backgroundJob, string) (string, error) {
-		<-release
-		return "", nil
-	}}, testLogger())
+	registry := newBackgroundRegistry(store, &backgroundNotesMock{noteReadyFunc: func(string) {}}, testLogger())
 
 	defer close(release)
 
-	for i, job := range []struct{ conversationID, childKey, destination string }{{"main", "", ""}, {"main", "/a", ""}, {"cron:daily", "", "main"}, {"other", "", ""}} {
+	for i, job := range []struct{ conversationID, destination string }{{"main", ""}, {"main", ""}, {"cron:daily", "main"}, {"other", ""}} {
 		turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: job.conversationID, origin: &protocol.InboundMessage{SyncDestination: job.destination}}
-		_, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: fmt.Sprintf("turn-1/call/%d", i), Kind: rocketcode.BackgroundKindExecute, ChildKey: job.childKey, Detached: true}, blockedWork(started, release))
+		_, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: fmt.Sprintf("turn-1/call/%d", i), Kind: rocketcode.BackgroundKindExecute, Detached: true}, blockedWork(started, release))
 		require.NoError(t, err)
 		<-started
 	}
@@ -64,7 +59,7 @@ func TestStopBackgroundJobTool(t *testing.T) {
 func TestStopBackgroundJobToolNeedsAllowBackground(t *testing.T) {
 	t.Parallel()
 
-	for permission, visible := range map[string]bool{"{}": false, "{rocketclaw: allow}": false, "{rocketclaw: {'*': allow}}": false, "{rocketclaw: {allow_background: deny}}": false, "{rocketclaw: {allow_background: allow}}": true} {
+	for permission, visible := range map[string]bool{"{}": false, "{rocketclaw: {allow_background: deny}}": false, "{rocketclaw: {allow_background: allow}}": true} {
 		t.Run(permission, func(t *testing.T) {
 			workspace := t.TempDir()
 			writeMainAgentSkills(t, workspace, "---\ndescription: Main\nmodel: gpt-6.1-sol\nmode: primary\npermission: "+permission+"\n---\nPrompt\n")

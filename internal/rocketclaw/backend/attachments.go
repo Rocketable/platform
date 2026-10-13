@@ -96,11 +96,13 @@ func (s *SessionService) AttachmentMetadata(ctx context.Context, conversationID,
 	return attachment, nil
 }
 
-// TurnAttachments returns, in the order they were attached, the files turnID's final reply sends.
+// TurnAttachments returns, in the order they were attached, the files turnID's final reply sends,
+// naming the owner of those its subagent sessions attached.
 func (s *SessionService) TurnAttachments(ctx context.Context, conversationID, turnID string) ([]protocol.OutboundAttachment, error) {
-	return queryRows(ctx, s.db, `SELECT id, name, mime_type, size, original_unverified FROM attachments WHERE conversation_id = $1 AND turn_id = $2 ORDER BY seq`, "turn attachments", func(row rowScanner) (protocol.OutboundAttachment, error) {
+	return queryRows(ctx, s.db, `SELECT id, COALESCE(NULLIF(conversation_id, $1), ''), name, mime_type, size, original_unverified FROM attachments
+WHERE (conversation_id = $1 OR starts_with(conversation_id, $1 || '/')) AND turn_id = $2 ORDER BY seq`, "turn attachments", func(row rowScanner) (protocol.OutboundAttachment, error) {
 		var attachment protocol.OutboundAttachment
-		if err := row.Scan(&attachment.ID, &attachment.Name, &attachment.MIMEType, &attachment.Size, &attachment.OriginalUnverified); err != nil {
+		if err := row.Scan(&attachment.ID, &attachment.ConversationID, &attachment.Name, &attachment.MIMEType, &attachment.Size, &attachment.OriginalUnverified); err != nil {
 			return protocol.OutboundAttachment{}, fmt.Errorf("scan turn attachment: %w", err)
 		}
 

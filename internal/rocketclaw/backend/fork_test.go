@@ -115,7 +115,7 @@ func TestForkConversation(t *testing.T) {
 
 			// A fork's subagents continue from the copied histories.
 			for _, delegation := range []string{"/call-1", "/call-1/call-2"} {
-				copied, err := childSessions{store: sessions, conversationID: tt.name}.ChildEntries(t.Context(), delegation)
+				copied, err := sessions.ObserveEntries(t.Context(), tt.name+delegation)
 				require.NoError(t, err)
 				require.Len(t, copied, 1)
 			}

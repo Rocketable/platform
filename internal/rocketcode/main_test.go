@@ -97,88 +97,9 @@ func TestNewExpandsPrimaryPromptInRoot(t *testing.T) {
 	require.Contains(t, diagnostics.String(), "remember workspace memory\n\n<current-workspace>\nWorkspace root: "+dir+"\n</current-workspace>")
 }
 
-func TestTaskChildResumesFromItsJournal(t *testing.T) {
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	agents := LoadAgents(fstest.MapFS{
-		"main.md":   {Data: []byte("---\nmodel: gpt-5.4\n---\nPARENT PROMPT")},
-		"review.md": {Data: []byte("---\nmodel: gpt-5.4\n---\nCHILD PROMPT")},
-	}, passThroughAgentModel)
-	require.Empty(t, agents.Errors)
-
-	mock := mockResponses(responseWithMessage("resp-child", "child answer"))
-	loop, err := NewWithModelResolver(testResolverForResponsesAPI(mock), testConfig(dir), root, agents.Agents, Skills{Items: map[string]Skill{}}, "main", nil)
-	require.NoError(t, err)
-
-	journal := recordingJournal()
-	parent := &looper{Journal: journal, observations: &turnObservations{journal: journal, turnID: "turn-1"}}
-	ctx := withToolCallContext(t.Context(), parent, nil, "call-1")
-	factory := loop.PermissionReviewer.(*toolFactory)
-	metadata := toolCallMetadata{callID: "call-1", observations: parent.observations, progress: &PublicProgress{}}
-
-	first, err := factory.runTask(ctx, testTaskParams("Review", "check this", "review"), metadata, testTaskOutput())
-	require.NoError(t, err)
-	require.Len(t, newParams(mock), 1)
-
-	_, recorded, err := journal.Load(t.Context(), "turn-1/call/call-1/task")
-	require.NoError(t, err)
-	require.True(t, recorded, "the child journals under its parent call, apart from the parent's own keys")
-
-	for _, call := range journal.SaveTraceCalls() {
-		require.Equal(t, "turn-1", call.TurnID, "only root turns persist public traces")
-	}
-
-	again, err := factory.runTask(ctx, testTaskParams("Review", "check this", "review"), metadata, testTaskOutput())
-	require.NoError(t, err)
-	require.Equal(t, first, again)
-	require.Len(t, newParams(mock), 1, "a child whose final answer was recorded finishes without calling the model")
-}
-
-// The embedder wakes a subagent outside any parent turn, and its answer joins its history.
-func TestRuntimeContinueSubagent(t *testing.T) {
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	agents := LoadAgents(fstest.MapFS{
-		"main.md":       {Data: []byte("---\nmodel: gpt-5.4\npermission: {task: allow}\n---\nPARENT PROMPT")},
-		"researcher.md": {Data: []byte("---\nmodel: gpt-5.4\n---\nCHILD PROMPT")},
-	}, passThroughAgentModel)
-	require.Empty(t, agents.Errors)
-
-	saved := map[string][]SessionEntry{"/call-1/call-2": {{Version: 1, Type: "turn", TurnID: "turn-1/call/call-2/task", Agent: "researcher", ReplayInput: []json.RawMessage{
-		json.RawMessage(`{"type":"message","role":"user","content":"start the tests"}`),
-		json.RawMessage(`{"type":"message","role":"assistant","content":"tests started"}`),
-	}}}}
-	config := testConfig(dir)
-	config.ChildSessions = savedChildSessions(saved)
-	mock := mockResponses(responseWithMessage("wake", "analysis: all green"))
-	loop, err := NewWithModelResolver(testResolverForResponsesAPI(mock), config, root, agents.Agents, Skills{Items: map[string]Skill{}}, "main", nil)
-	require.NoError(t, err)
-
-	got, err := loop.ContinueSubagent(t.Context(), "/call-1/call-2/wake/1", "/call-1/call-2", "researcher", "tests finished")
-	require.NoError(t, err)
-	require.Equal(t, "analysis: all green", got)
-
-	request := newParams(mock)[0]
-	input, err := json.Marshal(request.Input)
-	require.NoError(t, err)
-	require.Contains(t, string(input), "tests started")
-	require.Contains(t, string(input), "tests finished")
-	require.Contains(t, request.Instructions.Value, "CHILD PROMPT")
-	require.Len(t, saved["/call-1/call-2"], 2)
-	require.Equal(t, "/call-1/call-2/wake/1/task", saved["/call-1/call-2"][1].TurnID)
-
-	_, err = loop.ContinueSubagent(t.Context(), "/call-9/wake/1", "/call-9", "researcher", "tests finished")
-	require.ErrorContains(t, err, fmt.Sprintf(continueWithoutTurn, "/call-9"))
-}
-
-// A guarded subagent resumes too, and its guardrail reviews the answer its parent receives.
-func TestRuntimeContinueSubagentResumesJournaledTurn(t *testing.T) {
+// After a restart the embedder answers a background task job once its subagent session's turn ends,
+// through the response guardrail of the type that turn ended as.
+func TestRuntimeAwaitTask(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
 	require.NoError(t, err)
@@ -191,103 +112,31 @@ func TestRuntimeContinueSubagentResumesJournaledTurn(t *testing.T) {
 	}, passThroughAgentModel)
 	require.Empty(t, agents.Errors)
 
-	journal := recordingJournal()
-	for jobID, agent := range map[string]string{"turn-1/call/call-1": "researcher", "turn-1/call/call-2": "guarded", "turn-1/call/call-4": "guarded"} {
-		require.NoError(t, saveStep(t.Context(), journal, jobID+taskTurnSuffix, &turnStep{Record: SessionEntry{Version: 1, Type: "turn", TurnID: jobID + taskTurnSuffix, Agent: agent, ReplayInput: []json.RawMessage{
-			json.RawMessage(`{"type":"message","role":"user","content":"research the flaky test"}`),
-		}}}))
-	}
+	sessions := &mockChildSessions{
+		AppendChildEntryFunc: func(context.Context, string, *SessionEntry) error { return nil },
+		AwaitSubagentFunc: func(_ context.Context, key, _ string) (string, ReplayAttribution, error) {
+			if key == "/call-1" {
+				return "found it", ReplayAttribution{Agent: "researcher"}, nil
+			}
 
-	saved := map[string][]SessionEntry{}
+			return "secret answer", ReplayAttribution{Agent: "guarded"}, nil
+		},
+	}
 	config := testConfig(dir)
-	config.ChildSessions, config.Journal = savedChildSessions(saved), journal
-	mock := mockResponses(
-		responseWithMessage("resumed", "found it"),
-		responseWithMessage("guarded", "guarded answer"),
-		responseWithMessage("approve", `{"approved":true,"reason":""}`),
-		responseWithMessage("guarded-again", "secret answer"),
-		responseWithMessage("reject", `{"approved":false,"reason":"do not share"}`),
-	)
+	config.ChildSessions = sessions
+	mock := mockResponses(responseWithMessage("reject", `{"approved":false,"reason":"do not share"}`))
 	loop, err := NewWithModelResolver(testResolverForResponsesAPI(mock), config, root, agents.Agents, Skills{Items: map[string]Skill{}}, "main", nil)
 	require.NoError(t, err)
 
-	got, err := loop.ContinueSubagent(t.Context(), "turn-1/call/call-1", "/call-1", "main", "")
+	got, err := loop.AwaitTask(t.Context(), "turn-1/call/call-1", "/call-1", "main", "research the flaky test")
 	require.NoError(t, err)
 	require.Equal(t, "<task_result>\nfound it\n</task_result>", got)
+	require.Equal(t, "turn-1/call/call-1", sessions.AwaitSubagentCalls()[0].CallKey)
 
-	request := newParams(mock)[0]
-	input, err := json.Marshal(request.Input)
-	require.NoError(t, err)
-	require.Contains(t, string(input), "research the flaky test")
-	require.NotContains(t, string(input), "call-1/task", "the journaled turn replaces the input")
-	require.Contains(t, request.Instructions.Value, "CHILD PROMPT")
-	require.Len(t, saved["/call-1"], 1)
-	require.Equal(t, "turn-1/call/call-1/task", saved["/call-1"][0].TurnID)
-
-	got, err = loop.ContinueSubagent(t.Context(), "turn-1/call/call-2", "/call-2", "main", "")
-	require.NoError(t, err)
-	require.Equal(t, "<task_result>\nguarded answer\n</task_result>", got)
-
-	review, err := json.Marshal(newParams(mock)[2].Input)
-	require.NoError(t, err)
-	require.Contains(t, string(review), `Current Action: response\nThe agent main wants to delegate to guarded:\nresearch the flaky test\n\nAnd the response from guarded to main:\nguarded answer`)
-	require.Len(t, saved["/call-2"], 2, "the guardrail saves its run under the subagent's key")
-
-	got, err = loop.ContinueSubagent(t.Context(), "turn-1/call/call-4", "/call-4", "main", "")
+	got, err = loop.AwaitTask(t.Context(), "turn-1/call/call-2", "/call-2", "main", "research the flaky test")
 	require.NoError(t, err)
 	require.Equal(t, "<task_result>\ndelegation response blocked: do not share\n</task_result>", got)
-
-	_, err = loop.ContinueSubagent(t.Context(), "turn-1/call/call-3", "/call-3", "main", "")
-	require.EqualError(t, err, fmt.Sprintf(resumeWithoutTurn, "/call-3"))
-	require.Len(t, newParams(mock), 5)
-}
-
-func TestNewTaskSubagentsUseRootInstructionsWithoutParentPrompt(t *testing.T) {
-	for _, tc := range []struct {
-		name, parent, child     string
-		parentLoads, childLoads bool
-	}{
-		{"default", "", "", true, true},
-		{"explicit true", "rocketclaw: {load_agents_md: true}", "rocketclaw: {load_agents_md: true}", true, true},
-		{"parent disabled", "rocketclaw: {load_agents_md: false}", "", false, true},
-		{"child disabled", "", "rocketclaw: {load_agents_md: false}", true, false},
-		{"both disabled", "rocketclaw: {load_agents_md: false}", "rocketclaw: {load_agents_md: false}", false, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			root, err := os.OpenRoot(dir)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-			require.NoError(t, root.WriteFile("AGENTS.md", []byte("project rules\n"), 0o644))
-
-			agents := LoadAgents(fstest.MapFS{
-				"main.md":   {Data: []byte("---\nmodel: gpt-5.4\npermission: {" + tc.parent + "}\n---\nPARENT PROMPT")},
-				"review.md": {Data: []byte("---\nmodel: gpt-5.4\npermission: {" + tc.child + "}\n---\nCHILD PROMPT")},
-			}, passThroughAgentModel)
-			require.Empty(t, agents.Errors)
-
-			mock := mockResponses(responseWithTaskMessages())
-			loop, err := NewWithModelResolver(testResolverForResponsesAPI(mock), testConfig(dir), root, agents.Agents, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", nil)
-			require.NoError(t, err)
-
-			factory := loop.PermissionReviewer.(*toolFactory)
-			got, err := factory.runTask(t.Context(), testTaskParams("Review", "check this", "review"), toolCallMetadata{observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
-			require.NoError(t, err)
-			require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
-
-			instructions := newParams(mock)[0].Instructions.Value
-			workspace := "<current-workspace>\nWorkspace root: " + dir + "\n</current-workspace>"
-
-			require.Contains(t, loop.SystemPrompt, "PARENT PROMPT")
-			require.Contains(t, loop.SystemPrompt, workspace)
-			require.Equal(t, tc.parentLoads, strings.Contains(loop.SystemPrompt, "Instructions from: AGENTS.md\nproject rules"))
-			require.Equal(t, tc.childLoads, strings.Contains(instructions, "Instructions from: AGENTS.md\nproject rules"))
-			require.Contains(t, instructions, workspace)
-			require.Contains(t, instructions, "CHILD PROMPT")
-			require.NotContains(t, instructions, "PARENT PROMPT")
-		})
-	}
+	require.Contains(t, marshalJSON(t, newParams(mock)[0].Input), `Current Action: response\nThe agent main wants to delegate to guarded:\nresearch the flaky test\n\nAnd the response from guarded to main:\nsecret answer`)
 }
 
 func TestNewRequiresShellTempDir(t *testing.T) {
@@ -450,10 +299,10 @@ func TestNewBindsBashToEachAgentCustomShell(t *testing.T) {
 			factory := loop.PermissionReviewer.(*toolFactory)
 			other := factory.agents.Items[tc.other]
 
-			child, _, _, err := factory.subagent(t.Context(), &other, "/call-1", false, false)
+			child, err := factory.newLooper(&other, factory.sessionSystemPrompt(t.Context(), &other))
 			require.NoError(t, err)
-			require.Equal(t, tc.otherWant, run(t, child.CodeModeHosts["bash"]), "a task subagent uses its own shell")
-			require.Equal(t, other.CustomShell, child.promptExpansion.customShell, "a task subagent expands prompts with its own shell")
+			require.Equal(t, tc.otherWant, run(t, child.CodeModeHosts["bash"]), "a session switched to another type uses its own shell")
+			require.Equal(t, other.CustomShell, child.promptExpansion.customShell, "a session switched to another type expands prompts with its own shell")
 
 			for _, bash := range []looperTool{loop.CodeModeHosts["bash"], child.CodeModeHosts["bash"]} {
 				require.Equal(t, strings.Contains(run(t, bash), "custom:"), strings.Contains(bash.Definition.Description.Value, shell), "the bash description names the program only when one is used")

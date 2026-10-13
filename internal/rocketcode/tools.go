@@ -181,7 +181,7 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 
 // newLooper builds the looper that runs agent, whose permissions and prompt are final, on its model
 // with f's tools and settings, and with systemPrompt ahead of the skills and Code Mode guidance.
-// It journals nothing, drains no notes, and answers in agent's output format.
+// It journals nothing, drains no input, and answers in agent's output format.
 func (f *toolFactory) newLooper(agent *Agent, systemPrompt string) (*looper, error) {
 	client, origin, err := resolveModel(f.resolver, agent.Model)
 	if err != nil {
@@ -218,7 +218,6 @@ func (f *toolFactory) newLooper(agent *Agent, systemPrompt string) (*looper, err
 		Observability:          f.observability,
 		Journal:                InertJournal{},
 		SteerDrain:             InertSteerDrain{},
-		notes:                  InertBackgroundJobs{},
 		promptExpansion:        f.promptExpansion,
 		spillRel:               f.spillRel,
 	}

@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"slices"
 	"strings"
 	"time"
 
@@ -203,7 +202,7 @@ RETURNING scheduled_message_id, conversation_id, agent, message, due_at_unix_ns,
 func (s *SessionService) Thread(conversationID string) (ThreadState, bool, error) {
 	var thread ThreadState
 
-	err := s.db.QueryRowContext(context.Background(), `SELECT agent, created_by FROM managed_conversations WHERE conversation_id = $1`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &thread.CreatedBy)
+	err := s.db.QueryRowContext(context.Background(), `SELECT agent, created_by, spawned_by, parent_conversation_id FROM managed_conversations WHERE conversation_id = $1`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &thread.CreatedBy, &thread.spawnedBy, &thread.parent)
 	if err == sql.ErrNoRows {
 		return ThreadState{}, false, nil
 	}
@@ -764,9 +763,9 @@ WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntry
 	case len(finish.entries) > 0:
 		_, errSettle = tx.ExecContext(ctx, `UPDATE background_jobs SET note_state = $3 WHERE conversation_id = $1 AND claimed_turn_id = $2 AND note_state = 'pending'`, finish.store.conversationID, turnID, noteConsumed)
 	case finish.hidden:
-		errSettle = tx.QueryRowContext(ctx, `WITH released AS (UPDATE background_jobs SET claimed_turn_id = '', wake = (child_key = ''), wake_attempts = wake_attempts + 1,
-wake_after_unix_ns = $4 + ($5::bigint[])[LEAST(wake_attempts + 1, 3)] WHERE conversation_id = $1 AND claimed_turn_id = $2 AND note_state = $3 RETURNING wake_attempts, child_key)
-SELECT COALESCE(MIN(wake_attempts) FILTER (WHERE child_key = ''), 0) FROM released`, finish.store.conversationID, turnID, notePending, timeUnixNano(time.Now()), []int64{int64(time.Minute), int64(5 * time.Minute), int64(30 * time.Minute)}).Scan(&finish.retry)
+		errSettle = tx.QueryRowContext(ctx, `WITH released AS (UPDATE background_jobs SET claimed_turn_id = '', wake = TRUE, wake_attempts = wake_attempts + 1,
+wake_after_unix_ns = $4 + ($5::bigint[])[LEAST(wake_attempts + 1, 3)] WHERE conversation_id = $1 AND claimed_turn_id = $2 AND note_state = $3 RETURNING wake_attempts)
+SELECT COALESCE(MIN(wake_attempts), 0) FROM released`, finish.store.conversationID, turnID, notePending, timeUnixNano(time.Now()), []int64{int64(time.Minute), int64(5 * time.Minute), int64(30 * time.Minute)}).Scan(&finish.retry)
 	default:
 		_, errSettle = tx.ExecContext(ctx, `UPDATE background_jobs SET claimed_turn_id = '', wake = FALSE WHERE conversation_id = $1 AND claimed_turn_id = $2 AND note_state = $3`, finish.store.conversationID, turnID, notePending)
 	}
@@ -775,7 +774,7 @@ SELECT COALESCE(MIN(wake_attempts) FILTER (WHERE child_key = ''), 0) FROM releas
 		return nil, fmt.Errorf("settle background note claims: %w", errSettle)
 	}
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM turn_steps s WHERE conversation_id = $1 AND (starts_with(key, $2 || '/') OR key = $2 AND $3 = '') AND `+keepRunningJobSteps, finish.store.conversationID, turnID, finish.terminal); err != nil {
+	if _, err := tx.ExecContext(ctx, deleteUnownedStepsSQL+`t.conversation_id = $1 AND (starts_with(t.key, $2 || '/') OR t.key = $2 AND $3 = '')`, finish.store.conversationID, turnID, finish.terminal); err != nil {
 		return nil, fmt.Errorf("clear turn steps: %w", err)
 	}
 
@@ -786,6 +785,8 @@ SELECT COALESCE(MIN(wake_attempts) FILTER (WHERE child_key = ''), 0) FROM releas
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit turn finish: %w", err)
 	}
+
+	s.jobs.turnFinished()
 
 	return finish.outbound, nil
 }
@@ -830,35 +831,42 @@ WHERE s.conversation_id = $1 AND s.key = $2 AND COALESCE(s.value->'record'->>'re
 	return nil
 }
 
-// keepRunningJobSteps keeps, in a delete of turn_steps s under the key prefix $2, the steps
-// of the running Background Jobs nested under that prefix, which own them.
-const keepRunningJobSteps = `NOT EXISTS (SELECT 1 FROM background_jobs j WHERE j.conversation_id = s.conversation_id AND j.status = 'running'
-    AND starts_with(j.job_id, $2 || '/') AND starts_with(s.key, j.job_id || '/'))`
+// deleteUnownedStepsSQL deletes the turn_steps t starting with the key $2 that the caller's appended
+// condition on t selects, except the steps of the running and queued Background Jobs nested under the
+// key prefix $2, which own them.
+const deleteUnownedStepsSQL = `WITH unowned_steps AS (
+    SELECT s.conversation_id, s.key FROM turn_steps s LEFT JOIN background_jobs j ON j.conversation_id = s.conversation_id
+        AND j.status = 'running' AND starts_with(j.job_id, $2 || '/') AND starts_with(s.key, j.job_id || '/')
+    WHERE starts_with(s.key, $2) AND j.job_id IS NULL
+)
+DELETE FROM turn_steps t USING unowned_steps u WHERE (t.conversation_id, t.key) = (u.conversation_id, u.key) AND `
 
 // closeTurn ends a delivered row; stopped and failed rows stay as transcript history.
 // Steps recorded while delivering (a posted cron root) go with it.
 // Web owners without replay identity, and goal kickoffs with generated prompt
 // framing, stay done so retries and editable commands retain their original input.
 func (s *SessionService) closeTurn(ctx context.Context, turnID string) error {
-	_, err := execState(ctx, s.db, "close active turn", `WITH delivered AS (DELETE FROM active_turns a WHERE id = $2 AND terminal = '' AND
+	_, err := execState(ctx, s.db, "close active turn", `WITH replay AS (
+    SELECT 1 FROM active_turns a JOIN session_entries e USING (conversation_id)
+    CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item
+    WHERE a.id = $2 AND a.inbound_json->>'Source' = 'web' AND item->>'input_id' = a.inbound_json->'Metadata'->>'web_message_id' LIMIT 1
+), replays AS (SELECT count(*) AS n FROM replay),
+delivered AS (DELETE FROM active_turns USING replays WHERE id = $2 AND terminal = '' AND
     NOT (inbound_json->>'Source' = 'web' AND COALESCE(inbound_json->'Metadata'->>'web_message_id', '') <> '' AND
-        (inbound_json->>'GoalAction' = 'goal' OR NOT EXISTS (
-        SELECT 1 FROM session_entries e CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item
-        WHERE e.conversation_id = a.conversation_id AND item->>'input_id' = a.inbound_json->'Metadata'->>'web_message_id'))) RETURNING id),
-delivery_steps AS (DELETE FROM turn_steps s WHERE starts_with(key, $2 || '/') AND `+keepRunningJobSteps+`)
-UPDATE active_turns SET phase = $1 WHERE id = $2 AND id NOT IN (SELECT id FROM delivered)`, turnDone, turnID)
+        (inbound_json->>'GoalAction' = 'goal' OR n = 0)) RETURNING id),
+delivery_steps AS (`+deleteUnownedStepsSQL+`starts_with(t.key, $2 || '/')),
+kept AS (SELECT count(*) = 0 AS undelivered FROM delivered)
+UPDATE active_turns SET phase = $1 FROM kept WHERE id = $2 AND undelivered`, turnDone, turnID)
 
 	return err
 }
 
-// backgroundJobKind is the work a Background Job runs; task and subagent wake
-// rows run a subagent.
+// backgroundJobKind is the work a Background Job runs; a task waits for a subagent session's turn.
 type backgroundJobKind string
 
 const (
-	backgroundExecute      backgroundJobKind = "execute"
-	backgroundTask         backgroundJobKind = "task"
-	backgroundSubagentWake backgroundJobKind = "subagent_wake"
+	backgroundExecute backgroundJobKind = "execute"
+	backgroundTask    backgroundJobKind = "task"
 )
 
 // backgroundJobStatus is a Background Job's lifecycle state; only running is not terminal.
@@ -881,15 +889,15 @@ const (
 	noteConsumed noteState = "consumed"
 )
 
-// backgroundJob is one durable Background Job row, keyed by its root
-// conversation and its tool call key. The job owns the journal steps under
-// jobID + "/"; childKey names the owning subagent, empty for the main agent.
+// backgroundJob is one durable Background Job row, keyed by its owning
+// conversation and its tool call key. The job owns the journal steps under jobID + "/".
 type backgroundJob struct {
-	conversationID, jobID, childKey string
-	kind                            backgroundJobKind
-	status                          backgroundJobStatus
-	agent, label, callID            string
-	subagentKey                     string
+	conversationID, jobID string
+	kind                  backgroundJobKind
+	status                backgroundJobStatus
+	agent, label, callID  string
+	// subagentKey is a task's subagent session: conversationID + subagentKey.
+	subagentKey string
 	// origin is the originating turn's frozen routing; its SyncDestination
 	// also lists the job at that conversation.
 	origin    *protocol.InboundMessage
@@ -903,9 +911,11 @@ type backgroundJob struct {
 	finishedAt    time.Time
 	// result is the job's output, or its error when it failed.
 	result string
+	// input is a task's prompt, which its subagent's answer is reviewed with after a restart.
+	input string
 }
 
-const backgroundJobColumns = `conversation_id, job_id, child_key, kind, status, agent, label, call_id, subagent_key, origin_json, runner_id, note_state, wake, wake_after_unix_ns, claimed_turn_id, created_at_unix_ns, finished_at_unix_ns, result`
+const backgroundJobColumns = `conversation_id, job_id, kind, status, agent, label, call_id, subagent_key, origin_json, runner_id, note_state, wake, wake_after_unix_ns, claimed_turn_id, created_at_unix_ns, finished_at_unix_ns, result, input`
 
 func scanBackgroundJob(scanner rowScanner) (backgroundJob, error) {
 	var (
@@ -914,7 +924,7 @@ func scanBackgroundJob(scanner rowScanner) (backgroundJob, error) {
 		wakeAfter, createdAt, finishedAt int64
 	)
 
-	if err := scanner.Scan(&job.conversationID, &job.jobID, &job.childKey, &job.kind, &job.status, &job.agent, &job.label, &job.callID, &job.subagentKey, &origin, &job.runnerID, &job.noteState, &job.wake, &wakeAfter, &job.claimedTurnID, &createdAt, &finishedAt, &job.result); err != nil {
+	if err := scanner.Scan(&job.conversationID, &job.jobID, &job.kind, &job.status, &job.agent, &job.label, &job.callID, &job.subagentKey, &origin, &job.runnerID, &job.noteState, &job.wake, &wakeAfter, &job.claimedTurnID, &createdAt, &finishedAt, &job.result, &job.input); err != nil {
 		return backgroundJob{}, fmt.Errorf("scan background job: %w", err)
 	}
 
@@ -932,8 +942,8 @@ func scanBackgroundJob(scanner rowScanner) (backgroundJob, error) {
 func createBackgroundJob(ctx context.Context, db stateStoreDB, job *backgroundJob) (stored backgroundJob, created bool, err error) {
 	origin, _ := json.Marshal(job.origin)
 
-	inserted, err := execRows(ctx, db, "create background job", "count created background job", `INSERT INTO background_jobs (conversation_id, job_id, child_key, kind, status, agent, label, call_id, subagent_key, origin_json, sync_destination, runner_id, note_state, wake, claimed_turn_id, created_at_unix_ns, finished_at_unix_ns, result)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, FALSE, '', $14, 0, '') ON CONFLICT (conversation_id, job_id) DO NOTHING`, job.conversationID, job.jobID, job.childKey, job.kind, backgroundRunning, job.agent, job.label, job.callID, job.subagentKey, string(removeSessionEntryNUL(origin)), job.origin.SyncDestination, job.runnerID, noteNone, timeUnixNano(time.Now()))
+	inserted, err := execRows(ctx, db, "create background job", "count created background job", `INSERT INTO background_jobs (conversation_id, job_id, kind, status, agent, label, call_id, subagent_key, origin_json, sync_destination, runner_id, note_state, wake, claimed_turn_id, created_at_unix_ns, finished_at_unix_ns, result, input)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, FALSE, '', $13, 0, '', $14) ON CONFLICT (conversation_id, job_id) DO NOTHING`, job.conversationID, job.jobID, job.kind, backgroundRunning, job.agent, job.label, job.callID, job.subagentKey, string(removeSessionEntryNUL(origin)), job.origin.SyncDestination, job.runnerID, noteNone, timeUnixNano(time.Now()), strings.ReplaceAll(job.input, "\x00", ""))
 	if err != nil {
 		return backgroundJob{}, false, err
 	}
@@ -943,14 +953,10 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, FALSE, '', $14, 
 	return stored, inserted > 0, err
 }
 
-// finishBackgroundJob ends a running job held by job.runnerID and, in the same transaction,
-// settles the notes its subagent claimed and deletes its journal steps except those of the
-// running jobs it started. It reports false when another transition or runner won.
+// finishBackgroundJob ends a running job held by job.runnerID and, in the same transaction, deletes its
+// journal steps except those of the running jobs it started. It reports false when another transition
+// or runner won.
 func (s *SessionService) finishBackgroundJob(ctx context.Context, job *backgroundJob) (bool, error) {
-	if job.kind == backgroundSubagentWake { // A subagent wake leaves no note of its own.
-		job.noteState, job.wake = noteNone, false
-	}
-
 	tx, err := s.beginStateTx(ctx, "background job finish")
 	if err != nil {
 		return false, err
@@ -963,18 +969,7 @@ WHERE conversation_id = $1 AND job_id = $2 AND runner_id = $3 AND status = $9`, 
 		return false, err
 	}
 
-	// A subagent saves its turn only when its job completes; otherwise the notes it claimed go back to
-	// its next turn, like a failed turn's.
-	claims, settled := `UPDATE background_jobs SET note_state = $3 WHERE conversation_id = $1 AND claimed_turn_id = $2 AND note_state = 'pending'`, noteConsumed
-	if job.status != backgroundCompleted {
-		claims, settled = `UPDATE background_jobs SET claimed_turn_id = '', wake = FALSE WHERE conversation_id = $1 AND claimed_turn_id = $2 AND note_state = $3`, notePending
-	}
-
-	if _, err := tx.ExecContext(ctx, claims, job.conversationID, job.jobID, settled); err != nil {
-		return false, fmt.Errorf("settle background job note claims: %w", err)
-	}
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM turn_steps s WHERE conversation_id = $1 AND starts_with(key, $2 || '/') AND `+keepRunningJobSteps, job.conversationID, job.jobID); err != nil {
+	if _, err := tx.ExecContext(ctx, deleteUnownedStepsSQL+`t.conversation_id = $1 AND starts_with(t.key, $2 || '/')`, job.conversationID, job.jobID); err != nil {
 		return false, fmt.Errorf("clear background job steps: %w", err)
 	}
 
@@ -991,14 +986,14 @@ func (s *SessionService) restampBackgroundJob(ctx context.Context, job *backgrou
 	return moved > 0, err
 }
 
-// claimBackgroundNotes claims the owner's unclaimed pending notes for turnID,
+// claimBackgroundNotes claims the conversation's unclaimed pending notes for turnID,
 // skipping notes another transaction is claiming, in finish order. With held it
 // also returns the pending notes turnID already holds, for a resumed turn.
-func claimBackgroundNotes(ctx context.Context, db stateStoreDB, conversationID, childKey, turnID string, held bool) ([]backgroundJob, error) {
-	return queryRows(ctx, db, `WITH claimed AS (UPDATE background_jobs SET claimed_turn_id = $3 WHERE (conversation_id, job_id) IN (
-    SELECT conversation_id, job_id FROM background_jobs WHERE conversation_id = $1 AND child_key = $2 AND note_state = $4 AND claimed_turn_id = '' FOR UPDATE SKIP LOCKED
-) RETURNING `+backgroundJobColumns+`)
-SELECT * FROM (SELECT * FROM claimed UNION ALL SELECT `+backgroundJobColumns+` FROM background_jobs WHERE $5 AND conversation_id = $1 AND child_key = $2 AND note_state = $4 AND claimed_turn_id = $3) notes ORDER BY finished_at_unix_ns, job_id`, "background note claims", scanBackgroundJob, conversationID, childKey, turnID, notePending, held)
+func claimBackgroundNotes(ctx context.Context, db stateStoreDB, conversationID, turnID string, held bool) ([]backgroundJob, error) {
+	return queryRows(ctx, db, `WITH unclaimed AS (
+    SELECT job_id AS unclaimed_id FROM background_jobs WHERE conversation_id = $1 AND note_state = $3 AND claimed_turn_id = '' FOR UPDATE SKIP LOCKED
+), claimed AS (UPDATE background_jobs SET claimed_turn_id = $2 FROM unclaimed WHERE conversation_id = $1 AND job_id = unclaimed_id RETURNING `+backgroundJobColumns+`)
+SELECT * FROM claimed UNION ALL SELECT `+backgroundJobColumns+` FROM background_jobs WHERE $4 AND conversation_id = $1 AND note_state = $3 AND claimed_turn_id = $2 ORDER BY finished_at_unix_ns, job_id`, "background note claims", scanBackgroundJob, conversationID, turnID, notePending, held)
 }
 
 // redirectBackgroundJobs makes a hidden run's jobs without a destination report to destinationID.
@@ -1007,10 +1002,11 @@ func (d stateDAO) redirectBackgroundJobs(ctx context.Context, conversationID, de
 	return err
 }
 
-// backgroundWake returns the owner's unclaimed Completion Note that may wake it first, if any:
+// backgroundWake returns the conversation's unclaimed Completion Note that may wake it first, if any:
 // the earliest finished of those that may wake it now, or else the one whose wakeAfter comes first.
-func (s *SessionService) backgroundWake(ctx context.Context, conversationID, childKey string) (backgroundJob, bool, error) {
-	job, err := scanBackgroundJob(s.db.QueryRowContext(ctx, `SELECT `+backgroundJobColumns+` FROM background_jobs WHERE conversation_id = $1 AND child_key = $2 AND note_state = $3 AND wake AND claimed_turn_id = '' ORDER BY GREATEST(wake_after_unix_ns, $4), finished_at_unix_ns, job_id LIMIT 1`, conversationID, childKey, notePending, timeUnixNano(time.Now())))
+func (s *SessionService) backgroundWake(ctx context.Context, conversationID string) (backgroundJob, bool, error) {
+	job, err := scanBackgroundJob(s.db.QueryRowContext(ctx, `SELECT `+backgroundJobColumns+` FROM background_jobs WHERE conversation_id = $1 AND note_state = $2 AND wake AND claimed_turn_id = ''
+ORDER BY GREATEST(wake_after_unix_ns, $3), finished_at_unix_ns, job_id LIMIT 1`, conversationID, notePending, timeUnixNano(time.Now())))
 	if errors.Is(err, sql.ErrNoRows) {
 		return backgroundJob{}, false, nil
 	}
@@ -1021,33 +1017,6 @@ func (s *SessionService) backgroundWake(ctx context.Context, conversationID, chi
 // notedBackgroundJobs returns the conversation's jobs listed in jobIDs, in finish order.
 func (s *SessionService) notedBackgroundJobs(ctx context.Context, conversationID string, jobIDs []string) ([]backgroundJob, error) {
 	return queryRows(ctx, s.db, `SELECT `+backgroundJobColumns+` FROM background_jobs WHERE conversation_id = $1 AND job_id = ANY($2) ORDER BY finished_at_unix_ns, job_id`, "noted background jobs", scanBackgroundJob, conversationID, jobIDs)
-}
-
-// startSubagentWake claims the pending notes of the subagent a wake job runs
-// and records the job, running as that subagent's agent, in one transaction.
-// It returns no notes, and records nothing, unless one of them may wake it.
-func (s *SessionService) startSubagentWake(ctx context.Context, job *backgroundJob) ([]backgroundJob, error) {
-	tx, err := s.beginStateTx(ctx, "subagent wake start")
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	notes, err := claimBackgroundNotes(ctx, tx, job.conversationID, job.subagentKey, job.jobID, false)
-	if err != nil || !slices.ContainsFunc(notes, func(note backgroundJob) bool { return note.wake }) {
-		return nil, err
-	}
-
-	job.agent, job.label, job.origin = notes[0].agent, notes[0].label, notes[0].origin
-	if _, _, err := createBackgroundJob(ctx, tx, job); err != nil {
-		return nil, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit subagent wake start: %w", err)
-	}
-
-	return notes, nil
 }
 
 // releaseStaleBackgroundClaims frees pending notes claimed by turns that are no longer running.

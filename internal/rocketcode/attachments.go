@@ -41,6 +41,9 @@ type PromptInput struct {
 	Header      string
 	Attachments []Attachment
 	DirectSkill *PromptInputDirectSkill
+	// Agent, on a steer drained into a running subagent turn, is the agent type that turn runs as from
+	// its next step on.
+	Agent string
 	// Responses receives user-visible response items for this prompt. The runtime
 	// closes it after the prompt's turn reaches a terminal state.
 	Responses chan<- ChatResponse `json:"-"`

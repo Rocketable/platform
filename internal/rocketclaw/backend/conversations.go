@@ -62,12 +62,7 @@ func (r *Runtime) SyncConversation(ctx context.Context, source, destination stri
 		bridges = append(bridges, managed)
 	}
 
-	r.Sessions.turnGatesMu.Lock()
-	gate := r.Sessions.turnGates[destination]
-	owned := gate != nil && gate.reservedFor == source
-	r.Sessions.turnGatesMu.Unlock()
-
-	if owned {
+	if r.Sessions.reservedFor(destination) == source {
 		return bridges[1].syncConversation(ctx, bridges[0])
 	}
 
@@ -233,11 +228,7 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 
 	conversationID := inbound.ConversationID
 	if inbound.Kind == protocol.InboundKindCancel {
-		r.Sessions.turnGatesMu.Lock()
-		if gate := r.Sessions.turnGates[conversationID]; gate != nil && gate.reservedFor != "" {
-			conversationID = gate.reservedFor
-		}
-		r.Sessions.turnGatesMu.Unlock()
+		conversationID = cmp.Or(r.Sessions.reservedFor(conversationID), conversationID)
 	}
 
 	bridge, err := r.threads.recordedBridge(ctx, conversationID)
@@ -268,6 +259,11 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 		message.Complete, message.SlackReply = true, inbound.SlackReply
 
 		return r.PublishOutbound(ctx, message)
+	}
+
+	// A message sent here runs after the input a stopped parent held here (awaitSubagent), released ahead of it.
+	if err := bridge.releaseHeld(ctx); err != nil {
+		return err
 	}
 
 	completion := &turnCompletion{done: make(chan struct{})}
@@ -322,6 +318,11 @@ func (r *Runtime) StartGoal(ctx context.Context, inbound *protocol.InboundMessag
 
 	bridge, err := r.threads.recordedBridge(ctx, inbound.ConversationID)
 	if err != nil {
+		return err
+	}
+
+	// The goal's work runs after the input a stopped parent held here, released ahead of it.
+	if err := bridge.releaseHeld(ctx); err != nil {
 		return err
 	}
 
@@ -525,9 +526,7 @@ func (r *Runtime) MoveToBackground(ctx context.Context, conversationID string) (
 	var listed strings.Builder
 
 	for _, run := range moved {
-		if run.row.childKey == "" { // A subagent's moved calls belong to its own turn.
-			fmt.Fprintf(&listed, "- %s: %s (job ID: %s)\n", run.row.kind, cmp.Or(run.row.label, run.row.jobID), run.row.jobID)
-		}
+		fmt.Fprintf(&listed, "- %s: %s (job ID: %s)\n", run.row.kind, cmp.Or(run.row.label, run.row.jobID), run.row.jobID)
 	}
 
 	if listed.Len() > 0 {
@@ -558,32 +557,19 @@ func (r *Runtime) BackgroundJobs(ctx context.Context, conversationID string) ([]
 }
 
 // CompletionNotes returns, in finish order, the jobs whose Completion Notes a system input saved
-// at history delivers, by the job IDs it stored, with each note's text. A Delegation History's
-// notes are rows of its conversation, owned by its subagent.
+// at history delivers, by the job IDs it stored, with each note's text.
 func (r *Runtime) CompletionNotes(ctx context.Context, history string, jobIDs []string) ([]protocol.BackgroundJob, error) {
-	for conversationID := history; ; {
-		jobs, err := r.Sessions.notedBackgroundJobs(ctx, conversationID, jobIDs)
-		if err != nil {
-			return nil, err
-		}
-
-		jobs = slices.DeleteFunc(jobs, func(job backgroundJob) bool { return job.conversationID+job.childKey != history })
-		if len(jobs) > 0 {
-			notes := listedBackgroundJobs(jobs, conversationID)
-			for i := range notes {
-				notes[i].Note = backgroundNote(&jobs[i])
-			}
-
-			return notes, nil
-		}
-
-		index := strings.LastIndexByte(conversationID, '/')
-		if index < 0 {
-			return nil, nil
-		}
-
-		conversationID = conversationID[:index]
+	jobs, err := r.Sessions.notedBackgroundJobs(ctx, history, jobIDs)
+	if err != nil {
+		return nil, err
 	}
+
+	notes := listedBackgroundJobs(jobs, history)
+	for i := range notes {
+		notes[i].Note = backgroundNote(&jobs[i])
+	}
+
+	return notes, nil
 }
 
 // listedBackgroundJobs shows jobs at conversationID, hiding those of the runs reporting there.
@@ -646,7 +632,7 @@ func (b *Bridge) Drain(ctx context.Context, phase rocketcode.TurnPhase, applied 
 
 	// Completion Notes are claimed under b.mu, so a note this last step misses finds notesOpen false
 	// and wakes the conversation. A resumed turn is offered the notes it held once more.
-	notes, err := claimBackgroundNotes(context.WithoutCancel(ctx), tx, b.config.ConversationID, "", b.activeTurnID, true)
+	notes, err := claimBackgroundNotes(context.WithoutCancel(ctx), tx, b.config.ConversationID, b.activeTurnID, true)
 	if err != nil {
 		b.mu.Unlock()
 		return nil, inputPersistenceError{cause: err}
@@ -664,10 +650,10 @@ func (b *Bridge) Drain(ctx context.Context, phase rocketcode.TurnPhase, applied 
 
 	for i := range pending {
 		request := &pending[i]
-		prompt := buildPrompt(request.inbound, nil)
+		prompt := buildPrompt(request.inbound, nil, true)
 		header, _, _ := strings.Cut(prompt, "\n\n")
 		directSkill := inboundDirectSkill(request.inbound)
-		inputs = append(inputs, rocketcode.PromptInput{ID: request.queueItemID, Texts: []string{prompt}, Header: header, Attachments: attachmentsFromInbound(request.inbound.Attachments), DirectSkill: directSkill})
+		inputs = append(inputs, rocketcode.PromptInput{ID: request.queueItemID, Texts: []string{prompt}, Header: header, Attachments: attachmentsFromInbound(request.inbound.Attachments), DirectSkill: directSkill, Agent: request.inbound.Metadata[inboundAgentMetadataKey]})
 		b.log.Info("steer injected", "event", "steer_injected", "conversation_id", b.config.ConversationID, "queue_item_id", request.queueItemID, "phase", phase)
 	}
 	// A restart reoffers accepted steers and held notes, while the canonical

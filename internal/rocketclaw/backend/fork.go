@@ -166,16 +166,19 @@ func (s *SessionService) copySessionPrefix(ctx context.Context, db stateStoreDB,
 
 	// Copied system inputs show their Completion Notes from the finished jobs their IDs list, so
 	// copy those as consumed notes that wake nothing. Running jobs stay with the source.
-	if _, err := db.ExecContext(ctx, `WITH delegations AS (INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
+	if _, err := db.ExecContext(ctx, `WITH producers AS (
+    SELECT DISTINCT unnest($2::text[]) AS id
+), delegations AS (INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
 SELECT $1 || substr(e.conversation_id, length(p.id) + 1), e.entry_json, e.entry_timestamp
-FROM (SELECT DISTINCT unnest($2::text[]) AS id) p
+FROM producers p
 JOIN session_entries e ON e.conversation_id COLLATE "C" >= p.id || '/' AND e.conversation_id COLLATE "C" < p.id || '0'
-ORDER BY e.id)
-INSERT INTO background_jobs (conversation_id, job_id, child_key, kind, status, agent, label, call_id, subagent_key, origin_json, sync_destination, runner_id, note_state, wake, claimed_turn_id, created_at_unix_ns, finished_at_unix_ns, result)
-SELECT $1, job_id, child_key, kind, status, agent, label, call_id, subagent_key, origin_json, '', runner_id, $3, FALSE, '', created_at_unix_ns, finished_at_unix_ns, result
-FROM background_jobs WHERE conversation_id = ANY($2) AND child_key = '' AND status <> $4 AND job_id IN (
-    SELECT unnest(string_to_array(i->>'input_id', ' ')) FROM session_entries e, jsonb_array_elements(e.entry_json::jsonb->'replay_input') i
-    WHERE e.conversation_id = $1 AND (i->>'prompt_header' = '[System]' OR starts_with(i->>'prompt_header', '[System ')))`, destination, producers, noteConsumed, backgroundRunning); err != nil {
+ORDER BY e.id), noted_jobs AS (
+    SELECT DISTINCT unnest(string_to_array(i->>'input_id', ' ')) AS job_id FROM session_entries e, jsonb_array_elements(e.entry_json::jsonb->'replay_input') i
+    WHERE e.conversation_id = $1 AND (i->>'prompt_header' = '[System]' OR starts_with(i->>'prompt_header', '[System '))
+)
+INSERT INTO background_jobs (conversation_id, job_id, kind, status, agent, label, call_id, subagent_key, origin_json, sync_destination, runner_id, note_state, wake, claimed_turn_id, created_at_unix_ns, finished_at_unix_ns, result)
+SELECT $1, job_id, kind, status, agent, label, call_id, subagent_key, origin_json, '', runner_id, $3, FALSE, '', created_at_unix_ns, finished_at_unix_ns, result
+FROM background_jobs JOIN noted_jobs USING (job_id) WHERE conversation_id = ANY($2) AND status <> $4`, destination, producers, noteConsumed, backgroundRunning); err != nil {
 		return "", fmt.Errorf("copy fork delegations and completion notes: %w", err)
 	}
 

@@ -1319,7 +1319,13 @@ func (s *Server) listQueue(ctx context.Context, request *ListQueueRequest) (*Lis
 			protocol.InboundKindHeld:  PromptDelivery_STASH,
 		}[items[i].Kind]
 
-		response.Items = append(response.Items, &QueueItem{Id: items[i].ID, Text: input.Text, Attachments: input.Attachments, Delivery: delivery, Principal: items[i].Principal})
+		// An agent's write has no principal; Web shows its sender in the principal's place.
+		principal := items[i].Principal
+		if inbound := items[i].Inbound; inbound != nil && inbound.Metadata[protocol.InboundSenderSessionMetadataKey] != "" {
+			principal = "agent " + inbound.Metadata[protocol.InboundSenderAgentMetadataKey] + " (session " + inbound.Metadata[protocol.InboundSenderSessionMetadataKey] + ")"
+		}
+
+		response.Items = append(response.Items, &QueueItem{Id: items[i].ID, Text: input.Text, Attachments: input.Attachments, Delivery: delivery, Principal: principal})
 	}
 
 	return response, nil

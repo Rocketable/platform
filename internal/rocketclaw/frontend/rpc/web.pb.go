@@ -907,13 +907,13 @@ func (x *QuestionOption) GetDescription() string {
 type BackgroundJob struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	JobId string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
-	// execute, task, or subagent_wake.
+	// execute or task.
 	Kind string `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
 	// running, completed, failed, stopped, or killed.
 	State      string `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
 	Label      string `protobuf:"bytes,4,opt,name=label,proto3" json:"label,omitempty"`
 	ToolCallId string `protobuf:"bytes,5,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
-	// Child-session key of the subagent a task or subagent_wake job runs.
+	// Child-session key of the subagent a task job runs.
 	SubagentKey string `protobuf:"bytes,6,opt,name=subagent_key,json=subagentKey,proto3" json:"subagent_key,omitempty"`
 	// user or agent, for a stopped job.
 	StoppedBy string `protobuf:"bytes,7,opt,name=stopped_by,json=stoppedBy,proto3" json:"stopped_by,omitempty"`

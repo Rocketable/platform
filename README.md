@@ -152,16 +152,34 @@ Bash rules match command text, not everything a program can do. An executable-pa
 
 Some features are off until you turn them on under `permission.rocketclaw`:
 
-- `rocketclaw_list_sessions`, `rocketclaw_get_session`, `rocketclaw_current_session_id`: let an agent read saved conversations. These can read every conversation in the database, not only the agent's own. To protect the database, each call is limited: a list needs a `since` time and returns at most 200 conversations, and a read returns at most the 100 newest entries before `before_entry_id`, ending with `[next_before_entry_id=N]` when older entries remain. A list also takes a required `criteria` string: empty lists every stored conversation, and anything else is a Web `/search` query (free text plus `tag:`, `cron:`, `agent:`, `room:`, `is:` and `sort:`) that returns only the chats `/search` would, with their matching messages.
+- `rocketclaw_sessions_list`, `rocketclaw_sessions_get`, `rocketclaw_sessions_current_id`, `rocketclaw_sessions_get_url`: let an agent read saved conversations and get a chat's Web link. These can read every conversation in the database, not only the agent's own. To protect the database, each call is limited: a list needs a `since` time and returns at most 200 conversations, and a read returns at most the 100 newest entries before `before_entry_id`, ending with `[next_before_entry_id=N]` when older entries remain. A list also takes a required `criteria` string: empty lists every stored conversation, and anything else is a Web `/search` query (free text plus `tag:`, `cron:`, `agent:`, `room:`, `is:` and `sort:`) that returns only the chats `/search` would, with their matching messages.
 - `rocketclaw_set_tag`: lets an agent tag sessions with labels from groups you define. See the [example agent](internal/rocketclaw/skel/agents/examples/session-tags.example.md).
-- `allow_background: allow`: lets long scripts and subagents keep running while the conversation moves on.
+- `allow_background: allow`: lets long scripts and subagents keep running while the conversation moves on, and lets the agent steer, queue a follow-up behind, or stop a subagent that is still running.
+- `rocketclaw_sessions_write`: lets the agent start a Web session or send a message into one: steer, queue, stash, or stop. `deny` (the default) leaves it off. `children` reaches only sessions the agent's own session created. `auto` or `auto(name)` reaches every chat Web lists, with each write reviewed first. `allow` reaches every chat Web lists without review.
+
+Name each tool under `permission.rocketclaw`. Wildcards such as `"*"` and the short form `rocketclaw: allow` are not accepted there.
 
 ```yaml
 permission:
   rocketclaw:
-    rocketclaw_get_session: allow
+    rocketclaw_sessions_get: allow
     allow_background: allow
+    rocketclaw_sessions_write: children
 ```
+
+Release note for agent session control:
+
+- **Breaking:** under `permission.rocketclaw`, every tool must be named. An agent file that uses `rocketclaw: allow`, `"*"`, or another wildcard such as `rocketclaw_sessions_*` fails to load until you list each tool it needs by name.
+- `rocketclaw_start_new_thread`, `rocketclaw_list_sessions`, `rocketclaw_get_session`, and `rocketclaw_current_session_id` are removed, with no aliases. Use `rocketclaw_sessions_write` with an empty `session_id`, `rocketclaw_sessions_list`, `rocketclaw_sessions_get`, and `rocketclaw_sessions_current_id`. Agent files are not migrated, and rules on the old names match nothing.
+- There is no `rocketclaw_sessions_stop`. To stop a session without sending it anything, call `rocketclaw_sessions_write` with `mode: stop` and an empty `prompt`. Once the stopped turn has saved, that session's transcript gets one line saying which session and agent stopped it.
+- There is no `session.spawn_mode` setting. An agent file that still has it fails to load; use `rocketclaw_sessions_write` instead.
+- `rocketclaw_sessions_write` defaults to `deny`, so existing agents can no longer start sessions until you allow it. That includes a deployed `agents/main.md` that still says `rocketclaw_start_new_thread: allow`; newly generated `main` agents have `rocketclaw_sessions_write: allow`. Also update prompt text that names the old tool.
+- An agent with `auto` or `allow` can write into and stop any chat Web lists, including Slack threads RocketClaw manages, and the replies post to Slack. This holds for every turn of that agent, including cron, External MCP, and Slack mention turns.
+- Steering accepts any sender. A steer joins the running turn while that turn still takes input, whoever sent it and whoever started the turn, so a person's Web steer now also joins goal continuations, Completion Note wakes, scheduled messages, and the first turn of a session an agent created. Hidden cron and External MCP runs and `$workflow` turns still take a steer as their next turn.
+- `task`'s `continue` is now `{session_id, mode}` for agents with `allow_background: allow`. A still-running subagent is no longer refused: `mode` steers it, queues a follow-up after it, or stops it and runs the prompt next. A steer joins even when a foreground `task` call is waiting on that subagent. Queued follow-ups survive a restart, and no prompt, steer, follow-up, or wake reaches a subagent twice after a restart.
+- A continue that names a different `subagent_type` switches the subagent to that type instead of failing. The type must exist, the caller needs `task` permission for it, and its guardrail reviews the prompt and the answer. A steer switches a running subagent from its next step.
+- Every subagent now runs as a session of its own, on the same turn runner as other sessions, so its queue, steers, stops, and restart recovery work as a top-level session's do. A subagent session is not listed in the sidebar or search. Its Background Jobs report to the subagent itself. It acts for its top-level session's running turn: it writes sessions and tags for that session, the sessions it creates keep that turn's creator and agent limits, the files it attaches go out with that turn's reply, and `rocketclaw_sessions_current_id` returns that session's ID. It is not offered `rocketclaw_schedule_message` or `rocketclaw_reset_scheduled_messages`. Its first prompt carries a header naming the session and agent that delegated it.
+- Stopping a turn while its foreground `task` call waits also stops the subagent's current turn, and so on down a chain of foreground subagents, unless a background `task` job waits on that turn. The prompt the call sent, if still queued, is not withdrawn but held: it stays in the subagent's queue, shown in Web like a stash, through restarts, while the rest of the queue moves on. The next message sent to the subagent, by `task`, `rocketclaw_sessions_write`, or a person in Web, releases it to run just before that message, and a person's `$goal` releases it to run before the goal; a stash releases nothing, and a person's stash is never released this way. The stopped session gets no note. A restart is not a stop: the call waits again.
 
 ### Shadow agents
 

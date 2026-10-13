@@ -7,6 +7,8 @@ package backend
 import (
 	"context"
 	"sync"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
 // Ensure that backgroundNotesMock does implement backgroundNotes.
@@ -19,7 +21,10 @@ var _ backgroundNotes = &backgroundNotesMock{}
 //
 //		// make and configure a mocked backgroundNotes
 //		mockedbackgroundNotes := &backgroundNotesMock{
-//			continueSubagentFunc: func(ctx context.Context, job *backgroundJob, input string) (string, error) {
+//			InterruptConversationFunc: func(conversationID string) *protocol.InboundMessage {
+//				panic("mock out the InterruptConversation method")
+//			},
+//			continueSubagentFunc: func(ctx context.Context, job *backgroundJob) (string, error) {
 //				panic("mock out the continueSubagent method")
 //			},
 //			noteReadyFunc: func(conversationID string)  {
@@ -32,22 +37,28 @@ var _ backgroundNotes = &backgroundNotesMock{}
 //
 //	}
 type backgroundNotesMock struct {
+	// InterruptConversationFunc mocks the InterruptConversation method.
+	InterruptConversationFunc func(conversationID string) *protocol.InboundMessage
+
 	// continueSubagentFunc mocks the continueSubagent method.
-	continueSubagentFunc func(ctx context.Context, job *backgroundJob, input string) (string, error)
+	continueSubagentFunc func(ctx context.Context, job *backgroundJob) (string, error)
 
 	// noteReadyFunc mocks the noteReady method.
 	noteReadyFunc func(conversationID string)
 
 	// calls tracks calls to the methods.
 	calls struct {
+		// InterruptConversation holds details about calls to the InterruptConversation method.
+		InterruptConversation []struct {
+			// ConversationID is the conversationID argument value.
+			ConversationID string
+		}
 		// continueSubagent holds details about calls to the continueSubagent method.
 		continueSubagent []struct {
 			// Ctx is the ctx argument value.
 			Ctx context.Context
 			// Job is the job argument value.
 			Job *backgroundJob
-			// Input is the input argument value.
-			Input string
 		}
 		// noteReady holds details about calls to the noteReady method.
 		noteReady []struct {
@@ -55,28 +66,59 @@ type backgroundNotesMock struct {
 			ConversationID string
 		}
 	}
-	lockcontinueSubagent sync.RWMutex
-	locknoteReady        sync.RWMutex
+	lockInterruptConversation sync.RWMutex
+	lockcontinueSubagent      sync.RWMutex
+	locknoteReady             sync.RWMutex
+}
+
+// InterruptConversation calls InterruptConversationFunc.
+func (mock *backgroundNotesMock) InterruptConversation(conversationID string) *protocol.InboundMessage {
+	if mock.InterruptConversationFunc == nil {
+		panic("backgroundNotesMock.InterruptConversationFunc: method is nil but backgroundNotes.InterruptConversation was just called")
+	}
+	callInfo := struct {
+		ConversationID string
+	}{
+		ConversationID: conversationID,
+	}
+	mock.lockInterruptConversation.Lock()
+	mock.calls.InterruptConversation = append(mock.calls.InterruptConversation, callInfo)
+	mock.lockInterruptConversation.Unlock()
+	return mock.InterruptConversationFunc(conversationID)
+}
+
+// InterruptConversationCalls gets all the calls that were made to InterruptConversation.
+// Check the length with:
+//
+//	len(mockedbackgroundNotes.InterruptConversationCalls())
+func (mock *backgroundNotesMock) InterruptConversationCalls() []struct {
+	ConversationID string
+} {
+	var calls []struct {
+		ConversationID string
+	}
+	mock.lockInterruptConversation.RLock()
+	calls = mock.calls.InterruptConversation
+	mock.lockInterruptConversation.RUnlock()
+	return calls
 }
 
 // continueSubagent calls continueSubagentFunc.
-func (mock *backgroundNotesMock) continueSubagent(ctx context.Context, job *backgroundJob, input string) (string, error) {
+func (mock *backgroundNotesMock) continueSubagent(ctx context.Context, job *backgroundJob) (string, error) {
 	if mock.continueSubagentFunc == nil {
 		panic("backgroundNotesMock.continueSubagentFunc: method is nil but backgroundNotes.continueSubagent was just called")
 	}
 	callInfo := struct {
-		Ctx   context.Context
-		Job   *backgroundJob
-		Input string
+		Ctx context.Context
+		Job *backgroundJob
 	}{
-		Ctx:   ctx,
-		Job:   job,
-		Input: input,
+		Ctx: ctx,
+		Job: job,
 	}
 	mock.lockcontinueSubagent.Lock()
 	mock.calls.continueSubagent = append(mock.calls.continueSubagent, callInfo)
 	mock.lockcontinueSubagent.Unlock()
-	return mock.continueSubagentFunc(ctx, job, input)
+	return mock.continueSubagentFunc(ctx, job)
 }
 
 // continueSubagentCalls gets all the calls that were made to continueSubagent.
@@ -84,14 +126,12 @@ func (mock *backgroundNotesMock) continueSubagent(ctx context.Context, job *back
 //
 //	len(mockedbackgroundNotes.continueSubagentCalls())
 func (mock *backgroundNotesMock) continueSubagentCalls() []struct {
-	Ctx   context.Context
-	Job   *backgroundJob
-	Input string
+	Ctx context.Context
+	Job *backgroundJob
 } {
 	var calls []struct {
-		Ctx   context.Context
-		Job   *backgroundJob
-		Input string
+		Ctx context.Context
+		Job *backgroundJob
 	}
 	mock.lockcontinueSubagent.RLock()
 	calls = mock.calls.continueSubagent

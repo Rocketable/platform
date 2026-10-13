@@ -1326,6 +1326,7 @@ func TestSessionEntries(t *testing.T) {
 				{ID: "later-first", Kind: protocol.InboundKindEnqueue, Message: "first later message", Principal: "Bob Smith"},
 				{ID: "steering", Kind: protocol.InboundKindSteer, Message: "guide the current response", Principal: "Bob Smith"},
 				{ID: "later-second", Kind: protocol.InboundKindEnqueue, Message: "second later message"},
+				{ID: "agent", Kind: protocol.InboundKindHeld, Message: "from an agent", Inbound: &protocol.InboundMessage{Metadata: map[string]string{protocol.InboundSenderSessionMetadataKey: "web:a", protocol.InboundSenderAgentMetadataKey: "planner"}}},
 			}, nil
 		}
 		queued, err := invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: id})
@@ -1334,7 +1335,8 @@ func TestSessionEntries(t *testing.T) {
 			{Id: "later-first", Text: "first later message", Delivery: PromptDelivery_QUEUE, Principal: "Bob Smith"},
 			{Id: "steering", Text: "guide the current response", Delivery: PromptDelivery_STEER, Principal: "Bob Smith"},
 			{Id: "later-second", Text: "second later message", Delivery: PromptDelivery_QUEUE},
-		}, queued.Items)
+			{Id: "agent", Text: "from an agent", Delivery: PromptDelivery_STASH, Principal: "agent planner (session web:a)"},
+		}, queued.Items, "an agent's write shows its sender")
 	})
 
 	storedQueue, err := sessions.ThreadQueueForConversation(id)
@@ -3229,7 +3231,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 		document, err := invoke[HandoffResponse](ctx, connection, "Handoff", &HandoffRequest{Id: source})
 		require.NoError(t, err)
 		require.Contains(t, document.Document, "Source session: "+source)
-		require.Contains(t, document.Document, "For more details, call `rocketclaw_get_session` inside Execute with `conversation_id` set to the source session ID above.")
+		require.Contains(t, document.Document, "For more details, call `rocketclaw_sessions_get` inside Execute with `conversation_id` set to the source session ID above.")
 		require.Contains(t, document.Document, "Continue the verified work.")
 
 		beforeTurns := len(turns)
@@ -3724,8 +3726,8 @@ func TestBackgroundJobRPCs(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
-	_, err = db.ExecContext(ctx, `INSERT INTO background_jobs (conversation_id, job_id, child_key, kind, status, agent, label, call_id, subagent_key, origin_json, sync_destination, runner_id, note_state, wake, claimed_turn_id, created_at_unix_ns, finished_at_unix_ns, result)
-VALUES ($1, 'turn-9/call/k', '', 'task', 'running', 'main', 'report', 'k', '/k', '{}', 'chat', 'runner', 'none', FALSE, '', 1, 0, '')`, cronRun)
+	_, err = db.ExecContext(ctx, `INSERT INTO background_jobs (conversation_id, job_id, kind, status, agent, label, call_id, subagent_key, origin_json, sync_destination, runner_id, note_state, wake, claimed_turn_id, created_at_unix_ns, finished_at_unix_ns, result)
+VALUES ($1, 'turn-9/call/k', 'task', 'running', 'main', 'report', 'k', '/k', '{}', 'chat', 'runner', 'none', FALSE, '', 1, 0, '')`, cronRun)
 	require.NoError(t, err)
 	require.NoError(t, stream.RecvMsg(change))
 	require.Equal(t, "chat", change.ConversationId, "a hidden run's job change wakes its destination")

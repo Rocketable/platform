@@ -387,7 +387,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := newTestSessionService(t)
 		workspace := t.TempDir()
-		writeAgent(t, workspace, "main", "---\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw:\n    rocketclaw_current_session_id: allow\n    rocketclaw_get_tags: allow\n    rocketclaw_set_tag: [[red, yellow]]\n---\nPrompt\n")
+		writeAgent(t, workspace, "main", "---\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw:\n    rocketclaw_sessions_current_id: allow\n    rocketclaw_get_tags: allow\n    rocketclaw_set_tag: [[red, yellow]]\n---\nPrompt\n")
 
 		var tagOutputs []string
 
@@ -410,7 +410,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 			}
 
 			if len(tagOutputs) == 0 {
-				writeRawRunFunctionCall(t, w, "tag", "execute", json.RawMessage(`{"code":"def main():\n    return \"\\n\".join([rocketclaw_set_tag(tag=\"red\"), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_get_tags(), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_get_tags(), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_current_session_id()])\n"}`))
+				writeRawRunFunctionCall(t, w, "tag", "execute", json.RawMessage(`{"code":"def main():\n    return \"\\n\".join([rocketclaw_set_tag(tag=\"red\"), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_get_tags(), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_get_tags(), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_sessions_current_id()])\n"}`))
 			} else {
 				writeRawRunMessage(t, w, "done", "message", "done")
 			}
@@ -1471,10 +1471,13 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 				Prompt       string `json:"prompt"`
 				SubagentType string `json:"subagent_type"`
 				Background   bool   `json:"background"`
-				Continue     string `json:"continue"`
-			}{"research", "research the flaky test", "researcher", false, ""})
+				Continue     struct {
+					SessionID string `json:"session_id"`
+					Mode      string `json:"mode"`
+				} `json:"continue"`
+			}{Description: "research", Prompt: "research the flaky test", SubagentType: "researcher"})
 			_, _ = fmt.Fprintf(w, `{"id":"resp_0","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_e","name":"execute","arguments":%q},{"id":"fc_2","type":"function_call","status":"completed","call_id":"call_t","name":"task","arguments":%q}]}`, execute, task)
-		case strings.Contains(body, `"content":"research the flaky test"`):
+		case strings.Contains(body, `"instructions":"Research`):
 			select {
 			case <-release:
 			case <-r.Context().Done():
@@ -1507,13 +1510,15 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 	)
 
 	manager = newThreadBridgeManager(config.NewLockedConfig(nt.cfg), nt.service, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
-		cfg.SessionService, cfg.RequestRestart, cfg.StartNewThread, cfg.UserQuestionAsker = nt.service, testNoopRestart, testNoopStartNewThread, asker
+		cfg.SessionService, cfg.RequestRestart, cfg.UserQuestionAsker = nt.service, testNoopRestart, asker
 		bridge := NewConversation(config.NewLockedConfig(nt.cfg), finalsPublisher{finals: nt.finals}, &cfg, slog.New(slog.DiscardHandler))
 		bridge.threads, bridge.background = manager, registry
 
 		return bridge
 	})
 	registry = newBackgroundRegistry(nt.service, manager, testLogger())
+	nt.service.jobs = registry
+
 	runTestManager(t, manager)
 
 	rt := &Runtime{threads: manager, Sessions: nt.service, background: registry}
@@ -1651,11 +1656,9 @@ func TestMoveAsCallFinishes(t *testing.T) {
 		registry.move("main")
 		require.NoError(t, call.Wait())
 
-		var exists bool
-
-		err := store.db.QueryRowContext(t.Context(), `SELECT EXISTS (SELECT 1 FROM background_jobs WHERE conversation_id = $1 AND job_id = $2)`, "main", jobID).Scan(&exists)
+		rows, err := store.notedBackgroundJobs(t.Context(), "main", []string{jobID})
 		require.NoError(t, err)
-		require.Equal(t, result.Moved, exists)
+		require.Equal(t, result.Moved, len(rows) > 0)
 
 		if !result.Moved {
 			require.Equal(t, "done", result.Output)

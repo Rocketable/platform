@@ -457,7 +457,7 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 		t.Run(permission, func(t *testing.T) {
 			store, root := newShadowTestStore(t)
 			require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o700))
-			require.NoError(t, root.WriteFile(".rocketclaw/agents/main/a.md", fmt.Appendf(nil, "---\nmodel: gpt-child\npermission:\n  bash: %s\n  rocketclaw: {\"*\": allow}\n---\nChild prompt", permission), 0o600))
+			require.NoError(t, root.WriteFile(".rocketclaw/agents/main/a.md", fmt.Appendf(nil, "---\nmodel: gpt-child\npermission:\n  bash: %s\n  rocketclaw: {rocketclaw_restart: allow, rocketclaw_sessions_write: allow}\n---\nChild prompt", permission), 0o600))
 			require.NoError(t, root.WriteFile(".rocketclaw/agents/main.md", []byte("---\nmodel: gpt-parent\npermission: {bash: allow}\n---\nParent prompt"), 0o600))
 
 			toolResults := make(chan string, 4)
@@ -507,8 +507,8 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 			child := NewConversation(cfg, publisher, &Config{ConversationID: childID, Agent: "main/a", SessionService: store}, slog.New(slog.DiscardHandler))
 			child.shadow = true
 
-			prohibited := make([]rocketcode.Tool, 0, 7)
-			for _, name := range []string{askUserQuestionToolName, startNewThreadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, updateGoalToolName, reloadToolName, restartToolName} {
+			prohibited := make([]rocketcode.Tool, 0, 8)
+			for _, name := range []string{askUserQuestionToolName, sessionsWriteToolName, scheduleMessageToolName, resetScheduledMessagesToolName, updateGoalToolName, reloadToolName, restartToolName} {
 				prohibited = append(prohibited, rocketcode.Tool{Name: name})
 			}
 
@@ -526,9 +526,20 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 			require.Equal(t, "parent", capturedEnv[rocketclawConversationIDEnv])
 			require.NotContains(t, capturedEnv, "ROCKETCLAW_SHADOW", "shadow environment must not mutate captured parent inputs")
 
+			// A subagent of the shadow runs as a session of its own, under the shadow's limits.
+			manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), func(c Config) directBridge {
+				return NewConversation(cfg, publisher, &Config{ConversationID: c.ConversationID, Agent: c.Agent, SessionService: store}, slog.New(slog.DiscardHandler))
+			})
+			managed, err := manager.ensureThreadBridge(t.Context(), childID+"/call-1", ThreadState{Agent: "main", parent: childID})
+			require.NoError(t, err)
+
+			subagentConfig := managed.(*Bridge).rocketcodeConfig(root.Name(), nil, prohibited...)
+			require.Equal(t, "main", subagentConfig.ShellEnv["ROCKETCLAW_SHADOW"])
+
 			for _, tool := range prohibited {
 				require.True(t, slices.ContainsFunc(parentConfig.CustomTools, func(item rocketcode.Tool) bool { return item.Name == tool.Name }))
 				require.False(t, slices.ContainsFunc(childConfig.CustomTools, func(item rocketcode.Tool) bool { return item.Name == tool.Name }))
+				require.False(t, slices.ContainsFunc(subagentConfig.CustomTools, func(item rocketcode.Tool) bool { return item.Name == tool.Name }))
 			}
 
 			require.IsType(t, rocketcode.InertBackgroundJobs{}, childConfig.BackgroundJobs)
@@ -600,7 +611,7 @@ func TestShadowConsumedBatchIsAtomic(t *testing.T) {
 	inputs, err := parent.Drain(t.Context(), rocketcode.TurnPhaseFinalAnswer, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"note", "moved", "s1"}, []string{inputs[0].ID, inputs[1].ID, inputs[2].ID})
-	require.Equal(t, buildPrompt(steer, nil), inputs[2].Texts[0])
+	require.Equal(t, buildPrompt(steer, nil, true), inputs[2].Texts[0])
 	require.Equal(t, &rocketcode.PromptInputDirectSkill{Name: "docs-helper", Arguments: "\"typed args\"  Next\t"}, inputs[2].DirectSkill)
 
 	var mirrored []byte
@@ -1481,14 +1492,15 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 	store.definitions = cfg
 	finals := make(chan *protocol.OutboundMessage, 4)
 	manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), func(bridgeCfg Config) directBridge {
-		bridgeCfg.SessionService, bridgeCfg.RequestRestart, bridgeCfg.StartNewThread = store, testNoopRestart, testNoopStartNewThread
+		bridgeCfg.SessionService, bridgeCfg.RequestRestart = store, testNoopRestart
 		return NewConversation(cfg, finalsPublisher{finals: finals}, &bridgeCfg, slog.New(slog.DiscardHandler))
 	})
-	parent, err := manager.ensureStartedThread(t.Context(), &threadStart{conversationID: "parent", agent: "main"})
+	require.NoError(t, store.UpsertThread("parent", ThreadState{Agent: "main"}))
+	parent, err := manager.recordedBridge(t.Context(), "parent")
 	require.NoError(t, err)
 
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "raw admission must not be used", true)}
-	admitted, err := parent.(*Bridge).activateInbound(t.Context(), &request)
+	admitted, err := parent.activateInbound(t.Context(), &request)
 	require.NoError(t, err)
 	require.True(t, admitted)
 
@@ -1520,7 +1532,7 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 	require.NoError(t, err)
 
 	request.completion = &turnCompletion{done: make(chan struct{})}
-	parent.(*Bridge).handle(t.Context(), &request)
+	parent.handle(t.Context(), &request)
 	require.Empty(t, finals, "failed closure cannot deliver the parent final")
 
 	select {
@@ -1540,23 +1552,23 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 	require.NoError(t, err)
 	_, err = store.db.ExecContext(t.Context(), `ALTER TABLE active_turns ADD CONSTRAINT reject_finish CHECK (phase <> 'delivering')`)
 	require.NoError(t, err)
-	parent.(*Bridge).handle(t.Context(), &request)
+	parent.handle(t.Context(), &request)
 	require.Empty(t, finals, "failed settlement cannot deliver after durable closure")
 	closed, captured, err := loadTurnInputs(t.Context(), store.db, "parent", request.turnID)
 	require.NoError(t, err)
 	require.True(t, captured)
 	require.True(t, closed.Closed)
-	_, err = parent.(*Bridge).openInputWindow(t.Context(), &request)
+	_, err = parent.openInputWindow(t.Context(), &request)
 	require.NoError(t, err)
-	require.False(t, parent.(*Bridge).inputOpen, "resume must not reopen durable closure")
+	require.False(t, parent.inputOpen, "resume must not reopen durable closure")
 
 	late := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindSteer, "later turn", true)}
-	accepted, err := parent.(*Bridge).slipSteer(&late)
+	accepted, err := parent.slipSteer(&late)
 	require.NoError(t, err)
 	require.False(t, accepted)
 	_, err = store.db.ExecContext(t.Context(), `ALTER TABLE active_turns DROP CONSTRAINT reject_finish`)
 	require.NoError(t, err)
-	parent.(*Bridge).handle(t.Context(), &request)
+	parent.handle(t.Context(), &request)
 
 	parentInput := <-requests
 	require.Empty(t, requests, "retry must use the journaled provider response")

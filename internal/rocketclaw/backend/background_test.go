@@ -172,40 +172,102 @@ func TestBackgroundJobStop(t *testing.T) {
 	require.ElementsMatch(t, []string{"main", "cron:daily"}, []string{<-notes, <-notes})
 }
 
-// A stopped subagent is woken neither by late notes nor by its own jobs ending, which stop with it.
+func backgroundRows(t *testing.T, store *SessionService) []string {
+	t.Helper()
+
+	rows, err := queryStrings(t.Context(), store.db, `SELECT kind || ' ' || status || ' ' || note_state || ' ' || result FROM background_jobs ORDER BY kind, job_id`, "background rows")
+	require.NoError(t, err)
+
+	return rows
+}
+
+// A stopped task stops its subagent session's turn, and the subagent's own jobs stop with it and leave no note.
 func TestStoppedSubagentStaysStopped(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
-	woken := make(chan string, 4)
-	registry := newBackgroundRegistry(store, &backgroundNotesMock{noteReadyFunc: func(string) {}, continueSubagentFunc: func(_ context.Context, job *backgroundJob, _ string) (string, error) {
-		woken <- job.subagentKey
-		return "", nil
+	interrupted := make(chan string, 1)
+	registry := newBackgroundRegistry(store, &backgroundNotesMock{noteReadyFunc: func(string) {}, InterruptConversationFunc: func(conversationID string) *protocol.InboundMessage {
+		interrupted <- conversationID
+		return nil
 	}}, testLogger())
-	started, release := make(chan struct{}, 2), make(chan struct{})
+	started := make(chan struct{}, 2)
 
-	defer close(release)
+	_, err := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main/a", origin: &protocol.InboundMessage{}}.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-2/call/x", Kind: rocketcode.BackgroundKindExecute, Detached: true}, blockedWork(started, make(chan struct{})))
+	require.NoError(t, err)
+	<-started
 
-	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
-	for _, job := range []*rocketcode.BackgroundJob{
-		{ID: "turn-1/call/a", Kind: rocketcode.BackgroundKindTask, SubagentKey: "/a", Detached: true},
-		{ID: "turn-1/call/a/task/call/x", Kind: rocketcode.BackgroundKindExecute, ChildKey: "/a", Detached: true},
-	} {
-		_, err := turn.Run(t.Context(), job, blockedWork(started, release))
-		require.NoError(t, err)
-		<-started
-	}
+	_, err = store.db.ExecContext(t.Context(), `INSERT INTO active_turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id) VALUES ('turn-a', 'main/a', '{"Metadata":{"web_message_id":"main/turn-1/call/a"}}', '[]', 1, 1, 0)`)
+	require.NoError(t, err)
+
+	waiting := &backgroundWorkMock{RunBackgroundFunc: func(ctx context.Context) (string, error) {
+		started <- struct{}{}
+
+		_, _, err := registry.awaitSubagent(ctx, "main/a", "main/turn-1/call/a")
+
+		return "", err
+	}, DetachFunc: func() bool { return true }}
+	_, err = backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/a", Kind: rocketcode.BackgroundKindTask, SubagentKey: "/a", Detached: true}, waiting)
+	require.NoError(t, err)
+	<-started
 
 	stopped, err := registry.stop(t.Context(), "main", "turn-1/call/a", errStoppedByUser)
 	require.NoError(t, err)
 	require.True(t, stopped)
+	require.Equal(t, "main/a", <-interrupted, "the subagent's running turn stops with its task")
 
 	require.Eventually(t, func() bool {
-		states, err := queryStrings(context.Background(), store.db, `SELECT status || ' ' || note_state FROM background_jobs WHERE job_id = 'turn-1/call/a/task/call/x'`, "owned job state")
+		states, err := queryStrings(context.Background(), store.db, `SELECT status || ' ' || note_state FROM background_jobs WHERE job_id = 'turn-2/call/x'`, "owned job state")
 		return err == nil && slices.Equal(states, []string{"stopped none"})
 	}, 5*time.Second, 5*time.Millisecond, "the subagent's own job stops with it and leaves no note")
 	require.Equal(t, notePending, testBackgroundRow(t, store, "main", "turn-1/call/a").noteState, "the parent still learns of the stop")
-	require.Never(t, func() bool { return len(woken) > 0 }, 200*time.Millisecond, 5*time.Millisecond, "the stopped subagent is not woken")
+}
+
+// A wait that stops, other than for a shutdown, stops its subagent's running turn: for a stopped parent also
+// the turn ahead of its queued input, unless a background job waits for that turn; for a stopped job, only its own.
+// A stopped parent's queued input is held; the other requests in the queue are not.
+func TestStoppedWaitStopsSubagentTurn(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		cause                 error
+		detached, stops, held bool
+	}{{context.Canceled, false, true, true}, {context.Canceled, true, false, true}, {rocketcode.ErrShutdown, false, false, false}, {errStoppedByUser, false, false, false}} {
+		t.Run(fmt.Sprintf("%v/detached=%t", tc.cause, tc.detached), func(t *testing.T) {
+			t.Parallel()
+
+			store := newTestSessionService(t)
+			notes := &backgroundNotesMock{noteReadyFunc: func(string) {}, InterruptConversationFunc: func(string) *protocol.InboundMessage { return nil }}
+			registry := newBackgroundRegistry(store, notes, testLogger())
+			t.Cleanup(registry.shutdown)
+
+			require.NoError(t, store.startSubagent(t.Context(), "main/a", "main", "researcher", true))
+			_, err := store.db.ExecContext(t.Context(), `INSERT INTO active_turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id) VALUES ('turn-a', 'main/a', '{"Metadata":{"web_message_id":"main/turn-0/call/busy"}}', '[]', 1, 1, 0)`)
+			require.NoError(t, err)
+
+			for _, id := range []string{"main/turn-1/call/w", "main/turn-1/call/job"} {
+				require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: "main/a", Kind: protocol.InboundKindEnqueue}))
+			}
+
+			if tc.detached {
+				started := make(chan struct{}, 1)
+				_, err = backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-0/call/busy", Kind: rocketcode.BackgroundKindExecute, Detached: true}, blockedWork(started, make(chan struct{})))
+				require.NoError(t, err)
+				<-started
+			}
+
+			ctx, cancel := context.WithCancelCause(t.Context())
+			cancel(tc.cause)
+
+			_, _, err = registry.awaitSubagent(ctx, "main/a", "main/turn-1/call/w")
+			require.ErrorIs(t, err, tc.cause)
+			require.Len(t, notes.InterruptConversationCalls(), map[bool]int{false: 0, true: 1}[tc.stops])
+
+			kinds, err := queryStrings(t.Context(), store.db, `SELECT queue_item_id || ' ' || kind FROM thread_queue ORDER BY 1`, "queue kinds")
+			require.NoError(t, err)
+			require.Equal(t, []string{"main/turn-1/call/job enqueue", "main/turn-1/call/w " + map[bool]string{false: "enqueue", true: "held"}[tc.held]}, kinds)
+		})
+	}
 }
 
 func TestBackgroundJobAttachedCall(t *testing.T) {
@@ -214,14 +276,16 @@ func TestBackgroundJobAttachedCall(t *testing.T) {
 	store := newTestSessionService(t)
 	registry, notes := newTestBackgroundRegistry(store)
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
-	job := &rocketcode.BackgroundJob{ID: "turn-1/call/a", Kind: rocketcode.BackgroundKindTask, SubagentKey: "/a"}
+	task := func(name string) *rocketcode.BackgroundJob {
+		return &rocketcode.BackgroundJob{ID: "turn-1/call/" + name, Kind: rocketcode.BackgroundKindTask, SubagentKey: "/" + name}
+	}
 
 	t.Run("finished", func(t *testing.T) {
 		started, release := make(chan struct{}, 1), make(chan struct{})
 		close(release)
 
 		work := blockedWork(started, release)
-		result, err := turn.Run(t.Context(), job, work)
+		result, err := turn.Run(t.Context(), task("a"), work)
 		require.NoError(t, err)
 		require.Equal(t, rocketcode.BackgroundResult{Output: "done"}, result)
 		require.Empty(t, work.DetachCalls())
@@ -234,7 +298,7 @@ func TestBackgroundJobAttachedCall(t *testing.T) {
 
 		var call errgroup.Group
 		call.Go(func() error {
-			_, err := turn.Run(ctx, job, blockedWork(started, make(chan struct{})))
+			_, err := turn.Run(ctx, task("b"), blockedWork(started, make(chan struct{})))
 			return err
 		})
 		<-started
@@ -242,50 +306,32 @@ func TestBackgroundJobAttachedCall(t *testing.T) {
 		require.ErrorIs(t, call.Wait(), rocketcode.ErrShutdown, "foreground bash must see the shutdown cause")
 	})
 
-	t.Run("busy subagent", func(t *testing.T) {
-		started, release := make(chan struct{}, 1), make(chan struct{})
-
-		var call errgroup.Group
-		call.Go(func() error {
-			_, err := turn.Run(t.Context(), job, blockedWork(started, release))
-			return err
-		})
-		<-started
-
-		for _, detached := range []bool{false, true} {
-			_, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/b", Kind: rocketcode.BackgroundKindTask, SubagentKey: "/a", Detached: detached}, &backgroundWorkMock{})
-			require.EqualError(t, err, "subagent /a is busy with another turn; continue it again later", "an attached task reports to its caller, not with a note")
-		}
-
-		close(release)
-		require.NoError(t, call.Wait())
-	})
-
 	// A move whose row cannot be written ends the work instead of leaving it running unrecorded.
 	t.Run("moved without a row", func(t *testing.T) {
 		started := make(chan struct{}, 1)
-		taken := testBackgroundJob("main", "turn-0/call/z")
-		taken.kind, taken.subagentKey = backgroundTask, "/a"
-		createTestBackgroundJob(t, store, taken)
+		_, err := store.db.ExecContext(t.Context(), `CREATE FUNCTION refuse_row() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'database restarting'; END $$;
+CREATE TRIGGER refuse_row BEFORE INSERT ON background_jobs FOR EACH ROW EXECUTE FUNCTION refuse_row()`)
+		require.NoError(t, err)
 
 		var call errgroup.Group
 
 		work := blockedWork(started, make(chan struct{}))
 
 		call.Go(func() error {
-			_, err := turn.Run(t.Context(), job, work)
+			_, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/z", Kind: rocketcode.BackgroundKindExecute}, work)
 			return err
 		})
 		<-started
 		require.Len(t, registry.move("main"), 1)
-		require.Error(t, call.Wait(), "the subagent key is held by another running row")
+		require.Error(t, call.Wait(), "the database refuses the row")
 
 		workErr := context.Cause(work.RunBackgroundCalls()[0].Ctx)
 		require.ErrorIs(t, workErr, errBackgroundAbandoned)
 		require.False(t, registry.movable("main"))
 		require.Len(t, work.DetachCalls(), 1, "the work detaches before its row is written")
 
-		finishTestBackgroundJob(t, store, taken, backgroundCompleted, false)
+		_, err = store.db.ExecContext(t.Context(), `DROP TRIGGER refuse_row ON background_jobs`)
+		require.NoError(t, err)
 	})
 
 	// A move landing after the script stored its result for the turn leaves the call that result.
@@ -311,9 +357,11 @@ func TestBackgroundJobAttachedCall(t *testing.T) {
 		require.NotContains(t, backgroundJobIDs(t, store, "main"), "turn-1/call/s", "the job leaves no row and no note")
 	})
 
+	// A moved task's attached wait becomes its row, which reports with a note.
 	t.Run("moved", func(t *testing.T) {
 		ctx, cancel := context.WithCancelCause(t.Context())
 		started, release := make(chan struct{}, 1), make(chan struct{})
+		job := task("c")
 
 		var (
 			call    errgroup.Group
@@ -401,9 +449,11 @@ func TestBackgroundJobsAbandoned(t *testing.T) {
 		<-started
 	}
 
+	require.Equal(t, []string{"turn-1/call/a"}, backgroundJobIDs(t, store, "main"))
+
 	_, err := store.DeleteSession(t.Context(), "main")
 	require.NoError(t, err)
-	require.Empty(t, backgroundJobIDs(t, store, "main"))
+	require.Empty(t, backgroundJobIDs(t, store, "main"), "the conversation's running jobs go with it")
 	require.Equal(t, []string{"turn-1/call/a"}, backgroundJobIDs(t, store, "other"), "deleting a conversation kills only its own jobs")
 
 	registry.shutdown()
@@ -411,57 +461,7 @@ func TestBackgroundJobsAbandoned(t *testing.T) {
 	require.Empty(t, notes)
 }
 
-func backgroundRows(t *testing.T, store *SessionService) []string {
-	t.Helper()
-
-	rows, err := queryStrings(t.Context(), store.db, `SELECT kind || ' ' || status || ' ' || note_state || ' ' || result FROM background_jobs ORDER BY kind, job_id`, "background rows")
-	require.NoError(t, err)
-
-	return rows
-}
-
-// A wake leaves no note of its own; a completed wake consumes the note and a failed one releases it.
-func TestSubagentNoteWakesSubagent(t *testing.T) {
-	t.Parallel()
-
-	for _, errWake := range []error{nil, errors.New("provider down")} {
-		t.Run(fmt.Sprint(errWake), func(t *testing.T) {
-			store := newTestSessionService(t)
-			notes := &backgroundNotesMock{noteReadyFunc: func(string) {}, continueSubagentFunc: func(context.Context, *backgroundJob, string) (string, error) { return "analysis", errWake }}
-			registry := newBackgroundRegistry(store, notes, testLogger())
-			turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{Source: protocol.SourceSlack}, turnID: "turn-1"}
-			started, release := make(chan struct{}, 1), make(chan struct{})
-
-			_, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/a/x", Kind: rocketcode.BackgroundKindExecute, Label: "tests", Agent: "researcher", ChildKey: "/a", Detached: true}, blockedWork(started, release))
-			require.NoError(t, err)
-			<-started
-			close(release)
-			require.NoError(t, registry.group.Wait())
-
-			require.Empty(t, notes.noteReadyCalls(), "the parent is not told")
-
-			calls := notes.continueSubagentCalls()
-			require.Len(t, calls, 1, "one wake and no further one")
-			require.Equal(t, "/a", calls[0].Job.subagentKey)
-			require.Equal(t, "researcher", calls[0].Job.agent)
-			require.Equal(t, "[System]\n\n"+`<execute id="turn-1/call/a/x" state="completed" description="tests">`+"\ndone\n</execute>", calls[0].Input)
-
-			note, wake := "execute completed consumed done", "subagent_wake completed none analysis"
-			if errWake != nil {
-				note, wake = "execute completed pending done", "subagent_wake failed none provider down"
-			}
-
-			require.Equal(t, []string{note, wake}, backgroundRows(t, store))
-
-			if errWake != nil {
-				require.False(t, testBackgroundRow(t, store, "main", "turn-1/call/a/x").wake, "the released note wakes nothing")
-				require.Equal(t, []rocketcode.PromptInput{systemPromptInput("turn-1/call/a/x", `<execute id="turn-1/call/a/x" state="completed" description="tests">`+"\ndone\n</execute>")}, turn.DrainNotes(t.Context(), "/a"), "the subagent's next turn takes it")
-			}
-		})
-	}
-}
-
-// A resumed parent call re-attaching to a resumed subagent starts nothing; a second start replays nothing.
+// A resumed parent call re-attaching to a recovered task starts nothing; a second start replays nothing.
 func TestRestartSettlesRunningJobs(t *testing.T) {
 	t.Parallel()
 
@@ -474,26 +474,15 @@ func TestRestartSettlesRunningJobs(t *testing.T) {
 	}
 
 	task := testBackgroundJob("main", "turn-1/call/a")
-	task.kind, task.subagentKey, task.label = backgroundTask, "/a", "research"
+	task.kind, task.subagentKey, task.label, task.input = backgroundTask, "/a", "research", "find the bug"
 	createTestBackgroundJob(t, store, task)
 
-	note := testBackgroundJob("main", "turn-1/call/n")
-	note.childKey, note.agent = "/b", "researcher"
+	note := testBackgroundJob("main/b", "turn-1/call/n")
 	createTestBackgroundJob(t, store, note)
 	finishTestBackgroundJob(t, store, note, backgroundCompleted, true)
 
-	wake := testBackgroundJob("main", "/b/wake/W")
-	wake.kind, wake.childKey, wake.subagentKey = backgroundSubagentWake, "/b", "/b"
-	createTestBackgroundJob(t, store, wake)
-	_, err := claimBackgroundNotes(t.Context(), store.db, "main", "/b", wake.jobID, false)
-	require.NoError(t, err)
-
 	started, release := make(chan struct{}, 1), make(chan struct{})
-	notes := &backgroundNotesMock{noteReadyFunc: func(string) {}, continueSubagentFunc: func(_ context.Context, job *backgroundJob, _ string) (string, error) {
-		if job.kind == backgroundSubagentWake {
-			return "analysis", nil
-		}
-
+	notes := &backgroundNotesMock{noteReadyFunc: func(string) {}, continueSubagentFunc: func(context.Context, *backgroundJob) (string, error) {
 		started <- struct{}{}
 
 		<-release
@@ -505,25 +494,23 @@ func TestRestartSettlesRunningJobs(t *testing.T) {
 	require.NoError(t, err)
 
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
-	_, err = turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-2/call/c", Kind: rocketcode.BackgroundKindTask, SubagentKey: "/a"}, &backgroundWorkMock{})
-	require.EqualError(t, err, "subagent /a is still running; wait for its note before continuing it", "the subagent is busy before it resumes")
 	require.Empty(t, notes.noteReadyCalls(), "nothing wakes before resume")
 
 	require.NoError(t, resume(t.Context()))
 	<-started
 
-	woken := make([]string, 0, 2)
+	woken := make([]string, 0, 3)
 	for _, call := range notes.noteReadyCalls() {
 		woken = append(woken, call.ConversationID)
 	}
 
-	require.Equal(t, []string{"cron:daily", "private"}, woken, "only hidden runs are woken for killed scripts")
+	require.Equal(t, []string{"cron:daily", "main/b", "private"}, woken, "hidden runs are woken for killed scripts, and a subagent session for its note")
 
 	for _, detached := range []bool{false, true} {
 		attach := &backgroundWorkMock{DetachFunc: func() bool { return true }}
 		result, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: task.jobID, Kind: rocketcode.BackgroundKindTask, SubagentKey: "/a", Detached: detached}, attach)
 		require.NoError(t, err)
-		require.Equal(t, rocketcode.BackgroundResult{Moved: true}, result, "a re-attached call does not run the subagent again")
+		require.Equal(t, rocketcode.BackgroundResult{Moved: true}, result, "a re-attached call does not wait again")
 		require.Len(t, attach.DetachCalls(), 1)
 	}
 
@@ -531,34 +518,20 @@ func TestRestartSettlesRunningJobs(t *testing.T) {
 	require.NoError(t, registry.group.Wait())
 
 	calls := notes.continueSubagentCalls()
-	require.Len(t, calls, 2)
-
-	for _, call := range calls {
-		if call.Job.kind == backgroundTask {
-			require.Equal(t, task.jobID, call.Job.jobID)
-			require.Equal(t, registry.runnerID, call.Job.runnerID)
-			require.Empty(t, call.Input, "the subagent resumes its journaled turn")
-
-			continue
-		}
-
-		require.Equal(t, "/b", call.Job.subagentKey)
-		require.Contains(t, call.Input, `<execute id="turn-1/call/n" state="completed"`, "the wake's note is delivered again")
-	}
+	require.Len(t, calls, 1)
+	require.Equal(t, []string{task.jobID, registry.runnerID, "find the bug"}, []string{calls[0].Job.jobID, calls[0].Job.runnerID, calls[0].Job.input}, "the task waits again for its subagent's turn")
 
 	rows := func() []string {
-		rows, err := queryStrings(t.Context(), store.db, `SELECT CASE kind WHEN 'subagent_wake' THEN kind ELSE job_id END || ' ' || status || ' ' || note_state || ' ' || wake::text || ' ' || result FROM background_jobs ORDER BY 1`, "background rows")
+		rows, err := queryStrings(t.Context(), store.db, `SELECT job_id || ' ' || status || ' ' || note_state || ' ' || wake::text || ' ' || result FROM background_jobs ORDER BY 1`, "background rows")
 		require.NoError(t, err)
 
 		return rows
 	}
 	settled := []string{
-		"subagent_wake completed none false analysis",
-		"subagent_wake killed none false ",
 		"turn-1/call/a completed pending true found it",
 		"turn-1/call/cron:daily killed pending true ",
 		"turn-1/call/main killed pending false ",
-		"turn-1/call/n completed consumed true completed",
+		"turn-1/call/n completed pending true completed",
 		"turn-1/call/private killed pending true ",
 	}
 	require.Equal(t, settled, rows())
@@ -570,56 +543,4 @@ func TestRestartSettlesRunningJobs(t *testing.T) {
 	require.NoError(t, resume(t.Context()))
 	require.Equal(t, settled, rows(), "a second start replays nothing")
 	require.Empty(t, again.continueSubagentCalls())
-}
-
-// Notes are claimed for the nearest detached job among the subagent and its ancestors; no wake starts.
-func TestRunningSubagentDrainsItsNotes(t *testing.T) {
-	t.Parallel()
-
-	store := newTestSessionService(t)
-	notes := &backgroundNotesMock{noteReadyFunc: func(string) {}}
-	registry := newBackgroundRegistry(store, notes, testLogger())
-	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}, turnID: "turn-1"}
-	started, release, finished := make(chan struct{}, 4), make(chan struct{}), make(chan struct{})
-	close(finished)
-
-	// The detached subagent /a runs its own subagent /a/b attached.
-	_, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/a", Kind: rocketcode.BackgroundKindTask, Label: "research", Agent: "main", SubagentKey: "/a", Detached: true}, blockedWork(started, release))
-	require.NoError(t, err)
-	<-started
-
-	var nested errgroup.Group
-	nested.Go(func() error {
-		_, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/a/b", Kind: rocketcode.BackgroundKindTask, Agent: "researcher", ChildKey: "/a", SubagentKey: "/a/b"}, blockedWork(started, release))
-		return err
-	})
-	<-started
-
-	for jobID, owner := range map[string]string{"turn-1/call/s1": "/a", "turn-1/call/s2": "/a/b"} {
-		_, err = turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: jobID, Kind: rocketcode.BackgroundKindExecute, Label: "tests", Agent: "researcher", ChildKey: owner, Detached: true}, blockedWork(started, finished))
-		require.NoError(t, err)
-		<-started
-	}
-
-	require.Eventually(t, func() bool {
-		states, err := queryStrings(context.Background(), store.db, `SELECT note_state FROM background_jobs WHERE kind = 'execute'`, "notes")
-		return err == nil && slices.Equal(states, []string{"pending", "pending"})
-	}, 5*time.Second, time.Millisecond)
-
-	for jobID, owner := range map[string]string{"turn-1/call/s1": "/a", "turn-1/call/s2": "/a/b"} {
-		header := "[System]"
-		require.Equal(t, []rocketcode.PromptInput{{ID: jobID, Texts: []string{header + "\n\n" + `<execute id="` + jobID + `" state="completed" description="tests">` + "\ndone\n</execute>"}, Header: header}}, turn.DrainNotes(t.Context(), owner))
-		require.Empty(t, turn.DrainNotes(t.Context(), owner))
-	}
-
-	claims, err := queryStrings(t.Context(), store.db, `SELECT claimed_turn_id FROM background_jobs WHERE kind = 'execute'`, "claims")
-	require.NoError(t, err)
-	require.Equal(t, []string{"turn-1/call/a", "turn-1/call/a"}, claims, "the detached /a settles both claims")
-
-	close(release)
-	require.NoError(t, nested.Wait())
-	require.NoError(t, registry.group.Wait())
-	require.Empty(t, notes.continueSubagentCalls(), "the running subagents took the notes")
-	require.Equal(t, []string{"execute completed consumed done", "execute completed consumed done", "task completed pending done"}, backgroundRows(t, store))
-	require.Len(t, notes.noteReadyCalls(), 1, "only the task's own note reaches the main agent")
 }

@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,7 +36,7 @@ func TestSessionTagToolsBridge(t *testing.T) {
 				groups = "    rocketclaw_set_tag: [[triage, investigating, resolved], [customer, internal]]\n"
 			}
 
-			writeMainAgentSkills(t, workspace, "---\nmodel: gpt-6.1-sol\npermission:\n  read: allow\n  rocketclaw:\n    '*': allow\n    rocketclaw_get_tags: allow\n"+groups+"---\nPrompt\n")
+			writeMainAgentSkills(t, workspace, "---\nmodel: gpt-6.1-sol\npermission:\n  read: allow\n  rocketclaw:\n    rocketclaw_get_tags: allow\n"+groups+"---\nPrompt\n")
 			service := newTestSessionServiceAt(t, workspace)
 			// A real PostgreSQL write failure must reach the tool without changing active tags.
 			_, err := service.db.ExecContext(t.Context(), `ALTER TABLE session_tags ADD CONSTRAINT reject_resolved CHECK (NOT (tags ? 'resolved'))`)
@@ -200,138 +201,6 @@ func TestSessionTagToolsBridge(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestSessionTagChildAuthority(t *testing.T) {
-	t.Parallel()
-
-	for _, mode := range []toolMode{toolModePersistent} {
-		for _, tc := range []struct{ root, child bool }{{true, false}, {false, true}, {true, true}} {
-			t.Run(fmt.Sprintf("%v/%v/%v", mode, tc.root, tc.child), func(t *testing.T) {
-				workspace := t.TempDir()
-
-				for _, agent := range []struct {
-					name, model, tag string
-					enabled          bool
-				}{{"main", "gpt-6.1-sol", "root-only", tc.root}, {"helper", "gpt-5.4", "child-only", tc.child}} {
-					groups := ""
-					if agent.enabled {
-						groups = "    rocketclaw_set_tag: [[" + agent.tag + "]]\n"
-					}
-
-					writeAgent(t, workspace, agent.name, "---\ndescription: Agent\nmodel: "+agent.model+"\npermission:\n  read: allow\n  task: {helper: allow}\n  rocketclaw:\n    '*': allow\n"+groups+"---\nPrompt\n")
-				}
-
-				service := newTestSessionServiceAt(t, workspace)
-				counts := map[string]int{}
-
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					var body struct {
-						Model, Instructions string
-						Tools               []struct{ Name string }
-						Input               []struct{ Type, Output string }
-					}
-					if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
-						return
-					}
-
-					child := body.Model == "gpt-5.4"
-
-					enabled := tc.root
-					if child {
-						enabled = tc.child
-					}
-
-					for _, name := range []string{setTagToolName, getTagsToolName} {
-						for _, tool := range body.Tools {
-							assert.NotEqual(t, name, tool.Name, "tag tools run only inside execute")
-						}
-
-						assert.Equal(t, enabled, strings.Contains(body.Instructions, name))
-					}
-
-					var outputs []string
-
-					for _, item := range body.Input {
-						if item.Type == "function_call_output" {
-							outputs = append(outputs, item.Output)
-						}
-					}
-
-					counts[body.Model]++
-					n := counts[body.Model]
-
-					w.Header().Set("Content-Type", "application/json")
-
-					id := fmt.Sprintf("%s-%d", body.Model, n)
-					if child {
-						switch n {
-						case 1:
-							writeRawRunFunctionCall(t, w, id, "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_set_tag(tag=\"root-only\")\n"}`))
-						case 2:
-							assert.Contains(t, outputs[0], "failed")
-							writeRawRunFunctionCall(t, w, id, "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_set_tag(tag=\"child-only\")\n"}`))
-						case 3:
-							writeRawRunFunctionCall(t, w, id, "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_get_tags()\n"}`))
-						default:
-							if tc.child {
-								assert.Contains(t, outputs[1], `"child-only"`)
-								assert.Equal(t, outputs[1], outputs[2])
-							} else {
-								assert.Contains(t, outputs[1], "failed")
-								assert.Contains(t, outputs[2], "undefined: rocketclaw_get_tags")
-							}
-
-							writeRawRunMessage(t, w, id, "child-message", "child done")
-						}
-					} else {
-						switch n {
-						case 1:
-							writeRawRunFunctionCall(t, w, id, "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_set_tag(tag=\"root-only\")\n"}`))
-						case 2:
-							writeRawRunFunctionCall(t, w, id, "task", struct {
-								Description string `json:"description"`
-								Prompt      string `json:"prompt"`
-								Agent       string `json:"subagent_type"`
-							}{"delegate", "delegated prompt", "helper"})
-						default:
-							writeRawRunMessage(t, w, id, "root-message", "done")
-						}
-					}
-				}))
-				defer server.Close()
-
-				cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
-				root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(cfg), "main", slog.New(slog.DiscardHandler), mode)
-
-				require.NoError(t, err)
-				defer func() { require.NoError(t, root.Close()) }()
-
-				bridge := &Bridge{runtime: config.NewLockedConfig(cfg), config: Config{ConversationID: "owning", SessionService: service, RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}}, log: slog.New(slog.DiscardHandler)}
-				runtimeConfig := bridge.rocketcodeConfig(workspace, nil, sessionTagTools(service, "owning")...)
-				runtimeConfig.Journal = rocketcode.InertJournal{}
-				runtimeConfig.ChildSessions = rocketcode.InertChildSessions{}
-				runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
-				require.NoError(t, err)
-
-				input := make(chan rocketcode.PromptInput, 1)
-				input <- rocketcode.PromptInput{Texts: []string{"delegate"}, Responses: make(chan rocketcode.ChatResponse, 100)}
-
-				close(input)
-
-				memory := new(memoryStore)
-				require.NoError(t, runtime.Loop(t.Context(), input, memory.in(), memory.out, make(chan os.Signal)))
-				require.Equal(t, 4, counts["gpt-5.4"])
-				tags, err := sessionTags(t.Context(), service.db, "owning")
-				require.NoError(t, err)
-				require.Equal(t, tc.root, slices.Contains(tags, "root-only"))
-				require.Equal(t, tc.child, slices.Contains(tags, "child-only"))
-				ids, err := queryStrings(t.Context(), service.db, "SELECT conversation_id FROM session_tags", "tag owners")
-				require.NoError(t, err)
-				require.Equal(t, []string{"owning"}, ids)
-			})
-		}
 	}
 }
 
@@ -608,11 +477,9 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 		list, get, current bool
 		auto               bool
 	}{
-		{"exact", "rocketclaw_list_sessions: allow\n    rocketclaw_get_session: deny\n    rocketclaw_current_session_id: allow", true, false, true, false},
+		{"exact", "rocketclaw_sessions_list: allow\n    rocketclaw_sessions_get: deny\n    rocketclaw_sessions_current_id: allow", true, false, true, false},
 		{"absent", "{}", false, false, false, false},
-		{"wildcard", "'rocketclaw_*': allow", true, true, true, false},
-		{"wildcard deny", "'*': allow\n    rocketclaw_get_session: deny\n    rocketclaw_current_session_id: deny", true, false, false, false},
-		{"auto", "rocketclaw_list_sessions: auto\n    rocketclaw_get_session: deny\n    rocketclaw_current_session_id: auto", true, false, true, true},
+		{"auto", "rocketclaw_sessions_list: auto\n    rocketclaw_sessions_get: deny\n    rocketclaw_sessions_current_id: auto", true, false, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -669,7 +536,7 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 
 				requests++
 				if requests == 2 {
-					// Reviews so far came from the Execute call to rocketclaw_list_sessions alone.
+					// Reviews so far came from the Execute call to rocketclaw_sessions_list alone.
 					listApprovals = approvals
 				}
 
@@ -681,7 +548,7 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 
 				for _, tool := range body.Tools {
 					switch tool.Name {
-					case listSessionsToolName, getSessionToolName, currentSessionIDToolName:
+					case sessionsListToolName, sessionsGetToolName, sessionsCurrentIDToolName:
 						assert.Failf(t, "execute-only tool is model-facing", "%s", tool.Name)
 					}
 				}
@@ -696,28 +563,28 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 
 				if requests == probe {
 					// The strict schema stops a call without criteria before the tool runs.
-					writeRawRunFunctionCall(t, w, "missing-criteria", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_list_sessions(since=\"1h\", until=\"\", limit=1, include_message_preview=False)\n"}`))
+					writeRawRunFunctionCall(t, w, "missing-criteria", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_sessions_list(since=\"1h\", until=\"\", limit=1, include_message_preview=False)\n"}`))
 
 					return
 				}
 
 				switch requests {
 				case 1:
-					writeRawRunFunctionCall(t, w, "list", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_list_sessions(criteria=\"\", since=\"1970-01-01T00:00:00Z\", until=\"\", limit=200, include_message_preview=True)\n"}`))
+					writeRawRunFunctionCall(t, w, "list", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_sessions_list(criteria=\"\", since=\"1970-01-01T00:00:00Z\", until=\"\", limit=200, include_message_preview=True)\n"}`))
 				case 2:
-					writeRawRunFunctionCall(t, w, "get", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_get_session(conversation_id=\"external_mcp:private\", limit=100, before_entry_id=0)\n"}`))
+					writeRawRunFunctionCall(t, w, "get", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_sessions_get(conversation_id=\"external_mcp:private\", limit=100, before_entry_id=0)\n"}`))
 				case 3:
-					writeRawRunFunctionCall(t, w, "direct-list", listSessionsToolName, json.RawMessage(`{"criteria":"","since":"1970-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`))
+					writeRawRunFunctionCall(t, w, "direct-list", sessionsListToolName, json.RawMessage(`{"criteria":"","since":"1970-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`))
 				case 4:
-					writeRawRunFunctionCall(t, w, "direct-get", getSessionToolName, json.RawMessage(`{"conversation_id":"external_mcp:private","limit":100,"before_entry_id":0}`))
+					writeRawRunFunctionCall(t, w, "direct-get", sessionsGetToolName, json.RawMessage(`{"conversation_id":"external_mcp:private","limit":100,"before_entry_id":0}`))
 				case 5:
-					writeRawRunFunctionCall(t, w, "current", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_current_session_id()\n"}`))
+					writeRawRunFunctionCall(t, w, "current", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_sessions_current_id()\n"}`))
 				case 6:
-					writeRawRunFunctionCall(t, w, "direct-current", "rocketclaw_current_session_id", json.RawMessage(`{}`))
+					writeRawRunFunctionCall(t, w, "direct-current", "rocketclaw_sessions_current_id", json.RawMessage(`{}`))
 				case 7:
 					code, err := json.Marshal(struct {
 						Code string `json:"code"`
-					}{fmt.Sprintf("def main():\n    return rocketclaw_get_session(conversation_id=%q, limit=100, before_entry_id=0)\n", outputs[4])})
+					}{fmt.Sprintf("def main():\n    return rocketclaw_sessions_get(conversation_id=%q, limit=100, before_entry_id=0)\n", outputs[4])})
 					if !assert.NoError(t, err) {
 						return
 					}
@@ -735,19 +602,22 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			require.NoError(t, root.MkdirAll("shell", 0o700))
 
 			bridge := &Bridge{runtime: config.NewLockedConfig(cfg), config: Config{ConversationID: "external_mcp:private", SessionService: service, RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}}, log: slog.New(slog.DiscardHandler)}
-			runtimeConfig := bridge.rocketcodeConfig(filepath.Join(workspace, "shell"), nil)
+			runtimeConfig := bridge.rocketcodeConfig(filepath.Join(workspace, "shell"), nil, currentSessionIDTool(bridge.config.ConversationID))
 			runtimeConfig.Journal = rocketcode.InertJournal{}
 			runtimeConfig.ChildSessions = rocketcode.InertChildSessions{}
 			runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
 			require.NoError(t, err)
 
-			list, hasList := runtime.CodeModeHosts[listSessionsToolName]
-			get, hasGet := runtime.CodeModeHosts[getSessionToolName]
-			current, hasCurrent := runtime.CodeModeHosts["rocketclaw_current_session_id"]
+			list, hasList := runtime.CodeModeHosts[sessionsListToolName]
+			get, hasGet := runtime.CodeModeHosts[sessionsGetToolName]
+			current, hasCurrent := runtime.CodeModeHosts["rocketclaw_sessions_current_id"]
 
 			require.Equal(t, tc.list, hasList)
 			require.Equal(t, tc.get, hasGet)
 			require.Equal(t, tc.current, hasCurrent)
+
+			_, hasURL := runtime.CodeModeHosts[sessionsGetURLToolName]
+			require.False(t, hasURL, "no rule here grants get_url")
 
 			if tc.list {
 				require.True(t, list.Definition.Strict.Value)
@@ -787,21 +657,21 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 				require.Contains(t, outputs[probe-1], "invalid arguments")
 				require.Contains(t, outputs[probe-1], "criteria")
 			} else {
-				require.Contains(t, outputs[0], "undefined: rocketclaw_list_sessions")
-				require.Contains(t, outputs[probe-1], "undefined: rocketclaw_list_sessions")
+				require.Contains(t, outputs[0], "undefined: rocketclaw_sessions_list")
+				require.Contains(t, outputs[probe-1], "undefined: rocketclaw_sessions_list")
 			}
 
 			if tc.get {
 				require.Equal(t, outputs[1], outputs[6])
 				require.Equal(t, "timestamp\trole\tcontent\n1970-01-01T00:00:01Z\tuser\tsecret user\n1970-01-01T00:00:01Z\tassistant\tsecret answer\n0001-01-01T00:00:00Z\tcompaction\tCompaction boundary\n1970-01-01T00:00:01Z\tuser\tafter compaction\n1970-01-01T00:00:01Z\tassistant\trecent answer\n", outputs[1])
 			} else {
-				require.Contains(t, outputs[1], "undefined: rocketclaw_get_session")
+				require.Contains(t, outputs[1], "undefined: rocketclaw_sessions_get")
 			}
 
 			if tc.current {
 				require.Equal(t, "external_mcp:private", outputs[4])
 			} else {
-				require.Contains(t, outputs[4], "undefined: rocketclaw_current_session_id")
+				require.Contains(t, outputs[4], "undefined: rocketclaw_sessions_current_id")
 			}
 
 			require.Equal(t, tc.auto, approvals > 0)
@@ -814,6 +684,254 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSessionsGetURLTool(t *testing.T) {
+	s, _ := newSessionSearchFixture(t)
+	// The fake CLI stands in for the host tailscale binary that RocketClaw shells out to.
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "tailscale"), []byte("#!/bin/sh\necho 100.95.197.99\n"), 0o755))
+	t.Setenv("PATH", bin)
+
+	for origin, want := range map[string]string{"": "http://100.95.197.99:8080", "https://rocketclaw.example.ts.net": "https://rocketclaw.example.ts.net"} {
+		cfg := &config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rocketclaw", Origin: origin}}}
+		tool := sessionsGetURLTool(&threadBridgeManager{runtime: config.NewLockedConfig(cfg), store: s})
+
+		result, err := tool.Call(t.Context(), json.RawMessage(fmt.Sprintf(`{"session_id":%q}`, searchChatW)), nil)
+		require.NoError(t, err)
+		require.Equal(t, want+"/s/"+base64.RawURLEncoding.EncodeToString([]byte(searchChatW)), result.Output)
+
+		for _, id := range []string{searchChatD + "/call-1", "cron:cron/daily.md:20260102T030405.000000000Z:run", "external_mcp:private", ""} {
+			_, err := tool.Call(t.Context(), json.RawMessage(fmt.Sprintf(`{"session_id":%q}`, id)), nil)
+			require.ErrorContains(t, err, "is not a top-level session", id)
+		}
+	}
+}
+
+// A stop write without a prompt stops the turn and goal without waiting, queues nothing, starts no
+// turn, and posts who stopped it into the target's transcript. Every other write needs a prompt.
+func TestSessionsWriteStopWithoutPrompt(t *testing.T) {
+	store := newTestSessionService(t)
+	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}}), store: store, bridges: map[string]directBridge{}}
+	bridge := runningTestBridge(t, store, manager, "web:target")
+	require.NoError(t, store.BeginGoal("web:target", "ship it", "", 5))
+
+	write := sessionsWriteTool(&Bridge{config: Config{ConversationID: "web:sender", SessionService: store}, threads: manager}, new(protocol.InboundMessage), "main", "web:sender")
+	require.False(t, write.Resumable, "a write cut off by a restart is reported interrupted, not run again")
+
+	_, err := store.db.ExecContext(t.Context(), `CREATE FUNCTION reject_goal_stop() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'goal stop failed'; END $$;
+CREATE TRIGGER reject_goal_stop BEFORE UPDATE ON conversation_goals FOR EACH STATEMENT EXECUTE FUNCTION reject_goal_stop()`)
+	require.NoError(t, err)
+
+	failed := sessionsWriteTool(&Bridge{config: Config{ConversationID: "web:failed", SessionService: store}, threads: manager}, new(protocol.InboundMessage), "main", "web:failed")
+	_, err = failed.Call(t.Context(), json.RawMessage(`{"session_id":"web:target","mode":"stop","prompt":"","title":"","agent":""}`), nil)
+	require.ErrorContains(t, err, "goal stop failed")
+	_, err = store.db.ExecContext(t.Context(), `DROP TRIGGER reject_goal_stop ON conversation_goals; DROP FUNCTION reject_goal_stop()`)
+	require.NoError(t, err)
+
+	output, err := write.Call(t.Context(), json.RawMessage(`{"session_id":"web:target","mode":"stop","prompt":" ","title":"","agent":""}`), nil)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"outcome":"stopped","session_id":"web:target","url":"https://rc.example/s/`+base64.RawURLEncoding.EncodeToString([]byte("web:target"))+`","turn_was_running":true}`, output.Output)
+	assert.Equal(t, os.Interrupt, <-bridge.activeTurnInterrupts)
+
+	goal, _, err := store.Goal("web:target")
+	require.NoError(t, err)
+	assert.Equal(t, GoalStatusStopped, goal.Status)
+	assert.Empty(t, queueIDs(t, store, "web:target"), "nothing is queued")
+	assert.Empty(t, bridge.requestCh, "the posted line starts no turn")
+
+	entries, err := store.ObserveEntries(t.Context(), "web:target")
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "a stop that failed never posts its line")
+
+	messages, err := replayInputMessages(entries[0].Entry.ReplayInput)
+	require.NoError(t, err)
+	assert.Equal(t, []replayInputMessage{{role: "developer", text: "Stopped by session web:sender (agent )"}}, messages, "the next turn reads it and Web shows it")
+
+	for _, raw := range []string{`{"session_id":"web:target","mode":"steer","prompt":"","title":"","agent":""}`, `{"session_id":"","mode":"stop","prompt":"","title":"Child","agent":""}`} {
+		_, err = write.Call(t.Context(), json.RawMessage(raw), nil)
+		require.ErrorContains(t, err, "prompt is required", raw)
+	}
+
+	_, err = write.Call(t.Context(), json.RawMessage(`{"session_id":"web:other","mode":"stop","prompt":"","title":"","agent":""}`), nil)
+	require.ErrorContains(t, err, "is not a top-level session")
+}
+
+// A stop write without a prompt to a running turn posts its line once, after the stopped turn saves
+// its history, and starts no turn.
+func TestSessionsWriteStopLineFollowsStoppedTurn(t *testing.T) {
+	t.Parallel()
+
+	nt := newNoteTest(t, func(_ http.ResponseWriter, r *http.Request, _ int, _ string) { <-r.Context().Done() })
+	nt.cfg.Web = config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
+	manager, _ := nt.run(t, ignoreOutbound)
+
+	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("hello")))
+	nt.request(t)
+
+	write := sessionsWriteTool(&Bridge{config: Config{ConversationID: "web:sender", SessionService: nt.service}, threads: manager}, new(protocol.InboundMessage), "main", "web:sender")
+	output, err := write.Call(t.Context(), json.RawMessage(`{"session_id":"`+nt.conversationID+`","mode":"stop","prompt":"","title":"","agent":""}`), nil)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"outcome":"stopped","session_id":"`+nt.conversationID+`","url":"https://rc.example/s/`+base64.RawURLEncoding.EncodeToString([]byte(nt.conversationID))+`","turn_was_running":true}`, output.Output)
+
+	var early int
+	require.NoError(t, nt.service.db.QueryRowContext(t.Context(), `WITH running AS (SELECT count(*) AS turns FROM active_turns WHERE conversation_id = $1 AND phase = $2)
+SELECT COUNT(*) FROM session_entries, running WHERE conversation_id = $1 AND turns > 0`, nt.conversationID, turnRunning).Scan(&early))
+	assert.Zero(t, early, "nothing is posted while the stopped turn has not saved")
+
+	assert.Equal(t, protocol.TerminalStopped, readFinal(t, nt.finals).Terminal)
+	nt.waitIdle(t, manager, nt.conversationID)
+	assert.Empty(t, nt.requests, "the posted line starts no turn")
+	assert.Empty(t, queueIDs(t, nt.service, nt.conversationID), "nothing is queued")
+	require.NoError(t, nt.service.postStopLines(t.Context(), nt.conversationID), "a later flush posts nothing again")
+
+	transcript, err := nt.service.ObserveTranscript(t.Context(), nt.conversationID, 0, 0, nil)
+	require.NoError(t, err)
+	require.Len(t, transcript, 2)
+	assert.Equal(t, protocol.TerminalStopped, transcript[0].Terminal, "the stopped turn comes first")
+
+	messages, err := replayInputMessages(transcript[1].Entry.ReplayInput)
+	require.NoError(t, err)
+	assert.Equal(t, []replayInputMessage{{role: "developer", text: "Stopped by session web:sender (agent )"}}, messages, "the line is last, once")
+}
+
+// Inside a turn, the write tool creates a session and writes to a Slack thread session. Both run the
+// prompt as a system turn under the sender header, and the thread's reply posts where a Web input's
+// reply would. Under auto every write is reviewed; under children the thread, which this session did
+// not create, is refused.
+func TestSessionsWriteRunsInTurn(t *testing.T) {
+	const caller = "web:caller"
+
+	script := func(callID, code string) string {
+		arguments, _ := json.Marshal(struct {
+			Code string `json:"code"`
+		}{code}) // Encoding a string cannot fail.
+
+		return fmt.Sprintf(`{"id":"resp_%[1]s","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_%[1]s","type":"function_call","status":"completed","call_id":%[1]q,"name":"execute","arguments":%[2]q}]}`, callID, arguments)
+	}
+
+	for _, tc := range []struct {
+		value           string
+		finals, reviews int
+	}{{"allow", 3, 0}, {"auto", 3, 2}, {"children", 2, 0}} {
+		t.Run(tc.value, func(t *testing.T) {
+			nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+				switch {
+				case strings.Contains(body, `"model":"review-model"`):
+					_, _ = fmt.Fprintf(w, `{"id":"resp_review","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_review","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":%q,"annotations":[]}]}]}`, `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"Requested."}`)
+				case strings.Contains(body, "message from session "+caller+" (agent main)"), strings.Contains(body, `\"outcome\":\"queued\"`), strings.Contains(body, "was not created by this session"):
+					answerNoteTest(w, r, n, body)
+				default:
+					_, _ = w.Write([]byte(script("write", "def main():\n    return rocketclaw_sessions_write(session_id='', mode='stop', prompt='child task', title='Child', agent='') + '|' + rocketclaw_sessions_write(session_id='slack-thread:C123:111.222', mode='steer', prompt='also check 2025', title='', agent='')\n")))
+				}
+			})
+			writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw: {rocketclaw_sessions_write: "+tc.value+"}\n---\nPrompt\n")
+			nt.cfg.AutoApproverModel = "review-model"
+			nt.cfg.Web = config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
+			require.NoError(t, nt.service.UpsertThread(caller, ThreadState{Agent: "main"}))
+
+			manager, _ := nt.run(t, ignoreOutbound)
+
+			prompt := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "go", true)
+			prompt.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}
+			require.NoError(t, nt.bridge(t, manager, caller).Submit(t.Context(), prompt))
+
+			finals := map[string]*protocol.OutboundMessage{}
+			for len(finals) < tc.finals {
+				final := readFinal(t, nt.finals)
+				finals[final.ConversationID] = final
+			}
+
+			created, err := queryStrings(t.Context(), nt.service.db, `SELECT conversation_id FROM managed_conversations WHERE spawned_by = $1 AND created_by = 'Alice'`, "created sessions", caller)
+			require.NoError(t, err)
+			require.Len(t, created, 1, "the creator is recorded")
+			require.Contains(t, finals, created[0])
+
+			var bodies []string
+
+			reviews := 0
+
+			for len(nt.requests) > 0 {
+				if body := <-nt.requests; strings.Contains(body, `"model":"review-model"`) {
+					reviews++
+				} else {
+					bodies = append(bodies, body)
+				}
+			}
+
+			assert.Equal(t, tc.reviews, reviews)
+
+			if tc.value == "children" {
+				assert.NotContains(t, finals, nt.conversationID)
+				assert.Len(t, bodies, 3)
+				assert.True(t, slices.ContainsFunc(bodies, func(body string) bool { return strings.Contains(body, "was not created by this session") }))
+
+				return
+			}
+
+			thread := finals[nt.conversationID]
+			require.NotNil(t, thread)
+			assert.Nil(t, thread.SlackReply, "the thread's reply posts to its thread as a Web input's does")
+			assert.Equal(t, "answer", thread.Text)
+
+			require.Len(t, bodies, 4)
+
+			last := bodies[slices.IndexFunc(bodies, func(body string) bool { return strings.Contains(body, `\"outcome\":\"queued\"`) })]
+			assert.Contains(t, last, fmt.Sprintf(`{\"outcome\":\"created\",\"session_id\":\"%[1]s\",\"url\":\"https://rc.example/s/%[2]s\"}`, created[0], base64.RawURLEncoding.EncodeToString([]byte(created[0]))))
+			assert.Contains(t, last, `\"session_id\":\"slack-thread:C123:111.222\",\"url\":\"https://rc.example/s/`)
+
+			for _, text := range []string{"child task", "also check 2025"} {
+				index := slices.IndexFunc(bodies, func(body string) bool {
+					return strings.Contains(body, "message from session "+caller) && strings.Contains(lastRequestMessage(t, body), text)
+				})
+				require.GreaterOrEqual(t, index, 0, text)
+				assert.True(t, strings.HasPrefix(lastRequestMessage(t, bodies[index]), `[System sender="message from session `+caller+` (agent main)"`), lastRequestMessage(t, bodies[index]))
+			}
+		})
+	}
+}
+
+func TestCheckSessionTarget(t *testing.T) {
+	s, _ := newSessionSearchFixture(t)
+	// "caller" or its subagent created "child", which created "grandchild". "creator" created "caller", and a
+	// person created searchChatH, which leaves spawned_by empty as a fork does. A one-off cron run creates for
+	// its visible chat searchChatE, and the private External MCP turn holds its managed chat searchChatX.
+	for id, spawnedBy := range map[string]string{"caller": "creator", "creator": "", "child": "caller", "grandchild": "child", "cron-child": searchChatE, "one-off-cron:run": ""} {
+		require.NoError(t, s.UpsertThread(id, ThreadState{Agent: "main", spawnedBy: spawnedBy}))
+	}
+
+	s.reserveTurnPair(searchChatX, "external_mcp:private")
+
+	for _, tc := range []struct {
+		children                 bool
+		owner, sync, target, err string
+	}{
+		{false, "caller", "", searchChatW, ""},
+		{false, "caller", "", searchChatD, ""},
+		{false, "caller", "", searchChatA, ""},
+		{false, "caller", "", searchChatX, ""},
+		{false, "caller", "", searchChatD + "/call-1", "is not a top-level session"},
+		{false, "caller", "", "cron:cron/daily.md:20260102T030405.000000000Z:run", "is not a top-level session"},
+		{false, "caller", "", "one-off-cron:run", "is not a top-level session"},
+		{false, "caller", "", "external_mcp:private", "is not a top-level session"},
+		{false, "caller", "", "unrecorded/child", "is not a top-level session"},
+		{true, "caller", "", "child", ""},
+		{true, "one-off-cron:run", searchChatE, "cron-child", ""},
+		{true, "caller", "", "grandchild", "was not created by this session"},
+		{true, "caller", "", searchChatH, "was not created by this session"},
+		{true, "caller", "", "creator", "was not created by this session"},
+		// Subagents run with their owning conversation ID, so this also covers a subagent targeting its parent.
+		{false, "caller", "", "caller", "is this session"},
+		{false, "one-off-cron:run", searchChatE, searchChatE, "is this session"},
+		{false, "external_mcp:private", "", searchChatX, "is this session"},
+	} {
+		err := s.checkSessionTarget(t.Context(), tc.children, tc.owner, tc.sync, tc.target)
+		if tc.err == "" {
+			require.NoError(t, err, tc.target)
+		} else {
+			require.ErrorContains(t, err, tc.err, tc.target)
+		}
 	}
 }
 

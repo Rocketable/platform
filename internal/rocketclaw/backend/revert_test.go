@@ -376,7 +376,7 @@ VALUES ($1, 'parent', $2, $3, '{}', '[{"id":"input","text":"prepared"}]')`, chil
 	require.Len(t, entries, 2)
 }
 
-// Removed calls' delegations go, also by call-ID-plus-hash key; running Background Jobs keep theirs, like $stop.
+// Removed calls' delegations go, also by call-ID-plus-hash key; running and queued Background Jobs keep theirs, like $stop.
 func TestRevertKeepsKeptAndRunningSubagents(t *testing.T) {
 	t.Parallel()
 
@@ -408,6 +408,7 @@ func TestRevertKeepsKeptAndRunningSubagents(t *testing.T) {
 	job := testBackgroundJob("main", "turn-2/call/call_b")
 	job.kind, job.subagentKey = backgroundTask, "/call_b-cccccccc"
 	createTestBackgroundJob(t, s, job)
+
 	seedActiveTurn(t, s, "main", "turn-2", nil)
 
 	for _, key := range []string{"turn-2/call/call_b/step", "turn-2/call/call_r"} {
@@ -1313,7 +1314,7 @@ func TestRevertSavedAttachmentRetryIdentity(t *testing.T) {
 		{Name: "notes.pdf", MIMEType: "application/pdf", Data: []byte("file bytes")},
 	}}, true)
 	inbound.ConversationID, inbound.Metadata["web_message_id"], inbound.Metadata[protocol.InboundPrincipalMetadataKey] = "main", "original", "alice"
-	prompt := buildPrompt(inbound, nil)
+	prompt := buildPrompt(inbound, nil, false)
 	header, _, _ := strings.Cut(prompt, "\n\n")
 	attachments := attachmentsFromInbound(inbound.Attachments)
 

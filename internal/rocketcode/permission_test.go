@@ -193,6 +193,12 @@ websearch: allow
 		"read: ask":                      `permission action "ask" is not supported`,
 		"doom_loop: deny":                `permission "doom_loop" is not supported`,
 		"external_directory: deny":       `permission "external_directory" is not supported`,
+		"rocketclaw: {session: {spawn_mode: all}}":     "session.spawn_mode is removed; use rocketclaw_sessions_write",
+		"rocketclaw: allow":                            `permission "rocketclaw": name each rocketclaw tool`,
+		"rocketclaw: {'*': allow}":                     `permission "rocketclaw": name each rocketclaw tool`,
+		"rocketclaw: {rocketclaw_sessions_*: allow}":   `permission "rocketclaw": name each rocketclaw tool`,
+		"rocketclaw: {rocketclaw_sessions_write: all}": `unknown permission action "all"`,
+		"rocketclaw: {rocketclaw_restart: children}":   `unknown permission action "children"`,
 	} {
 		_, err := parsePermissionNode(parseYAMLNode(t, input))
 		require.ErrorContains(t, err, want)
@@ -235,6 +241,8 @@ func TestPermissionSetHelpers(t *testing.T) {
 	require.NoError(t, permissions.Deny("tools", "current_time"))
 	require.NoError(t, permissions.Allow("tools", "current_time"))
 	require.Equal(t, PermissionAllow, permissions.evaluate("tools", "current_time").Action)
+	require.NoError(t, permissions.Allow("rocketclaw", "rocketclaw_*"))
+	require.Equal(t, PermissionDeny, permissions.evaluate("rocketclaw", "rocketclaw_restart").Action)
 
 	permissions = PermissionSet{Buckets: nil}
 	require.NoError(t, permissions.Allow("apply_patch", "*.go"))
@@ -253,16 +261,13 @@ func TestPermissionSetEvaluate(t *testing.T) {
 		{name: "root instructions default on", yaml: `{}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionAllow, matched: false},
 		{name: "root instructions enabled", yaml: `rocketclaw: {load_agents_md: true}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionAllow, matched: true},
 		{name: "root instructions disabled", yaml: `rocketclaw: {load_agents_md: false}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionDeny, matched: true},
-		{name: "root instructions ignore wildcard", yaml: `rocketclaw: {'*': deny}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionAllow, matched: false},
-		{name: "root instructions ignore later wildcard", yaml: `rocketclaw: {load_agents_md: false, '*': allow}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionDeny, matched: true},
 		{name: "root instructions last exact rule wins", yaml: `rocketclaw: {load_agents_md: false, load_agents_md: true}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionAllow, matched: true},
 		{name: "background default off", yaml: `{}`, permission: "rocketclaw", subject: "allow_background", action: PermissionDeny, matched: false},
 		{name: "background enabled", yaml: `rocketclaw: {allow_background: allow}`, permission: "rocketclaw", subject: "allow_background", action: PermissionAllow, matched: true},
 		{name: "background disabled", yaml: `rocketclaw: {allow_background: deny}`, permission: "rocketclaw", subject: "allow_background", action: PermissionDeny, matched: true},
-		{name: "background ignores scalar allow", yaml: `rocketclaw: allow`, permission: "rocketclaw", subject: "allow_background", action: PermissionDeny, matched: false},
-		{name: "background ignores wildcard", yaml: `rocketclaw: {'*': allow}`, permission: "rocketclaw", subject: "allow_background", action: PermissionDeny, matched: false},
 		{name: "tag groups are not action rules", yaml: `rocketclaw: {rocketclaw_set_tag: [[red, yellow, green]]}`, permission: "rocketclaw", subject: "rocketclaw_set_tag", action: PermissionDeny, matched: false},
-		{name: "tag groups preserve other rules", yaml: `rocketclaw: {rocketclaw_set_tag: [[red, yellow, green]], rocketclaw_get_session: allow}`, permission: "rocketclaw", subject: "rocketclaw_get_session", action: PermissionAllow, matched: true},
+		{name: "tag groups preserve other rules", yaml: `rocketclaw: {rocketclaw_set_tag: [[red, yellow, green]], rocketclaw_sessions_get: allow}`, permission: "rocketclaw", subject: "rocketclaw_sessions_get", action: PermissionAllow, matched: true},
+		{name: "session write children allows", yaml: `rocketclaw: {rocketclaw_sessions_write: children}`, permission: "rocketclaw", subject: "rocketclaw_sessions_write", action: PermissionAllow, matched: true},
 		{name: "scalar tag rule stays scalar", yaml: `rocketclaw: {rocketclaw_set_tag: auto}`, permission: "rocketclaw", subject: "rocketclaw_set_tag", action: PermissionAuto, matched: true},
 		{name: "explicit deny", yaml: `tools: {restart: deny}`, permission: "tools", subject: "restart", action: PermissionDeny, matched: true},
 		{name: "slash allow does not match backslash", yaml: `read: {'dir/file': allow}`, permission: "read", subject: `dir\file`, action: PermissionDeny, matched: false},
@@ -270,7 +275,7 @@ func TestPermissionSetEvaluate(t *testing.T) {
 		{name: "literal backslash matches", yaml: `read: {'dir\file': allow}`, permission: "read", subject: `dir\file`, action: PermissionAllow, matched: true},
 		{name: "slash deny does not match backslash", yaml: `read: {'*': allow, 'dir/file': deny}`, permission: "read", subject: `dir\file`, action: PermissionAllow, matched: true},
 		{name: "literal backslash deny matches", yaml: `read: {'*': allow, 'dir\file': deny}`, permission: "read", subject: `dir\file`, action: PermissionDeny, matched: true},
-		{name: "wildcard match", yaml: `rocketclaw: {restart_*: allow}`, permission: "rocketclaw", subject: "restart_tool", action: PermissionAllow, matched: true},
+		{name: "wildcard match", yaml: `tools: {restart_*: allow}`, permission: "tools", subject: "restart_tool", action: PermissionAllow, matched: true},
 		{name: "last match wins", yaml: `tools: {"*": allow, restart: deny}`, permission: "tools", subject: "restart", action: PermissionDeny, matched: true},
 		{name: "read inherits edit allow", yaml: `edit: {docs/*.md: allow}`, permission: "read", subject: "docs/guide.md", action: PermissionAllow, matched: true},
 		{name: "global bucket is ignored", yaml: `"*": {"*": allow}`, permission: "bash", subject: "git status", action: PermissionDeny, matched: false},

@@ -113,7 +113,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 		observer = &permissionReviewDiagnostics{output: parentOutput, reviewer: agent.Name}
 	}
 
-	last, err := child.runPrompt(reviewCtx, "", texts, f.childSession, childFactory.childSessionOut(reviewCtx), observer)
+	last, err := child.runPrompt(reviewCtx, "", texts, f.childSession, childFactory.childSessionOut(reviewCtx, ""), observer)
 	if err != nil {
 		if reviewCtx.Err() == context.DeadlineExceeded {
 			return permissionReviewFailure("automatic permission review timed out while evaluating the requested approval")

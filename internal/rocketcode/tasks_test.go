@@ -18,7 +18,6 @@ import (
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sync/errgroup"
 )
 
 func TestTaskPublicLifecycleKeepsReviewContentPrivate(t *testing.T) {
@@ -29,31 +28,24 @@ func TestTaskPublicLifecycleKeepsReviewContentPrivate(t *testing.T) {
 				defer func() { close(reviewRelease); synctest.Wait() }()
 
 				api := mockResponseFunc(func(_ context.Context, params *responses.ResponseNewParams) (*responses.Response, error) {
-					input := marshalJSON(t, params.Input)
-					if strings.Contains(input, "Current Action: response") {
+					if strings.Contains(marshalJSON(t, params.Input), "Current Action: response") {
 						<-reviewRelease
 						return responseWithMessage("review", fmt.Sprintf(`{"approved":%t,"reason":"REVIEWER_PRIVATE_SENTINEL"}`, approved)), nil
 					}
 
-					if strings.Contains(input, "Current Action: delegation") {
-						return responseWithMessage("gate", `{"approved":true,"reason":"REVIEWER_PRIVATE_SENTINEL"}`), nil
-					}
-
-					return responseWithMessage("child", "CHILD_PRIVATE_SENTINEL"), nil
+					return responseWithMessage("gate", `{"approved":true,"reason":"REVIEWER_PRIVATE_SENTINEL"}`), nil
 				})
 				factory := testTaskFactory(api, Agents{Items: map[string]Agent{
-					"alias": {Name: "canonical-child", Model: "alias-model", Guardrail: "guard"},
+					"child": {Name: "child", Model: "gpt-5.4", Guardrail: "guard"},
 					"guard": testAgent("guard"),
 				}})
-				resolver := factory.resolver
-				factory.resolver = testModelResolverFunc(func(model string) (*openai.Client, ProviderOrigin, error) {
-					client, _, err := resolver.Resolve(model)
-					if err != nil {
-						return nil, ProviderOrigin{}, fmt.Errorf("resolve test model: %w", err)
-					}
-
-					return client, ProviderOrigin{Provider: "canonical-provider", Model: "canonical-model"}, nil
-				})
+				factory.childSessions = &mockChildSessions{
+					AppendChildEntryFunc: func(context.Context, string, *SessionEntry) error { return nil },
+					WriteSubagentFunc:    func(context.Context, *SubagentWrite) (bool, error) { return false, nil },
+					AwaitSubagentFunc: func(context.Context, string, string) (string, ReplayAttribution, error) {
+						return "CHILD_PRIVATE_SENTINEL", ReplayAttribution{Agent: "child", Model: "canonical-provider/canonical-model"}, nil
+					},
+				}
 				sink := recordingJournal()
 				l := emptyTestLooper()
 				l.Journal = sink
@@ -67,8 +59,8 @@ func TestTaskPublicLifecycleKeepsReviewContentPrivate(t *testing.T) {
 				)
 				go func() {
 					outputs, _, err = l.dispatchToolCalls(t.Context(), responseWithFunctionCalls("parent-response", []responses.ResponseFunctionToolCall{
-						testFunctionCall("item-A", "A", "task", `{"subagent_type":"alias","prompt":"do it","description":"PRIVATE_DESCRIPTION"}`),
-						testFunctionCall("item-B", "B", "task", `{"subagent_type":"alias","prompt":"do it","description":"PRIVATE_DESCRIPTION"}`),
+						testFunctionCall("item-A", "A", "task", `{"subagent_type":"child","prompt":"do it","description":"PRIVATE_DESCRIPTION"}`),
+						testFunctionCall("item-B", "B", "task", `{"subagent_type":"child","prompt":"do it","description":"PRIVATE_DESCRIPTION"}`),
 					}), nil, nil)
 				}()
 
@@ -83,7 +75,7 @@ func TestTaskPublicLifecycleKeepsReviewContentPrivate(t *testing.T) {
 					require.Equal(t, []string{"A", "B"}[i], item.ID)
 					require.Equal(t, PublicProgressDelegation, item.Kind)
 					require.Equal(t, PublicProgressReview, item.State)
-					require.Equal(t, "canonical-child", item.Agent)
+					require.Equal(t, "child", item.Agent)
 					require.Equal(t, "canonical-provider/canonical-model", item.Model)
 				}
 
@@ -142,36 +134,44 @@ func TestTaskPublicLifecycleFailureAndCancellation(t *testing.T) {
 
 				var start sync.Once
 
-				api := mockResponseFunc(func(ctx context.Context, params *responses.ResponseNewParams) (*responses.Response, error) {
-					if outcome == "stopped-review" {
-						input := marshalJSON(t, params.Input)
-						if strings.Contains(input, "Current Action: delegation") {
-							return responseWithMessage("gate", `{"approved":true,"reason":""}`), nil
-						}
-
-						if !strings.Contains(input, "Current Action: response") {
-							return responseWithMessage("child", "CHILD_PRIVATE_SENTINEL"), nil
-						}
-					}
-
+				wait := func(ctx context.Context) error {
 					start.Do(func() { close(started) })
 
 					select {
 					case <-release:
 						joined = true
-						return nil, errors.New("CHILD_FAILURE_PRIVATE_SENTINEL")
+						return errors.New("CHILD_FAILURE_PRIVATE_SENTINEL")
 					case <-ctx.Done():
 						joined = true
-						return nil, ctx.Err()
+						return ctx.Err()
 					}
+				}
+				api := mockResponseFunc(func(ctx context.Context, params *responses.ResponseNewParams) (*responses.Response, error) {
+					if strings.Contains(marshalJSON(t, params.Input), "Current Action: delegation") {
+						return responseWithMessage("gate", `{"approved":true,"reason":""}`), nil
+					}
+
+					return nil, wait(ctx)
 				})
 
 				factory := testTaskFactory(api, Agents{Items: map[string]Agent{"child": testAgent("child")}})
+				factory.childSessions = &mockChildSessions{
+					WriteSubagentFunc: func(context.Context, *SubagentWrite) (bool, error) { return false, nil },
+					AwaitSubagentFunc: func(ctx context.Context, _, _ string) (string, ReplayAttribution, error) {
+						if outcome == "stopped-review" {
+							return "CHILD_PRIVATE_SENTINEL", ReplayAttribution{Agent: "child"}, nil
+						}
+
+						return "", ReplayAttribution{}, wait(ctx)
+					},
+				}
+
 				if outcome == "stopped-review" {
 					agent := factory.agents.Items["child"]
 					agent.Guardrail = "guard"
 					factory.agents.Items["child"] = agent
 					factory.agents.Items["guard"] = testAgent("guard")
+					factory.childSessions.(*mockChildSessions).AppendChildEntryFunc = func(context.Context, string, *SessionEntry) error { return nil }
 				}
 
 				sink := recordingJournal()
@@ -265,50 +265,6 @@ func TestTaskPublicLifecycleFailureAndCancellation(t *testing.T) {
 	}
 }
 
-func TestTaskRejectsEmptySubagentModelWithoutResolving(t *testing.T) {
-	for _, model := range []string{"", "   "} {
-		t.Run(model, func(t *testing.T) {
-			calls := 0
-			factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{
-				"child": {Name: "child", Model: model},
-			}})
-			factory.resolver = testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
-				calls++
-				return nil, ProviderOrigin{}, errors.New("resolver called")
-			})
-
-			_, err := factory.runTask(context.Background(), testTaskParams("Child", "do it", "child"), toolCallMetadata{observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
-
-			require.ErrorContains(t, err, "required non-empty string")
-			require.Zero(t, calls)
-		})
-	}
-}
-
-func TestTaskResolvesSubagentModelIndependently(t *testing.T) {
-	rootClient, rootRequests := testResolverClient(t, "wrong")
-	workClient, workRequests := testResolverClient(t, "child answer")
-	resolver := testModelResolverFunc(func(model string) (*openai.Client, ProviderOrigin, error) {
-		if model == "work/gpt-child" {
-			return workClient, ProviderOrigin{Provider: "work", Model: "api-child"}, nil
-		}
-
-		return rootClient, ProviderOrigin{Provider: "openai", Model: model}, nil
-	})
-	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{
-		"child": {Name: "child", Model: "work/gpt-child"},
-	}})
-	factory.resolver = resolver
-
-	got, err := factory.runTask(context.Background(), testTaskParams("Child", "do it", "child"), toolCallMetadata{observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
-
-	require.NoError(t, err)
-	require.Equal(t, "<task_result>\nchild answer\n</task_result>", got)
-	require.Len(t, workRequests, 1)
-	require.Contains(t, <-workRequests, `"model":"api-child"`)
-	require.Empty(t, rootRequests)
-}
-
 func TestTaskResolvesGuardrailModelIndependently(t *testing.T) {
 	rootClient, rootRequests := testResolverClient(t, "wrong")
 	guardClient, guardRequests := testResolverClient(t, `{"approved":false,"reason":"blocked"}`)
@@ -338,55 +294,6 @@ func TestTaskResolvesGuardrailModelIndependently(t *testing.T) {
 }
 
 func TestTaskTool(t *testing.T) {
-	t.Run("applies child output schema", func(t *testing.T) {
-		mock := mockResponses(responseWithTaskMessages())
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": {Name: "review", Model: "gpt-5.4", Prompt: "review carefully", OutputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"answer": map[string]any{"type": "string"}},
-				"required":   []any{"answer"},
-			}},
-		}})
-
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
-
-		require.NoError(t, err)
-		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
-		require.Len(t, newParams(mock), 1)
-		require.NotNil(t, newParams(mock)[0].Text.Format.OfJSONSchema)
-		require.Equal(t, "agent_output", newParams(mock)[0].Text.Format.OfJSONSchema.Name)
-		require.True(t, newParams(mock)[0].Text.Format.OfJSONSchema.Strict.Value)
-		require.Equal(t, false, newParams(mock)[0].Text.Format.OfJSONSchema.Schema["additionalProperties"])
-	})
-
-	t.Run("returns last final child text wrapped in task result", func(t *testing.T) {
-		mock := mockResponses(responseWithTaskMessages())
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": {Name: "review", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "low", MaxRecursion: nil, Prompt: "review carefully", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
-		}})
-
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
-
-		require.NoError(t, err)
-		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
-		require.Len(t, newParams(mock), 1)
-		require.Equal(t, "review carefully", newParams(mock)[0].Instructions.Value)
-		require.Equal(t, responses.ResponseTextConfigVerbosityLow, newParams(mock)[0].Text.Verbosity)
-		require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), "check this")
-	})
-
-	t.Run("returns empty task result when child has no final text", func(t *testing.T) {
-		mock := mockResponses(testResponse("empty", nil))
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"empty": testAgent("empty"),
-		}})
-
-		got, err := factory.runTask(context.Background(), testTaskParams("Empty", "do it", "empty"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
-
-		require.NoError(t, err)
-		require.Equal(t, "<task_result>\n\n</task_result>", got)
-	})
-
 	t.Run("rejects unknown subagent", func(t *testing.T) {
 		factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
 
@@ -407,142 +314,6 @@ func TestTaskTool(t *testing.T) {
 		require.EqualError(t, err, "maxRecursion limit reached: task delegation is unavailable")
 	})
 
-	t.Run("allows any agent", func(t *testing.T) {
-		mock := mockResponses(responseWithTaskMessages())
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"helper": testAgentWithPrompt("helper", "help carefully"),
-		}})
-
-		got, err := factory.runTask(context.Background(), testTaskParams("Help", "assist", "helper"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
-
-		require.NoError(t, err)
-		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
-	})
-
-	t.Run("leaves subagent prompt shell commands literal by default", func(t *testing.T) {
-		mock := mockResponses(responseWithTaskMessages())
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": testAgentWithPrompt("review", "review !`printf carefully`"),
-		}})
-		factory.rootInstructions = "base prompt"
-
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
-
-		require.NoError(t, err)
-		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
-		require.Equal(t, "base prompt\n\nreview !`printf carefully`", newParams(mock)[0].Instructions.Value)
-		require.Equal(t, "review !`printf carefully`", factory.agents.Items["review"].Prompt)
-	})
-
-	t.Run("expands subagent prompt when enabled without mutating loaded agent", func(t *testing.T) {
-		dir := t.TempDir()
-		root, err := os.OpenRoot(dir)
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-		require.NoError(t, root.WriteFile("MEMORY.md", []byte("carefully"), 0o644))
-		shellTemp := testPromptShellTempConfig(t, root, dir)
-		env, err := newPromptExpansionEnvironment(root, shellTemp, nil, DefaultShellCommand)
-		require.NoError(t, err)
-
-		mock := mockResponses(responseWithTaskMessages())
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": testAgentWithPrompt("review", "review !`cat MEMORY.md`"),
-		}})
-		factory.rootInstructions = "base prompt"
-		factory.expandPromptShellCommands = testPromptExpansion(false, true, false)
-		factory.promptExpansion = env
-
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
-
-		require.NoError(t, err)
-		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
-		require.Equal(t, "base prompt\n\nreview carefully", newParams(mock)[0].Instructions.Value)
-		require.Equal(t, "review !`cat MEMORY.md`", factory.agents.Items["review"].Prompt)
-	})
-
-	t.Run("expands subagent prompt through the subagent custom shell", func(t *testing.T) {
-		env := testPromptExpansionEnvironment(t)
-		review := testAgentWithPrompt("review", "review !`echo hi`")
-		review.CustomShell = writeCustomShell(t, env.root)
-
-		mock := mockResponses(responseWithTaskMessages())
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"review": review}})
-		factory.rootInstructions = "base prompt"
-		factory.expandPromptShellCommands = testPromptExpansion(false, true, false)
-		factory.promptExpansion = env
-
-		_, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
-
-		require.NoError(t, err)
-		require.Equal(t, "base prompt\n\nreview custom:1:echo hi", newParams(mock)[0].Instructions.Value)
-	})
-
-	t.Run("primary expansion does not enable subagent expansion", func(t *testing.T) {
-		mock := mockResponses(responseWithTaskMessages())
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": testAgentWithPrompt("review", "review !`printf carefully`"),
-		}})
-		factory.rootInstructions = "base prompt"
-		factory.expandPromptShellCommands = testPromptExpansion(true, false, false)
-
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
-
-		require.NoError(t, err)
-		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
-		require.Equal(t, "base prompt\n\nreview !`printf carefully`", newParams(mock)[0].Instructions.Value)
-	})
-
-	t.Run("parent context cancellation stops child", func(t *testing.T) {
-		started := make(chan struct{})
-		mock := mockResponseFunc(func(ctx context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
-			close(started)
-			<-ctx.Done()
-
-			return nil, ctx.Err()
-		})
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"slow": testAgent("slow"),
-		}})
-		ctx, cancel := context.WithCancel(context.Background())
-
-		var group errgroup.Group
-
-		group.Go(func() error {
-			_, err := factory.runTask(ctx, testTaskParams("Slow", "wait", "slow"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
-			return err
-		})
-
-		<-started
-		cancel()
-		require.ErrorIs(t, group.Wait(), context.Canceled)
-	})
-
-	t.Run("diagnostics mirrors subagent output with prefixes", func(t *testing.T) {
-		mock := mockResponses(responseWithTaskMessages())
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": testAgentWithPrompt("review", "review carefully"),
-		}})
-		factory.diagnostics = true
-
-		output := make(chan ChatResponse, 10)
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, output)
-
-		require.NoError(t, err)
-		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
-
-		diagnostics := drainBufferedResponses(output)
-
-		require.Equal(t, []ChatResponse{
-			subagentDiagnosticResponse(testReviewSubagentDiagnostic("delegation", 1, 1, "started: Review")),
-			subagentDiagnosticResponse(testReviewSubagentDiagnostic("reasoning summary", 1, 1, "thinking")),
-			subagentDiagnosticResponse(testReviewSubagentDiagnostic("assistant commentary", 1, 1, "commentary")),
-			subagentDiagnosticResponse(testReviewSubagentDiagnostic("assistant message", 1, 1, "first")),
-			subagentDiagnosticResponse(testReviewSubagentDiagnostic("assistant message", 1, 1, "second")),
-			subagentDiagnosticResponse(testReviewSubagentDiagnostic("delegation", 1, 1, "finished")),
-		}, diagnostics)
-	})
-
 	t.Run("guardrail approval allows child and response", func(t *testing.T) {
 		mock := mockResponses(
 			testResponse("delegation-gate", []responses.ResponseOutputItemUnion{
@@ -550,7 +321,6 @@ func TestTaskTool(t *testing.T) {
 				testMessageOutputItem("delegation-commentary", "commentary", "verifying target"),
 				testMessageOutputItem("delegation-final", "", `{"approved":true,"reason":"ok"}`),
 			}),
-			responseWithTaskMessages(),
 			responseWithMessage("response-gate", `{"approved":true,"reason":""}`),
 		)
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
@@ -562,35 +332,30 @@ func TestTaskTool(t *testing.T) {
 		mainAgent := factory.agents.Items["main"]
 		factory.agent = &mainAgent
 		factory.diagnostics = true
+		factory.childSessions = answeringSessions(map[string][]SessionEntry{}, false)
 		output := make(chan ChatResponse, 20)
 
 		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, output)
 
 		require.NoError(t, err)
-		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
+		require.Equal(t, "<task_result>\ncheck this: done\n</task_result>", got)
 		require.Equal(t, []ChatResponse{
 			subagentDiagnosticResponse(testGuardrailSubagentDiagnostic("review", "safety", ChildRunStageDelegation, "reasoning summary", 1, 1, "checking delegation")),
 			subagentDiagnosticResponse(testGuardrailSubagentDiagnostic("review", "safety", ChildRunStageDelegation, "assistant commentary", 1, 1, "verifying target")),
 			subagentDiagnosticResponse(testGuardrailResultDiagnostic(ChildRunStageDelegation, "approve: ok")),
-			subagentDiagnosticResponse(testReviewSubagentDiagnostic("delegation", 1, 1, "started: Review")),
 			subagentDiagnosticResponse(testGuardrailResultDiagnostic(ChildRunStageResponse, "approve")),
-			subagentDiagnosticResponse(testReviewSubagentDiagnostic("reasoning summary", 1, 1, "thinking")),
-			subagentDiagnosticResponse(testReviewSubagentDiagnostic("assistant commentary", 1, 1, "commentary")),
-			subagentDiagnosticResponse(testReviewSubagentDiagnostic("assistant message", 1, 1, "first")),
-			subagentDiagnosticResponse(testReviewSubagentDiagnostic("assistant message", 1, 1, "second")),
-			subagentDiagnosticResponse(testReviewSubagentDiagnostic("delegation", 1, 1, "finished")),
 		}, drainBufferedResponses(output))
-		require.Len(t, newParams(mock), 3)
+		require.Len(t, newParams(mock), 2)
 		require.Equal(t, "guard carefully", newParams(mock)[0].Instructions.Value)
 		require.NotNil(t, newParams(mock)[0].Text.Format.OfJSONSchema)
 		require.Equal(t, "guardrail_decision", newParams(mock)[0].Text.Format.OfJSONSchema.Name)
 		require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), "Current Action: delegation")
 		require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), "The agent main wants to delegate to review:")
 		require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), "check this")
-		require.Equal(t, "guard carefully", newParams(mock)[2].Instructions.Value)
-		require.Contains(t, marshalJSON(t, newParams(mock)[2].Input.OfInputItemList), "Current Action: response")
-		require.Contains(t, marshalJSON(t, newParams(mock)[2].Input.OfInputItemList), "And the response from review to main:")
-		require.Contains(t, marshalJSON(t, newParams(mock)[2].Input.OfInputItemList), "second")
+		require.Equal(t, "guard carefully", newParams(mock)[1].Instructions.Value)
+		require.Contains(t, marshalJSON(t, newParams(mock)[1].Input.OfInputItemList), "Current Action: response")
+		require.Contains(t, marshalJSON(t, newParams(mock)[1].Input.OfInputItemList), "And the response from review to main:")
+		require.Contains(t, marshalJSON(t, newParams(mock)[1].Input.OfInputItemList), "check this: done")
 	})
 
 	t.Run("guardrail prompt includes root instructions and code mode", func(t *testing.T) {
@@ -644,7 +409,6 @@ func TestTaskTool(t *testing.T) {
 	t.Run("guardrail response rejection bubbles reason", func(t *testing.T) {
 		mock := mockResponses(
 			responseWithMessage("delegation-gate", `{"approved":true,"reason":""}`),
-			responseWithTaskMessages(),
 			responseWithMessage("response-gate", `{"approved":false,"reason":"do not share"}`),
 		)
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
@@ -652,6 +416,7 @@ func TestTaskTool(t *testing.T) {
 			"safety": testAgentWithPrompt("safety", "guard carefully"),
 		}})
 		factory.diagnostics = true
+		factory.childSessions = answeringSessions(map[string][]SessionEntry{}, false)
 		output := make(chan ChatResponse, 10)
 
 		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, output)
@@ -660,7 +425,6 @@ func TestTaskTool(t *testing.T) {
 		require.Equal(t, "<task_result>\ndelegation response blocked: do not share\n</task_result>", got)
 		require.Equal(t, []ChatResponse{
 			subagentDiagnosticResponse(testGuardrailResultDiagnostic(ChildRunStageDelegation, "approve")),
-			subagentDiagnosticResponse(testReviewSubagentDiagnostic("delegation", 1, 1, "started: Review")),
 			subagentDiagnosticResponse(testGuardrailResultDiagnostic(ChildRunStageResponse, "reject: do not share")),
 		}, drainBufferedResponses(output))
 	})
@@ -909,12 +673,12 @@ func TestTaskToolDescriptionUsesOpenCodeGuidance(t *testing.T) {
 func TestLooperRunsTaskToolCall(t *testing.T) {
 	mock := mockResponses(
 		responseWithFunctionCalls("parent-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "task", `{"description":"Review","prompt":"look","subagent_type":"review"}`)}),
-		responseWithMessage("child-final", "child answer"),
 		responseWithMessage("parent-final", "parent done"),
 	)
 	factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
 		"review": testAgent("review"),
 	}})
+	factory.childSessions = answeringSessions(map[string][]SessionEntry{}, false)
 	looper := testLooper(mock)
 	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "review", Action: permissionAllow}}}}}
 	looper.Tools = map[string]looperTool{"task": factory.taskTool()}
@@ -930,148 +694,10 @@ func TestLooperRunsTaskToolCall(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("parent done")}, collectResponses(output))
-	require.Len(t, newParams(mock), 3)
-	encoded := marshalJSON(t, newParams(mock)[2].Input.OfInputItemList)
-	require.Contains(t, encoded, "child answer")
+	require.Len(t, newParams(mock), 2)
+	encoded := marshalJSON(t, newParams(mock)[1].Input.OfInputItemList)
+	require.Contains(t, encoded, "look: done")
 	require.Contains(t, encoded, `\u003ctask_result\u003e`)
-}
-
-func TestLooperTaskMaxRecursion(t *testing.T) {
-	t.Run("unlimited preserves nested delegation", func(t *testing.T) {
-		mock := mockResponses(
-			responseWithFunctionCalls("parent-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "task", `{"description":"Review","prompt":"look","subagent_type":"review"}`)}),
-			responseWithFunctionCalls("child-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-2", "call-2", "task", `{"description":"Work","prompt":"go","subagent_type":"worker"}`)}),
-			responseWithMessage("grandchild-final", "grandchild done"),
-			responseWithMessage("child-final", "child done"),
-			responseWithMessage("parent-final", "parent done"),
-		)
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": testAgentWithPermissionName("review", PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "worker", Action: permissionAllow}}}}}),
-			"worker": testAgent("worker"),
-		}})
-		looper := testLooper(mock)
-		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "review", Action: permissionAllow}}}}}
-		looper.Tools = map[string]looperTool{"task": factory.taskTool()}
-		output := make(chan ChatResponse, 10)
-
-		input := make(chan PromptInput, 1)
-		input <- testPromptInput(PromptInputRoleUser, "start", output)
-
-		close(input)
-
-		err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
-
-		require.NoError(t, err)
-		require.Len(t, newParams(mock), 5)
-		require.Equal(t, []ChatResponse{assistantMessage("parent done")}, collectResponses(output))
-		require.Contains(t, marshalJSON(t, newParams(mock)[3].Input.OfInputItemList), "grandchild done")
-	})
-
-	t.Run("one level blocks grandchild delegation", func(t *testing.T) {
-		childLimit := 5
-		remaining := 1
-		mock := mockResponses(
-			responseWithFunctionCalls("parent-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "task", `{"description":"Review","prompt":"look","subagent_type":"review"}`)}),
-			responseWithFunctionCalls("child-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-2", "call-2", "task", `{"description":"Work","prompt":"go","subagent_type":"worker"}`)}),
-			responseWithMessage("child-final", "child done"),
-			responseWithMessage("parent-final", "parent done"),
-		)
-		reviewAgent := testAgentWithPermissionName("review", PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "worker", Action: permissionAllow}}}}})
-		reviewAgent.MaxRecursion = &childLimit
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": reviewAgent,
-			"worker": testAgent("worker"),
-		}})
-		factory.recursionRemaining = &remaining
-		looper := testLooper(mock)
-		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "review", Action: permissionAllow}}}}}
-		looper.Tools = map[string]looperTool{"task": factory.taskTool()}
-		output := make(chan ChatResponse, 10)
-
-		input := make(chan PromptInput, 1)
-		input <- testPromptInput(PromptInputRoleUser, "start", output)
-
-		close(input)
-
-		err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
-
-		require.NoError(t, err)
-		require.Equal(t, []ChatResponse{assistantMessage("parent done")}, collectResponses(output))
-		require.Len(t, newParams(mock), 4)
-		require.Contains(t, marshalJSON(t, newParams(mock)[2].Input.OfInputItemList), "tool not found")
-	})
-
-	t.Run("siblings each receive remaining depth", func(t *testing.T) {
-		remaining := 1
-		mock := mockResponses(
-			responseWithFunctionCalls("parent-tool", []responses.ResponseFunctionToolCall{
-				testFunctionCall("tool-1", "call-1", "task", `{"description":"Review first","prompt":"look","subagent_type":"review"}`),
-				testFunctionCall("tool-2", "call-2", "task", `{"description":"Review second","prompt":"look","subagent_type":"review"}`),
-			}),
-			responseWithMessage("child-first", "child one"),
-			responseWithMessage("child-second", "child two"),
-			responseWithMessage("parent-final", "parent done"),
-		)
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": testAgent("review"),
-		}})
-		factory.recursionRemaining = &remaining
-		looper := testLooper(mock)
-		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "review", Action: permissionAllow}}}}}
-		looper.Tools = map[string]looperTool{"task": factory.taskTool()}
-		looper.ParallelToolCalls = 1
-		output := make(chan ChatResponse, 10)
-
-		input := make(chan PromptInput, 1)
-		input <- testPromptInput(PromptInputRoleUser, "start", output)
-
-		close(input)
-
-		err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
-
-		require.NoError(t, err)
-		require.Equal(t, []ChatResponse{assistantMessage("parent done")}, collectResponses(output))
-		require.Len(t, newParams(mock), 4)
-	})
-}
-
-func TestLooperNumbersSiblingTaskDiagnostics(t *testing.T) {
-	mock := mockResponses(
-		responseWithFunctionCalls("parent-tool", []responses.ResponseFunctionToolCall{
-			testFunctionCall("tool-1", "call-1", "task", `{"description":"Review first","prompt":"look","subagent_type":"review"}`),
-			testFunctionCall("tool-2", "call-2", "task", `{"description":"Review second","prompt":"look","subagent_type":"review"}`),
-		}),
-		responseWithMessage("child-first", "child one"),
-		responseWithMessage("child-second", "child two"),
-		responseWithMessage("parent-final", "parent done"),
-	)
-	factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-		"review": testAgent("review"),
-	}})
-	factory.diagnostics = true
-	looper := testLooper(mock)
-	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "review", Action: permissionAllow}}}}}
-	looper.Tools = map[string]looperTool{"task": factory.taskTool()}
-	looper.ParallelToolCalls = 1
-	output := make(chan ChatResponse, 20)
-
-	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "start", output)
-
-	close(input)
-
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
-
-	require.NoError(t, err)
-	require.Equal(t, []ChatResponse{
-		subagentDiagnosticResponse(testReviewSubagentDiagnostic("delegation", 1, 2, "started: Review first")),
-		subagentDiagnosticResponse(testReviewSubagentDiagnostic("assistant message", 1, 2, "child one")),
-		subagentDiagnosticResponse(testReviewSubagentDiagnostic("delegation", 1, 2, "finished")),
-		subagentDiagnosticResponse(testReviewSubagentDiagnostic("delegation", 2, 2, "started: Review second")),
-		subagentDiagnosticResponse(testReviewSubagentDiagnostic("assistant message", 2, 2, "child two")),
-		subagentDiagnosticResponse(testReviewSubagentDiagnostic("delegation", 2, 2, "finished")),
-		assistantMessage("parent done"),
-	}, collectResponses(output))
 }
 
 func TestChildRunsAppendUnderToolCallKeys(t *testing.T) {
@@ -1085,10 +711,6 @@ func TestChildRunsAppendUnderToolCallKeys(t *testing.T) {
 		responseWithMessage("probe-review", allow),
 		responseWithMessage("probe-nested-review", allow),
 		responseWithMessage("delegation-gate", approve),
-		responseWithFunctionCalls("child", []responses.ResponseFunctionToolCall{testFunctionCall("tool-3", "call-inner", "probe", `{}`)}),
-		responseWithMessage("inner-review", allow),
-		responseWithMessage("inner-nested-review", allow),
-		responseWithMessage("child-final", "child done"),
 		responseWithMessage("response-gate", approve),
 		responseWithMessage("root-final", "done"),
 	)
@@ -1097,7 +719,7 @@ func TestChildRunsAppendUnderToolCallKeys(t *testing.T) {
 		"review": {Name: "review", Model: "gpt-5.4", Guardrail: "safety", Permission: PermissionSet{Buckets: []PermissionBucket{auto}}},
 		"safety": testAgent("safety"),
 	}})
-	sessions := &mockChildSessions{AppendChildEntryFunc: func(context.Context, string, *SessionEntry) error { return nil }}
+	sessions := answeringSessions(map[string][]SessionEntry{}, false)
 	factory.childSessions = sessions
 	factory.autoApprovePermissions = true
 	probe := testLooperTool("probe")
@@ -1131,26 +753,23 @@ func TestChildRunsAppendUnderToolCallKeys(t *testing.T) {
 		got = append(got, call.Key+" "+call.Entry.Agent)
 	}
 
-	review, task, inner := calls[0].Key, calls[2].Key, calls[3].Key
+	review, task := calls[0].Key, calls[2].Key
 	require.Regexp(t, `^/call-probe-review-[0-9a-f]{8}$`, review, "a review's key adds its reviewed call key's hash to its call ID")
 	require.Regexp(t, `^/call-task-[0-9a-f]{8}$`, task, "a task's key adds its tool call key's hash to its call ID")
-	require.Regexp(t, `^/call-inner-review-[0-9a-f]{8}$`, strings.TrimPrefix(inner, task), "a subagent's review is its own child")
 	require.Equal(t, []string{
 		review + " guardian",
 		review + " guardian",
 		task + " safety",
-		inner + " guardian",
-		inner + " guardian",
-		task + " review",
 		task + " safety",
-	}, got, "a review inside a running call joins its call's review history")
+	}, got, "a review inside a running call joins its call's review history, and a task's guardrail runs join its subagent's session")
+	require.Equal(t, guardrailEntryType, calls[2].Entry.Type, "the subagent's turns skip its guardrail runs")
 }
 
 // A reused call ID gets its own permission review, a resumed turn's review keeps its own, and
 // neither shares the history of the reviewed task's subagent. A denied call's review is saved too.
 func TestPermissionReviewKeyIsUniquePerToolCall(t *testing.T) {
 	call := responseWithFunctionCalls("root", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call_0", "task", `{"description":"Review","prompt":"look","subagent_type":"child","command":""}`)})
-	allowed := []*responses.Response{call, responseWithMessage("review", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`), responseWithMessage("child", "done"), responseWithMessage("root-final", "done")}
+	allowed := []*responses.Response{call, responseWithMessage("review", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`), responseWithMessage("root-final", "done")}
 	denied := []*responses.Response{call, responseWithMessage("review", `{"risk_level":"critical","user_authorization":"unknown","outcome":"deny","rationale":"no"}`), responseWithMessage("root-final", "done")}
 	saved := map[string][]SessionEntry{}
 	rows := make([]PublicProgress, 0, 3)
@@ -1158,7 +777,7 @@ func TestPermissionReviewKeyIsUniquePerToolCall(t *testing.T) {
 	for i, turnID := range []string{"turn-1", "turn-1", "turn-2"} {
 		mock := mockResponses([][]*responses.Response{allowed, allowed, denied}[i]...)
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"child": testAgent("child")}})
-		factory.childSessions = savedChildSessions(saved)
+		factory.childSessions = answeringSessions(saved, false)
 		factory.autoApprovePermissions = true
 		looper := testLooper(mock)
 		looper.agent = Agent{Name: "main"}
@@ -1184,25 +803,24 @@ func TestPermissionReviewKeyIsUniquePerToolCall(t *testing.T) {
 	require.Len(t, saved["/"+reviewKey("turn-2", "call_0")], 1)
 	require.Equal(t, "guardian", saved["/"+reviewKey("turn-2", "call_0")][0].Agent)
 	require.Equal(t, PublicProgressBlocked, rows[2].State)
-	require.Len(t, saved, 3, "the reviews of both turns and turn-1's subagent")
+	require.Len(t, saved, 2, "the reviews of both turns")
 }
 
 // Like OpenCode's per-subagent session ID, a reused call ID starts a new subagent; a resumed call keeps its own.
 func TestTaskSubagentKeyIsUniquePerToolCall(t *testing.T) {
-	saved := map[string][]SessionEntry{}
-	mock := mockResponses(responseWithMessage("first", "one"), responseWithMessage("resumed", "one again"), responseWithMessage("second", "two"))
-	factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"child": testAgent("child")}})
-	factory.childSessions = savedChildSessions(saved)
+	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"child": testAgent("child")}})
+	sessions := answeringSessions(map[string][]SessionEntry{}, false)
+	factory.childSessions = sessions
 	task := factory.taskTool()
 
 	keys := make([]string, 0, 3)
 
-	for i, turnID := range []string{"turn-1", "turn-1", "turn-2"} {
+	for _, turnID := range []string{"turn-1", "turn-1", "turn-2"} {
 		parent := testLooper(mockResponses())
 		parent.observations.turnID = turnID
 		result, err := task.Call(withToolCallContext(t.Context(), parent, nil, "call_0"), json.RawMessage(`{"subagent_type":"child","prompt":"look","description":"Review","command":""}`), nil, toolCallMetadata{callID: "call_0", observations: parent.observations, progress: &PublicProgress{ID: "call_0"}})
 		require.NoError(t, err)
-		require.Equal(t, "<task_result>\n"+[]string{"one", "one again", "two"}[i]+"\n</task_result>", result.Output)
+		require.Equal(t, "<task_result>\nlook: done\n</task_result>", result.Output)
 
 		progress := PublicProgressFromTrace(parent.observations.trace)
 		keys = append(keys, progress[len(progress)-1].SubagentKey)
@@ -1212,9 +830,10 @@ func TestTaskSubagentKeyIsUniquePerToolCall(t *testing.T) {
 	require.Equal(t, keys[0], keys[1], "a resumed call keeps its subagent")
 	require.Equal(t, taskKey("turn-2", "call_0"), keys[2])
 	require.NotEqual(t, keys[0], keys[2])
-	require.Len(t, saved, 2)
-	require.Len(t, saved[keys[0]], 2)
-	require.Len(t, saved[keys[2]], 1)
+
+	for i, call := range sessions.WriteSubagentCalls() {
+		require.Equal(t, keys[i], call.Write.Key)
+	}
 }
 
 // taskKey is the subagent key of a new root task call keyed turnID + "/call/" + callID.
@@ -1227,30 +846,6 @@ func taskKey(turnID, callID string) string {
 func reviewKey(turnID, callID string) string {
 	sum := sha256.Sum256([]byte(turnID + "/call/" + callID))
 	return callID + "-review-" + hex.EncodeToString(sum[:4])
-}
-
-// Whatever a subagent's own permissions, only the root agent may ask the human partner.
-func TestSubagentsNeverAskUserQuestion(t *testing.T) {
-	for _, permissions := range []string{`{rocketclaw: allow}`, `{rocketclaw: {allow_background: allow, ask_user_question: allow}, task: allow}`} {
-		t.Run(permissions, func(t *testing.T) {
-			mock := mockResponses(responseWithMessage("child", "done"))
-			child := testAgentWithPermissionName("child", parsePermissionYAML(t, permissions))
-			factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"child": child}})
-			factory.backgroundJobs = enabledBackgroundJobs()
-			ask := testLooperTool(askUserQuestionToolName)
-			ask.Permission = "rocketclaw"
-			ask.VisibilitySubjects = []string{askUserQuestionToolName}
-			factory.baseTools[askUserQuestionToolName] = ask
-			require.Contains(t, factory.toolsFor(&child), askUserQuestionToolName, "the same agent at the root may ask")
-
-			_, err := factory.runTask(t.Context(), testTaskParams("Child", "do it", "child"), toolCallMetadata{callID: "call-1", observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}}, testTaskOutput())
-			require.NoError(t, err)
-
-			for _, tool := range newParams(mock)[0].Tools {
-				require.NotEqual(t, new(askUserQuestionToolName), tool.GetName())
-			}
-		})
-	}
 }
 
 func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
@@ -1333,10 +928,6 @@ func testGuardrailResultDiagnostic(stage ChildRunStage, text string) *SubagentDi
 	return diagnostic
 }
 
-func testPromptExpansion(primary, subagent, skill bool) PromptShellCommandExpansion {
-	return PromptShellCommandExpansion{PrimaryPrompts: primary, SubagentPrompts: subagent, SkillPrompts: skill, InputPrompts: false}
-}
-
 func testPermissionReadTool(subjects func(json.RawMessage) ([]string, error)) looperTool {
 	var tool looperTool
 
@@ -1366,15 +957,4 @@ func permissionSetForActions(actions map[string]PermissionAction) PermissionSet 
 	}
 
 	return PermissionSet{Buckets: buckets}
-}
-
-func responseWithTaskMessages() *responses.Response {
-	id := "child"
-
-	return testResponse(id, []responses.ResponseOutputItemUnion{
-		testReasoningOutputItem(id+"-reasoning", "", "thinking"),
-		testMessageOutputItem(id+"-commentary", "commentary", "commentary"),
-		testMessageOutputItem(id+"-first", "", "first"),
-		testMessageOutputItem(id+"-second", "", "second"),
-	})
 }

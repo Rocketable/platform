@@ -16,8 +16,8 @@ func TestRuntimeCompletionNotesReadStoredJobs(t *testing.T) {
 	conversationID := "one-off-cron:cron/report.md:20260905t020000z:run"
 
 	script := testBackgroundJob(conversationID, "turn-1/call/a")
-	subagent := testBackgroundJob(conversationID, "turn-1/call/t-1/task/call/b")
-	subagent.childKey, subagent.kind, subagent.label, subagent.subagentKey = "/t-1", backgroundTask, "research", "/t-1/b-2"
+	subagent := testBackgroundJob(conversationID+"/t-1", "turn-1/call/t-1/task/call/b")
+	subagent.kind, subagent.label, subagent.subagentKey = backgroundTask, "research", "/b-2"
 
 	for _, job := range []*backgroundJob{script, subagent} {
 		createTestBackgroundJob(t, store, job)
@@ -34,8 +34,8 @@ func TestRuntimeCompletionNotesReadStoredJobs(t *testing.T) {
 
 	notes, err = rt.CompletionNotes(t.Context(), conversationID+"/t-1", []string{subagent.jobID})
 	require.NoError(t, err)
-	require.Equal(t, []protocol.BackgroundJob{{ID: subagent.jobID, Kind: "task", State: "completed", Label: "research", ToolCallID: "call", SubagentKey: "/t-1/b-2",
-		Note: `<subagent id="turn-1/call/t-1/task/call/b" state="completed" description="research" continue="/t-1/b-2">` + "\ncompleted\n</subagent>"}}, notes)
+	require.Equal(t, []protocol.BackgroundJob{{ID: subagent.jobID, Kind: "task", State: "completed", Label: "research", ToolCallID: "call", SubagentKey: "/b-2",
+		Note: `<subagent id="turn-1/call/t-1/task/call/b" state="completed" description="research" continue="/b-2">` + "\ncompleted\n</subagent>"}}, notes)
 
 	notes, err = rt.CompletionNotes(t.Context(), conversationID+"/t-1/b-2", []string{subagent.jobID})
 	require.NoError(t, err)

@@ -50,6 +50,9 @@ const (
 type ThreadState struct {
 	Agent     string        `json:"agent,omitempty"`
 	CreatedBy ThreadCreator `json:"created_by,omitempty"`
+	// spawnedBy is the top-level session whose agent created this one; it is set only at creation.
+	// parent is the session a subagent session belongs to, empty for any other.
+	spawnedBy, parent string
 }
 
 // ThreadCreator records which subsystem created a managed text conversation.
@@ -233,7 +236,7 @@ func (s *SessionService) UpsertThread(conversationID string, thread ThreadState)
 		return err
 	}
 
-	if _, err := tx.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, $2, $3) ON CONFLICT(conversation_id) DO UPDATE SET agent = excluded.agent, created_by = CASE WHEN excluded.created_by = '' THEN managed_conversations.created_by ELSE excluded.created_by END`, conversationID, thread.Agent, string(thread.CreatedBy)); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by, spawned_by) VALUES ($1, $2, $3, $4) ON CONFLICT(conversation_id) DO UPDATE SET agent = excluded.agent, created_by = CASE WHEN excluded.created_by = '' THEN managed_conversations.created_by ELSE excluded.created_by END`, conversationID, thread.Agent, string(thread.CreatedBy), thread.spawnedBy); err != nil {
 		return fmt.Errorf("upsert managed conversation: %w", err)
 	}
 
@@ -909,11 +912,15 @@ DELETE FROM turn_steps s USING jobs WHERE s.conversation_id = $1 AND starts_with
 			continue
 		}
 
-		for _, table := range []string{"active_turns", "turn_steps", "background_jobs"} {
+		for _, table := range []string{"active_turns", "turn_steps", "background_jobs", "thread_queue"} {
 			if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE conversation_id = $1`, id); err != nil {
 				return 0, fmt.Errorf("clear owned %s: %w", table, err)
 			}
 		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM managed_conversations WHERE conversation_id = ANY($1) AND parent_conversation_id <> ''`, ids); err != nil {
+		return 0, fmt.Errorf("clear subagent sessions: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM shadow_turns WHERE child_conversation_id = ANY($1)`, ids); err != nil {
@@ -921,7 +928,7 @@ DELETE FROM turn_steps s USING jobs WHERE s.conversation_id = $1 AND starts_with
 	}
 
 	// Queued input and unfinished unshadowed turns survive this entries-only clear.
-	// Their uploads and journaled tool results still own the original bytes.
+	// Their uploads, journaled tool results, and the files their replies send still own the original bytes.
 	// Like fork ownership, this scans payloads for opaque IDs. A large backlog
 	// would need indexed references instead of attachments times retained payload bytes.
 	if _, err := tx.ExecContext(ctx, `WITH retained AS (
@@ -929,8 +936,10 @@ SELECT message || content::text || COALESCE(inbound_json::text, '') AS payload F
 UNION ALL SELECT inbound_json::text || COALESCE(outbound_json::text, '') FROM active_turns WHERE conversation_id = ANY($1) AND phase <> 'done'
 UNION ALL SELECT s.value::text FROM turn_steps s JOIN active_turns a ON a.conversation_id = s.conversation_id
     AND (s.key = a.id OR starts_with(s.key, a.id || '/')) WHERE a.conversation_id = ANY($1) AND a.phase <> 'done'
-), removed AS (DELETE FROM attachments WHERE conversation_id = ANY($1)
-    AND NOT EXISTS (SELECT 1 FROM retained WHERE strpos(payload, attachments.id) > 0) RETURNING id)
+UNION ALL SELECT f.id FROM attachments f JOIN active_turns a ON a.id = f.turn_id WHERE f.conversation_id = ANY($1) AND a.phase <> 'done'
+), cleared AS (
+    SELECT f.id FROM attachments f LEFT JOIN retained r ON strpos(r.payload, f.id) > 0 WHERE f.conversation_id = ANY($1) AND r.payload IS NULL
+), removed AS (DELETE FROM attachments f USING cleared c WHERE f.id = c.id RETURNING f.id)
 INSERT INTO pending_attachment_deletions (id) SELECT id FROM removed`, ids); err != nil {
 		return 0, fmt.Errorf("enqueue cleared history attachments: %w", err)
 	}
@@ -1353,6 +1362,18 @@ func (s *SessionService) reserveTurnPair(pairID, conversationID string) {
 	}
 }
 
+// reservedFor returns the conversation pairID's turn gate is reserved for, if any.
+func (s *SessionService) reservedFor(pairID string) string {
+	s.turnGatesMu.Lock()
+	defer s.turnGatesMu.Unlock()
+
+	if gate := s.turnGates[pairID]; gate != nil {
+		return gate.reservedFor
+	}
+
+	return ""
+}
+
 func (s *SessionService) completeTurnPairReservation(pairID, conversationID string) {
 	pairID = strings.TrimSpace(pairID)
 
@@ -1732,7 +1753,7 @@ func queryStrings(ctx context.Context, db stateStoreDB, query, label string, arg
 	}, args...)
 }
 
-// conversationHasPendingWork reports queued or scheduled messages, running Background Jobs,
+// conversationHasPendingWork reports queued or scheduled messages, queued or running Background Jobs,
 // or wakeable Completion Notes, its own or those of hidden runs reporting to it,
 // which keep a conversation from being pruned.
 func conversationHasPendingWork(ctx context.Context, db stateStoreDB, conversationID string) (bool, error) {
