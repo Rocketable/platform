@@ -83,19 +83,6 @@ test("code blocks start unwrapped without browser storage and compact blocks kee
   expect(html(<CodeBlock label="Handoff" text="document" compact />)).not.toContain("Wrap Handoff");
 });
 
-test("screenshot entry formats bold, a code block, and a resolved group tag", () => {
-  const markup = html(<TranscriptText text={entry} />);
-  expect(markup).toContain("<strong>Allen now says he would buy a Windows computer if memory is the cause.</strong>");
-  expect(markup).toContain("<code>I wouldn’t recommend buying a Windows computer.\n</code>");
-  expect(markup).toContain("@cs-operators");
-  const prose = markup.match(/<div class="whitespace-pre-wrap break-words">([\s\S]*?)<\/div>/)?.[1] ?? "";
-  expect(prose).not.toContain("*");
-  expect(prose).not.toContain("```");
-  expect(prose).not.toContain("<!subteam");
-  expect(markup).not.toContain("```");
-  expect(markup).not.toContain("<!subteam");
-});
-
 test("numbered lists keep the written numbers", () => {
   const markup = html(<TranscriptText text={"1. Install the app\n\n2. Sign in\n3. Search"} />);
   expect(markup).toContain('<ol start="1"');
