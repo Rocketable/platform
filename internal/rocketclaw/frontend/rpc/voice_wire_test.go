@@ -67,7 +67,7 @@ func TestVoiceWireRoundTrip(t *testing.T) {
 			creds:    voiceCredentials{bearer: "sk-test"},
 			header:   http.Header{"Authorization": {"Bearer sk-test"}, "Api-Key": {"sk-test"}},
 			create:   "/v1/live/sessions",
-			body:     `{"session":{"model":"gpt-live-1",` + session + `,"audio":{"output":{"voice":"marin"}},"input":` + seed + `,"client":{"data_channel":{"allowed_client_events":["session.close","session.input_audio.mute","session.input_audio.unmute"]}}},"transport":{"type":"webrtc","sdp":"offer"}}`,
+			body:     `{"session":{"model":"gpt-live-1",` + session + `,"audio":{"output":{"voice":"marin"}},"input":` + seed + `},"transport":{"type":"webrtc","sdp":"offer"}}`,
 			reply:    `{"session":{"id":"live_1"},"transport":{"type":"webrtc","sdp":"answer"}}`,
 			id:       "live_1",
 			sideband: "/v1/live/sessions/live_1/attach",

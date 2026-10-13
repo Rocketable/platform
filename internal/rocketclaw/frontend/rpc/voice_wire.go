@@ -116,7 +116,7 @@ type voiceDialect interface {
 	reconnects() bool
 }
 
-// voiceSession is a call's session settings; each route sets the seed and client fields it has.
+// voiceSession is a call's session settings; each route sets the seed field it has.
 type voiceSession struct {
 	Model        string `json:"model"`
 	Instructions string `json:"instructions"`
@@ -128,9 +128,8 @@ type voiceSession struct {
 	Delegation struct {
 		Type string `json:"type"`
 	} `json:"delegation"`
-	Input        []voiceItem     `json:"input,omitempty"`
-	InitialItems []voiceItem     `json:"initial_items,omitempty"`
-	Client       json.RawMessage `json:"client,omitempty"`
+	Input        []voiceItem `json:"input,omitempty"`
+	InitialItems []voiceItem `json:"initial_items,omitempty"`
 }
 
 func newVoiceSession(model, agent, voice string) voiceSession {
