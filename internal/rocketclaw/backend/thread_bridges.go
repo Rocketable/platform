@@ -180,6 +180,13 @@ func (m *threadBridgeManager) StartActiveTurns(ctx context.Context) error {
 		return err
 	}
 
+	pending, err := queryStrings(ctx, m.store.db, `SELECT DISTINCT child_conversation_id FROM shadow_turns WHERE child_turn_id = '' AND terminal = '' AND (jsonb_array_length(inputs) > 0 OR COALESCE(context_entries->>'workflow_source', '') <> '')`, "pending shadow workers")
+	if err != nil {
+		return err
+	}
+
+	workers = slices.Compact(slices.Sorted(slices.Values(append(workers, pending...))))
+
 	for _, conversationID := range workers {
 		thread, recorded, err := m.store.Thread(conversationID)
 		if err != nil {
@@ -191,7 +198,7 @@ func (m *threadBridgeManager) StartActiveTurns(ctx context.Context) error {
 			continue
 		}
 
-		if _, err := m.ensureThreadBridge(conversationID, thread); err != nil {
+		if _, err := m.ensureThreadBridge(ctx, conversationID, thread); err != nil {
 			return fmt.Errorf("start active turn worker: %w", err)
 		}
 	}
@@ -199,7 +206,7 @@ func (m *threadBridgeManager) StartActiveTurns(ctx context.Context) error {
 	return nil
 }
 
-func (m *threadBridgeManager) StartPendingScheduledMessages() error {
+func (m *threadBridgeManager) StartPendingScheduledMessages(ctx context.Context) error {
 	scheduledMessages, err := m.store.ScheduledMessages()
 	if err != nil {
 		return fmt.Errorf("load pending scheduled message bridges: %w", err)
@@ -213,18 +220,18 @@ func (m *threadBridgeManager) StartPendingScheduledMessages() error {
 			return fmt.Errorf("load scheduled conversation selection: %w", err)
 		}
 
-		if _, err := m.ensureThreadBridge(conversationID, thread); err != nil {
+		if _, err := m.ensureThreadBridge(ctx, conversationID, thread); err != nil {
 			return fmt.Errorf("start pending scheduled message bridge: %w", err)
 		}
 	}
 
-	producers, err := m.store.pendingProducerIDs(context.Background())
+	producers, err := m.store.pendingProducerIDs(ctx)
 	if err != nil {
 		return err
 	}
 
 	for _, source := range producers {
-		if err := m.PickLaterWork(context.Background(), source); err != nil {
+		if err := m.PickLaterWork(ctx, source); err != nil {
 			return err
 		}
 	}
@@ -234,14 +241,14 @@ func (m *threadBridgeManager) StartPendingScheduledMessages() error {
 
 // StartActiveGoals continues each active goal, except where an unfinished turn
 // resumes first and continues the goal itself.
-func (m *threadBridgeManager) StartActiveGoals() error {
+func (m *threadBridgeManager) StartActiveGoals(ctx context.Context) error {
 	threads, err := m.store.ActiveGoalThreads()
 	if err != nil {
 		return fmt.Errorf("load active goal bridges: %w", err)
 	}
 
 	for conversationID, thread := range threads {
-		resuming, err := m.store.HasActiveTurn(context.Background(), conversationID)
+		resuming, err := m.store.HasActiveTurn(ctx, conversationID)
 		if err != nil {
 			return err
 		}
@@ -250,7 +257,7 @@ func (m *threadBridgeManager) StartActiveGoals() error {
 			continue
 		}
 
-		managed, err := m.ensureThreadBridge(conversationID, thread)
+		managed, err := m.ensureThreadBridge(ctx, conversationID, thread)
 		if err != nil {
 			return fmt.Errorf("start active goal bridge: %w", err)
 		}
@@ -260,7 +267,7 @@ func (m *threadBridgeManager) StartActiveGoals() error {
 		inbound.ConversationID = conversationID
 		inbound.SlackReply = &protocol.SlackReplyTarget{}
 
-		if err := managed.Submit(context.Background(), inbound); err != nil {
+		if err := managed.Submit(ctx, inbound); err != nil {
 			return fmt.Errorf("submit active goal continuation: %w", err)
 		}
 	}
@@ -271,6 +278,10 @@ func (m *threadBridgeManager) StartActiveGoals() error {
 // SwitchConversationAgent persists selection and updates the existing live bridge.
 // Frontends validate their current human/producer policy before calling it.
 func (r *Runtime) SwitchConversationAgent(conversationID, agent string) (bool, error) {
+	if err := rejectShadowMutation(context.Background(), r.threads.store.db, conversationID); err != nil {
+		return false, err
+	}
+
 	switched, err := r.threads.switchConversationAgent(conversationID, agent)
 	if err != nil {
 		return false, fmt.Errorf("switch conversation agent: %w", err)
@@ -332,8 +343,15 @@ func (m *threadBridgeManager) SubmitMention(ctx context.Context, agent string, t
 		return false, nil
 	}
 
-	if err := (stateDAO{db: tx}).createConversation(ctx, protocol.Conversation{ID: conversationID, Agent: agent}); err != nil {
+	created, err := (stateDAO{db: tx}).createConversation(ctx, protocol.Conversation{ID: conversationID, Agent: agent})
+	if err != nil {
 		return false, err
+	}
+
+	if created {
+		if _, err := m.store.reconcileShadows(ctx, tx, conversationID, agent); err != nil {
+			return false, err
+		}
 	}
 
 	item := protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Message: inbound.Text, Principal: inbound.Metadata[protocol.InboundPrincipalMetadataKey], Kind: protocol.InboundKindEnqueue, Source: inbound.Source, Inbound: inbound, Position: position, StashAt: time.Now().UTC()}
@@ -372,7 +390,7 @@ func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *protocol.
 		return protocol.StartNewThreadResult{}, err
 	}
 
-	managed, err := m.ensureStartedThread(&threadStart{conversationID: conversationID, agent: targetAgent, createdBy: ThreadCreator(req.CreatedBy)})
+	managed, err := m.ensureStartedThread(ctx, &threadStart{conversationID: conversationID, agent: targetAgent, createdBy: ThreadCreator(req.CreatedBy)})
 	if err != nil {
 		return protocol.StartNewThreadResult{}, err
 	}
@@ -432,14 +450,14 @@ func (m *threadBridgeManager) InterruptThread(target protocol.TextConversationTa
 	return m.InterruptConversation(conversationID), nil
 }
 
-func (m *threadBridgeManager) StartQueuedConversations() error {
-	conversationIDs, err := queryStrings(context.Background(), m.store.db, `SELECT DISTINCT conversation_id FROM thread_queue ORDER BY conversation_id`, "queued conversation IDs")
+func (m *threadBridgeManager) StartQueuedConversations(ctx context.Context) error {
+	conversationIDs, err := queryStrings(ctx, m.store.db, `SELECT DISTINCT conversation_id FROM thread_queue ORDER BY conversation_id`, "queued conversation IDs")
 	if err != nil {
 		return fmt.Errorf("load queued conversations: %w", err)
 	}
 
 	for _, conversationID := range conversationIDs {
-		if err := m.PickLaterWork(context.Background(), conversationID); err != nil {
+		if err := m.PickLaterWork(ctx, conversationID); err != nil {
 			return err
 		}
 	}
@@ -462,7 +480,7 @@ func (m *threadBridgeManager) PickLaterWork(ctx context.Context, conversationID 
 		return nil
 	}
 
-	managed, err := m.ensureThreadBridge(conversationID, thread)
+	managed, err := m.ensureThreadBridge(ctx, conversationID, thread)
 	if err != nil {
 		return err
 	}
@@ -506,7 +524,7 @@ func (m *threadBridgeManager) noteReady(conversationID string) {
 func (m *threadBridgeManager) continueSubagent(ctx context.Context, job *backgroundJob, input string) (string, error) {
 	runtimeCfg := m.runtime.Clone()
 
-	bridge, err := m.recordedBridge(job.conversationID)
+	bridge, err := m.recordedBridge(ctx, job.conversationID)
 	if err != nil {
 		return "", err
 	}
@@ -542,7 +560,7 @@ func (m *threadBridgeManager) continueSubagent(ctx context.Context, job *backgro
 	return output, nil
 }
 
-func (m *threadBridgeManager) recordedBridge(conversationID string) (*Bridge, error) {
+func (m *threadBridgeManager) recordedBridge(ctx context.Context, conversationID string) (*Bridge, error) {
 	thread, recorded, err := m.store.Thread(conversationID)
 	if err != nil {
 		return nil, err
@@ -552,7 +570,7 @@ func (m *threadBridgeManager) recordedBridge(conversationID string) (*Bridge, er
 		return nil, fmt.Errorf("conversation %q is not recorded", conversationID)
 	}
 
-	managed, err := m.ensureThreadBridge(conversationID, thread)
+	managed, err := m.ensureThreadBridge(ctx, conversationID, thread)
 	if err != nil {
 		return nil, err
 	}
@@ -604,7 +622,7 @@ func (m *threadBridgeManager) promoteQueueItem(ctx context.Context, conversation
 		return false, err
 	}
 
-	managed, err := m.ensureThreadBridge(conversationID, thread)
+	managed, err := m.ensureThreadBridge(ctx, conversationID, thread)
 	if err != nil {
 		return false, err
 	}
@@ -741,7 +759,7 @@ func (m *threadBridgeManager) stashQueueItem(ctx context.Context, conversationID
 		return err
 	}
 
-	managed, err := m.ensureThreadBridge(conversationID, thread)
+	managed, err := m.ensureThreadBridge(ctx, conversationID, thread)
 	if err != nil {
 		return err
 	}
@@ -749,7 +767,7 @@ func (m *threadBridgeManager) stashQueueItem(ctx context.Context, conversationID
 	return managed.(*Bridge).submitEnqueuedItem(ctx, item)
 }
 
-func (m *threadBridgeManager) ensureStartedThread(start *threadStart) (directBridge, error) {
+func (m *threadBridgeManager) ensureStartedThread(ctx context.Context, start *threadStart) (directBridge, error) {
 	thread, recorded, err := m.store.Thread(start.conversationID)
 	if err != nil {
 		return nil, err
@@ -759,7 +777,7 @@ func (m *threadBridgeManager) ensureStartedThread(start *threadStart) (directBri
 		thread = ThreadState{Agent: start.agent, CreatedBy: start.createdBy}
 	}
 
-	managed, err := m.ensureThreadBridge(start.conversationID, thread)
+	managed, err := m.ensureThreadBridge(ctx, start.conversationID, thread)
 	if err != nil {
 		return nil, err
 	}
@@ -800,10 +818,28 @@ func (m *threadBridgeManager) switchConversationAgent(conversationID, agent stri
 	return true, nil
 }
 
-func (m *threadBridgeManager) ensureThreadBridge(conversationID string, thread ThreadState) (directBridge, error) {
+func (m *threadBridgeManager) ensureThreadBridge(ctx context.Context, conversationID string, thread ThreadState) (directBridge, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
 		return nil, errors.New("text thread conversation ID is required")
+	}
+
+	m.mu.Lock()
+	managed := m.bridges[conversationID]
+	m.mu.Unlock()
+
+	if managed != nil {
+		return managed, nil
+	}
+
+	agent := strings.TrimSpace(thread.Agent)
+	if agent == "" {
+		return nil, errors.New("text thread agent is required")
+	}
+
+	var shadow bool
+	if err := m.store.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM shadow_bindings WHERE child_conversation_id = $1)`, conversationID).Scan(&shadow); err != nil {
+		return nil, fmt.Errorf("load worker ownership: %w", err)
 	}
 
 	m.mu.Lock()
@@ -813,14 +849,9 @@ func (m *threadBridgeManager) ensureThreadBridge(conversationID string, thread T
 		return managed, nil
 	}
 
-	agent := strings.TrimSpace(thread.Agent)
-	if agent == "" {
-		return nil, errors.New("text thread agent is required")
-	}
-
-	managed := m.factory(Config{ConversationID: conversationID, Agent: agent})
+	managed = m.factory(Config{ConversationID: conversationID, Agent: agent})
 	if bridge, ok := managed.(*Bridge); ok {
-		bridge.threads = m
+		bridge.threads, bridge.shadow = m, shadow
 	}
 
 	m.bridges[conversationID] = managed

@@ -45,6 +45,32 @@ independently toggles its origin on or off, so both, either, or neither can be s
 Messages without a recorded origin appear only when both are selected.
 Filtering does not change saved history or routing.
 
+## Shadow comparison
+
+Agents can declare [shadow definitions](../../../README.md#shadow-agents).
+Open their parent session to inspect the shadows in the right sidebar, with one
+tab per shadow and agent/model attribution. The comparison is read-only: send,
+steer, stop, and edit through the parent, not the shadow.
+
+On wide screens, parent and selected-shadow turns share one scroll area. Each
+paired row is as tall as its longer side, so the next pair begins at the same
+height. Steers stay inside their original turn, at the point they were used.
+Repeated prompt text and different completion speeds do not change pairing.
+Pending, silent, failed, and stopped turns keep their rows. Turns before a
+shadow was attached, or belonging to another parent agent, show an unavailable
+comparison rather than shifting later turns.
+
+Changing tabs reads the selected shadow's history; it does not open another live
+stream. Opening a skill or delegation replaces comparison until that panel is
+closed. On narrow screens, **Shadows** above the composer opens a full-screen
+comparison panel with turn navigation. It shares a row with the source filters
+when present, but does not change them. Tabs identify the shadow; row headings
+show only the turn number. Side-by-side alignment applies when both columns are visible.
+
+**Read-only describes the Web controls, not tool execution.** A shadow can still
+edit files or repeat external effects under its own permissions. Its replies and
+attachments stay in comparison and do not create extra connector deliveries.
+
 ## Revert, Undo, and Redo
 
 Recorded user messages in top-level pure Web sessions have a **Revert message**

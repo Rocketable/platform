@@ -153,6 +153,7 @@ ON CONFLICT DO NOTHING`, conversationID)
 // visibleChatsSQL keeps the managed_conversations rows c that Web shows
 // (ChatOriginFacts); a nonempty $1 restricts it to that chat.
 const visibleChatsSQL = `($1 = '' OR c.conversation_id = $1) AND c.conversation_id NOT LIKE 'cron:%' AND c.conversation_id NOT LIKE 'one-off-cron:%'
+    AND NOT EXISTS (SELECT 1 FROM shadow_bindings b WHERE b.child_conversation_id = c.conversation_id)
     AND NOT EXISTS (SELECT 1 FROM external_mcp_sessions p WHERE p.private_conversation_id = c.conversation_id)`
 
 // unindexedChatsSQL selects the chats Web shows that have no message search marker.

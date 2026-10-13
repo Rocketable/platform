@@ -19,6 +19,24 @@ type Conversation struct {
 	ID, Agent, CreatedBy string
 }
 
+// ShadowBinding identifies a parent's independent comparison session. Turns
+// contain only correlations in the requested parent history page, not seed history.
+type ShadowBinding struct {
+	ParentConversationID, ParentAgent, ShadowAgent, ChildConversationID string
+	Turns                                                               []ShadowTurn
+}
+
+// ShadowTurn pairs one outer turn by source and identity, never prompt text.
+// An empty ChildTurnID and Terminal means waiting. A completed turn without a
+// reply is silent; its position is retained regardless of transcript content.
+type ShadowTurn struct {
+	ParentSourceConversationID, ParentTurnID, ChildTurnID string
+	Order                                                 int64
+	Running                                               bool
+	Terminal                                              Terminal
+	Revision                                              string
+}
+
 // BackgroundJob is a Background Job a conversation lists: running, or finished with its
 // Completion Note still pending. Hidden marks a job of a hidden cron or External MCP run whose
 // destination is the conversation; StoppedBy is "user" or "agent" for a stopped job. Note is

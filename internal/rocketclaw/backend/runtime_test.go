@@ -234,7 +234,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 
 		for _, id := range []string{t.Name() + "-source", t.Name() + "-destination"} {
 			require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "job"}))
-			bridge, err := manager.recordedBridge(id)
+			bridge, err := manager.recordedBridge(t.Context(), id)
 			require.NoError(t, err)
 
 			bridges = append(bridges, bridge)
@@ -313,7 +313,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 			require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "selected"}))
 			_, err := store.AppendEntryID(ctx, id, testSessionEntry("existing history", "existing answer"))
 			require.NoError(t, err)
-			destination, err := manager.recordedBridge(id)
+			destination, err := manager.recordedBridge(t.Context(), id)
 			require.NoError(t, err)
 			require.NoError(t, destination.syncConversation(ctx, source))
 
@@ -428,8 +428,8 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 			require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}))
 			_, err := store.toggleSessionTag(ctx, id, id+"-tag", []string{id + "-tag"})
 			require.NoError(t, err)
-			replay, err := replayInputForMessage("user", id+" history")
-			require.NoError(t, err)
+
+			replay := replayInputForMessage("user", id+" history")
 			_, err = store.AppendEntryID(ctx, id, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replay, Agent: id, Model: "work/" + id, ReasoningEffort: new("high")})
 			require.NoError(t, err)
 		}
@@ -604,8 +604,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		reply.SlackReply = &protocol.SlackReplyTarget{MessageTS: "reply"}
 		require.NoError(t, rt.RunTurn(ctx, reply))
 
-		replay, err := replayInputForMessage("user", "Y-only reply after sync")
-		require.NoError(t, err)
+		replay := replayInputForMessage("user", "Y-only reply after sync")
 		_, err = store.AppendEntryID(ctx, "Y", &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replay})
 		require.NoError(t, err)
 		destinationEntries, err := store.ObserveEntries(ctx, "Y")
@@ -963,8 +962,8 @@ func TestBridgeDrainSteersPreservesAcquiredContent(t *testing.T) {
 		require.NoError(t, bridge.Submit(t.Context(), inbound))
 	}
 
-	drain := rocketcode.SteerDrain{Fn: bridge.drainSteers}
-	inputs := drain.Drain(t.Context(), rocketcode.TurnPhaseFinalAnswer)
+	drain := bridge
+	inputs := testDrainInputs(t, drain, rocketcode.TurnPhaseFinalAnswer)
 	require.Len(t, inputs, 2)
 
 	for i, text := range []string{"first", "second"} {
@@ -976,13 +975,13 @@ func TestBridgeDrainSteersPreservesAcquiredContent(t *testing.T) {
 	}
 
 	require.True(t, bridge.inputOpen, "injected input reopens provider work")
-	require.Empty(t, drain.Drain(t.Context(), rocketcode.TurnPhaseFinalAnswer))
+	require.Empty(t, testDrainInputs(t, drain, rocketcode.TurnPhaseFinalAnswer))
 	require.False(t, bridge.inputOpen)
 
 	late := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindSteer, &protocol.InboundContent{Text: "late", Attachments: []protocol.InboundAttachment{{Name: "late.png", MIMEType: "image/png", Data: []byte("late")}}}, true)
 	late.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "U2"}
 	require.NoError(t, bridge.Submit(t.Context(), late))
-	require.Empty(t, drain.Drain(t.Context(), rocketcode.TurnPhaseFinalAnswer))
+	require.Empty(t, testDrainInputs(t, drain, rocketcode.TurnPhaseFinalAnswer))
 	require.Same(t, late, (<-bridge.requestCh).inbound, "cutoff steer keeps its full input for the next turn")
 }
 
@@ -1033,7 +1032,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 	default:
 	}
 
-	inputs := bridge.drainSteers(t.Context(), rocketcode.TurnPhaseToolLoop)
+	inputs := testDrainInputs(t, bridge, rocketcode.TurnPhaseToolLoop)
 	require.Len(t, inputs, 2)
 
 	for i, text := range []string{"first", "last"} {
@@ -1086,7 +1085,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 	require.Equal(t, queued.Source, promoted.Source)
 	require.Equal(t, queued.Text, promoted.Text)
 	require.Equal(t, queued.SlackReply, promoted.SlackReply)
-	inputs = bridge.drainSteers(t.Context(), rocketcode.TurnPhaseToolLoop)
+	inputs = testDrainInputs(t, bridge, rocketcode.TurnPhaseToolLoop)
 	require.Len(t, inputs, 1)
 	require.Equal(t, &rocketcode.PromptInputDirectSkill{Name: "stop", Arguments: "\"typed args\"  Next"}, inputs[0].DirectSkill)
 	require.Contains(t, inputs[0].Texts[0], "original author")
@@ -1127,7 +1126,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 		require.True(t, promoted)
 
 		if inputOpen {
-			inputs := bridge.drainSteers(t.Context(), rocketcode.TurnPhaseToolLoop)
+			inputs := testDrainInputs(t, bridge, rocketcode.TurnPhaseToolLoop)
 			require.Len(t, inputs, 1)
 			require.Nil(t, inputs[0].DirectSkill)
 			require.Contains(t, inputs[0].Texts[0], "goal_continuation")
@@ -1505,7 +1504,7 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, movable)
 
-	moved, err := rt.MoveToBackground(nt.conversationID)
+	moved, err := rt.MoveToBackground(t.Context(), nt.conversationID)
 	require.NoError(t, err)
 	require.True(t, moved)
 
@@ -1564,7 +1563,7 @@ func TestMoveToBackgroundSkipsDeniedAgent(t *testing.T) {
 	bridge := nt.bridge(t, manager, nt.conversationID)
 	rt := &Runtime{threads: manager, Sessions: nt.service, background: bridge.background}
 
-	moved, err := rt.MoveToBackground(nt.conversationID)
+	moved, err := rt.MoveToBackground(t.Context(), nt.conversationID)
 	require.NoError(t, err)
 	require.False(t, moved, "an idle conversation has nothing to move")
 
@@ -1579,7 +1578,7 @@ func TestMoveToBackgroundSkipsDeniedAgent(t *testing.T) {
 	require.Empty(t, jobs)
 	require.False(t, movable, "a denied agent's call is not movable")
 
-	moved, err = rt.MoveToBackground(nt.conversationID)
+	moved, err = rt.MoveToBackground(t.Context(), nt.conversationID)
 	require.NoError(t, err)
 	require.False(t, moved)
 

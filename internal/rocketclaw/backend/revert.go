@@ -192,13 +192,25 @@ func stageRevertDB(ctx context.Context, db stateStoreDB, conversationID, before 
 		return "", "", fmt.Errorf("stage revert: %w", err)
 	}
 
+	if err := stageShadowRevertDB(ctx, db, conversationID, &entry); err != nil {
+		return "", "", err
+	}
+
 	return before, text, err
 }
 
 // commitRevertDB is called only inside prepared durable admission's transaction.
 func commitRevertDB(ctx context.Context, db stateStoreDB, conversationID, marker string) error {
+	if err := lockShadowHistory(ctx, db, conversationID); err != nil {
+		return err
+	}
+
 	entry, index, err := revertBoundary(ctx, db, conversationID, marker)
 	if err != nil {
+		return err
+	}
+
+	if err := commitShadowRevertDB(ctx, db, conversationID, &entry); err != nil {
 		return err
 	}
 
@@ -207,29 +219,9 @@ func commitRevertDB(ctx context.Context, db stateStoreDB, conversationID, marker
 	if err != nil {
 		return err
 	}
-	// Children are conversation records, never handles for undoing tool effects. A task
-	// subagent's or permission review's key adds a hash to its call ID, and a running
-	// Background Job's subagent keeps its history to finish, as $stop leaves background work running.
-	children, err := queryStrings(ctx, db, `WITH `+sessionHistorySQL+`
-    SELECT DISTINCT child.conversation_id FROM (
-        SELECT conversation_id FROM session_entries UNION SELECT conversation_id FROM active_turns
-    ) child
-    WHERE starts_with(child.conversation_id, $1 || '/') AND NOT EXISTS (
-        SELECT 1 FROM effective_entries e CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry->'replay_input', 'null'::jsonb)) WITH ORDINALITY AS items(item, ordinal)
-        WHERE item->>'type' = 'function_call' AND (e.revert_index < 0 OR ordinal <= e.revert_index)
-            AND (starts_with(child.conversation_id || '/', $1 || '/' || (item->>'call_id') || '/') OR starts_with(child.conversation_id, $1 || '/' || (item->>'call_id') || '-')))
-    AND NOT EXISTS (SELECT 1 FROM background_jobs j WHERE j.conversation_id = $1 AND j.status = 'running' AND j.subagent_key <> ''
-        AND starts_with(child.conversation_id || '/', $1 || j.subagent_key || '/'))`, "discarded revert delegations", conversationID)
-	if err != nil {
-		return err
-	}
 
-	for _, child := range children {
-		for _, query := range []string{`DELETE FROM session_entries WHERE conversation_id = $1`, `DELETE FROM active_turns WHERE conversation_id = $1`, `DELETE FROM turn_steps WHERE conversation_id = $1`} {
-			if _, err := db.ExecContext(ctx, query, child); err != nil {
-				return fmt.Errorf("prune revert delegation: %w", err)
-			}
-		}
+	if err := pruneRevertDelegations(ctx, db, conversationID); err != nil {
+		return err
 	}
 
 	if _, err := db.ExecContext(ctx, `DELETE FROM turn_steps s WHERE conversation_id = $1 AND EXISTS (SELECT 1 FROM unnest($2::text[]) id WHERE key = id OR starts_with(key, id || '/'))
@@ -279,9 +271,41 @@ UPDATE session_entries SET entry_json = $2 WHERE id = $1`, entry.ID, string(data
 	return saveSessionSummary(ctx, db, summary)
 }
 
+// Delegations are histories, never handles for undoing tool effects. Running
+// parent Background Jobs keep theirs; shadow lineages cannot start such jobs.
+func pruneRevertDelegations(ctx context.Context, db stateStoreDB, conversationID string) error {
+	children, err := queryStrings(ctx, db, `WITH `+sessionHistorySQL+`
+    SELECT DISTINCT child.conversation_id FROM (
+        SELECT conversation_id FROM session_entries UNION SELECT conversation_id FROM active_turns
+    ) child
+    WHERE starts_with(child.conversation_id, $1 || '/') AND NOT EXISTS (
+        SELECT 1 FROM effective_entries e CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry->'replay_input', 'null'::jsonb)) WITH ORDINALITY AS items(item, ordinal)
+        WHERE item->>'type' = 'function_call' AND (e.revert_index < 0 OR ordinal <= e.revert_index)
+            AND (starts_with(child.conversation_id || '/', $1 || '/' || (item->>'call_id') || '/') OR starts_with(child.conversation_id, $1 || '/' || (item->>'call_id') || '-')))
+    AND NOT EXISTS (SELECT 1 FROM background_jobs j WHERE j.conversation_id = $1 AND j.status = 'running' AND j.subagent_key <> ''
+        AND starts_with(child.conversation_id || '/', $1 || j.subagent_key || '/'))`, "discarded revert delegations", conversationID)
+	if err != nil {
+		return err
+	}
+
+	for _, child := range children {
+		for _, query := range []string{`DELETE FROM session_entries WHERE conversation_id = $1`, `DELETE FROM active_turns WHERE conversation_id = $1`, `DELETE FROM turn_steps WHERE conversation_id = $1`} {
+			if _, err := db.ExecContext(ctx, query, child); err != nil {
+				return fmt.Errorf("prune revert delegation: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
 // StageRevert settles the recorded bridge before changing its cutoff. Like
 // packages/app/src/session/revert.ts, interruption is not effect rollback.
 func (r *Runtime) StageRevert(ctx context.Context, conversationID, before string) (marker, prompt string, err error) {
+	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
+		return "", "", err
+	}
+
 	_, eligible, predecessor, err := r.Sessions.RevertState(ctx, conversationID)
 	if err != nil {
 		return "", "", err
@@ -296,11 +320,12 @@ func (r *Runtime) StageRevert(ctx context.Context, conversationID, before string
 		return marker, "", err
 	}
 
-	if _, _, err := revertBoundary(ctx, r.Sessions.db, conversationID, cmp.Or(before, predecessor)); err != nil {
+	boundary, _, err := revertBoundary(ctx, r.Sessions.db, conversationID, cmp.Or(before, predecessor))
+	if err != nil {
 		return "", "", err
 	}
 
-	b, err := r.threads.recordedBridge(conversationID)
+	b, err := r.threads.recordedBridge(ctx, conversationID)
 	if err != nil {
 		return "", "", err
 	}
@@ -328,6 +353,12 @@ func (r *Runtime) StageRevert(ctx context.Context, conversationID, before string
 	if err := r.Sessions.StopGoal(conversationID); err != nil {
 		return "", "", err
 	}
+
+	workers, err := r.settleShadowRevert(ctx, conversationID, &boundary)
+	if err != nil {
+		return "", "", err
+	}
+	defer releaseHistory(workers)
 
 	b.InterruptActiveTurn()
 
@@ -365,7 +396,7 @@ func (r *Runtime) StageRevert(ctx context.Context, conversationID, before string
 
 	defer func() { _ = tx.Rollback() }()
 
-	if err := lockSessionHistory(ctx, tx, conversationID); err != nil {
+	if err := lockShadowHistory(ctx, tx, conversationID); err != nil {
 		return "", "", err
 	}
 
@@ -387,7 +418,11 @@ func (r *Runtime) StageRevert(ctx context.Context, conversationID, before string
 
 // ClearRevert restores the whole suffix without changing any viewer's draft.
 func (r *Runtime) ClearRevert(ctx context.Context, conversationID string) error {
-	b, err := r.threads.recordedBridge(conversationID)
+	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
+		return err
+	}
+
+	b, err := r.threads.recordedBridge(ctx, conversationID)
 	if err != nil {
 		return err
 	}
@@ -398,11 +433,14 @@ func (r *Runtime) ClearRevert(ctx context.Context, conversationID string) error 
 		return errors.New("conversation history is busy")
 	}
 
+	b.historyMutation = true
+	b.mu.Unlock()
+
 	tx, err := r.Sessions.db.BeginTx(ctx, nil)
 	if err == nil {
 		defer func() { _ = tx.Rollback() }()
 
-		err = lockSessionHistory(ctx, tx, conversationID)
+		err = lockShadowHistory(ctx, tx, conversationID)
 	}
 
 	if err == nil {
@@ -415,13 +453,15 @@ func (r *Runtime) ClearRevert(ctx context.Context, conversationID string) error 
 	}
 
 	if err == nil {
-		_, err = tx.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = '' WHERE conversation_id = $1`, conversationID)
+		_, err = tx.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = '' WHERE conversation_id = $1
+OR conversation_id IN (SELECT child_conversation_id FROM shadow_bindings WHERE parent_conversation_id = $1)`, conversationID)
 	}
 
 	if err == nil {
 		err = tx.Commit()
 	}
-	b.mu.Unlock()
+
+	releaseHistory([]*Bridge{b})
 
 	if err != nil {
 		return fmt.Errorf("clear revert: %w", err)
@@ -521,7 +561,7 @@ func (b *Bridge) preserveRevertRequestLocked(ctx context.Context, request *bridg
 
 // mutateWebQueue serializes explicit release with staging and branch admission.
 func (r *Runtime) mutateWebQueue(ctx context.Context, conversationID, id string, kind protocol.InboundKind) (bool, error) {
-	b, err := r.threads.recordedBridge(conversationID)
+	b, err := r.threads.recordedBridge(ctx, conversationID)
 	if err != nil {
 		return false, err
 	}
@@ -650,7 +690,7 @@ func (r *Runtime) admitWeb(ctx context.Context, b *Bridge, request *bridgeReques
 
 	defer func() { _ = tx.Rollback() }()
 
-	if err := lockSessionHistory(ctx, tx, inbound.ConversationID); err != nil {
+	if err := lockShadowHistory(ctx, tx, inbound.ConversationID); err != nil {
 		return false, err
 	}
 

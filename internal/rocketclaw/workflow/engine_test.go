@@ -488,9 +488,9 @@ def main(args):
 		t.Run(tt.name, func(t *testing.T) {
 			source := "meta = {\"name\": \"test\", \"description\": \"test\", \"phases\": " + tt.phases + "}\ndef main(args):\n    " + tt.body + "\n"
 
-			definition, errCompile := compileDefinition("test.star", "test", []byte(source))
+			definition, errCompile := Compile("test.star", "test", source)
 			if errCompile != nil {
-				t.Fatalf("compileDefinition() error = %v", errCompile)
+				t.Fatalf("Compile() error = %v", errCompile)
 			}
 
 			_, err := Run(t.Context(), definition, RunRequest{RunID: tt.name}, &agentRunnerMock{RunFunc: inertAgent})
@@ -856,9 +856,9 @@ func engineDefinitionWithPhases(t *testing.T, phases []string, body string) *Def
 
 	source := `meta = {"name": "test", "description": "test"` + phaseSource + "}\n" + strings.TrimSpace(body) + "\n"
 
-	definition, err := compileDefinition("test.star", "test", []byte(source))
+	definition, err := Compile("test.star", "test", source)
 	if err != nil {
-		t.Fatalf("compileDefinition() error = %v\n%s", err, source)
+		t.Fatalf("Compile() error = %v\n%s", err, source)
 	}
 
 	return definition

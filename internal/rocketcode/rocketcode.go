@@ -461,6 +461,7 @@ func NewWithModelResolver(
 		PermissionReviewer:     factory,
 		Observability:          config.Observability,
 		Journal:                config.Journal,
+		SteerDrain:             InertSteerDrain{},
 		notes:                  InertBackgroundJobs{},
 		expandInputPrompts:     config.ExpandPromptShellCommands.InputPrompts,
 		promptExpansion:        promptExpansion,

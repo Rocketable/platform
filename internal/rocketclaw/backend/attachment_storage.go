@@ -7,14 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 type attachmentStorage interface {
 	Put(context.Context, string, []byte) error
 	Get(context.Context, string) ([]byte, error)
+	Delete(context.Context, string) error
 }
 
 type filesystemAttachments struct{ path string }
@@ -69,6 +72,37 @@ func (s filesystemAttachments) Get(_ context.Context, id string) ([]byte, error)
 type s3Attachments struct {
 	client *s3.Client
 	bucket string
+}
+
+func (s filesystemAttachments) Delete(_ context.Context, id string) error {
+	root, err := os.OpenRoot(s.path)
+	if err != nil {
+		return fmt.Errorf("open deleted attachment storage: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	if err := root.Remove(id); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("delete attachment: %w", err)
+	}
+
+	return nil
+}
+
+func (s s3Attachments) Delete(ctx context.Context, id string) error {
+	object, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &s.bucket, Key: &id})
+	if _, missing := errors.AsType[*types.NotFound](err); missing {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("head deleted S3 attachment: %w", err)
+	}
+	// Delete the actual version, not a marker that leaves the original bytes behind.
+	if _, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &s.bucket, Key: &id, VersionId: object.VersionId}); err != nil {
+		return fmt.Errorf("delete S3 attachment: %w", err)
+	}
+
+	return nil
 }
 
 func (s s3Attachments) Put(ctx context.Context, id string, data []byte) error {

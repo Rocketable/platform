@@ -23,21 +23,22 @@ type stateDAO struct {
 }
 
 // createConversation preserves selection and runs under the caller's history lock.
-func (d stateDAO) createConversation(ctx context.Context, conversation protocol.Conversation) error {
+func (d stateDAO) createConversation(ctx context.Context, conversation protocol.Conversation) (bool, error) {
 	summary, err := loadSessionSummary(ctx, d.db, conversation.ID)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if err := markNewChatIndexed(ctx, d.db, conversation.ID); err != nil {
-		return err
+		return false, err
 	}
 
-	if _, err := d.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, $2, $3) ON CONFLICT (conversation_id) DO NOTHING`, conversation.ID, conversation.Agent, conversation.CreatedBy); err != nil {
-		return fmt.Errorf("create conversation: %w", err)
+	created, err := execRows(ctx, d.db, "create conversation", "count created conversation", `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, $2, $3) ON CONFLICT (conversation_id) DO NOTHING`, conversation.ID, conversation.Agent, conversation.CreatedBy)
+	if err != nil {
+		return false, err
 	}
 
-	return saveSessionSummary(ctx, d.db, summary)
+	return created > 0, saveSessionSummary(ctx, d.db, summary)
 }
 
 func (d stateDAO) observedEntries(ctx context.Context, conversationID string) ([]ObservedSessionEntry, error) {
@@ -605,7 +606,13 @@ func (s *SessionService) HasActiveTurn(ctx context.Context, conversationID strin
 // keeps Background Jobs' steps, and returns the outbound to
 // deliver. When another path, such as $stop, finished the row first, that
 // path's stored outbound wins and nothing else is written.
-func (s *SessionService) finishTurn(ctx context.Context, turnID string, finish *turnFinish) (*protocol.OutboundMessage, error) {
+func (s *SessionService) finishTurn(ctx context.Context, turnID string, finish *turnFinish) (result *protocol.OutboundMessage, err error) {
+	defer func() {
+		if err != nil {
+			err = inputPersistenceError{cause: err}
+		}
+	}()
+
 	outbound, err := json.Marshal(finish.outbound)
 	if err != nil {
 		return nil, fmt.Errorf("encode final outbound: %w", err)
@@ -620,6 +627,20 @@ func (s *SessionService) finishTurn(ctx context.Context, turnID string, finish *
 	// commitRevertDB also takes the history lock before the turn row.
 	if err := lockSessionHistory(ctx, tx, finish.store.conversationID); err != nil {
 		return nil, err
+	}
+
+	// Serialize child saving with parent closure before changing execution phase,
+	// so neither settlement can miss the other's uncommitted payload ownership.
+	if _, err := tx.ExecContext(ctx, `SELECT id FROM shadow_turns WHERE child_conversation_id = $1 AND child_turn_id = $2 FOR UPDATE`, finish.store.conversationID, turnID); err != nil {
+		return nil, fmt.Errorf("lock comparison settlement: %w", err)
+	}
+
+	// Closure belongs to settlement, including fallback, preparation failure,
+	// workflow completion and stop. Unprepared turns remain terminal-only.
+	if _, err := tx.ExecContext(ctx, `UPDATE shadow_turns SET input_closed = TRUE,
+terminal = CASE WHEN terminal <> '' THEN terminal WHEN (child_turn_id = '' AND jsonb_array_length(inputs) = 0 AND COALESCE(context_entries->>'workflow_source', '') = '') OR $3 = 'stopped' THEN $3 ELSE terminal END
+WHERE parent_source_conversation_id = $1 AND parent_turn_id = $2`, finish.store.conversationID, turnID, cmp.Or(finish.outbound.Terminal, protocol.TerminalComplete)); err != nil {
+		return nil, inputPersistenceError{cause: fmt.Errorf("close mirrored input: %w", err)}
 	}
 
 	moved, err := execRows(ctx, tx, "finish active turn", "count finished active turn", `UPDATE active_turns SET phase = $2, terminal = $4, updated_at_unix_ns = $5,
@@ -666,9 +687,11 @@ WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntry
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM thread_queue q WHERE q.conversation_id = $1 AND EXISTS (
+	if _, err := tx.ExecContext(ctx, `DELETE FROM thread_queue q WHERE q.conversation_id = $1 AND (EXISTS (
     SELECT 1 FROM session_entries e CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item
-    WHERE e.conversation_id = q.conversation_id AND item->>'input_id' = q.queue_item_id)`, finish.store.conversationID); err != nil {
+    WHERE e.conversation_id = q.conversation_id AND item->>'input_id' = q.queue_item_id) OR EXISTS (
+    SELECT 1 FROM turn_steps s WHERE s.conversation_id = q.conversation_id AND s.key = $2
+    AND s.value::jsonb->'applied_input_ids' ? q.queue_item_id))`, finish.store.conversationID, turnID); err != nil {
 		return nil, fmt.Errorf("release recorded input ownership: %w", err)
 	}
 
@@ -702,6 +725,10 @@ SELECT COALESCE(MIN(wake_attempts) FILTER (WHERE child_key = ''), 0) FROM releas
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM turn_steps s WHERE conversation_id = $1 AND (starts_with(key, $2 || '/') OR key = $2 AND $3 = '') AND `+keepRunningJobSteps, finish.store.conversationID, turnID, finish.terminal); err != nil {
 		return nil, fmt.Errorf("clear turn steps: %w", err)
+	}
+
+	if err := releaseShadowPayloads(ctx, tx, finish.store.conversationID, turnID); err != nil {
+		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {

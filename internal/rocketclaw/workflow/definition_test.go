@@ -102,6 +102,19 @@ def main(args):
 			if definition.program == nil {
 				t.Errorf("Load()[%q].program = nil", tt.name)
 			}
+
+			if definition.Source != tt.source || definition.Path != "runtime/workflows/"+tt.file {
+				t.Errorf("Load()[%q] did not retain the validated source/path", tt.name)
+			}
+
+			if err := root.Remove("runtime/workflows/" + tt.file); err != nil {
+				t.Fatal(err)
+			}
+
+			recovered, err := Compile(definition.Path, definition.Name, definition.Source)
+			if err != nil || recovered.program == nil {
+				t.Fatalf("Compile saved source after deletion: definition = %v, error = %v", recovered, err)
+			}
 		})
 	}
 }
@@ -314,7 +327,7 @@ func TestLoadRejectsInvalidDefinitions(t *testing.T) {
 	}
 }
 
-func TestCompileDefinitionRejectsMoreThanOneHundredDeclaredPhases(t *testing.T) {
+func TestCompileRejectsMoreThanOneHundredDeclaredPhases(t *testing.T) {
 	phases := make([]string, 101)
 	for i := range phases {
 		phases[i] = fmt.Sprintf("phase-%d", i)
@@ -327,9 +340,9 @@ func TestCompileDefinitionRejectsMoreThanOneHundredDeclaredPhases(t *testing.T) 
 
 	source := `meta = {"name": "test", "description": "Test", "phases": ` + string(encoded) + "}\ndef main(args): return None\n"
 
-	_, err = compileDefinition("test.star", "test", []byte(source))
+	_, err = Compile("test.star", "test", source)
 	if err == nil || !strings.Contains(err.Error(), "at most 100 phases") {
-		t.Fatalf("compileDefinition() error = %v, want 100-phase limit", err)
+		t.Fatalf("Compile() error = %v, want 100-phase limit", err)
 	}
 }
 

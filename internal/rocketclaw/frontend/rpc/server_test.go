@@ -732,6 +732,9 @@ func TestSessionEntries(t *testing.T) {
 		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", name+".md"), []byte("---\nmodel: gpt-5.5\n---\nHelp."), 0o600))
 	}
 
+	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents", "main"), 0o700))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main", "alternative.md"), []byte("---\nmodel: gpt-5.5\n---\nCompare."), 0o600))
+
 	rt := &backend.Runtime{Sessions: sessions}
 
 	var promoted, promotedIDs []string
@@ -1489,6 +1492,88 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, emptyHistory.Messages)
 
+	t.Run("shadow metadata follows parent history without messages", func(t *testing.T) {
+		_, err := db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by)
+VALUES ('shadow-test-a', 'main/a', 'alice'), ('shadow-test-z', 'main/z', 'alice')`)
+
+		require.NoError(t, err)
+		defer func() {
+			_, err := db.ExecContext(ctx, `DELETE FROM managed_conversations WHERE conversation_id IN ('shadow-test-a', 'shadow-test-z')`)
+			require.NoError(t, err)
+		}()
+
+		_, err = db.ExecContext(ctx, `INSERT INTO shadow_bindings
+(child_conversation_id, parent_conversation_id, parent_agent, shadow_agent)
+VALUES ('shadow-test-z', $1, 'main', 'main/z'), ('shadow-test-a', $1, 'main', 'main/a')`, id)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `INSERT INTO shadow_turns
+(child_conversation_id, parent_source_conversation_id, parent_turn_id, inbound_json)
+SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shadow_bindings WHERE parent_conversation_id = $1`, id)
+		require.NoError(t, err)
+		waiting, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, Revision: emptyHistory.Revision})
+		require.NoError(t, err)
+		require.Len(t, waiting.Shadows, 2)
+		require.Empty(t, waiting.Messages)
+		require.False(t, waiting.Reset_)
+		require.NotEqual(t, emptyHistory.Revision, waiting.Revision)
+
+		for i, shadow := range waiting.Shadows {
+			require.Equal(t, []string{"main/a", "main/z"}[i], shadow.ShadowAgent)
+			require.Equal(t, id, shadow.ParentConversationId)
+			require.Len(t, shadow.Turns, 1)
+			require.Equal(t, id, shadow.Turns[0].ParentSourceConversationId)
+			require.Equal(t, "waiting", shadow.Turns[0].ParentTurnId)
+			require.Empty(t, shadow.Turns[0].ChildTurnId)
+			require.False(t, shadow.Turns[0].Running)
+			require.Empty(t, shadow.Turns[0].Terminal)
+			require.Positive(t, shadow.Turns[0].Order)
+		}
+
+		_, err = db.ExecContext(ctx, `UPDATE shadow_turns SET terminal = 'failed' WHERE child_conversation_id = 'shadow-test-a'`)
+		require.NoError(t, err)
+		failed, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, Revision: waiting.Revision})
+		require.NoError(t, err)
+		require.Empty(t, failed.Messages)
+		require.False(t, failed.Reset_)
+		require.NotEqual(t, waiting.Revision, failed.Revision)
+		require.Equal(t, "failed", failed.Shadows[0].Turns[0].Terminal)
+		require.Empty(t, failed.Shadows[1].Turns[0].Terminal)
+
+		for _, child := range []string{"shadow-test-a", "shadow-test-a/task"} {
+			_, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: child})
+			require.NoError(t, err, "comparison history resolves through its visible parent")
+			_, err = invoke[LoadSessionEntriesResponse](ctx, connection, "LoadSessionEntries", &SessionEntriesRequest{Id: child})
+			require.NoError(t, err)
+
+			for _, mutation := range []struct {
+				method  string
+				request proto.Message
+			}{
+				{"Prompt", &PromptRequest{Id: child, Text: "off-contract input"}},
+				{"DeleteSessionEntries", &SessionEntriesRequest{Id: child}},
+				{"UpdateSession", &UpdateSessionRequest{Id: child}},
+				{"ForkSession", &ForkSessionRequest{Id: child}},
+				{"StageRevert", &StageRevertRequest{Id: child}},
+				{"MoveToBackground", &MoveToBackgroundRequest{ConversationId: child}},
+				{"RemoveQueueItem", &QueueItemRequest{Id: child}},
+			} {
+				_, err := invoke[PromptResponse](ctx, connection, mutation.method, mutation.request)
+				require.Error(t, err, mutation.method)
+				require.Equal(t, codes.PermissionDenied, status.Code(err), mutation.method)
+			}
+		}
+
+		_, err = db.ExecContext(ctx, `UPDATE shadow_bindings SET parent_conversation_id = 'private-X' WHERE child_conversation_id = 'shadow-test-z'`)
+		require.NoError(t, err)
+
+		for _, child := range []string{"shadow-test-z", "shadow-test-z/task"} {
+			_, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: child})
+			require.Equal(t, codes.PermissionDenied, status.Code(err), "private producer cannot grant comparison reads")
+			_, err = invoke[LoadSessionEntriesResponse](ctx, connection, "LoadSessionEntries", &SessionEntriesRequest{Id: child})
+			require.Equal(t, codes.PermissionDenied, status.Code(err))
+		}
+	})
+
 	for _, hidden := range []string{"private-X", "cron:cron/daily.md:20000102T030405.000000006Z:a"} {
 		_, err = invoke[LoadSessionEntriesResponse](ctx, connection, "LoadSessionEntries", &SessionEntriesRequest{Id: hidden})
 		require.Equal(t, codes.PermissionDenied, status.Code(err))
@@ -1813,6 +1898,8 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, backend.ThreadState{Agent: "planner", CreatedBy: "alice"}, createdThread)
 	_, err = invoke[CreateSessionResponse](ctx, connection, "CreateSession", &CreateSessionRequest{Agent: "missing"})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
+	_, err = invoke[CreateSessionResponse](ctx, connection, "CreateSession", &CreateSessionRequest{Agent: "main/alternative"})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
 	historyBefore, err := sessions.ObserveEntries(ctx, "empty-web")
 	require.NoError(t, err)
@@ -1836,6 +1923,7 @@ func TestSessionEntries(t *testing.T) {
 	}{
 		{id, "planner", codes.InvalidArgument},
 		{created.Id, "selected", codes.OK},
+		{created.Id, "main/alternative", codes.InvalidArgument},
 		{"empty-web", "missing", codes.InvalidArgument},
 		{"private-X", "main", codes.PermissionDenied},
 		{"cron:cron/daily.md:20000102T030405.000000006Z:a", "main", codes.PermissionDenied},
@@ -2551,11 +2639,12 @@ func TestSessionEntries(t *testing.T) {
 		_, err = transaction.ExecContext(t.Context(), `LOCK TABLE managed_conversations IN ACCESS EXCLUSIVE MODE`)
 		require.NoError(t, err)
 
-		// Visibility remains readable; only the selected thread lookup is blocked.
+		// Shadow visibility also reads managed ownership, so the locked lookup
+		// fails before selecting an agent rather than returning incomplete choices.
 		selectedServer := &Server{backend: server.backend, sessions: lockedSessions, usernames: server.usernames, cfg: server.cfg, channels: server.channels, cronjobs: server.cronjobs}
 		incoming := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
 		selected, err := selectedServer.listAgents(incoming, id)
-		require.ErrorContains(t, err, "read selected conversation")
+		require.ErrorContains(t, err, "resolve web conversation visibility")
 		require.Nil(t, selected)
 	})
 
@@ -3534,7 +3623,7 @@ func TestBackgroundJobRPCs(t *testing.T) {
 
 			return jobs, nil
 		},
-		MoveToBackgroundFunc:  func(string) (bool, error) { return true, nil },
+		MoveToBackgroundFunc:  func(context.Context, string) (bool, error) { return true, nil },
 		StopBackgroundJobFunc: func(context.Context, string, string) (bool, error) { return true, nil },
 	}
 

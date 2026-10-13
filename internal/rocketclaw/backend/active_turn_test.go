@@ -433,9 +433,8 @@ func TestResumedCronRowPostsRootOnce(t *testing.T) {
 	msg := seedCronRun(t, service, "cron:daily")
 
 	crashed := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
-	replay, err := replayInputForMessage("user", "job prompt")
-	require.NoError(t, err)
-	_, err = service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", service), entries: []rocketcode.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replay}}, outbound: crashed.newOutboundMessage(msg, "turn-cron", "exact report", true)})
+	replay := replayInputForMessage("user", "job prompt")
+	_, err := service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", service), entries: []rocketcode.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replay}}, outbound: crashed.newOutboundMessage(msg, "turn-cron", "exact report", true)})
 	require.NoError(t, err)
 
 	require.NoError(t, manager.StartActiveTurns(t.Context()))
@@ -475,7 +474,7 @@ func TestResumedCronRowPostsRootOnce(t *testing.T) {
 	require.NoError(t, err)
 	_, err = service.AppendEntryID(t.Context(), "cron:daily", &rocketcode.SessionEntry{Version: 1, Type: producerScheduleEntryType, Timestamp: time.Now(), OutputTrace: []json.RawMessage{data}})
 	require.NoError(t, err)
-	require.NoError(t, manager.StartPendingScheduledMessages())
+	require.NoError(t, manager.StartPendingScheduledMessages(t.Context()))
 
 	pending, err := service.ScheduledMessagesForConversation(destination)
 	require.NoError(t, err)
@@ -508,8 +507,8 @@ func TestLegacyCronScheduleResumesIntoCanonical(t *testing.T) {
 			}
 
 			require.NoError(t, store.UpsertThread("cron:legacy", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
-			// Back to before 027_producer_handoff and the five migrations that follow it.
-			_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(t.Context(), store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 6)
+			// Back to before 027_producer_handoff and the six migrations that follow it.
+			_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(t.Context(), store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 7)
 			require.NoError(t, err)
 
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "original legacy job", false)
@@ -539,8 +538,7 @@ func TestLegacyCronScheduleResumesIntoCanonical(t *testing.T) {
 			}{Type: "function_call", ID: "fc_legacy", CallID: "legacy_schedule", Name: "execute", Arguments: string(arguments)})
 			require.NoError(t, err)
 			// Seed the actual provider/tool journal shape, not a producer effect.
-			replay, err := replayInputForMessage("user", "original legacy job")
-			require.NoError(t, err)
+			replay := replayInputForMessage("user", "original legacy job")
 
 			record := rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "legacy-turn", Timestamp: time.Now(), ReplayInput: append(replay, call), OutputTrace: []json.RawMessage{call}}
 			data, err = json.Marshal(struct {
@@ -602,7 +600,7 @@ func TestLegacyCronScheduleResumesIntoCanonical(t *testing.T) {
 			require.Equal(t, map[string]protocol.ScheduledMessageState{"legacy-id": legacy}, messages, "handoff preserves the row and timestamps exactly")
 			legacy.DueAt = time.Now().Add(-time.Minute).UTC()
 			require.NoError(t, store.PutScheduledMessage("legacy-id", &legacy))
-			require.NoError(t, manager.StartPendingScheduledMessages())
+			require.NoError(t, manager.StartPendingScheduledMessages(t.Context()))
 
 			if owner != "" {
 				require.NoError(t, manager.PickLaterWork(t.Context(), destination))
@@ -707,7 +705,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 
 	require.NoError(t, service.UpsertThread("cron:daily", ThreadState{Agent: "job", CreatedBy: ThreadCreatedByCron}))
 
-	bridge, err := manager.recordedBridge("cron:daily")
+	bridge, err := manager.recordedBridge(t.Context(), "cron:daily")
 	require.NoError(t, err)
 
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "run job", false)
@@ -790,7 +788,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 			return false
 		}
 
-		canonical, err := manager.recordedBridge("web:cron:daily")
+		canonical, err := manager.recordedBridge(t.Context(), "web:cron:daily")
 		require.NoError(t, err)
 
 		return len(canonical.requestCh) == 0 && !canonical.handlingSnapshot() && len(runningTestTurns(t, service)) == 0 && len(finals) == 0
@@ -829,7 +827,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 		roots <- message
 		return protocol.TextConversationTarget{ChannelID: "C1", ThreadID: "1.2"}, nil
 	}}
-	require.NoError(t, manager.StartPendingScheduledMessages())
+	require.NoError(t, manager.StartPendingScheduledMessages(t.Context()))
 	recurring := readFinal(t, finals)
 	assert.Equal(t, "web:cron:daily", recurring.ConversationID)
 	assert.Equal(t, "canonical", recurring.Agent, "startup uses persisted Web selection, not the stale schedule agent")
@@ -977,7 +975,7 @@ SELECT conversation_id, revert_message_id, unavailable_producer(producer_inbound
 					bridge.handle(t.Context(), &bridgeRequest{inbound: inbound, turnID: "pending", delivery: delivery})
 					require.Empty(t, runningTestTurns(t, store))
 				case state == "due creation failure":
-					bridge, err := manager.recordedBridge("cron:pending")
+					bridge, err := manager.recordedBridge(t.Context(), "cron:pending")
 					require.NoError(t, err)
 					bridge.armScheduledMessage("", &protocol.ScheduledMessageState{ConversationID: "cron:pending", DueAt: time.Now().Add(-time.Minute)})
 					require.Eventually(t, func() bool {
@@ -987,7 +985,7 @@ SELECT conversation_id, revert_message_id, unavailable_producer(producer_inbound
 						return attempted
 					}, 5*time.Second, 10*time.Millisecond)
 				default:
-					require.ErrorContains(t, manager.StartPendingScheduledMessages(), "reject_handoff")
+					require.ErrorContains(t, manager.StartPendingScheduledMessages(t.Context()), "reject_handoff")
 				}
 
 				_, through, err := (stateDAO{db: store.db}).producer(t.Context(), "cron:pending")
@@ -1005,7 +1003,7 @@ SELECT conversation_id, revert_message_id, unavailable_producer(producer_inbound
 			}
 
 			if !strings.HasPrefix(state, "live ") && !strings.HasPrefix(state, "due ") {
-				require.NoError(t, manager.StartPendingScheduledMessages())
+				require.NoError(t, manager.StartPendingScheduledMessages(t.Context()))
 			}
 
 			if strings.HasPrefix(state, "reset") {
@@ -1049,7 +1047,7 @@ SELECT conversation_id, revert_message_id, unavailable_producer(producer_inbound
 				assert.Contains(t, <-calls, "original job")
 			}
 
-			require.NoError(t, manager.StartPendingScheduledMessages())
+			require.NoError(t, manager.StartPendingScheduledMessages(t.Context()))
 			assert.Empty(t, calls, "consumed work stays consumed on rediscovery")
 		})
 	}
@@ -1131,7 +1129,7 @@ func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 				require.NoError(t, err)
 
 				if stored == "due while producing" {
-					require.NoError(t, manager.StartPendingScheduledMessages())
+					require.NoError(t, manager.StartPendingScheduledMessages(t.Context()))
 
 					pending, err := service.ScheduledMessagesForConversation(managedID)
 					require.NoError(t, err)
@@ -1167,7 +1165,7 @@ func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 				if stored == "projection failure" {
 					_, err := service.db.ExecContext(t.Context(), `ALTER TABLE scheduled_messages ADD CONSTRAINT reject_handoff CHECK (message <> 'scheduled follow up')`)
 					require.NoError(t, err)
-					require.ErrorContains(t, manager.StartPendingScheduledMessages(), "reject_handoff")
+					require.ErrorContains(t, manager.StartPendingScheduledMessages(t.Context()), "reject_handoff")
 					_, through, err := (stateDAO{db: service.db}).producer(t.Context(), privateID)
 					require.NoError(t, err)
 					assert.Zero(t, through, "a failed projection leaves progress pending")
@@ -1177,13 +1175,13 @@ func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 
 				_, err = manager.switchConversationAgent(managedID, "selected")
 				require.NoError(t, err)
-				require.NoError(t, manager.StartPendingScheduledMessages())
+				require.NoError(t, manager.StartPendingScheduledMessages(t.Context()))
 				final := readFinal(t, finals)
 				assert.Equal(t, managedID, final.ConversationID)
 				assert.Equal(t, "selected", final.Agent)
 				assert.Contains(t, <-requests, "Selected canonical instructions")
 				require.Eventually(t, func() bool { return len(runningTestTurns(t, service)) == 0 }, 5*time.Second, 10*time.Millisecond)
-				require.NoError(t, manager.StartPendingScheduledMessages())
+				require.NoError(t, manager.StartPendingScheduledMessages(t.Context()))
 
 				pending, err := service.ScheduledMessagesForConversation(managedID)
 				require.NoError(t, err)
@@ -1198,7 +1196,7 @@ func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 				require.NoError(t, manager.StartActiveTurns(t.Context()))
 			} else {
 				require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: privateID, Kind: protocol.InboundKindEnqueue, Message: msg.Text, Source: msg.Source, Inbound: msg}))
-				require.NoError(t, manager.StartQueuedConversations())
+				require.NoError(t, manager.StartQueuedConversations(t.Context()))
 			}
 
 			byConversation := map[string]int{}
@@ -1514,7 +1512,7 @@ func TestShutdownReleasesCronRunnerWait(t *testing.T) {
 
 	require.NoError(t, service.UpsertThread("cron:weekly", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
 
-	destination, err := rt.threads.recordedBridge(template.config.ConversationID)
+	destination, err := rt.threads.recordedBridge(t.Context(), template.config.ConversationID)
 	require.NoError(t, err)
 
 	synced := make(chan error, 1)

@@ -103,6 +103,7 @@ type InboundContent struct {
 // OutboundAttachment carries a human-visible file attachment to output sinks.
 type OutboundAttachment struct {
 	ID                 string
+	ConversationID     string `json:"conversation_id,omitempty"` // Actual owner when projecting an input reference.
 	Name, MIMEType     string
 	Data               []byte `json:"-"` // Persisted turn state keeps only ID; large files exceed Postgres JSON limits.
 	OriginalUnverified bool

@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -38,6 +40,36 @@ type Agents struct {
 	Items map[string]Agent
 }
 
+// PrimaryNames returns sorted top-level agents, excluding comparison shadows.
+func (a Agents) PrimaryNames() []string {
+	var names []string
+
+	for name := range a.Items {
+		if !strings.Contains(name, "/") {
+			names = append(names, name)
+		}
+	}
+
+	slices.Sort(names)
+
+	return names
+}
+
+// ShadowNames returns sorted immediate shadow names for a top-level parent.
+func (a Agents) ShadowNames(parent string) []string {
+	var names []string
+
+	for name := range a.Items {
+		if path.Dir(name) == parent {
+			names = append(names, name)
+		}
+	}
+
+	slices.Sort(names)
+
+	return names
+}
+
 // AgentLoadResult contains loaded agents and any non-fatal load errors.
 type AgentLoadResult struct {
 	Agents Agents
@@ -58,7 +90,8 @@ func (e *AgentMaxRecursionError) Unwrap() error {
 	return e.Err
 }
 
-// LoadAgents scans the top level of fsys for markdown agent files.
+// LoadAgents loads top-level Markdown agents and immediate shadows in each
+// matching directory. Shadow names retain their parent path.
 func LoadAgents(fsys fs.FS, resolveModel func(string) (string, error)) AgentLoadResult {
 	result := AgentLoadResult{
 		Agents: Agents{Items: map[string]Agent{}},
@@ -71,17 +104,43 @@ func LoadAgents(fsys fs.FS, resolveModel func(string) (string, error)) AgentLoad
 		return result
 	}
 
+	var files []string
+
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || path.Ext(entry.Name()) != ".md" {
 			continue
 		}
 
-		if filepath.Ext(entry.Name()) != ".md" {
+		files = append(files, entry.Name())
+		dir := strings.TrimSuffix(entry.Name(), ".md")
+
+		info, err := fs.Stat(fsys, dir)
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 
-		filePath := entry.Name()
+		if err == nil && !info.IsDir() {
+			continue
+		}
 
+		var children []fs.DirEntry
+		if err == nil {
+			children, err = fs.ReadDir(fsys, dir)
+		}
+
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Errorf("%s: read shadow agents: %w", dir, err))
+			continue
+		}
+
+		for _, child := range children {
+			if !child.IsDir() && path.Ext(child.Name()) == ".md" {
+				files = append(files, path.Join(dir, child.Name()))
+			}
+		}
+	}
+
+	for _, filePath := range files {
 		agent, err := loadAgent(fsys, filePath, resolveModel)
 		if err != nil {
 			result.Errors = append(result.Errors, err)

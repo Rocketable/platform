@@ -29,6 +29,8 @@ var workflowNamePattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 // Definition is a compiled workflow definition.
 type Definition struct {
 	Name         string
+	Path         string
+	Source       string
 	Description  string
 	Phases       []string
 	WorkerModels []string
@@ -118,7 +120,7 @@ func Load(root *os.Root, runtimeDir string) (definitions map[string]*Definition,
 			continue
 		}
 
-		definition, errCompile := compileDefinition(filename, name, source)
+		definition, errCompile := Compile(filename, name, string(source))
 		if errCompile != nil {
 			return nil, fmt.Errorf("validate workflow %s: %w", entry.Name(), errCompile)
 		}
@@ -129,7 +131,8 @@ func Load(root *os.Root, runtimeDir string) (definitions map[string]*Definition,
 	return definitions, nil
 }
 
-func compileDefinition(filename, filenameStem string, source []byte) (*Definition, error) {
+// Compile validates saved source and retains it for durable invocation snapshots.
+func Compile(filename, name, source string) (*Definition, error) {
 	predeclared := starlark.StringDict{
 		"worker": starlark.NewBuiltin("worker", func(_ *starlark.Thread, _ *starlark.Builtin, _ starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
 			return starlark.None, nil
@@ -149,12 +152,12 @@ func compileDefinition(filename, filenameStem string, source []byte) (*Definitio
 		Recursion:       false,
 	}
 
-	file, errParse := options.Parse(filename, source, 0)
+	file, errParse := options.Parse(filename, []byte(source), 0)
 	if errParse != nil {
 		return nil, fmt.Errorf("validate top-level syntax: %w", errParse)
 	}
 
-	name, description, phases, workerModels, errValidate := validateFile(options, file, filenameStem)
+	definitionName, description, phases, workerModels, errValidate := validateFile(options, file, name)
 	if errValidate != nil {
 		return nil, errValidate
 	}
@@ -182,7 +185,9 @@ func compileDefinition(filename, filenameStem string, source []byte) (*Definitio
 	}
 
 	return &Definition{
-		Name:         name,
+		Name:         definitionName,
+		Path:         filename,
+		Source:       source,
 		Description:  description,
 		Phases:       phases,
 		WorkerModels: workerModels,

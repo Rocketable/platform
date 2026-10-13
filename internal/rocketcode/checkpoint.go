@@ -64,9 +64,10 @@ func (TracelessJournal) SaveTrace(context.Context, string, []json.RawMessage) er
 // turnStep is a turn's recorded items under its turn ID. Response holds the latest
 // provider response while its calls or final answer are not yet appended.
 type turnStep struct {
-	Record   SessionEntry      `json:"record"`
-	Trace    []json.RawMessage `json:"trace,omitempty"`
-	Response json.RawMessage   `json:"response,omitempty"`
+	AppliedInputIDs []string          `json:"applied_input_ids,omitempty"`
+	Record          SessionEntry      `json:"record"`
+	Trace           []json.RawMessage `json:"trace,omitempty"`
+	Response        json.RawMessage   `json:"response,omitempty"`
 }
 
 // callStep is a tool call's started marker; Output holds its function_call_output
