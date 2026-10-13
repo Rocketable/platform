@@ -550,6 +550,12 @@ test("handoff hits and queued items format tags and markup", async () => {
     await excerpt.getByText("@handle").waitFor();
     expect(await excerpt.locator("strong").textContent()).toBe("bold");
     expect(await excerpt.getByText("@handle").count()).toBe(1);
+    await dialog.getByRole("button", { name: "Change", exact: true }).click();
+    await dialog.getByRole("button", { name: "Stash handoff here", exact: true }).waitFor({ state: "hidden" });
+    expect(await dialog.isVisible()).toBe(true);
+    expect(await dialog.getByRole("textbox", { name: "Search messages" }).inputValue()).toBe("");
+    expect(await excerpt.count()).toBe(0);
+    expect(new URL(page.url()).pathname).toBe(`/s/${btoa("dest").replace(/=+$/, "")}`);
   } finally {
     await browser.close();
     server.stop(true);
