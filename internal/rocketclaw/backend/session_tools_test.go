@@ -137,7 +137,7 @@ func TestSessionTagToolsBridge(t *testing.T) {
 			}
 
 			input := make(chan rocketcode.PromptInput, 1)
-			input <- rocketcode.PromptInput{Text: "tag", Responses: make(chan rocketcode.ChatResponse, 100)}
+			input <- rocketcode.PromptInput{Texts: []string{"tag"}, Responses: make(chan rocketcode.ChatResponse, 100)}
 
 			close(input)
 
@@ -175,7 +175,7 @@ func TestSessionTagToolsBridge(t *testing.T) {
 					require.NoError(t, err)
 
 					input := make(chan rocketcode.PromptInput, 1)
-					input <- rocketcode.PromptInput{Text: "resume", Responses: make(chan rocketcode.ChatResponse, 100)}
+					input <- rocketcode.PromptInput{Texts: []string{"resume"}, Responses: make(chan rocketcode.ChatResponse, 100)}
 
 					close(input)
 
@@ -313,7 +313,7 @@ func TestSessionTagChildAuthority(t *testing.T) {
 				require.NoError(t, err)
 
 				input := make(chan rocketcode.PromptInput, 1)
-				input <- rocketcode.PromptInput{Text: "delegate", Responses: make(chan rocketcode.ChatResponse, 100)}
+				input <- rocketcode.PromptInput{Texts: []string{"delegate"}, Responses: make(chan rocketcode.ChatResponse, 100)}
 
 				close(input)
 
@@ -763,7 +763,7 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			}
 
 			input := make(chan rocketcode.PromptInput, 1)
-			input <- rocketcode.PromptInput{Text: "inspect", Responses: make(chan rocketcode.ChatResponse, 100)}
+			input <- rocketcode.PromptInput{Texts: []string{"inspect"}, Responses: make(chan rocketcode.ChatResponse, 100)}
 
 			close(input)
 

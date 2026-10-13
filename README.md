@@ -185,6 +185,8 @@ model: '{{ model "coding-high" }}'
 
 `work/gpt-5.5` uses the `work` provider, and a bare `gpt-5.5` uses `openai`. RocketClaw never switches to another provider on its own. Each provider compacts conversation history at 200000 tokens unless you set `autocompaction_threshold`.
 
+Set `prompt_cache_markers_relative_position` (a negative number) only on a provider that accepts Anthropic `cache_control` markers, such as CLIProxyAPI in front of Claude. RocketClaw then marks one text piece of the last request message, counted from the end: `-2` marks the piece before the last. Automatic permission reviews send the planned action as the last piece, so `-2` lets the next review reuse the cached transcript. Leave it unset for OpenAI and other providers that reject unknown fields.
+
 Sign in per provider with `rocketclaw oai login [provider] [--headless]`. Use `rocketclaw oai list` to see sign-ins and `rocketclaw oai logout [provider]` to remove one. Credentials are normally saved in `.rocketclaw/auth.json`.
 
 ## Data and storage

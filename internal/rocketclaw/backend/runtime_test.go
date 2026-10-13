@@ -969,9 +969,9 @@ func TestBridgeDrainSteersPreservesAcquiredContent(t *testing.T) {
 
 	for i, text := range []string{"first", "second"} {
 		require.Equal(t, &rocketcode.PromptInputDirectSkill{Name: "docs-helper", Arguments: text}, inputs[i].DirectSkill)
-		require.Contains(t, inputs[i].Text, "attachment text")
-		require.Contains(t, inputs[i].Text, text)
-		require.Contains(t, inputs[i].Text, "U1")
+		require.Contains(t, inputs[i].Texts[0], "attachment text")
+		require.Contains(t, inputs[i].Texts[0], text)
+		require.Contains(t, inputs[i].Texts[0], "U1")
 		require.Equal(t, []rocketcode.Attachment{{MIME: "image/png", Filename: "image.png", URL: "data:image/png;base64," + []string{"Zmlyc3Q=", "c2Vjb25k"}[i]}}, inputs[i].Attachments)
 	}
 
@@ -1037,7 +1037,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 	require.Len(t, inputs, 2)
 
 	for i, text := range []string{"first", "last"} {
-		require.Contains(t, inputs[i].Text, text+" author")
+		require.Contains(t, inputs[i].Texts[0], text+" author")
 		require.Equal(t, []rocketcode.Attachment{{MIME: "image/png", Filename: "image.png", URL: "data:image/png;base64," + []string{"Zmlyc3Q=", "bGFzdA=="}[i]}}, inputs[i].Attachments)
 	}
 
@@ -1089,8 +1089,8 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 	inputs = bridge.drainSteers(t.Context(), rocketcode.TurnPhaseToolLoop)
 	require.Len(t, inputs, 1)
 	require.Equal(t, &rocketcode.PromptInputDirectSkill{Name: "stop", Arguments: "\"typed args\"  Next"}, inputs[0].DirectSkill)
-	require.Contains(t, inputs[0].Text, "original author")
-	require.Contains(t, inputs[0].Text, "acquired text file\n\nacquired forwarded thread")
+	require.Contains(t, inputs[0].Texts[0], "original author")
+	require.Contains(t, inputs[0].Texts[0], "acquired text file\n\nacquired forwarded thread")
 	require.Equal(t, []rocketcode.Attachment{{MIME: "image/png", Filename: "original.png", URL: "data:image/png;base64,b3JpZ2luYWw="}}, inputs[0].Attachments)
 	_, claimed, err := (stateDAO{db: store.db}).claimThreadQueueItem(t.Context(), conversationID, "q1")
 	require.NoError(t, err)
@@ -1130,8 +1130,8 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 			inputs := bridge.drainSteers(t.Context(), rocketcode.TurnPhaseToolLoop)
 			require.Len(t, inputs, 1)
 			require.Nil(t, inputs[0].DirectSkill)
-			require.Contains(t, inputs[0].Text, "goal_continuation")
-			require.Contains(t, inputs[0].Text, "$docs-helper attachment-only")
+			require.Contains(t, inputs[0].Texts[0], "goal_continuation")
+			require.Contains(t, inputs[0].Texts[0], "$docs-helper attachment-only")
 		} else {
 			inbound := (<-bridge.requestCh).inbound
 			require.Equal(t, "goal_continuation", inbound.Metadata[protocol.InboundPrincipalMetadataKey])

@@ -29,19 +29,22 @@ const (
 // PromptInput is one prompt plus optional model-visible attachments.
 type PromptInput struct {
 	// ID identifies this input in local durable replay, not provider requests.
-	ID string `json:"id,omitempty"`
+	ID string
 	// TurnID, when set, is the turn's stable identity and journal key across restarts.
-	TurnID string `json:"turn_id,omitempty"`
+	TurnID string
 	// Role defaults to PromptInputRoleUser when empty.
-	Role PromptInputRole `json:"role,omitempty"`
-	Text string          `json:"text"`
-	// Header is the exact generated prefix of Text, saved only in local replay.
-	Header      string                  `json:"header,omitempty"`
-	Attachments []Attachment            `json:"attachments,omitempty"`
-	DirectSkill *PromptInputDirectSkill `json:"directSkill,omitempty"`
+	Role PromptInputRole
+	// Texts are the prompt's text pieces. The prompt text is their concatenation;
+	// each piece carries its own separators. More than one piece is sent as
+	// separate text parts, which a provider's prompt cache marker can target.
+	Texts []string
+	// Header is the exact generated prefix of the first piece, saved only in local replay.
+	Header      string
+	Attachments []Attachment
+	DirectSkill *PromptInputDirectSkill
 	// Responses receives user-visible response items for this prompt. The runtime
 	// closes it after the prompt's turn reaches a terminal state.
-	Responses chan<- ChatResponse `json:"-"`
+	Responses chan<- ChatResponse
 }
 
 // PromptInputDirectSkill requests a skill load before the model turn starts.
@@ -130,11 +133,14 @@ func promptInputMessage(input *PromptInput) responses.ResponseInputItemUnionPara
 		role = responses.EasyInputMessageRoleDeveloper
 	}
 
-	content := easyInputStringContent(input.Text)
-	if len(input.Attachments) > 0 {
+	content := easyInputStringContent(strings.Join(input.Texts, ""))
+	if len(input.Texts) > 1 || len(input.Attachments) > 0 {
 		parts := responses.ResponseInputMessageContentListParam{}
-		if input.Text != "" {
-			parts = append(parts, responses.ResponseInputContentUnionParam{OfInputText: &responses.ResponseInputTextParam{Text: input.Text}})
+
+		for _, text := range input.Texts {
+			if text != "" {
+				parts = append(parts, responses.ResponseInputContentUnionParam{OfInputText: &responses.ResponseInputTextParam{Text: text}})
+			}
 		}
 
 		content = responses.EasyInputMessageContentUnionParam{OfInputItemContentList: appendAttachmentContent(parts, input.Attachments...)}

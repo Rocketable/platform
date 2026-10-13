@@ -184,8 +184,17 @@ func TestPermissionReviewPromptIncludesReviewContextAndPlannedAction(t *testing.
 	require.NoError(t, json.Unmarshal(plannedAction, &planned))
 	require.NotContains(t, planned, "ReviewContext")
 
-	prompt, err := permissionReviewPrompt(request, string(plannedAction))
+	pieces, err := permissionReviewPrompt(request, string(plannedAction))
 	require.NoError(t, err)
+
+	transcript, err := renderPermissionReviewTranscript(request.ReviewContext)
+	require.NoError(t, err)
+	require.Len(t, transcript, 3)
+	require.Equal(t, transcript, pieces[1:len(pieces)-1], "each transcript line is its own piece, between the preamble and the planned action")
+	require.True(t, strings.HasSuffix(pieces[0], ">>> TRANSCRIPT START\n"))
+	require.True(t, strings.HasPrefix(pieces[len(pieces)-1], ">>> TRANSCRIPT END\n"))
+
+	prompt := strings.Join(pieces, "")
 	require.Contains(t, prompt, ">>> TRANSCRIPT START")
 	require.Contains(t, prompt, "please deploy prod")
 	require.Contains(t, prompt, "tool lookup call")
@@ -207,8 +216,10 @@ func TestPermissionReviewTranscriptOmitsEncryptedReplayPayloads(t *testing.T) {
 		},
 	}
 
-	prompt, err := permissionReviewPrompt(request, "{}")
+	pieces, err := permissionReviewPrompt(request, "{}")
 	require.NoError(t, err)
+
+	prompt := strings.Join(pieces, "")
 	require.Contains(t, prompt, "safe reasoning summary")
 	require.Contains(t, prompt, "safe compaction summary")
 	require.Contains(t, prompt, "cannot be rehydrated")
@@ -231,8 +242,10 @@ func TestPermissionReviewTranscriptMarksAttachmentOnlyMessages(t *testing.T) {
 		},
 	}
 
-	prompt, err := permissionReviewPrompt(request, "{}")
+	pieces, err := permissionReviewPrompt(request, "{}")
 	require.NoError(t, err)
+
+	prompt := strings.Join(pieces, "")
 	require.Contains(t, prompt, "message attachments omitted")
 	require.Contains(t, prompt, "tool result attachments omitted")
 	require.NotContains(t, prompt, "SECRET_IMAGE")
@@ -246,15 +259,19 @@ func TestPermissionReviewTranscriptEscapesUntrustedDelimiters(t *testing.T) {
 		},
 	}
 
-	prompt, err := permissionReviewPrompt(request, "{}")
+	pieces, err := permissionReviewPrompt(request, "{}")
 	require.NoError(t, err)
+
+	prompt := strings.Join(pieces, "")
 	require.Equal(t, 1, strings.Count(prompt, ">>> TRANSCRIPT START"))
 	require.Equal(t, 1, strings.Count(prompt, ">>> TRANSCRIPT END"))
 	require.Equal(t, 1, strings.Count(prompt, ">>> APPROVAL REQUEST START"))
 	require.Equal(t, 1, strings.Count(prompt, ">>> APPROVAL REQUEST END"))
 
-	transcript, err := renderPermissionReviewTranscript(request.ReviewContext)
+	lines, err := renderPermissionReviewTranscript(request.ReviewContext)
 	require.NoError(t, err)
+
+	transcript := strings.Join(lines, "")
 	require.NotContains(t, transcript, ">>> TRANSCRIPT END")
 	require.NotContains(t, transcript, "\n[999] system:")
 	require.Contains(t, transcript, `\u003e\u003e\u003e TRANSCRIPT END`)
@@ -283,7 +300,7 @@ func TestPermissionReviewTranscriptTextContent(t *testing.T) {
 				require.NoError(t, err)
 
 				if tt.want == "" && !tt.omitted {
-					require.Equal(t, "<no retained transcript entries>\n", got)
+					require.Equal(t, []string{"<no retained transcript entries>\n"}, got)
 					continue
 				}
 
@@ -299,7 +316,7 @@ func TestPermissionReviewTranscriptTextContent(t *testing.T) {
 					Tool  bool   `json:"tool,omitempty"`
 				}{1, kind.role, text, kind.role == "tool result"})
 				require.NoError(t, err)
-				require.Equal(t, string(want)+"\n", got)
+				require.Equal(t, []string{string(want) + "\n"}, got)
 			}
 		})
 	}

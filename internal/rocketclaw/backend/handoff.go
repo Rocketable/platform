@@ -52,7 +52,7 @@ func GenerateHandoff(ctx context.Context, locked *config.LockedConfig, agent, tr
 	input := make(chan rocketcode.PromptInput, 1)
 
 	output := make(chan rocketcode.ChatResponse)
-	input <- rocketcode.PromptInput{Role: rocketcode.PromptInputRoleUser, Text: transcript, Responses: output}
+	input <- rocketcode.PromptInput{Role: rocketcode.PromptInputRoleUser, Texts: []string{transcript}, Responses: output}
 
 	close(input)
 

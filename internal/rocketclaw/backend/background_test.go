@@ -588,7 +588,7 @@ func TestRunningSubagentDrainsItsNotes(t *testing.T) {
 
 	for jobID, owner := range map[string]string{"turn-1/call/s1": "/a", "turn-1/call/s2": "/a/b"} {
 		header := "[System]"
-		require.Equal(t, []rocketcode.PromptInput{{ID: jobID, Text: header + "\n\n" + `<execute id="` + jobID + `" state="completed" description="tests">` + "\ndone\n</execute>", Header: header}}, turn.DrainNotes(t.Context(), owner))
+		require.Equal(t, []rocketcode.PromptInput{{ID: jobID, Texts: []string{header + "\n\n" + `<execute id="` + jobID + `" state="completed" description="tests">` + "\ndone\n</execute>"}, Header: header}}, turn.DrainNotes(t.Context(), owner))
 		require.Empty(t, turn.DrainNotes(t.Context(), owner))
 	}
 

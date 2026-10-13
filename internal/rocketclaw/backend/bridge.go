@@ -2174,7 +2174,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		return result, fmt.Errorf("publish rocketcode turn start: %w", err)
 	}
 
-	input <- rocketcode.PromptInput{ID: cmp.Or(msg.Metadata["web_message_id"], msg.Metadata[backgroundNotesMetadataKey]), TurnID: journalKey, Role: "", Text: prompt, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: directSkill, Responses: output}
+	input <- rocketcode.PromptInput{ID: cmp.Or(msg.Metadata["web_message_id"], msg.Metadata[backgroundNotesMetadataKey]), TurnID: journalKey, Role: "", Texts: []string{prompt}, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: directSkill, Responses: output}
 
 	close(input)
 

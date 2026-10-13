@@ -1169,7 +1169,7 @@ func TestPermissionReviewKeyIsUniquePerToolCall(t *testing.T) {
 		output := make(chan ChatResponse, 20)
 
 		input := make(chan PromptInput, 1)
-		input <- PromptInput{TurnID: turnID, Role: PromptInputRoleUser, Text: "start", Responses: output}
+		input <- PromptInput{TurnID: turnID, Role: PromptInputRoleUser, Texts: []string{"start"}, Responses: output}
 
 		close(input)
 

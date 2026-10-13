@@ -209,6 +209,9 @@ type OpenAIConfig struct {
 	APIBaseURL              string `json:"api_base_url"`
 	RocketCodeAuth          string `json:"rocketcode_auth"`
 	AutocompactionThreshold int64  `json:"autocompaction_threshold,omitempty"`
+	// PromptCacheMarkersRelativePosition, when set, marks the text piece at this
+	// negative index of the last request message with an Anthropic cache_control.
+	PromptCacheMarkersRelativePosition *int `json:"prompt_cache_markers_relative_position,omitempty"`
 }
 
 // Provider returns the default or named provider configuration.
@@ -513,6 +516,10 @@ func normalizeOpenAIConfig(field string, cfg *OpenAIConfig) error {
 
 	if cfg.AutocompactionThreshold < 0 {
 		return fmt.Errorf("%s.autocompaction_threshold must be a positive integer", field)
+	}
+
+	if position := cfg.PromptCacheMarkersRelativePosition; position != nil && *position >= 0 {
+		return fmt.Errorf("%s.prompt_cache_markers_relative_position must be a negative integer", field)
 	}
 
 	return nil
