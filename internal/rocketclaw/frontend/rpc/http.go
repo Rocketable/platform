@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -59,8 +60,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 				return
 			}
 
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write(body)
+			httpJSON(w, r, body)
 		})
 	}
 
@@ -128,9 +128,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 					if errors.Is(err, io.EOF) {
 						body, errMarshal := (protojson.MarshalOptions{EmitDefaultValues: true}).Marshal(response)
 						if errMarshal == nil {
-							w.Header().Set("Content-Type", "application/json")
-							_, _ = w.Write(body)
-
+							httpJSON(w, r, body)
 							return
 						}
 
@@ -191,6 +189,23 @@ func NewTailnetHandler(client tailnetWhoIs, next http.Handler) http.Handler {
 		// Names may be non-ASCII, which only -bin metadata carries.
 		next.ServeHTTP(w, r.WithContext(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-tailnet-login-bin", who.UserProfile.LoginName, "rocketclaw-tailnet-name-bin", who.UserProfile.DisplayName)))
 	})
+}
+
+// httpJSON writes a JSON body, gzip-compressed when the client accepts it.
+func httpJSON(w http.ResponseWriter, r *http.Request, body []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Add("Vary", "Accept-Encoding")
+
+	if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		_, _ = w.Write(body)
+		return
+	}
+
+	w.Header().Set("Content-Encoding", "gzip")
+
+	compressed := gzip.NewWriter(w)
+	_, _ = compressed.Write(body)
+	_ = compressed.Close()
 }
 
 func httpUpload(body io.Reader, stream grpc.ClientStream) error {

@@ -430,6 +430,7 @@ func TestHTTPStreams(t *testing.T) {
 			switch scenario {
 			case "large-history":
 				require.Equal(t, http.StatusOK, response.StatusCode)
+				require.True(t, response.Uncompressed, "a large history crosses the network compressed")
 
 				var history HistoryResponse
 				require.NoError(t, protojson.Unmarshal(body, &history))

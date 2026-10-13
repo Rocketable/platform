@@ -2405,7 +2405,7 @@ function historyLines(messages: TranscriptEvent[]): Line[] {
 function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () => void) {
   const scope = useContext(DraftScope);
   const history = useQuery({ ...queries.history({ id }), enabled: false });
-  const refreshHistory = useCallback(() => { draft.historyEpoch = (draft.historyEpoch ?? 0) + 1; return readHistoryDelta(draft.sessionId, draft, onDraftChange); }, [draft, onDraftChange]);
+  const refreshHistory = useCallback(() => readHistoryDelta(draft.sessionId, draft, onDraftChange), [draft, onDraftChange]);
   const loadEarlier = useCallback((from?: string) => readEarlierHistory(draft.sessionId, draft, onDraftChange, from), [draft, onDraftChange]);
   const followed = history.data?.delegations, earlier = draft.delegations;
   const delegations = useMemo(() => earlier ? [...new Set([...(followed ?? []), ...earlier])] : followed, [followed, earlier]);

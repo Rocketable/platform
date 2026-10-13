@@ -70,7 +70,7 @@ test("transcript and entry HTTP proxy reach Go and reject an unmapped connection
   const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
   const web = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const target = new URL(request.url);
-    if (target.pathname.startsWith("/api/") || target.pathname === "/stream") return fetch(new Request(new URL(target.pathname + target.search, url), request));
+    if (target.pathname.startsWith("/api/") || target.pathname === "/stream") return fetch(new Request(new URL(target.pathname + target.search, url), request), { decompress: false });
     const file = Bun.file(path.join(dist, target.pathname));
     return new Response(await file.exists() && target.pathname !== "/" ? file : Bun.file(path.join(dist, "index.html")));
   } });

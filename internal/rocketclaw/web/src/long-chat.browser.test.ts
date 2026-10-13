@@ -15,9 +15,14 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
   const view = (first: number, last: number, extra: object) => ({ messages: Array.from({ length: last - first + 1 }, (_, i) => entry(first + i)).flat(), origin: "", delegations: [], revision: "", reset: true, replacedKeys: [], removedKeys: [], entryKeys: Array.from({ length: last - first + 1 }, (_, i) => String(first + i)), running: false, terminal: "", start: String(first), more: first > 1, ...extra });
   const pages: { before?: string; from?: string; limit?: number }[] = [];
   const opened = Promise.withResolvers<void>();
+  let fullReads = 0;
+  const streamOpened = Promise.withResolvers<void>();
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
-    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/stream") {
+      setTimeout(streamOpened.resolve, 200);
+      return new Response(new ReadableStream({ start(controller) { controller.enqueue(`data: ${JSON.stringify({ conversationId: "long", revision: "" })}\n\n`); } }), { headers: { "Content-Type": "text/event-stream" } });
+    }
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "long", name: "Long chat" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "long-chat" } });
@@ -26,6 +31,10 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     if (url.pathname === "/api/History") {
       const input = await request.json() as { revision?: string; limit?: number; before?: string; from?: string };
       await opened.promise;
+      if (!input.before && !input.revision) {
+        fullReads++;
+        await streamOpened.promise;
+      }
       if (!input.before) return Response.json(view(turns - input.limit! + 1, turns, { revision: "tail", reset: !input.revision, ...(input.revision ? { messages: [], replacedKeys: [] } : {}) }));
       pages.push({ before: input.before, from: input.from, limit: input.limit });
       const before = Number(input.before);
@@ -48,6 +57,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     await page.getByText(`assistant ${turns}`).waitFor();
     expect(await page.locator('[data-slot="message"][data-message-id]').count()).toBe(100);
     expect(pages).toEqual([]);
+    expect(fullReads).toBe(1);
 
     // Typing redraws only the composer; redrawing a long transcript per keystroke made input lag.
     // Background polls may still redraw it a few times, so this bounds the count well below one per key.
