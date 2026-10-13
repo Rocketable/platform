@@ -45,7 +45,7 @@ func (*publicVoice) voices() []string {
 }
 
 func (*publicVoice) header(credentials voiceCredentials) http.Header {
-	return http.Header{"Authorization": {"Bearer " + credentials.bearer}}
+	return http.Header{"Authorization": {"Bearer " + credentials.bearer}, "Api-Key": {credentials.bearer}}
 }
 
 func (v *publicVoice) create(ctx context.Context, header http.Header, sdp, agent, voice string, history []*TranscriptEvent) (answer, id string, err error) {
