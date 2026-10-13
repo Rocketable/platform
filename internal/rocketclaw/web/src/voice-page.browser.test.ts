@@ -172,7 +172,9 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
     await status.getByText("Tap to talk", { exact: true }).waitFor();
     expect(await page.getByText(notice).count()).toBe(0);
     await picker.click(); // Covers R3: picking while idle switches the existing conversation's agent.
+    const switched = page.waitForResponse("**/api/Prompt");
     await page.getByRole("option", { name: /helper/ }).click();
+    await switched;
     await page.waitForFunction(() => document.querySelector('[aria-label="Choose agent"]')?.textContent === "helper");
     expect(prompts).toEqual([{ id: "voice-1", text: "$agent helper" }]);
     expect(await shownVoice()).toBe("Marin"); // Another provider offers other voices.
