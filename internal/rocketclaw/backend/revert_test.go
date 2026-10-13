@@ -1105,7 +1105,7 @@ func TestRevertCorruptHistoryCannotBeAdmitted(t *testing.T) {
 			var id int64
 			require.NoError(t, s.db.QueryRowContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', $1, '') RETURNING id`, corrupt.raw).Scan(&id))
 			_, _, err := stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", id))
-			require.Error(t, err)
+			require.ErrorContains(t, err, "decode revert boundary")
 
 			_, err = s.ObserveHistory(ctx, "main", "", 0, 0, 0, HistoryInventory{})
 			if corrupt.name == "trace" {

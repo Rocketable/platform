@@ -322,7 +322,7 @@ func httpInput(w http.ResponseWriter, r *http.Request, request proto.Message, me
 	switch method {
 	case "Prompt":
 		required = "id text"
-	case "History", "ForkSession", "StageRevert", "ClearRevert", "Handoff", "UpdateSession", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "ReorderQueue":
+	case "History", "ForkSession", "StageRevert", "ClearRevert", "Handoff", "UpdateSession", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue":
 		required = "id"
 	case "SearchMessages", "SearchSessions":
 		required = "query"
@@ -330,21 +330,18 @@ func httpInput(w http.ResponseWriter, r *http.Request, request proto.Message, me
 		required = "ids"
 	case "RunCronJob":
 		required = "stem"
-	case "MoveToBackground", "StopBackgroundJob", "AnswerQuestion", "Voice":
+	case "MoveToBackground":
 		required = "conversationId"
-	}
-
-	switch method {
 	case "SteerQueueItem", "PopQueueItem", "RemoveQueueItem":
-		required += " itemId"
+		required = "id itemId"
 	case "ReorderQueue":
-		required += " itemIds"
+		required = "id itemIds"
 	case "StopBackgroundJob":
-		required += " jobId"
+		required = "conversationId jobId"
 	case "AnswerQuestion":
-		required += " askId"
+		required = "conversationId askId"
 	case "Voice":
-		required += " sdp"
+		required = "conversationId sdp"
 	}
 
 	for name := range strings.FieldsSeq(required) {

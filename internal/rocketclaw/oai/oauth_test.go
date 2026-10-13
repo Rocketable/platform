@@ -964,10 +964,9 @@ func TestWriteAuthFileReportsPostRenameFailuresAsCommitted(t *testing.T) {
 }
 
 func TestGeneratePKCEProducesVerifierAndChallenge(t *testing.T) {
-	pkce, err := generatePKCE()
-	require.NoError(t, err)
-	require.NotEmpty(t, pkce.verifier)
-	require.NotEmpty(t, pkce.challenge)
+	pkce := generatePKCE()
+	require.Len(t, pkce.verifier, 58)
+	require.Len(t, pkce.challenge, 43)
 	require.NotEqual(t, pkce.verifier, pkce.challenge)
 	require.NotContains(t, pkce.verifier, "=")
 	require.NotContains(t, pkce.challenge, "=")
@@ -1088,7 +1087,7 @@ func TestStripInputIDsRemovesIDsWhenStoreFalse(t *testing.T) {
 	require.NotContains(t, string(body.Input[2]), "summary")
 }
 
-func TestCleanCodexRequestLeavesNonJSONAndInvalidJSONBodies(t *testing.T) {
+func TestCleanCodexRequestPreservesUntouchedBodies(t *testing.T) {
 	tests := []struct {
 		name        string
 		contentType string
@@ -1096,6 +1095,11 @@ func TestCleanCodexRequestLeavesNonJSONAndInvalidJSONBodies(t *testing.T) {
 	}{
 		{name: "non-json", contentType: "text/plain", body: `plain body`},
 		{name: "invalid-json", contentType: "application/json", body: `{not-json`},
+		{name: "missing-input", contentType: "application/json", body: `{"instructions":"","stream":true}`},
+		{name: "null-input", contentType: "application/json", body: `{"instructions":"","stream":true,"input": null}`},
+		{name: "empty-input", contentType: "application/json", body: `{"instructions":"","stream":true,"input": [ ]}`},
+		{name: "non-array-input", contentType: "application/json", body: `{"instructions":"","stream":true,"input": { "type": "message" }}`},
+		{name: "unmodified-items", contentType: "application/json", body: `{"instructions":"","stream":true,"input": [ {"type":"message","content":"keep"}, null, {"type":123,"id":"keep"} ]}`},
 	}
 
 	for _, tt := range tests {
@@ -1117,18 +1121,18 @@ func TestCleanCodexRequestReportsBodyReadError(t *testing.T) {
 	req := requestWithBody("")
 	req.Body = io.NopCloser(iotest.ErrReader(errRead))
 
-	metadata, err := cleanCodexRequest(req, true)
-	require.False(t, metadata.hasCompact)
+	threshold, err := cleanCodexRequest(req, true)
+	require.Nil(t, threshold)
 	require.ErrorIs(t, err, errRead)
 	require.ErrorContains(t, err, "read OpenAI request body")
 }
 
 func TestCleanCodexRequestSkipsNonObjectMetadataAndInputItems(t *testing.T) {
-	req := requestWithBody(`{"store":false,"context_management":["skip",{"compact_threshold":"many"}],"input":["skip",{"id":"item-1","type":"message"}]}`)
+	req := requestWithBody(`{"store":false,"context_management":["skip",{"compact_threshold":"many"}],"input":["skip",{"id":"item-1","type":"message"},null,{"type":123,"id":"keep"},[1,2]]}`)
 
-	metadata, err := cleanCodexRequest(req, false)
+	threshold, err := cleanCodexRequest(req, false)
 	require.NoError(t, err)
-	require.False(t, metadata.hasCompact)
+	require.Nil(t, threshold)
 
 	data, err := io.ReadAll(req.Body)
 	require.NoError(t, err)
@@ -1140,15 +1144,18 @@ func TestCleanCodexRequestSkipsNonObjectMetadataAndInputItems(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &body))
 	require.JSONEq(t, `"skip"`, string(body.Input[0]))
 	require.NotContains(t, string(body.Input[1]), `"id"`)
+	require.JSONEq(t, `null`, string(body.Input[2]))
+	require.JSONEq(t, `{"type":123,"id":"keep"}`, string(body.Input[3]))
+	require.JSONEq(t, `[1,2]`, string(body.Input[4]))
 }
 
 func TestCleanCodexRequestNoopsForNonPostOrNilBody(t *testing.T) {
 	req := requestWithBody(`{"input":[]}`)
 	req.Method = http.MethodGet
 
-	metadata, err := cleanCodexRequest(req, true)
+	threshold, err := cleanCodexRequest(req, true)
 	require.NoError(t, err)
-	require.False(t, metadata.hasCompact)
+	require.Nil(t, threshold)
 
 	data, err := io.ReadAll(req.Body)
 	require.NoError(t, err)
@@ -1157,22 +1164,52 @@ func TestCleanCodexRequestNoopsForNonPostOrNilBody(t *testing.T) {
 	req = requestWithBody(`{"input":[]}`)
 	req.Body = nil
 
-	metadata, err = cleanCodexRequest(req, true)
+	threshold, err = cleanCodexRequest(req, true)
 	require.NoError(t, err)
-	require.False(t, metadata.hasCompact)
+	require.Nil(t, threshold)
 }
 
 func TestCleanCodexRequestExtractsCompactionThreshold(t *testing.T) {
 	req := requestWithBody(`{"context_management":[{"type":"compaction","compact_threshold":12.5}],"input":[{"type":"message"}]}`)
+	req.GetBody = func() (io.ReadCloser, error) { return nil, errors.New("unprepared getter must be replaced") }
 
-	metadata, err := cleanCodexRequest(req, false)
+	threshold, err := cleanCodexRequest(req, false)
 	require.NoError(t, err)
-	require.True(t, metadata.hasCompact)
-	require.InDelta(t, 12.5, metadata.compactThreshold, 0)
+	require.NotNil(t, threshold)
+	require.InDelta(t, 12.5, *threshold, 0)
 
 	data, err := io.ReadAll(req.Body)
 	require.NoError(t, err)
 	require.NotContains(t, string(data), "context_management")
+	require.NoError(t, req.Body.Close())
+
+	for range 2 {
+		body, err := req.GetBody()
+		require.NoError(t, err)
+		replayed, err := io.ReadAll(body)
+		require.NoError(t, err)
+		require.NoError(t, body.Close())
+		require.Equal(t, data, replayed, "every getter call returns the same owned JSON after the original body closes")
+		require.True(t, json.Valid(replayed))
+	}
+
+	for _, tc := range []struct {
+		name, body string
+		want       *float64
+	}{
+		{name: "absent", body: `{}`},
+		{name: "null", body: `{"context_management":null}`},
+		{name: "zero", body: `{"context_management":[{"compact_threshold":0}]}`, want: new(float64(0))},
+		{name: "negative", body: `{"context_management":[{"compact_threshold":-5}]}`, want: new(float64(-5))},
+		{name: "first present", body: `{"context_management":[{"compact_threshold":null},{"compact_threshold":0},{"compact_threshold":12.5}]}`, want: new(float64(0))},
+		{name: "invalid later value", body: `{"context_management":[{"compact_threshold":12.5},{"compact_threshold":"many"}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			threshold, err := cleanCodexRequest(requestWithBody(tc.body), false)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, threshold)
+		})
+	}
 }
 
 func TestStripInputIDsKeepsIDsWhenStoreTrue(t *testing.T) {
@@ -1200,7 +1237,8 @@ func BenchmarkTransportHTTPAttempt(b *testing.B) {
 	var logs bytes.Buffer
 
 	transport := &transport{
-		log: slog.New(slog.NewTextHandler(&logs, nil)).With("process_start", "test-start", "conversation_id", "conversation", "turn_id", "turn", "provider", "chat", "model", "chat-model"),
+		sessionID: "session-id",
+		log:       slog.New(slog.NewTextHandler(&logs, nil)).With("process_start", "test-start", "conversation_id", "conversation", "turn_id", "turn", "provider", "chat", "model", "chat-model"),
 		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			return resp, nil
 		}),
@@ -1227,7 +1265,7 @@ func TestTransportAddsOAuthHeadersAndStripsBodyIDs(t *testing.T) {
 	testAuthPath(t, workspace)
 	requireSaveToken(t, workspace, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"})
 
-	transport := &transport{log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "Bearer access", req.Header.Get("Authorization"))
 		require.Equal(t, "acc-123", req.Header.Get("Chatgpt-Account-Id"))
 		require.Equal(t, originator, req.Header.Get("Originator"))
@@ -1260,7 +1298,7 @@ func TestTransportAddsOAuthHeadersAndStripsBodyIDs(t *testing.T) {
 
 func TestTransportReportsTokenAndBaseErrors(t *testing.T) {
 	t.Run("token error", func(t *testing.T) {
-		transport := &transport{log: slog.New(slog.DiscardHandler), workspace: t.TempDir(), runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: t.TempDir(), runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			t.Fatal("base transport should not be called without a token")
 
 			return nil, nil
@@ -1284,7 +1322,7 @@ func TestTransportReportsTokenAndBaseErrors(t *testing.T) {
 			var logs bytes.Buffer
 
 			errSend := &url.Error{Op: "Post", URL: "https://url-user:credential-secret@example.com/private-path", Err: errors.New("body-secret")}
-			transport := &transport{log: slog.New(slog.NewJSONHandler(&logs, nil)), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			transport := &transport{sessionID: "session-id", log: slog.New(slog.NewJSONHandler(&logs, nil)), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 				time.Sleep(17 * time.Millisecond)
 				return nil, errSend
 			})}
@@ -1311,16 +1349,20 @@ func TestTransportReportsTokenAndBaseErrors(t *testing.T) {
 }
 
 func TestTransportPrefixesCompactionWhenUsageExceedsThreshold(t *testing.T) {
-	body, compactCalls := runAutoCompactTransportTest(t,
-		`{"model":"gpt-5.5","instructions":"be brief","store":false,"context_management":[{"type":"compaction","compact_threshold":10}],"input":[{"id":"item-1","type":"message"}]}`,
-		codexStream(`{"id":"resp","usage":{"total_tokens":100},"output":[]}`, `{"id":"msg","type":"message"}`),
-		`{"output":[{"content":"private-content-value","encrypted_content":"sealed","id":"cmp_1","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}]}`,
-	)
+	for _, threshold := range []float64{10, 0, -5} {
+		t.Run(fmt.Sprintf("threshold %g", threshold), func(t *testing.T) {
+			body, compactCalls := runAutoCompactTransportTest(t,
+				fmt.Sprintf(`{"model":"gpt-5.5","instructions":"be brief","store":false,"context_management":[{"type":"compaction","compact_threshold":%g}],"input":[{"id":"item-1","type":"message"}]}`, threshold),
+				codexStream(`{"id":"resp","usage":{"total_tokens":100},"output":[]}`, `{"id":"msg","type":"message"}`),
+				`{"output":[{"content":"private-content-value","encrypted_content":"sealed","id":"cmp_1","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}]}`,
+			)
 
-	require.Equal(t, 1, compactCalls)
-	require.JSONEq(t, `{"id":"resp","usage":{"total_tokens":100},"output":[{"content":"private-content-value","encrypted_content":"sealed","id":"cmp_1","summary":{"text":"private-summary-value"},"type":"compaction"},{"id":"msg","type":"message"}]}`, body)
-	require.Contains(t, body, "private-content-value")
-	require.NotContains(t, body, "private-recent-id")
+			require.Equal(t, 1, compactCalls)
+			require.JSONEq(t, `{"id":"resp","usage":{"total_tokens":100},"output":[{"content":"private-content-value","encrypted_content":"sealed","id":"cmp_1","summary":{"text":"private-summary-value"},"type":"compaction"},{"id":"msg","type":"message"}]}`, body)
+			require.Contains(t, body, "private-content-value")
+			require.NotContains(t, body, "private-recent-id")
+		})
+	}
 }
 
 func TestTransportRetriesContextOverflowAfterCompaction(t *testing.T) {
@@ -1333,7 +1375,7 @@ func TestTransportRetriesContextOverflowAfterCompaction(t *testing.T) {
 
 	var logs bytes.Buffer
 
-	transport := &transport{log: slog.New(slog.NewJSONHandler(&logs, nil)), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{sessionID: "session-id", log: slog.New(slog.NewJSONHandler(&logs, nil)), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if strings.HasSuffix(req.URL.Path, "/responses/compact") {
 			compactCalls++
 			data, errRead := io.ReadAll(req.Body)
@@ -1341,6 +1383,7 @@ func TestTransportRetriesContextOverflowAfterCompaction(t *testing.T) {
 			require.NotContains(t, string(data), `context_management`)
 			require.NotContains(t, string(data), `"id"`)
 			require.Contains(t, string(data), `"input"`)
+			require.Contains(t, string(data), `"instructions":`)
 
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"output":[{"content":"private-content-value","encrypted_content":"sealed","id":"cmp_1","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction_summary"}]}`)), Header: make(http.Header)}, nil
 		}
@@ -1416,7 +1459,7 @@ func TestTransportDoesNotRetryNonContextStreamFailure(t *testing.T) {
 	requireSaveToken(t, workspace, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()})
 
 	responseCalls := 0
-	transport := &transport{log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if strings.HasSuffix(req.URL.Path, "/responses/compact") {
 			t.Fatal("compact transport should not be called")
 		}
@@ -1446,7 +1489,7 @@ func TestTransportKeepsOriginalContextErrorWhenCompactReturnsNoItem(t *testing.T
 
 	responseCalls := 0
 	compactCalls := 0
-	transport := &transport{log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if strings.HasSuffix(req.URL.Path, "/responses/compact") {
 			compactCalls++
 
@@ -1536,7 +1579,7 @@ func TestTransportLeavesResponseWhenCompactResponseHasNoCompaction(t *testing.T)
 	body, compactCalls := runAutoCompactTransportTest(t,
 		`{"model":"gpt-5.5","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`,
 		codexStream(`{"id":"resp","usage":{"total_tokens":100},"output":[]}`, `{"id":"msg","type":"message"}`),
-		`{"output":[{"id":"compact-msg","type":"message"}]}`,
+		`{"output":[{"id":"compact-msg","type":"message"},{},{"type":null},{"type":42},{"type":{}},{"type":[]}]}`,
 	)
 
 	require.Equal(t, 1, compactCalls)
@@ -1546,13 +1589,11 @@ func TestTransportLeavesResponseWhenCompactResponseHasNoCompaction(t *testing.T)
 
 func TestCodexCompactionHandlesErrorAndFallbackBranches(t *testing.T) {
 	errRead := errors.New("read failed")
-	errGetBody := errors.New("get body failed")
 	errCompact := errors.New("compact failed")
 	errCompactRead := errors.New("compact read failed")
 	responseBody := `{"usage":{"total_tokens":100},"output":[]}`
 	originalBody := `{"usage":{"total_tokens":100},"output":[{"id":"msg","type":"message"}]}`
-	requestBody := `{"model":"gpt-5.5","input":[{"type":"message"}]}`
-	metadata := codexRequestMetadata{hasCompact: true, compactThreshold: 10}
+	requestBody := `{"model":"gpt-5.5","instructions":"","input":[{"type":"message"}]}`
 	compactBase := func(status int, compactBody io.Reader, errRoundTrip error) func(*testing.T, *int) http.RoundTripper {
 		return func(t *testing.T, compactCalls *int) http.RoundTripper {
 			t.Helper()
@@ -1577,9 +1618,7 @@ func TestCodexCompactionHandlesErrorAndFallbackBranches(t *testing.T) {
 
 	tests := []struct {
 		name            string
-		requestBody     string
 		responseBody    io.Reader
-		getBodyErr      error
 		base            func(*testing.T, *int) http.RoundTripper
 		wantErr         error
 		wantErrContains string
@@ -1596,19 +1635,6 @@ func TestCodexCompactionHandlesErrorAndFallbackBranches(t *testing.T) {
 			name:            "malformed response",
 			responseBody:    strings.NewReader(`{not-json`),
 			wantErrContains: "parse Codex response",
-		},
-		{
-			name:            "get body error",
-			responseBody:    strings.NewReader(responseBody),
-			getBodyErr:      errGetBody,
-			wantErr:         errGetBody,
-			wantErrContains: "read Codex compact source request",
-		},
-		{
-			name:            "malformed source request",
-			requestBody:     `{not-json`,
-			responseBody:    strings.NewReader(responseBody),
-			wantErrContains: "parse Codex compact source request",
 		},
 		{
 			name:            "malformed output",
@@ -1656,15 +1682,12 @@ func TestCodexCompactionHandlesErrorAndFallbackBranches(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			body := tt.requestBody
-			if body == "" {
-				body = requestBody
-			}
+			req := requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-5.5","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`)
+			threshold, err := cleanCodexRequest(req, true)
+			require.NoError(t, err)
+			require.NotNil(t, threshold)
 
-			req := requestWithPathAndBody("/backend-api/codex/responses", body)
-			if tt.getBodyErr != nil {
-				req.GetBody = func() (io.ReadCloser, error) { return nil, tt.getBodyErr }
-			}
+			sourceURL := *req.URL
 
 			compactCalls := 0
 
@@ -1677,10 +1700,12 @@ func TestCodexCompactionHandlesErrorAndFallbackBranches(t *testing.T) {
 				base = tt.base(t, &compactCalls)
 			}
 
-			transport := &transport{log: slog.New(slog.DiscardHandler), base: base}
+			transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), base: base}
 			resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(tt.responseBody), Header: make(http.Header)}
 
-			got, err := transport.codexCompaction(context.Background(), req, resp, &metadata)
+			got, err := transport.codexCompaction(context.Background(), req, resp, threshold)
+			require.Equal(t, sourceURL, *req.URL, "compaction must not change the source request URL")
+
 			if got != nil {
 				t.Cleanup(func() { require.NoError(t, got.Body.Close()) })
 			}
@@ -1721,7 +1746,7 @@ func TestTransportRefreshesExpiredOAuthToken(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	transport := &transport{log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "Bearer "+access, req.Header.Get("Authorization"))
 		require.Equal(t, "acc-new", req.Header.Get("Chatgpt-Account-Id"))
 
@@ -1752,7 +1777,7 @@ func TestTransportRefreshesOAuthTokenInsideSkew(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	transport := &transport{log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "Bearer next-access", req.Header.Get("Authorization"))
 
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[]}`)), Header: make(http.Header)}, nil
@@ -1781,7 +1806,7 @@ func TestTransportRefreshPreservesStoredAccountID(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	transport := &transport{log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "Bearer next-access", req.Header.Get("Authorization"))
 		require.Equal(t, "acc-old", req.Header.Get("Chatgpt-Account-Id"))
 
@@ -1813,7 +1838,7 @@ func TestTransportReportsRefreshError(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	transport := &transport{log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		t.Fatal("base transport should not be called when refresh fails")
 
 		return nil, nil
@@ -1862,7 +1887,7 @@ func TestTransportRetriesCodexUnauthorizedWithReloadedStoredToken(t *testing.T) 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
 	calls := 0
-	transport := &transport{log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		calls++
 
 		switch calls {
@@ -1912,7 +1937,7 @@ func TestTransportForceRefreshesAndRetriesCodexUnauthorized(t *testing.T) {
 
 	var logs bytes.Buffer
 
-	transport := &transport{log: slog.New(slog.NewJSONHandler(&logs, nil)), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{sessionID: "session-id", log: slog.New(slog.NewJSONHandler(&logs, nil)), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		calls++
 
 		switch calls {
@@ -1993,7 +2018,7 @@ func TestTransportUsesRecoveredTokenForCompaction(t *testing.T) {
 
 	var logs bytes.Buffer
 
-	transport := &transport{log: slog.New(slog.NewJSONHandler(&logs, nil)), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{sessionID: "session-id", log: slog.New(slog.NewJSONHandler(&logs, nil)), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if strings.HasSuffix(req.URL.Path, "/responses/compact") {
 			compactCalls++
 
@@ -2053,7 +2078,7 @@ func TestTransportDoesNotRetryCodexUnauthorizedTwice(t *testing.T) {
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
 	calls := 0
-	transport := &transport{log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		calls++
 
 		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(fmt.Sprintf("unauthorized %d", calls))), Header: make(http.Header)}, nil
@@ -2082,7 +2107,7 @@ func TestTransportReturnsOriginalUnauthorizedForNonReplayableRequest(t *testing.
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
 	calls := 0
-	transport := &transport{log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		calls++
 
 		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader("original unauthorized")), Header: make(http.Header)}, nil
@@ -2115,7 +2140,7 @@ func TestTransportReportsCodexUnauthorizedRefreshErrorWithReloginGuidance(t *tes
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
 	calls := 0
-	transport := &transport{log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		calls++
 
 		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader("unauthorized")), Header: make(http.Header)}, nil
@@ -2139,7 +2164,7 @@ func TestTransportTreatsTrailingSlashResponsesPathAsStreaming(t *testing.T) {
 	testAuthPath(t, workspace)
 	requireSaveToken(t, workspace, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()})
 
-	transport := &transport{log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		data, err := io.ReadAll(req.Body)
 		require.NoError(t, err)
 		require.Contains(t, string(data), `"stream":true`)
@@ -2162,7 +2187,7 @@ func TestTransportLeavesCompactRequestsAsJSON(t *testing.T) {
 	testAuthPath(t, workspace)
 	requireSaveToken(t, workspace, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"})
 
-	transport := &transport{log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "/backend-api/codex/responses/compact", req.URL.Path)
 		require.Equal(t, "Bearer access", req.Header.Get("Authorization"))
 		require.Equal(t, "acc-123", req.Header.Get("Chatgpt-Account-Id"))
@@ -2195,7 +2220,7 @@ func TestTransportLeavesNonResponseRequestsAsJSON(t *testing.T) {
 	testAuthPath(t, workspace)
 	requireSaveToken(t, workspace, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()})
 
-	transport := &transport{log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "/backend-api/codex/models", req.URL.Path)
 		require.Equal(t, "Bearer access", req.Header.Get("Authorization"))
 
@@ -2276,7 +2301,7 @@ func runAutoCompactTransportTest(t *testing.T, requestBody, streamBody, compactB
 	testAuthPath(t, workspace)
 	requireSaveToken(t, workspace, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"})
 
-	transport := &transport{log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "Bearer access", req.Header.Get("Authorization"))
 		require.Equal(t, "acc-123", req.Header.Get("Chatgpt-Account-Id"))
 
@@ -2289,6 +2314,7 @@ func runAutoCompactTransportTest(t *testing.T, requestBody, streamBody, compactB
 			require.Contains(t, string(data), `"input"`)
 			require.NotContains(t, string(data), `context_management`)
 			require.NotContains(t, string(data), `"id"`)
+			require.Contains(t, string(data), `"instructions":`)
 
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(compactBody)), Header: make(http.Header)}, nil
 		}

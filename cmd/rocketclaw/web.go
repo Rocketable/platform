@@ -25,17 +25,11 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 		return nil, fmt.Errorf("start Web HTTP: %w", err)
 	}
 
-	connection, err := grpc.NewClient("passthrough:///web", grpc.WithTransportCredentials(insecure.NewCredentials()),
+	// This fixed passthrough target and insecure credentials cannot fail setup; dialing happens on RPC calls.
+	connection, _ := grpc.NewClient("passthrough:///web", grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 			return listener.DialContext(ctx)
 		}))
-	if err != nil {
-		_ = httpListener.Close()
-		_ = listener.Close()
-
-		return nil, fmt.Errorf("connect Web HTTP to RPC: %w", err)
-	}
-
 	httpServer := &http.Server{Handler: rpc.NewHTTPHandler(connection, cfg.Web.Sentry)}
 	server := grpc.NewServer()
 	rpc.New(rt, rt.Sessions, rt.Cfg, channels, cronjobs).Register(server)

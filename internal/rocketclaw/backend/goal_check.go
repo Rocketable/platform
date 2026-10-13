@@ -43,90 +43,70 @@ func ValidateGoalCheckScriptStart(locked *config.LockedConfig, agentName, script
 }
 
 func validateGoalCheckScript(root *os.Root, workspace, script string, permission rocketcode.PermissionSet) (string, error) {
-	command, subject, err := parseGoalCheckCommand(script)
-	if err != nil {
-		return "", err
-	}
-
-	if err := requireWorkspaceExecutable(root, workspace, command.argv[0]); err != nil {
-		return "", err
-	}
-
-	action, matched := permission.Evaluate("bash", subject)
-	if !matched || action != rocketcode.PermissionAllow {
-		return "", fmt.Errorf("goal check script is not allowed by agent bash permission: %s", subject)
-	}
-
-	return command.text, nil
-}
-
-type parsedGoalCheckCommand struct {
-	text string
-	argv []string
-}
-
-func parseGoalCheckCommand(script string) (parsedGoalCheckCommand, string, error) {
 	script = strings.TrimSpace(script)
 	if script == "" {
-		return parsedGoalCheckCommand{}, "", errors.New("goal check script is required")
+		return "", errors.New("goal check script is required")
 	}
 
 	parser := syntax.NewParser()
 
 	file, err := parser.Parse(strings.NewReader(script), "")
 	if err != nil {
-		return parsedGoalCheckCommand{}, "", fmt.Errorf("parse goal check script: %w", err)
+		return "", fmt.Errorf("parse goal check script: %w", err)
 	}
 
 	if len(file.Stmts) != 1 {
-		return parsedGoalCheckCommand{}, "", errors.New("goal check script must be exactly one command")
+		return "", errors.New("goal check script must be exactly one command")
 	}
 
 	stmt := file.Stmts[0]
 	if stmt.Negated || stmt.Background || stmt.Coprocess || stmt.Disown || stmt.Semicolon.IsValid() || len(stmt.Redirs) > 0 {
-		return parsedGoalCheckCommand{}, "", errors.New("goal check script must be one simple command without control operators or redirects")
+		return "", errors.New("goal check script must be one simple command without control operators or redirects")
 	}
 
 	call, ok := stmt.Cmd.(*syntax.CallExpr)
 	if !ok {
-		return parsedGoalCheckCommand{}, "", errors.New("goal check script must be one simple command")
+		return "", errors.New("goal check script must be one simple command")
 	}
 
 	if len(call.Assigns) > 0 {
-		return parsedGoalCheckCommand{}, "", errors.New("goal check script must not set environment assignments")
-	}
-
-	if len(call.Args) == 0 {
-		return parsedGoalCheckCommand{}, "", errors.New("goal check script command is required")
+		return "", errors.New("goal check script must not set environment assignments")
 	}
 
 	argv := make([]string, 0, len(call.Args))
 	for _, arg := range call.Args {
 		value, err := protocol.StaticGoalCheckWord(arg)
 		if err != nil {
-			return parsedGoalCheckCommand{}, "", fmt.Errorf("%w", err)
+			return "", fmt.Errorf("%w", err)
 		}
 
 		argv = append(argv, value)
 	}
 
 	if strings.TrimSpace(argv[0]) == "" {
-		return parsedGoalCheckCommand{}, "", errors.New("goal check script executable is required")
+		return "", errors.New("goal check script executable is required")
 	}
 
 	var buf bytes.Buffer
 
 	printer := syntax.NewPrinter()
-	if err := printer.Print(&buf, call); err != nil {
-		return parsedGoalCheckCommand{}, "", fmt.Errorf("render goal check script: %w", err)
-	}
+	_ = printer.Print(&buf, call) // A parsed command with default options and a bytes.Buffer cannot fail printing.
 
 	subjects := rocketcode.BashPermissionSubjects(buf.String())
 	if len(subjects) != 1 {
-		return parsedGoalCheckCommand{}, "", errors.New("goal check script must render one bash permission subject")
+		return "", errors.New("goal check script must render one bash permission subject")
 	}
 
-	return parsedGoalCheckCommand{text: strings.TrimSpace(buf.String()), argv: argv}, subjects[0], nil
+	if err := requireWorkspaceExecutable(root, workspace, argv[0]); err != nil {
+		return "", err
+	}
+
+	action, matched := permission.Evaluate("bash", subjects[0])
+	if !matched || action != rocketcode.PermissionAllow {
+		return "", fmt.Errorf("goal check script is not allowed by agent bash permission: %s", subjects[0])
+	}
+
+	return strings.TrimSpace(buf.String()), nil
 }
 
 func requireWorkspaceExecutable(root *os.Root, workspace, name string) error {

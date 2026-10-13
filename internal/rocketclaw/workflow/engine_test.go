@@ -172,6 +172,9 @@ func TestRunRejectsInvalidValues(t *testing.T) {
 		{name: "worker result", body: "w = worker(name=\"w\", instructions=\"i\")\ndef main(args): return w", want: "worker"},
 		{name: "callable result", body: `def main(args): return main`, want: "function"},
 		{name: "set result", body: `def main(args): return set([1])`, want: "set"},
+		{name: "nested tuple set", body: `def main(args): return (1, (set([1]),))`, want: "set is not JSON-compatible"},
+		{name: "nested list set", body: `def main(args): return [1, [set([1])]]`, want: "set is not JSON-compatible"},
+		{name: "nested dict set", body: `def main(args): return {"outer": {"inner": set([1])}}`, want: "set is not JSON-compatible"},
 		{name: "missing phase callback", body: `def main(args): return phase("work")`, want: "phase arguments"},
 		{name: "missing parallel callables", body: `def main(args): return parallel()`, want: "parallel arguments"},
 		{name: "non-sequence parallel callables", body: `def main(args): return parallel(1)`, want: "parallel callables must be a list or tuple"},
@@ -450,6 +453,17 @@ def main(args):
 				t.Fatalf("phase = %+v, want skipped with no calls", phase)
 			}
 		}
+
+		phases[0] = "run"
+
+		result, err = Run(t.Context(), engineDefinitionWithPhases(t, phases, `def main(args): return agent("prompt")`), RunRequest{RunID: "declared-full"}, &agentRunnerMock{RunFunc: inertAgent})
+		if err != nil {
+			t.Fatalf("Run() with a registered run phase at capacity: %v", err)
+		}
+
+		if got, want := result.Phases[0], (protocol.PhaseUpdate{PhaseID: "declared-full/phase/000000/run", Name: "run", Status: protocol.PhaseComplete, Scheduled: 1, Complete: 1}); got != want {
+			t.Fatalf("completed phase at capacity = %+v, want %+v", got, want)
+		}
 	})
 
 	t.Run("tuple formatting accepts empty and multiple fan-out results", func(t *testing.T) {
@@ -488,14 +502,18 @@ def main(args):
 }
 
 func TestRunFanout(t *testing.T) {
-	t.Run("parallel accepts a tuple", func(t *testing.T) {
-		result, err := Run(t.Context(), engineDefinition(t, `def main(args): return parallel((lambda: 1, lambda: 2))`), RunRequest{RunID: "tuple"}, &agentRunnerMock{RunFunc: inertAgent})
+	t.Run("parallel accepts empty and reused tuples", func(t *testing.T) {
+		result, err := Run(t.Context(), engineDefinition(t, `
+def main(args):
+    callbacks = (lambda: 1, lambda: 2)
+    return (parallel(()), parallel(callbacks), parallel(callbacks))
+`), RunRequest{RunID: "tuple"}, &agentRunnerMock{RunFunc: inertAgent})
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
 
-		if result.Text != `[1,2]` {
-			t.Fatalf("Run().Text = %s, want [1,2]", result.Text)
+		if result.Text != `[[],[1,2],[1,2]]` {
+			t.Fatalf("Run().Text = %s, want [[],[1,2],[1,2]]", result.Text)
 		}
 	})
 

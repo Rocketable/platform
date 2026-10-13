@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -77,10 +78,6 @@ func startExternalMCPServer(
 			}
 		}()
 
-		externalConversationID = strings.TrimSpace(externalConversationID)
-		requestedAgent = strings.TrimSpace(requestedAgent)
-		slackChannel = strings.TrimSpace(slackChannel)
-
 		if externalConversationID == "" {
 			return externalmcp.SessionResult{}, errors.New("external MCP conversation ID is required")
 		}
@@ -102,10 +99,6 @@ func startExternalMCPServer(
 		}
 
 		inboundContent.Text = input
-		if strings.TrimSpace(input) == "" && len(attachments) == 0 {
-			return externalmcp.SessionResult{}, errors.New("external MCP turn requires input or attachments")
-		}
-
 		unlockExternalConversation := locks.Lock(externalConversationID)
 		defer unlockExternalConversation()
 
@@ -219,13 +212,9 @@ func cleanupFailedExternalMCPConversation(relay mcpRelay, store *backend.Session
 }
 
 func externalMCPInboundContent(attachments []externalmcp.SessionAttachment) (protocol.InboundContent, []protocol.OutboundAttachment, error) {
-	if len(attachments) == 0 {
-		return protocol.InboundContent{}, nil, nil
-	}
-
 	var content protocol.InboundContent
 
-	outbound := make([]protocol.OutboundAttachment, 0, len(attachments))
+	outbound := slices.Grow([]protocol.OutboundAttachment(nil), len(attachments))
 	for i := range attachments {
 		data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(attachments[i].DataBase64))
 		if err != nil {
@@ -237,10 +226,7 @@ func externalMCPInboundContent(attachments []externalmcp.SessionAttachment) (pro
 		outbound = append(outbound, protocol.OutboundAttachment{Name: name, MIMEType: mimeType, Data: append([]byte(nil), data...)})
 
 		if protocol.IsTextAttachment(name, mimeType) {
-			descriptor := name
-			if descriptor == "" {
-				descriptor = "attachment"
-			}
+			descriptor := cmp.Or(name, "attachment")
 
 			if descriptorMIMEType := protocol.NormalizeMIMEType(mimeType); descriptorMIMEType != "" {
 				descriptor += " (" + descriptorMIMEType + ")"
@@ -308,21 +294,14 @@ func submitExternalMCPInput(ctx context.Context, turns frontend.Backend, usedAge
 	select {
 	case <-ctx.Done():
 		return externalmcp.SessionResult{}, true, fmt.Errorf("wait for external MCP reply: %w", ctx.Err())
-	case result, ok := <-resultCh:
-		if !ok {
-			return externalmcp.SessionResult{}, true, errors.New("wait for external MCP reply: response channel closed")
-		}
-
+	case result := <-resultCh:
 		if result.Err != nil {
 			return externalmcp.SessionResult{}, true, fmt.Errorf("wait for external MCP reply: %w", result.Err)
 		}
 
 		attachments := make([]externalmcp.SessionAttachment, 0, len(result.Attachments))
 		for i := range result.Attachments {
-			name := strings.TrimSpace(result.Attachments[i].Name)
-			if name == "" {
-				name = fmt.Sprintf("attachment-%d", i+1)
-			}
+			name := cmp.Or(strings.TrimSpace(result.Attachments[i].Name), fmt.Sprintf("attachment-%d", i+1))
 
 			attachments = append(attachments, externalmcp.SessionAttachment{Name: name, MIMEType: result.Attachments[i].MIMEType, DataBase64: base64.StdEncoding.EncodeToString(result.Attachments[i].Data)})
 		}

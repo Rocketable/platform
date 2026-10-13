@@ -262,11 +262,7 @@ func slackDirectoryID(id string) bool {
 }
 
 func slackDisplayName(user *slack.User) string {
-	if name := strings.TrimSpace(user.Profile.DisplayName); name != "" {
-		return name
-	}
-
-	return strings.TrimSpace(user.RealName)
+	return cmp.Or(strings.TrimSpace(user.Profile.DisplayName), strings.TrimSpace(user.RealName))
 }
 
 // Authenticate identifies the bot and workspace before other frontends use the connector.
@@ -362,10 +358,7 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 			c.setReplyState(msg.TurnID, &slots)
 		}
 
-		data, err := json.Marshal(slots)
-		if err != nil {
-			return fmt.Errorf("encode Slack reply placeholder: %w", err)
-		}
+		data, _ := json.Marshal(slots)
 
 		if err := c.facts.SaveTurnStep(ctx, msg.ConversationID, key, data); err != nil {
 			return fmt.Errorf("record Slack reply placeholder: %w", err)
@@ -389,7 +382,9 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 		ok = true
 	}
 
-	setMCPAttachmentOnlyResponseText(msg)
+	if msg.Text == "" && msg.ExternalConversationID != "" && len(msg.Attachments) > 0 {
+		msg.Text = cmp.Or(protocol.AttachmentNamesSpeech(msg.Attachments), "Attached files.")
+	}
 
 	if msg.Cronjob != nil {
 		return c.sendCronjobResponse(ctx, msg, &slots, ok)
@@ -399,34 +394,27 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 
 	switch {
 	case msg.Text != "" && msg.GoalTurn:
-		if err := c.sendGoalTurnResponse(ctx, msg, &slots, ok, footer); err != nil {
-			return err
-		}
-
+		err = c.sendGoalTurnResponse(ctx, msg, &slots, ok, footer)
 	case msg.Text != "" && msg.ExternalConversationID != "":
-		if err := c.sendMCPResponse(ctx, msg, &slots, ok); err != nil {
-			return err
-		}
-
+		err = c.sendMCPResponse(ctx, msg, &slots, ok)
 	case msg.Text != "":
 		fallbackText, blocks, overflow := titledMessageLayout("💬 "+msg.Agent, slackTruncatedText(msg.Text, slackTextLimit, "..."), msg.Text)
-		if _, _, _, err := c.sendTitledResponse(ctx, msg, &slots, ok, fallbackText, append(blocks, footer...), overflow, "reply"); err != nil {
-			return err
-		}
-
+		_, _, _, err = c.sendTitledResponse(ctx, msg, &slots, ok, fallbackText, append(blocks, footer...), overflow, "reply")
 	case len(footer) > 0:
 		c.sendFooterOnlyResponse(ctx, msg, &slots, ok, footerText, footer)
+	}
+
+	if err != nil {
+		return err
 	}
 
 	if msg.Text != "" {
 		c.log.Info("Slack text accepted", "event", "slack_text_delivery", "outcome", "accepted", "conversation_id", msg.ConversationID, "turn_id", msg.TurnID, "channel", msg.SlackReply.ChannelID, "thread_ts", msg.SlackReply.ThreadTS, "duration_ms", time.Since(startedAt).Milliseconds())
 	}
 
-	if len(msg.Attachments) > 0 {
-		channelID, threadTS := slackReplyDestination(msg.SlackReply)
-		if err := c.uploadResponseAttachments(ctx, channelID, threadTS, msg.Attachments); err != nil {
-			c.log.Warn("upload Slack response attachments", "error_type", fmt.Sprintf("%T", err))
-		}
+	channelID, threadTS := slackReplyDestination(msg.SlackReply)
+	if err := c.uploadResponseAttachments(ctx, channelID, threadTS, msg.Attachments); err != nil {
+		c.log.Warn("upload Slack response attachments", "error_type", fmt.Sprintf("%T", err))
 	}
 
 	c.editMCPRootFooter(ctx, msg)
@@ -434,17 +422,6 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 	c.finishResponse(ctx, msg, &slots, ok, strings.TrimSpace(msg.Text) == "" && len(footer) == 0)
 
 	return nil
-}
-
-func setMCPAttachmentOnlyResponseText(msg *protocol.OutboundMessage) {
-	if !msg.Complete || msg.Text != "" || msg.ExternalConversationID == "" || len(msg.Attachments) == 0 {
-		return
-	}
-
-	msg.Text = protocol.AttachmentNamesSpeech(msg.Attachments)
-	if msg.Text == "" {
-		msg.Text = "Attached files."
-	}
 }
 
 // AbortResponse releases Slack state after final response delivery cannot recover.
@@ -584,10 +561,7 @@ func (c *Connector) SendExternalMCPRelay(ctx context.Context, channelID, threadT
 
 	text := strings.TrimSpace(relay.Text)
 	if text == "" {
-		text = protocol.AttachmentNamesSpeech(relay.Attachments)
-		if text == "" {
-			text = "Attached files."
-		}
+		text = cmp.Or(protocol.AttachmentNamesSpeech(relay.Attachments), "Attached files.")
 	}
 
 	text = strings.NewReplacer(
@@ -612,10 +586,7 @@ func (c *Connector) SendExternalMCPRelay(ctx context.Context, channelID, threadT
 		return nil, fmt.Errorf("send Slack external MCP relay: %w", err)
 	}
 
-	attachmentThreadTS := threadTS
-	if attachmentThreadTS == "" {
-		attachmentThreadTS = messageTS
-	}
+	attachmentThreadTS := cmp.Or(threadTS, messageTS)
 
 	replyTarget := &protocol.SlackReplyTarget{ChannelID: postedChannelID, MessageTS: messageTS, ThreadTS: attachmentThreadTS}
 
@@ -648,10 +619,7 @@ func (c *Connector) SendExternalMCPRelay(ctx context.Context, channelID, threadT
 		for i := range relay.Attachments {
 			attachment := relay.Attachments[i]
 
-			name := strings.TrimSpace(attachment.Name)
-			if name == "" {
-				name = "attachment"
-			}
+			name := cmp.Or(strings.TrimSpace(attachment.Name), "attachment")
 
 			file, err := c.api.UploadFileContext(ctx, slack.UploadFileParameters{Reader: bytes.NewReader(attachment.Data), FileSize: len(attachment.Data), Filename: name, Title: name})
 			if err != nil {
@@ -1010,11 +978,9 @@ func (c *Connector) postOnce(ctx context.Context, conversationID, key, blockID, 
 	}
 
 	posting = slackPosting{ChannelID: channelID, ThreadTS: threadTS, Oldest: fmt.Sprintf("%.6f", float64(time.Now().UnixMicro())/1e6)}
-	if marker, err = json.Marshal(posting); err == nil {
-		err = c.facts.SaveTurnStep(ctx, conversationID, key+"/posting", marker)
-	}
 
-	if err != nil {
+	marker, _ = json.Marshal(posting)
+	if err := c.facts.SaveTurnStep(ctx, conversationID, key+"/posting", marker); err != nil {
 		return target, false, fmt.Errorf("record Slack posting marker: %w", err)
 	}
 
@@ -1036,12 +1002,8 @@ func (c *Connector) postOnce(ctx context.Context, conversationID, key, blockID, 
 // recordPost saves a posted message's target. A failure is only logged: the
 // message is already posted, and the posting marker finds it again on replay.
 func (c *Connector) recordPost(ctx context.Context, conversationID, key string, target *protocol.TextConversationTarget) {
-	data, err := json.Marshal(target)
-	if err == nil {
-		err = c.facts.SaveTurnStep(context.WithoutCancel(ctx), conversationID, key, data)
-	}
-
-	if err != nil {
+	data, _ := json.Marshal(target)
+	if err := c.facts.SaveTurnStep(context.WithoutCancel(ctx), conversationID, key, data); err != nil {
 		c.log.Error("record Slack post", "conversation_id", conversationID, "key", key, "error", err)
 	}
 }
@@ -1136,29 +1098,23 @@ func (c *Connector) sendGoalTurnResponse(ctx context.Context, msg *protocol.Outb
 			c.addReaction(ctx, &protocol.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}, slackGoalCompleteReaction, "add Slack goal complete root reaction")
 		}
 
-		if len(posted) > 0 {
-			last := posted[len(posted)-1]
-			c.addReaction(ctx, &protocol.SlackReplyTarget{ChannelID: last.ChannelID, MessageTS: last.MessageTS, ThreadTS: threadTS}, slackGoalCompleteReaction, "add Slack goal complete last reaction")
-		}
+		c.addReaction(ctx, &protocol.SlackReplyTarget{ChannelID: posted.ChannelID, MessageTS: posted.MessageTS, ThreadTS: threadTS}, slackGoalCompleteReaction, "add Slack goal complete last reaction")
 	}
 
 	return nil
 }
 
-func (c *Connector) sendTitledResponse(ctx context.Context, msg *protocol.OutboundMessage, slots *slackReplyState, hasSlots bool, fallbackText string, blocks []slack.Block, overflow []string, op string) (channelID, threadTS string, posted []slackReplyState, err error) {
+func (c *Connector) sendTitledResponse(ctx context.Context, msg *protocol.OutboundMessage, slots *slackReplyState, hasSlots bool, fallbackText string, blocks []slack.Block, overflow []string, op string) (channelID, threadTS string, posted slackReplyState, err error) {
 	channelID, threadTS = slackReplyDestination(msg.SlackReply)
 
 	if hasSlots {
 		if _, _, _, err = c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.MessageTS, slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(blocks...)); err != nil {
-			return "", "", nil, fmt.Errorf("update Slack %s response: %w", op, err)
+			return "", "", slackReplyState{}, fmt.Errorf("update Slack %s response: %w", op, err)
 		}
 
-		posted = []slackReplyState{{ChannelID: slots.ChannelID, MessageTS: slots.MessageTS}}
+		posted = slackReplyState{ChannelID: slots.ChannelID, MessageTS: slots.MessageTS}
 
 		channelID = slots.ChannelID
-		if threadTS == "" {
-			threadTS = slots.MessageTS
-		}
 	} else {
 		options := []slack.MsgOption{slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(blocks...)}
 		if threadTS != "" {
@@ -1169,19 +1125,18 @@ func (c *Connector) sendTitledResponse(ctx context.Context, msg *protocol.Outbou
 
 		channelID, postedTS, err = c.api.PostMessageContext(ctx, channelID, options...)
 		if err != nil {
-			return "", "", nil, fmt.Errorf("send Slack %s response: %w", op, err)
+			return "", "", slackReplyState{}, fmt.Errorf("send Slack %s response: %w", op, err)
 		}
 
-		posted = []slackReplyState{{ChannelID: channelID, MessageTS: postedTS}}
-		if threadTS == "" {
-			threadTS = postedTS
-		}
+		posted = slackReplyState{ChannelID: channelID, MessageTS: postedTS}
 	}
 
-	if len(overflow) > 0 {
-		if err = c.postResponseChunks(ctx, channelID, threadTS, overflow, nil); err != nil {
-			return channelID, threadTS, posted, fmt.Errorf("send Slack %s response continuation: %w", op, err)
-		}
+	if threadTS == "" {
+		threadTS = posted.MessageTS
+	}
+
+	if err = c.postResponseChunks(ctx, channelID, threadTS, overflow, nil); err != nil {
+		return channelID, threadTS, posted, fmt.Errorf("send Slack %s response continuation: %w", op, err)
 	}
 
 	return channelID, threadTS, posted, nil
@@ -1201,21 +1156,16 @@ func (c *Connector) sendCronjobResponse(ctx context.Context, msg *protocol.Outbo
 	startedAt := time.Now()
 	channelID, threadTS, posted, err := c.sendTitledResponse(ctx, msg, slots, hasSlots, fallbackText, blocks, overflow, "cronjob")
 
-	rootState := slackReplyState{}
-	if !hasSlots && len(posted) > 0 {
-		rootState = posted[0]
-	}
-
 	delivered := false
 	defer func() {
-		if delivered || rootState.MessageTS == "" {
+		if delivered || hasSlots || posted.MessageTS == "" {
 			return
 		}
 
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		c.deleteSlackMessage(cleanupCtx, &rootState, "delete failed Slack cronjob response")
+		c.deleteSlackMessage(cleanupCtx, &posted, "delete failed Slack cronjob response")
 	}()
 
 	if err != nil {
@@ -1224,10 +1174,8 @@ func (c *Connector) sendCronjobResponse(ctx context.Context, msg *protocol.Outbo
 
 	c.log.Info("Slack cronjob text accepted", "event", "slack_text_delivery", "outcome", "accepted", "conversation_id", msg.ConversationID, "turn_id", msg.TurnID, "channel", channelID, "thread_ts", threadTS, "duration_ms", time.Since(startedAt).Milliseconds())
 
-	if len(msg.Attachments) > 0 {
-		if err := c.uploadResponseAttachments(ctx, channelID, threadTS, msg.Attachments); err != nil {
-			c.log.Warn("upload Slack cronjob response attachments", "error_type", fmt.Sprintf("%T", err))
-		}
+	if err := c.uploadResponseAttachments(ctx, channelID, threadTS, msg.Attachments); err != nil {
+		c.log.Warn("upload Slack cronjob response attachments", "error_type", fmt.Sprintf("%T", err))
 	}
 
 	c.finishResponse(ctx, msg, slots, hasSlots, false)
@@ -1262,10 +1210,7 @@ func (c *Connector) uploadResponseAttachments(ctx context.Context, channelID, th
 	for i := range attachments {
 		attachment := attachments[i]
 
-		name := strings.TrimSpace(attachment.Name)
-		if name == "" {
-			name = "attachment"
-		}
+		name := cmp.Or(strings.TrimSpace(attachment.Name), "attachment")
 
 		startedAt := time.Now()
 		_, err := c.api.UploadFileContext(ctx, slack.UploadFileParameters{Reader: bytes.NewReader(attachment.Data), FileSize: len(attachment.Data), Filename: name, Title: name, Channel: channelID, ThreadTimestamp: threadTS})
@@ -1335,9 +1280,7 @@ func (c *Connector) postResponseChunks(ctx context.Context, channelID, threadTS 
 		postedChannelID, postedTS, err := c.api.PostMessageContext(ctx, channelID, options...)
 		if err != nil {
 			for _, v := range slices.Backward(posted) {
-				if _, _, errDelete := c.api.DeleteMessageContext(ctx, v.ChannelID, v.MessageTS); errDelete != nil {
-					c.log.Warn("delete partial Slack response chunk", "channel", v.ChannelID, "message_ts", v.MessageTS, "error", errDelete)
-				}
+				c.deleteSlackMessage(ctx, &v, "delete partial Slack response chunk")
 			}
 
 			return fmt.Errorf("send Slack response chunk %d/%d len=%d: %w", i+1, len(chunks), len([]rune(chunks[i])), err)
@@ -1679,13 +1622,10 @@ func (c *Connector) socialModeChannel(ctx context.Context, channelID string) (ch
 
 func (c *Connector) socialModeCouldAllowUser(userID string) bool {
 	userID = strings.TrimSpace(userID)
-	for _, channel := range c.config.Channels {
-		if slices.Contains(channel.AllowedUserIDs, userID) {
-			return true
-		}
-	}
 
-	return false
+	return slices.ContainsFunc(c.config.Channels, func(channel config.SlackChannelConfig) bool {
+		return slices.Contains(channel.AllowedUserIDs, userID)
+	})
 }
 
 func (c *Connector) socialModeAllowsUser(channel, userID string) bool {
@@ -1833,13 +1773,9 @@ func (c *Connector) claimPendingState(replyTarget *protocol.SlackReplyTarget) (s
 	defer c.mu.Unlock()
 
 	state, ok := c.pending[key]
-	if !ok {
-		return slackReplyState{}, false
-	}
-
 	delete(c.pending, key)
 
-	return state, true
+	return state, ok
 }
 
 func (c *Connector) clearReplyState(turnID string) {
@@ -1966,7 +1902,6 @@ func nativeSlackForward(payload json.RawMessage) (slackNativeForward, bool) {
 
 	var forward slackNativeForward
 
-	qualified := false
 	conflict := false
 	seenPreviews := make(map[string]bool)
 
@@ -1975,18 +1910,9 @@ func nativeSlackForward(payload json.RawMessage) (slackNativeForward, bool) {
 			continue
 		}
 
-		qualified = true
-
-		preview := strings.TrimSpace(attachment.Text)
-		if preview == "" {
-			preview = strings.TrimSpace(attachment.Fallback)
-		}
+		preview := cmp.Or(strings.TrimSpace(attachment.Text), strings.TrimSpace(attachment.Fallback))
 
 		if !seenPreviews[preview] {
-			if len(forward.previews) > 0 {
-				conflict = true
-			}
-
 			seenPreviews[preview] = true
 			forward.previews = append(forward.previews, preview)
 		}
@@ -2018,13 +1944,8 @@ func nativeSlackForward(payload json.RawMessage) (slackNativeForward, bool) {
 				continue
 			}
 
-			if channelID == "" {
-				channelID = permalinkChannel
-			}
-
-			if threadTS == "" {
-				threadTS = permalinkThread
-			}
+			channelID = cmp.Or(channelID, permalinkChannel)
+			threadTS = cmp.Or(threadTS, permalinkThread)
 		}
 
 		if channelID == "" || threadTS == "" {
@@ -2040,11 +1961,11 @@ func nativeSlackForward(payload json.RawMessage) (slackNativeForward, bool) {
 		forward.channelID, forward.threadTS = channelID, threadTS
 	}
 
-	if conflict {
+	if conflict || len(forward.previews) > 1 {
 		forward.channelID, forward.threadTS = "", ""
 	}
 
-	return forward, qualified
+	return forward, len(forward.previews) > 0
 }
 
 func (c *Connector) addSlackForward(ctx context.Context, content *protocol.InboundContent, forward slackNativeForward) {
@@ -2322,25 +2243,15 @@ func (c *Connector) downloadSlackFile(ctx context.Context, downloadURL string, l
 		return nil, fmt.Errorf("%w", err)
 	}
 
-	return append([]byte(nil), buffer.data.Bytes()...), nil
+	return buffer.data.Bytes(), nil
 }
 
 func slackFileDownloadURL(file *slack.File) string {
-	if downloadURL := strings.TrimSpace(file.URLPrivateDownload); downloadURL != "" {
-		return downloadURL
-	}
-
-	return strings.TrimSpace(file.URLPrivate)
+	return cmp.Or(strings.TrimSpace(file.URLPrivateDownload), strings.TrimSpace(file.URLPrivate))
 }
 
 func slackFileDisplayName(file *slack.File) string {
-	for _, candidate := range []string{file.Name, file.Title, file.ID} {
-		if name := strings.TrimSpace(candidate); name != "" {
-			return name
-		}
-	}
-
-	return "unnamed file"
+	return cmp.Or(strings.TrimSpace(file.Name), strings.TrimSpace(file.Title), strings.TrimSpace(file.ID), "unnamed file")
 }
 
 func slackFileDescriptor(file *slack.File) string {

@@ -247,10 +247,6 @@ func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error)
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 
-	return loadConfigData(absPath, data, secretsARN, fetcher)
-}
-
-func loadConfigData(absPath string, data []byte, secretsARN string, fetcher SecretFetcher) (*Config, error) {
 	root, err := decodeObject(data, "config")
 	if err != nil {
 		return nil, err
@@ -275,10 +271,8 @@ func loadConfigData(absPath string, data []byte, secretsARN string, fetcher Secr
 		return nil, err
 	}
 
-	data, err = json.Marshal(resolved)
-	if err != nil {
-		return nil, fmt.Errorf("encode resolved config: %w", err)
-	}
+	// Resolution only replaces decoded JSON values with fetched strings.
+	data, _ = json.Marshal(resolved)
 
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
@@ -437,11 +431,7 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	if err := c.validateSlack(); err != nil {
-		return err
-	}
-
-	return nil
+	return c.validateSlack()
 }
 
 // RenderAgentModel renders an agent model with the mappings from the loaded config.
@@ -543,7 +533,22 @@ func (c *Config) validateSlack() error {
 		}
 	}
 
-	c.Slack.Channels = normalizeSlackChannels(c.Slack.Channels)
+	normalized := make([]SlackChannelConfig, 0, len(c.Slack.Channels))
+	for _, channel := range c.Slack.Channels {
+		channel.Channel = strings.TrimSpace(channel.Channel)
+		if channel.Channel != "" && channel.Channel != "@" && !strings.HasPrefix(channel.Channel, "#") {
+			channel.Channel = "#" + channel.Channel
+		}
+
+		channel.Agents = normalizeStringList(channel.Agents)
+
+		channel.AllowedUserIDs = normalizeStringList(channel.AllowedUserIDs)
+		if channel.Channel != "" {
+			normalized = append(normalized, channel)
+		}
+	}
+
+	c.Slack.Channels = normalized
 	if len(c.Slack.Channels) == 0 {
 		return errors.New("slack.channels is required")
 	}
@@ -617,7 +622,10 @@ func validateMCPServerName(name string) error {
 	seen := make(map[rune]bool)
 
 	for _, r := range name {
-		if validMCPNameRune(r) {
+		if r >= 'a' && r <= 'z' ||
+			r >= 'A' && r <= 'Z' ||
+			r >= '0' && r <= '9' ||
+			r == '_' || r == '-' || r == '.' {
 			continue
 		}
 
@@ -632,39 +640,6 @@ func validateMCPServerName(name string) error {
 	}
 
 	return nil
-}
-
-func validMCPNameRune(r rune) bool {
-	return r >= 'a' && r <= 'z' ||
-		r >= 'A' && r <= 'Z' ||
-		r >= '0' && r <= '9' ||
-		r == '_' || r == '-' || r == '.'
-}
-
-func normalizeSlackChannels(channels []SlackChannelConfig) []SlackChannelConfig {
-	normalized := make([]SlackChannelConfig, 0, len(channels))
-	for _, channel := range channels {
-		channel.Channel = normalizeSlackChannel(channel.Channel)
-		channel.Agents = normalizeStringList(channel.Agents)
-
-		channel.AllowedUserIDs = normalizeStringList(channel.AllowedUserIDs)
-		if channel.Channel == "" {
-			continue
-		}
-
-		normalized = append(normalized, channel)
-	}
-
-	return normalized
-}
-
-func normalizeSlackChannel(channel string) string {
-	channel = strings.TrimSpace(channel)
-	if channel == "" || channel == "@" || strings.HasPrefix(channel, "#") {
-		return channel
-	}
-
-	return "#" + channel
 }
 
 func validateEnvironment(environment []string) error {

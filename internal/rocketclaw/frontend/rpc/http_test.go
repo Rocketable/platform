@@ -53,25 +53,30 @@ func TestHTTPBoundary(t *testing.T) {
 
 	for _, tc := range []struct{ method, body, message string }{
 		{"RunCronJob", `{}`, "stem is required"},
+		{"SteerQueueItem", `{}`, "id is required"},
 		{"SteerQueueItem", `{"id":"chat"}`, "itemId is required"},
 		{"PopQueueItem", `{"id":"chat"}`, "itemId is required"},
 		{"PopQueueItem", `{"itemId":"held"}`, "id is required"},
 		{"RemoveQueueItem", `{"id":"chat"}`, "itemId is required"},
 		{"ReorderQueue", `{"id":"chat"}`, "itemIds is required"},
+		{"ReorderQueue", `{"itemIds":[]}`, "id is required"},
 		{"SlackNames", `{}`, "ids is required"},
 		{"SearchSessions", `{"messages":true}`, "query is required"},
 		{"ListSkills", `{"agent":""}`, "agent must not be empty"},
 		{"MoveToBackground", `{}`, "conversationId is required"},
 		{"MoveToBackground", `{"conversationId":"chat","jobId":"turn-1/call/a"}`, "invalid field jobId"},
 		{"StopBackgroundJob", `{"conversationId":"chat"}`, "jobId is required"},
+		{"StopBackgroundJob", `{"jobId":"job"}`, "conversationId is required"},
 		{"StopBackgroundJob", `{"conversationId":"chat","jobId":"turn-1/call/a","reason":"user"}`, "invalid field reason"},
 		{"AnswerQuestion", `{"askId":"turn-1/call/q"}`, "conversationId is required"},
 		{"AnswerQuestion", `{"conversationId":"chat"}`, "askId is required"},
+		{"Voice", `{"sdp":"offer"}`, "conversationId is required"},
+		{"Voice", `{"conversationId":"chat"}`, "sdp is required"},
 	} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/"+tc.method, strings.NewReader(tc.body)))
 		require.Equal(t, http.StatusBadRequest, response.Code, tc.method)
-		require.Contains(t, response.Body.String(), tc.message)
+		require.JSONEq(t, fmt.Sprintf(`{"code":3,"message":%q}`, tc.message), response.Body.String(), tc.method)
 	}
 
 	requestInvalidAddress := httptest.NewRequest(http.MethodPost, "/api/Identity", strings.NewReader(`{}`))
@@ -128,6 +133,8 @@ func TestHTTPStreams(t *testing.T) {
 		{"deadline", codes.DeadlineExceeded, http.StatusGatewayTimeout},
 		{"invalid", codes.InvalidArgument, http.StatusBadRequest},
 		{"internal", codes.Internal, http.StatusInternalServerError},
+		{"unknown", codes.Unknown, http.StatusInternalServerError},
+		{"data-loss", codes.DataLoss, http.StatusInternalServerError},
 		{"unimplemented", codes.Unimplemented, http.StatusNotImplemented},
 		{"upload-rejected", codes.PermissionDenied, http.StatusForbidden},
 		{"upload-metadata", codes.InvalidArgument, http.StatusBadRequest},

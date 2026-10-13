@@ -75,12 +75,7 @@ func ParseGoalRequest(text string) (goal GoalRequest, rejection string) {
 			checkScript = value
 			text = rest
 		} else {
-			objective := strings.TrimSpace(text)
-			if objective == "" {
-				return GoalRequest{}, "Tell me the goal after the parameters, for example `$goal maxTurns: 5 update the docs`."
-			}
-
-			return GoalRequest{Objective: objective, CheckScript: checkScript, MaxTurns: maxTurns}, ""
+			return GoalRequest{Objective: text, CheckScript: checkScript, MaxTurns: maxTurns}, ""
 		}
 	}
 }

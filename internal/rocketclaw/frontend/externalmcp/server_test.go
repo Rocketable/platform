@@ -80,8 +80,10 @@ func TestStartSessionPromptServerReturnsHandlerAgent(t *testing.T) {
 }
 
 func TestStartSessionPromptServerPassesSlackChannel(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, _, _, _, input string, _ map[string]string, _ []SessionAttachment, slackChannel string) (SessionResult, error) {
-		assert.Equal(t, "what now?", input)
+	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, _, id, agent, input string, _ map[string]string, _ []SessionAttachment, slackChannel string) (SessionResult, error) {
+		assert.Equal(t, "external-1", id)
+		assert.Equal(t, "main", agent)
+		assert.Equal(t, " what now?\n", input)
 		assert.Equal(t, "#triage", slackChannel)
 
 		return SessionResult{Answer: "plain text reply"}, nil
@@ -90,7 +92,7 @@ func TestStartSessionPromptServerPassesSlackChannel(t *testing.T) {
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	result := callTool(t, server.url, "", "", map[string]any{"external_conversation_id": "external-1", "agent": "main", "input": "what now?", "slack_channel": " #triage "})
+	result := callTool(t, server.url, "", "", map[string]any{"external_conversation_id": " external-1\t", "agent": "\nmain ", "input": " what now?\n", "slack_channel": " #triage "})
 	content, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	assert.Equal(t, "plain text reply", content.Text)

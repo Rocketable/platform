@@ -1620,7 +1620,9 @@ func TestMoveAsCallFinishes(t *testing.T) {
 		registry.move("main")
 		require.NoError(t, call.Wait())
 
-		exists, err := store.hasBackgroundJob(t.Context(), "main", jobID)
+		var exists bool
+
+		err := store.db.QueryRowContext(t.Context(), `SELECT EXISTS (SELECT 1 FROM background_jobs WHERE conversation_id = $1 AND job_id = $2)`, "main", jobID).Scan(&exists)
 		require.NoError(t, err)
 		require.Equal(t, result.Moved, exists)
 

@@ -104,7 +104,7 @@ func (s *SessionService) ObserveTranscript(ctx context.Context, conversationID s
 func observeTranscriptDB(ctx context.Context, db stateStoreDB, conversationID string, from, before int64, revisions map[string]string) ([]ObservedSessionEntry, error) {
 	manifest, _ := json.Marshal(revisions)
 
-	entries, err := queryRows(ctx, db, `WITH `+sessionHistorySQL+`, transcript AS (
+	return queryRows(ctx, db, `WITH `+sessionHistorySQL+`, transcript AS (
     SELECT id, entry_json, source_conversation_id, synced,
         FALSE AS active, '' AS terminal, 0::bigint AS checkpoint_timestamp, '' AS turn_id, 0 AS checkpoint, id AS position, revert_index, marker
     FROM effective_entries WHERE id >= $3 AND ($4::bigint = 0 OR id < $4)
@@ -157,11 +157,6 @@ FROM fingerprinted ORDER BY position, checkpoint, checkpoint_timestamp, turn_id`
 
 		return entry, nil
 	}, conversationID, string(manifest), from, before)
-	if err != nil {
-		return nil, err
-	}
-
-	return entries, nil
 }
 
 // TranscriptPage returns the saved-entry ID that starts the newest limit

@@ -27,11 +27,6 @@ var ErrRestartRequested = errors.New("restart requested")
 // RocketCode turns stop once their running calls finish.
 var errShutdown = fmt.Errorf("%w: %w", protocol.ErrBridgeStopped, rocketcode.ErrShutdown)
 
-type namedStopper struct {
-	name string
-	stop func(context.Context) error
-}
-
 const (
 	stateRetention = 30 * 24 * time.Hour
 )
@@ -141,7 +136,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		restartRequested = make(chan struct{})
 		threadBridges    *threadBridgeManager
 		background       *backgroundRegistry
-		stops            []namedStopper
+		stops            []func(context.Context) error
 	)
 
 	if stats, err := rocketcodeSessions.PruneStateBefore(runCtx, time.Now().Add(-stateRetention)); err != nil {
@@ -299,8 +294,8 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 
 		cleanupCtx := context.Background()
 		for _, sink := range stops {
-			if err := sink.stop(cleanupCtx); err != nil {
-				logger.Warn("stop connector", "connector", sink.name, "error", err)
+			if err := sink(cleanupCtx); err != nil {
+				logger.Warn("stop connector", "connector", "frontend", "error", err)
 			}
 		}
 	}()
@@ -323,9 +318,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		return fmt.Errorf("assemble frontends: %w", err)
 	}
 
-	for _, stop := range extraStops {
-		stops = append(stops, namedStopper{name: "frontend", stop: stop})
-	}
+	stops = extraStops
 
 	if slack != nil {
 		rt.AttachSlack(slack)

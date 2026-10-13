@@ -219,9 +219,9 @@ func (t backgroundTurn) DrainNotes(ctx context.Context, subagentKey string) []ro
 func (t backgroundTurn) Run(ctx context.Context, job *rocketcode.BackgroundJob, work rocketcode.BackgroundWork) (rocketcode.BackgroundResult, error) {
 	r, key := t.registry, backgroundKey{t.conversationID, job.ID}
 
-	exists, err := r.store.hasBackgroundJob(ctx, key.conversationID, key.jobID)
-	if err != nil {
-		return rocketcode.BackgroundResult{}, err
+	var exists bool
+	if err := r.store.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM background_jobs WHERE conversation_id = $1 AND job_id = $2)`, key.conversationID, key.jobID).Scan(&exists); err != nil {
+		return rocketcode.BackgroundResult{}, fmt.Errorf("look up background job: %w", err)
 	}
 
 	if exists { // A resumed turn's call whose job already left it.
@@ -454,7 +454,7 @@ func (r *backgroundRegistry) recoverJobs(ctx context.Context) (resume func(conte
 			})
 		}
 
-		owners, err := r.store.backgroundWakeOwners(ctx)
+		owners, err := queryRows(ctx, r.store.db, `SELECT DISTINCT ON (conversation_id, child_key) `+backgroundJobColumns+` FROM background_jobs WHERE note_state = $1 AND wake AND claimed_turn_id = '' ORDER BY conversation_id, child_key`, "background wake owners", scanBackgroundJob, notePending)
 		if err != nil {
 			return err
 		}

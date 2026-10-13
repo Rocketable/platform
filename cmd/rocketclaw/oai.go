@@ -216,18 +216,12 @@ func saveOAILogin(configPath, workspace, runtimeDir, provider string, token oai.
 	var previous string
 	_ = json.Unmarshal(target["rocketcode_auth"], &previous)
 	target["rocketcode_auth"] = json.RawMessage(`"chatgpt"`)
-	section, err = json.Marshal(target)
+	section, _ = json.Marshal(target)
 	container[key] = section
 	if provider != "openai" {
-		root["providers"], err = json.Marshal(container)
+		root["providers"], _ = json.Marshal(container)
 	}
-	if err != nil {
-		return "", "", fmt.Errorf("marshal provider %q: %w", provider, err)
-	}
-	updated, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return "", "", fmt.Errorf("marshal config: %w", err)
-	}
+	updated, _ := json.MarshalIndent(root, "", "  ")
 	committed, errConfig := replaceConfig(configPath, append(updated, '\n'), info.Mode())
 	if errConfig != nil {
 		errConfig = fmt.Errorf("commit config: %w", errConfig)

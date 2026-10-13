@@ -138,10 +138,27 @@ type stateStoreDB interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func execRows(ctx context.Context, db stateStoreDB, execOp, countOp, query string, args ...any) (int64, error) {
+func queryScalar(ctx context.Context, db stateStoreDB, op, query string, dest any, args ...any) error {
+	if err := db.QueryRowContext(ctx, query, args...).Scan(dest); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func execState(ctx context.Context, db stateStoreDB, op, query string, args ...any) (sql.Result, error) {
 	result, err := db.ExecContext(ctx, query, args...)
 	if err != nil {
-		return 0, fmt.Errorf("%s: %w", execOp, err)
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return result, nil
+}
+
+func execRows(ctx context.Context, db stateStoreDB, execOp, countOp, query string, args ...any) (int64, error) {
+	result, err := execState(ctx, db, execOp, query, args...)
+	if err != nil {
+		return 0, err
 	}
 
 	n, err := result.RowsAffected()
@@ -268,12 +285,6 @@ func (s *SessionService) Goal(conversationID string) (GoalState, bool, error) {
 	return stateDAO{db: s.db}.goal(context.Background(), conversationID)
 }
 
-// AccountGoalTurn increments one active goal turn and applies budget exhaustion.
-func (s *SessionService) AccountGoalTurn(conversationID string) (GoalState, bool, error) {
-	conversationID = strings.TrimSpace(conversationID)
-	return s.commitGoalChange(conversationID, "goal turn accounting", "account goal turn", "count goal turn accounting", `UPDATE conversation_goals SET turns_used = turns_used + 1, status = CASE WHEN max_turns > 0 AND turns_used + 1 >= max_turns THEN $1 ELSE $2 END, updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (status = '' OR status = $5)`, []any{GoalStatusBudgetExhausted, GoalStatusActive}, []any{conversationID, GoalStatusActive})
-}
-
 // UpdateGoalStatus records a model-controlled goal status update.
 func (s *SessionService) UpdateGoalStatus(conversationID, status, note string) (GoalState, error) {
 	status = strings.TrimSpace(status)
@@ -306,17 +317,9 @@ func (s *SessionService) UpsertExternalMCPSession(externalConversationID string,
 	session.ManagedConversationID = strings.TrimSpace(session.ManagedConversationID)
 	session.SlackChannel = strings.TrimSpace(session.SlackChannel)
 
-	var privateConversationID any
-	if session.PrivateConversationID != "" {
-		privateConversationID = session.PrivateConversationID
-	}
+	_, err := execState(context.Background(), s.db, "upsert external MCP session", `INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel, origin_pairs) VALUES ($1, NULLIF($2::text, ''), $3, $4, $5, $6) ON CONFLICT(external_conversation_id) DO UPDATE SET private_conversation_id = excluded.private_conversation_id, managed_conversation_id = excluded.managed_conversation_id, agent = excluded.agent, slack_channel = excluded.slack_channel, origin_pairs = excluded.origin_pairs`, externalConversationID, session.PrivateConversationID, session.ManagedConversationID, session.Agent, session.SlackChannel, originPairsJSON(session.OriginPairs))
 
-	_, err := s.db.ExecContext(context.Background(), `INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel, origin_pairs) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT(external_conversation_id) DO UPDATE SET private_conversation_id = excluded.private_conversation_id, managed_conversation_id = excluded.managed_conversation_id, agent = excluded.agent, slack_channel = excluded.slack_channel, origin_pairs = excluded.origin_pairs`, externalConversationID, privateConversationID, session.ManagedConversationID, session.Agent, session.SlackChannel, originPairsJSON(session.OriginPairs))
-	if err != nil {
-		return fmt.Errorf("upsert external MCP session: %w", err)
-	}
-
-	return nil
+	return err
 }
 
 // RegisterExternalMCPConversation atomically persists a managed conversation and its public binding.
@@ -506,10 +509,8 @@ func (s *SessionService) ClaimScheduledMessage(id, conversationID string, dueAt,
 	}
 
 	var marker string
-
-	err = tx.QueryRowContext(context.Background(), `SELECT COALESCE((SELECT revert_message_id FROM managed_conversations WHERE conversation_id = $1), '')`, conversationID).Scan(&marker)
-	if err != nil {
-		return protocol.ScheduledMessageState{}, false, fmt.Errorf("read scheduled cutoff: %w", err)
+	if err := queryScalar(context.Background(), tx, "read scheduled cutoff", `SELECT COALESCE((SELECT revert_message_id FROM managed_conversations WHERE conversation_id = $1), '')`, &marker, conversationID); err != nil {
+		return protocol.ScheduledMessageState{}, false, err
 	}
 
 	if marker != "" {
@@ -578,18 +579,10 @@ func (s *SessionService) SyncCronSchedules(schedules []CronScheduleState, now ti
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `WITH scheduled_paths AS (
-    SELECT DISTINCT relative_path FROM cron_schedules
-),
-stale_run_paths AS (
-    SELECT r.relative_path
-    FROM cron_schedule_runs r
-    LEFT JOIN scheduled_paths s ON s.relative_path = r.relative_path
-    WHERE r.running = 0 AND s.relative_path IS NULL
-)
-DELETE FROM cron_schedule_runs r
-USING stale_run_paths s
-WHERE r.relative_path = s.relative_path`); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM cron_schedule_runs r
+WHERE r.running = 0 AND NOT EXISTS (
+    SELECT 1 FROM cron_schedules s WHERE s.relative_path = r.relative_path
+)`); err != nil {
 		return fmt.Errorf("delete stale cron run state: %w", err)
 	}
 
@@ -656,10 +649,8 @@ func (s *SessionService) ClaimCronSchedule(due CronScheduleState, nextDue, now t
 	}
 
 	var running bool
-
-	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM cron_schedule_runs WHERE relative_path = $1 AND running != 0)`, schedule.RelativePath).Scan(&running)
-	if err != nil {
-		return "", false, fmt.Errorf("check cron run state: %w", err)
+	if err := queryScalar(ctx, tx, "check cron run state", `SELECT EXISTS(SELECT 1 FROM cron_schedule_runs WHERE relative_path = $1 AND running != 0)`, &running, schedule.RelativePath); err != nil {
+		return "", false, err
 	}
 
 	if _, err := tx.ExecContext(ctx, `UPDATE cron_schedules SET next_due_unix_ns = $1, updated_at_unix_ns = $2 WHERE schedule_id = $3`, timeUnixNano(nextDue), timeUnixNano(now), schedule.ScheduleID); err != nil {
@@ -688,35 +679,23 @@ func (s *SessionService) ClaimCronSchedule(due CronScheduleState, nextDue, now t
 
 // CompleteCronRun clears per-file scheduled cron running state.
 func (s *SessionService) CompleteCronRun(relativePath string, now time.Time) error {
-	_, err := s.db.ExecContext(context.Background(), `UPDATE cron_schedule_runs SET running = 0, running_since_unix_ns = 0, updated_at_unix_ns = $1 WHERE relative_path = $2`, timeUnixNano(now), strings.TrimSpace(relativePath))
-	if err != nil {
-		return fmt.Errorf("complete cron run: %w", err)
-	}
-
-	return nil
+	_, err := execState(context.Background(), s.db, "complete cron run", `UPDATE cron_schedule_runs SET running = 0, running_since_unix_ns = 0, updated_at_unix_ns = $1 WHERE relative_path = $2`, timeUnixNano(now), strings.TrimSpace(relativePath))
+	return err
 }
 
 // ActiveGoalThreads returns managed thread state for conversations with active goals.
 func (s *SessionService) ActiveGoalThreads() (map[string]ThreadState, error) {
-	threads, err := queryMap(context.Background(), s.db, `WITH active_goals AS (
-    SELECT conversation_id FROM conversation_goals WHERE status = '' OR status = $1
-),
-goal_threads AS (
-    SELECT g.conversation_id, m.agent, m.created_by
-    FROM active_goals g
-    JOIN managed_conversations m ON m.conversation_id = g.conversation_id
-)
-SELECT conversation_id, agent, created_by FROM goal_threads
-ORDER BY conversation_id`, "active goal threads", func(row rowScanner) (string, ThreadState, error) {
+	threads, err := queryMap(context.Background(), s.db, `SELECT g.conversation_id, m.agent, m.created_by
+FROM conversation_goals g JOIN managed_conversations m ON m.conversation_id = g.conversation_id
+WHERE g.status = '' OR g.status = $1
+ORDER BY g.conversation_id`, "active goal threads", func(row rowScanner) (string, ThreadState, error) {
 		var (
-			conversationID, createdBy string
-			thread                    ThreadState
+			conversationID string
+			thread         ThreadState
 		)
-		if err := row.Scan(&conversationID, &thread.Agent, &createdBy); err != nil {
+		if err := row.Scan(&conversationID, &thread.Agent, &thread.CreatedBy); err != nil {
 			return "", ThreadState{}, fmt.Errorf("scan active goal thread: %w", err)
 		}
-
-		thread.CreatedBy = ThreadCreator(createdBy)
 
 		return conversationID, thread, nil
 	}, GoalStatusActive)
@@ -741,7 +720,7 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 		return PruneStateStats{}, err
 	}
 
-	externalSessions, err := externalMCPSessions(ctx, tx)
+	externalSessions, err := queryMap(ctx, tx, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel, origin_pairs FROM external_mcp_sessions ORDER BY external_conversation_id`, "external MCP sessions", scanExternalMCPSession)
 	if err != nil {
 		return PruneStateStats{}, err
 	}
@@ -859,15 +838,11 @@ func (s *SessionService) ObserveEntries(ctx context.Context, conversationID stri
 	}
 
 	entries, err := (stateDAO{db: s.db}).observedEntries(ctx, conversationID)
-	if err != nil {
-		return nil, err
+	if err == nil && entries == nil {
+		entries = []ObservedSessionEntry{}
 	}
 
-	if entries == nil {
-		return []ObservedSessionEntry{}, nil
-	}
-
-	return entries, nil
+	return entries, err
 }
 
 // AppendEntryID appends one entry through the runtime service and returns its row ID.
@@ -984,15 +959,11 @@ ORDER BY child.id`
 // ListSessions returns summaries for the requested stored rocketcode sessions.
 func (s *SessionService) ListSessions(ctx context.Context, conversationIDs []string) ([]protocol.SessionSummary, error) {
 	return queryRows(ctx, s.db, `SELECT conversation_id, preview, last_updated FROM session_summaries WHERE conversation_id = ANY($1) ORDER BY conversation_id COLLATE "C"`, "rocketcode session summaries", func(row rowScanner) (protocol.SessionSummary, error) {
-		var (
-			summary protocol.SessionSummary
-			preview []byte
-		)
-		if err := row.Scan(&summary.ConversationID, &preview, &summary.LastUpdated); err != nil {
+		var summary protocol.SessionSummary
+		if err := row.Scan(&summary.ConversationID, &summary.LastMessage, &summary.LastUpdated); err != nil {
 			return protocol.SessionSummary{}, fmt.Errorf("scan rocketcode session summary: %w", err)
 		}
 
-		summary.LastMessage = string(preview)
 		summary.LastUpdated = summary.LastUpdated.UTC()
 
 		return summary, nil
@@ -1015,47 +986,26 @@ type SidebarSession struct {
 // Breaking iteration or cancelling ctx closes the database rows.
 func (s *SessionService) SidebarSessions(ctx context.Context) iter.Seq2[SidebarSession, error] {
 	return func(yield func(SidebarSession, error) bool) {
-		rows, err := s.db.QueryContext(ctx, `WITH running_conversations AS (
-    SELECT DISTINCT conversation_id
-    FROM active_turns
-    WHERE phase <> 'done'
-),
-private_conversations AS (
-    SELECT private_conversation_id AS conversation_id
-    FROM external_mcp_sessions
-),
-eligible_conversations AS (
-    SELECT c.*, r.conversation_id IS NOT NULL AS running
-    FROM managed_conversations c
-    -- Keep the history check per conversation and stop at its first entry.
-    CROSS JOIN LATERAL (
-        SELECT 1 FROM session_entries e WHERE e.conversation_id = c.conversation_id LIMIT 1
-    ) h
-    LEFT JOIN running_conversations r ON r.conversation_id = c.conversation_id
-    LEFT JOIN private_conversations p ON p.conversation_id = c.conversation_id
-    WHERE c.conversation_id NOT LIKE 'cron:%'
-      AND c.conversation_id NOT LIKE 'one-off-cron:%'
-      AND p.conversation_id IS NULL
-),
-summarized_conversations AS (
-    SELECT c.*, s.preview, s.last_updated, COALESCE(t.tags, '[]'::jsonb) AS tags
-    FROM eligible_conversations c
-    LEFT JOIN session_summaries s ON s.conversation_id = c.conversation_id
-    LEFT JOIN session_tags t ON t.conversation_id = c.conversation_id
-)
-SELECT
-    conversation_id,
-    agent,
-    created_by,
-    preview,
-    last_updated,
-    running,
-    pinned,
-    name,
-    forked_from,
-    tags
-FROM summarized_conversations
-ORDER BY pinned DESC, COALESCE(last_updated, '0001-01-01 00:00:00+00'::timestamptz) DESC, conversation_id COLLATE "C"`)
+		rows, err := s.db.QueryContext(ctx, `SELECT
+    c.conversation_id,
+    c.agent,
+    c.created_by,
+    s.preview,
+    s.last_updated,
+    EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = c.conversation_id AND a.phase <> 'done'),
+    c.pinned,
+    c.name,
+    c.forked_from,
+    COALESCE(t.tags, '[]'::jsonb)
+FROM managed_conversations c
+-- Keep the history check per conversation and stop at its first entry.
+CROSS JOIN LATERAL (
+    SELECT 1 FROM session_entries e WHERE e.conversation_id = c.conversation_id LIMIT 1
+) h
+LEFT JOIN session_summaries s ON s.conversation_id = c.conversation_id
+LEFT JOIN session_tags t ON t.conversation_id = c.conversation_id
+WHERE `+visibleChatsSQL+`
+ORDER BY c.pinned DESC, COALESCE(s.last_updated, '0001-01-01 00:00:00+00'::timestamptz) DESC, c.conversation_id COLLATE "C"`, "")
 		if err != nil {
 			yield(SidebarSession{}, fmt.Errorf("query sidebar sessions: %w", err))
 			return
@@ -1116,9 +1066,7 @@ func (s *SessionService) ChatOriginFacts(ctx context.Context, id string) iter.Se
 		rows, err := s.db.QueryContext(ctx, `WITH visible AS (
     SELECT conversation_id, created_by, conversation_id LIKE 'web:cron:%' OR conversation_id LIKE 'web:one-off-cron:%' AS named_run
     FROM managed_conversations c
-    LEFT JOIN external_mcp_sessions p ON p.private_conversation_id = c.conversation_id
-    WHERE ($2 = '' OR conversation_id = $2) AND conversation_id NOT LIKE 'cron:%' AND conversation_id NOT LIKE 'one-off-cron:%'
-        AND p.private_conversation_id IS NULL
+    WHERE `+visibleChatsSQL+`
 ),
 creating_entries AS (
     SELECT c.conversation_id, e.entry_json->>'sync_source_conversation_id' AS source,
@@ -1127,7 +1075,7 @@ creating_entries AS (
     CROSS JOIN LATERAL (
         SELECT entry_json FROM session_entries WHERE conversation_id = c.conversation_id ORDER BY id LIMIT 1
     ) e
-    WHERE NOT c.named_run AND (c.conversation_id NOT LIKE 'slack-thread:%' OR c.created_by = $1)
+    WHERE NOT c.named_run AND (c.conversation_id NOT LIKE 'slack-thread:%' OR c.created_by = $2)
 ),
 creating_sources AS (
     SELECT conversation_id, source FROM creating_entries WHERE source IS NOT NULL
@@ -1145,7 +1093,7 @@ SELECT c.conversation_id, c.created_by, COALESCE(m.external_conversation_id, '')
     COALESCE(m.managed_conversation_id, ''), COALESCE(m.origin_pairs, 'null'), c.creating_source, COALESCE(producer.agent, '')
 FROM attributed_conversations c
 LEFT JOIN external_mcp_sessions m ON m.managed_conversation_id = c.conversation_id
-LEFT JOIN managed_conversations producer ON producer.conversation_id = c.producer_id`, ThreadCreatedByCron, id)
+LEFT JOIN managed_conversations producer ON producer.conversation_id = c.producer_id`, id, ThreadCreatedByCron)
 		if err != nil {
 			yield(ChatOriginFacts{}, fmt.Errorf("query chat origin facts: %w", err))
 			return
@@ -1232,13 +1180,13 @@ WHERE (a.conversation_id LIKE 'cron:%' OR a.conversation_id LIKE 'one-off-cron:%
 
 // ChannelFact returns a stored Slack name, never derived channel policy.
 func (s *SessionService) ChannelFact(ctx context.Context, workspaceID, channelID string) (name string, found bool, err error) {
-	err = s.db.QueryRowContext(ctx, `SELECT name FROM slack_channel_facts WHERE workspace_id = $1 AND channel_id = $2`, workspaceID, channelID).Scan(&name)
+	err = queryScalar(ctx, s.db, "read Slack channel fact", `SELECT name FROM slack_channel_facts WHERE workspace_id = $1 AND channel_id = $2`, &name, workspaceID, channelID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
 
 	if err != nil {
-		return "", false, fmt.Errorf("read Slack channel fact: %w", err)
+		return "", false, err
 	}
 
 	return name, true, nil
@@ -1247,14 +1195,11 @@ func (s *SessionService) ChannelFact(ctx context.Context, workspaceID, channelID
 // RecordChannelFact keeps the newest observation. Nanoseconds preserve ordering
 // even when a lookup and rename occur within one PostgreSQL timestamp microsecond.
 func (s *SessionService) RecordChannelFact(ctx context.Context, workspaceID, channelID, name string, observedAt time.Time) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO slack_channel_facts (workspace_id, channel_id, name, observed_at) VALUES ($1, $2, $3, $4)
+	_, err := execState(ctx, s.db, "record Slack channel fact", `INSERT INTO slack_channel_facts (workspace_id, channel_id, name, observed_at) VALUES ($1, $2, $3, $4)
 ON CONFLICT (workspace_id, channel_id) DO UPDATE SET name = EXCLUDED.name, observed_at = EXCLUDED.observed_at
 WHERE slack_channel_facts.observed_at < EXCLUDED.observed_at`, workspaceID, channelID, name, observedAt.UnixNano())
-	if err != nil {
-		return fmt.Errorf("record Slack channel fact: %w", err)
-	}
 
-	return nil
+	return err
 }
 
 // SlackChannelIDs lists the distinct channels of recorded managed Slack threads.
@@ -1512,37 +1457,28 @@ func (s *SessionService) externalMCPMetadataEntry(ctx context.Context, conversat
 
 func (s *SessionService) setGoalStatus(conversationID, status, note string) (GoalState, error) {
 	conversationID = strings.TrimSpace(conversationID)
-	goal, _, err := s.commitGoalChange(conversationID, "goal status update", "set active goal status", "count active goal status update", `UPDATE conversation_goals SET status = $1, note = $2, updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (status = '' OR status = $5)`, []any{strings.TrimSpace(status), strings.TrimSpace(note)}, []any{conversationID, GoalStatusActive})
-
-	return goal, err
-}
-
-func (s *SessionService) commitGoalChange(conversationID, beginLabel, execLabel, countLabel, query string, beforeUpdatedAt, afterUpdatedAt []any) (GoalState, bool, error) {
 	ctx := context.Background()
 
-	tx, err := s.beginStateTx(ctx, beginLabel)
+	tx, err := s.beginStateTx(ctx, "goal status update")
 	if err != nil {
-		return GoalState{}, false, err
+		return GoalState{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	args := append(append([]any{}, beforeUpdatedAt...), timeUnixNano(time.Now().UTC()))
-
-	args = append(args, afterUpdatedAt...)
-	if _, err = execRows(ctx, tx, execLabel, countLabel, query, args...); err != nil {
-		return GoalState{}, false, err
+	if _, err := execRows(ctx, tx, "set active goal status", "count active goal status update", `UPDATE conversation_goals SET status = $1, note = $2, updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (status = '' OR status = $5)`, strings.TrimSpace(status), strings.TrimSpace(note), timeUnixNano(time.Now().UTC()), conversationID, GoalStatusActive); err != nil {
+		return GoalState{}, err
 	}
 
-	goal, ok, err := (stateDAO{db: tx}).goal(ctx, conversationID)
+	goal, _, err := (stateDAO{db: tx}).goal(ctx, conversationID)
 	if err != nil {
-		return GoalState{}, false, err
+		return GoalState{}, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return GoalState{}, false, fmt.Errorf("commit %s: %w", beginLabel, err)
+		return GoalState{}, fmt.Errorf("commit goal status update: %w", err)
 	}
 
-	return goal, ok, nil
+	return goal, nil
 }
 
 func (s *SessionService) beginStateTx(ctx context.Context, label string) (*sql.Tx, error) {
@@ -1605,15 +1541,9 @@ func (s *SessionService) removeRetainedResults(conversationIDs ...string) error 
 
 func (s sessionStore) in() iter.Seq2[harness.SessionEntry, error] {
 	return func(yield func(harness.SessionEntry, error) bool) {
-		var (
-			observed []ObservedSessionEntry
-			err      error
-		)
-
-		observed, err = s.service.ObserveEntries(context.Background(), s.conversationID)
+		observed, err := s.service.ObserveEntries(context.Background(), s.conversationID)
 		if err != nil {
-			var entry harness.SessionEntry
-			yield(entry, err)
+			yield(harness.SessionEntry{}, err)
 
 			return
 		}
@@ -1755,10 +1685,6 @@ func slackStateKeyTime(key string) (time.Time, bool) {
 	nanos := int64(0)
 
 	if fractionText != "" {
-		if len(fractionText) > 9 {
-			fractionText = fractionText[:9]
-		}
-
 		nanos, err = strconv.ParseInt((fractionText + "000000000")[:9], 10, 64)
 		if err != nil {
 			return time.Time{}, false
@@ -1777,18 +1703,12 @@ func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, convers
 	created, ok := slackStateKeyTime(conversationID)
 	if !ok {
 		var emptyManaged bool
-		if err := db.QueryRowContext(ctx, `WITH conversations_with_history AS (
-    SELECT conversation_id FROM session_entries WHERE conversation_id = $1 LIMIT 1
-),
-empty_managed_conversations AS (
-    SELECT m.conversation_id
-    FROM managed_conversations m
-    LEFT JOIN conversations_with_history h ON h.conversation_id = m.conversation_id
-    WHERE m.conversation_id = $1 AND h.conversation_id IS NULL
+		if err := queryScalar(ctx, db, "read empty managed conversation", `SELECT EXISTS (
+    SELECT 1 FROM managed_conversations m WHERE m.conversation_id = $1
+        AND NOT EXISTS (SELECT 1 FROM session_entries e WHERE e.conversation_id = m.conversation_id)
         AND NOT EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = m.conversation_id)
-)
-SELECT COUNT(*) > 0 FROM empty_managed_conversations`, conversationID).Scan(&emptyManaged); err != nil {
-			return false, fmt.Errorf("read empty managed conversation: %w", err)
+)`, &emptyManaged, conversationID); err != nil {
+			return false, err
 		}
 
 		return emptyManaged, nil
@@ -1799,21 +1719,12 @@ SELECT COUNT(*) > 0 FROM empty_managed_conversations`, conversationID).Scan(&emp
 
 func sessionLatestBefore(ctx context.Context, db stateStoreDB, conversationID string, fallback, cutoff time.Time) (bool, error) {
 	var before bool
-
-	err := db.QueryRowContext(ctx, `WITH latest_entry AS (
-    SELECT MAX(entry_timestamp) AS entry_timestamp
-    FROM session_entries WHERE conversation_id = $3
-)
-SELECT COALESCE(entry_timestamp, $1) < $2 FROM latest_entry`, fallback.UTC().Format(time.RFC3339Nano), cutoff.UTC().Format(time.RFC3339Nano), conversationID).Scan(&before)
-	if err != nil {
-		return false, fmt.Errorf("read latest session entry timestamp: %w", err)
+	if err := queryScalar(ctx, db, "read latest session entry timestamp", `SELECT COALESCE(MAX(entry_timestamp), $1) < $2
+FROM session_entries WHERE conversation_id = $3`, &before, fallback.UTC().Format(time.RFC3339Nano), cutoff.UTC().Format(time.RFC3339Nano), conversationID); err != nil {
+		return false, err
 	}
 
 	return before, nil
-}
-
-func externalMCPSessions(ctx context.Context, db stateStoreDB) (map[string]ExternalMCPSessionState, error) {
-	return queryMap(ctx, db, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel, origin_pairs FROM external_mcp_sessions ORDER BY external_conversation_id`, "external MCP sessions", scanExternalMCPSession)
 }
 
 func readRows(ctx context.Context, db stateStoreDB, query, label string, scan func(rowScanner) error, args ...any) error {
@@ -1892,9 +1803,9 @@ func queryStrings(ctx context.Context, db stateStoreDB, query, label string, arg
 // which keep a conversation from being pruned.
 func conversationHasPendingWork(ctx context.Context, db stateStoreDB, conversationID string) (bool, error) {
 	var pending bool
-	if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM thread_queue WHERE conversation_id = $1)
-OR EXISTS(SELECT 1 FROM background_jobs WHERE (conversation_id = $1 OR sync_destination = $1) AND (status = $2 OR note_state = $3 AND wake))`, conversationID, backgroundRunning, notePending).Scan(&pending); err != nil {
-		return false, fmt.Errorf("check conversation pending work: %w", err)
+	if err := queryScalar(ctx, db, "check conversation pending work", `SELECT EXISTS(SELECT 1 FROM thread_queue WHERE conversation_id = $1)
+OR EXISTS(SELECT 1 FROM background_jobs WHERE (conversation_id = $1 OR sync_destination = $1) AND (status = $2 OR note_state = $3 AND wake))`, &pending, conversationID, backgroundRunning, notePending); err != nil {
+		return false, err
 	}
 
 	return pending, nil
@@ -1963,16 +1874,6 @@ func stalePrivateConversationIDs(ctx context.Context, db *sql.Tx, cutoff time.Ti
     SELECT conversation_id, '1970-01-01T00:00:00Z' FROM session_tags t
     WHERE NOT EXISTS (SELECT 1 FROM session_entries e WHERE e.conversation_id = t.conversation_id)
 ),
-private_histories AS (
-    SELECT conversation_id, MAX(entry_timestamp) AS last_entry_timestamp
-    FROM private_entries
-    WHERE conversation_id LIKE 'slack-thread:%' OR conversation_id LIKE 'external_mcp:%'
-       OR conversation_id LIKE 'cron:%' OR conversation_id LIKE 'one-off-cron:%'
-    GROUP BY conversation_id
-),
-stale_histories AS (
-    SELECT conversation_id FROM private_histories WHERE last_entry_timestamp < $1
-),
 referenced_conversations AS (
     SELECT conversation_id FROM managed_conversations
     UNION ALL
@@ -1981,14 +1882,12 @@ referenced_conversations AS (
     SELECT conversation_id FROM thread_queue
     UNION ALL
     SELECT unnest(ARRAY[conversation_id, sync_destination]) FROM background_jobs WHERE status = $2 OR note_state = $3 AND wake
-),
-orphaned_histories AS (
-    SELECT h.conversation_id
-    FROM stale_histories h
-    LEFT JOIN referenced_conversations r ON r.conversation_id = h.conversation_id
-    WHERE r.conversation_id IS NULL
 )
-SELECT conversation_id FROM orphaned_histories`, "stale private session conversations", cutoff.UTC().Format(time.RFC3339Nano), backgroundRunning, notePending)
+SELECT h.conversation_id FROM private_entries h
+WHERE (h.conversation_id LIKE 'slack-thread:%' OR h.conversation_id LIKE 'external_mcp:%'
+    OR h.conversation_id LIKE 'cron:%' OR h.conversation_id LIKE 'one-off-cron:%')
+    AND NOT EXISTS (SELECT 1 FROM referenced_conversations r WHERE r.conversation_id = h.conversation_id)
+GROUP BY h.conversation_id HAVING MAX(h.entry_timestamp) < $1`, "stale private session conversations", cutoff.UTC().Format(time.RFC3339Nano), backgroundRunning, notePending)
 }
 
 func deleteSessionEntries(ctx context.Context, db stateStoreDB, conversationIDs map[string]struct{}) (int64, error) {
@@ -2022,31 +1921,14 @@ type runLockWork interface {
 	Run(context.Context) error
 }
 
-func newRunLockClient(db *sql.DB) (*pglock.Client, error) {
-	client, err := pglock.UnsafeNew(
-		db,
-		pglock.WithCustomTable(runLockTable),
-		pglock.WithLeaseDuration(pglock.DefaultLeaseDuration),
-		pglock.WithHeartbeatFrequency(pglock.DefaultHeartbeatFrequency),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("acquire rocketclaw run lock: %w", err)
-	}
-
-	if err := client.TryCreateTable(); err != nil {
-		return nil, fmt.Errorf("acquire rocketclaw run lock: %w", err)
-	}
-
-	return client, nil
-}
-
 func holdRunLock(ctx context.Context, db *sql.DB, work runLockWork) error {
-	client, err := newRunLockClient(db)
-	if err != nil {
-		return err
+	// The opened DB and pglock's 20s lease/5s heartbeat defaults cannot fail validation.
+	client, _ := pglock.UnsafeNew(db, pglock.WithCustomTable(runLockTable))
+	if err := client.TryCreateTable(); err != nil {
+		return fmt.Errorf("acquire rocketclaw run lock: %w", err)
 	}
 
-	err = client.Do(ctx, runLockName, func(lockCtx context.Context, _ *pglock.Lock) error {
+	err := client.Do(ctx, runLockName, func(lockCtx context.Context, _ *pglock.Lock) error {
 		return work.Run(lockCtx)
 	})
 	if err != nil {

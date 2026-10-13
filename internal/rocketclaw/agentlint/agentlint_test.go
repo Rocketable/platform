@@ -103,7 +103,7 @@ reasoningEffort: xhigh
 expensive
 `)
 
-	for _, external := range []string{"webfetch: allow", "websearch: allow", "webfetch: allow\n  websearch: allow"} {
+	for _, external := range []string{"webfetch: allow", "websearch: allow", "webfetch: allow\n  websearch: allow", "webfetch:\n    'https://example.com': allow\n    '*': deny"} {
 		t.Run(external, func(t *testing.T) {
 			writeAgent(t, runtimeRoot, "browser.md", fmt.Sprintf(`---
 description: browser

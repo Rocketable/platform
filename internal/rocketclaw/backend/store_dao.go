@@ -93,10 +93,10 @@ func (d stateDAO) producer(ctx context.Context, conversationID string) (*protoco
 // update returns the established owner even when another binder already won.
 func (d stateDAO) bindProducer(ctx context.Context, conversationID, destination string) (string, error) {
 	var owner string
-	if err := d.db.QueryRowContext(ctx, `UPDATE managed_conversations SET producer_inbound_json =
+	if err := queryScalar(ctx, d.db, "bind producer destination", `UPDATE managed_conversations SET producer_inbound_json =
 jsonb_set(producer_inbound_json::jsonb, '{SyncDestination}', to_jsonb(COALESCE(NULLIF(producer_inbound_json->>'SyncDestination', ''), $2)))::json
-WHERE conversation_id = $1 RETURNING producer_inbound_json->>'SyncDestination'`, conversationID, destination).Scan(&owner); err != nil {
-		return "", fmt.Errorf("bind producer destination: %w", err)
+WHERE conversation_id = $1 RETURNING producer_inbound_json->>'SyncDestination'`, &owner, conversationID, destination); err != nil {
+		return "", err
 	}
 
 	return owner, nil
@@ -126,11 +126,8 @@ WHERE conversation_id = $1 AND id > $2 AND entry_json->>'type' IN ($3, $4)
 
 // advanceProducerEffects commits progress in the caller's effect transaction.
 func (d stateDAO) advanceProducerEffects(ctx context.Context, conversationID string, through int64) error {
-	if _, err := d.db.ExecContext(ctx, `UPDATE managed_conversations SET producer_effects_through_id = $2 WHERE conversation_id = $1`, conversationID, through); err != nil {
-		return fmt.Errorf("advance producer effects: %w", err)
-	}
-
-	return nil
+	_, err := execState(ctx, d.db, "advance producer effects", `UPDATE managed_conversations SET producer_effects_through_id = $2 WHERE conversation_id = $1`, conversationID, through)
+	return err
 }
 
 // projectProducerEffects applies original effects only to their retained owner,
@@ -147,12 +144,8 @@ func (d stateDAO) projectProducerEffects(ctx context.Context, source, destinatio
 	}
 
 	var active bool
-	if err := d.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM active_turns WHERE conversation_id = $1 AND phase <> $2)`, source, turnDone).Scan(&active); err != nil {
-		return nil, fmt.Errorf("check producer projection completion: %w", err)
-	}
-
-	if active {
-		return nil, nil
+	if err := queryScalar(ctx, d.db, "check producer projection completion", `SELECT EXISTS (SELECT 1 FROM active_turns WHERE conversation_id = $1 AND phase <> $2)`, &active, source, turnDone); err != nil || active {
+		return nil, err
 	}
 
 	effects, err := d.producerEffects(ctx, source, through)
@@ -207,12 +200,9 @@ RETURNING scheduled_message_id, conversation_id, agent, message, due_at_unix_ns,
 
 // Thread returns the persisted managed conversation state.
 func (s *SessionService) Thread(conversationID string) (ThreadState, bool, error) {
-	var (
-		thread    ThreadState
-		createdBy string
-	)
+	var thread ThreadState
 
-	err := s.db.QueryRowContext(context.Background(), `SELECT agent, created_by FROM managed_conversations WHERE conversation_id = $1`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &createdBy)
+	err := s.db.QueryRowContext(context.Background(), `SELECT agent, created_by FROM managed_conversations WHERE conversation_id = $1`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &thread.CreatedBy)
 	if err == sql.ErrNoRows {
 		return ThreadState{}, false, nil
 	}
@@ -220,8 +210,6 @@ func (s *SessionService) Thread(conversationID string) (ThreadState, bool, error
 	if err != nil {
 		return ThreadState{}, false, fmt.Errorf("read managed conversation: %w", err)
 	}
-
-	thread.CreatedBy = ThreadCreator(createdBy)
 
 	return thread, true, nil
 }
@@ -291,26 +279,18 @@ func originPairsJSON(metadata map[string]string) []byte {
 }
 
 func (d stateDAO) goal(ctx context.Context, conversationID string) (GoalState, bool, error) {
-	_, goal, err := scanGoal(d.db.QueryRowContext(ctx, `SELECT conversation_id, objective, check_script, max_turns, turns_used, status, note, created_at_unix_ns, updated_at_unix_ns FROM conversation_goals WHERE conversation_id = $1`, strings.TrimSpace(conversationID)))
+	var (
+		goal                 GoalState
+		createdAt, updatedAt int64
+	)
+
+	err := d.db.QueryRowContext(ctx, `SELECT objective, check_script, max_turns, turns_used, status, note, created_at_unix_ns, updated_at_unix_ns FROM conversation_goals WHERE conversation_id = $1`, strings.TrimSpace(conversationID)).Scan(&goal.Objective, &goal.CheckScript, &goal.MaxTurns, &goal.TurnsUsed, &goal.Status, &goal.Note, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return GoalState{}, false, nil
 	}
 
 	if err != nil {
-		return GoalState{}, false, fmt.Errorf("read goal: %w", err)
-	}
-
-	return goal, true, nil
-}
-
-func scanGoal(scanner rowScanner) (string, GoalState, error) {
-	var (
-		conversationID       string
-		goal                 GoalState
-		createdAt, updatedAt int64
-	)
-	if err := scanner.Scan(&conversationID, &goal.Objective, &goal.CheckScript, &goal.MaxTurns, &goal.TurnsUsed, &goal.Status, &goal.Note, &createdAt, &updatedAt); err != nil {
-		return "", GoalState{}, fmt.Errorf("scan goal: %w", err)
+		return GoalState{}, false, fmt.Errorf("read goal: %w", fmt.Errorf("scan goal: %w", err))
 	}
 
 	goal.CreatedAt = timeFromUnixNano(createdAt)
@@ -320,16 +300,12 @@ func scanGoal(scanner rowScanner) (string, GoalState, error) {
 		goal.Status = GoalStatusActive
 	}
 
-	return conversationID, goal, nil
+	return goal, true, nil
 }
 
 func (d stateDAO) putScheduledMessage(ctx context.Context, id string, message *protocol.ScheduledMessageState) error {
-	_, err := d.db.ExecContext(ctx, `INSERT INTO scheduled_messages (scheduled_message_id, conversation_id, agent, message, due_at_unix_ns, recurring, interval_ns) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT(scheduled_message_id) DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent, message = excluded.message, due_at_unix_ns = excluded.due_at_unix_ns, recurring = excluded.recurring, interval_ns = excluded.interval_ns`, strings.TrimSpace(id), strings.TrimSpace(message.ConversationID), strings.TrimSpace(message.Agent), message.Message, timeUnixNano(message.DueAt), boolInt(message.Recurring), int64(message.Interval))
-	if err != nil {
-		return fmt.Errorf("put scheduled message: %w", err)
-	}
-
-	return nil
+	_, err := execState(ctx, d.db, "put scheduled message", `INSERT INTO scheduled_messages (scheduled_message_id, conversation_id, agent, message, due_at_unix_ns, recurring, interval_ns) VALUES ($1, $2, $3, $4, $5, $6::boolean::integer, $7) ON CONFLICT(scheduled_message_id) DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent, message = excluded.message, due_at_unix_ns = excluded.due_at_unix_ns, recurring = excluded.recurring, interval_ns = excluded.interval_ns`, strings.TrimSpace(id), strings.TrimSpace(message.ConversationID), strings.TrimSpace(message.Agent), message.Message, timeUnixNano(message.DueAt), message.Recurring, int64(message.Interval))
+	return err
 }
 
 func (d stateDAO) scheduledMessages(ctx context.Context, conversationID string) (map[string]protocol.ScheduledMessageState, error) {
@@ -351,11 +327,8 @@ func (d stateDAO) scheduledMessages(ctx context.Context, conversationID string) 
 }
 
 func (d stateDAO) clearParkAfter(ctx context.Context, scheduledID string) error {
-	if _, err := d.db.ExecContext(ctx, `UPDATE thread_queue SET park_after = '' WHERE park_after = $1`, strings.TrimSpace(scheduledID)); err != nil {
-		return fmt.Errorf("clear thread queue park: %w", err)
-	}
-
-	return nil
+	_, err := execState(ctx, d.db, "clear thread queue park", `UPDATE thread_queue SET park_after = '' WHERE park_after = $1`, strings.TrimSpace(scheduledID))
+	return err
 }
 
 func (d stateDAO) deleteScheduledMessage(ctx context.Context, id string) (bool, error) {
@@ -375,11 +348,9 @@ func (d stateDAO) resetScheduledMessages(ctx context.Context, conversationID str
 		return fmt.Errorf("clear thread queue parks: %w", err)
 	}
 
-	if _, err := d.db.ExecContext(ctx, `DELETE FROM scheduled_messages WHERE conversation_id = $1`, conversationID); err != nil {
-		return fmt.Errorf("reset scheduled messages: %w", err)
-	}
+	_, err := execState(ctx, d.db, "reset scheduled messages", `DELETE FROM scheduled_messages WHERE conversation_id = $1`, conversationID)
 
-	return nil
+	return err
 }
 
 // PutThreadQueueItem persists one Enqueued Slack Message.
@@ -401,10 +372,7 @@ func putThreadQueueItem(ctx context.Context, db stateStoreDB, id string, item *p
 	var inbound *string
 
 	if item.Inbound != nil {
-		data, err := json.Marshal(item.Inbound)
-		if err != nil {
-			return fmt.Errorf("encode thread queue inbound: %w", err)
-		}
+		data, _ := json.Marshal(item.Inbound)
 
 		inbound = new(string(removeSessionEntryNUL(data)))
 	}
@@ -421,10 +389,6 @@ func putThreadQueueItem(ctx context.Context, db stateStoreDB, id string, item *p
 	return nil
 }
 
-func (s *SessionService) queuedConversationIDs(ctx context.Context) ([]string, error) {
-	return queryStrings(ctx, s.db, `SELECT DISTINCT conversation_id FROM thread_queue ORDER BY conversation_id`, "queued conversation IDs")
-}
-
 // ThreadQueueForConversation returns Enqueued Slack Messages in stack order.
 func (s *SessionService) ThreadQueueForConversation(conversationID string) ([]protocol.ThreadQueueItem, error) {
 	return queryRows(context.Background(), s.db, `SELECT queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply, inbound_json FROM thread_queue WHERE conversation_id = $1 ORDER BY position, stash_at_unix_ns`, "thread queue", scanThreadQueueItem, strings.TrimSpace(conversationID))
@@ -432,11 +396,8 @@ func (s *SessionService) ThreadQueueForConversation(conversationID string) ([]pr
 
 // DeleteThreadQueueItem deletes one Enqueued Slack Message.
 func (s *SessionService) DeleteThreadQueueItem(id string) error {
-	if _, err := s.db.ExecContext(context.Background(), `DELETE FROM thread_queue WHERE queue_item_id = $1`, strings.TrimSpace(id)); err != nil {
-		return fmt.Errorf("delete thread queue item: %w", err)
-	}
-
-	return nil
+	_, err := execState(context.Background(), s.db, "delete thread queue item", `DELETE FROM thread_queue WHERE queue_item_id = $1`, strings.TrimSpace(id))
+	return err
 }
 
 func (d stateDAO) claimThreadQueueItem(ctx context.Context, conversationID, id string) (protocol.ThreadQueueItem, bool, error) {
@@ -519,13 +480,13 @@ type conversationJournal struct {
 
 // LoadTurnStep returns one recorded step of a conversation's turns.
 func (s *SessionService) LoadTurnStep(ctx context.Context, conversationID, key string) (value json.RawMessage, found bool, err error) {
-	err = s.db.QueryRowContext(ctx, `SELECT value FROM turn_steps WHERE conversation_id = $1 AND key = $2`, conversationID, key).Scan(&value)
+	err = queryScalar(ctx, s.db, "load turn step", `SELECT value FROM turn_steps WHERE conversation_id = $1 AND key = $2`, &value, conversationID, key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
 	}
 
 	if err != nil {
-		return nil, false, fmt.Errorf("load turn step: %w", err)
+		return nil, false, err
 	}
 
 	return value, true, nil
@@ -533,11 +494,8 @@ func (s *SessionService) LoadTurnStep(ctx context.Context, conversationID, key s
 
 // SaveTurnStep records one step of a conversation's turns; the turn's finish removes it.
 func (s *SessionService) SaveTurnStep(ctx context.Context, conversationID, key string, value json.RawMessage) error {
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO turn_steps (conversation_id, key, value) VALUES ($1, $2, $3) ON CONFLICT (conversation_id, key) DO UPDATE SET value = excluded.value`, conversationID, key, string(removeSessionEntryNUL(value))); err != nil {
-		return fmt.Errorf("save turn step: %w", err)
-	}
-
-	return nil
+	_, err := execState(ctx, s.db, "save turn step", `INSERT INTO turn_steps (conversation_id, key, value) VALUES ($1, $2, $3) ON CONFLICT (conversation_id, key) DO UPDATE SET value = excluded.value`, conversationID, key, string(removeSessionEntryNUL(value)))
+	return err
 }
 
 func (j conversationJournal) Load(ctx context.Context, key string) (value json.RawMessage, found bool, err error) {
@@ -571,19 +529,14 @@ func (j conversationJournal) SaveTrace(ctx context.Context, turnID string, trace
 		return fmt.Errorf("encode turn trace: %w", err)
 	}
 
-	if _, err := j.store.db.ExecContext(ctx, `UPDATE active_turns SET output_trace_json = $2, updated_at_unix_ns = $3 WHERE id = $1 AND terminal = '' AND output_trace_json::jsonb IS DISTINCT FROM $2::jsonb`, rowID, string(removeSessionEntryNUL(data)), timeUnixNano(time.Now())); err != nil {
-		return fmt.Errorf("save turn trace: %w", err)
-	}
+	_, errExec := execState(ctx, j.store.db, "save turn trace", `UPDATE active_turns SET output_trace_json = $2, updated_at_unix_ns = $3 WHERE id = $1 AND terminal = '' AND output_trace_json::jsonb IS DISTINCT FROM $2::jsonb`, rowID, string(removeSessionEntryNUL(data)), timeUnixNano(time.Now()))
 
-	return nil
+	return errExec
 }
 
 // startTurnDB records a taken request as its conversation's running queue head.
 func startTurnDB(ctx context.Context, db stateStoreDB, turnID, conversationID string, inbound *protocol.InboundMessage) error {
-	data, err := json.Marshal(inbound)
-	if err != nil {
-		return fmt.Errorf("encode turn inbound: %w", err)
-	}
+	data, _ := json.Marshal(inbound)
 
 	now := timeUnixNano(time.Now())
 	if _, err := db.ExecContext(ctx, `INSERT INTO active_turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id)
@@ -637,15 +590,11 @@ WHERE phase <> $2 AND COALESCE(NULLIF(inbound_json->>'SyncDestination', ''), con
 	return turn, true, nil
 }
 
-func (s *SessionService) activeTurnWorkers(ctx context.Context) ([]string, error) {
-	return queryStrings(ctx, s.db, `SELECT DISTINCT COALESCE(NULLIF(inbound_json->>'SyncDestination', ''), conversation_id) FROM active_turns WHERE phase <> $1 ORDER BY 1`, "active turn workers", turnDone)
-}
-
 // HasActiveTurn reports whether the conversation has a running or undelivered turn.
 func (s *SessionService) HasActiveTurn(ctx context.Context, conversationID string) (bool, error) {
 	var active bool
-	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM active_turns WHERE conversation_id = $1 AND phase <> $2)`, conversationID, turnDone).Scan(&active); err != nil {
-		return false, fmt.Errorf("check active turn: %w", err)
+	if err := queryScalar(ctx, s.db, "check active turn", `SELECT EXISTS (SELECT 1 FROM active_turns WHERE conversation_id = $1 AND phase <> $2)`, &active, conversationID, turnDone); err != nil {
+		return false, err
 	}
 
 	return active, nil
@@ -776,17 +725,15 @@ const keepRunningJobSteps = `NOT EXISTS (SELECT 1 FROM background_jobs j WHERE j
 // Web owners without replay identity, and goal kickoffs with generated prompt
 // framing, stay done so retries and editable commands retain their original input.
 func (s *SessionService) closeTurn(ctx context.Context, turnID string) error {
-	if _, err := s.db.ExecContext(ctx, `WITH delivered AS (DELETE FROM active_turns a WHERE id = $2 AND terminal = '' AND
+	_, err := execState(ctx, s.db, "close active turn", `WITH delivered AS (DELETE FROM active_turns a WHERE id = $2 AND terminal = '' AND
     NOT (inbound_json->>'Source' = 'web' AND COALESCE(inbound_json->'Metadata'->>'web_message_id', '') <> '' AND
         (inbound_json->>'GoalAction' = 'goal' OR NOT EXISTS (
         SELECT 1 FROM session_entries e CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item
         WHERE e.conversation_id = a.conversation_id AND item->>'input_id' = a.inbound_json->'Metadata'->>'web_message_id'))) RETURNING id),
 delivery_steps AS (DELETE FROM turn_steps s WHERE starts_with(key, $2 || '/') AND `+keepRunningJobSteps+`)
-UPDATE active_turns SET phase = $1 WHERE id = $2 AND id NOT IN (SELECT id FROM delivered)`, turnDone, turnID); err != nil {
-		return fmt.Errorf("close active turn: %w", err)
-	}
+UPDATE active_turns SET phase = $1 WHERE id = $2 AND id NOT IN (SELECT id FROM delivered)`, turnDone, turnID)
 
-	return nil
+	return err
 }
 
 // backgroundJobKind is the work a Background Job runs; task and subagent wake
@@ -868,10 +815,7 @@ func scanBackgroundJob(scanner rowScanner) (backgroundJob, error) {
 // createBackgroundJob records a running job once per (conversation, job ID)
 // and returns the stored row; created is false when the row already existed.
 func createBackgroundJob(ctx context.Context, db stateStoreDB, job *backgroundJob) (stored backgroundJob, created bool, err error) {
-	origin, err := json.Marshal(job.origin)
-	if err != nil {
-		return backgroundJob{}, false, fmt.Errorf("encode background job origin: %w", err)
-	}
+	origin, _ := json.Marshal(job.origin)
 
 	inserted, err := execRows(ctx, db, "create background job", "count created background job", `INSERT INTO background_jobs (conversation_id, job_id, child_key, kind, status, agent, label, call_id, subagent_key, origin_json, sync_destination, runner_id, note_state, wake, claimed_turn_id, created_at_unix_ns, finished_at_unix_ns, result)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, FALSE, '', $14, 0, '') ON CONFLICT (conversation_id, job_id) DO NOTHING`, job.conversationID, job.jobID, job.childKey, job.kind, backgroundRunning, job.agent, job.label, job.callID, job.subagentKey, string(removeSessionEntryNUL(origin)), job.origin.SyncDestination, job.runnerID, noteNone, timeUnixNano(time.Now()))
@@ -926,16 +870,6 @@ WHERE conversation_id = $1 AND job_id = $2 AND runner_id = $3 AND status = $9`, 
 	return true, nil
 }
 
-// hasBackgroundJob reports whether the call keyed jobID already became a job.
-func (s *SessionService) hasBackgroundJob(ctx context.Context, conversationID, jobID string) (bool, error) {
-	var exists bool
-	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM background_jobs WHERE conversation_id = $1 AND job_id = $2)`, conversationID, jobID).Scan(&exists); err != nil {
-		return false, fmt.Errorf("look up background job: %w", err)
-	}
-
-	return exists, nil
-}
-
 // restampBackgroundJob hands a running job held by job.runnerID to runnerID.
 func (s *SessionService) restampBackgroundJob(ctx context.Context, job *backgroundJob, runnerID string) (bool, error) {
 	moved, err := execRows(ctx, s.db, "restamp background job", "count restamped background job", `UPDATE background_jobs SET runner_id = $4 WHERE conversation_id = $1 AND job_id = $2 AND runner_id = $3 AND status = $5`, job.conversationID, job.jobID, job.runnerID, runnerID, backgroundRunning)
@@ -954,11 +888,8 @@ SELECT * FROM (SELECT * FROM claimed UNION ALL SELECT `+backgroundJobColumns+` F
 
 // redirectBackgroundJobs makes a hidden run's jobs without a destination report to destinationID.
 func (d stateDAO) redirectBackgroundJobs(ctx context.Context, conversationID, destinationID string) error {
-	if _, err := d.db.ExecContext(ctx, `UPDATE background_jobs SET sync_destination = $2, origin_json = (origin_json::jsonb || jsonb_build_object('SyncDestination', $2::text))::json WHERE conversation_id = $1 AND sync_destination = ''`, conversationID, destinationID); err != nil {
-		return fmt.Errorf("redirect background jobs: %w", err)
-	}
-
-	return nil
+	_, err := execState(ctx, d.db, "redirect background jobs", `UPDATE background_jobs SET sync_destination = $2, origin_json = (origin_json::jsonb || jsonb_build_object('SyncDestination', $2::text))::json WHERE conversation_id = $1 AND sync_destination = ''`, conversationID, destinationID)
+	return err
 }
 
 // backgroundWake returns the owner's unclaimed Completion Note that may wake it first, if any:
@@ -970,12 +901,6 @@ func (s *SessionService) backgroundWake(ctx context.Context, conversationID, chi
 	}
 
 	return job, err == nil, err
-}
-
-// backgroundWakeOwners returns, for startup, one unclaimed Completion Note
-// that may wake its owner, per owner.
-func (s *SessionService) backgroundWakeOwners(ctx context.Context) ([]backgroundJob, error) {
-	return queryRows(ctx, s.db, `SELECT DISTINCT ON (conversation_id, child_key) `+backgroundJobColumns+` FROM background_jobs WHERE note_state = $1 AND wake AND claimed_turn_id = '' ORDER BY conversation_id, child_key`, "background wake owners", scanBackgroundJob, notePending)
 }
 
 // notedBackgroundJobs returns the conversation's jobs listed in jobIDs, in finish order.
@@ -1012,12 +937,10 @@ func (s *SessionService) startSubagentWake(ctx context.Context, job *backgroundJ
 
 // releaseStaleBackgroundClaims frees pending notes claimed by turns that are no longer running.
 func (s *SessionService) releaseStaleBackgroundClaims(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `UPDATE background_jobs j SET claimed_turn_id = '' WHERE note_state = $1 AND claimed_turn_id <> ''
-AND NOT EXISTS (SELECT 1 FROM active_turns a WHERE a.id = j.claimed_turn_id AND a.phase = $2)`, notePending, turnRunning); err != nil {
-		return fmt.Errorf("release stale background note claims: %w", err)
-	}
+	_, err := execState(ctx, s.db, "release stale background note claims", `UPDATE background_jobs j SET claimed_turn_id = '' WHERE note_state = $1 AND claimed_turn_id <> ''
+AND NOT EXISTS (SELECT 1 FROM active_turns a WHERE a.id = j.claimed_turn_id AND a.phase = $2)`, notePending, turnRunning)
 
-	return nil
+	return err
 }
 
 // backgroundJobs lists a conversation's running jobs and undelivered notes,
@@ -1029,14 +952,6 @@ func (s *SessionService) backgroundJobs(ctx context.Context, conversationID stri
 // runningBackgroundJobs returns every running job, for startup recovery.
 func (s *SessionService) runningBackgroundJobs(ctx context.Context) ([]backgroundJob, error) {
 	return queryRows(ctx, s.db, `SELECT `+backgroundJobColumns+` FROM background_jobs WHERE status = $1 ORDER BY created_at_unix_ns, conversation_id, job_id`, "running background jobs", scanBackgroundJob, backgroundRunning)
-}
-
-func boolInt(value bool) int {
-	if value {
-		return 1
-	}
-
-	return 0
 }
 
 func timeUnixNano(value time.Time) int64 {

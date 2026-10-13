@@ -86,11 +86,9 @@ func (q *webQuestions) AskUserQuestion(ctx context.Context, req *protocol.AskUse
 // change runs statement, a write of step $2 of conversation $1, and wakes the conversation's Web
 // views in the same transaction, since no trigger reports steps whose key holds a slash.
 func (q *webQuestions) change(ctx context.Context, statement, conversationID, key string, value ...any) error {
-	if _, err := q.store.db.ExecContext(ctx, `WITH changed AS (`+statement+`) SELECT pg_notify('rocketclaw_transcript_' || md5(current_schema()), json_build_object('conversationId', $1::text, 'revision', pg_current_xact_id()::text)::text)`, append([]any{conversationID, key}, value...)...); err != nil {
-		return fmt.Errorf("write turn step %q: %w", key, err)
-	}
+	_, err := execState(ctx, q.store.db, fmt.Sprintf("write turn step %q", key), `WITH changed AS (`+statement+`) SELECT pg_notify('rocketclaw_transcript_' || md5(current_schema()), json_build_object('conversationId', $1::text, 'revision', pg_current_xact_id()::text)::text)`, append([]any{conversationID, key}, value...)...)
 
-	return nil
+	return err
 }
 
 // PendingQuestions lists, in key order, the unanswered questions saved by conversationID's Web

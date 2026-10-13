@@ -16,12 +16,8 @@ import (
 // Background backfill shares this transaction lock with history mutation. It
 // also covers missing summaries and private histories without managed rows.
 func lockSessionHistory(ctx context.Context, db stateStoreDB, conversationID string) error {
-	_, err := db.ExecContext(ctx, `SELECT pg_advisory_xact_lock(87901, hashtext($1))`, conversationID)
-	if err != nil {
-		return fmt.Errorf("lock session history: %w", err)
-	}
-
-	return nil
+	_, err := execState(ctx, db, "lock session history", `SELECT pg_advisory_xact_lock(87901, hashtext($1))`, conversationID)
+	return err
 }
 
 // loadSessionSummary decodes history only when its durable projection is missing.
@@ -41,33 +37,21 @@ func loadSessionSummary(ctx context.Context, db stateStoreDB, conversationID str
 		return summary, fmt.Errorf("read session summary: %w", err)
 	}
 
-	rows, err := db.QueryContext(ctx, `SELECT entry_json, entry_timestamp FROM session_entries WHERE conversation_id = $1 ORDER BY id`, conversationID)
-	if err != nil {
-		return summary, fmt.Errorf("query session summary history: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
+	err = readRows(ctx, db, `SELECT entry_json, entry_timestamp FROM session_entries WHERE conversation_id = $1 ORDER BY id`, "session summary history", func(row rowScanner) error {
 		var raw, timestamp string
-		if err := rows.Scan(&raw, &timestamp); err != nil {
-			return summary, fmt.Errorf("scan session summary history: %w", err)
+		if err := row.Scan(&raw, &timestamp); err != nil {
+			return fmt.Errorf("scan session summary history: %w", err)
 		}
 
 		var entry harness.SessionEntry
 		if err := json.Unmarshal([]byte(raw), &entry); err != nil {
-			return summary, fmt.Errorf("parse session summary history: %w", err)
+			return fmt.Errorf("parse session summary history: %w", err)
 		}
 
-		if err := projectSessionSummary(&summary, &entry, timestamp); err != nil {
-			return summary, err
-		}
-	}
+		return projectSessionSummary(&summary, &entry, timestamp)
+	}, conversationID)
 
-	if err := rows.Err(); err != nil {
-		return summary, fmt.Errorf("read session summary history: %w", err)
-	}
-
-	return summary, nil
+	return summary, err
 }
 
 func projectSessionSummary(summary *protocol.SessionSummary, entry *harness.SessionEntry, timestamp string) error {
@@ -97,13 +81,10 @@ func projectSessionSummary(summary *protocol.SessionSummary, entry *harness.Sess
 }
 
 func saveSessionSummary(ctx context.Context, db stateStoreDB, summary protocol.SessionSummary) error {
-	_, err := db.ExecContext(ctx, `INSERT INTO session_summaries (conversation_id, preview, last_updated) VALUES ($1, $2, $3)
+	_, err := execState(ctx, db, "write session summary", `INSERT INTO session_summaries (conversation_id, preview, last_updated) VALUES ($1, $2, $3)
 ON CONFLICT (conversation_id) DO UPDATE SET preview = EXCLUDED.preview, last_updated = EXCLUDED.last_updated`, summary.ConversationID, []byte(summary.LastMessage), summary.LastUpdated)
-	if err != nil {
-		return fmt.Errorf("write session summary: %w", err)
-	}
 
-	return nil
+	return err
 }
 
 func (s *SessionService) backfillSessionSummaries(ctx context.Context) error {

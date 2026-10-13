@@ -1,11 +1,13 @@
 package backend
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -38,21 +40,16 @@ func parseDynamicWorkflowParams(raw json.RawMessage) (dynamicWorkflowParams, err
 	return params, nil
 }
 
-func allowedWorkflowDescriptions(permissions rocketcode.PermissionSet, descriptions []protocol.WorkflowDescription) []protocol.WorkflowDescription {
-	allowed := make([]protocol.WorkflowDescription, 0, len(descriptions))
-	for _, description := range descriptions {
+func (b *Bridge) dynamicWorkflowTool(permissions rocketcode.PermissionSet, agentName, tagConversationID string, definitions map[string]*workflow.Definition) (rocketcode.Tool, bool) {
+	allowed := slices.DeleteFunc(workflow.Descriptions(definitions), func(description protocol.WorkflowDescription) bool {
 		action, _ := permissions.Evaluate("workflow", description.Name)
-		if action != rocketcode.PermissionAllow {
-			continue
-		}
-
-		allowed = append(allowed, description)
+		return action != rocketcode.PermissionAllow
+	})
+	if len(allowed) == 0 {
+		return rocketcode.Tool{}, false
 	}
 
-	return allowed
-}
-
-func dynamicWorkflowToolDescription(allowed []protocol.WorkflowDescription) string {
+	visibility := make([]string, len(allowed))
 	lines := make([]string, 0, 5+len(allowed))
 	lines = append(lines,
 		"Run a saved Starlark workflow as a nested tool call inside this turn and return its final result text.",
@@ -62,33 +59,17 @@ func dynamicWorkflowToolDescription(allowed []protocol.WorkflowDescription) stri
 		"Available workflows (permission.workflow subjects):",
 	)
 
-	for _, description := range allowed {
-		text := strings.TrimSpace(description.Description)
-		if text == "" {
-			text = "Saved Starlark workflow."
-		}
+	for i, description := range allowed {
+		visibility[i] = description.Name
+		text := cmp.Or(strings.TrimSpace(description.Description), "Saved Starlark workflow.")
 
 		lines = append(lines, fmt.Sprintf("- %s: %s", description.Name, text))
-	}
-
-	return strings.Join(lines, "\n")
-}
-
-func (b *Bridge) dynamicWorkflowTool(permissions rocketcode.PermissionSet, agentName, tagConversationID string, definitions map[string]*workflow.Definition) (rocketcode.Tool, bool) {
-	allowed := allowedWorkflowDescriptions(permissions, workflow.Descriptions(definitions))
-	if len(allowed) == 0 {
-		return rocketcode.Tool{}, false
-	}
-
-	visibility := make([]string, len(allowed))
-	for i := range allowed {
-		visibility[i] = allowed[i].Name
 	}
 
 	return rocketcode.Tool{
 		Name:               dynamicWorkflowToolName,
 		Resumable:          true,
-		Description:        dynamicWorkflowToolDescription(allowed),
+		Description:        strings.Join(lines, "\n"),
 		Permission:         "workflow",
 		VisibilitySubjects: visibility,
 		Subjects: func(raw json.RawMessage) ([]string, error) {
@@ -124,21 +105,12 @@ func (b *Bridge) dynamicWorkflowTool(permissions rocketcode.PermissionSet, agent
 
 func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *rocketcode.Agent, agentName, tagConversationID string) (rocketcode.Tool, bool) {
 	runtimeCfg := b.runtime.Clone()
-	allowed := false
 
-	for _, bucket := range agent.Permission.Buckets {
-		if bucket.Name != "workflow" {
-			continue
-		}
-
-		for _, rule := range bucket.Rules {
-			if rule.Action == rocketcode.PermissionAllow {
-				allowed = true
-			}
-		}
-	}
-
-	if !allowed {
+	if !slices.ContainsFunc(agent.Permission.Buckets, func(bucket rocketcode.PermissionBucket) bool {
+		return bucket.Name == "workflow" && slices.ContainsFunc(bucket.Rules, func(rule rocketcode.PermissionRule) bool {
+			return rule.Action == rocketcode.PermissionAllow
+		})
+	}) {
 		return rocketcode.Tool{}, false
 	}
 
@@ -163,7 +135,7 @@ func (b *Bridge) runNestedWorkflow(ctx context.Context, agentName, tagConversati
 	defer func() { err = errors.Join(err, agentRun.Close()) }()
 
 	result, errRun := workflow.Run(ctx, definition, workflow.RunRequest{
-		RunID: rocketcode.ToolCallKey(ctx), Args: args, Definition: definition,
+		RunID: rocketcode.ToolCallKey(ctx), Args: args,
 	}, agentRun)
 	if errRun != nil {
 		return "", fmt.Errorf("run nested workflow %q: %w", name, errRun)

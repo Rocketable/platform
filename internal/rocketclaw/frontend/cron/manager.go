@@ -364,40 +364,31 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 		return nil
 	}
 
-	type scheduledDefinition struct {
-		definition definition
-		schedule   config.CronSchedule
+	statesByID := map[string]backend.CronScheduleState{}
+	for _, state := range states {
+		statesByID[state.ScheduleID] = state
 	}
 
-	scheduledDefinitions := map[string]scheduledDefinition{}
-
-	for i := range definitions {
-		definition := definitions[i]
-		for index, schedule := range definition.schedules {
-			if !schedule.DueAt.IsZero() {
-				continue
-			}
-
-			id := scheduleID(definition.relativePath, index, schedule.Raw)
-			scheduledDefinitions[id] = scheduledDefinition{definition: definition, schedule: schedule}
-		}
+	definitionsByPath := map[string]definition{}
+	for _, definition := range definitions {
+		definitionsByPath[definition.relativePath] = definition
 	}
 
 	startedFiles := map[string]struct{}{}
 
 	for _, state := range due {
-		scheduled, ok := scheduledDefinitions[state.ScheduleID]
+		scheduled, ok := statesByID[state.ScheduleID]
 		if !ok {
 			continue
 		}
 
-		definition := scheduled.definition
+		definition := definitionsByPath[scheduled.RelativePath]
 
 		if _, ok := startedFiles[definition.relativePath]; ok {
 			continue
 		}
 
-		relativePath, ok, err := m.store.ClaimCronSchedule(state, scheduled.schedule.Next(now), now)
+		relativePath, ok, err := m.store.ClaimCronSchedule(state, scheduled.NextDue, now)
 		if err != nil {
 			return fmt.Errorf("claim cron schedule: %w", err)
 		}
@@ -507,16 +498,11 @@ func cronTraceConversationID(prefix, relativePath string, ts time.Time) string {
 }
 
 func (m *Manager) preparePrompt(body string) string {
-	prompt := body
-	if prompt == "" {
+	if body == "" {
 		return cronReplyInstruction
 	}
 
-	if strings.HasSuffix(prompt, "\n") {
-		return prompt + "\n" + cronReplyInstruction
-	}
-
-	return prompt + "\n\n" + cronReplyInstruction
+	return strings.TrimSuffix(body, "\n") + "\n\n" + cronReplyInstruction
 }
 
 func (m *Manager) logLoadedDefinitions(definitions []definition) {

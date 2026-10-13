@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 )
 
 var errInvalidAWSRef = errors.New("aws object requires arn and key")
 
+// mergeJSON and resolveAWS consume the fresh decoded trees owned by Load.
 func mergeJSON(dst, src any) any {
 	dstMap, dstOK := dst.(map[string]any)
 
@@ -17,77 +17,56 @@ func mergeJSON(dst, src any) any {
 		return src
 	}
 
-	out := maps.Clone(dstMap)
 	for key, value := range srcMap {
-		out[key] = mergeJSON(out[key], value)
+		dstMap[key] = mergeJSON(dstMap[key], value)
 	}
 
-	return out
+	return dstMap
 }
 
 func resolveAWS(value any, fetcher SecretFetcher) (any, error) {
 	switch node := value.(type) {
 	case map[string]any:
-		arn, key, isRef, err := awsRef(node)
-		if err != nil {
-			return nil, err
-		}
+		if raw, exists := node["aws"]; len(node) == 1 && exists {
+			fields, isMap := raw.(map[string]any)
+			if !isMap {
+				return nil, &SecretFetchError{err: errInvalidAWSRef}
+			}
 
-		if isRef {
+			arn, _ := fields["arn"].(string)
+
+			key, _ := fields["key"].(string)
+			if arn == "" || key == "" {
+				return nil, &SecretFetchError{ARN: arn, Key: key, err: errInvalidAWSRef}
+			}
+
 			return secretField(fetcher, arn, key)
 		}
 
-		out := make(map[string]any, len(node))
 		for key, child := range node {
 			resolved, err := resolveAWS(child, fetcher)
 			if err != nil {
 				return nil, err
 			}
 
-			out[key] = resolved
+			node[key] = resolved
 		}
 
-		return out, nil
+		return node, nil
 	case []any:
-		out := make([]any, len(node))
 		for i, child := range node {
 			resolved, err := resolveAWS(child, fetcher)
 			if err != nil {
 				return nil, err
 			}
 
-			out[i] = resolved
+			node[i] = resolved
 		}
 
-		return out, nil
+		return node, nil
 	default:
 		return value, nil
 	}
-}
-
-func awsRef(node map[string]any) (arn, key string, ok bool, err error) {
-	if len(node) != 1 {
-		return "", "", false, nil
-	}
-
-	raw, exists := node["aws"]
-	if !exists {
-		return "", "", false, nil
-	}
-
-	fields, isMap := raw.(map[string]any)
-	if !isMap {
-		return "", "", false, &SecretFetchError{err: errInvalidAWSRef}
-	}
-
-	arn, _ = fields["arn"].(string)
-
-	key, _ = fields["key"].(string)
-	if arn == "" || key == "" {
-		return "", "", false, &SecretFetchError{ARN: arn, Key: key, err: errInvalidAWSRef}
-	}
-
-	return arn, key, true, nil
 }
 
 func decodeObject(data []byte, what string) (map[string]any, error) {

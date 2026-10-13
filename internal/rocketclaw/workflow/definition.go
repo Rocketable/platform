@@ -88,37 +88,34 @@ func Load(root *os.Root, runtimeDir string) (definitions map[string]*Definition,
 			return nil, fmt.Errorf("open workflow %s: %w", entry.Name(), errOpen)
 		}
 
-		info, errInfo := file.Stat()
-		if errInfo != nil {
-			errClose := file.Close()
-			if errClose != nil {
-				errClose = fmt.Errorf("close workflow %s: %w", entry.Name(), errClose)
+		info, err := file.Stat()
+
+		var source []byte
+
+		if err != nil {
+			err = fmt.Errorf("inspect workflow %s: %w", entry.Name(), err)
+		} else if info.Mode().IsRegular() {
+			source, err = io.ReadAll(file)
+			if err != nil {
+				err = fmt.Errorf("read workflow %s: %w", entry.Name(), err)
 			}
-
-			return nil, errors.Join(fmt.Errorf("inspect workflow %s: %w", entry.Name(), errInfo), errClose)
 		}
-
-		if !info.Mode().IsRegular() {
-			if errClose := file.Close(); errClose != nil {
-				return nil, fmt.Errorf("close workflow %s: %w", entry.Name(), errClose)
-			}
-
-			continue
-		}
-
-		source, errRead := io.ReadAll(file)
 
 		errClose := file.Close()
-		if errRead != nil {
-			if errClose != nil {
-				errClose = fmt.Errorf("close workflow %s: %w", entry.Name(), errClose)
-			}
+		if errClose != nil {
+			errClose = fmt.Errorf("close workflow %s: %w", entry.Name(), errClose)
+		}
 
-			return nil, errors.Join(fmt.Errorf("read workflow %s: %w", entry.Name(), errRead), errClose)
+		if err != nil {
+			return nil, errors.Join(err, errClose)
 		}
 
 		if errClose != nil {
-			return nil, fmt.Errorf("close workflow %s: %w", entry.Name(), errClose)
+			return nil, errClose
+		}
+
+		if !info.Mode().IsRegular() {
+			continue
 		}
 
 		definition, errCompile := compileDefinition(filename, name, source)
@@ -440,24 +437,15 @@ func isJSONLiteral(expression syntax.Expr) bool {
 	case *syntax.Ident:
 		return expression.Name == "True" || expression.Name == "False" || expression.Name == "None"
 	case *syntax.ListExpr:
-		for _, item := range expression.List {
-			if !isJSONLiteral(item) {
-				return false
-			}
-		}
-
-		return true
+		return !slices.ContainsFunc(expression.List, func(item syntax.Expr) bool { return !isJSONLiteral(item) })
 	case *syntax.DictExpr:
-		for _, item := range expression.List {
+		return !slices.ContainsFunc(expression.List, func(item syntax.Expr) bool {
 			entry := item.(*syntax.DictEntry)
 
 			key, ok := entry.Key.(*syntax.Literal)
-			if !ok || key.Token != syntax.STRING || !isJSONLiteral(entry.Value) {
-				return false
-			}
-		}
 
-		return true
+			return !ok || key.Token != syntax.STRING || !isJSONLiteral(entry.Value)
+		})
 	case *syntax.UnaryExpr:
 		literal, ok := expression.X.(*syntax.Literal)
 		return ok && (expression.Op == syntax.PLUS || expression.Op == syntax.MINUS) && (literal.Token == syntax.INT || literal.Token == syntax.FLOAT)
@@ -486,10 +474,7 @@ func validateWorker(call *syntax.CallExpr) (string, error) {
 			return "", errors.New("worker arguments must be named literals")
 		}
 
-		name, ok := named.X.(*syntax.Ident)
-		if !ok {
-			return "", errors.New("worker arguments must be named literals")
-		}
+		name := named.X.(*syntax.Ident) // The parser requires an identifier before a keyword argument's '='.
 
 		if _, exists := arguments[name.Name]; exists {
 			return "", fmt.Errorf("worker argument %s is duplicated", name.Name)
@@ -646,10 +631,8 @@ func validateNestedFanout(file *syntax.File, functions map[string]*syntax.DefStm
 			keyword := ""
 
 			if named, ok := argument.(*syntax.BinaryExpr); ok && named.Op == syntax.EQ {
-				if name, ok := named.X.(*syntax.Ident); ok {
-					keyword = name.Name
-					argument = named.Y
-				}
+				keyword = named.X.(*syntax.Ident).Name
+				argument = named.Y
 			} else {
 				positional++
 			}

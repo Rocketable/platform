@@ -7,13 +7,6 @@ import (
 )
 
 func newLogger(levelText string) *slog.Logger {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: parseLogLevel(levelText)}))
-	slog.SetDefault(logger)
-
-	return logger
-}
-
-func parseLogLevel(levelText string) slog.Level {
 	levelText = strings.TrimSpace(strings.ToUpper(levelText))
 	if levelText == "WARNING" {
 		levelText = "WARN"
@@ -21,8 +14,11 @@ func parseLogLevel(levelText string) slog.Level {
 
 	level := slog.LevelInfo
 	if err := level.UnmarshalText([]byte(levelText)); err != nil {
-		return slog.LevelDebug
+		level = slog.LevelDebug
 	}
 
-	return level
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	slog.SetDefault(logger)
+
+	return logger
 }
