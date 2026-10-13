@@ -230,8 +230,6 @@ func voicePost(ctx context.Context, target string, header http.Header, body []by
 	req.Header = header.Clone()
 	req.Header.Set("Content-Type", "application/json")
 
-	// Go keeps Authorization across a port or scheme change and never drops
-	// Chatgpt-Account-Id, so every hop off the first origin loses both here.
 	client := *http.DefaultClient
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {
@@ -240,6 +238,7 @@ func voicePost(ctx context.Context, target string, header http.Header, body []by
 
 		if req.URL.Scheme != via[0].URL.Scheme || req.URL.Host != via[0].URL.Host {
 			req.Header.Del("Authorization")
+			req.Header.Del("Api-Key")
 			req.Header.Del("Chatgpt-Account-Id")
 		}
 

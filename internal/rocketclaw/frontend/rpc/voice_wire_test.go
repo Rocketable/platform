@@ -65,7 +65,7 @@ func TestVoiceWireRoundTrip(t *testing.T) {
 		{
 			auth:     "api_key",
 			creds:    voiceCredentials{bearer: "sk-test"},
-			header:   http.Header{"Authorization": {"Bearer sk-test"}},
+			header:   http.Header{"Authorization": {"Bearer sk-test"}, "Api-Key": {"sk-test"}},
 			create:   "/v1/live/sessions",
 			body:     `{"session":{"model":"gpt-live-1",` + session + `,"audio":{"output":{"voice":"marin"}},"input":` + seed + `,"client":{"data_channel":{"allowed_client_events":["session.close","session.input_audio.mute","session.input_audio.unmute"]}}},"transport":{"type":"webrtc","sdp":"offer"}}`,
 			reply:    `{"session":{"id":"live_1"},"transport":{"type":"webrtc","sdp":"answer"}}`,
@@ -346,7 +346,7 @@ func TestVoiceWireFailures(t *testing.T) {
 
 func TestVoiceRedirects(t *testing.T) {
 	type hop struct {
-		url, authorization, account, body string
+		url, authorization, apiKey, account, body string
 	}
 
 	for _, tc := range []struct {
@@ -367,7 +367,7 @@ func TestVoiceRedirects(t *testing.T) {
 				body, err := io.ReadAll(req.Body)
 				require.NoError(t, err)
 
-				seen = append(seen, hop{req.URL.String(), req.Header.Get("Authorization"), req.Header.Get("Chatgpt-Account-Id"), string(body)})
+				seen = append(seen, hop{req.URL.String(), req.Header.Get("Authorization"), req.Header.Get("Api-Key"), req.Header.Get("Chatgpt-Account-Id"), string(body)})
 				if len(seen) == len(tc.hops) {
 					return &http.Response{StatusCode: http.StatusCreated, Body: http.NoBody}, nil
 				}
@@ -377,17 +377,17 @@ func TestVoiceRedirects(t *testing.T) {
 
 			t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-			resp, err := voicePost(t.Context(), tc.hops[0], http.Header{"Authorization": {"Bearer token"}, "Chatgpt-Account-Id": {"acct"}}, []byte("seed"))
+			resp, err := voicePost(t.Context(), tc.hops[0], http.Header{"Authorization": {"Bearer token"}, "Api-Key": {"token"}, "Chatgpt-Account-Id": {"acct"}}, []byte("seed"))
 			require.NoError(t, err)
 			require.NoError(t, resp.Body.Close())
 
 			// A cross-origin 307 still resends the body, as Codex's client does.
-			want := []hop{{tc.hops[0], "Bearer token", "acct", "seed"}}
+			want := []hop{{tc.hops[0], "Bearer token", "token", "acct", "seed"}}
 			for _, next := range tc.hops[1:] {
 				if tc.kept {
-					want = append(want, hop{next, "Bearer token", "acct", "seed"})
+					want = append(want, hop{next, "Bearer token", "token", "acct", "seed"})
 				} else {
-					want = append(want, hop{next, "", "", "seed"})
+					want = append(want, hop{next, "", "", "", "seed"})
 				}
 			}
 
