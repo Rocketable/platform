@@ -9,6 +9,8 @@ import (
 
 // Notes never come from the input's text, stay readable once consumed, and resolve in Delegation Histories.
 func TestRuntimeCompletionNotesReadStoredJobs(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	rt := &Runtime{Sessions: store}
 	conversationID := "one-off-cron:cron/report.md:20260905t020000z:run"

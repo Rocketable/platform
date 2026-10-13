@@ -193,6 +193,8 @@ def main(args):
 }
 
 func TestNestedWorkflowSessionTags(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeMainAgentSkills(t, workspace, "---\nmodel: gpt-5.5\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[customer, internal]]\n---\nPrompt\n")
 	root := openWorkspaceRoot(t, workspace)

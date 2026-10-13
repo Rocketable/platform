@@ -93,12 +93,16 @@ func (b *testBus) Outbound(ctx context.Context) iter.Seq[*protocol.OutboundMessa
 func (b *testBus) Close() { b.once.Do(func() { close(b.closed) }) }
 
 func TestBridgeSwitchAgentTrimsAndStoresAgent(t *testing.T) {
+	t.Parallel()
+
 	bridge := &Bridge{config: Config{Agent: "old"}}
 	bridge.SwitchAgent("  next  ")
 	assert.Equal(t, "next", bridge.agentSnapshot())
 }
 
 func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
+	t.Parallel()
+
 	bus := newTestBus()
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), bus: bus, config: Config{ConversationID: "web-conversation", SessionService: newTestSessionService(t)}, inputOpen: true, requestCh: make(chan bridgeRequest, 1)}
 	content := protocol.InboundContent{Text: "same text"}
@@ -178,6 +182,8 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 }
 
 func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 
 	const conversationID = "web-queue"
@@ -249,6 +255,8 @@ func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
 }
 
 func TestBridgeConsumedInputKeepsRawWebText(t *testing.T) {
+	t.Parallel()
+
 	bus := newTestBus()
 	bridge := &Bridge{bus: bus, config: Config{ConversationID: "slack-thread:C123:111.0", SessionService: newTestSessionService(t)}}
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{
@@ -264,6 +272,8 @@ func TestBridgeConsumedInputKeepsRawWebText(t *testing.T) {
 }
 
 func TestRestartToolScopesDescriptionToRuntimeConfig(t *testing.T) {
+	t.Parallel()
+
 	tool := restartTool(testNoopRestart)
 
 	assert.Contains(t, tool.Description, "explicitly requested runtime configuration change")
@@ -283,6 +293,8 @@ func TestRestartToolScopesDescriptionToRuntimeConfig(t *testing.T) {
 }
 
 func TestRestartToolCallsConfiguredRestart(t *testing.T) {
+	t.Parallel()
+
 	order := []string{}
 
 	tool := restartTool(func(reason string) (string, error) {
@@ -297,6 +309,8 @@ func TestRestartToolCallsConfiguredRestart(t *testing.T) {
 }
 
 func TestReloadToolReturnsModelVisibleFailure(t *testing.T) {
+	t.Parallel()
+
 	tool := reloadTool(func(string) (string, error) {
 		return "", errors.New("invalid staged cron")
 	})
@@ -310,6 +324,8 @@ func TestReloadToolReturnsModelVisibleFailure(t *testing.T) {
 }
 
 func TestUpdateGoalToolRunsSuccessfulCheckBeforeComplete(t *testing.T) {
+	t.Parallel()
+
 	bridge := newGoalCheckTestBridge(t, `---
 description: Main
 model: gpt-5.4
@@ -333,6 +349,8 @@ Prompt
 }
 
 func TestUpdateGoalToolRunsCheckThroughActiveAgentCustomShell(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name       string
 		wrapperRun string
@@ -378,6 +396,8 @@ Prompt
 }
 
 func TestUpdateGoalToolRecordsProgressNoteWithoutEndingGoal(t *testing.T) {
+	t.Parallel()
+
 	bridge := newGoalCheckTestBridge(t, `---
 description: Main
 model: gpt-5.4
@@ -402,6 +422,8 @@ Prompt
 }
 
 func TestUpdateGoalToolKeepsGoalActiveWhenCheckFails(t *testing.T) {
+	t.Parallel()
+
 	bridge := newGoalCheckTestBridge(t, `---
 description: Main
 model: gpt-5.4
@@ -425,6 +447,8 @@ Prompt
 }
 
 func TestUpdateGoalToolKeepsGoalActiveWhenCheckPermissionDenied(t *testing.T) {
+	t.Parallel()
+
 	bridge := newGoalCheckTestBridge(t, `---
 description: Main
 model: gpt-5.4
@@ -447,6 +471,8 @@ Prompt
 }
 
 func TestUpdateGoalToolDoesNotRunCheckForBlocked(t *testing.T) {
+	t.Parallel()
+
 	bridge := newGoalCheckTestBridge(t, `---
 description: Main
 model: gpt-5.4
@@ -469,6 +495,8 @@ Prompt
 }
 
 func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
+	t.Parallel()
+
 	bridge := newGoalAccountingTestBridge(t)
 	require.NoError(t, beginGoalDB(t.Context(), bridge.config.SessionService.db, "thread-1", &GoalState{Objective: "ship it", MaxTurns: 3}))
 
@@ -497,6 +525,8 @@ func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
 }
 
 func TestFinishGoalTurnHumanResteeringDoesNotConsumeBudget(t *testing.T) {
+	t.Parallel()
+
 	bridge := newGoalAccountingTestBridge(t)
 	require.NoError(t, beginGoalDB(t.Context(), bridge.config.SessionService.db, "thread-1", &GoalState{Objective: "ship it", MaxTurns: 3}))
 
@@ -514,6 +544,8 @@ func TestFinishGoalTurnHumanResteeringDoesNotConsumeBudget(t *testing.T) {
 }
 
 func TestGoalSteeringPromptRequiresProgressSummaryAndNote(t *testing.T) {
+	t.Parallel()
+
 	prompt := goalSteeringPrompt(&GoalState{Objective: "ship it", MaxTurns: 5, TurnsUsed: 1})
 
 	assert.Contains(t, prompt, "Progress summary:")
@@ -524,6 +556,8 @@ func TestGoalSteeringPromptRequiresProgressSummaryAndNote(t *testing.T) {
 }
 
 func TestInterruptActiveTurnSignalsAndPreservesQueue(t *testing.T) {
+	t.Parallel()
+
 	interrupts := make(chan os.Signal, 1)
 	marker := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "111.222"}
 
@@ -543,6 +577,8 @@ func TestInterruptActiveTurnSignalsAndPreservesQueue(t *testing.T) {
 }
 
 func TestInterruptActiveTurnDoesNotDeleteThreadQueueOrScheduled(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0}))
@@ -569,6 +605,8 @@ func TestInterruptActiveTurnDoesNotDeleteThreadQueueOrScheduled(t *testing.T) {
 }
 
 func TestPickLaterWorkPrefersEarlierStashOverLaterDue(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	stashAt := time.Date(2000, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -593,6 +631,8 @@ func TestPickLaterWorkPrefersEarlierStashOverLaterDue(t *testing.T) {
 }
 
 func TestPickLaterWorkWaitsWhenParkedAfterFutureScheduled(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "Ship README", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, ParkAfter: "s1"}))
@@ -605,6 +645,8 @@ func TestPickLaterWorkWaitsWhenParkedAfterFutureScheduled(t *testing.T) {
 }
 
 func TestPickLaterWorkStartsParkedQueueAfterScheduledCancel(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "Ship README", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, ParkAfter: "s1", SlackChannel: "C123", SlackTS: "111.222"}))
@@ -621,6 +663,8 @@ func TestPickLaterWorkStartsParkedQueueAfterScheduledCancel(t *testing.T) {
 }
 
 func TestActivateInboundReturnsStartedScheduleDeleteError(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	require.NoError(t, store.Stop())
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: protocol.SlackThreadConversationID("C123", "111.222"), SessionService: store}}
@@ -630,6 +674,8 @@ func TestActivateInboundReturnsStartedScheduleDeleteError(t *testing.T) {
 }
 
 func TestOneShotScheduleActivatesOnce(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "thread-1", SessionService: store}, requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
 	now := time.Now().UTC()
@@ -655,6 +701,8 @@ func TestOneShotScheduleActivatesOnce(t *testing.T) {
 }
 
 func TestPickLaterWorkSkipsWhenGoalStillActive(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	require.NoError(t, store.BeginGoal(conversationID, "ship it", "", 3))
@@ -694,6 +742,8 @@ func TestPickLaterWorkSkipsWhenGoalStillActive(t *testing.T) {
 }
 
 func TestPickLaterWorkAfterStopGoalStartsLaterWork(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	require.NoError(t, store.BeginGoal(conversationID, "ship it", "", 3))
@@ -708,6 +758,8 @@ func TestPickLaterWorkAfterStopGoalStartsLaterWork(t *testing.T) {
 }
 
 func TestPickLaterWorkClaimsDueRecurringSchedule(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	dueAt := time.Now().UTC().Add(-time.Second)
@@ -726,6 +778,8 @@ func TestPickLaterWorkClaimsDueRecurringSchedule(t *testing.T) {
 }
 
 func TestPickLaterWorkDoesNothingWhenIdleAndEmpty(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
@@ -742,6 +796,8 @@ func TestPickLaterWorkDoesNothingWhenIdleAndEmpty(t *testing.T) {
 }
 
 func TestPickLaterWorkDoesNotClaimScheduledWhenTurnBusy(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		store := newTestSessionService(t)
 		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
@@ -761,6 +817,8 @@ func TestPickLaterWorkDoesNotClaimScheduledWhenTurnBusy(t *testing.T) {
 }
 
 func TestBridgeStopDoesNotClassifyOrdinaryTurnAsInterrupted(t *testing.T) {
+	t.Parallel()
+
 	bridge := &Bridge{stopCh: make(chan struct{}), activeReply: protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "ordinary", true)}
 	_, bridge.activeTurnCancel = context.WithCancel(t.Context())
 	require.NoError(t, bridge.Stop())
@@ -768,6 +826,8 @@ func TestBridgeStopDoesNotClassifyOrdinaryTurnAsInterrupted(t *testing.T) {
 }
 
 func TestInterruptActiveWorkflowCancelsWithoutSignalChannel(t *testing.T) {
+	t.Parallel()
+
 	canceled := make(chan struct{})
 	bridge := &Bridge{requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{}), activeReply: new(protocol.InboundMessage)}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -833,6 +893,8 @@ func newGoalCheckTestBridge(t *testing.T, agent, script string) *Bridge {
 }
 
 func TestRestartToolAcceptsEmptyOutputAndPropagatesErrors(t *testing.T) {
+	t.Parallel()
+
 	tool := restartTool(testNoopRestart)
 	result, err := tool.Call(t.Context(), []byte(`{"reason":"cron changed"}`), nil)
 	require.NoError(t, err)
@@ -943,6 +1005,8 @@ func testNoopStartNewThread(context.Context, *protocol.StartNewThreadRequest) (p
 }
 
 func TestPublishFinalPreservesTurnID(t *testing.T) {
+	t.Parallel()
+
 	bus := newTestBus()
 	defer bus.Close()
 
@@ -969,6 +1033,8 @@ func TestPublishFinalPreservesTurnID(t *testing.T) {
 }
 
 func TestPublishFinalMarksCurrentGoalCompletion(t *testing.T) {
+	t.Parallel()
+
 	bus := newTestBus()
 	defer bus.Close()
 
@@ -990,6 +1056,8 @@ func TestPublishFinalMarksCurrentGoalCompletion(t *testing.T) {
 }
 
 func TestPublishFinalDoesNotReuseCompletedGoal(t *testing.T) {
+	t.Parallel()
+
 	bus := newTestBus()
 	defer bus.Close()
 
@@ -1016,6 +1084,8 @@ func TestPublishFinalDoesNotReuseCompletedGoal(t *testing.T) {
 }
 
 func TestPublishFinalCarriesMainResponseAttachments(t *testing.T) {
+	t.Parallel()
+
 	bus := newTestBus()
 	defer bus.Close()
 
@@ -1056,6 +1126,8 @@ func TestPublishFinalCarriesMainResponseAttachments(t *testing.T) {
 }
 
 func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
@@ -1104,6 +1176,8 @@ func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
 }
 
 func TestRocketCodeConfigEnablesDiagnostics(t *testing.T) {
+	t.Parallel()
+
 	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{AutoApproverModel: "gpt-5.4-mini"}), config: Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", RequestRestart: testNoopRestart, RequestReload: func(string) (string, error) {
 		return "rocketclaw runtime assets reloaded", nil
 	}, SessionService: newTestSessionService(t)}}
@@ -1132,6 +1206,8 @@ func TestRocketCodeConfigEnablesDiagnostics(t *testing.T) {
 }
 
 func TestAppendOverlayPromptToAgentIncludesConfiguredOverlayPrompt(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	agents := rocketcode.Agents{Items: map[string]rocketcode.Agent{"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", Prompt: "base prompt", Location: "", Permission: rocketcode.PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}}}
 
@@ -1148,6 +1224,8 @@ func TestAppendOverlayPromptToAgentIncludesConfiguredOverlayPrompt(t *testing.T)
 }
 
 func TestNewConversationKeepsInjectedSessionService(t *testing.T) {
+	t.Parallel()
+
 	service, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
@@ -1170,6 +1248,8 @@ func TestNewConversationKeepsInjectedSessionService(t *testing.T) {
 // A submission during shutdown is stored in the Thread Queue with its full
 // inbound, so it survives the process exit and starts after the restart.
 func TestBridgeSubmitAfterStopStoresRequestDurably(t *testing.T) {
+	t.Parallel()
+
 	bus := newTestBus()
 	defer bus.Close()
 
@@ -1203,6 +1283,8 @@ func TestBridgeSubmitAfterStopStoresRequestDurably(t *testing.T) {
 }
 
 func TestBridgeStartReportsStateLoadError(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	require.NoError(t, service.Stop())
 
@@ -1215,6 +1297,8 @@ func TestBridgeStartReportsStateLoadError(t *testing.T) {
 }
 
 func TestBridgeEnqueueReturnsContextOrStopErrors(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -1229,6 +1313,8 @@ func TestBridgeEnqueueReturnsContextOrStopErrors(t *testing.T) {
 }
 
 func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: '{{ model \"main\" }}'\npermission:\n  task:\n    helper: allow\n---\nPrompt\n")
 	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: '{{ model \"helper\" }}'\nguardrail: guardrail\n---\nHelper prompt\n")
@@ -1364,6 +1450,8 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 }
 
 func TestBridgeStopAfterStartContextCanceledIsIdempotent(t *testing.T) {
+	t.Parallel()
+
 	bus := newTestBus()
 	defer bus.Close()
 
@@ -1383,6 +1471,8 @@ func TestBridgeStopAfterStartContextCanceledIsIdempotent(t *testing.T) {
 }
 
 func TestScheduleMessageToolValidatesAndPreservesMessage(t *testing.T) {
+	t.Parallel()
+
 	var logs bytes.Buffer
 
 	service := newTestSessionService(t)
@@ -1429,6 +1519,8 @@ func TestScheduleMessageToolValidatesAndPreservesMessage(t *testing.T) {
 }
 
 func TestResetScheduledMessagesToolUsesScheduleSubject(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "slack-thread:C123:111.222", SessionService: service}}
 	require.NoError(t, service.PutScheduledMessage("later", &protocol.ScheduledMessageState{ConversationID: bridge.config.ConversationID, Agent: "main", Message: "later", DueAt: time.Now().Add(time.Hour)}))
@@ -1455,6 +1547,8 @@ func TestResetScheduledMessagesToolUsesScheduleSubject(t *testing.T) {
 }
 
 func TestAttachFilesToolReadsWorkspacePath(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
@@ -1514,6 +1608,8 @@ func TestAttachFilesToolReadsWorkspacePath(t *testing.T) {
 }
 
 func TestOutboundAttachmentSources(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
@@ -1543,6 +1639,8 @@ func TestOutboundAttachmentSources(t *testing.T) {
 }
 
 func TestAttachFilesToolReportsInvalidInput(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
@@ -1559,6 +1657,8 @@ func TestAttachFilesToolReportsInvalidInput(t *testing.T) {
 }
 
 func TestAttachmentFallbackAndImageAttachments(t *testing.T) {
+	t.Parallel()
+
 	assert.Empty(t, attachmentFallback(&protocol.InboundMessage{Attachments: []protocol.InboundAttachment{{Name: "image.png"}}}))
 	assert.Equal(t, unsupportedFileFallback, attachmentFallback(&protocol.InboundMessage{AttachmentPresence: protocol.AttachmentPresenceUnsupported}))
 	assert.Contains(t, attachmentFallback(&protocol.InboundMessage{AttachmentPresence: protocol.AttachmentPresenceImages, AttachmentWarnings: []string{" first ", " ", "second"}}), "- first\n- second")
@@ -1596,6 +1696,8 @@ func TestAttachmentFallbackAndImageAttachments(t *testing.T) {
 }
 
 func TestNormalizeInboundAttachmentsCentralizesModelPolicy(t *testing.T) {
+	t.Parallel()
+
 	msg := &protocol.InboundMessage{Attachments: []protocol.InboundAttachment{
 		{Name: " tiny.png ", MIMEType: "application/octet-stream", Data: tinyPNG()},
 		{Name: "not-image.png", MIMEType: "image/png", Data: []byte("not an image")},
@@ -1625,6 +1727,8 @@ func TestNormalizeInboundAttachmentsCentralizesModelPolicy(t *testing.T) {
 }
 
 func TestNormalizeInboundAttachmentsRejectsAttachmentsTooLargeToReduce(t *testing.T) {
+	t.Parallel()
+
 	msg := &protocol.InboundMessage{Attachments: []protocol.InboundAttachment{
 		{Name: "large.png", MIMEType: "image/png", Data: append(tinyPNG(), make([]byte, maxInboundAttachmentResizeInput)...)},
 	}}
@@ -1637,6 +1741,8 @@ func TestNormalizeInboundAttachmentsRejectsAttachmentsTooLargeToReduce(t *testin
 }
 
 func TestReduceResizedImageWithinLimitReportsEncoderErrorsAndExhaustion(t *testing.T) {
+	t.Parallel()
+
 	img := image.NewNRGBA(image.Rect(0, 0, 4, 4))
 
 	_, err := reduceResizedImageWithinLimit(img, 1000, 1, func(image.Image, int) ([]byte, int, error) {
@@ -1651,6 +1757,8 @@ func TestReduceResizedImageWithinLimitReportsEncoderErrorsAndExhaustion(t *testi
 }
 
 func TestFitInboundImageWithinLimitLeavesSmallImageUnchanged(t *testing.T) {
+	t.Parallel()
+
 	data := encodeAttachmentTestPNG(t, newAttachmentTestImage(1, 1), png.BestCompression)
 
 	transformed, transformedMIMEType, changed, err := fitInboundImageWithinLimit(" Image/PNG; Charset=UTF-8 ", data, len(data))
@@ -1661,6 +1769,8 @@ func TestFitInboundImageWithinLimitLeavesSmallImageUnchanged(t *testing.T) {
 }
 
 func TestFitInboundImageWithinLimitUsesLosslessPNGFirst(t *testing.T) {
+	t.Parallel()
+
 	img := newAttachmentTestImage(160, 160)
 	original := encodeAttachmentTestPNG(t, img, png.NoCompression)
 	target := len(encodeAttachmentTestPNG(t, img, png.BestCompression))
@@ -1679,6 +1789,8 @@ func TestFitInboundImageWithinLimitUsesLosslessPNGFirst(t *testing.T) {
 }
 
 func TestFitInboundImageWithinLimitUsesSmallestSuccessfulJPEGChangeFirst(t *testing.T) {
+	t.Parallel()
+
 	img := newAttachmentTestImage(256, 256)
 	original := encodeAttachmentTestJPEG(t, img, 100)
 	target := 0
@@ -1706,6 +1818,8 @@ func TestFitInboundImageWithinLimitUsesSmallestSuccessfulJPEGChangeFirst(t *test
 }
 
 func TestFitInboundImageWithinLimitResizesPNG(t *testing.T) {
+	t.Parallel()
+
 	original := encodeAttachmentTestPNG(t, newAttachmentTestImage(400, 400), png.NoCompression)
 	target := 4096
 	require.Greater(t, len(original), target)
@@ -1723,6 +1837,8 @@ func TestFitInboundImageWithinLimitResizesPNG(t *testing.T) {
 }
 
 func TestFitInboundImageWithinLimitFallsBackToJPEG(t *testing.T) {
+	t.Parallel()
+
 	original := encodeAttachmentTestPNG(t, newAttachmentTestImage(80, 80), png.NoCompression)
 	target := 1024
 	require.Greater(t, len(original), target)
@@ -1758,6 +1874,8 @@ func TestFitInboundImageWithinLimitFallsBackToJPEG(t *testing.T) {
 }
 
 func TestFitInboundImageWithinLimitReportsDecodeFailure(t *testing.T) {
+	t.Parallel()
+
 	transformed, transformedMIMEType, changed, err := fitInboundImageWithinLimit("image/webp", []byte("not an image"), 1)
 	assert.Nil(t, transformed)
 	assert.Empty(t, transformedMIMEType)
@@ -1766,6 +1884,8 @@ func TestFitInboundImageWithinLimitReportsDecodeFailure(t *testing.T) {
 }
 
 func TestFitInboundImageWithinLimitRejectsImpossibleTarget(t *testing.T) {
+	t.Parallel()
+
 	transformed, transformedMIMEType, changed, err := fitInboundImageWithinLimit("image/png", []byte("x"), 0)
 	assert.Nil(t, transformed)
 	assert.Empty(t, transformedMIMEType)
@@ -1779,6 +1899,8 @@ func TestFitInboundImageWithinLimitRejectsImpossibleTarget(t *testing.T) {
 }
 
 func TestFitInboundImageWithinLimitReportsPNGDecodeFailure(t *testing.T) {
+	t.Parallel()
+
 	transformed, transformedMIMEType, changed, err := fitInboundImageWithinLimit("image/png", []byte("not a png"), 1)
 	assert.Nil(t, transformed)
 	assert.Empty(t, transformedMIMEType)
@@ -1787,6 +1909,8 @@ func TestFitInboundImageWithinLimitReportsPNGDecodeFailure(t *testing.T) {
 }
 
 func TestResizePNGWithinLimitRejectsSinglePixelImageTooLargeForTarget(t *testing.T) {
+	t.Parallel()
+
 	original := encodeAttachmentTestPNG(t, newAttachmentTestImage(1, 1), png.NoCompression)
 
 	transformed, changed, err := resizePNGWithinLimit(original, 1)
@@ -1796,6 +1920,8 @@ func TestResizePNGWithinLimitRejectsSinglePixelImageTooLargeForTarget(t *testing
 }
 
 func TestNextImageResizeDimensionsStillShrinksWhenEstimateWouldGrow(t *testing.T) {
+	t.Parallel()
+
 	nextWidth, nextHeight := nextImageResizeDimensions(2, 2, 100, 10000)
 
 	assert.Equal(t, 1, nextWidth)
@@ -1803,12 +1929,16 @@ func TestNextImageResizeDimensionsStillShrinksWhenEstimateWouldGrow(t *testing.T
 }
 
 func TestInboundAttachmentReductionFailureReason(t *testing.T) {
+	t.Parallel()
+
 	assert.Equal(t, "image reduction failed", inboundAttachmentReductionFailureReason(errInboundAttachmentReductionFailed, maxInboundAttachmentBytes))
 	assert.Equal(t, "it still exceeded the remaining attachment budget after reduction", inboundAttachmentReductionFailureReason(errInboundAttachmentReductionNotEnough, 1))
 	assert.Equal(t, "it still exceeded the per-file size limit after reduction", inboundAttachmentReductionFailureReason(errInboundAttachmentReductionNotEnough, maxInboundAttachmentBytes))
 }
 
 func TestNormalizeInboundAttachmentsRejectsTotalBudgetOverflow(t *testing.T) {
+	t.Parallel()
+
 	data := append(tinyPNG(), make([]byte, maxInboundAttachmentBytes-len(tinyPNG()))...)
 	msg := &protocol.InboundMessage{Attachments: []protocol.InboundAttachment{
 		{Name: "one.png", MIMEType: "image/png", Data: data},
@@ -1871,6 +2001,8 @@ func decodeAttachmentTestImageConfig(t *testing.T, data []byte) image.Config {
 }
 
 func TestModelResolverConfiguresOpenAI(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", `---
 description: Main
@@ -1899,6 +2031,8 @@ Prompt
 }
 
 func TestReplayInputMessageRoleTextCoversMessageShapes(t *testing.T) {
+	t.Parallel()
+
 	msg := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindSteer, "[literal]\n\nuser text", true)
 	msg.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: `alice "quoted" ]`}
 	framed := buildPrompt(msg, nil)
@@ -1956,6 +2090,8 @@ func TestReplayInputMessageRoleTextCoversMessageShapes(t *testing.T) {
 }
 
 func TestReplayInputMessagesFiltersBlankMessages(t *testing.T) {
+	t.Parallel()
+
 	raw, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
 		{OfMessage: &responses.EasyInputMessageParam{Role: "user", Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(" ")}, Type: "message"}},
 		{OfMessage: &responses.EasyInputMessageParam{Role: "assistant", Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String("answer")}, Type: "message"}},
@@ -1968,11 +2104,15 @@ func TestReplayInputMessagesFiltersBlankMessages(t *testing.T) {
 }
 
 func TestReplayInputMessagesReportsBadJSON(t *testing.T) {
+	t.Parallel()
+
 	_, err := replayInputMessages([]json.RawMessage{json.RawMessage("{")})
 	require.ErrorContains(t, err, "decode replay input messages")
 }
 
 func TestSeedReplayTextIncludesWebSearchContext(t *testing.T) {
+	t.Parallel()
+
 	text := seedReplayText([]responses.ResponseInputItemUnionParam{{OfWebSearchCall: &responses.ResponseFunctionWebSearchParam{Action: responses.ResponseFunctionWebSearchActionUnionParam{OfSearch: &responses.ResponseFunctionWebSearchActionSearchParam{Queries: []string{"golang release"}}}, Status: "completed"}}})
 
 	assert.Contains(t, text, "web search completed")
@@ -1980,10 +2120,14 @@ func TestSeedReplayTextIncludesWebSearchContext(t *testing.T) {
 }
 
 func TestReplayInputRawKindReportsInvalidJSON(t *testing.T) {
+	t.Parallel()
+
 	assert.Empty(t, replayInputRawKind(json.RawMessage("{")))
 }
 
 func TestBuildPromptCoversAttachments(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		source protocol.Source
 		origin string
@@ -2000,6 +2144,8 @@ func TestBuildPromptCoversAttachments(t *testing.T) {
 }
 
 func TestBuildPromptAdditionalInstructionsFrontmatter(t *testing.T) {
+	t.Parallel()
+
 	msg := &protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, Text: "hello", Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}}
 
 	assert.Equal(t, "[Slack principal=\"Alice\" additional_instructions=\"Reply in one sentence.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": "Reply in one sentence."}))
@@ -2009,6 +2155,8 @@ func TestBuildPromptAdditionalInstructionsFrontmatter(t *testing.T) {
 }
 
 func TestParseDirectSkillTrigger(t *testing.T) {
+	t.Parallel()
+
 	for _, text := range []string{"$docs-helper write docs", "$skill docs-helper write docs"} {
 		directSkill := parseDirectSkillTrigger(text)
 
@@ -2047,6 +2195,8 @@ func TestParseDirectSkillTrigger(t *testing.T) {
 }
 
 func TestInboundWorkflowReadsWebCommands(t *testing.T) {
+	t.Parallel()
+
 	web := func(kind protocol.InboundKind, text string) *protocol.InboundMessage {
 		return protocol.NewInboundMessageFromContent(protocol.SourceWeb, kind, &protocol.InboundContent{Text: text, TextAttachments: []string{"attached"}}, true)
 	}
@@ -2081,6 +2231,8 @@ func TestInboundWorkflowReadsWebCommands(t *testing.T) {
 }
 
 func TestVoiceInboundRunsNoDollarCommands(t *testing.T) {
+	t.Parallel()
+
 	skill := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$docs-helper do it"}, true)
 	command := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$workflow deploy"}, true)
 
@@ -2096,6 +2248,8 @@ func TestVoiceInboundRunsNoDollarCommands(t *testing.T) {
 }
 
 func TestBridgeQueuesWebWorkflowInsteadOfSteering(t *testing.T) {
+	t.Parallel()
+
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), stopCh: make(chan struct{}), inputOpen: true, requestCh: make(chan bridgeRequest, 1), config: Config{SessionService: newTestSessionService(t)}}
 
 	workflowInbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$workflow audit src"}, true)
@@ -2111,6 +2265,8 @@ func TestBridgeQueuesWebWorkflowInsteadOfSteering(t *testing.T) {
 }
 
 func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
+	t.Parallel()
+
 	assert.Equal(t, "[System]", provenanceHeader(promptProvenance{origin: " \t\n ", media: " \n "}))
 	assert.Equal(t, "[ExternalMCP principal=\"Alice [ops]=lead\" additional_instructions=\"line \\\"one\\\"\\nnext\"]", provenanceHeader(promptProvenance{origin: "ExternalMCP", media: "Text", principal: " Alice [ops]=lead ", additionalInstructions: "line \"one\"\nnext"}))
 	assert.Equal(t, `[Slack principal="a\"b\\c"]`, provenanceHeader(promptProvenance{origin: "Slack", media: "Text", principal: "a\"b\\c"}))
@@ -2121,6 +2277,8 @@ func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
 }
 
 func TestBridgeScheduleMessageSubmitsAfterDelay(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: protocol.SlackThreadConversationID("D123", "111.222"), SessionService: newTestSessionService(t)}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 		require.NoError(t, bridge.ScheduleMessage(new(protocol.InboundMessage), 5*time.Second, "later", false))
@@ -2153,6 +2311,8 @@ func TestBridgeScheduleMessageSubmitsAfterDelay(t *testing.T) {
 }
 
 func TestBridgeScheduleMessagePersistsRecurringMetadata(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", SessionService: service}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 
@@ -2170,6 +2330,8 @@ func TestBridgeScheduleMessagePersistsRecurringMetadata(t *testing.T) {
 }
 
 func TestBridgeScheduleMessageLogsPersistFailure(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	require.NoError(t, store.Stop())
 
@@ -2182,6 +2344,8 @@ func TestBridgeScheduleMessageLogsPersistFailure(t *testing.T) {
 }
 
 func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testing.T) {
+	t.Parallel()
+
 	newBridge, service, requests, finals := newResumeTestBridges(t, false)
 	cfg := newBridge().runtime
 	threadKey := newBridge().config.ConversationID
@@ -2229,6 +2393,8 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 }
 
 func TestBridgeInterruptCancelsTurnWaitingForPairedSession(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
 		pairID, privateID := protocol.SlackThreadConversationID("C123", "111.222"), "external_mcp:private"
@@ -2254,6 +2420,8 @@ func TestBridgeInterruptCancelsTurnWaitingForPairedSession(t *testing.T) {
 }
 
 func TestBridgeSuccessfulManagedWorkflowReleasesPairedTurn(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		workspace := t.TempDir()
 		writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[customer, internal]]\n---\nMain prompt\n")
@@ -2386,6 +2554,8 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedTurn(t *testing.T) {
 }
 
 func TestBridgeFailedManagedWorkflowPersistsRunSummary(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		workspace := t.TempDir()
 		writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
@@ -2439,6 +2609,8 @@ func TestBridgeFailedManagedWorkflowPersistsRunSummary(t *testing.T) {
 }
 
 func TestBridgeFailedWorkerErrorIsNotPersisted(t *testing.T) {
+	t.Parallel()
+
 	const privateError = "PRIVATE_WORKER_ERROR"
 
 	workspace := t.TempDir()
@@ -2496,6 +2668,8 @@ func TestBridgeFailedWorkerErrorIsNotPersisted(t *testing.T) {
 }
 
 func TestBridgeStoppedManagedWorkflowPersistsRunSummary(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
 	root, err := os.OpenRoot(workspace)
@@ -2559,6 +2733,8 @@ func TestBridgeStoppedManagedWorkflowPersistsRunSummary(t *testing.T) {
 }
 
 func TestWorkflowRunSummaryIsVisibleWithoutIntermediateOutput(t *testing.T) {
+	t.Parallel()
+
 	const intermediate = "PRIVATE_INTERMEDIATE_WORKFLOW_OUTPUT"
 
 	workspace := t.TempDir()
@@ -2658,6 +2834,8 @@ func TestWorkflowRunSummaryIsVisibleWithoutIntermediateOutput(t *testing.T) {
 }
 
 func TestBridgeInterruptPreservesWaitingWorkflowReservation(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	pairID := protocol.SlackThreadConversationID("C123", "111.222")
 	service.reserveTurnPair(pairID, pairID)
@@ -2697,6 +2875,8 @@ func turnPairBusy(service *SessionService, pairID string) bool {
 }
 
 func TestBridgePairLockFailureReleasesWorkflowReservation(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
 		pairID := protocol.SlackThreadConversationID("C123", "111.222")
@@ -2725,6 +2905,8 @@ func TestBridgePairLockFailureReleasesWorkflowReservation(t *testing.T) {
 }
 
 func TestBridgeScheduleMessageUsesOwningSlackThread(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
 		conversationID := protocol.SlackThreadConversationID("D456", "222.333")
@@ -2750,6 +2932,8 @@ func TestBridgeScheduleMessageUsesOwningSlackThread(t *testing.T) {
 }
 
 func TestBridgeDeletesScheduledMessageAfterSuccessfulHandling(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	service := newTestSessionServiceAt(t, workspace)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
@@ -2790,6 +2974,8 @@ func TestBridgeDeletesScheduledMessageAfterSuccessfulHandling(t *testing.T) {
 }
 
 func TestSubmitEnqueuedItemPreservesSource(t *testing.T) {
+	t.Parallel()
+
 	bridge := &Bridge{
 		log:       slog.New(slog.DiscardHandler),
 		requestCh: make(chan bridgeRequest, 1),
@@ -2852,6 +3038,8 @@ func TestSubmitEnqueuedItemPreservesSource(t *testing.T) {
 }
 
 func TestBridgeDeletesEnqueueItemWhenTurnStarts(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	service := newTestSessionServiceAt(t, workspace)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
@@ -2888,6 +3076,8 @@ func TestBridgeDeletesEnqueueItemWhenTurnStarts(t *testing.T) {
 }
 
 func TestBridgeDeletesScheduledMessageWhenTurnStarts(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	service := newTestSessionServiceAt(t, workspace)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
@@ -2924,6 +3114,8 @@ func TestBridgeDeletesScheduledMessageWhenTurnStarts(t *testing.T) {
 }
 
 func TestBridgeKeepsRecurringScheduledMessageAfterSuccessfulHandling(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		workspace := t.TempDir()
 		service := newTestSessionServiceAt(t, workspace)
@@ -2970,6 +3162,8 @@ func TestBridgeKeepsRecurringScheduledMessageAfterSuccessfulHandling(t *testing.
 }
 
 func TestBridgeStopDisarmsScheduledMessage(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		var logs lockedBuffer
 
@@ -2991,6 +3185,8 @@ func TestBridgeStopDisarmsScheduledMessage(t *testing.T) {
 }
 
 func TestBridgeResetScheduledMessagesDeletesPersistedAndCancelsArmed(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		workspace := t.TempDir()
 		store, err := NewSessionService(workspace)
@@ -3030,6 +3226,8 @@ func TestBridgeResetScheduledMessagesDeletesPersistedAndCancelsArmed(t *testing.
 }
 
 func TestBridgeResetScheduledMessagesReportsStoreError(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	require.NoError(t, store.Stop())
 
@@ -3038,6 +3236,8 @@ func TestBridgeResetScheduledMessagesReportsStoreError(t *testing.T) {
 }
 
 func TestBridgeArmsOverdueScheduledMessage(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
 		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
@@ -3060,6 +3260,8 @@ func TestBridgeArmsOverdueScheduledMessage(t *testing.T) {
 }
 
 func TestBridgeRecurringScheduledMessageAdvancesAndRearms(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
 		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
@@ -3104,6 +3306,8 @@ func TestBridgeRecurringScheduledMessageAdvancesAndRearms(t *testing.T) {
 }
 
 func TestBridgeStaleScheduledMessageTimerDoesNotSubmit(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
 		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
@@ -3127,6 +3331,8 @@ func TestBridgeStaleScheduledMessageTimerDoesNotSubmit(t *testing.T) {
 }
 
 func TestBridgeScheduledMessageTimerStopsOnStoreError(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
 		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
@@ -3149,6 +3355,8 @@ func TestBridgeScheduledMessageTimerStopsOnStoreError(t *testing.T) {
 }
 
 func TestBridgeRestoresScheduledMessageAfterRestart(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		workspace := t.TempDir()
 		store, err := NewSessionService(workspace)
@@ -3202,6 +3410,8 @@ func TestBridgeRestoresScheduledMessageAfterRestart(t *testing.T) {
 }
 
 func TestBridgeStartLogsRestoredScheduledMessage(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	store, err := NewSessionService(workspace)
 	require.NoError(t, err)
@@ -3223,6 +3433,8 @@ func TestBridgeStartLogsRestoredScheduledMessage(t *testing.T) {
 }
 
 func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
+	t.Parallel()
+
 	status := http.StatusTooManyRequests
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if status == http.StatusOK {
@@ -3285,6 +3497,8 @@ func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
 }
 
 func TestAskUserQuestionToolAllowsEmptyOptions(t *testing.T) {
+	t.Parallel()
+
 	tool := askUserQuestionTool(&userQuestionAskerMock{AskUserQuestionFunc: func(_ context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
 		assert.Equal(t, "Approve?", req.Question)
 		assert.Empty(t, req.Options)
@@ -3299,6 +3513,8 @@ func TestAskUserQuestionToolAllowsEmptyOptions(t *testing.T) {
 }
 
 func TestAskUserQuestionToolDescriptionRejectsCatchAllOptions(t *testing.T) {
+	t.Parallel()
+
 	tool := askUserQuestionTool(&userQuestionAskerMock{AskUserQuestionFunc: func(context.Context, *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
 		return protocol.AskUserQuestionAnswer{}, nil
 	}}, &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true})
@@ -3308,6 +3524,8 @@ func TestAskUserQuestionToolDescriptionRejectsCatchAllOptions(t *testing.T) {
 }
 
 func TestAskUserQuestionToolFiltersRedundantCustomOptions(t *testing.T) {
+	t.Parallel()
+
 	tool := askUserQuestionTool(&userQuestionAskerMock{AskUserQuestionFunc: func(_ context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
 		require.Len(t, req.Options, 1)
 		assert.Equal(t, "High priority", req.Options[0].Label)
@@ -3322,6 +3540,8 @@ func TestAskUserQuestionToolFiltersRedundantCustomOptions(t *testing.T) {
 }
 
 func TestAskUserQuestionToolOmitsResponseChannel(t *testing.T) {
+	t.Parallel()
+
 	var got *protocol.AskUserQuestionRequest
 
 	tool := askUserQuestionTool(&userQuestionAskerMock{AskUserQuestionFunc: func(_ context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
@@ -3337,6 +3557,8 @@ func TestAskUserQuestionToolOmitsResponseChannel(t *testing.T) {
 }
 
 func TestAgentExplicitlyAllowsRocketClawToolRequiresAllow(t *testing.T) {
+	t.Parallel()
+
 	var allowed, auto, denied, missing rocketcode.PermissionSet
 	require.NoError(t, allowed.Set("rocketclaw", restartToolName, rocketcode.PermissionAllow))
 	require.NoError(t, auto.Set("rocketclaw", restartToolName, rocketcode.PermissionAuto))
@@ -3349,6 +3571,8 @@ func TestAgentExplicitlyAllowsRocketClawToolRequiresAllow(t *testing.T) {
 }
 
 func TestStartNewThreadToolPreservesLiteralPrompt(t *testing.T) {
+	t.Parallel()
+
 	tool := startNewThreadTool(func(_ context.Context, req *protocol.StartNewThreadRequest) (protocol.StartNewThreadResult, error) {
 		assert.Equal(t, &protocol.StartNewThreadRequest{CurrentAgent: "main", Title: "Child", Prompt: " literal $(date) ", CreatedBy: "Alice", AllowedAgents: []string{"main", "helper"}}, req)
 
@@ -3361,6 +3585,8 @@ func TestStartNewThreadToolPreservesLiteralPrompt(t *testing.T) {
 }
 
 func TestStartNewThreadToolLocksCronToItsAgent(t *testing.T) {
+	t.Parallel()
+
 	var got *protocol.StartNewThreadRequest
 
 	tool := startNewThreadTool(func(_ context.Context, req *protocol.StartNewThreadRequest) (protocol.StartNewThreadResult, error) {
@@ -3375,6 +3601,8 @@ func TestStartNewThreadToolLocksCronToItsAgent(t *testing.T) {
 }
 
 func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-5.5\npermission:\n  read: allow\n  bash: auto\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -3552,6 +3780,8 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 }
 
 func TestRunTurnTranslatesDollarToDirectSkill(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
@@ -3755,6 +3985,8 @@ Request: $ARGUMENTS
 }
 
 func TestRunTurnProjectsDifferentProviderHistoryBeforeRequest(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: work/gpt\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -3797,6 +4029,8 @@ func TestRunTurnProjectsDifferentProviderHistoryBeforeRequest(t *testing.T) {
 }
 
 func TestHandleInboundJournalsTurnAndClearsRowWithHistoryAppend(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -3904,6 +4138,8 @@ func TestHandleInboundJournalsTurnAndClearsRowWithHistoryAppend(t *testing.T) {
 }
 
 func TestInterruptActiveTurnEndsRowAsStopped(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -3967,6 +4203,8 @@ func TestInterruptActiveTurnEndsRowAsStopped(t *testing.T) {
 }
 
 func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: work/model-a\nreasoningEffort: high\npermission: {}\n---\nPrompt\n")
 	writeAgent(t, workspace, "reviewer", "---\ndescription: Reviewer\nmode: primary\nmodel: work/model-b\nreasoningEffort: low\nadditionalInstructions: Reply in one sentence.\npermission: {}\n---\nPrompt\n")
@@ -4142,6 +4380,8 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 }
 
 func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -4204,6 +4444,8 @@ func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {
 }
 
 func TestRunTurnSkipsActiveGoalDeveloperMessageWithoutNote(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -4256,11 +4498,15 @@ func TestRunTurnSkipsActiveGoalDeveloperMessageWithoutNote(t *testing.T) {
 }
 
 func TestExternalMCPMetadataDeveloperMessageSorted(t *testing.T) {
+	t.Parallel()
+
 	env := externalMCPMetadataEnv("slack-thread:C123:111.222", map[string]string{"ticket-id": "123", "owner": "alice"})
 	assert.Equal(t, "This external MCP thread has metadata:\nROCKETCLAW_CONVERSATION_ID=\"slack-thread:C123:111.222\"\nROCKETCLAW_METADATA_OWNER=\"alice\"\nROCKETCLAW_METADATA_TICKET_ID=\"123\"", externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", env))
 }
 
 func TestExternalMCPMetadataEnvSanitizesKeys(t *testing.T) {
+	t.Parallel()
+
 	assert.Equal(t, map[string]string{
 		"ROCKETCLAW_CONVERSATION_ID":    "slack-thread:C123:111.222",
 		"ROCKETCLAW_METADATA_TICKET_ID": "123",
@@ -4269,6 +4515,8 @@ func TestExternalMCPMetadataEnvSanitizesKeys(t *testing.T) {
 }
 
 func TestExternalMCPStoredMetadataEnvDoesNotParseInjectedLines(t *testing.T) {
+	t.Parallel()
+
 	env, ok := externalMCPStoredMetadataEnv("slack-thread:C123:111.222", []ObservedSessionEntry{{Entry: rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: testReplayInput(replayInputMessage{role: "developer", text: externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", externalMCPMetadataEnv("slack-thread:C123:111.222", map[string]string{"note": "first\nROCKETCLAW_METADATA_BAD=second"}))})}}})
 	require.True(t, ok)
 	assert.Equal(t, "first\nROCKETCLAW_METADATA_BAD=second", env["ROCKETCLAW_METADATA_NOTE"])
@@ -4276,6 +4524,8 @@ func TestExternalMCPStoredMetadataEnvDoesNotParseInjectedLines(t *testing.T) {
 }
 
 func TestExternalMCPStoredMetadataEnvSkipsInvalidEntriesAndUsesLatestMatch(t *testing.T) {
+	t.Parallel()
+
 	older := externalMCPMetadataDeveloperMessage(
 		"This external MCP thread has metadata:",
 		externalMCPMetadataEnv("slack-thread:C123:111.222", map[string]string{"note": "older"}),
@@ -4325,6 +4575,8 @@ func TestExternalMCPStoredMetadataEnvSkipsInvalidEntriesAndUsesLatestMatch(t *te
 }
 
 func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	bridge := new(Bridge)
 	bridge.config = Config{ConversationID: "thread-1", Agent: "main", RequestRestart: testNoopRestart, SessionService: store}
@@ -4392,6 +4644,8 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 }
 
 func TestWorkflowFinalOutboundPreservesMetadata(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	require.NoError(t, store.BeginGoal("thread-1", "ship it", "", 3))
 	bridge := &Bridge{config: Config{ConversationID: "thread-1", ExternalConversationID: "public-1", Agent: "main", SessionService: store}}
@@ -4431,6 +4685,8 @@ func readRocketCodeOutbound(t *testing.T, bus *testBus) *protocol.OutboundMessag
 }
 
 func TestRocketcodeShellTempRel(t *testing.T) {
+	t.Parallel()
+
 	assert.Equal(t, ".rocketclaw/.rocketcode/tmp/anonymous", rocketcodeShellTempRel(".rocketclaw", ""))
 	assert.Equal(t, ".rocketclaw/.rocketcode/tmp/anonymous", rocketcodeShellTempRel(".rocketclaw", " \t\n\u2003"))
 	assert.Equal(t, ".rocketclaw/.rocketcode/tmp/slack-thread_C123_111.222", rocketcodeShellTempRel(".rocketclaw", "slack-thread:C123:111.222"))
@@ -4513,6 +4769,8 @@ func seedFunctionCallOutputText(output *responses.ResponseInputItemFunctionCallO
 }
 
 func TestAppendSessionEntryKeepsPriorEntriesThenAdded(t *testing.T) {
+	t.Parallel()
+
 	continued := false
 	stopped := appendSessionEntry(iter.Seq2[rocketcode.SessionEntry, error](func(yield func(rocketcode.SessionEntry, error) bool) {
 		if !yield(rocketcode.SessionEntry{Type: "stored"}, nil) {
@@ -4766,6 +5024,8 @@ func testExecuteNote(jobID string) string {
 
 // One system turn holds all notes in finish order and replies in the thread of the turn that started the jobs.
 func TestBackgroundNotesWakeIdleConversation(t *testing.T) {
+	t.Parallel()
+
 	nt := newNoteTest(t, answerNoteTest)
 	manager, _ := nt.run(t, ignoreOutbound)
 
@@ -4795,6 +5055,8 @@ func TestBackgroundNotesWakeIdleConversation(t *testing.T) {
 
 // The note enters the next step, also of a goal continuation or a final answer, and starts no turn of its own.
 func TestBackgroundNoteEntersRunningTurn(t *testing.T) {
+	t.Parallel()
+
 	for _, goal := range []bool{false, true} {
 		t.Run(fmt.Sprintf("goal=%t", goal), func(t *testing.T) {
 			release := make(chan struct{})
@@ -4826,6 +5088,8 @@ func TestBackgroundNoteEntersRunningTurn(t *testing.T) {
 }
 
 func TestBackgroundNoteAfterLastStepWakesOnce(t *testing.T) {
+	t.Parallel()
+
 	nt := newNoteTest(t, answerNoteTest)
 	job := testBackgroundJob(nt.conversationID, "turn-0/call/a")
 	job.origin = nt.slackPrompt("run the tests")
@@ -4864,6 +5128,8 @@ func TestBackgroundNoteAfterLastStepWakesOnce(t *testing.T) {
 
 // A note injected into a turn that is then stopped wakes nothing; the next turn delivers it.
 func TestStoppedTurnReleasesItsNotes(t *testing.T) {
+	t.Parallel()
+
 	release := make(chan struct{})
 	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
 		if n == 1 {
@@ -4899,6 +5165,8 @@ func TestStoppedTurnReleasesItsNotes(t *testing.T) {
 
 // Released notes wake nothing again, and the owner's next turn delivers them.
 func TestFailedWakeReleasesItsNotes(t *testing.T) {
+	t.Parallel()
+
 	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
 		if n > 0 {
 			answerNoteTest(w, r, n, body)
@@ -4930,6 +5198,8 @@ func TestFailedWakeReleasesItsNotes(t *testing.T) {
 }
 
 func TestResumedTurnInjectsNoteOnce(t *testing.T) {
+	t.Parallel()
+
 	release := make(chan struct{})
 	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
 		if n == 1 {
@@ -4968,6 +5238,8 @@ func TestResumedTurnInjectsNoteOnce(t *testing.T) {
 
 // A note claimed before any step recorded it enters the resumed turn.
 func TestResumedTurnInjectsNoteClaimedBeforeCrash(t *testing.T) {
+	t.Parallel()
+
 	nt := newNoteTest(t, answerNoteTest)
 	nt.addNote(t, nt.conversationID, "turn-0/call/a", nt.slackPrompt("run the tests"))
 	require.NoError(t, startTurnDB(t.Context(), nt.service.db, "turn-crashed", nt.conversationID, nt.slackPrompt("hello")))
@@ -4985,6 +5257,8 @@ func TestResumedTurnInjectsNoteClaimedBeforeCrash(t *testing.T) {
 
 // The destination is the thread a cron run posted, subject to its output decision, or an External MCP managed thread.
 func TestHiddenProducerWakeReachesDestination(t *testing.T) {
+	t.Parallel()
+
 	decide := func(w http.ResponseWriter, _ *http.Request, _ int, _ string) {
 		// A hidden run's reply is its output.
 		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Tests passed.","annotations":[]}]}]}`))
@@ -5100,6 +5374,8 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 // after a restart, until a wake delivers the note to the destination. Only the first failure
 // reaches the destination, saying the wake retries.
 func TestHiddenRunFailedWakeRetries(t *testing.T) {
+	t.Parallel()
+
 	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
 		// A kept-alive connection would block on the network and stop the bubble's clock.
 		w.Header().Set("Connection", "close")
@@ -5197,6 +5473,8 @@ func TestHiddenRunFailedWakeRetries(t *testing.T) {
 }
 
 func TestStopLeavesBackgroundJobsRunning(t *testing.T) {
+	t.Parallel()
+
 	nt := newNoteTest(t, holdNoteTest(nil, 0))
 	manager, _ := nt.run(t, ignoreOutbound)
 	bridge := nt.bridge(t, manager, nt.conversationID)
@@ -5222,6 +5500,8 @@ func TestStopLeavesBackgroundJobsRunning(t *testing.T) {
 
 // The wake uses its conversation's settings, and its turn joins only the subagent's history.
 func TestSubagentWakeContinuesSavedHistory(t *testing.T) {
+	t.Parallel()
+
 	nt := newNoteTest(t, answerNoteTest)
 	manager, _ := nt.run(t, ignoreOutbound)
 	child := nt.conversationID + "/call_a"
@@ -5249,6 +5529,8 @@ func TestSubagentWakeContinuesSavedHistory(t *testing.T) {
 
 // A hidden producer's wake that finds its notes already delivered starts no turn.
 func TestEmptyProducerWakeLeavesDestinationFree(t *testing.T) {
+	t.Parallel()
+
 	nt := newNoteTest(t, answerNoteTest)
 	manager, _ := nt.run(t, ignoreOutbound)
 	private, managed := "external_mcp:planner:private", protocol.SlackThreadConversationID("C9", "9.9")
@@ -5268,6 +5550,8 @@ func TestEmptyProducerWakeLeavesDestinationFree(t *testing.T) {
 
 // After a hidden producer's turn ends, schedules stay private, a nested workflow runs, and turn-bound tools refuse.
 func TestBackgroundScriptUsesOriginTurnTools(t *testing.T) {
+	t.Parallel()
+
 	gate := ""
 	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
 		if n > 0 {
@@ -5321,6 +5605,8 @@ func TestBackgroundScriptUsesOriginTurnTools(t *testing.T) {
 
 // Exactly the three turn-bound platform tools refuse to run in background work.
 func TestTurnBoundPlatformTools(t *testing.T) {
+	t.Parallel()
+
 	origin := new(protocol.InboundMessage)
 	bridge := &Bridge{runtime: new(config.LockedConfig), config: Config{ConversationID: "main", SessionService: newTestSessionService(t)}, log: slog.New(slog.DiscardHandler)}
 	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []rocketcode.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(testNoopRestart), new(outboundAttachmentCollector).Tool(nil, bridge.config.SessionService, "main"), askUserQuestionTool(&userQuestionAskerMock{}, origin), startNewThreadTool(testNoopStartNewThread, origin, "main")})

@@ -14,6 +14,8 @@ import (
 )
 
 func TestGenerateHandoff(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\nmodel: handoff-model\npermission:\n  bash: allow\n  rocketclaw:\n    rocketclaw_set_tag: [[triage, resolved]]\n---\nOriginal agent instructions\n")
 
@@ -60,6 +62,8 @@ func TestGenerateHandoff(t *testing.T) {
 }
 
 func TestGenerateHandoffFailures(t *testing.T) {
+	t.Parallel()
+
 	for _, test := range []struct {
 		name, agent, message string
 	}{

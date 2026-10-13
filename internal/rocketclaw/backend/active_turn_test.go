@@ -123,6 +123,8 @@ func readFinal(t *testing.T, finals chan *protocol.OutboundMessage) *protocol.Ou
 
 // AE5: a crash after the claim and before any step leaves a row that runs exactly once after restart.
 func TestClaimedQueueItemRunsExactlyOnceAfterCrash(t *testing.T) {
+	t.Parallel()
+
 	newBridge, service, requests, finals := newResumeTestBridges(t, false)
 	crashed := newBridge()
 	conversationID := crashed.config.ConversationID
@@ -164,6 +166,8 @@ func TestClaimedQueueItemRunsExactlyOnceAfterCrash(t *testing.T) {
 // AE6: a crash in the delivering phase re-delivers from the row with no model call
 // and no second goal accounting; the goal then continues exactly once.
 func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
+	t.Parallel()
+
 	newBridge, service, requests, finals := newResumeTestBridges(t, false)
 	crashed := newBridge()
 	conversationID := crashed.config.ConversationID
@@ -213,6 +217,8 @@ func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
 }
 
 func TestFinishTurnKeepsLargeAttachment(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "make a file", true)
 	inbound.ConversationID = "web:attachment"
@@ -240,6 +246,8 @@ func TestFinishTurnKeepsLargeAttachment(t *testing.T) {
 
 // AE9: $stop on a workflow row waiting to resume posts one stopped final and never runs it.
 func TestStopOnWaitingRowPostsStoppedFinalAndDoesNotRun(t *testing.T) {
+	t.Parallel()
+
 	newBridge, service, requests, finals := newResumeTestBridges(t, false)
 	idle := newBridge()
 	conversationID := idle.config.ConversationID
@@ -269,6 +277,8 @@ func TestStopOnWaitingRowPostsStoppedFinalAndDoesNotRun(t *testing.T) {
 // AE2: shutdown cancels a turn blocked on the model at once, publishes nothing,
 // and leaves its row running for the next start.
 func TestShutdownCancelsTurnWithoutPublishing(t *testing.T) {
+	t.Parallel()
+
 	newBridge, service, requests, finals := newResumeTestBridges(t, true)
 	bridge := newBridge()
 
@@ -289,6 +299,8 @@ func TestShutdownCancelsTurnWithoutPublishing(t *testing.T) {
 // A request waiting for its paired session is kept for the next start on
 // shutdown, and a waiting row is finished as stopped by $stop.
 func TestWaitingForPairedSession(t *testing.T) {
+	t.Parallel()
+
 	for _, stop := range []bool{false, true} {
 		t.Run(map[bool]string{false: "shutdown", true: "stop"}[stop], func(t *testing.T) {
 			service := newTestSessionService(t)
@@ -343,6 +355,8 @@ func TestWaitingForPairedSession(t *testing.T) {
 
 // Startup wakes every row's worker; a private External MCP row runs on its destination.
 func TestStartActiveTurnsStartsRowWorkers(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 
 	managedID, privateID := protocol.SlackThreadConversationID("C123", "111.222"), "external_mcp:planner:private"
@@ -428,6 +442,8 @@ func seedCronRun(t *testing.T, service *SessionService, runID string) *protocol.
 // AE2: a scheduled cron row resumed after restart posts its report root once in
 // the configured channel, and the new thread receives the run's history.
 func TestResumedCronRowPostsRootOnce(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	manager, cfg, roots, finals := newCronTestManager(t, service)
 	msg := seedCronRun(t, service, "cron:daily")
@@ -488,6 +504,8 @@ func TestResumedCronRowPostsRootOnce(t *testing.T) {
 }
 
 func TestLegacyCronScheduleResumesIntoCanonical(t *testing.T) {
+	t.Parallel()
+
 	for _, owner := range []string{"", "slack-thread:C1:1.2"} {
 		t.Run(owner, func(t *testing.T) {
 			newBridge, store, calls, finals := newResumeTestBridges(t, false)
@@ -656,6 +674,8 @@ func TestLegacyCronScheduleResumesIntoCanonical(t *testing.T) {
 }
 
 func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "job", "---\ndescription: Job\nmode: primary\nmodel: gpt-5.5\npermission:\n  rocketclaw: allow\n---\nProducer instructions\n")
 	writeAgent(t, workspace, "canonical", "---\ndescription: Canonical\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nCanonical instructions\n")
@@ -1055,6 +1075,8 @@ SELECT conversation_id, revert_message_id, unavailable_producer(producer_inbound
 
 // A failed scheduled cron run posts no report root, live or resumed.
 func TestFailedCronRunPostsNoRoot(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	manager, cfg, roots, finals := newCronTestManager(t, service)
 	msg := seedCronRun(t, service, "cron:daily")
@@ -1073,6 +1095,8 @@ func TestFailedCronRunPostsNoRoot(t *testing.T) {
 // than the thread just posted. A failed footer edit is only logged: the delivery succeeds,
 // the turn closes, and no second root is posted.
 func TestCronRootFooterLinksBoundDestination(t *testing.T) {
+	t.Parallel()
+
 	for name, errFooter := range map[string]error{"edited": nil, "edit fails": errors.New("message_not_found")} {
 		t.Run(name, func(t *testing.T) {
 			service := newTestSessionService(t)
@@ -1109,6 +1133,8 @@ func TestCronRootFooterLinksBoundDestination(t *testing.T) {
 // still queued behind work, each finish after restart on the destination worker,
 // and their result reaches the paired thread once.
 func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
+	t.Parallel()
+
 	for _, stored := range []string{"row", "queued", "completed before Sync", "binding before projection", "projection before arming", "due while producing", "projection failure"} {
 		t.Run(stored, func(t *testing.T) {
 			newBridge, service, requests, finals := newResumeTestBridges(t, false)
@@ -1231,6 +1257,8 @@ func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 // AE7: a turn waiting on ask_user_question at shutdown asks the same question
 // again after restart, the answer continues the turn, and a later turn can still ask.
 func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -1330,6 +1358,8 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 // KTD10: a steer accepted but not yet injected before a restart is injected
 // exactly once by the resumed turn.
 func TestSteerAcceptedBeforeRestartIsInjectedOnce(t *testing.T) {
+	t.Parallel()
+
 	newBridge, service, requests, finals := newResumeTestBridges(t, true)
 	first := newBridge()
 	conversationID := first.config.ConversationID
@@ -1385,6 +1415,8 @@ func TestSteerAcceptedBeforeRestartIsInjectedOnce(t *testing.T) {
 // R21, R19: a resumed turn that fails posts the normal internal-error final,
 // and nothing it posts mentions the restart.
 func TestResumedTurnFailurePostsInternalErrorFinal(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -1430,6 +1462,8 @@ func TestResumedTurnFailurePostsInternalErrorFinal(t *testing.T) {
 
 // A resumed turn does not post its web input's consume card a second time.
 func TestResumedTurnPostsConsumeCardOnce(t *testing.T) {
+	t.Parallel()
+
 	newBridge, service, requests, _ := newResumeTestBridges(t, true)
 	template := newBridge()
 
@@ -1471,6 +1505,8 @@ func TestResumedTurnPostsConsumeCardOnce(t *testing.T) {
 // A row runs before a live message that reaches the conversation as soon as
 // connectors accept input.
 func TestRowRunsBeforeLiveMessage(t *testing.T) {
+	t.Parallel()
+
 	newBridge, service, _, finals := newResumeTestBridges(t, false)
 	bridge := newBridge()
 	conversationID := bridge.config.ConversationID
@@ -1489,6 +1525,8 @@ func TestRowRunsBeforeLiveMessage(t *testing.T) {
 // A cron turn mid-flight does not hold up shutdown: once bridges stop, the cron
 // runner's RunTurn and its follow-up sync return, so cron manager Stop does not block.
 func TestShutdownReleasesCronRunnerWait(t *testing.T) {
+	t.Parallel()
+
 	newBridge, service, requests, finals := newResumeTestBridges(t, true)
 	template := newBridge()
 	rt := &Runtime{Sessions: service, Cfg: template.runtime, Log: slog.New(slog.DiscardHandler)}
@@ -1554,6 +1592,8 @@ func TestShutdownReleasesCronRunnerWait(t *testing.T) {
 // one of two parallel workers resumes without re-running any finished worker. Its
 // summary matches an uninterrupted run, and $stop on the resumed run still stops it.
 func TestInterruptedWorkflowResumesWithRecordedWorkers(t *testing.T) {
+	t.Parallel()
+
 	for _, stop := range []bool{false, true} {
 		t.Run(map[bool]string{false: "resume", true: "stop"}[stop], func(t *testing.T) {
 			workspace := t.TempDir()
@@ -1711,6 +1751,8 @@ func killedExecuteNote(jobID string) string {
 
 // The killed script's note waits for the conversation's next turn and starts no turn of its own.
 func TestRestartReportsKilledScriptAtNextTurn(t *testing.T) {
+	t.Parallel()
+
 	nt := newNoteTest(t, answerNoteTest)
 	job := testBackgroundJob(nt.conversationID, "turn-0/call/a")
 	job.origin = nt.slackPrompt("run the tests")
@@ -1731,6 +1773,8 @@ func TestRestartReportsKilledScriptAtNextTurn(t *testing.T) {
 
 // A subagent cut by a restart resumes its journaled turn, then delivers its note; a second start replays nothing.
 func TestRestartResumesBackgroundSubagent(t *testing.T) {
+	t.Parallel()
+
 	cut := make(chan struct{}, 1)
 	cut <- struct{}{}
 
@@ -1788,6 +1832,8 @@ func TestRestartResumesBackgroundSubagent(t *testing.T) {
 
 // The killed note wakes the hidden cron run, and its follow-up is posted in the thread the run posted.
 func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
+	t.Parallel()
+
 	nt := newNoteTest(t, func(w http.ResponseWriter, _ *http.Request, _ int, _ string) {
 		// A cron run's reply is its report.
 		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Report finished.","annotations":[]}]}]}`))
@@ -1826,6 +1872,8 @@ func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
 
 // A second start replays nothing.
 func TestRestartWakesUndeliveredNote(t *testing.T) {
+	t.Parallel()
+
 	nt := newNoteTest(t, answerNoteTest)
 	nt.addNote(t, nt.conversationID, "turn-0/call/a", nt.slackPrompt("run the tests"))
 
@@ -1842,6 +1890,8 @@ func TestRestartWakesUndeliveredNote(t *testing.T) {
 }
 
 func TestRestartDropsJobsOfDeletedConversation(t *testing.T) {
+	t.Parallel()
+
 	nt := newNoteTest(t, answerNoteTest)
 	task := testBackgroundJob(nt.conversationID, "turn-0/call/a")
 	task.kind, task.subagentKey = backgroundTask, "/a"

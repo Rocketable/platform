@@ -18,6 +18,8 @@ import (
 )
 
 func TestSessionTagDefinitions(t *testing.T) {
+	t.Parallel()
+
 	for _, tags := range []string{"", "[]", "[[triage, investigating, resolved], [customer, internal]]", "[['*', '?', A, a]]", "wrong", "[[]]", "[['']]", "[[same], [same]]", "[[12]]", "null", "example"} {
 		t.Run(tags, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -88,6 +90,8 @@ func TestSessionTagDefinitions(t *testing.T) {
 }
 
 func TestSessionTagsExistingPermissions(t *testing.T) {
+	t.Parallel()
+
 	for _, permission := range []string{"allow", "rocketclaw: allow", "rocketclaw: {load_agents_md: false}", "rocketclaw: {rocketclaw_set_tag: deny, rocketclaw_get_tags: allow}", `rocketclaw:
     rocketclaw_set_tag:
       - ["red", "yellow", "green"]
@@ -174,6 +178,8 @@ func loadRocketCodeDefinitions(root *os.Root, workspace string, mode toolMode, m
 }
 
 func TestLoadRocketCodeDefinitionsKeepsBackgroundExact(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "broad", "---\nmodel: gpt-5.4\npermission:\n  rocketclaw: allow\n---\nPrompt\n")
 	writeAgent(t, workspace, "background", "---\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    allow_background: allow\n---\nPrompt\n")
@@ -202,6 +208,8 @@ func TestLoadRocketCodeDefinitionsKeepsBackgroundExact(t *testing.T) {
 }
 
 func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "assistant", "---\ndescription: Main\nmodel: gpt-5.4\nreasoningEffort: high\nverbosity: low\npermission:\n  bash:\n    \"gh *\": allow\n  rocketclaw:\n    code_mode_approve: auto(release-reviewer)\n---\nPrompt\n")
 	writeAgent(t, workspace, "restricted", "---\ndescription: Restricted\nmodel: gpt-5.4\npermission:\n  task:\n    \"go-reviewer\": allow\n---\nPrompt\n")
@@ -262,6 +270,8 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 }
 
 func TestLoadRocketCodeDefinitionsResolvesModelTemplate(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: '{{ model \"team/coding-high\" }}'\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -281,6 +291,8 @@ func TestLoadRocketCodeDefinitionsResolvesModelTemplate(t *testing.T) {
 }
 
 func TestLoadRocketCodeDefinitionsPreservesGuardrailReference(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\nmode: primary\nguardrail: guardrail\n---\nPrompt\n")
 	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: gpt-5.5\nreasoningEffort: low\nverbosity: low\npermission:\n  read:\n    \"docs/*\": allow\n---\nCheck delegated work\n")
@@ -308,6 +320,8 @@ func TestLoadRocketCodeDefinitionsPreservesGuardrailReference(t *testing.T) {
 }
 
 func TestLoadRocketCodeDefinitionsReportsInvalidTypedFrontmatter(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		line string
@@ -335,6 +349,8 @@ func TestLoadRocketCodeDefinitionsReportsInvalidTypedFrontmatter(t *testing.T) {
 }
 
 func TestLoadRocketCodeDefinitionsReportsMissingModel(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -349,6 +365,8 @@ func TestLoadRocketCodeDefinitionsReportsMissingModel(t *testing.T) {
 }
 
 func TestLoadRuntimeDefinitionsReportsInvalidStagedAgent(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw-stage", "agents"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw-stage", "skills"), 0o755))
@@ -359,6 +377,8 @@ func TestLoadRuntimeDefinitionsReportsInvalidStagedAgent(t *testing.T) {
 }
 
 func TestSessionTagInvalidReloadKeepsLiveDefinitions(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	root, err := os.OpenRoot(workspace)
 
@@ -388,6 +408,8 @@ func TestSessionTagInvalidReloadKeepsLiveDefinitions(t *testing.T) {
 }
 
 func TestLoadRuntimeDefinitionsDuringReload(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	root, err := os.OpenRoot(workspace)
 
@@ -445,6 +467,8 @@ func TestLoadRuntimeDefinitionsDuringReload(t *testing.T) {
 }
 
 func TestLoadRuntimeDefinitionsUsesLoadedModels(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	stage := ".rocketclaw-stage"
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, stage, "agents"), 0o755))
@@ -457,6 +481,8 @@ func TestLoadRuntimeDefinitionsUsesLoadedModels(t *testing.T) {
 }
 
 func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name           string
 		mode           toolMode
@@ -528,6 +554,8 @@ func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *te
 }
 
 func TestLoadRocketCodeDefinitionsLoadsStructuredSkillMetadata(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", `---
 description: Main
@@ -562,6 +590,8 @@ Content
 }
 
 func TestRocketCodeReadsAllowedSkillFilesFromConfiguredRuntimeDirectory(t *testing.T) {
+	t.Parallel()
+
 	for _, runtimeDir := range []string{".rocketclaw", ".femtoclaw"} {
 		t.Run(runtimeDir, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -590,6 +620,8 @@ func TestRocketCodeReadsAllowedSkillFilesFromConfiguredRuntimeDirectory(t *testi
 }
 
 func TestRocketCodeInterpolatesPermissionPatternsFromShellEnv(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
@@ -616,6 +648,8 @@ func TestRocketCodeInterpolatesPermissionPatternsFromShellEnv(t *testing.T) {
 }
 
 func TestLoadRocketCodeDefinitionsRejectsEscapingAgentSymlink(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "main.md")
 	require.NoError(t, os.WriteFile(outside, []byte("---\ndescription: Outside\nmode: primary\n---\nOutside\n"), 0o644))
@@ -633,6 +667,8 @@ func TestLoadRocketCodeDefinitionsRejectsEscapingAgentSymlink(t *testing.T) {
 }
 
 func TestLoadRocketCodeDefinitionsRejectsEscapingSkillSymlink(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\nmode: primary\n---\nPrompt\n")
 	outside := filepath.Join(t.TempDir(), "SKILL.md")

@@ -34,6 +34,8 @@ func requireNotPending(t *testing.T, err error, conversationID, questionID strin
 }
 
 func TestWebQuestionIsListedAndTakesTheFirstAnswer(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	rt := newTestWebQuestions(service)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
@@ -90,6 +92,8 @@ func TestWebQuestionIsListedAndTakesTheFirstAnswer(t *testing.T) {
 }
 
 func TestWebQuestionWithdrawsUnlessLeftForRestart(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	rt := newTestWebQuestions(service)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
@@ -140,6 +144,8 @@ func TestWebQuestionWithdrawsUnlessLeftForRestart(t *testing.T) {
 // A person's Web turn, here in a Slack-thread conversation, asks in Web, and its question
 // survives a restart: the resumed turn waits on it again and the Web answer continues the turn.
 func TestWebTurnQuestionContinuesAfterRestart(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))

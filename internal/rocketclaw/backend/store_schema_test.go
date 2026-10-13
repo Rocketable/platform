@@ -25,6 +25,8 @@ import (
 )
 
 func TestDelegationLookupStopsAtFirstChildEntry(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	store.db.SetMaxOpenConns(1)
 
@@ -59,6 +61,8 @@ FROM pg_index WHERE indrelid = 'session_entries'::regclass`
 }
 
 func TestChatOriginFactsSkipsKnownSourceLookup(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	store.db.SetMaxOpenConns(1)
 
@@ -101,6 +105,8 @@ SELECT pg_stat_force_next_flush();`)
 }
 
 func TestExternalMCPMetadataLookupUsesIndex(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	store.db.SetMaxOpenConns(1)
 
@@ -143,6 +149,8 @@ FROM pg_prepared_statements WHERE statement LIKE 'SELECT id, entry_json FROM ses
 }
 
 func TestHistoryVisibilityUsesRevertedParentIndex(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	store.db.SetMaxOpenConns(1)
 
@@ -186,6 +194,8 @@ FROM pg_prepared_statements WHERE statement = $1`, "history statement", transcri
 }
 
 func TestHistoryDeletionUsesConversationRangeIndexes(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	_, err := store.db.ExecContext(t.Context(), `
 INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
@@ -207,6 +217,8 @@ ANALYZE session_summaries;`)
 }
 
 func TestTranscriptChangeUsesSyncSourceIndex(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	_, err := store.db.ExecContext(t.Context(), `
 INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
@@ -222,6 +234,8 @@ WHERE entry_json::jsonb->>'sync_source_entry_id' = $1`, "transcript change plan"
 }
 
 func TestSessionMigrationsSerializeStartup(t *testing.T) {
+	t.Parallel()
+
 	for _, outcome := range []string{"success", "cancel", "cancel waiting", "connection loss"} {
 		t.Run(outcome, func(t *testing.T) {
 			dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
@@ -329,6 +343,8 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 }
 
 func TestSessionMigrationsSerializeLedgerCreation(t *testing.T) {
+	t.Parallel()
+
 	for _, legacy := range []bool{false, true} {
 		t.Run(strconv.FormatBool(legacy), func(t *testing.T) {
 			dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
@@ -386,6 +402,8 @@ func TestSessionMigrationsSerializeLedgerCreation(t *testing.T) {
 }
 
 func TestSessionMigrationsCancelPlanning(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	store := newTestSessionServiceAt(t, workspace)
 	store.db.SetMaxOpenConns(2)
@@ -421,6 +439,8 @@ func TestSessionMigrationsCancelPlanning(t *testing.T) {
 }
 
 func TestSessionMigrationRollbackAndCatchup(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	ctx := t.Context()
 	_, err := store.db.ExecContext(ctx, `DELETE FROM pg_migrations WHERE id IN ('009_session_summaries.sql', '010_slack_channel_facts.sql', '011_last_message_summaries.sql');
@@ -462,6 +482,8 @@ func TestSessionMigrationRollbackAndCatchup(t *testing.T) {
 }
 
 func TestProducerSessionTagsMigration(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	ctx := t.Context()
 	_, err := store.db.ExecContext(ctx, `DELETE FROM pg_migrations WHERE id='025_copy_producer_session_tags.sql';
@@ -547,6 +569,8 @@ func TestDropScriptCallsMigration(t *testing.T) {
 }
 
 func TestProducerHandoffMigration(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	cfg, err := pgx.ParseConfig(dsn)
@@ -655,6 +679,8 @@ INSERT INTO scheduled_messages (scheduled_message_id, conversation_id, agent, me
 }
 
 func TestBackgroundJobsMigration(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	ctx := t.Context()
 	source := migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}
@@ -692,6 +718,8 @@ func TestBackgroundJobsMigration(t *testing.T) {
 }
 
 func TestSessionSummaryRecencyIndexMigration(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	ctx := t.Context()
 	source := migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}
@@ -812,6 +840,8 @@ func TestMessageSearchMigrationSharesExtension(t *testing.T) {
 }
 
 func TestMessageSearchSchema(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	store.db.SetMaxOpenConns(1)
 
@@ -849,6 +879,8 @@ SET enable_seqscan = off;`)
 }
 
 func TestSessionMigrationUnlockFailureDiscardsConnection(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	store.db.SetMaxOpenConns(1)
 

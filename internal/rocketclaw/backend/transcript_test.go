@@ -22,6 +22,8 @@ import (
 // OpenCode V2 packages/core/src/session/projector.ts projects strictly before
 // the staged user message; RocketClaw boundaries may lie inside a saved turn.
 func TestRevertTranscriptPrefix(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	_, err := s.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ('main', 'planner', '')`)
@@ -116,6 +118,8 @@ func TestRevertTranscriptPrefix(t *testing.T) {
 }
 
 func TestObserveTranscript(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	checkpoint := &testCheckpoint{
@@ -287,6 +291,8 @@ FROM session_entries WHERE id = $1`, producerID)
 }
 
 func TestTranscriptPages(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	ids := make([]int64, 5)
@@ -353,6 +359,8 @@ func TestTranscriptPages(t *testing.T) {
 }
 
 func TestTranscriptChanges(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	conn, err := s.db.Conn(ctx)
@@ -542,6 +550,8 @@ func TestTranscriptChanges(t *testing.T) {
 }
 
 func TestTranscriptChangesReportsListenerFailures(t *testing.T) {
+	t.Parallel()
+
 	for _, scenario := range []string{"missing schema", "malformed signal", "disconnected"} {
 		t.Run(scenario, func(t *testing.T) {
 			s := newTestSessionService(t)
@@ -595,6 +605,8 @@ func TestTranscriptChangesReportsListenerFailures(t *testing.T) {
 }
 
 func TestTranscriptObservationReportsUnavailableStorage(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -626,6 +638,8 @@ func TestTranscriptObservationReportsUnavailableStorage(t *testing.T) {
 }
 
 func TestActiveTurnOutputTracePersistence(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 
@@ -773,6 +787,8 @@ func runningTestTurns(t *testing.T, s *SessionService) []string {
 }
 
 func TestTranscriptObservationReportsUnreadableStoredEntries(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	_, err := s.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', '{"type":"turn","output_trace":1}', '')`)
 	require.NoError(t, err)

@@ -17,6 +17,8 @@ import (
 
 // The tool stops its conversation's jobs, its subagents', and those of hidden runs reporting there; no others.
 func TestStopBackgroundJobTool(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	started, release := make(chan struct{}, 4), make(chan struct{})
 	// The wake of subagent /a holds its note until the test ends, so the note stays listed.
@@ -60,6 +62,8 @@ func TestStopBackgroundJobTool(t *testing.T) {
 
 // Only an exact allow_background rule shows the tool and lets it run.
 func TestStopBackgroundJobToolNeedsAllowBackground(t *testing.T) {
+	t.Parallel()
+
 	for permission, visible := range map[string]bool{"{}": false, "{rocketclaw: allow}": false, "{rocketclaw: {'*': allow}}": false, "{rocketclaw: {allow_background: deny}}": false, "{rocketclaw: {allow_background: allow}}": true} {
 		t.Run(permission, func(t *testing.T) {
 			workspace := t.TempDir()

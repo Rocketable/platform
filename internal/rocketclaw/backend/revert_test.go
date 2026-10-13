@@ -19,6 +19,8 @@ import (
 )
 
 func TestRevertQueueAdmissionAndRetry(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
@@ -60,6 +62,8 @@ func TestRevertQueueAdmissionAndRetry(t *testing.T) {
 }
 
 func TestRevertSettlesAndPreservesWaitingWork(t *testing.T) {
+	t.Parallel()
+
 	newBridge, s, requests, finals := newResumeTestBridges(t, true)
 	b := newBridge()
 	b.config.ConversationID = "main"
@@ -155,6 +159,8 @@ func TestRevertSettlesAndPreservesWaitingWork(t *testing.T) {
 }
 
 func TestRevertWaitsForDeliverySettlement(t *testing.T) {
+	t.Parallel()
+
 	for _, errDelivery := range []error{nil, errors.New("delivery failed")} {
 		t.Run(fmt.Sprint(errDelivery), func(t *testing.T) {
 			newBridge, s, _, _ := newResumeTestBridges(t, false)
@@ -217,6 +223,8 @@ func TestRevertWaitsForDeliverySettlement(t *testing.T) {
 }
 
 func TestRevertStorageLifecycle(t *testing.T) {
+	t.Parallel()
+
 	t.Run("mapped mid-turn suffix", func(t *testing.T) {
 		s, _ := newShadowTestStore(t)
 		ctx := t.Context()
@@ -370,6 +378,8 @@ VALUES ($1, 'parent', $2, $3, '{}', '[{"id":"input","text":"prepared"}]')`, chil
 
 // Removed calls' delegations go, also by call-ID-plus-hash key; running Background Jobs keep theirs, like $stop.
 func TestRevertKeepsKeptAndRunningSubagents(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	_, err := s.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ('main', 'planner', '')`)
@@ -424,6 +434,8 @@ func TestRevertKeepsKeptAndRunningSubagents(t *testing.T) {
 }
 
 func TestRevertEligibility(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 
 	ctx := t.Context()
@@ -462,6 +474,8 @@ func TestRevertEligibility(t *testing.T) {
 }
 
 func TestRevertPausesScheduledClaims(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	_, err := s.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ('main', 'planner', '')`)
@@ -496,6 +510,8 @@ func TestRevertPausesScheduledClaims(t *testing.T) {
 // OpenCode V2 packages/core/src/session/session.ts reconciles an accepted ID
 // before preparing or committing a new branch, including after completion.
 func TestRevertProviderPrefixAndCompletedRetry(t *testing.T) {
+	t.Parallel()
+
 	newBridge, s, requests, finals := newResumeTestBridges(t, false)
 	b := newBridge()
 	b.config.ConversationID = "main"
@@ -542,6 +558,8 @@ func TestRevertProviderPrefixAndCompletedRetry(t *testing.T) {
 }
 
 func TestRevertCompletedFallbackAndPreparationFailure(t *testing.T) {
+	t.Parallel()
+
 	newBridge, s, requests, finals := newResumeTestBridges(t, false)
 	b := newBridge()
 	b.config.ConversationID = "main"
@@ -627,6 +645,8 @@ func TestRevertCompletedFallbackAndPreparationFailure(t *testing.T) {
 }
 
 func TestRevertHistorySnapshot(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
 	id, err := s.AppendEntryID(t.Context(), "main", testSessionEntry("first", "answer"))
@@ -650,6 +670,8 @@ func TestRevertHistorySnapshot(t *testing.T) {
 }
 
 func TestRevertAdmissionRollbackAndConcurrentIdentity(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
 	id, err := s.AppendEntryID(t.Context(), "main", testSessionEntry("old", "answer"))
@@ -708,6 +730,8 @@ func TestRevertAdmissionRollbackAndConcurrentIdentity(t *testing.T) {
 }
 
 func TestRevertGoalIdentityAndPrompt(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
 
@@ -735,6 +759,8 @@ func TestRevertGoalIdentityAndPrompt(t *testing.T) {
 }
 
 func TestRevertBusyAdmissionAndRecordedDrain(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
@@ -802,6 +828,8 @@ func TestRevertBusyAdmissionAndRecordedDrain(t *testing.T) {
 }
 
 func TestRevertMarkerGatesDoNotReadReplay(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
@@ -836,6 +864,8 @@ func TestRevertMarkerGatesDoNotReadReplay(t *testing.T) {
 }
 
 func TestRevertPreservationFailureCompletesOwners(t *testing.T) {
+	t.Parallel()
+
 	for _, path := range []string{"steer", "channel", "handle", "activation", "enqueue"} {
 		t.Run(path, func(t *testing.T) {
 			s := newTestSessionService(t)
@@ -909,6 +939,8 @@ func TestRevertPreservationFailureCompletesOwners(t *testing.T) {
 }
 
 func TestRevertBranchCancelsPreservedOwners(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
@@ -953,6 +985,8 @@ func TestRevertBranchCancelsPreservedOwners(t *testing.T) {
 }
 
 func TestRevertLegacyQueuePromotionAndEnqueue(t *testing.T) {
+	t.Parallel()
+
 	newBridge, s, requests, finals := newResumeTestBridges(t, false)
 	b := newBridge()
 	b.config.ConversationID = "main"
@@ -979,6 +1013,8 @@ func TestRevertLegacyQueuePromotionAndEnqueue(t *testing.T) {
 }
 
 func TestRevertStashKeepsVoiceInbound(t *testing.T) {
+	t.Parallel()
+
 	newBridge, s, requests, finals := newResumeTestBridges(t, false)
 	crashed := newBridge()
 	crashed.config.ConversationID = "main"
@@ -1032,6 +1068,8 @@ func TestRevertStashKeepsVoiceInbound(t *testing.T) {
 }
 
 func TestRevertAdmissionRollbackAtEveryWrite(t *testing.T) {
+	t.Parallel()
+
 	for _, failure := range []struct{ table, operation string }{
 		{"session_entries", "DELETE"}, {"session_entries", "UPDATE"},
 		{"active_turns", "DELETE"}, {"turn_steps", "DELETE"},
@@ -1091,6 +1129,8 @@ func TestRevertAdmissionRollbackAtEveryWrite(t *testing.T) {
 }
 
 func TestRevertStorageFailuresAreNotEmptySuccess(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
@@ -1135,6 +1175,8 @@ func TestRevertStorageFailuresAreNotEmptySuccess(t *testing.T) {
 }
 
 func TestRevertStageFailurePreservesHistory(t *testing.T) {
+	t.Parallel()
+
 	for _, unavailable := range []string{"conversation_goals", "active_turns", "managed_conversations update", "settled delivery"} {
 		t.Run(unavailable, func(t *testing.T) {
 			s := newTestSessionService(t)
@@ -1177,6 +1219,8 @@ func TestRevertStageFailurePreservesHistory(t *testing.T) {
 }
 
 func TestRevertCorruptHistoryCannotBeAdmitted(t *testing.T) {
+	t.Parallel()
+
 	for _, corrupt := range []struct{ name, raw string }{
 		{"trace", `{"type":"turn","output_trace":1,"replay_input":[{"role":"user","type":"message","content":"old"}]}`},
 		{"replay", `{"type":"turn","replay_input":[{"role":"user","type":"message","input_id":"old","prompt_header":42,"content":"old"}]}`},
@@ -1208,6 +1252,8 @@ func TestRevertCorruptHistoryCannotBeAdmitted(t *testing.T) {
 }
 
 func TestRevertSavedAttachmentRetryIdentity(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "original", Attachments: []protocol.InboundAttachment{
 		{Name: "photo.png", MIMEType: "image/png", Data: []byte("image bytes")},

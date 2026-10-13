@@ -68,6 +68,8 @@ func jsonString(text string) string {
 }
 
 func TestMessageSearchIndexesSavedEntries(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	reference := uploadTestAttachment(t, s, "web-chat", "file-1")
@@ -126,6 +128,8 @@ func TestMessageSearchIndexesSavedEntries(t *testing.T) {
 }
 
 func TestMessageSearchIndexesForkedAttachments(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	require.NoError(t, (&Runtime{Sessions: s}).CreateConversation(ctx, protocol.Conversation{ID: "source", Agent: "main"}))
@@ -142,6 +146,8 @@ func TestMessageSearchIndexesForkedAttachments(t *testing.T) {
 }
 
 func TestMessageSearchIndexesExternalMCPManagedCopyOnce(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	reference := uploadTestAttachment(t, s, "private-x", "private-file")
@@ -165,6 +171,8 @@ func TestMessageSearchIndexesExternalMCPManagedCopyOnce(t *testing.T) {
 }
 
 func TestMessageSearchIndexesSyncedCopies(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	manager, _ := newTestBridgeManager(t, config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), s, make(chan *protocol.OutboundMessage, 4))
@@ -199,6 +207,8 @@ func TestMessageSearchIndexesSyncedCopies(t *testing.T) {
 }
 
 func TestMessageSearchFollowsCommittedRevert(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
@@ -228,6 +238,8 @@ func TestMessageSearchFollowsCommittedRevert(t *testing.T) {
 }
 
 func TestMessageSearchIndexesEndedTurns(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	reference := uploadTestAttachment(t, s, "web-chat", "turn-file")
@@ -279,6 +291,8 @@ func TestMessageSearchIndexesEndedTurns(t *testing.T) {
 }
 
 func TestMessageSearchSkipsUndecodableTurnRecords(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 
@@ -355,6 +369,8 @@ func messageSearchMarkers(t *testing.T, s *SessionService) []string {
 }
 
 func TestMessageSearchBackfillIndexesVisibleChats(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 
@@ -486,6 +502,8 @@ func TestMessageSearchBackfillResumesAfterCancel(t *testing.T) {
 }
 
 func TestMessageSearchBackfillOverlapsMutation(t *testing.T) {
+	t.Parallel()
+
 	for _, action := range []string{"append", "undo", "delete", "stop"} {
 		t.Run(action, func(t *testing.T) {
 			s := newTestSessionService(t)
@@ -585,6 +603,8 @@ func TestMessageSearchBackfillOverlapsMutation(t *testing.T) {
 }
 
 func TestMessageSearchMarksOnlyNewEmptyChats(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	rt := &Runtime{Sessions: s}
@@ -651,6 +671,8 @@ func searchTestTexts(t *testing.T, s *SessionService, needle string, prefixes ..
 }
 
 func TestSearchMessagesMatchesLowercasedSubstrings(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	require.NoError(t, s.UpsertThread("web-chat", ThreadState{Agent: "main"}))
@@ -693,6 +715,8 @@ func TestSearchMessagesMatchesLowercasedSubstrings(t *testing.T) {
 }
 
 func TestSearchMessagesShowsWhatHistoryShows(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	// Hidden chats an older binary left unmarked never make search incomplete.
@@ -775,6 +799,8 @@ func TestSearchMessagesShowsWhatHistoryShows(t *testing.T) {
 }
 
 func TestSearchMessagesMatchesGoReference(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	rng := rand.New(rand.NewPCG(8, 10))

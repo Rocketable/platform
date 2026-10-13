@@ -14,6 +14,8 @@ import (
 )
 
 func TestForkConversation(t *testing.T) {
+	t.Parallel()
+
 	sessions, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
@@ -176,6 +178,8 @@ func TestForkConversation(t *testing.T) {
 }
 
 func TestForkConversationRollsBackFailedCopies(t *testing.T) {
+	t.Parallel()
+
 	for _, test := range []struct {
 		name, constraint, message string
 	}{
@@ -242,6 +246,8 @@ func TestForkConversationRollsBackFailedCopies(t *testing.T) {
 }
 
 func TestForkConversationRejectsUnreadableHistory(t *testing.T) {
+	t.Parallel()
+
 	sessions, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })

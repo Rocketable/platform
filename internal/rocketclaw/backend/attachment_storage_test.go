@@ -143,6 +143,8 @@ func TestAttachmentStorage(t *testing.T) {
 }
 
 func TestFilesystemAttachmentsAtomicAndConfined(t *testing.T) {
+	t.Parallel()
+
 	root, err := os.OpenRoot(t.TempDir())
 
 	require.NoError(t, err)

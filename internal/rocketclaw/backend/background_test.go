@@ -69,6 +69,8 @@ func testBackgroundRow(t *testing.T, store *SessionService, conversationID, jobI
 }
 
 func TestBackgroundJobRunsDetachedOnce(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	registry, notes := newTestBackgroundRegistry(store)
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{Source: protocol.SourceSystem, RequireOutputDecision: true}}
@@ -108,6 +110,8 @@ func TestBackgroundJobRunsDetachedOnce(t *testing.T) {
 }
 
 func TestBackgroundJobFinishRetried(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	registry, notes := newTestBackgroundRegistry(store)
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
@@ -131,6 +135,8 @@ CREATE TRIGGER fail_first_finish BEFORE UPDATE OF status ON background_jobs FOR 
 }
 
 func TestBackgroundJobStop(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	registry, notes := newTestBackgroundRegistry(store)
 	started, release := make(chan struct{}, 2), make(chan struct{})
@@ -168,6 +174,8 @@ func TestBackgroundJobStop(t *testing.T) {
 
 // A stopped subagent is woken neither by late notes nor by its own jobs ending, which stop with it.
 func TestStoppedSubagentStaysStopped(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	woken := make(chan string, 4)
 	registry := newBackgroundRegistry(store, &backgroundNotesMock{noteReadyFunc: func(string) {}, continueSubagentFunc: func(_ context.Context, job *backgroundJob, _ string) (string, error) {
@@ -201,6 +209,8 @@ func TestStoppedSubagentStaysStopped(t *testing.T) {
 }
 
 func TestBackgroundJobAttachedCall(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	registry, notes := newTestBackgroundRegistry(store)
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
@@ -350,6 +360,8 @@ func TestBackgroundJobAttachedCall(t *testing.T) {
 }
 
 func TestBackgroundJobsRunWithoutLimit(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	registry, notes := newTestBackgroundRegistry(store)
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
@@ -375,6 +387,8 @@ func TestBackgroundJobsRunWithoutLimit(t *testing.T) {
 }
 
 func TestBackgroundJobsAbandoned(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	registry, notes := newTestBackgroundRegistry(store)
 	store.jobs = registry
@@ -408,6 +422,8 @@ func backgroundRows(t *testing.T, store *SessionService) []string {
 
 // A wake leaves no note of its own; a completed wake consumes the note and a failed one releases it.
 func TestSubagentNoteWakesSubagent(t *testing.T) {
+	t.Parallel()
+
 	for _, errWake := range []error{nil, errors.New("provider down")} {
 		t.Run(fmt.Sprint(errWake), func(t *testing.T) {
 			store := newTestSessionService(t)
@@ -447,6 +463,8 @@ func TestSubagentNoteWakesSubagent(t *testing.T) {
 
 // A resumed parent call re-attaching to a resumed subagent starts nothing; a second start replays nothing.
 func TestRestartSettlesRunningJobs(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 
 	for conversationID, origin := range map[string]*protocol.InboundMessage{"main": {Source: protocol.SourceSlack}, "cron:daily": {RequireOutputDecision: true}, "private": {SyncDestination: "managed"}} {
@@ -556,6 +574,8 @@ func TestRestartSettlesRunningJobs(t *testing.T) {
 
 // Notes are claimed for the nearest detached job among the subagent and its ancestors; no wake starts.
 func TestRunningSubagentDrainsItsNotes(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	notes := &backgroundNotesMock{noteReadyFunc: func(string) {}}
 	registry := newBackgroundRegistry(store, notes, testLogger())

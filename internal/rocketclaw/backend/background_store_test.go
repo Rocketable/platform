@@ -71,6 +71,8 @@ func retainedResults(t *testing.T, root *os.Root) []string {
 
 // The sweep also removes the conversation dirs it empties, and keeps fresh results.
 func TestStartupSweepsExpiredRetainedResults(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	require.NoError(t, store.sweepRetainedResults(), "a spill dir no turn created yet holds nothing to sweep")
 
@@ -124,6 +126,8 @@ func backgroundJobIDs(t *testing.T, store *SessionService, conversationID string
 }
 
 func TestBackgroundJobCreateKeepsFirstRow(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	first := testBackgroundJob("main", "turn-1/call/a")
 	first.origin.SyncDestination = "visible"
@@ -144,6 +148,8 @@ func TestBackgroundJobCreateKeepsFirstRow(t *testing.T) {
 }
 
 func TestBackgroundJobTransitionsCompareAndSet(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	job := testBackgroundJob("main", "turn-1/call/a")
 	createTestBackgroundJob(t, store, job)
@@ -201,6 +207,8 @@ func TestBackgroundJobTransitionsCompareAndSet(t *testing.T) {
 }
 
 func TestBackgroundJobFinishStoresNoteAndClearsJournal(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	ctx := t.Context()
 	job := testBackgroundJob("main", "turn-1/call/a")
@@ -250,6 +258,8 @@ CREATE TRIGGER reject_cleanup BEFORE DELETE ON turn_steps FOR EACH ROW EXECUTE F
 }
 
 func TestBackgroundNoteClaimSucceedsOnce(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	ctx := t.Context()
 	job := testBackgroundJob("main", "turn-1/call/a")
@@ -285,6 +295,8 @@ func TestBackgroundNoteClaimSucceedsOnce(t *testing.T) {
 }
 
 func TestFinishTurnConsumesOrReleasesNoteClaims(t *testing.T) {
+	t.Parallel()
+
 	for _, saved := range []bool{true, false} {
 		t.Run(strconv.FormatBool(saved), func(t *testing.T) {
 			store := newTestSessionService(t)
@@ -322,6 +334,8 @@ func TestFinishTurnConsumesOrReleasesNoteClaims(t *testing.T) {
 // it again 1 minute after the first failure, 5 minutes after the second, then every 30 minutes.
 // No wake takes them sooner, but a running turn does, and its saved answer consumes them.
 func TestHiddenRunTurnRetriesItsNotes(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		store := newTestSessionService(t)
 		ctx := t.Context()
@@ -388,6 +402,8 @@ func TestHiddenRunTurnRetriesItsNotes(t *testing.T) {
 
 // Unless its job completes, a subagent's drained notes go back to its next turn (OpenCode packages/core/src/session/input.ts).
 func TestBackgroundJobFinishConsumesOrReleasesNoteClaims(t *testing.T) {
+	t.Parallel()
+
 	for _, status := range []backgroundJobStatus{backgroundCompleted, backgroundFailed, backgroundStopped} {
 		t.Run(string(status), func(t *testing.T) {
 			store := newTestSessionService(t)
@@ -417,6 +433,8 @@ func TestBackgroundJobFinishConsumesOrReleasesNoteClaims(t *testing.T) {
 }
 
 func TestReleaseStaleBackgroundClaims(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	ctx := t.Context()
 	seedActiveTurn(t, store, "main", "live", nil)
@@ -437,6 +455,8 @@ func TestReleaseStaleBackgroundClaims(t *testing.T) {
 }
 
 func TestTurnCleanupKeepsBackgroundJournal(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	ctx := t.Context()
 	seedActiveTurn(t, store, "main", "turn-1", &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "turn-1"})
@@ -456,6 +476,8 @@ func TestTurnCleanupKeepsBackgroundJournal(t *testing.T) {
 }
 
 func TestBackgroundSubagentRunsOnce(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	ctx := t.Context()
 	subagent := func(jobID, subagentKey string, kind backgroundJobKind) *backgroundJob {
@@ -479,6 +501,8 @@ func TestBackgroundSubagentRunsOnce(t *testing.T) {
 }
 
 func TestBackgroundJobsListOwnAndDestinationJobs(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	createTestBackgroundJob(t, store, testBackgroundJob("main", "turn-1/call/running"))
 
@@ -594,6 +618,8 @@ func TestPruneKeepsConversationsWithLiveBackgroundJobs(t *testing.T) {
 }
 
 func TestConversationRemovalDeletesBackgroundJobs(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newShadowTestStore(t)
 	ctx := t.Context()
 	spill := openTestSpill(t, store)
@@ -653,6 +679,8 @@ func TestConversationRemovalDeletesBackgroundJobs(t *testing.T) {
 }
 
 func TestBackgroundJobChangeNotices(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	ctx := t.Context()
 	conn, err := store.db.Conn(ctx)

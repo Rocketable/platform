@@ -31,6 +31,8 @@ func TestReplayInputForMessagePreservesSDKSerialization(t *testing.T) {
 }
 
 func TestProviderForModel(t *testing.T) {
+	t.Parallel()
+
 	for model, want := range map[string]string{
 		"":           "openai",
 		"gpt-5.5":    "openai",
@@ -42,6 +44,8 @@ func TestProviderForModel(t *testing.T) {
 }
 
 func TestSessionEntryForProviderSameProviderIsUnchanged(t *testing.T) {
+	t.Parallel()
+
 	entry := rocketcode.SessionEntry{
 		Version:     1,
 		Type:        "turn",
@@ -62,6 +66,8 @@ func TestSessionEntryForProviderSameProviderIsUnchanged(t *testing.T) {
 }
 
 func TestSessionEntryForProviderDifferentProviderProjectsReplay(t *testing.T) {
+	t.Parallel()
+
 	entry := rocketcode.SessionEntry{
 		Version:    1,
 		Type:       "turn",
@@ -106,6 +112,8 @@ func TestSessionEntryForProviderDifferentProviderProjectsReplay(t *testing.T) {
 }
 
 func TestSessionEntriesForProviderTreatsMissingModelAsOpenAI(t *testing.T) {
+	t.Parallel()
+
 	entries := func(yield func(rocketcode.SessionEntry, error) bool) {
 		yield(rocketcode.SessionEntry{Model: "", ResponseID: providerReplayPrivate, ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"portable-readable"}`)}}, nil)
 	}
@@ -122,6 +130,8 @@ func TestSessionEntriesForProviderTreatsMissingModelAsOpenAI(t *testing.T) {
 }
 
 func TestReplayForProviderDropsUnknownBeforePayloadDecode(t *testing.T) {
+	t.Parallel()
+
 	replay, err := replayForProvider([]json.RawMessage{json.RawMessage(`{"type":"provider_hosted","role":{},"content":false,"output":42}`)})
 
 	require.NoError(t, err)
@@ -129,6 +139,8 @@ func TestReplayForProviderDropsUnknownBeforePayloadDecode(t *testing.T) {
 }
 
 func TestReplayForProviderReadsExactSummaryShapesAndPrefersCompactionContent(t *testing.T) {
+	t.Parallel()
+
 	ranges := []rocketcode.ReplayAttribution{{Start: 2, End: 3}}
 	replay, err := replayForProvider([]json.RawMessage{
 		json.RawMessage(`{"type":"reasoning","summary":"summary-string"}`),
@@ -154,6 +166,8 @@ func TestReplayForProviderReadsExactSummaryShapesAndPrefersCompactionContent(t *
 }
 
 func TestReplayForProviderRejectsMalformedKnownReadableData(t *testing.T) {
+	t.Parallel()
+
 	for _, test := range []struct {
 		name, raw, want string
 	}{
@@ -189,6 +203,8 @@ func TestReplayForProviderRejectsMalformedKnownReadableData(t *testing.T) {
 }
 
 func TestReplayForProviderDropsContentArrayItemsWithoutPortableParts(t *testing.T) {
+	t.Parallel()
+
 	for _, raw := range []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","content":[]}`),
 		json.RawMessage(`{"type":"function_call_output","call_id":"call","output":[]}`),
@@ -221,6 +237,8 @@ func TestReplayForProviderDropsContentArrayItemsWithoutPortableParts(t *testing.
 }
 
 func TestReplayForProviderCompactionFallsBackAfterBlankContent(t *testing.T) {
+	t.Parallel()
+
 	replay, err := replayForProvider([]json.RawMessage{
 		json.RawMessage(`{"type":"compaction","content":"","summary":"fallback-string"}`),
 		json.RawMessage(`{"type":"compaction","content":"  \n","summary":{"text":"fallback-whitespace"}}`),
@@ -241,6 +259,8 @@ func TestReplayForProviderCompactionFallsBackAfterBlankContent(t *testing.T) {
 }
 
 func TestReplayForProviderValidatesRequiredKnownFields(t *testing.T) {
+	t.Parallel()
+
 	for _, test := range []struct {
 		name, raw, want string
 	}{
