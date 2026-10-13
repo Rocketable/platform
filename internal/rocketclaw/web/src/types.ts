@@ -9,7 +9,9 @@ export type QueueItem = { id: string; text: string; attachments?: Attachment[]; 
 export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; allowedAgents?: string[]; running?: boolean; pinned?: boolean; name?: string; forkedFrom?: string; tags?: string[]; cron?: boolean; cronName?: string };
 export type OriginPair = { key: string; value: string };
 export type ChatOrigin = { kind: string; sourcePath?: string; stem?: string; runKind?: string; runId?: string; agent?: string; ranAt?: string; externalConversationId?: string; pairs?: OriginPair[] };
-export type HistoryView = { messages: TranscriptEvent[]; origin?: ChatOrigin; delegations: string[]; revision: string; reset: boolean; replacedKeys: string[]; removedKeys: string[]; entryKeys: string[]; running: boolean; terminal: string; start: string; more: boolean; revertEligible?: boolean; revertMessageId?: string; canUndo?: boolean; movable: boolean; backgroundJobs: BackgroundJob[]; pendingQuestions?: PendingQuestion[] };
+export type ShadowTurn = { parentSourceConversationId: string; parentTurnId: string; childTurnId: string; order: string; running: boolean; terminal: string; revision: string };
+export type ShadowBinding = { parentConversationId: string; parentAgent: string; shadowAgent: string; childConversationId: string; turns: ShadowTurn[] };
+export type HistoryView = { messages: TranscriptEvent[]; origin?: ChatOrigin; delegations: string[]; revision: string; reset: boolean; replacedKeys: string[]; removedKeys: string[]; entryKeys: string[]; running: boolean; terminal: string; start: string; more: boolean; revertEligible?: boolean; revertMessageId?: string; canUndo?: boolean; movable: boolean; backgroundJobs: BackgroundJob[]; pendingQuestions?: PendingQuestion[]; shadows?: ShadowBinding[] };
 export type MessageMatch = { conversationId: string; message: TranscriptEvent };
 export type SearchMessagesResponse = { matches?: MessageMatch[]; tagIds?: string[]; indexComplete?: boolean };
 // Term offsets are UTF-16 positions in the sent query; an empty match field means only message text matched.

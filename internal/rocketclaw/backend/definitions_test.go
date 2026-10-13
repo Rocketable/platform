@@ -213,8 +213,12 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 
 	defer func() { require.NoError(t, root.Close()) }()
 
+	require.NoError(t, root.MkdirAll(filepath.Join(config.DefaultRuntimeDir, "agents", "assistant"), 0o700))
+	require.NoError(t, root.WriteFile(filepath.Join(config.DefaultRuntimeDir, "agents", "assistant", "alternative.md"), []byte("---\nmodel: gpt-5.5\n---\nAlternative"), 0o600))
+
 	agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
 	require.NoError(t, err)
+	require.Contains(t, agents.Items, "assistant/alternative")
 
 	primary := agents.Items["assistant"]
 	helper := agents.Items["helper"]

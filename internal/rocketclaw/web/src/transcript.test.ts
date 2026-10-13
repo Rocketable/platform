@@ -1,21 +1,194 @@
 import { expect, test } from "bun:test";
+import { QueryObserver } from "@tanstack/react-query";
 import { API } from "typescript/unstable/async";
 import type { CallExpression, Expression, FunctionDeclaration, Node } from "typescript/unstable/ast";
 import { isBinaryExpression, isFunctionDeclaration, isVariableStatement } from "typescript/unstable/ast/is";
-import type { HistoryView, TranscriptEvent } from "./types";
+import type { HistoryView, ShadowBinding, TranscriptEvent } from "./types";
 
 // Execute the retained UI's actual private functions without exporting non-components.
 const api = new API({ cwd: import.meta.dir });
 const source = (await (await api.updateSnapshot({ openProject: "../tsconfig.json" })).getProjects()[0].program.getSourceFile(`${import.meta.dir}/ui.tsx`))!;
 await api.close();
 const transpiler = new Bun.Transpiler({ loader: "tsx" });
-const names = ["historyPage", "applyHistoryDelta", "readHistoryDelta", "readEarlierHistory", "sendComposer", "revertComposer", "restoreFiles", "promoteComposer", "popComposer", "switchQueueAgent", "stopComposer", "historyLines", "pendingInputs", "lineId", "isStopCommand", "transcriptTurns", "toolTitle"];
+const names = ["historyPage", "shadowHistory", "applyHistoryDelta", "readHistoryDelta", "readEarlierHistory", "sendComposer", "revertComposer", "restoreFiles", "promoteComposer", "popComposer", "switchQueueAgent", "stopComposer", "historyLines", "pendingInputs", "lineId", "isStopCommand", "transcriptTurns", "toolTitle", "comparisonRows", "turnKey", "mergeShadowBindings"];
 const functions = source.statements.filter((node) => (isFunctionDeclaration(node) ? names.includes(node.name?.text ?? "") : isVariableStatement(node) && node.declarationList.declarations.some((declaration) => names.includes(declaration.name.getText(source))))).map((node) => node.getText(source)).join("\n");
-const javascript = transpiler.transformSync(`import { QueryClient } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nimport { captureException } from ${JSON.stringify(Bun.resolveSync("@sentry/react", import.meta.dir))};\nimport { queries, mutations } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};\nconst queryClient = new QueryClient();\n${functions}\nexport { ${names.filter((name) => !["historyPage", "lineId", "isStopCommand", "switchQueueAgent"].includes(name)).join(", ")}, queryClient };`);
-const { applyHistoryDelta, readHistoryDelta, readEarlierHistory, sendComposer, revertComposer, promoteComposer, popComposer, stopComposer, historyLines, pendingInputs, transcriptTurns, toolTitle, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
+const javascript = transpiler.transformSync(`import { QueryClient, queryOptions } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nimport { captureException } from ${JSON.stringify(Bun.resolveSync("@sentry/react", import.meta.dir))};\nimport { queries, mutations } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};\nconst queryClient = new QueryClient();\n${functions}\nexport { ${names.filter((name) => !["historyPage", "lineId", "isStopCommand", "switchQueueAgent"].includes(name)).join(", ")}, queryClient };`);
+const { shadowHistory, applyHistoryDelta, readHistoryDelta, readEarlierHistory, sendComposer, revertComposer, promoteComposer, popComposer, stopComposer, historyLines, pendingInputs, transcriptTurns, toolTitle, comparisonRows, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
+
+test("comparison rows pair producer-scoped IDs, retain pending and unavailable turns, and omit child seed history", () => {
+  const parent = historyLines([
+    { role: "user", text: "same", turnId: "T", entryKey: "turn:parent:T", itemId: "p1" },
+    { role: "assistant", text: "main", turnId: "T", entryKey: "turn:parent:T", itemId: "p2" },
+    { role: "user", text: "same", turnId: "T", entryKey: "turn:producer:T", itemId: "p3" },
+    { role: "user", text: "legacy", itemId: "legacy" },
+  ]);
+  const child = historyLines([
+    { role: "user", text: "seed", turnId: "old", entryKey: "turn:child:old", itemId: "seed" },
+    { role: "assistant", text: "different", turnId: "child-T", entryKey: "turn:child:child-T", itemId: "c1" },
+  ]);
+  const binding = { childConversationId: "child", turns: [
+    { parentSourceConversationId: "parent", parentTurnId: "earlier-failed", childTurnId: "", order: "1" },
+    { parentSourceConversationId: "parent", parentTurnId: "T", childTurnId: "child-T", order: "2" },
+    { parentSourceConversationId: "parent", parentTurnId: "pending", childTurnId: "", order: "3" },
+  ] };
+  const rows = comparisonRows(transcriptTurns(parent, undefined, true), transcriptTurns(child, undefined, true), binding);
+  expect(rows.map((row: { child?: { items: Line[] }; correlation?: { parentTurnId: string } }) => [row.correlation?.parentTurnId, row.child?.items.map((line) => line.text)])).toEqual([["earlier-failed", undefined], ["T", ["different"]], [undefined, undefined], [undefined, undefined], ["pending", undefined]]);
+});
 type Line = { id: string; role: string; text: string; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; origin?: string; principal?: string };
 const event = (entryKey: string, itemId: string, role: string, text: string, extra: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ entryKey, itemId, inputId: "", role, text, turnId: "", complete: true, ...extra });
 const view = (messages: TranscriptEvent[], extra: Partial<HistoryView> = {}): HistoryView => ({ messages, delegations: [], revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(messages.map((message) => message.entryKey))], running: false, terminal: "", start: "0", more: false, movable: false, backgroundJobs: [], ...extra });
+
+for (const mode of ["initial", "cached"] as const) test(`comparison query keeps the latest fingerprint through a delayed ${mode} read`, async () => {
+  const original = globalThis.fetch;
+  const delayed = Promise.withResolvers<Response>(), started = Promise.withResolvers<void>();
+  const loaded = Promise.withResolvers<void>(), finished = Promise.withResolvers<void>();
+  const signals: AbortSignal[] = [];
+  const drafts = new Map();
+  const binding: ShadowBinding = { parentConversationId: "parent", parentAgent: "main", shadowAgent: "main/a", childConversationId: `query-${mode}`, turns: [{ parentSourceConversationId: "parent", parentTurnId: "T1", childTurnId: "T1", order: "1", running: true, terminal: "", revision: "initial" }] };
+  const options = (revision: string) => ({ ...shadowHistory({ ...binding, turns: [{ ...binding.turns[0], revision }] }, drafts), retry: false });
+  globalThis.fetch = ((_url: unknown, init: RequestInit) => {
+    signals.push(init.signal as AbortSignal);
+    if (signals.length === (mode === "initial" ? 1 : 2)) { started.resolve(); return delayed.promise; }
+    const text = signals.length === 1 ? "partial" : "final";
+    return Promise.resolve(Response.json(view([event("1", text, "assistant", text, { turnId: "T1" })], { revision: text })));
+  }) as typeof fetch;
+  const observer = new QueryObserver(queryClient, options("initial"));
+  const unsubscribe = observer.subscribe((result) => {
+    if (result.error) finished.reject(result.error);
+    if ((result.data as { lines?: Line[] })?.lines?.[0]?.text === "partial") loaded.resolve();
+    if ((result.data as { lines?: Line[] })?.lines?.[0]?.text === "final") finished.resolve();
+  });
+  try {
+    if (mode === "cached") { await loaded.promise; observer.setOptions(options("held")); }
+    await started.promise;
+    const draft = drafts.get(binding.childConversationId);
+    observer.setOptions(options("middle"));
+    observer.setOptions(options("final"));
+    expect(signals.at(-1)!.aborted).toBe(true);
+    delayed.resolve(Response.json(view([event("1", "stale", "assistant", "stale", { turnId: "T1" })])));
+    await finished.promise;
+    expect(signals).toHaveLength(mode === "initial" ? 2 : 3);
+    expect(signals.at(-1)!.aborted).toBe(false);
+    expect(drafts.get(binding.childConversationId)).toBe(draft);
+    expect(draft.lines.map((line: Line) => line.text)).toEqual(["final"]);
+    expect(draft.historyError).toBe("");
+    observer.setOptions({ ...shadowHistory(undefined, drafts), retry: false });
+    expect(observer.getCurrentResult().data).toBeUndefined();
+  } finally {
+    delayed.resolve(Response.json(view([])));
+    unsubscribe();
+    observer.destroy();
+    queryClient.removeQueries({ queryKey: ["shadow-history", binding.childConversationId] });
+    globalThis.fetch = original;
+  }
+});
+
+test("comparison query reads dependent child pages sequentially and stops at the required turn", async () => {
+  const original = globalThis.fetch;
+  const requests: { id: string; before?: string; limit?: number }[] = [];
+  const binding: ShadowBinding = { parentConversationId: "parent", parentAgent: "main", shadowAgent: "main/a", childConversationId: "paged-child", turns: [{ parentSourceConversationId: "parent", parentTurnId: "T1", childTurnId: "T1", order: "1", running: false, terminal: "complete", revision: "final" }] };
+  let outstanding = 0, maximum = 0;
+  globalThis.fetch = (async (_url: unknown, init: RequestInit) => {
+    const input = JSON.parse(init.body as string);
+    requests.push(input);
+    maximum = Math.max(maximum, ++outstanding);
+    await Promise.resolve();
+    const start = input.before ? Number(input.before) - 50 : 101;
+    const messages = Array.from({ length: 50 }, (_, i) => event(String(start + i), `item-${start + i}`, "assistant", `answer-${start + i}`, { turnId: `T${start + i}` }));
+    outstanding--;
+    return Response.json(view(messages, { start: String(start), more: true }));
+  }) as typeof fetch;
+  try {
+    const result = await queryClient.fetchQuery(shadowHistory(binding, new Map()));
+    expect(requests).toEqual([{ id: "paged-child", limit: 50 }, { id: "paged-child", before: "101", limit: 50 }, { id: "paged-child", before: "51", limit: 50 }]);
+    expect(maximum).toBe(1);
+    expect(result.lines).toHaveLength(150);
+    expect(result.lines[0].turnId).toBe("T1");
+  } finally {
+    queryClient.removeQueries({ queryKey: ["shadow-history", binding.childConversationId] });
+    globalThis.fetch = original;
+  }
+});
+
+test("cancelled comparison history does not apply stale data or become a history error", async () => {
+  const original = globalThis.fetch;
+  const controller = new AbortController();
+  let requested: AbortSignal | undefined;
+  const response = Promise.withResolvers<Response>();
+  globalThis.fetch = ((_url: unknown, init: RequestInit) => { requested = init.signal as AbortSignal; return response.promise; }) as typeof fetch;
+  const draft = { lines: [], busy: false };
+  try {
+    const reading = readHistoryDelta("cancelled-child", draft, () => {}, controller.signal);
+    controller.abort();
+    response.resolve(Response.json(view([event("stale", "stale", "assistant", "must not render")])));
+    await expect(reading).rejects.toThrow();
+    expect(requested).toBe(controller.signal);
+    expect(draft.lines).toEqual([]);
+    expect(draft).not.toHaveProperty("historyError");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+for (const read of [readHistoryDelta, readEarlierHistory]) test(`replacement ${read.name} waits for cancellation and uses its own signal`, async () => {
+  const original = globalThis.fetch;
+  const cancelled = new AbortController(), replacement = new AbortController();
+  const delayed = Promise.withResolvers<Response>();
+  const signals: AbortSignal[] = [];
+  globalThis.fetch = ((_url: unknown, init: RequestInit) => {
+    signals.push(init.signal as AbortSignal);
+    return signals.length === 1 ? delayed.promise : Promise.resolve(Response.json(view([event("final", "final", "assistant", "fresh")])));
+  }) as typeof fetch;
+  const draft = { lines: [] as Line[], busy: false, start: "2", more: true, historyError: "" };
+  try {
+    const reading = (signal: AbortSignal) => read === readHistoryDelta ? read("replacement-child", draft, () => {}, signal) : read("replacement-child", draft, () => {}, undefined, signal);
+    const first = reading(cancelled.signal);
+    const rejected = first.catch((err: unknown) => err);
+    cancelled.abort();
+    const next = reading(replacement.signal);
+    const completed = next.catch((err: unknown) => err);
+    delayed.resolve(Response.json(view([event("stale", "stale", "assistant", "stale")])));
+    expect(await rejected).toMatchObject({ name: "AbortError" });
+    expect(await completed).toBeUndefined();
+    expect(signals).toEqual([cancelled.signal, replacement.signal]);
+    expect(draft.lines.map((line) => line.text)).toEqual(["fresh"]);
+    expect(draft.historyError).toBe("");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("an unchanged parent tail refreshes only unfinished loaded comparison pages", async () => {
+  const original = globalThis.fetch;
+  const binding: ShadowBinding = { parentConversationId: "parent", parentAgent: "main", shadowAgent: "main/a", childConversationId: "a", turns: [{ parentSourceConversationId: "parent", parentTurnId: "T1", childTurnId: "", order: "1", running: false, terminal: "", revision: "pending" }] };
+  const tail = view(Array.from({ length: 50 }, (_, i) => event(String(i + 2), `tail-${i}`, "assistant", "tail")), { start: "2", more: true, revision: "tail", shadows: [{ ...binding, turns: [] }] });
+  const requests: { id: string; before?: string; limit?: number }[] = [];
+  let earlierReads = 0;
+  globalThis.fetch = ((_url: unknown, init: RequestInit) => {
+    const input = JSON.parse(init.body as string);
+    requests.push(input);
+    if (!input.before) return Promise.resolve(Response.json({ ...tail, reset: !input.revision }));
+    const shadows = ++earlierReads === 1 ? [binding] : [{ ...binding, turns: [{ ...binding.turns[0], childTurnId: "child-T1", terminal: "complete", revision: "final" }] }, { ...binding, childConversationId: "outside-loaded-page", turns: [{ ...binding.turns[0], order: "0" }] }];
+    return Promise.resolve(Response.json(view([event("1", "old", "assistant", "old")], { start: "1", shadows })));
+  }) as typeof fetch;
+  const draft = { lines: [] as Line[], busy: false, earlierShadows: undefined as { from: string; before: string; shadows: ShadowBinding[] }[] | undefined };
+  let changes = 0;
+  const changed = () => { changes++; };
+  try {
+    await readHistoryDelta("older-comparisons", draft, changed);
+    await readEarlierHistory("older-comparisons", draft, changed);
+    await readHistoryDelta("older-comparisons", draft, changed);
+    expect(draft.lines).toHaveLength(51);
+    expect(draft.earlierShadows![0].shadows.map((item) => item.childConversationId)).toEqual(["a"]);
+    expect(draft.earlierShadows![0].shadows[0].turns[0]).toMatchObject({ childTurnId: "child-T1", terminal: "complete", revision: "final" });
+    expect(changes).toBe(3);
+    await readHistoryDelta("older-comparisons", draft, changed);
+    expect(changes).toBe(3);
+    expect(requests.filter((input) => input.before)).toEqual([{ id: "older-comparisons", before: "2", limit: 50 }, { id: "older-comparisons", before: "2", limit: 50 }]);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
 
 test("history deltas replace whole groups, remove groups, and keep canonical inventory order", () => {
   const draft = { lines: historyLines([
@@ -306,8 +479,10 @@ test("thinking rows top-align the robot beside multiline text", () => {
 
 test("the in-progress status shows whenever the session is busy, whatever the newest line", () => {
   const text = (name: string) => source.statements.find((node) => isFunctionDeclaration(node) && node.name?.text === name)!.getText(source);
-  expect(text("Transcript")).toContain("working={!previewing && busy}");
-  expect(text("TranscriptLog")).toContain("{working ? <WorkingStatus ");
+  expect(text("Transcript")).toContain("busy: false, more: false, terminal: undefined, shadows: undefined } : { lines, delegations, busy, more, terminal, shadows }");
+  expect(text("Transcript")).toContain("working={followed.busy}");
+  expect(text("TranscriptLog")).toContain("working={working}");
+  expect(text("TranscriptBody")).toContain("{working ? <WorkingStatus ");
   expect(text("WorkingStatus")).toMatch(/<MessageScrollerItem>[^{]*<p role="status"[^>]*>Working…<\/p>/);
   expect(text("TranscriptLog")).not.toContain(">Thinking <");
 });
@@ -315,6 +490,42 @@ test("the in-progress status shows whenever the session is busy, whatever the ne
 test("turns keep activity and replies in the order they happened", () => {
   const lines = historyLines([event("first", "u1", "user", "first"), event("first", "t1", "thinking", "planning"), event("first", "a0", "assistant", "interim"), event("first", "tool1", "tool", "execute"), event("first", "a1", "assistant", "done"), event("second", "u2", "user", "second"), event("second", "t2", "thinking", "again")]);
   expect(transcriptTurns(lines)).toEqual([{ user: [lines[0]], items: [lines[1], lines[2], lines[3], lines[4]], lines: lines.slice(0, 5) }, { user: [lines[5]], items: [lines[6]], lines: lines.slice(5) }]);
+});
+
+test("comparison grouping keeps steers in their outer turn without merging identical later prompts", () => {
+  const lines = historyLines([
+    event("first", "u1", "user", "same", { turnId: "T1" }),
+    event("first", "a1", "assistant", "interim", { turnId: "T1" }),
+    event("first", "s1", "user", "steer", { turnId: "T1" }),
+    event("first", "a2", "assistant", "finished", { turnId: "T1" }),
+    event("second", "u2", "user", "same", { turnId: "T2" }),
+    event("second", "a3", "assistant", "later", { turnId: "T2" }),
+  ]);
+  const groups = (comparison = false) => transcriptTurns(lines, undefined, comparison).map((turn: { lines: Line[] }) => turn.lines.map((line) => line.id));
+  expect(groups()).toEqual([["u1", "a1"], ["s1", "a2"], ["u2", "a3"]]);
+  expect(groups(true)).toEqual([["u1", "a1", "s1", "a2"], ["u2", "a3"]]);
+  expect(transcriptTurns(lines, undefined, true)[0].items.map((line: Line) => line.id)).toEqual(["u1", "a1", "s1", "a2"]);
+  const producers = historyLines([
+    event("turn:cron-one:T", "p1", "user", "same", { turnId: "T" }),
+    event("turn:cron-one:T", "a1", "assistant", "one", { turnId: "T" }),
+    event("turn:cron-two:T", "p2", "user", "same", { turnId: "T" }),
+    event("turn:cron-two:T", "a2", "assistant", "two", { turnId: "T" }),
+  ]);
+  expect(transcriptTurns(producers, undefined, true).map((turn: { lines: Line[] }) => turn.lines.map((line) => line.id))).toEqual([["p1", "a1"], ["p2", "a2"]]);
+  const toolEvents = historyLines([
+    event("turn:parent:T", "input", "user", "same", { turnId: "T" }),
+    event("turn:parent:T", "call", "tool", "execute\n{}", { turnId: "T", toolName: "execute", toolCallId: "run" }),
+    event("turn:parent:T", "steer", "user", "same", { turnId: "T" }),
+    event("turn:parent:T", "result", "tool", "finished", { turnId: "T", toolCallId: "run" }),
+    event("turn:parent:T", "steer-two", "user", "same", { turnId: "T" }),
+    event("turn:parent:T", "answer", "assistant", "done", { turnId: "T" }),
+  ]);
+  const [toolTurn] = transcriptTurns(toolEvents, undefined, true);
+  expect(toolTurn.items.map((line: Line) => line.id)).toEqual(["input", "call", "steer", "steer-two", "answer"]);
+  expect(toolTurn.items[1].toolParts.map((line: Line) => line.id)).toEqual(["result"]);
+  expect(toolTurn.lines.map((line: Line) => line.id)).toEqual(["input", "call", "steer", "result", "steer-two", "answer"]);
+  const legacy = historyLines([event("old", "old-user", "user", "same"), event("old", "old-answer", "assistant", "old"), event("next", "next-user", "user", "same")]);
+  expect(transcriptTurns(legacy, undefined, true).map((turn: { lines: Line[] }) => turn.lines.map((line) => line.id))).toEqual([["old-user", "old-answer"], ["next-user"]]);
 });
 
 test("origin choices hide only matching transcript messages without changing turn order", () => {

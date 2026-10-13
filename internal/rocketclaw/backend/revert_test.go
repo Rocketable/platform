@@ -217,6 +217,90 @@ func TestRevertWaitsForDeliverySettlement(t *testing.T) {
 }
 
 func TestRevertStorageLifecycle(t *testing.T) {
+	t.Run("mapped mid-turn suffix", func(t *testing.T) {
+		s, _ := newShadowTestStore(t)
+		ctx := t.Context()
+		require.NoError(t, s.UpsertThread("parent", ThreadState{Agent: "main"}))
+
+		first := testSessionEntry("first", "kept")
+		first.TurnID = "first"
+		_, err := s.AppendEntryID(ctx, "parent", first)
+		require.NoError(t, err)
+
+		second := testSessionEntry("second", "reply")
+		second.TurnID = "second"
+		second.ReplayInput = append(second.ReplayInput, testSessionEntry("steer", "later reply").ReplayInput...)
+		id, err := s.AppendEntryID(ctx, "parent", second)
+		require.NoError(t, err)
+		children, err := queryStrings(ctx, s.db, `SELECT child_conversation_id FROM shadow_bindings ORDER BY shadow_agent`, "mapped children")
+		require.NoError(t, err)
+		_, err = s.db.ExecContext(ctx, `INSERT INTO shadow_turns (child_conversation_id, parent_source_conversation_id, parent_turn_id, inbound_json)
+VALUES ($1, 'parent', 'earlier-unmaterialized', '{}')`, children[1])
+		require.NoError(t, err)
+
+		for _, child := range children {
+			kept := testSessionEntry("first", "independent kept answer")
+			kept.TurnID = child + "-first"
+			_, err := s.AppendEntryID(ctx, child, kept)
+			require.NoError(t, err)
+
+			for _, turn := range []string{"first", "second", "future-without-entry"} {
+				_, err := s.db.ExecContext(ctx, `INSERT INTO shadow_turns (child_conversation_id, parent_source_conversation_id, parent_turn_id, child_turn_id, inbound_json, inputs)
+VALUES ($1, 'parent', $2, $3, '{}', '[{"id":"input","text":"prepared"}]')`, child, turn, child+"-"+turn)
+				require.NoError(t, err)
+			}
+		}
+
+		for range 2 {
+			entry := testSessionEntry("second", "discarded child answer")
+			entry.TurnID = children[0] + "-second"
+			_, err := s.AppendEntryID(ctx, children[0], entry)
+			require.NoError(t, err)
+		}
+
+		_, err = s.db.ExecContext(ctx, `UPDATE shadow_turns SET child_turn_id = '' WHERE child_conversation_id = $1 AND parent_turn_id <> 'first'`, children[1])
+		require.NoError(t, err)
+		_, err = s.db.ExecContext(ctx, `DELETE FROM shadow_turns WHERE child_conversation_id = $1 AND parent_turn_id = 'second'`, children[1])
+		require.NoError(t, err)
+		marker, _, err := stageRevertDB(ctx, s.db, "parent", fmt.Sprintf("%d:2", id))
+		require.NoError(t, err)
+		entries, err := s.ObserveEntries(ctx, children[0])
+		require.NoError(t, err)
+		require.Len(t, entries, 1, "a steer cutoff hides the whole correlated child turn")
+
+		var stopped int
+		require.NoError(t, s.db.QueryRowContext(ctx, `SELECT count(*) FROM shadow_turns WHERE parent_turn_id <> 'first' AND terminal = $1 AND input_closed`, protocol.TerminalStopped).Scan(&stopped))
+		require.Equal(t, 3, stopped, "an inactive group's earlier unmaterialized manifest is not part of the suffix")
+
+		manager := newThreadBridgeManager(s.definitions, s, s.log, func(cfg Config) directBridge {
+			cfg.SessionService = s
+			return NewConversation(s.definitions, discardPublisher{}, &cfg, s.log)
+		})
+		rt := &Runtime{Sessions: s, threads: manager}
+		require.NoError(t, rt.ClearRevert(ctx, "parent"))
+		entries, err = s.ObserveEntries(ctx, children[0])
+		require.NoError(t, err)
+		require.Len(t, entries, 3, "Redo restores stored rows")
+
+		_, claimed, err := s.claimShadowTurn(ctx, children[1])
+		require.NoError(t, err)
+		require.False(t, claimed, "Redo never restarts stopped effects")
+
+		marker, _, err = stageRevertDB(ctx, s.db, "parent", marker)
+		require.NoError(t, err)
+		tx, err := s.db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		require.NoError(t, commitRevertDB(ctx, tx, "parent", marker))
+		require.NoError(t, tx.Commit())
+
+		entries, err = s.ObserveEntries(ctx, children[0])
+		require.NoError(t, err)
+		require.Len(t, entries, 1, "commit keeps only earlier independent child history")
+
+		remaining, err := queryStrings(ctx, s.db, `SELECT parent_turn_id FROM shadow_turns ORDER BY 1`, "remaining comparisons")
+		require.NoError(t, err)
+		require.Equal(t, []string{"earlier-unmaterialized", "first", "first"}, remaining, "only future unmaterialized manifests belong to the discarded branch")
+	})
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	_, err := s.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ('main', 'planner', '')`)
@@ -547,7 +631,7 @@ func TestRevertHistorySnapshot(t *testing.T) {
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
 	id, err := s.AppendEntryID(t.Context(), "main", testSessionEntry("first", "answer"))
 	require.NoError(t, err)
-	view, err := s.ObserveHistory(t.Context(), "main", "", 0, 0, 1, HistoryInventory{})
+	view, err := s.ObserveHistory(t.Context(), "main", "", 0, 0, 1, &HistoryInventory{})
 	require.NoError(t, err)
 	require.True(t, view.Eligible)
 	require.NotEmpty(t, view.Predecessor)
@@ -555,7 +639,7 @@ func TestRevertHistorySnapshot(t *testing.T) {
 	marker := fmt.Sprintf("%d:0", id)
 	_, _, err = stageRevertDB(t.Context(), s.db, "main", marker)
 	require.NoError(t, err)
-	view, err = s.ObserveHistory(t.Context(), "main", "", 0, 0, 1, view.Inventory)
+	view, err = s.ObserveHistory(t.Context(), "main", "", 0, 0, 1, &view.Inventory)
 	require.NoError(t, err)
 	require.Equal(t, marker, view.Inventory.Marker)
 	require.True(t, view.Reset)
@@ -668,7 +752,7 @@ func TestRevertBusyAdmissionAndRecordedDrain(t *testing.T) {
 	require.Error(t, err)
 	_, err = rt.PromoteQueueItem(ctx, "main", "waiting")
 	require.ErrorContains(t, err, "busy")
-	require.Empty(t, b.drainSteers(ctx, rocketcode.TurnPhaseFinalAnswer))
+	require.Empty(t, testDrainInputs(t, b, rocketcode.TurnPhaseFinalAnswer))
 
 	completion := &turnCompletion{done: make(chan struct{})}
 	request := bridgeRequest{inbound: inbound, queueItemID: "waiting", completion: completion}
@@ -1107,7 +1191,7 @@ func TestRevertCorruptHistoryCannotBeAdmitted(t *testing.T) {
 			_, _, err := stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", id))
 			require.ErrorContains(t, err, "decode revert boundary")
 
-			_, err = s.ObserveHistory(ctx, "main", "", 0, 0, 0, HistoryInventory{})
+			_, err = s.ObserveHistory(ctx, "main", "", 0, 0, 0, &HistoryInventory{})
 			if corrupt.name == "trace" {
 				require.Error(t, err)
 			}

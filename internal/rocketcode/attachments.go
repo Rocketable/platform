@@ -44,7 +44,7 @@ type PromptInput struct {
 	DirectSkill *PromptInputDirectSkill
 	// Responses receives user-visible response items for this prompt. The runtime
 	// closes it after the prompt's turn reaches a terminal state.
-	Responses chan<- ChatResponse
+	Responses chan<- ChatResponse `json:"-"`
 }
 
 // PromptInputDirectSkill requests a skill load before the model turn starts.

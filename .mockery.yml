@@ -116,6 +116,9 @@ packages:
           structname: agentRunnerMock
   github.com/Rocketable/platform/internal/rocketcode:
     interfaces:
+      SteerDrain:
+        config:
+          structname: mockSteerDrain
       BackgroundJobs:
         config:
           structname: mockBackgroundJobs

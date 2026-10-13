@@ -459,6 +459,7 @@ func (f *toolFactory) subagent(ctx context.Context, base *Agent, childKey string
 		Observability:          f.observability,
 		Journal:                taskChildJournal(ctx),
 		notes:                  f.backgroundJobs,
+		SteerDrain:             InertSteerDrain{},
 		subagentKey:            childKey,
 	}
 	childFactory.configureSpill(child)
@@ -620,6 +621,7 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 		Observability:          f.observability,
 		Journal:                InertJournal{},
 		notes:                  InertBackgroundJobs{},
+		SteerDrain:             InertSteerDrain{},
 	}
 	childFactory.configureSpill(child)
 

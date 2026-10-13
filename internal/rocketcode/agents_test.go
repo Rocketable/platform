@@ -2,6 +2,8 @@ package rocketcode
 
 import (
 	"io/fs"
+	"os"
+	"path"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -92,6 +94,53 @@ func testMapFileMode(mode fs.FileMode, data string) *fstest.MapFile {
 }
 
 func TestLoadAgents(t *testing.T) {
+	t.Run("loads only immediate shadows of matching parent files", func(t *testing.T) {
+		root, err := os.OpenRoot(t.TempDir())
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+		for _, name := range []string{"main.md", "main/z.md", "main/a.md", "main/deeper/ignored.md", "unmatched/ignored.md", "ordinary.md"} {
+			require.NoError(t, root.MkdirAll(path.Dir(name), 0o700))
+			require.NoError(t, root.WriteFile(name, []byte("---\nmodel: "+name+"\npermission:\n  edit: deny\n---\nPrompt "+name), 0o600))
+		}
+
+		require.NoError(t, root.WriteFile("main/notes.txt", []byte("ignored"), 0o600))
+		require.NoError(t, root.WriteFile("main/broken.md", []byte("missing frontmatter"), 0o600))
+
+		result := LoadAgents(root.FS(), passThroughAgentModel)
+		require.Len(t, result.Agents.Items, 4)
+		require.Equal(t, []string{"main", "ordinary"}, result.Agents.PrimaryNames())
+		require.Equal(t, []string{"main/a", "main/z"}, result.Agents.ShadowNames("main"))
+		require.Empty(t, result.Agents.ShadowNames("ordinary"))
+		require.Empty(t, result.Agents.ShadowNames("unmatched"))
+		require.Len(t, result.Errors, 1)
+		require.EqualError(t, result.Errors[0], "main/broken.md: missing YAML frontmatter")
+
+		for _, name := range []string{"main", "main/a", "main/z", "ordinary"} {
+			agent := result.Agents.Items[name]
+			require.Equal(t, name, agent.Name)
+			require.Equal(t, name+".md", agent.Location)
+			require.Equal(t, name+".md", agent.Model)
+			require.Equal(t, "Prompt "+name+".md", agent.Prompt)
+			action, matched := agent.Permission.Evaluate("edit", "example.txt")
+			require.True(t, matched)
+			require.Equal(t, PermissionDeny, action)
+		}
+	})
+
+	t.Run("reports a shadow directory that escapes the root", func(t *testing.T) {
+		root, err := os.OpenRoot(t.TempDir())
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, root.Close()) })
+		require.NoError(t, root.WriteFile("main.md", []byte("---\nmodel: gpt-5.4\n---\nPrompt"), 0o600))
+		require.NoError(t, root.Symlink("..", "main"))
+
+		result := LoadAgents(root.FS(), passThroughAgentModel)
+		require.Len(t, result.Agents.Items, 1)
+		require.Len(t, result.Errors, 1)
+		require.ErrorContains(t, result.Errors[0], "main: read shadow agents:")
+	})
+
 	t.Run("loads valid top level markdown agents", func(t *testing.T) {
 		fsys := fstest.MapFS{
 			"review.md": testMapFileMode(0o640, `---
@@ -117,6 +166,7 @@ model: gpt-5.4
 Plan, do not edit.
 `),
 			"README.txt": testMapFile("ignored"),
+			"plan":       testMapFile("not a shadow directory"),
 			"nested/child.md": testMapFile(`---
 description: ignored nested agent
 ---

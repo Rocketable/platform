@@ -25,6 +25,12 @@ func (s *SessionService) SaveAttachment(ctx context.Context, conversationID, tur
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if upload {
+		if err := rejectShadowMutation(ctx, tx, conversationID); err != nil {
+			return err
+		}
+	}
+
 	var id string
 
 	err = queryScalar(ctx, tx, "save attachment", `INSERT INTO attachments (id, conversation_id, name, mime_type, size, original_unverified, upload, turn_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING RETURNING id`, &id, attachment.ID, conversationID, attachment.Name, attachment.MIMEType, len(attachment.Data), attachment.OriginalUnverified, upload, turnID)
@@ -102,14 +108,17 @@ func (s *SessionService) TurnAttachments(ctx context.Context, conversationID, tu
 	}, conversationID, turnID)
 }
 
-// InputAttachments returns producer's input text without its trailing upload
-// references, and the uploads it references in text order.
+// InputAttachments strips trailing upload references and returns their metadata
+// in text order, including actual owners of surviving correlated shadow inputs.
 func (s *SessionService) InputAttachments(ctx context.Context, producer, text string) (string, []protocol.OutboundAttachment, error) {
 	return inputAttachmentsDB(ctx, s.db, producer, text)
 }
 
 func inputAttachmentsDB(ctx context.Context, db stateStoreDB, producer, text string) (string, []protocol.OutboundAttachment, error) {
-	var attachments []protocol.OutboundAttachment
+	var (
+		attachments []protocol.OutboundAttachment
+		turns       []string
+	)
 
 	for word := range strings.FieldsSeq(text) {
 		id, ok := strings.CutPrefix(word, "attachment:")
@@ -119,7 +128,47 @@ func inputAttachmentsDB(ctx context.Context, db stateStoreDB, producer, text str
 
 		attachment := protocol.OutboundAttachment{ID: id}
 
-		err := db.QueryRowContext(ctx, `SELECT name, mime_type, size, original_unverified FROM attachments WHERE id=$1 AND conversation_id=$2 AND upload`, id, producer).Scan(&attachment.Name, &attachment.MIMEType, &attachment.Size, &attachment.OriginalUnverified)
+		err := db.QueryRowContext(ctx, `SELECT a.conversation_id, a.name, a.mime_type, a.size, a.original_unverified FROM attachments a
+WHERE a.id = $1 AND a.upload AND (a.conversation_id = $2 OR EXISTS (SELECT 1 FROM shadow_turns t
+    WHERE t.child_conversation_id = $2 AND t.parent_source_conversation_id = a.conversation_id AND t.child_turn_id <> ''))`, id, producer).Scan(&attachment.ConversationID, &attachment.Name, &attachment.MIMEType, &attachment.Size, &attachment.OriginalUnverified)
+		if err == nil && attachment.ConversationID != producer {
+			if turns == nil {
+				// Replay scanning is bounded by retained history; index consumed references if this becomes costly.
+				entries, errRead := observeTranscriptDB(ctx, db, producer, 0, 0, nil)
+				if errRead != nil {
+					return "", nil, errRead
+				}
+
+				turns = []string{}
+
+				for i := range entries {
+					entry := &entries[i]
+
+					items, err := rocketcode.ReplayInputToParams(entry.Entry.ReplayInput)
+					if err != nil {
+						return "", nil, fmt.Errorf("decode consumed input attachments: %w", err)
+					}
+
+					for i := range items {
+						role, consumed, message, err := ReplayInputMessageRoleText(&items[i], entry.Entry.ReplayInput[i])
+						if err != nil {
+							return "", nil, err
+						}
+
+						if message && role == "user" && consumed == text {
+							turns = append(turns, entry.Entry.TurnID)
+							break
+						}
+					}
+				}
+			}
+			// Correlation and the surviving consumed reference are both required; manifests may have released their payload.
+			err = db.QueryRowContext(ctx, `SELECT a.conversation_id, a.name, a.mime_type, a.size, a.original_unverified FROM attachments a
+WHERE a.id = $1 AND a.upload AND EXISTS (SELECT 1 FROM shadow_turns t
+    WHERE t.child_conversation_id = $2 AND t.parent_source_conversation_id = a.conversation_id
+        AND t.child_turn_id <> '' AND t.child_turn_id = ANY($3))`, id, producer, turns).Scan(&attachment.ConversationID, &attachment.Name, &attachment.MIMEType, &attachment.Size, &attachment.OriginalUnverified)
+		}
+
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}

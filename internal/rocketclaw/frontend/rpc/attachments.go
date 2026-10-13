@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -20,7 +21,7 @@ import (
 const attachmentChunkBytes = 256 << 10
 
 func attachmentMetadata(conversationID string, attachment *protocol.OutboundAttachment) *Attachment {
-	return &Attachment{Id: attachment.ID, Name: attachment.Name, MimeType: attachment.MIMEType, Size: max(attachment.Size, int64(len(attachment.Data))), OriginalUnverified: attachment.OriginalUnverified, ConversationId: conversationID}
+	return &Attachment{Id: attachment.ID, Name: attachment.Name, MimeType: attachment.MIMEType, Size: max(attachment.Size, int64(len(attachment.Data))), OriginalUnverified: attachment.OriginalUnverified, ConversationId: cmp.Or(attachment.ConversationID, conversationID)}
 }
 
 func (s *Server) uploadAttachment(stream grpc.ServerStream) error {
@@ -87,13 +88,20 @@ func (s *Server) downloadAttachment(stream grpc.ServerStream) error {
 		return err
 	}
 
-	queue, err := s.listQueue(stream.Context(), &ListQueueRequest{Id: request.ConversationId})
+	parent, err := s.sessions.ShadowParent(stream.Context(), request.ConversationId)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve attachment comparison parent: %w", err)
 	}
 
-	for _, item := range queue.Items {
-		history.Messages = append(history.Messages, &TranscriptEvent{Attachments: item.Attachments})
+	if parent == "" {
+		queue, err := s.listQueue(stream.Context(), &ListQueueRequest{Id: request.ConversationId})
+		if err != nil {
+			return err
+		}
+
+		for _, item := range queue.Items {
+			history.Messages = append(history.Messages, &TranscriptEvent{Attachments: item.Attachments})
+		}
 	}
 	// The staged request is the owning local composer's restore source, not a
 	// readable hidden suffix. Only its uploads gain this existing download path.

@@ -161,6 +161,61 @@ permission:
     allow_background: allow
 ```
 
+### Shadow agents
+
+Put alternative agent definitions in the directory named after their parent:
+
+```text
+agents/some-important-agent.md
+agents/some-important-agent/name-of-shadow-agent.md
+agents/some-important-agent/another-shadow.md
+```
+
+Each immediate Markdown child is a shadow. Use ordinary agent frontmatter,
+including a model and permissions, in each file. No extra configuration list is
+needed. Deeper directories and directories without a matching parent file do not
+declare shadows. Shadows are not choices in the normal agent picker, and cannot
+create shadows of their own.
+
+Each parent session has a separate saved session for every shadow. Each parent
+turn gives those sessions the same inputs, in the order the parent uses them:
+the prepared prompt, attachments, consumed steers, moved-work notices, and
+Background Job Completion Notes. Queued or stashed work is copied only when used;
+removed work is not copied. A shadow keeps its own replies, tool results, and
+history. The parent never waits for a shadow's answer. Model calls, cost, and tool
+work increase with each shadow.
+
+**Shadows run real tools. This is not a dry run.** They share the workspace and
+external services with the parent, so allowed file edits, shell commands, and
+external writes can race or happen more than once. Each shadow uses its own
+permissions, without borrowing the parent's approvals. Start with
+permission-limited definitions and non-critical work.
+
+Scripts run by shadows receive `ROCKETCLAW_SHADOW` with the full shadow agent
+name, such as `some-important-agent/name-of-shadow-agent`, alongside the other
+`ROCKETCLAW_*` environment variables. Scripts can use it to adjust their behavior
+during a shadow run.
+
+The same inputs do not mean identical model conversations: system instructions,
+model, independent history, tool results, and compaction can differ. A saved
+workflow runs from the same source and arguments, with the shadow as its base
+agent; explicit workflow worker settings still override that base.
+
+Inspect shadows in the Web comparison tabs beside their parent. Their output
+stays there, without an extra Slack reply, cron report, or MCP response. Shadows
+cannot ask independent human questions, create threads, schedule work, manage
+goals, reload/restart the service, or start Background Jobs. Read-only comparison
+does not prevent the real tool effects described above.
+
+New shadows on existing sessions begin at the next parent turn, seeded from the
+retained parent history without rerunning old work. Removing a file stops future
+turns, not work already admitted. Switching agents changes the shadows for future
+turns and retains earlier comparisons. Forks get fresh shadow sessions. Revert
+hides whole corresponding shadow turns; Redo restores saved comparisons without
+rerunning effects. Neither operation undoes files or external writes. Clearing
+history clears comparisons but keeps bindings for future work; deleting a parent
+deletes its owned shadow sessions.
+
 ## Skills
 
 Type `$` in the web page to list commands and skills for the current agent. `$review some text` runs the skill named `review`, and `$stop` stops the current work. To queue a skill instead of running it now, use `$enqueue $review some text`. In Slack, `$` text is plain text for the agent.
@@ -202,7 +257,7 @@ Sign in per provider with `rocketclaw oai login [provider] [--headless]`. Use `r
   "attachments": {"driver": "s3", "bucket_arn": "arn:aws:s3:::rocketclaw-attachments"}
   ```
 
-  S3 uses the standard AWS credentials and region settings, and needs `s3:PutObject` and `s3:GetObject`. RocketClaw does not create buckets or make files public.
+  S3 uses the standard AWS credentials and region settings. Grant `s3:PutObject`, `s3:GetObject`, and `s3:DeleteObject` for attachments, plus `s3:DeleteObjectVersion` for a versioned bucket. Grant `s3:ListBucket` so deletion retries can distinguish missing files from denied access. RocketClaw does not create buckets or make files public.
 - Back up the database and the attachment storage together. Restoring only the database brings back references to files, not the files.
 - `.rocketclaw/` holds generated runtime files, such as cloned overlays, per-session temporary folders, and oversized command output. Do not treat it as source code.
 

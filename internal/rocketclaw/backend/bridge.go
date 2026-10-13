@@ -114,6 +114,8 @@ type Bridge struct {
 	threads *threadBridgeManager
 	// background runs the turns' execute and task calls of agents allowed to background them.
 	background *backgroundRegistry
+	// shadow is explicit stored ownership, fixed before the worker starts.
+	shadow bool
 
 	mu                    sync.Mutex
 	handling, stopped     bool
@@ -138,7 +140,8 @@ type Bridge struct {
 	notesOpen    bool
 	notesOffered []string
 	// movedNotes tell the running turn, at its next step, which of its calls the user moved.
-	movedNotes []rocketcode.PromptInput
+	movedNotes      []rocketcode.PromptInput
+	shadowInputWake chan struct{}
 }
 
 type turnCompletion struct {
@@ -383,11 +386,24 @@ func (b *Bridge) InterruptActiveTurn() *protocol.InboundMessage {
 
 // PickLaterWork submits the next saved queue or due schedule for this conversation.
 func (b *Bridge) PickLaterWork(ctx context.Context) error {
+	if b.shadow {
+		select {
+		case b.requestCh <- bridgeRequest{}:
+		default:
+		}
+
+		return nil
+	}
+
 	return b.pickLaterWork(ctx, false)
 }
 
 func (b *Bridge) headRequest(ctx context.Context) (bridgeRequest, bool, error) {
 	turn, ok, err := b.config.SessionService.headTurn(ctx, b.config.ConversationID)
+	if err == nil && !ok && b.shadow {
+		turn, ok, err = b.config.SessionService.claimShadowTurn(ctx, b.config.ConversationID)
+	}
+
 	if err != nil || !ok {
 		return bridgeRequest{}, false, err
 	}
@@ -398,7 +414,7 @@ func (b *Bridge) headRequest(ctx context.Context) (bridgeRequest, bool, error) {
 	}
 
 	if turn.conversationID != b.config.ConversationID {
-		request.producer, err = b.threads.recordedBridge(turn.conversationID)
+		request.producer, err = b.threads.recordedBridge(ctx, turn.conversationID)
 		if err != nil {
 			return bridgeRequest{}, false, fmt.Errorf("load active turn producer: %w", err)
 		}
@@ -449,6 +465,10 @@ func (b *Bridge) stopIdleTurn() *protocol.InboundMessage {
 	finish := turnFinish{store: newSessionStore(turn.conversationID, b.config.SessionService), outbound: outbound, terminal: protocol.TerminalStopped, hidden: hiddenRun(turn.inbound)}
 
 	outbound, err = b.config.SessionService.finishTurn(ctx, turn.id, &finish)
+	if err == nil {
+		err = b.notifyShadowInputs(ctx, turn.id)
+	}
+
 	if err == nil {
 		err = b.deliver(ctx, &bridgeRequest{inbound: turn.inbound, turnID: turn.id}, outbound, finish.retry)
 	}
@@ -599,6 +619,11 @@ func (b *Bridge) slipSteer(request *bridgeRequest) (bool, error) {
 		return false, err
 	}
 
+	snapshot, _, err := loadTurnInputs(ctx, b.config.SessionService.db, b.config.ConversationID, turn.id)
+	if err != nil || snapshot.Closed {
+		return false, err
+	}
+
 	key := turn.id + "/steers"
 
 	var steers []journaledSteer
@@ -634,6 +659,21 @@ func (b *Bridge) loop(ctx context.Context) {
 		case <-b.stopCh:
 			return
 		case request := <-b.requestCh:
+			// A wake carries no request data; this worker claims its durable head.
+			if request.inbound == nil && b.shadow {
+				head, found, err := b.headRequest(ctx)
+				if err != nil {
+					b.log.Error("claim shadow work", "error", err)
+					continue
+				}
+
+				if !found {
+					continue
+				}
+
+				request = head
+			}
+
 			b.handle(ctx, &request)
 		}
 	}
@@ -720,24 +760,7 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 		b.mu.Unlock()
 
 		if errLock != nil {
-			if ctx.Err() != nil {
-				if err := b.storeStopped(request, "store waiting request"); err != nil && !errors.Is(err, protocol.ErrBridgeStopped) {
-					b.log.Error("store waiting request during shutdown", "conversation_id", b.config.ConversationID, "error", err)
-				}
-
-				return
-			}
-
-			if request.turnID != "" && stopped {
-				errLock = b.finish(ctx, request, &turnFinish{store: newSessionStore(b.config.ConversationID, b.config.SessionService)}, &runResult{turnID: request.turnID}, protocol.TerminalStopped)
-			}
-
-			b.completeRequestTurnPairReservation(request)
-
-			if request.inbound != nil {
-				request.inbound.CompleteResponseWithAttachments("", nil, errLock)
-			}
-
+			settlement.err = b.settlePairWait(ctx, request, stopped, errLock)
 			return
 		}
 	}
@@ -778,6 +801,11 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 		request.inbound.CompleteResponseWithAttachments("", nil, errHandle)
 	}
 
+	if _, persistence := errors.AsType[inputPersistenceError](errHandle); persistence {
+		settlement.err = errHandle
+		return
+	}
+
 	// A failed producer turn syncs too: the sync releases the turn pair it reserved, which a
 	// failed wake would otherwise hold until a restart, blocking every later turn here.
 	if request.producer != nil && request.completion == nil {
@@ -814,6 +842,34 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 	if handler != b {
 		b.pickLaterWorkLogged(ctx, b, &protocol.InboundMessage{})
 	}
+}
+
+// settlePairWait preserves an interrupted producer's reservation if terminal
+// closure could not commit, just as execution-time settlement does.
+func (b *Bridge) settlePairWait(ctx context.Context, request *bridgeRequest, stopped bool, err error) error {
+	if ctx.Err() != nil {
+		if err := b.storeStopped(request, "store waiting request"); err != nil && !errors.Is(err, protocol.ErrBridgeStopped) {
+			b.log.Error("store waiting request during shutdown", "conversation_id", b.config.ConversationID, "error", err)
+		}
+
+		return err
+	}
+
+	if request.turnID != "" && stopped {
+		err = b.finish(ctx, request, &turnFinish{store: newSessionStore(b.config.ConversationID, b.config.SessionService)}, &runResult{turnID: request.turnID}, protocol.TerminalStopped)
+	}
+
+	if _, persistence := errors.AsType[inputPersistenceError](err); persistence {
+		return err
+	}
+
+	b.completeRequestTurnPairReservation(request)
+
+	if request.inbound != nil {
+		request.inbound.CompleteResponseWithAttachments("", nil, err)
+	}
+
+	return err
 }
 
 // skipInbound ends a request whose activation found nothing to run: it frees the turn pair a
@@ -853,6 +909,8 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 	if request.producer != nil {
 		owner = request.producer
 	}
+
+	agent := cmp.Or(request.workflow.agent, owner.agentSnapshot())
 
 	if request.queueItemID != "" && request.producer == nil && request.inbound.GoalAction != protocol.GoalActionKickoff {
 		goal, active, err := b.config.SessionService.Goal(b.config.ConversationID)
@@ -914,6 +972,10 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 		if woken, err := claimWakeNotes(ctx, tx, owner.config.ConversationID, turnID, request.inbound); err != nil || !woken {
 			return false, err
 		}
+	}
+
+	if err := owner.admitShadowInputs(ctx, tx, request, agent, turnID); err != nil {
+		return false, err
 	}
 
 	if err := startTurnDB(ctx, tx, turnID, owner.config.ConversationID, request.inbound); err != nil {
@@ -1045,7 +1107,7 @@ WHERE a.phase <> $2 AND c.producer_inbound_json->>'SyncDestination' = $1)`, b.co
 			return b.enqueue(ctx, &bridgeRequest{inbound: inbound, backgroundWake: true}, "submit background wake")
 		}
 
-		destination, err := b.threads.recordedBridge(inbound.SyncDestination)
+		destination, err := b.threads.recordedBridge(ctx, inbound.SyncDestination)
 		if err != nil {
 			return fmt.Errorf("load background wake destination: %w", err)
 		}
@@ -1182,7 +1244,7 @@ func (b *Bridge) handoffProducer(ctx context.Context) error {
 				return fmt.Errorf("load web agents: %w", err)
 			}
 
-			choices := slices.Sorted(maps.Keys(definitions.Items))
+			choices := definitions.PrimaryNames()
 
 			stem := strings.TrimSuffix(strings.TrimPrefix(inbound.Cronjob.RelativePath, "cron/"), ".md")
 			if job, err := config.LoadOneOffCronjob(runtimeCfg.Workspace, runtimeCfg.RuntimeDirName(), stem); err == nil {
@@ -1193,7 +1255,11 @@ func (b *Bridge) handoffProducer(ctx context.Context) error {
 				return errors.New("create canonical web conversation: no loaded agents")
 			}
 
-			if err := dao.createConversation(ctx, protocol.Conversation{ID: web, Agent: choices[0], CreatedBy: string(ThreadCreatedByCron)}); err != nil {
+			if _, err := dao.createConversation(ctx, protocol.Conversation{ID: web, Agent: choices[0], CreatedBy: string(ThreadCreatedByCron)}); err != nil {
+				return err
+			}
+
+			if _, err := b.config.SessionService.reconcileShadows(ctx, tx, web, choices[0]); err != nil {
 				return err
 			}
 		}
@@ -1208,7 +1274,7 @@ func (b *Bridge) handoffProducer(ctx context.Context) error {
 		return fmt.Errorf("commit producer handoff: %w", err)
 	}
 
-	destination, err := b.threads.recordedBridge(owner)
+	destination, err := b.threads.recordedBridge(ctx, owner)
 	if err != nil {
 		return err
 	}
@@ -1269,7 +1335,7 @@ func (b *Bridge) submitEnqueuedItem(ctx context.Context, item *protocol.ThreadQu
 			return b.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: item.ID}, "submit stored message")
 		}
 
-		destination, err := b.threads.recordedBridge(inbound.SyncDestination)
+		destination, err := b.threads.recordedBridge(ctx, inbound.SyncDestination)
 		if err != nil {
 			return fmt.Errorf("load stored message destination: %w", err)
 		}
@@ -1353,7 +1419,7 @@ func (b *Bridge) completeRequestTurnPairReservation(request *bridgeRequest) {
 }
 
 func (b *Bridge) pickLaterWorkLogged(ctx context.Context, worker *Bridge, inbound *protocol.InboundMessage) {
-	errPick := worker.pickLaterWork(ctx, false)
+	errPick := worker.PickLaterWork(ctx)
 	if errPick != nil {
 		b.log.Error("pick later work", "error", errPick)
 
@@ -1380,34 +1446,58 @@ func (b *Bridge) wakePrompt(ctx context.Context, msg *protocol.InboundMessage) e
 	return nil
 }
 
-func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err error) {
+// openInputWindow restores durable closure before admitting any late input.
+func (b *Bridge) openInputWindow(ctx context.Context, request *bridgeRequest) (bool, error) {
 	msg := request.inbound
 
 	var recorded []journaledSteer
 
+	canonical, captured, err := loadTurnInputs(ctx, b.config.SessionService.db, b.config.ConversationID, request.turnID)
+	if err != nil {
+		return false, inputPersistenceError{cause: err}
+	}
+
 	if data, found, err := b.config.SessionService.LoadTurnStep(ctx, b.config.ConversationID, request.turnID+"/steers"); err != nil {
-		return err
+		return false, inputPersistenceError{cause: err}
 	} else if found {
 		if err := json.Unmarshal(data, &recorded); err != nil {
-			return fmt.Errorf("decode accepted steers: %w", err)
+			return false, inputPersistenceError{cause: fmt.Errorf("decode accepted steers: %w", err)}
 		}
 	}
 
 	b.mu.Lock()
 
-	b.inputOpen, b.activeTurnID = msg.Human && msg.SyncDestination == "" && !b.historyMutation, request.turnID
+	b.inputOpen, b.activeTurnID = msg.Human && msg.SyncDestination == "" && !b.historyMutation && !canonical.Closed && request.delivery == nil, request.turnID
 	b.notesOffered = strings.Fields(msg.Metadata[backgroundNotesMetadataKey])
 
 	for _, steer := range recorded {
-		b.steers = append(b.steers, bridgeRequest{inbound: steer.Inbound, queueItemID: steer.ID, completion: &turnCompletion{done: make(chan struct{})}})
+		if !slices.ContainsFunc(b.steers, func(request bridgeRequest) bool { return request.queueItemID == steer.ID }) {
+			b.steers = append(b.steers, bridgeRequest{inbound: steer.Inbound, queueItemID: steer.ID, completion: &turnCompletion{done: make(chan struct{})}})
+		}
 	}
 
 	b.mu.Unlock()
+
+	return captured, nil
+}
+
+func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err error) {
+	msg := request.inbound
+
+	captured, err := b.openInputWindow(ctx, request)
+	if err != nil {
+		return err
+	}
+
 	defer func() {
 		err = b.settleSteers(ctx, err)
 	}()
 
 	if request.delivery != nil {
+		if err := b.notifyShadowInputs(ctx, request.turnID); err != nil {
+			return inputPersistenceError{cause: err}
+		}
+
 		if err := b.deliver(ctx, request, request.delivery, 0); err != nil {
 			return err
 		}
@@ -1415,35 +1505,35 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 		return b.finishGoalTurn(ctx, request)
 	}
 
-	if msg.GoalAction == protocol.GoalActionContinue {
-		goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID)
-		if err != nil {
-			return fmt.Errorf("load goal continuation state: %w", err)
-		}
-
-		if !ok || strings.TrimSpace(goal.Status) != GoalStatusActive {
-			msg.CompleteResponseWithAttachments("", nil, nil)
-			return b.config.SessionService.closeTurn(context.WithoutCancel(ctx), request.turnID)
-		}
+	if stopped, err := b.finishStoppedShadow(ctx, request); err != nil || stopped {
+		return err
 	}
 
-	if err := b.wakePrompt(ctx, msg); err != nil {
-		return err
+	if msg.GoalAction == protocol.GoalActionContinue && !captured {
+		if skipped, err := b.skipObsoleteGoal(ctx, request); skipped || err != nil {
+			return err
+		}
 	}
 
 	turnID := request.turnID
 	started := time.Now()
 	result := runResult{turnID: turnID}
 	finish := turnFinish{store: newSessionStore(b.config.ConversationID, b.config.SessionService)}
+	prepare := !captured && !b.shadow
 
-	var errLog error
+	var errLog, errTurn error
+	if prepare {
+		errTurn = b.wakePrompt(ctx, msg)
+	}
 
 	slackChannel, slackMessageTS, slackThreadTS := "", "", ""
 	if reply := msg.SlackReply; reply != nil {
 		slackChannel, slackMessageTS, slackThreadTS = reply.ChannelID, reply.MessageTS, reply.ThreadTS
 	}
 
-	normalizeInboundAttachments(msg)
+	if prepare {
+		normalizeInboundAttachments(msg)
+	}
 
 	b.log.Info("starting rocketcode turn", "event", "turn_started", "conversation_id", b.config.ConversationID, "turn_id", turnID, "queue_item_id", request.queueItemID, "scheduled_message_id", request.scheduledMessageID, "source", msg.Source, "kind", msg.Kind, "text_len", len([]rune(msg.Text)), "attachment_count", len(msg.Attachments), "slack_channel", slackChannel, "slack_message_ts", slackMessageTS, "slack_thread_ts", slackThreadTS)
 
@@ -1458,7 +1548,7 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 		b.log.Info("finished rocketcode turn", "event", "turn_finished", "outcome", outcome, "conversation_id", b.config.ConversationID, "turn_id", turnID, "duration_ms", time.Since(started).Milliseconds(), "text_len", len([]rune(result.text)), "error_type", fmt.Sprintf("%T", errLog))
 	}()
 
-	if fallback := attachmentFallback(msg); fallback != "" {
+	if fallback := attachmentFallback(msg); prepare && fallback != "" {
 		b.publishConsumed(ctx, msg, "")
 
 		result.text = fallback
@@ -1467,14 +1557,20 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 		return errLog
 	}
 
-	var errTurn error
-	if msg.Workflow.Name != "" {
+	switch {
+	case errTurn != nil:
+		// Preparation failure settles as a terminal-only comparison below.
+	case msg.Workflow.Name != "":
 		result, errTurn = b.runWorkflow(ctx, request, &finish)
-	} else {
+	default:
 		result, errTurn = b.runTurn(ctx, msg, turnID, turnID, &finish)
 	}
 
 	if errTurn != nil {
+		if _, persistence := errors.AsType[inputPersistenceError](errTurn); persistence {
+			return errTurn
+		}
+
 		if ctx.Err() != nil && !errors.Is(errTurn, errTurnInterrupted) {
 			errLog = errTurn
 
@@ -1511,13 +1607,48 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 	return nil
 }
 
+// skipObsoleteGoal settles a stale continuation without inventing a model input.
+func (b *Bridge) skipObsoleteGoal(ctx context.Context, request *bridgeRequest) (bool, error) {
+	goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID)
+	if err != nil {
+		return false, inputPersistenceError{cause: fmt.Errorf("load goal continuation state: %w", err)}
+	}
+
+	if ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
+		return false, nil
+	}
+
+	outbound := protocol.NewOutboundMessage(b.config.ConversationID, "")
+	if _, err := b.config.SessionService.finishTurn(ctx, request.turnID, &turnFinish{store: newSessionStore(b.config.ConversationID, b.config.SessionService), outbound: outbound}); err != nil {
+		return true, err
+	}
+
+	if err := b.notifyShadowInputs(ctx, request.turnID); err != nil {
+		return true, inputPersistenceError{cause: err}
+	}
+
+	request.inbound.CompleteResponseWithAttachments("", nil, nil)
+
+	return true, b.config.SessionService.closeTurn(context.WithoutCancel(ctx), request.turnID)
+}
+
 // finish moves the request's row to delivering with its final outbound, then
 // delivers it. When $stop already finished the row, its stored outbound wins.
 func (b *Bridge) finish(ctx context.Context, request *bridgeRequest, finish *turnFinish, result *runResult, terminal protocol.Terminal) error {
 	msg := request.inbound
 
 	outbound := b.newOutboundMessage(msg, result.turnID, result.text, true)
-	outbound.Agent, outbound.Model, outbound.ReasoningEffort = result.attribution.Agent, result.attribution.Model, result.attribution.ReasoningEffort
+	if !b.shadow {
+		snapshot, _, err := loadTurnInputs(ctx, b.config.SessionService.db, b.config.ConversationID, request.turnID)
+		if err != nil {
+			return inputPersistenceError{cause: err}
+		}
+
+		outbound.Agent = cmp.Or(snapshot.Agent, outbound.Agent)
+	}
+
+	outbound.Agent = cmp.Or(result.attribution.Agent, outbound.Agent)
+	outbound.Model, outbound.ReasoningEffort = result.attribution.Model, result.attribution.ReasoningEffort
 	outbound.Terminal = cmp.Or(terminal, result.workflowTerminal, protocol.TerminalComplete)
 	outbound.Attachments = protocol.CloneOutboundAttachments(result.attachments)
 	outbound.GoalComplete = result.goalCompleted
@@ -1530,8 +1661,11 @@ func (b *Bridge) finish(ctx context.Context, request *bridgeRequest, finish *tur
 
 	outbound, err := b.config.SessionService.finishTurn(context.WithoutCancel(ctx), request.turnID, finish)
 	if err != nil {
-		msg.CompleteResponseWithAttachments("", nil, err)
 		return fmt.Errorf("finish turn %q: %w", request.turnID, err)
+	}
+
+	if err := b.notifyShadowInputs(ctx, request.turnID); err != nil {
+		return inputPersistenceError{cause: err}
 	}
 
 	return b.deliver(ctx, request, outbound, finish.retry)
@@ -1543,6 +1677,11 @@ func (b *Bridge) finish(ctx context.Context, request *bridgeRequest, finish *tur
 // still releases the destination.
 func (b *Bridge) deliver(ctx context.Context, request *bridgeRequest, outbound *protocol.OutboundMessage, retry int) error {
 	msg := request.inbound
+	if b.shadow {
+		// finishTurn already persisted output and attachment ownership locally.
+		// No bus, connector acknowledgement, producer sync, or parent caller.
+		return b.config.SessionService.closeTurn(context.WithoutCancel(ctx), request.turnID)
+	}
 
 	if retry == 1 {
 		outbound.Text = strings.TrimSpace(outbound.Text + "\n\n" + wakeRetryNotice)
@@ -1640,7 +1779,7 @@ func (b *Bridge) postCronRoot(ctx context.Context, outbound *protocol.OutboundMe
 		b.log.Warn("edit cronjob root footer", "conversation_id", b.config.ConversationID, "destination", destinationID, "error", err)
 	}
 
-	destination, err := b.threads.recordedBridge(destinationID)
+	destination, err := b.threads.recordedBridge(ctx, destinationID)
 	if err != nil {
 		return fmt.Errorf("load cronjob thread: %w", err)
 	}
@@ -1652,7 +1791,13 @@ func (b *Bridge) postCronRoot(ctx context.Context, outbound *protocol.OutboundMe
 // preserved queue. This lifecycle is separate from the turn's execution branches.
 func (b *Bridge) settleSteers(ctx context.Context, err error) error {
 	b.mu.Lock()
+
 	b.inputOpen, b.activeTurnID = false, ""
+	if _, persistence := errors.AsType[inputPersistenceError](err); persistence {
+		b.mu.Unlock()
+		return err
+	}
+
 	steers := b.steers
 
 	b.steers, b.steersRead, b.notesOffered, b.movedNotes = nil, 0, nil, nil
@@ -1676,33 +1821,70 @@ func (b *Bridge) settleSteers(ctx context.Context, err error) error {
 	return err
 }
 
+func (b *Bridge) turnInputs(ctx context.Context, turnID string) (snapshot turnInputSnapshot, captured bool, err error) {
+	if b.shadow {
+		snapshot, captured, err = b.config.SessionService.shadowInputs(ctx, b.config.ConversationID, turnID)
+	} else {
+		snapshot, captured, err = loadTurnInputs(ctx, b.config.SessionService.db, b.config.ConversationID, turnID)
+	}
+
+	if err != nil {
+		err = inputPersistenceError{cause: err}
+	}
+
+	return snapshot, captured, err
+}
+
 // prepareWorkflow retains the definition and open runner until execution owns
 // them. Admission must not discard this preparation and repeat it after pruning.
 func (b *Bridge) prepareWorkflow(request *bridgeRequest) error {
-	runtimeCfg := b.runtime.Clone()
-
-	root, errRoot := os.OpenRoot(runtimeCfg.Workspace)
-	if errRoot != nil {
-		return fmt.Errorf("open workspace root: %w", errRoot)
-	}
-
-	defer func() { _ = root.Close() }()
-
-	definitions, errLoad := workflow.Load(root, runtimeCfg.RuntimeDirName())
-	if errLoad != nil {
-		return fmt.Errorf("load workflow definitions: %w", errLoad)
-	}
-
 	msg := request.inbound
 
-	definition := definitions[msg.Workflow.Name]
+	snapshot, _, err := b.turnInputs(context.Background(), request.turnID)
+	if err != nil {
+		return err
+	}
+
+	var definition *workflow.Definition
+	if snapshot.WorkflowSource != "" {
+		definition, err = workflow.Compile(snapshot.WorkflowPath, snapshot.Workflow.Name, snapshot.WorkflowSource)
+		msg.Workflow = snapshot.Workflow
+	} else {
+		runtimeCfg := b.runtime.Clone()
+
+		root, errRoot := os.OpenRoot(runtimeCfg.Workspace)
+		if errRoot != nil {
+			return fmt.Errorf("open workspace root: %w", errRoot)
+		}
+
+		defer func() { _ = root.Close() }()
+
+		var definitions map[string]*workflow.Definition
+
+		definitions, err = workflow.Load(root, runtimeCfg.RuntimeDirName())
+		definition = definitions[msg.Workflow.Name]
+	}
+
+	if err != nil {
+		return fmt.Errorf("load workflow definition: %w", err)
+	}
+
 	if definition == nil {
 		return fmt.Errorf("workflow %q is not configured", msg.Workflow.Name)
 	}
 
-	runner, err := newWorkflowAgentRunner(b.runtime, b.agentSnapshot(), rocketcode.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, cmp.Or(msg.SyncDestination, b.config.ConversationID))...)
+	agent := b.agentSnapshot()
+	if !b.shadow {
+		agent = cmp.Or(snapshot.Agent, agent)
+	}
+
+	runner, err := newWorkflowAgentRunner(b.runtime, agent, rocketcode.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, cmp.Or(msg.SyncDestination, b.config.ConversationID))...)
 	if err != nil {
 		return fmt.Errorf("prepare workflow agent runner: %w", err)
+	}
+
+	if b.shadow {
+		runner.shellEnv = map[string]string{"ROCKETCLAW_SHADOW": agent}
 	}
 
 	runner.definition = definition
@@ -1724,6 +1906,10 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 	runner := &incoming.workflow
 	defer func() { err = errors.Join(err, incoming.closeWorkflow()) }()
 
+	if err := b.prepareWorkflowShadows(ctx, incoming); err != nil {
+		return result, err
+	}
+
 	request := workflow.RunRequest{RunID: turnID, Args: msg.Workflow.Args}
 
 	turnCtx, cancel := context.WithCancel(ctx)
@@ -1743,8 +1929,13 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 		cancel()
 	}()
 
-	if err := b.bus.PublishOutbound(ctx, b.newOutboundMessage(msg, turnID, "", false)); err != nil {
-		return result, fmt.Errorf("publish workflow start: %w", err)
+	if !b.shadow {
+		outbound := b.newOutboundMessage(msg, turnID, "", false)
+
+		outbound.Agent = runner.agent
+		if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
+			return result, fmt.Errorf("publish workflow start: %w", err)
+		}
 	}
 
 	workflowResult, errRun := workflow.Run(turnCtx, runner.definition, request, runner)
@@ -1791,10 +1982,7 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 
 	payload, _ := json.Marshal(summary)
 
-	summaryReplay, err := replayInputForMessage("developer", workflowRunSummaryPrefix+string(payload))
-	if err != nil {
-		return runResult{turnID: turnID, workflowTerminal: protocol.TerminalFailed}, fmt.Errorf("encode workflow run replay: %w", err)
-	}
+	summaryReplay := replayInputForMessage("developer", workflowRunSummaryPrefix+string(payload))
 
 	replay := summaryReplay
 
@@ -1804,15 +1992,8 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 			assistant = nestedWorkflowSilentCompleteText
 		}
 
-		userReplay, err := replayInputForMessage("user", msg.Text)
-		if err != nil {
-			return runResult{turnID: turnID, workflowTerminal: protocol.TerminalFailed}, err
-		}
-
-		assistantReplay, err := replayInputForMessage("assistant", assistant)
-		if err != nil {
-			return runResult{turnID: turnID, workflowTerminal: protocol.TerminalFailed}, err
-		}
+		userReplay := replayInputForMessage("user", msg.Text)
+		assistantReplay := replayInputForMessage("assistant", assistant)
 
 		replay = slices.Concat(userReplay, assistantReplay, summaryReplay)
 	}
@@ -1862,7 +2043,7 @@ func (b *Bridge) finishGoalTurn(ctx context.Context, request *bridgeRequest) err
 	return nil
 }
 
-func appendSessionEntry(entries iter.Seq2[rocketcode.SessionEntry, error], added *rocketcode.SessionEntry, cloneReplay bool) iter.Seq2[rocketcode.SessionEntry, error] {
+func appendSessionEntry(entries iter.Seq2[rocketcode.SessionEntry, error], added *rocketcode.SessionEntry) iter.Seq2[rocketcode.SessionEntry, error] {
 	return func(yield func(rocketcode.SessionEntry, error) bool) {
 		for entry, err := range entries {
 			if !yield(entry, err) {
@@ -1872,10 +2053,6 @@ func appendSessionEntry(entries iter.Seq2[rocketcode.SessionEntry, error], added
 
 		entry := *added
 		entry.Timestamp = time.Now().UTC()
-
-		if cloneReplay {
-			entry.ReplayInput = slices.Clone(entry.ReplayInput)
-		}
 
 		yield(entry, nil)
 	}
@@ -1892,7 +2069,16 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		}
 	}()
 
+	snapshot, captured, err := b.turnInputs(ctx, turnID)
+	if err != nil {
+		return runResult{}, err
+	}
+
 	agentName := b.agentSnapshot()
+	if !b.shadow {
+		agentName = cmp.Or(snapshot.Agent, agentName)
+	}
+
 	ctx = instrumentation.WithSession(ctx, b.config.ConversationID)
 
 	tracer := noop.NewTracerProvider().Tracer("rocketclaw")
@@ -1962,86 +2148,108 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	sessionIn := store.in()
 	for i := range finish.entries {
-		sessionIn = appendSessionEntry(sessionIn, &finish.entries[i], false)
+		sessionIn = appendSessionEntry(sessionIn, &finish.entries[i])
 	}
 
-	if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err != nil {
-		return runResult{}, fmt.Errorf("load active goal note: %w", err)
-	} else if ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
-		msg.GoalTurn = true
+	if captured {
+		if !b.shadow {
+			msg.GoalTurn = snapshot.GoalTurn
+		}
 
-		if note := strings.TrimSpace(goal.Note); note != "" {
-			replayInput, err := replayInputForMessage("developer", "RocketClaw goal state:\nStatus: progress\nLast reported note:\n"+note)
+		shellEnv, childContext = snapshot.Environment, snapshot.ChildContext
+
+		if len(childContext) > 0 {
+			// Restore common thread metadata from capture on both sides, rather
+			// than seeded or reloaded metadata. Transient entries follow below.
+			seed := sessionIn
+			sessionIn = func(yield func(rocketcode.SessionEntry, error) bool) {
+				for entry, err := range seed {
+					if (err != nil || entry.Type != externalMCPMetadataEntryType) && !yield(entry, err) {
+						return
+					}
+				}
+			}
+			sessionIn = appendSessionEntry(sessionIn, &childContext[0])
+		}
+	} else {
+		if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err != nil {
+			return runResult{}, fmt.Errorf("load active goal note: %w", err)
+		} else if ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
+			msg.GoalTurn = true
+
+			if note := strings.TrimSpace(goal.Note); note != "" {
+				replayInput := replayInputForMessage("developer", "RocketClaw goal state:\nStatus: progress\nLast reported note:\n"+note)
+
+				entry := rocketcode.SessionEntry{Version: 1, Type: "goal_state", ReplayInput: replayInput}
+				snapshot.ContextEntries = append(snapshot.ContextEntries, entry)
+			}
+		}
+
+		metadataEntry, foundMetadata, err := b.config.SessionService.externalMCPMetadataEntry(ctx, b.config.ConversationID)
+		if err != nil {
+			return runResult{}, fmt.Errorf("load external MCP metadata: %w", err)
+		}
+
+		if foundMetadata || msg.Source == protocol.SourceExternalMCP || b.config.ExternalConversationID != "" && msg.Source == protocol.SourceSystem || b.config.ManagedConversationID != "" && b.config.ManagedConversationID == b.config.ConversationID {
+			var entries []ObservedSessionEntry
+			if foundMetadata {
+				entries = []ObservedSessionEntry{metadataEntry}
+			}
+
+			metadataConversationID := b.config.ConversationID
+
+			_, session, paired, err := b.config.SessionService.ExternalMCPSessionByConversationID(b.config.ConversationID)
 			if err != nil {
-				return runResult{}, fmt.Errorf("encode active goal note: %w", err)
+				return runResult{}, fmt.Errorf("load external MCP pairing for metadata environment: %w", err)
 			}
 
-			sessionIn = appendSessionEntry(sessionIn, &rocketcode.SessionEntry{Version: 1, Type: "goal_state", ReplayInput: replayInput}, false)
-		}
-	}
-
-	metadataEntry, foundMetadata, err := b.config.SessionService.externalMCPMetadataEntry(ctx, b.config.ConversationID)
-	if err != nil {
-		return runResult{}, fmt.Errorf("load external MCP metadata: %w", err)
-	}
-
-	if foundMetadata || msg.Source == protocol.SourceExternalMCP || b.config.ExternalConversationID != "" && msg.Source == protocol.SourceSystem || b.config.ManagedConversationID != "" && b.config.ManagedConversationID == b.config.ConversationID {
-		var entries []ObservedSessionEntry
-		if foundMetadata {
-			entries = []ObservedSessionEntry{metadataEntry}
-		}
-
-		metadataConversationID := b.config.ConversationID
-
-		_, session, paired, err := b.config.SessionService.ExternalMCPSessionByConversationID(b.config.ConversationID)
-		if err != nil {
-			return runResult{}, fmt.Errorf("load external MCP pairing for metadata environment: %w", err)
-		}
-
-		if paired && session.PrivateConversationID != "" {
-			metadataConversationID = session.PrivateConversationID
-		}
-
-		metadataEnv, ok := externalMCPStoredMetadataEnv(metadataConversationID, entries)
-		if !ok {
-			metadataEnv = externalMCPMetadataEnv(b.config.ConversationID, msg.Metadata)
-		}
-
-		replayInput, err := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", metadataEnv))
-		if err != nil {
-			return runResult{}, fmt.Errorf("encode external MCP metadata: %w", err)
-		}
-
-		childContext = append(childContext, rocketcode.SessionEntry{Version: 1, ReplayInput: replayInput})
-		shellEnv = metadataEnv
-
-		if !ok {
-			if _, err := store.outID(rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Now().UTC(), ReplayInput: replayInput}); err != nil {
-				return runResult{}, fmt.Errorf("append external MCP metadata: %w", err)
-			}
-		} else {
-			metadataEnv[rocketclawConversationIDEnv] = b.config.ConversationID
-
-			transientEnv := externalMCPMetadataEnv(b.config.ConversationID, msg.Metadata)
-			for key := range metadataEnv {
-				delete(transientEnv, key)
+			if paired && session.PrivateConversationID != "" {
+				metadataConversationID = session.PrivateConversationID
 			}
 
-			if len(transientEnv) > 0 {
-				shellEnv = maps.Clone(metadataEnv)
-				maps.Copy(shellEnv, transientEnv)
+			metadataEnv, ok := externalMCPStoredMetadataEnv(metadataConversationID, entries)
+			if !ok {
+				metadataEnv = externalMCPMetadataEnv(b.config.ConversationID, msg.Metadata)
+			}
 
-				replayInput, err := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP turn has additional metadata:", transientEnv))
-				if err != nil {
-					return runResult{}, fmt.Errorf("encode transient external MCP metadata: %w", err)
+			replayInput := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", metadataEnv))
+
+			childContext = append(childContext, rocketcode.SessionEntry{Version: 1, ReplayInput: replayInput})
+			shellEnv = metadataEnv
+
+			if !ok {
+				if _, err := store.outID(rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Now().UTC(), ReplayInput: replayInput}); err != nil {
+					return runResult{}, fmt.Errorf("append external MCP metadata: %w", err)
+				}
+			} else {
+				metadataEnv[rocketclawConversationIDEnv] = b.config.ConversationID
+
+				transientEnv := externalMCPMetadataEnv(b.config.ConversationID, msg.Metadata)
+				for key := range metadataEnv {
+					delete(transientEnv, key)
 				}
 
-				store.managedReplayPrefix = replayInput
-				childContext = append(childContext, rocketcode.SessionEntry{Version: 1, ReplayInput: replayInput})
+				if len(transientEnv) > 0 {
+					shellEnv = maps.Clone(metadataEnv)
+					maps.Copy(shellEnv, transientEnv)
 
-				sessionIn = appendSessionEntry(sessionIn, &rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: replayInput}, false)
+					replayInput := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP turn has additional metadata:", transientEnv))
+
+					childContext = append(childContext, rocketcode.SessionEntry{Version: 1, ReplayInput: replayInput})
+
+					entry := rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: replayInput}
+					snapshot.ContextEntries = append(snapshot.ContextEntries, entry)
+				}
 			}
 		}
+	}
+
+	for i := range snapshot.ContextEntries {
+		if snapshot.ContextEntries[i].Type == externalMCPMetadataEntryType {
+			store.managedReplayPrefix = snapshot.ContextEntries[i].ReplayInput
+		}
+
+		sessionIn = appendSessionEntry(sessionIn, &snapshot.ContextEntries[i])
 	}
 
 	providerLog := b.log.With("conversation_id", b.config.ConversationID, "turn_id", turnID, "agent", agentName, "source", string(msg.Source), "kind", string(msg.Kind), "human", msg.Human, "goal_turn", msg.GoalTurn, "attachment_count", len(msg.Attachments))
@@ -2103,15 +2311,18 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	rocketcodeConfig := b.rocketcodeConfig(shellTempDir, shellEnv, customTools...)
+
 	rocketcodeConfig.ChildContext = childContext
-	rocketcodeConfig.BackgroundJobs = backgroundTurn{registry: b.background, root: shared, conversationID: b.config.ConversationID, origin: msg, turnID: turnID}
+	if !b.shadow {
+		rocketcodeConfig.BackgroundJobs = backgroundTurn{registry: b.background, root: shared, conversationID: b.config.ConversationID, origin: msg, turnID: turnID}
+	}
 
 	looper, err := rocketcode.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agentName, io.Discard)
 	if err != nil {
 		return runResult{}, fmt.Errorf("prepare rocketcode turn: %w", err)
 	}
 
-	looper.SteerDrain = rocketcode.SteerDrain{Fn: b.drainSteers}
+	looper.SteerDrain = b
 	sessionIn = sessionEntriesForProvider(sessionIn, providerForModel(looper.DisplayModel))
 	result = runResult{turnID: turnID, attribution: rocketcode.ReplayAttribution{Agent: agentName, Model: looper.DisplayModel, ReasoningEffort: new(string(looper.ReasoningEffort))}}
 
@@ -2151,21 +2362,60 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		cancelTurn()
 	}()
 
-	directSkill := inboundDirectSkill(msg)
+	if b.shadow {
+		var stopped bool
+		if err := b.config.SessionService.db.QueryRowContext(ctx, `SELECT terminal = $3 FROM shadow_turns WHERE child_conversation_id = $1 AND child_turn_id = $2`, b.config.ConversationID, turnID, protocol.TerminalStopped).Scan(&stopped); err != nil {
+			return runResult{}, inputPersistenceError{cause: fmt.Errorf("read active shadow stop: %w", err)}
+		}
 
-	prompt, err := b.buildPrompt(msg, agents.Items[agentName].Frontmatter)
-	if err != nil {
-		return runResult{}, err
+		if stopped {
+			return runResult{}, errTurnInterrupted
+		}
 	}
 
-	header, _, _ = strings.Cut(prompt, "\n\n")
+	var prepared rocketcode.PromptInput
+	if captured {
+		prepared = snapshot.Inputs[0]
+	} else {
+		prompt, err := b.buildPrompt(msg, agents.Items[agentName].Frontmatter)
+		if err != nil {
+			return runResult{}, err
+		}
+
+		header, _, _ = strings.Cut(prompt, "\n\n")
+		prepared = rocketcode.PromptInput{ID: cmp.Or(msg.Metadata["web_message_id"], msg.Metadata[backgroundNotesMetadataKey], turnID+"/initial"), TurnID: journalKey, Texts: []string{prompt}, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: inboundDirectSkill(msg)}
+		snapshot.Inputs, snapshot.Environment, snapshot.ChildContext = []rocketcode.PromptInput{prepared}, shellEnv, childContext
+
+		snapshot.GoalTurn = msg.GoalTurn
+		if err := b.config.SessionService.captureTurnInputs(ctx, b.config.ConversationID, turnID, &snapshot); err != nil {
+			return runResult{}, err
+		}
+	}
+
+	if err := b.notifyShadowInputs(ctx, turnID); err != nil {
+		return runResult{}, inputPersistenceError{cause: err}
+	}
+
+	if !b.shadow {
+		if err := b.startShadowWorkers(ctx, turnID); err != nil {
+			return runResult{}, inputPersistenceError{cause: err}
+		}
+	}
+
+	header = prepared.Header
 	b.publishConsumed(ctx, msg, header)
 
-	if err := b.bus.PublishOutbound(ctx, b.newOutboundMessage(msg, turnID, "", false)); err != nil {
-		return result, fmt.Errorf("publish rocketcode turn start: %w", err)
+	if !b.shadow {
+		outbound := b.newOutboundMessage(msg, turnID, "", false)
+
+		outbound.Agent = agentName
+		if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
+			return result, fmt.Errorf("publish rocketcode turn start: %w", err)
+		}
 	}
 
-	input <- rocketcode.PromptInput{ID: cmp.Or(msg.Metadata["web_message_id"], msg.Metadata[backgroundNotesMetadataKey]), TurnID: journalKey, Role: "", Texts: []string{prompt}, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: directSkill, Responses: output}
+	prepared.TurnID, prepared.Responses = journalKey, output
+	input <- prepared
 
 	close(input)
 
@@ -2318,6 +2568,22 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 
 	tools = append(tools, customTools...)
 
+	if b.shadow {
+		env := make(map[string]string, len(shellEnv)+1)
+		maps.Copy(env, shellEnv)
+
+		env["ROCKETCLAW_SHADOW"] = b.config.Agent
+		if shellEnv != nil {
+			env[rocketclawConversationIDEnv] = b.config.ConversationID
+		}
+
+		shellEnv = env
+
+		tools = slices.DeleteFunc(tools, func(tool rocketcode.Tool) bool {
+			return slices.Contains([]string{askUserQuestionToolName, startNewThreadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, updateGoalToolName, reloadToolName, restartToolName}, tool.Name)
+		})
+	}
+
 	return rocketcode.Config{Model: "", AutoApproverModel: runtimeCfg.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(runtimeCfg), RetainedResultDir: rocketcodeRetainedDir(b.config.ConversationID), Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: runtimeCfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: runtimeCfg.Instrumentation.HideInputs, HideOutputs: runtimeCfg.Instrumentation.HideOutputs}}, ChildSessions: childSessions{store: b.config.SessionService, conversationID: b.config.ConversationID}, Journal: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, BackgroundJobs: rocketcode.InertBackgroundJobs{}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(runtimeCfg.MCPServers), MCPWorkspace: runtimeCfg.Workspace}
 }
 
@@ -2409,9 +2675,9 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 		return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("open skills dir: %w", err)
 	}
 
-	agentResult := rocketcode.LoadAgents(agentsFS, cfg.RenderAgentModel)
-	if len(agentResult.Errors) > 0 {
-		return rocketcode.Agents{}, rocketcode.Skills{}, errors.Join(agentResult.Errors...)
+	agents, err := loadAgentDefinitions(agentsFS, cfg)
+	if err != nil {
+		return rocketcode.Agents{}, rocketcode.Skills{}, err
 	}
 
 	skillsRoot := filepath.Join(cfg.Workspace, runtimeDir, "skills")
@@ -2422,11 +2688,18 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 		tools = []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName}
 	}
 
-	for name := range agentResult.Agents.Items {
-		agent := agentResult.Agents.Items[name]
+	for name := range agents.Items {
+		agent := agents.Items[name]
 
 		groups, err := agentTagGroups(&agent)
 		if err != nil {
+			if strings.Contains(name, "/") {
+				slog.Warn("load shadow definition", "path", agent.Location, "error", err)
+				delete(agents.Items, name)
+
+				continue
+			}
+
 			return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("%s: permission.rocketclaw.rocketclaw_set_tag: %w", agent.Location, err)
 		}
 
@@ -2458,10 +2731,29 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 			_ = agent.Permission.Allow("rocketclaw", tool) // The fixed category and allow action cannot fail.
 		}
 
-		agentResult.Agents.Items[name] = agent
+		agents.Items[name] = agent
 	}
 
-	return agentResult.Agents, skillResult.Skills, nil
+	return agents, skillResult.Skills, nil
+}
+
+// loadAgentDefinitions keeps comparison failures separate from ordinary definitions.
+func loadAgentDefinitions(fsys fs.FS, cfg *config.Config) (rocketcode.Agents, error) {
+	result := rocketcode.LoadAgents(fsys, cfg.RenderAgentModel)
+
+	var errLoads []error
+
+	for _, err := range result.Errors {
+		location, _, _ := strings.Cut(err.Error(), ": ")
+		if strings.Contains(location, "/") {
+			slog.Warn("load shadow definition", "path", location, "error", err)
+			continue
+		}
+
+		errLoads = append(errLoads, err)
+	}
+
+	return result.Agents, errors.Join(errLoads...)
 }
 
 // LoadRuntimeDefinitions loads RocketCode definitions from runtimeDir without starting a run.
@@ -2483,7 +2775,7 @@ func ExternalMCPAgentsIn(cfg *config.LockedConfig, runtimeDir string) ([]string,
 		return nil, err
 	}
 
-	return slices.Sorted(maps.Keys(agents.Items)), nil
+	return agents.PrimaryNames(), nil
 }
 
 func parseReasonArg(raw json.RawMessage, op string) (string, error) {
@@ -2937,7 +3229,7 @@ func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID, text s
 		outbound.ExternalConversationID = strings.TrimSpace(msg.Metadata["external_conversation_id"])
 	}
 
-	outbound.Agent = b.config.Agent
+	outbound.Agent = b.agentSnapshot()
 
 	outbound.TurnID = turnID
 
@@ -2968,15 +3260,12 @@ func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID, text s
 
 type replayInputMessage struct{ role, text string }
 
-func replayInputForMessage(role, text string) ([]json.RawMessage, error) {
+func replayInputForMessage(role, text string) []json.RawMessage {
 	message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRole(role), Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(text)}, Type: "message"}
 
-	raw, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfMessage: &message}})
-	if err != nil {
-		return nil, fmt.Errorf("encode replay input message: %w", err)
-	}
+	raw, _ := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfMessage: &message}}) // One message/string union cannot fail serialization.
 
-	return raw, nil
+	return raw
 }
 
 func replayInputMessages(raw []json.RawMessage) ([]replayInputMessage, error) {

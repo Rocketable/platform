@@ -1,9 +1,10 @@
 "use client";
 
-import { QueryClient, QueryCache, MutationCache, QueryClientProvider, useQuery, useMutation } from "@tanstack/react-query";
+import { QueryClient, QueryCache, MutationCache, QueryClientProvider, queryOptions, useQuery, useMutation } from "@tanstack/react-query";
 import { captureException } from "@sentry/react";
 import { Combobox } from "@base-ui/react/combobox";
 import { Menu } from "@base-ui/react/menu";
+import { Tabs } from "@base-ui/react/tabs";
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -11,10 +12,10 @@ import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field
 import { queries, mutations, listSessions, rpc, RPCError } from "./api";
 import { draftContent } from "./drafts";
 import { holdWakeLock, rememberVoice, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
-import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse } from "./types";
+import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
 import { Bot, Captions, Check, ChevronDown, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
-import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps } from "react";
+import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
@@ -62,7 +63,7 @@ function sessionPath(id: string) {
 const Delegations = createContext<string[] | undefined>(undefined);
 
 // The right panel shows one delegation or one skill, so opening either replaces the other.
-function panelHref(id?: string, panel: "delegation" | "skill" = "delegation") {
+function panelHref(id?: string, panel: "delegation" | "skill" | "shadow" = "delegation") {
   const params = new URLSearchParams(location.search);
   params.delete("delegation");
   params.delete("skill");
@@ -630,7 +631,7 @@ function SidebarOwner({ children }: { children: ReactNode }) {
 }
 
 type PendingFile = { id: string; file: File };
-type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; movable?: boolean; jobs?: BackgroundJob[]; questions?: PendingQuestion[]; error: string; edit: number; submission: number; historyEpoch?: number; revertEligible?: boolean; revertMessageId?: string; canUndo?: boolean; reverting?: boolean; focus?: number; hydrated?: boolean; persistenceKey?: string; persistedEdit?: number; persistenceError?: string };
+type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; shadows?: ShadowBinding[]; earlierShadows?: { from: string; before: string; shadows: ShadowBinding[] }[]; movable?: boolean; jobs?: BackgroundJob[]; questions?: PendingQuestion[]; error: string; edit: number; submission: number; historyEpoch?: number; revertEligible?: boolean; revertMessageId?: string; canUndo?: boolean; reverting?: boolean; focus?: number; hydrated?: boolean; persistenceKey?: string; persistedEdit?: number; persistenceError?: string };
 const RevertActions = createContext<{ available: boolean; pending: boolean; run: (messageId?: string, redo?: boolean) => Promise<void> } | undefined>(undefined);
 const DraftScope = createContext<string | undefined>(undefined);
 
@@ -675,21 +676,23 @@ function SidebarToggle({ open, setOpen }: { open: boolean; setOpen: Dispatch<Set
   </TooltipTrigger><TooltipContent side="top">{label}</TooltipContent></Tooltip>;
 }
 
-// Tabs resize from their right edge and delegation from its left one.
-function ResizableAside({ side, className, children, ...props }: ComponentProps<"aside"> & { side: "tabs" | "delegation" }) {
-  const [edge, label, fallback, min, max] = side === "tabs" ? [1, "Resize tabs", 224, 192, 512] : [-1, "Resize delegation panel", 384, 288, Math.round(innerWidth * 0.6)];
+// Comparison columns share the existing panels' pointer/keyboard width policy.
+function useAsideWidth(side: "tabs" | "delegation" | "shadow") {
+  const [edge, label, fallback, min, max] = side === "tabs" ? [1, "Resize tabs", 224, 192, 512] : [-1, `Resize ${side} panel`, 384, 288, Math.round(innerWidth * 0.6)];
   const clamp = (value: number) => Math.round(Math.min(Math.max(value, min), max));
   const [stored, setStored] = useState(() => Number(localStorage.getItem(`${side}-width`)));
   const width = clamp(stored || fallback);
   const resize = (value: number) => {
     const room = document.querySelector("main")!.getBoundingClientRect().width - 26 * parseFloat(getComputedStyle(document.documentElement).fontSize);
-    const next = clamp(Math.min(value, width + room));
+    const next = clamp(Math.min(value, side === "shadow" ? room : width + room));
     setStored(next);
     localStorage.setItem(`${side}-width`, String(next));
   };
-  return <aside {...props} className={cn("relative", className)} style={{ width, minWidth: min }}>
-    {children}
-    <div role="separator" aria-orientation="vertical" aria-label={label} aria-valuenow={width} aria-valuemin={min} aria-valuemax={max} tabIndex={0}
+  return { edge, label, width, min, max, resize };
+}
+
+function AsideResizeHandle({ edge, label, width, min, max, resize }: ReturnType<typeof useAsideWidth>) {
+  return <div role="separator" aria-orientation="vertical" aria-label={label} aria-valuenow={width} aria-valuemin={min} aria-valuemax={max} tabIndex={0}
       className={cn("absolute inset-y-0 z-10 w-1.5 cursor-col-resize touch-none outline-none hover:bg-border focus-visible:bg-ring", edge > 0 ? "-right-0.75" : "-left-0.75")}
       onPointerDown={(event) => event.currentTarget.setPointerCapture(event.pointerId)}
       onPointerMove={(event) => {
@@ -701,8 +704,13 @@ function ResizableAside({ side, className, children, ...props }: ComponentProps<
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
         event.preventDefault();
         resize(width + (event.key === "ArrowRight" ? 16 : -16) * edge);
-      }} />
-  </aside>;
+      }} />;
+}
+
+// Tabs resize from their right edge and delegation from its left one.
+function ResizableAside({ side, className, children, ...props }: ComponentProps<"aside"> & { side: "tabs" | "delegation" }) {
+  const sizing = useAsideWidth(side);
+  return <aside {...props} className={cn("relative", className)} style={{ width: sizing.width, minWidth: sizing.min }}>{children}<AsideResizeHandle {...sizing} /></aside>;
 }
 
 type Tab = { path: string; pinned?: boolean; preview?: boolean };
@@ -1846,7 +1854,7 @@ function lineId(role: Line["role"], text: string, seen: Map<string, number>) {
   return `${base}:${n}`;
 }
 
-function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true, canonical: true }) {
+function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true, canonical: true }, comparison = false) {
   const turns: { user: Line[]; items: Line[]; lines: Line[] }[] = [];
   let current = { user: [] as Line[], items: [] as Line[], lines: [] as Line[] };
   const calls = new Map<string, Line & { toolParts: Line[] }>();
@@ -1860,7 +1868,8 @@ function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true
     }
   };
   for (const line of lines) {
-    if (line.role === "user") flush();
+    const previous = current.lines.at(-1);
+    if (comparison && line.turnId ? previous?.turnId !== line.turnId || previous?.entryKey !== line.entryKey : line.role === "user") flush();
     const visible = (filter.sandboxed && filter.canonical)
       || (line.origin === "sandboxed" && filter.sandboxed)
       || (line.origin === "canonical" && filter.canonical);
@@ -1872,6 +1881,7 @@ function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true
     const skillCall = line.role === "developer" ? skills.get(skillHeader) : undefined;
     if (line.role === "user") {
       current.user.push(line);
+      if (comparison) current.items.push(line);
     } else if (line.role === "tool" && line.toolName) {
       const call = { ...line, toolParts: [] as Line[] };
       current.items.push(call);
@@ -1894,6 +1904,23 @@ function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true
   }
   flush();
   return turns;
+}
+
+function comparisonRows(parents: Turn[], children: Turn[], binding: ShadowBinding) {
+  const childTurns = new Map(children.map((turn) => [turn.lines[0]?.turnId, turn]));
+  const correlations = new Map(binding.turns.map((turn) => [`turn:${turn.parentSourceConversationId}:${turn.parentTurnId}`, turn]));
+  const rows = parents.map((parent) => {
+    const correlation = correlations.get(parent.lines[0]?.entryKey ?? "");
+    correlations.delete(parent.lines[0]?.entryKey ?? "");
+    return { key: turnKey(parent), parent, correlation, child: correlation?.childTurnId ? childTurns.get(correlation.childTurnId) : undefined };
+  });
+  const missing = [...correlations].map(([key, correlation]) => ({ key, parent: undefined, correlation, child: childTurns.get(correlation.childTurnId) }));
+  let next = 0;
+  return [...rows.flatMap((row) => {
+    const start = next;
+    if (row.correlation) while (next < missing.length && BigInt(missing[next].correlation.order) < BigInt(row.correlation.order)) next++;
+    return [...missing.slice(start, next), row];
+  }), ...missing.slice(next)];
 }
 
 function toolTitle(line: Line) {
@@ -2114,6 +2141,7 @@ function useTranscriptPosition(conversationId: string, lines: Line[], turns: Tur
     if (firstOwner.current !== identity.data.username) return;
     const bounds = element.getBoundingClientRect();
     const visible = [...element.querySelectorAll<HTMLElement>('[data-slot="message"][data-message-id]')].filter((node) => {
+      if (node.closest("[data-shadow-cell]")) return false;
       const rect = node.getBoundingClientRect();
       return rect.bottom > bounds.top && rect.top < bounds.bottom;
     });
@@ -2141,7 +2169,15 @@ function useTranscriptPosition(conversationId: string, lines: Line[], turns: Tur
 const TranscriptTurn = memo(function TranscriptTurn({ turn, index, detail, conversationId, hasSandboxed }: { turn: Turn; index: number; live: boolean; detail: TimelineRows; conversationId: string; hasSandboxed: boolean }) {
   return (
     <MessageScrollerItem messageId={`turn-${turnKey(turn)}`} data-turn-key={turnKey(turn)} role="region" aria-label={`Turn ${index + 1}`} tabIndex={-1}>
-      {turn.user.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
+      <TurnContent turn={turn} detail={detail} conversationId={conversationId} hasSandboxed={hasSandboxed} />
+    </MessageScrollerItem>
+  );
+}, (previous, next) => !next.live && previous.index === next.index && previous.detail === next.detail && previous.conversationId === next.conversationId && previous.hasSandboxed === next.hasSandboxed
+  && previous.turn.lines.length === next.turn.lines.length && previous.turn.lines.every((line, index) => line === next.turn.lines[index]));
+
+function TurnContent({ turn, detail, conversationId, hasSandboxed, comparison = false }: { turn: Turn; detail: TimelineRows; conversationId: string; hasSandboxed: boolean; comparison?: boolean }) {
+  return <>
+      {comparison ? null : turn.user.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
       {projectTimeline(turn.items, detail).map((row) => row.kind === "line" ? <TranscriptLine key={row.line.id} line={row.line} open={row.open} conversationId={conversationId} hasSandboxed={hasSandboxed} /> : (
         <details key={row.key} className="group pb-3">
           <summary className="flex w-fit cursor-pointer list-none items-center gap-1 px-1 py-2 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
@@ -2152,10 +2188,51 @@ const TranscriptTurn = memo(function TranscriptTurn({ turn, index, detail, conve
           </div>
         </details>
       ))}
-    </MessageScrollerItem>
-  );
-}, (previous, next) => !next.live && previous.index === next.index && previous.detail === next.detail && previous.conversationId === next.conversationId && previous.hasSandboxed === next.hasSandboxed
-  && previous.turn.lines.length === next.turn.lines.length && previous.turn.lines.every((line, index) => line === next.turn.lines[index]));
+    </>;
+}
+
+function shadowHistory(binding: ShadowBinding | undefined, drafts: Map<string, ComposerDraft>) {
+  const id = binding?.childConversationId ?? "";
+  return queryOptions<{ lines: Line[]; delegations?: string[] }>({ queryKey: ["shadow-history", id, binding?.turns], enabled: !!binding,
+    placeholderData: (previous, query) => query?.queryKey[1] === id ? previous : undefined,
+    queryFn: async ({ signal }) => {
+      const draft: ComposerDraft = drafts.get(id) ?? { text: "", files: [], agent: "", sessionId: id, sending: false, busy: false, lines: [], error: "", edit: 0, submission: 0 };
+      drafts.set(id, draft);
+      await readHistoryDelta(id, draft, () => {}, signal);
+      let missing = binding!.turns.map((turn) => turn.childTurnId).filter((turn) => turn && !draft.lines.some((line) => line.turnId === turn));
+      // Each read is bounded, but a newly opened old parent page may need several
+      // child pages. Seed entries never become comparison rows.
+      while (draft.more && missing.length > 0) {
+        const before = draft.start;
+        await readEarlierHistory(id, draft, () => {}, undefined, signal);
+        missing = missing.filter((turn) => !draft.lines.some((line) => line.turnId === turn));
+        if (draft.start === before) break;
+      }
+      if (draft.historyError) throw new Error(draft.historyError);
+      return { lines: draft.lines, delegations: queryClient.getQueryData<HistoryView>(queries.history({ id }).queryKey)?.delegations };
+  } });
+}
+
+function useShadowHistory(binding?: ShadowBinding) {
+  const drafts = useRef(new Map<string, ComposerDraft>());
+  return useQuery(shadowHistory(binding, drafts.current));
+}
+
+function ShadowCell({ row, index, binding, detail, delegations }: { row: ReturnType<typeof comparisonRows>[number]; index: number; binding: ShadowBinding; detail: TimelineRows; delegations?: string[] }) {
+  let status = "Not attached for this turn or inactive agent segment.";
+  if (row.correlation) {
+    status = row.correlation.running ? "Working…" : row.correlation.terminal === "complete"
+      ? row.child?.lines.some((line) => line.role === "assistant") ? "Completed." : "Completed silently."
+      : row.correlation.terminal ? `Turn ${row.correlation.terminal}.` : "Waiting for parent input…";
+  }
+  return <RevertActions value={undefined}><Delegations value={delegations}>
+    <div data-shadow-cell={row.key} role="region" aria-label={`Shadow turn ${index + 1}`} className="min-w-0">
+      <p className="mb-2 text-xs text-muted-foreground">Turn {index + 1}</p>
+      {row.child ? <TurnContent comparison turn={row.child} detail={detail} conversationId={binding.childConversationId} hasSandboxed={row.child.lines.some((line) => line.origin === "sandboxed")} /> : null}
+      <p role="status" className="px-1 pb-3 text-xs text-muted-foreground">{status}</p>
+    </div>
+  </Delegations></RevertActions>;
+}
 
 function WorkingStatus({ conversationId, movable, onChange }: { conversationId: string; movable: boolean; onChange: () => Promise<unknown> }) {
   const move = useMutation({ mutationFn: mutations.moveToBackground, onSuccess: onChange });
@@ -2172,6 +2249,36 @@ function emptyTranscriptMessage(opening: boolean, empty: boolean, running: strin
   return running ? `${running} is running` : "Send a message to start the conversation.";
 }
 
+function TranscriptBody({ conversationId, working, terminal, origin, hasSandboxed, movable, refreshHistory, turns, rows, binding, detail, wide, loading, emptyMessage, delegations }: Pick<ComponentProps<typeof TranscriptLog>, "conversationId" | "working" | "terminal" | "origin" | "hasSandboxed" | "movable" | "refreshHistory"> & { turns: Turn[]; rows: ReturnType<typeof comparisonRows>; binding?: ShadowBinding; detail: TimelineRows; wide: boolean; loading: boolean; emptyMessage: string; delegations?: string[] }) {
+  return <MessageScrollerContent className={cn("mx-auto w-full min-w-0", binding && wide ? "max-w-7xl" : "max-w-3xl")}>
+    {origin && ["cron", "external_mcp"].includes(origin.kind) ? <MessageScrollerItem messageId="origin"><OriginCard origin={origin} /></MessageScrollerItem> : null}
+    {(binding ? rows : turns).length === 0 && !working ? (
+      <MessageScrollerItem className="flex flex-1 items-center justify-center">
+        <p role="status" className="text-sm text-muted-foreground">{emptyMessage}</p>
+      </MessageScrollerItem>
+    ) : (
+      <>
+        {loading ? <MessageScrollerItem><p role="status" className="px-1 text-sm text-muted-foreground">Loading earlier messages…</p></MessageScrollerItem> : null}
+        {binding ? rows.map((row, index) => <MessageScrollerItem key={row.key} messageId={`turn-${row.key}`} data-turn-key={row.key} role="region" aria-label={`Turn ${index + 1}`} tabIndex={-1}>
+          <div data-comparison-row className={cn("min-w-0", wide && "grid grid-cols-[minmax(0,1fr)_minmax(18rem,var(--shadow-width))] gap-5")}>
+            <div className="min-w-0"><p className="mb-2 text-xs text-muted-foreground">Turn {index + 1} · {row.parent?.lines[0]?.agent ?? binding.parentAgent}</p>{row.parent ? <TurnContent comparison turn={row.parent} detail={detail} conversationId={conversationId} hasSandboxed={hasSandboxed} /> : <p role="status" className="pb-3 text-xs text-muted-foreground">Parent turn has no transcript output.</p>}</div>
+            {wide ? <div className="min-w-0 border-l pl-5"><ShadowCell row={row} index={index} binding={binding} detail={detail} delegations={delegations} /></div> : null}
+          </div>
+        </MessageScrollerItem>) : turns.map((turn, index) => <TranscriptTurn key={turnKey(turn)} turn={turn} index={index} live={index === turns.length - 1} detail={detail} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
+        {working ? <WorkingStatus conversationId={conversationId} movable={movable} onChange={refreshHistory} /> : null}
+        {terminal ? <MessageScrollerItem><p role="status" className="px-1 pb-4 text-sm text-muted-foreground">Turn {terminal}.</p></MessageScrollerItem> : null}
+      </>
+    )}
+  </MessageScrollerContent>;
+}
+
+function TranscriptControls({ children, comparison }: { children?: ReactNode; comparison?: ReactNode }) {
+  if (!children && !comparison) return null;
+  return <div role="group" aria-label="Conversation view" className={cn("mx-auto my-2.5 flex w-full max-w-3xl shrink-0 flex-wrap items-center gap-x-3 gap-y-5 px-3", comparison ? "justify-between" : "justify-center")}>
+    {children}{comparison}
+  </div>;
+}
+
 function TranscriptLog({
   conversationId,
   lines,
@@ -2185,6 +2292,8 @@ function TranscriptLog({
   loadEarlier,
   movable,
   refreshHistory,
+  shadows = [],
+  children,
 }: {
   lines: Line[];
   conversationId: string;
@@ -2198,8 +2307,19 @@ function TranscriptLog({
   hasSandboxed: boolean;
   more: boolean;
   loadEarlier: () => Promise<void>;
+  shadows?: ShadowBinding[];
+  children?: ReactNode;
 }) {
-  const turns = transcriptTurns(lines, filter);
+  const search = new URLSearchParams(useSearch());
+  const selected = ["delegation", "skill"].some((panel) => search.has(panel)) ? undefined : shadows.find((binding) => binding.childConversationId === search.get("shadow")) ?? shadows[0];
+  const wide = useMedia("(min-width: 64rem)");
+  const mobileComparison = !!selected && !wide;
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const shadow = useShadowHistory(selected);
+  const shadowWidth = useAsideWidth("shadow");
+  const turns = transcriptTurns(lines, filter, !!selected);
+  const childTurns = transcriptTurns(shadow.data?.lines ?? [], { sandboxed: true, canonical: true }, true);
+  const pairedRows = selected ? comparisonRows(turns, childTurns, selected) : [];
   const detail = useTimelineDetail();
   const { viewport, seen, scrollToMessage } = useTranscriptPosition(conversationId, lines, turns);
   const anchor = useRef<{ key: string; top: number }>(undefined);
@@ -2215,8 +2335,8 @@ function TranscriptLog({
     const saved = anchor.current;
     const node = saved && [...viewport.current?.querySelectorAll<HTMLElement>("[data-turn-key]") ?? []].find((item) => item.dataset.turnKey === saved.key);
     if (node) viewport.current!.scrollTop += node.getBoundingClientRect().top - saved.top;
-    if (!loading) anchor.current = undefined;
-  }, [lines, loading, viewport]);
+    if (!loading && !shadow.isFetching) anchor.current = undefined;
+  }, [lines, loading, viewport, shadow.data, shadow.isFetching, selected?.childConversationId]);
   const nearTop = useCallback(() => {
     const element = viewport.current;
     if (more && !loading && element && element.scrollTop < element.clientHeight) earlier();
@@ -2232,25 +2352,21 @@ function TranscriptLog({
     scrollToMessage(`turn-${turnKey(turn)}`, { align: "start", behavior: "instant" });
     viewport.current?.querySelector<HTMLElement>(`[data-turn-key="${CSS.escape(turnKey(turn))}"]`)?.focus({ preventScroll: true });
   };
-  return (
+  const selectShadow = (value: Tabs.Tab.Value) => {
+    const element = viewport.current!;
+    const first = [...element.querySelectorAll<HTMLElement>("[data-turn-key]")].find((node) => node.getBoundingClientRect().bottom > element.getBoundingClientRect().top);
+    if (first) anchor.current = { key: first.dataset.turnKey!, top: first.getBoundingClientRect().top };
+    navigate(panelHref(String(value), "shadow"));
+  };
+  const commonParent = shadows.every((binding) => binding.parentAgent === shadows[0].parentAgent);
+  const tabs = <Tabs.List aria-label="Shadow agents" activateOnFocus className="flex min-w-0 gap-1 overflow-x-auto border-b p-2 lg:pr-12">
+    {shadows.map((binding) => <Tabs.Tab key={binding.childConversationId} value={binding.childConversationId} aria-label={binding.shadowAgent} title={`${binding.shadowAgent} · parent ${binding.parentAgent}`} className="shrink-0 rounded-md px-3 py-2 text-xs text-muted-foreground data-active:bg-muted data-active:text-foreground focus-visible:outline-2 focus-visible:outline-ring">{commonParent ? binding.shadowAgent.slice(binding.parentAgent.length + 1) : binding.shadowAgent}</Tabs.Tab>)}
+  </Tabs.List>;
+  const body = (
     <MessageScroller className="flex-1">
     <MessageScrollerViewport ref={viewport} id="transcript-scroll" preserveScrollOnPrepend={false} onScroll={() => { seen(); nearTop(); }} className="overflow-x-hidden [overflow-anchor:none]">
       <div className="min-h-full pl-3 pr-8 pt-3 pb-4 sm:pl-5 sm:pr-10 sm:pt-4">
-      <MessageScrollerContent className="mx-auto w-full min-w-0 max-w-3xl">
-      {origin && (origin.kind === "cron" || origin.kind === "external_mcp") ? <MessageScrollerItem messageId="origin"><OriginCard origin={origin} /></MessageScrollerItem> : null}
-      {turns.length === 0 && !working ? (
-        <MessageScrollerItem className="flex flex-1 items-center justify-center">
-          <p role="status" className="text-sm text-muted-foreground">{emptyMessage}</p>
-        </MessageScrollerItem>
-      ) : (
-        <>
-          {loading ? <MessageScrollerItem><p role="status" className="px-1 text-sm text-muted-foreground">Loading earlier messages…</p></MessageScrollerItem> : null}
-          {turns.map((turn, index) => <TranscriptTurn key={turnKey(turn)} turn={turn} index={index} live={index === turns.length - 1} detail={detail} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
-          {working ? <WorkingStatus conversationId={conversationId} movable={movable} onChange={refreshHistory} /> : null}
-          {terminal ? <MessageScrollerItem><p role="status" className="px-1 pb-4 text-sm text-muted-foreground">Turn {terminal}.</p></MessageScrollerItem> : null}
-        </>
-      )}
-      </MessageScrollerContent>
+        <TranscriptBody conversationId={conversationId} working={working} terminal={terminal} origin={origin} hasSandboxed={hasSandboxed} movable={movable} refreshHistory={refreshHistory} turns={turns} rows={pairedRows} binding={selected} detail={detail} wide={wide} loading={loading} emptyMessage={emptyMessage} delegations={shadow.data?.delegations} />
       </div>
     </MessageScrollerViewport>
     {turns.length > 0 ? (
@@ -2266,6 +2382,15 @@ function TranscriptLog({
     <MessageScrollerButton aria-label="Scroll to latest" title="Scroll to latest" behavior="instant" />
     </MessageScroller>
   );
+  const controls = <TranscriptControls comparison={mobileComparison ? <Button type="button" variant="ghost" size="sm" className="min-h-11" onClick={() => setMobileOpen(true)}>Shadows</Button> : null}>{children}</TranscriptControls>;
+  if (!selected) return <>{body}{controls}</>;
+  return <><Tabs.Root value={selected.childConversationId} onValueChange={selectShadow} style={{ "--shadow-width": `${shadowWidth.width}px` } as CSSProperties} className="flex min-h-0 flex-1 flex-col">
+    {wide ? <header className="grid grid-cols-[minmax(0,1fr)_minmax(18rem,var(--shadow-width))] border-b"><span className="p-3 text-xs text-muted-foreground">Conversation</span><div className="relative min-w-0">{tabs}<AsideResizeHandle {...shadowWidth} /></div></header> : null}
+    {shadow.error ? <p role="alert" className="px-3 text-sm text-destructive">{shadow.error.message}</p> : null}
+    <Tabs.Panel value={selected.childConversationId} className="flex min-h-0 flex-1 flex-col">{body}</Tabs.Panel>
+    {!wide ? <Sheet open={mobileOpen} onOpenChange={setMobileOpen}><SheetContent side="right" className="data-[side=right]:w-full data-[side=right]:sm:max-w-none"><SheetTitle>Shadow comparison · {selected.parentAgent}</SheetTitle>{tabs}<ScrollArea className="min-h-0 flex-1">{pairedRows.map((row, index) => <div key={row.key} className="p-3"><Button size="xs" variant="ghost" onClick={() => { setMobileOpen(false); scrollToMessage(`turn-${row.key}`, { align: "start", behavior: "instant" }); }}>Go to parent turn {index + 1}</Button><ShadowCell row={row} index={index} binding={selected} detail={detail} delegations={shadow.data?.delegations} /></div>)}</ScrollArea></SheetContent></Sheet> : null}
+  </Tabs.Root>{controls}
+  </>;
 }
 
 function applyHistoryDelta(draft: ComposerDraft, view: HistoryView) {
@@ -2303,6 +2428,7 @@ function applyHistoryDelta(draft: ComposerDraft, view: HistoryView) {
     draft.start = view.start;
     draft.more = view.more;
     draft.delegations = undefined;
+    draft.earlierShadows = undefined;
   }
   draft.busy = view.running || draft.lines.some((line) => !line.entryKey && line.role === "user" && !line.complete);
   draft.terminal = view.terminal;
@@ -2313,12 +2439,18 @@ function applyHistoryDelta(draft: ComposerDraft, view: HistoryView) {
   draft.movable = view.movable;
   draft.jobs = view.backgroundJobs;
   draft.questions = view.pendingQuestions;
+  draft.shadows = view.shadows;
   draft.revision = view.revision;
   draft.historyError = "";
   return newlyConsumed;
 }
 
-function readHistoryDelta(id: string, draft: ComposerDraft, onDraftChange: () => void): Promise<void> {
+function readHistoryDelta(id: string, draft: ComposerDraft, onDraftChange: () => void, signal?: AbortSignal): Promise<void> {
+  // A query's replacement signal must not inherit a cancelled read's promise.
+  if (signal && draft.historyRead) return draft.historyRead.catch(() => {}).then(() => {
+    signal.throwIfAborted();
+    return readHistoryDelta(id, draft, onDraftChange, signal);
+  });
   draft.historyAgain = true;
   if (draft.historyRead) return draft.historyRead;
   draft.historyRead = (async () => {
@@ -2328,21 +2460,38 @@ function readHistoryDelta(id: string, draft: ComposerDraft, onDraftChange: () =>
       try {
         const key = queries.history({ id }).queryKey;
         const cached = queryClient.getQueryData<HistoryView>(key);
-        const view = await queries.history({ id, revision: cached ? draft.revision : undefined, limit: historyPage }).queryFn({});
+        const view = await queries.history({ id, revision: cached ? draft.revision : undefined, limit: historyPage }).queryFn({ signal });
+        signal?.throwIfAborted();
         if (epoch !== (draft.historyEpoch ?? 0)) { draft.historyAgain = true; continue; }
+        // Earlier parent entries are settled, but their comparisons can still be live.
+        let earlierRefreshed = false;
+        for (const page of draft.earlierShadows ?? []) {
+          if (!page.shadows.some((binding) => binding.turns.some((turn) => !turn.terminal))) continue;
+          const known = new Set(page.shadows.flatMap((binding) => binding.turns.map((turn) => turn.order)));
+          for (let before = page.before; BigInt(before) > BigInt(page.from);) {
+            const earlier = await queries.history({ id, before, limit: historyPage }).queryFn({ signal });
+            signal?.throwIfAborted();
+            if (epoch !== (draft.historyEpoch ?? 0)) { draft.historyAgain = true; break; }
+            page.shadows = mergeShadowBindings(page.shadows, (earlier.shadows ?? []).map((binding) => ({ ...binding, turns: binding.turns.filter((turn) => known.has(turn.order)) })).filter((binding) => binding.turns.length));
+            earlierRefreshed = true;
+            before = earlier.start;
+          }
+        }
+        if (epoch !== (draft.historyEpoch ?? 0)) continue;
         if (!view.reset && view.revision === draft.revision
           && draft.busy === (view.running || draft.lines.some((line) => !line.entryKey && line.role === "user" && !line.complete))
           && draft.terminal === view.terminal && JSON.stringify(draft.origin) === JSON.stringify(view.origin)
           && JSON.stringify(cached?.delegations) === JSON.stringify(view.delegations)
           && draft.movable === view.movable && JSON.stringify(draft.jobs) === JSON.stringify(view.backgroundJobs)
           && JSON.stringify(draft.questions) === JSON.stringify(view.pendingQuestions)
-          && !draft.historyError) continue;
+          && !draft.historyError) { if (earlierRefreshed) onDraftChange(); continue; }
         if (applyHistoryDelta(draft, view)) void queryClient.invalidateQueries({ queryKey: ["queue"] });
         // Main's delegation panel reads a full durable parent view from this cache.
         const changed = new Set([...view.replacedKeys, ...view.removedKeys]);
         const groups = Map.groupBy([...(view.reset ? [] : cached?.messages ?? []).filter((message) => !changed.has(message.entryKey)), ...view.messages], (message) => message.entryKey);
         queryClient.setQueryData<HistoryView>(key, { ...view, reset: true, replacedKeys: [], removedKeys: [], messages: view.entryKeys.flatMap((entry) => groups.get(entry) ?? []) });
       } catch (err) {
+        if (signal?.aborted) throw err;
         // A history failure must not turn an accepted Prompt into a failed send.
         captureException(err);
         draft.historyError = err instanceof Error ? err.message : "history failed";
@@ -2356,21 +2505,28 @@ function readHistoryDelta(id: string, draft: ComposerDraft, onDraftChange: () =>
 const historyPage = 50;
 
 // Prepends one settled page: the previous historyPage entries, or every entry from a linked message onward.
-function readEarlierHistory(id: string, draft: ComposerDraft, onDraftChange: () => void, from?: string): Promise<void> {
+function readEarlierHistory(id: string, draft: ComposerDraft, onDraftChange: () => void, from?: string, signal?: AbortSignal): Promise<void> {
+  if (signal && draft.earlier) return draft.earlier.catch(() => {}).then(() => {
+    signal.throwIfAborted();
+    return readEarlierHistory(id, draft, onDraftChange, from, signal);
+  });
   const before = draft.start;
   const epoch = draft.historyEpoch ?? 0;
   if (draft.earlier || !draft.more || !before) return draft.earlier ?? Promise.resolve();
   draft.earlier = (async () => {
     try {
-      const view = await queries.history({ id, before, ...(from ? { from } : { limit: historyPage }) }).queryFn({});
+      const view = await queries.history({ id, before, ...(from ? { from } : { limit: historyPage }) }).queryFn({ signal });
+      signal?.throwIfAborted();
       if (draft.start === before && epoch === (draft.historyEpoch ?? 0)) {
         const known = new Set(draft.lines.map((line) => line.entryKey));
         draft.lines = [...historyLines(view.messages).filter((line) => !known.has(line.entryKey)), ...draft.lines];
         draft.start = view.start;
         draft.more = view.more;
         draft.delegations = [...new Set([...(draft.delegations ?? []), ...view.delegations])];
+        (draft.earlierShadows ??= []).push({ from: view.start, before, shadows: view.shadows ?? [] });
       }
     } catch (err) {
+      if (signal?.aborted) throw err;
       captureException(err);
       draft.historyError = err instanceof Error ? err.message : "history failed";
     }
@@ -2424,7 +2580,17 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
       stream.close();
     };
   }, [id, scope, refreshHistory]);
-  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !draft.revision, historyError: draft.historyError, origin: draft.origin, terminal: draft.terminal, delegations, more: draft.more ?? false, start: draft.start, loadEarlier, movable: draft.movable ?? false, hasSandboxed: draft.lines.some((line) => line.origin === "sandboxed") };
+  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !draft.revision, historyError: draft.historyError, origin: draft.origin, terminal: draft.terminal, delegations, shadows: mergeShadowBindings((draft.earlierShadows ?? []).reduce<ShadowBinding[]>((bindings, page) => mergeShadowBindings(bindings, page.shadows), []), draft.shadows ?? []), more: draft.more ?? false, start: draft.start, loadEarlier, movable: draft.movable ?? false, hasSandboxed: draft.lines.some((line) => line.origin === "sandboxed") };
+}
+
+function mergeShadowBindings(earlier: ShadowBinding[], followed: ShadowBinding[]) {
+  const bindings = new Map(earlier.map((binding) => [binding.childConversationId, binding]));
+  for (const binding of followed) {
+    const turns = new Map((bindings.get(binding.childConversationId)?.turns ?? []).map((turn) => [turn.order, turn]));
+    for (const turn of binding.turns) turns.set(turn.order, turn);
+    bindings.set(binding.childConversationId, { ...binding, turns: [...turns.values()].sort((a, b) => a.order.length - b.order.length || a.order.localeCompare(b.order)) });
+  }
+  return [...bindings.values()];
 }
 
 export function OriginCard({ origin }: { origin?: ChatOrigin }) {
@@ -2490,7 +2656,7 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
       route.goSession(draft.sessionId);
     }
   });
-  const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, terminal, delegations, more, start, loadEarlier, movable, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
+  const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, terminal, delegations, shadows, more, start, loadEarlier, movable, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
   const messageId = location.pathname === sessionPath(id) ? new URLSearchParams(search).get("message") : null;
   const matchedOrigin = (previewLines ?? lines).find((line) => line.messageId === messageId)?.origin;
   // A linked message older than the loaded entries loads every entry from it onward.
@@ -2503,12 +2669,12 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
   const available = !!draft.revertEligible && !previewing, pending = [draft.reverting, draft.sending, !draft.hydrated].some(Boolean);
   const revert = useMemo(() => ({ available, pending, run: runRevert }), [available, pending, runRevert]);
   const error = [scopeError, historyError].find(Boolean);
+  const followed = previewing ? { lines: previewLines ?? lines, delegations: preview.data?.delegations, busy: false, more: false, terminal: undefined, shadows: undefined } : { lines, delegations, busy, more, terminal, shadows };
   return (
     <RevertActions value={revert}>
       {draft.revertMessageId ? <div role="status" className="flex flex-wrap items-center gap-2 px-12 py-2 text-xs text-muted-foreground md:px-3"><span>History reverted. Files and external effects are unchanged.</span><Button size="sm" variant="outline" className="min-h-11 sm:min-h-8" disabled={revert.pending} onClick={() => void revert.run(undefined, true)}>Redo</Button></div> : null}
-      <Delegations value={previewing ? preview.data?.delegations : delegations}><TranscriptLog conversationId={id} lines={previewLines ?? lines} opening={opening} working={!previewing && busy} terminal={previewing ? undefined : terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} more={!previewing && more} loadEarlier={loadEarlier} movable={movable} refreshHistory={refreshHistory} /></Delegations>
-      {error ? <p role="alert" className="px-3 text-sm text-destructive">{error}</p> : null}
-      {hasSandboxed ? <ButtonGroup aria-label="Show messages from" className="mx-auto my-2.5">
+      <Delegations value={followed.delegations}><TranscriptLog conversationId={id} lines={followed.lines} opening={opening} working={followed.busy} terminal={followed.terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} more={followed.more} loadEarlier={loadEarlier} movable={movable} refreshHistory={refreshHistory} shadows={followed.shadows}>
+      {hasSandboxed ? <ButtonGroup aria-label="Show messages from">
         {(["sandboxed", "canonical"] as const).map((choice) => (
           <Button key={choice} type="button" size="xs" className="relative before:absolute before:-inset-y-2.5 before:inset-x-0" variant={visibleFilter[choice] ? "default" : "outline"} aria-pressed={visibleFilter[choice]} onClick={() => {
             if (matchedOrigin === choice) navigate(sessionPath(id));
@@ -2518,6 +2684,8 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
           </Button>
         ))}
       </ButtonGroup> : null}
+      </TranscriptLog></Delegations>
+      {error ? <p role="alert" className="px-3 text-sm text-destructive">{error}</p> : null}
       <fieldset disabled={[opening, previewing, !draft.hydrated].some(Boolean)} className={previewing ? "hidden" : "contents"}>
         <SessionComposer id={id} draft={draft} drafts={drafts} onDraftChange={onDraftChange} busy={busy} setBusy={setBusy} setLines={setLines} refreshHistory={refreshHistory} />
       </fieldset>

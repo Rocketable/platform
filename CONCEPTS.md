@@ -134,6 +134,21 @@ A Background Job's ID is the tool call key that started it. It ends as completed
 
 The system message that tells a Background Job's owner how the job ended. It enters a running turn of the owner at its next step, or wakes the owner with a new turn. A note for a script killed by a restart waits for the owner's next turn instead, unless the owner is a hidden cron or External MCP run. A turn that fails or stops before saving leaves the notes it read for the owner's next turn, without waking it again, unless the owner is a hidden cron or External MCP run, which may have no next turn: its notes wake it again 1 minute later, then 5 minutes later, then every 30 minutes until a wake saves. Only the first failure reaches its destination, saying the wake retries. It is consumed exactly once.
 
+### Shadow Agent
+
+An alternative agent defined by an immediate Markdown child of its parent's
+matching `agents/` directory. Each parent session owns a separate Shadow Session
+for each shadow. Shadows are not ordinary agent-picker choices and do not spawn
+more shadows.
+
+### Shadow Session
+
+A saved comparison child that receives each parent turn's ordered consumed
+inputs, with its own history, model, tool results, and failures. Web pairs turns
+by their recorded source and turn identity, not prompt text or completion order.
+Shadow output has no connector delivery. Shadows execute permitted tools for
+real in the shared workspace; output separation is not a dry-run sandbox.
+
 ### Private Producer Conversation
 
 A hidden conversation that runs work for a human-visible destination conversation, such as an External MCP case or a one-off cron run. Its turns carry that destination as their sync destination: Sync copies the history there, Web lists only the destination, and session tags set during the turn land on the destination.

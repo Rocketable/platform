@@ -246,7 +246,9 @@ func listSessionsTool(service *SessionService, threads *threadBridgeManager) roc
 			if criteria := strings.TrimSpace(params.Criteria); criteria == "" {
 				// Stored timestamps are UTC RFC3339Nano. Removing Z makes text order exact
 				// even across whole/fractional seconds, without PostgreSQL's microsecond rounding.
-				ids, err = queryStrings(ctx, service.db, `SELECT conversation_id FROM session_entries GROUP BY conversation_id
+				ids, err = queryStrings(ctx, service.db, `SELECT conversation_id FROM session_entries e
+WHERE NOT EXISTS (SELECT 1 FROM shadow_bindings b WHERE b.child_conversation_id = e.conversation_id OR starts_with(e.conversation_id, b.child_conversation_id || '/'))
+GROUP BY conversation_id
 HAVING MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") >= $1 COLLATE "C"
 AND ($2 = '' OR MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") < $2 COLLATE "C")
 ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, conversation_id COLLATE "C" LIMIT $3`, "session tool candidates", params.Since, params.Until, params.Limit)
@@ -593,7 +595,28 @@ WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entrie
 				fmt.Fprintf(&output, "[next_before_entry_id=%d]\n", observations[0].ID)
 			}
 
-			return rocketcode.TextToolResult(output.String()), nil
+			return sessionToolComparisonResult(ctx, service.db, params.ConversationID, params.BeforeEntryID, &output)
 		},
 	}
+}
+
+// sessionToolComparisonResult formats binding ownership separately from the
+// replay decoder so comparison inspection does not complicate message decoding.
+func sessionToolComparisonResult(ctx context.Context, db stateStoreDB, id string, before int64, output *strings.Builder) (rocketcode.ToolResult, error) {
+	shadows, err := shadowHistoryDB(ctx, db, id, "", 0, before)
+	if err != nil {
+		return rocketcode.ToolResult{}, err
+	}
+
+	if len(shadows) > 0 {
+		escape := strings.NewReplacer("\\", "\\\\", "\t", "\\t", "\r", "\\r", "\n", "\\n")
+
+		output.WriteString("\nshadows\nparent_conversation_id\tparent_agent\tshadow_agent\tchild_conversation_id\n")
+
+		for _, shadow := range shadows {
+			fmt.Fprintf(output, "%s\t%s\t%s\t%s\n", escape.Replace(shadow.ParentConversationID), escape.Replace(shadow.ParentAgent), escape.Replace(shadow.ShadowAgent), escape.Replace(shadow.ChildConversationID))
+		}
+	}
+
+	return rocketcode.TextToolResult(output.String()), nil
 }

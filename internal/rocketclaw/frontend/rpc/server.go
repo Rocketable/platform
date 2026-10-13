@@ -228,7 +228,7 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 	// Cron producer history is readable without granting chat or mutation access.
 	cronTrace := strings.HasPrefix(request.Id, "cron:") || strings.HasPrefix(request.Id, "one-off-cron:")
 	if !cronTrace {
-		if err := s.visibleConversation(ctx, request.Id); err != nil {
+		if err := s.readableConversation(ctx, request.Id); err != nil {
 			return nil, err
 		}
 	}
@@ -240,7 +240,7 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 		previous = historyRevision{}
 	}
 
-	view, err := s.sessions.ObserveHistory(ctx, request.Id, request.SourceConversationId, request.GetFrom(), request.GetBefore(), int(request.GetLimit()), previous)
+	view, err := s.sessions.ObserveHistory(ctx, request.Id, request.SourceConversationId, request.GetFrom(), request.GetBefore(), int(request.GetLimit()), &previous)
 	if err != nil {
 		return nil, fmt.Errorf("read web history page: %w", err)
 	}
@@ -250,7 +250,19 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 	}
 
 	entries, from, oldest := view.Entries, view.Inventory.From, view.Inventory.Oldest
+
 	response := &HistoryResponse{Reset_: view.Reset, Start: from, More: from > oldest, RevertEligible: view.Eligible, RevertMessageId: view.Inventory.Marker, CanUndo: view.Predecessor != "", Delegations: view.Delegations}
+	for i := range view.Shadows {
+		binding := &view.Shadows[i]
+
+		shadow := &ShadowBinding{ParentConversationId: binding.ParentConversationID, ParentAgent: binding.ParentAgent, ShadowAgent: binding.ShadowAgent, ChildConversationId: binding.ChildConversationID}
+		for j := range binding.Turns {
+			turn := &binding.Turns[j]
+			shadow.Turns = append(shadow.Turns, &ShadowTurn{ParentSourceConversationId: turn.ParentSourceConversationID, ParentTurnId: turn.ParentTurnID, ChildTurnId: turn.ChildTurnID, Order: turn.Order, Running: turn.Running, Terminal: string(turn.Terminal), Revision: turn.Revision})
+		}
+
+		response.Shadows = append(response.Shadows, shadow)
+	}
 
 	if !cronTrace && request.GetBefore() == 0 {
 		response.Origin, err = s.chatOrigin(ctx, request.Id)
@@ -995,7 +1007,7 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 
 	response := &ListAgentsResponse{}
 
-	allowed := slices.Sorted(maps.Keys(definitions.Items))
+	allowed := definitions.PrimaryNames()
 
 	channel, _, slack := protocol.SlackThreadTarget(id)
 	if id != "" {
@@ -1026,7 +1038,7 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 	// Keep the allowed order: Slack channels list their default agent first.
 	for _, name := range allowed {
 		agent, ok := definitions.Items[name]
-		if !ok {
+		if !ok || strings.Contains(name, "/") {
 			continue
 		}
 
@@ -1054,7 +1066,7 @@ func (s *Server) agentChoices(ctx context.Context, id string) ([]string, error) 
 		return nil, fmt.Errorf("load web agents: %w", err)
 	}
 
-	choices := slices.Sorted(maps.Keys(definitions.Items))
+	choices := definitions.PrimaryNames()
 
 	if channel, _, slack := protocol.SlackThreadTarget(id); slack {
 		allowed, err := s.channels.ChannelAgentChoices(ctx, channel)
@@ -1420,7 +1432,7 @@ func (s *Server) moveToBackground(ctx context.Context, request *MoveToBackground
 		return nil, err
 	}
 
-	moved, err := s.backend.MoveToBackground(request.ConversationId)
+	moved, err := s.backend.MoveToBackground(ctx, request.ConversationId)
 	if err != nil {
 		return nil, fmt.Errorf("web move to background: %w", err)
 	}
@@ -1471,6 +1483,15 @@ func (s *Server) visibleConversation(ctx context.Context, id string) error {
 		return fmt.Errorf("web queue: %w", status.Error(codes.InvalidArgument, "conversation ID is required"))
 	}
 
+	parent, err := s.sessions.ShadowParent(ctx, id)
+	if err != nil {
+		return fmt.Errorf("resolve web conversation visibility: %w", err)
+	}
+
+	if parent != "" {
+		return fmt.Errorf("web comparison: %w", status.Error(codes.PermissionDenied, "shadow sessions are read-only"))
+	}
+
 	visible, err := s.humanConversation(id)
 	if err != nil {
 		return err
@@ -1481,6 +1502,19 @@ func (s *Server) visibleConversation(ctx context.Context, id string) error {
 	}
 
 	return nil
+}
+
+func (s *Server) readableConversation(ctx context.Context, id string) error {
+	parent, err := s.sessions.ShadowParent(ctx, id)
+	if err != nil {
+		return fmt.Errorf("resolve web conversation visibility: %w", err)
+	}
+
+	if parent != "" {
+		id = parent
+	}
+
+	return s.visibleConversation(ctx, id)
 }
 
 func (s *Server) join(request *JoinRequest, stream grpc.ServerStream) error {
@@ -1573,7 +1607,7 @@ func (s *Server) tailscaleUsername(ctx context.Context, ip netip.Addr) (username
 }
 
 func (s *Server) entries(ctx context.Context, id string) ([]backend.ObservedSessionEntry, error) {
-	if err := s.visibleConversation(ctx, id); err != nil {
+	if err := s.readableConversation(ctx, id); err != nil {
 		return nil, err
 	}
 

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shadow comparison controls</title>
+<style>
+:root{color-scheme:light dark;--bg:#fbfbfa;--fg:#202321;--muted:#505750;--line:#d7dbd6;--soft:#eef2ee;--link:#285841}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,sans-serif}main{max-width:56rem;margin:auto;padding:2rem 1.2rem}h1{font-size:1.9rem;line-height:1.2}h2{font-size:1.4rem;margin-top:2rem}h3{font-size:1.1rem}p,dd{max-width:72ch}article{border:1px solid var(--line);border-radius:.6rem;padding:1rem;margin:1rem 0}dt{font-weight:600;margin-top:.55rem}dd{margin-left:0}a{color:var(--link)}.note{background:var(--soft);padding:1rem;border-radius:.6rem}.meta,footer{color:var(--muted);font-size:.9rem}table{border-collapse:collapse;width:100%;font-size:.9rem}th,td{text-align:left;padding:.65rem;border-bottom:1px solid var(--line);vertical-align:top}svg{width:100%;max-width:36rem;height:auto;color:var(--fg)}@media(prefers-color-scheme:dark){:root{--bg:#171b18;--fg:#eef1ed;--muted:#bbc3b9;--line:#424b41;--soft:#293229;--link:#a8d9bc}}
+</style>
+</head>
+<body><main>
+<header><h1>Shadow comparison controls</h1><p class="meta"><time datetime="2026-10-12">2026-10-12</time> · Owner: Ulderico · Topic: shadow-comparison-controls · Grounded in the current Web UI</p><p>Focus: a better mobile entry point and less repeated shadow identity. These are design choices, not an implementation plan.</p></header>
+<nav aria-label="Sections"><a href="#context">Context</a> · <a href="#ideas">Ranked ideas</a> · <a href="#cuts">Rejected ideas</a> · <a href="#references">References</a></nav>
+<section id="context"><h2>Grounding Context</h2>
+<p>The supplied screenshots show a detached upper-right “Compare shadows” action below the session tabs. The comparison sheet already names the selected shadow in its tab strip, then repeats that name above each turn. The bottom composer has an agent picker, attachment control, Stash, Steer, and Send.</p>
+<p>The source confirms this layout. Shadow tabs sit outside the mobile sheet’s scroller, so they can carry identity while rows carry turn numbers. Shadows are read-only comparison children, not choices for who answers the next message. Recorded turn pairing, parent-return links, and statuses must remain intact.</p>
+<p>No directly applicable past design learning was found. An adjacent Web connection-budget learning cautions against introducing additional mounted transcript streams. General NN/G guidance favors scoped controls and a clearly selected tab; it does not prove which placement RocketClaw users prefer.</p>
+<h3>Topic Axes</h3><p>Decomposition skipped — atomic subject. The placement alternatives are the deliverable.</p></section>
+<section id="ideas"><h2>Ranked Ideas</h2>
+<p class="note"><strong>Recommended combination:</strong> keep shadow identity in the tabs only, and put a compact comparison control just above the composer, outside the sending controls. If avoiding another row matters more, use the session menu instead.</p>
+<p class="note"><strong>Approved refinement:</strong> reuse the source-filter row above the composer. Keep the grouped “sandboxed | canonical” toggles and a separate “Shadows” button; the button opens comparison rather than filtering messages or selecting an agent. Show only “Shadows” when source toggles are unnecessary, and let the row wrap on narrow screens. Keep parent context in the sheet heading, short shadow names in tabs, and turn numbers in shadow rows.</p>
+<article id="idea-1"><h3>1. Name the shadow once</h3><dl>
+<dt>Description</dt><dd>Let the fixed selected tab identify the shadow. Change repeated row headings from “Turn 2 · main/concise” to “Turn 2.” Show short tab names such as “concise,” “skeptic,” and “structured” when their parent context is clear; retain full identities for accessibility and disambiguation.</dd>
+<dt>Basis</dt><dd>direct: <code>ui.tsx:2220</code> repeats the name; <code>:2335–2337</code> already labels the tabs; <code>:2362</code> keeps them outside the scroller.</dd>
+<dt>Rationale</dt><dd>The selected shadow is a property of the view, not fresh information in every turn. Turn numbers still explain correspondence.</dd>
+<dt>Downsides</dt><dd>Historical parent-agent segments can make shortened names ambiguous. Keep them distinguishable and preserve accessible context.</dd>
+<dt>Confidence / Complexity</dt><dd>95% / Low. Confidence is a design judgment, not a measured user result.</dd></dl>
+<svg viewBox="0 0 560 120" role="img" aria-labelledby="identity-title"><title id="identity-title">Tabs identify the shadow; rows identify turns</title><rect x="10" y="15" width="225" height="80" rx="8" fill="none" stroke="currentColor"/><text x="25" y="47" fill="currentColor" font-size="15">Selected tab → shadow identity</text><text x="25" y="74" fill="currentColor" font-size="15">Turn heading → turn identity</text><text x="275" y="48" fill="currentColor" font-size="15">concise | skeptic | structured</text><text x="275" y="77" fill="currentColor" font-size="15">Turn 1 · Turn 2 · Turn 3</text></svg><p class="meta">Conceptual illustration: identity belongs to the view; correspondence belongs to the row.</p></article>
+<article id="idea-2"><h3>2. A compact control above the composer</h3><dl>
+<dt>Description</dt><dd>Move “Compare shadows” to a small, left-aligned control immediately above and outside the message box. Keep it near the bottom agent picker without putting it inside that picker or squeezing it into the sending toolbar.</dd>
+<dt>Basis</dt><dd>reasoned: the composer already occupies the lower interaction area and its authoring row is crowded (<code>ui.tsx:3333–3348</code>). An adjoining control improves reach while separating viewing from sending.</dd>
+<dt>Rationale</dt><dd>Visible access without a detached top corner or confusion about which agent will answer.</dd>
+<dt>Downsides</dt><dd>Uses some vertical space and requires the comparison state to be available outside its current transcript component.</dd>
+<dt>Confidence / Complexity</dt><dd>80% / Medium. A visual trial on narrow screens would settle whether the additional row earns its space.</dd></dl></article>
+<article id="idea-3"><h3>3. A left-aligned conversation control</h3><dl>
+<dt>Description</dt><dd>Keep comparison above the transcript, but make it a compact, left-aligned “Conversation · Compare shadows” row rather than an isolated action on the right.</dd>
+<dt>Basis</dt><dd>direct: <code>ui.tsx:2359</code> already has a desktop Conversation header while mobile uses a <code>self-end</code> button.</dd>
+<dt>Rationale</dt><dd>Fixes the detached alignment with the smallest conceptual relocation and leaves the composer untouched.</dd>
+<dt>Downsides</dt><dd>It remains near the top and adds permanent header prominence.</dd>
+<dt>Confidence / Complexity</dt><dd>75% / Low.</dd></dl></article>
+<article id="idea-4"><h3>4. Put comparison in the session menu</h3><dl>
+<dt>Description</dt><dd>Remove the standalone control and add “Compare shadows” to the active session’s existing ellipsis menu.</dd>
+<dt>Basis</dt><dd>direct: <code>ui.tsx:846–869</code> provides an active-tab scoped menu. It currently contains tab-management commands, so comparison would be a deliberate extension.</dd>
+<dt>Rationale</dt><dd>The quietest transcript: no extra persistent control or row.</dd>
+<dt>Downsides</dt><dd>One more tap, weaker discovery, and new session-specific wiring. The menu still sits near the top.</dd>
+<dt>Confidence / Complexity</dt><dd>70% / Medium. Best if comparison is occasional.</dd></dl></article>
+<article id="idea-5"><h3>5. A separate button beside the agent picker</h3><dl>
+<dt>Description</dt><dd>Place a distinct “Compare” button beside the composer’s agent picker. Never make shadows ordinary entries in the active-agent selector.</dd>
+<dt>Basis</dt><dd>direct: <code>ui.tsx:3335</code> establishes the picker’s lower location; <code>CONCEPTS.md:141</code> says shadows are not ordinary agent-picker choices.</dd>
+<dt>Rationale</dt><dd>A visible, nearby entry with no additional row.</dd>
+<dt>Downsides</dt><dd>The supplied mobile toolbar is already full. It can crowd sending controls or imply comparison changes the active agent; this is not the preferred placement.</dd>
+<dt>Confidence / Complexity</dt><dd>55% / Medium.</dd></dl></article>
+</section>
+<section id="cuts"><h2>Rejection Summary</h2><p>Six lenses generated 21 raw proposals, consolidated into nine candidates before critique. Five survive; the final two placement options are conditional rather than proven improvements.</p><table><thead><tr><th>Idea</th><th>Reason cut</th></tr></thead><tbody>
+<tr><td>Compare on every parent turn</td><td>Adds a repeated action and opening-at-turn behavior beyond this placement cleanup.</td></tr>
+<tr><td>Named shadow launcher above composer</td><td>Duplicates the sheet tabs and risks mobile overflow.</td></tr>
+<tr><td>Shadow action beside session title</td><td>Competes with long titles and still occupies the top edge.</td></tr>
+<tr><td>Full-width comparison row</td><td>Gives a secondary action more prominence than the compact alternative needs.</td></tr>
+</tbody></table></section>
+<section id="references"><h2>References</h2><ul>
+<li><a href="https://github.com/Rocketable/platform/blob/b0f5a907c8fbdf4f695cc955655d666d080f1114/internal/rocketclaw/web/src/ui.tsx">Current PR Web UI</a></li>
+<li><a href="https://github.com/Rocketable/platform/blob/b0f5a907c8fbdf4f695cc955655d666d080f1114/CONCEPTS.md">Project vocabulary and shadow ownership</a></li>
+<li><a href="https://www.nngroup.com/articles/contextual-menus-guidelines/">NN/G: contextual-menu guidelines</a></li>
+<li><a href="https://www.nngroup.com/articles/tabs-used-right/">NN/G: tabs, used right</a></li>
+</ul></section>
+<footer>Composed 2026-10-12 from Ulderico’s mobile screenshots and feedback. Product code unchanged. README impact considered; no update needed.</footer>
+</main></body></html>

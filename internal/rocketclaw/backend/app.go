@@ -126,6 +126,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 	s.detach()
 
 	cfg, configPath, logger, rocketcodeSessions := s.cfg.Clone(), s.configPath, s.logger, s.sessions
+	rocketcodeSessions.definitions = s.cfg
 	rt := new(Runtime)
 	workCtx, cancelWork := context.WithCancelCause(runCtx)
 
@@ -276,6 +277,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 	})
 	background = newBackgroundRegistry(rocketcodeSessions, threadBridges, logger.With("component", "background_jobs"))
 	rocketcodeSessions.jobs = background
+	rocketcodeSessions.historyWorkers = threadBridges
 
 	var bridgeLoops errgroup.Group
 
@@ -336,15 +338,15 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		return err
 	}
 
-	if err := threadBridges.StartPendingScheduledMessages(); err != nil {
+	if err := threadBridges.StartPendingScheduledMessages(runCtx); err != nil {
 		return err
 	}
 
-	if err := threadBridges.StartActiveGoals(); err != nil {
+	if err := threadBridges.StartActiveGoals(runCtx); err != nil {
 		return err
 	}
 
-	if err := threadBridges.StartQueuedConversations(); err != nil {
+	if err := threadBridges.StartQueuedConversations(runCtx); err != nil {
 		return err
 	}
 

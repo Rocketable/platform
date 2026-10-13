@@ -124,7 +124,7 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 
 	bridge.activeAttribution = rocketcode.ReplayAttribution{Agent: "planner", Model: "work/model-a", ReasoningEffort: new("high")}
 	bridge.SwitchAgent("reviewer")
-	inputs := bridge.drainSteers(t.Context(), rocketcode.TurnPhaseFinalAnswer)
+	inputs := testDrainInputs(t, bridge, rocketcode.TurnPhaseFinalAnswer)
 	require.Len(t, inputs, 2)
 
 	for i := range inputs {
@@ -154,7 +154,7 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 		require.False(t, message.Complete)
 	}
 
-	require.Empty(t, bridge.drainSteers(t.Context(), rocketcode.TurnPhaseFinalAnswer))
+	require.Empty(t, testDrainInputs(t, bridge, rocketcode.TurnPhaseFinalAnswer))
 	require.Empty(t, bus.outbound, "a second drain must not repeat consumption")
 
 	// A disconnected observer must not drop or replay an admitted steer.
@@ -164,16 +164,17 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 
 	bus.Close()
 
-	bridge.inputOpen = true
+	bridge.inputOpen, bridge.activeTurnID = true, "next-turn"
+	bridge.steers, bridge.steersRead = nil, 0
 	disconnected := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &content, true)
 	disconnected.Metadata["web_message_id"] = "steer-disconnected"
 	require.NoError(t, bridge.Submit(t.Context(), disconnected))
-	inputs = bridge.drainSteers(t.Context(), rocketcode.TurnPhaseFinalAnswer)
+	inputs = testDrainInputs(t, bridge, rocketcode.TurnPhaseFinalAnswer)
 	require.Len(t, inputs, 1)
 	require.Equal(t, buildPrompt(initial, nil), inputs[0].Texts[0])
 	require.Contains(t, logged.String(), "publish consumed web input")
 	require.Contains(t, logged.String(), "test publisher closed")
-	require.Empty(t, bridge.drainSteers(t.Context(), rocketcode.TurnPhaseFinalAnswer))
+	require.Empty(t, testDrainInputs(t, bridge, rocketcode.TurnPhaseFinalAnswer))
 }
 
 func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
@@ -207,7 +208,7 @@ func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
 	}
 
 	require.Empty(t, bus.outbound)
-	require.Len(t, bridge.drainSteers(t.Context(), rocketcode.TurnPhaseFinalAnswer), 2)
+	require.Len(t, testDrainInputs(t, bridge, rocketcode.TurnPhaseFinalAnswer), 2)
 	require.Len(t, bus.outbound, 2)
 
 	for _, id := range []string{"queue-first", "queue-second"} {
@@ -2203,7 +2204,7 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 	require.NoError(t, service.closeTurn(t.Context(), "producer"))
 
 	manager, _ := newTestBridgeManager(t, cfg, service, finals)
-	require.NoError(t, manager.StartPendingScheduledMessages())
+	require.NoError(t, manager.StartPendingScheduledMessages(t.Context()))
 	final := readFinal(t, finals)
 	assert.Equal(t, threadKey, final.ConversationID)
 	assert.Equal(t, "selected", final.Agent)
@@ -4519,7 +4520,7 @@ func TestAppendSessionEntryKeepsPriorEntriesThenAdded(t *testing.T) {
 		}
 
 		continued = true
-	}), &rocketcode.SessionEntry{Type: "added"}, false)
+	}), &rocketcode.SessionEntry{Type: "added"})
 	stopped(func(rocketcode.SessionEntry, error) bool { return false })
 	assert.False(t, continued)
 
@@ -4534,7 +4535,7 @@ func TestAppendSessionEntryKeepsPriorEntriesThenAdded(t *testing.T) {
 		}
 
 		yield(rocketcode.SessionEntry{Type: "failed"}, assert.AnError)
-	}), &rocketcode.SessionEntry{Type: "added"}, false) {
+	}), &rocketcode.SessionEntry{Type: "added"}) {
 		got = append(got, entry.Type)
 
 		if err != nil {
@@ -4550,7 +4551,7 @@ func TestAppendSessionEntryKeepsPriorEntriesThenAdded(t *testing.T) {
 	added := rocketcode.SessionEntry{Type: "added", Version: 1, Model: "early", ReplayInput: replay}
 	seq := appendSessionEntry(iter.Seq2[rocketcode.SessionEntry, error](func(yield func(rocketcode.SessionEntry, error) bool) {
 		yield(rocketcode.SessionEntry{Type: "stored"}, nil)
-	}), &added, true)
+	}), &added)
 	added.Model = "late"
 	replay[0] = []byte(`"after"`)
 	before := time.Now().UTC()
@@ -4567,9 +4568,6 @@ func TestAppendSessionEntryKeepsPriorEntriesThenAdded(t *testing.T) {
 	assert.Equal(t, "stored", seen[0].Type)
 	assert.Equal(t, "late", seen[1].Model)
 	assert.Equal(t, []byte(`"after"`), []byte(seen[1].ReplayInput[0]))
-	seen[1].ReplayInput[0] = []byte(`"yielded"`)
-
-	assert.Equal(t, []byte(`"after"`), []byte(replay[0]))
 	assert.False(t, seen[1].Timestamp.Before(before))
 }
 
@@ -4677,7 +4675,7 @@ func ignoreOutbound(*protocol.OutboundMessage) {}
 func (nt *noteTest) bridge(t *testing.T, manager *threadBridgeManager, conversationID string) *Bridge {
 	t.Helper()
 
-	bridge, err := manager.recordedBridge(conversationID)
+	bridge, err := manager.recordedBridge(t.Context(), conversationID)
 	require.NoError(t, err)
 
 	return bridge
@@ -5228,9 +5226,8 @@ func TestSubagentWakeContinuesSavedHistory(t *testing.T) {
 	manager, _ := nt.run(t, ignoreOutbound)
 	child := nt.conversationID + "/call_a"
 
-	replay, err := replayInputForMessage("user", "research the flaky test")
-	require.NoError(t, err)
-	_, err = nt.service.AppendEntryID(t.Context(), child, &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "turn-1/call/call_a/task", Agent: "researcher", Timestamp: time.Now(), ReplayInput: replay})
+	replay := replayInputForMessage("user", "research the flaky test")
+	_, err := nt.service.AppendEntryID(t.Context(), child, &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "turn-1/call/call_a/task", Agent: "researcher", Timestamp: time.Now(), ReplayInput: replay})
 	require.NoError(t, err)
 
 	output, err := manager.continueSubagent(t.Context(), &backgroundJob{conversationID: nt.conversationID, subagentKey: "/call_a", agent: "researcher", origin: nt.slackPrompt("research")}, "[System]\n\nnote")

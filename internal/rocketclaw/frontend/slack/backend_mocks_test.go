@@ -44,7 +44,7 @@ var _ frontend.Backend = &backendMock{}
 //			ListConversationsFunc: func(context1 context.Context) ([]protocol.Conversation, error) {
 //				panic("mock out the ListConversations method")
 //			},
-//			MoveToBackgroundFunc: func(s string) (bool, error) {
+//			MoveToBackgroundFunc: func(context1 context.Context, s string) (bool, error) {
 //				panic("mock out the MoveToBackground method")
 //			},
 //			PendingQuestionsFunc: func(context1 context.Context, s string) ([]protocol.AskUserQuestionRequest, error) {
@@ -118,7 +118,7 @@ type backendMock struct {
 	ListConversationsFunc func(context1 context.Context) ([]protocol.Conversation, error)
 
 	// MoveToBackgroundFunc mocks the MoveToBackground method.
-	MoveToBackgroundFunc func(s string) (bool, error)
+	MoveToBackgroundFunc func(context1 context.Context, s string) (bool, error)
 
 	// PendingQuestionsFunc mocks the PendingQuestions method.
 	PendingQuestionsFunc func(context1 context.Context, s string) ([]protocol.AskUserQuestionRequest, error)
@@ -221,6 +221,8 @@ type backendMock struct {
 		}
 		// MoveToBackground holds details about calls to the MoveToBackground method.
 		MoveToBackground []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
 			// S is the s argument value.
 			S string
 		}
@@ -618,19 +620,21 @@ func (mock *backendMock) ListConversationsCalls() []struct {
 }
 
 // MoveToBackground calls MoveToBackgroundFunc.
-func (mock *backendMock) MoveToBackground(s string) (bool, error) {
+func (mock *backendMock) MoveToBackground(context1 context.Context, s string) (bool, error) {
 	if mock.MoveToBackgroundFunc == nil {
 		panic("backendMock.MoveToBackgroundFunc: method is nil but Backend.MoveToBackground was just called")
 	}
 	callInfo := struct {
-		S string
+		Context1 context.Context
+		S        string
 	}{
-		S: s,
+		Context1: context1,
+		S:        s,
 	}
 	mock.lockMoveToBackground.Lock()
 	mock.calls.MoveToBackground = append(mock.calls.MoveToBackground, callInfo)
 	mock.lockMoveToBackground.Unlock()
-	return mock.MoveToBackgroundFunc(s)
+	return mock.MoveToBackgroundFunc(context1, s)
 }
 
 // MoveToBackgroundCalls gets all the calls that were made to MoveToBackground.
@@ -638,10 +642,12 @@ func (mock *backendMock) MoveToBackground(s string) (bool, error) {
 //
 //	len(mockedBackend.MoveToBackgroundCalls())
 func (mock *backendMock) MoveToBackgroundCalls() []struct {
-	S string
+	Context1 context.Context
+	S        string
 } {
 	var calls []struct {
-		S string
+		Context1 context.Context
+		S        string
 	}
 	mock.lockMoveToBackground.RLock()
 	calls = mock.calls.MoveToBackground

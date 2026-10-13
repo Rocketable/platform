@@ -77,18 +77,18 @@ const (
 )
 
 // SteerDrain collects waiting steers and Completion Notes after a tool batch, or when a no-tool answer would otherwise end the turn.
-// The zero value is inert.
-type SteerDrain struct {
-	Fn func(context.Context, TurnPhase) []PromptInput
+// Applied identities include replayed and compacted inputs. A final drain may
+// wait for new input; errors must prevent accepting the pending final answer.
+type SteerDrain interface {
+	Drain(context.Context, TurnPhase, []string) ([]PromptInput, error)
 }
 
-// Drain returns the waiting inputs for phase. The zero value returns nil.
-func (d SteerDrain) Drain(ctx context.Context, phase TurnPhase) []PromptInput {
-	if d.Fn == nil {
-		return nil
-	}
+// InertSteerDrain never supplies additional input.
+type InertSteerDrain struct{}
 
-	return d.Fn(ctx, phase)
+// Drain does not wait or supply input.
+func (InertSteerDrain) Drain(context.Context, TurnPhase, []string) ([]PromptInput, error) {
+	return nil, nil
 }
 
 type responsesAPI interface {
@@ -766,6 +766,7 @@ func (l *looper) runTurn(
 	}
 
 	record = step.Record
+	applied := step.AppliedInputIDs
 	observations.turnID = record.TurnID
 	observations.trace = slices.Clone(step.Trace)
 
@@ -879,7 +880,7 @@ func (l *looper) runTurn(
 
 				turnItems = append([]responses.ResponseInputItemUnionParam(nil), recovered...)
 
-				return l.saveTurn(turnCtx, &record, nil)
+				return l.saveTurn(turnCtx, &record, nil, applied)
 			})
 			if errResponse != nil {
 				if errors.Is(context.Cause(turnCtx), errTurnInterrupted) {
@@ -895,7 +896,7 @@ func (l *looper) runTurn(
 				return emptyRecord, nil, false, err
 			}
 
-			if err := l.saveTurn(turnCtx, &record, resp); err != nil {
+			if err := l.saveTurn(turnCtx, &record, resp, applied); err != nil {
 				return emptyRecord, nil, false, fmt.Errorf("record provider response: %w", err)
 			}
 		}
@@ -914,7 +915,7 @@ func (l *looper) runTurn(
 				continue
 			}
 
-			injected, errSteers := l.appendSteers(turnCtx, &record, &turnItems, TurnPhaseFinalAnswer)
+			injected, errSteers := l.appendSteers(turnCtx, &record, &turnItems, TurnPhaseFinalAnswer, &applied)
 			if errSteers != nil {
 				return emptyRecord, nil, false, errSteers
 			}
@@ -923,7 +924,7 @@ func (l *looper) runTurn(
 				return record, rendered, false, nil
 			}
 
-			if err := l.saveTurn(turnCtx, &record, nil); err != nil {
+			if err := l.saveTurn(turnCtx, &record, nil, applied); err != nil {
 				return emptyRecord, nil, false, err
 			}
 
@@ -934,11 +935,11 @@ func (l *looper) runTurn(
 			return emptyRecord, nil, false, err
 		}
 
-		if _, err := l.appendSteers(turnCtx, &record, &turnItems, TurnPhaseToolLoop); err != nil {
+		if _, err := l.appendSteers(turnCtx, &record, &turnItems, TurnPhaseToolLoop, &applied); err != nil {
 			return emptyRecord, nil, false, err
 		}
 
-		if err := l.saveTurn(turnCtx, &record, nil); err != nil {
+		if err := l.saveTurn(turnCtx, &record, nil, applied); err != nil {
 			return emptyRecord, nil, false, fmt.Errorf("record tool outputs: %w", err)
 		}
 	}
@@ -970,7 +971,11 @@ func (l *looper) openTurn(ctx context.Context, input *PromptInput) (step turnSte
 			ReasoningEffort: new(string(l.ReasoningEffort)),
 			ReplayInput:     replayInput,
 		}
+
 		step.Record.TurnID = cmp.Or(input.TurnID, strconv.FormatInt(step.Record.Timestamp.UnixNano(), 10))
+		if input.ID != "" {
+			step.AppliedInputIDs = []string{input.ID}
+		}
 
 		if err := saveStep(ctx, l.Journal, step.Record.TurnID, &step); err != nil {
 			return step, nil, nil, nil, err
@@ -981,6 +986,16 @@ func (l *looper) openTurn(ctx context.Context, input *PromptInput) (step turnSte
 
 	if turnItems, err = ReplayInputToParams(step.Record.ReplayInput); err != nil {
 		return step, nil, nil, nil, err
+	}
+	// Older checkpoints still have identities in replay; retain those on the next
+	// save so later compaction cannot erase their deduplication evidence.
+	for i := range turnItems {
+		item := &turnItems[i]
+		if item.OfMessage != nil {
+			if id, ok := item.OfMessage.ExtraFields()["input_id"].(string); ok && id != "" && !slices.Contains(step.AppliedInputIDs, id) {
+				step.AppliedInputIDs = append(step.AppliedInputIDs, id)
+			}
+		}
 	}
 
 	if len(step.Response) > 0 {
@@ -994,8 +1009,8 @@ func (l *looper) openTurn(ctx context.Context, input *PromptInput) (step turnSte
 }
 
 // saveTurn journals the turn's items, trace, and the provider response whose calls are not yet appended.
-func (l *looper) saveTurn(ctx context.Context, record *SessionEntry, resp *responses.Response) error {
-	step := turnStep{Record: *record}
+func (l *looper) saveTurn(ctx context.Context, record *SessionEntry, resp *responses.Response, applied []string) error {
+	step := turnStep{Record: *record, AppliedInputIDs: applied}
 
 	l.observations.mu.Lock()
 	step.Trace = slices.Clone(l.observations.trace)
@@ -1036,14 +1051,21 @@ func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Resp
 
 // appendSteers skips a drained input whose ID is already in the turn, since a
 // resumed turn's embedder re-offers every steer it accepted.
-func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, phase TurnPhase) (bool, error) {
-	inputs := slices.DeleteFunc(append(l.SteerDrain.Drain(ctx, phase), l.notes.DrainNotes(ctx, l.subagentKey)...), func(input PromptInput) bool {
-		return input.ID != "" && slices.ContainsFunc(*turnItems, func(item responses.ResponseInputItemUnionParam) bool {
-			return item.OfMessage != nil && item.OfMessage.ExtraFields()["input_id"] == input.ID
-		})
-	})
+func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, phase TurnPhase, applied *[]string) (bool, error) {
+	inputs, err := l.SteerDrain.Drain(ctx, phase, slices.Clone(*applied))
+	if err != nil {
+		return false, fmt.Errorf("drain turn input: %w", err)
+	}
+
+	inputs = append(inputs, l.notes.DrainNotes(ctx, l.subagentKey)...)
+	injected := false
+
 	for i := range inputs {
 		input := &inputs[i]
+		if input.ID != "" && slices.Contains(*applied, input.ID) {
+			continue
+		}
+
 		if input.DirectSkill != nil {
 			item, err := l.directSkillInput(ctx, input.DirectSkill)
 			if err != nil {
@@ -1063,9 +1085,14 @@ func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnIte
 		}
 
 		*turnItems = append(*turnItems, steer)
+		if input.ID != "" {
+			*applied = append(*applied, input.ID)
+		}
+
+		injected = true
 	}
 
-	return len(inputs) > 0, nil
+	return injected, nil
 }
 
 func (l *looper) appendProviderReplay(record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, resp *responses.Response) error {

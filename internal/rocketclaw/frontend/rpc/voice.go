@@ -609,7 +609,7 @@ func (c *voiceCall) forward(ctx context.Context, snapshots chan<- voiceSnapshot)
 func (c *voiceCall) snapshot(ctx context.Context, root *os.Root, from int64, limit int) (voiceSnapshot, int64, error) {
 	var snapshot voiceSnapshot
 
-	view, err := c.server.sessions.ObserveHistory(ctx, c.conversationID, "", from, 0, limit, backend.HistoryInventory{})
+	view, err := c.server.sessions.ObserveHistory(ctx, c.conversationID, "", from, 0, limit, &backend.HistoryInventory{})
 	if err != nil {
 		return snapshot, 0, fmt.Errorf("read voice history: %w", err)
 	}

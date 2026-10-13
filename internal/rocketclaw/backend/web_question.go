@@ -118,6 +118,10 @@ func (r *Runtime) PendingQuestions(ctx context.Context, conversationID string) (
 // turn waiting on it. The first answer wins: an answer to a question no Web turn of that
 // conversation waits on, which includes one already answered, fails with *QuestionNotPendingError.
 func (r *Runtime) AnswerQuestion(ctx context.Context, conversationID, questionID string, answer protocol.AskUserQuestionAnswer) error {
+	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
+		return err
+	}
+
 	q, key := r.questions, webQuestionKey{conversationID, questionID}
 
 	// Holding q.mu across the save keeps a second answer from saving or waking anything.

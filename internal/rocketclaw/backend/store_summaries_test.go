@@ -52,9 +52,8 @@ func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
 				{"user", " \n", "latest user"},
 				{"assistant", " \n", "latest user"},
 			} {
-				replay, err := replayInputForMessage(message.role, message.text)
-				require.NoError(t, err)
-				_, err = service.AppendEntryID(t.Context(), tc.name, &harness.SessionEntry{Timestamp: time.Unix(1, 987654321).UTC(), ReplayInput: replay})
+				replay := replayInputForMessage(message.role, message.text)
+				_, err := service.AppendEntryID(t.Context(), tc.name, &harness.SessionEntry{Timestamp: time.Unix(1, 987654321).UTC(), ReplayInput: replay})
 				require.NoError(t, err)
 				summaries, err := service.ListSessions(t.Context(), []string{tc.name})
 				require.NoError(t, err)
@@ -327,9 +326,8 @@ func TestSessionSummaryPairedAppendAndCleanup(t *testing.T) {
 	session := &ExternalMCPSessionState{PrivateConversationID: "private", ManagedConversationID: "managed", Agent: "main"}
 	require.NoError(t, service.RegisterExternalMCPConversation("public", "main", session))
 
-	prefix, err := replayInputForMessage("user", "managed-only\x00")
-	require.NoError(t, err)
-	_, err = service.appendExternalMCPEntry(t.Context(), "private", "managed", &harness.SessionEntry{Timestamp: time.Unix(1, 0).UTC()}, prefix)
+	prefix := replayInputForMessage("user", "managed-only\x00")
+	_, err := service.appendExternalMCPEntry(t.Context(), "private", "managed", &harness.SessionEntry{Timestamp: time.Unix(1, 0).UTC()}, prefix)
 	require.NoError(t, err)
 	summaries, err := service.ListSessions(t.Context(), []string{"private", "managed"})
 	require.NoError(t, err)

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -287,6 +288,7 @@ func testLooper(client responsesAPI) *looper {
 	l.PermissionReviewer = inertPermissionReviewer{}
 	l.Journal = InertJournal{}
 	l.notes = InertBackgroundJobs{}
+	l.SteerDrain = InertSteerDrain{}
 	l.observations = &turnObservations{journal: l.Journal}
 
 	return &l
@@ -299,6 +301,7 @@ func emptyTestLooper() *looper {
 	l.PermissionReviewer = inertPermissionReviewer{}
 	l.Journal = InertJournal{}
 	l.notes = InertBackgroundJobs{}
+	l.SteerDrain = InertSteerDrain{}
 	l.observations = &turnObservations{journal: l.Journal}
 
 	return &l
@@ -2347,8 +2350,8 @@ Use this skill for docs.
 			call := PromptInput{ID: "original-input", Texts: []string{"$" + skillName + " !`touch executed`"}, DirectSkill: &PromptInputDirectSkill{Name: skillName, Arguments: "!`touch executed`"}, Responses: output}
 
 			if steer {
-				looper.SteerDrain = SteerDrain{Fn: func(context.Context, TurnPhase) []PromptInput {
-					return []PromptInput{call}
+				looper.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, TurnPhase, []string) ([]PromptInput, error) {
+					return []PromptInput{call}, nil
 				}}
 
 				input <- testPromptInput(PromptInputRoleUser, "start", output)
@@ -2439,11 +2442,11 @@ func TestLooperMixedSkillSteersDoNotSilentlyLoseAcceptedWork(t *testing.T) {
 		{Texts: []string{"plain neighboring request"}},
 		{Texts: []string{"$docs-helper last"}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "last"}},
 	}
-	looper.SteerDrain = SteerDrain{Fn: func(context.Context, TurnPhase) []PromptInput {
+	looper.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, TurnPhase, []string) ([]PromptInput, error) {
 		batch := steers
 		steers = nil
 
-		return batch
+		return batch, nil
 	}}
 	output := make(chan ChatResponse, 10)
 
@@ -2788,8 +2791,8 @@ func TestLooperResumedTurnInjectsEachSteerOnce(t *testing.T) {
 		return TextToolResult("looked-up"), nil
 	}
 	cut.Tools, cut.Permissions = map[string]looperTool{"lookup": tool}, PermissionSet{Buckets: []PermissionBucket{{Name: "lookup", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
-	cut.SteerDrain = SteerDrain{Fn: func(context.Context, TurnPhase) []PromptInput {
-		return []PromptInput{{ID: "steer-1", Texts: []string{"injected before the cut"}}}
+	cut.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, TurnPhase, []string) ([]PromptInput, error) {
+		return []PromptInput{{ID: "steer-1", Texts: []string{"injected before the cut"}}}, nil
 	}}
 	_, err := runJournaledTurn(ctx, cut, journal, "work")
 	require.Error(t, err)
@@ -2797,14 +2800,14 @@ func TestLooperResumedTurnInjectsEachSteerOnce(t *testing.T) {
 	mock := mockResponses(responseWithMessage("resp-1", "first"), responseWithMessage("resp-2", "done"))
 	resumed := testLooper(mock)
 	offered := false
-	resumed.SteerDrain = SteerDrain{Fn: func(context.Context, TurnPhase) []PromptInput {
+	resumed.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, TurnPhase, []string) ([]PromptInput, error) {
 		if offered {
-			return nil
+			return nil, nil
 		}
 
 		offered = true
 
-		return []PromptInput{{ID: "steer-1", Texts: []string{"injected before the cut"}}, {ID: "steer-2", Texts: []string{"drained but not journaled"}}}
+		return []PromptInput{{ID: "steer-1", Texts: []string{"injected before the cut"}}, {ID: "steer-2", Texts: []string{"drained but not journaled"}}}, nil
 	}}
 	_, err = runJournaledTurn(t.Context(), resumed, journal, "work")
 	require.NoError(t, err)
@@ -2813,6 +2816,120 @@ func TestLooperResumedTurnInjectsEachSteerOnce(t *testing.T) {
 	sent := marshalJSON(t, newParams(mock)[1].Input.OfInputItemList)
 	require.Equal(t, 1, strings.Count(sent, "injected before the cut"))
 	require.Equal(t, 1, strings.Count(sent, "drained but not journaled"))
+}
+
+func TestLooperResumedCompactedTurnKeepsInputIdentities(t *testing.T) {
+	for _, overflow := range []bool{false, true} {
+		t.Run(fmt.Sprintf("context_overflow=%t", overflow), func(t *testing.T) {
+			journal := recordingJournal()
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+
+			calls := 0
+			mock := mockResponseFunc(func(_ context.Context, params *responses.ResponseNewParams) (*responses.Response, error) {
+				calls++
+				if calls <= 2 {
+					return responseWithFunctionCalls(strconv.Itoa(calls), []responses.ResponseFunctionToolCall{testFunctionCall("tool", strconv.Itoa(calls), "lookup", `{}`)}), nil
+				}
+
+				if !overflow {
+					return responseWithCompactionAndMessage("compacted", "summary", "answer"), nil
+				}
+
+				if strings.Contains(marshalJSON(t, params.Input.OfInputItemList), "already consumed") {
+					return nil, contextLengthExceededError()
+				}
+				// The real overflow path has replaced the checkpoint's prefix,
+				// including S1. Crash after that save, before the provider retry.
+				cancel()
+
+				return nil, context.Canceled
+			})
+			mock.CompactFunc = func(context.Context, *responses.ResponseCompactParams, ...option.RequestOption) (*responses.CompactedResponse, error) {
+				return compactedResponse("compacted", "summary"), nil
+			}
+			cut := testLooper(mock)
+			tool := testLooperTool("lookup")
+			tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+				return TextToolResult("found"), nil
+			}
+			cut.Tools, cut.Permissions = map[string]looperTool{"lookup": tool}, PermissionSet{Buckets: []PermissionBucket{{Name: "lookup", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
+			cut.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, phase TurnPhase, applied []string) ([]PromptInput, error) {
+				if !slices.Contains(applied, "s1") {
+					return []PromptInput{{ID: "s1", Texts: []string{"already consumed"}}}, nil
+				}
+
+				if phase == TurnPhaseFinalAnswer {
+					cancel()
+					return nil, context.Canceled
+				}
+
+				return nil, nil
+			}}
+			_, err := runJournaledTurn(ctx, cut, journal, "work")
+			require.ErrorIs(t, err, context.Canceled)
+			saves := turnSaves(t, journal)
+			last := saves[len(saves)-1]
+			require.Equal(t, []string{"s1"}, last.AppliedInputIDs)
+
+			if overflow {
+				require.NotContains(t, marshalJSON(t, last.Record.ReplayInput), "already consumed")
+				require.NotEmpty(t, compactParams(mock))
+			}
+
+			resumedProvider := mockResponses(responseWithMessage("first", "answer"), responseWithMessage("last", "done"))
+			resumed := testLooper(resumedProvider)
+			offered := false
+			resumed.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, _ TurnPhase, applied []string) ([]PromptInput, error) {
+				require.Contains(t, applied, "s1")
+
+				if offered {
+					return nil, nil
+				}
+
+				offered = true
+
+				return []PromptInput{{ID: "s1", Texts: []string{"already consumed"}}, {ID: "s2", Texts: []string{"new input"}}}, nil
+			}}
+			_, err = runJournaledTurn(t.Context(), resumed, journal, "work")
+			require.NoError(t, err)
+
+			for _, params := range newParams(resumedProvider) {
+				require.NotContains(t, marshalJSON(t, params.Input.OfInputItemList), "already consumed")
+			}
+
+			params := newParams(resumedProvider)
+			require.NotEmpty(t, params)
+			require.Equal(t, 1, strings.Count(marshalJSON(t, params[len(params)-1].Input.OfInputItemList), "new input"))
+		})
+	}
+}
+
+func TestLooperDrainErrorLeavesFinalAnswerUnaccepted(t *testing.T) {
+	journal := recordingJournal()
+	mock := mockResponses(responseWithMessage("first", "not yet accepted"))
+	loop := testLooper(mock)
+	errDrain := errors.New("capture failed")
+	loop.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, phase TurnPhase, applied []string) ([]PromptInput, error) {
+		require.Equal(t, TurnPhaseFinalAnswer, phase)
+		require.Equal(t, []string{"initial"}, applied)
+
+		return nil, errDrain
+	}}
+	loop.Journal = journal
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- PromptInput{ID: "initial", TurnID: "turn-1", Texts: []string{"work"}, Responses: output}
+
+	close(input)
+	err := loop.Loop(t.Context(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	require.ErrorIs(t, err, errDrain)
+	require.Empty(t, collectResponses(output))
+	saves := turnSaves(t, journal)
+	require.Len(t, saves, 2)
+	require.NotEmpty(t, saves[1].Response, "restart still owns the unaccepted provider response")
 }
 
 func TestLooperResumesFromRecordedCallResults(t *testing.T) {
@@ -3190,12 +3307,12 @@ func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
 		return TextToolResult("looked-up"), nil
 	}
 	looper.Tools = map[string]looperTool{"lookup": tool}
-	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []PromptInput {
+	looper.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, phase TurnPhase, _ []string) ([]PromptInput, error) {
 		if phase != TurnPhaseToolLoop {
-			return nil
+			return nil, nil
 		}
 
-		return []PromptInput{{ID: "steer-1", Texts: []string{"don't touch the database"}}}
+		return []PromptInput{{ID: "steer-1", Texts: []string{"don't touch the database"}}}, nil
 	}}
 	output := make(chan ChatResponse, 10)
 
@@ -3249,12 +3366,12 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 		return TextToolResult("looked-up"), nil
 	}
 	looper.Tools = map[string]looperTool{"lookup": tool, "skill": factory.skillTool()}
-	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []PromptInput {
+	looper.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, phase TurnPhase, _ []string) ([]PromptInput, error) {
 		if phase != TurnPhaseToolLoop {
-			return nil
+			return nil, nil
 		}
 
-		return steers
+		return steers, nil
 	}}
 	output := make(chan ChatResponse, 10)
 
@@ -3288,7 +3405,7 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 		require.JSONEq(t, expected, marshalJSON(t, history[3+i]))
 	}
 
-	looper.SteerDrain = SteerDrain{}
+	looper.SteerDrain = InertSteerDrain{}
 
 	input = make(chan PromptInput, 1)
 	input <- testPromptInput(PromptInputRoleUser, "continue", make(chan ChatResponse, 10))
@@ -3353,17 +3470,17 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 			return TextToolResult(fmt.Sprintf("result-%d", params.Index)), nil
 		}
 		looper.Tools = map[string]looperTool{"first": {Definition: testFunctionToolParam("first"), Call: block}, "second": {Definition: testFunctionToolParam("second"), Call: block}, "third": {Definition: testFunctionToolParam("third"), Call: block}}
-		looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []PromptInput {
+		looper.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, phase TurnPhase, _ []string) ([]PromptInput, error) {
 			mu.Lock()
 
 			phases = append(phases, phase)
 			mu.Unlock()
 
 			if phase == TurnPhaseToolLoop {
-				return []PromptInput{{Texts: []string{"steer after batch"}}}
+				return []PromptInput{{Texts: []string{"steer after batch"}}}, nil
 			}
 
-			return nil
+			return nil, nil
 		}}
 		output := make(chan ChatResponse, 10)
 
@@ -3468,13 +3585,13 @@ func TestLooperInjectsSteersWhenNoTools(t *testing.T) {
 	})
 	looper := testLooper(mock)
 	looper.Journal = sink
-	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []PromptInput {
+	looper.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, phase TurnPhase, _ []string) ([]PromptInput, error) {
 		phases = append(phases, phase)
 		if phase != TurnPhaseFinalAnswer || len(phases) > 1 {
-			return nil
+			return nil, nil
 		}
 
-		return steers
+		return steers, nil
 	}}
 	output := make(chan ChatResponse, 10)
 

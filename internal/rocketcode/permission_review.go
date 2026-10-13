@@ -73,6 +73,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 		Observability:          f.observability,
 		Journal:                InertJournal{},
 		notes:                  InertBackgroundJobs{},
+		SteerDrain:             InertSteerDrain{},
 	}
 	childFactory.configureSpill(child)
 

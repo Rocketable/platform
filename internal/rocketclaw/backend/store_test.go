@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"iter"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,6 +27,8 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	harness "github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
@@ -832,14 +837,14 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 34, n)
+	assert.Equal(t, 35, n)
 	require.Error(t, first.db.QueryRowContext(t.Context(), `SELECT 1 FROM store_bootstrap`).Scan(&n))
 
 	second, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop()) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 34, n)
+	assert.Equal(t, 35, n)
 }
 
 func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
@@ -885,7 +890,7 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 
 				var count int
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-				require.Equal(t, 34, count)
+				require.Equal(t, 35, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations WHERE applied_at='2026-01-01Z'`).Scan(&count))
 				require.Equal(t, prefix, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM session_tags`).Scan(&count))
@@ -936,7 +941,7 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 34, n)
+	assert.Equal(t, 35, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
 }
 
@@ -1535,10 +1540,22 @@ func TestDeleteSessionDeletesOnlyTarget(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, service.UpsertThread("main", ThreadState{Agent: "ops"}))
 	require.NoError(t, service.BeginGoal("main", "ship it", "", 5))
+	seedActiveTurn(t, service, "main", "unshadowed-active", nil)
+	manager := newThreadBridgeManager(service.definitions, service, service.log, func(cfg Config) directBridge {
+		cfg.SessionService = service
+		return NewConversation(service.definitions, discardPublisher{}, &cfg, service.log)
+	})
+	_, err = manager.recordedBridge(t.Context(), "main")
+	require.NoError(t, err)
+
+	service.historyWorkers = manager
 
 	deleted, err := service.DeleteSession(context.Background(), "main")
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, deleted)
+	active, err := service.HasActiveTurn(t.Context(), "main")
+	require.NoError(t, err)
+	require.True(t, active, "history clear does not stop unshadowed work")
 
 	mainEntries, err := service.ObserveEntries(context.Background(), "main")
 	require.NoError(t, err)
@@ -1563,24 +1580,163 @@ func TestDeleteSessionDeletesOnlyTarget(t *testing.T) {
 }
 
 func TestHistoryRemovalIncludesDelegations(t *testing.T) {
+	t.Run("filesystem failure retry", func(t *testing.T) {
+		store, root := newShadowTestStore(t)
+		require.NoError(t, store.SaveAttachment(t.Context(), "parent", "", &protocol.OutboundAttachment{ID: "blob", Name: "result", Data: []byte("bytes")}, false))
+		_, err := store.db.ExecContext(t.Context(), `ALTER TABLE session_summaries ADD CONSTRAINT reject_deletion_summary CHECK (conversation_id <> 'parent')`)
+		require.NoError(t, err)
+		_, err = store.DeleteSession(t.Context(), "parent")
+		require.Error(t, err)
+
+		var count int
+		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM attachments`).Scan(&count))
+		require.Equal(t, 1, count, "SQL failure rolls ownership deletion back")
+		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM pending_attachment_deletions`).Scan(&count))
+		require.Zero(t, count, "tombstone insertion rolls back in the same transaction")
+		_, err = store.db.ExecContext(t.Context(), `ALTER TABLE session_summaries DROP CONSTRAINT reject_deletion_summary`)
+		require.NoError(t, err)
+
+		storage := store.attachments.(filesystemAttachments)
+		path, err := filepath.Rel(root.Name(), storage.path)
+		require.NoError(t, err)
+		// Temporarily move the storage directory to simulate an unavailable backing store.
+		require.NoError(t, root.Rename(path, path+"-unavailable"))
+		_, err = store.DeleteSession(t.Context(), "parent")
+		require.ErrorIs(t, err, fs.ErrNotExist)
+		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM attachments`).Scan(&count))
+		require.Zero(t, count, "SQL ownership deletion committed despite storage failure")
+		pending, err := queryStrings(t.Context(), store.db, `SELECT id FROM pending_attachment_deletions`, "pending byte deletion")
+		require.NoError(t, err)
+		require.Equal(t, []string{"blob"}, pending, "durable ownership survives the failed deletion")
+		require.NoError(t, root.Rename(path+"-unavailable", path))
+		reopened, err := NewSessionService(root.Name())
+
+		require.NoError(t, err)
+		defer func() { require.NoError(t, reopened.Stop()) }()
+
+		_, err = reopened.PruneStateBefore(t.Context(), time.Unix(0, 0))
+		require.NoError(t, err, "ordinary startup prune retries after a process restart")
+		_, err = reopened.attachments.Get(t.Context(), "blob")
+		require.ErrorIs(t, err, fs.ErrNotExist)
+		require.NoError(t, reopened.db.QueryRowContext(t.Context(), `SELECT count(*) FROM pending_attachment_deletions`).Scan(&count))
+		require.Zero(t, count)
+		// Simulate a crash after byte deletion but before the tombstone is removed.
+		_, err = reopened.db.ExecContext(t.Context(), `INSERT INTO pending_attachment_deletions (id) VALUES ('blob')`)
+		require.NoError(t, err)
+		_, err = reopened.PruneStateBefore(t.Context(), time.Unix(0, 0))
+		require.NoError(t, err)
+		require.NoError(t, reopened.db.QueryRowContext(t.Context(), `SELECT count(*) FROM pending_attachment_deletions`).Scan(&count))
+		require.Zero(t, count, "missing bytes are an idempotent deletion, not a failed retry")
+	})
+	t.Run("S3 original version", func(t *testing.T) {
+		requests := make(chan string, 9)
+
+		firstHead := make(chan struct{}, 1)
+		firstHead <- struct{}{}
+
+		firstDelete := make(chan struct{}, 1)
+		firstDelete <- struct{}{}
+
+		gone := make(chan struct{})
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests <- r.Method
+
+			if r.Method == http.MethodHead {
+				select {
+				case <-firstHead:
+					w.WriteHeader(http.StatusForbidden)
+					return
+				default:
+				}
+
+				select {
+				case <-gone:
+					w.WriteHeader(http.StatusNotFound)
+					return
+				default:
+				}
+
+				w.Header().Set("X-Amz-Version-Id", "original-version")
+			}
+
+			if r.Method == http.MethodDelete {
+				assert.Equal(t, "original-version", r.URL.Query().Get("versionId"), "erase original bytes instead of only creating a delete marker")
+
+				select {
+				case <-firstDelete:
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				default:
+					close(gone)
+				}
+			}
+		}))
+		t.Cleanup(server.Close)
+		store := newTestSessionService(t)
+		store.attachments = s3Attachments{bucket: "originals", client: s3.New(s3.Options{Region: "us-east-1", BaseEndpoint: new(server.URL), UsePathStyle: true, Credentials: credentials.NewStaticCredentialsProvider("test", "test", ""), RetryMaxAttempts: 1})}
+		require.NoError(t, store.SaveAttachment(t.Context(), "parent", "", &protocol.OutboundAttachment{ID: "blob", Name: "result", Data: []byte("bytes")}, false))
+		_, err := store.DeleteSession(t.Context(), "parent")
+		require.Error(t, err)
+		require.Equal(t, http.MethodPut, <-requests)
+		require.Equal(t, http.MethodHead, <-requests)
+		pending, err := queryStrings(t.Context(), store.db, `SELECT id FROM pending_attachment_deletions`, "failed S3 deletion")
+		require.NoError(t, err)
+		require.Equal(t, []string{"blob"}, pending, "403 is not proof that the bytes are absent")
+		_, err = store.PruneStateBefore(t.Context(), time.Unix(0, 0))
+		require.Error(t, err)
+		require.Equal(t, http.MethodHead, <-requests)
+		require.Equal(t, http.MethodDelete, <-requests)
+		pending, err = queryStrings(t.Context(), store.db, `SELECT id FROM pending_attachment_deletions`, "failed S3 version deletion")
+		require.NoError(t, err)
+		require.Equal(t, []string{"blob"}, pending, "a failed permanent deletion keeps ownership")
+		_, err = store.PruneStateBefore(t.Context(), time.Unix(0, 0))
+		require.NoError(t, err)
+		require.Equal(t, http.MethodHead, <-requests)
+		require.Equal(t, http.MethodDelete, <-requests)
+		_, err = store.db.ExecContext(t.Context(), `INSERT INTO pending_attachment_deletions (id) VALUES ('blob')`)
+		require.NoError(t, err)
+		_, err = store.PruneStateBefore(t.Context(), time.Unix(0, 0))
+		require.NoError(t, err, "a missing S3 key after permanent version deletion is a completed retry")
+		require.Equal(t, http.MethodHead, <-requests)
+		require.Empty(t, requests, "a 404 must not issue another marker-producing DELETE")
+		pending, err = queryStrings(t.Context(), store.db, `SELECT id FROM pending_attachment_deletions`, "completed S3 deletion")
+		require.NoError(t, err)
+		require.Empty(t, pending)
+	})
+
 	cutoff := time.Unix(1_700_000_000, 0).UTC()
 
-	for _, remove := range []func(*SessionService, string) error{
+	for index, remove := range []func(*SessionService, string) error{
 		func(s *SessionService, id string) error { _, err := s.DeleteSession(t.Context(), id); return err },
 		func(s *SessionService, _ string) error { _, err := s.PruneStateBefore(t.Context(), cutoff); return err },
 	} {
-		store := newTestSessionService(t)
+		store, _ := newShadowTestStore(t)
 		id := protocol.SlackThreadConversationID("D_1", slackTestTS(cutoff.Add(-time.Hour)))
-		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "planner"}))
+		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "main"}))
 		_, err := store.AppendEntryID(t.Context(), id, testSessionEntryAt(cutoff.Add(-time.Hour), id))
 		require.NoError(t, err)
 
 		decoy := protocol.SlackThreadConversationID("DX1", slackTestTS(cutoff.Add(-time.Hour))) + "/call-1"
-		histories := []string{id + "/call-1", id + "/call-1/call-2", decoy}
+		unrelated := id + "/unrelated"
+		require.NoError(t, store.UpsertThread(unrelated, ThreadState{Agent: "planner"}))
+		_, err = store.AppendEntryID(t.Context(), unrelated, testSessionEntryAt(cutoff.Add(time.Hour), unrelated))
+		require.NoError(t, err)
+		children, err := queryStrings(t.Context(), store.db, `SELECT child_conversation_id FROM shadow_bindings WHERE parent_conversation_id = $1 ORDER BY 1`, "owned children", id)
+		require.NoError(t, err)
+
+		histories := make([]string, 0, 3+2*len(children))
+		histories = append(histories, id+"/call-1", id+"/call-1/call-2", decoy)
+
+		histories = append(histories, children...)
+		for _, child := range children {
+			histories = append(histories, child+"/task/nested")
+		}
 
 		for _, history := range histories {
 			_, err := store.AppendEntryID(t.Context(), history, testSessionEntryAt(cutoff.Add(time.Hour), history))
 			require.NoError(t, err)
+			require.NoError(t, store.SaveTurnStep(t.Context(), history, "old/step", json.RawMessage(`{}`)))
+			require.NoError(t, store.SaveAttachment(t.Context(), history, "", &protocol.OutboundAttachment{ID: strings.ReplaceAll(history, "/", "_") + "-blob", Name: "result", MIMEType: "text/plain", Data: []byte("bytes")}, false))
 		}
 
 		require.NoError(t, remove(store, id))
@@ -1593,6 +1749,45 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 		entries, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM session_entries WHERE conversation_id = ANY($1)`, "delegation entries", histories)
 		require.NoError(t, err)
 		require.Equal(t, []string{decoy}, entries)
+		entries, err = queryStrings(t.Context(), store.db, `SELECT conversation_id FROM session_entries WHERE conversation_id = $1`, "unrelated slash session", unrelated)
+		require.NoError(t, err)
+		require.Equal(t, []string{unrelated}, entries)
+
+		for _, history := range histories {
+			_, err := store.attachments.Get(t.Context(), strings.ReplaceAll(history, "/", "_")+"-blob")
+			if history == decoy {
+				require.NoError(t, err)
+				require.Equal(t, []string{"old/step"}, testTurnStepKeys(t, store, history))
+			} else {
+				require.Error(t, err, "owned original bytes must be removed")
+				require.Empty(t, testTurnStepKeys(t, store, history))
+			}
+		}
+
+		var bindings int
+		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM shadow_bindings WHERE parent_conversation_id = $1`, id).Scan(&bindings))
+
+		if index == 0 {
+			require.Equal(t, 2, bindings, "history-only clear preserves bindings")
+
+			bridge := &Bridge{config: Config{ConversationID: id, Agent: "main", SessionService: store}, log: store.log}
+			request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "future", true)}
+			admitted, err := bridge.activateInbound(t.Context(), &request)
+			require.NoError(t, err)
+			require.True(t, admitted)
+
+			var comparisons int
+			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM shadow_turns WHERE parent_turn_id = $1`, request.turnID).Scan(&comparisons))
+			require.Equal(t, 2, comparisons, "future parent work reaches the retained children")
+		} else {
+			require.Zero(t, bindings)
+
+			for _, child := range children {
+				_, found, err := store.Thread(child)
+				require.NoError(t, err)
+				require.False(t, found, "retention removes child managed rows")
+			}
+		}
 	}
 }
 
@@ -1688,10 +1883,10 @@ func TestSessionServiceRejectsBlankKeys(t *testing.T) {
 }
 
 func TestDeleteSessionEntriesReportsDeleteFailures(t *testing.T) {
-	_, err := deleteSessionEntries(context.Background(), errStore{errExec: errors.New("no delete")}, map[string]struct{}{"main": {}})
+	_, err := deleteSessionEntries(context.Background(), errStore{errExec: errors.New("no delete")}, []string{"main"})
 	require.ErrorContains(t, err, "lock session history")
 
-	_, err = deleteSessionEntries(context.Background(), errStore{result: errResult{errRows: errors.New("no rows")}}, map[string]struct{}{"main": {}})
+	_, err = deleteSessionEntries(context.Background(), errStore{result: errResult{errRows: errors.New("no rows")}}, []string{"main"})
 	require.ErrorContains(t, err, "count stale session entries")
 }
 
@@ -2114,10 +2309,7 @@ func testReplayInput(messages ...replayInputMessage) []json.RawMessage {
 	var replayInput []json.RawMessage
 
 	for i := range messages {
-		raw, err := replayInputForMessage(messages[i].role, messages[i].text)
-		if err != nil {
-			panic(err)
-		}
+		raw := replayInputForMessage(messages[i].role, messages[i].text)
 
 		replayInput = append(replayInput, raw...)
 	}

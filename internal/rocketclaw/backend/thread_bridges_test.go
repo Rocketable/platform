@@ -124,7 +124,7 @@ func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
 	})
 	runTestManager(t, manager)
 
-	require.NoError(t, manager.StartPendingScheduledMessages())
+	require.NoError(t, manager.StartPendingScheduledMessages(t.Context()))
 	require.Len(t, created, 2)
 	assert.ElementsMatch(t, []Config{
 		{ConversationID: protocol.SlackThreadConversationID("D123", "111.222"), Agent: "selected"},
@@ -149,14 +149,14 @@ func TestThreadBridgeManagerDropsBridgeWhenThreadIsNotPersisted(t *testing.T) {
 
 	_, err := store.db.ExecContext(t.Context(), `ALTER TABLE managed_conversations ADD CONSTRAINT reject_thread CHECK (conversation_id <> 'slack-thread:D123:111.222') NOT VALID`)
 	require.NoError(t, err)
-	_, err = manager.ensureStartedThread(start)
+	_, err = manager.ensureStartedThread(t.Context(), start)
 	require.ErrorContains(t, err, "persist new Web session")
 	require.Len(t, bridges, 1)
 	assert.Len(t, bridges[0].StopCalls(), 1)
 
 	_, err = store.db.ExecContext(t.Context(), `ALTER TABLE managed_conversations DROP CONSTRAINT reject_thread`)
 	require.NoError(t, err)
-	_, err = manager.ensureStartedThread(start)
+	_, err = manager.ensureStartedThread(t.Context(), start)
 	require.NoError(t, err)
 	require.Len(t, bridges, 2, "the retry starts a fresh bridge")
 }
@@ -305,7 +305,7 @@ func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
 	})
 	runTestManager(t, manager)
 
-	require.NoError(t, manager.StartActiveGoals())
+	require.NoError(t, manager.StartActiveGoals(t.Context()))
 	require.Len(t, submittedMessages(bridge), 1)
 	assert.Equal(t, protocol.GoalActionContinue, submittedMessages(bridge)[0].GoalAction)
 	assert.Equal(t, "Continue the active goal loop.", submittedMessages(bridge)[0].Text)
@@ -325,7 +325,7 @@ func TestThreadBridgeManagerSkipsActiveGoalContinuationForResumedTurn(t *testing
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
 	runTestManager(t, manager)
 
-	require.NoError(t, manager.StartActiveGoals())
+	require.NoError(t, manager.StartActiveGoals(t.Context()))
 	assert.Empty(t, submittedMessages(bridge))
 }
 
@@ -368,7 +368,7 @@ func TestStartQueuedConversationsReportsLaterWorkErrors(t *testing.T) {
 		return newDirectBridgeMock()
 	})
 	runTestManager(t, manager)
-	require.ErrorContains(t, manager.StartQueuedConversations(), "text thread agent is required")
+	require.ErrorContains(t, manager.StartQueuedConversations(t.Context()), "text thread agent is required")
 }
 
 func TestStartQueuedConversationsWakesEachRecordedConversationOnce(t *testing.T) {
@@ -395,7 +395,7 @@ func TestStartQueuedConversationsWakesEachRecordedConversationOnce(t *testing.T)
 	})
 	runTestManager(t, manager)
 
-	require.NoError(t, manager.StartQueuedConversations())
+	require.NoError(t, manager.StartQueuedConversations(t.Context()))
 	require.Equal(t, map[string]int{first: 1, second: 1}, woke)
 	require.Len(t, manager.bridges, 2)
 }
@@ -567,7 +567,7 @@ func TestThreadBridgeManagerStopStopsActiveBridges(t *testing.T) {
 	shutdown := runTestManager(t, manager)
 
 	for _, id := range []string{"first", "second"} {
-		_, err := manager.ensureStartedThread(&threadStart{conversationID: id, agent: "main"})
+		_, err := manager.ensureStartedThread(t.Context(), &threadStart{conversationID: id, agent: "main"})
 		require.NoError(t, err)
 	}
 
@@ -577,7 +577,7 @@ func TestThreadBridgeManagerStopStopsActiveBridges(t *testing.T) {
 	require.Len(t, bridges[0].StopCalls(), 1)
 	require.Len(t, bridges[1].StopCalls(), 1)
 
-	_, err := manager.ensureStartedThread(&threadStart{conversationID: "late", agent: "main"})
+	_, err := manager.ensureStartedThread(t.Context(), &threadStart{conversationID: "late", agent: "main"})
 	require.NoError(t, err)
 	require.Len(t, bridges, 3)
 	assert.Len(t, bridges[2].StopCalls(), 1)

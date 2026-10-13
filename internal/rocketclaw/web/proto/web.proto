@@ -67,6 +67,28 @@ message HistoryResponse {
   repeated BackgroundJob background_jobs = 17;
   // Unanswered ask_user_question calls of this conversation's Web turns, in question ID order.
   repeated PendingQuestion pending_questions = 18;
+  // Page-scoped turn correlations, including shadows without transcript output.
+  repeated ShadowBinding shadows = 19;
+}
+
+message ShadowBinding {
+  string parent_conversation_id = 1;
+  string parent_agent = 2;
+  string shadow_agent = 3;
+  string child_conversation_id = 4;
+  repeated ShadowTurn turns = 5;
+}
+
+message ShadowTurn {
+  string parent_source_conversation_id = 1;
+  string parent_turn_id = 2;
+  string child_turn_id = 3;
+  int64 order = 4;
+  bool running = 5;
+  // Same terminal values as HistoryResponse; empty child ID and terminal means waiting.
+  string terminal = 6;
+  // Changes on child transcript updates, even when the parent transcript does not.
+  string revision = 7;
 }
 
 // An ask_user_question call a Web turn waits on; AnswerQuestion answers it by ID.

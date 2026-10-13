@@ -113,7 +113,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			require.Same(t, rt.threads, rt.TextRouter)
 			require.Equal(t, map[string]string{"alice": "secret"}, rt.ExternalMCPUsers)
 
-			_, err := rt.threads.ensureStartedThread(&threadStart{conversationID: threadID, agent: "main"})
+			_, err := rt.threads.ensureStartedThread(t.Context(), &threadStart{conversationID: threadID, agent: "main"})
 			require.NoError(t, err)
 			require.NoError(t, rt.threads.PickLaterWork(rt.RunCtx, threadID))
 

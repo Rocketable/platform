@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,6 +18,17 @@ const (
 	providerReplayReadable = "portable-readable"
 	providerReplayPrivate  = "provider-private-sentinel"
 )
+
+func TestReplayInputForMessagePreservesSDKSerialization(t *testing.T) {
+	for _, role := range []string{"user", "developer", "assistant"} {
+		for _, text := range []string{"", " \n", "quotes: \" and \\ and <html>", "日本\x00\xff\u2028"} {
+			message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRole(role), Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(text)}, Type: "message"}
+			want, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfMessage: &message}})
+			require.NoError(t, err, "string-only replay construction cannot fail")
+			require.Equal(t, want, replayInputForMessage(role, text))
+		}
+	}
+}
 
 func TestProviderForModel(t *testing.T) {
 	for model, want := range map[string]string{

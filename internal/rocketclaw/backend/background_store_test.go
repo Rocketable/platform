@@ -594,7 +594,7 @@ func TestPruneKeepsConversationsWithLiveBackgroundJobs(t *testing.T) {
 }
 
 func TestConversationRemovalDeletesBackgroundJobs(t *testing.T) {
-	store := newTestSessionService(t)
+	store, _ := newShadowTestStore(t)
 	ctx := t.Context()
 	spill := openTestSpill(t, store)
 	private := "external_mcp:planner:private"
@@ -621,10 +621,35 @@ func TestConversationRemovalDeletesBackgroundJobs(t *testing.T) {
 	require.ElementsMatch(t, []string{rocketcodeRetainedDir("other"), rocketcodeRetainedDir("other") + " other", rocketcodeRetainedDir(private), rocketcodeRetainedDir(private) + " " + private}, retainedResults(t, spill), "the deleted conversation's retained output goes with it")
 
 	require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: private, ManagedConversationID: "managed"}))
+	children, err := queryStrings(ctx, store.db, `SELECT child_conversation_id FROM shadow_bindings WHERE parent_conversation_id = 'managed'`, "failed MCP children")
+	require.NoError(t, err)
+	require.Len(t, children, 2)
+
+	for _, child := range children {
+		retainTestResult(t, spill, child, child, time.Now())
+		_, err := store.AppendEntryID(ctx, child, testSessionEntry("child", "result"))
+		require.NoError(t, err)
+		require.NoError(t, store.SaveAttachment(ctx, child, "", &protocol.OutboundAttachment{ID: child, Name: "result", Data: []byte("bytes")}, false))
+		require.NoError(t, store.SaveTurnStep(ctx, child, "old/step", json.RawMessage(`{}`)))
+	}
+
 	createTestBackgroundJob(t, store, testBackgroundJob(private, "turn-1/call/a"))
 	require.NoError(t, store.RemoveExternalMCPConversation("public-1"))
 	require.Empty(t, backgroundJobIDs(t, store, private))
 	require.Equal(t, []string{rocketcodeRetainedDir("other"), rocketcodeRetainedDir("other") + " other"}, retainedResults(t, spill))
+
+	for _, child := range children {
+		_, found, err := store.Thread(child)
+		require.NoError(t, err)
+		require.False(t, found)
+
+		entries, err := store.ObserveEntries(ctx, child)
+		require.NoError(t, err)
+		require.Empty(t, entries)
+		require.Empty(t, testTurnStepKeys(t, store, child))
+		_, err = store.attachments.Get(ctx, child)
+		require.Error(t, err)
+	}
 }
 
 func TestBackgroundJobChangeNotices(t *testing.T) {
