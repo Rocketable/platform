@@ -16,6 +16,9 @@ type ProviderOrigin struct {
 	Provider         string
 	Model            string
 	CompactThreshold int64
+	// PromptCacheMarkersRelativePosition, when set, is the negative index of the text
+	// piece in the last request message that carries an Anthropic cache_control marker.
+	PromptCacheMarkersRelativePosition *int
 }
 
 // ModelResolver selects an SDK client and API model for a model selector.

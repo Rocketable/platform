@@ -314,7 +314,7 @@ func testPromptInput(role PromptInputRole, text string, responseCh chan<- ChatRe
 	var input PromptInput
 
 	input.Role = role
-	input.Text = text
+	input.Texts = []string{text}
 	input.Responses = responseCh
 
 	return input
@@ -324,7 +324,7 @@ func testPromptInputWithAttachments(role PromptInputRole, text string, attachmen
 	var input PromptInput
 
 	input.Role = role
-	input.Text = text
+	input.Texts = []string{text}
 	input.Attachments = attachments
 	input.Responses = responseCh
 
@@ -840,6 +840,25 @@ func TestLooperBuildParamsUsesConfiguredCompactThreshold(t *testing.T) {
 	require.Equal(t, "compaction", params.ContextManagement[0].Type)
 	require.Equal(t, int64(12345), params.ContextManagement[0].CompactThreshold.Value)
 	require.False(t, params.Store.Value)
+}
+
+func TestLooperBuildParamsMarksPromptCachePiece(t *testing.T) {
+	history := []responses.ResponseInputItemUnionParam{
+		promptInputMessage(&PromptInput{Texts: []string{"preamble\n", "line 1\n", "line 2\n", "action\n"}}),
+		{OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{CallID: openai.String("call-1"), Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.String("read ok")}}},
+	}
+	stored := marshalJSON(t, history)
+	unmarked := `{"content":[{"text":"preamble\n","type":"input_text"},{"text":"line 1\n","type":"input_text"},{"text":"line 2\n","type":"input_text"},{"text":"action\n","type":"input_text"}],"role":"user","type":"message"}`
+
+	looper := emptyTestLooper()
+	require.JSONEq(t, unmarked, marshalJSON(t, looper.buildParams(history).Input.OfInputItemList[0]))
+
+	looper.ProviderOrigin.PromptCacheMarkersRelativePosition = new(-2)
+	require.JSONEq(t, `{"content":[{"text":"preamble\n","type":"input_text"},{"text":"line 1\n","type":"input_text"},{"cache_control":{"type":"ephemeral"},"text":"line 2\n","type":"input_text"},{"text":"action\n","type":"input_text"}],"role":"user","type":"message"}`, marshalJSON(t, looper.buildParams(history).Input.OfInputItemList[0]))
+	require.Equal(t, stored, marshalJSON(t, history))
+
+	looper.ProviderOrigin.PromptCacheMarkersRelativePosition = new(-5)
+	require.JSONEq(t, unmarked, marshalJSON(t, looper.buildParams(history).Input.OfInputItemList[0]))
 }
 
 func TestLooperBuildParamsIncludesHostedWebSearchTool(t *testing.T) {
@@ -1400,7 +1419,7 @@ func TestJournalAfterCompactionRecoveryBeforeProviderRetry(t *testing.T) {
 	require.NoError(t, err)
 
 	input := make(chan PromptInput, 1)
-	input <- PromptInput{ID: "input-1", Text: "[Web]\n\nnew prompt", Header: "[Web]", Responses: output}
+	input <- PromptInput{ID: "input-1", Texts: []string{"[Web]\n\nnew prompt"}, Header: "[Web]", Responses: output}
 
 	close(input)
 
@@ -1807,7 +1826,7 @@ func TestLooperSendsAndReplaysUserAttachments(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- PromptInput{Text: "[Web]\n\nsee attached", Header: "[Web]", Attachments: attachments, Responses: output}
+	input <- PromptInput{Texts: []string{"[Web]\n\nsee attached"}, Header: "[Web]", Attachments: attachments, Responses: output}
 
 	close(input)
 
@@ -2231,7 +2250,7 @@ Use this skill for docs.
 	input := make(chan PromptInput, 1)
 	arguments := "write the API guide !`echo run >> calls`"
 
-	input <- PromptInput{Text: "$docs-helper " + arguments, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: arguments}, Responses: output}
+	input <- PromptInput{Texts: []string{"$docs-helper " + arguments}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: arguments}, Responses: output}
 
 	close(input)
 
@@ -2325,7 +2344,7 @@ Use this skill for docs.
 			saves := 0
 
 			input := make(chan PromptInput, 1)
-			call := PromptInput{ID: "original-input", Text: "$" + skillName + " !`touch executed`", DirectSkill: &PromptInputDirectSkill{Name: skillName, Arguments: "!`touch executed`"}, Responses: output}
+			call := PromptInput{ID: "original-input", Texts: []string{"$" + skillName + " !`touch executed`"}, DirectSkill: &PromptInputDirectSkill{Name: skillName, Arguments: "!`touch executed`"}, Responses: output}
 
 			if steer {
 				looper.SteerDrain = SteerDrain{Fn: func(context.Context, TurnPhase) []PromptInput {
@@ -2415,10 +2434,10 @@ func TestLooperMixedSkillSteersDoNotSilentlyLoseAcceptedWork(t *testing.T) {
 	sink := recordingJournal()
 	looper.Journal = sink
 	steers := []PromptInput{
-		{Text: "$docs-helper first", DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "first"}},
-		{Text: "$missing-skill", DirectSkill: &PromptInputDirectSkill{Name: "missing-skill"}},
-		{Text: "plain neighboring request"},
-		{Text: "$docs-helper last", DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "last"}},
+		{Texts: []string{"$docs-helper first"}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "first"}},
+		{Texts: []string{"$missing-skill"}, DirectSkill: &PromptInputDirectSkill{Name: "missing-skill"}},
+		{Texts: []string{"plain neighboring request"}},
+		{Texts: []string{"$docs-helper last"}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "last"}},
 	}
 	looper.SteerDrain = SteerDrain{Fn: func(context.Context, TurnPhase) []PromptInput {
 		batch := steers
@@ -2770,7 +2789,7 @@ func TestLooperResumedTurnInjectsEachSteerOnce(t *testing.T) {
 	}
 	cut.Tools, cut.Permissions = map[string]looperTool{"lookup": tool}, PermissionSet{Buckets: []PermissionBucket{{Name: "lookup", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
 	cut.SteerDrain = SteerDrain{Fn: func(context.Context, TurnPhase) []PromptInput {
-		return []PromptInput{{ID: "steer-1", Text: "injected before the cut"}}
+		return []PromptInput{{ID: "steer-1", Texts: []string{"injected before the cut"}}}
 	}}
 	_, err := runJournaledTurn(ctx, cut, journal, "work")
 	require.Error(t, err)
@@ -2785,7 +2804,7 @@ func TestLooperResumedTurnInjectsEachSteerOnce(t *testing.T) {
 
 		offered = true
 
-		return []PromptInput{{ID: "steer-1", Text: "injected before the cut"}, {ID: "steer-2", Text: "drained but not journaled"}}
+		return []PromptInput{{ID: "steer-1", Texts: []string{"injected before the cut"}}, {ID: "steer-2", Texts: []string{"drained but not journaled"}}}
 	}}
 	_, err = runJournaledTurn(t.Context(), resumed, journal, "work")
 	require.NoError(t, err)
@@ -3135,7 +3154,7 @@ func TestLooperLoopRequiresPromptResponseChannel(t *testing.T) {
 	looper := emptyTestLooper()
 
 	input := make(chan PromptInput, 1)
-	input <- PromptInput{Role: PromptInputRoleUser, Text: "question"}
+	input <- PromptInput{Role: PromptInputRoleUser, Texts: []string{"question"}}
 
 	close(input)
 
@@ -3176,7 +3195,7 @@ func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
 			return nil
 		}
 
-		return []PromptInput{{ID: "steer-1", Text: "don't touch the database"}}
+		return []PromptInput{{ID: "steer-1", Texts: []string{"don't touch the database"}}}
 	}}
 	output := make(chan ChatResponse, 10)
 
@@ -3198,9 +3217,9 @@ func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
 
 func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 	steers := []PromptInput{
-		{Text: "use the other file", DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "first"}, Attachments: []Attachment{{MIME: "image/png", Filename: "screen.png", URL: "data:image/png;base64,c2NyZWVu"}}},
+		{Texts: []string{"use the other file"}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "first"}, Attachments: []Attachment{{MIME: "image/png", Filename: "screen.png", URL: "data:image/png;base64,c2NyZWVu"}}},
 		{Attachments: []Attachment{{MIME: "image/jpeg", Filename: "photo.jpg", URL: "data:image/jpeg;base64,cGhvdG8="}}},
-		{Text: "and skip tests", DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "last"}},
+		{Texts: []string{"and skip tests"}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "last"}},
 	}
 	want := []string{
 		`{"content":"<skill_content name=\"docs-helper\">\n# skill: docs-helper\n\nInstructions first fresh\n\nBase directory for this skill: file:///virtual/skills/docs-helper\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n\n</skill_files>\n</skill_content>","role":"developer","type":"message"}`,
@@ -3341,7 +3360,7 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 			mu.Unlock()
 
 			if phase == TurnPhaseToolLoop {
-				return []PromptInput{{Text: "steer after batch"}}
+				return []PromptInput{{Texts: []string{"steer after batch"}}}
 			}
 
 			return nil
@@ -3418,9 +3437,9 @@ func TestLooperInjectsSteersWhenNoTools(t *testing.T) {
 	var phases []TurnPhase
 
 	steers := []PromptInput{
-		{Text: "also add a test", Attachments: []Attachment{{MIME: "image/png", Filename: "test.png", URL: "data:image/png;base64,dGVzdA=="}}},
+		{Texts: []string{"also add a test"}, Attachments: []Attachment{{MIME: "image/png", Filename: "test.png", URL: "data:image/png;base64,dGVzdA=="}}},
 		{Attachments: []Attachment{{MIME: "application/pdf", Filename: "spec.pdf", URL: "data:application/pdf;base64,c3BlYw=="}}},
-		{Text: "and skip lint"},
+		{Texts: []string{"and skip lint"}},
 	}
 	want := []string{
 		`{"content":[{"type":"input_text","text":"also add a test"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,dGVzdA=="}],"role":"user","type":"message"}`,

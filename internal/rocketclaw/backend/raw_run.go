@@ -176,7 +176,7 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 	input := make(chan rocketcode.PromptInput, 1)
 
 	output := make(chan rocketcode.ChatResponse, 128)
-	input <- rocketcode.PromptInput{TurnID: request.Key + "/" + want.Hash, Role: rocketcode.PromptInputRoleUser, Text: request.Prompt, Responses: output}
+	input <- rocketcode.PromptInput{TurnID: request.Key + "/" + want.Hash, Role: rocketcode.PromptInputRoleUser, Texts: []string{request.Prompt}, Responses: output}
 
 	close(input)
 

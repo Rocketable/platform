@@ -488,10 +488,10 @@ func TestNewExpandsPromptsThroughRootAgentCustomShell(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, diagnostics.String(), "remember custom:1:echo hi\n")
 
-	input := PromptInput{Role: PromptInputRoleUser, Text: "input !`echo there`"}
+	input := PromptInput{Role: PromptInputRoleUser, Texts: []string{"input !`echo there`"}}
 	_, err = loop.promptTurnItems(t.Context(), &input)
 	require.NoError(t, err)
-	require.Equal(t, "input custom:1:echo there", input.Text)
+	require.Equal(t, "input custom:1:echo there", input.Texts[0])
 }
 
 func TestNewAllowsReadingFilesFromAllowedSkills(t *testing.T) {

@@ -263,7 +263,7 @@ func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata 
 	output := make(chan ChatResponse)
 
 	input := make(chan PromptInput, 1)
-	input <- PromptInput{TurnID: ToolCallKey(ctx) + taskTurnSuffix, Role: PromptInputRoleUser, Text: params.Prompt, Responses: output}
+	input <- PromptInput{TurnID: ToolCallKey(ctx) + taskTurnSuffix, Role: PromptInputRoleUser, Texts: []string{params.Prompt}, Responses: output}
 
 	close(input)
 
@@ -514,7 +514,7 @@ func (r *Runtime) ContinueSubagent(ctx context.Context, jobID, subagentKey, agen
 	output := make(chan ChatResponse)
 
 	inputs := make(chan PromptInput, 1)
-	inputs <- PromptInput{TurnID: turnID, Role: PromptInputRoleUser, Text: input, Responses: output}
+	inputs <- PromptInput{TurnID: turnID, Role: PromptInputRoleUser, Texts: []string{input}, Responses: output}
 
 	close(inputs)
 
@@ -626,7 +626,7 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 	output := make(chan ChatResponse)
 
 	input := make(chan PromptInput, 1)
-	input <- PromptInput{Role: PromptInputRoleUser, Text: message, Responses: output}
+	input <- PromptInput{Role: PromptInputRoleUser, Texts: []string{message}, Responses: output}
 
 	close(input)
 

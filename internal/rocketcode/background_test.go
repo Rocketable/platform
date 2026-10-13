@@ -364,7 +364,7 @@ func TestSubagentDrainsItsOwnNotes(t *testing.T) {
 	mock := mockResponses(responseWithMessage("wait", "waiting for tests"), responseWithMessage("after", "ship it"))
 	jobs := enabledBackgroundJobs()
 	jobs.RunFunc = InertBackgroundJobs{}.Run
-	notes := []PromptInput{{ID: "turn-call-1/call/call-x", Role: PromptInputRoleUser, Text: "tests finished: 12 passed"}}
+	notes := []PromptInput{{ID: "turn-call-1/call/call-x", Role: PromptInputRoleUser, Texts: []string{"tests finished: 12 passed"}}}
 	jobs.DrainNotesFunc = func(_ context.Context, subagentKey string) []PromptInput {
 		if subagentKey != taskKey("turn-call-1", "call-1") {
 			return nil

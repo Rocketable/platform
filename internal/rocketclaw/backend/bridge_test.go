@@ -128,8 +128,8 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 	require.Len(t, inputs, 2)
 
 	for i := range inputs {
-		require.Equal(t, buildPrompt(initial, nil), inputs[i].Text, "identity metadata must not change prompt framing")
-		require.NotContains(t, inputs[i].Text, "steer-")
+		require.Equal(t, buildPrompt(initial, nil), inputs[i].Texts[0], "identity metadata must not change prompt framing")
+		require.NotContains(t, inputs[i].Texts[0], "steer-")
 	}
 
 	require.Len(t, bus.outbound, 3)
@@ -170,7 +170,7 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 	require.NoError(t, bridge.Submit(t.Context(), disconnected))
 	inputs = bridge.drainSteers(t.Context(), rocketcode.TurnPhaseFinalAnswer)
 	require.Len(t, inputs, 1)
-	require.Equal(t, buildPrompt(initial, nil), inputs[0].Text)
+	require.Equal(t, buildPrompt(initial, nil), inputs[0].Texts[0])
 	require.Contains(t, logged.String(), "publish consumed web input")
 	require.Contains(t, logged.String(), "test publisher closed")
 	require.Empty(t, bridge.drainSteers(t.Context(), rocketcode.TurnPhaseFinalAnswer))
@@ -3352,9 +3352,9 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 		requestBody struct {
 			Model string `json:"model"`
 			Input []struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
-				Output  any    `json:"output"`
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+				Output  any             `json:"output"`
 			} `json:"input"`
 		}
 		errRequest     error
@@ -3383,7 +3383,12 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 
 			for _, item := range requestBody.Input {
 				if item.Role == "developer" {
-					messages = append(messages, item.Content)
+					var content string
+					if err := json.Unmarshal(item.Content, &content); err != nil {
+						errRequest = err
+					}
+
+					messages = append(messages, content)
 				}
 			}
 
@@ -3431,7 +3436,10 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	assert.Equal(t, "ok", result.text)
 	require.Len(t, requestBody.Input, 2)
 	assert.Equal(t, "developer", requestBody.Input[0].Role)
-	assert.Equal(t, "This external MCP thread has metadata:\nROCKETCLAW_CONVERSATION_ID=\"external_mcp:planner:private\"\nROCKETCLAW_METADATA_A=\"first\"\nROCKETCLAW_METADATA_Z=\"last\"", requestBody.Input[0].Content)
+
+	var metadata string
+	require.NoError(t, json.Unmarshal(requestBody.Input[0].Content, &metadata))
+	assert.Equal(t, "This external MCP thread has metadata:\nROCKETCLAW_CONVERSATION_ID=\"external_mcp:planner:private\"\nROCKETCLAW_METADATA_A=\"first\"\nROCKETCLAW_METADATA_Z=\"last\"", metadata)
 	assert.Equal(t, "user", requestBody.Input[1].Role)
 
 	msg.Metadata = map[string]string{"a": "ignored", "later-key": "fresh"}
@@ -3442,7 +3450,9 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 
 	for i := range requestBody.Input {
 		if requestBody.Input[i].Role == "developer" {
-			developerMessages = append(developerMessages, requestBody.Input[i].Content)
+			var content string
+			require.NoError(t, json.Unmarshal(requestBody.Input[i].Content, &content))
+			developerMessages = append(developerMessages, content)
 		}
 	}
 
@@ -3459,7 +3469,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	require.NoError(t, err)
 
 	for i := range requestBody.Input {
-		assert.NotContains(t, requestBody.Input[i].Content, "LATER_KEY")
+		assert.NotContains(t, string(requestBody.Input[i].Content), "LATER_KEY")
 	}
 
 	entries, err := service.ObserveEntries(context.Background(), bridge.config.ConversationID)

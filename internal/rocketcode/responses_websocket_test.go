@@ -120,7 +120,7 @@ func testWebsocketTextBeforeTerminal(t *testing.T, done, final string) {
 	workers.Go(func() error {
 		var err error
 
-		record, _, _, err = loop.runTurn(ctx, make(chan ChatResponse, 10), nil, nil, nil, &PromptInput{Text: "hello", Role: PromptInputRoleUser})
+		record, _, _, err = loop.runTurn(ctx, make(chan ChatResponse, 10), nil, nil, nil, &PromptInput{Texts: []string{"hello"}, Role: PromptInputRoleUser})
 
 		return err
 	})

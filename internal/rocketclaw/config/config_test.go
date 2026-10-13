@@ -293,6 +293,11 @@ func TestValidateReportsNamedProviderFieldErrors(t *testing.T) {
 			providers: map[string]OpenAIConfig{"work": {APIKey: "work-key", AutocompactionThreshold: -1}},
 			wantErr:   `providers["work"].autocompaction_threshold must be a positive integer`,
 		},
+		{
+			name:      "prompt cache marker position",
+			providers: map[string]OpenAIConfig{"work": {APIKey: "work-key", PromptCacheMarkersRelativePosition: new(0)}},
+			wantErr:   `providers["work"].prompt_cache_markers_relative_position must be a negative integer`,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validConfig()

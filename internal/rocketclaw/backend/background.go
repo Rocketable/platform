@@ -97,7 +97,7 @@ func backgroundNotesText(notes []backgroundJob) string {
 // Completion Note uses its job ID as input ID, so a resumed turn offered it again injects it once.
 func systemPromptInput(id, text string) rocketcode.PromptInput {
 	header := provenanceHeader(promptProvenance{origin: "System"})
-	return rocketcode.PromptInput{ID: id, Text: header + "\n\n" + text, Header: header}
+	return rocketcode.PromptInput{ID: id, Texts: []string{header + "\n\n" + text}, Header: header}
 }
 
 // conversationJobs kills a conversation's running jobs before its rows are deleted.
@@ -516,7 +516,7 @@ func (r *backgroundRegistry) wakeSubagent(conversationID, subagentKey string) {
 		notes, err := r.store.startSubagentWake(ctx, run.row)
 		if err == nil && len(notes) > 0 {
 			close(run.recorded)
-			r.work(ctx, key, run, subagentTurn{notes: r.notes, job: run.row, input: systemPromptInput("", backgroundNotesText(notes)).Text})
+			r.work(ctx, key, run, subagentTurn{notes: r.notes, job: run.row, input: systemPromptInput("", backgroundNotesText(notes)).Texts[0]})
 
 			return nil
 		}

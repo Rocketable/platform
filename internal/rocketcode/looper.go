@@ -649,7 +649,7 @@ func (l *looper) Loop(
 
 		turnOutput := line.Responses
 
-		if line.Text == "" && len(line.Attachments) == 0 && line.DirectSkill == nil {
+		if strings.Join(line.Texts, "") == "" && len(line.Attachments) == 0 && line.DirectSkill == nil {
 			close(turnOutput)
 
 			continue
@@ -790,7 +790,7 @@ func (l *looper) runTurn(
 
 	turnCtx, span := l.Observability.startSpan(turnCtx, "rocketcode.turn", semconv.SpanKindAgent,
 		attribute.String(semconv.AgentName, l.agent.Name),
-		l.Observability.inputValue(input.Text),
+		l.Observability.inputValue(strings.Join(input.Texts, "")),
 		attribute.String("rocketcode.model", l.DisplayModel),
 		attribute.Int("rocketcode.tool_count", len(l.Tools)),
 		attribute.Int64("rocketcode.compact_threshold", l.compactThreshold()),
@@ -1042,7 +1042,8 @@ func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnIte
 			return item.OfMessage != nil && item.OfMessage.ExtraFields()["input_id"] == input.ID
 		})
 	})
-	for _, input := range inputs {
+	for i := range inputs {
+		input := &inputs[i]
 		if input.DirectSkill != nil {
 			item, err := l.directSkillInput(ctx, input.DirectSkill)
 			if err != nil {
@@ -1056,7 +1057,7 @@ func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnIte
 			*turnItems = append(*turnItems, item)
 		}
 
-		steer := promptInputMessage(&input)
+		steer := promptInputMessage(input)
 		if err := appendReplayInput(record, &steer); err != nil {
 			return false, err
 		}
@@ -1129,7 +1130,12 @@ func (l *looper) appendToolOutputReplay(record *SessionEntry, turnItems *[]respo
 
 func (l *looper) promptTurnItems(ctx context.Context, input *PromptInput) ([]responses.ResponseInputItemUnionParam, error) {
 	if l.expandInputPrompts && input.DirectSkill == nil {
-		input.Text = l.promptExpansion.expandShellCommands(ctx, input.Text)
+		texts := make([]string, len(input.Texts))
+		for i, text := range input.Texts {
+			texts[i] = l.promptExpansion.expandShellCommands(ctx, text)
+		}
+
+		input.Texts = texts
 	}
 
 	turnItems := []responses.ResponseInputItemUnionParam{promptInputMessage(input)}
@@ -1742,6 +1748,26 @@ func (l *looper) rewriteHistory(items []responses.ResponseInputItemUnionParam) [
 
 func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) responses.ResponseNewParams {
 	history = projectReplayForOpenAI(history)
+	if position := l.ProviderOrigin.PromptCacheMarkersRelativePosition; position != nil {
+		// projectReplayForOpenAI already copied each message; the content list is
+		// still shared with stored history, so mark a clone of it.
+		for i := range slices.Backward(history) {
+			message := history[i].OfMessage
+			if message == nil {
+				continue
+			}
+
+			parts := slices.Clone(message.Content.OfInputItemContentList)
+			if piece := len(parts) + *position; piece >= 0 && parts[piece].OfInputText != nil {
+				text := *parts[piece].OfInputText
+				text.SetExtraFields(map[string]any{"cache_control": map[string]string{"type": "ephemeral"}})
+				parts[piece] = responses.ResponseInputContentUnionParam{OfInputText: &text}
+				message.Content.OfInputItemContentList = parts
+			}
+
+			break
+		}
+	}
 
 	var input responses.ResponseNewParamsInputUnion
 
