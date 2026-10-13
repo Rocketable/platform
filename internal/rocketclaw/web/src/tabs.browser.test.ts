@@ -167,6 +167,10 @@ test("storage reset, deep links, keyboard, page close, palette commands, and pla
   expect(await tab("Bravo").getAttribute("aria-selected")).toBe("true");
 
   await tab("Bravo").focus();
+  await page.keyboard.press("Home");
+  expect(await tab("Alpha").evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
+  await page.keyboard.press("End");
+  expect(await tab("Bravo").evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
   await page.keyboard.press("ArrowLeft");
   expect(await tab("Alpha").evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
   expect(page.url()).toEndWith(href("bravo"));
