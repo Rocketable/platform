@@ -113,6 +113,8 @@ func searchTestSessions(t *testing.T, s *SessionService, slack slackLookup, quer
 
 // Ported from session-list.test.ts; its unfinished words are read as free text.
 func TestSearchSessionsReadsTermsAndFilters(t *testing.T) {
+	t.Parallel()
+
 	s, slack := newSessionSearchFixture(t)
 	all := []string{searchChatA, searchChatX, searchChatH, searchChatB, searchChatW, searchChatD, searchChatE}
 
@@ -197,6 +199,8 @@ func TestSearchSessionsReadsTermsAndFilters(t *testing.T) {
 }
 
 func TestSearchSessionsFreeTextFields(t *testing.T) {
+	t.Parallel()
+
 	s, slack := newSessionSearchFixture(t)
 
 	for _, tc := range []struct {
@@ -221,6 +225,8 @@ func TestSearchSessionsFreeTextFields(t *testing.T) {
 }
 
 func TestSearchSessionsMessageHits(t *testing.T) {
+	t.Parallel()
+
 	s, slack := newSessionSearchFixture(t)
 	hitB := "ping <@U7> on support billing"
 
@@ -272,6 +278,8 @@ func TestSearchSessionsMessageHits(t *testing.T) {
 }
 
 func TestSearchSessionsSortOrder(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 	ctx := t.Context()
 
@@ -308,6 +316,8 @@ func TestSearchSessionsSortOrder(t *testing.T) {
 }
 
 func TestSearchSessionsTermOffsets(t *testing.T) {
+	t.Parallel()
+
 	s := newTestSessionService(t)
 
 	for _, tc := range []struct {
@@ -328,6 +338,8 @@ func TestSearchSessionsTermOffsets(t *testing.T) {
 
 // A term's offsets do not re-encode the query before it, so a 1 MiB query parses in linear time.
 func TestSearchSessionsLongQueryParse(t *testing.T) {
+	t.Parallel()
+
 	const pairs = 1 << 17
 
 	start := time.Now()
@@ -341,6 +353,8 @@ func TestSearchSessionsLongQueryParse(t *testing.T) {
 }
 
 func TestSearchSessionsOriginFailure(t *testing.T) {
+	t.Parallel()
+
 	s, slack := newSessionSearchFixture(t)
 	ctx := t.Context()
 	// A creating entry whose source entry ID is not a number fails the origin

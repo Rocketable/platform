@@ -23,6 +23,8 @@ import (
 )
 
 func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	header := provenanceHeader(promptProvenance{origin: "Web", media: "Text", principal: "alice", additionalInstructions: defaultReplyInstruction})
 	body, err := json.Marshal(header + "\n\n" + header + "\n\nbody")
@@ -72,6 +74,8 @@ func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
 }
 
 func TestSessionSummaryBackfillBatchesDiscovery(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	// Flush the same connection's scan statistics without timing-based waits.
 	service.db.SetMaxOpenConns(1)
@@ -188,6 +192,8 @@ func TestSessionSummaryBackfillProgressFailureAndResume(t *testing.T) {
 }
 
 func TestLastMessageMigrationRebuildsExistingPreviews(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	entry := testSessionEntry("question", "answer")
 	_, err := service.AppendEntryID(t.Context(), "existing", entry)
@@ -209,6 +215,8 @@ DELETE FROM pg_migrations WHERE id = '011_last_message_summaries.sql'`)
 }
 
 func TestSessionSummaryBackfillOverlapsMutation(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		action string
 		orphan bool
@@ -322,6 +330,8 @@ func TestSessionSummaryBackfillOverlapsMutation(t *testing.T) {
 }
 
 func TestSessionSummaryPairedAppendAndCleanup(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	session := &ExternalMCPSessionState{PrivateConversationID: "private", ManagedConversationID: "managed", Agent: "main"}
 	require.NoError(t, service.RegisterExternalMCPConversation("public", "main", session))
@@ -383,6 +393,8 @@ func TestSessionSummaryPairedAppendAndCleanup(t *testing.T) {
 }
 
 func TestConversationSummaryInitializationRollsBackOnFailure(t *testing.T) {
+	t.Parallel()
+
 	for _, creation := range []string{"upsert", "create", "external MCP"} {
 		for _, failure := range []struct{ name, message string }{
 			{"orphan decode", "parse session summary history"},
@@ -448,6 +460,8 @@ EXISTS (SELECT 1 FROM external_mcp_sessions WHERE external_conversation_id = 'pu
 }
 
 func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing.T) {
+	t.Parallel()
+
 	for _, creation := range []string{"backfill", "upsert", "create", "external MCP"} {
 		t.Run(creation, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -511,6 +525,8 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 }
 
 func TestSidebarSessionsHistoryChecksUseIndexedLookups(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	service.db.SetMaxOpenConns(1)
 
@@ -557,6 +573,8 @@ FROM pg_index WHERE indrelid = 'session_entries'::regclass`
 }
 
 func TestSidebarSessionPinsAndNames(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	ctx := t.Context()
 	stamp := time.Date(2026, 1, 1, 0, 0, 0, 123456000, time.UTC)
@@ -618,6 +636,8 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 }
 
 func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	for _, id := range []string{"a", "Z", "ä", "empty", "missing", "zero", "cron:private", "one-off-cron:private", "private"} {
 		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
@@ -733,6 +753,8 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 }
 
 func TestSidebarSessionsCloseRowsOnEarlyStopAndCancellation(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	for _, id := range []string{"a", "b"} {
 		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
@@ -792,6 +814,8 @@ func TestSidebarSessionsCloseRowsOnEarlyStopAndCancellation(t *testing.T) {
 }
 
 func TestSidebarSessionsCancelPendingDatabaseRow(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 
 	service := newTestSessionServiceAt(t, workspace)

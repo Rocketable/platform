@@ -26,6 +26,8 @@ import (
 )
 
 func TestRuntimeSubscribeIsLiveAndWaitsForDelivery(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		rt := new(Runtime)
 		history := protocol.NewOutboundMessage("conversation", "old")
@@ -62,6 +64,8 @@ func TestRuntimeSubscribeIsLiveAndWaitsForDelivery(t *testing.T) {
 }
 
 func TestRuntimeRecordsExplicitConversationsWithoutResettingSelection(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	rt := &Runtime{Sessions: store}
 	require.NoError(t, rt.CreateConversation(t.Context(), protocol.Conversation{ID: "opaque", Agent: "selected", CreatedBy: "cron"}))
@@ -73,6 +77,8 @@ func TestRuntimeRecordsExplicitConversationsWithoutResettingSelection(t *testing
 }
 
 func TestRuntimeSummaryBackfillLifecycle(t *testing.T) {
+	t.Parallel()
+
 	for _, mode := range []string{"cancel", "startup failure", "decode failure", "database failure"} {
 		t.Run(mode, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -686,6 +692,8 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 }
 
 func TestRuntimePersistedEnqueueAndProducerArrivalOrder(t *testing.T) {
+	t.Parallel()
+
 	for _, tt := range []struct {
 		name         string
 		producerID   string
@@ -830,6 +838,8 @@ func TestRuntimePersistedEnqueueAndProducerArrivalOrder(t *testing.T) {
 }
 
 func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
 	root, err := os.OpenRoot(workspace)
@@ -954,6 +964,8 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 }
 
 func TestBridgeDrainSteersPreservesAcquiredContent(t *testing.T) {
+	t.Parallel()
+
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), inputOpen: true, requestCh: make(chan bridgeRequest, 2), config: Config{SessionService: newTestSessionService(t)}}
 
 	for _, text := range []string{"first", "second"} {
@@ -986,6 +998,8 @@ func TestBridgeDrainSteersPreservesAcquiredContent(t *testing.T) {
 }
 
 func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
 	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
@@ -1154,6 +1168,8 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 }
 
 func TestRuntimeRunTurnCancelPublishesEmptyComplete(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.0")
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
@@ -1197,6 +1213,8 @@ func TestRuntimeRunTurnCancelPublishesEmptyComplete(t *testing.T) {
 }
 
 func TestRuntimeRunTurnRejectsUnrecordedConversationAndSyncDestination(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
 		cfg.SessionService = store
@@ -1216,6 +1234,8 @@ func TestRuntimeRunTurnRejectsUnrecordedConversationAndSyncDestination(t *testin
 }
 
 func TestRuntimeStartGoalRecordsGoalAndQueuesKickoff(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	conversationID := "web:goal"
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
@@ -1260,6 +1280,8 @@ func TestRuntimeStartGoalRecordsGoalAndQueuesKickoff(t *testing.T) {
 }
 
 func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
 	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
@@ -1298,6 +1320,8 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 }
 
 func TestRuntimeHeldQueueManualRelease(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	store := newTestSessionServiceAt(t, workspace)
 
@@ -1408,6 +1432,8 @@ func TestRuntimeHeldQueueManualRelease(t *testing.T) {
 }
 
 func TestAttachSlack(t *testing.T) {
+	t.Parallel()
+
 	manager := newThreadBridgeManager(new(config.LockedConfig), nil, slog.New(slog.DiscardHandler), func(Config) directBridge {
 		return nil
 	})
@@ -1428,6 +1454,8 @@ func TestAttachSlack(t *testing.T) {
 
 // The turn learns, after the calls' background results, which of its calls moved.
 func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
+	t.Parallel()
+
 	release := make(chan struct{})
 	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
 		switch {
@@ -1543,6 +1571,8 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 
 // Nothing to move is a no-op, and a denied agent's running execute stays in the foreground.
 func TestMoveToBackgroundSkipsDeniedAgent(t *testing.T) {
+	t.Parallel()
+
 	gate := ""
 	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
 		if n > 0 {
@@ -1595,6 +1625,8 @@ func TestMoveToBackgroundSkipsDeniedAgent(t *testing.T) {
 
 // A move racing a finish gives the call one outcome: its real result, or a background result whose note holds it.
 func TestMoveAsCallFinishes(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	registry, notes := newTestBackgroundRegistry(store)
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
@@ -1637,6 +1669,8 @@ func TestMoveAsCallFinishes(t *testing.T) {
 
 // Hidden runs' jobs are listed and stoppable at their destination; a killed job stays listed until its note is consumed.
 func TestRuntimeListsAndStopsBackgroundJobs(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	registry, notes := newTestBackgroundRegistry(store)
 	rt := &Runtime{Sessions: store, background: registry}
@@ -1680,6 +1714,8 @@ func TestRuntimeListsAndStopsBackgroundJobs(t *testing.T) {
 
 // An attached call's start and finish flip movable, which no row change reports.
 func TestMovableChangeWakesWebViews(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	registry, _ := newTestBackgroundRegistry(store)
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}

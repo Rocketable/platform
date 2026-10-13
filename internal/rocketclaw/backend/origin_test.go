@@ -9,6 +9,8 @@ import (
 )
 
 func TestParseCronRun(t *testing.T) {
+	t.Parallel()
+
 	scheduled := "cron:cron/inbox-delta-monitor.md:20260902T030027.554785000Z:GV4ST"
 	run, ok := ParseCronRun(scheduled)
 	require.True(t, ok)
@@ -28,6 +30,8 @@ func TestParseCronRun(t *testing.T) {
 }
 
 func TestOriginJSON(t *testing.T) {
+	t.Parallel()
+
 	for _, test := range []struct {
 		name   string
 		origin any
@@ -47,6 +51,8 @@ func TestOriginJSON(t *testing.T) {
 }
 
 func TestCreatingCronLocator(t *testing.T) {
+	t.Parallel()
+
 	run := "one-off-cron:cron/daily.md:20260905T020000.000000002Z:second"
 
 	for _, test := range []struct {

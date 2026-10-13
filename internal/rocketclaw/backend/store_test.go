@@ -98,6 +98,8 @@ func TestSessionTags(t *testing.T) {
 }
 
 func TestSessionTagsCommitRollback(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	ctx := t.Context()
 	group := []string{"triage", "resolved"}
@@ -132,6 +134,8 @@ func TestSessionTagsCommitRollback(t *testing.T) {
 }
 
 func TestSessionTagsConcurrent(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 
 	stores := []*SessionService{newTestSessionServiceAt(t, workspace), newTestSessionServiceAt(t, workspace)}
@@ -310,6 +314,8 @@ func listSessions(ctx context.Context, workspace string, conversationIDs ...stri
 }
 
 func TestAttachmentMetadata(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	attachment := protocol.OutboundAttachment{ID: "snapshot", Name: "report.txt", MIMEType: "text/plain", Data: []byte(strings.Repeat("original", 700000)), OriginalUnverified: true}
 	require.NoError(t, service.SaveAttachment(t.Context(), "producer", "", &attachment, false))
@@ -415,6 +421,8 @@ func BenchmarkRemoveSessionEntryNUL(b *testing.B) {
 }
 
 func TestSessionStoreAppendAndLoad(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	store := newSessionStore("slack-thread:C123:111.222", service)
 	entry := testSessionEntry("hello", "hi")
@@ -433,6 +441,8 @@ func TestSessionStoreAppendAndLoad(t *testing.T) {
 }
 
 func TestSessionServiceAppendEntryIDAndObserveEntries(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 
 	first := testSessionEntry("first\x00\x00\\\x00\\\\\x00\n\t😀", "assistant")
@@ -463,6 +473,8 @@ func TestSessionServiceAppendEntryIDAndObserveEntries(t *testing.T) {
 }
 
 func TestSessionServiceTurnPairAllowsOnlyOneActiveTurn(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
 		unlockFirst, err := service.lockTurnPair(t.Context(), "slack-thread:C1:1.1", "external_mcp:private")
@@ -496,6 +508,8 @@ func TestSessionServiceTurnPairAllowsOnlyOneActiveTurn(t *testing.T) {
 }
 
 func TestSessionServiceTurnPairReservationPrioritizesPrivateTurn(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
 		pairID, privateID := "slack-thread:C1:1.1", "external_mcp:private"
@@ -541,6 +555,8 @@ func TestSessionServiceTurnPairReservationPrioritizesPrivateTurn(t *testing.T) {
 }
 
 func TestSessionServiceScheduledMessages(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	dueAt := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
 
@@ -561,6 +577,8 @@ func TestSessionServiceScheduledMessages(t *testing.T) {
 }
 
 func TestLegacyProducerScheduleWaitsForResetHandoff(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	ctx := t.Context()
 	require.NoError(t, store.UpsertThread("producer", ThreadState{Agent: "main"}))
@@ -594,6 +612,8 @@ func TestLegacyProducerScheduleWaitsForResetHandoff(t *testing.T) {
 }
 
 func TestProducerRoutingAndEffectsSurviveCompletion(t *testing.T) {
+	t.Parallel()
+
 	for _, destination := range []string{"owner", ""} {
 		t.Run("destination="+destination, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -668,6 +688,8 @@ func TestProducerRoutingAndEffectsSurviveCompletion(t *testing.T) {
 }
 
 func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	store := newTestSessionServiceAt(t, workspace)
 	firstStash := time.Date(2000, 1, 2, 3, 0, 0, 0, time.UTC)
@@ -749,6 +771,8 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 }
 
 func TestSessionServiceMigratesThreadQueueKind(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	// Recreate the pre-006 queue in this test's isolated database schema.
 	_, err := store.db.ExecContext(t.Context(), `ALTER TABLE thread_queue DROP COLUMN IF EXISTS kind; DELETE FROM pg_migrations WHERE id = '006_thread_queue_kind.sql'; INSERT INTO thread_queue (queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position) VALUES ('old', 'recorded', 'original content', 'original author', 1, 0)`)
@@ -769,6 +793,8 @@ func TestSessionServiceMigratesThreadQueueKind(t *testing.T) {
 }
 
 func TestSessionServiceInitializesCronScheduleSchema(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 
 	rows, err := store.db.QueryContext(context.Background(), `SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND tablename LIKE 'cron_%' UNION SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() AND indexname LIKE 'cron_%' ORDER BY 1`)
@@ -790,6 +816,8 @@ func TestSessionServiceInitializesCronScheduleSchema(t *testing.T) {
 }
 
 func TestSessionServiceInitializesActiveTurnIndexes(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 
 	rows, err := store.db.QueryContext(context.Background(), `SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND tablename LIKE 'active_turns%' UNION SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() AND indexname LIKE 'active_turns%' ORDER BY 1`)
@@ -810,6 +838,8 @@ func TestSessionServiceInitializesActiveTurnIndexes(t *testing.T) {
 }
 
 func TestInitializeSessionDBReportsMigrationError(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 
@@ -832,6 +862,8 @@ func TestInitializeSessionDBReportsMigrationError(t *testing.T) {
 }
 
 func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	first := newTestSessionServiceAt(t, workspace)
 
@@ -848,6 +880,8 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 }
 
 func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
+	t.Parallel()
+
 	for _, prefix := range []int{5, 8, 16, 17, 18} {
 		for _, ledger := range []string{"pg_migrations", "gorp_migrations"} {
 			t.Run(fmt.Sprintf("%d/%s", prefix, ledger), func(t *testing.T) {
@@ -932,6 +966,8 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 }
 
 func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	first := newTestSessionServiceAt(t, workspace)
 	_, err := first.db.ExecContext(t.Context(), `ALTER TABLE pg_migrations RENAME TO gorp_migrations`)
@@ -946,6 +982,8 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 }
 
 func TestSlackChannelFacts(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	ctx := t.Context()
 	at := time.Unix(10, 123)
@@ -976,6 +1014,8 @@ func TestSlackChannelFacts(t *testing.T) {
 }
 
 func TestSessionServiceSyncCronSchedulesInsertsUpdatesAndDeletes(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	now := time.Date(2026, 7, 4, 10, 0, 0, 0, time.UTC)
 	due := now.Add(time.Minute)
@@ -1042,6 +1082,8 @@ func TestSessionServiceSyncCronSchedulesInsertsUpdatesAndDeletes(t *testing.T) {
 }
 
 func TestSessionServiceDueCronSchedulesHonorsDueTime(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	now := time.Date(2026, 7, 4, 10, 0, 0, 0, time.UTC)
 
@@ -1060,6 +1102,8 @@ func TestSessionServiceDueCronSchedulesHonorsDueTime(t *testing.T) {
 }
 
 func TestSessionServiceClaimCronScheduleSerializesSamePathAndCompletionClearsRunning(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	now := time.Date(2026, 7, 4, 10, 0, 0, 0, time.UTC)
 	next := now.Add(time.Hour)
@@ -1099,6 +1143,8 @@ func TestSessionServiceClaimCronScheduleSerializesSamePathAndCompletionClearsRun
 }
 
 func TestSessionServiceActiveGoalThreads(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	threads, err := store.ActiveGoalThreads()
 	require.NoError(t, err)
@@ -1126,6 +1172,8 @@ func TestSessionServiceActiveGoalThreads(t *testing.T) {
 }
 
 func TestSessionServiceBeginGoalPersistsCheckScript(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 
 	require.NoError(t, store.BeginGoal("thread-1", " fix lint ", " ./scripts/check.sh --linter-mode ", 3))
@@ -1144,6 +1192,8 @@ func TestSessionServiceBeginGoalPersistsCheckScript(t *testing.T) {
 }
 
 func TestSessionServiceBeginGoalRejectsActiveGoal(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 
 	require.NoError(t, store.BeginGoal("thread-1", "first", "", 3))
@@ -1157,6 +1207,8 @@ func TestSessionServiceBeginGoalRejectsActiveGoal(t *testing.T) {
 }
 
 func TestSessionServiceBeginGoalAllowsGoalAfterTerminal(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 
 	require.NoError(t, store.BeginGoal("thread-1", "first", "", 3))
@@ -1173,6 +1225,8 @@ func TestSessionServiceBeginGoalAllowsGoalAfterTerminal(t *testing.T) {
 }
 
 func TestSessionServiceProgressGoalKeepsGoalActiveAndRecordsNote(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 
 	require.NoError(t, store.BeginGoal("thread-1", "first", "", 3))
@@ -1189,6 +1243,8 @@ func TestSessionServiceProgressGoalKeepsGoalActiveAndRecordsNote(t *testing.T) {
 }
 
 func TestSessionStoreLoadsLargeImageTurn(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	store := newSessionStore("main", service)
 	entry := harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ResponseID: "", Model: "gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: strings.Repeat("x", 128*1024)})}
@@ -1199,6 +1255,8 @@ func TestSessionStoreLoadsLargeImageTurn(t *testing.T) {
 }
 
 func TestAppendSessionEntryDBReportsWriteFailures(t *testing.T) {
+	t.Parallel()
+
 	entry := &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: []json.RawMessage{json.RawMessage("{")}}
 	_, err := appendSessionEntryDB(context.Background(), errStore{}, "main", "main", entry)
 	require.ErrorContains(t, err, "marshal rocketcode session entry")
@@ -1209,6 +1267,8 @@ func TestAppendSessionEntryDBReportsWriteFailures(t *testing.T) {
 }
 
 func TestNewSessionServiceReportsInvalidDatabaseURL(t *testing.T) {
+	t.Parallel()
+
 	logger := slog.New(slog.DiscardHandler)
 	_, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: "not-a-dsn", Workspace: t.TempDir()}, logger)
 	require.Error(t, err)
@@ -1232,6 +1292,8 @@ func TestNewSessionServiceReportsInvalidDatabaseURL(t *testing.T) {
 }
 
 func TestHoldRunLockWaitsForReleaseOrCancellation(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	// This holder tests contention, not renewal; a heartbeat can race Close.
 	client, err := pglock.UnsafeNew(service.db, pglock.WithCustomTable(runLockTable), pglock.WithHeartbeatFrequency(0))
@@ -1261,6 +1323,8 @@ func TestHoldRunLockWaitsForReleaseOrCancellation(t *testing.T) {
 }
 
 func TestHoldRunLockAllowsSessionServiceWhileHeld(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	service := newTestSessionServiceAt(t, workspace)
 	// This holder tests service access, not renewal; a heartbeat can race Close.
@@ -1277,12 +1341,16 @@ func TestHoldRunLockAllowsSessionServiceWhileHeld(t *testing.T) {
 }
 
 func TestSessionStoreMissingIsEmpty(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	store := newSessionStore("main", service)
 	require.Empty(t, collectEntries(t, store.in()))
 }
 
 func TestSessionStoreReportsObserveError(t *testing.T) {
+	t.Parallel()
+
 	service, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
 	require.NoError(t, service.Stop())
@@ -1300,6 +1368,8 @@ func TestSessionStoreReportsObserveError(t *testing.T) {
 }
 
 func TestMemoryStoreAppendAndLoad(t *testing.T) {
+	t.Parallel()
+
 	var store memoryStore
 
 	entry := testSessionEntry("memory", "assistant")
@@ -1316,11 +1386,15 @@ func TestMemoryStoreAppendAndLoad(t *testing.T) {
 }
 
 func TestSessionStoreRejectsNilEntry(t *testing.T) {
+	t.Parallel()
+
 	_, err := AppendSessionEntryID(context.Background(), t.TempDir(), "main", nil)
 	require.ErrorContains(t, err, "rocketcode session entry is required")
 }
 
 func TestAppendSessionEntryIDRejectsBlankConversationID(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	entry := testSessionEntry("blank conversation", "assistant")
 
@@ -1329,6 +1403,8 @@ func TestAppendSessionEntryIDRejectsBlankConversationID(t *testing.T) {
 }
 
 func TestSessionInspectionMissingDBDoesNotCreateRuntimeDir(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 
 	summaries, err := listSessions(context.Background(), workspace)
@@ -1346,6 +1422,8 @@ func TestSessionInspectionMissingDBDoesNotCreateRuntimeDir(t *testing.T) {
 }
 
 func TestListSessionsIncludesLastMessages(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 
 	_, err := AppendSessionEntryID(context.Background(), workspace, "main", testSessionEntry("first user", "first assistant\x00"))
@@ -1372,12 +1450,16 @@ func TestListSessionsIncludesLastMessages(t *testing.T) {
 }
 
 func TestListSessionsMissingDBIsEmpty(t *testing.T) {
+	t.Parallel()
+
 	summaries, err := listSessions(context.Background(), t.TempDir())
 	require.NoError(t, err)
 	assert.Empty(t, summaries)
 }
 
 func TestSlackStateKeyTimeParsesAndRejectsKeys(t *testing.T) {
+	t.Parallel()
+
 	got, ok := slackStateKeyTime("slack-thread:D123:1700000000.1234567899")
 	require.True(t, ok)
 	assert.Equal(t, time.Unix(1700000000, 123456789).UTC(), got)
@@ -1397,6 +1479,8 @@ func TestSlackStateKeyTimeParsesAndRejectsKeys(t *testing.T) {
 }
 
 func TestSessionServiceSerializesConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 
 	var group sync.WaitGroup
@@ -1439,6 +1523,8 @@ func TestSessionServiceSerializesConcurrentAccess(t *testing.T) {
 }
 
 func TestSessionServiceBeginGoalRejectsConcurrentActiveStarts(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 
 	errCh := make(chan error, 20)
@@ -1477,6 +1563,8 @@ func TestSessionServiceBeginGoalRejectsConcurrentActiveStarts(t *testing.T) {
 }
 
 func TestSessionServiceConcurrentGoalTurnsPreserveAccounting(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	require.NoError(t, service.BeginGoal("thread", "ship it", "", 20))
 
@@ -1508,6 +1596,8 @@ func TestSessionServiceConcurrentGoalTurnsPreserveAccounting(t *testing.T) {
 }
 
 func TestSessionServiceThreadStatePersistsAtomically(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 
 	for i := range 25 {
@@ -1522,6 +1612,8 @@ func TestSessionServiceThreadStatePersistsAtomically(t *testing.T) {
 }
 
 func TestSessionServiceThreadAgentUpdatePreservesCreator(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	require.NoError(t, service.UpsertThread("thread", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
 	require.NoError(t, service.UpsertThread("thread", ThreadState{Agent: "main"}))
@@ -1533,6 +1625,8 @@ func TestSessionServiceThreadAgentUpdatePreservesCreator(t *testing.T) {
 }
 
 func TestDeleteSessionDeletesOnlyTarget(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	_, err := service.AppendEntryID(context.Background(), "main", testSessionEntry("main", "assistant"))
 	require.NoError(t, err)
@@ -1792,6 +1886,8 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 }
 
 func TestDeleteSessionMissingIDReturnsZero(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	deleted, err := service.DeleteSession(context.Background(), "missing")
 	require.NoError(t, err)
@@ -1799,17 +1895,23 @@ func TestDeleteSessionMissingIDReturnsZero(t *testing.T) {
 }
 
 func TestDeleteSessionMissingDBReturnsZero(t *testing.T) {
+	t.Parallel()
+
 	deleted, err := DeleteSession(context.Background(), t.TempDir(), "main")
 	require.NoError(t, err)
 	assert.Zero(t, deleted)
 }
 
 func TestDeleteSessionRejectsBlankConversationID(t *testing.T) {
+	t.Parallel()
+
 	_, err := DeleteSession(context.Background(), t.TempDir(), " ")
 	require.ErrorContains(t, err, "conversation ID is required")
 }
 
 func TestSessionServicePersistsExternalMCPSessionMapping(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	store := newTestSessionServiceAt(t, workspace)
 
@@ -1864,6 +1966,8 @@ func TestSessionServicePersistsExternalMCPSessionMapping(t *testing.T) {
 }
 
 func TestSessionServiceRejectsBlankKeys(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 
 	require.ErrorContains(t, store.UpsertThread(" ", ThreadState{Agent: "agent"}), "thread conversation ID is required")
@@ -1883,6 +1987,8 @@ func TestSessionServiceRejectsBlankKeys(t *testing.T) {
 }
 
 func TestDeleteSessionEntriesReportsDeleteFailures(t *testing.T) {
+	t.Parallel()
+
 	_, err := deleteSessionEntries(context.Background(), errStore{errExec: errors.New("no delete")}, []string{"main"})
 	require.ErrorContains(t, err, "lock session history")
 
@@ -2317,6 +2423,8 @@ func testReplayInput(messages ...replayInputMessage) []json.RawMessage {
 	return replayInput
 }
 func TestCopiedAttributionSurvivesSourceRetention(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	entry := harness.SessionEntry{Version: 1, Type: "turn", Agent: "planner", Model: "work/model-a", ReasoningEffort: new("high"), ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"answer"}`)}}
 	_, err := store.appendExternalMCPEntry(t.Context(), "producer-x", "interactive-y", &entry, nil)

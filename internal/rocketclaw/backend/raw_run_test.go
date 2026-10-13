@@ -135,6 +135,8 @@ func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 }
 
 func TestWorkflowAgentRunnerUsesRootCustomShell(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
@@ -195,6 +197,8 @@ func TestWorkflowAgentRunnerUsesRootCustomShell(t *testing.T) {
 }
 
 func TestWorkflowAgentRunnerTagLimits(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeMainAgentSkills(t, workspace, "---\nmodel: gpt-5.5\npermission:\n  read: allow\n  rocketclaw:\n    rocketclaw_set_tag: [[customer, internal]]\n---\nBase prompt\n")
 	service := newTestSessionServiceAt(t, workspace)
@@ -288,6 +292,8 @@ func TestWorkflowAgentRunnerTagLimits(t *testing.T) {
 }
 
 func TestWorkflowPermissionReviewerTagGuidance(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeMainAgentSkills(t, workspace, "---\nmodel: gpt-5.5\npermission:\n  read: auto(reviewer)\n  rocketclaw:\n    rocketclaw_set_tag: [[worker]]\n---\nWorker prompt\n")
 	writeAgent(t, workspace, "reviewer", "---\ndescription: Reviewer\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[review, published]]\n---\nReviewer prompt\n")
@@ -354,6 +360,8 @@ func TestWorkflowPermissionReviewerTagGuidance(t *testing.T) {
 }
 
 func TestWorkflowAgentRunnerResolvesNamedProviderModel(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -408,6 +416,8 @@ func TestWorkflowAgentRunnerResolvesNamedProviderModel(t *testing.T) {
 }
 
 func TestWorkflowAgentRunnerUsesConfiguredAutoApproverModel(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  rocketclaw:\n    code_mode_approve: auto\n  bash:\n    \"printf ok\": auto\n---\nMain prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -448,6 +458,8 @@ func TestWorkflowAgentRunnerUsesConfiguredAutoApproverModel(t *testing.T) {
 }
 
 func TestWorkflowAgentRunnerStructuredOutputUsesFinalAssistantMessage(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  read: {\"*\": allow}\n---\nMain prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -494,6 +506,8 @@ func TestWorkflowAgentRunnerStructuredOutputUsesFinalAssistantMessage(t *testing
 }
 
 func TestWorkflowExplicitSkillWithoutAvailableSubjects(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  skill:\n    unavailable: allow\n---\nMain prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -523,6 +537,8 @@ func TestWorkflowExplicitSkillWithoutAvailableSubjects(t *testing.T) {
 
 // A recorded worker result is reused only for the same request under the same key.
 func TestWorkflowAgentRunnerReplaysOnlyMatchingRecordedWorker(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -551,6 +567,8 @@ func TestWorkflowAgentRunnerReplaysOnlyMatchingRecordedWorker(t *testing.T) {
 }
 
 func TestWorkflowAgentRunnerRejectsInvalidOverridesAndStructuredOutput(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  read: {\"*\": allow}\n---\nMain prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -584,6 +602,8 @@ func TestWorkflowAgentRunnerRejectsInvalidOverridesAndStructuredOutput(t *testin
 }
 
 func TestWorkflowAgentRunnerMissingPermissionEnvironment(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  edit: {'${ROCKETCLAW_METADATA_FRUIT}/note.txt': allow}\n---\nMain prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -604,6 +624,8 @@ func TestWorkflowAgentRunnerMissingPermissionEnvironment(t *testing.T) {
 }
 
 func TestWorkflowAgentRunnerConcurrentDirectoriesAndCancellation(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
 	root, err := os.OpenRoot(workspace)
@@ -700,6 +722,8 @@ func TestWorkflowAgentRunnerConcurrentDirectoriesAndCancellation(t *testing.T) {
 }
 
 func TestWorkflowAgentRunnerReportsSetupFailures(t *testing.T) {
+	t.Parallel()
+
 	for _, scenario := range []string{"missing workspace", "missing definitions", "blocked runtime directory"} {
 		t.Run(scenario, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -729,6 +753,8 @@ func TestWorkflowAgentRunnerReportsSetupFailures(t *testing.T) {
 }
 
 func TestWorkflowAgentRunnerReturnsShellDirectoryCleanupError(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name       string
 		runFailure bool

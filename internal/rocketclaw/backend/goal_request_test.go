@@ -10,6 +10,8 @@ import (
 )
 
 func TestParseGoalRequestMaxTurnsDefaultAndOverrides(t *testing.T) {
+	t.Parallel()
+
 	for _, tt := range []struct {
 		name, text string
 		want       int
@@ -30,6 +32,8 @@ func TestParseGoalRequestMaxTurnsDefaultAndOverrides(t *testing.T) {
 }
 
 func TestParseGoalRequestAttachedParameters(t *testing.T) {
+	t.Parallel()
+
 	for _, tt := range []struct {
 		name, text               string
 		wantObjective, wantCheck string
@@ -74,6 +78,8 @@ func TestParseGoalRequestAttachedParameters(t *testing.T) {
 }
 
 func TestParseGoalRequestUsesCanonicalExamples(t *testing.T) {
+	t.Parallel()
+
 	_, rejection := protocol.ParseGoalRequest("")
 	assert.Equal(t, protocol.GoalCommandHelp, rejection)
 	assert.Contains(t, rejection, "maxTurns:")
@@ -86,6 +92,8 @@ func TestParseGoalRequestUsesCanonicalExamples(t *testing.T) {
 }
 
 func TestParseGoalRequestRejectsMalformedArguments(t *testing.T) {
+	t.Parallel()
+
 	for _, text := range []string{
 		"maxTurns:",
 		"maxTurns: nope goal",

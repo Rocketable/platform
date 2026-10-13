@@ -8,6 +8,8 @@ import (
 )
 
 func TestSessionStoreRequiresConversationID(t *testing.T) {
+	t.Parallel()
+
 	store, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop()) })
@@ -17,6 +19,8 @@ func TestSessionStoreRequiresConversationID(t *testing.T) {
 }
 
 func TestExternalMCPBindingPersistsPrivateAndManagedConversations(t *testing.T) {
+	t.Parallel()
+
 	store, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop()) })
@@ -47,6 +51,8 @@ func TestExternalMCPBindingPersistsPrivateAndManagedConversations(t *testing.T) 
 }
 
 func TestExternalMCPConversationRegistrationIsAtomic(t *testing.T) {
+	t.Parallel()
+
 	store, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop()) })
@@ -75,6 +81,8 @@ func TestExternalMCPConversationRegistrationIsAtomic(t *testing.T) {
 }
 
 func TestExternalMCPConversationCleanupRemovesOnlyBoundSessions(t *testing.T) {
+	t.Parallel()
+
 	store, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop()) })

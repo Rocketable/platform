@@ -23,6 +23,8 @@ import (
 )
 
 func TestModelResolverSelectsUnqualifiedExplicitAndNamedProviders(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		selector string
 		origin   rocketcode.ProviderOrigin
@@ -96,6 +98,8 @@ func TestModelResolverUsesProviderSettings(t *testing.T) {
 }
 
 func TestModelResolverRejectsUnknownProviderWithoutRequest(t *testing.T) {
+	t.Parallel()
+
 	requests := make(chan struct{}, 1)
 
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
@@ -117,6 +121,8 @@ func TestModelResolverRejectsUnknownProviderWithoutRequest(t *testing.T) {
 }
 
 func TestModelResolverConstructsProviderSpecificAPIKeyAndChatGPTClients(t *testing.T) {
+	t.Parallel()
+
 	apiKey := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		apiKey <- r.Header.Get("Authorization")
@@ -213,6 +219,8 @@ func TestModelResolverConstructsProviderSpecificAPIKeyAndChatGPTClients(t *testi
 }
 
 func TestModelResolverLogsProviderAndAPIModelWithoutCredentials(t *testing.T) {
+	t.Parallel()
+
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		attempts++

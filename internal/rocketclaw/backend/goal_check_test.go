@@ -12,6 +12,8 @@ import (
 )
 
 func TestValidateGoalCheckScriptStartRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	runtimeDir := config.DefaultRuntimeDir
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, runtimeDir, "agents"), 0o755))
@@ -32,6 +34,8 @@ func TestValidateGoalCheckScriptStartRejectsInvalidInput(t *testing.T) {
 }
 
 func TestValidateGoalCheckScriptAcceptsSafeSimpleCommand(t *testing.T) {
+	t.Parallel()
+
 	root, workspace := testGoalCheckWorkspace(t)
 
 	defer func() { require.NoError(t, root.Close()) }()
@@ -45,6 +49,8 @@ func TestValidateGoalCheckScriptAcceptsSafeSimpleCommand(t *testing.T) {
 }
 
 func TestValidateGoalCheckScriptRejectsUnsafeShapes(t *testing.T) {
+	t.Parallel()
+
 	root, workspace := testGoalCheckWorkspace(t)
 
 	defer func() { require.NoError(t, root.Close()) }()
@@ -90,6 +96,8 @@ func TestValidateGoalCheckScriptRejectsUnsafeShapes(t *testing.T) {
 }
 
 func TestValidateGoalCheckScriptRequiresWorkspaceExecutable(t *testing.T) {
+	t.Parallel()
+
 	root, workspace := testGoalCheckWorkspace(t)
 
 	defer func() { require.NoError(t, root.Close()) }()
@@ -113,6 +121,8 @@ func TestValidateGoalCheckScriptRequiresWorkspaceExecutable(t *testing.T) {
 }
 
 func TestValidateGoalCheckScriptChecksFullBashPermissionSubject(t *testing.T) {
+	t.Parallel()
+
 	root, workspace := testGoalCheckWorkspace(t)
 
 	defer func() { require.NoError(t, root.Close()) }()

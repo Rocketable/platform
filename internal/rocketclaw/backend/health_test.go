@@ -17,6 +17,8 @@ import (
 )
 
 func TestHealthReportCadenceAndCancellation(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		// A zero pool's Stats requires no driver, DB I/O, or external goroutines.
 		db := new(sql.DB)
@@ -64,6 +66,8 @@ func TestHealthReportCadenceAndCancellation(t *testing.T) {
 }
 
 func TestHealthReportKnownIntervalDeltas(t *testing.T) {
+	t.Parallel()
+
 	previous := healthSample{
 		at: time.Now(), allocatedBytes: 1000, gcCPUSeconds: 2,
 		pool:      sql.DBStats{WaitCount: 20, WaitDuration: time.Second},
@@ -103,6 +107,8 @@ func TestHealthReportKnownIntervalDeltas(t *testing.T) {
 }
 
 func TestHealthSamplePreservesHistogramBackingCounts(t *testing.T) {
+	t.Parallel()
+
 	samples := []metrics.Sample{
 		{Name: "/gc/heap/allocs:bytes"},
 		{Name: "/memory/classes/heap/objects:bytes"},

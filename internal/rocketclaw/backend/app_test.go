@@ -176,6 +176,8 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 }
 
 func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Queue recovery\nmodel: gpt-5.5\npermission: {}\n---\nRespond concisely.\n")
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.json"), []byte(`{}`), 0o600))
@@ -290,6 +292,8 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 
 // A turn continuing a subagent that resumes after a restart is refused instead of running it twice.
 func TestStartupResumedSubagentIsBusyForFrontends(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
 
@@ -338,6 +342,8 @@ func TestConfigureInstrumentationStartsAndStopsExporter(t *testing.T) {
 }
 
 func TestKeyedConversationLocksSerializeOneIDAndReleaseEntries(t *testing.T) {
+	t.Parallel()
+
 	locks := NewKeyedConversationLocks()
 	unlockFirst := locks.Lock("shared")
 	acquired := make(chan struct{})
@@ -370,6 +376,8 @@ func TestKeyedConversationLocksSerializeOneIDAndReleaseEntries(t *testing.T) {
 }
 
 func TestKeyedConversationLocksAllowIndependentIDs(t *testing.T) {
+	t.Parallel()
+
 	locks := NewKeyedConversationLocks()
 	unlockFirst := locks.Lock("first")
 	unlockedSecond := make(chan struct{})
@@ -396,6 +404,8 @@ func testLogger() *slog.Logger {
 // Shutdown waits for foreground bash with the run lock's heartbeat alive and stops frontends only
 // after; bash in a Background Job is killed instead, and its row left running for the next start.
 func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
+	t.Parallel()
+
 	for _, background := range []bool{false, true} {
 		t.Run(fmt.Sprintf("background=%v", background), func(t *testing.T) {
 			workspace := t.TempDir()
@@ -562,6 +572,8 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 
 // A person's Slack mention turn is not offered ask_user_question; Slack cannot show questions.
 func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n"), 0o600))

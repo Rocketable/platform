@@ -24,6 +24,8 @@ import (
 )
 
 func TestSessionTagToolsBridge(t *testing.T) {
+	t.Parallel()
+
 	for _, configured := range []bool{false, true} {
 		t.Run(strconv.FormatBool(configured), func(t *testing.T) {
 			workspace := t.TempDir()
@@ -203,6 +205,8 @@ func TestSessionTagToolsBridge(t *testing.T) {
 }
 
 func TestSessionTagChildAuthority(t *testing.T) {
+	t.Parallel()
+
 	for _, mode := range []toolMode{toolModePersistent} {
 		for _, tc := range []struct{ root, child bool }{{true, false}, {false, true}, {true, true}} {
 			t.Run(fmt.Sprintf("%v/%v/%v", mode, tc.root, tc.child), func(t *testing.T) {
@@ -333,6 +337,8 @@ func TestSessionTagChildAuthority(t *testing.T) {
 }
 
 func TestSessionToolsStoredContract(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	list := listSessionsTool(service, &threadBridgeManager{slackLookups: noSlackLookups{}})
 	get := getSessionTool(service)
@@ -411,6 +417,8 @@ func TestSessionToolsStoredContract(t *testing.T) {
 }
 
 func TestSessionToolsTimePrecisionAndDurations(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -469,6 +477,8 @@ func TestSessionToolsTimePrecisionAndDurations(t *testing.T) {
 }
 
 func TestSessionToolsReadOnlyRawScope(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 	require.NoError(t, service.UpsertThread("web:empty", ThreadState{Agent: "main"}))
 	require.NoError(t, service.UpsertThread("web:stored", ThreadState{Agent: "main"}))
@@ -542,6 +552,8 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 }
 
 func TestSessionToolsErrors(t *testing.T) {
+	t.Parallel()
+
 	service := newTestSessionService(t)
 
 	list, get := listSessionsTool(service, &threadBridgeManager{slackLookups: noSlackLookups{}}), getSessionTool(service)
@@ -590,6 +602,8 @@ func TestSessionToolsErrors(t *testing.T) {
 }
 
 func TestSessionToolsBridgePermissions(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name, rules        string
 		list, get, current bool
@@ -813,6 +827,8 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 }
 
 func TestSessionToolsCriteria(t *testing.T) {
+	t.Parallel()
+
 	s, slack := newSessionSearchFixture(t)
 	ctx := t.Context()
 	// The private External MCP chat and the cron producer match, but Web never lists them.
@@ -916,6 +932,8 @@ func TestSessionToolsCriteria(t *testing.T) {
 
 // The tool returns the chats SearchSessions finds, so it lists what /search shows.
 func TestSessionToolsCriteriaParity(t *testing.T) {
+	t.Parallel()
+
 	s, slack := newSessionSearchFixture(t)
 	list := listSessionsTool(s, &threadBridgeManager{slackLookups: slack})
 

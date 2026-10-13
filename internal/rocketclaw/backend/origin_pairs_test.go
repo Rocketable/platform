@@ -9,6 +9,8 @@ import (
 )
 
 func TestExternalMCPOriginDetailsStayOutsideHistory(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	binding := ExternalMCPSessionState{PrivateConversationID: "private", ManagedConversationID: "managed", Agent: "helper", SlackChannel: "#triage", OriginPairs: map[string]string{"topic": "billing"}}
 	require.NoError(t, store.RegisterExternalMCPConversation("external", "helper", &binding))
@@ -25,6 +27,8 @@ func TestExternalMCPOriginDetailsStayOutsideHistory(t *testing.T) {
 }
 
 func TestExternalMCPOriginPairsMigration(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	source := migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}
 	set := migrate.MigrationSet{TableName: "pg_migrations"}
@@ -68,6 +72,8 @@ INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUE
 }
 
 func TestChatOriginFactsReportsFailures(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	ctx := t.Context()
 

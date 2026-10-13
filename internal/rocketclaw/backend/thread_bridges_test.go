@@ -24,6 +24,8 @@ import (
 )
 
 func TestRunRejectsUnresolvedAgentModelAtStartup(t *testing.T) {
+	t.Parallel()
+
 	workspace := shortTempDir(t)
 	agentsRoot := filepath.Join(workspace, "agents")
 	require.NoError(t, os.MkdirAll(agentsRoot, 0o755))
@@ -37,6 +39,8 @@ func TestRunRejectsUnresolvedAgentModelAtStartup(t *testing.T) {
 }
 
 func TestRunRejectsInvalidWorkflowAtStartup(t *testing.T) {
+	t.Parallel()
+
 	for _, tt := range []struct{ name, source, want string }{
 		{name: "syntax", source: "not valid starlark", want: "validate workflow definitions"},
 		{name: "worker model", source: "meta = {\"name\": \"bad\", \"description\": \"Bad\"}\nw = worker(name=\"w\", instructions=\"work\", model=\"missing\")\ndef main(args): return None\n", want: `workflow worker model "missing" is not configured`},
@@ -58,6 +62,8 @@ func TestRunRejectsInvalidWorkflowAtStartup(t *testing.T) {
 }
 
 func TestRuntimeWorkflowDescriptionsListsSavedWorkflows(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
@@ -74,6 +80,8 @@ func TestRuntimeWorkflowDescriptionsListsSavedWorkflows(t *testing.T) {
 }
 
 func TestWorkflowValidationKeepsLiveAssetsOnInvalidReload(t *testing.T) {
+	t.Parallel()
+
 	for _, tt := range []struct{ name, source, want string }{
 		{name: "invalid syntax", source: "not valid starlark", want: "validate workflow definitions"},
 		{name: "unknown worker model", source: "meta = {\"name\": \"bad\", \"description\": \"Bad\"}\nw = worker(name=\"w\", instructions=\"work\", model=\"missing\")\ndef main(args): return None\n", want: `workflow worker model "missing" is not configured`},
@@ -101,6 +109,8 @@ func TestWorkflowValidationKeepsLiveAssetsOnInvalidReload(t *testing.T) {
 }
 
 func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 
 	store := newWorkspaceSessionService(t)
@@ -135,6 +145,8 @@ func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
 // A thread whose record cannot be persisted keeps no bridge: the new bridge is
 // stopped and forgotten, so a retry starts a fresh one.
 func TestThreadBridgeManagerDropsBridgeWhenThreadIsNotPersisted(t *testing.T) {
+	t.Parallel()
+
 	store := newWorkspaceSessionService(t)
 	bridges := make([]*directBridgeMock, 0, 2)
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge {
@@ -162,6 +174,8 @@ func TestThreadBridgeManagerDropsBridgeWhenThreadIsNotPersisted(t *testing.T) {
 }
 
 func TestRuntimeSwitchesConversationAgent(t *testing.T) {
+	t.Parallel()
+
 	store := newWorkspaceSessionService(t)
 
 	const id = "opaque-web-id"
@@ -180,6 +194,8 @@ func TestRuntimeSwitchesConversationAgent(t *testing.T) {
 }
 
 func TestThreadBridgeManagerMentionThreadRecognizesReportThreads(t *testing.T) {
+	t.Parallel()
+
 	store := newWorkspaceSessionService(t)
 	require.NoError(t, store.UpsertThread(protocol.SlackThreadConversationID("C123", "1.1"), ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
 	require.NoError(t, store.RegisterExternalMCPConversation("external", "main", &ExternalMCPSessionState{PrivateConversationID: "external_mcp:private", ManagedConversationID: protocol.SlackThreadConversationID("C123", "2.2"), Agent: "main"}))
@@ -208,6 +224,8 @@ func TestThreadBridgeManagerMentionThreadRecognizesReportThreads(t *testing.T) {
 // A mention is accepted once per conversation: a redelivery while it waits, mid-turn, after a
 // restart, or after its turn finished starts nothing, and a mention never steers the running turn.
 func TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce(t *testing.T) {
+	t.Parallel()
+
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
 	target := slackTarget("D123", "111.222")
@@ -275,6 +293,8 @@ func TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce(t *testing.T) {
 
 // A mention committed while its bridge is stopped stays accepted and waits for the next start.
 func TestThreadBridgeManagerSubmitMentionKeepsMentionForStoppedBridge(t *testing.T) {
+	t.Parallel()
+
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, stopped: true}
@@ -292,6 +312,8 @@ func TestThreadBridgeManagerSubmitMentionKeepsMentionForStoppedBridge(t *testing
 }
 
 func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
+	t.Parallel()
+
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "planner"}))
@@ -315,6 +337,8 @@ func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
 
 // A resumed turn continues its goal itself when it finishes; a startup kick would double it.
 func TestThreadBridgeManagerSkipsActiveGoalContinuationForResumedTurn(t *testing.T) {
+	t.Parallel()
+
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "planner"}))
@@ -330,6 +354,8 @@ func TestThreadBridgeManagerSkipsActiveGoalContinuationForResumedTurn(t *testing
 }
 
 func TestThreadBridgeManagerAllowsGoalAfterCompletedGoal(t *testing.T) {
+	t.Parallel()
+
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
 	require.NoError(t, store.BeginGoal(conversationID, "first", "", 5))
@@ -345,6 +371,8 @@ func TestThreadBridgeManagerAllowsGoalAfterCompletedGoal(t *testing.T) {
 }
 
 func TestThreadBridgeManagerPickLaterWorkUsesLiveBridge(t *testing.T) {
+	t.Parallel()
+
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
@@ -360,6 +388,8 @@ func TestThreadBridgeManagerPickLaterWorkUsesLiveBridge(t *testing.T) {
 }
 
 func TestStartQueuedConversationsReportsLaterWorkErrors(t *testing.T) {
+	t.Parallel()
+
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{}))
@@ -372,6 +402,8 @@ func TestStartQueuedConversationsReportsLaterWorkErrors(t *testing.T) {
 }
 
 func TestStartQueuedConversationsWakesEachRecordedConversationOnce(t *testing.T) {
+	t.Parallel()
+
 	store := newWorkspaceSessionService(t)
 	first := protocol.SlackThreadConversationID("D123", "111.222")
 	second := protocol.SlackThreadConversationID("D124", "222.333")
@@ -401,6 +433,8 @@ func TestStartQueuedConversationsWakesEachRecordedConversationOnce(t *testing.T)
 }
 
 func TestThreadBridgeManagerInterruptSlackThreadInterruptsActiveTurn(t *testing.T) {
+	t.Parallel()
+
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
 	require.NoError(t, store.BeginGoal(conversationID, "first", "", 5))
@@ -427,6 +461,8 @@ func TestThreadBridgeManagerInterruptSlackThreadInterruptsActiveTurn(t *testing.
 }
 
 func TestThreadBridgeManagerStashListAndDeleteQueue(t *testing.T) {
+	t.Parallel()
+
 	store := newWorkspaceSessionService(t)
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return newDirectBridgeMock() })
 	runTestManager(t, manager)
@@ -556,6 +592,8 @@ func TestThreadBridgeManagerStartNewThreadRejectsUnavailableAgents(t *testing.T)
 }
 
 func TestThreadBridgeManagerStopStopsActiveBridges(t *testing.T) {
+	t.Parallel()
+
 	store := newWorkspaceSessionService(t)
 	bridges := make([]*directBridgeMock, 0, 2)
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge {
