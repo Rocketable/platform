@@ -258,7 +258,7 @@ github.com/go-logr/stdr
 # github.com/go4org/hashtriemap v0.0.0-20260925222741-44e5305f85d9
 ## explicit; go 1.25.1
 github.com/go4org/hashtriemap
-# github.com/godbus/dbus/v5 v5.2.3
+# github.com/godbus/dbus/v5 v5.2.4
 ## explicit; go 1.20
 github.com/godbus/dbus/v5
 # github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8
