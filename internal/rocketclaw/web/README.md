@@ -119,23 +119,27 @@ see [Voice](#voice).
 ## Voice
 
 The **Voice** page (`/voice`, also in the bottom navigation and the command
-palette) holds one voice conversation, remembered in this browser for the signed-in
-user. Pick an agent and tap the orb to talk; tap it again to hang up. While a call is
+palette) holds the signed-in person's voice conversation. RocketClaw keeps it, with the
+person's agent, voice and transcript choice, on the server: the same on every device
+and through restarts, and never shared with another person, even in one browser. Pick an agent and tap the orb to talk; tap it again to hang up. While a call is
 active the orb slowly ebbs and flows, its inner light swirls around a glowing heart,
 and two orbit rings spin around it; it swells and brightens with the voice model's
 speech, measured in the browser from the incoming audio. With reduced motion it stays still. The first
-tap creates the conversation and later visits reuse it. Picking another agent
+tap creates the conversation and later visits, on any device, reuse it; each tap asks
+the server first, so a conversation another device reset is never called. Picking another agent
 while idle switches the conversation's agent with `$agent`. **Reset** hangs up and
-forgets the conversation, asking first while its turn runs, so the next call begins
-a fresh one; the old one stays in the session list and search, and a running turn
-keeps running there. A voice picker next to the agent picker lists the voices the
-agent's provider offers (ChatGPT-login and API-key providers offer different ones);
-the choice is remembered in this browser for each provider, and the composer's voice
-button uses it too. Icon buttons on the right show the transcript, open the
+forgets the conversation on every device, asking first while its turn runs, so the
+next call begins a fresh one; the old one stays in the session list and search until
+ordinary cleanup (an empty one is removed at the next restart), and a running turn
+keeps running there. A call already live on another device keeps its conversation
+until it ends. A voice picker next to the agent picker lists the voices the
+agent's provider offers (ChatGPT-login and API-key providers offer different ones).
+Each person has one voice: a call uses it when the agent's provider offers it, and
+that provider's default otherwise, and the composer's voice button follows it too. Icon buttons on the right show the transcript, open the
 conversation, and reset. The page shows the call state, elapsed time and notices
 under the orb. **Show transcript** swaps the big orb for live captions (not saved)
 shown as a chat, with a small orb at the bottom that still starts and ends the call;
-the choice is remembered in this browser. Leaving the page hangs up, and cancels a start
+the choice is kept with the person's voice settings. Leaving the page hangs up, and cancels a start
 still in progress; a conversation it already created stays.
 The screen stays awake while the Voice page is open or a call runs.
 
@@ -143,8 +147,9 @@ Each session's composer has a voice button that starts and ends a call on that
 session. It is not dictation: nothing is typed into the composer. It is unavailable
 on New session until the conversation exists, and leaving the session ends its call.
 
-A tab runs one call at a time, and a conversation has one live call: starting voice
-for it elsewhere ends the older call with "Voice moved to another device or tab."
+A tab runs one call at a time, and each person has one live call: starting voice
+anywhere else, on any conversation, ends their older call with "Voice moved to another
+device or tab." Other people's calls, even on the same conversation, keep running.
 A call also ends when the page closes, stays hidden for 30 seconds, or loses its
 connection to RocketClaw, and stops with "Voice call failed: audio connection
 lost." when the browser's audio connection fails. There are no idle or no-speech

@@ -17,22 +17,27 @@ supersedes_in_part: docs/plans/2026-10-10-1146-feat-web-voice-mode-plan.md
   - The person's requests reach the agent complete and in the order spoken.
   - A dropped connection to OpenAI does not leave a billed session running unseen.
   - Phones sign in over HTTPS as their own Tailscale user.
-- **Means:** apply the review fixes in KTD2-KTD11, copying Codex wherever Codex has the behavior (KTD1), with phone access through an embedded tsnet node (KTD9).
+  - The Voice page keeps working after a failed call and a restart, on every device the person uses.
+  - Each person has their own voice conversation and voice settings, the same on every device and never shared with another person.
+  - Each person has at most one live voice call at a time, while many people can be in calls at once.
+- **Means:** apply the review fixes in KTD2-KTD11, copying Codex wherever Codex has the behavior (KTD1), with phone access through an embedded tsnet node (KTD9). The server keeps each person's current voice conversation and voice settings (KTD12-KTD15).
 - **Authority:**
   - This plan wins over `docs/plans/2026-10-10-1146-feat-web-voice-mode-plan.md` where they differ. That plan's unlisted requirements still hold.
   - R-IDs win on behavior and KTDs on mechanism; units override neither.
   - `AGENTS.md` governs code style, tests and verification.
 - **Stop conditions:** stop and report if any of these happens:
-  - Go source CLOC would enter its hazard zone (above 23,000 of 23,500).
+  - U1-U11: Go source CLOC would enter its hazard zone (above 23,000 of 23,500).
+  - U12-U17: Go source CLOC would pass 23,470, which is 23,220 plus the 250 lines the owner allotted. U16 raises the budget from 23,500 to 23,750 (KTD16).
   - TS CLOC would pass 7,250 of 7,500.
   - The `tailscale.com` dependency cannot be vendored, or its newer gorilla/websocket breaks the existing RocketCode websocket tests.
-  - A requirement here needs a database migration.
+  - A requirement needs a database migration other than U12's `voice_settings` table.
 - **Execution profile:** Deep. Order:
   1. Deletions first, because CLOC headroom is about 570 lines: U1, U2, U6.
   2. Then U3, U5 and U9.
   3. Then U4, U10 and U11.
   4. Then U7 and U8.
-- **Finishing:** the fixes go into the PR's voice commit. The tab-test commit stays first.
+  5. Then U16, U12, U13, U17, U14 and U15.
+- **Finishing:** U1-U11 go into the PR's voice commit, with the tab-test commit first. U12-U17 ship later as one PR on `main`.
 
 ---
 
@@ -50,6 +55,8 @@ The browser stops on audio failure and retries once when audio never connects.
 
 Phones reach RocketClaw through an embedded Tailscale node with HTTPS and connection-based identity. The `tailscale serve` header sign-in is removed.
 
+The server keeps each person's current voice conversation and voice settings, instead of the browser. Startup cleanup leaves that conversation alone. Every device the person uses sees the same conversation until Reset, and the same agent, voice and transcript choice. Two people never share any of it, even in one browser.
+
 ### Problem Frame
 
 A three-model review of PR #275 (`xai/grok-4.7`, `openai/gpt-6.1-sol`, `openai/gpt-6-astra`) found defects in failure paths and ordering:
@@ -62,9 +69,26 @@ A three-model review of PR #275 (`xai/grok-4.7`, `openai/gpt-6.1-sol`, `openai/g
 
 The owner reviewed each fix on 2026-10-11 and set one rule: where Codex has a voice behavior, RocketClaw does what Codex does.
 
+On 2026-10-13 the Voice page stopped working in production, and so did typing in that conversation: every call and every message failed with "conversation is not recorded".
+- The page kept its conversation ID in browser storage, and the server did not know which conversation was the Voice page's.
+- A call that ends before any hand-off leaves the conversation without messages.
+- At every start, RocketClaw deletes conversations without messages, whatever their age (`shouldPruneThreadConversation` in `internal/rocketclaw/backend/store.go`).
+- The page kept using the deleted ID; only Reset recovered it.
+
 ### Requirements
 
 R-IDs follow `docs/plans/2026-10-10-1146-feat-web-voice-mode-plan.md`. Requirements not listed here are unchanged.
+
+Product Contract preservation: changed: R2, R4 — the current voice conversation moves from browser storage to the server, so it survives restarts and is the same on all of a person's devices (owner-directed, 2026-10-13). Changed: R20 — the one-live-call limit moves from each conversation to each person (owner-directed, 2026-10-13). R25-R27 are new; R26 and R27 replace the per-browser, per-provider voice choice and the per-browser transcript toggle.
+
+**Voice conversation and settings**
+
+- R2. The Voice page uses one current voice conversation per person. The server keeps it across restarts and devices, and the page reuses it until Reset.
+- R4. Reset ends this page's live call and forgets the person's current voice conversation on every device. The next Start creates a fresh conversation with the picked agent. Reset does not delete the old conversation: it stays in the session list and search until ordinary cleanup applies, so an empty one is removed at the next start (R25). A turn already running there keeps running.
+- R25. Startup cleanup never deletes a person's current voice conversation. Once Reset forgets it, ordinary cleanup applies.
+- R26. Each person's voice settings are kept by the server and are the same on every device: the agent for their next new voice conversation, their voice, and whether the Voice page shows the transcript. Two people never share settings, even in one browser.
+- R20. Each person has at most one live voice call, across all conversations and devices. Starting a new call ends that person's older call as moved to another device; other people's calls, even on the same conversation, are never affected.
+- R27. Each person has one voice. A call uses it when the conversation agent's provider offers it, and that provider's default voice otherwise; the Voice page and the composer's voice button both follow this.
 
 **Requests**
 
@@ -112,12 +136,18 @@ R-IDs follow `docs/plans/2026-10-10-1146-feat-web-voice-mode-plan.md`. Requireme
 - **No idle or no-speech timers.** (session-settled: user-directed — chosen over keeping both timers and fixing their races: Codex has neither.) Governs R16.
 - **Phones use an embedded tsnet node.** (session-settled: user-directed — chosen over `tailscale serve` identity headers, which any local process can forge, and over an owner-only Unix socket, which the macOS Tailscale system extension cannot reach: "connect: operation not permitted".) Governs R21.
 - **API key transport follows Codex redirects plus a plain-HTTP refusal.** (session-settled: user-directed — chosen over exactly Codex, which allows plain HTTP, and over never following redirects.) Governs R24.
+- **The server owns each person's current voice conversation.** (session-settled: user-directed — chosen over keeping the ID in browser storage with either an age check on empty-conversation cleanup or a Voice page that recovers from a deleted ID: one place owns both the pointer and its protection from cleanup, so they cannot drift apart.) Governs R2, R4, R25.
+- **Voice settings belong to the person, not the device.** (session-settled: user-directed — chosen over keeping the voice choice and transcript toggle in browser storage: RocketClaw is multi-user, so two people sharing a browser must not share settings, and one person must find the same settings on every device.) Governs R26.
+- **One voice per person.** (session-settled: user-directed — chosen over one remembered voice per provider for each person.) Governs R27.
+- **One live call per person; the newest wins.** (session-settled: user-directed — chosen over refusing a second start until the first call hangs up, and over one live call per conversation, which would let one person's call end another's.) Governs R20.
 
 ### Scope Boundaries
 
-- No change to the Voice page layout, the composer toggle placement, the seed limits, or one call per conversation.
+- No change to the Voice page layout, the composer toggle placement, or the seed limits.
 - No voice answers to questions and no progress, by decision.
 - No storing of talk after a call's last hand-off, matching the Codex app.
+- No change to startup cleanup of other conversations without messages.
+- No carry-over of voice state saved in browser storage. After the upgrade, the first Start creates a new current conversation, and each person starts with the provider's default voice and the transcript hidden until they choose; older conversations stay in the session list.
 
 #### Deferred to Follow-Up Work
 
@@ -125,6 +155,7 @@ R-IDs follow `docs/plans/2026-10-10-1146-feat-web-voice-mode-plan.md`. Requireme
 - Showing long replies on the Voice page, which today has no transcript.
 - The same plain-HTTP refusal for the model client in `internal/rocketclaw/backend/model_resolver.go`, which also accepts a remote `http://` base URL today.
 - A `Host` allowlist on the `listen_address` listener against DNS rebinding, a risk that predates this plan.
+- Chat tabs that point at an empty conversation deleted at startup. Startup cleanup could delete an empty conversation only after the 30-day retention, which needs a creation time on `managed_conversations`.
 
 ---
 
@@ -215,6 +246,43 @@ R-IDs follow `docs/plans/2026-10-10-1146-feat-web-voice-mode-plan.md`. Requireme
   - It does keep runtime state in config, a small smell this plan accepts.
   - Links posted before the node is up keep the IP form.
   - Governs R21.
+- KTD12. **One row of voice settings per person in a `voice_settings` table.** (session-settled: user-directed — instantiates the server-owned voice conversation and per-person settings Key Decisions; governs R2, R4, R25, R26, R27.)
+  - A new migration, the next free number (`034` when planned), creates the table:
+    - `username`, the primary key;
+    - `conversation_id`, the current voice conversation, nullable, referencing `managed_conversations` with `ON DELETE SET NULL`;
+    - `agent`, the agent for the next new voice conversation, empty for the default;
+    - `voice`, the person's voice, empty for the provider default;
+    - `transcript`, whether the Voice page shows the transcript, false by default.
+  - The key is the `username` that `Server.principal` returns. `createSession` stores the same value as `CreatedBy`, and the Voice page keyed its browser storage by it.
+  - `ON DELETE SET NULL` means the row never points at a deleted conversation, whatever path deletes it, and the person's other settings survive.
+  - Chosen over a column on `managed_conversations`: one row holds exactly one current conversation per person, plus settings that exist before any conversation does.
+- KTD13. **One `VoiceSettings` RPC with four actions.** (Governs R2, R4, R26, R27.)
+  - The request carries an action enum (`READ`, `START`, `RESET`, `UPDATE`), a conversation ID, and the setting fields. The response carries the caller's whole row: current conversation ID (empty when none), agent, voice and transcript.
+  - `READ` returns the caller's settings; a person with no row gets the defaults.
+  - `START` returns the current conversation. With none, it checks the requested agent against the caller's choices as `createSession` does, creates the conversation through `backend.CreateConversation`, records it and the agent only while no conversation is current, and returns the ID that won.
+    - Two devices starting at once both get the winner. The loser's conversation is empty and not current, so the next startup cleanup removes it. No lock is needed.
+  - `RESET` clears `conversation_id` only while it still names the given ID, then returns the current row. A device showing an older conversation cannot forget a newer one another device started.
+  - `UPDATE` stores the agent, voice or transcript value it is given. It checks an agent against the caller's choices and a voice against the voices the routes offer (`publicVoice.voices` and `codexVoice.voices`), and refuses anything else with `InvalidArgument`.
+  - The storage methods live on `*backend.SessionService`, which `rpc.Server` already holds as `sessions`. `frontend.Backend` and its mocks do not change.
+  - Chosen over a voice flag on `CreateSession` plus fields on `Identity`: same behavior, one handler, one place to read.
+- KTD14. **Startup cleanup skips current voice conversations.** (Governs R25.)
+  - `shouldPruneThreadConversation` already starts by skipping shadow children. That check also skips a conversation named in `voice_settings.conversation_id`.
+  - It is one more condition in an existing query, with no new Go function.
+- KTD15. **The browser reads voice settings from the server.** (Governs R2, R4, R26, R27.)
+  - The Voice page and the composer's voice button share one `READ` query. The shared query client's defaults (no stale time, refetch on window focus) let another device's changes show up when the page is visible again.
+  - Start always calls `START`, which returns the current ID or creates one, then starts the call on the returned ID and shows it. A page still showing an ID that another device reset therefore never calls on it. Reset calls `RESET` with the shown ID.
+  - While this page's call is active, the page keeps the call's conversation ID, and a refetched ID applies only after the call ends. `VoiceCall` hangs up whenever its ID changes, so only this page's own Reset may change the ID during a call.
+  - The agent picker, the voice picker and the transcript button call `UPDATE`. Picking an agent while a conversation exists also keeps sending `$agent` to that conversation, as today.
+  - A call sends the person's voice when the agent's provider offers it, and that provider's default otherwise (R27), as `voiceChoice` does today with a browser-stored value.
+  - Delete the browser-storage code for the voice conversation (`voice:<username>`), the voice choice (`voice:choice:<provider>`, `rememberVoice`) and the transcript toggle (`voice:transcript`).
+  - A live call on another device keeps running on its conversation after a Reset here, until it ends.
+- KTD16. **Raise the rocketclaw Go source budget by 250 lines.** (session-settled: user-directed — chosen over fitting U12-U15 and U17 into the 280 lines left under 23,500: per-person settings need more server code.)
+  - `GO_SOURCE_CLOC_BUDGET` in `internal/rocketclaw/Makefile` goes from 23,500 to 23,750; the 500-line hazard zone is unchanged.
+  - Conflict call-out: root `AGENTS.md` says "Never edit `SOURCE_CLOC_BUDGET` in `Makefile`". The owner explicitly directed this increase on 2026-10-13, and it applies to this budget only.
+- KTD17. **Live calls are keyed by person.** (session-settled: user-directed — instantiates the one-live-call-per-person Key Decision; governs R20.)
+  - `Server.voiceCalls` is keyed by the caller's `username` from `principal`, the same key as `voice_settings`, instead of the conversation ID. `voice` keeps the username that it drops today.
+  - Starting a call cancels the caller's existing entry with the `replaced` cause, and an exiting call removes the entry only while it is still its own, as today.
+  - Two people's calls on one conversation run side by side. Each speaks only replies to its own hand-offs (KTD5), and each announces pending questions (KTD6).
 
 ### High-Level Technical Design
 
@@ -276,6 +344,33 @@ stateDiagram-v2
   error --> idle: dismiss
 ```
 
+Current voice conversation across devices and restarts (KTD12-KTD15):
+
+```mermaid
+sequenceDiagram
+  participant P as Phone Voice page
+  participant D as Desk Voice page
+  participant R as VoiceSettings RPC
+  participant S as voice_settings
+  participant C as Startup cleanup
+  P->>R: READ
+  R-->>P: "" (no row)
+  P->>R: START agent=main
+  R->>S: create conversation, record it while none is current
+  R-->>P: id A
+  Note over P: call fails before any hand-off: A has no messages
+  C->>S: is A current?
+  S-->>C: yes, skip A
+  D->>R: READ
+  R-->>D: id A
+  D->>R: RESET id=A
+  R->>S: delete row while it names A
+  R-->>D: ""
+  P->>R: READ on window focus
+  R-->>P: ""
+  Note over C: next start: A is empty and not current, so it is deleted
+```
+
 ### Assumptions
 
 These are planning choices, not owner-confirmed decisions.
@@ -286,6 +381,7 @@ These are planning choices, not owner-confirmed decisions.
 - Tailscale's log upload is off for the node; troubleshooting falls back to the operator log.
 - Adding `tailscale.com` moves gorilla/websocket to the version tailscale requires. The RocketCode websocket tests are the check.
 - The tsnet TLS listener may give phones HTTP/2. Nothing relies on it; the existing connection budget holds on HTTP/1.1.
+- The current voice conversation and the voice settings are per sign-in name. A person reaching RocketClaw both as a Tailscale login and as a `web_users` name gets two sets, as they already get two identities.
 
 ### System-Wide Impact
 
@@ -294,7 +390,10 @@ These are planning choices, not owner-confirmed decisions.
   - `listen_address` callers keep `web_users` and `tailscale whois`.
   - Tailscale logins and `web_users` names are separate namespaces, so one person may appear under two names.
 - **Local processes remain the owner:** this plan removes header forgery. An agent shell can still reach `127.0.0.1` or the tsnet name through the host's own Tailscale node and act as the owner, as before.
-- **Cross-site requests:** there are no cookies. `CrossOriginProtection` compares exact origins, so other `*.ts.net` sites are refused. Each origin keeps its own browser storage, so the Voice page's current conversation is per origin.
+- **Cross-site requests:** there are no cookies. `CrossOriginProtection` compares exact origins, so other `*.ts.net` sites are refused. Each origin keeps its own browser storage, but the Voice page's current conversation lives on the server, so it is the same on every origin where the person signs in under the same name (KTD12; see Assumptions).
+- **Voice conversation lifetime:** a person's current voice conversation is kept even with no messages, so the database holds at most one such conversation per person. Reset hands it back to ordinary cleanup (R25).
+- **Settings follow the person:** choosing a voice, agent or transcript view on one device changes it on all of that person's devices, and never for anyone else (R26).
+- **Schema:** U12 adds the first migration since `033_agent_shadows.sql`. An older binary refuses to start against a database that has run it.
 - **Voice text trust:** the Codex route's request text is the voice model's wording, and background audio can become a message with the owner's authority. Keeping question answers out of voice (R12) and keeping `$` text inert are the safeguards.
 - **Queued hand-offs outlive the call:** a hand-off admitted before a restart runs after it, with `media=Voice`, through the existing queue worker.
 - **Links:** Slack footers and `rocketclaw_start_new_thread` links switch to the tsnet HTTPS name once it is known (KTD11), which reveals the tailnet name.
@@ -311,6 +410,10 @@ These are planning choices, not owner-confirmed decisions.
 | Login link claimed by the wrong tailnet | Link only in the operator log; docs say to confirm the node appears in your own tailnet; a pre-approved tagged key is recommended |
 | tsnet node login expires after 180 days | A tagged node has no expiry; docs name it |
 | Turning on tailnet HTTPS publishes machine names in certificate logs | Docs name it |
+| Go CLOC is already in the hazard zone (23,220 of 23,500) | KTD16 raises the budget by 250 lines; KTD13 and KTD14 reuse `SessionService`, the existing cleanup query and the existing RPC plumbing; stop past 23,470 |
+| Rolling back to a release without U12's migration fails at startup with "unknown migration" | Roll forward instead; `docs/solutions/runtime-errors/deployment-binary-missing-live-migrations.md` |
+| Another branch takes the same migration number | Use the next free number when U12 lands, and check the live ledger before deploying |
+| Two devices start at once and one conversation is left orphaned | It is empty and not current, so the next startup cleanup removes it (KTD13) |
 
 ### Sources & Research
 
@@ -323,7 +426,15 @@ These are planning choices, not owner-confirmed decisions.
   - `internal/rocketclaw/backend/thread_bridges.go` (`WebURL`)
   - `cmd/rocketclaw/web.go` (`startWebRPC`)
   - `internal/rocketclaw/frontend/rpc/{voice.go,voice_wire.go,http.go,server.go}`
-- Learnings: `docs/solutions/architecture-patterns/web-keep-alive-views-connection-budget.md`; `docs/solutions/logic-errors/saved-queue-never-started-after-restart.md`; `docs/solutions/best-practices/dupword-fix-rewrites-repeated-test-strings.md`.
+  - `internal/rocketclaw/backend/store.go` (`PruneStateBefore`, `shouldPruneThreadConversation`)
+  - `internal/rocketclaw/backend/app.go` (cleanup at every start, 30-day `stateRetention`)
+  - `internal/rocketclaw/backend/store_dao.go` (`Thread`, `createConversation`)
+  - `internal/rocketclaw/backend/migrations/033_agent_shadows.sql` (cascade pattern)
+  - `internal/rocketclaw/frontend/rpc/server.go` (`createSession`, `principal`)
+  - `internal/rocketclaw/web/src/ui.tsx` (`VoicePage`, `VoiceCall`, the composer's voice button)
+  - `internal/rocketclaw/web/src/voice.ts` (`voiceChoice`, `rememberVoice`)
+  - `internal/rocketclaw/frontend/rpc/voice_public.go` and `voice_codex.go` (`voices`)
+- Learnings: `docs/solutions/architecture-patterns/web-keep-alive-views-connection-budget.md`; `docs/solutions/logic-errors/saved-queue-never-started-after-restart.md`; `docs/solutions/best-practices/dupword-fix-rewrites-repeated-test-strings.md`; `docs/solutions/runtime-errors/deployment-binary-missing-live-migrations.md`.
 
 ---
 
@@ -607,30 +718,179 @@ These are planning choices, not owner-confirmed decisions.
 - **Test expectation:** none — documentation and one comment.
 - **Verification:** no doc mentions `tailscale serve` sign-in, voice answers, progress, or idle timers.
 
+### U16. Raise the rocketclaw Go source budget
+
+- **Goal:** U12-U15 and U17 have the 250 lines of Go source the owner allotted.
+- **Requirements:** R26; KTD16
+- **Dependencies:** none
+- **Files:** `internal/rocketclaw/Makefile`
+- **Approach:** change `GO_SOURCE_CLOC_BUDGET` from 23500 to 23750; leave the hazard zone and the check itself unchanged.
+- **Test expectation:** none -- a budget constant; `make test` runs the check.
+- **Verification:** `make check-cloc-budget` in `internal/rocketclaw` reports the 23,750 limit.
+
+### U12. Store voice settings and keep the current conversation through cleanup
+
+- **Goal:** the database holds each person's voice settings, and startup cleanup leaves their current voice conversation alone.
+- **Requirements:** R2, R4, R25, R26; KTD12, KTD14
+- **Dependencies:** U16
+- **Files:**
+  - `internal/rocketclaw/backend/migrations/034_voice_settings.sql` (next free number)
+  - `internal/rocketclaw/backend/store_dao.go`
+  - `internal/rocketclaw/backend/store.go`
+  - `internal/rocketclaw/backend/store_test.go`
+- **Approach:**
+  1. Add the KTD12 migration.
+  2. Add `SessionService` methods for KTD13's storage steps: read a person's row, record a new current conversation and agent only while none is current and return the winner, clear the conversation while it names a given ID, and store a setting.
+  3. Add the KTD14 condition to the ownership check in `shouldPruneThreadConversation`.
+- **Execution note:** start with a failing test for the 2026-10-13 failure: an empty current voice conversation survives `PruneStateBefore`.
+- **Patterns to follow:** `033_agent_shadows.sql` for foreign keys to `managed_conversations`; the shadow-child skip in `shouldPruneThreadConversation` and its tests in `shadows_test.go`; `queryScalar` and `execRows` for single statements.
+- **Test scenarios:**
+  - An empty conversation that is a person's current voice conversation survives `PruneStateBefore`; an empty conversation that is nobody's is still deleted in the same run.
+  - After the conversation is cleared from the row, the next `PruneStateBefore` deletes that empty conversation.
+  - Reading a person with no row returns the defaults: no conversation, empty agent and voice, transcript off.
+  - Recording a conversation twice for one person keeps the first and returns it both times.
+  - Clearing with an ID that is no longer current leaves the row; clearing with the current ID empties `conversation_id` and keeps agent, voice and transcript.
+  - Deleting the conversation empties `conversation_id` through `ON DELETE SET NULL` and keeps the other settings.
+  - Storing a voice, agent or transcript value for one person leaves every other person's row unchanged.
+- **Verification:** backend tests pass, and migrations apply on a fresh schema and on one already at `033`.
+
+### U13. `VoiceSettings` RPC
+
+- **Goal:** the browser reads and changes the person's voice conversation and settings through the server.
+- **Requirements:** R2, R4, R26, R27; KTD13
+- **Dependencies:** U12
+- **Files:**
+  - `internal/rocketclaw/web/proto/web.proto`
+  - `internal/rocketclaw/frontend/rpc/web.pb.go` (generated)
+  - `internal/rocketclaw/frontend/rpc/protocol.gen.go` (generated)
+  - `internal/rocketclaw/frontend/rpc/transport.go`
+  - `internal/rocketclaw/frontend/rpc/http.go`
+  - `internal/rocketclaw/frontend/rpc/server.go`
+  - `internal/rocketclaw/frontend/rpc/http_test.go`
+  - `internal/rocketclaw/frontend/rpc/voice_test.go`
+- **Approach:**
+  1. Add the request, response and action enum to `web.proto`. Register the unary method next to `CreateSession` in both method lists: the gRPC one in `transport.go` and the browser route one in `http.go`.
+  2. `httpInput` accepts an enum field only as `STEER`, `QUEUE` or `STASH`. Make it accept any value name of that field's own enum, so `action` passes and an unknown `delivery` is still refused.
+  3. The handler resolves `principal`, then runs the KTD13 action.
+  4. `START` and `UPDATE` reuse `createSession`'s agent-choice check rather than copying it.
+- **Patterns to follow:** `createSession` for principal, agent validation and `backend.CreateConversation`; the `fmt.Errorf("web …: %w", status.Error(...))` error style.
+- **Test scenarios:**
+  - `READ` for a person with no row returns no conversation and the default settings.
+  - `START` with no current conversation creates one with the picked agent and `CreatedBy` set to the caller, stores that agent, and `READ` then returns both.
+  - A second `START` from another device of the same person returns the same ID and creates nothing.
+  - `START` with an agent outside the caller's choices returns `InvalidArgument` and creates neither a conversation nor a row.
+  - `RESET` with the current ID makes the next `READ` show no conversation and keeps the agent, voice and transcript; the next `START` creates a different conversation, and the old one is still listed.
+  - `RESET` with an older ID, after another `START`, leaves the newer conversation current and returns it.
+  - `UPDATE` with a voice, then `READ` from another device of the same person, returns that voice; `UPDATE` with transcript on does the same for the transcript.
+  - `UPDATE` with a voice no route offers, or an agent outside the caller's choices, returns `InvalidArgument` and changes nothing.
+  - Two people get different conversations, and one person's `UPDATE` never changes the other's settings.
+  - The 2026-10-13 failure end to end: `START`, a call that admits no hand-off, `PruneStateBefore`, then a `Voice` call and a `Prompt` on the same ID both succeed.
+  - A caller with no identity gets the same `Unauthenticated` error as other RPCs.
+  - Through `NewHTTPHandler`, `POST /api/VoiceSettings` with `action: "START"` reaches the handler, and a `Prompt` with an unknown `delivery` is still refused with 400.
+- **Verification:** the protocol hash changes; rpc tests pass.
+
+### U14. Voice page and composer use the server's settings
+
+- **Goal:** no voice state lives in the browser; the Voice page and the composer follow the person's server-side settings.
+- **Requirements:** R2, R4, R26, R27; KTD15
+- **Dependencies:** U13
+- **Files:**
+  - `internal/rocketclaw/web/src/api.ts`
+  - `internal/rocketclaw/web/src/types.ts`
+  - `internal/rocketclaw/web/src/voice.ts`
+  - `internal/rocketclaw/web/src/ui.tsx`
+  - `internal/rocketclaw/web/src/voice.test.ts`
+  - `internal/rocketclaw/web/src/voice-page.browser.test.ts`
+  - the committed web bundle
+- **Approach:**
+  1. Add a `voiceSettings` query for `READ`, and mutations for `START`, `RESET` and `UPDATE`.
+  2. `VoiceCall` takes its conversation ID from the query, except during its own live call (KTD15). Start and Reset use the mutations and update the query's data with the returned row.
+  3. The agent picker, voice picker and transcript button call `UPDATE`; the composer's voice button reads the voice from the same query.
+  4. `voiceChoice` takes the person's voice from the query instead of browser storage, keeping its provider-default fallback (R27). Delete `rememberVoice`, `voiceKey`, the `storageKey` prop and the `voice:transcript` reads and writes.
+- **Patterns to follow:** the `queries` and `mutations` objects in `api.ts`; the existing stubbed `/api/*` routes in `voice-page.browser.test.ts`.
+- **Test scenarios:**
+  - With a current conversation on the server, the page shows its agent; Start sends `START`, gets that ID back, creates nothing, and calls on it.
+  - With none, Start sends `START` with the picked agent, then calls on the returned ID.
+  - A page still showing an ID that another device reset calls on the ID `START` returns, not the shown one.
+  - A refetch that returns a different or empty ID during a live call leaves the call running; the new ID shows once the call ends.
+  - A call that ended with an error keeps its error on screen, but a refetch shows the server's current ID.
+  - Start stays off until the person's settings load, so it cannot create a conversation with defaults that overwrite them.
+  - An `UPDATE` the server refuses puts the old value back and shows the error.
+  - `START` that finds a current conversation returns it, though another device resets it a moment later.
+  - Reset sends `RESET` with the shown ID; the next Start sends `START`.
+  - A `RESET` that returns another device's newer ID shows that conversation.
+  - Picking a voice sends `UPDATE`; after a reload, the page and the composer's voice button both use that voice.
+  - A person whose voice the agent's provider does not offer gets that provider's default voice on the Voice page and on the composer's button.
+  - The transcript button sends `UPDATE`, and a reload keeps the transcript shown; a long reply still turns the transcript on and stores it.
+  - Two people signed in one after the other in the same browser each see only their own conversation, agent, voice and transcript setting.
+  - The page never reads or writes `voice:<username>`, `voice:choice:<provider>` or `voice:transcript` in browser storage.
+  - Leaving the page while `START` is pending starts no call and never opens the microphone.
+- **Verification:** bun tests and browser tests pass; the bundle is rebuilt.
+
+### U17. One live call per person
+
+- **Goal:** a person's new call ends their older one anywhere, and never ends anyone else's.
+- **Requirements:** R20; KTD17
+- **Dependencies:** none
+- **Files:**
+  - `internal/rocketclaw/frontend/rpc/voice.go`
+  - `internal/rocketclaw/frontend/rpc/server.go` (the `voiceCalls` comment)
+  - `internal/rocketclaw/frontend/rpc/voice_test.go`
+- **Approach:** key the existing call map by username per KTD17; no new state.
+- **Patterns to follow:** the existing replace-and-remove logic around `voiceCalls` in `voice.go`, and its test in `voice_test.go`.
+- **Test scenarios:**
+  - One person starts a call on conversation A, then another on conversation B: the first stream gets an `ended` frame with reason replaced, and the second stays live.
+  - One person starts two calls on the same conversation: the first ends as replaced, as before.
+  - Two people start calls on the same conversation: both stay live, and each gets only replies to its own hand-offs.
+  - Two people start calls on different conversations: both stay live.
+  - After a person's call ends, their next call starts with nothing to replace.
+- **Verification:** rpc voice tests pass.
+
+### U15. Documentation for per-person voice conversation and settings
+
+- **Goal:** docs say the Voice page's conversation and voice settings follow the person, not the browser.
+- **Requirements:** R2, R4, R20, R25, R26, R27
+- **Dependencies:** U12-U14, U17
+- **Files:**
+  - `README.md`
+  - `internal/rocketclaw/web/README.md`
+  - `internal/rocketclaw/frontend/rpc/README.md`
+  - `CONCEPTS.md`
+- **Approach:**
+  1. Replace the three "remembered in this browser" statements in the web README's Voice section (conversation, voice choice, transcript) with the R2, R4, R26 and R27 behavior, including Reset on every device and one voice per person.
+  2. Replace the "one live call per conversation" statements in `README.md`, the web README and the Voice Session entry in `CONCEPTS.md` with R20: one live call per person.
+  3. Add the `VoiceSettings` RPC to the transport section.
+  4. Add a "Voice Settings" entry under Web Voice in `CONCEPTS.md`, covering the current voice conversation and its exemption from startup cleanup.
+- **Test expectation:** none — documentation only.
+- **Verification:** no doc says the Voice page's conversation, voice or transcript choice is per browser, per origin or per device.
+
 ---
 
 ## Verification Contract
 
 | Gate | Command | Applies to |
 |---|---|---|
-| Format | `gofmt` on touched Go files | U1-U6, U9-U11 |
-| Go tests | `go test ./...` from the repo root | U1-U6, U9-U11 |
+| Format | `gofmt` on touched Go files | U1-U6, U9-U13, U17 |
+| Go tests | `go test ./...` from the repo root | U1-U6, U9-U13, U17 |
 | Lint | `make lint` from the repo root | all code units |
 | Full test | `make test` from the repo root (coverage minimum 85.5%, Go and TS CLOC budgets) | all code units |
-| Web | `make test` in `internal/rocketclaw/web` | U7 |
-| Proto | `go generate ./frontend/rpc` from `internal/rocketclaw` with `protoc-gen-go` v1.36.12 | U3 |
+| Web | `make test` in `internal/rocketclaw/web` | U7, U14 |
+| Proto | `go generate ./frontend/rpc` from `internal/rocketclaw` with `protoc-gen-go` v1.36.12 | U3, U13 |
 | Review | the same three-model review on the final diff | all |
 | Live | API-key route call; phone call over the tsnet address with the reply heard | before merge |
+| Live restart | Start a voice call and end it before any hand-off, restart RocketClaw, then call again from the phone and from the desk on the same conversation, with the desk signed in under the phone's Tailscale login | U12-U14, after deploy |
+| Live multi-user | A second person opens the Voice page on their own device and gets their own conversation, voice and transcript setting; the first person's are unchanged. Both call at once and neither call ends. The first person then starts a call on the desk, which ends their phone call. | U12-U14, U17, after deploy |
 
 ---
 
 ## Definition of Done
 
-- R9-R12, R14, R16, R18, R19 and R21-R24 hold, each covered by a named test scenario or a live check.
+- R2, R4, R9-R12, R14, R16 and R18-R27 hold, each covered by a named test scenario or a live check.
 - All Verification Contract gates pass except the live checks, which the PR states as pending until done.
-- Go CLOC stays at or below 23,000, and TS at or below 7,250.
+- Go CLOC stays at or below 23,000 for U1-U11 and at or below 23,470 after U12-U17, under the 23,750 budget; TS stays at or below 7,250.
+- No web code reads or writes a voice conversation ID, voice choice or transcript setting in browser storage.
 - No defensive guards and no nil-as-disabled injected dependencies.
-- No new exported symbols beyond the WhoIs wrapper constructor and the `web.tsnet` config fields, including the runtime origin field.
+- No new exported symbols beyond the WhoIs wrapper constructor, the `web.tsnet` config fields including the runtime origin field, the generated `VoiceSettings` types, and the `SessionService` voice-settings methods that `rpc.Server` calls.
 - Removed behavior leaves no code, tests or docs behind:
   - timers;
   - progress;
@@ -639,4 +899,4 @@ These are planning choices, not owner-confirmed decisions.
   - `servedUser`;
   - forwarded metadata.
 - No secrets, SDP, transcripts or upstream bodies in logs or Sentry.
-- The fixes are squashed into the voice commit; the tab-test commit stays first.
+- U1-U11 are squashed into the voice commit, with the tab-test commit first. U12-U17 land as one commit on `main`, after any commits that fix problems carried over from `main`.

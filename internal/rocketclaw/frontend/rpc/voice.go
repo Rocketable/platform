@@ -60,6 +60,7 @@ type voiceTurn struct {
 type voiceSnapshot struct {
 	turns     []voiceTurn
 	questions []protocol.AskUserQuestionRequest
+	voice     map[string]bool // inputs any voice call handed off; another person's never supersede this call
 }
 
 // voiceLongReply is what the voice model hears instead of a reply too long to speak.
@@ -75,11 +76,56 @@ func voiceProvider(model string) string {
 	return name
 }
 
+// voiceSettings reads or changes the caller's voice settings and returns them.
+func (s *Server) voiceSettings(ctx context.Context, request *VoiceSettingsRequest) (*VoiceSettingsResponse, error) {
+	username, _, err := s.principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var settings backend.VoiceSettings
+
+	switch request.Action {
+	case VoiceSettingsAction_READ:
+	case VoiceSettingsAction_START:
+		// The conversation START finds is its answer, though another device resets it a moment later.
+		if settings, err = s.sessions.VoiceSettings(ctx, username); err != nil || settings.ConversationID != "" {
+			break
+		}
+
+		var created *CreateSessionResponse
+		if created, err = s.createSession(ctx, &CreateSessionRequest{Agent: request.GetAgent()}); err == nil {
+			err = s.sessions.StartVoiceConversation(ctx, username, created.Id, request.GetAgent())
+		}
+	case VoiceSettingsAction_RESET:
+		err = s.sessions.ResetVoiceConversation(ctx, username, request.ConversationId)
+	case VoiceSettingsAction_UPDATE:
+		var choices []string
+		if choices, err = s.agentChoices(ctx, ""); err == nil {
+			if request.Agent != nil && !slices.Contains(choices, *request.Agent) || request.Voice != nil && !slices.Contains(append(newCodexVoice().voices(), (&publicVoice{}).voices()...), *request.Voice) {
+				return nil, fmt.Errorf("web voice settings: %w", status.Error(codes.InvalidArgument, "select a loaded agent and an offered voice"))
+			}
+
+			err = s.sessions.UpdateVoiceSettings(ctx, username, request.Agent, request.Voice, request.Transcript)
+		}
+	}
+
+	if err == nil && settings.ConversationID == "" {
+		settings, err = s.sessions.VoiceSettings(ctx, username)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("web voice settings: %w", err)
+	}
+
+	return &VoiceSettingsResponse{ConversationId: settings.ConversationID, Agent: settings.Agent, Voice: settings.Voice, Transcript: settings.Transcript}, nil
+}
+
 // voice runs one call for exactly as long as the request lives.
 func (s *Server) voice(request *VoiceRequest, stream grpc.ServerStream) error {
 	ctx, id := stream.Context(), request.ConversationId
 
-	_, principal, err := s.principal(ctx)
+	username, principal, err := s.principal(ctx)
 	if err != nil {
 		return err
 	}
@@ -144,17 +190,17 @@ func (s *Server) voice(request *VoiceRequest, stream grpc.ServerStream) error {
 	own := &cancel
 
 	s.voiceMu.Lock()
-	if older := s.voiceCalls[id]; older != nil {
+	if older := s.voiceCalls[username]; older != nil {
 		(*older)(voiceEndError("replaced"))
 	}
 
-	s.voiceCalls[id] = own
+	s.voiceCalls[username] = own
 	s.voiceMu.Unlock()
 
 	defer func() {
 		s.voiceMu.Lock()
-		if s.voiceCalls[id] == own {
-			delete(s.voiceCalls, id)
+		if s.voiceCalls[username] == own {
+			delete(s.voiceCalls, username)
 		}
 		s.voiceMu.Unlock()
 	}()
@@ -475,7 +521,7 @@ func (c *voiceCall) update(snapshot voiceSnapshot) {
 
 	for _, turn := range snapshot.turns {
 		for _, id := range turn.inputs {
-			if !c.seen[id] {
+			if !c.seen[id] && !snapshot.voice[id] {
 				clear(live)
 
 				typed = typed || during && !c.inputs[id]
@@ -607,7 +653,7 @@ func (c *voiceCall) forward(ctx context.Context, snapshots chan<- voiceSnapshot)
 // snapshot reads the entries from entry from on, or the latest limit entries, and returns
 // where the read started.
 func (c *voiceCall) snapshot(ctx context.Context, root *os.Root, from int64, limit int) (voiceSnapshot, int64, error) {
-	var snapshot voiceSnapshot
+	snapshot := voiceSnapshot{voice: map[string]bool{}}
 
 	view, err := c.server.sessions.ObserveHistory(ctx, c.conversationID, "", from, 0, limit, &backend.HistoryInventory{})
 	if err != nil {
@@ -631,6 +677,7 @@ func (c *voiceCall) snapshot(ctx context.Context, root *os.Root, from int64, lim
 			switch {
 			case message.Role == "user" && message.Principal != "": // System notes carry no principal and never supersede voice.
 				turn.inputs = append(turn.inputs, message.InputId)
+				snapshot.voice[message.InputId] = strings.Contains(message.Header, " media=Voice")
 			case message.Role == "assistant" && message.Complete && !entry.Active: // A running turn's inputs still count.
 				turn.reply = message.Text
 			}

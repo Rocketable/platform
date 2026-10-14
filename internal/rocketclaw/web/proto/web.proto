@@ -491,6 +491,32 @@ message VoiceRequest {
   string voice = 3;
 }
 
+enum VoiceSettingsAction {
+  READ = 0;
+  // START returns the current voice conversation, creating one with agent when none is current.
+  START = 1;
+  // RESET forgets the current voice conversation while it is still conversation_id.
+  RESET = 2;
+  // UPDATE stores the agent, voice and transcript fields that are set.
+  UPDATE = 3;
+}
+
+message VoiceSettingsRequest {
+  VoiceSettingsAction action = 1;
+  string conversation_id = 2;
+  optional string agent = 3;
+  optional string voice = 4;
+  optional bool transcript = 5;
+}
+
+// VoiceSettingsResponse is the caller's voice settings; conversation_id is empty when none is current.
+message VoiceSettingsResponse {
+  string conversation_id = 1;
+  string agent = 2;
+  string voice = 3;
+  bool transcript = 4;
+}
+
 // The first event answers the browser's SDP offer; the last ends the call.
 // A notice in between reports a hand-off the agent could not accept; typed
 // says a typed message superseded voice, so the browser mutes the voice
@@ -526,6 +552,7 @@ service Web {
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
   rpc Join(JoinRequest) returns (stream ConversationChange);
   rpc Voice(VoiceRequest) returns (stream VoiceEvent);
+  rpc VoiceSettings(VoiceSettingsRequest) returns (VoiceSettingsResponse);
   rpc Prompt(PromptRequest) returns (PromptResponse);
   rpc ListCronJobs(ListCronJobsRequest) returns (ListCronJobsResponse);
   rpc RunCronJob(RunCronJobRequest) returns (RunCronJobResponse);

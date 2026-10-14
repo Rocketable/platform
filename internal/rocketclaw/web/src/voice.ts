@@ -57,18 +57,10 @@ export function useVoice() {
   return useSyncExternalStore(subscribeVoice, voiceView, voiceView);
 }
 
-// Each provider offers its own voices, so this browser remembers one choice per provider.
-const voiceKey = (agent: Agent) => `voice:choice:${agent.model?.includes("/") ? agent.model.split("/")[0] : "openai"}`;
-
-// voiceChoice is the voice remembered for the agent's provider while it still offers it, else its default.
-export function voiceChoice(agent?: Agent) {
+// voiceChoice is the person's voice while the agent's provider offers it, else the provider's default.
+export function voiceChoice(agent?: Agent, voice = "") {
   const voices = agent?.voices ?? [];
-  const saved = agent ? localStorage.getItem(voiceKey(agent)) : null;
-  return saved && voices.includes(saved) ? saved : voices[0] ?? "";
-}
-
-export function rememberVoice(agent: Agent, voice: string) {
-  localStorage.setItem(voiceKey(agent), voice);
+  return voices.includes(voice) ? voice : voices[0] ?? "";
 }
 
 // stopVoice hangs up this tab's call, or clears a shown error.

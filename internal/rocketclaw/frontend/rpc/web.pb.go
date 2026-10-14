@@ -70,6 +70,61 @@ func (PromptDelivery) EnumDescriptor() ([]byte, []int) {
 	return file_web_proto_rawDescGZIP(), []int{0}
 }
 
+type VoiceSettingsAction int32
+
+const (
+	VoiceSettingsAction_READ VoiceSettingsAction = 0
+	// START returns the current voice conversation, creating one with agent when none is current.
+	VoiceSettingsAction_START VoiceSettingsAction = 1
+	// RESET forgets the current voice conversation while it is still conversation_id.
+	VoiceSettingsAction_RESET VoiceSettingsAction = 2
+	// UPDATE stores the agent, voice and transcript fields that are set.
+	VoiceSettingsAction_UPDATE VoiceSettingsAction = 3
+)
+
+// Enum value maps for VoiceSettingsAction.
+var (
+	VoiceSettingsAction_name = map[int32]string{
+		0: "READ",
+		1: "START",
+		2: "RESET",
+		3: "UPDATE",
+	}
+	VoiceSettingsAction_value = map[string]int32{
+		"READ":   0,
+		"START":  1,
+		"RESET":  2,
+		"UPDATE": 3,
+	}
+)
+
+func (x VoiceSettingsAction) Enum() *VoiceSettingsAction {
+	p := new(VoiceSettingsAction)
+	*p = x
+	return p
+}
+
+func (x VoiceSettingsAction) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (VoiceSettingsAction) Descriptor() protoreflect.EnumDescriptor {
+	return file_web_proto_enumTypes[1].Descriptor()
+}
+
+func (VoiceSettingsAction) Type() protoreflect.EnumType {
+	return &file_web_proto_enumTypes[1]
+}
+
+func (x VoiceSettingsAction) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use VoiceSettingsAction.Descriptor instead.
+func (VoiceSettingsAction) EnumDescriptor() ([]byte, []int) {
+	return file_web_proto_rawDescGZIP(), []int{1}
+}
+
 type ListSessionsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -4869,6 +4924,151 @@ func (x *VoiceRequest) GetVoice() string {
 	return ""
 }
 
+type VoiceSettingsRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Action         VoiceSettingsAction    `protobuf:"varint,1,opt,name=action,proto3,enum=rpc.VoiceSettingsAction" json:"action,omitempty"`
+	ConversationId string                 `protobuf:"bytes,2,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
+	Agent          *string                `protobuf:"bytes,3,opt,name=agent,proto3,oneof" json:"agent,omitempty"`
+	Voice          *string                `protobuf:"bytes,4,opt,name=voice,proto3,oneof" json:"voice,omitempty"`
+	Transcript     *bool                  `protobuf:"varint,5,opt,name=transcript,proto3,oneof" json:"transcript,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *VoiceSettingsRequest) Reset() {
+	*x = VoiceSettingsRequest{}
+	mi := &file_web_proto_msgTypes[79]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VoiceSettingsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VoiceSettingsRequest) ProtoMessage() {}
+
+func (x *VoiceSettingsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_web_proto_msgTypes[79]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VoiceSettingsRequest.ProtoReflect.Descriptor instead.
+func (*VoiceSettingsRequest) Descriptor() ([]byte, []int) {
+	return file_web_proto_rawDescGZIP(), []int{79}
+}
+
+func (x *VoiceSettingsRequest) GetAction() VoiceSettingsAction {
+	if x != nil {
+		return x.Action
+	}
+	return VoiceSettingsAction_READ
+}
+
+func (x *VoiceSettingsRequest) GetConversationId() string {
+	if x != nil {
+		return x.ConversationId
+	}
+	return ""
+}
+
+func (x *VoiceSettingsRequest) GetAgent() string {
+	if x != nil && x.Agent != nil {
+		return *x.Agent
+	}
+	return ""
+}
+
+func (x *VoiceSettingsRequest) GetVoice() string {
+	if x != nil && x.Voice != nil {
+		return *x.Voice
+	}
+	return ""
+}
+
+func (x *VoiceSettingsRequest) GetTranscript() bool {
+	if x != nil && x.Transcript != nil {
+		return *x.Transcript
+	}
+	return false
+}
+
+// VoiceSettingsResponse is the caller's voice settings; conversation_id is empty when none is current.
+type VoiceSettingsResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ConversationId string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
+	Agent          string                 `protobuf:"bytes,2,opt,name=agent,proto3" json:"agent,omitempty"`
+	Voice          string                 `protobuf:"bytes,3,opt,name=voice,proto3" json:"voice,omitempty"`
+	Transcript     bool                   `protobuf:"varint,4,opt,name=transcript,proto3" json:"transcript,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *VoiceSettingsResponse) Reset() {
+	*x = VoiceSettingsResponse{}
+	mi := &file_web_proto_msgTypes[80]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VoiceSettingsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VoiceSettingsResponse) ProtoMessage() {}
+
+func (x *VoiceSettingsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_web_proto_msgTypes[80]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VoiceSettingsResponse.ProtoReflect.Descriptor instead.
+func (*VoiceSettingsResponse) Descriptor() ([]byte, []int) {
+	return file_web_proto_rawDescGZIP(), []int{80}
+}
+
+func (x *VoiceSettingsResponse) GetConversationId() string {
+	if x != nil {
+		return x.ConversationId
+	}
+	return ""
+}
+
+func (x *VoiceSettingsResponse) GetAgent() string {
+	if x != nil {
+		return x.Agent
+	}
+	return ""
+}
+
+func (x *VoiceSettingsResponse) GetVoice() string {
+	if x != nil {
+		return x.Voice
+	}
+	return ""
+}
+
+func (x *VoiceSettingsResponse) GetTranscript() bool {
+	if x != nil {
+		return x.Transcript
+	}
+	return false
+}
+
 // The first event answers the browser's SDP offer; the last ends the call.
 // A notice in between reports a hand-off the agent could not accept; typed
 // says a typed message superseded voice, so the browser mutes the voice
@@ -4892,7 +5092,7 @@ type VoiceEvent struct {
 
 func (x *VoiceEvent) Reset() {
 	*x = VoiceEvent{}
-	mi := &file_web_proto_msgTypes[79]
+	mi := &file_web_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4904,7 +5104,7 @@ func (x *VoiceEvent) String() string {
 func (*VoiceEvent) ProtoMessage() {}
 
 func (x *VoiceEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[79]
+	mi := &file_web_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4917,7 +5117,7 @@ func (x *VoiceEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VoiceEvent.ProtoReflect.Descriptor instead.
 func (*VoiceEvent) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{79}
+	return file_web_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *VoiceEvent) GetEvent() isVoiceEvent_Event {
@@ -5032,7 +5232,7 @@ type VoiceAnswer struct {
 
 func (x *VoiceAnswer) Reset() {
 	*x = VoiceAnswer{}
-	mi := &file_web_proto_msgTypes[80]
+	mi := &file_web_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5044,7 +5244,7 @@ func (x *VoiceAnswer) String() string {
 func (*VoiceAnswer) ProtoMessage() {}
 
 func (x *VoiceAnswer) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[80]
+	mi := &file_web_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5057,7 +5257,7 @@ func (x *VoiceAnswer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VoiceAnswer.ProtoReflect.Descriptor instead.
 func (*VoiceAnswer) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{80}
+	return file_web_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *VoiceAnswer) GetSdp() string {
@@ -5084,7 +5284,7 @@ type VoiceEnded struct {
 
 func (x *VoiceEnded) Reset() {
 	*x = VoiceEnded{}
-	mi := &file_web_proto_msgTypes[81]
+	mi := &file_web_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5096,7 +5296,7 @@ func (x *VoiceEnded) String() string {
 func (*VoiceEnded) ProtoMessage() {}
 
 func (x *VoiceEnded) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[81]
+	mi := &file_web_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5109,7 +5309,7 @@ func (x *VoiceEnded) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VoiceEnded.ProtoReflect.Descriptor instead.
 func (*VoiceEnded) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{81}
+	return file_web_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *VoiceEnded) GetReason() string {
@@ -5473,7 +5673,25 @@ const file_web_proto_rawDesc = "" +
 	"\fVoiceRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x10\n" +
 	"\x03sdp\x18\x02 \x01(\tR\x03sdp\x12\x14\n" +
-	"\x05voice\x18\x03 \x01(\tR\x05voice\"\xda\x01\n" +
+	"\x05voice\x18\x03 \x01(\tR\x05voice\"\xef\x01\n" +
+	"\x14VoiceSettingsRequest\x120\n" +
+	"\x06action\x18\x01 \x01(\x0e2\x18.rpc.VoiceSettingsActionR\x06action\x12'\n" +
+	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12\x19\n" +
+	"\x05agent\x18\x03 \x01(\tH\x00R\x05agent\x88\x01\x01\x12\x19\n" +
+	"\x05voice\x18\x04 \x01(\tH\x01R\x05voice\x88\x01\x01\x12#\n" +
+	"\n" +
+	"transcript\x18\x05 \x01(\bH\x02R\n" +
+	"transcript\x88\x01\x01B\b\n" +
+	"\x06_agentB\b\n" +
+	"\x06_voiceB\r\n" +
+	"\v_transcript\"\x8c\x01\n" +
+	"\x15VoiceSettingsResponse\x12'\n" +
+	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x14\n" +
+	"\x05agent\x18\x02 \x01(\tR\x05agent\x12\x14\n" +
+	"\x05voice\x18\x03 \x01(\tR\x05voice\x12\x1e\n" +
+	"\n" +
+	"transcript\x18\x04 \x01(\bR\n" +
+	"transcript\"\xda\x01\n" +
 	"\n" +
 	"VoiceEvent\x12*\n" +
 	"\x06answer\x18\x01 \x01(\v2\x10.rpc.VoiceAnswerH\x00R\x06answer\x12'\n" +
@@ -5492,14 +5710,21 @@ const file_web_proto_rawDesc = "" +
 	"\x0ePromptDelivery\x12\t\n" +
 	"\x05STEER\x10\x00\x12\t\n" +
 	"\x05QUEUE\x10\x01\x12\t\n" +
-	"\x05STASH\x10\x022\x94\x12\n" +
+	"\x05STASH\x10\x02*A\n" +
+	"\x13VoiceSettingsAction\x12\b\n" +
+	"\x04READ\x10\x00\x12\t\n" +
+	"\x05START\x10\x01\x12\t\n" +
+	"\x05RESET\x10\x02\x12\n" +
+	"\n" +
+	"\x06UPDATE\x10\x032\xdc\x12\n" +
 	"\x03Web\x126\n" +
 	"\x10UploadAttachment\x12\x0f.rpc.Attachment\x1a\x0f.rpc.Attachment(\x01\x128\n" +
 	"\x12DownloadAttachment\x12\x0f.rpc.Attachment\x1a\x0f.rpc.Attachment0\x01\x12E\n" +
 	"\fListSessions\x12\x18.rpc.ListSessionsRequest\x1a\x19.rpc.ListSessionsResponse0\x01\x12F\n" +
 	"\rCreateSession\x12\x19.rpc.CreateSessionRequest\x1a\x1a.rpc.CreateSessionResponse\x123\n" +
 	"\x04Join\x12\x10.rpc.JoinRequest\x1a\x17.rpc.ConversationChange0\x01\x12-\n" +
-	"\x05Voice\x12\x11.rpc.VoiceRequest\x1a\x0f.rpc.VoiceEvent0\x01\x121\n" +
+	"\x05Voice\x12\x11.rpc.VoiceRequest\x1a\x0f.rpc.VoiceEvent0\x01\x12F\n" +
+	"\rVoiceSettings\x12\x19.rpc.VoiceSettingsRequest\x1a\x1a.rpc.VoiceSettingsResponse\x121\n" +
 	"\x06Prompt\x12\x12.rpc.PromptRequest\x1a\x13.rpc.PromptResponse\x12C\n" +
 	"\fListCronJobs\x12\x18.rpc.ListCronJobsRequest\x1a\x19.rpc.ListCronJobsResponse\x12=\n" +
 	"\n" +
@@ -5547,202 +5772,208 @@ func file_web_proto_rawDescGZIP() []byte {
 	return file_web_proto_rawDescData
 }
 
-var file_web_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_web_proto_msgTypes = make([]protoimpl.MessageInfo, 83)
+var file_web_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_web_proto_msgTypes = make([]protoimpl.MessageInfo, 85)
 var file_web_proto_goTypes = []any{
 	(PromptDelivery)(0),                  // 0: rpc.PromptDelivery
-	(*ListSessionsRequest)(nil),          // 1: rpc.ListSessionsRequest
-	(*Session)(nil),                      // 2: rpc.Session
-	(*HistoryRequest)(nil),               // 3: rpc.HistoryRequest
-	(*HistoryResponse)(nil),              // 4: rpc.HistoryResponse
-	(*ShadowBinding)(nil),                // 5: rpc.ShadowBinding
-	(*ShadowTurn)(nil),                   // 6: rpc.ShadowTurn
-	(*PendingQuestion)(nil),              // 7: rpc.PendingQuestion
-	(*QuestionOption)(nil),               // 8: rpc.QuestionOption
-	(*BackgroundJob)(nil),                // 9: rpc.BackgroundJob
-	(*StageRevertRequest)(nil),           // 10: rpc.StageRevertRequest
-	(*StageRevertResponse)(nil),          // 11: rpc.StageRevertResponse
-	(*ClearRevertRequest)(nil),           // 12: rpc.ClearRevertRequest
-	(*ClearRevertResponse)(nil),          // 13: rpc.ClearRevertResponse
-	(*ListSessionsResponse)(nil),         // 14: rpc.ListSessionsResponse
-	(*CreateSessionRequest)(nil),         // 15: rpc.CreateSessionRequest
-	(*CreateSessionResponse)(nil),        // 16: rpc.CreateSessionResponse
-	(*ForkSessionRequest)(nil),           // 17: rpc.ForkSessionRequest
-	(*ForkSessionResponse)(nil),          // 18: rpc.ForkSessionResponse
-	(*SearchMessagesRequest)(nil),        // 19: rpc.SearchMessagesRequest
-	(*MessageMatch)(nil),                 // 20: rpc.MessageMatch
-	(*SearchMessagesResponse)(nil),       // 21: rpc.SearchMessagesResponse
-	(*SearchSessionsRequest)(nil),        // 22: rpc.SearchSessionsRequest
-	(*SearchTerm)(nil),                   // 23: rpc.SearchTerm
-	(*SessionMatch)(nil),                 // 24: rpc.SessionMatch
-	(*SearchSessionsResponse)(nil),       // 25: rpc.SearchSessionsResponse
-	(*SlackNamesRequest)(nil),            // 26: rpc.SlackNamesRequest
-	(*SlackNamesResponse)(nil),           // 27: rpc.SlackNamesResponse
-	(*HandoffRequest)(nil),               // 28: rpc.HandoffRequest
-	(*HandoffResponse)(nil),              // 29: rpc.HandoffResponse
-	(*JoinRequest)(nil),                  // 30: rpc.JoinRequest
-	(*ConversationChange)(nil),           // 31: rpc.ConversationChange
-	(*TranscriptEvent)(nil),              // 32: rpc.TranscriptEvent
-	(*Attachment)(nil),                   // 33: rpc.Attachment
-	(*PromptRequest)(nil),                // 34: rpc.PromptRequest
-	(*PromptResponse)(nil),               // 35: rpc.PromptResponse
-	(*CronJob)(nil),                      // 36: rpc.CronJob
-	(*Agent)(nil),                        // 37: rpc.Agent
-	(*ListAgentsRequest)(nil),            // 38: rpc.ListAgentsRequest
-	(*ListAgentsResponse)(nil),           // 39: rpc.ListAgentsResponse
-	(*Skill)(nil),                        // 40: rpc.Skill
-	(*ListSkillsRequest)(nil),            // 41: rpc.ListSkillsRequest
-	(*ListSkillsResponse)(nil),           // 42: rpc.ListSkillsResponse
-	(*Workflow)(nil),                     // 43: rpc.Workflow
-	(*ListWorkflowsRequest)(nil),         // 44: rpc.ListWorkflowsRequest
-	(*ListWorkflowsResponse)(nil),        // 45: rpc.ListWorkflowsResponse
-	(*ListCronJobsRequest)(nil),          // 46: rpc.ListCronJobsRequest
-	(*ListCronJobsResponse)(nil),         // 47: rpc.ListCronJobsResponse
-	(*RunCronJobRequest)(nil),            // 48: rpc.RunCronJobRequest
-	(*RunCronJobResponse)(nil),           // 49: rpc.RunCronJobResponse
-	(*AnswerQuestionRequest)(nil),        // 50: rpc.AnswerQuestionRequest
-	(*AnswerQuestionResponse)(nil),       // 51: rpc.AnswerQuestionResponse
-	(*ConfigModel)(nil),                  // 52: rpc.ConfigModel
-	(*ConfigChannel)(nil),                // 53: rpc.ConfigChannel
-	(*ConfigView)(nil),                   // 54: rpc.ConfigView
-	(*ListConfigRequest)(nil),            // 55: rpc.ListConfigRequest
-	(*ListConfigResponse)(nil),           // 56: rpc.ListConfigResponse
-	(*UpdateSessionRequest)(nil),         // 57: rpc.UpdateSessionRequest
-	(*UpdateSessionResponse)(nil),        // 58: rpc.UpdateSessionResponse
-	(*ProtocolRequest)(nil),              // 59: rpc.ProtocolRequest
-	(*ProtocolResponse)(nil),             // 60: rpc.ProtocolResponse
-	(*QueueItem)(nil),                    // 61: rpc.QueueItem
-	(*ListQueueRequest)(nil),             // 62: rpc.ListQueueRequest
-	(*ListQueueResponse)(nil),            // 63: rpc.ListQueueResponse
-	(*QueueItemRequest)(nil),             // 64: rpc.QueueItemRequest
-	(*QueueItemResponse)(nil),            // 65: rpc.QueueItemResponse
-	(*ReorderQueueRequest)(nil),          // 66: rpc.ReorderQueueRequest
-	(*MoveToBackgroundRequest)(nil),      // 67: rpc.MoveToBackgroundRequest
-	(*MoveToBackgroundResponse)(nil),     // 68: rpc.MoveToBackgroundResponse
-	(*StopBackgroundJobRequest)(nil),     // 69: rpc.StopBackgroundJobRequest
-	(*StopBackgroundJobResponse)(nil),    // 70: rpc.StopBackgroundJobResponse
-	(*SessionEntriesRequest)(nil),        // 71: rpc.SessionEntriesRequest
-	(*SessionEntryMeta)(nil),             // 72: rpc.SessionEntryMeta
-	(*ListSessionEntriesResponse)(nil),   // 73: rpc.ListSessionEntriesResponse
-	(*SessionEntryData)(nil),             // 74: rpc.SessionEntryData
-	(*LoadSessionEntriesResponse)(nil),   // 75: rpc.LoadSessionEntriesResponse
-	(*DeleteSessionEntriesResponse)(nil), // 76: rpc.DeleteSessionEntriesResponse
-	(*IdentityRequest)(nil),              // 77: rpc.IdentityRequest
-	(*IdentityResponse)(nil),             // 78: rpc.IdentityResponse
-	(*VoiceRequest)(nil),                 // 79: rpc.VoiceRequest
-	(*VoiceEvent)(nil),                   // 80: rpc.VoiceEvent
-	(*VoiceAnswer)(nil),                  // 81: rpc.VoiceAnswer
-	(*VoiceEnded)(nil),                   // 82: rpc.VoiceEnded
-	nil,                                  // 83: rpc.SlackNamesResponse.NamesEntry
+	(VoiceSettingsAction)(0),             // 1: rpc.VoiceSettingsAction
+	(*ListSessionsRequest)(nil),          // 2: rpc.ListSessionsRequest
+	(*Session)(nil),                      // 3: rpc.Session
+	(*HistoryRequest)(nil),               // 4: rpc.HistoryRequest
+	(*HistoryResponse)(nil),              // 5: rpc.HistoryResponse
+	(*ShadowBinding)(nil),                // 6: rpc.ShadowBinding
+	(*ShadowTurn)(nil),                   // 7: rpc.ShadowTurn
+	(*PendingQuestion)(nil),              // 8: rpc.PendingQuestion
+	(*QuestionOption)(nil),               // 9: rpc.QuestionOption
+	(*BackgroundJob)(nil),                // 10: rpc.BackgroundJob
+	(*StageRevertRequest)(nil),           // 11: rpc.StageRevertRequest
+	(*StageRevertResponse)(nil),          // 12: rpc.StageRevertResponse
+	(*ClearRevertRequest)(nil),           // 13: rpc.ClearRevertRequest
+	(*ClearRevertResponse)(nil),          // 14: rpc.ClearRevertResponse
+	(*ListSessionsResponse)(nil),         // 15: rpc.ListSessionsResponse
+	(*CreateSessionRequest)(nil),         // 16: rpc.CreateSessionRequest
+	(*CreateSessionResponse)(nil),        // 17: rpc.CreateSessionResponse
+	(*ForkSessionRequest)(nil),           // 18: rpc.ForkSessionRequest
+	(*ForkSessionResponse)(nil),          // 19: rpc.ForkSessionResponse
+	(*SearchMessagesRequest)(nil),        // 20: rpc.SearchMessagesRequest
+	(*MessageMatch)(nil),                 // 21: rpc.MessageMatch
+	(*SearchMessagesResponse)(nil),       // 22: rpc.SearchMessagesResponse
+	(*SearchSessionsRequest)(nil),        // 23: rpc.SearchSessionsRequest
+	(*SearchTerm)(nil),                   // 24: rpc.SearchTerm
+	(*SessionMatch)(nil),                 // 25: rpc.SessionMatch
+	(*SearchSessionsResponse)(nil),       // 26: rpc.SearchSessionsResponse
+	(*SlackNamesRequest)(nil),            // 27: rpc.SlackNamesRequest
+	(*SlackNamesResponse)(nil),           // 28: rpc.SlackNamesResponse
+	(*HandoffRequest)(nil),               // 29: rpc.HandoffRequest
+	(*HandoffResponse)(nil),              // 30: rpc.HandoffResponse
+	(*JoinRequest)(nil),                  // 31: rpc.JoinRequest
+	(*ConversationChange)(nil),           // 32: rpc.ConversationChange
+	(*TranscriptEvent)(nil),              // 33: rpc.TranscriptEvent
+	(*Attachment)(nil),                   // 34: rpc.Attachment
+	(*PromptRequest)(nil),                // 35: rpc.PromptRequest
+	(*PromptResponse)(nil),               // 36: rpc.PromptResponse
+	(*CronJob)(nil),                      // 37: rpc.CronJob
+	(*Agent)(nil),                        // 38: rpc.Agent
+	(*ListAgentsRequest)(nil),            // 39: rpc.ListAgentsRequest
+	(*ListAgentsResponse)(nil),           // 40: rpc.ListAgentsResponse
+	(*Skill)(nil),                        // 41: rpc.Skill
+	(*ListSkillsRequest)(nil),            // 42: rpc.ListSkillsRequest
+	(*ListSkillsResponse)(nil),           // 43: rpc.ListSkillsResponse
+	(*Workflow)(nil),                     // 44: rpc.Workflow
+	(*ListWorkflowsRequest)(nil),         // 45: rpc.ListWorkflowsRequest
+	(*ListWorkflowsResponse)(nil),        // 46: rpc.ListWorkflowsResponse
+	(*ListCronJobsRequest)(nil),          // 47: rpc.ListCronJobsRequest
+	(*ListCronJobsResponse)(nil),         // 48: rpc.ListCronJobsResponse
+	(*RunCronJobRequest)(nil),            // 49: rpc.RunCronJobRequest
+	(*RunCronJobResponse)(nil),           // 50: rpc.RunCronJobResponse
+	(*AnswerQuestionRequest)(nil),        // 51: rpc.AnswerQuestionRequest
+	(*AnswerQuestionResponse)(nil),       // 52: rpc.AnswerQuestionResponse
+	(*ConfigModel)(nil),                  // 53: rpc.ConfigModel
+	(*ConfigChannel)(nil),                // 54: rpc.ConfigChannel
+	(*ConfigView)(nil),                   // 55: rpc.ConfigView
+	(*ListConfigRequest)(nil),            // 56: rpc.ListConfigRequest
+	(*ListConfigResponse)(nil),           // 57: rpc.ListConfigResponse
+	(*UpdateSessionRequest)(nil),         // 58: rpc.UpdateSessionRequest
+	(*UpdateSessionResponse)(nil),        // 59: rpc.UpdateSessionResponse
+	(*ProtocolRequest)(nil),              // 60: rpc.ProtocolRequest
+	(*ProtocolResponse)(nil),             // 61: rpc.ProtocolResponse
+	(*QueueItem)(nil),                    // 62: rpc.QueueItem
+	(*ListQueueRequest)(nil),             // 63: rpc.ListQueueRequest
+	(*ListQueueResponse)(nil),            // 64: rpc.ListQueueResponse
+	(*QueueItemRequest)(nil),             // 65: rpc.QueueItemRequest
+	(*QueueItemResponse)(nil),            // 66: rpc.QueueItemResponse
+	(*ReorderQueueRequest)(nil),          // 67: rpc.ReorderQueueRequest
+	(*MoveToBackgroundRequest)(nil),      // 68: rpc.MoveToBackgroundRequest
+	(*MoveToBackgroundResponse)(nil),     // 69: rpc.MoveToBackgroundResponse
+	(*StopBackgroundJobRequest)(nil),     // 70: rpc.StopBackgroundJobRequest
+	(*StopBackgroundJobResponse)(nil),    // 71: rpc.StopBackgroundJobResponse
+	(*SessionEntriesRequest)(nil),        // 72: rpc.SessionEntriesRequest
+	(*SessionEntryMeta)(nil),             // 73: rpc.SessionEntryMeta
+	(*ListSessionEntriesResponse)(nil),   // 74: rpc.ListSessionEntriesResponse
+	(*SessionEntryData)(nil),             // 75: rpc.SessionEntryData
+	(*LoadSessionEntriesResponse)(nil),   // 76: rpc.LoadSessionEntriesResponse
+	(*DeleteSessionEntriesResponse)(nil), // 77: rpc.DeleteSessionEntriesResponse
+	(*IdentityRequest)(nil),              // 78: rpc.IdentityRequest
+	(*IdentityResponse)(nil),             // 79: rpc.IdentityResponse
+	(*VoiceRequest)(nil),                 // 80: rpc.VoiceRequest
+	(*VoiceSettingsRequest)(nil),         // 81: rpc.VoiceSettingsRequest
+	(*VoiceSettingsResponse)(nil),        // 82: rpc.VoiceSettingsResponse
+	(*VoiceEvent)(nil),                   // 83: rpc.VoiceEvent
+	(*VoiceAnswer)(nil),                  // 84: rpc.VoiceAnswer
+	(*VoiceEnded)(nil),                   // 85: rpc.VoiceEnded
+	nil,                                  // 86: rpc.SlackNamesResponse.NamesEntry
 }
 var file_web_proto_depIdxs = []int32{
-	32, // 0: rpc.HistoryResponse.messages:type_name -> rpc.TranscriptEvent
-	9,  // 1: rpc.HistoryResponse.background_jobs:type_name -> rpc.BackgroundJob
-	7,  // 2: rpc.HistoryResponse.pending_questions:type_name -> rpc.PendingQuestion
-	5,  // 3: rpc.HistoryResponse.shadows:type_name -> rpc.ShadowBinding
-	6,  // 4: rpc.ShadowBinding.turns:type_name -> rpc.ShadowTurn
-	8,  // 5: rpc.PendingQuestion.options:type_name -> rpc.QuestionOption
-	32, // 6: rpc.StageRevertResponse.prompt:type_name -> rpc.TranscriptEvent
-	2,  // 7: rpc.ListSessionsResponse.sessions:type_name -> rpc.Session
-	32, // 8: rpc.ForkSessionResponse.prompt:type_name -> rpc.TranscriptEvent
-	32, // 9: rpc.MessageMatch.message:type_name -> rpc.TranscriptEvent
-	20, // 10: rpc.SearchMessagesResponse.matches:type_name -> rpc.MessageMatch
-	23, // 11: rpc.SearchSessionsResponse.terms:type_name -> rpc.SearchTerm
-	24, // 12: rpc.SearchSessionsResponse.matches:type_name -> rpc.SessionMatch
-	20, // 13: rpc.SearchSessionsResponse.messages:type_name -> rpc.MessageMatch
-	83, // 14: rpc.SlackNamesResponse.names:type_name -> rpc.SlackNamesResponse.NamesEntry
-	33, // 15: rpc.TranscriptEvent.attachments:type_name -> rpc.Attachment
-	9,  // 16: rpc.TranscriptEvent.completion_notes:type_name -> rpc.BackgroundJob
+	33, // 0: rpc.HistoryResponse.messages:type_name -> rpc.TranscriptEvent
+	10, // 1: rpc.HistoryResponse.background_jobs:type_name -> rpc.BackgroundJob
+	8,  // 2: rpc.HistoryResponse.pending_questions:type_name -> rpc.PendingQuestion
+	6,  // 3: rpc.HistoryResponse.shadows:type_name -> rpc.ShadowBinding
+	7,  // 4: rpc.ShadowBinding.turns:type_name -> rpc.ShadowTurn
+	9,  // 5: rpc.PendingQuestion.options:type_name -> rpc.QuestionOption
+	33, // 6: rpc.StageRevertResponse.prompt:type_name -> rpc.TranscriptEvent
+	3,  // 7: rpc.ListSessionsResponse.sessions:type_name -> rpc.Session
+	33, // 8: rpc.ForkSessionResponse.prompt:type_name -> rpc.TranscriptEvent
+	33, // 9: rpc.MessageMatch.message:type_name -> rpc.TranscriptEvent
+	21, // 10: rpc.SearchMessagesResponse.matches:type_name -> rpc.MessageMatch
+	24, // 11: rpc.SearchSessionsResponse.terms:type_name -> rpc.SearchTerm
+	25, // 12: rpc.SearchSessionsResponse.matches:type_name -> rpc.SessionMatch
+	21, // 13: rpc.SearchSessionsResponse.messages:type_name -> rpc.MessageMatch
+	86, // 14: rpc.SlackNamesResponse.names:type_name -> rpc.SlackNamesResponse.NamesEntry
+	34, // 15: rpc.TranscriptEvent.attachments:type_name -> rpc.Attachment
+	10, // 16: rpc.TranscriptEvent.completion_notes:type_name -> rpc.BackgroundJob
 	0,  // 17: rpc.PromptRequest.delivery:type_name -> rpc.PromptDelivery
-	37, // 18: rpc.ListAgentsResponse.agents:type_name -> rpc.Agent
-	40, // 19: rpc.ListSkillsResponse.skills:type_name -> rpc.Skill
-	43, // 20: rpc.ListWorkflowsResponse.workflows:type_name -> rpc.Workflow
-	36, // 21: rpc.ListCronJobsResponse.jobs:type_name -> rpc.CronJob
-	52, // 22: rpc.ConfigView.models:type_name -> rpc.ConfigModel
-	53, // 23: rpc.ConfigView.slack_channels:type_name -> rpc.ConfigChannel
-	54, // 24: rpc.ListConfigResponse.config:type_name -> rpc.ConfigView
-	33, // 25: rpc.QueueItem.attachments:type_name -> rpc.Attachment
+	38, // 18: rpc.ListAgentsResponse.agents:type_name -> rpc.Agent
+	41, // 19: rpc.ListSkillsResponse.skills:type_name -> rpc.Skill
+	44, // 20: rpc.ListWorkflowsResponse.workflows:type_name -> rpc.Workflow
+	37, // 21: rpc.ListCronJobsResponse.jobs:type_name -> rpc.CronJob
+	53, // 22: rpc.ConfigView.models:type_name -> rpc.ConfigModel
+	54, // 23: rpc.ConfigView.slack_channels:type_name -> rpc.ConfigChannel
+	55, // 24: rpc.ListConfigResponse.config:type_name -> rpc.ConfigView
+	34, // 25: rpc.QueueItem.attachments:type_name -> rpc.Attachment
 	0,  // 26: rpc.QueueItem.delivery:type_name -> rpc.PromptDelivery
-	61, // 27: rpc.ListQueueResponse.items:type_name -> rpc.QueueItem
-	72, // 28: rpc.ListSessionEntriesResponse.entries:type_name -> rpc.SessionEntryMeta
-	74, // 29: rpc.LoadSessionEntriesResponse.entries:type_name -> rpc.SessionEntryData
-	81, // 30: rpc.VoiceEvent.answer:type_name -> rpc.VoiceAnswer
-	82, // 31: rpc.VoiceEvent.ended:type_name -> rpc.VoiceEnded
-	33, // 32: rpc.Web.UploadAttachment:input_type -> rpc.Attachment
-	33, // 33: rpc.Web.DownloadAttachment:input_type -> rpc.Attachment
-	1,  // 34: rpc.Web.ListSessions:input_type -> rpc.ListSessionsRequest
-	15, // 35: rpc.Web.CreateSession:input_type -> rpc.CreateSessionRequest
-	30, // 36: rpc.Web.Join:input_type -> rpc.JoinRequest
-	79, // 37: rpc.Web.Voice:input_type -> rpc.VoiceRequest
-	34, // 38: rpc.Web.Prompt:input_type -> rpc.PromptRequest
-	46, // 39: rpc.Web.ListCronJobs:input_type -> rpc.ListCronJobsRequest
-	48, // 40: rpc.Web.RunCronJob:input_type -> rpc.RunCronJobRequest
-	50, // 41: rpc.Web.AnswerQuestion:input_type -> rpc.AnswerQuestionRequest
-	3,  // 42: rpc.Web.History:input_type -> rpc.HistoryRequest
-	17, // 43: rpc.Web.ForkSession:input_type -> rpc.ForkSessionRequest
-	10, // 44: rpc.Web.StageRevert:input_type -> rpc.StageRevertRequest
-	12, // 45: rpc.Web.ClearRevert:input_type -> rpc.ClearRevertRequest
-	19, // 46: rpc.Web.SearchMessages:input_type -> rpc.SearchMessagesRequest
-	22, // 47: rpc.Web.SearchSessions:input_type -> rpc.SearchSessionsRequest
-	26, // 48: rpc.Web.SlackNames:input_type -> rpc.SlackNamesRequest
-	28, // 49: rpc.Web.Handoff:input_type -> rpc.HandoffRequest
-	38, // 50: rpc.Web.ListAgents:input_type -> rpc.ListAgentsRequest
-	41, // 51: rpc.Web.ListSkills:input_type -> rpc.ListSkillsRequest
-	44, // 52: rpc.Web.ListWorkflows:input_type -> rpc.ListWorkflowsRequest
-	55, // 53: rpc.Web.ListConfig:input_type -> rpc.ListConfigRequest
-	57, // 54: rpc.Web.UpdateSession:input_type -> rpc.UpdateSessionRequest
-	59, // 55: rpc.Web.Protocol:input_type -> rpc.ProtocolRequest
-	77, // 56: rpc.Web.Identity:input_type -> rpc.IdentityRequest
-	62, // 57: rpc.Web.ListQueue:input_type -> rpc.ListQueueRequest
-	64, // 58: rpc.Web.RemoveQueueItem:input_type -> rpc.QueueItemRequest
-	64, // 59: rpc.Web.SteerQueueItem:input_type -> rpc.QueueItemRequest
-	64, // 60: rpc.Web.PopQueueItem:input_type -> rpc.QueueItemRequest
-	66, // 61: rpc.Web.ReorderQueue:input_type -> rpc.ReorderQueueRequest
-	67, // 62: rpc.Web.MoveToBackground:input_type -> rpc.MoveToBackgroundRequest
-	69, // 63: rpc.Web.StopBackgroundJob:input_type -> rpc.StopBackgroundJobRequest
-	71, // 64: rpc.Web.ListSessionEntries:input_type -> rpc.SessionEntriesRequest
-	71, // 65: rpc.Web.LoadSessionEntries:input_type -> rpc.SessionEntriesRequest
-	71, // 66: rpc.Web.DeleteSessionEntries:input_type -> rpc.SessionEntriesRequest
-	33, // 67: rpc.Web.UploadAttachment:output_type -> rpc.Attachment
-	33, // 68: rpc.Web.DownloadAttachment:output_type -> rpc.Attachment
-	14, // 69: rpc.Web.ListSessions:output_type -> rpc.ListSessionsResponse
-	16, // 70: rpc.Web.CreateSession:output_type -> rpc.CreateSessionResponse
-	31, // 71: rpc.Web.Join:output_type -> rpc.ConversationChange
-	80, // 72: rpc.Web.Voice:output_type -> rpc.VoiceEvent
-	35, // 73: rpc.Web.Prompt:output_type -> rpc.PromptResponse
-	47, // 74: rpc.Web.ListCronJobs:output_type -> rpc.ListCronJobsResponse
-	49, // 75: rpc.Web.RunCronJob:output_type -> rpc.RunCronJobResponse
-	51, // 76: rpc.Web.AnswerQuestion:output_type -> rpc.AnswerQuestionResponse
-	4,  // 77: rpc.Web.History:output_type -> rpc.HistoryResponse
-	18, // 78: rpc.Web.ForkSession:output_type -> rpc.ForkSessionResponse
-	11, // 79: rpc.Web.StageRevert:output_type -> rpc.StageRevertResponse
-	13, // 80: rpc.Web.ClearRevert:output_type -> rpc.ClearRevertResponse
-	21, // 81: rpc.Web.SearchMessages:output_type -> rpc.SearchMessagesResponse
-	25, // 82: rpc.Web.SearchSessions:output_type -> rpc.SearchSessionsResponse
-	27, // 83: rpc.Web.SlackNames:output_type -> rpc.SlackNamesResponse
-	29, // 84: rpc.Web.Handoff:output_type -> rpc.HandoffResponse
-	39, // 85: rpc.Web.ListAgents:output_type -> rpc.ListAgentsResponse
-	42, // 86: rpc.Web.ListSkills:output_type -> rpc.ListSkillsResponse
-	45, // 87: rpc.Web.ListWorkflows:output_type -> rpc.ListWorkflowsResponse
-	56, // 88: rpc.Web.ListConfig:output_type -> rpc.ListConfigResponse
-	58, // 89: rpc.Web.UpdateSession:output_type -> rpc.UpdateSessionResponse
-	60, // 90: rpc.Web.Protocol:output_type -> rpc.ProtocolResponse
-	78, // 91: rpc.Web.Identity:output_type -> rpc.IdentityResponse
-	63, // 92: rpc.Web.ListQueue:output_type -> rpc.ListQueueResponse
-	65, // 93: rpc.Web.RemoveQueueItem:output_type -> rpc.QueueItemResponse
-	65, // 94: rpc.Web.SteerQueueItem:output_type -> rpc.QueueItemResponse
-	65, // 95: rpc.Web.PopQueueItem:output_type -> rpc.QueueItemResponse
-	65, // 96: rpc.Web.ReorderQueue:output_type -> rpc.QueueItemResponse
-	68, // 97: rpc.Web.MoveToBackground:output_type -> rpc.MoveToBackgroundResponse
-	70, // 98: rpc.Web.StopBackgroundJob:output_type -> rpc.StopBackgroundJobResponse
-	73, // 99: rpc.Web.ListSessionEntries:output_type -> rpc.ListSessionEntriesResponse
-	75, // 100: rpc.Web.LoadSessionEntries:output_type -> rpc.LoadSessionEntriesResponse
-	76, // 101: rpc.Web.DeleteSessionEntries:output_type -> rpc.DeleteSessionEntriesResponse
-	67, // [67:102] is the sub-list for method output_type
-	32, // [32:67] is the sub-list for method input_type
-	32, // [32:32] is the sub-list for extension type_name
-	32, // [32:32] is the sub-list for extension extendee
-	0,  // [0:32] is the sub-list for field type_name
+	62, // 27: rpc.ListQueueResponse.items:type_name -> rpc.QueueItem
+	73, // 28: rpc.ListSessionEntriesResponse.entries:type_name -> rpc.SessionEntryMeta
+	75, // 29: rpc.LoadSessionEntriesResponse.entries:type_name -> rpc.SessionEntryData
+	1,  // 30: rpc.VoiceSettingsRequest.action:type_name -> rpc.VoiceSettingsAction
+	84, // 31: rpc.VoiceEvent.answer:type_name -> rpc.VoiceAnswer
+	85, // 32: rpc.VoiceEvent.ended:type_name -> rpc.VoiceEnded
+	34, // 33: rpc.Web.UploadAttachment:input_type -> rpc.Attachment
+	34, // 34: rpc.Web.DownloadAttachment:input_type -> rpc.Attachment
+	2,  // 35: rpc.Web.ListSessions:input_type -> rpc.ListSessionsRequest
+	16, // 36: rpc.Web.CreateSession:input_type -> rpc.CreateSessionRequest
+	31, // 37: rpc.Web.Join:input_type -> rpc.JoinRequest
+	80, // 38: rpc.Web.Voice:input_type -> rpc.VoiceRequest
+	81, // 39: rpc.Web.VoiceSettings:input_type -> rpc.VoiceSettingsRequest
+	35, // 40: rpc.Web.Prompt:input_type -> rpc.PromptRequest
+	47, // 41: rpc.Web.ListCronJobs:input_type -> rpc.ListCronJobsRequest
+	49, // 42: rpc.Web.RunCronJob:input_type -> rpc.RunCronJobRequest
+	51, // 43: rpc.Web.AnswerQuestion:input_type -> rpc.AnswerQuestionRequest
+	4,  // 44: rpc.Web.History:input_type -> rpc.HistoryRequest
+	18, // 45: rpc.Web.ForkSession:input_type -> rpc.ForkSessionRequest
+	11, // 46: rpc.Web.StageRevert:input_type -> rpc.StageRevertRequest
+	13, // 47: rpc.Web.ClearRevert:input_type -> rpc.ClearRevertRequest
+	20, // 48: rpc.Web.SearchMessages:input_type -> rpc.SearchMessagesRequest
+	23, // 49: rpc.Web.SearchSessions:input_type -> rpc.SearchSessionsRequest
+	27, // 50: rpc.Web.SlackNames:input_type -> rpc.SlackNamesRequest
+	29, // 51: rpc.Web.Handoff:input_type -> rpc.HandoffRequest
+	39, // 52: rpc.Web.ListAgents:input_type -> rpc.ListAgentsRequest
+	42, // 53: rpc.Web.ListSkills:input_type -> rpc.ListSkillsRequest
+	45, // 54: rpc.Web.ListWorkflows:input_type -> rpc.ListWorkflowsRequest
+	56, // 55: rpc.Web.ListConfig:input_type -> rpc.ListConfigRequest
+	58, // 56: rpc.Web.UpdateSession:input_type -> rpc.UpdateSessionRequest
+	60, // 57: rpc.Web.Protocol:input_type -> rpc.ProtocolRequest
+	78, // 58: rpc.Web.Identity:input_type -> rpc.IdentityRequest
+	63, // 59: rpc.Web.ListQueue:input_type -> rpc.ListQueueRequest
+	65, // 60: rpc.Web.RemoveQueueItem:input_type -> rpc.QueueItemRequest
+	65, // 61: rpc.Web.SteerQueueItem:input_type -> rpc.QueueItemRequest
+	65, // 62: rpc.Web.PopQueueItem:input_type -> rpc.QueueItemRequest
+	67, // 63: rpc.Web.ReorderQueue:input_type -> rpc.ReorderQueueRequest
+	68, // 64: rpc.Web.MoveToBackground:input_type -> rpc.MoveToBackgroundRequest
+	70, // 65: rpc.Web.StopBackgroundJob:input_type -> rpc.StopBackgroundJobRequest
+	72, // 66: rpc.Web.ListSessionEntries:input_type -> rpc.SessionEntriesRequest
+	72, // 67: rpc.Web.LoadSessionEntries:input_type -> rpc.SessionEntriesRequest
+	72, // 68: rpc.Web.DeleteSessionEntries:input_type -> rpc.SessionEntriesRequest
+	34, // 69: rpc.Web.UploadAttachment:output_type -> rpc.Attachment
+	34, // 70: rpc.Web.DownloadAttachment:output_type -> rpc.Attachment
+	15, // 71: rpc.Web.ListSessions:output_type -> rpc.ListSessionsResponse
+	17, // 72: rpc.Web.CreateSession:output_type -> rpc.CreateSessionResponse
+	32, // 73: rpc.Web.Join:output_type -> rpc.ConversationChange
+	83, // 74: rpc.Web.Voice:output_type -> rpc.VoiceEvent
+	82, // 75: rpc.Web.VoiceSettings:output_type -> rpc.VoiceSettingsResponse
+	36, // 76: rpc.Web.Prompt:output_type -> rpc.PromptResponse
+	48, // 77: rpc.Web.ListCronJobs:output_type -> rpc.ListCronJobsResponse
+	50, // 78: rpc.Web.RunCronJob:output_type -> rpc.RunCronJobResponse
+	52, // 79: rpc.Web.AnswerQuestion:output_type -> rpc.AnswerQuestionResponse
+	5,  // 80: rpc.Web.History:output_type -> rpc.HistoryResponse
+	19, // 81: rpc.Web.ForkSession:output_type -> rpc.ForkSessionResponse
+	12, // 82: rpc.Web.StageRevert:output_type -> rpc.StageRevertResponse
+	14, // 83: rpc.Web.ClearRevert:output_type -> rpc.ClearRevertResponse
+	22, // 84: rpc.Web.SearchMessages:output_type -> rpc.SearchMessagesResponse
+	26, // 85: rpc.Web.SearchSessions:output_type -> rpc.SearchSessionsResponse
+	28, // 86: rpc.Web.SlackNames:output_type -> rpc.SlackNamesResponse
+	30, // 87: rpc.Web.Handoff:output_type -> rpc.HandoffResponse
+	40, // 88: rpc.Web.ListAgents:output_type -> rpc.ListAgentsResponse
+	43, // 89: rpc.Web.ListSkills:output_type -> rpc.ListSkillsResponse
+	46, // 90: rpc.Web.ListWorkflows:output_type -> rpc.ListWorkflowsResponse
+	57, // 91: rpc.Web.ListConfig:output_type -> rpc.ListConfigResponse
+	59, // 92: rpc.Web.UpdateSession:output_type -> rpc.UpdateSessionResponse
+	61, // 93: rpc.Web.Protocol:output_type -> rpc.ProtocolResponse
+	79, // 94: rpc.Web.Identity:output_type -> rpc.IdentityResponse
+	64, // 95: rpc.Web.ListQueue:output_type -> rpc.ListQueueResponse
+	66, // 96: rpc.Web.RemoveQueueItem:output_type -> rpc.QueueItemResponse
+	66, // 97: rpc.Web.SteerQueueItem:output_type -> rpc.QueueItemResponse
+	66, // 98: rpc.Web.PopQueueItem:output_type -> rpc.QueueItemResponse
+	66, // 99: rpc.Web.ReorderQueue:output_type -> rpc.QueueItemResponse
+	69, // 100: rpc.Web.MoveToBackground:output_type -> rpc.MoveToBackgroundResponse
+	71, // 101: rpc.Web.StopBackgroundJob:output_type -> rpc.StopBackgroundJobResponse
+	74, // 102: rpc.Web.ListSessionEntries:output_type -> rpc.ListSessionEntriesResponse
+	76, // 103: rpc.Web.LoadSessionEntries:output_type -> rpc.LoadSessionEntriesResponse
+	77, // 104: rpc.Web.DeleteSessionEntries:output_type -> rpc.DeleteSessionEntriesResponse
+	69, // [69:105] is the sub-list for method output_type
+	33, // [33:69] is the sub-list for method input_type
+	33, // [33:33] is the sub-list for extension type_name
+	33, // [33:33] is the sub-list for extension extendee
+	0,  // [0:33] is the sub-list for field type_name
 }
 
 func init() { file_web_proto_init() }
@@ -5752,7 +5983,8 @@ func file_web_proto_init() {
 	}
 	file_web_proto_msgTypes[31].OneofWrappers = []any{}
 	file_web_proto_msgTypes[56].OneofWrappers = []any{}
-	file_web_proto_msgTypes[79].OneofWrappers = []any{
+	file_web_proto_msgTypes[79].OneofWrappers = []any{}
+	file_web_proto_msgTypes[81].OneofWrappers = []any{
 		(*VoiceEvent_Answer)(nil),
 		(*VoiceEvent_Ended)(nil),
 		(*VoiceEvent_Notice)(nil),
@@ -5765,8 +5997,8 @@ func file_web_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_web_proto_rawDesc), len(file_web_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   83,
+			NumEnums:      2,
+			NumMessages:   85,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

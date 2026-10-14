@@ -19,6 +19,8 @@ export type SearchSessionsResponse = { terms: { key: string; text: string; start
 export type SessionBatch = { sessions: Session[]; owner: string; upstreamSuccess: boolean; summariesComplete: boolean };
 export type AgentChoices = { agents: Agent[]; currentAgent: string };
 export type CronJob = { stem: string; status: string; lastRun: string; nextRun: string; schedule?: string; body?: string; agent?: string; channel?: string; upcoming?: string[]; origin?: string };
+// VoiceSettings is the signed-in person's voice state, kept by the server; conversationId is empty when none is current.
+export type VoiceSettings = { conversationId: string; agent: string; voice: string; transcript: boolean };
 // voices are the call voices its provider offers, the default first.
 export type Agent = { name: string; model?: string; reasoning?: string; description?: string; verbosity?: string; prompt?: string; permissions?: string; origin?: string; customShell?: string; voices?: string[] };
 export type Skill = { name: string; description?: string; license?: string; compatibility?: string; content?: string; origin?: string };

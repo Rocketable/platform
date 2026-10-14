@@ -1754,8 +1754,9 @@ func slackStateKeyTime(key string) (time.Time, bool) {
 
 func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, conversationID string, cutoff time.Time) (bool, error) {
 	var bound bool
-	if err := queryScalar(ctx, db, "read retention ownership", `SELECT EXISTS (SELECT 1 FROM shadow_bindings WHERE child_conversation_id = $1)`, &bound, conversationID); err != nil || bound {
-		return false, err // Children expire only with their explicitly recorded owner.
+	if err := queryScalar(ctx, db, "read retention ownership", `SELECT EXISTS (SELECT 1 FROM shadow_bindings WHERE child_conversation_id = $1)
+    OR EXISTS (SELECT 1 FROM voice_settings WHERE conversation_id = $1)`, &bound, conversationID); err != nil || bound {
+		return false, err // Children expire only with their explicitly recorded owner; a current voice conversation, only after Reset.
 	}
 
 	pending, err := conversationHasPendingWork(ctx, db, conversationID)

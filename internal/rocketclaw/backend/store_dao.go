@@ -215,6 +215,54 @@ func (s *SessionService) Thread(conversationID string) (ThreadState, bool, error
 	return thread, true, nil
 }
 
+// VoiceSettings is one person's Web voice state: their current voice conversation
+// (empty when none), the agent for their next one, their voice, and the transcript view.
+type VoiceSettings struct {
+	ConversationID string
+	Agent          string
+	Voice          string
+	Transcript     bool
+}
+
+// VoiceSettings returns username's voice settings, or the defaults when none are stored.
+func (s *SessionService) VoiceSettings(ctx context.Context, username string) (VoiceSettings, error) {
+	var settings VoiceSettings
+
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(conversation_id, ''), agent, voice, transcript FROM voice_settings WHERE username = $1`, username).Scan(&settings.ConversationID, &settings.Agent, &settings.Voice, &settings.Transcript)
+	if errors.Is(err, sql.ErrNoRows) {
+		return VoiceSettings{}, nil
+	}
+
+	if err != nil {
+		return VoiceSettings{}, fmt.Errorf("read voice settings: %w", err)
+	}
+
+	return settings, nil
+}
+
+// StartVoiceConversation makes conversationID, started with agent, username's current
+// voice conversation unless one is already current; the current one then wins.
+func (s *SessionService) StartVoiceConversation(ctx context.Context, username, conversationID, agent string) error {
+	_, err := execState(ctx, s.db, "start voice conversation", `INSERT INTO voice_settings (username, conversation_id, agent) VALUES ($1, $2, $3)
+ON CONFLICT (username) DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent WHERE voice_settings.conversation_id IS NULL`, username, conversationID, agent)
+
+	return err
+}
+
+// ResetVoiceConversation forgets username's current voice conversation while it is still conversationID.
+func (s *SessionService) ResetVoiceConversation(ctx context.Context, username, conversationID string) error {
+	_, err := execState(ctx, s.db, "reset voice conversation", `UPDATE voice_settings SET conversation_id = NULL WHERE username = $1 AND conversation_id = $2`, username, conversationID)
+	return err
+}
+
+// UpdateVoiceSettings stores the given settings for username; a nil one keeps its value.
+func (s *SessionService) UpdateVoiceSettings(ctx context.Context, username string, agent, voice *string, transcript *bool) error {
+	_, err := execState(ctx, s.db, "update voice settings", `INSERT INTO voice_settings (username, agent, voice, transcript) VALUES ($1, COALESCE($2, ''), COALESCE($3, ''), COALESCE($4, FALSE))
+ON CONFLICT (username) DO UPDATE SET agent = COALESCE($2, voice_settings.agent), voice = COALESCE($3, voice_settings.voice), transcript = COALESCE($4, voice_settings.transcript)`, username, agent, voice, transcript)
+
+	return err
+}
+
 // SetThreadAgentIfExists updates a managed conversation agent without creating a thread.
 func (s *SessionService) SetThreadAgentIfExists(conversationID, agent string) (bool, error) {
 	rows, err := execRows(context.Background(), s.db, "update managed conversation agent", "count managed conversation agent update", `UPDATE managed_conversations SET agent = $1 WHERE conversation_id = $2`, strings.TrimSpace(agent), strings.TrimSpace(conversationID))
