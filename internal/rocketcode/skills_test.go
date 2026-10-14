@@ -21,7 +21,34 @@ func mapFile(data string) *fstest.MapFile {
 	return &fstest.MapFile{Data: []byte(data), Mode: 0, ModTime: time.Time{}, Sys: nil}
 }
 
+func BenchmarkLoadSkill(b *testing.B) {
+	fsys := fstest.MapFS{"example/SKILL.md": mapFile("---\nname: example\ndescription: Review a change\n---\n" + strings.Repeat("Check the change and its tests.\n", 100))}
+	for b.Loop() {
+		_, err := loadSkill(fsys, "example/SKILL.md")
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestLoadSkills(t *testing.T) {
+	t.Run("preserves body bytes after frontmatter", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, input, content string
+		}{
+			{"unicode", "---\nname: example\ndescription: café\n---\nRésumé\n", "Résumé\n"},
+			{"crlf", "---\r\nname: example\r\ndescription: Example\r\n---\r\nBody\r\n", "Body\r\n"},
+			{"empty", "---\nname: example\ndescription: Example\n---", ""},
+			{"raw bytes", "---\nname: example\ndescription: Example\n---\n\xff\x00", "\xff\x00"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				result := LoadSkills(fstest.MapFS{"example/SKILL.md": mapFile(tc.input)}, "skills")
+				require.Empty(t, result.Errors)
+				require.Equal(t, tc.content, result.Skills.Items["example"].Content)
+			})
+		}
+	})
+
 	t.Run("loads multiple valid skills from nested directories", func(t *testing.T) {
 		fsys := fstest.MapFS{
 			"git-release/SKILL.md": mapFile(`---
@@ -66,12 +93,25 @@ Use for docs.
 	})
 
 	t.Run("reports files missing frontmatter", func(t *testing.T) {
-		result := LoadSkills(fstest.MapFS{"bad-skill/SKILL.md": mapFile("# Missing frontmatter\n")}, "/tmp/skills")
+		content := "# Missing frontmatter\n" + strings.Repeat("x", 64<<10)
+		fsys := fstest.MapFS{"bad-skill/SKILL.md": mapFile(content)}
+
+		var result SkillLoadResult
+
+		cost := testing.Benchmark(func(b *testing.B) {
+			b.Helper()
+
+			for b.Loop() {
+				result = LoadSkills(fsys, "skills")
+			}
+		})
 
 		require.Empty(t, result.Skills.Items)
 		require.Equal(t, []string{"bad-skill"}, result.Skills.Dirs)
 		require.Len(t, result.Errors, 1)
 		require.Equal(t, `bad-skill/SKILL.md: missing YAML frontmatter`, result.Errors[0].Error())
+		// Allow the file read and loader overhead, but not another full-file copy.
+		require.Less(t, cost.AllocedBytesPerOp(), int64(len(content)*3/2))
 	})
 
 	t.Run("reports invalid YAML frontmatter", func(t *testing.T) {
