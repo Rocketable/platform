@@ -266,6 +266,30 @@ func testShellTempConfig(t *testing.T, root *os.Root, outputDir string) shellTem
 	return config
 }
 
+func TestResolveBashPath(t *testing.T) {
+	for _, tt := range []struct{ home, arg, want string }{
+		{"/home/person", "~", "/home/person"},
+		{"/home/person", "~/file", "/home/person/file"},
+		{"/home/person", "~//file", "/home/person/file"},
+		{"/home/person", "~/../file", "/home/file"},
+		{"/home/person", "~person/file", "/workspace/~person/file"},
+		{"/", "~", "/"},
+		{"/", "~/file", "/file"},
+		{"relative/home", "~", "relative/home"},
+		{"relative/home", "~/file", "relative/home/file"},
+		{"", "~", "/workspace/~"},
+		{"", "~/file", "/workspace/~/file"},
+		{"", "file", "/workspace/file"},
+		{"", "/file", "/file"},
+		{"", "", "/workspace"},
+	} {
+		t.Run(tt.home+"/"+tt.arg, func(t *testing.T) {
+			t.Setenv("HOME", tt.home)
+			require.Equal(t, tt.want, resolveBashPath("/workspace", tt.arg))
+		})
+	}
+}
+
 func TestShellCommandOverride(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)

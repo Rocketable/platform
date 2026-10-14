@@ -434,15 +434,9 @@ func unquoteShellArg(arg string) string {
 }
 
 func resolveBashPath(hostDir, arg string) string {
-	if strings.HasPrefix(arg, "~/") {
+	if arg == "~" || strings.HasPrefix(arg, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Clean(filepath.Join(home, arg[2:]))
-		}
-	}
-
-	if arg == "~" {
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Clean(home)
+			return filepath.Join(home, strings.TrimPrefix(arg, "~"))
 		}
 	}
 
