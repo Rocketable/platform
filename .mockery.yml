@@ -23,6 +23,12 @@ packages:
             pkgname: rpc
             structname: mockFrontendAssembler
             inpackage: false
+      runtimeReloader:
+        config:
+          structname: runtimeReloaderMock
+      externalMCPAgents:
+        config:
+          structname: externalMCPAgentsMock
       SlackFrontend:
         configs:
           - structname: slackFrontendMock

@@ -43,7 +43,7 @@ func Listen(socketPath string) (net.Listener, error) {
 func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	desc := grpc.ServiceDesc{ServiceName: "rpc.Web", HandlerType: (*any)(nil), Metadata: "web.proto"}
 
-	for _, method := range []string{"Protocol", "Identity", "Prompt", "History", "ForkSession", "StageRevert", "ClearRevert", "SearchMessages", "SearchSessions", "SlackNames", "Handoff", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "ListWorkflows", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "ReorderQueue", "MoveToBackground", "StopBackgroundJob", "AnswerQuestion", "VoiceSettings"} {
+	for _, method := range []string{"Protocol", "Identity", "Reload", "Prompt", "History", "ForkSession", "StageRevert", "ClearRevert", "SearchMessages", "SearchSessions", "SlackNames", "Handoff", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "ListWorkflows", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "ReorderQueue", "MoveToBackground", "StopBackgroundJob", "AnswerQuestion", "VoiceSettings"} {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 
@@ -95,6 +95,8 @@ func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 
 func (s *Server) webCall(ctx context.Context, method string, request any) (any, error) {
 	switch method {
+	case "Reload":
+		return s.reload(ctx, request.(*ReloadRequest))
 	case "ListCronJobs":
 		return s.listCronJobs(ctx)
 	case "RunCronJob":
@@ -110,12 +112,7 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 	case "ListAgents":
 		return s.listAgents(ctx, request.(*ListAgentsRequest).ConversationId)
 	case "Identity":
-		username, principal, err := s.principal(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		return &IdentityResponse{Username: username, Principal: principal}, nil
+		return s.identity(ctx)
 	case "CreateSession":
 		return s.createSession(ctx, request.(*CreateSessionRequest))
 	case "VoiceSettings":
@@ -159,6 +156,28 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 	default: // Protocol negotiates the schema, not a browser principal.
 		return &ProtocolResponse{ProtoSha256: protoSHA256}, nil
 	}
+}
+
+func (s *Server) identity(ctx context.Context) (*IdentityResponse, error) {
+	username, principal, err := s.principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &IdentityResponse{Username: username, Principal: principal}, nil
+}
+
+func (s *Server) reload(ctx context.Context, request *ReloadRequest) (*ReloadResponse, error) {
+	if _, _, err := s.principal(ctx); err != nil {
+		return nil, err
+	}
+
+	message, err := s.backend.Reload(request.Reason)
+	if err != nil {
+		return nil, fmt.Errorf("web reload: %w", err)
+	}
+
+	return &ReloadResponse{Message: message}, nil
 }
 
 // historyRPC answers the History RPC: the transcript page plus the conversation's Background

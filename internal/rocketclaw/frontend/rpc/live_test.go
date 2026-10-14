@@ -416,6 +416,71 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
 	require.Error(t, err, "authentication is checked before mutation")
 }
 
+func TestReloadRealBackendBrowser(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	root, err := os.OpenRoot(cfg.Workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.Mkdir("agents", 0o700))
+
+	const agent = "---\ndescription: Reload fixture\nmodel: test-model\n---\n"
+	require.NoError(t, root.WriteFile("agents/main.md", []byte(agent+"Original prompt\n"), 0o600))
+	ctx, cancel := context.WithCancel(t.Context())
+	ready := make(chan *backend.Runtime)
+	assembly := &mockFrontendAssembler{AssembleFunc: func(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+		ready <- rt
+		return nil, rt.RunCtx.Done(), nil, nil // Public assembler permits absent Slack.
+	}, ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil }}
+
+	var running errgroup.Group
+	running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly) })
+	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
+
+	rt := <-ready
+	updated := agent + "Updated prompt\n"
+	require.NoError(t, root.WriteFile("agents/main.md", []byte(updated), 0o600))
+	require.NoError(t, root.WriteFile("rocketclaw.json", []byte("invalid config"), 0o600))
+	listener, err := Listen(testSocketPath(t))
+	require.NoError(t, err)
+
+	transport := grpc.NewServer()
+	New(rt, rt.Sessions, rt.Cfg, &mockChannels{}, &mockCronJobs{JobsFunc: func() ([]cronfrontend.Job, error) { return nil, nil }}).Register(transport)
+
+	var serving errgroup.Group
+	serving.Go(func() error { return transport.Serve(listener) })
+	t.Cleanup(func() { transport.Stop(); require.NoError(t, serving.Wait()) })
+
+	connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+
+	handler := NewHTTPHandler(connection, cfg.Web.Sentry)
+	request := httptest.NewRequest(http.MethodPost, "/api/Reload", strings.NewReader(`{"reason":"updated assets"}`))
+	request.RemoteAddr = "192.0.2.1:1234"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	require.Equal(t, http.StatusUnauthorized, response.Code)
+
+	live, err := root.ReadFile(cfg.RuntimeDirName() + "/agents/main.md")
+	require.NoError(t, err)
+	require.Equal(t, agent+"Original prompt\n", string(live))
+
+	httpServer := httptest.NewServer(handler)
+	t.Cleanup(httpServer.Close)
+	runWebTest(t, "src/reload-transport.test.ts", "ROCKETCLAW_RELOAD_TEST_URL="+httpServer.URL)
+
+	live, err = root.ReadFile(cfg.RuntimeDirName() + "/agents/main.md")
+	require.NoError(t, err)
+	require.Equal(t, updated, string(live))
+
+	conversations, err := rt.ListConversations(ctx)
+	require.NoError(t, err)
+	require.Empty(t, conversations, "reload starts no agent turn or conversation")
+	require.NoError(t, rt.RunCtx.Err(), "reload does not request process shutdown")
+}
+
 func TestRevertRealBackendBrowser(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)

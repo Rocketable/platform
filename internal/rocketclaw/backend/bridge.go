@@ -96,7 +96,7 @@ const (
 type Config struct {
 	ConversationID, Agent, ManagedConversationID, ExternalConversationID string
 	RequestRestart                                                       func(string) (string, error)
-	RequestReload                                                        func(string) (string, error)
+	RequestReload                                                        runtimeReloader
 	UserQuestionAsker                                                    protocol.UserQuestionAsker
 	StartNewThread                                                       func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadResult, error)
 	SessionService                                                       *SessionService
@@ -2805,16 +2805,16 @@ func restartTool(requestRestart func(string) (string, error)) rocketcode.Tool {
 	}}
 }
 
-func reloadTool(requestReload func(string) (string, error)) rocketcode.Tool {
+func reloadTool(requestReload runtimeReloader) rocketcode.Tool {
 	return rocketcode.Tool{Name: reloadToolName, Description: "Reload rocketclaw runtime assets after changing agents/, skills/, cron/, scripts/, or already-configured overlay repository content. The reason field must explain what runtime assets changed. This validates staged runtime assets before changing the live runtime. It does not reread rocketclaw.json or femtoclaw.json; adding, removing, or changing configured overlay entries requires rocketclaw_restart.", Permission: "rocketclaw", VisibilitySubjects: []string{reloadToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{reloadToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		reason, err := parseReasonArg(raw, "reload")
 		if err != nil {
 			return rocketcode.ToolResult{}, err
 		}
 
-		output, err := requestReload(reason)
+		output, err := requestReload.Reload(reason)
 		if err != nil {
-			return rocketcode.TextToolResult("rocketclaw_reload failed; live runtime assets were not changed:\n\n" + err.Error()), nil
+			return rocketcode.TextToolResult("rocketclaw_reload failed:\n\n" + err.Error()), nil
 		}
 
 		return rocketcode.TextToolResult(output), nil

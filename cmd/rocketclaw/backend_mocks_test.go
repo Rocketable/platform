@@ -59,6 +59,9 @@ var _ frontend.Backend = &BackendMock{}
 //			QueueItemsFunc: func(s string) ([]protocol.ThreadQueueItem, error) {
 //				panic("mock out the QueueItems method")
 //			},
+//			ReloadFunc: func(s string) (string, error) {
+//				panic("mock out the Reload method")
+//			},
 //			ReorderQueueItemsFunc: func(s string, strings []string) error {
 //				panic("mock out the ReorderQueueItems method")
 //			},
@@ -131,6 +134,9 @@ type BackendMock struct {
 
 	// QueueItemsFunc mocks the QueueItems method.
 	QueueItemsFunc func(s string) ([]protocol.ThreadQueueItem, error)
+
+	// ReloadFunc mocks the Reload method.
+	ReloadFunc func(s string) (string, error)
 
 	// ReorderQueueItemsFunc mocks the ReorderQueueItems method.
 	ReorderQueueItemsFunc func(s string, strings []string) error
@@ -256,6 +262,11 @@ type BackendMock struct {
 			// S is the s argument value.
 			S string
 		}
+		// Reload holds details about calls to the Reload method.
+		Reload []struct {
+			// S is the s argument value.
+			S string
+		}
 		// ReorderQueueItems holds details about calls to the ReorderQueueItems method.
 		ReorderQueueItems []struct {
 			// S is the s argument value.
@@ -343,6 +354,7 @@ type BackendMock struct {
 	lockPopQueueItem            sync.RWMutex
 	lockPromoteQueueItem        sync.RWMutex
 	lockQueueItems              sync.RWMutex
+	lockReload                  sync.RWMutex
 	lockReorderQueueItems       sync.RWMutex
 	lockRunTurn                 sync.RWMutex
 	lockStageRevert             sync.RWMutex
@@ -800,6 +812,38 @@ func (mock *BackendMock) QueueItemsCalls() []struct {
 	mock.lockQueueItems.RLock()
 	calls = mock.calls.QueueItems
 	mock.lockQueueItems.RUnlock()
+	return calls
+}
+
+// Reload calls ReloadFunc.
+func (mock *BackendMock) Reload(s string) (string, error) {
+	if mock.ReloadFunc == nil {
+		panic("BackendMock.ReloadFunc: method is nil but Backend.Reload was just called")
+	}
+	callInfo := struct {
+		S string
+	}{
+		S: s,
+	}
+	mock.lockReload.Lock()
+	mock.calls.Reload = append(mock.calls.Reload, callInfo)
+	mock.lockReload.Unlock()
+	return mock.ReloadFunc(s)
+}
+
+// ReloadCalls gets all the calls that were made to Reload.
+// Check the length with:
+//
+//	len(mockedBackend.ReloadCalls())
+func (mock *BackendMock) ReloadCalls() []struct {
+	S string
+} {
+	var calls []struct {
+		S string
+	}
+	mock.lockReload.RLock()
+	calls = mock.calls.Reload
+	mock.lockReload.RUnlock()
 	return calls
 }
 

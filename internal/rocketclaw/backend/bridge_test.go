@@ -311,13 +311,13 @@ func TestRestartToolCallsConfiguredRestart(t *testing.T) {
 func TestReloadToolReturnsModelVisibleFailure(t *testing.T) {
 	t.Parallel()
 
-	tool := reloadTool(func(string) (string, error) {
+	tool := reloadTool(&runtimeReloaderMock{ReloadFunc: func(string) (string, error) {
 		return "", errors.New("invalid staged cron")
-	})
+	}})
 
 	result, err := tool.Call(t.Context(), []byte(`{"reason":"cron changed"}`), nil)
 	require.NoError(t, err)
-	assert.Equal(t, "rocketclaw_reload failed; live runtime assets were not changed:\n\ninvalid staged cron", result.Output)
+	assert.Equal(t, "rocketclaw_reload failed:\n\ninvalid staged cron", result.Output)
 
 	_, err = tool.Call(t.Context(), []byte(`{"reason":"  "}`), nil)
 	require.ErrorContains(t, err, "reason is required")
@@ -1178,9 +1178,9 @@ func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
 func TestRocketCodeConfigEnablesDiagnostics(t *testing.T) {
 	t.Parallel()
 
-	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{AutoApproverModel: "gpt-5.4-mini"}), config: Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", RequestRestart: testNoopRestart, RequestReload: func(string) (string, error) {
+	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{AutoApproverModel: "gpt-5.4-mini"}), config: Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", RequestRestart: testNoopRestart, RequestReload: &runtimeReloaderMock{ReloadFunc: func(string) (string, error) {
 		return "rocketclaw runtime assets reloaded", nil
-	}, SessionService: newTestSessionService(t)}}
+	}}, SessionService: newTestSessionService(t)}}
 	cfg := bridge.rocketcodeConfig(t.TempDir(), nil, rocketcode.Tool{Name: attachFilesToolName})
 
 	toolNames := make([]string, 0, len(cfg.CustomTools))
@@ -1233,7 +1233,7 @@ func TestNewConversationKeepsInjectedSessionService(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()
 
-	input := Config{ConversationID: "  slack-thread:C123:111.222  ", Agent: "  main  ", ManagedConversationID: "  managed  ", ExternalConversationID: "  external  ", RequestRestart: testNoopRestart, RequestReload: testNoopRestart, UserQuestionAsker: &webQuestions{store: service, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}, StartNewThread: testNoopStartNewThread, SessionService: service}
+	input := Config{ConversationID: "  slack-thread:C123:111.222  ", Agent: "  main  ", ManagedConversationID: "  managed  ", ExternalConversationID: "  external  ", RequestRestart: testNoopRestart, RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}, UserQuestionAsker: &webQuestions{store: service, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}, StartNewThread: testNoopStartNewThread, SessionService: service}
 	bridge := NewConversation(new(config.LockedConfig), bus, &input, slog.New(slog.DiscardHandler))
 	assert.Same(t, service, bridge.config.SessionService)
 	assert.Equal(t, "slack-thread:C123:111.222", bridge.config.ConversationID)

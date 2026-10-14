@@ -226,35 +226,6 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		return "restart requested; runtime cancellation started", nil
 	}
 
-	var (
-		reloadMu sync.Mutex
-
-		refreshExternalMCPAgents = func() error { return nil }
-	)
-
-	requestReload := func(reason string) (string, error) {
-		reloadMu.Lock()
-		defer reloadMu.Unlock()
-
-		logger.Info("reload requested", "reason", reason)
-
-		if err := skel.ReplaceRuntimeAssetsAfterValidation(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, logger, s.cfg, func(runtimeDir string) error {
-			if err := validateRuntimeAssets(s.cfg, runtimeDir); err != nil {
-				return err
-			}
-
-			return s.assemble.ValidateAssets(cfg, runtimeDir, channels)
-		}); err != nil {
-			return "", fmt.Errorf("reload runtime assets: %w", err)
-		}
-
-		if err := refreshExternalMCPAgents(); err != nil {
-			return "", err
-		}
-
-		return "rocketclaw runtime assets reloaded", nil
-	}
-
 	logger.Info(
 		"initializing rocketclaw runtime",
 		"workspace", cfg.Workspace,
@@ -265,7 +236,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 
 	threadBridges = newThreadBridgeManager(s.cfg, rocketcodeSessions, logger, func(Config Config) directBridge {
 		Config.RequestRestart = requestRestart
-		Config.RequestReload = requestReload
+		Config.RequestReload = rt
 		Config.UserQuestionAsker = questions
 		Config.StartNewThread = threadBridges.StartNewThread
 		Config.SessionService = rocketcodeSessions
@@ -304,9 +275,10 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 
 	*rt = Runtime{
 		Cfg: s.cfg, Log: logger, RunCtx: runCtx,
-		Sessions:                 rocketcodeSessions,
-		ExternalMCPUsers:         externalMCPUsers,
-		RefreshExternalMCPAgents: &refreshExternalMCPAgents, TextRouter: threadBridges, threads: threadBridges, background: background,
+		Sessions:          rocketcodeSessions,
+		ExternalMCPUsers:  externalMCPUsers,
+		ExternalMCPAgents: inertExternalMCPAgents{}, assemble: s.assemble,
+		TextRouter: threadBridges, threads: threadBridges, background: background,
 		questions: questions,
 	}
 

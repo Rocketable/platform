@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"iter"
 	"log/slog"
 	"maps"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 )
 
 // SlackFrontend is the Slack surface cmd constructs.
@@ -22,14 +24,29 @@ type SlackFrontend interface {
 	SlackTagsMatching(context.Context, string) []string
 }
 
+type runtimeReloader interface {
+	Reload(string) (string, error)
+}
+
+type externalMCPAgents interface {
+	Refresh() error
+}
+
+type inertExternalMCPAgents struct{}
+
+func (inertExternalMCPAgents) Refresh() error { return nil }
+
 // Runtime is the backend after construction, before frontends.
 type Runtime struct {
-	Cfg                      *config.LockedConfig
-	Log                      *slog.Logger
-	RunCtx                   context.Context
-	Sessions                 *SessionService
-	ExternalMCPUsers         map[string]string
-	RefreshExternalMCPAgents *func() error
+	Cfg               *config.LockedConfig
+	Log               *slog.Logger
+	RunCtx            context.Context
+	Sessions          *SessionService
+	ExternalMCPUsers  map[string]string
+	ExternalMCPAgents externalMCPAgents
+	assemble          FrontendAssembler
+
+	reloadMu sync.Mutex
 
 	TextRouter protocol.PrimaryTextRouter
 	threads    *threadBridgeManager
@@ -38,6 +55,32 @@ type Runtime struct {
 
 	eventsMu    sync.Mutex
 	subscribers map[chan protocol.Event]<-chan struct{}
+}
+
+// Reload validates and replaces runtime assets, then refreshes External MCP agents.
+// It uses the startup configuration, never rereading the configuration file.
+func (r *Runtime) Reload(reason string) (string, error) {
+	r.reloadMu.Lock()
+	defer r.reloadMu.Unlock()
+
+	cfg := r.Cfg.Clone()
+	r.Log.Info("reload requested", "reason", reason)
+
+	if err := skel.ReplaceRuntimeAssetsAfterValidation(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, r.Log, r.Cfg, func(runtimeDir string) error {
+		if err := validateRuntimeAssets(r.Cfg, runtimeDir); err != nil {
+			return err
+		}
+
+		return r.assemble.ValidateAssets(cfg, runtimeDir, cfg.Slack.MappedChannels())
+	}); err != nil {
+		return "", fmt.Errorf("reload runtime assets: %w", err)
+	}
+
+	if err := r.ExternalMCPAgents.Refresh(); err != nil {
+		return "", fmt.Errorf("refresh external MCP agents: %w", err)
+	}
+
+	return "rocketclaw runtime assets reloaded", nil
 }
 
 // Subscribe registers a live-only event consumer. History is read separately.

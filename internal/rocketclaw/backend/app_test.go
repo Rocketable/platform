@@ -118,7 +118,8 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			require.NoError(t, rt.threads.PickLaterWork(rt.RunCtx, threadID))
 
 			bridge := rt.threads.bridges[threadID].(*Bridge)
-			reloaded, err := bridge.config.RequestReload("test reload")
+			require.Same(t, rt, bridge.config.RequestReload)
+			reloaded, err := bridge.config.RequestReload.Reload("test reload")
 			require.NoError(t, err)
 			require.Equal(t, "rocketclaw runtime assets reloaded", reloaded)
 
