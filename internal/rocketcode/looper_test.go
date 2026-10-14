@@ -2096,7 +2096,7 @@ func TestPermissionReviewFailsClosedOnInvalidReviewerOutput(t *testing.T) {
 	require.Equal(t, permissionReviewRiskLevelHigh, decision.RiskLevel)
 	require.Equal(t, permissionReviewUserAuthorizationUnknown, decision.UserAuthorization)
 	require.Equal(t, permissionReviewOutcomeDeny, decision.Outcome)
-	require.Contains(t, decision.Rationale, "invalid JSON")
+	require.Equal(t, "automatic permission reviewer returned invalid structured output: invalid JSON: invalid character 'o' in literal null (expecting 'u')", decision.Rationale)
 }
 
 func TestLooperAppliesWebFetchURLPermissions(t *testing.T) {
