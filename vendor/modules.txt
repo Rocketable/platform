@@ -283,7 +283,7 @@ github.com/google/uuid
 # github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 ## explicit; go 1.20
 github.com/gorilla/websocket
-# github.com/grpc-ecosystem/grpc-gateway/v2 v2.31.0
+# github.com/grpc-ecosystem/grpc-gateway/v2 v2.32.0
 ## explicit; go 1.26.0
 github.com/grpc-ecosystem/grpc-gateway/v2/internal/httprule
 github.com/grpc-ecosystem/grpc-gateway/v2/runtime
