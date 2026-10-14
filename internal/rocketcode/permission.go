@@ -785,7 +785,8 @@ func bashExecutablePatternMatch(subject, pattern string) bool {
 			return true
 		}
 
-		fields, err := expand.Fields(nil, call.Args[0])
+		// A nil config makes expand share its package-level config across goroutines.
+		fields, err := expand.Fields(&expand.Config{}, call.Args[0])
 		if err != nil || len(fields) != 1 {
 			return false
 		}

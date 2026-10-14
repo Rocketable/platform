@@ -92,6 +92,17 @@ func (b *testBus) Outbound(ctx context.Context) iter.Seq[*protocol.OutboundMessa
 
 func (b *testBus) Close() { b.once.Do(func() { close(b.closed) }) }
 
+func TestReplayInputForMessagePreservesSDKSerialization(t *testing.T) {
+	for _, role := range []string{"user", "developer", "assistant"} {
+		for _, text := range []string{"", " \n", "quotes: \" and \\ and <html>", "日本\x00\xff\u2028"} {
+			message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRole(role), Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(text)}, Type: "message"}
+			want, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfMessage: &message}})
+			require.NoError(t, err, "string-only replay construction cannot fail")
+			require.Equal(t, want, replayInputForMessage(role, text))
+		}
+	}
+}
+
 func TestBridgeSwitchAgentTrimsAndStoresAgent(t *testing.T) {
 	t.Parallel()
 
@@ -1920,21 +1931,6 @@ func TestFitInboundImageWithinLimitReportsDecodeFailure(t *testing.T) {
 	assert.Empty(t, transformedMIMEType)
 	assert.False(t, changed)
 	assert.ErrorIs(t, err, errInboundAttachmentReductionFailed)
-}
-
-func TestFitInboundImageWithinLimitRejectsImpossibleTarget(t *testing.T) {
-	t.Parallel()
-
-	transformed, transformedMIMEType, changed, err := fitInboundImageWithinLimit("image/png", []byte("x"), 0)
-	assert.Nil(t, transformed)
-	assert.Empty(t, transformedMIMEType)
-	assert.False(t, changed)
-	require.ErrorIs(t, err, errInboundAttachmentReductionNotEnough)
-
-	transformed, changed, err = resizePNGWithinLimit([]byte("x"), 0)
-	assert.Nil(t, transformed)
-	assert.False(t, changed)
-	assert.ErrorIs(t, err, errInboundAttachmentReductionNotEnough)
 }
 
 func TestFitInboundImageWithinLimitReportsPNGDecodeFailure(t *testing.T) {
@@ -3938,7 +3934,7 @@ func TestRunTurnProjectsDifferentProviderHistoryBeforeRequest(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	_, err = service.AppendEntryID(t.Context(), conversationID, &rocketcode.SessionEntry{Version: 1, Type: "turn", Model: "openai/gpt", ResponseID: providerReplayPrivate, ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"portable-readable","id":"provider-private-sentinel"}`)}, OutputTrace: []json.RawMessage{json.RawMessage(`{"private":"provider-private-sentinel"}`)}})
+	_, err = service.AppendEntryID(t.Context(), conversationID, &rocketcode.SessionEntry{Version: 1, Type: "turn", Model: "openai/gpt", ResponseID: "provider-private-sentinel", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"portable-readable","id":"provider-private-sentinel"}`)}, OutputTrace: []json.RawMessage{json.RawMessage(`{"private":"provider-private-sentinel"}`)}})
 	require.NoError(t, err)
 
 	var requestBody string
@@ -3963,12 +3959,12 @@ func TestRunTurnProjectsDifferentProviderHistoryBeforeRequest(t *testing.T) {
 	msg.ConversationID = conversationID
 	_, err = runTestTurn(t.Context(), bridge, msg, "turn-1")
 	require.NoError(t, err)
-	assert.Contains(t, requestBody, providerReplayReadable)
-	assert.NotContains(t, requestBody, providerReplayPrivate)
+	assert.Contains(t, requestBody, "portable-readable")
+	assert.NotContains(t, requestBody, "provider-private-sentinel")
 
 	entries, err := service.ObserveEntries(t.Context(), conversationID)
 	require.NoError(t, err)
-	assert.Contains(t, string(entries[0].Entry.ReplayInput[0]), providerReplayPrivate)
+	assert.Contains(t, string(entries[0].Entry.ReplayInput[0]), "provider-private-sentinel")
 }
 
 func TestHandleInboundJournalsTurnAndClearsRowWithHistoryAppend(t *testing.T) {

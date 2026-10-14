@@ -107,6 +107,7 @@ type SessionService struct {
 
 	turnGatesMu sync.Mutex
 	turnGates   map[string]*sessionTurnGate
+	lastTurnID  int64
 }
 
 type sessionTurnGate struct {
@@ -1013,7 +1014,8 @@ type SidebarSession struct {
 // Breaking iteration or cancelling ctx closes the database rows.
 func (s *SessionService) SidebarSessions(ctx context.Context) iter.Seq2[SidebarSession, error] {
 	return func(yield func(SidebarSession, error) bool) {
-		rows, err := s.db.QueryContext(ctx, `WITH running AS (
+		rows, err := s.db.QueryContext(ctx, `WITH `+visibleChatsSQL+`,
+running AS (
     SELECT DISTINCT ON (conversation_id) conversation_id, inbound_json->>'Text' AS prompt, to_timestamp(created_at_unix_ns / 1e9) AS started_at
     FROM active_turns WHERE phase <> 'done'
     ORDER BY conversation_id, created_at_unix_ns
@@ -1029,16 +1031,16 @@ SELECT
     c.name,
     c.forked_from,
     COALESCE(t.tags, '[]'::jsonb)
-FROM managed_conversations c
--- Keep the history check per conversation and stop at its first entry. A CTE
--- would read every stored entry on each refresh, about twice as slow.
+FROM visible_chats c
+-- Exception to the no-subquery rule: keep the history check per conversation and stop at its
+-- first entry. A CTE would read every stored entry on each refresh, about twice as slow.
 LEFT JOIN LATERAL (
     SELECT TRUE AS found FROM session_entries e WHERE e.conversation_id = c.conversation_id LIMIT 1
 ) h ON TRUE
 LEFT JOIN running r ON r.conversation_id = c.conversation_id
 LEFT JOIN session_summaries s ON s.conversation_id = c.conversation_id
 LEFT JOIN session_tags t ON t.conversation_id = c.conversation_id
-WHERE (h.found OR r.conversation_id IS NOT NULL) AND `+visibleChatsSQL+`
+WHERE h.found OR r.conversation_id IS NOT NULL
 ORDER BY c.pinned DESC, COALESCE(CASE WHEN h.found THEN s.last_updated ELSE r.started_at END, '0001-01-01 00:00:00+00'::timestamptz) DESC, c.conversation_id COLLATE "C"`, "")
 		if err != nil {
 			yield(SidebarSession{}, fmt.Errorf("query sidebar sessions: %w", err))
@@ -1097,15 +1099,13 @@ type ChatOriginFacts struct {
 // A nonempty id restricts the inventory to that conversation.
 func (s *SessionService) ChatOriginFacts(ctx context.Context, id string) iter.Seq2[ChatOriginFacts, error] {
 	return func(yield func(ChatOriginFacts, error) bool) {
-		rows, err := s.db.QueryContext(ctx, `WITH visible AS (
-    SELECT conversation_id, created_by, conversation_id LIKE 'web:cron:%' OR conversation_id LIKE 'web:one-off-cron:%' AS named_run
-    FROM managed_conversations c
-    WHERE `+visibleChatsSQL+`
-),
+		rows, err := s.db.QueryContext(ctx, `WITH `+visibleChatsSQL+`,
+visible AS (SELECT conversation_id, created_by, conversation_id LIKE 'web:cron:%' OR conversation_id LIKE 'web:one-off-cron:%' AS named_run FROM visible_chats),
 creating_entries AS (
     SELECT c.conversation_id, e.entry_json->>'sync_source_conversation_id' AS source,
         e.entry_json->>'sync_source_entry_id' AS source_entry_id
     FROM visible c
+    -- Exception to the no-subquery rule: no CTE can stop at a chat's first entry, so a CTE reads all history.
     CROSS JOIN LATERAL (
         SELECT entry_json FROM session_entries WHERE conversation_id = c.conversation_id ORDER BY id LIMIT 1
     ) e
@@ -1330,6 +1330,18 @@ func (s *SessionService) toggleSessionTag(ctx context.Context, conversationID, t
 	return tags, nil
 }
 
+// newTurnID issues the next active_turns key. The key spans every conversation of the one
+// process the run lock admits, and macOS clocks repeat readings within a microsecond, so each
+// ID is its clock reading or one past the last, whichever is later.
+func (s *SessionService) newTurnID() string {
+	s.turnGatesMu.Lock()
+	defer s.turnGatesMu.Unlock()
+
+	s.lastTurnID = max(s.lastTurnID+1, time.Now().UnixNano())
+
+	return fmt.Sprintf("turn-%d", s.lastTurnID)
+}
+
 func (s *SessionService) reserveTurnPair(pairID, conversationID string) {
 	pairID = strings.TrimSpace(pairID)
 
@@ -1487,23 +1499,6 @@ func (s *SessionService) removeHistoryFiles(ctx context.Context, ids []string) e
 	}
 
 	return errors.Join(errCombined, s.removeRetainedResults(ids...))
-}
-
-func (s sessionStore) in() iter.Seq2[harness.SessionEntry, error] {
-	return func(yield func(harness.SessionEntry, error) bool) {
-		observed, err := s.service.ObserveEntries(context.Background(), s.conversationID)
-		if err != nil {
-			yield(harness.SessionEntry{}, err)
-
-			return
-		}
-
-		for i := range observed {
-			if !yield(observed[i].Entry, nil) {
-				return
-			}
-		}
-	}
 }
 
 func removeSessionEntryNUL(data []byte) []byte {

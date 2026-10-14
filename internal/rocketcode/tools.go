@@ -179,10 +179,52 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 	return tools, codeHosts
 }
 
-func (f *toolFactory) configureSpill(loop *looper) {
-	loop.spillRel = f.spillRel
-	loop.promptExpansion = f.promptExpansion
-	loop.promptExpansion.customShell = loop.agent.CustomShell
+// newLooper builds the looper that runs agent, whose permissions and prompt are final, on its model
+// with f's tools and settings, and with systemPrompt ahead of the skills and Code Mode guidance.
+// It journals nothing, drains no notes, and answers in agent's output format.
+func (f *toolFactory) newLooper(agent *Agent, systemPrompt string) (*looper, error) {
+	client, origin, err := resolveModel(f.resolver, agent.Model)
+	if err != nil {
+		return nil, err
+	}
+
+	modelTools, codeHosts := f.assembleTools(agent)
+
+	var mcpServers []string
+	if f.mcpRegistry != nil {
+		mcpServers = visibleMCPServers(agent.Permission, f.mcpRegistry.Names())
+	}
+
+	loop := &looper{
+		agent:                  *agent,
+		ProviderOrigin:         origin,
+		Client:                 newResponsesAPI(client),
+		SystemPrompt:           withCodeModeSystemPrompt(composeSystemPromptWithSkills(systemPrompt, f.skills, agent), modelTools, codeHosts, mcpServers),
+		Model:                  origin.Model,
+		DisplayModel:           origin.displayModel(),
+		ReasoningEffort:        shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
+		Verbosity:              agent.Verbosity,
+		CompactThreshold:       cmp.Or(origin.CompactThreshold, f.compactThreshold),
+		CompactionSteering:     f.compactionSteering,
+		ParallelToolCalls:      f.parallelToolCalls,
+		ResponseFormat:         agentOutputResponseFormat(agent.OutputSchema),
+		Permissions:            agent.Permission,
+		Tools:                  modelTools,
+		CodeModeHosts:          codeHosts,
+		Diagnostics:            f.diagnostics,
+		AutoApprovePermissions: f.autoApprovePermissions,
+		PermissionReviewer:     f,
+		InPermissionReview:     f.inPermissionReview,
+		Observability:          f.observability,
+		Journal:                InertJournal{},
+		SteerDrain:             InertSteerDrain{},
+		notes:                  InertBackgroundJobs{},
+		promptExpansion:        f.promptExpansion,
+		spillRel:               f.spillRel,
+	}
+	loop.promptExpansion.customShell = agent.CustomShell
+
+	return loop, nil
 }
 
 func toolVisible(agent *Agent, name string, tool *looperTool) bool {

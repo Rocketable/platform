@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -132,7 +133,7 @@ func TestShadowsRealBackendBrowser(t *testing.T) {
 		return nil
 	})
 	t.Cleanup(func() { cancel(); require.NoError(t, observing.Wait()) })
-	listener, err := Listen(testSocketPath(t))
+	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()

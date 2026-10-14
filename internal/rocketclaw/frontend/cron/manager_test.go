@@ -52,7 +52,7 @@ func TestJobsProjectsDefinitionsAndPersistedTriggers(t *testing.T) {
 	manager := New(workspace, "runtime", []string{"#ops"}, store, &runnerMock{}, slog.New(slog.DiscardHandler))
 	start := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 	manager.now = func() time.Time { return start.Add(5 * time.Minute) }
-	definitions, err := loadDefinitionsIn(workspace, "runtime")
+	definitions, err := loadDefinitionsIn(workspace, "runtime", []string{"#ops"})
 	require.NoError(t, err)
 
 	states := manager.scheduledStates(definitions, start)
@@ -98,7 +98,7 @@ func TestLoadDefinitionsLoadsMarkdownAndSkipsTemplates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	defs, err := loadDefinitionsIn(workspace, ".")
+	defs, err := loadDefinitionsIn(workspace, ".", []string{"#triage"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 }
 
 func TestLoadDefinitionsWithoutCronDirectory(t *testing.T) {
-	defs, err := loadDefinitionsIn(t.TempDir(), ".")
+	defs, err := loadDefinitionsIn(t.TempDir(), ".", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func TestLoadDefinitionsReportsDirectoryErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := loadDefinitionsIn(workspaceFile, "."); err == nil || !strings.Contains(err.Error(), "open workspace root") {
+	if _, err := loadDefinitionsIn(workspaceFile, ".", nil); err == nil || !strings.Contains(err.Error(), "open workspace root") {
 		t.Fatalf("loadDefinitionsIn(workspace file, .) error = %v; want workspace open error", err)
 	}
 
@@ -298,7 +298,7 @@ func TestLoadDefinitionsReportsDirectoryErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := loadDefinitionsIn(workspace, "."); err == nil || !strings.Contains(err.Error(), "read cronjob directory") {
+	if _, err := loadDefinitionsIn(workspace, ".", nil); err == nil || !strings.Contains(err.Error(), "read cronjob directory") {
 		t.Fatalf("loadDefinitionsIn(cron file, .) error = %v; want cron directory error", err)
 	}
 }
@@ -550,7 +550,7 @@ func TestScanScheduledUsesLatestDefinitionAndPersistsState(t *testing.T) {
 	start := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
 	m.now = func() time.Time { return start }
 
-	defs, err := loadDefinitionsIn(workspace, ".")
+	defs, err := loadDefinitionsIn(workspace, ".", m.channels)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -600,7 +600,7 @@ func TestScanScheduledInvalidLiveChannelRunsNothingUntilRepaired(t *testing.T) {
 	}}, slog.New(slog.DiscardHandler))
 	start := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
 	m.now = func() time.Time { return start }
-	definitions, err := loadDefinitionsIn(workspace, ".")
+	definitions, err := loadDefinitionsIn(workspace, ".", m.channels)
 	require.NoError(t, err)
 	require.NoError(t, store.SyncCronSchedules(m.scheduledStates(definitions, start), start))
 
@@ -651,7 +651,7 @@ func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 	start := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
 	m.now = func() time.Time { return start }
 
-	defs, err := loadDefinitionsIn(workspace, ".")
+	defs, err := loadDefinitionsIn(workspace, ".", m.channels)
 	if err != nil {
 		t.Fatal(err)
 	}

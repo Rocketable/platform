@@ -95,7 +95,7 @@ func parseOAILogin(args []string) (string, bool, string, bool, error) {
 			headless = true
 		case arg == "-h" || arg == "--help":
 			return cmp.Or(provider, "openai"), headless, secretsARN, true, nil
-		case arg == "--aws-secrets-manager-arn" && secretsARN != "":
+		case (arg == "--aws-secrets-manager-arn" || strings.HasPrefix(arg, "--aws-secrets-manager-arn=")) && secretsARN != "":
 			return "", false, "", false, errors.New("duplicate --aws-secrets-manager-arn")
 		case arg == "--aws-secrets-manager-arn":
 			if i+1 >= len(args) {
@@ -104,9 +104,6 @@ func parseOAILogin(args []string) (string, bool, string, bool, error) {
 			i++
 			secretsARN = args[i]
 		case strings.HasPrefix(arg, "--aws-secrets-manager-arn="):
-			if secretsARN != "" {
-				return "", false, "", false, errors.New("duplicate --aws-secrets-manager-arn")
-			}
 			secretsARN = strings.TrimPrefix(arg, "--aws-secrets-manager-arn=")
 		case strings.HasPrefix(arg, "-"):
 			return "", false, "", false, fmt.Errorf("unknown flag %q", arg)

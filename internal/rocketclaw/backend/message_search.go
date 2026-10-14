@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	harness "github.com/Rocketable/platform/internal/rocketcode"
@@ -107,6 +108,45 @@ SELECT $1, NULLIF($2::bigint, 0), NULLIF($3::text, ''), * FROM unnest($4::intege
 	return err
 }
 
+// PromptPrincipal reads the top-level principal attribute of a recorded prompt header.
+func PromptPrincipal(header string) string {
+	inside, ok := strings.CutPrefix(header, "[")
+	if !ok || !strings.HasSuffix(inside, "]") {
+		return ""
+	}
+
+	_, attributes, _ := strings.Cut(strings.TrimSuffix(inside, "]"), " ")
+	for attributes != "" {
+		name, value, ok := strings.Cut(attributes, "=")
+		if !ok {
+			return ""
+		}
+
+		if strings.HasPrefix(value, `"`) {
+			quoted, err := strconv.QuotedPrefix(value)
+			if err != nil {
+				return ""
+			}
+
+			attributes = value[len(quoted):]
+			if attributes != "" && !strings.HasPrefix(attributes, " ") {
+				return ""
+			}
+
+			if name == "principal" {
+				principal, _ := strconv.Unquote(quoted) // QuotedPrefix already validated this string.
+				return principal
+			}
+		} else {
+			_, attributes, _ = strings.Cut(value, " ")
+		}
+
+		attributes = strings.TrimPrefix(attributes, " ")
+	}
+
+	return ""
+}
+
 func (s *SessionService) messagePrincipals(ctx context.Context) (principals map[string][]string, complete bool, err error) {
 	principals = make(map[string][]string)
 	err = readRows(ctx, s.db, `WITH visible AS (
@@ -193,26 +233,30 @@ ON CONFLICT DO NOTHING`, conversationID)
 	return err
 }
 
-// visibleChatsSQL keeps the managed_conversations rows c that Web shows
-// (ChatOriginFacts); a nonempty $1 restricts it to that chat.
-const visibleChatsSQL = `($1 = '' OR c.conversation_id = $1) AND c.conversation_id NOT LIKE 'cron:%' AND c.conversation_id NOT LIKE 'one-off-cron:%'
-    AND NOT EXISTS (SELECT 1 FROM shadow_bindings b WHERE b.child_conversation_id = c.conversation_id)
-    AND NOT EXISTS (SELECT 1 FROM external_mcp_sessions p WHERE p.private_conversation_id = c.conversation_id)`
+// visibleChatsSQL is the CTE visible_chats of the managed_conversations rows
+// Web shows (ChatOriginFacts); a nonempty $1 restricts it to that chat.
+const visibleChatsSQL = `visible_chats AS NOT MATERIALIZED (SELECT c.* FROM managed_conversations c
+    LEFT JOIN shadow_bindings b ON b.child_conversation_id = c.conversation_id
+    LEFT JOIN external_mcp_sessions p ON p.private_conversation_id = c.conversation_id
+    WHERE ($1 = '' OR c.conversation_id = $1) AND c.conversation_id NOT LIKE 'cron:%' AND c.conversation_id NOT LIKE 'one-off-cron:%'
+        AND b.child_conversation_id IS NULL AND p.private_conversation_id IS NULL)`
 
-// unindexedChatsSQL selects the chats Web shows that have no message search marker.
-const unindexedChatsSQL = `SELECT c.conversation_id FROM managed_conversations c WHERE ` + visibleChatsSQL + `
-    AND NOT EXISTS (SELECT 1 FROM message_search_indexed m WHERE m.conversation_id = c.conversation_id)`
+// unindexedChatsSQL starts a WITH of visible_chats and unindexed_chats, the
+// chats Web shows that have no message search marker.
+const unindexedChatsSQL = `WITH ` + visibleChatsSQL + `,
+unindexed_chats AS (SELECT c.conversation_id FROM visible_chats c
+    LEFT JOIN message_search_indexed i ON i.conversation_id = c.conversation_id WHERE i.conversation_id IS NULL)`
 
 // searchMessagesSQL applies the undo cutoff of effective_entries and
 // observeTranscriptDB, and orders hits as ListConversations orders chats and
 // History orders messages. $1 is empty and $2 holds the LIKE patterns.
-const searchMessagesSQL = `SELECT NOT EXISTS (` + unindexedChatsSQL + `),
-    COALESCE(json_agg(json_build_object('ConversationID', m.conversation_id, 'Role', m.role, 'Text', m.text, 'MessageID', COALESCE(m.entry_id || ':' || m.replay_index, ''))
-        ORDER BY c.conversation_id, COALESCE(m.entry_id, a.history_anchor_id), a.created_at_unix_ns NULLS FIRST, m.turn_id, m.replay_index, m.part_index), 'null')
-FROM managed_conversations c JOIN message_search m ON m.conversation_id = c.conversation_id LEFT JOIN active_turns a ON a.id = m.turn_id
-WHERE ` + visibleChatsSQL + ` AND m.text_lower LIKE ANY ($2::text[])
-    AND (c.revert_message_id = '' OR COALESCE(m.entry_id, a.history_anchor_id) < split_part(c.revert_message_id, ':', 1)::bigint
-        OR m.entry_id = split_part(c.revert_message_id, ':', 1)::bigint AND m.replay_index < split_part(c.revert_message_id, ':', 2)::integer)`
+const searchMessagesSQL = unindexedChatsSQL + `,
+hits AS (SELECT COALESCE(json_agg(json_build_object('ConversationID', m.conversation_id, 'Role', m.role, 'Text', m.text, 'MessageID', COALESCE(m.entry_id || ':' || m.replay_index, ''))
+        ORDER BY c.conversation_id, COALESCE(m.entry_id, a.history_anchor_id), a.created_at_unix_ns NULLS FIRST, m.turn_id, m.replay_index, m.part_index), 'null') AS hits
+    FROM visible_chats c JOIN message_search m ON m.conversation_id = c.conversation_id LEFT JOIN active_turns a ON a.id = m.turn_id
+    WHERE m.text_lower LIKE ANY ($2::text[]) AND (c.revert_message_id = '' OR COALESCE(m.entry_id, a.history_anchor_id) < split_part(c.revert_message_id, ':', 1)::bigint
+        OR m.entry_id = split_part(c.revert_message_id, ':', 1)::bigint AND m.replay_index < split_part(c.revert_message_id, ':', 2)::integer))
+SELECT u.conversation_id IS NULL, h.hits FROM hits h LEFT JOIN unindexed_chats u ON true LIMIT 1`
 
 // MessageSearchHit is a user or assistant message as History shows it.
 type MessageSearchHit struct {
@@ -284,7 +328,7 @@ func MentionedIDs(hits []MessageSearchHit, mentions map[string]string) []string 
 
 func (s *SessionService) backfillMessageSearch(ctx context.Context) error {
 	for {
-		conversationIDs, err := queryStrings(ctx, s.db, unindexedChatsSQL+` ORDER BY c.conversation_id COLLATE "C" LIMIT 100`, "unindexed message search chats", "")
+		conversationIDs, err := queryStrings(ctx, s.db, unindexedChatsSQL+` SELECT conversation_id FROM unindexed_chats ORDER BY conversation_id COLLATE "C" LIMIT 100`, "unindexed message search chats", "")
 		if err != nil {
 			return err
 		}
@@ -319,7 +363,7 @@ func (s *SessionService) backfillChatMessageSearch(ctx context.Context, conversa
 	}
 
 	var unindexed bool
-	if err := queryScalar(ctx, tx, "check message search backfill", `SELECT EXISTS (`+unindexedChatsSQL+`)`, &unindexed, conversationID); err != nil || !unindexed {
+	if err := queryScalar(ctx, tx, "check message search backfill", unindexedChatsSQL+` SELECT count(*) > 0 FROM unindexed_chats`, &unindexed, conversationID); err != nil || !unindexed {
 		return err
 	}
 

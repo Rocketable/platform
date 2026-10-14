@@ -371,6 +371,13 @@ type turnInputSnapshot struct {
 	WorkflowPath   string                      `json:"workflow_path"`
 }
 
+// emptyTurnInputsError reports a turn whose saved input holds no prompt to run.
+type emptyTurnInputsError struct{ TurnID string }
+
+func (e emptyTurnInputsError) Error() string {
+	return "turn " + e.TurnID + " has saved input but no prompt to run"
+}
+
 type inputPersistenceError struct{ cause error }
 
 func (e inputPersistenceError) Error() string { return "persist consumed input: " + e.cause.Error() }

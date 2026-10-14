@@ -471,8 +471,6 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	var threshold *float64
 
 	if codexResponse || codexCompact {
-		var err error
-
 		threshold, err = cleanCodexRequest(cloned, codexResponse)
 		if err != nil {
 			return nil, err
@@ -762,11 +760,29 @@ func cleanCodexRequest(req *http.Request, streaming bool) (*float64, error) {
 		data, _ = json.Marshal(body)
 	}
 
+	setRequestBody(req, data)
+
+	return threshold, nil
+}
+
+// setRequestBody replaces req's body with data, which GetBody replays.
+func setRequestBody(req *http.Request, data []byte) {
 	req.Body = io.NopCloser(bytes.NewReader(data))
 	req.ContentLength = int64(len(data))
 	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }
+}
 
-	return threshold, nil
+// requestFields decodes the JSON object that cleanCodexRequest buffered behind req's byte-backed GetBody.
+func requestFields(req *http.Request) map[string]json.RawMessage {
+	requestBody, _ := req.GetBody()
+	data, _ := io.ReadAll(requestBody)
+	_ = requestBody.Close()
+
+	var fields map[string]json.RawMessage
+
+	_ = json.Unmarshal(data, &fields)
+
+	return fields
 }
 
 func cleanCodexInputItem(raw json.RawMessage, stripIDs bool) (json.RawMessage, bool) {
@@ -890,13 +906,7 @@ func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Req
 	}
 
 	// A compaction threshold comes only from cleanCodexRequest's buffered JSON.
-	requestBody, _ := req.GetBody()
-	data, _ := io.ReadAll(requestBody)
-	_ = requestBody.Close()
-
-	var retryBody map[string]json.RawMessage
-
-	_ = json.Unmarshal(data, &retryBody)
+	retryBody := requestFields(req)
 
 	retryItem := compactItem
 	if item, ok := cleanCodexInputItem(compactItem, false); ok {
@@ -907,12 +917,10 @@ func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Req
 
 	retryBody["input"] = input
 
-	data, _ = json.Marshal(retryBody)
+	data, _ := json.Marshal(retryBody)
 
 	retry := req.Clone(ctx)
-	retry.Body = io.NopCloser(bytes.NewReader(data))
-	retry.ContentLength = int64(len(data))
-	retry.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }
+	setRequestBody(retry, data)
 
 	resp, err := t.roundTrip(retry, "compacted_retry")
 	if err != nil {
@@ -929,14 +937,7 @@ func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Req
 }
 
 func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (item json.RawMessage, ok bool, err error) {
-	// Both callers use cleanCodexRequest's owned, valid JSON and byte-backed GetBody.
-	requestBody, _ := req.GetBody()
-	data, _ := io.ReadAll(requestBody)
-	_ = requestBody.Close()
-
-	compactSource := map[string]json.RawMessage{}
-	_ = json.Unmarshal(data, &compactSource)
-
+	compactSource := requestFields(req)
 	if codexInputHasUnansweredFunctionCall(compactSource["input"]) {
 		return nil, false, nil
 	}
@@ -948,13 +949,11 @@ func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (it
 		"instructions": compactSource["instructions"],
 	}
 
-	data, _ = json.Marshal(compactRequest)
+	data, _ := json.Marshal(compactRequest)
 
 	compactReq := req.Clone(ctx)
 	compactReq.URL.Path = strings.TrimRight(compactReq.URL.Path, "/") + "/compact"
-	compactReq.Body = io.NopCloser(bytes.NewReader(data))
-	compactReq.ContentLength = int64(len(data))
-	compactReq.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }
+	setRequestBody(compactReq, data)
 
 	compactResp, err := t.roundTrip(compactReq, "compaction")
 	if err != nil {
@@ -1015,19 +1014,15 @@ func codexInputHasUnansweredFunctionCall(data json.RawMessage) bool {
 		case "function_call":
 			pending[item.CallID]++
 		case "function_call_output":
-			if pending[item.CallID] > 0 {
-				pending[item.CallID]--
+			// Only calls still awaiting an output keep an entry.
+			pending[item.CallID]--
+			if pending[item.CallID] <= 0 {
+				delete(pending, item.CallID)
 			}
 		}
 	}
 
-	for _, count := range pending {
-		if count > 0 {
-			return true
-		}
-	}
-
-	return false
+	return len(pending) > 0
 }
 
 func codexStreamingResponse(resp *http.Response) (*http.Response, error) {
@@ -1064,44 +1059,38 @@ func codexStreamingResponse(resp *http.Response) (*http.Response, error) {
 		}
 
 		if event.Type == "response.failed" {
-			errResponse = &codexStreamError{}
+			var response struct {
+				Error struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
 
 			if len(event.Response) > 0 {
-				var response struct {
-					Error struct {
-						Code    string `json:"code"`
-						Message string `json:"message"`
-					} `json:"error"`
-				}
-
 				if err := json.Unmarshal(event.Response, &response); err != nil {
 					return nil, fmt.Errorf("parse Codex failed response: %w", err)
 				}
-
-				errResponse = &codexStreamError{Code: response.Error.Code, Message: response.Error.Message}
 			}
+
+			errResponse = &codexStreamError{Code: response.Error.Code, Message: response.Error.Message}
 
 			continue
 		}
 
 		if event.Type == "response.incomplete" {
-			reason := "unknown"
+			var response struct {
+				IncompleteDetails struct {
+					Reason string `json:"reason"`
+				} `json:"incomplete_details"`
+			}
 
 			if len(event.Response) > 0 {
-				var response struct {
-					IncompleteDetails struct {
-						Reason string `json:"reason"`
-					} `json:"incomplete_details"`
-				}
-
 				if err := json.Unmarshal(event.Response, &response); err != nil {
 					return nil, fmt.Errorf("parse Codex incomplete response: %w", err)
 				}
-
-				reason = cmp.Or(strings.TrimSpace(response.IncompleteDetails.Reason), "unknown")
 			}
 
-			errResponse = fmt.Errorf("codex stream response incomplete: %s", reason)
+			errResponse = fmt.Errorf("codex stream response incomplete: %s", cmp.Or(strings.TrimSpace(response.IncompleteDetails.Reason), "unknown"))
 
 			continue
 		}
@@ -1299,14 +1288,8 @@ func parseClaims(token string) (claims, bool) {
 	}
 
 	data, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return claims{}, false
-	}
 
 	var parsed claims
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		return claims{}, false
-	}
 
-	return parsed, true
+	return parsed, err == nil && json.Unmarshal(data, &parsed) == nil
 }

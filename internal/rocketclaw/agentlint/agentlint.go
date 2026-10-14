@@ -215,8 +215,25 @@ func loadRuntimeAgentInfos(runtimeRoot string, cfg *config.Config) (map[string]*
 		}
 
 		suppressions := map[string][]string{}
-		findings = append(findings, collectMetadata(filePath, frontmatter, suppressions)...)
 		infos[name] = &agentInfo{agent: agent, filePath: filePath, suppressions: suppressions}
+
+		if frontmatter == nil || frontmatter.Kind != yaml.MappingNode {
+			continue
+		}
+
+		for i := 0; i+1 < len(frontmatter.Content); i += 2 {
+			key := frontmatter.Content[i]
+
+			if key.Value == "permissions" {
+				findings = append(findings, Finding{Code: rc006, Severity: "error", Path: filePath, Message: "plural permissions frontmatter is ignored; use permission", keys: []string{"permissions"}})
+			}
+
+			if key.Value != "customShell" && strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(key.Value)) == "customshell" {
+				findings = append(findings, Finding{Code: rc009, Severity: "error", Path: filePath, Message: key.Value + " is ignored; the field is customShell", keys: []string{key.Value}})
+			}
+
+			collectSuppressions(filePath, key.Value, frontmatter.Content[i+1], suppressions, &findings)
+		}
 	}
 
 	return infos, findings, nil
@@ -244,31 +261,6 @@ func parseFrontmatter(content string) (*yaml.Node, error) {
 	return root.Content[0], nil
 }
 
-func collectMetadata(filePath string, frontmatter *yaml.Node, suppressions map[string][]string) []Finding {
-	if frontmatter == nil || frontmatter.Kind != yaml.MappingNode {
-		return nil
-	}
-
-	findings := []Finding{}
-
-	for i := 0; i+1 < len(frontmatter.Content); i += 2 {
-		key := frontmatter.Content[i]
-		value := frontmatter.Content[i+1]
-
-		if key.Value == "permissions" {
-			findings = append(findings, Finding{Code: rc006, Severity: "error", Path: filePath, Message: "plural permissions frontmatter is ignored; use permission", keys: []string{"permissions"}})
-		}
-
-		if key.Value != "customShell" && strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(key.Value)) == "customshell" {
-			findings = append(findings, Finding{Code: rc009, Severity: "error", Path: filePath, Message: key.Value + " is ignored; the field is customShell", keys: []string{key.Value}})
-		}
-
-		collectSuppressions(filePath, key.Value, value, suppressions, &findings)
-	}
-
-	return findings
-}
-
 func collectSuppressions(filePath, key string, node *yaml.Node, suppressions map[string][]string, findings *[]Finding) {
 	addSuppressionsFromNode(filePath, key, node, suppressions, findings)
 
@@ -284,8 +276,7 @@ func collectSuppressions(filePath, key string, node *yaml.Node, suppressions map
 }
 
 func addSuppressionsFromNode(filePath, key string, node *yaml.Node, suppressions map[string][]string, findings *[]Finding) {
-	comments := []string{node.LineComment, node.HeadComment, node.FootComment}
-	for _, comment := range comments {
+	for _, comment := range []string{node.LineComment, node.HeadComment, node.FootComment} {
 		if !strings.Contains(comment, "#nolint") {
 			continue
 		}

@@ -4,7 +4,7 @@
 
 RocketClaw supports multiple OpenAI-compatible provider configurations. Agent model names select a provider, while each RocketCode looper still uses exactly one `*openai.Client`.
 
-The design keeps provider configuration, credentials, and stored-conversation handling in RocketClaw. RocketCode receives only a model resolver and the result for the model it is about to run.
+The design keeps provider configuration and credentials in RocketClaw. RocketCode receives only a model resolver and the result for the model it is about to run, and converts saved history that another provider recorded when it loads that history.
 
 ## Non-Goals
 
@@ -97,7 +97,7 @@ Provider names are non-empty trimmed names without `/`; `openai` is reserved for
 
 ## Stored Conversation History
 
-RocketClaw uses the existing `SessionEntry.Model` value to identify which provider produced a saved turn. It does not add a provider column or a new field to RocketCode session entries.
+RocketCode uses the existing `SessionEntry.Model` value, and the `Model` of an entry's replay attribution ranges, to identify which provider produced each saved replay item. It does not add a provider column or a new field to RocketCode session entries.
 
 Examples:
 
@@ -108,26 +108,24 @@ Examples:
 
 An unqualified model, `openai/...`, an empty model, or a missing model means the default `openai` provider. A `work/...` model means provider `work`.
 
-Before RocketClaw passes stored entries to a root RocketCode run, it compares each saved entry's provider name with the provider selected for the new root model.
+Every looper converts at the one place each turn reads saved history (`loadSession` in `Loop`), so root agents and continued subagents share the same handling. For each saved replay item, RocketCode compares the provider of the model that produced it (the entry's model, or its attribution range's model) with the provider of the looper's own display model.
 
-- If the names match, RocketClaw passes the entry unchanged.
-- If the names differ, RocketClaw creates a copy whose replay contains only data that can be sent to another provider.
+- If the names match, RocketCode uses the item unchanged.
+- If the names differ, RocketCode replaces the item with only data that can be sent to another provider and moves the entry's attribution ranges to the replaced items. Saved history is not rewritten.
 
-For a different provider, RocketClaw:
+For a different provider, RocketCode:
 
 - keeps user, developer, and assistant messages, including attachments;
 - keeps function calls and function outputs, preserving call ID, name, arguments, and output while removing provider-generated item IDs;
 - converts readable reasoning summaries to ordinary assistant messages;
 - converts readable compaction text to an ordinary assistant message;
 - removes encrypted reasoning and encrypted compaction;
-- removes response IDs and provider-generated item IDs;
+- removes provider-generated item IDs;
 - drops encrypted-only and unknown provider-specific items.
 
-There is no retry or special state when data is removed. If a saved entry has no provider information, RocketClaw treats it as belonging to the default provider.
+There is no retry or special state when data is removed. If a saved entry has no provider information, RocketCode treats it as belonging to the default provider.
 
-The same conversion is applied to an interrupted root-turn checkpoint when its saved display model belongs to a different provider. Child runs have no persisted conversation history and need no storage conversion.
-
-RocketCode does not compare providers and does not know why an entry was converted.
+The same conversion is applied when `openTurn` resumes an interrupted turn's checkpoint, root or subagent, to each item whose display model or attribution range belongs to a different provider. The resumed turn continues from, and later saves, the converted items.
 
 ## Saving New Turns
 
@@ -138,7 +136,7 @@ default provider: gpt-6.1-sol
 named provider:   work/gpt-6.1-sol
 ```
 
-Active-turn checkpoints use the corresponding existing display-model field. RocketClaw can therefore apply the same provider-name rule during restart recovery without another stored field.
+Active-turn checkpoints use the corresponding existing display-model field. RocketCode can therefore apply the same provider-name rule during restart recovery without another stored field.
 
 ## Provider Credentials
 
@@ -202,7 +200,7 @@ Behavioral tests cover:
 - different-provider function calls and outputs preserving their portable fields;
 - different-provider reasoning and compaction retaining readable text but not encrypted content or provider item IDs;
 - entries with missing or unqualified models being treated as default-provider entries;
-- interrupted-turn recovery using the same conversion;
+- continued subagent history and interrupted-turn recovery using the same conversion;
 - provider-specific API-key and ChatGPT client construction;
 - login, list, and logout changing only the selected provider;
 - concurrent auth updates preserving every provider's credential;

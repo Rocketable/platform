@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -39,7 +40,7 @@ func TestSidebarSendFailures(t *testing.T) {
 
 	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\nmodel: gpt-6.1-sol\n---\nHelp."), 0o600))
-	listener, err := Listen(testSocketPath(t))
+	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
 	// This test-only limit rejects both the owner-bearing terminal and a session row.
@@ -126,7 +127,7 @@ func TestSidebarHTTPStreamsBeforeGoTailAndCancels(t *testing.T) {
 
 		return channel, []string{"main"}, nil
 	}}
-	listener, err := Listen(testSocketPath(t))
+	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
 	listReturned := make(chan struct{})

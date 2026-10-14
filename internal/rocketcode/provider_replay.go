@@ -1,58 +1,16 @@
-package backend
+package rocketcode
 
 import (
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"iter"
 	"slices"
-	"strconv"
 	"strings"
 
-	"github.com/Rocketable/platform/internal/rocketcode"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 )
-
-// PromptPrincipal reads the top-level principal attribute of a recorded prompt header.
-func PromptPrincipal(header string) string {
-	inside, ok := strings.CutPrefix(header, "[")
-	if !ok || !strings.HasSuffix(inside, "]") {
-		return ""
-	}
-
-	_, attributes, _ := strings.Cut(strings.TrimSuffix(inside, "]"), " ")
-	for attributes != "" {
-		name, value, ok := strings.Cut(attributes, "=")
-		if !ok {
-			return ""
-		}
-
-		if strings.HasPrefix(value, `"`) {
-			quoted, err := strconv.QuotedPrefix(value)
-			if err != nil {
-				return ""
-			}
-
-			attributes = value[len(quoted):]
-			if attributes != "" && !strings.HasPrefix(attributes, " ") {
-				return ""
-			}
-
-			if name == "principal" {
-				principal, _ := strconv.Unquote(quoted) // QuotedPrefix already validated this string.
-				return principal
-			}
-		} else {
-			_, attributes, _ = strings.Cut(value, " ")
-		}
-
-		attributes = strings.TrimPrefix(attributes, " ")
-	}
-
-	return ""
-}
 
 func providerForModel(model string) string {
 	model = strings.TrimSpace(model)
@@ -63,69 +21,42 @@ func providerForModel(model string) string {
 	return "openai"
 }
 
-func sessionEntryForProvider(entry *rocketcode.SessionEntry, provider string) (rocketcode.SessionEntry, error) {
-	if providerForModel(entry.Model) == provider {
-		return *entry, nil
-	}
+// forProvider replaces each replay item another provider's model produced with
+// the portable input any provider accepts, and moves the attribution ranges to
+// the replaced items.
+func (e *SessionEntry) forProvider(provider string) error {
+	replay := make([]json.RawMessage, 0, len(e.ReplayInput))
 
-	ranges := slices.Clone(entry.ReplayAttribution)
-
-	replay, err := replayForProvider(entry.ReplayInput, ranges)
-	if err != nil {
-		return rocketcode.SessionEntry{}, err
-	}
-
-	projected := *entry
-	projected.ResponseID = ""
-	projected.ReplayInput = replay
-	projected.ReplayAttribution = ranges
-	projected.OutputTrace = slices.DeleteFunc(slices.Clone(entry.OutputTrace), func(raw json.RawMessage) bool {
-		return len(rocketcode.PublicProgressFromTrace([]json.RawMessage{raw})) == 0
-	})
-
-	return projected, nil
-}
-
-func sessionEntriesForProvider(entries iter.Seq2[rocketcode.SessionEntry, error], provider string) iter.Seq2[rocketcode.SessionEntry, error] {
-	return func(yield func(rocketcode.SessionEntry, error) bool) {
-		for entry, err := range entries {
-			if err == nil {
-				entry, err = sessionEntryForProvider(&entry, provider)
-			}
-
-			if !yield(entry, err) {
-				return
-			}
+	boundaries := make([]int, len(e.ReplayInput)+1)
+	for i, raw := range e.ReplayInput {
+		boundaries[i] = len(replay)
+		if providerForModel(e.AttributionAt(i).Model) == provider {
+			replay = append(replay, raw)
+			continue
 		}
-	}
-}
-
-func replayForProvider(rawItems []json.RawMessage, attribution ...[]rocketcode.ReplayAttribution) ([]json.RawMessage, error) {
-	items := make([]responses.ResponseInputItemUnionParam, 0, len(rawItems))
-
-	boundaries := make([]int, len(rawItems)+1)
-	for i, raw := range rawItems {
-		boundaries[i] = len(items)
 
 		var kind struct {
 			Type string `json:"type"`
 		}
 		if err := json.Unmarshal(raw, &kind); err != nil {
-			return nil, fmt.Errorf("decode replay item %d type: %w", i, err)
+			return fmt.Errorf("decode replay item %d type: %w", i, err)
 		}
 
-		var summaryTexts []string
+		var (
+			items        []responses.ResponseInputItemUnionParam
+			summaryTexts []string
+		)
 
 		switch kind.Type {
 		case "message":
 			var item replayMessage
 			if err := json.Unmarshal(raw, &item); err != nil {
-				return nil, fmt.Errorf("decode replay item %d message: %w", i, err)
+				return fmt.Errorf("decode replay item %d message: %w", i, err)
 			}
 
 			message, keep, err := portableMessage(item.Role, item.Phase, item.Content)
 			if err != nil {
-				return nil, fmt.Errorf("decode replay item %d message %w", i, err)
+				return fmt.Errorf("decode replay item %d message %w", i, err)
 			}
 
 			if keep {
@@ -147,19 +78,19 @@ func replayForProvider(rawItems []json.RawMessage, attribution ...[]rocketcode.R
 		case "function_call":
 			call, err := portableFunctionCall(raw)
 			if err != nil {
-				return nil, fmt.Errorf("decode replay item %d function call %w", i, err)
+				return fmt.Errorf("decode replay item %d function call %w", i, err)
 			}
 
 			items = append(items, call)
 		case "function_call_output":
 			var item replayFunctionOutput
 			if err := json.Unmarshal(raw, &item); err != nil {
-				return nil, fmt.Errorf("decode replay item %d function output: %w", i, err)
+				return fmt.Errorf("decode replay item %d function output: %w", i, err)
 			}
 
 			output, keep, err := portableFunctionOutput(item.CallID, item.Output)
 			if err != nil {
-				return nil, fmt.Errorf("decode replay item %d function output %w", i, err)
+				return fmt.Errorf("decode replay item %d function output %w", i, err)
 			}
 
 			if keep {
@@ -168,32 +99,19 @@ func replayForProvider(rawItems []json.RawMessage, attribution ...[]rocketcode.R
 		case "reasoning":
 			var item replayReasoning
 			if err := json.Unmarshal(raw, &item); err != nil {
-				return nil, fmt.Errorf("decode replay item %d reasoning: %w", i, err)
+				return fmt.Errorf("decode replay item %d reasoning: %w", i, err)
 			}
 
-			texts, _, err := readableText(item.Summary)
+			texts, err := readableText(item.Summary)
 			if err != nil {
-				return nil, fmt.Errorf("decode replay item %d reasoning summary: %w", i, err)
+				return fmt.Errorf("decode replay item %d reasoning summary: %w", i, err)
 			}
 
 			summaryTexts = texts
 		case "compaction", "compaction_summary":
-			var item replayCompaction
-			if err := json.Unmarshal(raw, &item); err != nil {
-				return nil, fmt.Errorf("decode replay item %d compaction: %w", i, err)
-			}
-
-			texts, present, err := readableText(item.Content)
+			texts, err := compactionText(raw)
 			if err != nil {
-				return nil, fmt.Errorf("decode replay item %d compaction content: %w", i, err)
-			}
-
-			texts = nonblankText(texts)
-			if !present || len(texts) == 0 {
-				texts, _, err = readableText(item.Summary)
-				if err != nil {
-					return nil, fmt.Errorf("decode replay item %d compaction summary: %w", i, err)
-				}
+				return fmt.Errorf("decode replay item %d %w", i, err)
 			}
 
 			summaryTexts = texts
@@ -204,19 +122,43 @@ func replayForProvider(rawItems []json.RawMessage, attribution ...[]rocketcode.R
 			message.OfMessage.Type = "message"
 			items = append(items, message)
 		}
+
+		portable, err := ReplayInputFromParams(items)
+		if err != nil {
+			return fmt.Errorf("encode projected replay: %w", err)
+		}
+
+		replay = append(replay, portable...)
 	}
 
-	boundaries[len(rawItems)] = len(items)
-	for _, ranges := range attribution {
-		rocketcode.RemapReplayAttribution(ranges, boundaries)
+	boundaries[len(e.ReplayInput)] = len(replay)
+	e.ReplayAttribution = slices.Clone(e.ReplayAttribution)
+	RemapReplayAttribution(e.ReplayAttribution, boundaries)
+	e.ReplayInput = replay
+
+	return nil
+}
+
+// compactionText returns a compaction item's readable text: its content, or its
+// summary when the content has none.
+func compactionText(raw json.RawMessage) ([]string, error) {
+	var item struct{ Content, Summary json.RawMessage }
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return nil, fmt.Errorf("compaction: %w", err)
 	}
 
-	replay, err := rocketcode.ReplayInputFromParams(items)
+	texts, err := readableText(item.Content)
 	if err != nil {
-		return nil, fmt.Errorf("encode projected replay: %w", err)
+		return nil, fmt.Errorf("compaction content: %w", err)
 	}
 
-	return replay, nil
+	if texts = nonblankText(texts); len(texts) == 0 {
+		if texts, err = readableText(item.Summary); err != nil {
+			return nil, fmt.Errorf("compaction summary: %w", err)
+		}
+	}
+
+	return nonblankText(texts), nil
 }
 
 type replayMessage struct {
@@ -239,8 +181,6 @@ type replayFunctionOutput struct {
 }
 
 type replayReasoning struct{ Summary json.RawMessage }
-
-type replayCompaction struct{ Content, Summary json.RawMessage }
 
 type portableContent struct {
 	Type     string `json:"type"`
@@ -393,23 +333,23 @@ func nonblankText(texts []string) []string {
 	})
 }
 
-func readableText(raw json.RawMessage) (texts []string, present bool, err error) {
+func readableText(raw json.RawMessage) ([]string, error) {
 	if raw == nil {
-		return nil, false, nil
+		return nil, nil
 	}
 
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
-		return nil, true, errors.New("empty value")
+		return nil, errors.New("empty value")
 	}
 
 	if raw[0] == '"' {
 		var text string
 		if err := json.Unmarshal(raw, &text); err != nil {
-			return nil, true, fmt.Errorf("decode string: %w", err)
+			return nil, fmt.Errorf("decode string: %w", err)
 		}
 
-		return []string{text}, true, nil
+		return []string{text}, nil
 	}
 
 	decode := func(part json.RawMessage) (string, error) {
@@ -436,25 +376,25 @@ func readableText(raw json.RawMessage) (texts []string, present bool, err error)
 	switch raw[0] {
 	case '{':
 		text, err := decode(raw)
-		return []string{text}, true, err
+		return []string{text}, err
 	case '[':
 		var parts []json.RawMessage
 		if err := json.Unmarshal(raw, &parts); err != nil {
-			return nil, true, fmt.Errorf("decode array: %w", err)
+			return nil, fmt.Errorf("decode array: %w", err)
 		}
 
 		texts := make([]string, len(parts))
 		for i := range parts {
 			text, err := decode(parts[i])
 			if err != nil {
-				return nil, true, fmt.Errorf("item %d: %w", i, err)
+				return nil, fmt.Errorf("item %d: %w", i, err)
 			}
 
 			texts[i] = text
 		}
 
-		return texts, true, nil
+		return texts, nil
 	default:
-		return nil, true, errors.New("expected string, text object, or text array")
+		return nil, errors.New("expected string, text object, or text array")
 	}
 }

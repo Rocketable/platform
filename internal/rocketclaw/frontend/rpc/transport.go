@@ -2,41 +2,12 @@ package rpc
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net"
-	"os"
-	"path/filepath"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
-
-// Listen opens a Unix socket inside an existing private directory. Only the
-// trusted Web proxy, running as the same OS user, may supply browser IP metadata.
-// TCP and forwarded HTTP headers are not authentication boundaries.
-func Listen(socketPath string) (net.Listener, error) {
-	if !filepath.IsAbs(socketPath) {
-		return nil, errors.New("web RPC socket path must be absolute")
-	}
-
-	dir, err := os.Stat(filepath.Dir(socketPath))
-	if err != nil {
-		return nil, fmt.Errorf("stat web RPC socket directory: %w", err)
-	}
-
-	if !dir.IsDir() || dir.Mode().Perm()&0o077 != 0 {
-		return nil, errors.New("web RPC socket directory must be private (0700)")
-	}
-
-	listener, err := net.Listen("unix", socketPath)
-	if err != nil {
-		return nil, fmt.Errorf("listen on web RPC socket: %w", err)
-	}
-
-	return listener, nil
-}
 
 // Register publishes the implemented portion of rpc.Web. Other methods retain
 // gRPC's Unimplemented response; they are not successful empty handlers.

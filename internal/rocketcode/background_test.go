@@ -318,6 +318,23 @@ func TestTaskContinueRunsSavedSubagent(t *testing.T) {
 	require.Len(t, saved[key], 6, "the continue call's guardrail runs save under the subagent it continues")
 }
 
+func TestTaskContinueConvertsAnotherProvidersTurn(t *testing.T) {
+	turn := SessionEntry{Version: 1, Type: "turn", TurnID: "turn/call/call-1/task", Agent: "child", Model: "work/model", ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","content":"look"}`),
+		json.RawMessage(`{"type":"reasoning","encrypted_content":"work-only","summary":[{"type":"summary_text","text":"looked closely"}]}`),
+	}}
+	jobs := enabledBackgroundJobs()
+	jobs.RunFunc = InertBackgroundJobs{}.Run
+	mock := mockResponses(responseWithMessage("second", "done"))
+
+	_, _, err := continueTestTask(t, mock, jobs, map[string][]SessionEntry{"/call-1": {turn}}, new(testAgent("child")))("call-3", "more", "/call-1")
+	require.NoError(t, err)
+
+	sent := marshalJSON(t, newParams(mock)[0].Input)
+	require.NotContains(t, sent, "work-only")
+	require.Contains(t, sent, "looked closely")
+}
+
 func TestTaskContinueRejections(t *testing.T) {
 	errBusy := errors.New("subagent /call-1 is still running")
 

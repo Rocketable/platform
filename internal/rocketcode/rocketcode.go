@@ -378,11 +378,6 @@ func NewWithModelResolver(
 
 	systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + strings.TrimSpace(preloadedInstructions+"\n\n"+workspaceInstructions))
 
-	client, origin, err := resolveModel(resolver, activeAgent.Model)
-	if err != nil {
-		return nil, fmt.Errorf("agent %q model: %w", activeAgent.Name, err)
-	}
-
 	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, string(config.ReasoningEffort)))
 	agentForTools := &activeAgent
 	activeAgent.Permission = shellTemp.effectivePermissions(activeAgent.Permission)
@@ -429,48 +424,16 @@ func NewWithModelResolver(
 		backgroundJobs:             config.BackgroundJobs,
 		mcpRegistry:                mcpRegistry,
 	}
-	modelTools, codeHosts := factory.assembleTools(agentForTools)
 
-	var mcpServers []string
-	if factory.mcpRegistry != nil && agentForTools != nil {
-		mcpServers = visibleMCPServers(agentForTools.Permission, factory.mcpRegistry.Names())
+	looper, err := factory.newLooper(agentForTools, systemPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("agent %q model: %w", activeAgent.Name, err)
 	}
 
-	runtimeSystemPrompt := withCodeModeSystemPrompt(
-		composeSystemPromptWithSkills(systemPrompt, skills, agentForTools),
-		modelTools, codeHosts, mcpServers,
-	)
-	looper := &looper{
-		agent:                  activeAgent,
-		ProviderOrigin:         origin,
-		Client:                 newResponsesAPI(client),
-		SystemPrompt:           runtimeSystemPrompt,
-		Model:                  origin.Model,
-		DisplayModel:           origin.displayModel(),
-		ReasoningEffort:        reasoningEffort,
-		Verbosity:              activeAgent.Verbosity,
-		ResponseFormat:         agentOutputResponseFormat(activeAgent.OutputSchema),
-		CompactThreshold:       cmp.Or(origin.CompactThreshold, config.CompactThreshold),
-		CompactionSteering:     config.CompactionSteering,
-		ParallelToolCalls:      config.ParallelToolCalls,
-		Permissions:            activeAgent.Permission,
-		Tools:                  modelTools,
-		CodeModeHosts:          codeHosts,
-		Diagnostics:            config.Diagnostics,
-		AutoApprovePermissions: config.AutoApprovePermissions,
-		PermissionReviewer:     factory,
-		Observability:          config.Observability,
-		Journal:                config.Journal,
-		SteerDrain:             InertSteerDrain{},
-		notes:                  InertBackgroundJobs{},
-		expandInputPrompts:     config.ExpandPromptShellCommands.InputPrompts,
-		promptExpansion:        promptExpansion,
-		spillRel:               spillRel,
-	}
-	looper.promptExpansion.customShell = activeAgent.CustomShell
+	looper.Journal, looper.expandInputPrompts = config.Journal, config.ExpandPromptShellCommands.InputPrompts
 
 	if config.Diagnostics {
-		if err := printRuntimeDiagnostics(diagnosticsWriter, &activeAgent, looper.Tools, skills, runtimeSystemPrompt); err != nil {
+		if err := printRuntimeDiagnostics(diagnosticsWriter, &activeAgent, looper.Tools, skills, looper.SystemPrompt); err != nil {
 			return nil, err
 		}
 	}

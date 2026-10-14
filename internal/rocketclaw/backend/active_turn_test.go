@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -317,6 +318,114 @@ func TestStopOnWaitingRowPostsStoppedFinalAndDoesNotRun(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, protocol.TerminalStopped, entries[0].Terminal, "the web transcript shows the stopped turn")
+}
+
+// A $stop after the bridge took an unfinished row but before it handled it
+// finishes the row as stopped once, and the taken request never runs it.
+func TestStopBetweenTakeAndHandleDoesNotRun(t *testing.T) {
+	t.Parallel()
+
+	newBridge, service, requests, finals := newResumeTestBridges(t, false)
+	bridge := newBridge()
+	seedActiveTurn(t, service, bridge.config.ConversationID, "turn-taken", nil)
+
+	head, ok, err := bridge.headRequest(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	require.NotNil(t, bridge.InterruptActiveTurn())
+	final := readFinal(t, finals)
+	assert.Equal(t, "turn-taken", final.TurnID)
+	assert.Equal(t, protocol.TerminalStopped, final.Terminal)
+
+	bridge.handle(t.Context(), &head)
+	assert.Empty(t, requests, "the taken request does not run the stopped row")
+	assert.Empty(t, finals, "the stopped final is posted once")
+	assert.Empty(t, runningTestTurns(t, service))
+}
+
+// A $stop after the bridge started handling a request but before its turn
+// registered its cancel stops the turn before any model call, once, and the
+// next message runs normally.
+func TestStopBeforeTurnRegistersCancelStopsTurn(t *testing.T) {
+	t.Parallel()
+
+	newBridge, service, requests, finals := newResumeTestBridges(t, false)
+	bridge := newBridge()
+	runTestBridge(t, bridge)
+
+	// The held history lock parks the handler in activation, after handling starts.
+	tx, err := service.db.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	require.NoError(t, lockSessionHistory(t.Context(), tx, bridge.config.ConversationID))
+	require.NoError(t, bridge.Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "stop me", true)))
+	require.Eventually(t, bridge.handlingSnapshot, 5*time.Second, 10*time.Millisecond)
+
+	bridge.InterruptActiveTurn()
+	require.NoError(t, tx.Rollback())
+	assert.Equal(t, protocol.TerminalStopped, readFinal(t, finals).Terminal)
+	require.Eventually(t, func() bool { return !bridge.handlingSnapshot() }, 5*time.Second, 10*time.Millisecond)
+	assert.Empty(t, requests, "the stopped turn calls no model")
+	assert.Empty(t, finals, "the stopped final is posted once")
+	assert.Empty(t, runningTestTurns(t, service))
+
+	require.NoError(t, bridge.Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "next", true)))
+	assert.Equal(t, "answer", readFinal(t, finals).Text, "the stop does not leak into the next turn")
+	assert.Len(t, requests, 1)
+}
+
+// The same holds for a hidden producer's turn run behind its destination, whose stops reach the producer.
+func TestStopBeforeProducerTurnRegistersCancelStopsTurn(t *testing.T) {
+	t.Parallel()
+
+	nt := newNoteTest(t, answerNoteTest)
+	manager, _ := nt.run(t, ignoreOutbound)
+	private, managed := "external_mcp:planner:private", protocol.SlackThreadConversationID("C9", "9.9")
+
+	for _, conversationID := range []string{private, managed} {
+		require.NoError(t, nt.service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	}
+
+	submit := func(text string) {
+		origin := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, text, true)
+		origin.ConversationID, origin.SyncDestination = private, managed
+		require.NoError(t, nt.bridge(t, manager, managed).enqueue(t.Context(), &bridgeRequest{inbound: origin, producer: nt.bridge(t, manager, private)}, "test"))
+	}
+
+	// The held history lock parks the handler in activation, after it reserved the destination.
+	tx, err := nt.service.db.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	require.NoError(t, lockSessionHistory(t.Context(), tx, private))
+	submit("stop me")
+	require.Eventually(t, func() bool { return turnPairBusy(nt.service, managed) }, 5*time.Second, 10*time.Millisecond)
+
+	manager.InterruptConversation(managed)
+	require.NoError(t, tx.Rollback())
+	assert.Equal(t, protocol.TerminalStopped, readFinalFor(t, nt.finals, managed).Terminal)
+	nt.waitIdle(t, manager, managed)
+	assert.Empty(t, nt.requests, "the stopped turn calls no model")
+	assert.Empty(t, nt.finals, "the stopped final is posted once")
+
+	submit("next")
+	assert.Equal(t, "answer", readFinalFor(t, nt.finals, managed).Text, "the stop does not leak into the next turn")
+	assert.Len(t, nt.requests, 1)
+}
+
+// Turn IDs key active_turns across conversations, so two issued within one
+// clock tick still differ, in issue order.
+func TestNewTurnIDIncreases(t *testing.T) {
+	t.Parallel()
+
+	service := new(SessionService)
+
+	var last int64
+
+	for range 1000 {
+		n, err := strconv.ParseInt(strings.TrimPrefix(service.newTurnID(), "turn-"), 10, 64)
+		require.NoError(t, err)
+		require.Greater(t, n, last)
+		last = n
+	}
 }
 
 // AE2: shutdown cancels a turn blocked on the model at once, publishes nothing,
@@ -1458,6 +1567,32 @@ func TestResumedTurnFailurePostsInternalErrorFinal(t *testing.T) {
 	}
 }
 
+// A turn whose saved input holds no prompt fails as a normal turn instead of
+// crashing the process, and the conversation keeps serving later messages.
+func TestCapturedTurnWithoutPromptFailsTurn(t *testing.T) {
+	t.Parallel()
+
+	newBridge, service, requests, finals := newResumeTestBridges(t, false)
+	bridge := newBridge()
+	conversationID := bridge.config.ConversationID
+
+	msg := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "hello", true)
+	msg.ConversationID = conversationID
+	require.NoError(t, startTurnDB(t.Context(), service.db, "turn-empty", conversationID, msg))
+	require.NoError(t, service.SaveTurnStep(t.Context(), conversationID, "turn-empty/canonical", json.RawMessage(`{"workflow_source":"saved"}`)))
+
+	runTestBridge(t, bridge)
+
+	failed := readFinal(t, finals)
+	assert.Equal(t, "turn-empty", failed.TurnID)
+	assert.Equal(t, protocol.TerminalFailed, failed.Terminal)
+	assert.Equal(t, internalErrorResponse+"\n\n"+emptyTurnInputsError{TurnID: "turn-empty"}.Error(), failed.Text)
+	assert.Empty(t, requests, "the empty turn never reaches the model")
+
+	require.NoError(t, bridge.Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "next", true)))
+	assert.Equal(t, "answer", readFinal(t, finals).Text)
+}
+
 // A resumed turn does not post its web input's consume card a second time.
 func TestResumedTurnPostsConsumeCardOnce(t *testing.T) {
 	t.Parallel()
@@ -1826,6 +1961,56 @@ func TestRestartResumesBackgroundSubagent(t *testing.T) {
 	manager, _ = nt.restart(t)
 	nt.waitIdle(t, manager, nt.conversationID)
 	assert.Empty(t, nt.requests, "a second start replays nothing")
+}
+
+// A restart between a subagent turn's save and its job's settlement resumes the journaled turn,
+// which must not save the turn again.
+func TestResumedSubagentTurnSavedBeforeSettlementSavesOnce(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+
+		w.Header().Set("Content-Type", "application/json")
+		writeRawRunMessage(t, w, "resp", "msg", "found it")
+	}))
+	t.Cleanup(server.Close)
+
+	workspace := t.TempDir()
+	writeMainAgentSkills(t, workspace, "---\ndescription: Main\nmodel: gpt-6.1-sol\nmode: primary\n---\nPrompt\n")
+	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
+	root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(cfg), "main", slog.New(slog.DiscardHandler), toolModePersistent)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	service := newTestSessionService(t)
+	children := childSessions{store: service, conversationID: "main"}
+	require.NoError(t, children.AppendChildEntry(t.Context(), "/call-1", &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "turn-1/call/call-1/task", Agent: "main", Timestamp: time.Now().UTC()}))
+
+	bridge := &Bridge{runtime: config.NewLockedConfig(cfg), config: Config{ConversationID: "main", SessionService: service}, log: slog.New(slog.DiscardHandler)}
+	runtimeConfig := bridge.rocketcodeConfig(workspace, nil)
+	runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
+	require.NoError(t, err)
+
+	// The job's settlement, which clears its journaled turn, never runs.
+	for _, input := range []string{"more", ""} {
+		got, err := runtime.ContinueSubagent(t.Context(), "job-1", "/call-1", "main", input)
+		require.NoError(t, err)
+		require.Contains(t, got, "found it")
+	}
+
+	require.Equal(t, 1, requests, "the resumed turn replays its journaled answer")
+
+	saved, err := children.ChildEntries(t.Context(), "/call-1")
+	require.NoError(t, err)
+
+	turnIDs := make([]string, len(saved))
+	for i := range saved {
+		turnIDs[i] = saved[i].TurnID
+	}
+
+	require.Equal(t, []string{"turn-1/call/call-1/task", "job-1/task"}, turnIDs)
 }
 
 // The killed note wakes the hidden cron run, and its follow-up is posted in the thread the run posted.

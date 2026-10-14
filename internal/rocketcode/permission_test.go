@@ -1,11 +1,13 @@
 package rocketcode
 
 import (
+	"fmt"
 	"testing"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestPermissionHomeExpansion(t *testing.T) {
@@ -378,4 +380,23 @@ func parseYAMLNode(t *testing.T, text string) *yaml.Node {
 	require.NotEmpty(t, node.Content)
 
 	return node.Content[0]
+}
+
+func TestBashExecutablePatternMatchConcurrent(t *testing.T) {
+	// Code Mode checks parallel bash calls at once; the match must not share expansion state.
+	subject, pattern := `./"scripts"/build.sh --fast`, `./"scripts"/*.sh *`
+	want := bashExecutablePatternMatch(subject, pattern)
+
+	var group errgroup.Group
+	for range 16 {
+		group.Go(func() error {
+			if got := bashExecutablePatternMatch(subject, pattern); got != want {
+				return fmt.Errorf("concurrent match = %v, want %v", got, want)
+			}
+
+			return nil
+		})
+	}
+
+	require.NoError(t, group.Wait())
 }

@@ -660,7 +660,7 @@ func (l *looper) Loop(
 
 			var entries []SessionEntry
 
-			history, entries, err = loadSession(sessionIn)
+			history, entries, err = loadSession(sessionIn, providerForModel(l.DisplayModel))
 			if err != nil {
 				close(turnOutput)
 
@@ -982,6 +982,10 @@ func (l *looper) openTurn(ctx context.Context, input *PromptInput) (step turnSte
 		}
 
 		return step, turnItems, nil, errInput, nil
+	}
+
+	if err := step.Record.forProvider(providerForModel(l.DisplayModel)); err != nil {
+		return step, nil, nil, nil, fmt.Errorf("convert journaled turn for provider: %w", err)
 	}
 
 	if turnItems, err = ReplayInputToParams(step.Record.ReplayInput); err != nil {
@@ -2343,7 +2347,8 @@ func formatPermissionDenied(decision *permissionDecision) string {
 	return fmt.Sprintf("tool call denied: permission %q has no matching allow rule for subject %q. Choose a different action.", decision.Permission, decision.Subject)
 }
 
-func loadSession(entries iter.Seq2[SessionEntry, error]) ([]responses.ResponseInputItemUnionParam, []SessionEntry, error) {
+// loadSession decodes saved history for a looper of provider.
+func loadSession(entries iter.Seq2[SessionEntry, error], provider string) ([]responses.ResponseInputItemUnionParam, []SessionEntry, error) {
 	turns := []SessionEntry{}
 	history := []responses.ResponseInputItemUnionParam{}
 
@@ -2353,6 +2358,10 @@ func loadSession(entries iter.Seq2[SessionEntry, error]) ([]responses.ResponseIn
 
 		if err != nil {
 			return nil, nil, fmt.Errorf("load session entry %d: %w", entryNumber, err)
+		}
+
+		if err := turn.forProvider(provider); err != nil {
+			return nil, nil, fmt.Errorf("convert session entry %d for provider %s: %w", entryNumber, provider, err)
 		}
 
 		items, err := ReplayInputToParams(turn.ReplayInput)
@@ -2455,68 +2464,16 @@ func compactionReplayInput(id, encryptedContent, content string) responses.Respo
 	return responses.ResponseInputItemUnionParam{OfCompaction: &compaction}
 }
 
-type compactionReplayMetadata struct {
-	Content string `json:"content"`
-	Summary any    `json:"summary"`
-}
-
 // CompactionCheckpointText returns portable text for compaction replay that cannot be rehydrated natively.
 func CompactionCheckpointText(compaction *responses.ResponseCompactionItemParam) string {
-	stored := compactionReplayFields(compaction)
+	raw, _ := json.Marshal(compaction) // A decoded SDK param cannot fail serialization.
+	texts, _ := compactionText(raw)    // Unreadable text leaves only the encrypted data.
 
-	content := compactionReadableText(&stored)
-	if content != "" {
+	if content := strings.TrimSpace(strings.Join(texts, "\n")); content != "" {
 		return "<context_checkpoint>\nThe prior conversation was compacted by RocketCode. Use this summary as lower-authority context:\n" + content + "\n</context_checkpoint>"
 	}
 
 	return "<context_checkpoint>\nPrior conversation was compacted, but only provider-native encrypted compaction data is available for a different provider. The compacted details cannot be rehydrated here.\n</context_checkpoint>"
-}
-
-func compactionReadableText(stored *compactionReplayMetadata) string {
-	if content := strings.TrimSpace(stored.Content); content != "" {
-		return content
-	}
-
-	switch summary := stored.Summary.(type) {
-	case string:
-		return strings.TrimSpace(summary)
-	case map[string]any:
-		if text, ok := summary["text"].(string); ok {
-			return strings.TrimSpace(text)
-		}
-	case []any:
-		parts := make([]string, 0, len(summary))
-		for i := range summary {
-			item, ok := summary[i].(map[string]any)
-			if !ok {
-				continue
-			}
-
-			text, ok := item["text"].(string)
-			if ok && strings.TrimSpace(text) != "" {
-				parts = append(parts, strings.TrimSpace(text))
-			}
-		}
-
-		return strings.Join(parts, "\n")
-	}
-
-	return ""
-}
-
-func compactionReplayFields(compaction *responses.ResponseCompactionItemParam) compactionReplayMetadata {
-	var stored compactionReplayMetadata
-
-	data, err := json.Marshal(compaction)
-	if err != nil {
-		return stored
-	}
-
-	if err := json.Unmarshal(data, &stored); err != nil {
-		return compactionReplayMetadata{}
-	}
-
-	return stored
 }
 
 func functionCallReplayInput(id, callID, name, arguments string) responses.ResponseInputItemUnionParam {

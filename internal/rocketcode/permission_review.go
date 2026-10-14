@@ -1,19 +1,15 @@
 package rocketcode
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"time"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
-	"github.com/openai/openai-go/v3/shared"
-	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -88,42 +84,16 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	agent.Permission = f.shellTemp.effectivePermissions(agent.Permission)
 	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
 
-	client, origin, err := resolveModel(f.resolver, agent.Model)
-	if err != nil {
-		return permissionReviewFailure("automatic permission reviewer model failed: " + err.Error())
-	}
-
 	childFactory := *f
 	childFactory.inPermissionReview = true
 	childFactory.childKey = f.childKey + "/" + request.Review
 
-	modelTools, codeHosts := childFactory.assembleTools(&agent)
-	child := &looper{
-		agent:                  agent,
-		ProviderOrigin:         origin,
-		Client:                 newResponsesAPI(client),
-		SystemPrompt:           childFactory.childSystemPrompt(&agent, modelTools, codeHosts),
-		Model:                  origin.Model,
-		DisplayModel:           origin.displayModel(),
-		ReasoningEffort:        shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
-		Verbosity:              agent.Verbosity,
-		CompactThreshold:       cmp.Or(origin.CompactThreshold, f.compactThreshold),
-		CompactionSteering:     f.compactionSteering,
-		ParallelToolCalls:      f.parallelToolCalls,
-		ResponseFormat:         permissionReviewResponseFormat(),
-		Permissions:            agent.Permission,
-		Tools:                  modelTools,
-		CodeModeHosts:          codeHosts,
-		Diagnostics:            f.diagnostics,
-		AutoApprovePermissions: f.autoApprovePermissions,
-		PermissionReviewer:     &childFactory,
-		InPermissionReview:     true,
-		Observability:          f.observability,
-		Journal:                InertJournal{},
-		notes:                  InertBackgroundJobs{},
-		SteerDrain:             InertSteerDrain{},
+	child, err := childFactory.newLooper(&agent, childFactory.childSystemPrompt(&agent))
+	if err != nil {
+		return permissionReviewFailure("automatic permission reviewer model failed: " + err.Error())
 	}
-	childFactory.configureSpill(child)
+
+	child.ResponseFormat = permissionReviewResponseFormat()
 
 	payload, err := json.MarshalIndent(request, "", "  ")
 	if err != nil {
@@ -138,43 +108,17 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	reviewCtx, cancel := context.WithTimeout(ctx, permissionReviewTimeout)
 	defer cancel()
 
-	output := make(chan ChatResponse)
+	var observer chatObserver = inertChatObserver{}
+	if f.diagnostics {
+		observer = &permissionReviewDiagnostics{output: parentOutput, reviewer: agent.Name}
+	}
 
-	input := make(chan PromptInput, 1)
-	input <- PromptInput{Role: PromptInputRoleUser, Texts: texts, Responses: output}
-
-	close(input)
-
-	var (
-		group errgroup.Group
-		last  string
-	)
-
-	group.Go(func() error {
-		for item := range output {
-			if f.diagnostics {
-				emitPermissionReviewDiagnostic(parentOutput, agent.Name, item)
-			}
-
-			if item.Kind == ChatResponseAssistantMessage {
-				last = item.Text
-			}
-		}
-
-		return nil
-	})
-
-	if err := child.Loop(reviewCtx, input, f.childSession, childFactory.childSessionOut(reviewCtx), make(chan os.Signal, 1)); err != nil {
-		_ = group.Wait()
-
+	last, err := child.runPrompt(reviewCtx, "", texts, f.childSession, childFactory.childSessionOut(reviewCtx), observer)
+	if err != nil {
 		if reviewCtx.Err() == context.DeadlineExceeded {
 			return permissionReviewFailure("automatic permission review timed out while evaluating the requested approval")
 		}
 
-		return permissionReviewFailure("automatic permission review failed: " + err.Error())
-	}
-
-	if err := group.Wait(); err != nil {
 		return permissionReviewFailure("automatic permission review failed: " + err.Error())
 	}
 
@@ -190,13 +134,20 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	return decision
 }
 
-func emitPermissionReviewDiagnostic(output chan<- ChatResponse, reviewer string, item ChatResponse) {
+// permissionReviewDiagnostics streams a permission review's output items to output as
+// diagnostics of reviewer.
+type permissionReviewDiagnostics struct {
+	output   chan<- ChatResponse
+	reviewer string
+}
+
+func (d *permissionReviewDiagnostics) observe(item ChatResponse) {
 	if item.Kind == ChatResponseAssistantMessage {
 		return
 	}
 
-	emitSubagentDiagnostic(output, &SubagentDiagnostic{
-		Name:  reviewer,
+	emitSubagentDiagnostic(d.output, &SubagentDiagnostic{
+		Name:  d.reviewer,
 		Label: "auto-approver",
 		Subagent: &SubagentDiagnostic{
 			Label:    nestedDiagnosticLabel(item),

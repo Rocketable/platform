@@ -75,8 +75,7 @@ func SyncInWithOverlays(workspace, runtimeDir string, overlays []string, logger 
 	}
 
 	for _, root := range [...]string{agentsRoot, workspaceCron} {
-		overlayTarget := filepath.Join(workspace, root)
-		if err := syncFSFiltered(payload, root, overlayTarget, "unpacking embedded rocketclaw setup files", logger, false, false, nil); err != nil {
+		if err := syncFSFiltered(payload, root, filepath.Join(workspace, root), "unpacking embedded rocketclaw setup files", logger, false, false, nil); err != nil {
 			return fmt.Errorf("unpack embedded rocketclaw overlay %s: %w", root, err)
 		}
 	}
@@ -239,10 +238,7 @@ func syncWorkspaceScriptSymlinks(workspace, runtimeDir string, logger *slog.Logg
 			return fmt.Errorf("walk runtime scripts %s: %w", path, err)
 		}
 
-		if d.IsDir() {
-			return nil
-		}
-
+		// Directories, symlinks, and other non-regular entries carry a ModeType bit.
 		if d.Type()&os.ModeType != 0 {
 			return nil
 		}
@@ -292,12 +288,38 @@ func syncWorkspaceScriptSymlinks(workspace, runtimeDir string, logger *slog.Logg
 func removeWorkspaceRuntimeScriptSymlinksIfPresent(workspace string, logger *slog.Logger) error {
 	workspaceScripts := filepath.Join(workspace, scriptsRoot)
 
-	if _, err := os.Stat(workspaceScripts); err == nil {
-		if err := removeRuntimeScriptSymlinks(workspace, workspaceScripts, logger); err != nil {
-			return err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(workspaceScripts); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
 		return fmt.Errorf("stat workspace scripts directory %s: %w", workspaceScripts, err)
+	}
+
+	if err := filepath.WalkDir(workspaceScripts, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return fmt.Errorf("walk workspace scripts %s: %w", path, err)
+		}
+
+		if d.Type()&os.ModeSymlink == 0 {
+			return nil
+		}
+
+		if _, err := os.Readlink(path); err != nil {
+			return fmt.Errorf("read workspace script symlink %s: %w", path, err)
+		}
+
+		if !isRuntimeScriptSymlink(workspace, path) {
+			return nil
+		}
+
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("remove runtime workspace script symlink %s: %w", path, err)
+		}
+
+		logger.Debug("removed runtime workspace script symlink", "path", path)
+
+		return nil
+	}); err != nil {
+		return fmt.Errorf("walk workspace scripts: %w", err)
 	}
 
 	return nil
@@ -376,38 +398,6 @@ func syncScriptSymlinkGitExclude(workspace string, generated []string, logger *s
 	return nil
 }
 
-func removeRuntimeScriptSymlinks(workspace, workspaceScripts string, logger *slog.Logger) error {
-	if err := filepath.WalkDir(workspaceScripts, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return fmt.Errorf("walk workspace scripts %s: %w", path, err)
-		}
-
-		if d.Type()&os.ModeSymlink == 0 {
-			return nil
-		}
-
-		if _, err := os.Readlink(path); err != nil {
-			return fmt.Errorf("read workspace script symlink %s: %w", path, err)
-		}
-
-		if !isRuntimeScriptSymlink(workspace, path) {
-			return nil
-		}
-
-		if err := os.Remove(path); err != nil {
-			return fmt.Errorf("remove runtime workspace script symlink %s: %w", path, err)
-		}
-
-		logger.Debug("removed runtime workspace script symlink", "path", path)
-
-		return nil
-	}); err != nil {
-		return fmt.Errorf("walk workspace scripts: %w", err)
-	}
-
-	return nil
-}
-
 func overlayWorkspaceIn(workspace, target string, logger *slog.Logger) error {
 	for _, root := range [...]string{agentsRoot, skillsRoot, workspaceCron, scriptsRoot, workflowsRoot} {
 		dir := filepath.Join(workspace, root)
@@ -474,7 +464,6 @@ func isRuntimeScriptSymlink(workspace, path string) bool {
 
 	target = filepath.Clean(target)
 	for _, root := range []string{filepath.Join(workspace, ".rocketclaw"), filepath.Join(workspace, ".femtoclaw")} {
-		root = filepath.Clean(root)
 		if target == root || strings.HasPrefix(target, root+string(filepath.Separator)) {
 			return true
 		}
@@ -517,27 +506,18 @@ func reconcileGitOverlays(target string, overlays []OverlayInfo, logger *slog.Lo
 	overlayRoot := filepath.Join(target, overlaysRoot)
 
 	info, err := os.Stat(overlayRoot)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			if len(overlays) == 0 {
-				return nil
-			}
 
-			if err := os.MkdirAll(overlayRoot, 0o755); err != nil {
-				return fmt.Errorf("create configured overlay clone directory %s: %w", overlayRoot, err)
-			}
-		} else {
-			return fmt.Errorf("stat configured overlay clone directory %s: %w", overlayRoot, err)
+	switch {
+	case errors.Is(err, os.ErrNotExist) && len(overlays) == 0:
+		return nil
+	case errors.Is(err, os.ErrNotExist):
+		if err := os.MkdirAll(overlayRoot, 0o755); err != nil {
+			return fmt.Errorf("create configured overlay clone directory %s: %w", overlayRoot, err)
 		}
-	}
-
-	if info != nil && !info.IsDir() {
+	case err != nil:
+		return fmt.Errorf("stat configured overlay clone directory %s: %w", overlayRoot, err)
+	case !info.IsDir():
 		return fmt.Errorf("configured overlay clone path is not a directory: %s", overlayRoot)
-	}
-
-	active := map[string]struct{}{}
-	for _, overlay := range overlays {
-		active[filepath.Base(overlay.ClonePath)] = struct{}{}
 	}
 
 	entries, err := os.ReadDir(overlayRoot)
@@ -546,7 +526,7 @@ func reconcileGitOverlays(target string, overlays []OverlayInfo, logger *slog.Lo
 	}
 
 	for _, entry := range entries {
-		if _, ok := active[entry.Name()]; ok {
+		if slices.ContainsFunc(overlays, func(overlay OverlayInfo) bool { return filepath.Base(overlay.ClonePath) == entry.Name() }) {
 			continue
 		}
 
@@ -575,20 +555,17 @@ func applyGitOverlay(target string, overlay OverlayInfo, logger *slog.Logger) er
 		{"remote", "add", "origin", overlay.URL},
 		{"sparse-checkout", "init", "--cone"},
 		{"sparse-checkout", "set", agentsRoot, skillsRoot, workspaceCron, scriptsRoot, workflowsRoot},
+		{"fetch", "--depth=1", "--filter=blob:none", "origin", cmp.Or(overlay.Ref, "HEAD")},
+		{"checkout", "--detach", "FETCH_HEAD"},
 	} {
-		if err := runGit(overlay.ClonePath, args...); err != nil {
-			return err
+		cmd := exec.Command("git", args...)
+		cmd.Dir = overlay.ClonePath
+
+		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 		}
-	}
-
-	fetchRef := cmp.Or(overlay.Ref, "HEAD")
-
-	if err := runGit(overlay.ClonePath, "fetch", "--depth=1", "--filter=blob:none", "origin", fetchRef); err != nil {
-		return err
-	}
-
-	if err := runGit(overlay.ClonePath, "checkout", "--detach", "FETCH_HEAD"); err != nil {
-		return err
 	}
 
 	for _, root := range [...]string{agentsRoot, skillsRoot, workspaceCron, scriptsRoot, workflowsRoot} {
@@ -619,20 +596,6 @@ func gitOverlaySlug(url, ref string) string {
 	})
 
 	return cmp.Or(strings.Join(parts, "-"), "overlay")
-}
-
-func runGit(dir string, args ...string) error {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
-	}
-
-	return nil
 }
 
 func resetRuntimeDirectory(target string, logger *slog.Logger, preserveOverlays bool) error {

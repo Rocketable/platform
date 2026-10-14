@@ -66,8 +66,7 @@ func parseInspectionCommand(name string, args []string) (string, string, error) 
 }
 
 func runtimeRootForInspectionTarget(target, tempPattern, buildName, secretsARN string) (string, *config.Config, func(), error) {
-	cleanup := func() {
-	}
+	cleanup := func() {}
 
 	_, cfg, err := loadRuntimeConfig(secretsARN)
 	if err != nil {

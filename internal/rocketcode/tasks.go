@@ -16,7 +16,6 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
-	"github.com/openai/openai-go/v3/shared"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -24,7 +23,7 @@ const (
 	// askUserQuestionToolName is RocketClaw's tool that asks the human partner (bridge.go).
 	askUserQuestionToolName = "ask_user_question"
 	// taskTurnSuffix ends the turn IDs of task subagents, apart from the timestamp turn IDs of
-	// guardrail and permission review runs saved under the same child key.
+	// guardrail runs saved under the same child key.
 	taskTurnSuffix = "/task"
 )
 
@@ -171,23 +170,15 @@ func (f *toolFactory) availableSubagentsDescription() string {
 	return strings.Join(lines, "\n")
 }
 
-func (f *toolFactory) childSystemPrompt(agent *Agent, modelTools, codeHosts map[string]looperTool) string {
+// childSystemPrompt puts the instructions agent may load ahead of its prompt; the main agent's
+// prompt comes first instead (NewWithModelResolver).
+func (f *toolFactory) childSystemPrompt(agent *Agent) string {
 	rootInstructions := ""
 	if agent.Permission.evaluate("rocketclaw", "load_agents_md").Action == permissionAllow {
 		rootInstructions = f.rootInstructions
 	}
 
-	rootInstructions = strings.TrimSpace(rootInstructions + "\n\n" + f.workspaceInstructions)
-
-	var mcpServers []string
-	if f.mcpRegistry != nil {
-		mcpServers = visibleMCPServers(agent.Permission, f.mcpRegistry.Names())
-	}
-
-	return withCodeModeSystemPrompt(
-		composeSystemPromptWithSkills(strings.TrimSpace(rootInstructions+"\n\n"+agent.Prompt), f.skills, agent),
-		modelTools, codeHosts, mcpServers,
-	)
+	return strings.TrimSpace(strings.TrimSpace(rootInstructions+"\n\n"+f.workspaceInstructions) + "\n\n" + agent.Prompt)
 }
 
 // taskChildJournal journals a Task child under its parent call; outside a tool call there is nothing to resume.
@@ -260,20 +251,14 @@ func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata 
 		return "", err
 	}
 
-	output := make(chan ChatResponse)
-
-	input := make(chan PromptInput, 1)
-	input <- PromptInput{TurnID: ToolCallKey(ctx) + taskTurnSuffix, Role: PromptInputRoleUser, Texts: []string{params.Prompt}, Responses: output}
-
-	close(input)
-
 	var (
-		group            errgroup.Group
-		last             string
-		childDiagnostics []ChatResponse
+		childDiagnostics              = &subagentDiagnostics{agent: agent.Name, metadata: metadata}
+		observer         chatObserver = inertChatObserver{}
 	)
 
 	if f.diagnostics {
+		observer = childDiagnostics
+
 		emitSubagentDiagnostic(parentOutput, &SubagentDiagnostic{
 			Name:  agent.Name,
 			Label: "delegation",
@@ -283,36 +268,7 @@ func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata 
 		})
 	}
 
-	group.Go(func() error {
-		for item := range output {
-			if item.Kind == ChatResponseAssistantMessage {
-				last = item.Text
-			}
-
-			if f.diagnostics {
-				childDiagnostics = append(childDiagnostics, ChatResponse{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{
-					Name:     agent.Name,
-					Label:    nestedDiagnosticLabel(item),
-					Index:    metadata.subagentIndex,
-					Total:    metadata.subagentTotal,
-					Text:     item.Text,
-					Tool:     item.Tool,
-					Subagent: item.Subagent,
-					Provider: item.Provider,
-				}})
-			}
-		}
-
-		return nil
-	})
-
-	interrupts := make(chan os.Signal, 1)
-	err = child.Loop(ctx, input, sessionIn, sessionOut, interrupts)
-
-	if errWait := group.Wait(); errWait != nil {
-		return "", fmt.Errorf("collect task output: %w", errWait)
-	}
-
+	last, err := child.runPrompt(ctx, ToolCallKey(ctx)+taskTurnSuffix, []string{params.Prompt}, sessionIn, sessionOut, observer)
 	if err != nil {
 		return "", err
 	}
@@ -336,7 +292,7 @@ func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata 
 	}
 
 	if f.diagnostics {
-		for _, diagnostic := range childDiagnostics {
+		for _, diagnostic := range childDiagnostics.items {
 			emitDiagnosticChatResponse(parentOutput, diagnostic)
 		}
 
@@ -404,7 +360,7 @@ func (f *toolFactory) subagent(ctx context.Context, base *Agent, childKey string
 			return nil, nil, nil, fmt.Errorf("load subagent history: %w", errLoad)
 		}
 
-		// Guardrail and permission review runs save under the same key with their own turn IDs.
+		// Guardrail runs save under the same key with their own turn IDs.
 		history = slices.DeleteFunc(saved, func(entry SessionEntry) bool { return !strings.HasSuffix(entry.TurnID, taskTurnSuffix) })
 		if len(history) == 0 && !resumed {
 			return nil, nil, nil, fmt.Errorf(continueWithoutTurn, childKey)
@@ -431,38 +387,11 @@ func (f *toolFactory) subagent(ctx context.Context, base *Agent, childKey string
 		childFactory.recursionRemaining = &remaining
 	}
 
-	client, origin, err := resolveModel(f.resolver, agent.Model)
-	if err != nil {
+	if child, err = childFactory.newLooper(&agent, childFactory.childSystemPrompt(&agent)); err != nil {
 		return nil, nil, nil, err
 	}
 
-	modelTools, codeHosts := childFactory.assembleTools(&agent)
-	child = &looper{
-		agent:                  agent,
-		ProviderOrigin:         origin,
-		Client:                 newResponsesAPI(client),
-		SystemPrompt:           childFactory.childSystemPrompt(&agent, modelTools, codeHosts),
-		Model:                  origin.Model,
-		DisplayModel:           origin.displayModel(),
-		ReasoningEffort:        shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
-		Verbosity:              agent.Verbosity,
-		CompactThreshold:       cmp.Or(origin.CompactThreshold, f.compactThreshold),
-		CompactionSteering:     f.compactionSteering,
-		ParallelToolCalls:      f.parallelToolCalls,
-		ResponseFormat:         agentOutputResponseFormat(agent.OutputSchema),
-		Permissions:            agent.Permission,
-		Tools:                  modelTools,
-		CodeModeHosts:          codeHosts,
-		Diagnostics:            f.diagnostics,
-		AutoApprovePermissions: f.autoApprovePermissions,
-		PermissionReviewer:     &childFactory,
-		Observability:          f.observability,
-		Journal:                taskChildJournal(ctx),
-		notes:                  f.backgroundJobs,
-		SteerDrain:             InertSteerDrain{},
-		subagentKey:            childKey,
-	}
-	childFactory.configureSpill(child)
+	child.Journal, child.notes, child.subagentKey, child.InPermissionReview = taskChildJournal(ctx), f.backgroundJobs, childKey, false
 
 	sessionIn = func(yield func(SessionEntry, error) bool) {
 		for i := range history {
@@ -512,31 +441,8 @@ func (r *Runtime) ContinueSubagent(ctx context.Context, jobID, subagentKey, agen
 	}
 
 	child.Journal = TracelessJournal{Parent: r.Journal}
-	output := make(chan ChatResponse)
 
-	inputs := make(chan PromptInput, 1)
-	inputs <- PromptInput{TurnID: turnID, Role: PromptInputRoleUser, Texts: []string{input}, Responses: output}
-
-	close(inputs)
-
-	var (
-		group errgroup.Group
-		last  string
-	)
-
-	group.Go(func() error {
-		for item := range output {
-			if item.Kind == ChatResponseAssistantMessage {
-				last = item.Text
-			}
-		}
-
-		return nil
-	})
-
-	err = child.Loop(ctx, inputs, sessionIn, sessionOut, make(chan os.Signal, 1))
-	_ = group.Wait() // The collector cannot fail.
-
+	last, err := child.runPrompt(ctx, turnID, []string{input}, sessionIn, sessionOut, inertChatObserver{})
 	if err != nil || !resumed {
 		return last, err
 	}
@@ -570,6 +476,69 @@ func (f *toolFactory) childSession(yield func(SessionEntry, error) bool) {
 	}
 }
 
+// chatObserver receives each output item of a turn runPrompt runs, as it arrives.
+type chatObserver interface {
+	observe(ChatResponse)
+}
+
+type inertChatObserver struct{}
+
+func (inertChatObserver) observe(ChatResponse) {}
+
+// subagentDiagnostics collects a task subagent's output items as diagnostics, which runTask emits
+// only once the subagent's guardrail approves its answer.
+type subagentDiagnostics struct {
+	agent    string
+	metadata toolCallMetadata
+	items    []ChatResponse
+}
+
+func (d *subagentDiagnostics) observe(item ChatResponse) {
+	d.items = append(d.items, ChatResponse{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{
+		Name:     d.agent,
+		Label:    nestedDiagnosticLabel(item),
+		Index:    d.metadata.subagentIndex,
+		Total:    d.metadata.subagentTotal,
+		Text:     item.Text,
+		Tool:     item.Tool,
+		Subagent: item.Subagent,
+		Provider: item.Provider,
+	}})
+}
+
+// runPrompt runs texts as the only turn of l, journaled under turnID, passes each output item to
+// observer as it arrives, and returns the turn's last assistant message.
+func (l *looper) runPrompt(ctx context.Context, turnID string, texts []string, sessionIn iter.Seq2[SessionEntry, error], sessionOut func(SessionEntry) error, observer chatObserver) (string, error) {
+	output := make(chan ChatResponse)
+
+	input := make(chan PromptInput, 1)
+	input <- PromptInput{TurnID: turnID, Role: PromptInputRoleUser, Texts: texts, Responses: output}
+
+	close(input)
+
+	var (
+		group errgroup.Group
+		last  string
+	)
+
+	group.Go(func() error {
+		for item := range output {
+			observer.observe(item)
+
+			if item.Kind == ChatResponseAssistantMessage {
+				last = item.Text
+			}
+		}
+
+		return nil
+	})
+
+	err := l.Loop(ctx, input, sessionIn, sessionOut, make(chan os.Signal, 1))
+	_ = group.Wait() // The collector cannot fail.
+
+	return last, err
+}
+
 func (f *toolFactory) childSessionOut(ctx context.Context) func(SessionEntry) error {
 	return func(entry SessionEntry) error {
 		if err := f.childSessions.AppendChildEntry(ctx, f.childKey, &entry); err != nil {
@@ -586,77 +555,24 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 	agent.Permission = f.shellTemp.effectivePermissions(agent.Permission)
 	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
 
-	responseFormat := guardrailResponseFormat()
-
-	client, origin, err := resolveModel(f.resolver, agent.Model)
-	if err != nil {
-		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail model failed: " + err.Error()}
-	}
-
 	childFactory := *f
 	childFactory.inGuardrailRun = true
 	childFactory.childKey = subagentKey
 
-	modelTools, codeHosts := childFactory.assembleTools(&agent)
-	child := &looper{
-		agent:                  agent,
-		ProviderOrigin:         origin,
-		Client:                 newResponsesAPI(client),
-		SystemPrompt:           childFactory.childSystemPrompt(&agent, modelTools, codeHosts),
-		Model:                  origin.Model,
-		DisplayModel:           origin.displayModel(),
-		ReasoningEffort:        shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
-		Verbosity:              agent.Verbosity,
-		CompactThreshold:       cmp.Or(origin.CompactThreshold, f.compactThreshold),
-		CompactionSteering:     f.compactionSteering,
-		ParallelToolCalls:      f.parallelToolCalls,
-		ResponseFormat:         responseFormat,
-		Permissions:            agent.Permission,
-		Tools:                  modelTools,
-		CodeModeHosts:          codeHosts,
-		Diagnostics:            f.diagnostics,
-		AutoApprovePermissions: f.autoApprovePermissions,
-		PermissionReviewer:     &childFactory,
-		InPermissionReview:     f.inPermissionReview,
-		Observability:          f.observability,
-		Journal:                InertJournal{},
-		notes:                  InertBackgroundJobs{},
-		SteerDrain:             InertSteerDrain{},
-	}
-	childFactory.configureSpill(child)
-
-	output := make(chan ChatResponse)
-
-	input := make(chan PromptInput, 1)
-	input <- PromptInput{Role: PromptInputRoleUser, Texts: []string{message}, Responses: output}
-
-	close(input)
-
-	var (
-		group errgroup.Group
-		last  string
-	)
-
-	group.Go(func() error {
-		for item := range output {
-			if f.diagnostics {
-				emitGuardrailDiagnostic(parentOutput, guardedAgent, agent.Name, stage, metadata, item)
-			}
-
-			if item.Kind == ChatResponseAssistantMessage {
-				last = item.Text
-			}
-		}
-
-		return nil
-	})
-
-	if err := child.Loop(ctx, input, f.childSession, childFactory.childSessionOut(ctx), make(chan os.Signal, 1)); err != nil {
-		_ = group.Wait()
-		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail failed: " + err.Error()}
+	child, err := childFactory.newLooper(&agent, childFactory.childSystemPrompt(&agent))
+	if err != nil {
+		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail model failed: " + err.Error()}
 	}
 
-	if err := group.Wait(); err != nil {
+	child.ResponseFormat = guardrailResponseFormat()
+
+	var observer chatObserver = inertChatObserver{}
+	if f.diagnostics {
+		observer = &guardrailDiagnostics{output: parentOutput, guardedAgent: guardedAgent, guardrailAgent: agent.Name, stage: stage, metadata: metadata}
+	}
+
+	last, err := child.runPrompt(ctx, "", []string{message}, f.childSession, childFactory.childSessionOut(ctx), observer)
+	if err != nil {
 		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail failed: " + err.Error()}
 	}
 
@@ -672,18 +588,27 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 	return decision
 }
 
-func emitGuardrailDiagnostic(output chan<- ChatResponse, guardedAgent, guardrailAgent string, stage ChildRunStage, metadata toolCallMetadata, item ChatResponse) {
+// guardrailDiagnostics streams a guardrail run's output items to output as diagnostics of the
+// agent it guards.
+type guardrailDiagnostics struct {
+	output                       chan<- ChatResponse
+	guardedAgent, guardrailAgent string
+	stage                        ChildRunStage
+	metadata                     toolCallMetadata
+}
+
+func (d *guardrailDiagnostics) observe(item ChatResponse) {
 	if item.Kind == ChatResponseAssistantMessage {
 		return
 	}
 
-	emitSubagentDiagnostic(output, &SubagentDiagnostic{
-		Name:  guardedAgent,
-		Index: metadata.subagentIndex,
-		Total: metadata.subagentTotal,
+	emitSubagentDiagnostic(d.output, &SubagentDiagnostic{
+		Name:  d.guardedAgent,
+		Index: d.metadata.subagentIndex,
+		Total: d.metadata.subagentTotal,
 		Subagent: &SubagentDiagnostic{
-			Name:  guardrailAgent,
-			Label: "guardrail(" + string(stage) + ")",
+			Name:  d.guardrailAgent,
+			Label: "guardrail(" + string(d.stage) + ")",
 			Subagent: &SubagentDiagnostic{
 				Label:    nestedDiagnosticLabel(item),
 				Text:     item.Text,

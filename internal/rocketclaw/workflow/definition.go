@@ -108,12 +108,8 @@ func Load(root *os.Root, runtimeDir string) (definitions map[string]*Definition,
 			errClose = fmt.Errorf("close workflow %s: %w", entry.Name(), errClose)
 		}
 
-		if err != nil {
-			return nil, errors.Join(err, errClose)
-		}
-
-		if errClose != nil {
-			return nil, errClose
+		if errJoined := errors.Join(err, errClose); errJoined != nil {
+			return nil, errJoined
 		}
 
 		if !info.Mode().IsRegular() {
@@ -144,13 +140,8 @@ func Compile(filename, name, source string) (*Definition, error) {
 		})
 	}
 
-	options := &syntax.FileOptions{
-		While:           true,
-		Set:             true,
-		TopLevelControl: false,
-		GlobalReassign:  false,
-		Recursion:       false,
-	}
+	// Top-level control flow, global reassignment, and recursion stay disabled.
+	options := &syntax.FileOptions{While: true, Set: true}
 
 	file, errParse := options.Parse(filename, []byte(source), 0)
 	if errParse != nil {
@@ -400,8 +391,7 @@ func isEffectfulDefault(expression syntax.Expr) bool {
 			return !effectful
 		}
 
-		name, ok := callName(call)
-		if ok && (name == "worker" || name == "agent" || name == "parallel" || name == "pipeline" || name == "phase" || name == "print" || name == "fail") {
+		if name, _ := callName(call); name == "worker" || name == "agent" || name == "parallel" || name == "pipeline" || name == "phase" || name == "print" || name == "fail" {
 			effectful = true
 		}
 
@@ -537,20 +527,16 @@ func validateWorkerTools(tools syntax.Expr) error {
 		return errors.New("worker tools must be a literal list of strings or None")
 	}
 
-	seen := make(map[string]bool)
-
-	for _, tool := range list.List {
+	for i, tool := range list.List {
 		literal, ok := tool.(*syntax.Literal)
 		if !ok || literal.Token != syntax.STRING {
 			return errors.New("worker tools must be a literal list of strings or None")
 		}
 
-		name := literal.Value.(string)
-		if name == "task" || seen[name] {
+		// Earlier tools already passed the string-literal check above.
+		if literal.Value == "task" || slices.ContainsFunc(list.List[:i], func(earlier syntax.Expr) bool { return earlier.(*syntax.Literal).Value == literal.Value }) {
 			return errors.New("worker tools must be unique and cannot include task")
 		}
-
-		seen[name] = true
 	}
 
 	return nil
@@ -589,8 +575,6 @@ func parseMeta(meta *syntax.DictExpr, filenameStem string) (name, description st
 			return "", "", nil, errors.New("meta must declare at most 100 phases")
 		}
 
-		seen := make(map[string]bool)
-
 		for _, item := range list.List {
 			literal, ok := item.(*syntax.Literal)
 			if !ok || literal.Token != syntax.STRING || literal.Value.(string) == "" {
@@ -598,11 +582,10 @@ func parseMeta(meta *syntax.DictExpr, filenameStem string) (name, description st
 			}
 
 			phase := literal.Value.(string)
-			if seen[phase] {
+			if slices.Contains(phases, phase) {
 				return "", "", nil, fmt.Errorf("duplicate phase %q", phase)
 			}
 
-			seen[phase] = true
 			phases = append(phases, phase)
 		}
 	}
@@ -698,24 +681,12 @@ func callbackHasFanout(callback syntax.Expr, functions map[string]*syntax.DefStm
 			return true
 		}
 
-		identifier, ok := callName(call)
-		if !ok {
-			return true
-		}
+		// A call without a name yields "", which is neither a fan-out nor a defined function.
+		identifier, _ := callName(call)
+		function := functions[identifier]
+		found = identifier == "parallel" || identifier == "pipeline" || function != nil && !visited[identifier] && callbackHasFanout(function.Name, functions, visited)
 
-		if identifier == "parallel" || identifier == "pipeline" {
-			found = true
-			return false
-		}
-
-		if function := functions[identifier]; function != nil && !visited[identifier] {
-			if callbackHasFanout(function.Name, functions, visited) {
-				found = true
-				return false
-			}
-		}
-
-		return true
+		return !found
 	})
 
 	return found

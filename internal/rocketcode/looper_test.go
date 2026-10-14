@@ -491,7 +491,7 @@ func (m *sessionEntryRecorder) appendEntry(entry *SessionEntry) error {
 
 	m.entries = append(m.entries, *entry)
 
-	_, turns, err := loadSession(sessionEntries(m.entries))
+	_, turns, err := loadSession(sessionEntries(m.entries), "openai")
 	if err != nil {
 		return fmt.Errorf("reload session: %w", err)
 	}
@@ -582,7 +582,7 @@ func TestLooperReloadsSessionWithCurrentRuntimeConfig(t *testing.T) {
 	require.Contains(t, marshalJSON(t, items[3]), `"content":"next question"`)
 	require.Contains(t, marshalJSON(t, items[3]), `"role":"user"`)
 
-	_, savedTurns, err := loadSession(sessionEntries(saved))
+	_, savedTurns, err := loadSession(sessionEntries(saved), "openai")
 	require.NoError(t, err)
 	require.Len(t, savedTurns, 1)
 	require.Equal(t, "turn", savedTurns[0].Type)
@@ -615,7 +615,7 @@ func TestLooperSendsAndReplaysDeveloperPromptInput(t *testing.T) {
 	require.Len(t, saved, 1)
 	require.JSONEq(t, `{"content":"keep this rule","role":"developer","type":"message"}`, string(saved[0].ReplayInput[0]))
 
-	history, _, err := loadSession(sessionEntries(saved))
+	history, _, err := loadSession(sessionEntries(saved), "openai")
 	require.NoError(t, err)
 	require.JSONEq(t, `{"content":"keep this rule","role":"developer","type":"message"}`, marshalJSON(t, history[0]))
 }
@@ -641,7 +641,7 @@ func TestLooperExecuteResultTurnExit(t *testing.T) {
 			loop.Permissions = loop.agent.Permission
 			factory := &toolFactory{baseTools: makeSandboxedTools(&sandboxedFileSystem{root: root}, nil), spillRel: defaultSpillRel, promptExpansion: promptExpansionEnvironment{root: root}}
 			loop.Tools, loop.CodeModeHosts = factory.assembleTools(&loop.agent)
-			factory.configureSpill(loop)
+			loop.spillRel, loop.promptExpansion = factory.spillRel, factory.promptExpansion
 
 			calls := 0
 			loop.Client = mockResponseFunc(func(ctx context.Context, params *responses.ResponseNewParams) (*responses.Response, error) {
@@ -696,7 +696,7 @@ func TestLooperExecuteResultTurnExit(t *testing.T) {
 				resumed := testLooper(mockResponses())
 				resumed.Journal, resumed.agent, resumed.Permissions = journal, loop.agent, loop.agent.Permission
 				resumed.Tools, resumed.CodeModeHosts = factory.assembleTools(&resumed.agent)
-				factory.configureSpill(resumed)
+				resumed.spillRel, resumed.promptExpansion = factory.spillRel, factory.promptExpansion
 
 				calls := 0
 				resumed.Client = mockResponseFunc(func(_ context.Context, params *responses.ResponseNewParams) (*responses.Response, error) {
@@ -921,7 +921,7 @@ func TestLooperPersistsAndReplaysCompactionItems(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
 
-	history, turns, err := loadSession(sessionEntries(saved))
+	history, turns, err := loadSession(sessionEntries(saved), "openai")
 	require.NoError(t, err)
 	require.Len(t, turns, 1)
 	require.Len(t, turns[0].ReplayInput, 3)
@@ -1518,7 +1518,7 @@ func TestLooperDispatchesToolCalls(t *testing.T) {
 	require.Equal(t, "developer", *second[5].GetRole())
 	require.Contains(t, marshalJSON(t, second[5]), "first instructions")
 
-	history, _, err := loadSession(sessionEntries(saved))
+	history, _, err := loadSession(sessionEntries(saved), "openai")
 	require.NoError(t, err)
 	require.Len(t, history, 7)
 	require.Equal(t, "function_call", *history[1].GetType())
@@ -1847,7 +1847,7 @@ func TestLooperSendsAndReplaysUserAttachments(t *testing.T) {
 	require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), `"type":"input_file"`)
 	require.NotContains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), "prompt_header")
 
-	history, _, err := loadSession(sessionEntries(saved))
+	history, _, err := loadSession(sessionEntries(saved), "openai")
 	require.NoError(t, err)
 	serialized := marshalJSON(t, history)
 	require.Contains(t, serialized, `"image_url":"data:image/png;base64,aW1hZ2U="`)
@@ -1879,7 +1879,7 @@ func TestLooperSendsAndReplaysDeveloperAttachments(t *testing.T) {
 	require.Contains(t, serialized, `"role":"developer"`)
 	require.Contains(t, serialized, `"type":"input_image"`)
 
-	history, _, err := loadSession(sessionEntries(saved))
+	history, _, err := loadSession(sessionEntries(saved), "openai")
 	require.NoError(t, err)
 	serialized = marshalJSON(t, history)
 	require.Contains(t, serialized, `"role":"developer"`)
@@ -2725,7 +2725,7 @@ func TestLooperOmitsInterruptedTurnsFromSession(t *testing.T) {
 	require.NoError(t, group.Wait())
 	require.Equal(t, []ChatResponse{assistantCommentary("(interrupted)")}, collectResponses(output))
 
-	_, turns, err := loadSession(sessionEntries(saved))
+	_, turns, err := loadSession(sessionEntries(saved), "openai")
 	require.NoError(t, err)
 	require.Empty(t, turns)
 
@@ -2771,6 +2771,24 @@ func TestLooperResumesCancelledProviderCallWithoutRestartText(t *testing.T) {
 	require.Equal(t, 1, strings.Count(sent, "question"), "the resumed turn keeps one copy of its prompt")
 	require.NotContains(t, sent, "restart")
 	require.NotContains(t, sent, "interrupted")
+}
+
+func TestLooperResumedTurnOfAnotherProviderIsConverted(t *testing.T) {
+	journal := recordingJournal()
+	step, err := json.Marshal(turnStep{Record: SessionEntry{Version: 1, Type: "turn", TurnID: "turn-1", Model: "work/model", ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","content":"question"}`),
+		json.RawMessage(`{"type":"reasoning","encrypted_content":"work-only","summary":[{"type":"summary_text","text":"thought it over"}]}`),
+	}}})
+	require.NoError(t, err)
+	require.NoError(t, journal.Save(t.Context(), "turn-1", step))
+
+	mock := mockResponses(responseWithMessage("resp-final", "answer"))
+	_, err = runJournaledTurn(t.Context(), testLooper(mock), journal, "question")
+	require.NoError(t, err)
+
+	sent := marshalJSON(t, newParams(mock)[0].Input.OfInputItemList)
+	require.NotContains(t, sent, "work-only")
+	require.Contains(t, sent, "thought it over")
 }
 
 // A resumed turn's embedder re-offers every steer it accepted; only those not yet in the turn are injected.
@@ -3393,7 +3411,7 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 	require.Len(t, items, 8)
 	require.JSONEq(t, `{"call_id":"call-1","output":"looked-up","type":"function_call_output"}`, marshalJSON(t, items[2]))
 
-	history, turns, err := loadSession(sessionEntries(saved))
+	history, turns, err := loadSession(sessionEntries(saved), "openai")
 	require.NoError(t, err)
 	require.Len(t, turns, 1)
 	require.Len(t, turns[0].ReplayInput, 9)
@@ -3614,7 +3632,7 @@ func TestLooperInjectsSteersWhenNoTools(t *testing.T) {
 	items := newParams(mock)[1].Input.OfInputItemList
 	require.Len(t, items, 5)
 
-	history, turns, err := loadSession(sessionEntries(saved))
+	history, turns, err := loadSession(sessionEntries(saved), "openai")
 	require.NoError(t, err)
 	require.Len(t, turns, 1)
 	require.Len(t, turns[0].ReplayInput, 6)

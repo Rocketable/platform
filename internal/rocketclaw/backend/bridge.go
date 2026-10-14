@@ -207,8 +207,16 @@ type childSessions struct {
 	conversationID string
 }
 
+// AppendChildEntry saves each turn once: a turn's journal outlives its save until the parent
+// settles, so a restart in between resumes the turn and saves it again.
 func (s childSessions) AppendChildEntry(ctx context.Context, key string, entry *rocketcode.SessionEntry) error {
+	var saved bool
+	if err := queryScalar(ctx, s.store.db, "find saved child turn", `SELECT COUNT(*) > 0 FROM session_entries WHERE conversation_id = $1 AND entry_json->>'turn_id' = $2`, &saved, s.conversationID+key, entry.TurnID); err != nil || saved {
+		return err
+	}
+
 	_, err := s.store.AppendEntryID(ctx, s.conversationID+key, entry)
+
 	return err
 }
 
@@ -351,13 +359,28 @@ func (b *Bridge) InterruptActiveTurn() *protocol.InboundMessage {
 	reply := b.activeReply
 	interrupts := b.activeTurnInterrupts
 	cancel := b.activeTurnCancel
-	active := interrupts != nil || cancel != nil
+	// A handled turn that has not registered its cancel yet starts stopped.
+	active := interrupts != nil || cancel != nil || b.handling
 	b.activeTurnInterrupted = b.activeTurnInterrupted || active
-	idle := !active && !b.handling
+
+	// Only a handler or an idle stop holds a settlement. An idle stop holds one so a request
+	// taken meanwhile waits for it and then finds its row stopped.
+	var settlement *turnCompletion
+	if !active && b.settlement == nil {
+		settlement = &turnCompletion{done: make(chan struct{})}
+		b.settlement = settlement
+	}
 	b.mu.Unlock()
 
-	if idle {
-		return b.stopIdleTurn()
+	if settlement != nil {
+		stopped := b.stopIdleTurn()
+
+		b.mu.Lock()
+		b.settlement = nil
+		close(settlement.done)
+		b.mu.Unlock()
+
+		return stopped
 	}
 
 	if cancel != nil {
@@ -691,6 +714,13 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 	b.log.Info("bridge dequeued request", "event", "request_dequeued", "conversation_id", b.config.ConversationID, "has_inbound", request.inbound != nil, "turn_id", request.turnID, "scheduled_message_id", request.scheduledMessageID, "queue_item_id", request.queueItemID, "queue_len", len(b.requestCh))
 	b.mu.Lock()
 
+	for b.settlement != nil {
+		stop := b.settlement
+		b.mu.Unlock()
+		<-stop.done
+		b.mu.Lock()
+	}
+
 	var marker string
 
 	errState := b.config.SessionService.db.QueryRowContext(ctx, `SELECT COALESCE((SELECT revert_message_id FROM managed_conversations WHERE conversation_id = $1), '')`, b.config.ConversationID).Scan(&marker)
@@ -720,7 +750,7 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 		b.activeReply = nil
 		b.activeCompletion = nil
 		b.settlement = nil
-		b.handling = false
+		b.handling, b.activeTurnInterrupted = false, false
 
 		close(settlement.done)
 		b.mu.Unlock()
@@ -739,13 +769,22 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 
 	if request.producer != nil {
 		handler = request.producer
+		// The reservation routes stops to the producer, so it handles from before then.
+		request.producer.mu.Lock()
+		request.producer.activeCompletion = request.completion
+		request.producer.handling = true
+		request.producer.mu.Unlock()
+
+		defer func() {
+			request.producer.mu.Lock()
+			request.producer.handling, request.producer.activeTurnInterrupted = false, false
+			request.producer.mu.Unlock()
+		}()
+
 		b.config.SessionService.reserveTurnPair(b.config.ConversationID, request.producer.config.ConversationID)
 		b.config.SessionService.turnGatesMu.Lock()
 		producerReservation = b.config.SessionService.turnGates[b.config.ConversationID].reserved
 		b.config.SessionService.turnGatesMu.Unlock()
-		request.producer.mu.Lock()
-		request.producer.activeCompletion = request.completion
-		request.producer.mu.Unlock()
 	}
 
 	admitted, errHandle := b.activateInbound(ctx, request)
@@ -872,8 +911,13 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 		return false, nil
 	}
 
+	// A row an idle $stop finished after headRequest read it no longer runs.
 	if request.turnID != "" {
-		return true, nil
+		var taken bool
+
+		err = queryScalar(ctx, tx, "check taken active turn", `SELECT COUNT(*) > 0 FROM active_turns WHERE id = $1 AND (phase = $2 OR $3)`, &taken, request.turnID, turnRunning, request.delivery != nil)
+
+		return taken, err
 	}
 
 	var queuedItem protocol.ThreadQueueItem
@@ -895,7 +939,7 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 		}
 	}
 
-	turnID := fmt.Sprintf("turn-%d", time.Now().UnixNano())
+	turnID := b.config.SessionService.newTurnID()
 
 	if request.backgroundWake {
 		if woken, err := claimWakeNotes(ctx, tx, owner.config.ConversationID, turnID, request.inbound); err != nil || !woken {
@@ -1832,8 +1876,8 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 
 	b.mu.Lock()
 
-	b.activeReply, b.activeTurnCancel, b.activeTurnInterrupted = msg, cancel, b.historyMutation
-	if b.historyMutation {
+	b.activeReply, b.activeTurnCancel, b.activeTurnInterrupted = msg, cancel, b.activeTurnInterrupted || b.historyMutation
+	if b.activeTurnInterrupted {
 		cancel()
 	}
 
@@ -2059,31 +2103,12 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		childContext []rocketcode.SessionEntry
 	)
 
-	sessionIn := store.in()
-	for i := range finish.entries {
-		sessionIn = appendSessionEntry(sessionIn, &finish.entries[i])
-	}
-
 	if captured {
 		if !b.shadow {
 			msg.GoalTurn = snapshot.GoalTurn
 		}
 
 		shellEnv, childContext = snapshot.Environment, snapshot.ChildContext
-
-		if len(childContext) > 0 {
-			// Restore common thread metadata from capture on both sides, rather
-			// than seeded or reloaded metadata. Transient entries follow below.
-			seed := sessionIn
-			sessionIn = func(yield func(rocketcode.SessionEntry, error) bool) {
-				for entry, err := range seed {
-					if (err != nil || entry.Type != externalMCPMetadataEntryType) && !yield(entry, err) {
-						return
-					}
-				}
-			}
-			sessionIn = appendSessionEntry(sessionIn, &childContext[0])
-		}
 	} else {
 		if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err != nil {
 			return runResult{}, fmt.Errorf("load active goal note: %w", err)
@@ -2157,10 +2182,6 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		}
 	}
 
-	for i := range snapshot.ContextEntries {
-		sessionIn = appendSessionEntry(sessionIn, &snapshot.ContextEntries[i])
-	}
-
 	providerLog := b.log.With("conversation_id", b.config.ConversationID, "turn_id", turnID, "agent", agentName, "source", string(msg.Source), "kind", string(msg.Kind), "human", msg.Human, "goal_turn", msg.GoalTurn, "attachment_count", len(msg.Attachments))
 	resolver := newModelResolver(runtimeCfg, providerLog)
 
@@ -2198,6 +2219,29 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	b.log.Info("prepared rocketcode session history", "conversation_id", b.config.ConversationID, "turn_id", turnID, "entry_count", len(observed), "replay_item_count", replayItemCount, "history_bytes", historyBytes, "compaction_count", compactionCount, "latest_entry_id", latestEntryID, "latest_entry_type", latestEntryType)
 
+	// Restore common thread metadata from capture on both sides, rather than
+	// seeded or reloaded metadata. Transient entries follow below.
+	restored := captured && len(childContext) > 0
+	sessionIn := func(yield func(rocketcode.SessionEntry, error) bool) {
+		for i := range observed {
+			if (!restored || observed[i].Entry.Type != externalMCPMetadataEntryType) && !yield(observed[i].Entry, nil) {
+				return
+			}
+		}
+	}
+
+	for i := range finish.entries {
+		sessionIn = appendSessionEntry(sessionIn, &finish.entries[i])
+	}
+
+	if restored {
+		sessionIn = appendSessionEntry(sessionIn, &childContext[0])
+	}
+
+	for i := range snapshot.ContextEntries {
+		sessionIn = appendSessionEntry(sessionIn, &snapshot.ContextEntries[i])
+	}
+
 	// Tools that act on the turn's routing read msg, so its background work keeps it.
 	tagConversationID := cmp.Or(msg.SyncDestination, b.config.ConversationID)
 	customTools := append(sessionTagTools(b.config.SessionService, tagConversationID), attachments.Tool(root, b.config.SessionService, b.config.ConversationID), b.scheduleMessageTool(msg), b.resetScheduledMessagesTool(msg))
@@ -2232,7 +2276,6 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	looper.SteerDrain = b
-	sessionIn = sessionEntriesForProvider(sessionIn, providerForModel(looper.DisplayModel))
 	result = runResult{turnID: turnID, attribution: rocketcode.ReplayAttribution{Agent: agentName, Model: looper.DisplayModel, ReasoningEffort: new(string(looper.ReasoningEffort))}}
 
 	input := make(chan rocketcode.PromptInput, 1)
@@ -2252,10 +2295,14 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	b.activeAttribution = result.attribution
 	b.activeTurnInterrupts = interrupts
 	b.activeTurnCancel = cancelTurn
-	// A history mutation interrupts the turn at once, so it takes no Completion Notes.
-	b.activeTurnInterrupted, b.notesOpen = b.historyMutation, !b.historyMutation
-	if b.historyMutation {
+	// A history mutation or an earlier stop interrupts the turn at once, so it takes no Completion Notes.
+	b.activeTurnInterrupted = b.activeTurnInterrupted || b.historyMutation
+
+	b.notesOpen = !b.activeTurnInterrupted
+	if b.activeTurnInterrupted {
 		interrupts <- os.Interrupt
+
+		cancelTurn()
 	}
 	b.mu.Unlock()
 
@@ -2283,6 +2330,15 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	var prepared rocketcode.PromptInput
+
+	if captured && len(snapshot.Inputs) == 0 {
+		b.log.Error("turn has captured input but no prompt", "conversation_id", b.config.ConversationID, "turn_id", turnID, "shadow", b.shadow,
+			"agent", snapshot.Agent, "closed", snapshot.Closed, "goal_turn", snapshot.GoalTurn, "workflow", snapshot.Workflow.Name,
+			"context_entries", len(snapshot.ContextEntries), "child_context", len(snapshot.ChildContext))
+
+		return runResult{}, emptyTurnInputsError{TurnID: turnID}
+	}
+
 	if captured {
 		prepared = snapshot.Inputs[0]
 	} else {
@@ -2897,14 +2953,7 @@ func outboundAttachment(root *os.Root, input *outboundAttachmentInput) (protocol
 	}
 
 	name = cmp.Or(name, "attachment")
-
-	if mimeType == "" {
-		mimeType = mime.TypeByExtension(filepath.Ext(name))
-	}
-
-	if mimeType == "" {
-		mimeType = http.DetectContentType(data)
-	}
+	mimeType = cmp.Or(mimeType, mime.TypeByExtension(filepath.Ext(name)), http.DetectContentType(data))
 
 	return protocol.OutboundAttachment{Name: name, MIMEType: protocol.NormalizeMIMEType(mimeType), Data: bytes.Clone(data)}, nil
 }
@@ -3636,10 +3685,6 @@ func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (
 		return data, mimeType, false, nil
 	}
 
-	if targetLimit <= 0 {
-		return nil, "", false, errInboundAttachmentReductionNotEnough
-	}
-
 	if mimeType == "image/png" {
 		transformed, changed, err := resizePNGWithinLimit(data, targetLimit)
 		if err == nil {
@@ -3674,10 +3719,6 @@ func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (
 }
 
 func resizePNGWithinLimit(data []byte, targetLimit int) (transformed []byte, changed bool, err error) {
-	if targetLimit <= 0 {
-		return nil, false, errInboundAttachmentReductionNotEnough
-	}
-
 	src, err := png.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, false, fmt.Errorf("%w: decode png: %w", errInboundAttachmentReductionFailed, err)
@@ -3742,10 +3783,10 @@ func flattenInboundImageForJPEG(src image.Image) *image.NRGBA {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			r, g, b, a := src.At(x, y).RGBA()
 			alpha := float64(a) / 0xffff
-			red := uint8(math.Round((float64(r>>8) * alpha) + (255 * (1 - alpha))))
-			green := uint8(math.Round((float64(g>>8) * alpha) + (255 * (1 - alpha))))
-			blue := uint8(math.Round((float64(b>>8) * alpha) + (255 * (1 - alpha))))
-			flattened.Set(x-bounds.Min.X, y-bounds.Min.Y, color.NRGBA{R: red, G: green, B: blue, A: 0xff})
+			blend := func(channel uint32) uint8 {
+				return uint8(math.Round((float64(channel>>8) * alpha) + (255 * (1 - alpha))))
+			}
+			flattened.Set(x-bounds.Min.X, y-bounds.Min.Y, color.NRGBA{R: blend(r), G: blend(g), B: blend(b), A: 0xff})
 		}
 	}
 
@@ -3757,18 +3798,13 @@ func encodeInboundImageAsJPEGWithinLimit(img image.Image, targetLimit int) (cand
 
 	for quality := 95; quality >= 50; quality -= 5 {
 		var buffer bytes.Buffer
-
-		options := jpeg.Options{Quality: quality}
-		if err := jpeg.Encode(&buffer, img, &options); err != nil {
+		if err := jpeg.Encode(&buffer, img, &jpeg.Options{Quality: quality}); err != nil {
 			return nil, 0, fmt.Errorf("%w: encode jpeg: %w", errInboundAttachmentReductionFailed, fmt.Errorf("encode jpeg: %w", err))
 		}
 
-		candidate := buffer.Bytes()
-		candidateSize := len(candidate)
-		bestSize = min(bestSize, candidateSize)
-
-		if candidateSize <= targetLimit {
-			return candidate, candidateSize, nil
+		bestSize = min(bestSize, buffer.Len())
+		if buffer.Len() <= targetLimit {
+			return buffer.Bytes(), buffer.Len(), nil
 		}
 	}
 
@@ -3787,23 +3823,14 @@ func encodeInboundPNG(img image.Image) []byte {
 }
 
 func nextImageResizeDimensions(currentWidth, currentHeight, currentSize, targetLimit int) (nextWidth, nextHeight int) {
-	scale := math.Sqrt(float64(targetLimit) / float64(currentSize))
-
-	scale *= 0.92
+	scale := math.Sqrt(float64(targetLimit)/float64(currentSize)) * 0.92
 	if scale >= 1 {
 		scale = 0.92
 	}
 
-	nextWidth = max(1, int(math.Round(float64(currentWidth)*scale)))
-	nextHeight = max(1, int(math.Round(float64(currentHeight)*scale)))
-
-	if nextWidth >= currentWidth && currentWidth > 1 {
-		nextWidth = currentWidth - 1
-	}
-
-	if nextHeight >= currentHeight && currentHeight > 1 {
-		nextHeight = currentHeight - 1
-	}
+	// Each side shrinks by at least one pixel, but never below one.
+	nextWidth = min(max(1, int(math.Round(float64(currentWidth)*scale))), max(1, currentWidth-1))
+	nextHeight = min(max(1, int(math.Round(float64(currentHeight)*scale))), max(1, currentHeight-1))
 
 	return nextWidth, nextHeight
 }

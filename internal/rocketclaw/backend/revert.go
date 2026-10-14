@@ -898,12 +898,21 @@ func reconcileWebDB(ctx context.Context, db stateStoreDB, inbound *protocol.Inbo
 		return false, err
 	}
 
-	var message replayMessage
+	var message struct {
+		Content json.RawMessage
+		Header  string `json:"prompt_header"`
+	}
 	if err := json.Unmarshal(raw, &message); err != nil {
 		return false, fmt.Errorf("decode saved Web message: %w", err)
 	}
 
-	var parts []portableContent
+	var parts []struct {
+		Type     string `json:"type"`
+		ImageURL string `json:"image_url"`
+		FileData string `json:"file_data"`
+		FileURL  string `json:"file_url"`
+		Filename string `json:"filename"`
+	}
 	if strings.HasPrefix(string(message.Content), "[") {
 		if err := json.Unmarshal(message.Content, &parts); err != nil {
 			return false, fmt.Errorf("decode saved Web content: %w", err)

@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -151,7 +152,7 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
-			listener, err := Listen(testSocketPath(t))
+			listener, err := net.Listen("unix", testSocketPath(t))
 			require.NoError(t, err)
 
 			transport := grpc.NewServer()
@@ -206,7 +207,7 @@ func TestTailnetIdentity(t *testing.T) {
 	t.Setenv("PATH", dir)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "tailscale"), []byte("#!/bin/sh\nexit 1\n"), 0o700))
 
-	listener, err := Listen(testSocketPath(t))
+	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
@@ -919,7 +920,7 @@ func TestSessionEntries(t *testing.T) {
 
 	server := New(core, sessions, config.NewLockedConfig(cfg), channels, cronjobs)
 	socketPath := testSocketPath(t)
-	listener, err := Listen(socketPath)
+	listener, err := net.Listen("unix", socketPath)
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
@@ -3575,26 +3576,6 @@ func testSocketPath(t *testing.T) string {
 	return socketPath
 }
 
-func TestPrivateSocket(t *testing.T) {
-	socketPath := testSocketPath(t)
-	_, err := Listen("web.sock")
-	require.ErrorContains(t, err, "absolute")
-	_, err = Listen(filepath.Join(socketPath, "missing", "web.sock"))
-	require.ErrorContains(t, err, "stat web RPC socket directory")
-	require.NoError(t, os.Chmod(filepath.Dir(socketPath), 0o755))
-	_, err = Listen(socketPath)
-	require.ErrorContains(t, err, "private")
-	require.NoError(t, os.Chmod(filepath.Dir(socketPath), 0o700))
-	listener, err := Listen(socketPath)
-	require.NoError(t, err)
-	_, err = Listen(socketPath)
-	require.ErrorContains(t, err, "listen on web RPC socket")
-	require.NoError(t, listener.Close())
-
-	_, err = os.Stat(socketPath)
-	require.ErrorIs(t, err, os.ErrNotExist)
-}
-
 // Move and stop reach the backend only for visible conversations; a hidden run's job change wakes its destination's stream.
 func TestBackgroundJobRPCs(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
@@ -3660,7 +3641,7 @@ func TestBackgroundJobRPCs(t *testing.T) {
 		StopBackgroundJobFunc: func(context.Context, string, string) (bool, error) { return true, nil },
 	}
 
-	listener, err := Listen(testSocketPath(t))
+	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
@@ -3774,7 +3755,7 @@ func TestQuestionRPCs(t *testing.T) {
 		return nil
 	}
 
-	listener, err := Listen(testSocketPath(t))
+	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -112,7 +113,7 @@ func TestHTTPReload(t *testing.T) {
 		return "rocketclaw runtime assets reloaded", nil
 	}}
 	server := New(core, nil, config.NewLockedConfig(&config.Config{WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}), &mockChannels{}, &mockCronJobs{})
-	listener, err := Listen(testSocketPath(t))
+	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
@@ -334,7 +335,7 @@ func TestHTTPStreams(t *testing.T) {
 					return nil
 				}
 			}))
-			listener, err := Listen(testSocketPath(t))
+			listener, err := net.Listen("unix", testSocketPath(t))
 			require.NoError(t, err)
 
 			var serving errgroup.Group
