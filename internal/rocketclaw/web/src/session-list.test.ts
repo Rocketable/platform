@@ -8,6 +8,7 @@ import {
   MISSING_SUMMARY,
   readSessionEnumeration,
   rowPreview,
+  saveCompleteSessions,
   searchIsAuthoritative,
   shouldCommitSnapshot,
   stripSessionHistory,
@@ -61,6 +62,10 @@ test("only an unfinished operator as the last word is left out while typing", ()
 });
 
 describe("session list reconciliation", () => {
+  test("does not save when storage was unavailable before enumeration", async () => {
+    await expect(saveCompleteSessions("alice", "v1", [{ id: "new", preview: "fresh" }], undefined)).resolves.toBeUndefined();
+  });
+
   test("keeps prior rows and replaces matching IDs in server prefix order", () => {
     const prior: Session[] = [
       { id: "old", preview: "keep", updatedAt: "1" },
