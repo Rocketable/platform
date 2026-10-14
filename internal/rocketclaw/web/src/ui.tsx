@@ -2322,6 +2322,11 @@ function TranscriptLog({
   const pairedRows = selected ? comparisonRows(turns, childTurns, selected) : [];
   const detail = useTimelineDetail();
   const { viewport, seen, scrollToMessage } = useTranscriptPosition(conversationId, lines, turns);
+  // TODO(@shadcn/react > 0.3.1): delete `bottom`, this effect, and its onScroll update once MessageScroller ships
+  // shadcn-ui/ui#11223 and #12306. A wheel at the bottom or a scrollbar drag after a jump stops following for good.
+  const { scrollToEnd } = useMessageScroller();
+  const bottom = useRef<number | undefined>(0);
+  useLayoutEffect(() => { if (viewport.current!.scrollTop === bottom.current) scrollToEnd(); });
   const anchor = useRef<{ key: string; top: number }>(undefined);
   const [loading, setLoading] = useState(false);
   // Scrolling near the top loads one earlier page and keeps the turns on screen still.
@@ -2364,7 +2369,10 @@ function TranscriptLog({
   </Tabs.List>;
   const body = (
     <MessageScroller className="flex-1">
-    <MessageScrollerViewport ref={viewport} id="transcript-scroll" preserveScrollOnPrepend={false} onScroll={() => { seen(); nearTop(); }} className="overflow-x-hidden [overflow-anchor:none]">
+    <MessageScrollerViewport ref={viewport} id="transcript-scroll" preserveScrollOnPrepend={false} onScroll={({ currentTarget: element }) => {
+      bottom.current = element.scrollHeight - element.clientHeight - element.scrollTop <= 1 ? element.scrollTop : undefined;
+      seen(); nearTop();
+    }} className="overflow-x-hidden [overflow-anchor:none]">
       <div className="min-h-full pl-3 pr-8 pt-3 pb-4 sm:pl-5 sm:pr-10 sm:pt-4">
         <TranscriptBody conversationId={conversationId} working={working} terminal={terminal} origin={origin} hasSandboxed={hasSandboxed} movable={movable} refreshHistory={refreshHistory} turns={turns} rows={pairedRows} binding={selected} detail={detail} wide={wide} loading={loading} emptyMessage={emptyMessage} delegations={shadow.data?.delegations} />
       </div>

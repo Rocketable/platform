@@ -1895,6 +1895,28 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         const el = document.querySelector("#transcript-scroll")!;
         return el.scrollHeight - el.clientHeight - el.scrollTop < 2;
       });
+      // Reaching the bottom with a wheel, or with the scrollbar after a jump, keeps following new text.
+      await scroll.hover();
+      for (const [step, reach] of [
+        () => transcriptPage.mouse.wheel(0, 400),
+        async () => {
+          await rail.getByRole("button", { name: "Turn 1: Prompt 1", exact: true }).click();
+          await transcriptPage.waitForFunction(() => document.querySelector("#transcript-scroll")!.scrollTop < 50);
+          await scroll.evaluate((el: HTMLElement) => new Promise((resolve) => {
+            el.addEventListener("scroll", resolve, { once: true });
+            el.scrollTop = el.scrollHeight;
+          }));
+        },
+      ].entries()) {
+        await reach();
+        ctrl.history[ctrl.history.length - 1] = { ...ctrl.history.at(-1)!, text: `\nStill following ${width} ${step}\n` + "More streamed text.\n".repeat(40 * (step + 2)) };
+        (await transcriptStream(`jump-${width}`).promise).enqueue(`data: ${JSON.stringify({ conversationId: `jump-${width}`, revision: "hint" })}\n\n`);
+        await transcriptPage.getByText(`Still following ${width} ${step}`, { exact: false }).waitFor({ state: "attached" });
+        await transcriptPage.waitForFunction(() => {
+          const el = document.querySelector("#transcript-scroll")!;
+          return el.scrollHeight - el.clientHeight - el.scrollTop < 2;
+        });
+      }
       await rail.getByRole("button", { name: "Turn 20: Prompt 20", exact: true }).focus();
       await transcriptPage.keyboard.press("Enter");
       const last = transcriptPage.getByRole("region", { name: "Turn 20", exact: true });
