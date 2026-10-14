@@ -130,9 +130,13 @@ for (const width of [1440, 390, 320]) test(`shadow comparison at ${width}px`, as
     updated.messages = messages("b", [4, 1, 10]);
     updated.revision = "streamed";
     b.turns[2].revision = "streamed";
+    b.turns[4].running = true;
     histories.get("parent")!.revision = "child-only";
     controller!.enqueue(`data: ${JSON.stringify({ conversationId: "parent", revision: "child-only" })}\n\n`);
     await page.getByText(/b turn 3 paragraph 10\./).waitFor();
+    const working = page.locator('[data-shadow-cell="turn:parent:T5"]').getByRole("status");
+    await working.filter({ hasText: "Working…" }).waitFor();
+    expect(await working.innerText()).toBe("Working…");
     if (width >= 1024) await alignment();
     expect(streams).toEqual(["parent"]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
