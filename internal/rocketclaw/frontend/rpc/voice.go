@@ -613,8 +613,6 @@ func (c *voiceCall) end(ctx context.Context, events <-chan voiceEvent, closed bo
 // forward sends the loop a snapshot of the conversation after each change. The first read
 // takes the latest 10 entries and later reads keep its start, so every turn this call hands
 // off stays in view however many turns finish between two reads, as Codex hears each turn end.
-// ponytail: each read covers every turn since the call began, so a call with many turns reads
-// more each time; following the view's revisions, as the Web history does, would read less.
 func (c *voiceCall) forward(ctx context.Context, snapshots chan<- voiceSnapshot) error {
 	root, err := os.OpenRoot(c.server.cfg.Clone().Workspace)
 	if err != nil {

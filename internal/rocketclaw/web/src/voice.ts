@@ -130,8 +130,6 @@ export async function startVoice(conversationId: string, voice = "") {
         if (!role) return;
         const text = event.delta ?? event.item!.text;
         // As Codex resume_realtime_speaker_for: the first reply begun after the person spoke unmutes.
-        // ponytail: an older reply still captioning after that speech also unmutes, though the model stops when
-        // interrupted; telling replies apart by item id would close that.
         if (audio.muted && text.trim()) {
           if (role === "user") heard = true;
           else if (heard && last?.role === "user") {
