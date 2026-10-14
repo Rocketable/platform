@@ -412,15 +412,13 @@ func loadSkill(fsys fs.FS, filePath string) (Skill, error) {
 		return Skill{}, fmt.Errorf("%s: read skill: %w", filePath, err)
 	}
 
-	content := string(data)
-
-	match := skillFrontmatterPattern.FindStringSubmatchIndex(content)
+	match := skillFrontmatterPattern.FindSubmatchIndex(data)
 	if match == nil {
 		return Skill{}, fmt.Errorf("%s: missing YAML frontmatter", filePath)
 	}
 
 	var frontmatter skillFrontmatter
-	if err := yaml.Unmarshal([]byte(content[match[2]:match[3]]), &frontmatter); err != nil {
+	if err := yaml.Unmarshal(data[match[2]:match[3]], &frontmatter); err != nil {
 		return Skill{}, fmt.Errorf("%s: parse YAML frontmatter: %w", filePath, err)
 	}
 
@@ -435,7 +433,7 @@ func loadSkill(fsys fs.FS, filePath string) (Skill, error) {
 		Compatibility: frontmatter.Compatibility,
 		Metadata:      frontmatter.Metadata,
 		Location:      filePath,
-		Content:       content[match[1]:],
+		Content:       string(data[match[1]:]),
 	}, nil
 }
 
