@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -784,6 +785,153 @@ func TestShadowLiveFinalDrain(t *testing.T) {
 	require.Len(t, entries, 1)
 	require.Contains(t, string(entries[0].Entry.ReplayInput[0]), `"input_id":"initial"`)
 	require.Contains(t, string(entries[0].Entry.ReplayInput[2]), `"input_id":"s1"`)
+}
+
+func TestShadowStoppedInitialInputParity(t *testing.T) {
+	for _, human := range []bool{true, false} {
+		t.Run(fmt.Sprintf("human=%t", human), func(t *testing.T) {
+			store, root := newShadowTestStore(t)
+			require.NoError(t, root.Remove(".rocketclaw/agents/main/z.md"))
+			require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o700))
+
+			type providerRequest struct {
+				Input []json.RawMessage `json:"input"`
+			}
+
+			requests := make(chan providerRequest, 8)
+
+			held := make(chan struct{}, 2)
+			held <- struct{}{}
+
+			held <- struct{}{}
+
+			release := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request providerRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+					return
+				}
+
+				requests <- request
+
+				select {
+				case <-held:
+					select {
+					case <-release:
+					case <-r.Context().Done():
+					}
+
+					return
+				default:
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				writeRawRunMessage(t, w, "response", "message", "answer")
+			}))
+			t.Cleanup(server.Close)
+			t.Cleanup(func() { close(release) })
+
+			cfg := config.NewLockedConfig(&config.Config{Workspace: root.Name(), OpenAI: config.OpenAIConfig{APIBaseURL: server.URL, APIKey: "test"}})
+			store.definitions = cfg
+			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
+
+			var childID string
+			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings`).Scan(&childID))
+
+			finals := make(chan *protocol.OutboundMessage, 8)
+			manager, shutdown := newTestBridgeManager(t, cfg, store, finals)
+			t.Cleanup(func() { require.NoError(t, shutdown()) })
+			parent, err := manager.recordedBridge(t.Context(), "parent")
+			require.NoError(t, err)
+
+			const prompt = "Please review the draft."
+			if human {
+				inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, prompt, true)
+				inbound.Metadata = map[string]string{"web_message_id": "initial-input"}
+				require.NoError(t, parent.Submit(t.Context(), inbound))
+			} else {
+				job := testBackgroundJob("parent", "initial-note")
+				createTestBackgroundJob(t, store, job)
+				finishTestBackgroundJob(t, store, job, backgroundCompleted, true)
+				manager.noteReady("parent")
+			}
+
+			var initial []json.RawMessage
+
+			for range 2 {
+				select {
+				case request := <-requests:
+					require.Len(t, request.Input, 1)
+					initial = append(initial, request.Input[0])
+				case <-time.After(3 * time.Second):
+					t.Fatal("parent and shadow did not start their initial requests")
+				}
+			}
+
+			require.JSONEq(t, string(initial[0]), string(initial[1]))
+			head, found, err := store.headTurn(t.Context(), childID)
+			require.NoError(t, err)
+			require.True(t, found)
+			require.False(t, head.inbound.Human, "mirroring must not grant human privileges")
+			require.Empty(t, head.inbound.Metadata, "routing and note ownership remain with the parent")
+
+			parent.InterruptActiveTurn()
+			require.Equal(t, protocol.TerminalStopped, readFinal(t, finals).Terminal)
+
+			var saved []json.RawMessage
+
+			for _, id := range []string{"parent", childID} {
+				require.Eventually(t, func() bool {
+					active, err := store.HasActiveTurn(t.Context(), id)
+					return err == nil && !active
+				}, 3*time.Second, time.Millisecond)
+				entries, err := store.ObserveEntries(t.Context(), id)
+				require.NoError(t, err)
+
+				if human {
+					require.Len(t, entries, 1, "%s keeps stopped initial human input", id)
+					require.Len(t, entries[0].Entry.ReplayInput, 1)
+					saved = append(saved, entries[0].Entry.ReplayInput[0])
+					require.Contains(t, string(saved[len(saved)-1]), `"input_id":"initial-input"`)
+					require.Contains(t, string(saved[len(saved)-1]), prompt)
+				} else {
+					require.Empty(t, entries, "%s must not save pending note text as replay", id)
+				}
+
+				transcript, err := store.ObserveTranscript(t.Context(), id, 0, 0, nil)
+				require.NoError(t, err)
+				require.Len(t, transcript, 1)
+				require.Equal(t, protocol.TerminalStopped, transcript[0].Terminal)
+			}
+
+			require.Empty(t, requests, "stopped work must not retry")
+			require.Empty(t, finals, "shadow settlement stays local")
+
+			if !human {
+				require.Equal(t, []string{"initial-note pending false"}, noteStates(t, store))
+				return
+			}
+
+			require.JSONEq(t, string(saved[0]), string(saved[1]), "saved input identity and framing match")
+
+			require.NoError(t, parent.Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "next", true)))
+
+			for range 2 {
+				select {
+				case request := <-requests:
+					raw, err := json.Marshal(request.Input)
+					require.NoError(t, err)
+					require.Equal(t, 1, strings.Count(string(raw), prompt), "each next request sees the stopped input once")
+					require.JSONEq(t, string(initial[0]), string(request.Input[0]))
+				case <-time.After(3 * time.Second):
+					t.Fatal("parent and shadow did not receive the next prompt")
+				}
+			}
+
+			readFinal(t, finals)
+		})
+	}
 }
 
 func TestShadowFirstReconciliationClear(t *testing.T) {
