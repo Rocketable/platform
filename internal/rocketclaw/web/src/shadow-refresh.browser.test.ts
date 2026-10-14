@@ -42,6 +42,7 @@ for (const mode of ["initial", "cached", "earlier"] as const) test(`shadow refre
       case "/api/History": {
         reads.push(input);
         if (input.id === "parent") return Response.json(mode === "earlier" && !input.before ? { ...tail, reset: !input.revision } : parent);
+        if (input.id === "b") return Response.json({ code: 14, message: "Shadow history unavailable" }, { status: 503 });
         if (hold) { hold = false; started.resolve(); return delayed.promise; }
         return Response.json(child);
       }
@@ -93,6 +94,14 @@ for (const mode of ["initial", "cached", "earlier"] as const) test(`shadow refre
     expect(reads.every((read) => read.limit === 50 || read.id === "parent" && !!read.before && !!read.from)).toBe(true);
     // A fingerprint key change cancels the obsolete read; its replacement owns a fresh signal.
     expect(failedReads).toHaveLength(mode === "earlier" ? 0 : 1);
+    if (mode === "cached") {
+      await page.getByRole("tab", { name: "main/b", exact: true }).click();
+      await page.getByRole("alert").filter({ hasText: "Shadow history unavailable" }).waitFor();
+      expect(await page.getByText("Parent oldest answer", { exact: true }).count()).toBe(1);
+      await page.getByRole("tab", { name: "main/a", exact: true }).click();
+      await page.getByText("Final child answer", { exact: true }).waitFor();
+      expect(await page.getByRole("alert").count()).toBe(0);
+    }
     expect(errors).toEqual([]);
   } finally {
     delayed.resolve(Response.json(child));
