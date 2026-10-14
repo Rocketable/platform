@@ -484,6 +484,10 @@ message IdentityRequest {}
 
 message IdentityResponse { string username = 1; string principal = 2; }
 
+message ReloadRequest { string reason = 1; }
+
+message ReloadResponse { string message = 1; }
+
 message VoiceRequest {
   string conversation_id = 1;
   string sdp = 2;
@@ -572,6 +576,7 @@ service Web {
   rpc UpdateSession(UpdateSessionRequest) returns (UpdateSessionResponse);
   rpc Protocol(ProtocolRequest) returns (ProtocolResponse);
   rpc Identity(IdentityRequest) returns (IdentityResponse);
+  rpc Reload(ReloadRequest) returns (ReloadResponse);
   rpc ListQueue(ListQueueRequest) returns (ListQueueResponse);
   rpc RemoveQueueItem(QueueItemRequest) returns (QueueItemResponse);
   rpc SteerQueueItem(QueueItemRequest) returns (QueueItemResponse);

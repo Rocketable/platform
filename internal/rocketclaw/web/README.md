@@ -814,6 +814,12 @@ delta read from the last applied revision; opening or reconnecting also catches 
   Add `&download=1` to force a download for an image too.
 - `POST /api/Prompt` accepts `attachmentIds` in selection order alongside unchanged
   `id`, `text`, and `delivery`. The backend adds attachment references to the text.
+- `POST /api/Reload` takes `{"reason":"updated runtime assets"}` and returns
+  `{"message":"rocketclaw runtime assets reloaded"}`. It uses the same Web
+  authorization and serialized, validation-before-swap reload as the agent tool,
+  including External MCP agent refresh. It starts no agent turn, does not restart
+  the process, and does not reread configuration. A refresh failure is reported
+  after the assets have been replaced; it does not roll them back.
 - `POST /api/Voice` takes `{"conversationId":"<visible-id>","sdp":"<offer>","voice":"<name>"}`
   (`voice` optional, one of the agent's `voices` from `ListAgents`) and
   answers with SSE: `{"answer":{"sdp","route"}}`, any `{"notice":"…"}` frames, then

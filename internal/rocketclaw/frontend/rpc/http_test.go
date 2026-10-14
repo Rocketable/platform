@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -103,6 +104,68 @@ func TestHTTPBoundary(t *testing.T) {
 		require.Equal(t, http.StatusBadRequest, response.Code, tc.path)
 		require.JSONEq(t, fmt.Sprintf(`{"code":3,"message":%q}`, tc.message), response.Body.String())
 	}
+}
+
+func TestHTTPReload(t *testing.T) {
+	core := &mockBackend{ReloadFunc: func(reason string) (string, error) {
+		require.Equal(t, "updated assets", reason)
+		return "rocketclaw runtime assets reloaded", nil
+	}}
+	server := New(core, nil, config.NewLockedConfig(&config.Config{WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}), &mockChannels{}, &mockCronJobs{})
+	listener, err := Listen(testSocketPath(t))
+	require.NoError(t, err)
+
+	transport := grpc.NewServer()
+	server.Register(transport)
+
+	var serving errgroup.Group
+	serving.Go(func() error { return transport.Serve(listener) })
+	t.Cleanup(func() {
+		transport.Stop()
+		require.NoError(t, serving.Wait())
+	})
+
+	connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+
+	handler := NewHTTPHandler(connection, config.SentryConfig{})
+
+	for _, tc := range []struct {
+		address string
+		code    int
+	}{
+		{"192.0.2.1:1234", http.StatusUnauthorized},
+		{"127.0.0.1:1234", http.StatusOK},
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/api/Reload", strings.NewReader(`{"reason":"updated assets"}`))
+		request.RemoteAddr = tc.address
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		require.Equal(t, tc.code, response.Code)
+
+		if tc.code == http.StatusOK {
+			require.JSONEq(t, `{"message":"rocketclaw runtime assets reloaded"}`, response.Body.String())
+		} else {
+			require.Empty(t, core.ReloadCalls())
+		}
+	}
+
+	for _, principal := range []string{"", "not-an-address", "192.0.2.1"} {
+		ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", principal))
+		_, err := invoke[ReloadResponse](ctx, connection, "Reload", &ReloadRequest{Reason: "updated assets"})
+		require.Equal(t, codes.Unauthenticated, status.Code(err))
+	}
+
+	require.Len(t, core.ReloadCalls(), 1)
+	core.ReloadFunc = func(string) (string, error) { return "", errors.New("invalid staged assets") }
+	request := httptest.NewRequest(http.MethodPost, "/api/Reload", strings.NewReader(`{"reason":"updated assets"}`))
+	request.RemoteAddr = "127.0.0.1:1234"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	require.Equal(t, http.StatusInternalServerError, response.Code)
+	require.JSONEq(t, `{"code":2,"message":"web reload: invalid staged assets"}`, response.Body.String())
+	require.Empty(t, core.RunTurnCalls())
 }
 
 func TestHTTPStreams(t *testing.T) {

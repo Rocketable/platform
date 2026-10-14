@@ -32,13 +32,12 @@ func TestValidateAssetsReportsCronChannelError(t *testing.T) {
 func TestAssembleFrontendsReportsSlackStartError(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
-	refresh := func() error { return nil }
 	rt := &backend.Runtime{
-		Cfg:                      config.NewLockedConfig(&config.Config{}),
-		Log:                      slog.New(slog.DiscardHandler),
-		RunCtx:                   ctx,
-		RefreshExternalMCPAgents: &refresh,
+		Cfg:    config.NewLockedConfig(&config.Config{}),
+		Log:    slog.New(slog.DiscardHandler),
+		RunCtx: ctx,
 	}
+	rt.ExternalMCPAgents = &mcpAgentIndex{cfg: rt.Cfg}
 	_, _, _, err := processAssembler{}.Assemble(rt)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "start Slack connector")
@@ -64,7 +63,6 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
-	refresh := func() error { return nil }
 	rt := &backend.Runtime{
 		Cfg: config.NewLockedConfig(&config.Config{
 			Workspace: workspace,
@@ -75,12 +73,12 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 			MCPExternal: config.MCPExternalConfig{Enabled: true, ListenAddr: "127.0.0.1:0"},
 			Web:         config.WebConfig{ListenAddress: "127.0.0.1:0"},
 		}),
-		Log:                      slog.New(slog.DiscardHandler),
-		RunCtx:                   ctx,
-		Sessions:                 sessions,
-		RefreshExternalMCPAgents: &refresh,
-		ExternalMCPUsers:         map[string]string{"alice": "secret"},
+		Log:              slog.New(slog.DiscardHandler),
+		RunCtx:           ctx,
+		Sessions:         sessions,
+		ExternalMCPUsers: map[string]string{"alice": "secret"},
 	}
+	rt.ExternalMCPAgents = &mcpAgentIndex{cfg: rt.Cfg}
 	front, done, stops, err := processAssembler{}.Assemble(rt)
 	require.NoError(t, err)
 	require.NotNil(t, front)

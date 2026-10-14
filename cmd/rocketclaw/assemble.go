@@ -35,7 +35,7 @@ func (processAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-
 
 	if cfg.MCPExternal.Enabled {
 		agents := &mcpAgentIndex{cfg: rt.Cfg}
-		*rt.RefreshExternalMCPAgents = agents.Refresh
+		rt.ExternalMCPAgents = agents
 		if err := agents.Refresh(); err != nil {
 			return nil, nil, nil, err
 		}

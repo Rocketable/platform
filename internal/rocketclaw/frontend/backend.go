@@ -10,6 +10,7 @@ import (
 
 // Backend owns conversation execution, recording, ordering, and live output.
 type Backend interface {
+	Reload(string) (string, error)
 	Subscribe(context.Context) iter.Seq[protocol.Event]
 	CreateConversation(context.Context, protocol.Conversation) error
 	ListConversations(context.Context) ([]protocol.Conversation, error)
