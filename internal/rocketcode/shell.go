@@ -364,7 +364,9 @@ func (sss *sandboxedShellSystem) deniedBashPath(command, hostDir string) string 
 		}
 
 		name := filepath.Base(unquoteShellArg(args[0]))
-		if !isBashFileCommand(name) {
+		switch name {
+		case "cat", "cd", "chmod", "chown", "cp", "grep", "head", "less", "ln", "mkdir", "more", "mv", "pushd", "rm", "tail", "touch":
+		default:
 			return true
 		}
 
@@ -390,15 +392,6 @@ func (sss *sandboxedShellSystem) deniedBashPath(command, hostDir string) string 
 	})
 
 	return denied
-}
-
-func isBashFileCommand(name string) bool {
-	switch name {
-	case "cat", "cd", "chmod", "chown", "cp", "grep", "head", "less", "ln", "mkdir", "more", "mv", "pushd", "rm", "tail", "touch":
-		return true
-	default:
-		return false
-	}
 }
 
 func staticBashPathArg(command, arg string) (string, bool) {
