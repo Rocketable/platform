@@ -115,9 +115,11 @@ func observeTranscriptDB(ctx context.Context, db stateStoreDB, conversationID st
 ), transcript AS (
     SELECT e.id, e.entry_json, e.source_conversation_id, e.synced,
         FALSE AS active, COALESCE(a.terminal, '') AS terminal, 0::bigint AS checkpoint_timestamp, '' AS turn_id, 0 AS checkpoint, e.id AS position, e.revert_index, e.marker
-    FROM effective_entries e LEFT JOIN active_turns a
+    FROM effective_entries e LEFT JOIN shadow_turns t
+        ON t.child_conversation_id = CASE WHEN e.synced THEN e.source_conversation_id ELSE $1 END AND t.child_turn_id = e.entry->>'turn_id'
+    LEFT JOIN active_turns a
         ON a.conversation_id = CASE WHEN e.synced THEN e.source_conversation_id ELSE $1 END AND a.id = e.entry->>'turn_id'
-        AND a.terminal = 'stopped' AND a.inbound_json->>'Human' = 'true'
+        AND a.terminal = 'stopped' AND COALESCE(t.inbound_json, a.inbound_json)->>'Human' = 'true'
         AND e.entry->>'type' = 'turn' AND COALESCE(e.entry->>'response_id', '') = ''
     WHERE e.id >= $3 AND ($4::bigint = 0 OR e.id < $4)
     UNION ALL
