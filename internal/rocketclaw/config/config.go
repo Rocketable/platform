@@ -66,11 +66,7 @@ func (c *Config) AttachmentLocation() (AttachmentDriver, string, error) {
 			return "", "", errors.New("filesystem attachments do not accept bucket_arn")
 		}
 
-		path := c.Attachments.Path
-		if path == "" {
-			path = filepath.Join(c.RuntimeDirName(), "attachments")
-		}
-
+		path := cmp.Or(c.Attachments.Path, filepath.Join(c.RuntimeDirName(), "attachments"))
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(c.Workspace, path)
 		}
@@ -280,9 +276,7 @@ func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error)
 	}
 
 	configDir := filepath.Dir(absPath)
-	if cfg.Workspace == "" {
-		cfg.Workspace = configDir
-	}
+	cfg.Workspace = cmp.Or(cfg.Workspace, configDir)
 
 	if !filepath.IsAbs(cfg.Workspace) {
 		cfg.Workspace = filepath.Join(configDir, cfg.Workspace)
@@ -587,13 +581,10 @@ func (c *Config) validateMCPServers() error {
 		server.URL = strings.TrimSpace(server.URL)
 		server.Cwd = strings.TrimSpace(server.Cwd)
 
-		hasCommand := server.Command != ""
-
-		hasURL := server.URL != ""
 		switch {
-		case hasCommand == hasURL:
+		case (server.Command != "") == (server.URL != ""):
 			return fmt.Errorf("mcp_servers[%q]: set exactly one of command or url", name)
-		case hasURL:
+		case server.URL != "":
 			parsed, err := url.Parse(server.URL)
 			if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 				return fmt.Errorf("mcp_servers[%q]: url must be an http or https URL", name)
@@ -619,8 +610,6 @@ func validateMCPServerName(name string) error {
 
 	var invalid []string
 
-	seen := make(map[rune]bool)
-
 	for _, r := range name {
 		if r >= 'a' && r <= 'z' ||
 			r >= 'A' && r <= 'Z' ||
@@ -629,9 +618,8 @@ func validateMCPServerName(name string) error {
 			continue
 		}
 
-		if !seen[r] {
-			invalid = append(invalid, fmt.Sprintf("%q", string(r)))
-			seen[r] = true
+		if quoted := fmt.Sprintf("%q", string(r)); !slices.Contains(invalid, quoted) {
+			invalid = append(invalid, quoted)
 		}
 	}
 

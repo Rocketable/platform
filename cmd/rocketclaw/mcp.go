@@ -73,8 +73,21 @@ func startExternalMCPServer(
 		)
 
 		defer func() {
-			if err != nil && createdConversationID != "" {
-				cleanupFailedExternalMCPConversation(relay, store, logger, reply, externalConversationID, createdConversationID, durableRegistration, promptAccepted)
+			if err == nil || createdConversationID == "" || promptAccepted {
+				return
+			}
+
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			relay.CleanupExternalMCPRelay(cleanupCtx, reply.SlackReply)
+
+			if !durableRegistration {
+				return
+			}
+
+			if err := store.RemoveExternalMCPConversation(externalConversationID); err != nil {
+				logger.Error("clean failed external MCP conversation", "external_conversation_id", externalConversationID, "conversation_id", createdConversationID, "error", err)
 			}
 		}()
 
@@ -190,25 +203,6 @@ func startExternalMCPServer(
 	}
 
 	return server, nil
-}
-
-func cleanupFailedExternalMCPConversation(relay mcpRelay, store *backend.SessionService, logger *slog.Logger, reply *protocol.InboundMessage, externalConversationID, conversationID string, durableRegistration, promptAccepted bool) {
-	if promptAccepted {
-		return
-	}
-
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	relay.CleanupExternalMCPRelay(cleanupCtx, reply.SlackReply)
-
-	if !durableRegistration {
-		return
-	}
-
-	if err := store.RemoveExternalMCPConversation(externalConversationID); err != nil {
-		logger.Error("clean failed external MCP conversation", "external_conversation_id", externalConversationID, "conversation_id", conversationID, "error", err)
-	}
 }
 
 func externalMCPInboundContent(attachments []externalmcp.SessionAttachment) (protocol.InboundContent, []protocol.OutboundAttachment, error) {

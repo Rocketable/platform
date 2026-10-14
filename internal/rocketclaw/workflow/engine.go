@@ -164,8 +164,7 @@ func workflowEvalError(err error) error {
 		errEval = errNested
 	}
 
-	for _, v := range slices.Backward(errEval.CallStack) {
-		frame := v
+	for _, frame := range slices.Backward(errEval.CallStack) {
 		if frame.Pos.Filename() != "<builtin>" {
 			return fmt.Errorf("%s in %s: %w", frame.Pos, frame.Name, err)
 		}
@@ -386,9 +385,7 @@ func (e *engine) builtins() starlark.StringDict {
 
 			fn.Freeze()
 
-			ctx := thread.Local(localContext).(context.Context)
-
-			values, err := pipelineItems(ctx, items)
+			values, err := pipelineItems(thread.Local(localContext).(context.Context), items)
 			if err != nil {
 				return nil, err
 			}
@@ -457,10 +454,7 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 		}
 		e.mu.Unlock()
 
-		phase := thread.Local(localPhase).(string)
-		if phase == "" {
-			phase = "run"
-		}
+		phase := cmp.Or(thread.Local(localPhase).(string), "run")
 
 		request := AgentRequest{Prompt: prompt, Key: nextKey(thread)}
 		if worker != nil {
@@ -489,13 +483,11 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 			}
 		}
 
-		ctx := thread.Local(localContext).(context.Context)
-
 		if err := e.phaseCount(phase, 1, 1, 0); err != nil {
 			return nil, err
 		}
 
-		raw, errAgent := e.agent.Run(ctx, &request)
+		raw, errAgent := e.agent.Run(thread.Local(localContext).(context.Context), &request)
 		if errAgent != nil {
 			e.cancel(errAgent)
 

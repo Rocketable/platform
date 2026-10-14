@@ -428,14 +428,7 @@ func TestSessionStoreAppendAndLoad(t *testing.T) {
 
 	_, err := service.AppendEntryID(t.Context(), store.conversationID, entry)
 	require.NoError(t, err)
-	require.Equal(t, []harness.SessionEntry{*entry}, collectEntries(t, store.in()))
-
-	for got, err := range store.in() {
-		require.NoError(t, err)
-		assert.Equal(t, *entry, got)
-
-		break
-	}
+	require.Equal(t, []harness.SessionEntry{*entry}, collectEntries(t, storedEntries(t, service, store.conversationID)))
 }
 
 func TestSessionServiceAppendEntryIDAndObserveEntries(t *testing.T) {
@@ -1162,12 +1155,11 @@ func TestSessionStoreLoadsLargeImageTurn(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	store := newSessionStore("main", service)
 	entry := harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ResponseID: "", Model: "gpt-6.1-sol", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: strings.Repeat("x", 128*1024)})}
 
 	_, err := service.AppendEntryID(t.Context(), "main", &entry)
 	require.NoError(t, err)
-	require.Equal(t, []harness.SessionEntry{entry}, collectEntries(t, store.in()))
+	require.Equal(t, []harness.SessionEntry{entry}, collectEntries(t, storedEntries(t, service, "main")))
 }
 
 func TestAppendSessionEntryDBReportsWriteFailures(t *testing.T) {
@@ -1259,9 +1251,7 @@ func TestHoldRunLockAllowsSessionServiceWhileHeld(t *testing.T) {
 func TestSessionStoreMissingIsEmpty(t *testing.T) {
 	t.Parallel()
 
-	service := newTestSessionService(t)
-	store := newSessionStore("main", service)
-	require.Empty(t, collectEntries(t, store.in()))
+	require.Empty(t, collectEntries(t, storedEntries(t, newTestSessionService(t), "main")))
 }
 
 func TestSessionStoreReportsObserveError(t *testing.T) {
@@ -1271,16 +1261,8 @@ func TestSessionStoreReportsObserveError(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, service.Stop())
 
-	store := newSessionStore("main", service)
-
-	var errObserve error
-	for _, err := range store.in() {
-		errObserve = err
-		break
-	}
-
-	require.Error(t, errObserve)
-	assert.ErrorContains(t, errObserve, "query rocketcode session entries")
+	_, err = service.ObserveEntries(t.Context(), "main")
+	assert.ErrorContains(t, err, "query rocketcode session entries")
 }
 
 func TestMemoryStoreAppendAndLoad(t *testing.T) {
@@ -2316,6 +2298,21 @@ func pruneTestTime(cutoff time.Time, fresh bool) time.Time {
 	}
 
 	return cutoff.Add(-time.Second)
+}
+
+// storedEntries reads conversationID's saved history the way runTurn does.
+func storedEntries(t *testing.T, service *SessionService, conversationID string) iter.Seq2[harness.SessionEntry, error] {
+	t.Helper()
+
+	observed, err := service.ObserveEntries(t.Context(), conversationID)
+	require.NoError(t, err)
+
+	var memory memoryStore
+	for i := range observed {
+		memory.entries = append(memory.entries, observed[i].Entry)
+	}
+
+	return memory.in()
 }
 
 func collectEntries(t *testing.T, seq iter.Seq2[harness.SessionEntry, error]) []harness.SessionEntry {

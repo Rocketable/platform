@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -52,7 +53,7 @@ func TestShadowUploadCardsAndDownloads(t *testing.T) {
 	require.NoError(t, seeded.db.QueryRow(`SELECT child_conversation_id FROM shadow_bindings`).Scan(&child))
 
 	server := New(withoutBackgroundJobs(), sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{})
-	listener, err := Listen(testSocketPath(t))
+	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()

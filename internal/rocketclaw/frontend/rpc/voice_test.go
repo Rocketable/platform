@@ -194,7 +194,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 
 	h.rt = <-ready
 
-	listener, err := Listen(testSocketPath(t))
+	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()

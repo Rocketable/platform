@@ -214,7 +214,7 @@ func TestSplitSlackResponseTextBoundaries(t *testing.T) {
 
 func TestGoalMessageLayoutMatchesCronStyle(t *testing.T) {
 	body := "Progress summary: I counted 1. Current state: 1 of 10. Next concrete step: count 2 on the next turn."
-	fallback, blocks, overflow := goalMessageLayout(1, 10, false, body)
+	fallback, blocks, overflow := titledMessageLayout(slackGoalHeaderText(1, 10, false), slackGoalHeaderText(1, 10, false), body)
 	assert.Equal(t, "🏁 Pursuing Goal (1/10)...", fallback)
 	assert.Empty(t, overflow)
 	require.Len(t, blocks, 3)
@@ -228,7 +228,7 @@ func TestGoalMessageLayoutMatchesCronStyle(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, body, section.Text.Text)
 
-	fallback, blocks, overflow = goalMessageLayout(3, 5, true, "done")
+	fallback, blocks, overflow = titledMessageLayout(slackGoalHeaderText(3, 5, true), slackGoalHeaderText(3, 5, true), "done")
 	assert.Equal(t, "✅ Goal complete", fallback)
 	assert.Empty(t, overflow)
 

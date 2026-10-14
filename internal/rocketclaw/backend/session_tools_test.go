@@ -181,8 +181,7 @@ func TestSessionTagToolsBridge(t *testing.T) {
 
 					close(input)
 
-					history := newSessionStore("external_mcp:owning", service)
-					require.NoError(t, runtime.Loop(t.Context(), input, history.in(), memory.out, make(chan os.Signal)))
+					require.NoError(t, runtime.Loop(t.Context(), input, storedEntries(t, service, "external_mcp:owning"), memory.out, make(chan os.Signal)))
 					tags, err := sessionTags(t.Context(), service.db, "external_mcp:owning")
 					require.NoError(t, err)
 
@@ -619,7 +618,6 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			workspace := t.TempDir()
 			writeMainAgentSkills(t, workspace, "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission:\n  read: allow\n  rocketclaw:\n    "+tc.rules+"\n---\nPrompt\n")
 			service := newTestSessionServiceAt(t, workspace)
-			history := newSessionStore("external_mcp:private", service)
 
 			entries := []rocketcode.SessionEntry{
 				*testSessionEntry("secret user", "secret answer"),
@@ -774,7 +772,7 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			close(input)
 
 			store := &memoryStore{}
-			require.NoError(t, runtime.Loop(t.Context(), input, history.in(), store.out, make(chan os.Signal)))
+			require.NoError(t, runtime.Loop(t.Context(), input, storedEntries(t, service, "external_mcp:private"), store.out, make(chan os.Signal)))
 
 			require.Equal(t, probe+1, requests)
 			require.Len(t, outputs, probe)

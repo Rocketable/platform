@@ -679,7 +679,7 @@ func TestLoadExecuteResultDispatchWithoutRead(t *testing.T) {
 	loop.agent = Agent{Name: "main", Permission: permissions}
 	loop.Permissions = permissions
 	loop.Tools, loop.CodeModeHosts = factory.assembleTools(&loop.agent)
-	factory.configureSpill(loop)
+	loop.spillRel, loop.promptExpansion = factory.spillRel, factory.promptExpansion
 	loop.restoreTurnExecuteResults("turn-1")
 	t.Cleanup(loop.deleteTurnExecuteResults)
 
@@ -740,7 +740,7 @@ func TestLoadExecuteResultDispatchWithoutRead(t *testing.T) {
 
 	loader := loop.Tools[loadExecuteResultToolName]
 	sibling := testLooper(mockResponses())
-	factory.configureSpill(sibling)
+	sibling.spillRel, sibling.promptExpansion = factory.spillRel, factory.promptExpansion
 	sibling.restoreTurnExecuteResults("sibling")
 	t.Cleanup(sibling.deleteTurnExecuteResults)
 	ctx := withToolCallContext(t.Context(), sibling, nil, "")

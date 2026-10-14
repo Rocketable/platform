@@ -1316,6 +1316,15 @@ func TestRevertSavedAttachmentRetryIdentity(t *testing.T) {
 	prompt := buildPrompt(inbound, nil)
 	header, _, _ := strings.Cut(prompt, "\n\n")
 	attachments := attachmentsFromInbound(inbound.Attachments)
+
+	type portableContent struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL string `json:"image_url"`
+		FileData string `json:"file_data"`
+		Filename string `json:"filename"`
+	}
+
 	raw, err := json.Marshal(struct {
 		Type    string            `json:"type"`
 		Role    string            `json:"role"`

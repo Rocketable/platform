@@ -82,12 +82,9 @@ func New(workspace, runtimeDir string, channels []string, store cronScheduleStor
 
 // ValidateRuntimeDefinitions loads cron definitions from runtimeDir without mutating scheduler state.
 func ValidateRuntimeDefinitions(workspace, runtimeDir string, channels []string) error {
-	definitions, err := loadDefinitionsIn(workspace, runtimeDir)
-	if err != nil {
-		return err
-	}
+	_, err := loadDefinitionsIn(workspace, runtimeDir, channels)
 
-	return validateDefinitionChannels(definitions, channels)
+	return err
 }
 
 // Start loads cron definitions and starts scheduling them.
@@ -99,12 +96,8 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 	m.mu.Unlock()
 
-	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir)
+	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir, m.channels)
 	if err != nil {
-		return err
-	}
-
-	if err := validateDefinitionChannels(definitions, m.channels); err != nil {
 		return err
 	}
 
@@ -143,7 +136,17 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.wg.Add(1)
 	go m.runTickerLoop(runCtx)
 
-	m.logLoadedDefinitions(definitions)
+	m.log.Info("loaded cronjobs", "count", len(definitions))
+
+	for _, definition := range definitions {
+		for range definition.schedules {
+			m.log.Info(
+				"loaded cronjob schedule",
+				"file", definition.relativePath,
+				"agent", definition.agent,
+			)
+		}
+	}
 
 	return nil
 }
@@ -192,12 +195,8 @@ func (m *Manager) LoadOneOffCronjob(target string) (protocol.OneOffCronjob, erro
 // Jobs returns loaded definitions and their next triggers in the next day.
 // It neither refreshes scheduler state nor claims any work.
 func (m *Manager) Jobs() ([]Job, error) {
-	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir)
+	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir, m.channels)
 	if err != nil {
-		return nil, err
-	}
-
-	if err := validateDefinitionChannels(definitions, m.channels); err != nil {
 		return nil, err
 	}
 
@@ -251,10 +250,8 @@ func (m *Manager) RunOneOffCronjob(ctx context.Context, job *protocol.OneOffCron
 	m.mu.Unlock()
 	defer m.wg.Done()
 
-	runCtx := context.WithoutCancel(ctx)
-
 	startedAt := time.Now()
-	result, err := m.run.Run(runCtx, job.Agent, job.Prompt, raw)
+	result, err := m.run.Run(context.WithoutCancel(ctx), job.Agent, job.Prompt, raw)
 
 	outcome := "completed"
 	if err != nil {
@@ -293,10 +290,7 @@ func (m *Manager) runOneOffTimer(ctx context.Context, definition *definition, in
 	}
 
 	m.executeJob(ctx, definition)
-	m.deleteOneOffCronjob(definition)
-}
 
-func (m *Manager) deleteOneOffCronjob(definition *definition) {
 	relativePath := filepath.ToSlash(filepath.Join(m.runtimeDir, "cron", filepath.Base(definition.relativePath)))
 	if err := os.Remove(filepath.Join(m.workspace, relativePath)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		m.log.Warn("delete one-off cronjob", "file", definition.relativePath, "error", err)
@@ -333,12 +327,8 @@ func (m *Manager) runTickerLoop(ctx context.Context) {
 func (m *Manager) scanScheduled(ctx context.Context) error {
 	now := m.now()
 
-	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir)
+	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir, m.channels)
 	if err != nil {
-		return err
-	}
-
-	if err := validateDefinitionChannels(definitions, m.channels); err != nil {
 		return err
 	}
 
@@ -418,16 +408,6 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 	return nil
 }
 
-func validateDefinitionChannels(definitions []definition, channels []string) error {
-	for _, definition := range definitions {
-		if !slices.Contains(channels, definition.textChannel) {
-			return fmt.Errorf("cronjob %s channel %q is not configured", definition.relativePath, definition.textChannel)
-		}
-	}
-
-	return nil
-}
-
 func (m *Manager) runScheduled(ctx context.Context, relativePath string, definition *definition) {
 	defer m.wg.Done()
 	defer func() {
@@ -442,8 +422,7 @@ func (m *Manager) runScheduled(ctx context.Context, relativePath string, definit
 func (m *Manager) scheduledStates(definitions []definition, now time.Time) []backend.CronScheduleState {
 	var states []backend.CronScheduleState
 
-	for i := range definitions {
-		definition := definitions[i]
+	for _, definition := range definitions {
 		for index, schedule := range definition.schedules {
 			if !schedule.DueAt.IsZero() {
 				continue
@@ -505,22 +484,8 @@ func (m *Manager) preparePrompt(body string) string {
 	return strings.TrimSuffix(body, "\n") + "\n\n" + cronReplyInstruction
 }
 
-func (m *Manager) logLoadedDefinitions(definitions []definition) {
-	m.log.Info("loaded cronjobs", "count", len(definitions))
-
-	for i := range definitions {
-		definition := definitions[i]
-		for range definition.schedules {
-			m.log.Info(
-				"loaded cronjob schedule",
-				"file", definition.relativePath,
-				"agent", definition.agent,
-			)
-		}
-	}
-}
-
-func loadDefinitionsIn(workspace, runtimeDir string) ([]definition, error) {
+// loadDefinitionsIn loads every cron definition, then rejects any whose channel is not in channels.
+func loadDefinitionsIn(workspace, runtimeDir string, channels []string) ([]definition, error) {
 	root, err := os.OpenRoot(workspace)
 	if err != nil {
 		return nil, fmt.Errorf("open workspace root: %w", err)
@@ -566,6 +531,12 @@ func loadDefinitionsIn(workspace, runtimeDir string) ([]definition, error) {
 		}
 
 		definitions = append(definitions, definition)
+	}
+
+	for _, definition := range definitions {
+		if !slices.Contains(channels, definition.textChannel) {
+			return nil, fmt.Errorf("cronjob %s channel %q is not configured", definition.relativePath, definition.textChannel)
+		}
 	}
 
 	return definitions, nil

@@ -20,10 +20,6 @@ import (
 // The cron frontend adds its output-decision instruction to Prompt.
 func LoadOneOffCronjob(workspace, runtimeDir, target string) (protocol.OneOffCronjob, error) {
 	target = strings.TrimSpace(target)
-	if target == "" {
-		return protocol.OneOffCronjob{}, errors.New("cron target must be a top-level cron stem like daily or daily.md")
-	}
-
 	if strings.Contains(target, "/") || strings.Contains(target, `\`) {
 		return protocol.OneOffCronjob{}, errors.New("cron target must be a top-level cron stem; nested paths are not allowed")
 	}

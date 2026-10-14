@@ -112,8 +112,7 @@ func selectRuntimeConfigFile() (runtimeConfigFile, error) {
 	return runtimeConfigFile{}, nil
 }
 func printStdout(text, name string) error {
-	_, err := fmt.Fprint(os.Stdout, text)
-	if err != nil {
+	if _, err := fmt.Fprint(os.Stdout, text); err != nil {
 		return fmt.Errorf("print %s: %w", name, err)
 	}
 	return nil

@@ -1,15 +1,10 @@
-package backend
+package rocketcode
 
 import (
 	"encoding/json"
-	"iter"
-	"slices"
 	"testing"
 	"time"
 
-	"github.com/Rocketable/platform/internal/rocketcode"
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,17 +13,6 @@ const (
 	providerReplayReadable = "portable-readable"
 	providerReplayPrivate  = "provider-private-sentinel"
 )
-
-func TestReplayInputForMessagePreservesSDKSerialization(t *testing.T) {
-	for _, role := range []string{"user", "developer", "assistant"} {
-		for _, text := range []string{"", " \n", "quotes: \" and \\ and <html>", "日本\x00\xff\u2028"} {
-			message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRole(role), Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(text)}, Type: "message"}
-			want, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfMessage: &message}})
-			require.NoError(t, err, "string-only replay construction cannot fail")
-			require.Equal(t, want, replayInputForMessage(role, text))
-		}
-	}
-}
 
 func TestProviderForModel(t *testing.T) {
 	t.Parallel()
@@ -46,7 +30,7 @@ func TestProviderForModel(t *testing.T) {
 func TestSessionEntryForProviderSameProviderIsUnchanged(t *testing.T) {
 	t.Parallel()
 
-	entry := rocketcode.SessionEntry{
+	entry := SessionEntry{
 		Version:     1,
 		Type:        "turn",
 		Timestamp:   time.Unix(1, 2).UTC(),
@@ -58,9 +42,8 @@ func TestSessionEntryForProviderSameProviderIsUnchanged(t *testing.T) {
 	want, err := json.Marshal(entry)
 	require.NoError(t, err)
 
-	got, err := sessionEntryForProvider(&entry, "work")
-	require.NoError(t, err)
-	data, err := json.Marshal(got)
+	require.NoError(t, entry.forProvider("work"))
+	data, err := json.Marshal(entry)
 	require.NoError(t, err)
 	assert.Equal(t, want, data)
 }
@@ -68,7 +51,7 @@ func TestSessionEntryForProviderSameProviderIsUnchanged(t *testing.T) {
 func TestSessionEntryForProviderDifferentProviderProjectsReplay(t *testing.T) {
 	t.Parallel()
 
-	entry := rocketcode.SessionEntry{
+	entry := SessionEntry{
 		Version:    1,
 		Type:       "turn",
 		Timestamp:  time.Unix(1, 0).UTC(),
@@ -88,10 +71,11 @@ func TestSessionEntryForProviderDifferentProviderProjectsReplay(t *testing.T) {
 		OutputTrace: []json.RawMessage{json.RawMessage(`{"private":"provider-private-sentinel"}`), json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"item/0","parent_id":"turn/response","kind":"text","state":"completed","text":"early-public"}}`)},
 	}
 
-	got, err := sessionEntryForProvider(&entry, "work")
+	original, err := json.Marshal(entry)
 	require.NoError(t, err)
-	assert.Empty(t, got.ResponseID)
-	assert.Equal(t, entry.OutputTrace[1:], got.OutputTrace)
+
+	got := entry
+	require.NoError(t, got.forProvider("work"))
 	assert.Equal(t, entry.Model, got.Model)
 
 	data, err := json.Marshal(got.ReplayInput)
@@ -106,33 +90,41 @@ func TestSessionEntryForProviderDifferentProviderProjectsReplay(t *testing.T) {
 	assert.NotContains(t, text, "provider_hosted")
 	assert.Len(t, got.ReplayInput, 7)
 
-	original, err := json.Marshal(entry)
+	unchanged, err := json.Marshal(entry)
 	require.NoError(t, err)
-	assert.Contains(t, string(original), providerReplayPrivate)
+	assert.Equal(t, original, unchanged)
 }
 
-func TestSessionEntriesForProviderTreatsMissingModelAsOpenAI(t *testing.T) {
+func TestSessionEntryForProviderTreatsMissingModelAsOpenAI(t *testing.T) {
 	t.Parallel()
 
-	entries := func(yield func(rocketcode.SessionEntry, error) bool) {
-		yield(rocketcode.SessionEntry{Model: "", ResponseID: providerReplayPrivate, ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"portable-readable"}`)}}, nil)
-	}
+	entry := SessionEntry{Model: "", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","id":"provider-private-sentinel","content":"portable-readable"}`)}}
+	require.NoError(t, entry.forProvider("work"))
+	assert.Contains(t, string(entry.ReplayInput[0]), providerReplayReadable)
+	assert.NotContains(t, string(entry.ReplayInput[0]), providerReplayPrivate)
+}
 
-	got := slices.Collect(func(yield func(rocketcode.SessionEntry) bool) {
-		for entry, err := range sessionEntriesForProvider(iter.Seq2[rocketcode.SessionEntry, error](entries), "work") {
-			require.NoError(t, err)
-			yield(entry)
-		}
-	})
-	require.Len(t, got, 1)
-	assert.Empty(t, got[0].ResponseID)
-	assert.Contains(t, string(got[0].ReplayInput[0]), providerReplayReadable)
+func TestSessionEntryForProviderConvertsOnlyAnotherProvidersRanges(t *testing.T) {
+	t.Parallel()
+
+	native := json.RawMessage(`{"type":"reasoning","encrypted_content":"work-native","summary":[]}`)
+	entry := SessionEntry{Model: "work/gpt", ReplayInput: []json.RawMessage{
+		native,
+		json.RawMessage(`{"type":"reasoning","encrypted_content":"provider-private-sentinel","summary":[{"type":"summary_text","text":"portable-readable"}]}`),
+		native,
+	}, ReplayAttribution: []ReplayAttribution{{Start: 1, End: 2, Model: "openai/gpt"}}}
+	require.NoError(t, entry.forProvider("work"))
+	require.Len(t, entry.ReplayInput, 3)
+	assert.Equal(t, native, entry.ReplayInput[0])
+	assert.Contains(t, string(entry.ReplayInput[1]), providerReplayReadable)
+	assert.NotContains(t, string(entry.ReplayInput[1]), providerReplayPrivate)
+	assert.Equal(t, native, entry.ReplayInput[2])
 }
 
 func TestReplayForProviderDropsUnknownBeforePayloadDecode(t *testing.T) {
 	t.Parallel()
 
-	replay, err := replayForProvider([]json.RawMessage{json.RawMessage(`{"type":"provider_hosted","role":{},"content":false,"output":42}`)})
+	replay, err := replayForWork(json.RawMessage(`{"type":"provider_hosted","role":{},"content":false,"output":42}`))
 
 	require.NoError(t, err)
 	assert.Empty(t, replay)
@@ -141,8 +133,7 @@ func TestReplayForProviderDropsUnknownBeforePayloadDecode(t *testing.T) {
 func TestReplayForProviderReadsExactSummaryShapesAndPrefersCompactionContent(t *testing.T) {
 	t.Parallel()
 
-	ranges := []rocketcode.ReplayAttribution{{Start: 2, End: 3}}
-	replay, err := replayForProvider([]json.RawMessage{
+	entry := SessionEntry{ReplayAttribution: []ReplayAttribution{{Start: 2, End: 3}}, ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"reasoning","summary":"summary-string"}`),
 		json.RawMessage(`{"type":"reasoning","summary":{"text":"summary-object"}}`),
 		json.RawMessage(`{"type":"reasoning","summary":[{"text":"summary-array-one"},{"text":" \n"},{"text":"summary-array-two"}]}`),
@@ -150,11 +141,11 @@ func TestReplayForProviderReadsExactSummaryShapesAndPrefersCompactionContent(t *
 		json.RawMessage(`{"type":"compaction","summary":{"text":"compaction-fallback"}}`),
 		json.RawMessage(`{"type":"compaction_summary","content":[{"text":" "},{"text":" padded content "}],"summary":"unused"}`),
 		json.RawMessage(`{"type":"compaction_summary","content":" ","summary":[{"text":""},{"text":" padded fallback "},{"text":"\t"}]}`),
-	}, ranges)
-	require.NoError(t, err)
-	assert.Equal(t, []rocketcode.ReplayAttribution{{Start: 2, End: 4}}, ranges)
+	}}
+	require.NoError(t, entry.forProvider("work"))
+	assert.Equal(t, []ReplayAttribution{{Start: 2, End: 4}}, entry.ReplayAttribution)
 
-	items, err := rocketcode.ReplayInputToParams(replay)
+	items, err := ReplayInputToParams(entry.ReplayInput)
 	require.NoError(t, err)
 
 	got := make([]string, len(items))
@@ -182,12 +173,8 @@ func TestReplayForProviderRejectsMalformedKnownReadableData(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			raw := []json.RawMessage{json.RawMessage(test.raw)}
-			_, err := replayForProvider(raw)
-			require.ErrorContains(t, err, test.want)
-
-			entry := rocketcode.SessionEntry{Model: "openai/model", ReplayInput: raw}
-			_, err = sessionEntryForProvider(&entry, "other")
-			require.ErrorContains(t, err, test.want)
+			entry := SessionEntry{Model: "openai/model", ReplayInput: raw}
+			require.ErrorContains(t, entry.forProvider("other"), test.want)
 			require.Equal(t, raw, entry.ReplayInput)
 		})
 	}
@@ -196,7 +183,7 @@ func TestReplayForProviderRejectsMalformedKnownReadableData(t *testing.T) {
 		json.RawMessage(`{"type":"reasoning","encrypted_content":"private"}`),
 		json.RawMessage(`{"type":"compaction","encrypted_content":"private"}`),
 	} {
-		replay, err := replayForProvider([]json.RawMessage{raw})
+		replay, err := replayForWork(raw)
 		require.NoError(t, err)
 		assert.Empty(t, replay)
 	}
@@ -211,14 +198,14 @@ func TestReplayForProviderDropsContentArrayItemsWithoutPortableParts(t *testing.
 		json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_image","file_id":"hosted-image"},{"type":"input_file","file_id":"hosted-file"}]}`),
 		json.RawMessage(`{"type":"function_call_output","call_id":"call","output":[{"type":"input_image","file_id":"hosted-image"},{"type":"input_file","file_id":"hosted-file"}]}`),
 	} {
-		replay, err := replayForProvider([]json.RawMessage{raw})
+		replay, err := replayForWork(raw)
 		require.NoError(t, err)
 		assert.Empty(t, replay)
 	}
 
-	replay, err := replayForProvider([]json.RawMessage{
+	replay, err := replayForWork(
 		json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_image","file_id":"drop"},{"type":"input_image","image_url":"data:image/png;base64,keep"},{"type":"input_file","file_id":"drop"},{"type":"input_file","file_data":"keep-data"}]}`),
-	})
+	)
 	require.NoError(t, err)
 	require.Len(t, replay, 1)
 	assert.NotContains(t, string(replay[0]), `file_id`)
@@ -229,7 +216,7 @@ func TestReplayForProviderDropsContentArrayItemsWithoutPortableParts(t *testing.
 		json.RawMessage(`{"type":"message","role":"assistant","phase":"final_answer","content":""}`),
 		json.RawMessage(`{"type":"function_call_output","call_id":"call","output":""}`),
 	} {
-		replay, err := replayForProvider([]json.RawMessage{raw})
+		replay, err := replayForWork(raw)
 		require.NoError(t, err)
 		require.Len(t, replay, 1, "empty strings survive even though empty content arrays do not")
 		require.JSONEq(t, string(raw), string(replay[0]))
@@ -239,15 +226,15 @@ func TestReplayForProviderDropsContentArrayItemsWithoutPortableParts(t *testing.
 func TestReplayForProviderCompactionFallsBackAfterBlankContent(t *testing.T) {
 	t.Parallel()
 
-	replay, err := replayForProvider([]json.RawMessage{
+	replay, err := replayForWork(
 		json.RawMessage(`{"type":"compaction","content":"","summary":"fallback-string"}`),
 		json.RawMessage(`{"type":"compaction","content":"  \n","summary":{"text":"fallback-whitespace"}}`),
 		json.RawMessage(`{"type":"compaction","content":{"text":""},"summary":[{"text":"fallback-object"}]}`),
 		json.RawMessage(`{"type":"compaction","content":[],"summary":"fallback-array"}`),
-	})
+	)
 	require.NoError(t, err)
 
-	items, err := rocketcode.ReplayInputToParams(replay)
+	items, err := ReplayInputToParams(replay)
 	require.NoError(t, err)
 
 	got := make([]string, len(items))
@@ -277,13 +264,21 @@ func TestReplayForProviderValidatesRequiredKnownFields(t *testing.T) {
 		{name: "output call id blank", raw: `{"type":"function_call_output","call_id":" ","output":"done"}`, want: "function output call_id"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := replayForProvider([]json.RawMessage{json.RawMessage(test.raw)})
+			_, err := replayForWork(json.RawMessage(test.raw))
 			require.ErrorContains(t, err, test.want)
 		})
 	}
 
-	replay, err := replayForProvider([]json.RawMessage{json.RawMessage(`{"type":"function_call","call_id":"call","name":"read","arguments":""}`)})
+	replay, err := replayForWork(json.RawMessage(`{"type":"function_call","call_id":"call","name":"read","arguments":""}`))
 	require.NoError(t, err)
 	require.Len(t, replay, 1)
 	assert.Contains(t, string(replay[0]), `"arguments":""`)
+}
+
+// replayForWork converts replay a default-provider model recorded for provider work.
+func replayForWork(raw ...json.RawMessage) ([]json.RawMessage, error) {
+	entry := SessionEntry{ReplayInput: raw}
+	err := entry.forProvider("work")
+
+	return entry.ReplayInput, err
 }

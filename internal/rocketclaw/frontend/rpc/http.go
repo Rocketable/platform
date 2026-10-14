@@ -71,31 +71,21 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 			var (
 				request  proto.Message = &ListSessionsRequest{}
 				response proto.Message = &ListSessionsResponse{}
+				required string
 			)
 
 			switch method {
 			case "/stream":
-				method, request, response = "Join", &JoinRequest{Id: r.URL.Query().Get("id")}, &ConversationChange{}
+				method, request, response, required = "Join", &JoinRequest{Id: r.URL.Query().Get("id")}, &ConversationChange{}, "id"
 			case "DownloadAttachment", "UploadAttachment":
 				request = &Attachment{ConversationId: r.URL.Query().Get("conversationId"), Id: r.URL.Query().Get("id"), Name: r.URL.Query().Get("name")}
-				response = &Attachment{}
+				response, required = &Attachment{}, map[string]string{"DownloadAttachment": "conversationId id", "UploadAttachment": "conversationId name"}[method]
 			case "Voice":
 				request, response = &VoiceRequest{}, &VoiceEvent{}
 				if err := httpInput(w, r, request, method); err != nil {
 					httpRPCError(w, status.Error(codes.InvalidArgument, err.Error()))
 					return
 				}
-			}
-
-			required := ""
-
-			switch method {
-			case "Join":
-				required = "id"
-			case "UploadAttachment":
-				required = "conversationId name"
-			case "DownloadAttachment":
-				required = "conversationId id"
 			}
 
 			for name := range strings.FieldsSeq(required) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -33,7 +34,7 @@ func TestSlackNames(t *testing.T) {
 		return names
 	}}
 	cfg := &config.Config{WebUsers: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice"}}
-	listener, err := Listen(testSocketPath(t))
+	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()

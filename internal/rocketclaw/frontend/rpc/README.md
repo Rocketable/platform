@@ -431,8 +431,6 @@ source-row retention without exposing source or destination IDs in the transcrip
 RocketClaw accepts browser connections directly (for example over the private network).
 HTTP mutations and uploads reject cross-origin browser requests using Go's
 `CrossOriginProtection`; browser-IP identity never grants cross-origin authority.
-The private Unix socket trusts that OS user, including other processes running as that user.
-Do not expose the socket through a general-purpose relay.
 
 The HTTP proxy forwards only the connection's remote IP. It ignores
 `X-Forwarded-For`, `X-Real-IP`, `Tailscale-User-*`, and client-supplied principal
@@ -493,7 +491,7 @@ creates an isolated schema via the existing test helper.
 mkdir -p "$PWD/.tmp/test-tmp"
 export TMPDIR="$PWD/.tmp/test-tmp"
 export ROCKETCLAW_TEST_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:55435/rocketclaw_test?sslmode=disable'
-go test -race -count=1 -run '^(TestWebRPC|TestSessionEntries|TestPrivateSocket)$' \
+go test -race -count=1 -run '^(TestWebRPC|TestSessionEntries)$' \
   ./cmd/rocketclaw ./internal/rocketclaw/frontend/rpc
 ```
 

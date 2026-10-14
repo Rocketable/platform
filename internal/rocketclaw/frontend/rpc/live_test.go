@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -134,7 +135,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 			require.NoError(t, seeded.UpsertActiveTurn(ctx, checkpoint))
 		}
 
-		listener, err := Listen(testSocketPath(t))
+		listener, err := net.Listen("unix", testSocketPath(t))
 		require.NoError(t, err)
 
 		transport := grpc.NewServer()
@@ -442,7 +443,7 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 	updated := agent + "Updated prompt\n"
 	require.NoError(t, root.WriteFile("agents/main.md", []byte(updated), 0o600))
 	require.NoError(t, root.WriteFile("rocketclaw.json", []byte("invalid config"), 0o600))
-	listener, err := Listen(testSocketPath(t))
+	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
@@ -539,7 +540,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 		json.RawMessage(`{"type":"compaction","content":"abandoned summary"}`),
 	}})
 	require.NoError(t, err)
-	listener, err := Listen(testSocketPath(t))
+	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
