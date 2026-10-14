@@ -235,6 +235,20 @@ func TestSkillDescriptions(t *testing.T) {
 		require.NotContains(t, description, "git-review")
 	})
 
+	t.Run("tool description when no skills are allowed", func(t *testing.T) {
+		factory := testSkillFactory(t, skills, agentWithSkillRules(PermissionRule{Pattern: "*", Action: permissionDeny}))
+
+		require.Equal(t, strings.Join([]string{
+			"Load a specialized skill when the task at hand matches one of the skills listed in the system prompt.",
+			"",
+			"Use this tool to inject the skill's instructions and resources into current conversation. The output may contain detailed workflow guidance as well as references to scripts, files, etc in the same directory as the skill.",
+			"",
+			"The skill name must match one of the skills listed in your system prompt.",
+			"",
+			"No skills are currently available.",
+		}, "\n"), factory.skillDescription())
+	})
+
 	t.Run("system prompt instructs discovery without listing skills", func(t *testing.T) {
 		prompt := composeSystemPromptWithSkills("base prompt", skills, agentWithSkillPermission())
 

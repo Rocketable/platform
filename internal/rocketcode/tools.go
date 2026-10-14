@@ -621,30 +621,27 @@ func (f *toolFactory) availableSkillNames() []string {
 
 func (f *toolFactory) skillDescription() string {
 	list := f.skills.Available(f.agent)
-	if len(list) == 0 {
-		return strings.Join([]string{
-			"Load a specialized skill when the task at hand matches one of the skills listed in the system prompt.",
-			"",
-			"Use this tool to inject the skill's instructions and resources into current conversation. The output may contain detailed workflow guidance as well as references to scripts, files, etc in the same directory as the skill.",
-			"",
-			"The skill name must match one of the skills listed in your system prompt.",
-			"",
-			"No skills are currently available.",
-		}, "\n")
-	}
 
-	return strings.Join([]string{
+	lines := []string{
 		"Load a specialized skill when the task at hand matches one of the skills listed in the system prompt.",
 		"",
 		"Use this tool to inject the skill's instructions and resources into current conversation. The output may contain detailed workflow guidance as well as references to scripts, files, etc in the same directory as the skill.",
 		"",
 		"The skill name must match one of the skills listed in your system prompt.",
 		"",
-		"The following skills provide specialized sets of instructions for particular tasks.",
-		"Invoke this tool to load a skill when a task matches one of the available skills listed below:",
-		"",
-		formatSkills("## Available skills", list),
-	}, "\n")
+	}
+	if len(list) == 0 {
+		lines = append(lines, "No skills are currently available.")
+	} else {
+		lines = append(lines,
+			"The following skills provide specialized sets of instructions for particular tasks.",
+			"Invoke this tool to load a skill when a task matches one of the available skills listed below:",
+			"",
+			formatSkills("## Available skills", list),
+		)
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 func functionTool(name, description string, properties map[string]any) *responses.FunctionToolParam {
