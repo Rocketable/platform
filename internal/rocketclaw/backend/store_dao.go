@@ -723,6 +723,10 @@ WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntry
 		return &stored, s.loadAttachmentData(ctx, stored.Attachments)
 	}
 
+	if err := finish.preserveStoppedInput(ctx, tx, turnID); err != nil {
+		return nil, err
+	}
+
 	for i := range finish.entries {
 		if _, err := finish.store.appendDB(ctx, tx, &finish.entries[i]); err != nil {
 			return nil, err
@@ -788,6 +792,45 @@ SELECT COALESCE(MIN(wake_attempts) FILTER (WHERE child_key = ''), 0) FROM releas
 	}
 
 	return finish.outbound, nil
+}
+
+// preserveStoppedInput saves human input before the first completed response,
+// without promoting unfinished provider/tool output or consuming Completion Notes.
+func (f *turnFinish) preserveStoppedInput(ctx context.Context, db stateStoreDB, turnID string) error {
+	if f.terminal != protocol.TerminalStopped || len(f.entries) > 0 {
+		return nil
+	}
+
+	entries, err := queryRows(ctx, db, `SELECT s.value::jsonb->'record' || jsonb_build_object('output_trace', a.output_trace_json::jsonb)
+FROM turn_steps s JOIN active_turns a ON a.conversation_id = s.conversation_id AND a.id = s.key
+WHERE s.conversation_id = $1 AND s.key = $2 AND COALESCE(s.value->'record'->>'response_id', '') = ''
+    AND a.inbound_json->>'Human' = 'true'
+    AND jsonb_array_length(s.value::jsonb->'applied_input_ids') > 0`, "stopped input", func(row rowScanner) (harness.SessionEntry, error) {
+		var (
+			raw   []byte
+			entry harness.SessionEntry
+		)
+		if err := row.Scan(&raw); err != nil {
+			return entry, fmt.Errorf("read stopped input: %w", err)
+		}
+
+		if err := json.Unmarshal(raw, &entry); err != nil {
+			return entry, fmt.Errorf("decode stopped input: %w", err)
+		}
+
+		return entry, nil
+	}, f.store.conversationID, turnID)
+	if err != nil {
+		return err
+	}
+
+	for i := range entries {
+		if _, err := f.store.appendDB(ctx, db, &entries[i]); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // keepRunningJobSteps keeps, in a delete of turn_steps s under the key prefix $2, the steps
