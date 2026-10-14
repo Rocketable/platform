@@ -227,6 +227,122 @@ test("pending saves, delayed hydration and owner switches cannot beat deletion o
 
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
+test("session picker hides only live working rows and selects only visible matches", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const sessions: Session[] = [
+    { id: "working", name: "Working fixture", agent: "fixture", running: true, tags: ["working-only"] },
+    { id: "idle", name: "Idle fixture", agent: "fixture", running: false, tags: ["idle-only"] },
+    { id: "later", name: "Later fixture", agent: "fixture", running: false },
+  ];
+  const delayed = Promise.withResolvers<void>();
+  const mutations: string[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions, owner: "fixture", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (!url.pathname.startsWith("/api/")) return new Response(Bun.file(path.join(dist, url.pathname.startsWith("/assets/") ? url.pathname : "index.html")));
+    const input = await request.json() as { query?: string; id?: string };
+    switch (url.pathname) {
+      case "/api/Protocol": return Response.json({ protoSha256: "picker-filter-fixture" });
+      case "/api/Identity": return Response.json({ username: "fixture" });
+      case "/api/ListAgents": return Response.json({ agents: [{ name: "fixture", model: "fixture" }], currentAgent: "fixture" });
+      case "/api/ListConfig": return Response.json({ config: {} });
+      case "/api/History": return Response.json({ messages: [], revision: "1", reset: true, running: sessions.find((session) => session.id === input.id)?.running ?? false });
+      case "/api/SearchSessions":
+        if (input.query === "delayed") await delayed.promise;
+        return Response.json({ terms: [], text: input.query, needle: input.query, matches: (input.query === "only-working" ? sessions.slice(0, 1) : sessions).map((session) => ({ conversationId: session.id, field: "Name", text: session.name })), messages: [], mentionIds: [], indexComplete: true, summariesComplete: true });
+      case "/api/ListQueue": return Response.json({ items: [] });
+      case "/api/ListSkills": return Response.json({ skills: [] });
+      case "/api/ListWorkflows": return Response.json({ workflows: [] });
+      case "/api/ListCronJobs": return Response.json({ jobs: [] });
+      case "/api/VoiceSettings": return Response.json({});
+      default: mutations.push(url.pathname); return Response.json({});
+    }
+  } });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage();
+    const origin = `http://127.0.0.1:${server.port}`;
+    const workingPath = `${origin}/s/${Buffer.from("working").toString("base64url")}`;
+    const laterPath = `${origin}/s/${Buffer.from("later").toString("base64url")}`;
+    await page.goto(workingPath);
+    await page.locator("footer").waitFor();
+    await page.keyboard.press("Control+p");
+    const picker = page.getByRole("dialog", { name: "Go to session", exact: true });
+    const toggle = picker.getByRole("switch", { name: "Hide working sessions", exact: true });
+    const search = picker.getByPlaceholder("Search sessions", { exact: true });
+    const titles = picker.locator('[data-slot="session-title"]');
+    await picker.getByText("Working fixture", { exact: true }).waitFor();
+    expect(await toggle.isChecked()).toBe(false);
+    expect(await titles.allTextContents()).toEqual(["Working fixture", "Idle fixture", "Later fixture"]);
+    await toggle.click();
+    await picker.getByText("Working fixture", { exact: true }).waitFor({ state: "detached" });
+    expect(page.url()).toBe(workingPath); // Filtering does not close the current chat.
+    expect(await titles.allTextContents()).toEqual(["Idle fixture", "Later fixture"]);
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 800 });
+      expect(await picker.evaluate((element: HTMLElement) => element.scrollWidth <= element.clientWidth)).toBe(true);
+      await picker.screenshot({ path: path.join(screenshots, `hide-working-${width}.png`) });
+    }
+    await search.fill("tag:");
+    await picker.getByRole("button", { name: "idle-only", exact: true }).waitFor();
+    expect(await picker.getByRole("button", { name: "working-only", exact: true }).count()).toBe(0);
+    await search.fill("");
+    sessions[0].running = false;
+    await picker.getByText("Working fixture", { exact: true }).waitFor();
+    sessions[0].running = true;
+    await picker.getByText("Working fixture", { exact: true }).waitFor({ state: "detached" });
+    await toggle.press("Space");
+    await picker.getByText("Working fixture", { exact: true }).waitFor();
+    await toggle.press("Space");
+    await picker.getByText("Working fixture", { exact: true }).waitFor({ state: "detached" });
+
+    // A turn starts while Enter waits; it must skip both working matches.
+    const requested = page.waitForRequest("**/api/SearchSessions");
+    await search.fill("delayed");
+    await search.press("Enter");
+    await requested;
+    await toggle.press("Space");
+    await picker.getByText("Working fixture", { exact: true }).waitFor();
+    await toggle.press("Space");
+    await picker.getByText("Working fixture", { exact: true }).waitFor({ state: "detached" });
+    sessions[1].running = true;
+    await picker.getByText("Idle fixture", { exact: true }).waitFor({ state: "detached" });
+    delayed.resolve();
+    await page.waitForURL(laterPath);
+    await picker.waitFor({ state: "hidden" });
+
+    await page.keyboard.press("Control+p");
+    expect(await toggle.isChecked()).toBe(false); // No persistent setting.
+    await toggle.click();
+    await search.fill("only-working");
+    await search.press("Enter");
+    await picker.getByText("No matches", { exact: true }).waitFor();
+    expect(page.url()).toBe(laterPath);
+    expect(await titles.count()).toBe(0);
+    sessions[1].running = false;
+    await search.fill("");
+    await picker.getByText("Idle fixture", { exact: true }).waitFor();
+    await search.press("ArrowDown");
+    await search.press("Enter");
+    await picker.waitFor({ state: "hidden" });
+    expect(page.url()).toBe(laterPath);
+    await page.keyboard.press("Control+p");
+    await toggle.click();
+    await picker.getByRole("button").filter({ hasText: "Idle fixture" }).click();
+    await page.waitForURL(`${origin}/s/${Buffer.from("idle").toString("base64url")}`);
+
+    await page.keyboard.press("Control+p");
+    await search.fill("off-query");
+    await search.press("Enter");
+    await page.waitForURL(workingPath); // Off keeps the existing first-match behavior.
+    await page.goto(`${origin}/search?q=only-working`);
+    await page.getByRole("group", { name: "Working fixture", exact: true }).waitFor();
+    expect(await page.getByRole("switch", { name: "Hide working sessions", exact: true }).count()).toBe(0);
+    expect(mutations).toEqual([]);
+  } finally { delayed.resolve(); server.stop(true); await browser.close(); }
+}, 45_000);
+
 test("actual App renders independent public lifecycle and reconnect replacements at narrow widths", async () => {
   // Build current sources in memory; leave the parent's shared embedded assets untouched.
   const build = await Bun.build({ entrypoints: ["./src/main.tsx"], target: "browser", define: { "process.env.NODE_ENV": '"production"' } });

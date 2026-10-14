@@ -45,6 +45,13 @@ independently toggles its origin on or off, so both, either, or neither can be s
 Messages without a recorded origin appear only when both are selected.
 Filtering does not change saved history or routing.
 
+## Session picker
+
+In **Go to session**, turn on **Hide working sessions** to omit sessions while their
+agent turns are running. They return automatically when the turns end. The switch
+starts off each time the picker opens. It does not stop work, close chat tabs, or
+filter the full Search page.
+
 ## Shadow comparison
 
 Agents can declare [shadow definitions](../../../README.md#shadow-agents).

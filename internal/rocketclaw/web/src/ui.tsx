@@ -7,6 +7,7 @@ import { Menu } from "@base-ui/react/menu";
 import { Tabs } from "@base-ui/react/tabs";
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions, rpc, RPCError } from "./api";
@@ -1247,8 +1248,11 @@ function usePendingCron(id: string) {
 
 // The server reads and matches the query. While typing, an unfinished last word is left out; Enter sends everything.
 // Requests start after a 250 ms pause (and by 1 s with messages), a newer one aborts the older, and they rerun when sidebar chats change.
-function useSessionSearch(query: string, messages: boolean, entered: boolean) {
+function useSessionSearch(query: string, messages: boolean, entered: boolean, hideWorking = false) {
   const { rows } = useContext(Sidebar);
+  const available = hideWorking ? rows.filter((session) => !session.running) : rows;
+  const latest = useRef({ available, hideWorking });
+  useLayoutEffect(() => { latest.current = { available, hideWorking }; });
   const ids = useMemo(() => rows.map(({ id }) => id).toSorted().join(" "), [rows]);
   const { word, unfinished } = typingWord(query);
   const sent = (entered || !unfinished ? query : query.slice(0, query.length - word.length)).trimEnd();
@@ -1292,17 +1296,17 @@ function useSessionSearch(query: string, messages: boolean, entered: boolean) {
   const pending = !!sent && result.query !== sent;
   const { found, missing } = useMemo(() => matchedRows(result.response, rows), [result.response, rows]);
   return {
-    word, sent, result, found, missing, run, pending,
+    word, sent, result, found, missing, run, pending, available,
     error: sent && result.query === sent ? result.error : undefined,
     // Before any response for typed text the rows are the sidebar's, in its order.
-    rows: sent && result.query ? found.map(({ session }) => session) : rows,
+    rows: sent && result.query ? found.map(({ session }) => session).filter((session) => !hideWorking || !session.running) : available,
     // enter acts on the shown rows when they are the response for the whole query, never on a dimmed older list;
     // otherwise it sends the query at once, or waits for it in flight, and opens the first row of that response.
     enter: (shown: () => void, open: (session: Session) => void) => {
       const text = query.trimEnd();
       if (!text || text === sent && !pending) return shown();
       void run(text).then((response) => {
-        const first = matchedRows(response, rows).found[0];
+        const first = matchedRows(response, latest.current.hideWorking ? latest.current.available : rows).found[0];
         if (first) open(first.session);
       });
     },
@@ -1338,6 +1342,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
   // The same levels and descriptions as the Config slider; the active one is marked.
   const timeline = timelineLevels.map(({ id: key, label, description, rows }) => ({ key: `timeline-${key}`, label: `Timeline: ${label}`, detail: key === level?.id ? `Current · ${description}` : description, run: () => setTimelineRows(rows) }));
   const [query, setQuery] = useState("");
+  const [hideWorking, setHideWorking] = useState(false);
   const [recent, setRecent] = useState<string[]>(() => JSON.parse(localStorage.getItem("command-history") ?? "[]"));
   const [pick, setPick] = useState(0);
   const [entered, setEntered] = useState(false);
@@ -1363,7 +1368,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
   useLayoutEffect(() => { input.current?.focus(); }, []);
   const agents = useQuery({ ...queries.agents(), staleTime: 60_000, enabled: mode === "sessions" });
   const active = useRef<HTMLButtonElement>(null);
-  const search = useSessionSearch(mode === "sessions" ? query : "", false, entered);
+  const search = useSessionSearch(mode === "sessions" ? query : "", false, entered, hideWorking);
   const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000, enabled: mode === "commands" || mode === "cron" });
   const runCron = useMutation({
     mutationFn: mutations.runCron,
@@ -1403,7 +1408,12 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
       <DialogContent initialFocus={input} showCloseButton={false} className="top-[20%] flex max-h-[75vh] translate-y-0 flex-col overflow-hidden sm:max-w-lg [@media(pointer:coarse)]:top-[var(--search-top,1rem)] [@media(pointer:coarse)]:max-h-[var(--search-height,75vh)]">
         <DialogTitle className="sr-only">{copy.title}</DialogTitle>
         <DialogDescription className="sr-only">{copy.desc}</DialogDescription>
-        {mode === "sessions" ? <SessionSearch rows={sidebar.rows} catalog={agents.data?.agents ?? []} query={query} setQuery={(update) => { setPick(0); setEntered(false); setQuery(update); }} search={search} inputRef={input} placeholder={copy.placeholder} onKeyDown={onKeyDown} /> : <Input
+        {mode === "sessions" ? <>
+          <SessionSearch rows={search.available} catalog={agents.data?.agents ?? []} query={query} setQuery={(update) => { setPick(0); setEntered(false); setQuery(update); }} search={search} inputRef={input} placeholder={copy.placeholder} onKeyDown={onKeyDown} />
+          <FieldGroup><Field orientation="horizontal"><FieldLabel className="min-h-11">
+            <Switch checked={hideWorking} onCheckedChange={(checked) => { setHideWorking(checked); setPick(0); }} />Hide working sessions
+          </FieldLabel></Field></FieldGroup>
+        </> : <Input
           ref={input}
           value={query}
           onChange={(event) => { setPick(0); setQuery(event.target.value); }}
