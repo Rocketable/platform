@@ -295,7 +295,7 @@ func expandPermissionPattern(permission, pattern string) string {
 	}
 
 	home := func() string {
-		if dir, err := osUserHomeDir(); err == nil {
+		if dir, err := os.UserHomeDir(); err == nil {
 			return dir
 		}
 
@@ -319,15 +319,6 @@ func expandPermissionPattern(permission, pattern string) string {
 	}
 
 	return pattern
-}
-
-func osUserHomeDir() (string, error) {
-	dir, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("get user home dir: %w", err)
-	}
-
-	return dir, nil
 }
 
 // Allow appends an allow rule for permission and pattern.
