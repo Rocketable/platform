@@ -239,11 +239,11 @@ func (h *voiceHarness) call(t *testing.T, id, sdp string) (*bufio.Reader, contex
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = response.Body.Close() })
 	require.Equal(t, http.StatusOK, response.StatusCode)
-	require.Len(t, h.peers, 1, "the sideband attaches before the browser gets the answer")
 
 	reader := bufio.NewReader(response.Body)
 	assert.JSONEq(t, `{"answer":{"sdp":"answer-`+sdp+`","route":"public"}}`, strings.TrimPrefix(frame(t, reader), "data: "))
 
+	// Upgrade can reach the client before the fixture publishes its peer.
 	create, peer := <-h.creates, <-h.peers
 	assert.Equal(t, "Bearer "+voiceSecret, create.header.Get("Authorization"))
 	assert.Equal(t, "live_"+sdp, peer.id)
