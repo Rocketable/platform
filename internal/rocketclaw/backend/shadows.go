@@ -52,9 +52,6 @@ ORDER BY 1`, "owned history IDs", roots)
 // add children before its interruption settles, so enumerate again afterward.
 // No SQL lock or mutex crosses worker settlement.
 func (s *SessionService) beginHistoryMutation(ctx context.Context, roots []string) (tx *sql.Tx, ids []string, workers []*Bridge, err error) {
-	roots = slices.Clone(roots)
-	slices.Sort(roots)
-
 	pausedIDs := []string{}
 	settled := false
 
@@ -74,10 +71,17 @@ func (s *SessionService) beginHistoryMutation(ctx context.Context, roots []strin
 			return nil, nil, workers, fmt.Errorf("begin history mutation: %w", err)
 		}
 
-		for _, id := range roots {
-			if err := lockSessionHistory(ctx, tx, id); err != nil {
-				return tx, nil, workers, err
-			}
+		// Lock the whole family in the shared order, then enumerate it again
+		// under those locks. If it grew, rolling back releases every lock.
+		var locked []string
+
+		locked, err = ownedHistoryIDs(ctx, tx, roots)
+		if err != nil {
+			return tx, nil, workers, err
+		}
+
+		if err := lockHistories(ctx, tx, locked); err != nil {
+			return tx, nil, workers, err
 		}
 
 		ids, err = ownedHistoryIDs(ctx, tx, roots)
@@ -85,10 +89,9 @@ func (s *SessionService) beginHistoryMutation(ctx context.Context, roots []strin
 			return tx, nil, workers, err
 		}
 
-		for _, id := range ids {
-			if err := lockSessionHistory(ctx, tx, id); err != nil {
-				return tx, nil, workers, err
-			}
+		if slices.ContainsFunc(ids, func(id string) bool { return !slices.Contains(locked, id) }) {
+			_ = tx.Rollback()
+			continue
 		}
 
 		var pending []string
@@ -286,18 +289,12 @@ func lockShadowHistory(ctx context.Context, db stateStoreDB, parent string) erro
 		return err
 	}
 
-	ids, err := queryStrings(ctx, db, `SELECT child_conversation_id FROM shadow_bindings WHERE parent_conversation_id = $1 ORDER BY 1`, "shadow history locks", parent)
+	ids, err := queryStrings(ctx, db, `SELECT child_conversation_id FROM shadow_bindings WHERE parent_conversation_id = $1`, "shadow history locks", parent)
 	if err != nil {
 		return err
 	}
 
-	for _, id := range ids {
-		if err := lockSessionHistory(ctx, db, id); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return lockHistories(ctx, db, ids)
 }
 
 func stageShadowRevertDB(ctx context.Context, db stateStoreDB, parent string, entry *ObservedSessionEntry) error {

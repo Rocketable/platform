@@ -130,6 +130,28 @@ On start, you must always read:
 - Use `errors.AsType[T]()` for typed error extraction instead of legacy `errors.As` target variables.
 - Use all appropriate features of Go 1.26.2 or newer.
 
+## SQL Queries
+
+- Do not write subqueries. This includes scalar subqueries, `IN (SELECT ...)`, `EXISTS (SELECT ...)`, and derived tables in `FROM`. Compose the query from CTEs (`WITH` clauses) instead.
+- Each CTE must make the next step simpler or smaller: filter, join, or aggregate one thing, and name it for what it holds. The final `SELECT` should read as a short combination of named CTEs.
+- When a CTE does not shrink or simplify what follows, merge it into its neighbor instead of adding a step.
+- Apply this to every query you write or change. When you touch a query that still uses subqueries, rewrite it as CTEs.
+
+Example:
+
+```sql
+-- Avoid
+SELECT m.conversation_id FROM managed_conversations m
+WHERE EXISTS (SELECT 1 FROM shadow_bindings b WHERE b.parent_conversation_id = m.conversation_id);
+
+-- Prefer
+WITH shadow_parents AS (
+    SELECT DISTINCT parent_conversation_id AS conversation_id FROM shadow_bindings
+)
+SELECT m.conversation_id FROM managed_conversations m
+JOIN shadow_parents p USING (conversation_id);
+```
+
 ## Verification
 
 - Before finalizing Go changes, run `gofmt` on touched files.

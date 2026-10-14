@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,6 +19,41 @@ import (
 func lockSessionHistory(ctx context.Context, db stateStoreDB, conversationID string) error {
 	_, err := execState(ctx, db, "lock session history", `SELECT pg_advisory_xact_lock(87901, hashtext($1))`, conversationID)
 	return err
+}
+
+// lockHistories takes several history locks in the one order every transaction
+// shares: ordinary histories, then shadow comparison histories, each by bytes.
+// Shadow histories go last because lockShadowHistory reaches them through their
+// parent's lock. Taking two locks any other way can deadlock against it.
+func lockHistories(ctx context.Context, db stateStoreDB, ids []string) error {
+	shadows, err := queryStrings(ctx, db, `WITH candidates AS (
+    SELECT unnest($1::text[]) AS id
+)
+SELECT DISTINCT c.id FROM candidates c
+JOIN shadow_bindings b ON c.id = b.child_conversation_id OR starts_with(c.id, b.child_conversation_id || '/')`, "shadow history IDs", ids)
+	if err != nil {
+		return err
+	}
+
+	ordered := slices.SortedFunc(slices.Values(ids), func(a, b string) int {
+		if shadowA, shadowB := slices.Contains(shadows, a), slices.Contains(shadows, b); shadowA != shadowB {
+			if shadowA {
+				return 1
+			}
+
+			return -1
+		}
+
+		return strings.Compare(a, b)
+	})
+
+	for _, id := range ordered {
+		if err := lockSessionHistory(ctx, db, id); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // loadSessionSummary decodes history only when its durable projection is missing.

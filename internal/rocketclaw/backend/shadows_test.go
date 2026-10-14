@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1556,4 +1557,65 @@ func TestShadowFinalWaitCancellationAndClosure(t *testing.T) {
 	_, err = store.db.ExecContext(t.Context(), `UPDATE shadow_turns SET terminal = $2 WHERE parent_turn_id = $1`, request.turnID, protocol.TerminalStopped)
 	require.NoError(t, err)
 	require.NoError(t, parent.notifyShadowInputs(t.Context(), request.turnID))
+}
+
+// Deleting a Web copy while its producer's family holds history locks waits for
+// them instead of deadlocking: both sides lock the family in the same order.
+func TestHistoryMutationSharesLockOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name, producer, child string
+		lockRest              func(context.Context, *sql.Tx, string) error
+	}{
+		{"producer handoff", "slack-thread:LOCKORDER:1", "A2HANDOFF", func(ctx context.Context, tx *sql.Tx, producer string) error {
+			return lockHistories(ctx, tx, []string{producer, "web:" + producer})
+		}},
+		{"shadow parent", "slack-thread:LOCKORDER:2", "A2SHADOW", func(ctx context.Context, tx *sql.Tx, producer string) error {
+			return lockShadowHistory(ctx, tx, producer)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestSessionService(t)
+			ctx := t.Context()
+			web := "web:" + tc.producer
+
+			for _, id := range []string{tc.producer, web, tc.child} {
+				_, err := (stateDAO{db: s.db}).createConversation(ctx, protocol.Conversation{ID: id, Agent: "main"})
+				require.NoError(t, err)
+			}
+
+			_, err := s.db.ExecContext(ctx, `UPDATE managed_conversations SET producer_inbound_json = json_build_object('SyncDestination', $2::text) WHERE conversation_id = $1`, tc.producer, web)
+			require.NoError(t, err)
+			_, err = s.db.ExecContext(ctx, `INSERT INTO shadow_bindings (child_conversation_id, parent_conversation_id, parent_agent, shadow_agent) VALUES ($1, $2, 'main', 'shadow')`, tc.child, tc.producer)
+			require.NoError(t, err)
+
+			holder, err := s.db.BeginTx(ctx, nil)
+			require.NoError(t, err)
+
+			defer func() { _ = holder.Rollback() }()
+
+			require.NoError(t, lockSessionHistory(ctx, holder, tc.producer))
+
+			var pid int
+			require.NoError(t, holder.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&pid))
+
+			deleted := make(chan error, 1)
+
+			go func() {
+				_, err := s.DeleteSession(ctx, web)
+				deleted <- err
+			}()
+
+			require.Eventually(t, func() bool {
+				var blocked bool
+
+				err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))`, pid).Scan(&blocked)
+
+				return err == nil && blocked
+			}, 10*time.Second, 10*time.Millisecond)
+
+			require.NoError(t, tc.lockRest(ctx, holder, tc.producer))
+			require.NoError(t, holder.Commit())
+			require.NoError(t, <-deleted)
+		})
+	}
 }
