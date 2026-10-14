@@ -8,6 +8,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPermissionHomeExpansion(t *testing.T) {
+	for _, home := range []string{"/home/person", ""} {
+		t.Run(home, func(t *testing.T) {
+			t.Setenv("HOME", home)
+
+			for _, tc := range []struct {
+				permission, pattern, want string
+			}{
+				{"read", "~", home},
+				{"read", "~/file", home + "/file"},
+				{"read", "$HOME", home},
+				{"read", "$HOME/file", home + "/file"},
+				{"read", "file", "file"},
+				{"bash", "~/file", "~/file"},
+				{"bash", "$HOME/file", "$HOME/file"},
+			} {
+				var permissions PermissionSet
+				require.NoError(t, permissions.Set(tc.permission, tc.pattern, PermissionAllow))
+				require.Equal(t, tc.want, permissions.Buckets[0].Rules[0].Pattern, tc.permission+" "+tc.pattern)
+			}
+		})
+	}
+}
+
 func TestInterpolatePermissions(t *testing.T) {
 	for _, tc := range []struct {
 		name, pattern, value, allowed, denied string
