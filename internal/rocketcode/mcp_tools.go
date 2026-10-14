@@ -80,12 +80,6 @@ func visibleMCPServers(permissions PermissionSet, servers []string) []string {
 	return visible
 }
 
-func mcpToolAllowed(permissions PermissionSet, server, tool string) bool {
-	action, _ := permissions.Evaluate(mcpPermissionBucket, server+"."+tool)
-
-	return action == PermissionAllow || action == PermissionAuto
-}
-
 // executeDescription is short invariant guidance. Catalog lives in the system prompt;
 // full discovery is in-script search (OpenCode-style).
 func executeDescription() string {
@@ -265,7 +259,8 @@ func listAllowedTools(ctx context.Context, session *mcpclient.Session, permissio
 			}
 
 			for _, info := range infos {
-				if !mcpToolAllowed(permissions, info.Server, info.Name) {
+				action, _ := permissions.Evaluate(mcpPermissionBucket, info.Server+"."+info.Name)
+				if action != PermissionAllow && action != PermissionAuto {
 					continue
 				}
 
