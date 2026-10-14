@@ -134,6 +134,8 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel 
       expect(Math.abs(dragged - 384 - 100)).toBeLessThan(2);
       await handle.press("ArrowLeft");
       expect(await size()).toBe(dragged + 16);
+      await handle.press("ArrowRight");
+      expect(await size()).toBe(dragged);
       await drag(-2000);
       const widest = await size();
       const chat = Math.round((await page.locator("main").boundingBox())!.width);
