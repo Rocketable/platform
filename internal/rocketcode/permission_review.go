@@ -130,9 +130,9 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 		return permissionReviewFailure("automatic permission review failed: " + err.Error())
 	}
 
-	decision, err := parsePermissionReviewDecision(last)
-	if err != nil {
-		return permissionReviewFailure("automatic permission reviewer returned invalid structured output: " + err.Error())
+	var decision permissionReviewDecision
+	if err := json.Unmarshal([]byte(last), &decision); err != nil {
+		return permissionReviewFailure("automatic permission reviewer returned invalid structured output: invalid JSON: " + err.Error())
 	}
 
 	if f.diagnostics {
@@ -178,16 +178,6 @@ func emitPermissionReviewResult(output chan<- ChatResponse, reviewer string, dec
 
 func permissionReviewFailure(rationale string) permissionReviewDecision {
 	return permissionReviewDecision{RiskLevel: permissionReviewRiskLevelHigh, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeDeny, Rationale: rationale}
-}
-
-func parsePermissionReviewDecision(text string) (permissionReviewDecision, error) {
-	var decision permissionReviewDecision
-
-	if err := json.Unmarshal([]byte(text), &decision); err != nil {
-		return permissionReviewDecision{}, fmt.Errorf("invalid JSON: %w", err)
-	}
-
-	return decision, nil
 }
 
 // permissionReviewPrompt returns the review prompt as text pieces: the preamble,
