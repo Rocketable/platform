@@ -870,6 +870,7 @@ func TestExecuteSearchAndRun(t *testing.T) {
 	var permissions PermissionSet
 	require.NoError(t, permissions.Allow("mcp", "demo.*"))
 	require.NoError(t, permissions.Deny("mcp", "demo.danger"))
+	require.NoError(t, permissions.Set("mcp", "demo.search_issue", PermissionAuto))
 
 	tools := (&toolFactory{mcpRegistry: reg}).mcpToolsFor(&Agent{Permission: permissions}, nil)
 	require.NotNil(t, tools)
