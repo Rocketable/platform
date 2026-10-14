@@ -301,6 +301,7 @@ test("Voice page keeps each person's conversation and settings on the server, an
     reading.resolve();
     reading = undefined;
     await status.getByText("Tap to talk", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Start voice call", exact: true }).and(page.locator(":enabled")).waitFor();
     expect(await page.getByRole("button", { name: "Start voice call", exact: true }).isDisabled()).toBe(false);
     expect(await shownVoice()).toBe("Cove");
     expect(await page.getByLabel("Transcript", { exact: true }).count()).toBe(0);
