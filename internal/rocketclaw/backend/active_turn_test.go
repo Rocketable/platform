@@ -121,6 +121,50 @@ func readFinal(t *testing.T, finals chan *protocol.OutboundMessage) *protocol.Ou
 	}
 }
 
+func TestStoppedInitialRequestKeepsAcceptedInput(t *testing.T) {
+	t.Parallel()
+
+	newBridge, service, requests, finals := newResumeTestBridges(t, true)
+	bridge := newBridge()
+	runTestBridge(t, bridge)
+	conversationID := bridge.config.ConversationID
+
+	const prompt = "Please review the draft."
+
+	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, prompt, true)
+	inbound.Metadata = map[string]string{"web_message_id": "initial-input"}
+	response := inbound.EnableResponseWait()
+	require.NoError(t, bridge.Submit(t.Context(), inbound))
+	require.Contains(t, <-requests, prompt)
+
+	bridge.InterruptActiveTurn()
+	require.NoError(t, (<-response).Err)
+	assert.Equal(t, protocol.TerminalStopped, readFinal(t, finals).Terminal)
+	require.Eventually(t, func() bool { return len(runningTestTurns(t, service)) == 0 }, 5*time.Second, 10*time.Millisecond)
+	require.Empty(t, requests, "stopped work must not retry")
+
+	entries, err := service.ObserveEntries(t.Context(), conversationID)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "accepted input must remain in saved history")
+	require.Len(t, entries[0].Entry.ReplayInput, 1)
+	require.Empty(t, entries[0].Entry.ResponseID)
+	assert.Contains(t, string(entries[0].Entry.ReplayInput[0]), `"input_id":"initial-input"`)
+	assert.Contains(t, string(entries[0].Entry.ReplayInput[0]), prompt)
+	transcript, err := service.ObserveTranscript(t.Context(), conversationID, 0, 0, nil)
+	require.NoError(t, err)
+	require.Len(t, transcript, 1)
+	assert.Equal(t, protocol.TerminalStopped, transcript[0].Terminal)
+
+	next := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "Continue with a summary.", true)
+	require.NoError(t, bridge.Submit(t.Context(), next))
+
+	body := <-requests
+	assert.Equal(t, 1, strings.Count(body, prompt), "the next request sees the accepted input exactly once")
+	assert.Less(t, strings.Index(body, prompt), strings.Index(body, next.Text), "input order is preserved")
+	assert.Equal(t, "answer", readFinal(t, finals).Text)
+	require.Empty(t, requests, "only the new turn executes")
+}
+
 // AE5: a crash after the claim and before any step leaves a row that runs exactly once after restart.
 func TestClaimedQueueItemRunsExactlyOnceAfterCrash(t *testing.T) {
 	t.Parallel()

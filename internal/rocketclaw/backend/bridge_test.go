@@ -2730,6 +2730,10 @@ func TestBridgeStoppedManagedWorkflowPersistsRunSummary(t *testing.T) {
 	assert.Equal(t, protocol.TerminalStopped, summary.Terminal)
 	assert.Equal(t, []workflowRunPhaseSummary{{Name: "work", Status: protocol.PhaseError, Scheduled: 1}, {Name: "later", Status: protocol.PhaseSkipped}}, summary.Phases)
 	assert.Equal(t, "workflow stopped by user", summary.Error)
+	transcript, err := service.ObserveTranscript(t.Context(), conversationID, 0, 0, nil)
+	require.NoError(t, err)
+	require.Len(t, transcript, 1)
+	assert.Empty(t, transcript[0].Terminal, "saved workflow summaries retain their existing transcript metadata")
 }
 
 func TestWorkflowRunSummaryIsVisibleWithoutIntermediateOutput(t *testing.T) {
@@ -5124,6 +5128,62 @@ func TestBackgroundNoteAfterLastStepWakesOnce(t *testing.T) {
 	nt.waitIdle(t, manager, nt.conversationID)
 	assert.Empty(t, nt.requests)
 	assert.Equal(t, []string{"turn-0/call/a consumed true"}, noteStates(t, nt.service))
+}
+
+func TestStoppedInitialTurnDoesNotReplayPendingNotes(t *testing.T) {
+	t.Parallel()
+
+	for _, human := range []bool{false, true} {
+		t.Run(fmt.Sprintf("human=%t", human), func(t *testing.T) {
+			release := make(chan struct{})
+			nt := newNoteTest(t, holdNoteTest(release, 0))
+			t.Cleanup(func() { close(release) })
+			manager, _ := nt.run(t, ignoreOutbound)
+			bridge := nt.bridge(t, manager, nt.conversationID)
+
+			if human {
+				require.NoError(t, bridge.Submit(t.Context(), nt.slackPrompt("Please review the draft.")))
+				require.Contains(t, nt.request(t), "Please review the draft.")
+			}
+
+			nt.addNote(t, nt.conversationID, "turn-0/call/a", nt.slackPrompt("run the tests"))
+
+			if human {
+				// A previously released note waits for human work rather than waking another turn.
+				_, err := nt.service.db.ExecContext(t.Context(), `UPDATE background_jobs SET wake = FALSE WHERE conversation_id = $1`, nt.conversationID)
+				require.NoError(t, err)
+			}
+
+			manager.noteReady(nt.conversationID)
+
+			if !human {
+				require.Equal(t, systemPromptHeader()+"\n\n"+testExecuteNote("turn-0/call/a"), lastRequestMessage(t, nt.request(t)))
+			}
+
+			bridge.InterruptActiveTurn()
+			assert.Equal(t, protocol.TerminalStopped, readFinal(t, nt.finals).Terminal)
+			nt.waitIdle(t, manager, nt.conversationID)
+			assert.Empty(t, nt.requests, "stopped execution must not retry")
+			assert.Equal(t, []string{"turn-0/call/a pending false"}, noteStates(t, nt.service))
+
+			entries, err := nt.service.ObserveEntries(t.Context(), nt.conversationID)
+			require.NoError(t, err)
+
+			if human {
+				require.Len(t, entries, 1)
+				assert.Contains(t, string(entries[0].Entry.ReplayInput[0]), "Please review the draft.")
+			} else {
+				assert.Empty(t, entries, "a pending Completion Note is not saved as replay input")
+			}
+
+			require.NoError(t, bridge.Submit(t.Context(), nt.slackPrompt("next")))
+			assert.NotContains(t, nt.request(t), "turn-0/call/a", "only human input survives in saved replay")
+			assert.Equal(t, 1, strings.Count(nt.request(t), `<execute id=\"turn-0/call/a\"`), "the next turn sees the released note once")
+			readFinal(t, nt.finals)
+			nt.waitIdle(t, manager, nt.conversationID)
+			assert.Equal(t, []string{"turn-0/call/a consumed false"}, noteStates(t, nt.service))
+		})
+	}
 }
 
 // A note injected into a turn that is then stopped wakes nothing; the next turn delivers it.

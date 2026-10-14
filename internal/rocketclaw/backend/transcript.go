@@ -104,25 +104,30 @@ func (s *SessionService) ObserveTranscript(ctx context.Context, conversationID s
 func observeTranscriptDB(ctx context.Context, db stateStoreDB, conversationID string, from, before int64, revisions map[string]string) ([]ObservedSessionEntry, error) {
 	manifest, _ := json.Marshal(revisions)
 
-	return queryRows(ctx, db, `WITH `+sessionHistorySQL+`, transcript AS (
-    SELECT id, entry_json, source_conversation_id, synced,
-        FALSE AS active, '' AS terminal, 0::bigint AS checkpoint_timestamp, '' AS turn_id, 0 AS checkpoint, id AS position, revert_index, marker
-    FROM effective_entries WHERE id >= $3 AND ($4::bigint = 0 OR id < $4)
+	return queryRows(ctx, db, `WITH `+sessionHistorySQL+`, saved_turns AS (
+    SELECT DISTINCT entry->>'turn_id' AS turn_id FROM physical_entries
+    WHERE NOT synced OR source_conversation_id = $1
+), readable_turns AS (
+    SELECT a.*, c.marker FROM active_turns a CROSS JOIN cutoff c CROSS JOIN visibility v
+    LEFT JOIN saved_turns saved ON saved.turn_id = a.id
+    WHERE a.conversation_id = $1 AND v.readable AND saved.turn_id IS NULL
+        AND (c.marker = '' OR a.history_anchor_id < split_part(c.marker, ':', 1)::bigint)
+), transcript AS (
+    SELECT e.id, e.entry_json, e.source_conversation_id, e.synced,
+        FALSE AS active, COALESCE(a.terminal, '') AS terminal, 0::bigint AS checkpoint_timestamp, '' AS turn_id, 0 AS checkpoint, e.id AS position, e.revert_index, e.marker
+    FROM effective_entries e LEFT JOIN active_turns a
+        ON a.conversation_id = CASE WHEN e.synced THEN e.source_conversation_id ELSE $1 END AND a.id = e.entry->>'turn_id'
+        AND a.terminal = 'stopped' AND a.inbound_json->>'Human' = 'true'
+        AND e.entry->>'type' = 'turn' AND COALESCE(e.entry->>'response_id', '') = ''
+    WHERE e.id >= $3 AND ($4::bigint = 0 OR e.id < $4)
     UNION ALL
     SELECT 0, (COALESCE(s.value::jsonb->'record', '{}'::jsonb) || jsonb_build_object(
         'version', 1, 'type', 'turn', 'turn_id', a.id, 'output_trace', a.output_trace_json::jsonb
-    ))::text, '', FALSE, a.terminal = '', a.terminal, a.created_at_unix_ns, a.id, 1, a.history_anchor_id, -1, c.marker
-    FROM active_turns a LEFT JOIN turn_steps s ON s.conversation_id = a.conversation_id AND s.key = a.id
-    CROSS JOIN cutoff c
-    WHERE a.conversation_id = $1
-        AND (SELECT readable FROM visibility)
-        AND (c.marker = '' OR a.history_anchor_id < split_part(c.marker, ':', 1)::bigint)
-        AND (a.phase <> 'done' OR a.terminal <> '')
+    ))::text, '', FALSE, a.terminal = '', a.terminal, a.created_at_unix_ns, a.id, 1, a.history_anchor_id, -1, a.marker
+    FROM readable_turns a LEFT JOIN turn_steps s ON s.conversation_id = a.conversation_id AND s.key = a.id
+    WHERE (a.phase <> 'done' OR a.terminal <> '')
         AND CASE WHEN $4::bigint = 0 THEN a.terminal = '' OR a.history_anchor_id >= $3
             ELSE a.terminal <> '' AND a.history_anchor_id >= $3 AND a.history_anchor_id < $4 END
-        AND NOT EXISTS (
-        SELECT 1 FROM physical_entries WHERE entry->>'turn_id' = a.id AND (NOT synced OR source_conversation_id = $1)
-    )
 ), fingerprinted AS (
     SELECT *, CASE WHEN COALESCE(entry_json::jsonb->>'turn_id', '') <> ''
         THEN 'turn:' || CASE WHEN synced THEN source_conversation_id ELSE $1 END || ':' || (entry_json::jsonb->>'turn_id')

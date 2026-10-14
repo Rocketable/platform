@@ -297,8 +297,13 @@ func TestBackgroundNoteClaimSucceedsOnce(t *testing.T) {
 func TestFinishTurnConsumesOrReleasesNoteClaims(t *testing.T) {
 	t.Parallel()
 
-	for _, saved := range []bool{true, false} {
-		t.Run(strconv.FormatBool(saved), func(t *testing.T) {
+	for _, tt := range []struct {
+		terminal protocol.Terminal
+		saved    bool
+	}{
+		{"", true}, {protocol.TerminalStopped, true}, {protocol.TerminalFailed, true}, {protocol.TerminalStopped, false},
+	} {
+		t.Run(string(tt.terminal)+"/saved="+strconv.FormatBool(tt.saved), func(t *testing.T) {
 			store := newTestSessionService(t)
 			ctx := t.Context()
 			job := testBackgroundJob("main", "turn-1/call/a")
@@ -309,9 +314,11 @@ func TestFinishTurnConsumesOrReleasesNoteClaims(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, claimed, 1)
 
-			finish := &turnFinish{store: newSessionStore("main", store), outbound: protocol.NewOutboundMessage("main", ""), terminal: protocol.TerminalStopped}
-			if saved {
-				finish.entries, finish.terminal = []harness.SessionEntry{*testSessionEntry("note", "answer")}, ""
+			finish := &turnFinish{store: newSessionStore("main", store), outbound: protocol.NewOutboundMessage("main", ""), terminal: tt.terminal}
+			if tt.saved {
+				entry := testSessionEntry("note", "answer")
+				entry.Type = workflowRunEntryType
+				finish.entries = []harness.SessionEntry{*entry}
 			}
 
 			_, err = store.finishTurn(ctx, "turn-2", finish)
@@ -320,7 +327,7 @@ func TestFinishTurnConsumesOrReleasesNoteClaims(t *testing.T) {
 			notes, err := queryStrings(ctx, store.db, `SELECT note_state || ' ' || wake::text || ' ' || claimed_turn_id FROM background_jobs`, "background notes")
 			require.NoError(t, err)
 
-			if saved {
+			if tt.saved {
 				require.Equal(t, []string{"consumed true turn-2"}, notes)
 				return
 			}
