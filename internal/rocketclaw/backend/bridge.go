@@ -1163,13 +1163,8 @@ func (b *Bridge) handoffProducer(ctx context.Context) error {
 
 	defer func() { _ = tx.Rollback() }()
 
-	ids := []string{source, web}
-	slices.Sort(ids)
-
-	for _, id := range ids {
-		if err := lockSessionHistory(ctx, tx, id); err != nil {
-			return err
-		}
+	if err := lockHistories(ctx, tx, []string{source, web}); err != nil {
+		return err
 	}
 
 	dao := stateDAO{db: tx}

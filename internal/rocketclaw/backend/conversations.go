@@ -98,13 +98,8 @@ func (b *Bridge) syncConversation(ctx context.Context, source *Bridge) error {
 
 	defer func() { _ = tx.Rollback() }()
 
-	ids := []string{source.config.ConversationID, b.config.ConversationID}
-	slices.Sort(ids)
-
-	for _, id := range ids {
-		if err := lockSessionHistory(ctx, tx, id); err != nil {
-			return err
-		}
+	if err := lockHistories(ctx, tx, []string{source.config.ConversationID, b.config.ConversationID}); err != nil {
+		return err
 	}
 
 	dao := stateDAO{db: tx}
