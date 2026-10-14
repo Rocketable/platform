@@ -106,10 +106,6 @@ func CodeModeOnlyHostTool(name string) bool {
 	}
 }
 
-func codeModeOnlyTool(name string, tool *looperTool) bool {
-	return tool.codeModeOnly || CodeModeOnlyHostTool(name)
-}
-
 // toolsFor returns model-facing tools (no code-mode-only host tools).
 func (f *toolFactory) toolsFor(agent *Agent) map[string]looperTool {
 	model, _ := f.assembleTools(agent)
@@ -148,7 +144,7 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 
 	for name := range tools {
 		tool := tools[name]
-		if !codeModeOnlyTool(name, &tool) || !toolVisible(agent, name, &tool) {
+		if (!tool.codeModeOnly && !CodeModeOnlyHostTool(name)) || !toolVisible(agent, name, &tool) {
 			continue
 		}
 
@@ -165,7 +161,7 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 
 		// Sandbox host tools and embedder custom tools run only inside execute.
 		tool := tools[name]
-		if codeModeOnlyTool(name, &tool) {
+		if tool.codeModeOnly || CodeModeOnlyHostTool(name) {
 			delete(tools, name)
 
 			continue
