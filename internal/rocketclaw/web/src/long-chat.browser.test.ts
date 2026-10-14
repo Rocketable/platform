@@ -37,6 +37,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
       }
       if (!input.before) return Response.json(view(turns - input.limit! + 1, turns, { revision: "tail", reset: !input.revision, ...(input.revision ? { messages: [], replacedKeys: [] } : {}) }));
       pages.push({ before: input.before, from: input.from, limit: input.limit });
+      if (input.before === "5") return Response.json({ message: "Earlier history unavailable", code: 13 }, { status: 503 });
       const before = Number(input.before);
       return Response.json(view(input.from ? Number(input.from) : Math.max(1, before - input.limit!), before - 1, { reset: false }));
     }
@@ -98,6 +99,11 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
       return !!viewport && !!target && target.bottom > viewport.top && target.top < viewport.bottom;
     });
     expect(pages[1]).toEqual({ before: "21", from: "5", limit: undefined });
+    await page.getByText("Earlier history unavailable", { exact: true }).waitFor();
+    expect(pages[2]).toEqual({ before: "5", from: undefined, limit: 50 });
+    expect(await page.getByText("user 5", { exact: true }).count()).toBe(1);
+    expect(await page.getByText(`assistant ${turns}`, { exact: true }).count()).toBe(1);
+    expect(await page.locator("textarea").inputValue()).toBe(typed);
   } finally {
     await browser.close();
     server.stop(true);
