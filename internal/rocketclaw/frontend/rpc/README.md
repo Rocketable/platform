@@ -283,8 +283,8 @@ answer are ordinary JSON errors: `NotFound` for an unrecorded conversation, and
 token refresh (naming its `rocketclaw oai login` command), a plain-HTTP
 `api_base_url` whose host is not `localhost` or a loopback IP, or an OpenAI
 rejection, which reports only the upstream HTTP status. Voice requests to OpenAI
-drop `Authorization` and `Chatgpt-Account-Id` on any redirect to another scheme,
-host, or port.
+drop `Authorization`, `Api-Key` and `Chatgpt-Account-Id` on any redirect to another
+scheme, host, or port.
 
 A conversation has one live call; the newest wins, and the older stream ends with
 `replaced`. The server has no idle or no-speech timers. Aborting the request ends
