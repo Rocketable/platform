@@ -1,6 +1,6 @@
 "use client";
 
-import { QueryClient, QueryCache, MutationCache, QueryClientProvider, queryOptions, useQuery, useMutation } from "@tanstack/react-query";
+import { QueryClient, QueryCache, MutationCache, QueryClientProvider, queryOptions, useQuery, useMutation, useIsMutating } from "@tanstack/react-query";
 import { captureException } from "@sentry/react";
 import { Combobox } from "@base-ui/react/combobox";
 import { Menu } from "@base-ui/react/menu";
@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions, rpc, RPCError } from "./api";
 import { draftContent } from "./drafts";
-import { holdWakeLock, rememberVoice, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
+import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
 import { Bot, Captions, Check, ChevronDown, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
@@ -32,7 +32,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import type { Agent, Attachment as AttachmentMeta, BackgroundJob, ConfigView, CronJob, QueueItem, Session, TranscriptEvent } from "@/types";
+import type { Agent, Attachment as AttachmentMeta, BackgroundJob, ConfigView, CronJob, QueueItem, Session, TranscriptEvent, VoiceSettings } from "@/types";
 import { runPreload } from "@/preload";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
 import {
@@ -3627,7 +3627,7 @@ function CronPage() {
 function VoicePage() {
   const identity = useQuery(queries.identity());
   if (!identity.isSuccess) return null;
-  return <VoiceCall key={identity.data.username} storageKey={`voice:${identity.data.username}`} />;
+  return <VoiceCall key={identity.data.username} username={identity.data.username} />;
 }
 
 // useOwnVoice is the tab's one call as seen from conversation id: idle unless the call is on id.
@@ -3705,14 +3705,38 @@ function VoiceStage({ voice, compact, busy, loading, error, onPress }: { voice: 
   </div>;
 }
 
-function VoiceCall({ storageKey }: { storageKey: string }) {
+// useVoiceSettings is the person's voice conversation and settings, kept by the server and
+// the same on every device; update shows a change at once, keeps the server's answer, and
+// puts the old value back if the server refuses it. The page shows its own call's
+// conversation while that call runs, though another device moves the current one: changing
+// the shown id hangs the call up. A call that ended with an error keeps its message only.
+function useVoiceSettings(username: string) {
+  const settings = useQuery(queries.voiceSettings(username));
+  const saved = settings.data ?? { conversationId: "", agent: "", voice: "", transcript: false };
+  const save = (next: VoiceSettings) => queryClient.setQueryData(queries.voiceSettings(username).queryKey, next);
+  const update = useMutation({
+    mutationFn: (change: Partial<Omit<VoiceSettings, "conversationId">>) => mutations.voiceSettings({ action: "UPDATE", ...change }),
+    onMutate: (change) => { save({ ...saved, ...change }); return saved; },
+    onError: (_error, _change, before) => save(before!),
+    onSuccess: save,
+  });
+  const [callId, setCallId] = useState("");
+  const call = useOwnVoice(callId);
+  const id = ["connecting", "live", "ending"].includes(call.state) ? callId : saved.conversationId;
+  // The page owns its call: Reset and leaving the page hang it up.
+  useEffect(() => () => { if (voiceView().conversationId === id && voiceView().state !== "error") stopVoice(); }, [id]);
+  // Until the person's settings load, Start would create a conversation with defaults that overwrite them.
+  return { saved, save, update, id, setCallId, agent: saved.agent || "main", loading: settings.isPending, problem: call.error || settings.error?.message };
+}
+
+function VoiceCall({ username }: { username: string }) {
   const sidebar = useContext(Sidebar);
-  const [id, setId] = useState(() => localStorage.getItem(storageKey) ?? "");
+  const { saved, save, update, id, setCallId, agent, loading, problem } = useVoiceSettings(username);
   const voice = useOwnVoice(id);
-  const [agent, setAgent] = useState("");
   const [picking, setPicking] = useState(false);
   const [confirm, setConfirm] = useState(false);
-  const [transcript, setTranscript] = useState(() => localStorage.getItem("voice:transcript") === "on");
+  const { mutate: saveSetting } = update;
+  const transcript = saved.transcript;
   // A reply too long to speak turns the transcript on, as the button does, so it is on screen.
   useEffect(() => {
     const newest = () => voiceView().conversationId === id ? voiceView().captions.findLast((caption) => caption.written) : undefined;
@@ -3721,69 +3745,69 @@ function VoiceCall({ storageKey }: { storageKey: string }) {
       const written = newest();
       if (written === shown) return;
       shown = written;
-      if (!written) return; // A new call's empty transcript.
-      localStorage.setItem("voice:transcript", "on");
-      setTranscript(true);
+      if (written) saveSetting({ transcript: true }); // A new call's transcript starts empty.
     });
-  }, [id]);
+  }, [id, saveSetting]);
   const agents = useQuery(queries.agents(id ? { conversationId: id } : undefined));
   const catalog = agents.data?.agents ?? [];
-  const selected = [agent, id ? agents.data?.currentAgent : "main"].find((name) => catalog.some((item) => item.name === name)) ?? catalog[0]?.name ?? "";
+  const selected = [id ? agents.data?.currentAgent : agent].find((name) => catalog.some((item) => item.name === name)) ?? catalog[0]?.name ?? "";
   const active = voice.state !== "idle" && voice.state !== "error";
   const agentInfo = catalog.find((item) => item.name === selected);
   const voices = agentInfo?.voices ?? [];
-  const [picked, setPicked] = useState("");
-  const speaker = voices.includes(picked) ? picked : voiceChoice(agentInfo);
-  // The page owns its call: Reset and leaving the page hang it up, and leaving cancels a start still creating its conversation.
-  useEffect(() => () => { if (voiceView().conversationId === id) stopVoice(); }, [id]);
+  const speaker = voiceChoice(agentInfo, saved.voice);
+  // Leaving cancels a start still creating its conversation.
   const left = useRef(false);
   useEffect(() => () => { left.current = true; }, []);
-  const start = useMutation({ mutationFn: async () => {
-    let next = id;
-    if (!next) {
-      next = await mutations.createSession({ agent: selected });
-      localStorage.setItem(storageKey, next);
-      setId(next);
-      sidebar.invalidateQueries();
-    }
-    if (!left.current) void startVoice(next, speaker);
+  // Start always asks the server, so a conversation another device reset is never called.
+  const start = useMutation({ mutationKey: ["voiceCall", username], mutationFn: async () => {
+    const next = await mutations.voiceSettings({ action: "START", agent: selected });
+    save(next);
+    sidebar.invalidateQueries();
+    if (left.current) return;
+    setCallId(next.conversationId);
+    // Another device's conversation may run an agent whose provider lacks this voice; its default is safe.
+    void startVoice(next.conversationId, next.conversationId === id || next.agent === selected ? speaker : "");
   } });
   const pick = useMutation({ mutationFn: async (name: string) => {
-    setAgent(name);
+    await update.mutateAsync({ agent: name });
     if (!id) return;
     await mutations.prompt({ id, text: `$agent ${name}` });
     await queryClient.invalidateQueries({ queryKey: ["agents"] });
   } });
-  const reset = () => {
-    localStorage.removeItem(storageKey);
-    setId("");
-    setAgent(selected);
+  // Only this page's call can be live here: the composer ends its call on leaving its session.
+  const reset = useMutation({ mutationKey: ["voiceCall", username], mutationFn: async () => {
+    stopVoice();
+    setCallId("");
     setConfirm(false);
-  };
-  const error = [voice.error, start.error?.message, pick.error?.message].find(Boolean);
+    await mutations.voiceSettings({ action: "RESET", conversationId: id });
+    await queryClient.invalidateQueries({ queryKey: ["voiceSettings"] });
+  } });
+  // Start and Reset never overlap, so a Start cannot land on the conversation a Reset is forgetting.
+  const settling = useIsMutating({ mutationKey: ["voiceCall", username] }) > 0;
+  const error = [voice.error, problem, ...[start, pick, update, reset].map((mutation) => mutation.error?.message)].find(Boolean);
   return (
     <div className="mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col gap-4 p-4">
       <PageTitle>Voice</PageTitle>
       <div className="flex items-center gap-2">
         <AgentPicker catalog={catalog} selected={selected} setAgent={(name) => pick.mutate(name)} open={picking} setOpen={setPicking} disabled={[active, start.isPending, pick.isPending, catalog.length === 0].some(Boolean)} />
-        {agentInfo && voices.length > 0 ? <VoicePicker voices={voices} value={speaker} disabled={active || start.isPending} onPick={(name) => { rememberVoice(agentInfo, name); setPicked(name); }} /> : null}
+        {agentInfo && voices.length > 0 ? <VoicePicker voices={voices} value={speaker} disabled={active || start.isPending} onPick={(name) => update.mutate({ voice: name })} /> : null}
         <div className="ml-auto flex items-center gap-1">
-          <Button variant={transcript ? "secondary" : "ghost"} size="icon" className="size-11 sm:size-8" aria-label="Show transcript" title="Show transcript" aria-pressed={transcript} onClick={() => { localStorage.setItem("voice:transcript", transcript ? "off" : "on"); setTranscript(!transcript); }}><Captions /></Button>
+          <Button variant={transcript ? "secondary" : "ghost"} size="icon" className="size-11 sm:size-8" aria-label="Show transcript" title="Show transcript" aria-pressed={transcript} onClick={() => update.mutate({ transcript: !transcript })}><Captions /></Button>
           {id ? <>
             <Button variant="ghost" size="icon" className="size-11 sm:size-8" role="link" nativeButton={false} render={<Link href={sessionPath(id)} />} aria-label="Open conversation" title="Open conversation"><MessageSquare /></Button>
-            <Button variant="ghost" size="icon" className="size-11 sm:size-8" aria-label="Reset" title="Start a new voice conversation" onClick={() => sidebar.rows.find((row) => row.id === id)?.running ? setConfirm(true) : reset()}><RotateCcw /></Button>
+            <Button variant="ghost" size="icon" className="size-11 sm:size-8" aria-label="Reset" title="Start a new voice conversation" disabled={settling} onClick={() => sidebar.rows.find((row) => row.id === id)?.running ? setConfirm(true) : reset.mutate()}><RotateCcw /></Button>
           </> : null}
         </div>
       </div>
       {transcript ? <VoiceTranscript captions={voice.captions} /> : null}
-      <VoiceStage voice={voice} compact={transcript} busy={start.isPending} loading={agents.isPending} error={error} onPress={() => active ? stopVoice() : start.mutate()} />
+      <VoiceStage voice={voice} compact={transcript} busy={settling} loading={agents.isPending || loading} error={error} onPress={() => active ? stopVoice() : start.mutate()} />
       <Dialog open={confirm} onOpenChange={setConfirm}>
         <DialogContent>
           <DialogTitle>Reset voice conversation?</DialogTitle>
           <DialogDescription>The agent is still working. Its turn keeps running in the old conversation.</DialogDescription>
           <div className="mt-6 flex justify-end gap-2">
             <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
-            <Button onClick={reset}>Reset</Button>
+            <Button disabled={settling} onClick={() => reset.mutate()}>Reset</Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -3796,7 +3820,9 @@ function VoiceToggle({ sessionId }: { sessionId: string }) {
   const { state, notice } = useOwnVoice(sessionId);
   const calling = state !== "idle" && state !== "error";
   const choices = useQuery({ ...queries.agents({ conversationId: sessionId }), enabled: sessionId !== "" });
-  const speaker = voiceChoice(choices.data?.agents.find((item) => item.name === choices.data?.currentAgent));
+  const identity = useQuery(queries.identity());
+  const settings = useQuery({ ...queries.voiceSettings(identity.data?.username ?? ""), enabled: identity.isSuccess });
+  const speaker = voiceChoice(choices.data?.agents.find((item) => item.name === choices.data?.currentAgent), settings.data?.voice);
   // The session pane stays mounted on page routes, so leaving the session ends its call as unmounting does.
   useEffect(() => () => { if (voiceView().conversationId === sessionId) stopVoice(); }, [route.id, sessionId]);
   // Phones talk on the Voice page: a narrow composer row has no room for another button.

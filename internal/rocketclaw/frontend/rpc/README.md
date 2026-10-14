@@ -286,12 +286,24 @@ rejection, which reports only the upstream HTTP status. Voice requests to OpenAI
 drop `Authorization`, `Api-Key` and `Chatgpt-Account-Id` on any redirect to another
 scheme, host, or port.
 
-A conversation has one live call; the newest wins, and the older stream ends with
-`replaced`. The server has no idle or no-speech timers. Aborting the request ends
-the call: over a live sideband the server sends `session.close` and waits up to 3 s;
+Each person (the caller's username) has one live call across all conversations; the
+newest wins, and the older stream ends with `replaced`. Different people's calls on
+one conversation run side by side. The server has no idle or no-speech timers.
+Aborting the request ends the call: over a live sideband the server sends `session.close` and waits up to 3 s;
 it then hangs up a public session that did not confirm, and closes the socket. The
 handler returns right after `ended`. OpenAI's `session.closed` ends the call as
 `expired`, `safety` (a content stop), or `closed`.
+
+`VoiceSettings(VoiceSettingsRequest) -> VoiceSettingsResponse` (`POST /api/VoiceSettings`)
+reads and changes the caller's voice settings: their current voice conversation, the
+agent for their next one, their voice, and the transcript view. The action is `READ`
+(the default), `START` (returns the current conversation, or creates one with `agent`
+as `CreateSession` would), `RESET` (forgets the current conversation while it is still
+`conversationId`), or `UPDATE` (stores the `agent`, `voice` and `transcript` fields that
+are set; an agent the caller cannot choose or a voice no route offers is
+`InvalidArgument`). Every action answers with the caller's whole settings row, and
+`conversationId` is empty when none is current. Startup cleanup never deletes a
+person's current voice conversation; after `RESET`, ordinary cleanup applies.
 
 When the sideband drops, a public call ends as `lost`. A Codex call reconnects as
 Codex does: it waits 200 ms, doubling to 5 s (reset after 30 s connected), then

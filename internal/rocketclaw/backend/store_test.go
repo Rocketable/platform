@@ -869,14 +869,14 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 35, n)
+	assert.Equal(t, 36, n)
 	require.Error(t, first.db.QueryRowContext(t.Context(), `SELECT 1 FROM store_bootstrap`).Scan(&n))
 
 	second, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop()) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 35, n)
+	assert.Equal(t, 36, n)
 }
 
 func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
@@ -924,7 +924,7 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 
 				var count int
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-				require.Equal(t, 35, count)
+				require.Equal(t, 36, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations WHERE applied_at='2026-01-01Z'`).Scan(&count))
 				require.Equal(t, prefix, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM session_tags`).Scan(&count))
@@ -977,7 +977,7 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 35, n)
+	assert.Equal(t, 36, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
 }
 
@@ -2437,4 +2437,70 @@ func TestCopiedAttributionSurvivesSourceRetention(t *testing.T) {
 	require.Equal(t, "producer-x", entries[0].SourceConversationID)
 	require.Equal(t, entry.AttributionAt(0), entries[0].Entry.AttributionAt(0))
 	require.JSONEq(t, string(entry.ReplayInput[0]), string(entries[0].Entry.ReplayInput[0]))
+}
+
+func TestVoiceSettings(t *testing.T) {
+	store := newTestSessionService(t)
+	ctx := t.Context()
+
+	create := func(id string) {
+		t.Helper()
+		require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}))
+	}
+	create("voice-a")
+	create("voice-b")
+
+	settings := func(username string) VoiceSettings {
+		t.Helper()
+
+		current, err := store.VoiceSettings(ctx, username)
+		require.NoError(t, err)
+
+		return current
+	}
+	recorded := func(id string) bool {
+		t.Helper()
+
+		_, ok, err := store.Thread(id)
+		require.NoError(t, err)
+
+		return ok
+	}
+	prune := func() {
+		t.Helper()
+
+		_, err := store.PruneStateBefore(ctx, time.Now())
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, VoiceSettings{}, settings("alice"), "a person with no row gets the defaults")
+
+	require.NoError(t, store.StartVoiceConversation(ctx, "alice", "voice-a", "main"))
+	require.NoError(t, store.StartVoiceConversation(ctx, "alice", "voice-b", "other"))
+
+	voice, on := "cedar", true
+	require.NoError(t, store.UpdateVoiceSettings(ctx, "alice", nil, &voice, &on))
+	require.NoError(t, store.UpdateVoiceSettings(ctx, "bob", nil, nil, &on))
+	assert.Equal(t, VoiceSettings{ConversationID: "voice-a", Agent: "main", Voice: "cedar", Transcript: true}, settings("alice"), "the first start wins; an update keeps the fields it was not given")
+	assert.Equal(t, VoiceSettings{Transcript: true}, settings("bob"))
+
+	// Startup cleanup deleted an empty current voice conversation on 2026-10-13.
+	prune()
+	assert.True(t, recorded("voice-a"), "an empty current voice conversation survives startup cleanup")
+	assert.False(t, recorded("voice-b"), "an empty conversation that is nobody's is still deleted")
+
+	require.NoError(t, store.ResetVoiceConversation(ctx, "alice", "voice-b"))
+	assert.Equal(t, "voice-a", settings("alice").ConversationID, "a stale reset leaves the newer conversation current")
+
+	require.NoError(t, store.ResetVoiceConversation(ctx, "alice", "voice-a"))
+	assert.Equal(t, VoiceSettings{Agent: "main", Voice: "cedar", Transcript: true}, settings("alice"))
+	prune()
+	assert.False(t, recorded("voice-a"), "after Reset, ordinary cleanup applies")
+
+	create("voice-c")
+	require.NoError(t, store.StartVoiceConversation(ctx, "alice", "voice-c", "main"))
+	_, err := store.db.ExecContext(ctx, `DELETE FROM managed_conversations WHERE conversation_id = 'voice-c'`)
+	require.NoError(t, err)
+	assert.Equal(t, VoiceSettings{Agent: "main", Voice: "cedar", Transcript: true}, settings("alice"), "a deleted conversation clears only the pointer")
+	assert.Equal(t, VoiceSettings{Transcript: true}, settings("bob"))
 }

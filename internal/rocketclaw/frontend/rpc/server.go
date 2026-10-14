@@ -55,7 +55,7 @@ type Server struct {
 	searches    map[string]*searchFlight
 	searchGroup singleflight.Group
 
-	// voiceCalls holds each conversation's live voice call; a newer call replaces it.
+	// voiceCalls holds each person's live voice call by username; their newer call replaces it.
 	voiceMu    sync.Mutex
 	voiceCalls map[string]*context.CancelCauseFunc
 }

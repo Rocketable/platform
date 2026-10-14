@@ -157,7 +157,11 @@ A hidden conversation that runs work for a human-visible destination conversatio
 
 ### Voice Session
 
-A live spoken call between a person on the Web and OpenAI's voice model, attached to one conversation. Audio flows between the browser and OpenAI; RocketClaw creates the call with the conversation agent's Provider credentials and holds its control connection while the browser's request stays open. The call ends when that request ends, or earlier when RocketClaw or OpenAI ends it; it has no idle or no-speech timers. Its end reason is one of `stopped`, `replaced`, `expired`, `safety`, `closed`, `lost`, or `error`. On the Codex route RocketClaw reconnects a dropped control connection; on the API-key route a drop ends the call as `lost`. A conversation has at most one live Voice Session: starting another ends the older one. Ending a Voice Session never stops the conversation's turns.
+A live spoken call between a person on the Web and OpenAI's voice model, attached to one conversation. Audio flows between the browser and OpenAI; RocketClaw creates the call with the conversation agent's Provider credentials and holds its control connection while the browser's request stays open. The call ends when that request ends, or earlier when RocketClaw or OpenAI ends it; it has no idle or no-speech timers. Its end reason is one of `stopped`, `replaced`, `expired`, `safety`, `closed`, `lost`, or `error`. On the Codex route RocketClaw reconnects a dropped control connection; on the API-key route a drop ends the call as `lost`. A person has at most one live Voice Session: starting another, on any conversation or device, ends their older one, while other people's sessions, even on the same conversation, keep running. Ending a Voice Session never stops the conversation's turns.
+
+### Voice Settings
+
+One person's Web voice state, kept by the server and the same on every device: their current voice conversation for the Voice page, the agent for their next one, their voice, and whether the Voice page shows the transcript. Two people never share Voice Settings, even in one browser. Startup cleanup never deletes a person's current voice conversation, even with no messages; Reset forgets it, and ordinary cleanup applies after that. A call uses the person's voice when the conversation agent's provider offers it, and that provider's default otherwise.
 
 ### Voice Hand-off
 

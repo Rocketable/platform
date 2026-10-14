@@ -7,7 +7,7 @@ const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
 type Probe = { locks: number; mics: number; heard: number; audio?: HTMLMediaElement };
 
-test("Voice page keeps one conversation per owner, and the composer toggle ends its call on leaving the session", async () => {
+test("Voice page keeps each person's conversation and settings on the server, and the composer toggle ends its call on leaving the session", async () => {
   const { chromium: engine } = await import(playwright!);
   const browser = await engine.launch({ executablePath: chromium, headless: true, args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--disable-features=WebRtcHideLocalIpsWithMdns", "--autoplay-policy=no-user-gesture-required"] });
   // A second page plays OpenAI: it answers each offer and drives the oai-events channel.
@@ -16,11 +16,15 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
   let voiceFails = false, creating: PromiseWithResolvers<void> | undefined, listing: PromiseWithResolvers<void> | undefined, voiceStream: ReadableStreamDefaultController | undefined;
   const notice = "The agent could not accept that request. Try again.";
   const rows = [{ id: "voice-1", name: "First voice", agent: "main" }, { id: "voice-2", name: "Second voice", agent: "main", running: true }];
+  // The server keeps each person's voice settings; the browser keeps none.
+  let username = "tester", reads = 0, updateFails = false, reading: PromiseWithResolvers<void> | undefined;
+  const people: Record<string, { conversationId: string; agent: string; voice: string; transcript: boolean }> = {};
+  const settings = (person = username) => people[person] ??= { conversationId: "", agent: "", voice: "", transcript: false };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: username, upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/Identity") return Response.json({ username });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "voice" });
     if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "voice" } });
     if (url.pathname === "/api/ListAgents") {
@@ -29,11 +33,20 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
       return Response.json({ agents: [{ name: "main", model: "openai/gpt", voices: ["cove", "juniper"] }, { name: "helper", model: "keyed/gpt", voices: ["marin", "cedar"] }], currentAgent: agents[conversationId] ?? "main" });
     }
     if (url.pathname === "/api/History") return Response.json({ messages: [], origin: "", revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
-    if (url.pathname === "/api/CreateSession") {
-      const body = await request.json() as { agent: string }, id = `voice-${created.push(body)}`;
-      agents[id] = body.agent;
-      await creating?.promise;
-      return Response.json({ id });
+    if (url.pathname === "/api/VoiceSettings") {
+      const body = JSON.parse(await request.text() || "{}") as { action?: string; conversationId?: string; agent?: string; voice?: string; transcript?: boolean };
+      const mine = settings();
+      if (!body.action) { reads++; await reading?.promise; }
+      if (body.action === "UPDATE" && updateFails) return Response.json({ code: 14, message: "settings are unavailable" }, { status: 503 });
+      if (body.action === "START" && !mine.conversationId) {
+        const id = `voice-${created.push({ agent: body.agent! })}`;
+        agents[id] = body.agent!;
+        await creating?.promise;
+        Object.assign(mine, { conversationId: id, agent: body.agent });
+      }
+      if (body.action === "RESET" && mine.conversationId === body.conversationId) mine.conversationId = "";
+      if (body.action === "UPDATE") Object.assign(mine, Object.fromEntries(Object.entries(body).filter(([key]) => ["agent", "voice", "transcript"].includes(key))));
+      return Response.json(mine);
     }
     if (url.pathname === "/api/Prompt") {
       const body = await request.json() as { id: string; text: string };
@@ -99,7 +112,7 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
     const status = page.getByRole("status").filter({ hasText: /^(Tap to talk|Connecting…|Listening|Ending…|Tap to try again)/ });
     const live = () => page.waitForFunction(() => /^Listening · 0:\d\d$/.test(document.querySelector('[role="status"][aria-live="polite"]')?.textContent ?? ""));
     const closes = (count: number) => openai.waitForFunction((count: number) => (window as unknown as { closes?: number }).closes === count, count);
-    const stored = () => page.evaluate(() => localStorage.getItem("voice:tester"));
+    const stored = () => settings().conversationId;
     const picker = page.getByRole("combobox", { name: "Choose agent" });
     await page.goto(origin);
     await page.getByRole("button", { name: "Open command palette", exact: true }).click();
@@ -107,7 +120,7 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
     await page.waitForURL("**/voice");
     await page.getByRole("tablist", { name: "Open tabs" }).getByRole("tab", { name: "Voice", exact: true }).waitFor();
     expect(await status.textContent()).toBe("Tap to talk");
-    expect(await stored()).toBeNull();
+    expect(stored()).toBe("");
     await held(1); // The open Voice page keeps the screen on.
 
     const voicePicker = page.getByRole("combobox", { name: "Choose voice" }); // Covers the voice picker: the agent's provider offers its voices, the default first.
@@ -121,7 +134,7 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
     await page.evaluate(() => { history.pushState(null, "", "/"); dispatchEvent(new PopStateEvent("popstate")); });
     await held(0);
     creating.resolve();
-    await page.waitForFunction(() => localStorage.getItem("voice:tester") === "voice-1");
+    while (stored() !== "voice-1") await Bun.sleep(10);
     expect({ created, calls, mics: (await probe()).mics }).toEqual({ created: [{ agent: "main" }], calls: [], mics: 0 });
     listing = Promise.withResolvers(); // Until its agents load, the orb cannot start the call: they decide its voice.
     await page.goBack();
@@ -135,7 +148,7 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
     expect(spoken).toEqual(["juniper"]);
     expect(await page.getByLabel("Transcript", { exact: true }).count()).toBe(0); // The transcript is off until asked for.
     await page.getByRole("button", { name: "Show transcript" }).click(); // The orb shrinks below the transcript.
-    expect(await page.locator(".voice-orb").getAttribute("data-size")).toBe("small");
+    await page.locator('.voice-orb[data-size="small"]').waitFor();
     await page.getByLabel("Transcript", { exact: true }).getByText("Voice: Hi!").waitFor();
     expect(await page.getByLabel("Transcript", { exact: true }).locator("p").allTextContents()).toEqual(["You: Hello there", "Voice: Hi!"]);
     await page.waitForFunction(() => Number(document.querySelector<HTMLElement>(".voice-orb")?.style.getPropertyValue("--level")) > 0.01); // The orb swells with the model's voice.
@@ -159,12 +172,12 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
     await page.waitForFunction(() => Number(document.querySelector<HTMLElement>(".voice-orb")?.style.getPropertyValue("--level")) > 0.01); // The orb swells again.
     // A reply too long to speak turns the transcript on and shows there, formatted as in the conversation.
     await page.getByRole("button", { name: "Show transcript" }).click();
-    expect(await transcript.count()).toBe(0);
+    await transcript.waitFor({ state: "detached" });
     voiceStream!.enqueue(`data: ${JSON.stringify({ reply: "Summary:\n```\nall green\n```" })}\n\n`);
     await transcript.getByText("Summary:").waitFor();
     expect(await transcript.getByRole("button", { name: "Copy Code" }).count()).toBe(1);
     expect(await page.getByRole("button", { name: "Show transcript" }).getAttribute("aria-pressed")).toBe("true");
-    expect(await page.evaluate(() => localStorage.getItem("voice:transcript"))).toBe("on");
+    while (!settings().transcript) await Bun.sleep(10);
     expect(await picker.isDisabled()).toBe(true);
     expect(await probe()).toEqual({ locks: 1, mics: 1, heard: 1 }); // One keep-awake owner; the model's audio track reaches the audio element (playback is not measured).
     await page.getByRole("button", { name: "End voice call", exact: true }).click({ force: true }) // The live orb never stops moving.;
@@ -184,23 +197,27 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
     expect(created).toHaveLength(1);
     expect(calls).toEqual(["voice-1", "voice-1"]);
     expect(spoken).toEqual(["juniper", "marin"]);
-    expect(await page.evaluate(() => localStorage.getItem("voice:choice:openai"))).toBe("juniper"); // Remembered per provider.
+    expect(settings().voice).toBe("juniper"); // One voice per person, kept by the server; helper's provider lacks it, so its default spoke.
     await page.getByRole("button", { name: "Reset", exact: true }).click(); // Covers R4: Reset ends the call and forgets the conversation.
     await closes(2);
     await status.getByText("Tap to talk", { exact: true }).waitFor();
-    expect(await stored()).toBeNull();
-    expect(await page.getByRole("link", { name: "Open conversation" }).count()).toBe(0);
+    expect(stored()).toBe("");
+    await page.getByRole("link", { name: "Open conversation" }).waitFor({ state: "detached" });
     expect(await page.getByLabel("Transcript", { exact: true }).textContent()).toBe("Nothing said yet."); // The transcript choice is kept.
+    await voicePicker.click();
+    await page.getByRole("option", { name: "Cedar" }).click();
+    while (settings().voice !== "cedar") await Bun.sleep(10);
     await page.getByRole("button", { name: "Start voice call", exact: true }).click();
     await live();
     expect(created).toEqual([{ agent: "main" }, { agent: "helper" }]); // Reset carries the agent into the next conversation.
-    expect(await stored()).toBe("voice-2");
+    expect(spoken.at(-1)).toBe("cedar"); // Covers R27: the first call on a new conversation uses the person's voice.
+    expect(stored()).toBe("voice-2");
     await page.getByRole("button", { name: "End voice call", exact: true }).click({ force: true }) // The live orb never stops moving.;
     await closes(3);
     await page.getByRole("button", { name: "Reset", exact: true }).click(); // voice-2 has a running turn, so Reset asks first.
     const confirm = page.getByRole("dialog", { name: "Reset voice conversation?" });
     await confirm.getByRole("button", { name: "Cancel" }).click();
-    expect(await stored()).toBe("voice-2");
+    expect(stored()).toBe("voice-2");
     await page.getByRole("link", { name: "Open conversation" }).click();
     await page.waitForURL(`**/s/${Buffer.from("voice-2").toString("base64url")}`);
 
@@ -211,6 +228,7 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
     await page.getByText(notice).waitFor(); // The notice shows by the composer toggle.
     await held(1); // A running call keeps the screen on outside the Voice page.
     expect(calls.at(-1)).toBe("voice-2");
+    expect(spoken.at(-1)).toBe("cedar"); // The composer's voice button uses the person's voice too.
     await page.getByRole("button", { name: "Voice", exact: true }).click(); // Leaving the session for /voice ends its call.
     await page.waitForURL("**/voice");
     await closes(4);
@@ -233,6 +251,63 @@ test("Voice page keeps one conversation per owner, and the composer toggle ends 
     await page.goto(origin);
     await toggle.waitFor();
     expect(await toggle.isDisabled()).toBe(true);
+    voiceFails = false;
+    expect(await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith("voice")))).toEqual([]); // The browser keeps no voice state.
+
+    // Covers R4: a page still showing a conversation another device reset calls on the one Start returns.
+    await page.goto(`${origin}/voice`);
+    await page.getByRole("link", { name: "Open conversation" }).waitFor();
+    settings().conversationId = "";
+    await page.getByRole("button", { name: "Start voice call", exact: true }).click();
+    await live();
+    expect(calls.at(-1)).toBe("voice-3");
+    // Another device's Reset, seen by a refetch, leaves this page's live call running until it ends.
+    settings().conversationId = "";
+    const before = reads;
+    await page.evaluate(() => { dispatchEvent(new Event("visibilitychange")); });
+    while (reads === before) await Bun.sleep(10);
+    await live();
+    expect(await openai.evaluate(() => (window as unknown as { closes?: number }).closes)).toBe(5);
+    await page.getByRole("button", { name: "End voice call", exact: true }).click({ force: true }); // The live orb never stops moving.
+    await closes(6);
+    await page.getByRole("link", { name: "Open conversation" }).waitFor({ state: "detached" });
+    updateFails = true; // A setting the server refuses goes back to what it was, and the error shows.
+    await page.getByRole("button", { name: "Show transcript" }).click();
+    await page.getByText("settings are unavailable").waitFor();
+    expect(await page.getByRole("button", { name: "Show transcript" }).getAttribute("aria-pressed")).toBe("true");
+    expect(settings().transcript).toBe(true);
+    updateFails = false;
+    // A call that ended with an error keeps its message but no longer holds its conversation: the page follows the server.
+    const refetch = async () => { const before = reads; await page.evaluate(() => { dispatchEvent(new Event("visibilitychange")); }); while (reads === before) await Bun.sleep(10); };
+    settings().conversationId = "voice-3";
+    await refetch();
+    await page.getByRole("link", { name: "Open conversation" }).waitFor();
+    voiceFails = true;
+    await page.getByRole("button", { name: "Start voice call", exact: true }).click();
+    const noCredential = page.getByText("This agent's provider has no credential for voice.");
+    await noCredential.waitFor();
+    settings().conversationId = "voice-2";
+    await refetch();
+    await page.locator(`[aria-label="Open conversation"][href$="${Buffer.from("voice-2").toString("base64url")}"]`).waitFor();
+    expect(await noCredential.count()).toBe(1);
+    voiceFails = false;
+
+    // Covers R26: two people in one browser each see only their own settings.
+    username = "guest";
+    reading = Promise.withResolvers(); // Until the person's settings load, Start stays off: it would create a conversation with defaults.
+    await page.reload();
+    await voicePicker.waitFor(); // The agents loaded; only the settings are still on their way.
+    expect(await page.getByRole("button", { name: "Start voice call", exact: true }).isDisabled()).toBe(true);
+    reading.resolve();
+    reading = undefined;
+    await status.getByText("Tap to talk", { exact: true }).waitFor();
+    expect(await page.getByRole("button", { name: "Start voice call", exact: true }).isDisabled()).toBe(false);
+    expect(await shownVoice()).toBe("Cove");
+    expect(await page.getByLabel("Transcript", { exact: true }).count()).toBe(0);
+    username = "tester";
+    await page.reload();
+    await page.getByLabel("Transcript", { exact: true }).waitFor(); // tester turned the transcript on earlier.
+    expect(settings("guest")).toEqual({ conversationId: "", agent: "", voice: "", transcript: false });
   } finally {
     await browser.close();
     server.stop(true);
