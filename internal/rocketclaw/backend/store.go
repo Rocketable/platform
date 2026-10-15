@@ -1862,16 +1862,40 @@ func queryStrings(ctx context.Context, db stateStoreDB, query, label string, arg
 	}, args...)
 }
 
-// conversationHasPendingWork reports queued messages, running Background Jobs,
+// conversationHasPendingWork reports queued or scheduled messages, running Background Jobs,
 // or wakeable Completion Notes, its own or those of hidden runs reporting to it,
 // which keep a conversation from being pruned.
 func conversationHasPendingWork(ctx context.Context, db stateStoreDB, conversationID string) (bool, error) {
 	var pending bool
-	if err := queryScalar(ctx, db, "check conversation pending work", `SELECT EXISTS(SELECT 1 FROM thread_queue WHERE conversation_id = $1)
-OR EXISTS(SELECT 1 FROM background_jobs WHERE (conversation_id = $1 OR sync_destination = $1) AND (status = $2 OR note_state = $3 AND wake))
-OR EXISTS(SELECT 1 FROM shadow_turns t JOIN shadow_bindings b USING (child_conversation_id)
+	if err := queryScalar(ctx, db, "check conversation pending work", `WITH owners AS (
+    SELECT $1::text AS conversation_id
+    UNION
+    SELECT conversation_id FROM managed_conversations WHERE producer_inbound_json->>'SyncDestination' = $1
+), related_conversations AS (
+    SELECT conversation_id FROM owners
+    UNION
+    SELECT b.child_conversation_id FROM shadow_bindings b JOIN owners o ON b.parent_conversation_id = o.conversation_id
+), producer_effects AS (
+    SELECT e.conversation_id, e.id, e.entry_json->>'type' AS kind,
+        max(e.id) FILTER (WHERE e.entry_json->>'type' = $5) OVER (PARTITION BY e.conversation_id) AS reset_id
+    FROM related_conversations r JOIN managed_conversations m USING (conversation_id) JOIN session_entries e USING (conversation_id)
+    WHERE m.producer_inbound_json IS NOT NULL AND e.id > m.producer_effects_through_id AND e.entry_json->>'type' IN ($4, $5)
+        AND NOT e.entry_json::jsonb ? 'sync_source_entry_id'
+), pending_work AS (
+    SELECT 1 FROM thread_queue WHERE conversation_id = $1
+    UNION ALL
+    SELECT 1 FROM scheduled_messages JOIN related_conversations USING (conversation_id)
+    UNION ALL
+    SELECT 1 FROM producer_effects WHERE kind = $4 AND id > COALESCE(reset_id, 0)
+    UNION ALL
+    SELECT 1 FROM background_jobs WHERE (conversation_id = $1 OR sync_destination = $1) AND (status = $2 OR note_state = $3 AND wake)
+    UNION ALL
+    SELECT 1 FROM shadow_turns t JOIN shadow_bindings b USING (child_conversation_id)
+    LEFT JOIN active_turns a ON a.conversation_id = t.child_conversation_id AND a.id = t.child_turn_id AND a.phase <> 'done'
     WHERE (b.parent_conversation_id = $1 OR b.child_conversation_id = $1 OR t.parent_source_conversation_id = $1)
-        AND (t.terminal = '' AND t.child_turn_id = '' OR EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = t.child_conversation_id AND a.id = t.child_turn_id AND a.phase <> 'done')))`, &pending, conversationID, backgroundRunning, notePending); err != nil {
+        AND (t.terminal = '' AND t.child_turn_id = '' OR a.id IS NOT NULL)
+)
+SELECT count(*) > 0 FROM pending_work`, &pending, conversationID, backgroundRunning, notePending, producerScheduleEntryType, producerResetEntryType); err != nil {
 		return false, err
 	}
 
@@ -1934,8 +1958,9 @@ func stalePrivateConversationIDs(ctx context.Context, db *sql.Tx, cutoff time.Ti
 	return queryStrings(ctx, db, `WITH private_entries AS (
     SELECT conversation_id, entry_timestamp FROM session_entries
     UNION ALL
-    SELECT conversation_id, '1970-01-01T00:00:00Z' FROM session_tags t
-    WHERE NOT EXISTS (SELECT 1 FROM session_entries e WHERE e.conversation_id = t.conversation_id)
+    SELECT t.conversation_id, '1970-01-01T00:00:00Z' FROM session_tags t
+    LEFT JOIN session_entries e ON e.conversation_id = t.conversation_id
+    WHERE e.conversation_id IS NULL
 ),
 referenced_conversations AS (
     SELECT conversation_id FROM managed_conversations
@@ -1944,15 +1969,19 @@ referenced_conversations AS (
     UNION ALL
     SELECT conversation_id FROM thread_queue
     UNION ALL
+    SELECT conversation_id FROM scheduled_messages
+    UNION ALL
     SELECT unnest(ARRAY[conversation_id, sync_destination]) FROM background_jobs WHERE status = $2 OR note_state = $3 AND wake
     UNION ALL
-    SELECT parent_source_conversation_id FROM shadow_turns t WHERE terminal = '' AND (child_turn_id = ''
-        OR EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = t.child_conversation_id AND a.id = t.child_turn_id AND a.phase <> 'done'))
+    SELECT t.parent_source_conversation_id FROM shadow_turns t
+    LEFT JOIN active_turns a ON a.conversation_id = t.child_conversation_id AND a.id = t.child_turn_id AND a.phase <> 'done'
+    WHERE t.terminal = '' AND (t.child_turn_id = '' OR a.id IS NOT NULL)
 )
 SELECT h.conversation_id FROM private_entries h
+LEFT JOIN referenced_conversations r ON r.conversation_id = h.conversation_id
 WHERE (h.conversation_id LIKE 'slack-thread:%' OR h.conversation_id LIKE 'external_mcp:%'
     OR h.conversation_id LIKE 'cron:%' OR h.conversation_id LIKE 'one-off-cron:%')
-    AND NOT EXISTS (SELECT 1 FROM referenced_conversations r WHERE r.conversation_id = h.conversation_id)
+    AND r.conversation_id IS NULL
 GROUP BY h.conversation_id HAVING MAX(h.entry_timestamp) < $1`, "stale private session conversations", cutoff.UTC().Format(time.RFC3339Nano), backgroundRunning, notePending)
 }
 

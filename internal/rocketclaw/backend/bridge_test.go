@@ -1499,7 +1499,7 @@ func TestScheduleMessageToolValidatesAndPreservesMessage(t *testing.T) {
 
 	assert.Equal(t, map[string]bool{"  keep spaces  ": false, "again": true}, recurring)
 
-	for _, delay := range []time.Duration{12 * time.Hour, 24 * time.Hour} {
+	for _, delay := range []time.Duration{12 * time.Hour, 24 * time.Hour, 24*time.Hour + time.Nanosecond, 5040 * time.Hour} {
 		for _, recurring := range []bool{false, true} {
 			t.Run(fmt.Sprintf("accepted%s/recurring=%t", delay, recurring), func(t *testing.T) {
 				message := fmt.Sprintf("  follow up after %s recurring=%t  ", delay, recurring)
@@ -1544,8 +1544,8 @@ func TestScheduleMessageToolValidatesAndPreservesMessage(t *testing.T) {
 		`{"message":"hello","send_this_in":"nope"}`,
 		`{"message":"hello","send_this_in":"0s"}`,
 		`{"message":"hello","send_this_in":"-1h"}`,
-		`{"message":"hello","send_this_in":"24h1ns"}`,
-		`{"message":"hello","send_this_in":"24h1ns","recurring":true}`,
+		`{"message":"hello","send_this_in":"5040h1ns"}`,
+		`{"message":"hello","send_this_in":"5040h1ns","recurring":true}`,
 		`{"message":"hello","send_this_in":"30s","recurring":true}`,
 	} {
 		_, err := tool.Call(context.Background(), []byte(raw), nil)
