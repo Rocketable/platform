@@ -123,6 +123,8 @@ MCP clients call `session_prompt` with a conversation ID, an agent, and a config
 
 Each active job file in `cron/` names a Slack `channel`. If the job's reply is empty, nothing is posted. Otherwise the reply starts a new read-only thread in that channel; follow up from its conversation in Web.
 
+Agents can use `rocketclaw_schedule_message` for a follow-up in the current conversation. `send_this_in` accepts positive durations up to `24h`, including `12h` and `24h`. Set `recurring` to `false` for one message or `true` to repeat at that interval (at least `1m`) until scheduled messages are reset.
+
 ## How a request runs
 
 1. A request arrives from the web page (including a `$workflow` command), a Slack mention, MCP, a cron job, or a scheduled message.
