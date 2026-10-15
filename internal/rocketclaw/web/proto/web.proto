@@ -69,6 +69,7 @@ message HistoryResponse {
   repeated PendingQuestion pending_questions = 18;
   // Page-scoped turn correlations, including shadows without transcript output.
   repeated ShadowBinding shadows = 19;
+  map<string, string> review_rationales = 20;
 }
 
 message ShadowBinding {

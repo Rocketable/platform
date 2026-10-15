@@ -318,7 +318,7 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 	}
 
 	if request.GetBefore() > 0 {
-		return response, nil // Settled pages are read once, not followed.
+		return response, s.reviewRationales(ctx, response) // Settled pages are read once, not followed.
 	}
 
 	for _, key := range slices.Sorted(maps.Keys(previous.Entries)) {
@@ -330,7 +330,35 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 	data, _ = json.Marshal(current)
 	response.Revision = base64.RawURLEncoding.EncodeToString(data)
 
-	return response, nil
+	return response, s.reviewRationales(ctx, response)
+}
+
+func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse) error {
+	response.ReviewRationales = make(map[string]string)
+	for _, review := range response.Delegations {
+		if !strings.Contains(review[strings.LastIndexByte(review, '/')+1:], "-review-") {
+			continue
+		}
+
+		entries, err := s.sessions.ObserveEntries(ctx, review)
+		if err != nil {
+			return fmt.Errorf("read permission review: %w", err)
+		}
+
+		var rationales []string
+
+		for i := range entries {
+			if rationale := entries[i].Entry.PermissionReviewRationale(); rationale != "" {
+				rationales = append(rationales, rationale)
+			}
+		}
+
+		if len(rationales) > 0 {
+			response.ReviewRationales[review] = strings.Join(rationales, "\n")
+		}
+	}
+
+	return nil
 }
 
 func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *backend.ObservedSessionEntry, conversationID string, calls map[string]string) ([]*TranscriptEvent, error) {

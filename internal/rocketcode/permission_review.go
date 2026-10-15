@@ -20,6 +20,50 @@ const (
 	permissionReviewTimeout = 90 * time.Second
 )
 
+// PermissionReviewRationale reads only the completed final response of a saved review.
+func (e *SessionEntry) PermissionReviewRationale() string {
+	final := make(map[string]bool)
+
+	progresses := PublicProgressFromTrace(e.OutputTrace)
+	for i := range progresses {
+		progress := &progresses[i]
+		if e.ResponseID != "" && progress.Kind == PublicProgressText && progress.State == PublicProgressCompleted && progress.ParentID == e.TurnID+"/"+e.ResponseID {
+			if index := strings.LastIndexByte(progress.ID, '/'); index >= 0 {
+				final[progress.ID[:index]] = true
+			}
+		}
+	}
+
+	items, err := ReplayInputToParams(e.ReplayInput)
+	if err != nil {
+		return ""
+	}
+
+	var text string
+
+	for i := range items {
+		message := items[i].OfMessage
+		if message == nil || message.Role != responses.EasyInputMessageRoleAssistant || message.Phase == responses.EasyInputMessagePhaseCommentary {
+			continue
+		}
+
+		id, _ := message.ExtraFields()["id"].(string)
+		if final[id] {
+			text = message.Content.OfString.Value
+			if !message.Content.OfString.Valid() {
+				text = permissionReviewContentText(message.Content.OfInputItemContentList)
+			}
+		}
+	}
+
+	var decision permissionReviewDecision
+	if json.Unmarshal([]byte(text), &decision) != nil || decision.Outcome != permissionReviewOutcomeAllow && decision.Outcome != permissionReviewOutcomeDeny {
+		return ""
+	}
+
+	return decision.Rationale
+}
+
 func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionReviewRequest, parentOutput chan<- ChatResponse) permissionReviewDecision {
 	if f.inPermissionReview {
 		return permissionReviewFailure("automatic permission review cannot recursively require automatic approval")

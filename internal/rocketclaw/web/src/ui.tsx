@@ -63,7 +63,7 @@ function sessionPath(id: string) {
   return `/s/${encodeSessionId(id)}`;
 }
 
-const Delegations = createContext<string[] | undefined>(undefined);
+const Delegations = createContext<Pick<HistoryView, "delegations" | "reviewRationales"> | undefined>(undefined);
 
 // The right panel shows one delegation or one skill, so opening either replaces the other.
 function panelHref(id?: string, panel: "delegation" | "skill" | "shadow" = "delegation") {
@@ -646,7 +646,7 @@ function SidebarOwner({ children }: { children: ReactNode }) {
 }
 
 type PendingFile = { id: string; file: File };
-type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; shadows?: ShadowBinding[]; earlierShadows?: { from: string; before: string; shadows: ShadowBinding[] }[]; movable?: boolean; jobs?: BackgroundJob[]; questions?: PendingQuestion[]; error: string; edit: number; submission: number; historyEpoch?: number; revertEligible?: boolean; revertMessageId?: string; canUndo?: boolean; reverting?: boolean; focus?: number; hydrated?: boolean; persistenceKey?: string; persistedEdit?: number; persistenceError?: string };
+type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; reviewRationales?: Record<string, string>; shadows?: ShadowBinding[]; earlierShadows?: { from: string; before: string; shadows: ShadowBinding[] }[]; movable?: boolean; jobs?: BackgroundJob[]; questions?: PendingQuestion[]; error: string; edit: number; submission: number; historyEpoch?: number; revertEligible?: boolean; revertMessageId?: string; canUndo?: boolean; reverting?: boolean; focus?: number; hydrated?: boolean; persistenceKey?: string; persistedEdit?: number; persistenceError?: string };
 const RevertActions = createContext<{ available: boolean; pending: boolean; run: (messageId?: string, redo?: boolean) => Promise<void> } | undefined>(undefined);
 const DraftScope = createContext<string | undefined>(undefined);
 
@@ -2081,7 +2081,7 @@ const toolIcons: Partial<Record<string, ReactNode>> = { task: <Bot />, skill: <S
 function ToolLinks({ line, title }: { line: Line; title: string }) {
   // toolTitle names a skill call's skill as "Skill · name".
   const skill = line.toolName === "skill" && title.startsWith("Skill · ") ? title.slice("Skill · ".length) : "";
-  const delegations = use(Delegations);
+  const delegations = use(Delegations)?.delegations;
   const delegation = delegationOf(line, delegations);
   // A reviewed call's row opens its permission review once the delegations list it; an older task row, the one ending in its call ID.
   const review = (line.review && delegations?.includes(line.review) ? line.review : undefined) || line.delegation && delegations?.find((child) => child !== delegation && child.slice(child.lastIndexOf("/") + 1) === line.toolCallId);
@@ -2097,6 +2097,7 @@ function ToolLinks({ line, title }: { line: Line; title: string }) {
 
 function ToolLine({ line, conversationId, hasSandboxed, open }: { line: Line; conversationId: string; hasSandboxed: boolean; open?: boolean }) {
   const title = toolTitle(line);
+  const rationale = use(Delegations)?.reviewRationales?.[line.review ?? ""];
   const parts = [line, ...(line.toolParts ?? [])];
   const text = [
     line.toolName ? `Arguments\n${line.text.slice(line.toolName.length + 1)}` : `Result\n${line.text}`,
@@ -2106,7 +2107,7 @@ function ToolLine({ line, conversationId, hasSandboxed, open }: { line: Line; co
     <TraceRow open={open} data-tool-call-id={line.toolCallId} icon={toolIcons[line.toolName ?? ""] ?? <Wrench />} title={<span className="font-mono">{title}</span>} label={title} status={toolStatus(line, use(TurnRunning))} description={line.state}>
       <ToolLinks line={line} title={title} />
       {line.state ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
-      <CodeBlock size="sm" label={title} text={text} />
+      <CodeBlock size="sm" label={title} text={text} footer={rationale ? <footer data-slot="permission-review-rationale" className="px-2.5 pb-2.5 whitespace-pre-wrap wrap-anywhere text-muted-foreground">{rationale}</footer> : null} />
       {parts.map((part) => (
         <div key={part.id}>
           <MessageAttachments attachments={part.attachments} conversationId={conversationId} />
@@ -2251,7 +2252,7 @@ function TranscriptLines({ rows, conversationId, hasSandboxed }: { rows: Timelin
 
 function shadowHistory(binding: ShadowBinding | undefined, drafts: Map<string, ComposerDraft>) {
   const id = binding?.childConversationId ?? "";
-  return queryOptions<{ lines: Line[]; delegations?: string[] }>({ queryKey: ["shadow-history", id, binding?.turns], enabled: !!binding,
+  return queryOptions<{ lines: Line[]; delegations?: Pick<HistoryView, "delegations" | "reviewRationales"> }>({ queryKey: ["shadow-history", id, binding?.turns], enabled: !!binding,
     placeholderData: (previous, query) => query?.queryKey[1] === id ? previous : undefined,
     queryFn: async ({ signal }) => {
       const draft: ComposerDraft = drafts.get(id) ?? { text: "", files: [], agent: "", sessionId: id, sending: false, busy: false, lines: [], error: "", edit: 0, submission: 0 };
@@ -2267,7 +2268,8 @@ function shadowHistory(binding: ShadowBinding | undefined, drafts: Map<string, C
         if (draft.start === before) break;
       }
       if (draft.historyError) throw new Error(draft.historyError);
-      return { lines: draft.lines, delegations: queryClient.getQueryData<HistoryView>(queries.history({ id }).queryKey)?.delegations };
+      const history = queryClient.getQueryData<HistoryView>(queries.history({ id }).queryKey);
+      return { lines: draft.lines, delegations: { delegations: [...new Set([...(draft.delegations ?? []), ...(history?.delegations ?? [])])], reviewRationales: { ...draft.reviewRationales, ...history?.reviewRationales } } };
   } });
 }
 
@@ -2276,7 +2278,7 @@ function useShadowHistory(binding?: ShadowBinding) {
   return useQuery(shadowHistory(binding, drafts.current));
 }
 
-function ShadowCell({ row, index, binding, detail, delegations }: { row: ReturnType<typeof comparisonRows>[number]; index: number; binding: ShadowBinding; detail: TimelineRows; delegations?: string[] }) {
+function ShadowCell({ row, index, binding, detail, delegations }: { row: ReturnType<typeof comparisonRows>[number]; index: number; binding: ShadowBinding; detail: TimelineRows; delegations?: Pick<HistoryView, "delegations" | "reviewRationales"> }) {
   let status = "Not attached for this turn or inactive agent segment.";
   if (row.correlation) {
     status = row.correlation.running ? "Working…" : row.correlation.terminal === "complete"
@@ -2307,7 +2309,7 @@ function emptyTranscriptMessage(opening: boolean, empty: boolean, running: strin
   return running ? `${running} is running` : "Send a message to start the conversation.";
 }
 
-function TranscriptBody({ conversationId, working, terminal, origin, hasSandboxed, movable, refreshHistory, turns, rows, binding, detail, wide, loading, emptyMessage, delegations }: Pick<ComponentProps<typeof TranscriptLog>, "conversationId" | "working" | "terminal" | "origin" | "hasSandboxed" | "movable" | "refreshHistory"> & { turns: Turn[]; rows: ReturnType<typeof comparisonRows>; binding?: ShadowBinding; detail: TimelineRows; wide: boolean; loading: boolean; emptyMessage: string; delegations?: string[] }) {
+function TranscriptBody({ conversationId, working, terminal, origin, hasSandboxed, movable, refreshHistory, turns, rows, binding, detail, wide, loading, emptyMessage, delegations }: Pick<ComponentProps<typeof TranscriptLog>, "conversationId" | "working" | "terminal" | "origin" | "hasSandboxed" | "movable" | "refreshHistory"> & { turns: Turn[]; rows: ReturnType<typeof comparisonRows>; binding?: ShadowBinding; detail: TimelineRows; wide: boolean; loading: boolean; emptyMessage: string; delegations?: Pick<HistoryView, "delegations" | "reviewRationales"> }) {
   return <MessageScrollerContent className={cn("mx-auto w-full min-w-0", binding && wide ? "max-w-7xl" : "max-w-3xl")}>
     {origin && ["cron", "external_mcp"].includes(origin.kind) ? <MessageScrollerItem messageId="origin"><OriginCard origin={origin} /></MessageScrollerItem> : null}
     {(binding ? rows : turns).length === 0 && !working ? (
@@ -2494,6 +2496,7 @@ function applyHistoryDelta(draft: ComposerDraft, view: HistoryView) {
     draft.start = view.start;
     draft.more = view.more;
     draft.delegations = undefined;
+    draft.reviewRationales = undefined;
     draft.earlierShadows = undefined;
   }
   draft.busy = view.running || draft.lines.some((line) => !line.entryKey && line.role === "user" && !line.complete);
@@ -2548,6 +2551,7 @@ function readHistoryDelta(id: string, draft: ComposerDraft, onDraftChange: () =>
           && draft.busy === (view.running || draft.lines.some((line) => !line.entryKey && line.role === "user" && !line.complete))
           && draft.terminal === view.terminal && JSON.stringify(draft.origin) === JSON.stringify(view.origin)
           && JSON.stringify(cached?.delegations) === JSON.stringify(view.delegations)
+          && JSON.stringify(cached?.reviewRationales) === JSON.stringify(view.reviewRationales)
           && draft.movable === view.movable && JSON.stringify(draft.jobs) === JSON.stringify(view.backgroundJobs)
           && JSON.stringify(draft.questions) === JSON.stringify(view.pendingQuestions)
           && !draft.historyError) { if (earlierRefreshed) onDraftChange(); continue; }
@@ -2589,6 +2593,7 @@ function readEarlierHistory(id: string, draft: ComposerDraft, onDraftChange: () 
         draft.start = view.start;
         draft.more = view.more;
         draft.delegations = [...new Set([...(draft.delegations ?? []), ...view.delegations])];
+        draft.reviewRationales = { ...draft.reviewRationales, ...view.reviewRationales };
         (draft.earlierShadows ??= []).push({ from: view.start, before, shadows: view.shadows ?? [] });
       }
     } catch (err) {
@@ -2632,8 +2637,8 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
   const history = useQuery({ ...queries.history({ id }), enabled: false });
   const refreshHistory = useCallback(() => readHistoryDelta(draft.sessionId, draft, onDraftChange), [draft, onDraftChange]);
   const loadEarlier = useCallback((from?: string) => readEarlierHistory(draft.sessionId, draft, onDraftChange, from), [draft, onDraftChange]);
-  const followed = history.data?.delegations, earlier = draft.delegations;
-  const delegations = useMemo(() => earlier ? [...new Set([...(followed ?? []), ...earlier])] : followed, [followed, earlier]);
+  const followed = history.data, earlier = draft.delegations, earlierReviews = draft.reviewRationales;
+  const delegations = useMemo(() => ({ delegations: [...new Set([...(followed?.delegations ?? []), ...(earlier ?? [])])], reviewRationales: { ...earlierReviews, ...followed?.reviewRationales } }), [followed, earlier, earlierReviews]);
   const setBusy = useCallback((value: boolean) => { draft.busy = value; onDraftChange(); }, [draft, onDraftChange]);
   const setLines = useCallback((update: (current: Line[]) => Line[]) => { draft.lines = update(draft.lines); onDraftChange(); }, [draft, onDraftChange]);
   useEffect(() => {
@@ -2738,7 +2743,7 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
   const available = !!draft.revertEligible && !previewing, pending = [draft.reverting, draft.sending, !draft.hydrated].some(Boolean);
   const revert = useMemo(() => ({ available, pending, run: runRevert }), [available, pending, runRevert]);
   const error = [scopeError, historyError].find(Boolean);
-  const followed = previewing ? { lines: previewLines ?? lines, delegations: preview.data?.delegations, busy: false, more: false, terminal: undefined, shadows: undefined } : { lines, delegations, busy, more, terminal, shadows };
+  const followed = previewing ? { lines: previewLines ?? lines, delegations: preview.data, busy: false, more: false, terminal: undefined, shadows: undefined } : { lines, delegations, busy, more, terminal, shadows };
   return (
     <RevertActions value={revert}>
       <Delegations value={followed.delegations}><TranscriptLog conversationId={id} lines={followed.lines} opening={opening} working={followed.busy} terminal={followed.terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} more={followed.more} loadEarlier={loadEarlier} movable={movable} refreshHistory={refreshHistory} shadows={followed.shadows}>
@@ -2799,7 +2804,7 @@ function DelegationPanel({ id }: { id: string }) {
       {history.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading delegation…</p> : null}
       {history.error ? <p role="alert" className="text-sm text-destructive">{history.error.message}</p> : null}
       {history.data?.messages.length === 0 ? <p role="status" className="text-sm text-muted-foreground">No saved transcript</p> : null}
-      <Delegations value={history.data?.delegations}>
+      <Delegations value={history.data}>
         <TranscriptLines rows={transcriptTurns(lines).flatMap((turn) => [...turn.user, ...turn.items]).map((line) => ({ kind: "line", line }))} conversationId={child} hasSandboxed={sandboxed} />
       </Delegations>
       {history.isSuccess ? <Link href={panelHref(parent?.level)} className="block w-fit text-xs text-muted-foreground underline hover:text-foreground">{parent ? `Back to ${parent.label}` : "Back to conversation"}</Link> : null}

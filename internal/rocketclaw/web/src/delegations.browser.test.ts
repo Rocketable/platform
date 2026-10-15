@@ -9,12 +9,12 @@ const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel at ${width}px`, async () => {
   const { chromium: engine } = await import(playwright!);
   const event = (role: string, text: string, tool: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ role, text, complete: true, entryKey: "", itemId: "", inputId: "", turnId: "", ...tool });
-  const histories: Record<string, { messages: TranscriptEvent[]; delegations: string[] }> = {
+  const histories: Record<string, { messages: TranscriptEvent[]; delegations: string[]; reviewRationales?: Record<string, string> }> = {
     // A task row opens the subagent its progress records, also when it continued it; an older row without one opens the listed delegation ending in its call ID.
     // A row opens its permission review only once the delegations list it; an older task row opens the one saved under its call ID.
     chat: { messages: [event("user", "Run the review", { messageId: "1:0" }), event("tool", `task {"description":"Review"}`, { toolName: "task", toolCallId: "call-task", delegation: "chat/call-task-0a1b2c3d" }), event("tool", `bash {"command":"ls"}`, { toolName: "bash", toolCallId: "call-plain", review: "chat/call-plain-review-9f9f9f9f" }), event("tool", `task {"description":"Again"}`, { toolName: "task", toolCallId: "call-again", delegation: "chat/call-task-0a1b2c3d" }),
-      event("tool", `bash {"command":"rm"}`, { toolName: "bash", toolCallId: "call_0", review: "chat/call_0-review-1a2b3c4d" }), event("tool", `task {"description":"Fresh"}`, { toolName: "task", toolCallId: "call-fresh", delegation: "chat/call-fresh-2b3c4d5e", review: "chat/call-fresh-review-3c4d5e6f" }), event("tool", `bash {"command":"old"}`, { toolName: "bash", toolCallId: "call-old" }), event("assistant", "Review finished")],
-      delegations: ["chat/call-task", "chat/call-task-0a1b2c3d", "chat/call_0-review-1a2b3c4d", "chat/call-fresh-2b3c4d5e", "chat/call-fresh-review-3c4d5e6f", "chat/call-old"] },
+      event("tool", `bash {"command":"rm"}`, { toolName: "bash", toolCallId: "call_0", review: "chat/call_0-review-1a2b3c4d" }), event("tool", "blocked", { toolCallId: "call_0" }), event("tool", `task {"description":"Fresh"}`, { toolName: "task", toolCallId: "call-fresh", delegation: "chat/call-fresh-2b3c4d5e", review: "chat/call-fresh-review-3c4d5e6f" }), event("tool", `bash {"command":"old"}`, { toolName: "bash", toolCallId: "call-old" }), event("assistant", "Review finished")],
+      delegations: ["chat/call-task", "chat/call-task-0a1b2c3d", "chat/call_0-review-1a2b3c4d", "chat/call-fresh-2b3c4d5e", "chat/call-fresh-review-3c4d5e6f", "chat/call-old"], reviewRationales: { "chat/call_0-review-1a2b3c4d": "The requested change is outside the allowed scope.", "chat/call-fresh-review-3c4d5e6f": "The read-only check is within the requested scope." } },
     "chat/call-task": { messages: [event("assistant", "Task call allowed")], delegations: [] },
     "chat/call_0-review-1a2b3c4d": { messages: [event("assistant", "Bash call allowed")], delegations: [] },
     "chat/call-task-0a1b2c3d": { messages: [event("user", "Review this"), event("tool", `execute {"code":"print(1)"}`, { toolName: "execute", toolCallId: "call-inner" }), event("assistant", "Child done")], delegations: ["chat/call-task-0a1b2c3d/call-inner"] },
@@ -68,6 +68,11 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel 
     const delegation = () => new URL(page.url()).searchParams.get("delegation");
     const review = page.locator("main").getByRole("link", { name: /^Open permission review/ });
     expect(await review.count()).toBe(3);
+    const denied = page.locator('main [data-tool-call-id="call_0"]');
+    const allowed = page.locator('main [data-tool-call-id="call-fresh"]');
+    expect(await denied.locator('[data-slot="code-block"] > [data-slot="permission-review-rationale"]').textContent()).toBe("The requested change is outside the allowed scope.");
+    expect(await allowed.locator('[data-slot="code-block"] > [data-slot="permission-review-rationale"]').textContent()).toBe("The read-only check is within the requested scope.");
+    expect(await plain.locator('[data-slot="permission-review-rationale"]').count()).toBe(0);
     expect(await href(review.nth(2))).toBe("chat/call-fresh-review-3c4d5e6f");
     await review.and(page.getByRole("link", { name: "Open permission review: task", exact: true })).first().click();
     await panel.getByText("Task call allowed", { exact: true }).waitFor();

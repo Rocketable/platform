@@ -419,9 +419,10 @@ type HistoryResponse struct {
 	// Unanswered ask_user_question calls of this conversation's Web turns, in question ID order.
 	PendingQuestions []*PendingQuestion `protobuf:"bytes,18,rep,name=pending_questions,json=pendingQuestions,proto3" json:"pending_questions,omitempty"`
 	// Page-scoped turn correlations, including shadows without transcript output.
-	Shadows       []*ShadowBinding `protobuf:"bytes,19,rep,name=shadows,proto3" json:"shadows,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Shadows          []*ShadowBinding  `protobuf:"bytes,19,rep,name=shadows,proto3" json:"shadows,omitempty"`
+	ReviewRationales map[string]string `protobuf:"bytes,20,rep,name=review_rationales,json=reviewRationales,proto3" json:"review_rationales,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *HistoryResponse) Reset() {
@@ -583,6 +584,13 @@ func (x *HistoryResponse) GetPendingQuestions() []*PendingQuestion {
 func (x *HistoryResponse) GetShadows() []*ShadowBinding {
 	if x != nil {
 		return x.Shadows
+	}
+	return nil
+}
+
+func (x *HistoryResponse) GetReviewRationales() map[string]string {
+	if x != nil {
+		return x.ReviewRationales
 	}
 	return nil
 }
@@ -5436,7 +5444,7 @@ const file_web_proto_rawDesc = "" +
 	"\brevision\x18\x04 \x01(\tR\brevision\x12\x14\n" +
 	"\x05limit\x18\x05 \x01(\x05R\x05limit\x12\x16\n" +
 	"\x06before\x18\x06 \x01(\x03R\x06before\x12\x12\n" +
-	"\x04from\x18\a \x01(\x03R\x04fromJ\x04\b\x03\x10\x04\"\xae\x05\n" +
+	"\x04from\x18\a \x01(\x03R\x04fromJ\x04\b\x03\x10\x04\"\xcc\x06\n" +
 	"\x0fHistoryResponse\x120\n" +
 	"\bmessages\x18\x01 \x03(\v2\x14.rpc.TranscriptEventR\bmessages\x12\x16\n" +
 	"\x06origin\x18\x02 \x01(\tR\x06origin\x12 \n" +
@@ -5458,7 +5466,11 @@ const file_web_proto_rawDesc = "" +
 	"\amovable\x18\x10 \x01(\bR\amovable\x12;\n" +
 	"\x0fbackground_jobs\x18\x11 \x03(\v2\x12.rpc.BackgroundJobR\x0ebackgroundJobs\x12A\n" +
 	"\x11pending_questions\x18\x12 \x03(\v2\x14.rpc.PendingQuestionR\x10pendingQuestions\x12,\n" +
-	"\ashadows\x18\x13 \x03(\v2\x12.rpc.ShadowBindingR\ashadows\"\xe6\x01\n" +
+	"\ashadows\x18\x13 \x03(\v2\x12.rpc.ShadowBindingR\ashadows\x12W\n" +
+	"\x11review_rationales\x18\x14 \x03(\v2*.rpc.HistoryResponse.ReviewRationalesEntryR\x10reviewRationales\x1aC\n" +
+	"\x15ReviewRationalesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe6\x01\n" +
 	"\rShadowBinding\x124\n" +
 	"\x16parent_conversation_id\x18\x01 \x01(\tR\x14parentConversationId\x12!\n" +
 	"\fparent_agent\x18\x02 \x01(\tR\vparentAgent\x12!\n" +
@@ -5866,7 +5878,7 @@ func file_web_proto_rawDescGZIP() []byte {
 }
 
 var file_web_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_web_proto_msgTypes = make([]protoimpl.MessageInfo, 87)
+var file_web_proto_msgTypes = make([]protoimpl.MessageInfo, 88)
 var file_web_proto_goTypes = []any{
 	(PromptDelivery)(0),                  // 0: rpc.PromptDelivery
 	(VoiceSettingsAction)(0),             // 1: rpc.VoiceSettingsAction
@@ -5956,121 +5968,123 @@ var file_web_proto_goTypes = []any{
 	(*VoiceEvent)(nil),                   // 85: rpc.VoiceEvent
 	(*VoiceAnswer)(nil),                  // 86: rpc.VoiceAnswer
 	(*VoiceEnded)(nil),                   // 87: rpc.VoiceEnded
-	nil,                                  // 88: rpc.SlackNamesResponse.NamesEntry
+	nil,                                  // 88: rpc.HistoryResponse.ReviewRationalesEntry
+	nil,                                  // 89: rpc.SlackNamesResponse.NamesEntry
 }
 var file_web_proto_depIdxs = []int32{
 	33, // 0: rpc.HistoryResponse.messages:type_name -> rpc.TranscriptEvent
 	10, // 1: rpc.HistoryResponse.background_jobs:type_name -> rpc.BackgroundJob
 	8,  // 2: rpc.HistoryResponse.pending_questions:type_name -> rpc.PendingQuestion
 	6,  // 3: rpc.HistoryResponse.shadows:type_name -> rpc.ShadowBinding
-	7,  // 4: rpc.ShadowBinding.turns:type_name -> rpc.ShadowTurn
-	9,  // 5: rpc.PendingQuestion.options:type_name -> rpc.QuestionOption
-	33, // 6: rpc.StageRevertResponse.prompt:type_name -> rpc.TranscriptEvent
-	3,  // 7: rpc.ListSessionsResponse.sessions:type_name -> rpc.Session
-	33, // 8: rpc.ForkSessionResponse.prompt:type_name -> rpc.TranscriptEvent
-	33, // 9: rpc.MessageMatch.message:type_name -> rpc.TranscriptEvent
-	21, // 10: rpc.SearchMessagesResponse.matches:type_name -> rpc.MessageMatch
-	24, // 11: rpc.SearchSessionsResponse.terms:type_name -> rpc.SearchTerm
-	25, // 12: rpc.SearchSessionsResponse.matches:type_name -> rpc.SessionMatch
-	21, // 13: rpc.SearchSessionsResponse.messages:type_name -> rpc.MessageMatch
-	88, // 14: rpc.SlackNamesResponse.names:type_name -> rpc.SlackNamesResponse.NamesEntry
-	34, // 15: rpc.TranscriptEvent.attachments:type_name -> rpc.Attachment
-	10, // 16: rpc.TranscriptEvent.completion_notes:type_name -> rpc.BackgroundJob
-	0,  // 17: rpc.PromptRequest.delivery:type_name -> rpc.PromptDelivery
-	38, // 18: rpc.ListAgentsResponse.agents:type_name -> rpc.Agent
-	41, // 19: rpc.ListSkillsResponse.skills:type_name -> rpc.Skill
-	44, // 20: rpc.ListWorkflowsResponse.workflows:type_name -> rpc.Workflow
-	37, // 21: rpc.ListCronJobsResponse.jobs:type_name -> rpc.CronJob
-	53, // 22: rpc.ConfigView.models:type_name -> rpc.ConfigModel
-	54, // 23: rpc.ConfigView.slack_channels:type_name -> rpc.ConfigChannel
-	55, // 24: rpc.ListConfigResponse.config:type_name -> rpc.ConfigView
-	34, // 25: rpc.QueueItem.attachments:type_name -> rpc.Attachment
-	0,  // 26: rpc.QueueItem.delivery:type_name -> rpc.PromptDelivery
-	62, // 27: rpc.ListQueueResponse.items:type_name -> rpc.QueueItem
-	73, // 28: rpc.ListSessionEntriesResponse.entries:type_name -> rpc.SessionEntryMeta
-	75, // 29: rpc.LoadSessionEntriesResponse.entries:type_name -> rpc.SessionEntryData
-	1,  // 30: rpc.VoiceSettingsRequest.action:type_name -> rpc.VoiceSettingsAction
-	86, // 31: rpc.VoiceEvent.answer:type_name -> rpc.VoiceAnswer
-	87, // 32: rpc.VoiceEvent.ended:type_name -> rpc.VoiceEnded
-	34, // 33: rpc.Web.UploadAttachment:input_type -> rpc.Attachment
-	34, // 34: rpc.Web.DownloadAttachment:input_type -> rpc.Attachment
-	2,  // 35: rpc.Web.ListSessions:input_type -> rpc.ListSessionsRequest
-	16, // 36: rpc.Web.CreateSession:input_type -> rpc.CreateSessionRequest
-	31, // 37: rpc.Web.Join:input_type -> rpc.JoinRequest
-	82, // 38: rpc.Web.Voice:input_type -> rpc.VoiceRequest
-	83, // 39: rpc.Web.VoiceSettings:input_type -> rpc.VoiceSettingsRequest
-	35, // 40: rpc.Web.Prompt:input_type -> rpc.PromptRequest
-	47, // 41: rpc.Web.ListCronJobs:input_type -> rpc.ListCronJobsRequest
-	49, // 42: rpc.Web.RunCronJob:input_type -> rpc.RunCronJobRequest
-	51, // 43: rpc.Web.AnswerQuestion:input_type -> rpc.AnswerQuestionRequest
-	4,  // 44: rpc.Web.History:input_type -> rpc.HistoryRequest
-	18, // 45: rpc.Web.ForkSession:input_type -> rpc.ForkSessionRequest
-	11, // 46: rpc.Web.StageRevert:input_type -> rpc.StageRevertRequest
-	13, // 47: rpc.Web.ClearRevert:input_type -> rpc.ClearRevertRequest
-	20, // 48: rpc.Web.SearchMessages:input_type -> rpc.SearchMessagesRequest
-	23, // 49: rpc.Web.SearchSessions:input_type -> rpc.SearchSessionsRequest
-	27, // 50: rpc.Web.SlackNames:input_type -> rpc.SlackNamesRequest
-	29, // 51: rpc.Web.Handoff:input_type -> rpc.HandoffRequest
-	39, // 52: rpc.Web.ListAgents:input_type -> rpc.ListAgentsRequest
-	42, // 53: rpc.Web.ListSkills:input_type -> rpc.ListSkillsRequest
-	45, // 54: rpc.Web.ListWorkflows:input_type -> rpc.ListWorkflowsRequest
-	56, // 55: rpc.Web.ListConfig:input_type -> rpc.ListConfigRequest
-	58, // 56: rpc.Web.UpdateSession:input_type -> rpc.UpdateSessionRequest
-	60, // 57: rpc.Web.Protocol:input_type -> rpc.ProtocolRequest
-	78, // 58: rpc.Web.Identity:input_type -> rpc.IdentityRequest
-	80, // 59: rpc.Web.Reload:input_type -> rpc.ReloadRequest
-	63, // 60: rpc.Web.ListQueue:input_type -> rpc.ListQueueRequest
-	65, // 61: rpc.Web.RemoveQueueItem:input_type -> rpc.QueueItemRequest
-	65, // 62: rpc.Web.SteerQueueItem:input_type -> rpc.QueueItemRequest
-	65, // 63: rpc.Web.PopQueueItem:input_type -> rpc.QueueItemRequest
-	67, // 64: rpc.Web.ReorderQueue:input_type -> rpc.ReorderQueueRequest
-	68, // 65: rpc.Web.MoveToBackground:input_type -> rpc.MoveToBackgroundRequest
-	70, // 66: rpc.Web.StopBackgroundJob:input_type -> rpc.StopBackgroundJobRequest
-	72, // 67: rpc.Web.ListSessionEntries:input_type -> rpc.SessionEntriesRequest
-	72, // 68: rpc.Web.LoadSessionEntries:input_type -> rpc.SessionEntriesRequest
-	72, // 69: rpc.Web.DeleteSessionEntries:input_type -> rpc.SessionEntriesRequest
-	34, // 70: rpc.Web.UploadAttachment:output_type -> rpc.Attachment
-	34, // 71: rpc.Web.DownloadAttachment:output_type -> rpc.Attachment
-	15, // 72: rpc.Web.ListSessions:output_type -> rpc.ListSessionsResponse
-	17, // 73: rpc.Web.CreateSession:output_type -> rpc.CreateSessionResponse
-	32, // 74: rpc.Web.Join:output_type -> rpc.ConversationChange
-	85, // 75: rpc.Web.Voice:output_type -> rpc.VoiceEvent
-	84, // 76: rpc.Web.VoiceSettings:output_type -> rpc.VoiceSettingsResponse
-	36, // 77: rpc.Web.Prompt:output_type -> rpc.PromptResponse
-	48, // 78: rpc.Web.ListCronJobs:output_type -> rpc.ListCronJobsResponse
-	50, // 79: rpc.Web.RunCronJob:output_type -> rpc.RunCronJobResponse
-	52, // 80: rpc.Web.AnswerQuestion:output_type -> rpc.AnswerQuestionResponse
-	5,  // 81: rpc.Web.History:output_type -> rpc.HistoryResponse
-	19, // 82: rpc.Web.ForkSession:output_type -> rpc.ForkSessionResponse
-	12, // 83: rpc.Web.StageRevert:output_type -> rpc.StageRevertResponse
-	14, // 84: rpc.Web.ClearRevert:output_type -> rpc.ClearRevertResponse
-	22, // 85: rpc.Web.SearchMessages:output_type -> rpc.SearchMessagesResponse
-	26, // 86: rpc.Web.SearchSessions:output_type -> rpc.SearchSessionsResponse
-	28, // 87: rpc.Web.SlackNames:output_type -> rpc.SlackNamesResponse
-	30, // 88: rpc.Web.Handoff:output_type -> rpc.HandoffResponse
-	40, // 89: rpc.Web.ListAgents:output_type -> rpc.ListAgentsResponse
-	43, // 90: rpc.Web.ListSkills:output_type -> rpc.ListSkillsResponse
-	46, // 91: rpc.Web.ListWorkflows:output_type -> rpc.ListWorkflowsResponse
-	57, // 92: rpc.Web.ListConfig:output_type -> rpc.ListConfigResponse
-	59, // 93: rpc.Web.UpdateSession:output_type -> rpc.UpdateSessionResponse
-	61, // 94: rpc.Web.Protocol:output_type -> rpc.ProtocolResponse
-	79, // 95: rpc.Web.Identity:output_type -> rpc.IdentityResponse
-	81, // 96: rpc.Web.Reload:output_type -> rpc.ReloadResponse
-	64, // 97: rpc.Web.ListQueue:output_type -> rpc.ListQueueResponse
-	66, // 98: rpc.Web.RemoveQueueItem:output_type -> rpc.QueueItemResponse
-	66, // 99: rpc.Web.SteerQueueItem:output_type -> rpc.QueueItemResponse
-	66, // 100: rpc.Web.PopQueueItem:output_type -> rpc.QueueItemResponse
-	66, // 101: rpc.Web.ReorderQueue:output_type -> rpc.QueueItemResponse
-	69, // 102: rpc.Web.MoveToBackground:output_type -> rpc.MoveToBackgroundResponse
-	71, // 103: rpc.Web.StopBackgroundJob:output_type -> rpc.StopBackgroundJobResponse
-	74, // 104: rpc.Web.ListSessionEntries:output_type -> rpc.ListSessionEntriesResponse
-	76, // 105: rpc.Web.LoadSessionEntries:output_type -> rpc.LoadSessionEntriesResponse
-	77, // 106: rpc.Web.DeleteSessionEntries:output_type -> rpc.DeleteSessionEntriesResponse
-	70, // [70:107] is the sub-list for method output_type
-	33, // [33:70] is the sub-list for method input_type
-	33, // [33:33] is the sub-list for extension type_name
-	33, // [33:33] is the sub-list for extension extendee
-	0,  // [0:33] is the sub-list for field type_name
+	88, // 4: rpc.HistoryResponse.review_rationales:type_name -> rpc.HistoryResponse.ReviewRationalesEntry
+	7,  // 5: rpc.ShadowBinding.turns:type_name -> rpc.ShadowTurn
+	9,  // 6: rpc.PendingQuestion.options:type_name -> rpc.QuestionOption
+	33, // 7: rpc.StageRevertResponse.prompt:type_name -> rpc.TranscriptEvent
+	3,  // 8: rpc.ListSessionsResponse.sessions:type_name -> rpc.Session
+	33, // 9: rpc.ForkSessionResponse.prompt:type_name -> rpc.TranscriptEvent
+	33, // 10: rpc.MessageMatch.message:type_name -> rpc.TranscriptEvent
+	21, // 11: rpc.SearchMessagesResponse.matches:type_name -> rpc.MessageMatch
+	24, // 12: rpc.SearchSessionsResponse.terms:type_name -> rpc.SearchTerm
+	25, // 13: rpc.SearchSessionsResponse.matches:type_name -> rpc.SessionMatch
+	21, // 14: rpc.SearchSessionsResponse.messages:type_name -> rpc.MessageMatch
+	89, // 15: rpc.SlackNamesResponse.names:type_name -> rpc.SlackNamesResponse.NamesEntry
+	34, // 16: rpc.TranscriptEvent.attachments:type_name -> rpc.Attachment
+	10, // 17: rpc.TranscriptEvent.completion_notes:type_name -> rpc.BackgroundJob
+	0,  // 18: rpc.PromptRequest.delivery:type_name -> rpc.PromptDelivery
+	38, // 19: rpc.ListAgentsResponse.agents:type_name -> rpc.Agent
+	41, // 20: rpc.ListSkillsResponse.skills:type_name -> rpc.Skill
+	44, // 21: rpc.ListWorkflowsResponse.workflows:type_name -> rpc.Workflow
+	37, // 22: rpc.ListCronJobsResponse.jobs:type_name -> rpc.CronJob
+	53, // 23: rpc.ConfigView.models:type_name -> rpc.ConfigModel
+	54, // 24: rpc.ConfigView.slack_channels:type_name -> rpc.ConfigChannel
+	55, // 25: rpc.ListConfigResponse.config:type_name -> rpc.ConfigView
+	34, // 26: rpc.QueueItem.attachments:type_name -> rpc.Attachment
+	0,  // 27: rpc.QueueItem.delivery:type_name -> rpc.PromptDelivery
+	62, // 28: rpc.ListQueueResponse.items:type_name -> rpc.QueueItem
+	73, // 29: rpc.ListSessionEntriesResponse.entries:type_name -> rpc.SessionEntryMeta
+	75, // 30: rpc.LoadSessionEntriesResponse.entries:type_name -> rpc.SessionEntryData
+	1,  // 31: rpc.VoiceSettingsRequest.action:type_name -> rpc.VoiceSettingsAction
+	86, // 32: rpc.VoiceEvent.answer:type_name -> rpc.VoiceAnswer
+	87, // 33: rpc.VoiceEvent.ended:type_name -> rpc.VoiceEnded
+	34, // 34: rpc.Web.UploadAttachment:input_type -> rpc.Attachment
+	34, // 35: rpc.Web.DownloadAttachment:input_type -> rpc.Attachment
+	2,  // 36: rpc.Web.ListSessions:input_type -> rpc.ListSessionsRequest
+	16, // 37: rpc.Web.CreateSession:input_type -> rpc.CreateSessionRequest
+	31, // 38: rpc.Web.Join:input_type -> rpc.JoinRequest
+	82, // 39: rpc.Web.Voice:input_type -> rpc.VoiceRequest
+	83, // 40: rpc.Web.VoiceSettings:input_type -> rpc.VoiceSettingsRequest
+	35, // 41: rpc.Web.Prompt:input_type -> rpc.PromptRequest
+	47, // 42: rpc.Web.ListCronJobs:input_type -> rpc.ListCronJobsRequest
+	49, // 43: rpc.Web.RunCronJob:input_type -> rpc.RunCronJobRequest
+	51, // 44: rpc.Web.AnswerQuestion:input_type -> rpc.AnswerQuestionRequest
+	4,  // 45: rpc.Web.History:input_type -> rpc.HistoryRequest
+	18, // 46: rpc.Web.ForkSession:input_type -> rpc.ForkSessionRequest
+	11, // 47: rpc.Web.StageRevert:input_type -> rpc.StageRevertRequest
+	13, // 48: rpc.Web.ClearRevert:input_type -> rpc.ClearRevertRequest
+	20, // 49: rpc.Web.SearchMessages:input_type -> rpc.SearchMessagesRequest
+	23, // 50: rpc.Web.SearchSessions:input_type -> rpc.SearchSessionsRequest
+	27, // 51: rpc.Web.SlackNames:input_type -> rpc.SlackNamesRequest
+	29, // 52: rpc.Web.Handoff:input_type -> rpc.HandoffRequest
+	39, // 53: rpc.Web.ListAgents:input_type -> rpc.ListAgentsRequest
+	42, // 54: rpc.Web.ListSkills:input_type -> rpc.ListSkillsRequest
+	45, // 55: rpc.Web.ListWorkflows:input_type -> rpc.ListWorkflowsRequest
+	56, // 56: rpc.Web.ListConfig:input_type -> rpc.ListConfigRequest
+	58, // 57: rpc.Web.UpdateSession:input_type -> rpc.UpdateSessionRequest
+	60, // 58: rpc.Web.Protocol:input_type -> rpc.ProtocolRequest
+	78, // 59: rpc.Web.Identity:input_type -> rpc.IdentityRequest
+	80, // 60: rpc.Web.Reload:input_type -> rpc.ReloadRequest
+	63, // 61: rpc.Web.ListQueue:input_type -> rpc.ListQueueRequest
+	65, // 62: rpc.Web.RemoveQueueItem:input_type -> rpc.QueueItemRequest
+	65, // 63: rpc.Web.SteerQueueItem:input_type -> rpc.QueueItemRequest
+	65, // 64: rpc.Web.PopQueueItem:input_type -> rpc.QueueItemRequest
+	67, // 65: rpc.Web.ReorderQueue:input_type -> rpc.ReorderQueueRequest
+	68, // 66: rpc.Web.MoveToBackground:input_type -> rpc.MoveToBackgroundRequest
+	70, // 67: rpc.Web.StopBackgroundJob:input_type -> rpc.StopBackgroundJobRequest
+	72, // 68: rpc.Web.ListSessionEntries:input_type -> rpc.SessionEntriesRequest
+	72, // 69: rpc.Web.LoadSessionEntries:input_type -> rpc.SessionEntriesRequest
+	72, // 70: rpc.Web.DeleteSessionEntries:input_type -> rpc.SessionEntriesRequest
+	34, // 71: rpc.Web.UploadAttachment:output_type -> rpc.Attachment
+	34, // 72: rpc.Web.DownloadAttachment:output_type -> rpc.Attachment
+	15, // 73: rpc.Web.ListSessions:output_type -> rpc.ListSessionsResponse
+	17, // 74: rpc.Web.CreateSession:output_type -> rpc.CreateSessionResponse
+	32, // 75: rpc.Web.Join:output_type -> rpc.ConversationChange
+	85, // 76: rpc.Web.Voice:output_type -> rpc.VoiceEvent
+	84, // 77: rpc.Web.VoiceSettings:output_type -> rpc.VoiceSettingsResponse
+	36, // 78: rpc.Web.Prompt:output_type -> rpc.PromptResponse
+	48, // 79: rpc.Web.ListCronJobs:output_type -> rpc.ListCronJobsResponse
+	50, // 80: rpc.Web.RunCronJob:output_type -> rpc.RunCronJobResponse
+	52, // 81: rpc.Web.AnswerQuestion:output_type -> rpc.AnswerQuestionResponse
+	5,  // 82: rpc.Web.History:output_type -> rpc.HistoryResponse
+	19, // 83: rpc.Web.ForkSession:output_type -> rpc.ForkSessionResponse
+	12, // 84: rpc.Web.StageRevert:output_type -> rpc.StageRevertResponse
+	14, // 85: rpc.Web.ClearRevert:output_type -> rpc.ClearRevertResponse
+	22, // 86: rpc.Web.SearchMessages:output_type -> rpc.SearchMessagesResponse
+	26, // 87: rpc.Web.SearchSessions:output_type -> rpc.SearchSessionsResponse
+	28, // 88: rpc.Web.SlackNames:output_type -> rpc.SlackNamesResponse
+	30, // 89: rpc.Web.Handoff:output_type -> rpc.HandoffResponse
+	40, // 90: rpc.Web.ListAgents:output_type -> rpc.ListAgentsResponse
+	43, // 91: rpc.Web.ListSkills:output_type -> rpc.ListSkillsResponse
+	46, // 92: rpc.Web.ListWorkflows:output_type -> rpc.ListWorkflowsResponse
+	57, // 93: rpc.Web.ListConfig:output_type -> rpc.ListConfigResponse
+	59, // 94: rpc.Web.UpdateSession:output_type -> rpc.UpdateSessionResponse
+	61, // 95: rpc.Web.Protocol:output_type -> rpc.ProtocolResponse
+	79, // 96: rpc.Web.Identity:output_type -> rpc.IdentityResponse
+	81, // 97: rpc.Web.Reload:output_type -> rpc.ReloadResponse
+	64, // 98: rpc.Web.ListQueue:output_type -> rpc.ListQueueResponse
+	66, // 99: rpc.Web.RemoveQueueItem:output_type -> rpc.QueueItemResponse
+	66, // 100: rpc.Web.SteerQueueItem:output_type -> rpc.QueueItemResponse
+	66, // 101: rpc.Web.PopQueueItem:output_type -> rpc.QueueItemResponse
+	66, // 102: rpc.Web.ReorderQueue:output_type -> rpc.QueueItemResponse
+	69, // 103: rpc.Web.MoveToBackground:output_type -> rpc.MoveToBackgroundResponse
+	71, // 104: rpc.Web.StopBackgroundJob:output_type -> rpc.StopBackgroundJobResponse
+	74, // 105: rpc.Web.ListSessionEntries:output_type -> rpc.ListSessionEntriesResponse
+	76, // 106: rpc.Web.LoadSessionEntries:output_type -> rpc.LoadSessionEntriesResponse
+	77, // 107: rpc.Web.DeleteSessionEntries:output_type -> rpc.DeleteSessionEntriesResponse
+	71, // [71:108] is the sub-list for method output_type
+	34, // [34:71] is the sub-list for method input_type
+	34, // [34:34] is the sub-list for extension type_name
+	34, // [34:34] is the sub-list for extension extendee
+	0,  // [0:34] is the sub-list for field type_name
 }
 
 func init() { file_web_proto_init() }
@@ -6095,7 +6109,7 @@ func file_web_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_web_proto_rawDesc), len(file_web_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   87,
+			NumMessages:   88,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
