@@ -901,12 +901,15 @@ func TestSessionEntries(t *testing.T) {
 		return channelTitle, []string{"planner", "main"}, nil
 	}
 	channels.SlackTagsMatchingFunc = func(context.Context, string) []string { return nil }
+	cronRan := make(chan struct{}, 2)
 	cronRunner := &mockCronRunner{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		require.Equal(t, "planner", agent)
 		require.Contains(t, prompt, "Cron body")
 		require.Equal(t, "#ops", progress.TextChannel)
 		require.NotEmpty(t, progress.SyncDestination)
 		require.True(t, strings.HasPrefix(progress.ConversationID, "one-off-cron:cron/alpha.md:"))
+
+		cronRan <- struct{}{}
 
 		return protocol.CronRunResult{ConversationID: progress.SyncDestination}, nil
 	}}
@@ -2561,7 +2564,10 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 	}
 
 	require.NotEqual(t, opened[0], opened[1])
-	require.Eventually(t, func() bool { return len(cronRunner.RunCalls()) >= 2 }, time.Second, 10*time.Millisecond)
+	// Call recording precedes the final RunFunc read; synchronize before replacing it.
+	require.Eventually(t, func() bool { return len(cronRan) == 2 }, time.Second, 10*time.Millisecond)
+	<-cronRan
+	<-cronRan
 
 	calls := cronRunner.RunCalls()
 	require.ElementsMatch(t, opened, []string{calls[0].RawRunProgress.SyncDestination, calls[1].RawRunProgress.SyncDestination})
