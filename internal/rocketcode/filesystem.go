@@ -1076,30 +1076,19 @@ func runRipgrep(ctx context.Context, hostRoot, pattern string, files []string) (
 	}
 
 	errExit, ok := errors.AsType[*exec.ExitError](err)
-	if !ok {
-		if message != "" {
-			return nil, false, message
-		}
-
-		return nil, false, err.Error()
-	}
-
-	switch errExit.ExitCode() {
-	case 1:
+	if ok && errExit.ExitCode() == 1 {
 		return nil, false, "No files found"
-	case 2:
-		if message != "" {
-			return nil, false, message
-		}
-
-		return stdoutBuf.Bytes(), true, ""
-	default:
-		if message != "" {
-			return nil, false, message
-		}
-
-		return nil, false, err.Error()
 	}
+
+	if message != "" {
+		return nil, false, message
+	}
+
+	if ok && errExit.ExitCode() == 2 {
+		return stdoutBuf.Bytes(), true, ""
+	}
+
+	return nil, false, err.Error()
 }
 
 func parseGrepMatches(stdout []byte, searchRoot *os.Root, hostRoot string) ([]grepMatch, error) {
