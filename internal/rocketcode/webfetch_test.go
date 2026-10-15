@@ -2,6 +2,7 @@ package rocketcode
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -10,6 +11,34 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestWebFetchRequestAcceptHeader(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, r.Header.Get("Accept"))
+	}))
+	t.Cleanup(server.Close)
+
+	for _, tt := range []struct {
+		format string
+		want   string
+	}{
+		{"markdown", "text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1"},
+		{"text", "text/plain;q=1.0, text/markdown;q=0.9, text/html;q=0.8, */*;q=0.1"},
+		{"html", "text/html;q=1.0, application/xhtml+xml;q=0.9, text/plain;q=0.8, text/markdown;q=0.7, */*;q=0.1"},
+		{"", "*/*"},
+	} {
+		t.Run(tt.format, func(t *testing.T) {
+			resp, err := doWebFetchRequest(t.Context(), server.URL, tt.format, false)
+			require.NoError(t, err)
+
+			defer func() { _ = resp.Body.Close() }()
+
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, string(body))
+		})
+	}
+}
 
 func TestWebFetchFormatsHTML(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
