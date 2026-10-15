@@ -194,6 +194,7 @@ message SearchSessionsResponse {
   repeated string mention_ids = 6;
   bool index_complete = 7;
   bool summaries_complete = 8;
+  repeated string principals = 9;
 }
 
 // SlackNamesRequest asks for display names of Slack IDs.

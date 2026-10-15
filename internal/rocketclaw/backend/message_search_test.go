@@ -242,9 +242,10 @@ func TestMessageSearchIndexesEndedTurns(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
+	require.NoError(t, s.UpsertThread("web-chat", ThreadState{Agent: "main"}))
 	reference := uploadTestAttachment(t, s, "web-chat", "turn-file")
 	turn := &testCheckpoint{TurnID: "turn-1", ConversationKey: "web-chat", ReplayInput: []json.RawMessage{
-		json.RawMessage(`{"type":"message","role":"user","content":` + jsonString("stopped question\n\n"+reference) + `}`),
+		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Web principal=\"Stopped Writer\"]","content":` + jsonString("stopped question\n\n"+reference) + `}`),
 		json.RawMessage(`{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Partial answer","annotations":[]}]}`),
 	}, OutputTrace: []json.RawMessage{json.RawMessage(`{"type":"response.output_text.delta","item_id":"msg_2","content_index":0,"delta":"progress only"}`)}}
 	require.NoError(t, upsertTestTurn(ctx, s, turn))
@@ -260,6 +261,14 @@ func TestMessageSearchIndexesEndedTurns(t *testing.T) {
 		{0, 0, 0, "user", "stopped question", "stopped question"},
 		{0, 1, 0, "assistant", "Partial answer", "partial answer"},
 	}, messageSearchTestRows(t, s, "web-chat"), "History shows the stopped turn's record, not its progress log")
+	search, matches := searchTestSessions(t, s, noSlackLookups{}, `principal:"Stopped Writer"`, false)
+	require.Empty(t, search.Principals, "a chat without saved history is not listed in the sidebar")
+	require.Empty(t, matches)
+
+	_, err = s.AppendEntryID(ctx, "web-chat", testReplayEntry())
+	require.NoError(t, err)
+	_, matches = searchTestSessions(t, s, noSlackLookups{}, `principal:"Stopped Writer"`, false)
+	require.Len(t, matches, 1)
 
 	// A runner arriving after the stop rewrites the record before its own finish.
 	turn.ReplayInput = append(turn.ReplayInput, json.RawMessage(`{"type":"message","role":"assistant","content":"Late answer"}`))
@@ -277,6 +286,8 @@ func TestMessageSearchIndexesEndedTurns(t *testing.T) {
 	id, err := s.AppendEntryID(ctx, "web-chat", entry)
 	require.NoError(t, err)
 	require.Equal(t, []messageSearchTestRow{{id, 0, 0, "user", "saved question", "saved question"}}, messageSearchTestRows(t, s, "web-chat"), "the turn's saved entry hides it")
+	_, matches = searchTestSessions(t, s, noSlackLookups{}, `principal:"Stopped Writer"`, false)
+	require.Empty(t, matches, "the saved entry replaces the stopped turn's principal too")
 
 	require.NoError(t, upsertTestTurn(ctx, s, &testCheckpoint{TurnID: "turn-2", ConversationKey: "web-chat", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"failed question"}`)}}))
 	endTestTurn(t, s, "web-chat", "turn-2", protocol.TerminalFailed)
@@ -288,6 +299,8 @@ func TestMessageSearchIndexesEndedTurns(t *testing.T) {
 	_, err = s.DeleteSession(ctx, "web-chat")
 	require.NoError(t, err)
 	require.Empty(t, messageSearchTestRows(t, s, "web-chat"), "turn rows cascade with their turn")
+	search, _ = searchTestSessions(t, s, noSlackLookups{}, "", false)
+	require.Empty(t, search.Principals)
 }
 
 func TestMessageSearchSkipsUndecodableTurnRecords(t *testing.T) {

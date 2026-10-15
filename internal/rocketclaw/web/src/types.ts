@@ -15,7 +15,7 @@ export type HistoryView = { messages: TranscriptEvent[]; origin?: ChatOrigin; de
 export type MessageMatch = { conversationId: string; message: TranscriptEvent };
 export type SearchMessagesResponse = { matches?: MessageMatch[]; tagIds?: string[]; indexComplete?: boolean };
 // Term offsets are UTF-16 positions in the sent query; an empty match field means only message text matched.
-export type SearchSessionsResponse = { terms: { key: string; text: string; start: number; end: number }[]; text: string; needle: string; matches: { conversationId: string; field: string; text: string }[]; messages: MessageMatch[]; mentionIds: string[]; indexComplete: boolean; summariesComplete: boolean };
+export type SearchSessionsResponse = { terms: { key: string; text: string; start: number; end: number }[]; text: string; needle: string; matches: { conversationId: string; field: string; text: string }[]; messages: MessageMatch[]; mentionIds: string[]; principals?: string[]; indexComplete: boolean; summariesComplete: boolean };
 export type SessionBatch = { sessions: Session[]; owner: string; upstreamSuccess: boolean; summariesComplete: boolean };
 export type AgentChoices = { agents: Agent[]; currentAgent: string };
 export type CronJob = { stem: string; status: string; lastRun: string; nextRun: string; schedule?: string; body?: string; agent?: string; channel?: string; upcoming?: string[]; origin?: string };

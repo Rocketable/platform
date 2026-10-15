@@ -205,6 +205,42 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
   }
 }, 30_000);
 
+test("principal filters retain links, pills and quoted suggestions", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const principal = 'Writer "One"', term = `principal:${JSON.stringify(principal)}`;
+  const { server, origin } = serve([{ id: "written", name: "Written conversation", tags: ["x"] }], ({ query }) => response(query,
+    query.includes(term) ? [{ conversationId: "written", text: "recorded prompt" }] : [],
+    [...(query.includes(term) ? [term] : []), ...(query.includes("tag:x") ? ["tag:x"] : [])].sort((a, b) => query.indexOf(a) - query.indexOf(b)), { principals: [principal], text: "", needle: "" }));
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage();
+    const query = `${term} tag:x `;
+    await page.goto(`${origin}/search?${new URLSearchParams({ q: query })}`);
+    const pill = page.getByRole("button", { name: term, exact: true });
+    await pill.waitFor();
+    await page.reload();
+    await pill.waitFor();
+    await page.getByLabel("Search results").getByRole("link", { name: "Written conversation" }).waitFor();
+    await pill.click();
+    await page.getByRole("button", { name: "tag:x", exact: true }).waitFor();
+    expect(new URL(page.url()).searchParams.get("q")).toBe("tag:x ");
+    const input = page.getByRole("textbox", { name: "Search sessions" });
+    await input.fill("principal:");
+    const suggestion = page.getByRole("button", { name: principal, exact: true });
+    await suggestion.waitFor();
+    await suggestion.click();
+    await pill.waitFor();
+    expect(new URL(page.url()).searchParams.get("q")).toBe(`tag:x ${term} `);
+    expect(await input.inputValue()).toBe("");
+    await page.getByRole("button", { name: "New search", exact: true }).click();
+    await input.fill("principal:");
+    await suggestion.waitFor();
+  } finally {
+    await browser.close();
+    server.stop(true);
+  }
+}, 30_000);
+
 test("search URL follows the active tab, folds legacy filters, and reopens a matching tab", async () => {
   const { chromium: engine } = await import(playwright!);
   const folded = "agent:alitu-cs-support outage";

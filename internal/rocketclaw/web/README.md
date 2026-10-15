@@ -516,6 +516,13 @@ Suggestion keys take priority over results; Escape dismisses suggestions first,
 then closes the dialog. Both Cmd/Ctrl+P and the Search page accept exact,
 case-sensitive tag filters: `tag:customer`, or `tag:"Needs review"` for a name
 containing spaces. Quoted values use JSON escaping, such as `tag:"say \"hello\""`.
+`principal:"Writer One"` keeps conversations containing a visible human prompt
+with that exact recorded principal. Values are case-sensitive; the filter key
+is not. Attribution comes from the recorded prompt header, not session ownership
+or text that looks like a header. Typing `principal:` suggests recorded values.
+Repeated principal filters require every named principal to appear somewhere in
+the conversation. Other filters and search text still apply. Principal search
+uses the message index and follows the same history cutoff and indexing status.
 Other repeated filters use AND: `tag:customer tag:triage` requires both tags. Unknown
 tags match nothing. Bare `tag:`, unclosed quotes, and invalid quoted values stay
 ordinary search text. A filter-only query lists every conversation it keeps;
@@ -527,7 +534,7 @@ search surface, overriding pinned-first and message-hit grouping; rows without
 activity come last, equal times order by conversation ID, and the last `sort:` wins.
 Typing `is:` suggests `pinned`, `forked`, and `cron`; typing `sort:` suggests
 `newest` and `oldest`. While typing, a last word that is an unfinished filter
-(a bare `tag:`, `cron:`, `agent:`, or `room:`, a partial `is:` or `sort:` term
+(a bare `tag:`, `cron:`, `agent:`, `principal:`, or `room:`, a partial `is:` or `sort:` term
 such as `is:pin`, or an unclosed quote) is not sent; Enter, opening a saved
 search, and following a link send the whole query. Unknown complete terms such
 as `is:foo` stay ordinary text. Filter pills show the server's reading of the

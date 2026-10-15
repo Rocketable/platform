@@ -150,7 +150,7 @@ func (s *Server) searchSessions(ctx context.Context, request *SearchSessionsRequ
 			return nil, fmt.Errorf("web session search: %w", err)
 		}
 
-		response := &SearchSessionsResponse{Text: search.Text, Needle: search.Needle, Messages: messageMatches(search.Hits), MentionIds: search.MentionIDs, IndexComplete: search.IndexComplete, SummariesComplete: search.SummariesComplete}
+		response := &SearchSessionsResponse{Text: search.Text, Needle: search.Needle, Messages: messageMatches(search.Hits), MentionIds: search.MentionIDs, IndexComplete: search.IndexComplete, SummariesComplete: search.SummariesComplete, Principals: search.Principals}
 		for _, term := range search.Terms {
 			response.Terms = append(response.Terms, &SearchTerm{Key: string(term.Key), Text: term.Text, Start: int32(term.Start), End: int32(term.End)})
 		}

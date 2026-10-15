@@ -20,12 +20,13 @@ import (
 type SearchKey string
 
 const (
-	keyTag   SearchKey = "tag"
-	keyCron  SearchKey = "cron"
-	keyAgent SearchKey = "agent"
-	keyRoom  SearchKey = "room"
-	keyIs    SearchKey = "is"
-	keySort  SearchKey = "sort"
+	keyTag       SearchKey = "tag"
+	keyCron      SearchKey = "cron"
+	keyAgent     SearchKey = "agent"
+	keyRoom      SearchKey = "room"
+	keyIs        SearchKey = "is"
+	keySort      SearchKey = "sort"
+	keyPrincipal SearchKey = "principal"
 )
 
 // SearchTerm is a filter term of a session search query: its text, decoded value
@@ -80,10 +81,11 @@ type SessionSearch struct {
 	// MentionIDs are the Slack user and group IDs whose mention a hit holds.
 	MentionIDs                       []string
 	IndexComplete, SummariesComplete bool
+	Principals                       []string
 }
 
 // parseSessionQuery reads query as Web's search regex
-// /(?:^|\s)(is:(?:pinned|forked|cron)|sort:(?:newest|oldest)|(?:tag|cron|agent|room):("(?:[^"\\]|\\.)*"|\S+))(?=\s|$)/gi
+// /(?:^|\s)(is:(?:pinned|forked|cron)|sort:(?:newest|oldest)|(?:tag|cron|agent|room|principal):("(?:[^"\\]|\\.)*"|\S+))(?=\s|$)/gi
 // did, decoding quoted values as JSON; a value that is empty or does not decode
 // leaves its term as text. text is query without each term and the one
 // whitespace character before it, trimmed.
@@ -115,7 +117,7 @@ func parseSessionQuery(query string) (terms []SearchTerm, text string) {
 			found = found && (term.Value == "pinned" || term.Value == "forked" || term.Value == "cron")
 		case keySort:
 			found = found && (term.Value == "newest" || term.Value == "oldest")
-		case keyTag, keyCron, keyAgent, keyRoom:
+		case keyTag, keyCron, keyAgent, keyRoom, keyPrincipal:
 			term.Value = value
 			if strings.HasPrefix(value, `"`) {
 				start := pos + len(key) + 1
@@ -226,7 +228,7 @@ func (s *SessionService) SidebarChats(ctx context.Context, slack slackLookup) it
 }
 
 // passes requires any room term to match, and every other filter term.
-func (c *SidebarChat) passes(terms []SearchTerm) bool {
+func (c *SidebarChat) passes(terms []SearchTerm, principals []string) bool {
 	hasRoom, roomMatch := false, false
 
 	for _, term := range terms {
@@ -239,6 +241,8 @@ func (c *SidebarChat) passes(terms []SearchTerm) bool {
 			ok = c.CronName == term.Value
 		case keyAgent:
 			ok = c.Session.Conversation.Agent == term.Value
+		case keyPrincipal:
+			ok = slices.Contains(principals, term.Value)
 		case keyRoom:
 			hasRoom, roomMatch = true, roomMatch || c.Room == term.Value
 			continue
@@ -276,6 +280,15 @@ func (s *SessionService) SearchSessions(ctx context.Context, query string, messa
 	search.Terms, search.Text = parseSessionQuery(query)
 	search.Needle = strings.ToLower(search.Text)
 
+	principals, complete, err := s.messagePrincipals(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if slices.ContainsFunc(search.Terms, func(term SearchTerm) bool { return term.Key == keyPrincipal }) {
+		search.IndexComplete = complete
+	}
+
 	var chats []SidebarChat
 
 	hits := make(map[string]bool) // Whether each chat that passed the filters has hits.
@@ -286,12 +299,16 @@ func (s *SessionService) SearchSessions(ctx context.Context, query string, messa
 		}
 
 		search.SummariesComplete = search.SummariesComplete && chat.Session.Summary != nil
+		search.Principals = append(search.Principals, principals[chat.Session.Conversation.ID]...)
 
-		if chat.passes(search.Terms) {
+		if chat.passes(search.Terms, principals[chat.Session.Conversation.ID]) {
 			chats = append(chats, chat)
 			hits[chat.Session.Conversation.ID] = false
 		}
 	}
+
+	slices.Sort(search.Principals)
+	search.Principals = slices.Compact(search.Principals)
 
 	if messages && search.Needle != "" {
 		found, mentions, complete, err := s.SearchMessagesMentioning(ctx, search.Needle, slack)
@@ -307,7 +324,7 @@ func (s *SessionService) SearchSessions(ctx context.Context, query string, messa
 		}
 
 		search.MentionIDs = MentionedIDs(search.Hits, mentions)
-		search.IndexComplete = complete
+		search.IndexComplete = search.IndexComplete && complete
 	}
 
 	for _, withHits := range []bool{true, false} {
@@ -350,6 +367,12 @@ func (s *SessionService) SearchSessions(ctx context.Context, query string, messa
 		}
 	}
 
+	search.sortMatches()
+
+	return search, nil
+}
+
+func (search *SessionSearch) sortMatches() {
 	var sort string
 
 	for _, term := range search.Terms {
@@ -382,6 +405,4 @@ func (s *SessionService) SearchSessions(ctx context.Context, query string, messa
 			return cmp.Or(order, strings.Compare(a.Chat.Session.Conversation.ID, b.Chat.Session.Conversation.ID))
 		})
 	}
-
-	return search, nil
 }

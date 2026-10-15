@@ -33,8 +33,8 @@ func indexEntryMessages(ctx context.Context, db stateStoreDB, conversationID, pr
 	}
 
 	var (
-		positions, parts     []int
-		roles, texts, lowers []string
+		positions, parts                 []int
+		roles, texts, lowers, principals []string
 	)
 
 	for i := range items {
@@ -44,7 +44,15 @@ func indexEntryMessages(ctx context.Context, db stateStoreDB, conversationID, pr
 		}
 
 		text = strings.ReplaceAll(text, "\x00", "")
-		if !ok || role != "user" && role != "assistant" || strings.TrimSpace(text) == "" {
+
+		var principal string
+
+		if role == "user" && items[i].OfMessage != nil {
+			header, _ := items[i].OfMessage.ExtraFields()["prompt_header"].(string)
+			principal = PromptPrincipal(header)
+		}
+
+		if !ok || role != "user" && role != "assistant" || strings.TrimSpace(text) == "" && principal == "" {
 			continue
 		}
 
@@ -82,8 +90,9 @@ func indexEntryMessages(ctx context.Context, db stateStoreDB, conversationID, pr
 
 		for part, text := range shown {
 			text = strings.ReplaceAll(text, "\x00", "")
-			if strings.TrimSpace(text) != "" {
+			if strings.TrimSpace(text) != "" || principal != "" {
 				positions, parts, roles, texts, lowers = append(positions, i), append(parts, part), append(roles, role), append(texts, text), append(lowers, strings.ToLower(text))
+				principals = append(principals, principal)
 			}
 		}
 	}
@@ -92,10 +101,44 @@ func indexEntryMessages(ctx context.Context, db stateStoreDB, conversationID, pr
 		return nil
 	}
 
-	_, err = execState(ctx, db, "index message search", `INSERT INTO message_search (conversation_id, entry_id, turn_id, replay_index, part_index, role, text, text_lower)
-SELECT $1, NULLIF($2::bigint, 0), NULLIF($3::text, ''), * FROM unnest($4::integer[], $5::integer[], $6::text[], $7::text[], $8::text[])`, conversationID, entryID, turnID, positions, parts, roles, texts, lowers)
+	_, err = execState(ctx, db, "index message search", `INSERT INTO message_search (conversation_id, entry_id, turn_id, replay_index, part_index, role, text, text_lower, principal)
+SELECT $1, NULLIF($2::bigint, 0), NULLIF($3::text, ''), * FROM unnest($4::integer[], $5::integer[], $6::text[], $7::text[], $8::text[], $9::text[])`, conversationID, entryID, turnID, positions, parts, roles, texts, lowers, principals)
 
 	return err
+}
+
+func (s *SessionService) messagePrincipals(ctx context.Context) (principals map[string][]string, complete bool, err error) {
+	principals = make(map[string][]string)
+	err = readRows(ctx, s.db, `WITH visible AS (
+    SELECT c.conversation_id, c.revert_message_id FROM managed_conversations c
+    LEFT JOIN shadow_bindings b ON b.child_conversation_id = c.conversation_id
+    LEFT JOIN external_mcp_sessions p ON p.private_conversation_id = c.conversation_id
+    WHERE c.conversation_id NOT LIKE 'cron:%' AND c.conversation_id NOT LIKE 'one-off-cron:%'
+        AND b.child_conversation_id IS NULL AND p.private_conversation_id IS NULL
+), index_state AS (
+    SELECT count(c.conversation_id) = count(i.conversation_id) AS complete FROM visible c
+    LEFT JOIN message_search_indexed i ON i.conversation_id = c.conversation_id
+), principals AS (
+    SELECT DISTINCT m.conversation_id, m.principal FROM message_search m JOIN visible c USING (conversation_id)
+    LEFT JOIN active_turns a ON a.id = m.turn_id
+    WHERE m.principal <> '' AND (c.revert_message_id = '' OR COALESCE(m.entry_id, a.history_anchor_id) < split_part(c.revert_message_id, ':', 1)::bigint
+        OR m.entry_id = split_part(c.revert_message_id, ':', 1)::bigint AND m.replay_index < split_part(c.revert_message_id, ':', 2)::integer)
+)
+SELECT COALESCE(p.conversation_id, ''), COALESCE(p.principal, ''), s.complete FROM index_state s
+LEFT JOIN principals p ON TRUE ORDER BY p.conversation_id COLLATE "C", p.principal COLLATE "C"`, "message principals", func(row rowScanner) error {
+		var id, principal string
+		if err := row.Scan(&id, &principal, &complete); err != nil {
+			return fmt.Errorf("scan message principal: %w", err)
+		}
+
+		if principal != "" {
+			principals[id] = append(principals[id], principal)
+		}
+
+		return nil
+	})
+
+	return principals, complete, err
 }
 
 // indexTurnMessages replaces the rows of turnID, a turn of conversationID, with

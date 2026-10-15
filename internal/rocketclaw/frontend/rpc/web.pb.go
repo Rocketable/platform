@@ -1828,6 +1828,7 @@ type SearchSessionsResponse struct {
 	MentionIds        []string        `protobuf:"bytes,6,rep,name=mention_ids,json=mentionIds,proto3" json:"mention_ids,omitempty"`
 	IndexComplete     bool            `protobuf:"varint,7,opt,name=index_complete,json=indexComplete,proto3" json:"index_complete,omitempty"`
 	SummariesComplete bool            `protobuf:"varint,8,opt,name=summaries_complete,json=summariesComplete,proto3" json:"summaries_complete,omitempty"`
+	Principals        []string        `protobuf:"bytes,9,rep,name=principals,proto3" json:"principals,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -1916,6 +1917,13 @@ func (x *SearchSessionsResponse) GetSummariesComplete() bool {
 		return x.SummariesComplete
 	}
 	return false
+}
+
+func (x *SearchSessionsResponse) GetPrincipals() []string {
+	if x != nil {
+		return x.Principals
+	}
+	return nil
 }
 
 // SlackNamesRequest asks for display names of Slack IDs.
@@ -5556,7 +5564,7 @@ const file_web_proto_rawDesc = "" +
 	"\fSessionMatch\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x14\n" +
 	"\x05field\x18\x02 \x01(\tR\x05field\x12\x12\n" +
-	"\x04text\x18\x03 \x01(\tR\x04text\"\xbe\x02\n" +
+	"\x04text\x18\x03 \x01(\tR\x04text\"\xde\x02\n" +
 	"\x16SearchSessionsResponse\x12%\n" +
 	"\x05terms\x18\x01 \x03(\v2\x0f.rpc.SearchTermR\x05terms\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\x12\x16\n" +
@@ -5566,7 +5574,10 @@ const file_web_proto_rawDesc = "" +
 	"\vmention_ids\x18\x06 \x03(\tR\n" +
 	"mentionIds\x12%\n" +
 	"\x0eindex_complete\x18\a \x01(\bR\rindexComplete\x12-\n" +
-	"\x12summaries_complete\x18\b \x01(\bR\x11summariesComplete\"%\n" +
+	"\x12summaries_complete\x18\b \x01(\bR\x11summariesComplete\x12\x1e\n" +
+	"\n" +
+	"principals\x18\t \x03(\tR\n" +
+	"principals\"%\n" +
 	"\x11SlackNamesRequest\x12\x10\n" +
 	"\x03ids\x18\x01 \x03(\tR\x03ids\"\x88\x01\n" +
 	"\x12SlackNamesResponse\x128\n" +
