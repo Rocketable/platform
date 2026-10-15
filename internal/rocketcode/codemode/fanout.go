@@ -444,12 +444,7 @@ func newCancellableThread(ctx context.Context, name string, maxSteps uint64) (th
 	thread.SetLocal(localCtx, ctx)
 
 	stopCancel := context.AfterFunc(ctx, func() {
-		cause := context.Cause(ctx)
-		if cause == nil {
-			cause = context.Canceled
-		}
-
-		thread.Cancel(cause.Error())
+		thread.Cancel(context.Cause(ctx).Error())
 	})
 
 	return thread, func() { stopCancel() }
