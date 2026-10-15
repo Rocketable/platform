@@ -441,6 +441,50 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 	})
 }
 
+func TestRunRipgrepExitResults(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		code    int
+		stderr  string
+		stdout  []byte
+		partial bool
+		errText string
+	}{
+		{name: "success", code: 0, stdout: []byte("result")},
+		{name: "success with stderr", code: 0, stderr: "detail", stdout: []byte("result")},
+		{name: "no matches", code: 1, errText: "No files found"},
+		{name: "no matches with stderr", code: 1, stderr: "detail", errText: "No files found"},
+		{name: "partial", code: 2, stdout: []byte("result"), partial: true},
+		{name: "error with stderr", code: 2, stderr: "detail", errText: "detail"},
+		{name: "other failure", code: 3, errText: "exit status 3"},
+		{name: "other failure with stderr", code: 3, stderr: "detail", errText: "detail"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root, err := os.OpenRoot(t.TempDir())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+			script := fmt.Sprintf("#!/bin/sh\nprintf result\nprintf ' %s \\n' >&2\nexit %d\n", tt.stderr, tt.code)
+			require.NoError(t, root.WriteFile("rg", []byte(script), 0o755))
+			t.Setenv("PATH", root.Name())
+
+			stdout, partial, errText := runRipgrep(t.Context(), root.Name(), "needle", []string{"."})
+			require.Equal(t, tt.stdout, stdout)
+			require.Equal(t, tt.partial, partial)
+			require.Equal(t, tt.errText, errText)
+		})
+	}
+
+	t.Run("cannot start", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("PATH", dir)
+		stdout, partial, errText := runRipgrep(t.Context(), dir, "needle", []string{"."})
+		require.Nil(t, stdout)
+		require.False(t, partial)
+		require.Equal(t, `exec: "rg": executable file not found in $PATH`, errText)
+	})
+}
+
 func TestFormatGrepOutput(t *testing.T) {
 	matches := []grepMatch{
 		{path: "a", line: 1, text: "old", mtime: 0},
