@@ -175,6 +175,13 @@ func TestSearchSessionsReadsTermsAndFilters(t *testing.T) {
 		{"room:support", []string{"room=support"}, "", []string{searchChatA}},
 		{"room:C9", []string{"room=C9"}, "", []string{searchChatB}},
 		{"room:C1", []string{"room=C1"}, "", nil},
+		{"room:support room:C9", []string{"room=support", "room=C9"}, "", []string{searchChatA, searchChatB}},
+		{`room:"support" ROOM:"C9"`, []string{"room=support", "room=C9"}, "", []string{searchChatA, searchChatB}},
+		{"room:unknown room:C9", []string{"room=unknown", "room=C9"}, "", []string{searchChatB}},
+		{"room:Support room:unknown", []string{"room=Support", "room=unknown"}, "", nil},
+		{"room:support tag:customer room:C9 agent:main is:forked", []string{"room=support", "tag=customer", "room=C9", "agent=main", "is=forked"}, "", []string{searchChatA}},
+		{"room:support room:C9 agent:main agent:other", []string{"room=support", "room=C9", "agent=main", "agent=other"}, "", nil},
+		{"room:support room:C9 sort:oldest", []string{"room=support", "room=C9", "sort=oldest"}, "", []string{searchChatB, searchChatA}},
 	} {
 		calls := len(slack.SidebarChannelAgentChoicesCalls())
 		search, matches := searchTestSessions(t, s, slack, tc.query, false)
@@ -241,6 +248,8 @@ func TestSearchSessionsMessageHits(t *testing.T) {
 		{"support", []string{hitB}, nil, []searchTestMatch{{searchChatB, "", ""}, {searchChatA, fieldRoom, "support"}, {searchChatW, fieldName, "support"}}},
 		{"support sort:oldest", []string{hitB}, nil, []searchTestMatch{{searchChatW, fieldName, "support"}, {searchChatB, "", ""}, {searchChatA, fieldRoom, "support"}}},
 		{"tag:customer billing", nil, nil, nil},
+		{"room:support room:C9 billing", []string{hitB}, nil, []searchTestMatch{{searchChatB, "", ""}}},
+		{"room:support room:C9 tag:customer billing", nil, nil, nil},
 		{"ada", []string{hitB}, []string{"U7"}, []searchTestMatch{{searchChatB, "", ""}}},
 		{"ada agent:main", nil, nil, nil},
 	} {
@@ -329,6 +338,10 @@ func TestSearchSessionsTermOffsets(t *testing.T) {
 			{Key: keyIs, Text: "is:pinned", Value: "pinned", Start: 24, End: 33},
 		}},
 		{"a\u00a0TAG:x  b", "a  b", []SearchTerm{{Key: keyTag, Text: "TAG:x", Value: "x", Start: 2, End: 7}}},
+		{`😀 room:"Blue garden" ROOM:amber x`, "😀 x", []SearchTerm{
+			{Key: keyRoom, Text: `room:"Blue garden"`, Value: "Blue garden", Start: 3, End: 21},
+			{Key: keyRoom, Text: "ROOM:amber", Value: "amber", Start: 22, End: 32},
+		}},
 	} {
 		search, _ := searchTestSessions(t, s, noSlackLookups{}, tc.query, false)
 		require.Equal(t, tc.terms, search.Terms, tc.query)

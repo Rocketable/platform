@@ -225,8 +225,10 @@ func (s *SessionService) SidebarChats(ctx context.Context, slack slackLookup) it
 	}
 }
 
-// passes reports whether c passes every filter term.
+// passes requires any room term to match, and every other filter term.
 func (c *SidebarChat) passes(terms []SearchTerm) bool {
+	hasRoom, roomMatch := false, false
+
 	for _, term := range terms {
 		var ok bool
 
@@ -238,7 +240,8 @@ func (c *SidebarChat) passes(terms []SearchTerm) bool {
 		case keyAgent:
 			ok = c.Session.Conversation.Agent == term.Value
 		case keyRoom:
-			ok = c.Room == term.Value
+			hasRoom, roomMatch = true, roomMatch || c.Room == term.Value
+			continue
 		case keyIs:
 			ok = term.Value == "pinned" && c.Session.Pinned || term.Value == "forked" && c.Session.ForkedFrom != "" || term.Value == "cron" && c.Cron
 		case keySort:
@@ -250,7 +253,7 @@ func (c *SidebarChat) passes(terms []SearchTerm) bool {
 		}
 	}
 
-	return true
+	return !hasRoom || roomMatch
 }
 
 // sessionLabel is the label Web shows for a chat without a name or preview.
@@ -265,7 +268,7 @@ func sessionLabel(id string) string {
 }
 
 // SearchSessions reads query in Web's session search language and finds, among
-// SidebarChats, those passing every filter term whose fields hold the needle and,
+// SidebarChats, those passing the filters whose fields hold the needle and,
 // when messages is set, those with message hits. Without a sort: term they keep
 // sidebar order, chats with hits first; with one, they follow summary time.
 func (s *SessionService) SearchSessions(ctx context.Context, query string, messages bool, slack slackLookup) (*SessionSearch, error) {

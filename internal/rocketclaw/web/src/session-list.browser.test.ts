@@ -227,6 +227,89 @@ test("pending saves, delayed hydration and owner switches cannot beat deletion o
 
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
+test("room autocomplete keeps both selections on each search surface", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const rows: Session[] = [
+    { id: "slack-thread:C11:1", title: "amber", preview: "Amber result", agent: "main" },
+    { id: "slack-thread:C12:1", title: "Blue garden", preview: "Blue result", agent: "main" },
+    { id: "slack-thread:C13:1", title: "cobalt", preview: "Cobalt result", agent: "other" },
+  ];
+  const queries: string[] = [];
+  const results: Record<string, number[]> = {
+    "room:amber": [0], 'room:amber room:"Blue garden"': [0, 1], 'room:"Blue garden"': [1],
+    'room:"Blue garden" agent:main': [1], 'room:"Blue garden" agent:other': [],
+    '😀 room:"Blue garden" room:amber': [],
+  };
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (!url.pathname.startsWith("/api/")) return new Response(Bun.file(path.join(dist, url.pathname.startsWith("/assets/") ? url.pathname : "index.html")));
+    if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
+    if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "room-search" });
+    if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }, { name: "other" }] });
+    if (url.pathname === "/api/ListConfig") return Response.json({ config: {} });
+    if (url.pathname === "/api/ListSkills") return Response.json({ skills: [] });
+    if (url.pathname === "/api/ListWorkflows") return Response.json({ workflows: [] });
+    if (url.pathname === "/api/ListCronJobs") return Response.json({ jobs: [] });
+    if (url.pathname === "/api/SearchSessions") {
+      const { query } = await request.json() as { query: string };
+      queries.push(query);
+      const terms = ["room:amber", 'room:"Blue garden"', "agent:main", "agent:other"].flatMap((text) => {
+        const start = query.indexOf(text);
+        return start < 0 ? [] : [{ key: text.split(":")[0], text, start, end: start + text.length }];
+      }).sort((a, b) => a.start - b.start);
+      return Response.json({ terms, text: "", needle: "", matches: (results[query] ?? []).map((index) => ({ conversationId: rows[index].id, field: "Preview", text: rows[index].preview })), messages: [], mentionIds: [], indexComplete: true, summariesComplete: true });
+    }
+    return Response.json({});
+  } });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const origin = `http://127.0.0.1:${server.port}`;
+    for (const palette of [true, false]) {
+      const page = await browser.newPage();
+      await page.goto(origin + (palette ? "/" : "/search"));
+      await page.locator("footer").waitFor();
+      if (palette) await page.keyboard.press("Control+p");
+      const surface = palette ? page.getByRole("dialog", { name: "Go to session", exact: true }) : page.getByRole("tabpanel", { name: "Search", exact: true });
+      const input = surface.getByRole("textbox", { name: "Search sessions", exact: true });
+      await input.fill("room:am");
+      await surface.getByRole("button", { name: "amber", exact: true }).click();
+      await surface.getByRole("button", { name: "room:amber", exact: true }).waitFor();
+      await input.fill("room:Blue");
+      await input.press("Tab");
+      await surface.getByRole("button", { name: 'room:"Blue garden"', exact: true }).waitFor();
+      expect(await surface.getByRole("button", { name: "room:amber", exact: true }).count()).toBe(1);
+      expect(queries).toContain('room:amber room:"Blue garden"');
+      const found = palette ? surface.locator('[data-slot="session-title"]') : page.getByLabel("Search results").locator("h2");
+      expect(await found.allTextContents()).toEqual(palette ? ["Amber result", "Blue result"] : ["Amber result(1)", "Blue result(1)"]);
+      const removed = page.waitForResponse((response: { url: () => string; request: () => { postDataJSON: () => { query: string } } }) => response.url().endsWith("/api/SearchSessions") && response.request().postDataJSON().query === 'room:"Blue garden"');
+      await surface.getByRole("button", { name: "room:amber", exact: true }).click();
+      await removed;
+      await found.filter({ hasText: "Amber result" }).waitFor({ state: "detached" });
+      expect(await found.allTextContents()).toEqual(palette ? ["Blue result"] : ["Blue result(1)"]);
+      expect(await surface.getByRole("button", { name: "room:amber", exact: true }).count()).toBe(0);
+      expect(await surface.getByRole("button", { name: 'room:"Blue garden"', exact: true }).count()).toBe(1);
+      await input.fill("agent:ma");
+      await input.press("Enter");
+      await surface.getByRole("button", { name: "agent:main", exact: true }).waitFor();
+      await input.fill("agent:oth");
+      await input.press("Enter");
+      await surface.getByRole("button", { name: "agent:other", exact: true }).waitFor();
+      expect(await surface.getByRole("button", { name: "agent:main", exact: true }).count()).toBe(0);
+      expect(await surface.getByRole("button", { name: 'room:"Blue garden"', exact: true }).count()).toBe(1);
+      if (!palette) {
+        const query = '😀 room:"Blue garden" room:amber ';
+        await page.goto(`${origin}/search?q=${encodeURIComponent(query)}`);
+        await surface.getByRole("button", { name: "room:amber", exact: true }).waitFor();
+        expect(await input.inputValue()).toBe("😀 ");
+        await surface.getByRole("button", { name: 'room:"Blue garden"', exact: true }).click();
+        await page.waitForFunction(() => new URLSearchParams(location.search).get("q") === "😀 room:amber ");
+      }
+      await page.close();
+    }
+  } finally { server.stop(true); await browser.close(); }
+}, 30_000);
+
 test("actual App renders independent public lifecycle and reconnect replacements at narrow widths", async () => {
   // Build current sources in memory; leave the parent's shared embedded assets untouched.
   const build = await Bun.build({ entrypoints: ["./src/main.tsx"], target: "browser", define: { "process.env.NODE_ENV": '"production"' } });

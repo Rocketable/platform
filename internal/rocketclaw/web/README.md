@@ -488,12 +488,13 @@ and original MCP metadata keys and values, case-insensitively, as one phrase.
 case-sensitive matches on the agent or on a Slack thread's room; quote values
 with spaces, such as `room:"general chat"`. Typing `agent:` or `room:` suggests
 values; choosing one by click, arrows, Tab, or Enter writes the filter into the
-query and replaces any earlier filter for the same key.
+query. Choosing an agent replaces earlier agent filters; choosing a room keeps
+earlier rooms. Multiple room filters match either room.
 Suggestion keys take priority over results; Escape dismisses suggestions first,
 then closes the dialog. Both Cmd/Ctrl+P and the Search page accept exact,
 case-sensitive tag filters: `tag:customer`, or `tag:"Needs review"` for a name
 containing spaces. Quoted values use JSON escaping, such as `tag:"say \"hello\""`.
-Repeated filters use AND: `tag:customer tag:triage` requires both tags. Unknown
+Other repeated filters use AND: `tag:customer tag:triage` requires both tags. Unknown
 tags match nothing. Bare `tag:`, unclosed quotes, and invalid quoted values stay
 ordinary search text. A filter-only query lists every conversation it keeps;
 `tag:customer outage` keeps message hits only from tagged conversations.
