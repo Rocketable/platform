@@ -680,7 +680,15 @@ func seekSequence(lines, pattern []string, startIndex int, eof bool) int {
 		func(a, b string) bool { return strings.TrimRight(a, " \t") == strings.TrimRight(b, " \t") },
 		func(a, b string) bool { return strings.TrimSpace(a) == strings.TrimSpace(b) },
 		func(a, b string) bool {
-			return normalizeUnicode(strings.TrimSpace(a)) == normalizeUnicode(strings.TrimSpace(b))
+			replacer := strings.NewReplacer(
+				"\u2018", "'", "\u2019", "'", "\u201A", "'", "\u201B", "'",
+				"\u201C", `"`, "\u201D", `"`, "\u201E", `"`, "\u201F", `"`,
+				"\u2010", "-", "\u2011", "-", "\u2012", "-", "\u2013", "-", "\u2014", "-", "\u2015", "-",
+				"\u2026", "...",
+				"\u00A0", " ",
+			)
+
+			return replacer.Replace(strings.TrimSpace(a)) == replacer.Replace(strings.TrimSpace(b))
 		},
 	}
 	for _, compare := range comparators {
@@ -707,18 +715,6 @@ func tryMatch(lines, pattern []string, startIndex int, compare func(string, stri
 	}
 
 	return -1
-}
-
-func normalizeUnicode(text string) string {
-	replacer := strings.NewReplacer(
-		"\u2018", "'", "\u2019", "'", "\u201A", "'", "\u201B", "'",
-		"\u201C", `"`, "\u201D", `"`, "\u201E", `"`, "\u201F", `"`,
-		"\u2010", "-", "\u2011", "-", "\u2012", "-", "\u2013", "-", "\u2014", "-", "\u2015", "-",
-		"\u2026", "...",
-		"\u00A0", " ",
-	)
-
-	return replacer.Replace(text)
 }
 
 func (sfs *sandboxedFileSystem) Glob(ctx context.Context, pattern, path string) string {
