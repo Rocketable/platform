@@ -9,53 +9,181 @@ on:
 permissions:
   contents: read
 
+env:
+  ROCKETCLAW_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/rocketclaw_test?sslmode=disable
+
 jobs:
-  test:
+  # Tests run against the committed generated files, so this job proves they are current.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - &setup-go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      # setup-go keys its cache on go.sum alone and never refreshes it; main saves a fresh one per commit.
+      - &restore-go
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.cache/golangci-lint
+          key: go-${{ github.job }}-${{ github.sha }}
+          restore-keys: go-${{ github.job }}-
+      - &setup-bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - &node-modules
+        uses: actions/cache@v6
+        with:
+          path: internal/rocketclaw/web/node_modules
+          key: node-modules-${{ hashFiles('internal/rocketclaw/web/bun.lock') }}
+      - name: Install cloc
+        run: sudo apt-get update && sudo apt-get install -y cloc
+      - run: make -C internal/rocketclaw generate
+      - name: Generated files are committed
+        run: git diff --exit-code && test -z "$(git status --porcelain)"
+      - run: make check-cloc-budget
+      - run: make -C internal/rocketclaw -o web-assets -o vendor lint
+      - run: make -C internal/rocketcode lint
+      - run: make -C internal/funneld lint
+      - &save-go
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.cache/golangci-lint
+          key: go-${{ github.job }}-${{ github.sha }}
+
+  rocketcode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - *setup-go
+      - *restore-go
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - run: go test -race -count 1 ./...
+        working-directory: internal/rocketcode
+      - run: go test ../../cmd/funneld ./...
+        working-directory: internal/funneld
+      - *save-go
+
+  rocketclaw:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        suite: [core, web]
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_HOST_AUTH_METHOD: trust
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: rocketclaw_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d rocketclaw_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-    env:
-      ROCKETCLAW_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/rocketclaw_test?sslmode=disable
+        shard: [0, 1, 2, 3]
     steps:
+      # A service container would block every step until it is healthy; this starts in the background.
+      - name: Start PostgreSQL
+        run: >-
+          nohup docker run -d --name postgres -p 5432:5432
+          -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rocketclaw_test
+          postgres:18 > "$RUNNER_TEMP/postgres.log" 2>&1 &
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - *setup-go
+      - *restore-go
+      - *setup-bun
+      - *node-modules
+      - run: bun install --frozen-lockfile
+        working-directory: internal/rocketclaw/web
+      - &playwright-cache
+        uses: actions/cache@v6
         with:
-          go-version-file: go.mod
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.2"
-      - name: Install cloc, jq, and ripgrep
-        run: sudo apt-get update && sudo apt-get install -y cloc jq ripgrep
-      - name: Install Playwright and Chromium for browser tests
+          path: |
+            ~/.cache/ms-playwright
+            ~/.cache/playwright-core
+          key: playwright-1.63.0-no-shell
+      - &playwright
+        name: Install Playwright and Chromium for browser tests
         run: |
-          dir="$RUNNER_TEMP/playwright"
-          mkdir -p "$dir"
+          dir="$HOME/.cache/playwright-core"
+          [ -d "$dir/node_modules/playwright-core" ] || (mkdir -p "$dir" && cd "$dir" && bun add playwright-core@1.63.0)
           cd "$dir"
-          bun add playwright-core@1.63.0
-          ./node_modules/.bin/playwright-core install --with-deps chromium
+          ./node_modules/.bin/playwright-core install --with-deps --no-shell chromium
           echo "ROCKETCLAW_PLAYWRIGHT_MODULE=$dir/node_modules/playwright-core" >> "$GITHUB_ENV"
           echo "ROCKETCLAW_CHROMIUM=$(bun -e 'console.log(require("playwright-core").chromium.executablePath())')" >> "$GITHUB_ENV"
-      - run: make test
-        if: matrix.suite == 'core'
-      - if: matrix.suite == 'web'
-        run: make -C internal/rocketclaw generate
-      - name: Web tests against Go test servers
-        if: matrix.suite == 'web'
-        run: make -C internal/rocketclaw/web test
+      # TCP readiness skips the image's socket-only init server.
+      - name: Wait for PostgreSQL
+        timeout-minutes: 2
+        run: until docker exec postgres pg_isready -h 127.0.0.1 -U postgres -d rocketclaw_test; do sleep 1; done
+      - name: Coverage shard
+        working-directory: internal/rocketclaw
+        run: |
+          tests=$(grep -rhoE '^func Test[A-Za-z0-9_]*\(' --include='*_test.go' ../../cmd/rocketclaw . | sed -E 's/^func (.*)\(/\1/' | grep -vx TestMain | sort -u | awk -v n=${{ strategy.job-total }} -v i=${{ matrix.shard }} 'NR % n == i' | paste -sd'|' -)
+          make coverage-profile COVERPROFILE=coverage-${{ matrix.shard }}.out GOTESTRUN="^($tests)\$\$"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-${{ matrix.shard }}
+          path: internal/rocketclaw/coverage-${{ matrix.shard }}.out
+          overwrite: true
+      - *save-go
+
+  coverage:
+    needs: rocketclaw
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - *setup-go
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+          path: internal/rocketclaw
+      - working-directory: internal/rocketclaw
+        run: |
+          { echo "mode: atomic"; tail -q -n +2 coverage-*.out; } > .coverage.out
+          make -o coverage-profile check-coverage
+
+  web:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+      - *setup-bun
+      - *node-modules
+      - run: bun install --frozen-lockfile
+        working-directory: internal/rocketclaw/web
+      - *playwright-cache
+      - *playwright
+      # The Sentry test reads the source maps the build writes.
+      - run: bun run build
+        working-directory: internal/rocketclaw/web
+      # Transport tests need the live PostgreSQL/provider fixtures owned by Go, so the rocketclaw job runs them.
+      - name: Web tests
+        working-directory: internal/rocketclaw/web
+        run: >-
+          find ./src -type f \( -name "*.test.ts" -o -name "*.test.tsx" \) ! -name "*-transport.test.ts" | sort |
+          awk -v n=${{ strategy.job-total }} -v i=${{ matrix.shard }} 'NR % n == i' |
+          xargs -n 1 -P 4 bun test
+
+  # The merge-queue ruleset requires the "test (core)" and "test (web)" checks.
+  core:
+    name: test (core)
+    if: always()
+    needs: [checks, rocketcode, rocketclaw, coverage]
+    runs-on: ubuntu-latest
+    steps:
+      - &all-passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: jq -e 'all(.[]; .result == "success")' <<< "$NEEDS"
+
+  web-result:
+    name: test (web)
+    if: always()
+    needs: web
+    runs-on: ubuntu-latest
+    steps:
+      - *all-passed
