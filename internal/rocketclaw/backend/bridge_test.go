@@ -1499,12 +1499,53 @@ func TestScheduleMessageToolValidatesAndPreservesMessage(t *testing.T) {
 
 	assert.Equal(t, map[string]bool{"  keep spaces  ": false, "again": true}, recurring)
 
+	for _, delay := range []time.Duration{12 * time.Hour, 24 * time.Hour} {
+		for _, recurring := range []bool{false, true} {
+			t.Run(fmt.Sprintf("accepted%s/recurring=%t", delay, recurring), func(t *testing.T) {
+				message := fmt.Sprintf("  follow up after %s recurring=%t  ", delay, recurring)
+				before := time.Now().UTC().Truncate(time.Microsecond)
+				result, err := tool.Call(t.Context(), fmt.Appendf(nil, `{"message":%q,"send_this_in":%q,"recurring":%t}`, message, delay, recurring), nil)
+				require.NoError(t, err)
+
+				after := time.Now().UTC()
+
+				if recurring {
+					assert.Equal(t, "scheduled recurring message every "+delay.String(), result.Output)
+				} else {
+					assert.Equal(t, "scheduled message in "+delay.String(), result.Output)
+				}
+
+				messages, err := service.ScheduledMessagesForConversation(bridge.config.ConversationID)
+				require.NoError(t, err)
+
+				byMessage := make(map[string]protocol.ScheduledMessageState)
+				for _, scheduled := range messages {
+					byMessage[scheduled.Message] = scheduled
+				}
+
+				scheduled, ok := byMessage[message]
+				require.True(t, ok, "scheduled message preserves exact text")
+				assert.WithinRange(t, scheduled.DueAt, before.Add(delay), after.Add(delay))
+				assert.Equal(t, recurring, scheduled.Recurring)
+
+				interval := time.Duration(0)
+				if recurring {
+					interval = delay
+				}
+
+				assert.Equal(t, interval, scheduled.Interval)
+			})
+		}
+	}
+
 	for _, raw := range []string{
 		`{`,
 		`{"message":"  ","send_this_in":"5m"}`,
 		`{"message":"hello","send_this_in":"nope"}`,
 		`{"message":"hello","send_this_in":"0s"}`,
-		`{"message":"hello","send_this_in":"2h"}`,
+		`{"message":"hello","send_this_in":"-1h"}`,
+		`{"message":"hello","send_this_in":"24h1ns"}`,
+		`{"message":"hello","send_this_in":"24h1ns","recurring":true}`,
 		`{"message":"hello","send_this_in":"30s","recurring":true}`,
 	} {
 		_, err := tool.Call(context.Background(), []byte(raw), nil)
