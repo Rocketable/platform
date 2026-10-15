@@ -513,6 +513,7 @@ query: a filter becomes a pill once it is followed by a space and the results
 for it arrive. The word being typed stays in the input, and removing a pill
 removes exactly that filter. Editing the text never removes a pill or joins
 text to it; a pill inside or right after the edited text moves in front of it.
+Pills show the full filter text, wrapping long values to fit the available width.
 A conversation the server finds before the session list has loaded it shows
 loading feedback rather than “No matches”. Until the server finishes indexing
 existing chats, the Search page says message results may be incomplete, and
