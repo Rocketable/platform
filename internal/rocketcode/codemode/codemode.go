@@ -285,10 +285,6 @@ func kwargsToMap(thread *starlark.Thread, kwargs []starlark.Tuple) (map[string]a
 		return nil, fmt.Errorf("decode kwargs: %w", err)
 	}
 
-	if out == nil {
-		out = map[string]any{}
-	}
-
 	return out, nil
 }
 
