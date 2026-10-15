@@ -855,6 +855,7 @@ func TestSessionToolsCriteria(t *testing.T) {
 		rowH   = "human\t1\t2026-01-06T00:00:00Z\t\tcron\t\tbilling\t\n"
 		rowB   = "slack-thread:C9:2.2\t1\t2026-01-04T00:00:00Z\t\ttwo words\tC9\tbilling\t\n"
 		rowW   = "web-session:quarter\t1\t2026-01-03T00:00:00Z\tsupport\tother\t\tbilling\t\n"
+		rowA   = "slack-thread:C1:1.1\t1\t2026-01-05T00:00:00Z\t\tmain\tsupport\t*,Needs review,customer,is:pinned,say \"hello\"\t\n"
 	)
 
 	for _, tc := range []struct {
@@ -869,6 +870,9 @@ func TestSessionToolsCriteria(t *testing.T) {
 		{sessionListParams{Criteria: "tag:billing sort:oldest", Since: epoch, Limit: 2}, header + rowW + rowB + "[criteria: terms=tag:billing,sort:oldest; text=]\n[truncated: 1 more matching sessions]\n"},
 		{sessionListParams{Criteria: "tag:billing", Since: "2026-01-04T00:00:00Z", Until: "2026-01-06T00:00:00Z", Limit: 200}, header + rowB + "[criteria: terms=tag:billing; text=]\n"},
 		{sessionListParams{Criteria: "status:open tag:billing", Since: epoch, Limit: 200}, header + "[criteria: terms=tag:billing; text=status:open]\n"},
+		{sessionListParams{Criteria: "room:support room:C9", Since: epoch, Limit: 200}, header + rowA + rowB + "[criteria: terms=room:support,room:C9; text=]\n"},
+		{sessionListParams{Criteria: "room:support tag:billing room:C9", Since: epoch, Limit: 200}, header + rowB + "[criteria: terms=room:support,tag:billing,room:C9; text=]\n"},
+		{sessionListParams{Criteria: "room:unknown room:missing", Since: epoch, Limit: 200}, header + "[criteria: terms=room:unknown,room:missing; text=]\n"},
 		// Newest first, even though the sidebar puts the pinned chat first.
 		{sessionListParams{Criteria: "agent:main", Since: epoch, Limit: 2}, header + "mcp-dest\t1\t2026-01-07T00:00:00Z\t\tmain\t\t\t\n" +
 			"slack-thread:C1:1.1\t1\t2026-01-05T00:00:00Z\t\tmain\tsupport\t*,Needs review,customer,is:pinned,say \"hello\"\t\n" +
@@ -937,7 +941,7 @@ func TestSessionToolsCriteriaParity(t *testing.T) {
 	s, slack := newSessionSearchFixture(t)
 	list := listSessionsTool(s, &threadBridgeManager{slackLookups: slack})
 
-	for _, query := range []string{"tag:customer", "outage", "outage tag:", "billing", "support sort:oldest", "is:cron", "is:pinned is:forked", "agent:main", "room:support", "room:C9", "cron:daily", "t-1", "ada", "status:open"} {
+	for _, query := range []string{"tag:customer", "outage", "outage tag:", "billing", "support sort:oldest", "is:cron", "is:pinned is:forked", "agent:main", "room:support", "room:C9", "room:support room:C9", "room:support room:C9 billing", "room:support room:C9 tag:customer", "cron:daily", "t-1", "ada", "status:open"} {
 		search, err := s.SearchSessions(t.Context(), query, true, slack)
 		require.NoError(t, err)
 

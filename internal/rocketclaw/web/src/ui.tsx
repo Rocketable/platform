@@ -1759,10 +1759,10 @@ function usePills(query: string, setQuery: (update: (query: string) => string) =
       change(query.slice(0, front) + kept + query.slice(front, start) + value.slice(same, value.length - tail) + query.slice(end), start + kept.length + at - same);
     },
     remove: (term: { start: number; end: number }) => change(cutTerms(query, [term]), cutTerms(query.slice(0, caret.current), [term]).length),
-    // Picking an agent: or room: value removes earlier terms of its key, by the offsets of the response for the sent text once it is here.
+    // Picking an agent: value removes earlier agents, by the offsets of the response for the sent text once it is here.
     pick: (key: string, name: string) => {
       const term = `${key}:${key === "is" || key === "sort" ? name : termValue(name)} `;
-      if (key !== "agent" && key !== "room") return change(head + term);
+      if (key !== "agent") return change(head + term);
       if (search.result.query === search.sent && response) return change(cutTerms(head, terms.filter((item) => item.key === key && item.end < head.length)) + term);
       change(head + term);
       search.next((text, later) => setQuery((latest) => {
