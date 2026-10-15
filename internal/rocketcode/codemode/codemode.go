@@ -100,10 +100,6 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 
 	predeclared := make(starlark.StringDict, len(catalog)+len(host)+len(concurrency))
 	for name, tool := range catalog {
-		if _, exists := predeclared[name]; exists {
-			return "", fmt.Errorf("builtin name collision %q", name)
-		}
-
 		predeclared[name] = newMCPToolBuiltin(tool, decide, call, observe)
 	}
 
