@@ -386,7 +386,7 @@ func wrapParseError(err error) error {
 func (e *parseError) Unwrap() error { return e.err }
 
 func (e *parseError) Error() string {
-	raw, errMarshal := json.Marshal(parseDiagnostic{
+	raw, _ := json.Marshal(parseDiagnostic{
 		Phase:            "codemode_parse",
 		Category:         string(e.category),
 		Message:          e.message,
@@ -396,9 +396,6 @@ func (e *parseError) Error() string {
 		LikelyCause:      e.likelyCause,
 		RecommendedFix:   e.recommendedFix,
 	})
-	if errMarshal != nil {
-		return e.message
-	}
 
 	return string(raw)
 }
