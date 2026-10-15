@@ -159,19 +159,31 @@ func TestToolCallObserverReceivesConcurrencyPath(t *testing.T) {
 	}
 }
 
-func TestConcurrencyBounds(t *testing.T) {
-	_, err := Run(t.Context(), `def main():
-    return gather([], concurrency=0)
-`, nil, allowAll, nilCall, noToolCallObserver, nil)
-	if err == nil || !strings.Contains(err.Error(), "concurrency") {
-		t.Fatalf("concurrency=0 error = %v", err)
-	}
+func TestConcurrencyRejectsInvalidArguments(t *testing.T) {
+	for _, tc := range []struct {
+		name, expression, want string
+	}{
+		{"zero concurrency", "gather([], concurrency=0)", "concurrency must be between 1 and 64"},
+		{"excess concurrency", "gather([], concurrency=65)", "concurrency must be between 1 and 64"},
+		{"missing callables", "gather()", "gather arguments: gather: missing argument for callables"},
+		{"invalid callables container", "gather(1)", "gather callables: must be a list or tuple"},
+		{"noncallable branch", "gather([1])", "gather callables must be callable"},
+		{"noninteger concurrency", "gather([], concurrency=1.5)", "concurrency must be an integer:"},
+		{"missing map function", "map([])", "map arguments: map: missing argument for fn"},
+		{"invalid map concurrency", "map([], lambda n: n, concurrency=0)", "concurrency must be between 1 and 64"},
+		{"invalid map items", "map(1, lambda n: n)", "map items: must be a list or tuple"},
+		{"missing race callables", "race()", "race arguments: race: missing argument for callables"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Run(t.Context(), "def main():\n    return "+tc.expression+"\n", nil, allowAll, nilCall, noToolCallObserver, nil)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Run() error = %v, want %q", err, tc.want)
+			}
 
-	_, err = Run(t.Context(), `def main():
-    return gather([], concurrency=65)
-`, nil, allowAll, nilCall, noToolCallObserver, nil)
-	if err == nil || !strings.Contains(err.Error(), "concurrency") {
-		t.Fatalf("concurrency=65 error = %v", err)
+			if got != "" {
+				t.Fatalf("Run() = %q, want no result for invalid arguments", got)
+			}
+		})
 	}
 }
 
