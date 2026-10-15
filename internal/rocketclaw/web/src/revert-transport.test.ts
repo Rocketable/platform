@@ -14,13 +14,22 @@ test("real HTTP Revert commits only retained context and converges across viewer
     await second.locator("textarea").fill("Other viewer draft");
     await first.getByRole("button", { name: "Add files", exact: true }).click();
     await first.locator('input[type="file"]').setInputFiles({ name: "old-draft.txt", mimeType: "text/plain", buffer: Buffer.from("replace me") });
+    await first.locator("textarea").fill("Keep my draft");
     const selected = first.locator('[data-slot="message"][data-message-id]').filter({ has: first.getByText("abandoned request", { exact: true }) });
+    await selected.hover();
+    await first.route("**/api/StageRevert", (route: { fulfill(options: object): Promise<void> }) => route.fulfill({ status: 503, json: { message: "Revert unavailable", code: 14 } }), { times: 1 });
+    await selected.getByRole("button", { name: "Revert message", exact: true }).click();
+    await first.getByText("Revert unavailable", { exact: true }).waitFor();
+    expect(await first.locator("textarea").inputValue()).toBe("Keep my draft");
+    expect(await first.getByLabel("Pending attachments").getByText("old-draft.txt", { exact: true }).count()).toBe(1);
+    expect(await first.locator('[data-slot="message"]').getByText("abandoned answer", { exact: true }).count()).toBe(1);
     await selected.hover();
     const staged = first.waitForResponse((response: { url: () => string }) => response.url().endsWith("/api/StageRevert"));
     await selected.getByRole("button", { name: "Revert message", exact: true }).click();
     const result = await staged;
     expect(await result.json()).toMatchObject({ prompt: { text: "abandoned request" } });
     await first.waitForFunction(() => document.querySelector("textarea")?.value === "abandoned request");
+    expect(await first.getByText("Revert unavailable", { exact: true }).count()).toBe(0);
     await first.getByText("boundary-upload.txt", { exact: true }).last().waitFor();
     expect(await first.getByText("old-draft.txt", { exact: true }).count()).toBe(0);
     // Download through the real authenticated route after staging, not an inline File stub.
