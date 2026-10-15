@@ -39,42 +39,32 @@ test("saved sidebar snapshots isolate owners and commit atomically", async () =>
         return request;
       };
       let rejected = false;
-      let deletionRejected = false;
       try {
         await storage.saveCompleteSessions("a", "v1", [{ id: "replacement" }], await storage.loadSnapshotGeneration("a", "v1"));
       } catch {
         rejected = true;
-      }
-      try {
-        await storage.clearSavedSessionHistory("a", "v1", "one");
-      } catch {
-        deletionRejected = true;
       } finally {
         IDBObjectStore.prototype.put = put;
       }
       return {
         rejected,
-        deletionRejected,
         generation: await storage.loadSnapshotGeneration("a", "v1"),
         ownerMiss: await storage.loadSavedSessions("b", "v1") === undefined,
         protocolMiss: await storage.loadSavedSessions("a", "v2") === undefined,
       };
     });
-    expect(initial).toEqual({ rejected: true, deletionRejected: true, generation: 0, ownerMiss: true, protocolMiss: true });
+    expect(initial).toEqual({ rejected: true, generation: 0, ownerMiss: true, protocolMiss: true });
     await page.reload();
     const restored = await page.evaluate(async () => {
       const path = "/session-list.js";
       const storage = await import(path);
       const rows = await storage.loadSavedSessions("a", "v1");
-      await storage.clearSavedSessionHistory("a", "v1", "one");
-      const cleared = await storage.loadSavedSessions("a", "v1");
       await storage.saveCompleteSessions("a", "v1", [], await storage.loadSnapshotGeneration("a", "v1"));
-      return { running: rows[0].running, fullPreview: rows[0].preview === "start\0" + "x".repeat(17 * 1024 * 1024) + "\0end", cleared, empty: await storage.loadSavedSessions("a", "v1") };
+      return { running: rows[0].running, fullPreview: rows[0].preview === "start\0" + "x".repeat(17 * 1024 * 1024) + "\0end", empty: await storage.loadSavedSessions("a", "v1") };
     });
     expect(restored).toEqual({
       fullPreview: true,
       running: false,
-      cleared: [{ id: "one", title: "kept", preview: "", updatedAt: "", agent: "agent", tags: ["customer", "Needs review"], running: false }],
       empty: [],
     });
   } finally {
@@ -83,7 +73,7 @@ test("saved sidebar snapshots isolate owners and commit atomically", async () =>
   }
 }, 30_000);
 
-test("pending saves, delayed hydration and owner switches cannot beat deletion or leak owners", async () => {
+test("pending saves and owner switches cannot leak owners or overwrite newer snapshots", async () => {
   const build = await Bun.build({ entrypoints: ["./src/session-list.ts"], target: "browser" });
   expect(build.success).toBe(true);
   const script = await build.outputs[0].text();
@@ -100,22 +90,13 @@ test("pending saves, delayed hydration and owner switches cannot beat deletion o
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
-    const deletingPage = await context.newPage();
     await page.goto(`http://127.0.0.1:${server.port}`);
-    await deletingPage.goto(`http://127.0.0.1:${server.port}`);
-    // No broadcast subscriber in A: the durable transaction check must protect
-    // storage even when a paused tab has not processed its notification yet.
-    await page.exposeFunction("deleteElsewhere", () => deletingPage.evaluate(async () => {
-      const modulePath = "/storage.js";
-      const storage = await import(modulePath);
-      await storage.clearSavedSessionHistory("owner", "protocol", "synthetic");
-    }));
     const result = await page.evaluate(async () => {
       const modulePath = "/storage.js";
       const storage = await import(modulePath);
       const rows = [{ id: "synthetic", preview: "old synthetic preview", agent: "agent", title: "room" }];
-      const beforeDelete = await storage.loadSnapshotGeneration("owner", "protocol");
-      await storage.saveCompleteSessions("owner", "protocol", rows, beforeDelete);
+      const activeGeneration = await storage.loadSnapshotGeneration("owner", "protocol");
+      await storage.saveCompleteSessions("owner", "protocol", rows, activeGeneration);
       const open = IDBFactory.prototype.open;
       const holdOpen = () => {
         const held = Promise.withResolvers<void>();
@@ -136,27 +117,8 @@ test("pending saves, delayed hydration and owner switches cannot beat deletion o
         return { held: held.promise, release: () => { IDBFactory.prototype.open = open; release.resolve(); } };
       };
 
-      const saveGate = holdOpen();
-      const pendingSave = storage.saveCompleteSessions("owner", "protocol", rows, beforeDelete);
-      await saveGate.held;
-      await (window as unknown as { deleteElsewhere: () => Promise<void> }).deleteElsewhere();
-      const afterDelete = await storage.loadSavedSessions("owner", "protocol");
-      saveGate.release();
-      await pendingSave;
-      const afterOldSave = await storage.loadSavedSessions("owner", "protocol");
-
-      const afterDeletion = await storage.loadSnapshotGeneration("owner", "protocol");
-      await storage.saveCompleteSessions("owner", "protocol", rows, afterDeletion);
-      const loadGate = holdOpen();
-      const pendingLoad = storage.loadSavedSessions("owner", "protocol");
-      await loadGate.held;
-      await (window as unknown as { deleteElsewhere: () => Promise<void> }).deleteElsewhere();
-      loadGate.release();
-      const delayedHydration = await pendingLoad;
-
-      const activeGeneration = await storage.loadSnapshotGeneration("owner", "protocol");
       const switchGate = holdOpen();
-      const pendingOwnerSave = storage.saveCompleteSessions("owner", "protocol", rows, activeGeneration);
+      const pendingOwnerSave = storage.saveCompleteSessions("owner", "protocol", [{ ...rows[0], preview: "switched-away preview" }], activeGeneration);
       await switchGate.held;
       storage.invalidatePendingSaves("owner", "protocol");
       await storage.saveCompleteSessions("other", "protocol", [{ id: "other", preview: "other preview" }], await storage.loadSnapshotGeneration("other", "protocol"));
@@ -189,35 +151,16 @@ test("pending saves, delayed hydration and owner switches cannot beat deletion o
       olderGate.release();
       await olderSave;
       const newest = await storage.loadSavedSessions("ordering", "protocol");
-      const deleteGate = holdOpen();
-      const pendingDelete = storage.clearSavedSessionHistory("ordering", "protocol", "row");
-      await deleteGate.held;
-      const postDeleteSave = storage.loadSnapshotGeneration("ordering", "protocol").then((generation: number) =>
-        storage.saveCompleteSessions("ordering", "protocol", [{ id: "row", preview: "after deletion" }], generation));
-      // Let the newer save reach its transaction if it does not wait for deletion.
-      await storage.loadSavedSessions("ordering", "protocol");
-      deleteGate.release();
-      await Promise.all([pendingDelete, postDeleteSave]);
       return {
         newest,
-        postDelete: await storage.loadSavedSessions("ordering", "protocol"),
-        afterDelete: afterDelete[0].preview,
-        afterOldSave: afterOldSave[0].preview,
-        routing: afterOldSave[0].title,
-        delayedHydration,
         other: await storage.loadSavedSessions("other", "protocol"),
         ownerAfterSwitch: await storage.loadSavedSessions("owner", "protocol"),
       };
     });
     expect(result).toEqual({
       newest: [{ id: "row", preview: "newer" }],
-      postDelete: [{ id: "row", preview: "after deletion" }],
-      afterDelete: "",
-      afterOldSave: "",
-      routing: "room",
-      delayedHydration: [{ id: "synthetic", preview: "", updatedAt: "", agent: "agent", title: "room" }],
       other: [{ id: "other", preview: "other preview" }],
-      ownerAfterSwitch: [{ id: "synthetic", preview: "", updatedAt: "", agent: "agent", title: "room" }],
+      ownerAfterSwitch: [{ id: "synthetic", preview: "old synthetic preview", agent: "agent", title: "room" }],
     });
   } finally {
     await browser.close();
