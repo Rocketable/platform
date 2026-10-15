@@ -14,14 +14,15 @@ import (
 func TestWebFetchFormatsHTML(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(`<html><body><h1>Title</h1><script>hidden()</script><p>Hello <strong>world</strong>.</p></body></html>`))
+		_, _ = w.Write([]byte(`<html><body><h1>Title</h1><script>hidden()</script><p>Hello <strong>world</strong>.</p><a href="guide">Guide</a></body></html>`))
 	}))
 	t.Cleanup(server.Close)
 
-	markdown, err := webFetch(context.Background(), testWebFetchParams(server.URL, "markdown"))
+	markdown, err := webFetch(context.Background(), testWebFetchParams(server.URL+"/pages/index.html", "markdown"))
 	require.NoError(t, err)
 	require.Contains(t, markdown.Output, "# Title")
 	require.Contains(t, markdown.Output, "**world**")
+	require.Contains(t, markdown.Output, "[Guide]("+server.URL+"/guide)")
 
 	text, err := webFetch(context.Background(), testWebFetchParams(server.URL, "text"))
 	require.NoError(t, err)

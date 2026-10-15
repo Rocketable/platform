@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -130,8 +131,8 @@ func webFetchToolResult(rawURL, format, contentType string, body []byte) (ToolRe
 		switch format {
 		case "markdown":
 			opts := []converter.ConvertOptionFunc{}
-			if origin := originForURL(rawURL); origin != "" {
-				opts = append(opts, converter.WithDomain(origin))
+			if u, err := url.Parse(rawURL); err == nil && u.Scheme != "" && u.Host != "" {
+				opts = append(opts, converter.WithDomain(u.Scheme+"://"+u.Host))
 			}
 
 			markdown, err := htmltomarkdown.ConvertString(content, opts...)
