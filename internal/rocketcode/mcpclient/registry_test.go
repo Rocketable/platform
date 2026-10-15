@@ -253,6 +253,43 @@ func TestHTTPHeaders(t *testing.T) {
 	assert.Equal(t, "Bearer secret", sawAuth)
 }
 
+func TestSameHostRedirects(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name      string
+		target    string
+		redirects int
+		wantErr   string
+	}{
+		{"same host below limit", "https://mcp.example/next", 9, ""},
+		{"different host", "https://other.example/next", 1, "refusing cross-host redirect to other.example"},
+		{"different port", "https://mcp.example:8443/next", 1, "refusing cross-host redirect to mcp.example:8443"},
+		{"at limit", "https://mcp.example/next", 10, "stopped after 10 redirects"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			original, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://mcp.example/start", http.NoBody)
+			require.NoError(t, err)
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, tt.target, http.NoBody)
+			require.NoError(t, err)
+
+			via := make([]*http.Request, tt.redirects)
+			for i := range via {
+				via[i] = original
+			}
+
+			err = sameHostRedirects(req, via)
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestStdioCallTool(t *testing.T) {
 	t.Parallel()
 
