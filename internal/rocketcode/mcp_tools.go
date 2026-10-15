@@ -710,10 +710,6 @@ func searchTokenize(query string) [][]string {
 	var terms [][]string
 
 	for _, term := range fields {
-		if term == "" || term == "*" {
-			continue
-		}
-
 		forms := []string{term}
 		if strings.HasSuffix(term, "es") && len(term) > 3 {
 			forms = append(forms, strings.TrimSuffix(term, "es"))
