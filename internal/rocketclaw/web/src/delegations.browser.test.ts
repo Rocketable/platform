@@ -52,15 +52,15 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel 
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat").replace(/=+$/, "")}?message=1%3A0`);
     const open = page.locator("main").getByRole("link", { name: /^Open delegation/ });
     await page.locator("main").getByText("Review finished", { exact: true }).waitFor();
-    // The default Compact level folds both calls into one closed summary row.
-    await page.locator("main summary").filter({ hasText: "Used 6 tools" }).click();
-    for (const title of ["task", "task", "task", "bash · ls", "bash · rm", "bash · old"]) await page.locator(`main details:not([open]) > summary[title="${title}"]`).first().click();
+    // The default Compact level folds both calls into one closed Chain of Thought row.
+    await page.locator("main").getByRole("button", { name: "Used 6 tools", exact: true }).click();
+    for (const title of ["task", "task", "task", "bash · ls", "bash · rm", "bash · old"]) await page.locator("main").getByRole("button", { name: title, exact: true, expanded: false }).first().click();
     const href = async (link: { getAttribute(name: string): Promise<string | null> }) => new URL(await link.getAttribute("href") ?? "", page.url()).searchParams.get("delegation");
     expect(await open.count()).toBe(4);
     expect(await href(open.nth(1))).toBe("chat/call-task-0a1b2c3d");
     expect(await href(open.nth(2))).toBe("chat/call-fresh-2b3c4d5e");
     expect(await href(page.getByRole("link", { name: "Open delegation: bash · old", exact: true }))).toBe("chat/call-old");
-    const plain = page.locator('main details:has(> summary[title="bash · ls"])');
+    const plain = page.locator('main [data-slot="trace-collapsible"]:has(> [data-slot="trace-collapsible-trigger"][title="bash · ls"])');
     await plain.waitFor();
     expect(await plain.getByRole("link").count()).toBe(0);
     const panel = width >= 1024 ? page.getByRole("complementary", { name: "Delegation", exact: true }) : page.getByRole("dialog", { name: "Delegation", exact: true });

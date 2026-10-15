@@ -5,7 +5,7 @@ import tailwind from "@tailwindcss/postcss";
 const outdir = new URL("../internal/web/dist/", import.meta.url).pathname;
 await mkdir(outdir, { recursive: true });
 for (const name of await readdir(outdir)) await rm(`${outdir}/${name}`, { recursive: true });
-const result = await Bun.build({ entrypoints: ["./src/main.tsx"], outdir, target: "browser", minify: true, sourcemap: "linked", splitting: true, naming: "assets/[name]-[hash].[ext]", define: { "process.env.NODE_ENV": '"production"' } });
+const result = await Bun.build({ entrypoints: ["./src/main.tsx"], outdir, target: "browser", minify: true, sourcemap: "linked", splitting: true, naming: { entry: "assets/[name]-[hash].[ext]", chunk: "assets/chunk-[hash].[ext]" }, define: { "process.env.NODE_ENV": '"production"' } });
 if (!result.success) throw new AggregateError(result.logs, "SPA build failed");
 // Bun's debugId comment lacks Sentry's runtime registration; let the CLI own both IDs and maps.
 for (const output of result.outputs) {

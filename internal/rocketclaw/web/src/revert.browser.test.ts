@@ -183,11 +183,11 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
         const bounds = (await button.boundingBox())!;
         await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
       }
-      const agent = page.getByRole("combobox", { name: "Choose agent" });
+      const agent = page.getByRole("button", { name: "Choose agent", exact: true });
       expect(await agent.isDisabled()).toBe(true);
       const bounds = (await agent.boundingBox())!;
       await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-      expect(await page.getByRole("listbox").count()).toBe(0);
+      expect(await page.getByRole("menu").count()).toBe(0);
       expect(await page.getByLabel("Attach files").isDisabled()).toBe(true);
       await input.evaluate((node: HTMLTextAreaElement) => {
         const dataTransfer = new DataTransfer();

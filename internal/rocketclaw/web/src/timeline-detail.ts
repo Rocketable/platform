@@ -114,7 +114,7 @@ type TimelineGroup<T> = { kind: "group"; key: string; label: string; members: { 
 const categoryByTool: Partial<Record<string, TimelineCategory>> = { execute: "execute", bash: "execute", task: "subagents", skill: "skills" };
 const categoryByRole: Partial<Record<string, TimelineCategory>> = { thinking: "thinking", developer: "notices" };
 // In-band failures from internal/rocketcode looper.go and replay.go; "tool call rejected" is the repeat guard.
-const failure = /^(tool call (failed|denied|aborted)|subagent task aborted)/;
+export const timelineFailure = /^(tool call (failed|denied|aborted)|subagent task aborted)/;
 
 // Placement follows OpenCode 7440ff784408a8a095b58ef908de3fc6ee66ca66, packages/session-ui/src/timeline/projection.ts
 // (renderable, toolGroupType, groupContent): replies and separate items end a run of grouped items.
@@ -133,7 +133,7 @@ export function projectTimeline<T extends TimelineItem>(items: T[], rows: Timeli
     // Categories without a Collapse setting start closed, as OpenCode's do, except at Everything.
     const open = collapsible.has(id) ? details === "expanded" : everything;
     const pinned = [line, ...(line.toolParts ?? [])].some((part) => part.attachments?.length);
-    const failed = line.role === "tool" && (line.state === "background" || failure.test((line.toolName ? line.toolParts?.[0]?.text : line.text) ?? ""));
+    const failed = line.role === "tool" && (line.state === "background" || timelineFailure.test((line.toolName ? line.toolParts?.[0]?.text : line.text) ?? ""));
     if (placement === "hidden" && !pinned && !failed) continue;
     if (placement === "grouped" && !pinned) {
       if (!group) projected.push(group = { kind: "group", key: line.id, label: "", members: [] });

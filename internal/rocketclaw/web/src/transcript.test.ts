@@ -472,11 +472,6 @@ test("pending delivery classification uses consumed input IDs, not render or sto
   expect(pending.queued.map((line: { principal?: string }) => line.principal)).toEqual(["Bob Smith", undefined]);
 });
 
-test("thinking rows top-align the robot beside multiline text", () => {
-  const row = source.statements.find((node) => isFunctionDeclaration(node) && node.name?.text === "TraceLine")!;
-  expect((row as FunctionDeclaration).body!.statements[0].getText(source)).toContain("flex items-start gap-1.5");
-});
-
 test("the in-progress status shows whenever the session is busy, whatever the newest line", () => {
   const text = (name: string) => source.statements.find((node) => isFunctionDeclaration(node) && node.name?.text === name)!.getText(source);
   expect(text("Transcript")).toContain("busy: false, more: false, terminal: undefined, shadows: undefined } : { lines, delegations, busy, more, terminal, shadows }");

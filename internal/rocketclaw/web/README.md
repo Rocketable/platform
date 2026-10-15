@@ -24,7 +24,11 @@ that cannot be resolved shows its ID, such as `@U123`. Headings and tables stay
 literal. Session titles, turn previews, handoff results, and queued items show the
 same inline formatting on one line; their tooltips and accessible names use the
 plain text with names filled in. Copy still copies the original text.
-Code blocks and tool output scroll sideways by default. Their wrap button, also in
+Code blocks and tool output are shadcn/ui
+[Code Blocks](https://ui.shadcn.com/docs/components/base/code-block) and scroll
+sideways by default. A fenced block whose language is bash/sh, CSS, diff, Go, HTML,
+JavaScript/JSX, JSON, Markdown, Python, SQL, TypeScript/TSX, or YAML is syntax
+highlighted once that language loads; tool output and search results are not. Their wrap button, also in
 the expanded view, wraps long lines for every block at once; this browser
 remembers the choice across reloads.
 Only sessions with sandboxed messages append ` - origin` to the footer. The
@@ -83,7 +87,9 @@ after it, and replaces that session's composer text and files with the request.
 It sends nothing and keeps the current agent and submitting identity.
 `$undo` (also in the command palette) moves to the previous recorded request;
 repeated Undo can leave an empty conversation. **Redo** or `$redo` restores the
-whole hidden suffix without changing the composer.
+whole hidden suffix without changing the composer. While history is reverted, a
+[Checkpoint](https://ui.shadcn.com/docs/ai-elements/base/checkpoint) divider below
+the last kept turn says so and offers **Redo**.
 
 The cutoff survives reload and daemon restart. Waiting human work stays stored
 but hidden until Redo, which restores its order. Sending a new prompt—including
@@ -553,9 +559,11 @@ palette offers the same actions.
 Safe-area padding is preserved. On very narrow screens, navigation buttons scroll
 horizontally instead of overlapping.
 
-Use the agent selector in the composer to change agents. Type in its search box to
-filter agents by name or model; Enter picks the first match. On touch screens the
-search box waits for a tap, so the keyboard does not cover the list. New Web threads select
+The composer is a [Prompt Input](https://ui.shadcn.com/docs/ai-elements/base/prompt-input):
+an Input Group with pending files above the text and its controls below. Use its
+agent menu, a [Model Selector](https://ui.shadcn.com/docs/ai-elements/base/model-selector),
+to change agents; each agent shows its model and effort, and typing a name's first
+letters moves to it. New Web threads select
 `main` by default, or the first listed agent when `main` is not listed; existing
 threads retain their agent. When a thread's agent is no longer listed, for example
 because its Slack channel does not allow it, the selector shows the channel's first configured
@@ -728,6 +736,12 @@ failed call (a result starting with `tool call failed`, `denied` or `aborted`) a
 on its own when its category is hidden, and a call that delivers files always appears
 on its own. While a turn runs, **Working…** shows at every level. The chat has no
 database-entry inspection panel.
+Activity rows are shadcn/ui [Trace](https://ui.shadcn.com/docs/components/base/trace)
+lines with an icon, a title, and a recorded state when there is one. Reasoning reads
+**Thought**. A call recorded as working or in review, or one without a result yet
+while its turn runs, shows a spinner and a shimmering title; a
+failed or stopped call, or one whose result is an in-band failure, shows in red. A
+summary row shows running if any of its items run, otherwise red if any failed.
 While an `execute` or `task` call of an agent with
 `permission.rocketclaw.allow_background: allow` runs, **Move to background** shows
 beside **Working…**. It moves every such call of the conversation at once; the
@@ -739,14 +753,17 @@ queue's box, with their state and **Open**; running ones also get **Stop**. Open
 History or scrolls to a script's call, loading earlier turns when needed. Jobs
 started by hidden cron or External MCP runs that report to this chat are listed
 too, without Open. Calls running in the background stay visible at every Timeline
-detail level. Each Completion Note is one row, `<label> · finished`, `failed`,
-`stopped by user`, `stopped by agent`, or `killed (server restarted)`, shown at
-every level with the full note collapsed beneath it. `$stop` does not stop
+detail level. Background Jobs and Completion Notes are Trace lines too: a running
+job spins, and a failed or killed one shows in red. Each Completion Note is one
+row, its label followed by `finished`, `failed`, `stopped by user`,
+`stopped by agent`, or `killed (server restarted)`, shown at every level with the
+full note collapsed beneath it. `$stop` does not stop
 Background Jobs; use Stop.
 When a turn started in Web calls `ask_user_question`, the question shows as a card
 in the same box above the composer, and stays there after a reload or restart until
-answered. Clicking an option answers a single choice; a multiple choice takes the
-checked options and **Submit**. While the card shows, Send answers with the
+answered. The card is a shadcn/ui
+[Questionnaire](https://ui.shadcn.com/docs/components/base/questionnaire): pick an
+option, or check every option that applies for a multiple choice, then **Submit**. While the card shows, Send answers with the
 composer's text as a custom answer instead of queueing it; Steer, Stash, and `$stop`
 work as usual. If someone else already answered or the turn ended, the card goes
 away and says so.

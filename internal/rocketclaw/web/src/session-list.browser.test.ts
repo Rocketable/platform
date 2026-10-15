@@ -280,8 +280,8 @@ test("actual App renders independent public lifecycle and reconnect replacements
       expect(await page.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
       messages = [...messages, event("B:outcome", "tool", "B result", { toolCallId: "B", parentId: "producer/turn/response", state: "completed", agent: "canonical-child", model: "child/model" })]; revision++;
       (await stream.promise).enqueue('data: {"conversationId":"public","revision":"hint"}\n\n');
-      await log.locator("summary").filter({ hasText: "completed" }).waitFor();
-      expect(await log.locator("summary").filter({ hasText: /^task/ }).evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.textContent?.trim()))).toEqual(["taskworking", "taskcompleted", "taskworking"]);
+      await log.locator('[data-slot="trace-collapsible-trigger"]').filter({ hasText: "completed" }).waitFor();
+      expect(await log.locator('[data-slot="trace-collapsible-trigger"]').filter({ hasText: /^task/ }).evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.textContent?.trim()))).toEqual(["taskworking", "taskcompleted", "taskworking"]);
       expect(await log.locator('[data-slot="message-footer"]').filter({ hasText: "canonical-child (child/model)" }).count()).toBe(3);
       expect(await page.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
       expect(await log.evaluate((element: HTMLElement) => element.scrollWidth <= element.clientWidth)).toBe(true);
@@ -296,7 +296,7 @@ test("actual App renders independent public lifecycle and reconnect replacements
       messages = messages.filter((message) => message.itemId !== "text"); revision++;
       (await stream.promise).enqueue('data: {"conversationId":"public","revision":"duplicate"}\n\ndata: {"conversationId":"public","revision":"duplicate"}\n\n');
       await log.getByText("Short", { exact: true }).waitFor({ state: "detached" });
-      expect(await log.locator("summary").filter({ hasText: /^task/ }).count()).toBe(3);
+      expect(await log.locator('[data-slot="trace-collapsible-trigger"]').filter({ hasText: /^task/ }).count()).toBe(3);
       await page.getByRole("button", { name: "Stop", exact: true }).click();
       await page.getByRole("button", { name: "Send", exact: true }).waitFor();
     }
@@ -811,8 +811,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await skillComposer.inputValue()).toBe("retained through browser history");
     await skillComposer.fill("");
 
-    await page.getByRole("combobox", { name: "Choose agent" }).click();
-    await page.getByRole("option", { name: "other gpt" }).click();
+    await page.getByRole("button", { name: "Choose agent", exact: true }).click();
+    await page.getByRole("menuitemradio", { name: "other gpt" }).click();
     ctrl.holdPrompt = true;
     await page.getByPlaceholder("Message a new session").fill("hello\n\nwhile held");
     await page.getByRole("button", { name: "Send" }).click();
@@ -956,7 +956,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await page.locator("textarea").fill("$agent main");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await shown(page, "Switched to main");
-    await page.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "main" }).waitFor();
+    await page.getByRole("button", { name: "Choose agent", exact: true }).filter({ hasText: "main" }).waitFor();
     await goToSession(page, "will vanish");
     await page.goBack();
     await page.locator("textarea").fill("stay with main");
@@ -1696,8 +1696,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       expect(ctrl.createdAgents.length).toBe(creations);
       if (width === 390) await navPage.keyboard.press("Escape");
       expect(await navPage.getByPlaceholder("Message a new session").inputValue()).toBe("");
-      await navPage.getByRole("combobox", { name: "Choose agent" }).click();
-      await navPage.getByRole("option", { name: "other gpt", exact: true }).click();
+      await navPage.getByRole("button", { name: "Choose agent", exact: true }).click();
+      await navPage.getByRole("menuitemradio", { name: "other gpt", exact: true }).click();
       await navPage.getByPlaceholder("Message a new session").fill("fresh draft");
       await openPage("Config");
       await navPage.waitForURL(`${origin}/config`);
@@ -1705,12 +1705,12 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await navPage.waitForURL(`${origin}/`);
       if (width === 390) await navPage.keyboard.press("Escape");
       expect(await navPage.getByPlaceholder("Message a new session").inputValue()).toBe("fresh draft");
-      await navPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
+      await navPage.getByRole("button", { name: "Choose agent", exact: true }).filter({ hasText: "other" }).waitFor();
       await newChat.click();
       if (width === 390) await navPage.keyboard.press("Escape");
       await navPage.waitForFunction(() => document.querySelector("textarea")?.value === "" && !document.querySelector("textarea")?.closest("fieldset")?.disabled);
       expect(await navPage.getByPlaceholder("Message a new session").inputValue()).toBe("");
-      await navPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "main" }).waitFor();
+      await navPage.getByRole("button", { name: "Choose agent", exact: true }).filter({ hasText: "main" }).waitFor();
       expect(ctrl.createdAgents.length).toBe(creations);
     }
     await navPage.close();
@@ -1792,10 +1792,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await cronPage.locator("#transcript-scroll").getByText("Silent run trace", { exact: true }).waitFor();
       expect(cronOpens.slice(opensBefore)).toEqual(["cron:silent-source"]);
       await cronPage.getByPlaceholder("Message or $command").fill("Continue this run");
-      await cronPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
-      await cronPage.getByRole("combobox", { name: "Choose agent" }).click();
-      await cronPage.getByRole("option").first().waitFor();
-      expect(await cronPage.getByRole("option").count()).toBe(1);
+      await cronPage.getByRole("button", { name: "Choose agent", exact: true }).filter({ hasText: "other" }).waitFor();
+      await cronPage.getByRole("button", { name: "Choose agent", exact: true }).click();
+      await cronPage.getByRole("menuitemradio").first().waitFor();
+      expect(await cronPage.getByRole("menuitemradio").count()).toBe(1);
       await cronPage.keyboard.press("Escape");
       ctrl.promptStarted = Promise.withResolvers<void>();
       await cronPage.getByRole("button", { name: "Send", exact: true }).click();
@@ -1923,7 +1923,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       expect(await last.evaluate((el: HTMLElement) => el === document.activeElement)).toBe(true);
       await transcriptPage.mouse.move(0, 0);
       await previewBox.waitFor({ state: "hidden" });
-      await last.locator("summary").first().click();
+      await last.locator('[data-slot="trace-collapsible-trigger"]').first().click();
       await rail.getByRole("button", { name: "Turn 1: Prompt 1", exact: true }).click();
       await transcriptPage.waitForFunction(() => document.querySelector("#transcript-scroll")!.scrollTop < 50);
     }
@@ -1941,13 +1941,13 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await transcriptPage.setViewportSize({ width, height: 600 });
       await transcriptPage.goto(`${origin}/s/${Buffer.from(`code-${width}`).toString("base64url")}`);
       await transcriptPage.locator('pre[aria-label="sh"]').waitFor();
-      // The default Compact level folds the call into a closed summary row.
-      await transcriptPage.locator("summary").filter({ hasText: "Used 1 tool" }).click();
-      await transcriptPage.locator("summary").filter({ hasText: /^bash$/ }).click();
+      // The default Compact level folds the call into a closed Chain of Thought row.
+      await transcriptPage.getByRole("button", { name: "Used 1 tool", exact: true }).click();
+      await transcriptPage.getByRole("button", { name: "bash", exact: true }).click();
       expect(await transcriptPage.locator("#transcript-scroll pre").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["bash", "sh"]);
       for (const label of ["bash", "sh"]) {
         const panel = transcriptPage.locator(`#transcript-scroll pre[aria-label="${label}"]`);
-        const scroller = panel.locator("xpath=..");
+        const scroller = panel;
         await panel.waitFor();
         expect(await panel.textContent()).toBe(label === "bash" ? `Arguments\n{}\n\nResult\n${codeText}` : codeText);
         expect(await scroller.evaluate((el: HTMLElement) => el.clientHeight)).toBeLessThanOrEqual(256);
@@ -1955,12 +1955,12 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         expect(await scroller.getAttribute("tabindex")).toBe("0");
         await scroller.focus();
         await transcriptPage.keyboard.press("ArrowDown");
-        await transcriptPage.waitForFunction((label: string) => document.querySelector(`pre[aria-label="${label}"]`)!.parentElement!.scrollTop > 0, label);
+        await transcriptPage.waitForFunction((label: string) => document.querySelector(`pre[aria-label="${label}"]`)!.scrollTop > 0, label);
         await transcriptPage.getByRole("button", { name: `Expand ${label}`, exact: true }).click();
         const overlay = transcriptPage.getByRole("dialog", { name: label, exact: true });
         await overlay.waitFor();
         expect(await overlay.locator("pre").textContent()).toBe(label === "bash" ? `Arguments\n{}\n\nResult\n${codeText}` : codeText);
-        expect(await overlay.locator("pre").evaluate((el: HTMLElement) => el.parentElement!.clientHeight)).toBeGreaterThan(256);
+        expect(await overlay.locator("pre").evaluate((el: HTMLElement) => el.clientHeight)).toBeGreaterThan(256);
         expect(await scroller.evaluate((el: HTMLElement) => el.clientHeight)).toBeLessThanOrEqual(256);
         await overlay.getByRole("button", { name: `Copy ${label}`, exact: true }).click();
         expect(await transcriptPage.evaluate(() => navigator.clipboard.readText())).toBe(label === "bash" ? `Arguments\n{}\n\nResult\n${codeText}` : codeText);
@@ -1979,18 +1979,18 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await transcriptPage.waitForFunction(() => Array.from(document.querySelectorAll('[role="status"]')).filter((el) => el.textContent === "Copied").length === 2);
       await transcriptPage.evaluate(() => Reflect.deleteProperty(navigator, "clipboard"));
       expect(await transcriptPage.evaluate(() => navigator.clipboard.readText())).toBe(`Arguments\n{}\n\nResult\n${codeText}`);
-      const tool = transcriptPage.locator("details").filter({ has: transcriptPage.locator('pre[aria-label="bash"]') }).last();
+      const tool = transcriptPage.locator('[data-slot="trace-collapsible"]').filter({ has: transcriptPage.locator('pre[aria-label="bash"]') }).last();
       await tool.getByRole("button", { name: "Collapse tool ↑", exact: true }).click();
-      expect(await tool.locator("pre").isVisible()).toBe(false);
-      await tool.locator("summary").click();
-      expect(await tool.locator("pre").isVisible()).toBe(true);
+      await tool.locator("pre").waitFor({ state: "hidden" });
+      await tool.locator('[data-slot="trace-collapsible-trigger"]').first().click();
+      await tool.locator("pre").waitFor();
       // A partial streamed fence is rendered as code before its closing fence arrives.
       ctrl.history = [...ctrl.history.filter((message) => message.entryKey !== "fenced-stream"), { entryKey: "fenced-stream", itemId: "fenced-stream:0", inputId: "", role: "assistant", text: "~~~py\n  streamed", turnId: "fenced-stream", complete: false }];
       (await transcriptStream(`code-${width}`).promise).enqueue(`data: ${JSON.stringify({ conversationId: `code-${width}`, revision: "hint" })}\n\n`);
       await transcriptPage.locator('pre[aria-label="py"]').waitFor();
       expect(await transcriptPage.locator('pre[aria-label="py"]').textContent()).toBe("  streamed");
       // One remembered wrap setting applies to every block, inline and expanded, long tokens included.
-      const fits = (label: string) => transcriptPage.locator(`#transcript-scroll pre[aria-label="${label}"]`).evaluate((el: HTMLElement) => el.parentElement!.scrollWidth <= el.parentElement!.clientWidth);
+      const fits = (label: string) => transcriptPage.locator(`#transcript-scroll pre[aria-label="${label}"]`).evaluate((el: HTMLElement) => el.scrollWidth <= el.clientWidth);
       expect([await fits("bash"), await fits("sh")]).toEqual([false, false]);
       await transcriptPage.getByRole("button", { name: "Wrap sh", exact: true }).click();
       expect(await transcriptPage.getByRole("button", { name: "Wrap bash", exact: true }).getAttribute("aria-pressed")).toBe("true");
@@ -2002,7 +2002,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       expect(await transcriptPage.getByRole("button", { name: "Wrap sh", exact: true }).getAttribute("aria-pressed")).toBe("true");
       await transcriptPage.getByRole("button", { name: "Expand sh", exact: true }).click();
       const expanded = transcriptPage.getByRole("dialog", { name: "sh", exact: true });
-      const expandedFits = () => expanded.locator("pre").evaluate((el: HTMLElement) => el.parentElement!.scrollWidth <= el.parentElement!.clientWidth);
+      const expandedFits = () => expanded.locator("pre").evaluate((el: HTMLElement) => el.scrollWidth <= el.clientWidth);
       expect(await expandedFits()).toBe(true);
       await expanded.getByRole("button", { name: "Wrap sh", exact: true }).click();
       expect(await expandedFits()).toBe(false);
@@ -2022,17 +2022,17 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     transcriptStreams.clear();
     const detailPage = await browser.newPage();
     await detailPage.goto(`${origin}/s/${Buffer.from("timeline-detail").toString("base64url")}`);
-    const grouped = detailPage.locator("#transcript-scroll summary").filter({ hasText: /^Used \d tools? ▸$/ });
+    const grouped = detailPage.locator('#transcript-scroll [data-slot="trace-collapsible-trigger"]').filter({ hasText: /^Used \d tools?$/ });
     await grouped.waitFor();
-    expect(await grouped.textContent()).toBe("Used 1 tool ▸");
+    expect(await grouped.textContent()).toBe("Used 1 tool");
     expect(await detailPage.evaluate(() => localStorage.getItem("timeline-detail"))).toBeNull();
     await grouped.click();
     ctrl.history = [...detailItems, step("tool", "skill\n{\"name\":\"release\"}", { toolName: "skill", toolCallId: "load" }), step("assistant", "Build is green")]
       .map((item, index) => ({ ...item, entryKey: "detail", itemId: `detail:${index}`, inputId: "", turnId: "", complete: true }));
     (await transcriptStream("timeline-detail").promise).enqueue(`data: ${JSON.stringify({ conversationId: "timeline-detail", revision: "hint" })}\n\n`);
     await detailPage.getByText("Build is green", { exact: true }).waitFor();
-    expect(await grouped.textContent()).toBe("Used 2 tools ▸");
-    expect(await grouped.evaluate((el: HTMLElement) => (el.parentElement as HTMLDetailsElement).open)).toBe(true);
+    expect(await grouped.textContent()).toBe("Used 2 tools");
+    expect(await grouped.getAttribute("aria-expanded")).toBe("true");
     const palette = async (name: string) => {
       await detailPage.locator("footer").getByRole("button", { name: "Open command palette" }).click();
       await detailPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: new RegExp(`^${name}`) }).click();
@@ -2065,7 +2065,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect((await levels.allTextContents()).map((text: string) => text.match(/^Timeline: (Messages only|Quiet|Compact|Detailed|Everything)/)![1])).toEqual(["Messages only", "Quiet", "Compact", "Detailed", "Everything"]);
     await levels.filter({ hasText: "Messages only" }).click();
     await detailPage.getByText("Build is green", { exact: true }).waitFor();
-    expect(await detailPage.locator("#transcript-scroll summary").count()).toBe(0);
+    expect(await detailPage.locator('#transcript-scroll [data-slot="trace-collapsible-trigger"]').count()).toBe(0);
     // Pointer input reaches the Config slider: clicking its far end selects Everything.
     await detailPage.goto(`${origin}/config`);
     const sliderBox = (await detailPage.getByRole("group", { name: "Timeline detail" }).boundingBox())!;
@@ -2074,51 +2074,29 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(JSON.parse((await detailPage.evaluate(() => localStorage.getItem("timeline-detail")))!).rows).toEqual(timelineLevels.at(-1)!.rows);
     await detailPage.close();
     ctrl.history = [];
-    // Agent search matches names or models; Enter picks the first match and closing clears the search.
-    const searchPage = await browser.newPage({ viewport: { width: 1280, height: 844 } });
-    await searchPage.route("**/api/ListAgents", (route: { fulfill(options: { json: unknown }): Promise<void> }) => route.fulfill({ json: { agents: [{ name: "other", model: "gpt" }, { name: "main", model: "root/model", reasoning: "high" }], currentAgent: "other" } }));
-    await searchPage.goto(`${origin}/s/${Buffer.from("named").toString("base64url")}`);
-    const agentPicker = searchPage.getByRole("combobox", { name: "Choose agent" });
+    // The agent menu lists each agent with its model and effort; the agents refetch every 2s without closing it.
+    const agentPage = await browser.newPage({ viewport: { width: 1280, height: 844 } });
+    await agentPage.route("**/api/ListAgents", (route: { fulfill(options: { json: unknown }): Promise<void> }) => route.fulfill({ json: { agents: [{ name: "other", model: "gpt" }, { name: "main", model: "root/model", reasoning: "high" }], currentAgent: "other" } }));
+    await agentPage.goto(`${origin}/s/${Buffer.from("named").toString("base64url")}`);
+    const agentPicker = agentPage.getByRole("button", { name: "Choose agent", exact: true });
     await agentPicker.filter({ hasText: "other" }).waitFor();
     await agentPicker.click();
-    const agentSearch = searchPage.getByLabel("Search agents");
-    const agentOptions = searchPage.getByRole("option");
-    await agentSearch.fill("ROOT");
-    await agentOptions.filter({ hasText: "main" }).waitFor();
-    expect(await agentOptions.allInnerTexts()).toEqual(["main\nroot/model · high"]);
-    await agentSearch.fill("oth");
-    await agentOptions.filter({ hasText: "other" }).waitFor();
-    expect(await agentOptions.count()).toBe(1);
-    await agentSearch.fill("zzz");
-    await searchPage.getByText("No matching agents", { exact: true }).waitFor();
-    expect(await agentOptions.count()).toBe(0);
-    await searchPage.keyboard.press("Escape");
-    await agentSearch.waitFor({ state: "hidden" });
-    await agentPicker.click();
+    const agentOptions = agentPage.getByRole("menuitemradio");
     await agentOptions.nth(1).waitFor();
-    expect(await agentSearch.inputValue()).toBe("");
-    // The agents refetch every 2s; an open, filtered picker keeps its search and highlight.
-    await agentSearch.fill("o");
-    await agentOptions.nth(1).waitFor();
-    await searchPage.waitForTimeout(2500);
-    expect(await agentSearch.inputValue()).toBe("o");
+    expect(await agentOptions.allInnerTexts()).toEqual(["other\ngpt", "main\nroot/model · high"]);
+    expect(await agentOptions.first().getAttribute("aria-checked")).toBe("true");
+    await agentPage.waitForTimeout(2500);
     expect(await agentOptions.count()).toBe(2);
-    await agentSearch.press("ArrowDown");
-    await agentSearch.press("Enter");
+    await agentOptions.filter({ hasText: "main" }).click();
     await agentPicker.filter({ hasText: "main" }).waitFor();
-    await agentSearch.waitFor({ state: "hidden" });
-    await agentPicker.click();
-    await agentSearch.fill("OTH");
-    await agentSearch.press("Enter");
-    await agentPicker.filter({ hasText: "other" }).waitFor();
-    await agentSearch.waitFor({ state: "hidden" });
-    await searchPage.close();
+    await agentOptions.first().waitFor({ state: "hidden" });
+    await agentPage.close();
     for (const width of [1280, 390]) {
       ctrl.rows = [row("recent", "Most recent message"), row("named", "Original preview"), { ...row("pinned", "Pinned preview"), pinned: true }];
       ctrl.yieldBatches = complete(ctrl.rows);
       const detailsPage = await browser.newPage({ viewport: { width, height: 844 } });
       await detailsPage.goto(`${origin}/s/${Buffer.from("named").toString("base64url")}`);
-      await detailsPage.getByRole("combobox", { name: "Choose agent" }).waitFor();
+      await detailsPage.getByRole("button", { name: "Choose agent", exact: true }).waitFor();
       if (width === 390) {
         expect(await detailsPage.locator("main").getByRole("button", { name: "Pin session", exact: true }).count()).toBe(0);
         expect(await detailsPage.locator("main").getByRole("button", { name: "Name session", exact: true }).count()).toBe(0);
@@ -2126,15 +2104,15 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       expect(await detailsPage.getByRole("button", { name: "Steer", exact: true }).isDisabled()).toBe(true);
       if (width === 390) {
         await detailsPage.setViewportSize({ width: 320, height: 568 });
-        const selector = detailsPage.getByRole("combobox", { name: "Choose agent" });
+        const selector = detailsPage.getByRole("button", { name: "Choose agent", exact: true });
         expect((await selector.boundingBox())!.height).toBeGreaterThanOrEqual(44);
         const selectorBox = (await selector.boundingBox())!;
         const sendBox = (await detailsPage.getByRole("button", { name: "Send", exact: true }).boundingBox())!;
         expect(selectorBox.width).toBeLessThanOrEqual(144);
         expect(Math.abs(selectorBox.y - sendBox.y)).toBeLessThan(2);
         await selector.click();
-        await detailsPage.getByRole("option", { name: "main gpt", exact: true }).waitFor();
-        expect((await detailsPage.locator('[data-slot="combobox-content"]').boundingBox())!.width).toBeGreaterThan(selectorBox.width);
+        await detailsPage.getByRole("menuitemradio", { name: "main gpt", exact: true }).waitFor();
+        expect((await detailsPage.locator('[data-slot="dropdown-menu-content"]').boundingBox())!.width).toBeGreaterThan(selectorBox.width);
         expect(await detailsPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         await detailsPage.screenshot({ path: path.join(screenshots, "chat-agent-320.png") });
         await detailsPage.keyboard.press("Escape");
@@ -2263,8 +2241,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await attachmentPage.getByRole("button", { name: "Remove keep.bin", exact: true }).waitFor();
     expect(await attachmentPage.locator("textarea").inputValue()).toBe("  exact file draft\n");
     const beforeFailedUpload = ctrl.prompt.length;
-    await attachmentPage.getByRole("combobox", { name: "Choose agent" }).click();
-    await attachmentPage.getByRole("option", { name: "other gpt" }).click();
+    await attachmentPage.getByRole("button", { name: "Choose agent", exact: true }).click();
+    await attachmentPage.getByRole("menuitemradio", { name: "other gpt" }).click();
     ctrl.uploadError = "drop.bin";
     await attachmentPage.getByRole("button", { name: "Send", exact: true }).click();
     await attachmentPage.getByText("Upload failed: drop.bin", { exact: true }).waitFor();
@@ -2272,7 +2250,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await attachmentPage.locator("textarea").inputValue()).toBe("  exact file draft\n");
     expect(await attachmentPage.getByRole("button", { name: /^Remove .*\.bin$/ }).count()).toBe(2);
     expect(await attachmentPage.locator("textarea").isEnabled()).toBe(true);
-    expect(await attachmentPage.getByRole("combobox", { name: "Choose agent" }).innerText()).toBe("other");
+    expect(await attachmentPage.getByRole("button", { name: "Choose agent", exact: true }).innerText()).toBe("other");
     expect(["keep.bin", "drop.bin"].map((name) => [...uploadedFiles.findLast(({ meta }) => meta.name === name)!.data])).toEqual([[0, 255, 1, 2], [3, 4, 0, 255]]);
     ctrl.uploadError = "";
     ctrl.promptError = true;
@@ -2518,7 +2496,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const retiredPage = await browser.newPage({ viewport: { width: 1280, height: 844 } });
     const retiredPrompts = () => ctrl.prompt.filter((text) => text.startsWith("retired-session:"));
     await retiredPage.goto(`${origin}/s/${Buffer.from("retired-session").toString("base64url")}`);
-    await retiredPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
+    await retiredPage.getByRole("button", { name: "Choose agent", exact: true }).filter({ hasText: "other" }).waitFor();
     await retiredPage.locator("textarea").fill("held hello");
     await retiredPage.getByRole("button", { name: "Stash", exact: true }).click();
     const popped = retiredPage.waitForResponse((response: PromptResponse) => response.url().endsWith("/api/PopQueueItem"));
@@ -2529,7 +2507,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     ctrl.currentAgents.set("retired-session", "retired");
     transcriptStreams.clear();
     await retiredPage.reload();
-    await retiredPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
+    await retiredPage.getByRole("button", { name: "Choose agent", exact: true }).filter({ hasText: "other" }).waitFor();
     await retiredPage.route("**/api/Prompt", (route: { request(): { postDataJSON(): { text: string } }; fulfill(options: object): Promise<void>; continue(): Promise<void> }) => route.request().postDataJSON().text.startsWith("$agent ")
       ? route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ message: "agent is not currently allowed", code: 3 }) })
       : route.continue());
@@ -2557,7 +2535,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     ctrl.queue = [{ id: "queued-work", text: "queued work", delivery: "QUEUE", principal: ctrl.principal }];
     transcriptStreams.clear();
     await retiredPage.reload();
-    await retiredPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
+    await retiredPage.getByRole("button", { name: "Choose agent", exact: true }).filter({ hasText: "other" }).waitFor();
     const steered = retiredPage.waitForResponse((response: PromptResponse) => response.url().endsWith("/api/SteerQueueItem"));
     await retiredPage.locator('[data-queue-id="queued-work"]').getByRole("button", { name: "Send", exact: true }).click();
     await steered;
@@ -2568,7 +2546,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     ctrl.currentAgents.set("blank-session", "");
     transcriptStreams.clear();
     await retiredPage.goto(`${origin}/s/${Buffer.from("blank-session").toString("base64url")}`);
-    await retiredPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
+    await retiredPage.getByRole("button", { name: "Choose agent", exact: true }).filter({ hasText: "other" }).waitFor();
     const blankSent = retiredPage.waitForResponse((response: PromptResponse) => response.url().endsWith("/api/Prompt") && response.request().postDataJSON().text === "hi");
     await retiredPage.locator("textarea").fill("hi");
     await retiredPage.locator("textarea").press("Enter");
@@ -2577,7 +2555,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await retiredPage.route("**/api/ListAgents", (route: { fulfill(options: { json: unknown }): Promise<void> }) => route.fulfill({ json: { agents: [{ name: "other", model: "gpt" }], currentAgent: "" } }));
     transcriptStreams.clear();
     await retiredPage.goto(`${origin}/`);
-    await retiredPage.getByRole("combobox", { name: "Choose agent" }).filter({ hasText: "other" }).waitFor();
+    await retiredPage.getByRole("button", { name: "Choose agent", exact: true }).filter({ hasText: "other" }).waitFor();
     await retiredPage.close();
 
     // Alice reads Bob's recorded authors, never her current identity, in every delivery surface.

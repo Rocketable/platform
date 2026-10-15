@@ -60,15 +60,16 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`background jobs a
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat").replace(/=+$/, "")}`);
     const jobs = page.getByRole("list", { name: "Background jobs" });
     await jobs.getByRole("listitem").first().waitFor();
-    expect(await jobs.getByRole("listitem").allInnerTexts()).toEqual(["old script · running\nOpen\nStop", "research · running\nOpen\nStop", "cron loop · running\nStop", "build · killed (server restarted)\nOpen"]);
+    expect(await jobs.getByRole("listitem").allInnerTexts()).toEqual(["old script\nrunning\nOpen\nStop", "research\nrunning\nOpen\nStop", "cron loop\nrunning\nStop", "build\nkilled (server restarted)\nOpen"]);
+    expect(await jobs.locator('[data-slot="trace-line"]').evaluateAll((lines: HTMLElement[]) => lines.map((line) => line.dataset.status ?? ""))).toEqual(["running", "running", "running", "error"]);
 
     // A finished Completion Note stays one row at Messages only, with its note folded beneath.
-    const note = page.locator("main details").filter({ has: page.locator("summary", { hasText: "tests · finished" }) });
-    expect(await note.getAttribute("open")).toBe(null);
+    const note = page.locator("main").getByRole("button", { name: /^tests\s*finished$/ });
+    expect(await note.getAttribute("aria-expanded")).toBe("false");
     await page.getByText("Working…", { exact: true }).waitFor();
     await page.screenshot({ path: path.join(shots, `background-jobs-${width}.png`) });
-    await note.locator("summary").click();
-    await note.getByText("all green", { exact: false }).waitFor();
+    await note.click();
+    await page.locator('main [data-slot="code-block-code"]', { hasText: "all green" }).waitFor();
 
     // Wait for complete action responses before Open loads an earlier page.
     await Promise.all([page.waitForResponse("**/api/MoveToBackground").then((response: { finished(): Promise<unknown> }) => response.finished()), page.getByRole("button", { name: "Move to background", exact: true }).click()]);
@@ -96,7 +97,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`background jobs a
     live = { movable: false, backgroundJobs: [live.backgroundJobs[3]] };
     notify(JSON.stringify({ conversationId: "chat", revision: "tail" }));
     await page.getByRole("button", { name: "Move to background" }).waitFor({ state: "detached" });
-    expect(await jobs.getByRole("listitem").allInnerTexts()).toEqual(["build · killed (server restarted)\nOpen"]);
+    expect(await jobs.getByRole("listitem").allInnerTexts()).toEqual(["build\nkilled (server restarted)\nOpen"]);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();

@@ -117,23 +117,24 @@ test("transcript and entry HTTP proxy reach Go", async () => {
       expect(await footer.innerText()).not.toContain("Source:");
       expect(await footer.innerText()).not.toContain("Destination:");
       expect(await page.getByRole("group", { name: "Show messages from" }).count()).toBe(0);
-      const trace = page.getByRole("region", { name: /^Turn \d+$/ }).filter({ hasText: "tagged" }).locator(":scope > details");
+      const trace = page.getByRole("region", { name: /^Turn \d+$/ }).filter({ hasText: "tagged" }).locator(':scope > [data-slot="trace"] > [data-slot="trace-collapsible"]');
+      const traceTrigger = trace.locator(':scope > [data-slot="trace-collapsible-trigger"]');
       // The tag call ran inside the execute script; only the script's own row is shown.
-      const tool = trace.locator("details").filter({ hasText: "tagged" });
+      const tool = trace.locator('[data-slot="trace-collapsible"]').filter({ hasText: "tagged" });
       const toolBody = tool.locator("pre").first();
-      // The default Compact level folds each turn's activity into one closed summary row.
-      expect(await page.locator('[aria-label^="Turn "] > details[open]').count()).toBe(0);
-      expect(await trace.locator(":scope > summary").innerText()).toContain("Used 1 tool");
+      // The default Compact level folds each turn's activity into one closed Chain of Thought row.
+      expect(await page.locator('[aria-label^="Turn "] > [data-slot="trace"] > [data-slot="trace-collapsible"] > [aria-expanded="true"]').count()).toBe(0);
+      expect(await traceTrigger.innerText()).toContain("Used 1 tool");
       expect(await toolBody.isVisible()).toBe(false);
       expect(await report.isVisible()).toBe(true);
       expect(await report.count()).toBe(1);
-      await trace.locator(":scope > summary").press("Enter");
-      expect(await trace.getAttribute("open")).not.toBeNull();
+      await traceTrigger.press("Enter");
+      expect(await traceTrigger.getAttribute("aria-expanded")).toBe("true");
       expect(await trace.innerText()).not.toContain("rocketclaw_set_tag");
-      await tool.locator("summary").press("Enter");
-      expect(await toolBody.isVisible()).toBe(true);
+      await tool.locator('[data-slot="trace-collapsible-trigger"]').first().press("Enter");
+      await toolBody.waitFor();
       await tool.getByRole("button", { name: "Collapse tool" }).click();
-      expect(await toolBody.isVisible()).toBe(false);
+      await toolBody.waitFor({ state: "hidden" });
       await page.screenshot({ path: path.join(screenshots, filename) });
       await page.goto(`http://127.0.0.1:${web.port}/s/${Buffer.from(id).toString("base64url")}`);
       const sandboxed = page.locator('[data-slot="message-footer"]').filter({ hasText: "producer (work/a-very-long-provider-qualified-model-name-for-narrow-layout#high) - sandboxed" }).last();
