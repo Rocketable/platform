@@ -22,25 +22,38 @@ func TestLoadConfigFromArgs(t *testing.T) {
 		]
 	}`)
 
-	cfg, err := loadConfigFromArgs([]string{"--config", path, "--addr", "127.0.0.1:8443", "--http-addr", "none"}, func(string) string { return "" })
-	if err != nil {
-		t.Fatal(err)
-	}
+	for _, tt := range []struct {
+		name         string
+		args         []string
+		wantHost     string
+		wantHTTPAddr string
+	}{
+		{"disable HTTP", []string{"--http-addr", "none"}, "example.ts.net", ""},
+		{"override host and HTTP address", []string{"--host", "other.ts.net", "--http-addr", "127.0.0.1:8080"}, "other.ts.net", "127.0.0.1:8080"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			args := append([]string{"--config", path, "--addr", "127.0.0.1:8443"}, tt.args...)
+			cfg, err := loadConfigFromArgs(args, func(string) string { return "" })
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	if cfg.Host != "example.ts.net" {
-		t.Fatalf("Host = %q; want example.ts.net", cfg.Host)
-	}
+			if cfg.Host != tt.wantHost {
+				t.Fatalf("Host = %q; want %q", cfg.Host, tt.wantHost)
+			}
 
-	if cfg.Addr != "127.0.0.1:8443" {
-		t.Fatalf("Addr = %q; want 127.0.0.1:8443", cfg.Addr)
-	}
+			if cfg.Addr != "127.0.0.1:8443" {
+				t.Fatalf("Addr = %q; want 127.0.0.1:8443", cfg.Addr)
+			}
 
-	if cfg.HTTPAddr != "" {
-		t.Fatalf("HTTPAddr = %q; want empty", cfg.HTTPAddr)
-	}
+			if cfg.HTTPAddr != tt.wantHTTPAddr {
+				t.Fatalf("HTTPAddr = %q; want %q", cfg.HTTPAddr, tt.wantHTTPAddr)
+			}
 
-	if cfg.CertCache != defaultCertCache {
-		t.Fatalf("CertCache = %q; want %q", cfg.CertCache, defaultCertCache)
+			if cfg.CertCache != defaultCertCache {
+				t.Fatalf("CertCache = %q; want %q", cfg.CertCache, defaultCertCache)
+			}
+		})
 	}
 }
 
