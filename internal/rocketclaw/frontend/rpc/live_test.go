@@ -701,7 +701,11 @@ func TestHistoryPublicProgress(t *testing.T) {
 	// A was reviewed before it ran and B only during its run; both save under the call's review key.
 	reviews := []string{"public/" + rocketcode.ReviewKey("turn", "A"), "public/" + rocketcode.ReviewKey("turn", "B")}
 	for _, review := range reviews {
-		_, err := sessions.AppendEntryID(ctx, review, &rocketcode.SessionEntry{Type: "turn"})
+		_, err := sessions.AppendEntryID(ctx, review, &rocketcode.SessionEntry{Type: "turn", TurnID: "review", ResponseID: "final", ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"message","id":"answer","role":"assistant","content":"{\"outcome\":\"allow\",\"rationale\":\"The read-only check is within scope.\"}"}`),
+		}, OutputTrace: []json.RawMessage{
+			json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"answer/0","parent_id":"review/final","kind":"text","state":"completed"}}`),
+		}})
 		require.NoError(t, err)
 	}
 
@@ -720,6 +724,7 @@ func TestHistoryPublicProgress(t *testing.T) {
 	require.Equal(t, "turn:public:turn:turn/response/msg/0", held.Messages[1].ItemId)
 	require.False(t, held.Messages[1].Complete)
 	require.True(t, held.Messages[4].Complete, "B finishes independently while A and parent remain active")
+	require.Equal(t, map[string]string{reviews[0]: "The read-only check is within scope.", reviews[1]: "The read-only check is within scope."}, held.ReviewRationales)
 	require.Equal(t, []string{"working", "completed", "blocked"}, []string{held.Messages[2].State, held.Messages[3].State, held.Messages[5].State})
 	require.Equal(t, "canonical-child", held.Messages[2].Agent)
 	// A task row opens its recorded subagent, including the one a continue call continued.
@@ -832,6 +837,7 @@ func TestHistoryPublicProgress(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, view.Running)
 		require.Equal(t, reviews, view.Delegations, "the saved turn keeps its calls' reviews")
+		require.Equal(t, held.ReviewRationales, view.ReviewRationales)
 		encoded, err := json.Marshal(view)
 		require.NoError(t, err)
 		require.NotContains(t, string(encoded), "REVIEWER SENTINEL")

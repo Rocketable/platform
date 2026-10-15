@@ -42,6 +42,10 @@ relabel saved messages. Missing historical values are omitted, and old bare
 model names are shown as recorded without an assumed provider. Optimistic
 inputs are enriched by message ID when their consuming runtime is ready.
 Tool progress shows its state and producer settings, without a Copy action.
+Completed automatic permission reviews show their recorded rationale as a plain-text
+footer inside the tool response, including reviews of nested host-tool calls.
+The permission-review link remains available. Pending reviews and histories
+without a recorded completed final response have no footer.
 Reasoning groups have no footer or Copy action.
 When a session contains sandboxed messages, a slim button group above the
 composer highlights both `sandboxed` and `canonical` by default. Each button
@@ -631,8 +635,8 @@ last applied revision. Recorded message IDs identify saved entry positions,
 separately from render and input IDs; the browser never matches consumption by text.
 Public assistant text appears when the provider emits it, before the request ends.
 Tool and delegation status updates persist independently, without waiting for the
-slowest sibling. Their rows keep the original call order. Private child diagnostics,
-review reasons, and provisional tool arguments are not public progress.
+slowest sibling. Their rows keep the original call order. Private child diagnostics
+and provisional tool arguments are not public progress.
 Final text replaces partial text exactly, including when the final text is empty.
 Stopped or failed turns retain their progress without becoming resumable work.
 Progress does not create command targets or move waiting steers into the model early.

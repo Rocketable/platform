@@ -12,6 +12,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPermissionReviewRationaleUsesCompletedFinalResponse(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		response, state, text, want string
+		commentary                  bool
+	}{
+		{"final", "completed", `{"outcome":"allow","rationale":"The read-only check is within scope."}`, "The read-only check is within scope.", false},
+		{"final", "completed", `{"outcome":"deny","rationale":"The change is outside scope."}`, "The change is outside scope.", false},
+		{"final", "working", `{"outcome":"allow","rationale":"Pending"}`, "", false},
+		{"other", "completed", `{"outcome":"allow","rationale":"Unrelated response"}`, "", false},
+		{"final", "completed", `{"outcome":"unknown","rationale":"Not a decision"}`, "", false},
+		{"final", "completed", `not structured output`, "", false},
+		{"final", "completed", `{"outcome":"allow","rationale":"Commentary is not a final decision"}`, "", true},
+	} {
+		entry := SessionEntry{TurnID: "review", ResponseID: "final", OutputTrace: []json.RawMessage{
+			json.RawMessage(`{"type":"reasoning","text":"{\"outcome\":\"deny\",\"rationale\":\"Do not use reasoning\"}"}`),
+			json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"earlier","parent_id":"review/earlier","kind":"text","state":"completed","text":"{\"outcome\":\"deny\",\"rationale\":\"Do not use earlier output\"}"}}`),
+		}}
+		raw, err := json.Marshal(publicProgressTrace{Type: "rocketcode_public_progress", Progress: PublicProgress{ID: "answer/0", ParentID: "review/" + tc.response, Kind: PublicProgressText, State: PublicProgressState(tc.state), Text: tc.text}})
+		require.NoError(t, err)
+
+		entry.OutputTrace = append(entry.OutputTrace, raw)
+
+		item := testInputMessage(responses.EasyInputMessageRoleAssistant, tc.text, "")
+		if tc.commentary {
+			item.OfMessage.Phase = responses.EasyInputMessagePhaseCommentary
+		}
+
+		item.OfMessage.SetExtraFields(map[string]any{"id": "answer"})
+		entry.ReplayInput, err = ReplayInputFromParams([]responses.ResponseInputItemUnionParam{item})
+		require.NoError(t, err)
+		require.Equal(t, tc.want, entry.PermissionReviewRationale())
+	}
+}
+
 func TestPermissionReviewResponseFormatUsesStrictFourFieldSchema(t *testing.T) {
 	format := permissionReviewResponseFormat()
 	require.NotNil(t, format.OfJSONSchema)
