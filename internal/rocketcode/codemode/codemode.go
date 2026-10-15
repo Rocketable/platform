@@ -308,12 +308,7 @@ func validateArgs(schemaMap, args map[string]any) error {
 		return fmt.Errorf("resolve input schema: %w", err)
 	}
 
-	instance := any(args)
-	if args == nil {
-		instance = map[string]any{}
-	}
-
-	if err := resolved.Validate(instance); err != nil {
+	if err := resolved.Validate(args); err != nil {
 		return fmt.Errorf("validate args: %w", err)
 	}
 
