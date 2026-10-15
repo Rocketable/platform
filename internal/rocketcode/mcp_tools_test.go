@@ -921,7 +921,7 @@ func TestCodeModeSearchOpenCodeShape(t *testing.T) {
 	}}
 
 	index := buildCodeModeSearchIndex(hosts, mcpTools)
-	out := codeModeSearch(index, map[string]any{"query": "echo", "limit": 10})
+	out := codeModeSearch(index, map[string]any{"query": " *echo* ", "limit": 10})
 
 	var parsed codeModeSearchResult
 	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
