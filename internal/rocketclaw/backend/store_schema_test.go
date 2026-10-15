@@ -276,18 +276,18 @@ FROM pg_prepared_statements WHERE starts_with(statement, $1) ORDER BY name`, "sh
 			t.Log(strings.Join(plan, "\n"))
 		}
 
-		n, err := set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Down, 1)
+		n, err := set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Down, 2)
 		require.NoError(t, err)
-		require.Equal(t, 1, n)
+		require.Equal(t, 2, n)
 
 		var index sql.NullString
 
 		require.NoError(t, store.db.QueryRowContext(ctx, `SELECT to_regclass('managed_conversations_sync_destination')::text`).Scan(&index))
 		require.False(t, index.Valid)
 
-		n, err = set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Up, 1)
+		n, err = set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Up, 2)
 		require.NoError(t, err)
-		require.Equal(t, 1, n)
+		require.Equal(t, 2, n)
 	}
 }
 
@@ -387,7 +387,7 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			}
 
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&n))
-			require.Equal(t, 37, n)
+			require.Equal(t, 38, n)
 			// No migration lock may survive startup and poison later pool users.
 			require.Eventually(t, func() bool {
 				var locks int
@@ -454,7 +454,7 @@ func TestSessionMigrationsSerializeLedgerCreation(t *testing.T) {
 
 			var count int
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-			require.Equal(t, 37, count)
+			require.Equal(t, 38, count)
 		})
 	}
 }
@@ -512,7 +512,7 @@ func TestSessionMigrationRollbackAndCatchup(t *testing.T) {
 
 	var n int
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM pg_migrations`).Scan(&n))
-	require.Equal(t, 35, n)
+	require.Equal(t, 36, n)
 
 	var missing sql.NullString
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT to_regclass('slack_channel_facts')::text`).Scan(&missing))
@@ -576,9 +576,9 @@ INSERT INTO session_tags (conversation_id, tags) VALUES
 func TestDropScriptCallsMigration(t *testing.T) {
 	store := newTestSessionService(t)
 	ctx := t.Context()
-	n, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 4)
+	n, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 5)
 	require.NoError(t, err)
-	require.Equal(t, 4, n)
+	require.Equal(t, 5, n)
 
 	progress := `{"type":"rocketcode_public_progress","progress":{"id":"script","kind":"tool","state":"completed"}}`
 	trace := func(files string) string {
@@ -754,9 +754,9 @@ func TestBackgroundJobsMigration(t *testing.T) {
 	}
 
 	for range 2 {
-		n, err := set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Down, 8)
+		n, err := set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Down, 9)
 		require.NoError(t, err)
-		require.Equal(t, 8, n)
+		require.Equal(t, 9, n)
 
 		exists, body := schema()
 		require.False(t, exists)
@@ -765,9 +765,9 @@ func TestBackgroundJobsMigration(t *testing.T) {
 		_, err = store.db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('rolled-back', '{}', '')`)
 		require.NoError(t, err, "the restored transcript trigger still runs")
 
-		n, err = set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Up, 8)
+		n, err = set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Up, 9)
 		require.NoError(t, err)
-		require.Equal(t, 8, n)
+		require.Equal(t, 9, n)
 
 		exists, body = schema()
 		require.True(t, exists)
@@ -788,17 +788,17 @@ func TestSessionSummaryRecencyIndexMigration(t *testing.T) {
 	require.False(t, index.Valid)
 
 	for range 2 {
-		n, err := set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Down, 5)
+		n, err := set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Down, 6)
 		require.NoError(t, err)
-		require.Equal(t, 5, n)
+		require.Equal(t, 6, n)
 
 		var definition string
 		require.NoError(t, store.db.QueryRowContext(ctx, `SELECT pg_get_indexdef('session_summaries_updated'::regclass)`).Scan(&definition))
 		require.Contains(t, definition, `(last_updated DESC, conversation_id COLLATE "C")`)
 
-		n, err = set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Up, 5)
+		n, err = set.ExecMaxContext(ctx, store.db, "postgres", source, migrate.Up, 6)
 		require.NoError(t, err)
-		require.Equal(t, 5, n)
+		require.Equal(t, 6, n)
 		require.NoError(t, store.db.QueryRowContext(ctx, `SELECT to_regclass('session_summaries_updated')::text`).Scan(&index))
 		require.False(t, index.Valid)
 	}

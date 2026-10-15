@@ -7,12 +7,52 @@ import (
 	"fmt"
 	"iter"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketcode"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 )
+
+// PromptPrincipal reads the top-level principal attribute of a recorded prompt header.
+func PromptPrincipal(header string) string {
+	inside, ok := strings.CutPrefix(header, "[")
+	if !ok || !strings.HasSuffix(inside, "]") {
+		return ""
+	}
+
+	_, attributes, _ := strings.Cut(strings.TrimSuffix(inside, "]"), " ")
+	for attributes != "" {
+		name, value, ok := strings.Cut(attributes, "=")
+		if !ok {
+			return ""
+		}
+
+		if strings.HasPrefix(value, `"`) {
+			quoted, err := strconv.QuotedPrefix(value)
+			if err != nil {
+				return ""
+			}
+
+			attributes = value[len(quoted):]
+			if attributes != "" && !strings.HasPrefix(attributes, " ") {
+				return ""
+			}
+
+			if name == "principal" {
+				principal, _ := strconv.Unquote(quoted) // QuotedPrefix already validated this string.
+				return principal
+			}
+		} else {
+			_, attributes, _ = strings.Cut(value, " ")
+		}
+
+		attributes = strings.TrimPrefix(attributes, " ")
+	}
+
+	return ""
+}
 
 func providerForModel(model string) string {
 	model = strings.TrimSpace(model)

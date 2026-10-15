@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -109,6 +110,84 @@ func searchTestSessions(t *testing.T, s *SessionService, slack slackLookup, quer
 	}
 
 	return search, matches
+}
+
+func TestSearchSessionsPrincipalCriteria(t *testing.T) {
+	t.Parallel()
+	s, slack := newSessionSearchFixture(t)
+	ctx := t.Context()
+	require.NoError(t, s.UpsertThread("written-web", ThreadState{Agent: "main"}))
+	require.NoError(t, s.UpsertThread(searchChatW, ThreadState{Agent: "other", CreatedBy: ThreadCreator(`Writer "One"`)}))
+
+	var authored int64
+
+	for _, row := range []struct{ id, role, principal, text string }{
+		{searchChatA, "user", `Writer "One"`, "needle"},
+		{searchChatB, "user", `Writer "One"`, "other prompt"},
+		{searchChatB, "user", "Writer Attachment", ""},
+		{"written-web", "user", "Writer Cut", "hidden by cutoff"},
+		{searchChatW, "assistant", `Writer "One"`, "needle"},
+		{searchChatH, "user", "", `[Web principal="Writer \"One\""] needle`},
+		{"external_mcp:private", "user", `Writer "One"`, "needle"},
+		{searchChatD + "/call-1", "user", `Writer "One"`, "needle"},
+		{"cron:daily", "user", `Writer "One"`, "needle"},
+	} {
+		entry := testReplayEntry(fmt.Sprintf(`{"type":"message","role":%q,"prompt_header":%s,"content":%q}`, row.role, jsonString(fmt.Sprintf("[Web principal=%q]", row.principal)), row.text))
+		if row.id == searchChatA {
+			entry.ReplayInput = append(entry.ReplayInput, json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Web principal=\"Writer Two\"]","content":"follow-up"}`))
+		}
+
+		id, err := s.AppendEntryID(ctx, row.id, entry)
+		require.NoError(t, err)
+
+		if row.id == "written-web" {
+			authored = id
+		}
+	}
+
+	for _, tc := range []struct {
+		query string
+		ids   []string
+	}{
+		{`principal:"Writer \"One\""`, []string{searchChatA, searchChatB}},
+		{`PRINCIPAL:"Writer \"One\"" tag:customer room:support needle`, []string{searchChatA}},
+		{`principal:"Writer \"One\"" principal:"Writer Two"`, []string{searchChatA}},
+		{`principal:"writer \"One\""`, nil},
+		{`principal:unknown`, nil},
+		{`principal:"Writer Cut"`, []string{"written-web"}},
+		{`principal:"Writer Attachment"`, []string{searchChatB}},
+		{`principal:""`, nil},
+		{`principal:"bad\q"`, nil},
+	} {
+		search, matches := searchTestSessions(t, s, slack, tc.query, true)
+
+		ids := make([]string, 0, len(matches))
+		for _, match := range matches {
+			ids = append(ids, match.ID)
+		}
+
+		require.True(t, slices.Equal(tc.ids, ids), "%s: chats %q", tc.query, ids)
+		require.True(t, search.IndexComplete)
+	}
+
+	_, _, err := stageRevertDB(ctx, s.db, "written-web", fmt.Sprintf("%d:0", authored))
+	require.NoError(t, err)
+	filtered, matches := searchTestSessions(t, s, slack, `principal:"Writer Cut"`, false)
+	require.Empty(t, matches)
+	require.Equal(t, []string{`Writer "One"`, "Writer Attachment", "Writer Two"}, filtered.Principals)
+
+	_, criteria, err := s.searchSessionsWithin(ctx, `principal:"Writer \"One\"" principal:"Writer Two"`, &sessionListParams{}, slack)
+	require.NoError(t, err)
+	require.Len(t, criteria, 1)
+	require.Equal(t, searchChatA, criteria[0].Chat.Session.Conversation.ID)
+	unindexMessageSearch(t, s)
+	search, matches := searchTestSessions(t, s, slack, `principal:"Writer \"One\""`, false)
+	require.Empty(t, matches)
+	require.False(t, search.IndexComplete)
+	require.NoError(t, s.backfillMessageSearch(ctx))
+	search, matches = searchTestSessions(t, s, slack, `principal:"Writer \"One\""`, false)
+	require.Len(t, matches, 2)
+	require.True(t, search.IndexComplete)
 }
 
 // Ported from session-list.test.ts; its unfinished words are read as free text.

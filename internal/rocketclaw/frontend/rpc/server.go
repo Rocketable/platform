@@ -18,7 +18,6 @@ import (
 	"os"
 	"os/exec"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -760,47 +759,7 @@ func historyEvent(item *responses.ResponseInputItemUnionParam, raw json.RawMessa
 		inputID, _ = item.OfMessage.ExtraFields()["input_id"].(string)
 	}
 
-	return &TranscriptEvent{Role: role, Text: text, Header: header, Principal: headerPrincipal(header), InputId: inputID, Complete: true}, nil
-}
-
-// headerPrincipal reads top-level attributes from backend/bridge.go's provenanceHeader grammar.
-func headerPrincipal(header string) string {
-	inside, ok := strings.CutPrefix(header, "[")
-	if !ok || !strings.HasSuffix(inside, "]") {
-		return ""
-	}
-
-	_, attributes, _ := strings.Cut(strings.TrimSuffix(inside, "]"), " ")
-	for attributes != "" {
-		name, value, ok := strings.Cut(attributes, "=")
-		if !ok {
-			return ""
-		}
-
-		if strings.HasPrefix(value, `"`) {
-			quoted, err := strconv.QuotedPrefix(value)
-			if err != nil {
-				return ""
-			}
-
-			attributes = value[len(quoted):]
-			if attributes != "" && !strings.HasPrefix(attributes, " ") {
-				return ""
-			}
-
-			if name == "principal" {
-				principal, _ := strconv.Unquote(quoted) // QuotedPrefix already validated this string.
-
-				return principal
-			}
-		} else {
-			_, attributes, _ = strings.Cut(value, " ")
-		}
-
-		attributes = strings.TrimPrefix(attributes, " ")
-	}
-
-	return ""
+	return &TranscriptEvent{Role: role, Text: text, Header: header, Principal: backend.PromptPrincipal(header), InputId: inputID, Complete: true}, nil
 }
 
 func (s *Server) humanConversation(id string) (bool, error) {

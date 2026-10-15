@@ -95,9 +95,9 @@ function slackRooms(sessions: { id: string; title?: string }[]) {
 
 // The query's last word, and whether it is an unfinished operator: a bare key, a strict prefix of an is:/sort: keyword, or an unclosed quote.
 function typingWord(query: string) {
-  const word = /(?:^|\s)((?:tag|cron|agent|room):"(?:[^"\\]|\\.)*\\?|\S*)$/i.exec(query)![1];
+  const word = /(?:^|\s)((?:tag|cron|agent|room|principal):"(?:[^"\\]|\\.)*\\?|\S*)$/i.exec(query)![1];
   const lower = word.toLowerCase();
-  return { word, unfinished: /^(?:tag|cron|agent|room):(?:"(?:[^"\\]|\\.)*\\?)?$/.test(lower) || /^(?:is|sort):/.test(lower) && ["is:pinned", "is:forked", "is:cron", "sort:newest", "sort:oldest"].some((keyword) => keyword !== lower && keyword.startsWith(lower)) };
+  return { word, unfinished: /^(?:tag|cron|agent|room|principal):(?:"(?:[^"\\]|\\.)*\\?)?$/.test(lower) || /^(?:is|sort):/.test(lower) && ["is:pinned", "is:forked", "is:cron", "sort:newest", "sort:oldest"].some((keyword) => keyword !== lower && keyword.startsWith(lower)) };
 }
 
 function termValue(value: string) {
@@ -1267,6 +1267,7 @@ function useSessionSearch(query: string, messages: boolean, entered: boolean) {
   const ids = useMemo(() => rows.map(({ id }) => id).toSorted().join(" "), [rows]);
   const { word, unfinished } = typingWord(query);
   const sent = (entered || !unfinished ? query : query.slice(0, query.length - word.length)).trimEnd();
+  const principalChoices = !sent && /^principal:/i.test(word);
   const [result, setResult] = useState<{ query: string; response?: SearchSessionsResponse; error?: string }>({ query: "" });
   const request = useRef<{ key: string; version: number; failed?: boolean; controller?: AbortController; pending?: Promise<SearchSessionsResponse | undefined> }>({ key: "", version: 0 });
   const waiting = useRef<((read: string, response: SearchSessionsResponse) => void)[]>([]);
@@ -1277,12 +1278,12 @@ function useSessionSearch(query: string, messages: boolean, entered: boolean) {
     clearTimeout(pause.current);
     clearTimeout(deadline.current);
     firstEdit.current = 0;
-    const key = `${text}\n${ids}`;
+    const key = `${text}\n${ids}\n${principalChoices}`;
     if (request.current.key === key && request.current.pending) return request.current.pending;
     request.current.controller?.abort();
     const controller = new AbortController(), version = request.current.version + 1;
     const current = () => request.current.version === version;
-    const pending = text ? rpc<SearchSessionsResponse>("SearchSessions", { query: text, messages }, controller.signal).then((response) => {
+    const pending = text || principalChoices ? rpc<SearchSessionsResponse>("SearchSessions", { query: text, messages }, controller.signal).then((response) => {
       if (!current()) return undefined;
       setResult({ query: text, response });
       for (const resolve of waiting.current.splice(0)) resolve(text, response);
@@ -1292,17 +1293,17 @@ function useSessionSearch(query: string, messages: boolean, entered: boolean) {
       return undefined;
     }).finally(() => { if (current()) request.current.pending = undefined; }) : undefined;
     request.current = { key, version, controller, pending };
-    if (!text) setResult((previous) => previous.query === "" ? previous : { query: "" });
+    if (!text && !principalChoices) setResult((previous) => previous.query === "" ? previous : { query: "" });
     return pending ?? Promise.resolve(undefined);
-  }, [ids, messages]);
+  }, [ids, messages, principalChoices]);
   useEffect(() => {
     // A failed search retries on the next keystroke.
-    if (request.current.key === `${sent}\n${ids}` && !request.current.failed) return;
+    if (request.current.key === `${sent}\n${ids}\n${principalChoices}` && !request.current.failed) return;
     if (!firstEdit.current) firstEdit.current = Date.now();
     pause.current = setTimeout(() => void run(sent), sent ? 250 : 0);
     if (messages) deadline.current = setTimeout(() => void run(sent), Math.max(0, 1000 - (Date.now() - firstEdit.current)));
     return () => { clearTimeout(pause.current); clearTimeout(deadline.current); };
-  }, [query, sent, ids, messages, run]);
+  }, [query, sent, ids, messages, principalChoices, run]);
   useEffect(() => () => { request.current.controller?.abort(); request.current.version++; }, []);
   const pending = !!sent && result.query !== sent;
   const { found, missing } = useMemo(() => matchedRows(result.response, rows), [result.response, rows]);
@@ -1720,10 +1721,10 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
 }
 
 // Values offered for the operator word being typed; a completed value commits on space or Enter instead of offering itself again.
-function searchChoices(word: string, rows: Session[], catalog: Agent[]) {
-  const typed = /^(tag|cron|agent|room|is|sort):"?(.*?)"?$/is.exec(word);
+function searchChoices(word: string, rows: Session[], catalog: Agent[], principals: string[]) {
+  const typed = /^(tag|cron|agent|room|principal|is|sort):"?(.*?)"?$/is.exec(word);
   const key = typed?.[1].toLowerCase() ?? "", needle = typed?.[2].toLowerCase() ?? "";
-  const names = key === "room" ? slackRooms(rows) : key === "cron" ? [...new Set(rows.flatMap((row) => row.cronName ? [row.cronName] : []))] : key === "tag" ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : key === "sort" ? ["newest", "oldest"] : ["pinned", "forked", "cron"];
+  const names = key === "principal" ? principals : key === "room" ? slackRooms(rows) : key === "cron" ? [...new Set(rows.flatMap((row) => row.cronName ? [row.cronName] : []))] : key === "tag" ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : key === "sort" ? ["newest", "oldest"] : ["pinned", "forked", "cron"];
   const offered = !key ? [] : (key === "agent" ? catalog.map(({ name, model, reasoning }) => ({ key: name, detail: [model, reasoning].filter(Boolean).join(" · ") })) : names.map((name) => ({ key: name, detail: "" }))).filter((item) => item.key.toLowerCase().includes(needle));
   return { key, choices: offered.some((item) => item.key.toLowerCase() === needle) ? [] : offered };
 }
@@ -1787,7 +1788,7 @@ function SessionSearch({ rows, catalog, query, setQuery, search, inputRef, place
   const sidebar = useContext(Sidebar);
   const stale = !sidebar.refreshing && rows.length > 0 && !searchIsAuthoritative(sidebar);
   const [overlayPick, setOverlayPick] = useState(0);
-  const { key, choices } = searchChoices(search.word, rows, catalog);
+  const { key, choices } = searchChoices(search.word, rows, catalog, search.result.response?.principals ?? []);
   const { pills, input, change, head, select, edit, remove, pick: choose } = usePills(query, setQuery, search, inputRef);
   const pick = choices.length === 0 ? 0 : overlayPick % choices.length;
   const active = useRef<HTMLButtonElement>(null);
