@@ -167,12 +167,7 @@ func withCodeModeSystemPrompt(base string, modelTools, hosts map[string]looperTo
 		return base
 	}
 
-	extra := codeModeSystemPrompt(hosts, servers)
-	if extra == "" {
-		return base
-	}
-
-	return strings.TrimSpace(base + "\n\n" + extra)
+	return strings.TrimSpace(base + "\n\n" + codeModeSystemPrompt(hosts, servers))
 }
 
 func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool) map[string]looperTool {
