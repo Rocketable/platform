@@ -1374,6 +1374,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     blocked.resolve();
     await shown(page, "new protocol preview");
 
+    // Recovery searches must match Bob's replacement row, not the earlier Alice rows.
+    searches.preview = ["gone"];
     for (const rejection of ["mismatch", "unauthorized"] as const) {
       await page.keyboard.press("Control+p");
       await sessionPalette.waitFor();
@@ -1386,7 +1388,9 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await hidden(page, "new protocol preview");
       await hidden(page, "unconfirmed owner preview");
       await page.keyboard.press("Control+p");
+      const filtered = page.waitForResponse("**/api/SearchSessions");
       await search.fill("preview");
+      await filtered;
       await hidden(page, "new protocol preview");
       blocked = Promise.withResolvers();
       ctrl.yieldBatches = complete([row("gone", "new protocol preview")], "bob");
