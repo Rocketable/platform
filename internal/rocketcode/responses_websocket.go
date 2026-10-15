@@ -140,8 +140,9 @@ func (d *responsesWebsocketDoer) middleware(req *http.Request, next option.Middl
 	defer d.mu.Unlock()
 
 	resp, err := d.doCreate(req, observer)
-	if err != nil {
-		d.resetConn()
+	if err != nil && d.conn != nil {
+		_ = d.conn.Close()
+		d.conn = nil
 	}
 
 	return resp, err
@@ -288,15 +289,6 @@ func (d *responsesWebsocketDoer) readCreate(req *http.Request, observer response
 			return jsonHTTPResponse(req, event.Status, body)
 		}
 	}
-}
-
-func (d *responsesWebsocketDoer) resetConn() {
-	if d.conn == nil {
-		return
-	}
-
-	_ = d.conn.Close()
-	d.conn = nil
 }
 
 func jsonHTTPResponse(req *http.Request, status int, body []byte) (*http.Response, error) {
