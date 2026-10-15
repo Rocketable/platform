@@ -281,6 +281,10 @@ func TestSkillsAvailable(t *testing.T) {
 }
 
 func TestPermissionPrompt(t *testing.T) {
+	t.Run("escapes rule patterns and reviewer names", func(t *testing.T) {
+		prompt := permissionPrompt(PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "deploy\r\n`tag`\\", Action: permissionAuto, Reviewer: "review\r\n`agent`\\"}}}}})
+		require.Contains(t, prompt, "- Require automatic approval by `review  \\`agent\\`\\` for `deploy  \\`tag\\`\\`.")
+	})
 	t.Run("omits generated session tag authority", func(t *testing.T) {
 		permissions := parsePermissionYAML(t, "rocketclaw_tags: {rocketclaw_set_tag: deny, rocketclaw_get_tags: allow}\nread: {README.md: allow}")
 		prompt := permissionPrompt(permissions)

@@ -367,6 +367,7 @@ func permissionPrompt(permissions PermissionSet) string {
 }
 
 func permissionRuleLines(rules []PermissionRule) []string {
+	inlineCode := strings.NewReplacer("\r", " ", "\n", " ", "`", "\\`")
 	lines := make([]string, 2, 2+len(rules))
 	lines[0] = "Rules are listed in order. The last matching rule wins."
 
@@ -381,11 +382,11 @@ func permissionRuleLines(rules []PermissionRule) []string {
 		case permissionAuto:
 			action = "Require automatic approval for"
 			if rule.Reviewer != "" {
-				action = "Require automatic approval by `" + markdownInlineCode(rule.Reviewer) + "` for"
+				action = "Require automatic approval by `" + inlineCode.Replace(rule.Reviewer) + "` for"
 			}
 		}
 
-		lines = append(lines, "- "+action+" `"+markdownInlineCode(rule.Pattern)+"`.")
+		lines = append(lines, "- "+action+" `"+inlineCode.Replace(rule.Pattern)+"`.")
 	}
 
 	return lines
@@ -397,13 +398,6 @@ func permissionPromptName(name string) string {
 	}
 
 	return strings.ToUpper(name[:1]) + name[1:]
-}
-
-func markdownInlineCode(text string) string {
-	text = strings.ReplaceAll(text, "\r", " ")
-	text = strings.ReplaceAll(text, "\n", " ")
-
-	return strings.ReplaceAll(text, "`", "\\`")
 }
 
 func loadSkill(fsys fs.FS, filePath string) (Skill, error) {
