@@ -1363,10 +1363,10 @@ func TestShadowAdmissionPinsAgent(t *testing.T) {
 			return
 		}
 
-		requests <- request.Model
-
 		w.Header().Set("Content-Type", "application/json")
 		writeRawRunMessage(t, w, "response", "message", "answer")
+
+		requests <- request.Model
 	}))
 	t.Cleanup(server.Close)
 	cfg := config.NewLockedConfig(&config.Config{Workspace: root.Name(), OpenAI: config.OpenAIConfig{APIBaseURL: server.URL, APIKey: "test"}})
@@ -1390,7 +1390,10 @@ func TestShadowAdmissionPinsAgent(t *testing.T) {
 	result, err := runTestTurn(t.Context(), bridge, head.inbound, head.id)
 	require.NoError(t, err)
 	require.Equal(t, "main", result.attribution.Agent)
-	require.Equal(t, "gpt-5.5", <-requests)
+	// Let the parent and both shadows reach the provider before shutdown cancels their requests.
+	for range 3 {
+		require.Equal(t, "gpt-5.5", <-requests)
+	}
 }
 
 func TestShadowSiblingFailureIsIndependent(t *testing.T) {
