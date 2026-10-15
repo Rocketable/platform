@@ -109,7 +109,7 @@ test("Voice page keeps each person's conversation and settings on the server, an
     });
     const held = (count: number) => page.waitForFunction((count: number) => (window as unknown as Probe).locks === count, count);
     const probe = () => page.evaluate(() => { const { locks, mics, heard } = window as unknown as Probe; return { locks, mics, heard }; });
-    const status = page.getByRole("status").filter({ hasText: /^(Tap to talk|Connecting…|Listening|Ending…|Tap to try again)/ });
+    const status = page.getByRole("status").filter({ hasText: /^(Tap to talk|Connecting…|Reconnecting…|Listening|Ending…|Tap to try again)/ });
     const live = () => page.waitForFunction(() => /^Listening · 0:\d\d$/.test(document.querySelector('[role="status"][aria-live="polite"]')?.textContent ?? ""));
     const closes = (count: number) => openai.waitForFunction((count: number) => (window as unknown as { closes?: number }).closes === count, count);
     const stored = () => settings().conversationId;
@@ -309,6 +309,20 @@ test("Voice page keeps each person's conversation and settings on the server, an
     await page.reload();
     await page.getByLabel("Transcript", { exact: true }).waitFor(); // tester turned the transcript on earlier.
     expect(settings("guest")).toEqual({ conversationId: "", agent: "", voice: "", transcript: false });
+
+    const sticky = page.getByRole("button", { name: "Sticky", exact: true });
+    await sticky.click();
+    expect(await sticky.getAttribute("aria-pressed")).toBe("true");
+    const start = { calls: calls.length, mics: (await probe()).mics };
+    await page.getByRole("button", { name: "Start voice call", exact: true }).click();
+    await live();
+    voiceStream!.close();
+    await status.getByText("Reconnecting…", { exact: true }).waitFor();
+    await live();
+    expect({ calls: calls.length - start.calls, mics: (await probe()).mics - start.mics, sticky: await sticky.getAttribute("aria-pressed") }).toEqual({ calls: 2, mics: 1, sticky: "true" });
+    await page.getByRole("button", { name: "End voice call", exact: true }).click({ force: true });
+    await status.getByText("Tap to talk", { exact: true }).waitFor();
+    expect(await sticky.getAttribute("aria-pressed")).toBe("false");
   } finally {
     await browser.close();
     server.stop(true);

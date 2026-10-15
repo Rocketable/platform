@@ -12,9 +12,9 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions, rpc, RPCError } from "./api";
 import { draftContent } from "./drafts";
-import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
+import { holdWakeLock, setVoiceSticky, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, TextCursorInput, Undo2, Wrench, X } from "lucide-react";
+import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, TextCursorInput, Undo2, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -3463,7 +3463,7 @@ function Composer({
 function AgentPicker({ catalog, selected, setAgent, open, setOpen, disabled }: { catalog: Agent[]; selected: string; setAgent: (name: string) => void; open: boolean; setOpen: (open: boolean) => void; disabled: boolean }) {
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
-      <DropdownMenuTrigger disabled={disabled} aria-label="Choose agent" title={selected} render={<InputGroupButton size="sm" variant="outline" className="min-h-11 min-w-0 max-w-36 sm:min-h-0" />}>
+      <DropdownMenuTrigger disabled={disabled} aria-label="Choose agent" title={selected} render={<InputGroupButton size="sm" variant="outline" className="min-h-11 min-w-0 max-w-36 shrink sm:min-h-0" />}>
         <Bot /><span className={cn("min-w-0 truncate", !selected && "text-muted-foreground")}>{selected || "Choose agent"}</span><ChevronDown />
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" className="w-[min(28rem,calc(100vw-2rem))]">
@@ -3709,7 +3709,7 @@ function VoicePage() {
 // useOwnVoice is the tab's one call as seen from conversation id: idle unless the call is on id.
 function useOwnVoice(id: string): VoiceView {
   const voice = useVoice();
-  return voice.conversationId === id ? voice : { state: "idle", conversationId: id, error: "", notice: "", captions: [] };
+  return voice.conversationId === id ? voice : { state: "idle", conversationId: id, error: "", notice: "", captions: [], sticky: voice.sticky };
 }
 
 function VoiceClock({ startedAt }: { startedAt: number }) {
@@ -3766,7 +3766,7 @@ function VoiceTranscript({ captions }: { captions: VoiceCaption[] }) {
   </section>;
 }
 
-const voiceStatus: Record<VoiceState, string> = { idle: "Tap to talk", connecting: "Connecting…", live: "Listening", ending: "Ending…", error: "Tap to try again" };
+const voiceStatus: Record<VoiceState, string> = { idle: "Tap to talk", connecting: "Connecting…", reconnecting: "Reconnecting…", live: "Listening", ending: "Ending…", error: "Tap to try again" };
 
 // VoiceStage is the orb with the call's status under it: big and centered, or small
 // at the bottom beside the transcript. It is one orb either way, so it shrinks rather than reappearing.
@@ -3774,7 +3774,7 @@ const voiceStatus: Record<VoiceState, string> = { idle: "Tap to talk", connectin
 function VoiceStage({ voice, compact, busy, loading, error, onPress }: { voice: VoiceView; compact: boolean; busy: boolean; loading: boolean; error?: string; onPress: () => void }) {
   const active = voice.state !== "idle" && voice.state !== "error";
   return <div className={cn("flex flex-col items-center", compact ? "shrink-0 gap-2" : "flex-1 justify-center gap-10 py-10")}>
-    <VoiceOrb state={voice.state} data-size={compact ? "small" : "large"} aria-label={active ? "End voice call" : "Start voice call"} aria-pressed={active} disabled={busy || voice.state === "ending" || (!active && loading)} onClick={onPress} />
+    <VoiceOrb state={voice.state === "reconnecting" ? "connecting" : voice.state} data-size={compact ? "small" : "large"} aria-label={active ? "End voice call" : "Start voice call"} aria-pressed={active} disabled={busy || voice.state === "ending" || (!active && loading)} onClick={onPress} />
     <span role="status" aria-live="polite" className="text-sm tracking-wide text-muted-foreground">{voiceStatus[voice.state]}{voice.state === "live" ? <VoiceClock startedAt={voice.startedAt!} /> : null}</span>
     <span aria-live="polite" className="text-center text-sm">{voice.notice}</span>
     {error ? <p role="alert" className="text-center text-sm text-destructive">{error}</p> : null}
@@ -3798,7 +3798,7 @@ function useVoiceSettings(username: string) {
   });
   const [callId, setCallId] = useState("");
   const call = useOwnVoice(callId);
-  const id = ["connecting", "live", "ending"].includes(call.state) ? callId : saved.conversationId;
+  const id = ["connecting", "reconnecting", "live", "ending"].includes(call.state) ? callId : saved.conversationId;
   // The page owns its call: Reset and leaving the page hang it up.
   useEffect(() => () => { if (voiceView().conversationId === id && voiceView().state !== "error") stopVoice(); }, [id]);
   // Until the person's settings load, Start would create a conversation with defaults that overwrite them.
@@ -3833,7 +3833,7 @@ function VoiceCall({ username }: { username: string }) {
   const speaker = voiceChoice(agentInfo, saved.voice);
   // Leaving cancels a start still creating its conversation.
   const left = useRef(false);
-  useEffect(() => () => { left.current = true; }, []);
+  useEffect(() => () => { left.current = true; setVoiceSticky(false); }, []);
   // Start always asks the server, so a conversation another device reset is never called.
   const start = useMutation({ mutationKey: ["voiceCall", username], mutationFn: async () => {
     const next = await mutations.voiceSettings({ action: "START", agent: selected });
@@ -3864,9 +3864,10 @@ function VoiceCall({ username }: { username: string }) {
   return (
     <div className="mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col gap-4 p-4">
       <PageTitle>Voice</PageTitle>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5 sm:gap-2 max-sm:[&>:first-child>svg:first-child]:hidden">
         <AgentPicker catalog={catalog} selected={selected} setAgent={(name) => pick.mutate(name)} open={picking} setOpen={setPicking} disabled={[active, start.isPending, pick.isPending, catalog.length === 0].some(Boolean)} />
         {agentInfo && voices.length > 0 ? <VoicePicker voices={voices} value={speaker} disabled={active || start.isPending} onPick={(name) => update.mutate({ voice: name })} /> : null}
+        <StickyToggle />
         <div className="ml-auto flex items-center gap-1">
           <Button variant={transcript ? "secondary" : "ghost"} size="icon" className="size-11 sm:size-8" aria-label="Show transcript" title="Show transcript" aria-pressed={transcript} onClick={() => update.mutate({ transcript: !transcript })}><Captions /></Button>
           {id ? <>
@@ -3889,6 +3890,12 @@ function VoiceCall({ username }: { username: string }) {
       </Dialog>
     </div>
   );
+}
+
+// StickyToggle makes the tab's call reconnect after network losses until it is hung up.
+function StickyToggle() {
+  const { sticky } = useVoice();
+  return <Button variant={sticky ? "default" : "outline"} size="icon" className="size-11 sm:size-8" aria-label="Sticky" aria-pressed={sticky} title="Sticky: reconnect after a lost connection until you hang up" onClick={() => setVoiceSticky(!sticky)}><Magnet /></Button>;
 }
 
 function VoiceToggle({ sessionId }: { sessionId: string }) {
