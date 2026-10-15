@@ -2189,6 +2189,117 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 	entries, err = store.ObserveEntries(t.Context(), orphanID)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
+
+	for _, tc := range []struct {
+		name, conversation, parent, destination string
+		orphan                                  bool
+	}{
+		{"scheduled", emptySlack, "", "", false},
+		{"scheduled orphan", "external_mcp:scheduled", "", "", true},
+		{"scheduled shadow", "scheduled-child", "scheduled-parent", "", false},
+		{"scheduled producer", "scheduled-producer", "", "scheduled-owner", false},
+		{"scheduled producer shadow", "scheduled-child", "scheduled-producer", "scheduled-owner", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestSessionService(t)
+			ctx := t.Context()
+
+			for _, id := range []string{tc.conversation, tc.parent, tc.destination} {
+				if id != "" && (!tc.orphan || id != tc.conversation) {
+					require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "planner"}))
+				}
+			}
+
+			if tc.orphan || tc.conversation == emptySlack {
+				_, err := store.AppendEntryID(ctx, tc.conversation, testSessionEntryAt(cutoff.Add(-time.Hour), tc.conversation))
+				require.NoError(t, err)
+			}
+
+			producer := tc.conversation
+			if tc.parent != "" {
+				_, err := store.db.ExecContext(ctx, `INSERT INTO shadow_bindings (child_conversation_id, parent_conversation_id, parent_agent, shadow_agent) VALUES ($1, $2, 'planner', 'shadow')`, tc.conversation, tc.parent)
+				require.NoError(t, err)
+
+				producer = tc.parent
+			}
+
+			if tc.destination != "" {
+				_, err := store.db.ExecContext(ctx, `UPDATE managed_conversations SET producer_inbound_json = json_build_object('SyncDestination', $2::text) WHERE conversation_id = $1`, producer, tc.destination)
+				require.NoError(t, err)
+			}
+
+			scheduled := protocol.ScheduledMessageState{ConversationID: tc.conversation, Agent: "planner", Message: "pending follow-up", DueAt: cutoff.Add(5040 * time.Hour)}
+			require.NoError(t, store.PutScheduledMessage("pending", &scheduled))
+			_, err := store.PruneStateBefore(ctx, cutoff)
+			require.NoError(t, err)
+			messages, err := store.ScheduledMessagesForConversation(tc.conversation)
+			require.NoError(t, err)
+			assert.Equal(t, map[string]protocol.ScheduledMessageState{"pending": scheduled}, messages)
+
+			for _, id := range []string{tc.conversation, tc.parent, tc.destination} {
+				if id != "" && (!tc.orphan || id != tc.conversation) {
+					_, ok, err := store.Thread(id)
+					require.NoError(t, err)
+					assert.True(t, ok, id)
+				}
+			}
+
+			require.NoError(t, store.ResetScheduledMessages(tc.conversation))
+			_, err = store.PruneStateBefore(ctx, cutoff)
+			require.NoError(t, err)
+
+			for _, id := range []string{tc.conversation, tc.parent, tc.destination} {
+				if id != "" {
+					_, ok, err := store.Thread(id)
+					require.NoError(t, err)
+					assert.False(t, ok, id)
+				}
+			}
+
+			entries, err := store.ObserveEntries(ctx, tc.conversation)
+			require.NoError(t, err)
+			assert.Empty(t, entries)
+		})
+	}
+
+	t.Run("pending producer effect", func(t *testing.T) {
+		store := newTestSessionService(t)
+
+		ctx := t.Context()
+		for _, id := range []string{managedID, "scheduled-producer", "scheduled-child"} {
+			require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "planner"}))
+		}
+
+		_, err := store.db.ExecContext(ctx, `INSERT INTO shadow_bindings (child_conversation_id, parent_conversation_id, parent_agent, shadow_agent) VALUES ('scheduled-child', 'scheduled-producer', 'planner', 'shadow')`)
+		require.NoError(t, err)
+		_, err = store.db.ExecContext(ctx, `UPDATE managed_conversations SET producer_inbound_json = json_build_object('SyncDestination', $1::text) WHERE conversation_id = 'scheduled-producer'`, managedID)
+		require.NoError(t, err)
+
+		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "scheduled-producer", Agent: "planner", SessionService: store}}
+		origin := &protocol.InboundMessage{SyncDestination: managedID}
+		require.NoError(t, bridge.ScheduleMessage(origin, 5040*time.Hour, "pending follow-up", false))
+
+		_, err = store.PruneStateBefore(ctx, cutoff)
+		require.NoError(t, err)
+		_, ok, err := store.Thread(managedID)
+		require.NoError(t, err)
+		require.True(t, ok)
+
+		effects, err := (stateDAO{db: store.db}).producerEffects(ctx, "scheduled-producer", 0)
+		require.NoError(t, err)
+		require.Len(t, effects, 1)
+		require.NoError(t, bridge.ResetScheduledMessages(origin))
+
+		_, err = store.PruneStateBefore(ctx, cutoff)
+		require.NoError(t, err)
+		_, ok, err = store.Thread(managedID)
+		require.NoError(t, err)
+		assert.False(t, ok)
+
+		effects, err = (stateDAO{db: store.db}).producerEffects(ctx, "scheduled-producer", 0)
+		require.NoError(t, err)
+		assert.Empty(t, effects)
+	})
 }
 
 func TestSessionServicePrunesStaleExternalConversationWithActiveTurn(t *testing.T) {
