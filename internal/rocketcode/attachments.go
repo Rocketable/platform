@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"mime"
-	"net/url"
 	"strings"
 
 	openai "github.com/openai/openai-go/v3"
@@ -261,13 +260,4 @@ func textFromHTMLString(s string) (string, error) {
 	walk(doc, false)
 
 	return strings.TrimSpace(out.String()), nil
-}
-
-func originForURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return ""
-	}
-
-	return u.Scheme + "://" + u.Host
 }
