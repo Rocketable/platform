@@ -513,15 +513,6 @@ func stripHeredoc(input string) string {
 	return strings.Join(lines[1:len(lines)-1], "\n")
 }
 
-func joinBOM(text string, bom bool) string {
-	text = strings.TrimPrefix(text, "\ufeff")
-	if !bom {
-		return text
-	}
-
-	return "\ufeff" + text
-}
-
 func readTextFile(sfs *sandboxedFileSystem, name string) (text string, bom bool, err error) {
 	name, err = normalizeRootName(sfs.root, name)
 	if err != nil {
@@ -554,7 +545,12 @@ func writeTextFile(sfs *sandboxedFileSystem, name, text string, bom bool) error 
 		}
 	}
 
-	if err := sfs.root.WriteFile(name, []byte(joinBOM(text, bom)), 0o644); err != nil {
+	text = strings.TrimPrefix(text, "\ufeff")
+	if bom {
+		text = "\ufeff" + text
+	}
+
+	if err := sfs.root.WriteFile(name, []byte(text), 0o644); err != nil {
 		return fmt.Errorf("write text file %q: %w", name, err)
 	}
 
