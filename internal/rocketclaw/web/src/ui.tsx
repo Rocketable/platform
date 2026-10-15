@@ -1545,7 +1545,7 @@ type SavedSearches = { tabs: SavedSearch[]; active: string };
 
 function SearchPage() {
   const identity = useQuery(queries.identity());
-  if (!identity.isSuccess) return null;
+  if (!identity.data) return null;
   return <SearchTabs key={identity.data.username} owner={identity.data.username} />;
 }
 
@@ -3702,7 +3702,7 @@ function CronPage() {
 
 function VoicePage() {
   const identity = useQuery(queries.identity());
-  if (!identity.isSuccess) return null;
+  if (!identity.data) return null;
   return <VoiceCall key={identity.data.username} username={identity.data.username} />;
 }
 

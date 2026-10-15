@@ -320,6 +320,13 @@ test("Voice page keeps each person's conversation and settings on the server, an
     await status.getByText("Reconnecting…", { exact: true }).waitFor();
     await live();
     expect({ calls: calls.length - start.calls, mics: (await probe()).mics - start.mics, sticky: await sticky.getAttribute("aria-pressed") }).toEqual({ calls: 2, mics: 1, sticky: "true" });
+    await page.route(/\/api\/(Identity|Voice)$/, (route: { abort(): Promise<void> }) => route.abort());
+    voiceStream!.close();
+    await status.getByText("Reconnecting…", { exact: true }).waitFor();
+    await page.waitForEvent("requestfailed", (request: { url(): string }) => request.url().endsWith("/api/Identity"));
+    await page.unroute(/\/api\/(Identity|Voice)$/);
+    await live();
+    expect({ mics: (await probe()).mics - start.mics, sticky: await sticky.getAttribute("aria-pressed") }).toEqual({ mics: 1, sticky: "true" });
     await page.getByRole("button", { name: "End voice call", exact: true }).click({ force: true });
     await status.getByText("Tap to talk", { exact: true }).waitFor();
     expect(await sticky.getAttribute("aria-pressed")).toBe("false");

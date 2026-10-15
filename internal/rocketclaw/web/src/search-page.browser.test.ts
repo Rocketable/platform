@@ -93,6 +93,12 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     await search.waitFor();
     expect(await tabs.last().getAttribute("aria-selected")).toBe("true");
     expect(await search.inputValue()).toBe("same");
+    const box = await search.elementHandle();
+    await page.route("**/api/Identity", (route: { abort(): Promise<void> }) => route.abort());
+    await page.waitForEvent("requestfailed", (request: { url(): string }) => request.url().endsWith("/api/Identity"));
+    await page.unroute("**/api/Identity");
+    await page.waitForResponse((response: { url(): string; ok(): boolean }) => response.url().endsWith("/api/Identity") && response.ok());
+    expect(await box.evaluate((node: HTMLElement) => node.isConnected)).toBe(true);
     await tabs.first().click();
     expect(await page.getByRole("dialog", { name: "Rename search" }).count()).toBe(0);
     await tabs.first().click();
