@@ -147,6 +147,132 @@ test("preview tabs, promotion, pins, close commands, middle-click, and drag surv
   expect(page.url()).toBe(`${origin}/`);
 }), 60_000);
 
+for (const width of [1280, 320]) test(`copy page link across pages at ${width}px`, () => withPage({ viewport: { width, height: 800 }, hasTouch: width === 320, permissions: ["clipboard-read", "clipboard-write"] }, async (page, origin) => {
+  const copy = page.getByRole("button", { name: "Copy page link", exact: true });
+  const status = page.locator("footer").getByRole("status");
+  for (const pathname of ["/", `${href("alpha")}?view=one%20%26%20two#result%2Fthree`, "/search?q=tag%3A%22two%20words%22%20%26%20%2B%25#result%2Ftwo", "/cron", "/agents", "/skills", "/skills/example", "/config", "/voice"]) {
+    await page.goto(`${origin}${pathname}`);
+    // Search normalizes its address after identity loads; compare the clipboard with that settled URL.
+    if (pathname.startsWith("/search")) await page.waitForURL(`${origin}/search?q=tag%3A%22two+words%22+%26+%2B%25`);
+    if (pathname.startsWith("/s/")) expect(page.url()).toBe(`${origin}${pathname}`);
+    await copy.waitFor();
+    if (width === 320) await copy.tap();
+    else { await copy.focus(); await page.keyboard.press("Enter"); }
+    await status.filter({ hasText: "Page link copied" }).waitFor();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(page.url());
+    expect(await copy.locator("svg.lucide-check").count()).toBe(1);
+    const buttons = page.locator("#bottom-navigation").getByRole("button");
+    const boxes = await buttons.evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => {
+      const { x, y, width, height } = node.getBoundingClientRect();
+      return { x, y, width, height };
+    }));
+    expect(boxes).toHaveLength(5);
+    for (const [index, box] of boxes.entries()) {
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(width);
+      expect(Math.round(box.width)).toBe(width === 320 ? 48 : 32);
+      expect(Math.round(box.height)).toBe(width === 320 ? 48 : 32);
+      if (index) expect(boxes[index - 1].x + boxes[index - 1].width).toBeLessThanOrEqual(box.x);
+    }
+  }
+  if (width === 1280) {
+    // Config can finish after Search canonicalizes its URL; that must not replace a focused copy control.
+    const config = Promise.withResolvers<void>();
+    await page.route("**/api/ListConfig", async (route: any) => { await config.promise; await route.continue(); });
+    await page.goto(`${origin}/search?q=two%20words`);
+    await page.waitForURL(`${origin}/search?q=two+words`);
+    const focusedCopy = await copy.elementHandle();
+    await copy.focus();
+    config.resolve();
+    await page.waitForFunction(() => !document.querySelector("main fieldset")!.hasAttribute("disabled"));
+    expect(await focusedCopy.evaluate((node: HTMLElement) => ({ connected: node.isConnected, focused: document.activeElement === node }))).toEqual({ connected: true, focused: true });
+    await page.keyboard.press("Enter");
+    await status.filter({ hasText: "Page link copied" }).waitFor();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${origin}/search?q=two+words`);
+    await page.unroute("**/api/ListConfig");
+    for (const name of ["Cron", "Agents", "Cron"]) {
+      await page.getByRole("tab", { name, exact: true }).click();
+      await page.waitForURL(`${origin}/${name.toLowerCase()}`);
+    }
+    const tabCopy = await copy.elementHandle();
+    await copy.focus();
+    await page.keyboard.press("Control+BracketRight");
+    await page.waitForURL(`${origin}/agents`);
+    expect(await tabCopy.evaluate((node: HTMLElement) => ({ connected: node.isConnected, focused: document.activeElement === node }))).toEqual({ connected: true, focused: true });
+    await page.keyboard.press("Enter");
+    await status.filter({ hasText: "Page link copied" }).waitFor();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${origin}/agents`);
+  }
+  await page.getByRole("button", { name: "New session", exact: true }).click();
+  await page.waitForURL(`${origin}/`);
+  await copy.click();
+  await status.filter({ hasText: "Page link copied" }).waitFor();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${origin}/`);
+  await page.getByRole("button", { name: "Search sessions", exact: true }).click();
+  await page.getByRole("dialog", { name: "Go to session" }).waitFor();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Open command palette", exact: true }).click();
+  await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search", exact: true }).click();
+  await page.getByRole("dialog").waitFor({ state: "detached" });
+  await page.waitForURL((url: URL) => url.pathname === "/search");
+  await page.getByRole("main").getByRole("textbox", { name: "Search sessions", exact: true }).fill("two words & +%");
+  await page.waitForURL((url: URL) => url.searchParams.get("q") === "two words & +%");
+  await page.evaluate(() => { location.hash = "match%2Ftwo"; });
+  await copy.click();
+  await status.filter({ hasText: "Page link copied" }).waitFor();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(page.url());
+  for (const pathname of ["/search", href("alpha")]) {
+    await page.goto(`${origin}${pathname}`);
+    await copy.click();
+    await status.filter({ hasText: "Page link copied" }).waitFor();
+    const input = pathname === "/search" ? page.getByRole("main").getByRole("textbox", { name: "Search sessions", exact: true }) : page.getByPlaceholder("Message or $command");
+    await input.focus();
+    await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw new Error("Copy denied"); } } }));
+    await copy.click();
+    await status.filter({ hasText: "Could not copy page link" }).waitFor();
+    await input.focus();
+    expect(await copy.locator("svg.lucide-circle-alert").isVisible()).toBe(true);
+    expect(await copy.locator("svg.lucide-check").count()).toBe(0);
+    expect(await status.textContent()).not.toContain("Page link copied");
+    expect(await page.getByRole("tooltip").count()).toBe(0);
+    if (pathname.startsWith("/s/")) {
+      await input.fill("next message");
+      expect(await page.getByRole("button", { name: "Send", exact: true }).evaluate((node: HTMLElement) => {
+        const rect = node.getBoundingClientRect();
+        const status = document.querySelector('footer [role="status"]')!.getBoundingClientRect();
+        return {
+          tappable: node.contains(document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2)),
+          unobscured: status.right <= rect.left || status.left >= rect.right || status.bottom <= rect.top || status.top >= rect.bottom,
+        };
+      })).toEqual({ tappable: true, unobscured: true });
+    }
+  }
+}), 60_000);
+
+test("copy page link on plain HTTP without Clipboard API", () => withPage({ permissions: ["clipboard-read", "clipboard-write"] }, async (page, origin) => {
+  await page.route("http://copy.test/**", async (route: any) => {
+    if (new URL(route.request().url()).pathname === "/stream") return route.fulfill({ contentType: "text/event-stream", body: ": connected\n\n" });
+    await route.fulfill({ response: await route.fetch({ url: route.request().url().replace("http://copy.test", origin) }) });
+  });
+  const url = `http://copy.test${href("alpha")}?view=one%20%26%20two#result%2Fthree`;
+  await page.goto(url);
+  expect(await page.evaluate(() => ({ secure: isSecureContext, clipboard: typeof navigator.clipboard }))).toEqual({ secure: false, clipboard: "undefined" });
+  const copy = page.getByRole("button", { name: "Copy page link", exact: true });
+  await copy.click();
+  const status = page.locator("footer").getByRole("status");
+  await status.filter({ hasText: "Page link copied" }).waitFor();
+  expect(await copy.evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
+  const reader = await page.context().browser().newPage({ permissions: ["clipboard-read", "clipboard-write"] });
+  await reader.goto(origin);
+  expect(await reader.evaluate(() => navigator.clipboard.readText())).toBe(url);
+  await reader.close();
+  await page.evaluate(() => { document.execCommand = () => false; });
+  await copy.click();
+  await status.filter({ hasText: "Could not copy page link" }).waitFor();
+  expect(await status.isVisible()).toBe(true);
+  expect(await copy.locator("svg.lucide-check").count()).toBe(0);
+}), 30_000);
+
 test("storage reset, deep links, keyboard, page close, palette commands, and placement", () => withPage({}, async (page, origin) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   await page.goto(`${origin}/`);

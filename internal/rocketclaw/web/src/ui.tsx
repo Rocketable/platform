@@ -14,7 +14,7 @@ import { queries, mutations, listSessions, rpc, RPCError } from "./api";
 import { draftContent } from "./drafts";
 import { holdWakeLock, setVoiceSticky, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, TextCursorInput, Undo2, Wrench, X } from "lucide-react";
+import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, TextCursorInput, Undo2, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -691,6 +691,26 @@ function SidebarToggle({ open, setOpen }: { open: boolean; setOpen: Dispatch<Set
   </TooltipTrigger><TooltipContent side="top">{label}</TooltipContent></Tooltip>;
 }
 
+function CopyPageLink() {
+  const [status, setStatus] = useState<"copied" | "error">();
+  const Icon = status === "copied" ? Check : status === "error" ? CircleAlert : Share;
+  const message = status === "copied" ? "Page link copied" : status === "error" ? "Could not copy page link. Copy the address from your browser." : "";
+  return <div className="shrink-0">
+    <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)]" />} aria-label="Copy page link" onClick={async () => {
+      setStatus(undefined);
+      try {
+        await copyText(location.href, document.body);
+        setStatus("copied");
+      } catch {
+        setStatus("error");
+      }
+    }}>
+      <Icon className={cn("size-[var(--navigation-icon)]", status === "error" && "text-destructive")} />
+    </TooltipTrigger><TooltipContent side="top">{message || "Copy page link"}</TooltipContent></Tooltip>
+    <span role="status" className="sr-only">{message}</span>
+  </div>;
+}
+
 // Comparison columns share the existing panels' pointer/keyboard width policy.
 function useAsideWidth(side: "tabs" | "delegation" | "shadow") {
   const [edge, label, fallback, min, max] = side === "tabs" ? [1, "Resize tabs", 224, 192, 512] : [-1, `Resize ${side} panel`, 384, 288, Math.round(innerWidth * 0.6)];
@@ -1047,6 +1067,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
                   <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Open command palette" onClick={() => openPalette("commands")}>
                     <Command className="size-[var(--navigation-icon)]" />
                   </TooltipTrigger><TooltipContent side="top">Open command palette</TooltipContent></Tooltip>
+                  <CopyPageLink />
                 </div>
               </div>
             </BottomNavigation>
