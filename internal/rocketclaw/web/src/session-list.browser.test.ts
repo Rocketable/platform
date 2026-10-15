@@ -227,7 +227,7 @@ test("pending saves, delayed hydration and owner switches cannot beat deletion o
 
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
-test("room autocomplete keeps both selections on each search surface", async () => {
+test("room autocomplete keeps selections and full labels on each search surface", async () => {
   const { chromium: engine } = await import(playwright!);
   const rows: Session[] = [
     { id: "slack-thread:C11:1", title: "amber", preview: "Amber result", agent: "main" },
@@ -235,6 +235,7 @@ test("room autocomplete keeps both selections on each search surface", async () 
     { id: "slack-thread:C13:1", title: "cobalt", preview: "Cobalt result", agent: "other" },
   ];
   const queries: string[] = [];
+  const longRooms = ["synthetic-observatory-room-with-a-long-shared-prefix-for-wrapping-amber", "synthetic observatory room with a long shared prefix for wrapping blue"];
   const results: Record<string, number[]> = {
     "room:amber": [0], 'room:amber room:"Blue garden"': [0, 1], 'room:"Blue garden"': [1],
     'room:"Blue garden" agent:main': [1], 'room:"Blue garden" agent:other': [],
@@ -254,7 +255,7 @@ test("room autocomplete keeps both selections on each search surface", async () 
     if (url.pathname === "/api/SearchSessions") {
       const { query } = await request.json() as { query: string };
       queries.push(query);
-      const terms = ["room:amber", 'room:"Blue garden"', "agent:main", "agent:other"].flatMap((text) => {
+      const terms = ["room:amber", 'room:"Blue garden"', "agent:main", "agent:other", ...longRooms.map((room) => `room:${JSON.stringify(room)}`)].flatMap((text) => {
         const start = query.indexOf(text);
         return start < 0 ? [] : [{ key: text.split(":")[0], text, start, end: start + text.length }];
       }).sort((a, b) => a.start - b.start);
@@ -297,6 +298,34 @@ test("room autocomplete keeps both selections on each search surface", async () 
       await surface.getByRole("button", { name: "agent:other", exact: true }).waitFor();
       expect(await surface.getByRole("button", { name: "agent:main", exact: true }).count()).toBe(0);
       expect(await surface.getByRole("button", { name: 'room:"Blue garden"', exact: true }).count()).toBe(1);
+      await surface.getByRole("button", { name: "agent:other", exact: true }).click();
+      await surface.getByRole("button", { name: 'room:"Blue garden"', exact: true }).click();
+      await input.fill(longRooms.map((room) => `room:${JSON.stringify(room)} `).join(""));
+      for (const width of [1280, 320]) {
+        await page.setViewportSize({ width, height: 800 });
+        await page.evaluate(() => document.fonts.ready);
+        await surface.evaluate((node: HTMLElement) => Promise.all(node.getAnimations({ subtree: true }).map((animation) => animation.finished)));
+        for (const room of longRooms) {
+          const label = `room:${JSON.stringify(room)}`;
+          const pill = surface.getByRole("button", { name: label, exact: true });
+          await pill.waitFor();
+          expect(await pill.innerText()).toBe(label);
+          expect(await pill.evaluate((button: HTMLElement) => {
+            const text = button.firstElementChild as HTMLElement;
+            const bounds = button.getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(text);
+            return {
+              ellipsis: getComputedStyle(text).textOverflow === "ellipsis",
+              fitsText: text.scrollWidth <= text.clientWidth,
+              fitsViewport: bounds.left >= 0 && bounds.right <= innerWidth,
+              containsText: [...range.getClientRects()].every((rect) => rect.left >= bounds.left && rect.right <= bounds.right && rect.top >= bounds.top && rect.bottom <= bounds.bottom),
+            };
+          })).toEqual({ ellipsis: false, fitsText: true, fitsViewport: true, containsText: true });
+        }
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await page.screenshot({ path: path.join(screenshots, `room-pills-${palette ? "palette" : "search"}-${width}.png`) });
+      }
       if (!palette) {
         const query = '😀 room:"Blue garden" room:amber ';
         await page.goto(`${origin}/search?q=${encodeURIComponent(query)}`);

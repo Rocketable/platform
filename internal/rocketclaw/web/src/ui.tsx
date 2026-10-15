@@ -111,8 +111,8 @@ function cutTerms(text: string, terms: { start: number; end: number }[]) {
 
 function FilterPill({ label, onClear }: { label: string; onClear: () => void }) {
   return (
-    <button type="button" className="flex h-5 max-w-[8rem] shrink-0 items-center rounded-full bg-sidebar-row-active px-2 text-xs" onMouseDown={(event) => event.preventDefault()} onClick={onClear}>
-      <span className="truncate">{label}</span>
+    <button type="button" className="flex min-h-5 max-w-full shrink-0 items-center rounded-full bg-sidebar-row-active px-2 text-xs" onMouseDown={(event) => event.preventDefault()} onClick={onClear}>
+      <span className="min-w-0 text-left whitespace-normal [overflow-wrap:anywhere]">{label}</span>
     </button>
   );
 }
