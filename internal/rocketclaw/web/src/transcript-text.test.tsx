@@ -29,7 +29,8 @@ test("fenced blocks preserve code, recognize closing fences and tolerate streami
     ["```\n```", "", "Code"],
   ]) {
     const markup = html(<TranscriptText text={text} />);
-    expect(markup).toContain(`<code>${code}</code>`);
+    expect(markup).toContain(`<code data-slot="code-block-code"`);
+    expect(markup).toContain(`>${code}</code>`);
     expect(markup).toContain(`aria-label="Copy ${label}"`);
   }
   const prose = html(<TranscriptText text={"Inline `code`\n    ```not a fence\n```invalid`info\n<script>"} />);
@@ -72,14 +73,14 @@ test("prose renders http(s) links in a new tab and Slack bold, leaving everythin
 test("tool panels retain all output as literal text", () => {
   const output = "```not markdown\n" + "  line\n".repeat(5000) + "last line";
   const markup = html(<CodeBlock label="Result" text={output} />);
-  expect(markup).toContain(`<code>${output}</code>`);
+  expect(markup).toContain(`>${output}</code>`);
   expect(markup).toContain('aria-label="Copy Result"');
 });
 
 test("code blocks start unwrapped without browser storage and compact blocks keep the toggle in the dialog", () => {
   const markup = html(<CodeBlock label="Result" text="output" />);
   expect(markup).toMatch(/aria-label="Wrap Result"[^>]*aria-pressed="false"|aria-pressed="false"[^>]*aria-label="Wrap Result"/);
-  expect(markup).toContain("whitespace-pre ");
+  expect(markup).not.toMatch(/ data-wrap=/);
   expect(html(<CodeBlock label="Handoff" text="document" compact />)).not.toContain("Wrap Handoff");
 });
 
@@ -144,7 +145,7 @@ test("needle highlights matches in bold, prose, quotes, code, and resolved tags"
   expect(windows.match(new RegExp(`<mark ${mark}>windows</mark>`, "g"))).toHaveLength(3);
   expect(windows).toContain(`<strong><mark ${mark}>Windows</mark></strong>`);
   expect(windows).toContain("<blockquote");
-  expect(windows).toContain("<code>");
+  expect(windows).toContain("<code ");
   const operators = html(<TranscriptText text={entry} needle="operators" />);
   expect(operators).toContain(`@cs-<mark ${mark}>operators</mark>`);
 });

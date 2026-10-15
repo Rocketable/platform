@@ -49,14 +49,16 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`pending Web quest
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat").replace(/=+$/, "")}`);
-    const card = page.getByRole("group", { name: "Question" });
+    const card = page.getByRole("form", { name: "Question" });
     await card.getByText("Question q1?").waitFor();
     await page.screenshot({ path: path.join(shots, `question-single-${width}.png`) });
 
     // A closed and reopened tab lists the question again from History.
     await page.reload();
     await card.getByText("Question q1?").waitFor();
-    await card.getByRole("button", { name: /^Yes/ }).click();
+    // A single choice sends the picked option.
+    await card.getByLabel(/^Yes/).check();
+    await card.getByRole("button", { name: "Submit" }).click();
     await card.getByText("Question q2?").waitFor();
 
     // A multiple choice sends every checked option, in option order.
@@ -80,7 +82,8 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`pending Web quest
     expect(await composer.inputValue()).toBe("");
     await page.getByText("answer unavailable", { exact: true }).waitFor({ state: "detached" });
 
-    await card.getByRole("button", { name: "Late" }).click();
+    await card.getByLabel("Late").check();
+    await card.getByRole("button", { name: "Submit" }).click();
     await page.getByText("This question was already answered or ended").waitFor();
     await card.waitFor({ state: "detached" });
     expect(await composer.getAttribute("placeholder")).toBe("Queue a follow-up · ⌘⏎ steers");

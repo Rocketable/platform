@@ -4,7 +4,8 @@ import { useQuery, useQueries } from "@tanstack/react-query";
 import { Check, Copy, Maximize2, WrapText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogTrigger, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
+import { CodeBlock as CodeBlockFrame, CodeBlockActions, CodeBlockContent, CodeBlockHeader, CodeBlockTitle } from "@/components/ui/code-block";
+import { useHighlightedCode } from "@/hooks/use-highlighted-code";
 import { queries } from "./api";
 
 export async function copyText(text: string, container: Element) {
@@ -69,11 +70,22 @@ function highlight(text: string, needle?: string): ReactNode {
   }
 }
 
-export function CodeBlock({ text, label = "Code", compact = false, needle }: { text: string; label?: string; compact?: boolean; needle?: string }) {
+// Code Block content is a grid, so several nodes share one span to stay on their lines.
+function searchedCode(text: string, needle?: string) {
+  return needle ? <span>{highlight(text, needle)}</span> : text;
+}
+
+// A titled Code Block with wrap, expand and copy; compact keeps only the expand and copy buttons.
+// Copy uses copyText rather than CodeBlockCopyButton, which needs the Clipboard API that plain HTTP lacks.
+// A known language is highlighted, except while search highlights a needle.
+export function CodeBlock({ text, label = "Code", compact = false, needle, size, language = "" }: { text: string; label?: string; compact?: boolean; needle?: string; size?: "sm"; language?: string }) {
+  const lines = useHighlightedCode(text, needle ? "" : language);
+  // The hook returns plain strings until a language loads; plain text then stays one text node.
+  const code = lines.some((line) => typeof line !== "string") ? <span>{lines.flatMap((line, index) => index ? ["\n", line] : [line])}{text.endsWith("\n") ? "\n" : ""}</span> : searchedCode(text, needle);
   const wrap = useSyncExternalStore(subscribeWrap, () => wrapped ??= localStorage.getItem(WRAP_KEY) === "true", () => false);
   const [copied, setCopied] = useState<string>();
   const [error, setError] = useState(false);
-  const actionProps = compact ? { variant: "outline", size: "default", className: "min-h-11" } as const : { variant: "ghost", size: "icon-sm" } as const;
+  const actionProps = compact ? { variant: "outline", size: "default", className: "min-h-11" } as const : { variant: "ghost", size: "icon-xs" } as const;
   const copy = <Button type="button" {...actionProps} aria-label={`Copy ${label}`} title={`Copy ${label}`} onClick={async (event) => {
         const container = event.currentTarget.closest('[role="dialog"]') ?? document.body;
         setError(false);
@@ -89,21 +101,19 @@ export function CodeBlock({ text, label = "Code", compact = false, needle }: { t
         localStorage.setItem(WRAP_KEY, String(!wrap));
         publishWrap(!wrap);
       }}><WrapText data-icon="inline-start" /><span hidden={!compact}>Wrap</span></Button>;
-  const pre = <pre aria-label={label} className={`${wrap ? "whitespace-pre-wrap wrap-anywhere" : "whitespace-pre"} p-3 font-mono text-xs leading-5`}><code>{highlight(text, needle)}</code></pre>;
-  const scrollBar = wrap ? null : <ScrollBar orientation="horizontal" />;
+  const expand = <DialogTrigger render={<Button type="button" {...actionProps} aria-label={`Expand ${label}`} title={`Expand ${label}`} />}><Maximize2 data-icon="inline-start" /><span hidden={!compact}>Preview</span></DialogTrigger>;
+  const content = (className: string) => <CodeBlockContent aria-label={label} wrap={wrap} className={className}>{code}</CodeBlockContent>;
   return <Dialog>
-    <div className={compact ? "flex min-w-0 items-center gap-2" : "my-2 min-w-0 max-w-full overflow-hidden rounded-md border bg-muted/30"}>
-    <div className={compact ? "flex flex-wrap items-center gap-2" : "flex items-center justify-between gap-2 border-b px-3 py-1"}>
-      <span hidden={compact} className="mr-auto truncate text-xs text-muted-foreground">{label}</span>
-      {compact ? null : wrapToggle}
-      <DialogTrigger render={<Button type="button" {...actionProps} aria-label={`Expand ${label}`} title={`Expand ${label}`} />}><Maximize2 data-icon="inline-start" /><span hidden={!compact}>Preview</span></DialogTrigger>
-      {copy}{status}
-    </div>
-    <ScrollArea hidden={compact} className="flex max-h-64 flex-col">{pre}{scrollBar}</ScrollArea>
-    </div>
+    {compact ? <div className="flex flex-wrap items-center gap-2">{expand}{copy}{status}</div> : <CodeBlockFrame size={size} className="my-2">
+      <CodeBlockHeader>
+        <CodeBlockTitle>{label}</CodeBlockTitle>
+        <CodeBlockActions>{wrapToggle}{expand}{copy}{status}</CodeBlockActions>
+      </CodeBlockHeader>
+      {content("max-h-64")}
+    </CodeBlockFrame>}
     <DialogContent className="flex h-[calc(100dvh-2rem)] min-w-0 flex-col sm:max-w-[calc(100%-2rem)]" aria-describedby={undefined}>
       <div className="flex min-w-0 items-center gap-2 pr-10"><div className="mr-auto min-w-0 break-words"><DialogTitle>{label}</DialogTitle></div>{wrapToggle}{copy}{status}</div>
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border bg-muted/30"><ScrollArea className="flex min-h-0 flex-1 flex-col">{pre}{scrollBar}</ScrollArea></div>
+      <CodeBlockFrame className="min-h-0 flex-1">{content("min-h-0 flex-1")}</CodeBlockFrame>
     </DialogContent>
   </Dialog>;
 }
@@ -248,7 +258,7 @@ export function InlineText({ text, needle }: { text: string; needle?: string }) 
 export function TranscriptText({ text, needle, interactive = true }: { text: string; needle?: string; interactive?: boolean }) {
   return <>{fencedParts(text).map((part) => part.label
     ? interactive
-      ? <CodeBlock key={part.start} text={part.text} label={part.label} needle={needle} />
-      : <pre key={part.start} aria-label={part.label} className="my-2 max-w-full whitespace-pre-wrap wrap-anywhere rounded-md border bg-muted/30 p-3 font-mono text-xs leading-5"><code>{highlight(part.text, needle)}</code></pre>
+      ? <CodeBlock key={part.start} text={part.text} label={part.label} language={part.label} needle={needle} />
+      : <CodeBlockFrame key={part.start} size="sm" className="my-2"><CodeBlockContent aria-label={part.label} wrap tabIndex={-1}>{searchedCode(part.text, needle)}</CodeBlockContent></CodeBlockFrame>
     : <div key={part.start} className="whitespace-pre-wrap break-words">{blockNodes(part.text, needle, interactive)}</div>)}</>;
 }

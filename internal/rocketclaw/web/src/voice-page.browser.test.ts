@@ -113,7 +113,7 @@ test("Voice page keeps each person's conversation and settings on the server, an
     const live = () => page.waitForFunction(() => /^Listening · 0:\d\d$/.test(document.querySelector('[role="status"][aria-live="polite"]')?.textContent ?? ""));
     const closes = (count: number) => openai.waitForFunction((count: number) => (window as unknown as { closes?: number }).closes === count, count);
     const stored = () => settings().conversationId;
-    const picker = page.getByRole("combobox", { name: "Choose agent" });
+    const picker = page.getByRole("button", { name: "Choose agent", exact: true });
     await page.goto(origin);
     await page.getByRole("button", { name: "Open command palette", exact: true }).click();
     await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Voice", exact: true }).click();
@@ -185,7 +185,7 @@ test("Voice page keeps each person's conversation and settings on the server, an
     await status.getByText("Tap to talk", { exact: true }).waitFor();
     expect(await page.getByText(notice).count()).toBe(0);
     await picker.click(); // Covers R3: picking while idle switches the existing conversation's agent.
-    await page.getByRole("option", { name: /helper/ }).click();
+    await page.getByRole("menuitemradio", { name: /helper/ }).click();
     await page.waitForFunction(() => document.querySelector('[aria-label="Choose agent"]')?.textContent === "helper");
     expect(prompts).toEqual([{ id: "voice-1", text: "$agent helper" }]);
     expect(await shownVoice()).toBe("Marin"); // Another provider offers other voices.

@@ -17,7 +17,7 @@ for (const final of ["short", "empty", "stop", "calls"]) test(`real Go HTTP App 
     await page.goto(`${url}/s/${Buffer.from(id).toString("base64url")}`);
     if (final === "calls") {
       const log = page.locator("#transcript-scroll");
-      const summaries = log.locator("summary").filter({ hasText: /^task/ });
+      const summaries = log.locator('[data-slot="trace-collapsible-trigger"]').filter({ hasText: /^task/ });
       await summaries.nth(2).waitFor();
       expect(await summaries.allTextContents()).toEqual(["taskworking", "taskworking", "taskworking"]);
       for (const call of ["B", "C"]) {
@@ -46,7 +46,7 @@ for (const final of ["short", "empty", "stop", "calls"]) test(`real Go HTTP App 
     expect(await page.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
     expect(await log.locator('[data-slot="message"][data-message-id]').count()).toBe(0);
     expect(await log.innerText()).not.toContain("PRIVATE_SENTINEL");
-    expect(await log.locator("summary").count()).toBe(0);
+    expect(await log.locator('[data-slot="trace-collapsible-trigger"]').count()).toBe(0);
     // Both reload and a new browser page fetch the same committed row, with no
     // terminal event and no test-built History responses or content-bearing hint.
     await page.reload();

@@ -2,35 +2,38 @@
 
 import { QueryClient, QueryCache, MutationCache, QueryClientProvider, queryOptions, useQuery, useMutation, useIsMutating } from "@tanstack/react-query";
 import { captureException } from "@sentry/react";
-import { Combobox } from "@base-ui/react/combobox";
 import { Menu } from "@base-ui/react/menu";
 import { Tabs } from "@base-ui/react/tabs";
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from "@/components/ui/input-group";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions, rpc, RPCError } from "./api";
 import { draftContent } from "./drafts";
 import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { Bot, Captions, Check, ChevronDown, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
+import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, TextCursorInput, Undo2, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
 import { CodeBlock, InlineText, TranscriptText, copyText, useCleanText } from "./transcript-text";
-import { projectTimeline, setTimelineRows, timelineLevel, timelineLevels, useTimelineDetail, type TimelineRows } from "./timeline-detail";
+import { projectTimeline, setTimelineRows, timelineFailure, timelineLevel, timelineLevels, useTimelineDetail, type TimelineRows } from "./timeline-detail";
 import { TimelineDetailCard } from "./timeline-detail-card";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Attachment, AttachmentGroup, AttachmentMedia, AttachmentContent, AttachmentTitle, AttachmentDescription, AttachmentActions, AttachmentAction } from "@/components/ui/attachment";
+import { Marker, MarkerContent } from "@/components/ui/marker";
 import { Message, MessageContent } from "@/components/ui/message";
 import { MessageScrollerProvider, MessageScroller, MessageScrollerViewport, MessageScrollerContent, MessageScrollerItem, MessageScrollerButton, useMessageScroller } from "@/components/ui/message-scroller";
+import { Questionnaire, QuestionnaireActions, QuestionnaireChoice, QuestionnaireChoiceDescription, QuestionnaireChoices, QuestionnaireDescription, QuestionnaireError, QuestionnaireItem, QuestionnaireSubmit, QuestionnaireTitle } from "@/components/ui/questionnaire";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace";
 import { cn } from "@/lib/utils";
 import type { Agent, Attachment as AttachmentMeta, BackgroundJob, ConfigView, CronJob, QueueItem, Session, TranscriptEvent, VoiceSettings } from "@/types";
 import { runPreload } from "@/preload";
@@ -225,7 +228,7 @@ function QueuePanel({
     onReorder(next);
   };
   return (
-    <div className="relative z-0 -mb-3 rounded-[22px] bg-muted px-2 pt-2 pb-5 shadow-[inset_0_0_0_1px_var(--border)]">
+    <div className="mb-2 rounded-lg bg-muted p-2 shadow-[inset_0_0_0_1px_var(--border)]">
       {jobs}
       <ul className={cn("flex flex-col gap-0.5", items.length > 3 && "max-h-32 overflow-y-auto")}>
         {rows.map((item) => (
@@ -293,6 +296,7 @@ function QueuePanel({
 }
 
 const jobState = (job: BackgroundJob) => ({ completed: "finished", stopped: `stopped by ${job.stoppedBy}`, killed: "killed (server restarted)" } as Record<string, string | undefined>)[job.state] ?? job.state;
+const jobStatus = (job: BackgroundJob) => job.state === "running" ? "running" : ["failed", "killed"].includes(job.state) ? "error" : undefined;
 
 // jobsSlot is the composer's question card and Background Jobs list, or nothing when the conversation has neither.
 function jobsSlot(id: string, jobs: BackgroundJob[] | undefined, onChange: () => Promise<unknown>, openCall: (callId: string) => void, card: ReactNode) {
@@ -303,7 +307,11 @@ function BackgroundJobs({ id, jobs, openCall, onChange }: { id: string; jobs: Ba
   const stop = useMutation({ mutationFn: mutations.stopBackgroundJob, onSuccess: onChange });
   return <ul aria-label="Background jobs" className={cn("flex flex-col gap-0.5", jobs.length > 3 && "max-h-32 overflow-y-auto")}>
     {jobs.map((job) => <li key={job.jobId} className="flex items-center gap-2 rounded-md px-2 py-1">
-      <span className="min-w-0 flex-1 truncate text-sm">{job.label} · {jobState(job)}</span>
+      <TraceLine status={jobStatus(job)} className="flex-1">
+        <TraceStatusIcon status={jobStatus(job)} icon={<Check />} />
+        <TraceTitle>{job.label}</TraceTitle>
+        <TraceDescription>{jobState(job)}</TraceDescription>
+      </TraceLine>
       {job.hidden ? null : <Button type="button" variant="ghost" size="sm" aria-label={`Open ${job.label}`} onClick={() => job.subagentKey ? navigate(panelHref(id + job.subagentKey)) : openCall(job.toolCallId)}>Open</Button>}
       {job.state === "running" ? <Button type="button" variant="ghost" size="sm" aria-label={`Stop ${job.label}`} disabled={stop.isPending} onClick={() => stop.mutate({ conversationId: id, jobId: job.jobId })}>Stop</Button> : null}
     </li>)}
@@ -311,22 +319,29 @@ function BackgroundJobs({ id, jobs, openCall, onChange }: { id: string; jobs: Ba
   </ul>;
 }
 
-// QuestionCard asks a Web turn's pending question: one click answers a single choice, and a
-// multiple choice submits every checked option.
+// QuestionCard asks a Web turn's pending question as a Questionnaire
+// (https://ui.shadcn.com/docs/components/base/questionnaire): Submit sends the picked option, or every checked one.
 function QuestionCard({ question, sending, answer }: { question: PendingQuestion; sending: boolean; answer: (selected: string[]) => void }) {
-  const [checked, setChecked] = useState<Record<string, boolean>>({});
-  return <fieldset aria-label="Question" disabled={sending} className="flex flex-col gap-1 px-2 py-1">
-    <p className="text-sm font-medium">{question.question}</p>
-    {question.details ? <p className="text-xs text-muted-foreground">{question.details}</p> : null}
-    {question.options.map((option) => {
-      const label = <span className="flex min-w-0 flex-col py-1 text-left"><span>{option.label}</span>{option.description ? <span className="text-xs text-muted-foreground">{option.description}</span> : null}</span>;
-      return question.multiple
-        ? <label key={option.value} className="flex items-center gap-2 px-1 text-sm"><input type="checkbox" checked={checked[option.value] ?? false} onChange={(event) => setChecked({ ...checked, [option.value]: event.target.checked })} />{label}</label>
-        : <Button key={option.value} type="button" variant="outline" className="h-auto justify-start whitespace-normal" onClick={() => answer([option.value])}>{label}</Button>;
-    })}
-    {question.multiple ? <Button type="button" size="sm" className="self-start" disabled={!Object.values(checked).includes(true)} onClick={() => answer(question.options.map((option) => option.value).filter((value) => checked[value]))}>Submit</Button> : null}
-    <p className="text-xs text-muted-foreground">Or send your own answer from the message box.</p>
-  </fieldset>;
+  return <Questionnaire aria-label="Question" className="my-1" onSubmit={(event) => {
+    event.preventDefault();
+    answer(new FormData(event.currentTarget).getAll("answer").map(String));
+  }}>
+    <QuestionnaireItem name="answer" multiple={question.multiple} required disabled={sending}>
+      <QuestionnaireTitle>{question.question}</QuestionnaireTitle>
+      {question.details ? <QuestionnaireDescription>{question.details}</QuestionnaireDescription> : null}
+      <QuestionnaireChoices>
+        {question.options.map((option) => <QuestionnaireChoice key={option.value} value={option.value}>
+          {option.label}
+          {option.description ? <QuestionnaireChoiceDescription>{option.description}</QuestionnaireChoiceDescription> : null}
+        </QuestionnaireChoice>)}
+      </QuestionnaireChoices>
+      <QuestionnaireError />
+    </QuestionnaireItem>
+    <QuestionnaireActions>
+      <p className="text-xs text-muted-foreground">Or send your own answer from the message box.</p>
+      <QuestionnaireSubmit size="sm" />
+    </QuestionnaireActions>
+  </Questionnaire>;
 }
 
 // useQuestion answers the conversation's first pending Web question, from its card or with Send's
@@ -2008,25 +2023,39 @@ function MessageActions({ line, hasSandboxed }: { line: Line; hasSandboxed: bool
   </div>;
 }
 
-// Without `open`, a line keeps the always-open look that cron and steer previews use.
-function TraceLine({ line, hasSandboxed, open }: { line: Line; hasSandboxed: boolean; open?: boolean }) {
-  const body = line.role === "thinking" ? (
-    <div className="flex items-start gap-1.5 px-1 py-0.5 text-[12px] leading-5 text-muted-foreground">
-      <Bot className="size-3.5 shrink-0 opacity-80" />
-      <span className="min-w-0 whitespace-pre-wrap break-words">{line.text}</span>
-    </div>
-  ) : (
-    <div className="min-w-0 px-1 pb-3">
-      <CodeBlock label="Instructions" text={line.text} />
-      {line.header ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
-    </div>
-  );
-  return open === undefined ? body : (
-    <details open={open} className="min-w-0">
-      <summary className="cursor-pointer px-1 py-1 text-xs text-muted-foreground hover:text-foreground">{line.role === "thinking" ? "Thinking" : "Instructions"}</summary>
-      {body}
-    </details>
-  );
+type TraceStatus = "running" | "error";
+// Whether the turn a row belongs to is still working, so its unanswered calls are running.
+const TurnRunning = createContext(false);
+// A "background" call keeps that state after its job ends, so only the Background Jobs list shows the job running.
+const toolStates: Partial<Record<NonNullable<Line["state"]>, TraceStatus>> = { working: "running", review: "running", failed: "error", stopped: "error" };
+
+// A call runs until its result arrives while the turn works, and fails on a failed state or an in-band
+// failure, as in https://ui.shadcn.com/docs/ai-elements/base/tool#states.
+function toolStatus(line: Line, running: boolean): TraceStatus | undefined {
+  if (line.role !== "tool") return undefined;
+  if (line.state) return toolStates[line.state];
+  if (timelineFailure.test((line.toolName ? line.toolParts?.[0]?.text : line.text) ?? "")) return "error";
+  return running && line.toolName && !line.toolParts?.length ? "running" : undefined;
+}
+
+// A running line spins and a failed one warns, in place of its own icon.
+function TraceStatusIcon({ status, icon }: { status?: TraceStatus; icon: ReactNode }) {
+  return <TraceIcon>{status === "running" ? <LoaderCircle className="animate-spin" /> : status === "error" ? <CircleAlert /> : icon}</TraceIcon>;
+}
+
+// Activity is a Trace line that expands into its detail (https://ui.shadcn.com/docs/components/base/trace).
+// `open` is the timeline setting; callers key rows by it, so a new setting opens or closes them.
+function TraceRow({ open = true, icon, title, label, status, description, children, ...props }: { open?: boolean; icon: ReactNode; title: ReactNode; label?: string; status?: TraceStatus; description?: string; children: ReactNode; "data-tool-call-id"?: string }) {
+  return <TraceCollapsible defaultOpen={open} {...props}>
+    <TraceCollapsibleTrigger title={label}>
+      <TraceLine status={status}>
+        <TraceStatusIcon status={status} icon={icon} />
+        <TraceTitle>{title}</TraceTitle>
+        {description ? <TraceDescription aria-live="polite">{description}</TraceDescription> : null}
+      </TraceLine>
+    </TraceCollapsibleTrigger>
+    <TraceCollapsibleContent hiddenUntilFound>{children}</TraceCollapsibleContent>
+  </TraceCollapsible>;
 }
 
 function MessageAuthor({ principal, role = "user" }: { principal?: string; role?: Line["role"] }) {
@@ -2035,10 +2064,9 @@ function MessageAuthor({ principal, role = "user" }: { principal?: string; role?
 
 // Each Completion Note is one row with its note, from its stored job, folded beneath.
 function CompletionNotes({ notes }: { notes: BackgroundJob[] }) {
-  return notes.map((note) => <details key={note.jobId} className="mb-3 min-w-0">
-    <summary className="cursor-pointer px-3 py-2 text-xs font-medium">{note.label} · {jobState(note)}</summary>
-    <CodeBlock label={note.label} text={note.note} />
-  </details>);
+  return notes.map((note) => <TraceRow key={note.jobId} open={false} icon={<BellRing />} title={note.label} description={jobState(note)} status={jobStatus(note)}>
+    <CodeBlock size="sm" label={note.label} text={note.note} />
+  </TraceRow>);
 }
 
 // A task row opens the subagent its call recorded; older rows open the delegation ending in their call ID.
@@ -2046,50 +2074,63 @@ function delegationOf(line: Line, delegations?: string[]) {
   return line.delegation || delegations?.find((child) => child.slice(child.lastIndexOf("/") + 1) === line.toolCallId);
 }
 
-function ToolLine({ line, conversationId, hasSandboxed, open }: { line: Line; conversationId: string; hasSandboxed: boolean; open?: boolean }) {
-  const title = toolTitle(line);
+const toolIcons: Partial<Record<string, ReactNode>> = { task: <Bot />, skill: <Sparkles />, execute: <SquareTerminal />, bash: <SquareTerminal /> };
+
+// The panels a call opens, as Trace link lines: its subagent (https://ui.shadcn.com/docs/ai-elements/base/subagent),
+// permission review, or skill.
+function ToolLinks({ line, title }: { line: Line; title: string }) {
   // toolTitle names a skill call's skill as "Skill · name".
   const skill = line.toolName === "skill" && title.startsWith("Skill · ") ? title.slice("Skill · ".length) : "";
   const delegations = use(Delegations);
   const delegation = delegationOf(line, delegations);
   // A reviewed call's row opens its permission review once the delegations list it; an older task row, the one ending in its call ID.
   const review = (line.review && delegations?.includes(line.review) ? line.review : undefined) || line.delegation && delegations?.find((child) => child !== delegation && child.slice(child.lastIndexOf("/") + 1) === line.toolCallId);
+  const links = [
+    delegation && { href: panelHref(delegation), text: "Open delegation", label: `Open delegation: ${title}`, icon: <Bot /> },
+    review && { href: panelHref(review), text: "Open permission review", label: `Open permission review: ${title}`, icon: <ShieldCheck /> },
+    skill && { href: panelHref(skill, "skill"), text: "View skill", label: `View skill: ${skill}`, icon: <Sparkles /> },
+  ].filter((link) => !!link);
+  return links.length ? <Trace className="mb-2">{links.map((link) => <Link key={link.text} href={link.href} aria-label={link.label}>
+    <TraceLine><TraceIcon>{link.icon}</TraceIcon><TraceTitle>{link.text}</TraceTitle><TraceIcon><ChevronRight /></TraceIcon></TraceLine>
+  </Link>)}</Trace> : null;
+}
+
+function ToolLine({ line, conversationId, hasSandboxed, open }: { line: Line; conversationId: string; hasSandboxed: boolean; open?: boolean }) {
+  const title = toolTitle(line);
   const parts = [line, ...(line.toolParts ?? [])];
   const text = [
     line.toolName ? `Arguments\n${line.text.slice(line.toolName.length + 1)}` : `Result\n${line.text}`,
     ...parts.slice(1).map((part) => `${part.role === "developer" ? "Skill instructions" : "Result"}\n${part.text}`),
   ].join("\n\n");
   return (
-    <details open={open ?? true} data-tool-call-id={line.toolCallId} className="mb-3 min-w-0">
-      <summary className="cursor-pointer px-3 py-2 text-xs font-medium" title={title}>
-        <span className="ml-1 inline-block max-w-[calc(100%-1.5rem)] truncate align-middle font-mono">{title}</span>
-        {line.state ? <span aria-live="polite" className="ml-2 text-muted-foreground">{line.state}</span> : null}
-      </summary>
-      {delegation ? <Link href={panelHref(delegation)} aria-label={`Open delegation: ${title}`} className="block w-fit px-3 pb-2 text-xs text-muted-foreground underline hover:text-foreground">Open delegation</Link> : null}
-      {review ? <Link href={panelHref(review)} aria-label={`Open permission review: ${title}`} className="block w-fit px-3 pb-2 text-xs text-muted-foreground underline hover:text-foreground">Open permission review</Link> : null}
-      {skill ? <Link href={panelHref(skill, "skill")} aria-label={`View skill: ${skill}`} className="block w-fit px-3 pb-2 text-xs text-muted-foreground underline hover:text-foreground">View skill</Link> : null}
+    <TraceRow open={open} data-tool-call-id={line.toolCallId} icon={toolIcons[line.toolName ?? ""] ?? <Wrench />} title={<span className="font-mono">{title}</span>} label={title} status={toolStatus(line, use(TurnRunning))} description={line.state}>
+      <ToolLinks line={line} title={title} />
       {line.state ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
-      <CodeBlock label={title} text={text} />
+      <CodeBlock size="sm" label={title} text={text} />
       {parts.map((part) => (
         <div key={part.id}>
           <MessageAttachments attachments={part.attachments} conversationId={conversationId} />
         </div>
       ))}
-      <button type="button" className="px-3 py-2 text-xs text-muted-foreground hover:text-foreground" onClick={(event) => {
-        const details = event.currentTarget.closest("details")!;
-        details.open = false;
-        const summary = details.querySelector("summary")!;
-        summary.scrollIntoView({ block: "nearest" });
-        summary.focus({ preventScroll: true });
-      }}>Collapse tool ↑</button>
-    </details>
+      <Button type="button" variant="ghost" size="xs" onClick={(event) => {
+        const trigger = event.currentTarget.closest('[data-slot="trace-collapsible"]')!.querySelector<HTMLElement>('[data-slot="trace-collapsible-trigger"]')!;
+        trigger.click();
+        trigger.scrollIntoView({ block: "nearest" });
+        trigger.focus({ preventScroll: true });
+      }}>Collapse tool ↑</Button>
+    </TraceRow>
   );
 }
 
 function TranscriptLine({ line, conversationId, hasSandboxed, open }: { line: Line; conversationId: string; hasSandboxed: boolean; open?: boolean }) {
   if (line.completionNotes?.length) return <CompletionNotes notes={line.completionNotes} />;
-  if (["thinking", "developer"].includes(line.role)) return <TraceLine line={line} hasSandboxed={hasSandboxed} open={open} />;
-  if (line.role === "tool") return <ToolLine line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} open={open} />;
+  // Reasoning follows https://ui.shadcn.com/docs/ai-elements/base/reasoning; saved thinking is always finished.
+  if (line.role === "thinking") return <TraceRow key={String(open)} open={open} icon={<Brain />} title="Thought"><div className="whitespace-pre-wrap">{line.text}</div></TraceRow>;
+  if (line.role === "developer") return <TraceRow key={String(open)} open={open} icon={<ScrollText />} title="Instructions">
+    <CodeBlock size="sm" label="Instructions" text={line.text} />
+    {line.header ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
+  </TraceRow>;
+  if (line.role === "tool") return <ToolLine key={String(open)} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} open={open} />;
   const align = line.role === "user" ? "end" : undefined;
   return (
     <Message data-message-id={line.messageId || undefined} align={align} className="mb-4" tabIndex={0} onPointerDown={(event) => {
@@ -2166,29 +2207,46 @@ function useTranscriptPosition(conversationId: string, lines: Line[], turns: Tur
 }
 
 // Finished turns keep their line objects between updates, so only changed turns and the live one re-render.
-const TranscriptTurn = memo(function TranscriptTurn({ turn, index, detail, conversationId, hasSandboxed }: { turn: Turn; index: number; live: boolean; detail: TimelineRows; conversationId: string; hasSandboxed: boolean }) {
+const TranscriptTurn = memo(function TranscriptTurn({ turn, index, running, detail, conversationId, hasSandboxed }: { turn: Turn; index: number; live: boolean; running: boolean; detail: TimelineRows; conversationId: string; hasSandboxed: boolean }) {
   return (
     <MessageScrollerItem messageId={`turn-${turnKey(turn)}`} data-turn-key={turnKey(turn)} role="region" aria-label={`Turn ${index + 1}`} tabIndex={-1}>
-      <TurnContent turn={turn} detail={detail} conversationId={conversationId} hasSandboxed={hasSandboxed} />
+      <TurnRunning value={running}><TurnContent turn={turn} detail={detail} conversationId={conversationId} hasSandboxed={hasSandboxed} /></TurnRunning>
     </MessageScrollerItem>
   );
-}, (previous, next) => !next.live && previous.index === next.index && previous.detail === next.detail && previous.conversationId === next.conversationId && previous.hasSandboxed === next.hasSandboxed
+}, (previous, next) => !next.live && previous.running === next.running && previous.index === next.index && previous.detail === next.detail && previous.conversationId === next.conversationId && previous.hasSandboxed === next.hasSandboxed
   && previous.turn.lines.length === next.turn.lines.length && previous.turn.lines.every((line, index) => line === next.turn.lines[index]));
 
 function TurnContent({ turn, detail, conversationId, hasSandboxed, comparison = false }: { turn: Turn; detail: TimelineRows; conversationId: string; hasSandboxed: boolean; comparison?: boolean }) {
   return <>
       {comparison ? null : turn.user.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
-      {projectTimeline(turn.items, detail).map((row) => row.kind === "line" ? <TranscriptLine key={row.line.id} line={row.line} open={row.open} conversationId={conversationId} hasSandboxed={hasSandboxed} /> : (
-        <details key={row.key} className="group pb-3">
-          <summary className="flex w-fit cursor-pointer list-none items-center gap-1 px-1 py-2 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
-            {row.label} <span aria-hidden="true" className="transition-transform group-open:rotate-90">▸</span>
-          </summary>
-          <div className="ml-1 border-l pl-3">
-            {row.members.map(({ line, open }) => <TranscriptLine key={line.id} line={line} open={open} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
-          </div>
-        </details>
-      ))}
+      <TranscriptLines rows={projectTimeline(turn.items, detail)} conversationId={conversationId} hasSandboxed={hasSandboxed} />
     </>;
+}
+
+type TimelineRow = ReturnType<typeof projectTimeline<Line>>[number];
+
+// Consecutive activity rows share one Trace between the messages around them. A grouped row is a
+// Chain of Thought (https://ui.shadcn.com/docs/ai-elements/base/chain-of-thought) whose status comes from its steps.
+function TranscriptLines({ rows, conversationId, hasSandboxed }: { rows: TimelineRow[]; conversationId: string; hasSandboxed: boolean }) {
+  const running = use(TurnRunning);
+  const activity = (row: TimelineRow) => row.kind === "group" || !!row.line.completionNotes?.length || !["user", "assistant"].includes(row.line.role);
+  const render = (row: TimelineRow) => {
+    if (row.kind === "line") return <TranscriptLine key={row.line.id} line={row.line} open={row.open} conversationId={conversationId} hasSandboxed={hasSandboxed} />;
+    const statuses = row.members.map(({ line }) => toolStatus(line, running));
+    return <TraceRow key={row.key} open={false} icon={<ListChecks />} title={row.label} status={(["running", "error"] as const).find((status) => statuses.includes(status))}>
+      <Trace>{row.members.map(({ line, open }) => <TranscriptLine key={line.id} line={line} open={open} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}</Trace>
+    </TraceRow>;
+  };
+  const runs: TimelineRow[][] = [];
+  for (const row of rows) {
+    const run = runs.at(-1);
+    if (run && activity(run[0]) && activity(row)) run.push(row);
+    else runs.push([row]);
+  }
+  return runs.map((run) => {
+    const first = run[0];
+    return activity(first) ? <Trace key={`trace:${first.kind === "group" ? first.key : first.line.id}`} className="mb-4">{run.map(render)}</Trace> : render(first);
+  });
 }
 
 function shadowHistory(binding: ShadowBinding | undefined, drafts: Map<string, ComposerDraft>) {
@@ -2225,13 +2283,13 @@ function ShadowCell({ row, index, binding, detail, delegations }: { row: ReturnT
       ? row.child?.lines.some((line) => line.role === "assistant") ? "Completed." : "Completed silently."
       : row.correlation.terminal ? `Turn ${row.correlation.terminal}.` : "Waiting for parent input…";
   }
-  return <RevertActions value={undefined}><Delegations value={delegations}>
+  return <RevertActions value={undefined}><Delegations value={delegations}><TurnRunning value={!!row.correlation?.running}>
     <div data-shadow-cell={row.key} role="region" aria-label={`Shadow turn ${index + 1}`} className="min-w-0">
       <p className="mb-2 text-xs text-muted-foreground">Turn {index + 1}</p>
       {row.child ? <TurnContent comparison turn={row.child} detail={detail} conversationId={binding.childConversationId} hasSandboxed={row.child.lines.some((line) => line.origin === "sandboxed")} /> : null}
       <p role="status" className="px-1 pb-3 text-xs text-muted-foreground">{status}</p>
     </div>
-  </Delegations></RevertActions>;
+  </TurnRunning></Delegations></RevertActions>;
 }
 
 function WorkingStatus({ conversationId, movable, onChange }: { conversationId: string; movable: boolean; onChange: () => Promise<unknown> }) {
@@ -2264,7 +2322,7 @@ function TranscriptBody({ conversationId, working, terminal, origin, hasSandboxe
             <div className="min-w-0"><p className="mb-2 text-xs text-muted-foreground">Turn {index + 1} · {row.parent?.lines[0]?.agent ?? binding.parentAgent}</p>{row.parent ? <TurnContent comparison turn={row.parent} detail={detail} conversationId={conversationId} hasSandboxed={hasSandboxed} /> : <p role="status" className="pb-3 text-xs text-muted-foreground">Parent turn has no transcript output.</p>}</div>
             {wide ? <div className="min-w-0 border-l pl-5"><ShadowCell row={row} index={index} binding={binding} detail={detail} delegations={delegations} /></div> : null}
           </div>
-        </MessageScrollerItem>) : turns.map((turn, index) => <TranscriptTurn key={turnKey(turn)} turn={turn} index={index} live={index === turns.length - 1} detail={detail} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
+        </MessageScrollerItem>) : turns.map((turn, index) => <TranscriptTurn key={turnKey(turn)} turn={turn} index={index} live={index === turns.length - 1} running={working && index === turns.length - 1} detail={detail} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
         {working ? <WorkingStatus conversationId={conversationId} movable={movable} onChange={refreshHistory} /> : null}
         {terminal ? <MessageScrollerItem><p role="status" className="px-1 pb-4 text-sm text-muted-foreground">Turn {terminal}.</p></MessageScrollerItem> : null}
       </>
@@ -2553,7 +2611,10 @@ async function openCall(draft: ComposerDraft, onDraftChange: () => void, scrollT
   }
   const node = find();
   if (!node) return;
-  for (let group = node.parentElement?.closest("details"); group; group = group.parentElement?.closest("details")) group.open = true;
+  for (let group = node.parentElement?.closest('[data-slot="trace-collapsible"]'); group; group = group.parentElement?.closest('[data-slot="trace-collapsible"]')) {
+    const trigger = group.querySelector<HTMLElement>(':scope > [data-slot="trace-collapsible-trigger"]')!;
+    if (trigger.getAttribute("aria-expanded") === "false") trigger.click();
+  }
   scrollToMessage(`turn-${node.closest<HTMLElement>("[data-turn-key]")!.dataset.turnKey}`, { align: "start", behavior: "instant" });
   node.scrollIntoView({ block: "center", behavior: "instant" });
 }
@@ -2680,7 +2741,6 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
   const followed = previewing ? { lines: previewLines ?? lines, delegations: preview.data?.delegations, busy: false, more: false, terminal: undefined, shadows: undefined } : { lines, delegations, busy, more, terminal, shadows };
   return (
     <RevertActions value={revert}>
-      {draft.revertMessageId ? <div role="status" className="flex flex-wrap items-center gap-2 px-12 py-2 text-xs text-muted-foreground md:px-3"><span>History reverted. Files and external effects are unchanged.</span><Button size="sm" variant="outline" className="min-h-11 sm:min-h-8" disabled={revert.pending} onClick={() => void revert.run(undefined, true)}>Redo</Button></div> : null}
       <Delegations value={followed.delegations}><TranscriptLog conversationId={id} lines={followed.lines} opening={opening} working={followed.busy} terminal={followed.terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} more={followed.more} loadEarlier={loadEarlier} movable={movable} refreshHistory={refreshHistory} shadows={followed.shadows}>
       {hasSandboxed ? <ButtonGroup aria-label="Show messages from">
         {(["sandboxed", "canonical"] as const).map((choice) => (
@@ -2693,6 +2753,13 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
         ))}
       </ButtonGroup> : null}
       </TranscriptLog></Delegations>
+      {/* A revert leaves a Checkpoint after the kept turns: https://ui.shadcn.com/docs/ai-elements/base/checkpoint. */}
+      {draft.revertMessageId ? <div className="mx-auto w-full max-w-3xl px-3 py-2"><Marker variant="separator" role="status">
+        <MarkerContent className="max-w-full">
+          History reverted. Files and external effects are unchanged.
+          <Button size="xs" variant="outline" className="ms-2 min-h-11 sm:min-h-6" disabled={revert.pending} onClick={() => void revert.run(undefined, true)}>Redo</Button>
+        </MarkerContent>
+      </Marker></div> : null}
       {error ? <p role="alert" className="px-3 text-sm text-destructive">{error}</p> : null}
       <fieldset disabled={[opening, previewing, !draft.hydrated].some(Boolean)} className={previewing ? "hidden" : "contents"}>
         <SessionComposer id={id} draft={draft} drafts={drafts} onDraftChange={onDraftChange} busy={busy} setBusy={setBusy} setLines={setLines} refreshHistory={refreshHistory} />
@@ -2733,7 +2800,7 @@ function DelegationPanel({ id }: { id: string }) {
       {history.error ? <p role="alert" className="text-sm text-destructive">{history.error.message}</p> : null}
       {history.data?.messages.length === 0 ? <p role="status" className="text-sm text-muted-foreground">No saved transcript</p> : null}
       <Delegations value={history.data?.delegations}>
-        {transcriptTurns(lines).flatMap((turn) => [...turn.user, ...turn.items]).map((line) => <TranscriptLine key={line.id} line={line} conversationId={child} hasSandboxed={sandboxed} />)}
+        <TranscriptLines rows={transcriptTurns(lines).flatMap((turn) => [...turn.user, ...turn.items]).map((line) => ({ kind: "line", line }))} conversationId={child} hasSandboxed={sandboxed} />
       </Delegations>
       {history.isSuccess ? <Link href={panelHref(parent?.level)} className="block w-fit text-xs text-muted-foreground underline hover:text-foreground">{parent ? `Back to ${parent.label}` : "Back to conversation"}</Link> : null}
     </div></ScrollArea>
@@ -3318,8 +3385,8 @@ function Composer({
           </ul>
         ) : null}
         <QueuePanel conversationId={sessionId} items={queued} busy={busy} sending={sending} onSteer={(id, itemText) => void steerQueued(id, itemText)} onPop={popQueued} onRemove={removeQueued} onReorder={reorderQueued} jobs={jobs} />
-        <ComposerAttachments files={files} setFiles={setFiles} sending={sending} fileInput={fileInput}>
-          <Textarea
+        <PromptInput files={files} setFiles={setFiles} sending={sending} fileInput={fileInput}>
+          <InputGroupTextarea
             ref={messageInput}
             disabled={sending}
             value={text}
@@ -3329,7 +3396,6 @@ function Composer({
               setText(event.target.value);
             }}
             placeholder={placeholder}
-            variant="embedded"
             className="min-h-16 max-h-[40dvh] overflow-y-auto"
             onKeyDown={(event) => {
               if (event.key === "Enter" && event.altKey && (event.metaKey || event.ctrlKey) && !event.shiftKey) {
@@ -3370,48 +3436,50 @@ function Composer({
               }
             }}
           />
-          <div className="flex items-center gap-1 px-1 sm:gap-2">
-            <div className="flex min-w-0 flex-1 items-center gap-1">
-              <Tooltip><TooltipTrigger render={<Button type="button" variant="ghost" size="icon" className="size-11 sm:size-8" disabled={sending} />} aria-label="Add files" onClick={() => fileInput.current?.click()}><Plus /></TooltipTrigger><TooltipContent>Add files</TooltipContent></Tooltip>
-              <AgentPicker catalog={catalog} selected={selected} setAgent={setAgent} open={agentOpen} setOpen={setAgentOpen} disabled={sending || catalog.length === 0} />
-               <div className="hidden md:contents"><SessionHeaderActions id={sessionId} /></div>
-            </div>
-            <div className="flex shrink-0 items-center justify-end gap-1">
-              <Button type="button" variant={steerOff ? "quiet" : "ghost"} className="h-11 sm:h-8" disabled={sending || empty} onClick={() => void send("STASH")}>Stash</Button>
-              <Tooltip>
-                <TooltipTrigger render={<Button type="button" variant="ghost" className="h-11 sm:h-8" disabled={steerOff} />} aria-label="Steer" onClick={() => void send("STEER")}>
-                  Steer
-                </TooltipTrigger>
-                <TooltipContent>Guide the current response <ModEnterKeys mac={mac} /></TooltipContent>
-              </Tooltip>
-              <VoiceToggle sessionId={sessionId} />
-              <Tooltip><TooltipTrigger render={<Button type="button" size="icon" className="size-11 sm:size-8" disabled={sending} />} aria-label={stopping ? "Stop" : "Send"} onClick={() => void (stopping ? stop() : send())}>
-                {stopping ? <Square /> : <Send />}
-              </TooltipTrigger><TooltipContent>{stopping ? "Stop response" : sendLabel}</TooltipContent></Tooltip>
-            </div>
-          </div>
-        </ComposerAttachments>
+          <InputGroupAddon align="block-end">
+            <Tooltip><TooltipTrigger render={<InputGroupButton size="icon-sm" variant="outline" className="size-11 sm:size-8" disabled={sending} />} aria-label="Add files" onClick={() => fileInput.current?.click()}><Plus /></TooltipTrigger><TooltipContent>Add files</TooltipContent></Tooltip>
+            <AgentPicker catalog={catalog} selected={selected} setAgent={setAgent} open={agentOpen} setOpen={setAgentOpen} disabled={sending || catalog.length === 0} />
+            <div className="hidden md:contents"><SessionHeaderActions id={sessionId} /></div>
+            <InputGroupButton size="sm" variant={steerOff ? "quiet" : "ghost"} className="ml-auto h-11 sm:h-8" disabled={sending || empty} onClick={() => void send("STASH")}>Stash</InputGroupButton>
+            <Tooltip>
+              <TooltipTrigger render={<InputGroupButton size="sm" className="h-11 sm:h-8" disabled={steerOff} />} aria-label="Steer" onClick={() => void send("STEER")}>
+                Steer
+              </TooltipTrigger>
+              <TooltipContent>Guide the current response <ModEnterKeys mac={mac} /></TooltipContent>
+            </Tooltip>
+            <VoiceToggle sessionId={sessionId} />
+            <Tooltip><TooltipTrigger render={<InputGroupButton size="icon-sm" variant="default" className="size-11 sm:size-8" disabled={sending} />} aria-label={stopping ? "Stop" : "Send"} onClick={() => void (stopping ? stop() : send())}>
+              {stopping ? <Square /> : <Send />}
+            </TooltipTrigger><TooltipContent>{stopping ? "Stop response" : sendLabel}</TooltipContent></Tooltip>
+          </InputGroupAddon>
+        </PromptInput>
       </div>
     </div>
   );
 }
 
+// The agent menu follows Model Selector (https://ui.shadcn.com/docs/ai-elements/base/model-selector):
+// one radio menu, each agent with its model and effort. Typing a name's first letters moves to it.
 function AgentPicker({ catalog, selected, setAgent, open, setOpen, disabled }: { catalog: Agent[]; selected: string; setAgent: (name: string) => void; open: boolean; setOpen: (open: boolean) => void; disabled: boolean }) {
   return (
-    <Combobox.Root items={catalog} value={catalog.find((item) => item.name === selected) ?? null} onValueChange={(item) => { if (item) setAgent(item.name); }} itemToStringLabel={(item) => item.name} filter={(item, query) => `${item.name} ${item.model ?? ""}`.toLowerCase().includes(query.toLowerCase())} autoHighlight open={open} onOpenChange={setOpen} disabled={disabled}>
-      <Combobox.Trigger aria-label="Choose agent" title={selected} className="flex min-h-11 w-fit min-w-0 max-w-36 items-center gap-1.5 rounded-lg border border-input bg-transparent py-2 pr-2 pl-2.5 text-sm whitespace-nowrap outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 sm:h-8 sm:min-h-8 dark:bg-input/30 dark:hover:bg-input/50 [&_svg]:size-4 [&_svg]:shrink-0"><Bot /><span className={cn("min-w-0 flex-1 overflow-hidden text-left", !selected && "text-muted-foreground")}>{selected || "Choose agent"}</span><ChevronDown className="text-muted-foreground" /></Combobox.Trigger>
-      <Combobox.Portal><Combobox.Positioner side="top" align="start" sideOffset={4} className="isolate z-50">
-        <Combobox.Popup data-slot="combobox-content" initialFocus={() => !window.matchMedia("(pointer: coarse)").matches} className="flex max-h-(--available-height) w-[min(28rem,calc(100vw-2rem))] flex-col gap-1 overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10">
-          <Combobox.Input render={<Input />} aria-label="Search agents" placeholder="Search agents" />
-          <Combobox.Empty className="px-2 py-2 text-sm text-muted-foreground empty:p-0">No matching agents</Combobox.Empty>
-          <Combobox.List className="min-h-0 overflow-y-auto">{(item: Agent) => <Combobox.Item key={item.name} value={item} className="flex min-h-11 cursor-default items-center gap-1.5 rounded-md py-1 pr-2 pl-1.5 text-sm outline-hidden select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground sm:min-h-8"><span className="flex min-w-0 flex-1 flex-col whitespace-normal"><span className="break-all">{item.name}</span><span className="break-all text-xs text-muted-foreground">{[item.model, item.reasoning].filter(Boolean).join(" · ")}</span></span><Combobox.ItemIndicator><Check className="size-4" /></Combobox.ItemIndicator></Combobox.Item>}</Combobox.List>
-        </Combobox.Popup>
-      </Combobox.Positioner></Combobox.Portal>
-    </Combobox.Root>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger disabled={disabled} aria-label="Choose agent" title={selected} render={<InputGroupButton size="sm" variant="outline" className="min-h-11 min-w-0 max-w-36 sm:min-h-0" />}>
+        <Bot /><span className={cn("min-w-0 truncate", !selected && "text-muted-foreground")}>{selected || "Choose agent"}</span><ChevronDown />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" className="w-[min(28rem,calc(100vw-2rem))]">
+        <DropdownMenuRadioGroup value={selected} onValueChange={(name: string) => setAgent(name)}>
+          {catalog.map((item) => <DropdownMenuRadioItem key={item.name} value={item.name} label={item.name} closeOnClick className="min-h-11 sm:min-h-8">
+            <span className="flex min-w-0 flex-1 flex-col"><span className="break-all">{item.name}</span><span className="break-all text-xs text-muted-foreground">{[item.model, item.reasoning].filter(Boolean).join(" · ")}</span></span>
+          </DropdownMenuRadioItem>)}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
-function ComposerAttachments({ files, setFiles, sending, fileInput, children }: {
+// The composer follows Prompt Input (https://ui.shadcn.com/docs/ai-elements/base/prompt-input): an Input Group
+// whose files show as Attachments above the text, added with + or by dropping or pasting them.
+function PromptInput({ files, setFiles, sending, fileInput, children }: {
   files: PendingFile[];
   setFiles: (files: PendingFile[]) => void;
   sending: boolean;
@@ -3419,7 +3487,8 @@ function ComposerAttachments({ files, setFiles, sending, fileInput, children }: 
   children: ReactNode;
 }) {
   const addFiles = (added: File[]) => setFiles([...files, ...added.map((file) => ({ id: crypto.getRandomValues(new Uint32Array(4)).join("-"), file }))]);
-  return <div className="relative z-10 rounded-[22px] border bg-card p-2 shadow-[0_12px_28px_-18px_rgb(0_0_0/40%)]" onDragOver={(event) => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }} onDrop={(event) => {
+  return <><input ref={fileInput} type="file" multiple hidden aria-label="Attach files" disabled={sending} onChange={(event) => { addFiles(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
+  <InputGroup onDragOver={(event) => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }} onDrop={(event) => {
     if (!event.dataTransfer.types.includes("Files")) return;
     event.preventDefault();
     if (!sending) addFiles(Array.from(event.dataTransfer.files));
@@ -3428,14 +3497,13 @@ function ComposerAttachments({ files, setFiles, sending, fileInput, children }: 
     event.preventDefault();
     if (!sending) addFiles(Array.from(event.clipboardData.files));
   }}>
-    <input ref={fileInput} type="file" multiple hidden aria-label="Attach files" disabled={sending} onChange={(event) => { addFiles(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
-    {files.length ? <AttachmentGroup aria-label="Pending attachments">{files.map(({ id, file }) => <Attachment key={id} state={sending ? "uploading" : "idle"}>
+    {files.length ? <InputGroupAddon align="block-start"><AttachmentGroup aria-label="Pending attachments">{files.map(({ id, file }) => <Attachment key={id} size="sm" state={sending ? "uploading" : "idle"}>
       <AttachmentMedia><FileIcon /></AttachmentMedia>
       <AttachmentContent><AttachmentTitle>{file.name}</AttachmentTitle><AttachmentDescription>{sending ? "Sending…" : `${file.size} bytes`}</AttachmentDescription></AttachmentContent>
       <AttachmentActions><AttachmentAction disabled={sending} aria-label={`Remove ${file.name}`} onClick={() => setFiles(files.filter((pending) => pending.id !== id))}><X /></AttachmentAction></AttachmentActions>
-    </Attachment>)}</AttachmentGroup> : null}
+    </Attachment>)}</AttachmentGroup></InputGroupAddon> : null}
     {children}
-  </div>;
+  </InputGroup></>;
 }
 
 function cronWhen(value: string) {
@@ -3495,7 +3563,7 @@ function CronRunPreview({ preview, onClose }: { preview: CronJob; onClose: () =>
       {history.error ? <p role="alert" className="text-sm text-destructive">{history.error.message}</p> : null}
       {!preview.nextRun ? <p className="text-sm text-muted-foreground">No delivered chat · Run traces</p> : null}
       <div className="mt-2 max-h-64 overflow-y-auto">
-        {previewLines.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
+        <TranscriptLines rows={previewLines.map((line) => ({ kind: "line", line }))} conversationId={conversationId} hasSandboxed={hasSandboxed} />
         {history.data?.messages.length === 0 ? <p className="text-sm text-muted-foreground">No recorded messages for this run.</p> : null}
       </div>
     </section>
