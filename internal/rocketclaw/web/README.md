@@ -1,5 +1,10 @@
 # RocketClaw Web
 
+Every page has a **Copy page link** share icon in the bottom navigation, on desktop
+and mobile. It copies the full current address, including query and fragment,
+and shows whether copying succeeded. Plain HTTP uses the same clipboard fallback
+as message copying.
+
 Assistant replies show a smaller, muted footer with known
 `agent (provider/model#effort)` details; `#effort` is omitted when absent.
 On desktop, hover a message to see its footer and Copy button. On touch
@@ -463,7 +468,8 @@ retaining a 44px touch target. The handle stays
 visible when the controls are hidden and supports Enter/Space when focused.
 Touch devices and narrow screens use 48px navigation targets and 8px gaps;
 desktop uses 32px targets and 4px gaps. Icons are 24px in both layouts.
-The centered bar has New session, Search sessions, Voice, and Open command palette.
+The centered bar has New session, Search sessions, Voice, Open command palette,
+and Copy page link.
 Cmd/Ctrl+Alt+N opens a new session. The magnifying glass beside New session opens
 the session palette, like Cmd/Ctrl+P. The **Sessions: Search** command opens
 the Search page. Each search has its own editable tab, saved in this browser for

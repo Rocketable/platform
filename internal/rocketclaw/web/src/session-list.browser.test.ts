@@ -721,7 +721,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const navigation = page.locator("footer");
     const compactHeight = (await navigation.boundingBox())!.height;
     const navigationCommands = navigation.getByRole("button", { name: "Open command palette", exact: true });
-    expect(await navigation.locator("#bottom-navigation button:visible").count()).toBe(4);
+    expect(await navigation.locator("#bottom-navigation button:visible").count()).toBe(5);
     expect(await navigation.getByRole("link").count()).toBe(0);
     expect((await navigationCommands.boundingBox())!.width).toBe(48);
     expect((await navigationCommands.locator("svg").boundingBox())!.width).toBe(24);
@@ -1752,7 +1752,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       } else {
         expect(Math.abs(groupBox!.x + groupBox!.width / 2 - width / 2)).toBeLessThan(1);
       }
-      expect(await newChat.locator("..").getByRole("button").count()).toBe(4);
+      expect(await newChat.locator("..").getByRole("button").count()).toBe(5);
       const creations = ctrl.createdAgents.length;
       await newChat.click();
       await navPage.waitForURL(`${origin}/`);
