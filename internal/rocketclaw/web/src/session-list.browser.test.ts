@@ -389,6 +389,8 @@ test("actual App renders independent public lifecycle and reconnect replacements
       await log.getByText("Held partial suffix", { exact: true }).waitFor();
       expect(await log.locator('[data-slot="bubble-content"]').filter({ hasText: "Held partial suffix" }).count()).toBe(1);
       expect(await log.locator('[data-slot="message"][data-message-id]').count()).toBe(0);
+      // Transcript rendering can finish before the composer's local draft hydration.
+      await page.getByRole("button", { name: "Stop", exact: true }).and(page.locator(":enabled")).waitFor();
       expect(await page.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
       messages = [...messages, event("B:outcome", "tool", "B result", { toolCallId: "B", parentId: "producer/turn/response", state: "completed", agent: "canonical-child", model: "child/model" })]; revision++;
       (await stream.promise).enqueue('data: {"conversationId":"public","revision":"hint"}\n\n');
