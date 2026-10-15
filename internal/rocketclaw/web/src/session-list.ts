@@ -7,7 +7,6 @@ export const SESSION_HISTORY_CHANNEL = "rocketclaw-session-history";
 const epochs = new Map<string, number>();
 let globalEpoch = 0;
 const pendingSaves = new Map<IDBTransaction, string>();
-const pendingClears = new Map<string, Promise<void>>();
 
 function scopeKey(owner: string, protocol: string) {
   return JSON.stringify([owner, protocol]);
@@ -49,7 +48,6 @@ function openSnapshots(): Promise<IDBDatabase> {
 // Capture before opening the network enumeration, not when its rows are saved.
 // The string metadata key cannot collide with the [owner, protocol] row key.
 export async function loadSnapshotGeneration(owner: string, protocol: string): Promise<number> {
-  await pendingClears.get(scopeKey(owner, protocol))?.catch(() => {});
   const db = await openSnapshots();
   try {
     return await new Promise((resolve, reject) => {
@@ -89,7 +87,6 @@ export async function saveCompleteSessions(owner: string, protocol: string, rows
   if (generation === undefined) return; // Storage was unavailable before enumeration.
   invalidatePendingSaves(owner, protocol);
   const epoch = snapshotEpoch(owner, protocol);
-  await pendingClears.get(scopeKey(owner, protocol))?.catch(() => {});
   const db = await openSnapshots();
   try {
     if (epoch !== snapshotEpoch(owner, protocol)) {
@@ -110,45 +107,6 @@ export async function saveCompleteSessions(owner: string, protocol: string, rows
     });
   } finally {
     db.close();
-  }
-}
-
-// History deletion retains the discoverable conversation and its routing data.
-// Invalidate first so a delayed save cannot resurrect the preview after this commit.
-export async function clearSavedSessionHistory(owner: string, protocol: string, id: string): Promise<void> {
-  invalidatePendingSaves(owner, protocol);
-  const scope = scopeKey(owner, protocol);
-  const clearing = Promise.resolve(pendingClears.get(scope)).catch(() => {}).then(async () => {
-    const db = await openSnapshots();
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const tx = db.transaction("snapshots", "readwrite");
-        tx.oncomplete = () => resolve();
-        tx.onabort = () => reject(tx.error);
-        const store = tx.objectStore("snapshots");
-        const generation = store.get(scope);
-        generation.onsuccess = () => store.put((generation.result ?? 0) + 1, scope);
-        const key = [owner, protocol];
-        const request = store.get(key);
-        request.onsuccess = () => {
-          const rows: Session[] | undefined = request.result;
-          if (rows !== undefined) {
-            store.put(stripSessionHistory(rows, id), key);
-          }
-        };
-      });
-    } finally {
-      db.close();
-    }
-  });
-  pendingClears.set(scope, clearing);
-  try {
-    await clearing;
-    const channel = new BroadcastChannel(SESSION_HISTORY_CHANNEL);
-    channel.postMessage({ owner, protocol, id });
-    channel.close();
-  } finally {
-    if (pendingClears.get(scope) === clearing) pendingClears.delete(scope);
   }
 }
 
