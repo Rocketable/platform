@@ -13,6 +13,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`pending Web quest
   // Each answer moves the turn on to its next question; the last one already ended when it is answered.
   const next = [question("q2", true, "Alpha", "Beta", "Gamma"), question("q3", false, "Red", "Blue"), question("q4", false, "Late")];
   let questions = [question("q1", false, "Yes", "No")];
+  let rejectAnswer = true;
   const calls: { path: string; body: object }[] = [];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
@@ -33,6 +34,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`pending Web quest
       case "/api/Prompt": calls.push({ path: url.pathname, body: input }); return Response.json({ privateText: "" });
       case "/api/AnswerQuestion": {
         calls.push({ path: url.pathname, body: input });
+        if (input.askId === "q3" && rejectAnswer) { rejectAnswer = false; return Response.json({ code: 14, message: "answer unavailable" }, { status: 503 }); }
         questions = next.splice(0, 1);
         if (input.askId === "q4") return Response.json({ code: 5, message: "question is no longer pending" }, { status: 404 });
         return Response.json({});
@@ -69,8 +71,14 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`pending Web quest
     expect(await composer.getAttribute("placeholder")).toBe("Answer the question · ⌘⏎ steers");
     await composer.fill("my own answer");
     await composer.press("Enter");
+    await page.getByText("answer unavailable", { exact: true }).waitFor();
+    expect(await composer.inputValue()).toBe("my own answer");
+    expect(await card.getByText("Question q3?").isVisible()).toBe(true);
+    await page.locator("textarea:enabled").waitFor();
+    await composer.press("Enter");
     await card.getByText("Question q4?").waitFor();
     expect(await composer.inputValue()).toBe("");
+    await page.getByText("answer unavailable", { exact: true }).waitFor({ state: "detached" });
 
     await card.getByRole("button", { name: "Late" }).click();
     await page.getByText("This question was already answered or ended").waitFor();
@@ -79,6 +87,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`pending Web quest
     expect(calls).toEqual([
       { path: "/api/AnswerQuestion", body: { conversationId: "chat", askId: "q1", selected: ["yes"] } },
       { path: "/api/AnswerQuestion", body: { conversationId: "chat", askId: "q2", selected: ["alpha", "gamma"] } },
+      { path: "/api/AnswerQuestion", body: { conversationId: "chat", askId: "q3", custom: "my own answer" } },
       { path: "/api/AnswerQuestion", body: { conversationId: "chat", askId: "q3", custom: "my own answer" } },
       { path: "/api/AnswerQuestion", body: { conversationId: "chat", askId: "q4", selected: ["late"] } },
     ]);
