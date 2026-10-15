@@ -241,8 +241,8 @@ func NewWithProviders(
 		return nil, err
 	}
 
-	if err := requireProvider(providers); err != nil {
-		return nil, err
+	if providers.OpenAI == nil {
+		return nil, errors.New("openai provider is required")
 	}
 
 	return NewWithModelResolver(openAIModelResolver{client: providers.OpenAI}, configInput, root, agents, skills, defaultAgent, diagnosticsWriter)
@@ -577,14 +577,6 @@ func normalizeConfig(configInput *Config) Config {
 	}
 
 	return config
-}
-
-func requireProvider(providers Providers) error {
-	if providers.OpenAI == nil {
-		return errors.New("openai provider is required")
-	}
-
-	return nil
 }
 
 func validateAgentModels(agents Agents) error {
