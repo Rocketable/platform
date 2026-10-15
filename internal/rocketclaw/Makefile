@@ -1,6 +1,7 @@
 COVERPROFILE ?= .coverage.out
 COVERPKG ?= github.com/Rocketable/platform/cmd/rocketclaw,./...
 COVERAGE_REQUIRED ?= 85.5
+GOTESTRUN ?= .
 GO_SOURCE_CLOC_BUDGET ?= 23750
 GO_SOURCE_CLOC_HAZARD_ZONE ?= 500
 
@@ -57,7 +58,14 @@ check-cloc-budget:
 	if [ "$$go_source_cloc" -ge "$$limit" ]; then printf "STOP IMMEDIATELY. EXECUTION MUST BE HALTED. LOSS STATE REACHED.\n\nThe limit is %d, current value %d.\n\nContinual operation under this mode can lead to more losses of features, capabilities, and deviation from Human Partner intentions.\n\nABORT!\n" "$$limit" "$$go_source_cloc"; exit 2; fi; \
 	if [ "$$lines_left" -le "$$hazard_zone" ]; then printf "The total lines of source code count is inside the hazard zone. \n\nThe limit is %d, reaching this limit is considered a loss and it will cause the whole system to halt unsafely.\n\nAmong the potential losses is the undue removal of features without human approval.\n\nYou have %d lines of source code left to use. \n\nThe usage of hazard budget is tolerated but not encouraged. \n\nThink hard, preserve system attributes and original feature set to avoid product regressions.\n" "$$limit" "$$lines_left"; exit 0; fi; \
 
-check-coverage:
+check-coverage: coverage-profile
+	@set -eu; \
+	current=$$(go tool cover -func="$(COVERPROFILE)" | awk '/^total:/ { gsub("%", "", $$3); print $$3 }'); \
+	[ -n "$$current" ] || { printf "coverage budget failed: unable to read coverage total\n"; exit 1; }; \
+	awk -v current="$$current" -v required="$(COVERAGE_REQUIRED)" 'BEGIN { if (current + 0 < required + 0) { printf "coverage budget failed: current %.1f%% < required %.1f%%\n", current, required; exit 1 } printf "coverage budget ok: current %.1f%% >= required %.1f%%\n", current, required }'
+
+# CI shards the tests with GOTESTRUN and merges the profiles.
+coverage-profile:
 	@set -eu; \
 	name=; \
 	cleanup() { \
@@ -84,10 +92,7 @@ check-coverage:
 		done; \
 		export ROCKETCLAW_TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:$$port/rocketclaw_test?sslmode=disable"; \
 	fi; \
-	go test -race -count 1 -covermode=atomic -coverpkg=$(COVERPKG) -coverprofile=$(COVERPROFILE) github.com/Rocketable/platform/cmd/rocketclaw/... ./...; \
-	current=$$(go tool cover -func="$(COVERPROFILE)" | awk '/^total:/ { gsub("%", "", $$3); print $$3 }'); \
-	[ -n "$$current" ] || { printf "coverage budget failed: unable to read coverage total\n"; exit 1; }; \
-	awk -v current="$$current" -v required="$(COVERAGE_REQUIRED)" 'BEGIN { if (current + 0 < required + 0) { printf "coverage budget failed: current %.1f%% < required %.1f%%\n", current, required; exit 1 } printf "coverage budget ok: current %.1f%% >= required %.1f%%\n", current, required }'
+	go test -race -count 1 -covermode=atomic -coverpkg=$(COVERPKG) -coverprofile=$(COVERPROFILE) -run '$(GOTESTRUN)' github.com/Rocketable/platform/cmd/rocketclaw/... ./...
 
 .FORCE:
 

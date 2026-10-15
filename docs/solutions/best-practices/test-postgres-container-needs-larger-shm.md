@@ -52,8 +52,8 @@ export ROCKETCLAW_TEST_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5543
 
 As of this writing, neither of the repo's own container setups sets it:
 
-- `make test` in `internal/rocketclaw` (target `check-coverage` in `internal/rocketclaw/Makefile`) runs `docker run -d --name "$name" ... postgres:$latest` with no `--shm-size` when `ROCKETCLAW_TEST_DATABASE_URL` is unset.
-- The `postgres` service in `.github/workflows/test.yml` sets only health-check `options`. GitHub Actions service containers accept `--shm-size` in that same `options` string.
+- `make test` in `internal/rocketclaw` (target `coverage-profile` in `internal/rocketclaw/Makefile`) runs `docker run -d --name "$name" ... postgres:$latest` with no `--shm-size` when `ROCKETCLAW_TEST_DATABASE_URL` is unset.
+- Each `rocketclaw` shard in `.github/workflows/test.yml` starts its own `docker run -d --name postgres ... postgres:18` with no `--shm-size`.
 
 If either path starts failing with shared-memory errors, add `--shm-size=1g` there. Do not lower test parallelism or retry flaky tests to work around it.
 

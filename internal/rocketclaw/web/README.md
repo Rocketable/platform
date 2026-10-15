@@ -374,9 +374,8 @@ API, and sending a message resumes following through `scrollToEnd`.
 
 The build includes TypeScript checks. The entry, sidebar and public-progress HTTP integration
 tests fail unless their Go test servers are running. `go test` in
-`frontend/rpc` runs each of them against its own server. CI starts those servers
-with `ROCKETCLAW_WEB_TEST_SERVER_DIR` before `bun test`; see
-`.github/workflows/test.yml`. Use the isolated
+`frontend/rpc` runs each of them against its own server, which is how the
+`rocketclaw` job in `.github/workflows/test.yml` runs them. Use the isolated
 PostgreSQL and browser-test instructions in the transport README to exercise
 those paths. Keep temporary test artifacts under the repository's `.tmp/`.
 
