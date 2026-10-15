@@ -174,7 +174,17 @@ func doWebFetchRequest(ctx context.Context, rawURL, format string, honestUA bool
 
 	req.Header.Set("User-Agent", ua)
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("Accept", webFetchAcceptHeader(format))
+
+	switch format {
+	case "markdown":
+		req.Header.Set("Accept", "text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1")
+	case "text":
+		req.Header.Set("Accept", "text/plain;q=1.0, text/markdown;q=0.9, text/html;q=0.8, */*;q=0.1")
+	case "html":
+		req.Header.Set("Accept", "text/html;q=1.0, application/xhtml+xml;q=0.9, text/plain;q=0.8, text/markdown;q=0.7, */*;q=0.1")
+	default:
+		req.Header.Set("Accept", "*/*")
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -182,17 +192,4 @@ func doWebFetchRequest(ctx context.Context, rawURL, format string, honestUA bool
 	}
 
 	return resp, nil
-}
-
-func webFetchAcceptHeader(format string) string {
-	switch format {
-	case "markdown":
-		return "text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1"
-	case "text":
-		return "text/plain;q=1.0, text/markdown;q=0.9, text/html;q=0.8, */*;q=0.1"
-	case "html":
-		return "text/html;q=1.0, application/xhtml+xml;q=0.9, text/plain;q=0.8, text/markdown;q=0.7, */*;q=0.1"
-	default:
-		return "*/*"
-	}
 }
