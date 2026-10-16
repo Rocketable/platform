@@ -611,7 +611,8 @@ func TestTranscriptObservationReportsUnavailableStorage(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	for range s.Changes(ctx, "main") {
+	for _, err := range s.Changes(ctx, "main") {
+		require.NoError(t, err)
 		t.Fatal("cancellation must end observation without yielding an error")
 	}
 

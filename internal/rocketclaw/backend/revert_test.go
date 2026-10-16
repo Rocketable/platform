@@ -198,8 +198,8 @@ func TestRevertWaitsForDeliverySettlement(t *testing.T) {
 			require.Eventually(t, func() bool { b.mu.Lock(); defer b.mu.Unlock(); return b.historyMutation }, time.Second, time.Millisecond)
 
 			select {
-			case <-staged:
-				t.Fatal("staged before delivery settled")
+			case err := <-staged:
+				t.Fatal("staged before delivery settled", err)
 			default:
 			}
 
