@@ -25,6 +25,7 @@ import (
 	migrate "github.com/rubenv/sql-migrate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 // finalsPublisher completes delivery at once and reports every final outbound.
@@ -1407,7 +1408,15 @@ func TestSteerAcceptedBeforeRestartIsInjectedOnce(t *testing.T) {
 	newBridge, service, requests, finals := newResumeTestBridges(t, true)
 	first := newBridge()
 	conversationID := first.config.ConversationID
-	shutdown := runTestBridge(t, first)
+	ctx, shutdown := context.WithCancelCause(t.Context())
+
+	var running errgroup.Group
+
+	running.Go(func() error { return first.Run(ctx) })
+	t.Cleanup(func() {
+		shutdown(errShutdown)
+		require.NoError(t, running.Wait())
+	})
 
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "hello", true)
 	require.NoError(t, first.Submit(t.Context(), msg))
@@ -1419,7 +1428,7 @@ func TestSteerAcceptedBeforeRestartIsInjectedOnce(t *testing.T) {
 	require.Len(t, turns, 1)
 	assert.Contains(t, testTurnStepKeys(t, service, conversationID), turns[0]+"/steers", "the accepted steer is recorded under its turn")
 
-	shutdown()
+	shutdown(errShutdown)
 	require.Eventually(t, func() bool { return !first.handlingSnapshot() }, 5*time.Second, 10*time.Millisecond)
 
 	late := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindSteer, "and the metrics", true)
@@ -1429,6 +1438,8 @@ func TestSteerAcceptedBeforeRestartIsInjectedOnce(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, queued, "the late steer is not a new queued turn")
 
+	// The stopped loop drains accepted requests before the next process can resume.
+	require.NoError(t, running.Wait())
 	runTestBridge(t, newBridge())
 	assert.Contains(t, readFinal(t, finals).Text, "answer")
 
