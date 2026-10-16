@@ -260,6 +260,19 @@ func TestRaceSuccessWins(t *testing.T) {
 	}
 }
 
+func TestRaceAllBranchesFail(t *testing.T) {
+	got, err := Run(t.Context(), `def main():
+    return race([lambda: 1 // 0, lambda: 1 // 0])
+`, nil, allowAll, nilCall, noToolCallObserver, nil)
+	if err == nil || !strings.Contains(err.Error(), "floored division by zero") {
+		t.Fatalf("race error = %v, want division by zero", err)
+	}
+
+	if got != "" {
+		t.Fatalf("race = %q, want no result when all branches fail", got)
+	}
+}
+
 func TestRaceFirstFailureWins(t *testing.T) {
 	_, err := Run(t.Context(), `def main():
     return race_first([
