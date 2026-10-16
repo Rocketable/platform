@@ -17,7 +17,7 @@ import (
 func TestClipExecuteHead(t *testing.T) {
 	t.Parallel()
 
-	for _, text := range []string{"", "ok", strings.Repeat("a\n", 10), strings.Repeat("a\n", executeHeadMaxLines), strings.Repeat("x", executeHeadMaxBytes)} {
+	for _, text := range []string{"", "ok", "€\r\n\xff", strings.Repeat("a\n", 10), strings.Repeat("a\n", executeHeadMaxLines), strings.Repeat("x", executeHeadMaxBytes)} {
 		got, oversized := clipExecuteHead(text)
 		require.False(t, oversized)
 		require.Equal(t, text, got)
@@ -25,16 +25,20 @@ func TestClipExecuteHead(t *testing.T) {
 
 	head, oversized := clipExecuteHead(strings.Repeat("line\n", 2100))
 	require.True(t, oversized)
-	require.Equal(t, 2000, strings.Count(head, "\n"))
-	require.NotContains(t, head, "output truncated")
+	require.Equal(t, strings.Repeat("line\n", executeHeadMaxLines), head)
 
 	long := strings.Repeat("x", executeHeadMaxBytes+10)
 	head, oversized = clipExecuteHead(long)
 	require.True(t, oversized)
-	require.LessOrEqual(t, len(head), executeHeadMaxBytes)
+	require.Equal(t, long[:executeHeadMaxBytes], head)
 	head, oversized = clipExecuteHead(strings.Repeat("x", executeHeadMaxBytes-1) + "\nnext")
 	require.True(t, oversized)
 	require.Equal(t, strings.Repeat("x", executeHeadMaxBytes-1)+"\n", head)
+
+	long = strings.Repeat("€", executeHeadMaxBytes/3+1)
+	head, oversized = clipExecuteHead(long)
+	require.True(t, oversized)
+	require.Equal(t, long[:executeHeadMaxBytes], head)
 }
 
 func TestSaveExecuteResult(t *testing.T) {

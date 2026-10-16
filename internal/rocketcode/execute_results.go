@@ -49,34 +49,19 @@ func isExecuteSpillPath(root *os.Root, spillRel, path string) bool {
 }
 
 func clipExecuteHead(text string) (string, bool) {
-	var out strings.Builder
-
-	reader := bufio.NewReader(strings.NewReader(text))
-
+	end := 0
 	lines := 0
-	for lines < executeHeadMaxLines {
-		line, err := reader.ReadString('\n')
-		if out.Len()+len(line) > executeHeadMaxBytes {
-			remain := executeHeadMaxBytes - out.Len()
-			out.WriteString(line[:remain])
 
-			return out.String(), true
-		}
-
-		out.WriteString(line)
+	for line := range strings.SplitAfterSeq(text[:min(len(text), executeHeadMaxBytes)], "\n") {
+		end += len(line)
 
 		lines++
-
-		if err != nil {
-			return out.String(), false
+		if lines == executeHeadMaxLines {
+			break
 		}
 	}
 
-	if _, err := reader.ReadByte(); err == nil {
-		return out.String(), true
-	}
-
-	return out.String(), false
+	return text[:end], end < len(text)
 }
 
 var errUnknownExecuteResult = errors.New("unknown or expired execute result")
