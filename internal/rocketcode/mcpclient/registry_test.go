@@ -3,6 +3,7 @@ package mcpclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -118,21 +119,40 @@ func TestRegistrySnapshot(t *testing.T) {
 	assert.True(t, reg.Has("alpha"))
 }
 
-func TestUnknownServer(t *testing.T) {
+func TestSessionErrors(t *testing.T) {
 	t.Parallel()
 
-	reg, err := New(t.TempDir(), nil)
-	require.NoError(t, err)
+	for _, tt := range []struct {
+		name   string
+		server string
+		config ServerConfig
+		want   string
+	}{
+		{name: "unknown server", server: "nope", want: `unknown mcp server "nope"`},
+		{name: "missing transport", server: "demo", want: `mcp server "demo": no transport configured`},
+		{name: "invalid URL", server: "demo", config: ServerConfig{URL: "http://[::1", Headers: map[string]string{"Authorization": "Bearer test"}}, want: `connect mcp server "demo":`},
+		{name: "escaping cwd", server: "demo", config: ServerConfig{Command: "echo", Cwd: ".."}, want: `cwd ".." escapes workspace`},
+		{name: "missing command", server: "demo", config: ServerConfig{Command: "./missing-mcp-command"}, want: `connect mcp server "demo":`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	session := reg.Open()
+			reg, err := New(t.TempDir(), map[string]ServerConfig{"demo": tt.config})
+			require.NoError(t, err)
 
-	t.Cleanup(func() { require.NoError(t, session.Close()) })
+			session := reg.Open()
 
-	_, err = session.ListTools(t.Context(), "nope")
-	require.ErrorContains(t, err, `unknown mcp server "nope"`)
+			t.Cleanup(func() { require.NoError(t, session.Close()) })
 
-	_, err = session.CallTool(t.Context(), "nope", "echo", nil)
-	require.ErrorContains(t, err, `unknown mcp server "nope"`)
+			tools, err := session.ListTools(t.Context(), tt.server)
+			require.ErrorContains(t, err, tt.want)
+			assert.Nil(t, tools)
+
+			got, err := session.CallTool(t.Context(), tt.server, "echo", nil)
+			require.ErrorContains(t, err, tt.want)
+			assert.Empty(t, got)
+		})
+	}
 }
 
 func TestCloseIdempotent(t *testing.T) {
@@ -211,6 +231,38 @@ func TestHTTPCallTool(t *testing.T) {
 	got, err = session.CallTool(t.Context(), "demo", "struct_only", map[string]any{})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"n":1}`, got)
+
+	got, err = session.CallTool(t.Context(), "demo", "missing", nil)
+	require.ErrorContains(t, err, `call demo.missing:`)
+	require.ErrorContains(t, err, `unknown tool "missing"`)
+	assert.Empty(t, got)
+}
+
+func TestListToolsError(t *testing.T) {
+	t.Parallel()
+
+	url := startTestHTTPServer(t, func(server *mcp.Server) {
+		server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+			return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+				if method == "tools/list" {
+					return nil, errors.New("catalog unavailable")
+				}
+
+				return next(ctx, method, req)
+			}
+		})
+	})
+	reg, err := New(t.TempDir(), map[string]ServerConfig{"demo": {URL: url}})
+	require.NoError(t, err)
+
+	session := reg.Open()
+
+	t.Cleanup(func() { require.NoError(t, session.Close()) })
+
+	tools, err := session.ListTools(t.Context(), "demo")
+	require.ErrorContains(t, err, `list tools on "demo":`)
+	require.ErrorContains(t, err, "catalog unavailable")
+	assert.Nil(t, tools)
 }
 
 func TestHTTPHeaders(t *testing.T) {
