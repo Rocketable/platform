@@ -51,8 +51,6 @@ func resolveAWS(value any, fetcher SecretFetcher) (any, error) {
 
 			node[key] = resolved
 		}
-
-		return node, nil
 	case []any:
 		for i, child := range node {
 			resolved, err := resolveAWS(child, fetcher)
@@ -62,11 +60,9 @@ func resolveAWS(value any, fetcher SecretFetcher) (any, error) {
 
 			node[i] = resolved
 		}
-
-		return node, nil
-	default:
-		return value, nil
 	}
+
+	return value, nil
 }
 
 func decodeObject(data []byte, what string) (map[string]any, error) {
