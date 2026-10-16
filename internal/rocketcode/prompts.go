@@ -96,10 +96,6 @@ func expandPromptShellCommands(prompt string, run func(string) string) string {
 }
 
 func expandAgentPrompt(ctx context.Context, agent *Agent, enabled bool, env *promptExpansionEnvironment) {
-	if agent == nil {
-		return
-	}
-
 	if !enabled {
 		return
 	}
