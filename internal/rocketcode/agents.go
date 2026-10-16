@@ -235,12 +235,12 @@ func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, e
 
 	return Agent{
 		Name:            name,
-		Description:     frontmatterString(frontmatter, "description"),
+		Description:     argString(frontmatter, "description"),
 		Model:           model,
-		ReasoningEffort: frontmatterString(frontmatter, "reasoningEffort"),
-		Verbosity:       frontmatterString(frontmatter, "verbosity"),
+		ReasoningEffort: argString(frontmatter, "reasoningEffort"),
+		Verbosity:       argString(frontmatter, "verbosity"),
 		MaxRecursion:    maxRecursion,
-		Guardrail:       frontmatterString(frontmatter, "guardrail"),
+		Guardrail:       argString(frontmatter, "guardrail"),
 		CustomShell:     customShell,
 		Prompt:          strings.TrimSpace(prompt),
 		Location:        filePath,
@@ -384,10 +384,4 @@ func parseAgentOutputSchema(schema *yaml.Node) (map[string]any, error) {
 	}
 
 	return result, nil
-}
-
-func frontmatterString(frontmatter map[string]any, key string) string {
-	text, _ := frontmatter[key].(string)
-
-	return text
 }
