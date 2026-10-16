@@ -4,6 +4,19 @@ import { SourceMap } from "node:module";
 
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
+// The SDK keeps a slow frame only if a span is still open when its observer reports the frame, which can lag
+// past the span's idle timeout on a busy machine. Run in the page after slow work, this holds the open span with a
+// traced request until the page's own later observer has seen the frame (see /test/frame/ in the server).
+function holdFrame(name: string, pattern: string) {
+  new PerformanceObserver((list, observer) => {
+    const scripts = list.getEntries().flatMap((entry) => (entry as PerformanceEntry & { scripts: { invokerType: string; invoker: string }[] }).scripts);
+    if (!scripts.some((script) => new RegExp(pattern).test(`${script.invokerType}:${script.invoker}`))) return;
+    observer.disconnect();
+    void fetch(`/test/frame/seen/${name}`);
+  }).observe({ type: "long-animation-frame" });
+  void fetch(`/test/frame/hold/${name}`);
+}
+
 for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample rate ${rate ?? "disabled"}`, async () => {
   const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
   const envelopes: string[] = [];
@@ -18,6 +31,7 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
   const searchCancelled = Promise.withResolvers<void>();
   const events: { exception?: { values: { type?: string; value: string; stacktrace?: { frames: { filename: string; lineno: number; colno: number }[] }; mechanism?: { type: string } }[] }; logentry?: { formatted: string }; debug_meta?: { images: { debug_id: string }[] } }[] = [];
   const headers: Headers[] = [];
+  const frames = new Map<string, PromiseWithResolvers<void>>();
   let breakReact = false;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async (request) => {
     const url = new URL(request.url);
@@ -35,6 +49,13 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
       if (spans.some((span) => span.attributes["sentry.op"]?.value === "ui.action.click") && spans.some((span) => span.attributes["sentry.op"]?.value === "ui.long_animation_frame" && span.attributes["browser.script.invoker_type"]?.value === "event-listener" && /^INPUT(?:#.*)?\.onclick$/.test(span.attributes["browser.script.invoker"]?.value ?? ""))) interaction.resolve();
       if (["browser exception", "promise rejection", "console failure", "request failure", "clipboard failure"].every((message) => events.some((event) => event.logentry?.formatted === message || event.exception?.values.some((exception) => exception.value === message))) && events.some((event) => event.exception?.values.some((exception) => exception.type === "React ErrorBoundary TypeError"))) reported.resolve();
       return Response.json({});
+    }
+    if (url.pathname.startsWith("/test/frame/")) {
+      const [, , , action, name] = url.pathname.split("/");
+      const frame = frames.get(name) ?? frames.set(name, Promise.withResolvers()).get(name)!;
+      if (action === "seen") frame.resolve();
+      else await frame.promise;
+      return new Response("");
     }
     if (url.pathname.startsWith("/api/")) headers.push(request.headers);
     if (url.pathname === "/api/SearchSessions") {
@@ -65,6 +86,7 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
   const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM, headless: true });
   try {
     const page = await browser.newPage();
+    await page.addInitScript(`window.holdFrame = ${holdFrame}`);
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.port}/?q=private-search`);
@@ -74,8 +96,9 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
       // Let startup requests and rendering settle before measuring the inline script.
       await page.waitForLoadState("networkidle");
       await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-      // Trigger a paint while the document still has a query string.
-      await page.addScriptTag({ content: `const until = performance.now() + 150; while (performance.now() < until) {} document.body.append("slow script");` });
+      // Trigger a paint while the document still has a query string. The pageload span may already have
+      // ended, so the click opens an interaction span for the frame.
+      await page.addScriptTag({ content: `document.body.click(); const until = performance.now() + 150; while (performance.now() < until) {} document.body.append("slow script"); holdFrame("script", "^classic-script:");` });
     }
     await page.getByRole("button", { name: "Open command palette", exact: true }).click();
     await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
@@ -93,6 +116,7 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
       await search.evaluate((node: HTMLElement) => node.addEventListener("click", () => {
         const until = performance.now() + 150;
         while (performance.now() < until) {}
+        (window as unknown as { holdFrame: typeof holdFrame }).holdFrame("click", String.raw`^event-listener:INPUT(?:#.*)?\.onclick$`);
       }, { once: true }));
       await search.click();
       await interaction.promise;

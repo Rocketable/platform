@@ -148,7 +148,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v7
       - *setup-bun
@@ -161,12 +161,13 @@ jobs:
       - run: bun run build
         working-directory: internal/rocketclaw/web
       # Transport tests need the live PostgreSQL/provider fixtures owned by Go, so the rocketclaw job runs them.
+      # Two browser files at a time on four cores, because timing-sensitive browser tests time out when starved.
       - name: Web tests
         working-directory: internal/rocketclaw/web
         run: >-
           find ./src -type f \( -name "*.test.ts" -o -name "*.test.tsx" \) ! -name "*-transport.test.ts" | sort |
           awk -v n=${{ strategy.job-total }} -v i=${{ matrix.shard }} 'NR % n == i' |
-          xargs -n 1 -P 4 bun test
+          xargs -n 1 -P 2 bun test
 
   # The merge-queue ruleset requires the "test (core)" and "test (web)" checks.
   core:

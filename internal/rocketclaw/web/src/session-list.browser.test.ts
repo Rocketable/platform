@@ -872,6 +872,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await page.getByRole("menuitemradio", { name: "other gpt" }).click();
     ctrl.holdPrompt = true;
     await page.getByPlaceholder("Message a new session").fill("hello\n\nwhile held");
+    // A send during an identity refresh has no provisional author, so send just after a refresh.
+    await page.waitForResponse("**/api/Identity");
     await page.getByRole("button", { name: "Send" }).click();
     await ctrl.promptStarted.promise;
     expect(ctrl.prompt).toEqual(["web-session:new:hello\n\nwhile held"]);
@@ -2709,6 +2711,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     ctrl.queue = [];
     ctrl.holdPrompt = true;
     promptHold = Promise.withResolvers();
+    await authorPage.waitForResponse("**/api/Identity");
     await handoffDialog.getByRole("button", { name: "Start new session", exact: true }).click();
     await authorPage.waitForURL("**/s/d2ViLXNlc3Npb246bmV3");
     const handoffBubble = authorPage.locator('[data-slot="bubble-content"]').filter({ hasText: "Handoff document" });
