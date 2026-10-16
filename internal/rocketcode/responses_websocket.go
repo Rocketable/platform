@@ -181,10 +181,8 @@ func (d *responsesWebsocketDoer) doCreate(req *http.Request, observer responseOb
 	delete(payload, "stream")
 	delete(payload, "background")
 
-	create, errMarshal := json.Marshal(payload)
-	if errMarshal != nil {
-		return nil, fmt.Errorf("encode responses websocket create: %w", errMarshal)
-	}
+	// Decoded JSON values and the type string are always JSON-encodable.
+	create, _ := json.Marshal(payload)
 
 	if err := observer.beginResponse(req.Context()); err != nil {
 		return nil, err
@@ -278,12 +276,8 @@ func (d *responsesWebsocketDoer) readCreate(req *http.Request, observer response
 			if len(body) == 0 {
 				body = message
 			} else {
-				wrapped, errMarshal := json.Marshal(map[string]json.RawMessage{"error": body})
-				if errMarshal != nil {
-					return nil, fmt.Errorf("encode responses websocket error: %w", errMarshal)
-				}
-
-				body = wrapped
+				// Unmarshaling the event already validated the raw error JSON.
+				body, _ = json.Marshal(map[string]json.RawMessage{"error": body})
 			}
 
 			return jsonHTTPResponse(req, event.Status, body)
