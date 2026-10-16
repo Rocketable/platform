@@ -2375,6 +2375,7 @@ function TranscriptLog({
   movable,
   refreshHistory,
   shadows = [],
+  footer,
   children,
 }: {
   lines: Line[];
@@ -2390,6 +2391,7 @@ function TranscriptLog({
   more: boolean;
   loadEarlier: () => Promise<void>;
   shadows?: ShadowBinding[];
+  footer: ReactNode;
   children?: ReactNode;
 }) {
   const search = new URLSearchParams(useSearch());
@@ -2473,13 +2475,13 @@ function TranscriptLog({
     </MessageScroller>
   );
   const controls = <TranscriptControls comparison={mobileComparison ? <Button type="button" variant="ghost" size="sm" className="min-h-11" onClick={() => setMobileOpen(true)}>Shadows</Button> : null}>{children}</TranscriptControls>;
-  if (!selected) return <>{body}{controls}</>;
+  if (!selected) return <>{body}{footer}{controls}</>;
   return <><Tabs.Root value={selected.childConversationId} onValueChange={selectShadow} style={{ "--shadow-width": `${shadowWidth.width}px` } as CSSProperties} className="flex min-h-0 flex-1 flex-col">
     {wide ? <header className="grid grid-cols-[minmax(0,1fr)_minmax(18rem,var(--shadow-width))] border-b"><span className="p-3 text-xs text-muted-foreground">Conversation</span><div className="relative min-w-0">{tabs}<AsideResizeHandle {...shadowWidth} /></div></header> : null}
     {shadow.error ? <p role="alert" className="px-3 text-sm text-destructive">{shadow.error.message}</p> : null}
     <Tabs.Panel value={selected.childConversationId} className="flex min-h-0 flex-1 flex-col">{body}</Tabs.Panel>
     {!wide ? <Sheet open={mobileOpen} onOpenChange={setMobileOpen}><SheetContent side="right" className="data-[side=right]:w-full data-[side=right]:sm:max-w-none"><SheetTitle>Shadow comparison · {selected.parentAgent}</SheetTitle>{tabs}<ScrollArea className="min-h-0 flex-1">{pairedRows.map((row, index) => <div key={row.key} className="p-3"><Button size="xs" variant="ghost" onClick={() => { setMobileOpen(false); scrollToMessage(`turn-${row.key}`, { align: "start", behavior: "instant" }); }}>Go to parent turn {index + 1}</Button><ShadowCell row={row} index={index} binding={selected} detail={detail} delegations={shadow.data?.delegations} /></div>)}</ScrollArea></SheetContent></Sheet> : null}
-  </Tabs.Root>{controls}
+  </Tabs.Root>{footer}{controls}
   </>;
 }
 
@@ -2766,9 +2768,23 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
   const revert = useMemo(() => ({ available, pending, run: runRevert }), [available, pending, runRevert]);
   const error = [scopeError, historyError].find(Boolean);
   const followed = previewing ? { lines: previewLines ?? lines, delegations: preview.data, busy: false, more: false, terminal: undefined, shadows: undefined } : { lines, delegations, busy, more, terminal, shadows };
+  const queue = useQuery({ ...queries.queue({ id }), enabled: id !== "", refetchInterval: 2000 });
+  const { queued, parked } = pendingInputs(draft, queue.data ?? []);
+  // Pending steers, the revert checkpoint, and errors end the transcript so the origin switcher stays next to the composer.
+  const footer = <>
+    {parked.length > 0 && !previewing ? <section aria-label="Pending steers" className="mx-auto w-full max-w-3xl px-3"><p className="text-xs text-muted-foreground">Waiting to steer</p>{parked.map((line) => <TranscriptLine key={line.id} line={line} conversationId={id} hasSandboxed={false} />)}</section> : null}
+    {/* A revert leaves a Checkpoint after the kept turns: https://ui.shadcn.com/docs/ai-elements/base/checkpoint. */}
+    {draft.revertMessageId ? <div className="mx-auto w-full max-w-3xl px-3 py-2"><Marker variant="separator" role="status">
+      <MarkerContent className="max-w-full">
+        History reverted. Files and external effects are unchanged.
+        <Button size="xs" variant="outline" className="ms-2 min-h-11 sm:min-h-6" disabled={revert.pending} onClick={() => void revert.run(undefined, true)}>Redo</Button>
+      </MarkerContent>
+    </Marker></div> : null}
+    {error ? <p role="alert" className="px-3 text-sm text-destructive">{error}</p> : null}
+  </>;
   return (
     <RevertActions value={revert}>
-      <Delegations value={followed.delegations}><TranscriptLog conversationId={id} lines={followed.lines} opening={opening} working={followed.busy} terminal={followed.terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} more={followed.more} loadEarlier={loadEarlier} movable={movable} refreshHistory={refreshHistory} shadows={followed.shadows}>
+      <Delegations value={followed.delegations}><TranscriptLog conversationId={id} lines={followed.lines} opening={opening} working={followed.busy} terminal={followed.terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} more={followed.more} loadEarlier={loadEarlier} movable={movable} refreshHistory={refreshHistory} shadows={followed.shadows} footer={footer}>
       {hasSandboxed ? <ButtonGroup aria-label="Show messages from">
         {(["sandboxed", "canonical"] as const).map((choice) => (
           <Button key={choice} type="button" size="xs" className="relative before:absolute before:-inset-y-2.5 before:inset-x-0" variant={visibleFilter[choice] ? "default" : "outline"} aria-pressed={visibleFilter[choice]} onClick={() => {
@@ -2780,16 +2796,8 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
         ))}
       </ButtonGroup> : null}
       </TranscriptLog></Delegations>
-      {/* A revert leaves a Checkpoint after the kept turns: https://ui.shadcn.com/docs/ai-elements/base/checkpoint. */}
-      {draft.revertMessageId ? <div className="mx-auto w-full max-w-3xl px-3 py-2"><Marker variant="separator" role="status">
-        <MarkerContent className="max-w-full">
-          History reverted. Files and external effects are unchanged.
-          <Button size="xs" variant="outline" className="ms-2 min-h-11 sm:min-h-6" disabled={revert.pending} onClick={() => void revert.run(undefined, true)}>Redo</Button>
-        </MarkerContent>
-      </Marker></div> : null}
-      {error ? <p role="alert" className="px-3 text-sm text-destructive">{error}</p> : null}
       <fieldset disabled={[opening, previewing, !draft.hydrated].some(Boolean)} className={previewing ? "hidden" : "contents"}>
-        <SessionComposer id={id} draft={draft} drafts={drafts} onDraftChange={onDraftChange} busy={busy} setBusy={setBusy} setLines={setLines} refreshHistory={refreshHistory} />
+        <SessionComposer id={id} draft={draft} drafts={drafts} onDraftChange={onDraftChange} busy={busy} setBusy={setBusy} setLines={setLines} refreshHistory={refreshHistory} queued={queued} />
       </fieldset>
     </RevertActions>
   );
@@ -3104,6 +3112,7 @@ function SessionComposer({
   setBusy,
   setLines,
   refreshHistory,
+  queued,
 }: {
   id: string;
   draft: ComposerDraft;
@@ -3113,6 +3122,7 @@ function SessionComposer({
   setBusy: (value: boolean) => void;
   setLines: (update: (current: Line[]) => Line[]) => void;
   refreshHistory: () => Promise<unknown>;
+  queued: QueueItem[];
 }) {
   const identity = useQuery(queries.identity());
   const { setCommand } = useContext(SessionCommands);
@@ -3122,7 +3132,6 @@ function SessionComposer({
   const { scrollToEnd, scrollToMessage } = useMessageScroller();
   const prompt = useMutation({ mutationFn: mutations.prompt, onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["queue"] }); } });
   const agents = useQuery({ ...queries.agents({ conversationId: id }), refetchInterval: 2000 });
-  const queueQuery = useQuery({ ...queries.queue({ id }), enabled: id !== "", refetchInterval: 2000 });
   const removeQueueItem = useMutation({ mutationFn: mutations.removeQueueItem, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["queue"] }) });
   const steerQueueItem = useMutation({ mutationFn: mutations.steerQueueItem, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["queue"] }) });
   const popQueueItem = useMutation({ mutationFn: mutations.popQueueItem, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["queue"] }) });
@@ -3163,7 +3172,6 @@ function SessionComposer({
     setDollarOff(invocation !== "$skill " && invocation !== "$workflow ");
     setAgentOpen(false);
   };
-  const { queued, parked } = pendingInputs(draft, queueQuery.data ?? []);
   const question = useQuestion(id, draft, refreshHistory, setSendError);
   const { placeholder, sendLabel } = composerLabels(question.pending, busy, id);
   const send = (delivery?: PromptDelivery) => {
@@ -3214,7 +3222,6 @@ function SessionComposer({
     <>
       {sendError ? <p className="px-3 pb-2 text-sm text-destructive sm:px-5">{sendError}</p> : null}
       {draft.persistenceError ? <p role="alert" className="px-3 pb-2 text-sm text-destructive">{draft.persistenceError}</p> : null}
-      {parked.length > 0 ? <section aria-label="Pending steers" className="mx-auto w-full max-w-3xl px-3"><p className="text-xs text-muted-foreground">Waiting to steer</p>{parked.map((line) => <TranscriptLine key={line.id} line={line} conversationId={id} hasSandboxed={false} />)}</section> : null}
       <Composer
         files={files}
         setFiles={setFiles}

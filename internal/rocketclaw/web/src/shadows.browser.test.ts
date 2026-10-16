@@ -46,7 +46,7 @@ for (const width of [1440, 390, 320]) test(`shadow comparison at ${width}px`, as
         if (input.id !== "parent") expect(input.limit).toBe(50);
         return Response.json(histories.get(input.id)!);
       }
-      case "/api/ListQueue": return Response.json({ items: [] });
+      case "/api/ListQueue": return Response.json({ items: width === 320 ? [{ id: "steer", text: "Pending steer", delivery: "STEER" }] : [] });
       default: return Response.json({});
     }
   } });
@@ -66,6 +66,11 @@ for (const width of [1440, 390, 320]) test(`shadow comparison at ${width}px`, as
       expect(position.bottom).toBeLessThanOrEqual(position.composerTop);
       expect(await controls.getByRole("group", { name: "Show messages from" }).count()).toBe(width === 320 ? 1 : 0);
       if (width === 320) {
+        // Pending steers end the transcript; the origin switcher stays next to the composer.
+        const steers = page.getByRole("region", { name: "Pending steers", exact: true });
+        await steers.waitFor();
+        const steersBox = (await steers.boundingBox())!;
+        expect(steersBox.y + steersBox.height).toBeLessThanOrEqual((await controls.boundingBox())!.y);
         const sandboxed = controls.getByRole("button", { name: "sandboxed", exact: true });
         await sandboxed.click();
         expect(await sandboxed.getAttribute("aria-pressed")).toBe("false");
