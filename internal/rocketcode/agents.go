@@ -387,15 +387,7 @@ func parseAgentOutputSchema(schema *yaml.Node) (map[string]any, error) {
 }
 
 func frontmatterString(frontmatter map[string]any, key string) string {
-	value, ok := frontmatter[key]
-	if !ok {
-		return ""
-	}
-
-	text, ok := value.(string)
-	if !ok {
-		return ""
-	}
+	text, _ := frontmatter[key].(string)
 
 	return text
 }
