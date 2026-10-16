@@ -223,10 +223,6 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell string, p
 	cmd.Cancel = func() error {
 		timedOut = true
 
-		if cmd.Process == nil {
-			return nil
-		}
-
 		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			return fmt.Errorf("terminate command group: %w", err)
 		}
