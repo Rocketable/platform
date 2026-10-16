@@ -266,6 +266,30 @@ func testShellTempConfig(t *testing.T, root *os.Root, outputDir string) shellTem
 	return config
 }
 
+func TestPathWithinRoot(t *testing.T) {
+	for _, tt := range []struct {
+		root, path string
+		want       bool
+	}{
+		{"/workspace", "/workspace", true},
+		{"/workspace", "/workspace/nested/file", true},
+		{"/workspace", "/workspace/nested/../file", true},
+		{"/workspace", "/workspace/..hidden", true},
+		{"/workspace", "/workspace-other/file", false},
+		{"/workspace", "/workspace/../outside", false},
+		{"/workspace", "/", false},
+		{"/", "/workspace", true},
+		{"spill", "spill/result.txt", true},
+		{"spill", "spill-other/result.txt", false},
+		{"spill", "../spill/result.txt", false},
+		{"/workspace", "relative", false},
+	} {
+		t.Run(tt.root+"/"+tt.path, func(t *testing.T) {
+			require.Equal(t, tt.want, pathWithinRoot(tt.root, tt.path))
+		})
+	}
+}
+
 func TestResolveBashPath(t *testing.T) {
 	for _, tt := range []struct{ home, arg, want string }{
 		{"/home/person", "~", "/home/person"},

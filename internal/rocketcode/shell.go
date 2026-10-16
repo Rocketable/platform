@@ -442,9 +442,6 @@ func resolveBashPath(hostDir, arg string) string {
 
 func pathWithinRoot(rootName, path string) bool {
 	rel, err := filepath.Rel(rootName, path)
-	if err != nil {
-		return false
-	}
 
-	return rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return err == nil && filepath.IsLocal(rel)
 }
