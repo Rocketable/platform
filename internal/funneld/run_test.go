@@ -14,6 +14,24 @@ import (
 	"testing"
 )
 
+func TestRunRejectsInvalidArgs(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"unknown flag", []string{"--unknown"}, "flag provided but not defined: -unknown"},
+		{"positional argument", []string{"unexpected"}, "funneld takes flags only, got extra arguments: [unexpected]"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := Run(t.Context(), "funneld", tt.args)
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("Run(%q) error = %v; want %q", tt.args, err, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadConfigFromArgs(t *testing.T) {
 	path := writeConfig(t, `{
 		"host": "https://example.ts.net",
