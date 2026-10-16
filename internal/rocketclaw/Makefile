@@ -65,12 +65,16 @@ check-coverage: coverage-profile
 	awk -v current="$$current" -v required="$(COVERAGE_REQUIRED)" 'BEGIN { if (current + 0 < required + 0) { printf "coverage budget failed: current %.1f%% < required %.1f%%\n", current, required; exit 1 } printf "coverage budget ok: current %.1f%% >= required %.1f%%\n", current, required }'
 
 # CI shards the tests with GOTESTRUN and merges the profiles.
+# Test browsers whose test run was killed never exit, so they are cleared before and after the
+# run. Only orphans (parent PID 1) match, so other running test runs keep their browsers.
 coverage-profile:
 	@set -eu; \
 	name=; \
 	cleanup() { \
 		if [ -n "$$name" ]; then docker rm -f "$$name" >/dev/null 2>&1 || true; fi; \
+		pkill -P 1 -f 'ms-playwright/chromium' || true; \
 	}; \
+	pkill -P 1 -f 'ms-playwright/chromium' || true; \
 	trap cleanup EXIT INT TERM; \
 	if [ -z "$${ROCKETCLAW_TEST_DATABASE_URL:-}" ]; then \
 		latest=$$(curl -fsSL https://www.postgresql.org/versions.json | jq -r '[.[] | select(.supported) | .major] | max_by(tonumber)'); \
