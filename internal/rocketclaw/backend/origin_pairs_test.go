@@ -32,9 +32,9 @@ func TestExternalMCPOriginPairsMigration(t *testing.T) {
 	store := newTestSessionService(t)
 	source := migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}
 	set := migrate.MigrationSet{TableName: "pg_migrations"}
-	n, err := set.ExecMaxContext(t.Context(), store.db, "postgres", source, migrate.Down, 13)
+	n, err := set.ExecMaxContext(t.Context(), store.db, "postgres", source, migrate.Down, 14)
 	require.NoError(t, err)
-	require.Equal(t, 13, n)
+	require.Equal(t, 14, n)
 	_, err = store.db.ExecContext(t.Context(), `INSERT INTO external_mcp_sessions
 (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) VALUES
 ('with-details', 'private', 'managed', 'helper', '#triage'),

@@ -201,6 +201,39 @@ FROM session_entries WHERE id = $1`, producerID)
 	require.Equal(t, "producer", withProducer[2].SourceConversationID)
 	require.True(t, withProducer[2].Synced)
 
+	// A running hidden run that syncs here shows live after the history, under the key its synced copy takes.
+	hidden := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "hidden", false)
+	hidden.SyncDestination = "main"
+	require.NoError(t, startTurnDB(ctx, s.db, "producer-live", "producer", hidden))
+	live, err := s.ObserveTranscript(ctx, "main", 0, 0, nil)
+	require.NoError(t, err)
+	require.Len(t, live, 4)
+	require.Equal(t, "turn:producer:producer-live", live[3].Key)
+	require.True(t, live[3].Active)
+	require.True(t, live[3].Synced)
+	require.Equal(t, "producer", live[3].SourceConversationID)
+
+	page, err := s.ObserveTranscript(ctx, "main", 0, producerID+1000, nil)
+	require.NoError(t, err)
+	require.Len(t, page, 3, "older pages never show a live hidden turn")
+
+	copied := testSessionEntry("hidden", "done")
+	copied.TurnID = "producer-live"
+	copiedID, err := s.AppendEntryID(ctx, "producer", copied)
+	require.NoError(t, err)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
+SELECT 'main', (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id, 'sync_source_conversation_id', conversation_id))::json, entry_timestamp
+FROM session_entries WHERE id = $1`, copiedID)
+	require.NoError(t, err)
+	synced, err := s.ObserveTranscript(ctx, "main", 0, 0, nil)
+	require.NoError(t, err)
+	require.Len(t, synced, 4, "the synced copy replaces the live turn")
+	require.Equal(t, live[3].Key, synced[3].Key)
+	require.False(t, synced[3].Active)
+
+	_, err = s.db.ExecContext(ctx, `DELETE FROM active_turns WHERE id = 'producer-live'`)
+	require.NoError(t, err)
+
 	_, err = s.db.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = 'main' AND entry_json::jsonb ? 'sync_source_entry_id'`)
 	require.NoError(t, err)
 	require.NoError(t, clearTestTurn(ctx, s, checkpoint.TurnID))
@@ -356,6 +389,31 @@ func TestTranscriptPages(t *testing.T) {
 
 	_, _, err = s.TranscriptPage(canceled, "main", 0, 50)
 	require.ErrorContains(t, err, "read transcript page")
+}
+
+func TestTranscriptChangesReachSyncDestination(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+
+	next, stop := iter.Pull2(s.Changes(ctx, "destination"))
+	defer stop()
+
+	_, err, _ := next()
+	require.NoError(t, err, "initial refresh")
+
+	hidden := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "hidden", false)
+	hidden.SyncDestination = "destination"
+	require.NoError(t, startTurnDB(ctx, s.db, "hidden-turn", "producer", hidden))
+	require.NoError(t, conversationJournal{store: s, conversationID: "producer", log: slog.New(slog.DiscardHandler)}.SaveTrace(ctx, "hidden-turn", []json.RawMessage{json.RawMessage(`{"id":"progress"}`)}))
+
+	for range 2 {
+		change, err, ok := next()
+		require.True(t, ok)
+		require.NoError(t, err)
+		require.Equal(t, "destination", change.ConversationID)
+	}
 }
 
 func TestTranscriptChanges(t *testing.T) {

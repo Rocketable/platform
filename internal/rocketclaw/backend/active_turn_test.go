@@ -341,63 +341,6 @@ func TestShutdownCancelsTurnWithoutPublishing(t *testing.T) {
 	assert.NotEmpty(t, testTurnStepKeys(t, service, bridge.config.ConversationID), "recorded steps survive")
 }
 
-// A request waiting for its paired session is kept for the next start on
-// shutdown, and a waiting row is finished as stopped by $stop.
-func TestWaitingForPairedSession(t *testing.T) {
-	t.Parallel()
-
-	for _, stop := range []bool{false, true} {
-		t.Run(map[bool]string{false: "shutdown", true: "stop"}[stop], func(t *testing.T) {
-			service := newTestSessionService(t)
-			pairID := protocol.SlackThreadConversationID("C123", "111.222")
-			service.reserveTurnPair(pairID, "external_mcp:private")
-
-			finals := make(chan *protocol.OutboundMessage, 4)
-			bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), finalsPublisher{finals: finals}, &Config{ConversationID: pairID, Agent: "main", ManagedConversationID: pairID, RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
-
-			if stop {
-				seedActiveTurn(t, service, pairID, "turn-waiting", nil)
-			}
-
-			cancel := runTestBridge(t, bridge)
-
-			if !stop {
-				msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "wait", true)
-				msg.ConversationID = pairID
-				require.NoError(t, bridge.Submit(t.Context(), msg))
-			}
-
-			require.Eventually(t, func() bool {
-				bridge.mu.Lock()
-				defer bridge.mu.Unlock()
-
-				return bridge.waitingTurnCancel != nil
-			}, 5*time.Second, 10*time.Millisecond)
-
-			if stop {
-				require.NotNil(t, bridge.InterruptActiveTurn())
-
-				final := readFinal(t, finals)
-				assert.Empty(t, final.Text)
-				assert.Equal(t, "turn-waiting", final.TurnID)
-				assert.Equal(t, protocol.TerminalStopped, final.Terminal, "a stopped ordinary turn reports stopped")
-				require.Eventually(t, func() bool { return len(runningTestTurns(t, service)) == 0 }, 5*time.Second, 10*time.Millisecond)
-
-				return
-			}
-
-			cancel()
-			require.Eventually(t, func() bool {
-				queue, err := service.ThreadQueueForConversation(pairID)
-				require.NoError(t, err)
-
-				return len(queue) == 1 && queue[0].Message == "wait"
-			}, 5*time.Second, 10*time.Millisecond)
-			assert.Empty(t, finals)
-		})
-	}
-}
-
 // Startup wakes every row's worker; a private External MCP row runs on its destination.
 func TestStartActiveTurnsStartsRowWorkers(t *testing.T) {
 	t.Parallel()
@@ -571,7 +514,7 @@ func TestLegacyCronScheduleResumesIntoCanonical(t *testing.T) {
 
 			require.NoError(t, store.UpsertThread("cron:legacy", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
 			// Back to before 027_producer_handoff and the nine migrations that follow it.
-			_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(t.Context(), store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 10)
+			_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(t.Context(), store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 11)
 			require.NoError(t, err)
 
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "original legacy job", false)

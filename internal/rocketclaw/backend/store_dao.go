@@ -728,7 +728,7 @@ WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntry
 	}
 
 	for i := range finish.entries {
-		if _, err := finish.store.appendDB(ctx, tx, &finish.entries[i]); err != nil {
+		if _, err := appendSessionEntryDB(ctx, tx, finish.store.conversationID, finish.store.conversationID, &finish.entries[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -787,10 +787,6 @@ SELECT COALESCE(MIN(wake_attempts) FILTER (WHERE child_key = ''), 0) FROM releas
 		return nil, fmt.Errorf("commit turn finish: %w", err)
 	}
 
-	if finish.store.managedConversationID != "" && len(finish.entries) > 0 {
-		s.completeTurnPairReservation(finish.store.managedConversationID, finish.store.conversationID)
-	}
-
 	return finish.outbound, nil
 }
 
@@ -826,7 +822,7 @@ WHERE s.conversation_id = $1 AND s.key = $2 AND COALESCE(s.value->'record'->>'re
 	}
 
 	for i := range entries {
-		if _, err := f.store.appendDB(ctx, db, &entries[i]); err != nil {
+		if _, err := appendSessionEntryDB(ctx, db, f.store.conversationID, f.store.conversationID, &entries[i]); err != nil {
 			return err
 		}
 	}

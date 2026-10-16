@@ -17,6 +17,9 @@ content-free conversation-change hints; it does not replay history or return out
 through Prompt's private response field. History accepts the last applied `revision`
 and returns changed entries, removed keys, the complete ordered key inventory, and
 running/terminal state. Invalid or differently scoped revisions reset the view.
+Running turns include those of hidden runs whose sync destination is the chat; each
+shows after the chat's history under the key its synced copy later takes, and Join
+reports its changes.
 A positive `limit` returns only the newest `limit` saved entries plus running turns,
 and its revision follows only those entries, so a read's cost depends on the entries
 shown, not on the whole chat. `start` is where the returned entries begin and `more` says older ones

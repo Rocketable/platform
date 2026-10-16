@@ -87,9 +87,8 @@ type GoalState struct {
 }
 
 type sessionStore struct {
-	conversationID, managedConversationID string
-	managedReplayPrefix                   []json.RawMessage
-	service                               *SessionService
+	conversationID string
+	service        *SessionService
 }
 
 // SessionService owns runtime PostgreSQL session and state access inside one rocketclaw process.
@@ -111,10 +110,8 @@ type SessionService struct {
 }
 
 type sessionTurnGate struct {
-	token       chan struct{}
 	reserved    chan struct{}
 	reservedFor string
-	refs        int
 }
 
 // ObservedSessionEntry carries saved or checkpoint metadata and an optional payload.
@@ -1325,138 +1322,25 @@ func (s *SessionService) toggleSessionTag(ctx context.Context, conversationID, t
 	return tags, nil
 }
 
-func (s *SessionService) appendExternalMCPEntry(ctx context.Context, privateConversationID, managedConversationID string, entry *harness.SessionEntry, managedReplayPrefix []json.RawMessage) (int64, error) {
-	tx, err := s.beginStateTx(ctx, "external MCP session entry append")
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	privateID, err := appendPairEntryDB(ctx, tx, privateConversationID, managedConversationID, entry, managedReplayPrefix)
-	if err != nil {
-		return 0, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit external MCP session entry append: %w", err)
-	}
-
-	if entry.Type != externalMCPMetadataEntryType {
-		s.completeTurnPairReservation(managedConversationID, privateConversationID)
-	}
-
-	return privateID, nil
-}
-
-func appendPairEntryDB(ctx context.Context, db stateStoreDB, privateConversationID, managedConversationID string, entry *harness.SessionEntry, managedReplayPrefix []json.RawMessage) (int64, error) {
-	managedEntry, err := externalMCPManagedEntry(entry, managedReplayPrefix)
-	if err != nil {
-		return 0, err
-	}
-
-	privateID, err := appendSessionEntryDB(ctx, db, strings.TrimSpace(privateConversationID), "", entry)
-	if err != nil {
-		return 0, err
-	}
-
-	managedID, err := appendSessionEntryDB(ctx, db, strings.TrimSpace(managedConversationID), "", &managedEntry)
-	if err != nil {
-		return 0, fmt.Errorf("append managed external MCP session entry: %w", err)
-	}
-
-	if _, err := db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint, 'sync_source_conversation_id', $3::text))::json WHERE id=$2`, privateID, managedID, privateConversationID); err != nil {
-		return 0, fmt.Errorf("record external MCP entry source: %w", err)
-	}
-
-	return privateID, indexEntryMessages(ctx, db, strings.TrimSpace(managedConversationID), privateConversationID, managedID, "", managedEntry.ReplayInput)
-}
-
-func (s *SessionService) lockTurnPair(ctx context.Context, pairID, conversationID string) (func(), error) {
-	pairID = strings.TrimSpace(pairID)
-	conversationID = strings.TrimSpace(conversationID)
-
-	s.turnGatesMu.Lock()
-
-	gate := s.turnGateLocked(pairID)
-	gate.refs++
-	reserved := gate.reserved
-	waitForReservation := gate.reservedFor != "" && gate.reservedFor != conversationID
-	s.turnGatesMu.Unlock()
-
-	if waitForReservation {
-		select {
-		case <-ctx.Done():
-			s.releaseTurnGateReference(pairID, gate)
-			return nil, fmt.Errorf("wait for paired turn reservation: %w", ctx.Err())
-		case <-reserved:
-		}
-	}
-
-	select {
-	case <-ctx.Done():
-		s.releaseTurnGateReference(pairID, gate)
-		return nil, fmt.Errorf("wait for paired turn: %w", ctx.Err())
-	case <-gate.token:
-	}
-
-	return func() {
-		gate.token <- struct{}{}
-
-		s.releaseTurnGateReference(pairID, gate)
-	}, nil
-}
-
 func (s *SessionService) reserveTurnPair(pairID, conversationID string) {
 	pairID = strings.TrimSpace(pairID)
-	conversationID = strings.TrimSpace(conversationID)
 
 	s.turnGatesMu.Lock()
 	defer s.turnGatesMu.Unlock()
 
-	gate := s.turnGateLocked(pairID)
-	if gate.reservedFor == "" {
-		gate.reservedFor = conversationID
-		gate.reserved = make(chan struct{})
+	if s.turnGates[pairID] == nil {
+		s.turnGates[pairID] = &sessionTurnGate{reserved: make(chan struct{}), reservedFor: strings.TrimSpace(conversationID)}
 	}
-}
-
-// turnGateLocked returns or creates a gate while the caller holds turnGatesMu.
-func (s *SessionService) turnGateLocked(pairID string) *sessionTurnGate {
-	gate := s.turnGates[pairID]
-	if gate == nil {
-		gate = &sessionTurnGate{token: make(chan struct{}, 1)}
-		gate.token <- struct{}{}
-
-		s.turnGates[pairID] = gate
-	}
-
-	return gate
 }
 
 func (s *SessionService) completeTurnPairReservation(pairID, conversationID string) {
+	pairID = strings.TrimSpace(pairID)
+
 	s.turnGatesMu.Lock()
 	defer s.turnGatesMu.Unlock()
 
-	gate := s.turnGates[strings.TrimSpace(pairID)]
-	if gate == nil || gate.reservedFor != strings.TrimSpace(conversationID) {
-		return
-	}
-
-	close(gate.reserved)
-	gate.reservedFor = ""
-
-	gate.reserved = nil
-	if gate.refs == 0 {
-		delete(s.turnGates, strings.TrimSpace(pairID))
-	}
-}
-
-func (s *SessionService) releaseTurnGateReference(pairID string, gate *sessionTurnGate) {
-	s.turnGatesMu.Lock()
-	defer s.turnGatesMu.Unlock()
-
-	gate.refs--
-	if gate.refs == 0 && gate.reservedFor == "" {
+	if gate := s.turnGates[pairID]; gate != nil && gate.reservedFor == strings.TrimSpace(conversationID) {
+		close(gate.reserved)
 		delete(s.turnGates, pairID)
 	}
 }
@@ -1614,23 +1498,6 @@ func (s sessionStore) in() iter.Seq2[harness.SessionEntry, error] {
 	}
 }
 
-//nolint:gocritic // rocketcode requires value-shaped session entries at this boundary.
-func (s sessionStore) outID(entry harness.SessionEntry) (int64, error) {
-	if s.managedConversationID != "" {
-		return s.service.appendExternalMCPEntry(context.Background(), s.conversationID, s.managedConversationID, &entry, s.managedReplayPrefix)
-	}
-
-	return s.service.AppendEntryID(context.Background(), s.conversationID, &entry)
-}
-
-func (s sessionStore) appendDB(ctx context.Context, db stateStoreDB, entry *harness.SessionEntry) (int64, error) {
-	if s.managedConversationID != "" {
-		return appendPairEntryDB(ctx, db, s.conversationID, s.managedConversationID, entry, s.managedReplayPrefix)
-	}
-
-	return appendSessionEntryDB(ctx, db, s.conversationID, s.conversationID, entry)
-}
-
 func removeSessionEntryNUL(data []byte) []byte {
 	if !bytes.Contains(data, []byte(`\u0000`)) {
 		return data
@@ -1693,9 +1560,9 @@ func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID, 
 	return id, nil
 }
 
-func externalMCPManagedEntry(entry *harness.SessionEntry, replayPrefix []json.RawMessage) (harness.SessionEntry, error) {
+func externalMCPManagedEntry(entry *harness.SessionEntry) (harness.SessionEntry, error) {
 	managed := *entry
-	managed.ReplayInput = append(make([]json.RawMessage, 0, len(replayPrefix)+len(entry.ReplayInput)), replayPrefix...)
+	managed.ReplayInput = make([]json.RawMessage, 0, len(entry.ReplayInput))
 	boundaries := make([]int, len(entry.ReplayInput)+1)
 
 	for i, raw := range entry.ReplayInput {

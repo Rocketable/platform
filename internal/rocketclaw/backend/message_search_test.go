@@ -145,31 +145,6 @@ func TestMessageSearchIndexesForkedAttachments(t *testing.T) {
 	require.Equal(t, "read this", rows[0].Text, "the copied attachment is visible inside the fork transaction")
 }
 
-func TestMessageSearchIndexesExternalMCPManagedCopyOnce(t *testing.T) {
-	t.Parallel()
-
-	s := newTestSessionService(t)
-	ctx := t.Context()
-	reference := uploadTestAttachment(t, s, "private-x", "private-file")
-	prefix := []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"Prefix prompt"}`)}
-
-	_, err := s.appendExternalMCPEntry(ctx, "private-x", "managed-y", testReplayEntry(
-		`{"type":"message","role":"user","content":`+jsonString("from mcp\n\n"+reference)+`}`,
-		`{"type":"message","role":"assistant","content":"mcp answer"}`,
-	), prefix)
-	require.NoError(t, err)
-	require.Empty(t, messageSearchTestRows(t, s, "private-x"))
-
-	entries, err := s.ObserveEntries(ctx, "managed-y")
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	require.Equal(t, []messageSearchTestRow{
-		{entries[0].ID, 0, 0, "user", "Prefix prompt", "prefix prompt"},
-		{entries[0].ID, 1, 0, "user", "from mcp", "from mcp"},
-		{entries[0].ID, 2, 0, "assistant", "mcp answer", "mcp answer"},
-	}, messageSearchTestRows(t, s, "managed-y"))
-}
-
 func TestMessageSearchIndexesSyncedCopies(t *testing.T) {
 	t.Parallel()
 
@@ -420,7 +395,7 @@ func TestMessageSearchBackfillIndexesVisibleChats(t *testing.T) {
 
 	require.NoError(t, s.RegisterExternalMCPConversation("public", "main", &ExternalMCPSessionState{PrivateConversationID: "private", ManagedConversationID: "managed", Agent: "main"}))
 	require.NoError(t, s.UpsertThread("private", ThreadState{Agent: "main"}))
-	_, err = s.appendExternalMCPEntry(ctx, "private", "managed", testSessionEntry("mcp question", "mcp answer"), nil)
+	_, err = s.AppendEntryID(ctx, "private", testSessionEntry("mcp question", "mcp answer"))
 	require.NoError(t, err)
 
 	want := map[string][]messageSearchTestRow{}

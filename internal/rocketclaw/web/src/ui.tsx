@@ -1262,25 +1262,6 @@ function paletteRows(
   });
 }
 
-const pendingCronRuns = new Map<string, string>();
-const pendingCronListeners = new Set<() => void>();
-
-function notePendingCron(id: string, stem: string) {
-  if (stem === "") pendingCronRuns.delete(id);
-  else pendingCronRuns.set(id, stem);
-  for (const listener of pendingCronListeners) listener();
-}
-
-function usePendingCron(id: string) {
-  return useSyncExternalStore(
-    (listener) => {
-      pendingCronListeners.add(listener);
-      return () => pendingCronListeners.delete(listener);
-    },
-    () => pendingCronRuns.get(id) ?? "",
-  );
-}
-
 // The server reads and matches the query. While typing, an unfinished last word is left out; Enter sends everything.
 // Requests start after a 250 ms pause (and by 1 s with messages), a newer one aborts the older, and they rerun when sidebar chats change.
 function useSessionSearch(query: string, messages: boolean, entered: boolean) {
@@ -1404,11 +1385,10 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
   const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000, enabled: mode === "commands" || mode === "cron" });
   const runCron = useMutation({
     mutationFn: mutations.runCron,
-    onSuccess: (id, input) => {
+    onSuccess: (id) => {
       void queryClient.invalidateQueries({ queryKey: ["cronJobs"] });
       sidebar.invalidateQueries();
       if (id === "") return;
-      notePendingCron(id, input.stem);
       navigate(sessionPath(id));
       setMode(undefined);
     },
@@ -2325,10 +2305,10 @@ function WorkingStatus({ conversationId, movable, onChange }: { conversationId: 
   </div></MessageScrollerItem>;
 }
 
-function emptyTranscriptMessage(opening: boolean, empty: boolean, running: string) {
+function emptyTranscriptMessage(opening: boolean, empty: boolean) {
   if (opening) return "Loading conversation…";
   if (!empty) return "No messages for selected origins.";
-  return running ? `${running} is running` : "Send a message to start the conversation.";
+  return "Send a message to start the conversation.";
 }
 
 function TranscriptBody({ conversationId, working, terminal, origin, hasSandboxed, movable, refreshHistory, turns, rows, binding, detail, wide, loading, emptyMessage, delegations }: Pick<ComponentProps<typeof TranscriptLog>, "conversationId" | "working" | "terminal" | "origin" | "hasSandboxed" | "movable" | "refreshHistory"> & { turns: Turn[]; rows: ReturnType<typeof comparisonRows>; binding?: ShadowBinding; detail: TimelineRows; wide: boolean; loading: boolean; emptyMessage: string; delegations?: Pick<HistoryView, "delegations" | "reviewRationales"> }) {
@@ -2434,9 +2414,7 @@ function TranscriptLog({
     const frame = requestAnimationFrame(nearTop);
     return () => cancelAnimationFrame(frame);
   }, [lines, nearTop]);
-  const running = usePendingCron(conversationId);
-  const emptyMessage = emptyTranscriptMessage(opening, lines.length === 0, running);
-  useEffect(() => { if (running && lines.length > 0) notePendingCron(conversationId, ""); }, [running, lines.length, conversationId]);
+  const emptyMessage = emptyTranscriptMessage(opening, lines.length === 0);
   const jumpToTurn = (turn: Turn) => {
     scrollToMessage(`turn-${turnKey(turn)}`, { align: "start", behavior: "instant" });
     viewport.current?.querySelector<HTMLElement>(`[data-turn-key="${CSS.escape(turnKey(turn))}"]`)?.focus({ preventScroll: true });
@@ -3724,7 +3702,7 @@ function CronPage() {
             <div className="mt-6 flex justify-end gap-2">
               <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
               <Button onClick={() => {
-                run.mutate({ stem: confirmStem }, { onSuccess: (id) => { if (id !== "") { notePendingCron(id, confirmStem); route.goSession(id); } } });
+                run.mutate({ stem: confirmStem }, { onSuccess: (id) => { if (id !== "") route.goSession(id); } });
                 setConfirmStem("");
               }}>Run</Button>
             </div>
