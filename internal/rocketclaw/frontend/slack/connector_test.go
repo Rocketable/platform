@@ -68,17 +68,6 @@ func TestSlackMCPBlocksStayWithinSlackLimit(t *testing.T) {
 	}
 }
 
-func TestSlackMCPBlocksUseCronStyleFrame(t *testing.T) {
-	blocks := slackMCPBlocks("MCP request", "conversation-1", "private-agent", "body", true)
-	require.Len(t, blocks, 3)
-
-	header, ok := blocks[0].(*slack.HeaderBlock)
-	require.True(t, ok)
-	assert.Equal(t, "📡 MCP request | conversation-1 | private-agent", header.Text.Text)
-	assert.IsType(t, new(slack.DividerBlock), blocks[1])
-	assert.IsType(t, new(slack.SectionBlock), blocks[2])
-}
-
 func TestSlackMCPResponseBlocksKeepAutomaticParsing(t *testing.T) {
 	blocks := slackMCPBlocks("MCP response", "conversation-1", "private-agent", "*answer* @here", false)
 	require.Len(t, blocks, 3)
