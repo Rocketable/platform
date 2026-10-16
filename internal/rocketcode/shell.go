@@ -184,15 +184,8 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell string, p
 		return bashFailure(err.Error())
 	}
 
-	commandCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(timeoutMillisecond)*time.Millisecond+shellTimeoutGrace)
+	commandCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutMillisecond)*time.Millisecond+shellTimeoutGrace)
 	defer cancel()
-
-	// Bash otherwise runs to completion; only a killed Background Job stops it early.
-	defer context.AfterFunc(ctx, func() {
-		if errors.Is(context.Cause(ctx), ErrBackgroundKilled) {
-			cancel()
-		}
-	})()
 
 	timedOut := false
 
