@@ -36,9 +36,15 @@ lint:
 build:
 	bun run build
 
+# Test browsers whose test run was killed never exit, so they are cleared before and after the
+# run. Only orphans (parent PID 1) match, so other running test runs keep their browsers.
+# Transport tests need the live PostgreSQL/provider fixtures owned by Go.
 test: build
-	# Transport tests need the live PostgreSQL/provider fixtures owned by Go.
-	bash -o pipefail -c 'find ./src -type f \( -name "*.test.ts" -o -name "*.test.tsx" \) ! -name "*-transport.test.ts" -print0 | sort -z | xargs -0 -n 1 -P 4 bun test'
+	@set -eu; \
+	cleanup() { pkill -P 1 -f 'ms-playwright/chromium' || true; }; \
+	cleanup; \
+	trap cleanup EXIT INT TERM; \
+	bash -o pipefail -c 'find ./src -type f \( -name "*.test.ts" -o -name "*.test.tsx" \) ! -name "*-transport.test.ts" -print0 | sort -z | xargs -0 -n 1 -P 4 bun test'; \
 	go -C .. test ./frontend/rpc -run 'Test(PublicProgressRealBrowser|RevertRealBackendBrowser|ShadowsRealBackendBrowser|SessionEntries|SidebarHTTPStreamsBeforeGoTailAndCancels)$$' -count=1
 	$(MAKE) check-cloc-budget
 
