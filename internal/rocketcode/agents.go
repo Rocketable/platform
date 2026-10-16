@@ -293,10 +293,6 @@ func decodeAgentFrontmatter(frontmatterText []byte) (map[string]any, *yaml.Node,
 }
 
 func frontmatterField(frontmatter *yaml.Node, key string) *yaml.Node {
-	if frontmatter == nil || frontmatter.Kind != yaml.MappingNode {
-		return nil
-	}
-
 	for i := 0; i+1 < len(frontmatter.Content); i += 2 {
 		if frontmatter.Content[i].Value == key {
 			return frontmatter.Content[i+1]
