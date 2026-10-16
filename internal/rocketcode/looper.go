@@ -2448,13 +2448,8 @@ func reasoningReplayInput(id, summary, encryptedContent string) responses.Respon
 func compactionReplayInput(id, encryptedContent, content string) responses.ResponseInputItemUnionParam {
 	compaction := responses.ResponseCompactionItemParam{ID: openai.String(id), EncryptedContent: encryptedContent, Type: "compaction"}
 
-	extra := map[string]any{}
 	if content != "" {
-		extra["content"] = content
-	}
-
-	if len(extra) > 0 {
-		compaction.SetExtraFields(extra)
+		compaction.SetExtraFields(map[string]any{"content": content})
 	}
 
 	return responses.ResponseInputItemUnionParam{OfCompaction: &compaction}
