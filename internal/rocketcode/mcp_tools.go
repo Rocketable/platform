@@ -621,10 +621,6 @@ func hostToolSignature(name string, schema map[string]any) string {
 }
 
 func schemaSearchText(schema map[string]any) string {
-	if schema == nil {
-		return ""
-	}
-
 	props, _ := schema["properties"].(map[string]any)
 	if len(props) == 0 {
 		return ""
