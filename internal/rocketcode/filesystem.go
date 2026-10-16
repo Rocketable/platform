@@ -922,12 +922,7 @@ func normalizeRootName(root *os.Root, name string) (string, error) {
 		return "", fmt.Errorf("resolve root %q: %w", root.Name(), err)
 	}
 
-	targetAbs, err := filepath.Abs(clean)
-	if err != nil {
-		return "", fmt.Errorf("resolve path %q: %w", name, err)
-	}
-
-	rel, err := filepath.Rel(rootAbs, targetAbs)
+	rel, err := filepath.Rel(rootAbs, clean)
 	if err != nil {
 		return "", fmt.Errorf("resolve path %q relative to root: %w", name, err)
 	}
