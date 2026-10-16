@@ -767,10 +767,6 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 				return ToolResult{}, fmt.Errorf("marshal %s args: %w", toolName, err)
 			}
 
-			if len(raw) == 0 {
-				raw = json.RawMessage(`{}`)
-			}
-
 			return recordHostCall(ctx, toolName, args, toolCopy.resumable, func(ctx context.Context) (ToolResult, error) {
 				if err := CheckNestedToolCall(ctx, toolName, &toolCopy, raw); err != nil {
 					return ToolResult{}, err
@@ -890,7 +886,7 @@ func emitNestedExecuteToolDiagnostic(ctx context.Context, path []string, nestedN
 	}
 
 	raw, err := json.Marshal(args)
-	if err != nil || len(raw) == 0 {
+	if err != nil {
 		raw = json.RawMessage(`{}`)
 	}
 
