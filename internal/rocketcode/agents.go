@@ -168,7 +168,7 @@ func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, e
 		return Agent{}, fmt.Errorf("%s: stat agent: %w", filePath, err)
 	}
 
-	frontmatter, frontmatterNode, prompt, err := parseAgentFrontmatter(string(data))
+	frontmatter, frontmatterNode, prompt, err := parseAgentFrontmatter(data)
 	if err != nil {
 		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
 	}
@@ -255,8 +255,8 @@ func passThroughAgentModel(model string) (string, error) {
 	return model, nil
 }
 
-func parseAgentFrontmatter(content string) (frontmatter map[string]any, frontmatterNode *yaml.Node, prompt string, err error) {
-	match := agentFrontmatterPattern.FindStringSubmatchIndex(content)
+func parseAgentFrontmatter(content []byte) (frontmatter map[string]any, frontmatterNode *yaml.Node, prompt string, err error) {
+	match := agentFrontmatterPattern.FindSubmatchIndex(content)
 	if match == nil {
 		return nil, nil, "", errors.New("missing YAML frontmatter")
 	}
@@ -265,18 +265,18 @@ func parseAgentFrontmatter(content string) (frontmatter map[string]any, frontmat
 
 	frontmatter, frontmatterNode, err = decodeAgentFrontmatter(frontmatterText)
 	if err != nil {
-		frontmatter, frontmatterNode, err = decodeAgentFrontmatter(sanitizeAgentFrontmatter(frontmatterText))
+		frontmatter, frontmatterNode, err = decodeAgentFrontmatter([]byte(sanitizeAgentFrontmatter(string(frontmatterText))))
 		if err != nil {
 			return nil, nil, "", fmt.Errorf("parse YAML frontmatter: %w", err)
 		}
 	}
 
-	return frontmatter, frontmatterNode, content[match[1]:], nil
+	return frontmatter, frontmatterNode, string(content[match[1]:]), nil
 }
 
-func decodeAgentFrontmatter(frontmatterText string) (map[string]any, *yaml.Node, error) {
+func decodeAgentFrontmatter(frontmatterText []byte) (map[string]any, *yaml.Node, error) {
 	var node yaml.Node
-	if err := yaml.Unmarshal([]byte(frontmatterText), &node); err != nil {
+	if err := yaml.Unmarshal(frontmatterText, &node); err != nil {
 		return nil, nil, fmt.Errorf("unmarshal YAML frontmatter: %w", err)
 	}
 

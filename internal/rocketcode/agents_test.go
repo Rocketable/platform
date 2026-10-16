@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -29,8 +30,19 @@ schema:
 `
 
 func BenchmarkDecodeAgentFrontmatter(b *testing.B) {
+	data := []byte(benchmarkAgentFrontmatter)
 	for b.Loop() {
-		_, _, err := decodeAgentFrontmatter(benchmarkAgentFrontmatter)
+		_, _, err := decodeAgentFrontmatter(data)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkLoadAgent(b *testing.B) {
+	fsys := fstest.MapFS{"review.md": testMapFile("---\n" + benchmarkAgentFrontmatter + "---\n" + strings.Repeat("Check the change and its tests.\n", 100))}
+	for b.Loop() {
+		_, err := loadAgent(fsys, "review.md", passThroughAgentModel)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -38,8 +50,9 @@ func BenchmarkDecodeAgentFrontmatter(b *testing.B) {
 }
 
 func TestDecodeAgentFrontmatterAllocations(t *testing.T) {
+	data := []byte(benchmarkAgentFrontmatter)
 	allocs := testing.AllocsPerRun(100, func() {
-		_, _, err := decodeAgentFrontmatter(benchmarkAgentFrontmatter)
+		_, _, err := decodeAgentFrontmatter(data)
 		require.NoError(t, err)
 	})
 	// Leave headroom for decoder changes, but not a second YAML parser pass.
@@ -66,7 +79,7 @@ func TestDecodeAgentFrontmatter(t *testing.T) {
 
 			errWant := yaml.Unmarshal([]byte(text), &want)
 
-			got, node, err := decodeAgentFrontmatter(text)
+			got, node, err := decodeAgentFrontmatter([]byte(text))
 			if errWant != nil {
 				require.EqualError(t, err, "unmarshal YAML frontmatter: "+errWant.Error())
 				require.Nil(t, got)
@@ -376,16 +389,42 @@ Strictly follow the rules.
 		require.Equal(t, "Use !`printf expanded` now.", result.Agents.Items["main"].Prompt)
 	})
 
+	t.Run("preserves prompt bytes after frontmatter", func(t *testing.T) {
+		for _, tc := range []struct{ name, input, prompt string }{
+			{"unicode", "---\nmodel: example-model\ndescription: café\n---\nRésumé\n", "Résumé"},
+			{"crlf", "---\r\nmodel: example-model\r\n---\r\nFirst\r\nsecond\r\n", "First\r\nsecond"},
+			{"empty", "---\nmodel: example-model\n---", ""},
+			{"raw bytes", "---\nmodel: example-model\n---\n\xff\x00", "\xff\x00"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				result := LoadAgents(fstest.MapFS{"review.md": testMapFile(tc.input)}, passThroughAgentModel)
+				require.Empty(t, result.Errors)
+				require.Equal(t, tc.prompt, result.Agents.Items["review"].Prompt)
+			})
+		}
+	})
+
 	t.Run("reports missing frontmatter", func(t *testing.T) {
+		content := "# Missing frontmatter\n" + strings.Repeat("x", 64<<10)
 		fsys := fstest.MapFS{
-			"review.md": testMapFile("# Missing frontmatter\n"),
+			"review.md": testMapFile(content),
 		}
 
-		result := LoadAgents(fsys, passThroughAgentModel)
+		var result AgentLoadResult
+
+		cost := testing.Benchmark(func(b *testing.B) {
+			b.Helper()
+
+			for b.Loop() {
+				result = LoadAgents(fsys, passThroughAgentModel)
+			}
+		})
 
 		require.Empty(t, result.Agents.Items)
 		require.Len(t, result.Errors, 1)
 		require.Equal(t, "review.md: missing YAML frontmatter", result.Errors[0].Error())
+		// Allow the file read and loader overhead, but not another full-file copy.
+		require.Less(t, cost.AllocedBytesPerOp(), int64(len(content)*3/2))
 	})
 
 	t.Run("rejects missing empty or non string model", func(t *testing.T) {
