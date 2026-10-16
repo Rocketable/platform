@@ -239,23 +239,20 @@ func childEnv(overrides map[string]string) []string {
 
 	out := make([]string, 0, len(allow)+len(overrides))
 
-	seen := make(map[string]struct{}, len(allow)+len(overrides))
 	for _, key := range allow {
 		if val, ok := overrides[key]; ok {
 			out = append(out, key+"="+val)
-			seen[key] = struct{}{}
 
 			continue
 		}
 
 		if val, ok := parent[key]; ok {
 			out = append(out, key+"="+val)
-			seen[key] = struct{}{}
 		}
 	}
 
 	for key, val := range overrides {
-		if _, ok := seen[key]; ok {
+		if slices.Contains(allow, key) {
 			continue
 		}
 
