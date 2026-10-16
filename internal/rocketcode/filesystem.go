@@ -760,12 +760,11 @@ func (sfs *sandboxedFileSystem) Glob(ctx context.Context, pattern, path string) 
 	cmd := exec.CommandContext(ctx, "rg", "--no-config", "--files", "--hidden", "--no-follow", "--path-separator=/", "--glob=!.git/*", "-g", pattern)
 	cmd.Dir = hostRoot
 
-	var stdoutBuf, stderr bytes.Buffer
+	var stderr bytes.Buffer
 
-	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	stdout, err := cmd.Output()
 	if err != nil {
 		if errExit, ok := errors.AsType[*exec.ExitError](err); ok && errExit.ExitCode() == 1 {
 			return "No files found"
@@ -779,7 +778,7 @@ func (sfs *sandboxedFileSystem) Glob(ctx context.Context, pattern, path string) 
 		return err.Error()
 	}
 
-	outputText := strings.TrimSpace(stdoutBuf.String())
+	outputText := strings.TrimSpace(string(stdout))
 	if outputText == "" {
 		return "No files found"
 	}
@@ -1010,12 +1009,11 @@ func (sfs *sandboxedFileSystem) allowedRipgrepFiles(ctx context.Context, hostRoo
 	cmd := exec.CommandContext(ctx, "rg", args...)
 	cmd.Dir = hostRoot
 
-	var stdoutBuf, stderr bytes.Buffer
+	var stderr bytes.Buffer
 
-	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	stdout, err := cmd.Output()
 	message := strings.TrimSpace(stderr.String())
 
 	if err != nil {
@@ -1029,7 +1027,7 @@ func (sfs *sandboxedFileSystem) allowedRipgrepFiles(ctx context.Context, hostRoo
 		}
 	}
 
-	outputText := strings.TrimSpace(stdoutBuf.String())
+	outputText := strings.TrimSpace(string(stdout))
 	if outputText == "" {
 		return nil, ""
 	}
@@ -1055,15 +1053,14 @@ func runRipgrep(ctx context.Context, hostRoot, pattern string, files []string) (
 	cmd := exec.CommandContext(ctx, "rg", args...)
 	cmd.Dir = hostRoot
 
-	var stdoutBuf, stderr bytes.Buffer
+	var stderr bytes.Buffer
 
-	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	stdout, err := cmd.Output()
 	message := strings.TrimSpace(stderr.String())
 
 	if err == nil {
-		return stdoutBuf.Bytes(), false, ""
+		return stdout, false, ""
 	}
 
 	errExit, ok := errors.AsType[*exec.ExitError](err)
@@ -1076,7 +1073,7 @@ func runRipgrep(ctx context.Context, hostRoot, pattern string, files []string) (
 	}
 
 	if ok && errExit.ExitCode() == 2 {
-		return stdoutBuf.Bytes(), true, ""
+		return stdout, true, ""
 	}
 
 	return nil, false, err.Error()
