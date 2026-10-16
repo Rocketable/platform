@@ -289,10 +289,6 @@ func decodeAgentFrontmatter(frontmatterText string) (map[string]any, *yaml.Node,
 		return nil, nil, fmt.Errorf("unmarshal YAML frontmatter: %w", err)
 	}
 
-	if frontmatter == nil {
-		return map[string]any{}, node.Content[0], nil
-	}
-
 	return frontmatter, node.Content[0], nil
 }
 
