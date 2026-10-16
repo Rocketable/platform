@@ -201,6 +201,28 @@ ignored
 		require.NotContains(t, result.Agents.Items, "child")
 	})
 
+	t.Run("loads optional string values", func(t *testing.T) {
+		for _, tt := range []struct{ frontmatter, want string }{
+			{"", ""},
+			{"description: null", ""},
+			{"description: 123", ""},
+			{"description: true", ""},
+			{"description: []", ""},
+			{"description: {}", ""},
+			{`description: ""`, ""},
+			{`description: "  exact text  "`, "  exact text  "},
+		} {
+			t.Run(tt.frontmatter, func(t *testing.T) {
+				result := LoadAgents(fstest.MapFS{
+					"main.md": testMapFile("---\nmodel: gpt-5.4\n" + tt.frontmatter + "\n---\nPrompt\n"),
+				}, passThroughAgentModel)
+
+				require.Empty(t, result.Errors)
+				require.Equal(t, tt.want, result.Agents.Items["main"].Description)
+			})
+		}
+	})
+
 	t.Run("loads schema output", func(t *testing.T) {
 		result := LoadAgents(fstest.MapFS{
 			"review.md": testMapFile(`---
