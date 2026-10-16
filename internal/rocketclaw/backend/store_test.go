@@ -17,7 +17,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"cirello.io/pglock"
@@ -427,9 +426,8 @@ func TestSessionStoreAppendAndLoad(t *testing.T) {
 	store := newSessionStore("slack-thread:C123:111.222", service)
 	entry := testSessionEntry("hello", "hi")
 
-	id, err := store.outID(*entry)
+	_, err := service.AppendEntryID(t.Context(), store.conversationID, entry)
 	require.NoError(t, err)
-	assert.Positive(t, id)
 	require.Equal(t, []harness.SessionEntry{*entry}, collectEntries(t, store.in()))
 
 	for got, err := range store.in() {
@@ -470,88 +468,6 @@ func TestSessionServiceAppendEntryIDAndObserveEntries(t *testing.T) {
 		_, err := service.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('invalid', $1, '')`, raw)
 		require.Error(t, err)
 	}
-}
-
-func TestSessionServiceTurnPairAllowsOnlyOneActiveTurn(t *testing.T) {
-	t.Parallel()
-
-	synctest.Test(t, func(t *testing.T) {
-		service := newTestSessionService(t)
-		unlockFirst, err := service.lockTurnPair(t.Context(), "slack-thread:C1:1.1", "external_mcp:private")
-		require.NoError(t, err)
-
-		secondAcquired := false
-
-		var errSecond error
-
-		go func() {
-			var unlockSecond func()
-
-			unlockSecond, errSecond = service.lockTurnPair(t.Context(), "slack-thread:C1:1.1", "slack-thread:C1:1.1")
-			if errSecond != nil {
-				return
-			}
-
-			secondAcquired = true
-
-			unlockSecond()
-		}()
-
-		synctest.Wait()
-		assert.False(t, secondAcquired)
-
-		unlockFirst()
-		synctest.Wait()
-		require.NoError(t, errSecond)
-		assert.True(t, secondAcquired)
-	})
-}
-
-func TestSessionServiceTurnPairReservationPrioritizesPrivateTurn(t *testing.T) {
-	t.Parallel()
-
-	synctest.Test(t, func(t *testing.T) {
-		service := newTestSessionService(t)
-		pairID, privateID := "slack-thread:C1:1.1", "external_mcp:private"
-		service.reserveTurnPair(pairID, privateID)
-
-		managedAcquired := false
-
-		go func() {
-			unlock, err := service.lockTurnPair(t.Context(), pairID, pairID)
-			if err != nil {
-				return
-			}
-
-			managedAcquired = true
-
-			unlock()
-		}()
-
-		synctest.Wait()
-		assert.False(t, managedAcquired)
-
-		privateAcquired := false
-
-		go func() {
-			unlock, err := service.lockTurnPair(t.Context(), pairID, privateID)
-			if err != nil {
-				return
-			}
-
-			privateAcquired = true
-
-			unlock()
-		}()
-
-		synctest.Wait()
-		assert.True(t, privateAcquired)
-		assert.False(t, managedAcquired)
-
-		service.completeTurnPairReservation(pairID, privateID)
-		synctest.Wait()
-		assert.True(t, managedAcquired)
-	})
 }
 
 func TestSessionServiceScheduledMessages(t *testing.T) {
@@ -869,14 +785,14 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 38, n)
+	assert.Equal(t, 39, n)
 	require.Error(t, first.db.QueryRowContext(t.Context(), `SELECT 1 FROM store_bootstrap`).Scan(&n))
 
 	second, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop()) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 38, n)
+	assert.Equal(t, 39, n)
 }
 
 func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
@@ -924,7 +840,7 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 
 				var count int
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-				require.Equal(t, 38, count)
+				require.Equal(t, 39, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations WHERE applied_at='2026-01-01Z'`).Scan(&count))
 				require.Equal(t, prefix, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM session_tags`).Scan(&count))
@@ -977,7 +893,7 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 38, n)
+	assert.Equal(t, 39, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
 }
 
@@ -1249,7 +1165,7 @@ func TestSessionStoreLoadsLargeImageTurn(t *testing.T) {
 	store := newSessionStore("main", service)
 	entry := harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ResponseID: "", Model: "gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: strings.Repeat("x", 128*1024)})}
 
-	_, err := store.outID(entry)
+	_, err := service.AppendEntryID(t.Context(), "main", &entry)
 	require.NoError(t, err)
 	require.Equal(t, []harness.SessionEntry{entry}, collectEntries(t, store.in()))
 }
@@ -2538,7 +2454,10 @@ func TestCopiedAttributionSurvivesSourceRetention(t *testing.T) {
 
 	store := newTestSessionService(t)
 	entry := harness.SessionEntry{Version: 1, Type: "turn", Agent: "planner", Model: "work/model-a", ReasoningEffort: new("high"), ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"answer"}`)}}
-	_, err := store.appendExternalMCPEntry(t.Context(), "producer-x", "interactive-y", &entry, nil)
+	producerID, err := store.AppendEntryID(t.Context(), "producer-x", &entry)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
+SELECT 'interactive-y', (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id, 'sync_source_conversation_id', 'producer-x'))::json, entry_timestamp FROM session_entries WHERE id = $1`, producerID)
 	require.NoError(t, err)
 	_, err = store.db.ExecContext(t.Context(), `DELETE FROM session_entries WHERE conversation_id=$1`, "producer-x")
 	require.NoError(t, err)

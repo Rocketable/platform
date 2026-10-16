@@ -124,7 +124,7 @@ func (b *Bridge) syncConversation(ctx context.Context, source *Bridge) error {
 			producer = source.config.ConversationID
 		}
 
-		entry, err := externalMCPManagedEntry(&observed.Entry, nil)
+		entry, err := externalMCPManagedEntry(&observed.Entry)
 		if err != nil {
 			return err
 		}

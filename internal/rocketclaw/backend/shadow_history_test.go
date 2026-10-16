@@ -103,7 +103,10 @@ ON b.parent_conversation_id = v.parent ORDER BY v.parent, v.turn_id, b.shadow_ag
 		require.Equal(t, "T1", view.Shadows[i+2].Turns[0].ParentTurnID, "source scopes reused turn IDs")
 	}
 
-	_, err = store.appendExternalMCPEntry(ctx, "producer", "parent", first, nil)
+	producerID, err := store.AppendEntryID(ctx, "producer", first)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
+SELECT 'parent', (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id, 'sync_source_conversation_id', 'producer'))::json, entry_timestamp FROM session_entries WHERE id = $1`, producerID)
 	require.NoError(t, err)
 	_, err = store.db.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = 'producer'`)
 	require.NoError(t, err)

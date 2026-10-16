@@ -627,14 +627,9 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 				*testSessionEntry("after compaction", "recent answer"),
 			}
 			for _, entry := range entries {
-				_, err := history.outID(entry)
+				_, err := service.AppendEntryID(t.Context(), "external_mcp:private", &entry)
 				require.NoError(t, err)
 			}
-
-			unlock, err := service.lockTurnPair(t.Context(), "external_mcp:private", "external_mcp:private")
-			require.NoError(t, err)
-
-			defer unlock()
 
 			requests, approvals, listApprovals := 0, 0, 0
 
@@ -741,7 +736,7 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, root.Close()) })
 			require.NoError(t, root.MkdirAll("shell", 0o700))
 
-			bridge := &Bridge{runtime: config.NewLockedConfig(cfg), config: Config{ConversationID: "external_mcp:private", ManagedConversationID: "managed:other", ExternalConversationID: "public-id", SessionService: service, RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}}, log: slog.New(slog.DiscardHandler)}
+			bridge := &Bridge{runtime: config.NewLockedConfig(cfg), config: Config{ConversationID: "external_mcp:private", SessionService: service, RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}}, log: slog.New(slog.DiscardHandler)}
 			runtimeConfig := bridge.rocketcodeConfig(filepath.Join(workspace, "shell"), nil)
 			runtimeConfig.Journal = rocketcode.InertJournal{}
 			runtimeConfig.ChildSessions = rocketcode.InertChildSessions{}
@@ -820,8 +815,6 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 					require.NotContains(t, string(raw), `"parent_call_id"`)
 				}
 			}
-
-			require.True(t, turnPairBusy(service, "external_mcp:private"))
 		})
 	}
 }

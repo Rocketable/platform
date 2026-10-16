@@ -329,69 +329,6 @@ func TestSessionSummaryBackfillOverlapsMutation(t *testing.T) {
 	}
 }
 
-func TestSessionSummaryPairedAppendAndCleanup(t *testing.T) {
-	t.Parallel()
-
-	service := newTestSessionService(t)
-	session := &ExternalMCPSessionState{PrivateConversationID: "private", ManagedConversationID: "managed", Agent: "main"}
-	require.NoError(t, service.RegisterExternalMCPConversation("public", "main", session))
-
-	prefix := replayInputForMessage("user", "managed-only\x00")
-	_, err := service.appendExternalMCPEntry(t.Context(), "private", "managed", &harness.SessionEntry{Timestamp: time.Unix(1, 0).UTC()}, prefix)
-	require.NoError(t, err)
-	summaries, err := service.ListSessions(t.Context(), []string{"private", "managed"})
-	require.NoError(t, err)
-	require.Equal(t, []protocol.SessionSummary{{ConversationID: "managed", LastMessage: "managed-only", LastUpdated: time.Unix(1, 0).UTC()}, {ConversationID: "private", LastUpdated: time.Unix(1, 0).UTC()}}, summaries)
-
-	var group errgroup.Group
-	for i := range 25 {
-		group.Go(func() error {
-			_, err := service.appendExternalMCPEntry(t.Context(), "private", "managed", testSessionEntryAt(time.Unix(int64(25-i), 987654321).UTC(), fmt.Sprintf("paired %d 日本 %s", i, strings.Repeat("full preview ", 100))), prefix)
-			return err
-		})
-	}
-
-	require.NoError(t, group.Wait())
-	summaries, err = service.ListSessions(t.Context(), []string{"private", "managed"})
-	require.NoError(t, err)
-	require.Len(t, summaries, 2)
-
-	for _, summary := range summaries {
-		entries, err := service.ObserveEntries(t.Context(), summary.ConversationID)
-		require.NoError(t, err)
-		require.Len(t, entries, 26)
-		last := entries[len(entries)-1].Entry
-		messages, err := replayInputMessages(last.ReplayInput)
-		require.NoError(t, err)
-
-		var preview string
-
-		for _, message := range messages {
-			if message.role == "user" || message.role == "assistant" {
-				preview = message.text
-			}
-		}
-
-		require.Equal(t, protocol.SessionSummary{ConversationID: summary.ConversationID, LastMessage: preview, LastUpdated: last.Timestamp.Truncate(time.Microsecond)}, summary)
-	}
-	// Fail the second write after the first history and summary have been written.
-	_, err = service.db.ExecContext(t.Context(), `ALTER TABLE session_entries ADD CONSTRAINT reject_managed CHECK (conversation_id <> 'managed') NOT VALID`)
-	require.NoError(t, err)
-	_, err = service.appendExternalMCPEntry(t.Context(), "private", "managed", testSessionEntry("rolled back", "answer"), nil)
-	require.Error(t, err)
-	after, err := service.ListSessions(t.Context(), []string{"private", "managed"})
-	require.NoError(t, err)
-	require.Equal(t, summaries, after)
-	entries, err := service.ObserveEntries(t.Context(), "private")
-	require.NoError(t, err)
-	require.Len(t, entries, 26)
-	require.NoError(t, service.RemoveExternalMCPConversation("public"))
-	require.NoError(t, service.backfillSessionSummary(t.Context(), "private"))
-	after, err = service.ListSessions(t.Context(), []string{"private", "managed"})
-	require.NoError(t, err)
-	require.Empty(t, after)
-}
-
 func TestConversationSummaryInitializationRollsBackOnFailure(t *testing.T) {
 	t.Parallel()
 

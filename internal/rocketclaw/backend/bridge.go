@@ -94,12 +94,12 @@ const (
 
 // Config controls one rocketcode bridge conversation.
 type Config struct {
-	ConversationID, Agent, ManagedConversationID, ExternalConversationID string
-	RequestRestart                                                       func(string) (string, error)
-	RequestReload                                                        runtimeReloader
-	UserQuestionAsker                                                    protocol.UserQuestionAsker
-	StartNewThread                                                       func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadResult, error)
-	SessionService                                                       *SessionService
+	ConversationID, Agent string
+	RequestRestart        func(string) (string, error)
+	RequestReload         runtimeReloader
+	UserQuestionAsker     protocol.UserQuestionAsker
+	StartNewThread        func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadResult, error)
+	SessionService        *SessionService
 }
 
 // Bridge forwards rocketclaw messages into one turn-lived rocketcode run per turn.
@@ -123,7 +123,6 @@ type Bridge struct {
 	activeAttribution     rocketcode.ReplayAttribution
 	activeTurnInterrupts  chan os.Signal
 	activeTurnCancel      context.CancelFunc
-	waitingTurnCancel     context.CancelFunc
 	activeTurnInterrupted bool
 	activeCompletion      *turnCompletion
 	pendingOutput         *protocol.OutboundMessage
@@ -232,8 +231,6 @@ func NewConversation(cfg *config.LockedConfig, publisher protocol.OutboundPublis
 	normalized := *bridgeCfg
 	normalized.ConversationID = strings.TrimSpace(normalized.ConversationID)
 	normalized.Agent = strings.TrimSpace(normalized.Agent)
-	normalized.ManagedConversationID = strings.TrimSpace(normalized.ManagedConversationID)
-	normalized.ExternalConversationID = strings.TrimSpace(normalized.ExternalConversationID)
 
 	return &Bridge{log: logger.With("component", "rocketcode"), config: normalized, runtime: cfg, bus: publisher, requestCh: make(chan bridgeRequest, defaultQueueSize), stopCh: make(chan struct{})}
 }
@@ -331,12 +328,8 @@ func (b *Bridge) Stop() error {
 
 	close(b.stopCh)
 	b.stopped = true
-	cancel, activeCancel := b.waitingTurnCancel, b.activeTurnCancel
+	activeCancel := b.activeTurnCancel
 	b.mu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
 
 	if activeCancel != nil {
 		activeCancel()
@@ -358,18 +351,13 @@ func (b *Bridge) InterruptActiveTurn() *protocol.InboundMessage {
 	reply := b.activeReply
 	interrupts := b.activeTurnInterrupts
 	cancel := b.activeTurnCancel
-	waitingCancel := b.waitingTurnCancel
-	active := interrupts != nil || cancel != nil || waitingCancel != nil
+	active := interrupts != nil || cancel != nil
 	b.activeTurnInterrupted = b.activeTurnInterrupted || active
 	idle := !active && !b.handling
 	b.mu.Unlock()
 
 	if idle {
 		return b.stopIdleTurn()
-	}
-
-	if waitingCancel != nil {
-		waitingCancel()
 	}
 
 	if cancel != nil {
@@ -738,35 +726,6 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 		b.mu.Unlock()
 	}()
 
-	unlock := func() {}
-
-	if b.config.ManagedConversationID != "" {
-		waitCtx, cancelWait := context.WithCancel(ctx)
-
-		b.mu.Lock()
-		b.waitingTurnCancel = cancelWait
-		b.activeReply = request.inbound
-		b.activeTurnInterrupted = false
-		b.mu.Unlock()
-
-		var errLock error
-
-		unlock, errLock = b.config.SessionService.lockTurnPair(waitCtx, b.config.ManagedConversationID, b.config.ConversationID)
-
-		cancelWait()
-		b.mu.Lock()
-		b.waitingTurnCancel = nil
-		stopped := b.activeTurnInterrupted
-		b.mu.Unlock()
-
-		if errLock != nil {
-			settlement.err = b.settlePairWait(ctx, request, stopped, errLock)
-			return
-		}
-	}
-
-	defer unlock()
-
 	if request.syncSource != "" {
 		request.completion.err = b.syncConversation(ctx, request.producer)
 		close(request.completion.done)
@@ -835,41 +794,11 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 		}
 	}
 
-	b.completeRequestTurnPairReservation(request)
-
 	b.pickLaterWorkLogged(ctx, handler, request.inbound)
 
 	if handler != b {
 		b.pickLaterWorkLogged(ctx, b, &protocol.InboundMessage{})
 	}
-}
-
-// settlePairWait preserves an interrupted producer's reservation if terminal
-// closure could not commit, just as execution-time settlement does.
-func (b *Bridge) settlePairWait(ctx context.Context, request *bridgeRequest, stopped bool, err error) error {
-	if ctx.Err() != nil {
-		if err := b.storeStopped(request, "store waiting request"); err != nil && !errors.Is(err, protocol.ErrBridgeStopped) {
-			b.log.Error("store waiting request during shutdown", "conversation_id", b.config.ConversationID, "error", err)
-		}
-
-		return err
-	}
-
-	if request.turnID != "" && stopped {
-		err = b.finish(ctx, request, &turnFinish{store: newSessionStore(b.config.ConversationID, b.config.SessionService)}, &runResult{turnID: request.turnID}, protocol.TerminalStopped)
-	}
-
-	if _, persistence := errors.AsType[inputPersistenceError](err); persistence {
-		return err
-	}
-
-	b.completeRequestTurnPairReservation(request)
-
-	if request.inbound != nil {
-		request.inbound.CompleteResponseWithAttachments("", nil, err)
-	}
-
-	return err
 }
 
 // skipInbound ends a request whose activation found nothing to run: it frees the turn pair a
@@ -1403,14 +1332,6 @@ func (b *Bridge) submitDueScheduled(ctx context.Context, id string, armed *proto
 	b.log.Info("scheduled message enqueued", "event", "schedule_admitted", "scheduled_message_id", id, "conversation_id", armed.ConversationID, "due_at", armed.DueAt, "overdue_ms", now.Sub(armed.DueAt).Milliseconds(), "recurring", stored.Recurring, "queue_len", len(b.requestCh))
 
 	return nil
-}
-
-func (b *Bridge) completeRequestTurnPairReservation(request *bridgeRequest) {
-	if b.config.ManagedConversationID == "" || (b.config.ConversationID == b.config.ManagedConversationID && (request.inbound == nil || request.inbound.Workflow.Name == "")) {
-		return
-	}
-
-	b.config.SessionService.completeTurnPairReservation(b.config.ManagedConversationID, b.config.ConversationID)
 }
 
 func (b *Bridge) pickLaterWorkLogged(ctx context.Context, worker *Bridge, inbound *protocol.InboundMessage) {
@@ -2132,9 +2053,6 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	shellTempDir, store := filepath.Join(runtimeCfg.Workspace, filepath.FromSlash(shellTempRel)), newSessionStore(b.config.ConversationID, b.config.SessionService)
-	if msg.SyncDestination == "" && b.config.ManagedConversationID != b.config.ConversationID {
-		store.managedConversationID = b.config.ManagedConversationID
-	}
 
 	var (
 		shellEnv     map[string]string
@@ -2185,7 +2103,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 			return runResult{}, fmt.Errorf("load external MCP metadata: %w", err)
 		}
 
-		if foundMetadata || msg.Source == protocol.SourceExternalMCP || b.config.ExternalConversationID != "" && msg.Source == protocol.SourceSystem || b.config.ManagedConversationID != "" && b.config.ManagedConversationID == b.config.ConversationID {
+		if foundMetadata || msg.Source == protocol.SourceExternalMCP {
 			var entries []ObservedSessionEntry
 			if foundMetadata {
 				entries = []ObservedSessionEntry{metadataEntry}
@@ -2213,7 +2131,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 			shellEnv = metadataEnv
 
 			if !ok {
-				if _, err := store.outID(rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Now().UTC(), ReplayInput: replayInput}); err != nil {
+				if _, err := b.config.SessionService.AppendEntryID(context.Background(), b.config.ConversationID, &rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Now().UTC(), ReplayInput: replayInput}); err != nil {
 					return runResult{}, fmt.Errorf("append external MCP metadata: %w", err)
 				}
 			} else {
@@ -2240,10 +2158,6 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	for i := range snapshot.ContextEntries {
-		if snapshot.ContextEntries[i].Type == externalMCPMetadataEntryType {
-			store.managedReplayPrefix = snapshot.ContextEntries[i].ReplayInput
-		}
-
 		sessionIn = appendSessionEntry(sessionIn, &snapshot.ContextEntries[i])
 	}
 
@@ -3219,7 +3133,6 @@ func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID, text s
 	outbound.ConversationID = b.config.ConversationID
 	outbound.SourceConversationID = b.config.ConversationID
 
-	outbound.ExternalConversationID = b.config.ExternalConversationID
 	if msg != nil && msg.Source == protocol.SourceExternalMCP {
 		outbound.ExternalConversationID = strings.TrimSpace(msg.Metadata["external_conversation_id"])
 	}

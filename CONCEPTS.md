@@ -151,7 +151,7 @@ real in the shared workspace; output separation is not a dry-run sandbox.
 
 ### Private Producer Conversation
 
-A hidden conversation that runs work for a human-visible destination conversation, such as an External MCP case or a one-off cron run. Its turns carry that destination as their sync destination: Sync copies the history there, Web lists only the destination, and session tags set during the turn land on the destination.
+A hidden conversation that runs work for a human-visible destination conversation, such as an External MCP case or a one-off cron run. Its turns carry that destination as their sync destination: while a turn runs, the destination's history shows it live; Sync then copies the history there. Web lists only the destination, and session tags set during the turn land on the destination.
 
 ## Web Voice
 
