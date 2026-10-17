@@ -2264,8 +2264,11 @@ function TranscriptLines({ rows, conversationId, hasSandboxed }: { rows: Timelin
   const render = (row: TimelineRow) => {
     if (row.kind === "line") return <TranscriptLine key={row.line.id} line={row.line} open={row.open} conversationId={conversationId} hasSandboxed={hasSandboxed} />;
     const statuses = row.members.map(({ line }) => toolStatus(line, running));
+    // A group of only thoughts shows their text directly instead of a Thought row inside a Thought row.
+    const thoughts = row.members.every(({ line }) => line.role === "thinking");
     return <TraceRow key={row.key} open={false} icon={<ListChecks />} title={row.label} status={(["running", "error"] as const).find((status) => statuses.includes(status))}>
-      <Trace>{row.members.map(({ line, open }) => <TranscriptLine key={line.id} line={line} open={open} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}</Trace>
+      <Trace>{row.members.map(({ line, open }) => thoughts ? <div key={line.id} className="whitespace-pre-wrap">{line.text}</div>
+        : <TranscriptLine key={line.id} line={line} open={open} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}</Trace>
     </TraceRow>;
   };
   const runs: TimelineRow[][] = [];

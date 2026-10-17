@@ -775,7 +775,8 @@ Subagents (`task`), Skills (`skill` with its loaded instructions), Notices (deve
 messages), and Other tools. Each category is shown on its own, grouped, or hidden.
 Neighbouring grouped items of any category merge into one closed summary row such as
 "Used 3 tools", "Thoughts", or "Updates"; a reply or a separately shown item ends the
-row. Collapse decides whether Execute calls and reasoning start open. Opening or
+row. Collapse decides whether Execute calls and reasoning start open; a summary row
+of only reasoning shows the reasoning text itself when opened. Opening or
 closing an item survives live updates of the same turn. Replies always appear. A
 failed call (a result starting with `tool call failed`, `denied` or `aborted`) appears
 on its own when its category is hidden, and a call that delivers files always appears
