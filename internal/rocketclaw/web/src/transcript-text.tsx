@@ -294,7 +294,6 @@ const markdownComponents: Components = {
 };
 
 // A line starting with <!here> or <!subteam^…> would otherwise be an HTML block that hides its Markdown.
-// ponytail: the escape also applies inside code, where such a tag would show a backslash; a remark plugin could skip code.
 export function MarkdownText({ text }: { text: string }) {
   return <div className="markdown break-words"><Markdown remarkPlugins={[remarkGfm, remarkSlackTags]} components={markdownComponents}>{text.replaceAll(/<(?=!(?:here|channel|everyone|subteam\^)[^<>\n]*>)/g, "\\<")}</Markdown></div>;
 }
