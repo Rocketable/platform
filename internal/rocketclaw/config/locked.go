@@ -4,6 +4,8 @@ import (
 	"maps"
 	"slices"
 	"sync"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
 // LockedConfig owns configuration and serializes work that depends on its runtime assets.
@@ -72,10 +74,7 @@ func clone(source *Config) Config {
 		cfg.Slack.Channels[i].AllowedUserIDs = slices.Clone(cfg.Slack.Channels[i].AllowedUserIDs)
 	}
 
-	if cfg.Web.Sentry.TracesSampleRate != nil {
-		rate := *cfg.Web.Sentry.TracesSampleRate
-		cfg.Web.Sentry.TracesSampleRate = &rate
-	}
+	cfg.Web.Sentry.TracesSampleRate = protocol.Clone(cfg.Web.Sentry.TracesSampleRate)
 
 	if cfg.Web.Tsnet != nil {
 		tsnet := *cfg.Web.Tsnet
