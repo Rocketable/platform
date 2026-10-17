@@ -14,7 +14,7 @@ import { queries, mutations, listSessions, rpc, RPCError } from "./api";
 import { draftContent } from "./drafts";
 import { holdWakeLock, setVoiceSticky, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, TextCursorInput, Undo2, Wrench, X } from "lucide-react";
+import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Layers, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, TextCursorInput, Undo2, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useDeferredValue, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -752,8 +752,9 @@ function ResizableAside({ side, className, children, ...props }: ComponentProps<
   return <aside {...props} className={cn("relative", className)} style={{ width: sizing.width, minWidth: sizing.min }}>{children}<AsideResizeHandle {...sizing} /></aside>;
 }
 
-type Tab = { path: string; pinned?: boolean; preview?: boolean };
-type TabState = { owner?: string; tabs: Tab[]; active: string };
+type Tab = { path: string; pinned?: boolean; preview?: boolean; space?: string };
+type Space = { id: string; name: string; last?: string };
+type TabState = { owner?: string; tabs: Tab[]; active: string; spaces: Space[]; space: string };
 const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
 const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/search": ["Search", Search], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings] };
 
@@ -766,25 +767,39 @@ function pinnedFirst(tabs: Tab[]) {
   return tabs.toSorted((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
 }
 
-// An opened location replaces the preview tab, or else opens right of the active tab.
+// New session is one location, so the space that opens it takes its tab; a pinned one already shows everywhere.
+// Like every tab moved between spaces, it becomes permanent, so each space keeps at most one preview tab.
+function home(tabs: Tab[], space: string) {
+  return tabs.some((tab) => tab.path === "/") ? tabs.map((tab) => tab.path === "/" && !tab.pinned && tab.space !== space ? { path: "/", space } : tab) : [...tabs, { path: "/", space }];
+}
+
+// An opened location replaces the current space's preview tab, or else opens right of the active tab.
+// Activating any other tab enters its space, where it becomes the last active tab; pinned tabs show in every space.
 function openTab(state: TabState, path: string): TabState {
-  if (state.tabs.some((tab) => tab.path === path)) return { ...state, active: path };
-  const preview = state.tabs.findIndex((tab) => tab.preview);
+  const open = state.tabs.find((tab) => tab.path === path), current = open && !open.pinned && path !== "/" ? open.space! : state.space;
+  const preview = state.tabs.findIndex((tab) => tab.preview && tab.space === current);
   const at = preview >= 0 ? preview : state.tabs.findIndex((tab) => tab.path === state.active) + 1 || state.tabs.length;
-  return { ...state, active: path, tabs: pinnedFirst(state.tabs.toSpliced(at, Number(preview >= 0), { path, preview: true })) };
+  return { ...state, active: path, space: current, spaces: state.spaces.map((space) => space.id === current ? { ...space, last: path } : space),
+    tabs: !open ? pinnedFirst(state.tabs.toSpliced(at, Number(preview >= 0), { path, preview: true, space: current })) : path === "/" ? home(state.tabs, current) : state.tabs };
 }
 
 // The URL is the active tab, so a reload keeps it and any other URL opens as a permanent tab.
 function loadTabs(owner: string | undefined, path: string): TabState {
-  let tabs: Tab[] = [];
+  let tabs: Tab[] = [], view: Pick<TabState, "spaces" | "space"> = { spaces: [{ id: "main", name: "Main" }], space: "main" };
   if (owner !== undefined) {
     try {
       const stored = JSON.parse(localStorage.getItem(`tabs:${owner}`) ?? "") as Tab[];
       const flag = (value: unknown) => value === undefined || typeof value === "boolean";
       if (stored.every((tab) => typeof tab.path === "string" && flag(tab.pinned) && flag(tab.preview)) && new Set(stored.map((tab) => tab.path)).size === stored.length) tabs = stored;
     } catch { /* Missing or unreadable tabs reset to the current location. */ }
+    try {
+      const stored = JSON.parse(localStorage.getItem(`tab-groups-spaces:${owner}`) ?? "") as typeof view, ids = stored.spaces.map((space) => space.id);
+      if (stored.spaces.every((space) => typeof space.id === "string" && typeof space.name === "string") && new Set(ids).size === ids.length && ids.includes(stored.space)) view = stored;
+    } catch { /* Missing or unreadable spaces reset to Main and keep every tab. */ }
   }
-  return { owner, tabs: tabs.some((tab) => tab.path === path) ? tabs : [...tabs, { path }], active: path };
+  // Tabs saved by other builds, or left in a lost space, belong to the first space.
+  tabs = (tabs.some((tab) => tab.path === path) ? tabs : [...tabs, { path, space: view.space }]).map((tab) => tab.pinned || view.spaces.some((space) => space.id === tab.space) ? tab : { ...tab, space: view.spaces[0].id });
+  return openTab({ owner, tabs, active: path, ...view }, path);
 }
 
 function useTabs() {
@@ -799,43 +814,65 @@ function useTabs() {
   useEffect(() => {
     if (state.owner !== undefined) localStorage.setItem(`tabs:${state.owner}`, JSON.stringify(state.tabs));
   }, [state.owner, state.tabs]);
+  useEffect(() => {
+    if (state.owner !== undefined) localStorage.setItem(`tab-groups-spaces:${state.owner}`, JSON.stringify({ spaces: state.spaces, space: state.space }));
+  }, [state.owner, state.spaces, state.space]);
   const update = (change: (tabs: Tab[]) => Tab[]) => setState((current) => ({ ...current, tabs: pinnedFirst(change(current.tabs)) }));
-  // Closing the active tab activates the target, else its right neighbour, else its left one; no tabs leaves Home.
+  const shown = state.tabs.filter((tab) => tab.pinned || tab.space === state.space);
+  // Closing the active tab activates the target, else its right neighbour, else its left one, in this space; an emptied space gets New session.
   const close = (paths: string[], target?: string) => {
     const doomed = new Set(paths), kept = (tab: Tab) => !doomed.has(tab.path);
-    const rest = state.tabs.filter(kept);
-    setState({ ...state, tabs: rest.length ? rest : [{ path: "/" }] });
-    if (!doomed.has(pathname) || (!rest.length && pathname === "/")) return;
-    const at = state.tabs.findIndex((tab) => tab.path === pathname);
-    navigate(target ?? (state.tabs.slice(at + 1).find(kept) ?? state.tabs.slice(0, at).findLast(kept))?.path ?? "/");
+    const rest = state.tabs.filter(kept), empty = !shown.some(kept);
+    setState({ ...state, tabs: empty ? home(rest, state.space) : rest });
+    if (!doomed.has(pathname) || (empty && pathname === "/")) return;
+    const at = shown.findIndex((tab) => tab.path === pathname);
+    navigate(target ?? (shown.slice(at + 1).find(kept) ?? shown.slice(0, at).findLast(kept))?.path ?? "/");
+  };
+  // Entering a space returns to its last active tab, else its first tab, else New session.
+  const enter = (id: string, spaces = state.spaces) => {
+    const there = state.tabs.filter((tab) => tab.pinned || tab.space === id), last = spaces.find((space) => space.id === id)?.last;
+    const path = (there.find((tab) => tab.path === last) ?? there.find((tab) => !tab.pinned))?.path ?? "/";
+    setState(openTab({ ...state, spaces, space: id }, path));
+    if (path !== pathname) navigate(path);
   };
   const unpinned = (tabs: Tab[]) => tabs.flatMap((tab) => tab.pinned ? [] : [tab.path]);
   const next = placement === "left" ? "top" : "left";
   return {
-    state, pathname, placement, place, close,
+    state, shown, pathname, placement, place, close, enter,
+    addSpace: () => { const id = Date.now().toString(36); enter(id, [...state.spaces, { id, name: `Space ${state.spaces.length + 1}` }]); },
+    renameSpace: (name: string) => setState({ ...state, spaces: state.spaces.map((space) => space.id === state.space ? { ...space, name } : space) }),
+    // Deleting a space moves its tabs, made permanent, to the first remaining space.
+    deleteSpace: () => {
+      const spaces = state.spaces.filter((space) => space.id !== state.space);
+      setState(openTab({ ...state, spaces, space: spaces[0].id, tabs: state.tabs.map((tab) => tab.space === state.space ? { path: tab.path, space: spaces[0].id } : tab) }, state.active));
+    },
     promote: (path: string) => { if (state.tabs.some((tab) => tab.path === path && tab.preview)) update((tabs) => tabs.map((tab) => tab.path === path ? { ...tab, preview: false } : tab)); },
     move: (from: string, to: string) => update((tabs) => moveQueueId(tabs.map((tab) => tab.path), from, to).map((path) => tabs.find((tab) => tab.path === path)!)),
-    create: (id: string) => update((tabs) => tabs.map((tab) => tab.path === "/" ? { path: sessionPath(id), pinned: tab.pinned } : tab)),
+    create: (id: string) => update((tabs) => tabs.map((tab) => tab.path === "/" ? { path: sessionPath(id), pinned: tab.pinned, space: tab.space } : tab)),
     commands: (path: string) => [
       { key: "close", label: "Close", run: () => close([path]) },
-      { key: "close-others", label: "Close others", run: () => close(unpinned(state.tabs).filter((other) => other !== path), path) },
-      { key: "close-right", label: "Close to the right", run: () => close(unpinned(state.tabs.slice(state.tabs.findIndex((tab) => tab.path === path) + 1)), path) },
-      { key: "close-all", label: "Close all", run: () => close(unpinned(state.tabs)) },
-      { key: "pin", label: state.tabs.find((tab) => tab.path === path)?.pinned ? "Unpin" : "Pin", run: () => update((tabs) => tabs.map((tab) => tab.path === path ? { path, pinned: !tab.pinned } : tab)) },
+      { key: "close-others", label: "Close others", run: () => close(unpinned(shown).filter((other) => other !== path), path) },
+      { key: "close-right", label: "Close to the right", run: () => close(unpinned(shown.slice(shown.findIndex((tab) => tab.path === path) + 1)), path) },
+      { key: "close-all", label: "Close all", run: () => close(unpinned(shown)) },
+      { key: "pin", label: state.tabs.find((tab) => tab.path === path)?.pinned ? "Unpin" : "Pin", run: () => update((tabs) => tabs.map((tab) => tab.path !== path ? tab : tab.pinned ? { path, space: state.space } : { path, pinned: true })) },
+      // Moving a tab makes it permanent; moving the active tab follows it to its new space.
+      ...shown.some((tab) => tab.path === path && !tab.pinned) ? state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move to "${space.name}"`, run: () => setState(openTab({ ...state, tabs: state.tabs.map((tab) => tab.path === path ? { path, space: space.id } : tab) }, state.active)) })) : [],
       { key: "placement", label: `Move tabs to ${next}`, run: () => place(next) },
     ],
   };
 }
 
-function TabStrip({ tabs: { state, pathname, close, promote, move, commands }, vertical, newChat }: { tabs: ReturnType<typeof useTabs>; vertical: boolean; newChat: () => void }) {
+function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs>; vertical: boolean; newChat: () => void }) {
+  const { state, shown, pathname, close, promote, move, commands } = tabs, space = state.spaces.find((item) => item.id === state.space)?.name;
   const [menu, setMenu] = useState<{ path: string; anchor: Element | { getBoundingClientRect: () => DOMRect } }>();
   const [editing, setEditing] = useState<string>();
   const pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
   const list = useRef<HTMLDivElement>(null), refocus = useRef("");
   // Closing from the strip unmounts the focused control, so focus moves to the selected tab, as in SearchTabs.
   const selected = () => list.current!.querySelector<HTMLElement>('[aria-selected="true"]')!;
-  return <>
-    <div ref={list} role="tablist" aria-label="Open tabs" aria-orientation={vertical ? "vertical" : "horizontal"} className={cn("flex shrink-0 [scrollbar-width:thin]", vertical ? "h-full flex-col gap-0.5 overflow-y-auto p-1" : "mr-12 overflow-x-auto overflow-y-hidden border-b")}
+  return <div className={cn("flex shrink-0", vertical ? "h-full flex-col" : "mr-12 border-b")}>
+    <SpaceMenu tabs={tabs} name={space} vertical={vertical} />
+    <div ref={list} role="tablist" aria-label="Open tabs" aria-orientation={vertical ? "vertical" : "horizontal"} className={cn("flex [scrollbar-width:thin]", vertical ? "min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-1" : "min-w-0 flex-1 overflow-x-auto overflow-y-hidden")}
       onContextMenu={(event) => {
         const path = pathOf(event);
         if (!path) return;
@@ -871,27 +908,55 @@ function TabStrip({ tabs: { state, pathname, close, promote, move, commands }, v
           if (path !== pathname) navigate(path);
           return;
         }
-        const at = state.tabs.findIndex((item) => item.path === path);
+        const at = shown.findIndex((item) => item.path === path);
         const step = ({ ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 } as Record<string, number>)[event.key];
-        const position = event.key === "Home" ? 0 : event.key === "End" ? state.tabs.length - 1 : step ? at + step : -1;
-        if (!state.tabs[position]) return;
+        const position = event.key === "Home" ? 0 : event.key === "End" ? shown.length - 1 : step ? at + step : -1;
+        if (!shown[position]) return;
         event.preventDefault();
         if (event.shiftKey && step) {
-          flushSync(() => move(path, state.tabs[position].path));
+          flushSync(() => move(path, shown[position].path));
           tab.focus();
         } else event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[position].focus();
       }}>
-      {state.tabs.map((tab) => <TabItem key={tab.path} tab={tab} active={tab.path === pathname} vertical={vertical} editing={tab.path === editing} endEdit={() => setEditing(undefined)} promote={() => promote(tab.path)} close={() => { flushSync(() => close([tab.path])); selected().focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} />)}
+      {shown.map((tab) => <TabItem key={tab.path} tab={tab} description={tab.pinned ? undefined : `Space: ${space}`} active={tab.path === pathname} vertical={vertical} editing={tab.path === editing} endEdit={() => setEditing(undefined)} promote={() => promote(tab.path)} close={() => { flushSync(() => close([tab.path])); selected().focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} />)}
     </div>
     <Menu.Root open={!!menu} onOpenChange={(open) => { if (!open) setMenu(undefined); }}>
       <Menu.Portal><Menu.Positioner anchor={menu?.anchor} sideOffset={4} align="start" className="z-50 outline-none"><Menu.Popup finalFocus={() => { const key = refocus.current; refocus.current = ""; return key.startsWith("close") ? selected() : key !== "rename"; }} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none">
         {menu ? [...menu.path.startsWith("/s/") ? [{ key: "rename", label: "Rename session", run: () => setEditing(menu.path) }] : [], ...commands(menu.path)].map(({ key, label, run }) => <Menu.Item key={key} onClick={() => { refocus.current = key; run(); }} className="flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent">{label}</Menu.Item>) : null}
       </Menu.Popup></Menu.Positioner></Menu.Portal>
     </Menu.Root>
-  </>;
+  </div>;
 }
 
-function TabItem({ tab, active, vertical, editing, endEdit, promote, close, openMenu }: { tab: Tab; active: boolean; vertical: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: Element) => void }) {
+// The space button opens the space menu; renaming edits the name in place of the button, as Base UI's Menu takes printable keys.
+function SpaceMenu({ tabs: { state, enter, addSpace, renameSpace, deleteSpace }, name, vertical }: { tabs: ReturnType<typeof useTabs>; name?: string; vertical: boolean }) {
+  const [renaming, setRenaming] = useState(false);
+  const box = cn("flex shrink-0 items-center gap-1.5 px-3 text-sm font-medium", vertical ? "m-1 mb-0 rounded-md py-2" : "border-r");
+  const item = "flex cursor-default items-center rounded-md px-1.5 py-1 text-sm outline-none focus:bg-accent focus:text-accent-foreground";
+  return <DropdownMenu>
+    {renaming ? <input ref={(node) => node?.focus()} aria-label="Space name" defaultValue={name} className={cn(box, "w-36 bg-background font-normal outline-1 -outline-offset-1 outline-ring")}
+      onFocus={(event) => event.currentTarget.select()}
+      onKeyDown={(event) => {
+        // Escape empties the field, and leaving it blank keeps the old name.
+        if (event.key === "Escape") { event.preventDefault(); event.currentTarget.value = ""; }
+        if (event.key === "Enter" || event.key === "Escape") event.currentTarget.blur();
+      }}
+      onBlur={(event) => { const value = event.currentTarget.value.trim(); if (value) renameSpace(value); setRenaming(false); }} />
+      : <Menu.Trigger aria-label={`Space: ${name}`} className={cn(box, "cursor-pointer hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring")}><Layers aria-hidden="true" className="size-4" /><span className="max-w-32 truncate">{name}</span><ChevronDown aria-hidden="true" className="size-3.5 text-muted-foreground" /></Menu.Trigger>}
+    <DropdownMenuContent finalFocus={!renaming} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="w-auto min-w-44">
+      <DropdownMenuRadioGroup value={state.space} onValueChange={(id: string) => enter(id)}>
+        {state.spaces.map((space) => <DropdownMenuRadioItem key={space.id} value={space.id} closeOnClick>{space.name}</DropdownMenuRadioItem>)}
+      </DropdownMenuRadioGroup>
+      <Menu.Group className="mt-1 border-t pt-1">
+        <Menu.Item className={item} onClick={() => { addSpace(); setRenaming(true); }}>New space</Menu.Item>
+        <Menu.Item className={item} onClick={() => setRenaming(true)}>Rename space</Menu.Item>
+        {state.spaces.length > 1 ? <Menu.Item className={item} onClick={deleteSpace}>Delete space</Menu.Item> : null}
+      </Menu.Group>
+    </DropdownMenuContent>
+  </DropdownMenu>;
+}
+
+function TabItem({ tab, description, active, vertical, editing, endEdit, promote, close, openMenu }: { tab: Tab; description?: string; active: boolean; vertical: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: Element) => void }) {
   const sidebar = useContext(Sidebar);
   const id = tab.path.startsWith("/s/") ? decodeSessionId(tab.path.slice(3)) : "";
   const session = sidebar.rows.find((row) => row.id === id) ?? { id };
@@ -901,7 +966,7 @@ function TabItem({ tab, active, vertical, editing, endEdit, promote, close, open
   useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
   return <div data-tab={tab.path} draggable={!editing} className={cn("group flex shrink-0 items-center", vertical ? "rounded-md" : "border-r", active ? "bg-sidebar-row-active" : "hover:bg-accent")}>
     <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className={cn("flex min-w-0", vertical ? "flex-1" : "max-w-80")} />}>
-      <div ref={ref} role="tab" aria-selected={active} aria-label={title} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
+      <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={description} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
         onClick={() => { if (!active) navigate(tab.path); }} onDoubleClick={promote}>
         <Icon aria-hidden="true" className="size-4 shrink-0" />
         {session.running ? <span role="img" aria-label="Turn running" className="hidden size-2 shrink-0 rounded-full bg-foreground in-aria-selected:block [@media(hover:none)]:block" /> : null}
@@ -982,7 +1047,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const medium = useMedia("(min-width: 48rem)");
   const vertical = tabs.placement === "left" && medium;
   const [tabsOpen, setTabsOpen] = useState(true);
-  const { close: closeTab, state: { tabs: openTabs }, pathname } = tabs;
+  const { close: closeTab, shown: openTabs, pathname } = tabs;
   const newChat = useCallback(() => {
     const draft = drafts.get("") ?? drafts.get(conversation.id)!;
     if ([!scope, draft.reverting, !draft.hydrated].some(Boolean)) return;
