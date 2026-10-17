@@ -236,6 +236,23 @@ ignored
 		}
 	})
 
+	t.Run("loads reasoning effort from model suffix", func(t *testing.T) {
+		for _, tt := range []struct{ frontmatter, model, effort string }{
+			{"model: work/gpt-6.1-sol#max", "work/gpt-6.1-sol", "max"},
+			{"model: work/gpt-6.1-sol#max\nreasoningEffort: high", "work/gpt-6.1-sol", "max"},
+			{"model: work/gpt-6.1-sol\nreasoningEffort: high", "work/gpt-6.1-sol", "high"},
+			{"model: work/gpt-6.1-sol", "work/gpt-6.1-sol", ""},
+		} {
+			t.Run(tt.frontmatter, func(t *testing.T) {
+				result := LoadAgents(fstest.MapFS{"main.md": testMapFile("---\n" + tt.frontmatter + "\n---\nPrompt\n")}, passThroughAgentModel)
+
+				require.Empty(t, result.Errors)
+				require.Equal(t, tt.model, result.Agents.Items["main"].Model)
+				require.Equal(t, tt.effort, result.Agents.Items["main"].ReasoningEffort)
+			})
+		}
+	})
+
 	t.Run("loads schema output", func(t *testing.T) {
 		result := LoadAgents(fstest.MapFS{
 			"review.md": testMapFile(`---

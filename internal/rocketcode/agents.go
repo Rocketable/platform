@@ -1,6 +1,7 @@
 package rocketcode
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -209,7 +210,9 @@ func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, e
 		return Agent{}, fmt.Errorf("%s: model: required non-empty string", filePath)
 	}
 
-	model, err := resolveModel(modelField.Value)
+	modelRef, modelEffort, _ := strings.Cut(modelField.Value, "#")
+
+	model, err := resolveModel(modelRef)
 	if err != nil {
 		return Agent{}, fmt.Errorf("%s: model: %w", filePath, err)
 	}
@@ -237,7 +240,7 @@ func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, e
 		Name:            name,
 		Description:     argString(frontmatter, "description"),
 		Model:           model,
-		ReasoningEffort: argString(frontmatter, "reasoningEffort"),
+		ReasoningEffort: cmp.Or(modelEffort, argString(frontmatter, "reasoningEffort")),
 		Verbosity:       argString(frontmatter, "verbosity"),
 		MaxRecursion:    maxRecursion,
 		Guardrail:       argString(frontmatter, "guardrail"),

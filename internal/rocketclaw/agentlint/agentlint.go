@@ -83,7 +83,7 @@ func Lint(runtimeRoot string, cfg *config.Config) (Result, error) {
 		}
 
 		if info.agent.ReasoningEffort == "xhigh" {
-			findings = append(findings, Finding{Code: rc008, Severity: "error", Path: info.filePath, Message: name + " uses reasoningEffort xhigh, which may be excessive", keys: []string{"reasoningEffort"}})
+			findings = append(findings, Finding{Code: rc008, Severity: "error", Path: info.filePath, Message: name + " uses reasoningEffort xhigh, which may be excessive", keys: []string{"reasoningEffort", "model"}})
 		}
 	}
 

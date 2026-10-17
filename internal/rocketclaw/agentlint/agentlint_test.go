@@ -216,12 +216,19 @@ reasoningEffort: xhigh
 ---
 expensive
 `)
+	writeAgent(t, runtimeRoot, "suffix.md", "---\ndescription: suffix\n---\nsuffix\n", "gpt-6.1-sol#xhigh")
+	// writeAgent quotes the model, so a model line comment needs the raw file.
+	require.NoError(t, os.WriteFile(filepath.Join(runtimeRoot, "agents", "approved.md"), []byte("---\nmodel: gpt-6.1-sol#xhigh #nolint RC008: approved for hard reasoning\ndescription: approved\n---\napproved\n"), 0o644))
 
 	result, err := Lint(runtimeRoot, new(config.Config))
 	require.NoError(t, err)
-	require.Len(t, result.Findings, 1)
-	assert.Equal(t, rc008, result.Findings[0].Code)
-	assert.Equal(t, "error", result.Findings[0].Severity)
+	require.Len(t, result.Findings, 2)
+	assert.Equal(t, []string{"agents/expensive.md", "agents/suffix.md"}, []string{result.Findings[0].Path, result.Findings[1].Path})
+
+	for _, finding := range result.Findings {
+		assert.Equal(t, rc008, finding.Code)
+		assert.Equal(t, "error", finding.Severity)
+	}
 }
 
 func TestLintSuppressionIsLocal(t *testing.T) {
