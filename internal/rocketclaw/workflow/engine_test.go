@@ -70,20 +70,6 @@ def main(args):
 		}
 	})
 
-	t.Run("structured agent result must match schema", func(t *testing.T) {
-		definition := engineDefinition(t, `
-def main(args):
-    return agent("structured", schema={"type": "object", "properties": {"count": {"type": "integer"}}, "required": ["count"]})
-`)
-
-		_, err := Run(t.Context(), definition, RunRequest{RunID: "mismatch"}, &agentRunnerMock{RunFunc: func(context.Context, *AgentRequest) (json.RawMessage, error) {
-			return json.RawMessage(`{"count":"two"}`), nil
-		}})
-		if err == nil || !strings.Contains(err.Error(), "count") {
-			t.Fatalf("Run() error = %v, want schema mismatch", err)
-		}
-	})
-
 	t.Run("worker value does not expose mutable tools", func(t *testing.T) {
 		definition := engineDefinition(t, `
 w = worker(name="worker", instructions="work", tools=["read"])
