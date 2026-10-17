@@ -1,4 +1,7 @@
-import { Fragment, useState, useSyncExternalStore, type ReactNode } from "react";
+import { Fragment, useState, useSyncExternalStore, type ReactElement, type ReactNode } from "react";
+import type { Parent, RootContent } from "mdast";
+import Markdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { captureException } from "@sentry/react";
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { Check, Copy, Maximize2, WrapText } from "lucide-react";
@@ -34,26 +37,31 @@ export async function copyText(text: string, container: Element) {
   }
 }
 
-// One browser-wide wrap preference, shared by every mounted block like the timeline detail store.
+// Browser-wide display preferences (code wrap, message output), shared by every mounted component
+// and by other tabs like the timeline detail store.
 const WRAP_KEY = "code-wrap";
-const wrapListeners = new Set<() => void>();
-let wrapped: boolean | undefined;
+export const OUTPUT_KEY = "output-mode";
+const preferenceListeners = new Set<() => void>();
 
-function publishWrap(next: boolean) {
-  wrapped = next;
-  for (const listener of wrapListeners) listener();
+function publishPreference() {
+  for (const listener of preferenceListeners) listener();
 }
 
-function onWrapStorage(event: StorageEvent) {
-  if (event.key === WRAP_KEY) publishWrap(event.newValue === "true");
-}
-
-function subscribeWrap(listener: () => void) {
-  wrapListeners.add(listener);
-  window.addEventListener("storage", onWrapStorage);
+function subscribePreference(listener: () => void) {
+  preferenceListeners.add(listener);
+  window.addEventListener("storage", publishPreference);
   return () => {
-    wrapListeners.delete(listener);
+    preferenceListeners.delete(listener);
   };
+}
+
+export function usePreference(key: string) {
+  return useSyncExternalStore(subscribePreference, () => localStorage.getItem(key), () => null);
+}
+
+export function setPreference(key: string, value: string) {
+  localStorage.setItem(key, value);
+  publishPreference();
 }
 
 function highlight(text: string, needle?: string): ReactNode {
@@ -82,7 +90,7 @@ export function CodeBlock({ text, label = "Code", compact = false, needle, size,
   const lines = useHighlightedCode(text, needle ? "" : language);
   // The hook returns plain strings until a language loads; plain text then stays one text node.
   const code = lines.some((line) => typeof line !== "string") ? <span>{lines.flatMap((line, index) => index ? ["\n", line] : [line])}{text.endsWith("\n") ? "\n" : ""}</span> : searchedCode(text, needle);
-  const wrap = useSyncExternalStore(subscribeWrap, () => wrapped ??= localStorage.getItem(WRAP_KEY) === "true", () => false);
+  const wrap = usePreference(WRAP_KEY) === "true";
   const [copied, setCopied] = useState<string>();
   const [error, setError] = useState(false);
   const actionProps = compact ? { variant: "outline", size: "default", className: "min-h-11" } as const : { variant: "ghost", size: "icon-xs" } as const;
@@ -97,10 +105,7 @@ export function CodeBlock({ text, label = "Code", compact = false, needle, size,
         }
       }}>{copied === text && !error ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}<span hidden={!compact}>Copy</span></Button>;
   const status = <span role="status" className={error ? "text-xs text-destructive" : "sr-only"}>{error ? "Could not copy. Select and copy the text." : copied === text ? "Copied" : ""}</span>;
-  const wrapToggle = <Button type="button" {...actionProps} variant={wrap ? "secondary" : actionProps.variant} aria-label={`Wrap ${label}`} title={`Wrap ${label}`} aria-pressed={wrap} onClick={() => {
-        localStorage.setItem(WRAP_KEY, String(!wrap));
-        publishWrap(!wrap);
-      }}><WrapText data-icon="inline-start" /><span hidden={!compact}>Wrap</span></Button>;
+  const wrapToggle = <Button type="button" {...actionProps} variant={wrap ? "secondary" : actionProps.variant} aria-label={`Wrap ${label}`} title={`Wrap ${label}`} aria-pressed={wrap} onClick={() => setPreference(WRAP_KEY, String(!wrap))}><WrapText data-icon="inline-start" /><span hidden={!compact}>Wrap</span></Button>;
   const expand = <DialogTrigger render={<Button type="button" {...actionProps} aria-label={`Expand ${label}`} title={`Expand ${label}`} />}><Maximize2 data-icon="inline-start" /><span hidden={!compact}>Preview</span></DialogTrigger>;
   const content = (className: string) => <CodeBlockContent aria-label={label} wrap={wrap} className={className}>{code}</CodeBlockContent>;
   return <Dialog>
@@ -262,4 +267,34 @@ export function TranscriptText({ text, needle, interactive = true }: { text: str
       ? <CodeBlock key={part.start} text={part.text} label={part.label} language={part.label} needle={needle} />
       : <CodeBlockFrame key={part.start} size="sm" className="my-2"><CodeBlockContent aria-label={part.label} wrap tabIndex={-1}>{searchedCode(part.text, needle)}</CodeBlockContent></CodeBlockFrame>
     : <div key={part.start} className="whitespace-pre-wrap break-words">{blockNodes(part.text, needle, interactive)}</div>)}</>;
+}
+
+// Markdown keeps Slack tags as text; each becomes a span, rendered with names as in Raw output.
+function remarkSlackTags() {
+  const walk = (node: Parent) => {
+    node.children = node.children.flatMap((child): RootContent[] => {
+      if ("children" in child) walk(child);
+      return child.type !== "text" ? [child] : child.value.split(/(<[@#!][^<>\n]*>)/).map((value, index) => index % 2 ? { type: "text", value, data: { hName: "span" } } : { type: "text", value });
+    });
+  };
+  return walk;
+}
+
+// Markdown output has no raw HTML, so every span is a Slack tag.
+const markdownComponents: Components = {
+  a: ({ href, children }) => <a href={href} className="underline" target="_blank" rel="noopener noreferrer">{children}</a>,
+  code: ({ children }) => <code className="rounded-sm bg-muted px-1 font-mono text-[0.9em]">{children}</code>,
+  pre: ({ children }) => {
+    const { className = "", children: text = "" } = (children as ReactElement<{ className?: string; children?: string }>).props;
+    const language = className.replace(/^language-/, "");
+    return <CodeBlock text={text} label={language || "Code"} language={language} />;
+  },
+  span: ({ children }) => inlineNodes(String(children)),
+  table: ({ children }) => <div className="overflow-x-auto"><table>{children}</table></div>,
+};
+
+// A line starting with <!here> or <!subteam^…> would otherwise be an HTML block that hides its Markdown.
+// ponytail: the escape also applies inside code, where such a tag would show a backslash; a remark plugin could skip code.
+export function MarkdownText({ text }: { text: string }) {
+  return <div className="markdown break-words"><Markdown remarkPlugins={[remarkGfm, remarkSlackTags]} components={markdownComponents}>{text.replaceAll(/<(?=!(?:here|channel|everyone|subteam\^)[^<>\n]*>)/g, "\\<")}</Markdown></div>;
 }
