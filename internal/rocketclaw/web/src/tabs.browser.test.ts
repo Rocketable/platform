@@ -478,3 +478,94 @@ test("running tab shows a dot instead of close until hover or focus at desktop w
   await page.waitForURL(`**${href("delta")}`);
   expect(await dot.evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("1");
 }), 60_000);
+
+test("spaces show only their own tabs, return to their last tab, follow opened tabs, and survive reload", () => withPage({}, async (page, origin) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  const space = page.getByRole("button", { name: /^Space: / });
+  async function choose(item: string, role = "menuitem") {
+    await space.click();
+    await page.getByRole(role, { name: item, exact: true }).click();
+    await page.getByRole("menu").waitFor({ state: "hidden" });
+  }
+  for (const [link, name] of [["/", "New session"], [href("alpha"), "Alpha"], [href("bravo"), "Bravo"], [href("charlie"), "Charlie"]]) {
+    await page.goto(`${origin}${link}`);
+    await tab(name).waitFor();
+    await page.waitForFunction((path: string) => JSON.parse(localStorage.getItem("tabs:tester") ?? "[]").some((saved: { path: string }) => saved.path === path), link);
+  }
+  expect(await space.getAttribute("aria-label")).toBe("Space: Main");
+  expect(await tab("Charlie").getAttribute("aria-description")).toBe("Space: Main");
+
+  // A new space takes New session along and is named in place.
+  await choose("New space");
+  await page.waitForURL(`${origin}/`);
+  await page.getByRole("textbox", { name: "Space name" }).waitFor();
+  await page.keyboard.type("Ops");
+  await page.keyboard.press("Enter");
+  expect(await space.getAttribute("aria-label")).toBe("Space: Ops");
+  expect(await names(page)).toEqual(["New session"]);
+  expect(page.url()).toBe(`${origin}/`);
+
+  await choose("Main", "menuitemradio");
+  await page.waitForURL(`**${href("charlie")}`);
+  expect(await names(page)).toEqual(["Alpha", "Bravo", "Charlie"]);
+  await menu(page, "Bravo", 'Move to "Ops"');
+  expect(await names(page)).toEqual(["Alpha", "Charlie"]);
+  await tab("Alpha").focus();
+  await page.keyboard.press("ArrowRight");
+  expect(await tab("Charlie").evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
+  await choose("Ops", "menuitemradio");
+  await page.waitForURL(`${origin}/`);
+  expect(await names(page)).toEqual(["New session", "Bravo"]);
+  await tab("Bravo").click();
+  await choose("Main", "menuitemradio");
+  await page.waitForURL(`**${href("charlie")}`);
+
+  // Opening a tab that lives in another space switches to it, and reload keeps both.
+  await openFromPalette(page, "Bravo");
+  await page.waitForURL(`**${href("bravo")}`);
+  expect(await space.getAttribute("aria-label")).toBe("Space: Ops");
+  await page.reload();
+  await tab("Bravo").waitFor();
+  expect(await space.getAttribute("aria-label")).toBe("Space: Ops");
+  expect(await names(page)).toEqual(["New session", "Bravo"]);
+  await page.keyboard.press("Control+BracketRight");
+  await page.waitForURL(`${origin}/`);
+
+  await menu(page, "Bravo", "Close all");
+  await page.waitForURL(`${origin}/`);
+  expect(await names(page)).toEqual(["New session"]);
+  expect(await space.getAttribute("aria-label")).toBe("Space: Ops");
+  await openFromPalette(page, "Bravo");
+  await choose("Main", "menuitemradio");
+  await page.waitForURL(`**${href("charlie")}`);
+  expect(await names(page)).toEqual(["Alpha", "Charlie"]);
+  // New session is never duplicated: opening it brings its tab into this space.
+  await page.getByRole("button", { name: "New session", exact: true }).click();
+  await page.waitForURL(`${origin}/`);
+  expect(await names(page)).toEqual(["Alpha", "Charlie", "New session"]);
+  expect(await space.getAttribute("aria-label")).toBe("Space: Main");
+
+  await menu(page, "Alpha", "Pin");
+  await choose("Ops", "menuitemradio");
+  await page.waitForURL(`**${href("bravo")}`);
+  expect(await names(page)).toEqual(["Alpha", "Bravo"]);
+
+  // Deleting a space moves its tabs to the first space, and the last space stays.
+  await choose("Delete space");
+  expect(await space.getAttribute("aria-label")).toBe("Space: Main");
+  expect(await names(page)).toEqual(["Alpha", "Charlie", "New session", "Bravo"]);
+  expect(page.url()).toEndWith(href("bravo"));
+  await space.click();
+  await page.getByRole("menuitem", { name: "Rename space" }).waitFor();
+  expect(await page.getByRole("menuitem").allInnerTexts()).toEqual(["New space", "Rename space"]);
+  await page.keyboard.press("Escape");
+
+  // Unreadable spaces reset to Main and keep every tab; the menu also sits atop left tabs.
+  await page.evaluate(() => localStorage.setItem("tab-groups-spaces:tester", "{not json"));
+  await page.reload();
+  await tab("Bravo").waitFor();
+  expect(await names(page)).toEqual(["Alpha", "Charlie", "New session", "Bravo"]);
+  await menu(page, "Bravo", "Move tabs to left");
+  const [button, list] = [await space.boundingBox(), await strip(page).boundingBox()];
+  expect(button.y + button.height).toBeLessThanOrEqual(list.y);
+}), 60_000);
