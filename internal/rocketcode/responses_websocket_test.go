@@ -104,7 +104,7 @@ func testWebsocketTextBeforeTerminal(t *testing.T, done, final string) {
 	}
 	loop.Tools = map[string]looperTool{"Execute": tool}
 	loop.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "Execute", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
-	loop.Client = newResponsesAPI(&client)
+	loop.Client = responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}}
 	sink := recordingJournal()
 	persisted := make(chan []PublicProgress, 10)
 	sink.SaveTraceFunc = func(_ context.Context, _ string, trace []json.RawMessage) error {
@@ -236,7 +236,7 @@ func TestWebsocketStorageFailureDoesNotRetryOrReuseUnreadEvents(t *testing.T) {
 	defer server.Close()
 
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(websocketAPIBaseURL(server.URL)))
-	api := newResponsesAPI(&client)
+	api := responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}}
 	loop := testLooper(api)
 	sink := recordingJournal()
 	errPersist := contextLengthExceededError() // A wrapped provider-looking cause must still be fatal local storage.
@@ -344,7 +344,7 @@ func TestWebsocketObservationTerminalAndReceiveBoundaries(t *testing.T) {
 			}
 
 			client := openai.NewClient(opts...)
-			api := newResponsesAPI(&client)
+			api := responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}}
 			sink := recordingJournal()
 			errPersist := errors.New("storage failed during cancellation")
 			persisted := make(chan struct{}, 10)
@@ -475,7 +475,7 @@ func TestNewResponsesAPIUsesWebsocketWhenURLIsWebsocket(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(websocketAPIBaseURL(server.URL)))
-	api := newResponsesAPI(&client)
+	api := responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}}
 	resp, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-6.1-sol"}, inertResponseObserver{})
 	require.NoError(t, err)
 	require.Equal(t, "resp_ws", resp.ID)
@@ -508,7 +508,7 @@ func TestNewResponsesAPIUsesClientHTTPClientWhenURLIsHTTPS(t *testing.T) {
 		option.WithBaseURL(server.URL+"/v1"),
 		option.WithHTTPClient(&http.Client{Transport: transport}),
 	)
-	api := newResponsesAPI(&client)
+	api := responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}}
 	resp, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-6.1-sol"}, inertResponseObserver{})
 	require.NoError(t, err)
 	require.Equal(t, "resp_auth", resp.ID)
@@ -554,7 +554,7 @@ func TestNewResponsesAPIKeepsHTTPWhenURLIsNotWebsocket(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL+"/v1"), option.WithUnsafeAllowHTTP())
-	api := newResponsesAPI(&client)
+	api := responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}}
 	resp, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-6.1-sol"}, inertResponseObserver{})
 	require.NoError(t, err)
 	require.Equal(t, "resp_http", resp.ID)
@@ -584,7 +584,7 @@ func TestNewResponsesAPICompactsOverHTTPWhenURLIsWebsocket(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(websocketAPIBaseURL(server.URL)))
-	api := newResponsesAPI(&client)
+	api := responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}}
 	resp, err := api.Compact(t.Context(), &responses.ResponseCompactParams{Model: "gpt-6.1-sol"})
 	require.NoError(t, err)
 	require.Equal(t, "cmp_1", resp.ID)
@@ -622,7 +622,7 @@ func TestNewResponsesAPIMapsWebsocketError(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(websocketAPIBaseURL(server.URL)))
-	api := newResponsesAPI(&client)
+	api := responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}}
 	_, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-6.1-sol"}, inertResponseObserver{})
 	require.Error(t, err)
 	errAPI, ok := errors.AsType[*openai.Error](err)
