@@ -191,23 +191,19 @@ func (s *Session) connect(ctx context.Context, name string) (*mcp.ClientSession,
 		cs, err = client.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
 	case cfg.URL != "":
 		t := &mcp.StreamableClientTransport{Endpoint: cfg.URL, DisableStandaloneSSE: true}
+		t.HTTPClient = &http.Client{Timeout: httpClientTimeout, CheckRedirect: sameHostRedirects}
+
 		if len(cfg.Headers) > 0 {
 			endpoint, errURL := url.Parse(cfg.URL)
 			if errURL != nil {
 				return nil, fmt.Errorf("connect mcp server %q: %w", name, errURL)
 			}
 
-			t.HTTPClient = &http.Client{
-				Timeout: httpClientTimeout,
-				Transport: headerRoundTripper{
-					base:    http.DefaultTransport,
-					headers: cfg.Headers,
-					host:    endpoint.Host,
-				},
-				CheckRedirect: sameHostRedirects,
+			t.HTTPClient.Transport = headerRoundTripper{
+				base:    http.DefaultTransport,
+				headers: cfg.Headers,
+				host:    endpoint.Host,
 			}
-		} else {
-			t.HTTPClient = &http.Client{Timeout: httpClientTimeout, CheckRedirect: sameHostRedirects}
 		}
 
 		cs, err = client.Connect(ctx, t, nil)
