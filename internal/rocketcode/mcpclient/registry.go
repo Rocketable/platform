@@ -2,6 +2,7 @@
 package mcpclient
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -341,35 +342,24 @@ func flattenCallToolResult(result *mcp.CallToolResult) (string, error) {
 	}
 
 	text := b.String()
-	if result.IsError {
-		if text != "" {
-			return "", errors.New(text)
-		}
 
-		if result.StructuredContent != nil {
-			data, err := json.Marshal(result.StructuredContent)
-			if err != nil {
+	isError := result.IsError
+	if text == "" && result.StructuredContent != nil {
+		data, err := json.Marshal(result.StructuredContent)
+		if err != nil {
+			if isError {
 				return "", fmt.Errorf("mcp tool error: %w", err)
 			}
 
-			return "", errors.New(string(data))
+			return "", fmt.Errorf("marshal structured content: %w", err)
 		}
 
-		return "", errors.New("mcp tool error")
+		text = string(data)
 	}
 
-	if text != "" {
-		return text, nil
+	if isError {
+		return "", errors.New(cmp.Or(text, "mcp tool error"))
 	}
 
-	if result.StructuredContent == nil {
-		return "", nil
-	}
-
-	data, err := json.Marshal(result.StructuredContent)
-	if err != nil {
-		return "", fmt.Errorf("marshal structured content: %w", err)
-	}
-
-	return string(data), nil
+	return text, nil
 }

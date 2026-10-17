@@ -64,6 +64,26 @@ func TestFlattenCallToolResult(t *testing.T) {
 			result: &mcp.CallToolResult{},
 			want:   "",
 		},
+		{
+			name:    "structured encoding error",
+			result:  &mcp.CallToolResult{StructuredContent: make(chan int)},
+			wantErr: "marshal structured content: json: unsupported type: chan int",
+		},
+		{
+			name:    "isError structured encoding error",
+			result:  &mcp.CallToolResult{IsError: true, StructuredContent: make(chan int)},
+			wantErr: "mcp tool error: json: unsupported type: chan int",
+		},
+		{
+			name:   "text skips structured encoding",
+			result: &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "t"}}, StructuredContent: make(chan int)},
+			want:   "t",
+		},
+		{
+			name:    "isError text skips structured encoding",
+			result:  &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "boom"}}, StructuredContent: make(chan int)},
+			wantErr: "boom",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
