@@ -1163,7 +1163,7 @@ func TestSessionStoreLoadsLargeImageTurn(t *testing.T) {
 
 	service := newTestSessionService(t)
 	store := newSessionStore("main", service)
-	entry := harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ResponseID: "", Model: "gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: strings.Repeat("x", 128*1024)})}
+	entry := harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ResponseID: "", Model: "gpt-6.1-sol", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: strings.Repeat("x", 128*1024)})}
 
 	_, err := service.AppendEntryID(t.Context(), "main", &entry)
 	require.NoError(t, err)
@@ -2423,7 +2423,7 @@ func newTestSessionServiceAt(t *testing.T, workspace string) *SessionService {
 }
 
 func testSessionEntry(user, assistant string) *harness.SessionEntry {
-	return &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ResponseID: "", Model: "gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: user}, replayInputMessage{role: "assistant", text: assistant})}
+	return &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ResponseID: "", Model: "gpt-6.1-sol", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: user}, replayInputMessage{role: "assistant", text: assistant})}
 }
 
 func testSessionEntryAt(ts time.Time, user string) *harness.SessionEntry {

@@ -67,7 +67,7 @@ func TestStopBackgroundJobToolNeedsAllowBackground(t *testing.T) {
 	for permission, visible := range map[string]bool{"{}": false, "{rocketclaw: allow}": false, "{rocketclaw: {'*': allow}}": false, "{rocketclaw: {allow_background: deny}}": false, "{rocketclaw: {allow_background: allow}}": true} {
 		t.Run(permission, func(t *testing.T) {
 			workspace := t.TempDir()
-			writeMainAgentSkills(t, workspace, "---\ndescription: Main\nmodel: gpt-5.5\nmode: primary\npermission: "+permission+"\n---\nPrompt\n")
+			writeMainAgentSkills(t, workspace, "---\ndescription: Main\nmodel: gpt-6.1-sol\nmode: primary\npermission: "+permission+"\n---\nPrompt\n")
 
 			cfg := &config.Config{Workspace: workspace}
 			root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(cfg), "main", slog.New(slog.DiscardHandler), toolModePersistent)

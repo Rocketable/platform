@@ -88,7 +88,7 @@ func NewWithModelResolver(
 
 - [ ] **Step 1: Add failing root-resolution tests**
 
-Add `TestNewWithModelResolverResolvesRootAgent`, `TestNewWithModelResolverRejectsUnknownProvider`, and `TestNewWithModelResolverStoresResolvedDisplayModel` in `models_test.go`. Use two `httptest.Server` instances and real SDK clients so the selected endpoint proves routing. Assert `work/gpt-5.5` sends API model `gpt-5.5`, saves display model `work/gpt-5.5`, and never calls the default server.
+Add `TestNewWithModelResolverResolvesRootAgent`, `TestNewWithModelResolverRejectsUnknownProvider`, and `TestNewWithModelResolverStoresResolvedDisplayModel` in `models_test.go`. Use two `httptest.Server` instances and real SDK clients so the selected endpoint proves routing. Assert `work/gpt-6.1-sol` sends API model `gpt-6.1-sol`, saves display model `work/gpt-6.1-sol`, and never calls the default server.
 
 - [ ] **Step 2: Verify root tests fail**
 
@@ -104,7 +104,7 @@ Expected: FAIL because `ModelResolver` and `NewWithModelResolver` do not exist.
 
 Add the exact public types above. Add a private single-OpenAI resolver used only by `New`/`NewWithProviders`; it accepts unqualified models and `openai/model`, rejects other qualifiers, and preserves current eager legacy validation. `NewWithModelResolver` resolves only the active agent, validates non-empty provider/model and non-nil client, adapts the client to the existing `responsesAPI`, and creates one root looper.
 
-Keep qualified selectors intact after agent template rendering so `work/gpt-5.5` reaches the resolver. Do not put provider configuration in RocketCode.
+Keep qualified selectors intact after agent template rendering so `work/gpt-6.1-sol` reaches the resolver. Do not put provider configuration in RocketCode.
 
 - [ ] **Step 4: Add failing independent-child tests**
 

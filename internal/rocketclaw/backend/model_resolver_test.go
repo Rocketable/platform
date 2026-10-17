@@ -30,9 +30,9 @@ func TestModelResolverSelectsUnqualifiedExplicitAndNamedProviders(t *testing.T) 
 		origin   rocketcode.ProviderOrigin
 		server   string
 	}{
-		{selector: "gpt-5.5", origin: rocketcode.ProviderOrigin{Provider: "openai", Model: "gpt-5.5"}, server: "openai"},
-		{selector: "openai/gpt-5.5", origin: rocketcode.ProviderOrigin{Provider: "openai", Model: "gpt-5.5"}, server: "openai"},
-		{selector: "work/gpt-5.5", origin: rocketcode.ProviderOrigin{Provider: "work", Model: "gpt-5.5"}, server: "work"},
+		{selector: "gpt-6.1-sol", origin: rocketcode.ProviderOrigin{Provider: "openai", Model: "gpt-6.1-sol"}, server: "openai"},
+		{selector: "openai/gpt-6.1-sol", origin: rocketcode.ProviderOrigin{Provider: "openai", Model: "gpt-6.1-sol"}, server: "openai"},
+		{selector: "work/gpt-6.1-sol", origin: rocketcode.ProviderOrigin{Provider: "work", Model: "gpt-6.1-sol"}, server: "work"},
 		{selector: "anthropic/api/claude-sonnet-5-5", origin: rocketcode.ProviderOrigin{Provider: "anthropic", Model: "api/claude-sonnet-5-5"}, server: "work"},
 	}
 
@@ -83,17 +83,17 @@ func TestModelResolverUsesProviderSettings(t *testing.T) {
 	cfg.Providers["work"] = config.OpenAIConfig{AutocompactionThreshold: 1}
 	cfg.Providers["later"] = config.OpenAIConfig{}
 
-	_, origin, err := resolver.Resolve("gpt-5.5")
+	_, origin, err := resolver.Resolve("gpt-6.1-sol")
 	require.NoError(t, err)
 	assert.Equal(t, int64(150000), origin.CompactThreshold)
 	assert.Nil(t, origin.PromptCacheMarkersRelativePosition)
 
-	_, origin, err = resolver.Resolve("work/gpt-5.5")
+	_, origin, err = resolver.Resolve("work/gpt-6.1-sol")
 	require.NoError(t, err)
 	assert.Equal(t, int64(80000), origin.CompactThreshold)
 	assert.Equal(t, new(-2), origin.PromptCacheMarkersRelativePosition)
 
-	_, _, err = resolver.Resolve("later/gpt-5.5")
+	_, _, err = resolver.Resolve("later/gpt-6.1-sol")
 	require.EqualError(t, err, `unknown provider "later"`)
 }
 
@@ -108,7 +108,7 @@ func TestModelResolverRejectsUnknownProviderWithoutRequest(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	resolver := newModelResolver(&config.Config{OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: server.URL}}}, slog.New(slog.DiscardHandler))
-	for _, model := range []string{"missing/gpt-5.5", "/gpt-5.5", "work/", "work//gpt-5.5", "work/gpt-5.5/", " work/gpt-5.5", "work/ gpt-5.5", "work/gpt-5.5 ", "work/\tgpt-5.5"} {
+	for _, model := range []string{"missing/gpt-6.1-sol", "/gpt-6.1-sol", "work/", "work//gpt-6.1-sol", "work/gpt-6.1-sol/", " work/gpt-6.1-sol", "work/ gpt-6.1-sol", "work/gpt-6.1-sol ", "work/\tgpt-6.1-sol"} {
 		_, _, err := resolver.Resolve(model)
 		require.Error(t, err, model)
 	}

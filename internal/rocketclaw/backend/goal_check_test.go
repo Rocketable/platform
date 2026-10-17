@@ -18,7 +18,7 @@ func TestValidateGoalCheckScriptStartRejectsInvalidInput(t *testing.T) {
 	runtimeDir := config.DefaultRuntimeDir
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, runtimeDir, "agents"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, runtimeDir, "skills"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, runtimeDir, "agents", "main.md"), []byte("---\ndescription: main\nmodel: gpt-5.5\n---\nmain\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, runtimeDir, "agents", "main.md"), []byte("---\ndescription: main\nmodel: gpt-6.1-sol\n---\nmain\n"), 0o644))
 
 	for _, test := range []struct {
 		agent, script, message string

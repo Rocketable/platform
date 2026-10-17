@@ -159,7 +159,7 @@ Attachment originals use the top-level `attachments` setting: `{"driver":"filesy
 
 ## Model Providers And Credentials
 
-`openai` is the default provider; named entries live under `providers`. An unqualified model uses `openai`, `openai/gpt-5.5` explicitly selects the default, and `work/gpt-5.5` selects `providers.work`. Root and child agents resolve their models independently, with no implicit provider failover. Provider credentials are isolated in the selected workspace and runtime directory. Optional `autocompaction_threshold` on `openai` or a named provider overrides that provider's compaction token threshold; omit it to keep the 200000 default. Optional `prompt_cache_markers_relative_position` (negative) adds an Anthropic `cache_control` marker to that text piece of the last request message, counted from the end; set it only on providers that accept the marker, such as CLIProxyAPI in front of Claude. `-2` caches permission review transcripts.
+`openai` is the default provider; named entries live under `providers`. An unqualified model uses `openai`, `openai/gpt-6.1-sol` explicitly selects the default, and `work/gpt-6.1-sol` selects `providers.work`. Root and child agents resolve their models independently, with no implicit provider failover. Provider credentials are isolated in the selected workspace and runtime directory. Optional `autocompaction_threshold` on `openai` or a named provider overrides that provider's compaction token threshold; omit it to keep the 200000 default. Optional `prompt_cache_markers_relative_position` (negative) adds an Anthropic `cache_control` marker to that text piece of the last request message, counted from the end; set it only on providers that accept the marker, such as CLIProxyAPI in front of Claude. `-2` caches permission review transcripts.
 
 | Command | Purpose |
 | --- | --- |
@@ -225,7 +225,7 @@ Agents are top-level Markdown files in `agents/*.md`. The filename without `.md`
 ```yaml
 ---
 description: Short human-readable purpose
-model: gpt-5.5
+model: gpt-6.1-sol
 reasoningEffort: high
 verbosity: medium
 maxRecursion: 2

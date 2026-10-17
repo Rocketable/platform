@@ -14,7 +14,7 @@
     "git@github.com:Rocketable/overlay3.git"
   ],
   "models": {
-    "coding-high": "gpt-5.5",
+    "coding-high": "gpt-6.1-sol",
     "review-fast": "software-development-sol"
   },
   "logging": {

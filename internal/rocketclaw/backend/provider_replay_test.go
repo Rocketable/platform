@@ -34,10 +34,10 @@ func TestProviderForModel(t *testing.T) {
 	t.Parallel()
 
 	for model, want := range map[string]string{
-		"":           "openai",
-		"gpt-5.5":    "openai",
-		"openai/gpt": "openai",
-		"work/gpt":   "work",
+		"":            "openai",
+		"gpt-6.1-sol": "openai",
+		"openai/gpt":  "openai",
+		"work/gpt":    "work",
 	} {
 		assert.Equal(t, want, providerForModel(model), model)
 	}

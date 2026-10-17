@@ -1,6 +1,6 @@
 ---
 description: Primary AI personal assistant for rocketclaw conversations
-model: gpt-5.5
+model: gpt-6.1-sol
 reasoningEffort: high
 permission:
   bash:

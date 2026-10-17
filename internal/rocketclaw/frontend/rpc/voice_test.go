@@ -177,7 +177,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.Mkdir("agents", 0o700))
 
-	for name, model := range map[string]string{"main": "gpt-5.5", "nokey": "nokey/gpt-5.5", "chat": "chat/gpt-5.5", "stale": "stale/gpt-5.5"} {
+	for name, model := range map[string]string{"main": "gpt-6.1-sol", "nokey": "nokey/gpt-6.1-sol", "chat": "chat/gpt-6.1-sol", "stale": "stale/gpt-6.1-sol"} {
 		require.NoError(t, root.WriteFile(filepath.Join("agents", name+".md"), []byte("---\ndescription: Voice fixture\nmode: primary\nmodel: "+model+"\npermission: {}\n---\nReply plainly.\n"), 0o600))
 	}
 
@@ -316,7 +316,7 @@ func (p *voicePeer) all(t *testing.T) []string {
 }
 
 func voiceModel(id, item string) string {
-	return `{"id":"` + id + `","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[` + item + `]}`
+	return `{"id":"` + id + `","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[` + item + `]}`
 }
 
 func voiceModelText(id, text string) string {

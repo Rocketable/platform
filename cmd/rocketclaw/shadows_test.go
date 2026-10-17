@@ -17,7 +17,7 @@ func TestMCPAgentIndexKeepsShadowsOutOfSelectableAgents(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll("agents/parent", 0o700))
 	for _, name := range []string{"parent.md", "parent/a.md", "parent/b.md"} {
-		require.NoError(t, root.WriteFile(filepath.Join("agents", name), []byte("---\nmodel: gpt-5.5\n---\nAnswer the prompt."), 0o600))
+		require.NoError(t, root.WriteFile(filepath.Join("agents", name), []byte("---\nmodel: gpt-6.1-sol\n---\nAnswer the prompt."), 0o600))
 	}
 
 	cfg := &config.Config{Workspace: root.Name()}

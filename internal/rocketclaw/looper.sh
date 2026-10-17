@@ -12,7 +12,7 @@ while true; do
 
 	[ "$make_test_exit" -ne 0 ] || break
 
-	opencode run --model openai/gpt-5.5 --variant xhigh --thinking "$(printf 'make test is failing.
+	opencode run --model openai/gpt-6.1-sol --variant xhigh --thinking "$(printf 'make test is failing.
 
 Failure output:
 %s

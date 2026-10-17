@@ -1,6 +1,6 @@
 ---
 description: Opt-in conversation triage with durable session tags
-model: gpt-5.5
+model: gpt-6.1-sol
 permission:
   rocketclaw:
     rocketclaw_set_tag:

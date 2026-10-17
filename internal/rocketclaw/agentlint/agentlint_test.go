@@ -353,7 +353,7 @@ func TestLintResolvesModelTemplate(t *testing.T) {
 func writeAgent(t *testing.T, runtimeRoot, name, content string, models ...string) {
 	t.Helper()
 
-	model := "gpt-5.5"
+	model := "gpt-6.1-sol"
 	if len(models) > 0 {
 		model = models[0]
 	}

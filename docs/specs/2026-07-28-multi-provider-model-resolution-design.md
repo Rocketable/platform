@@ -34,17 +34,17 @@ type ModelResolver interface {
 Examples:
 
 ```text
-Resolve("gpt-5.5")
+Resolve("gpt-6.1-sol")
     client: default OpenAI client
-    origin: {Provider: "openai", Model: "gpt-5.5"}
+    origin: {Provider: "openai", Model: "gpt-6.1-sol"}
 
-Resolve("openai/gpt-5.5")
+Resolve("openai/gpt-6.1-sol")
     client: default OpenAI client
-    origin: {Provider: "openai", Model: "gpt-5.5"}
+    origin: {Provider: "openai", Model: "gpt-6.1-sol"}
 
-Resolve("work/gpt-5.5")
+Resolve("work/gpt-6.1-sol")
     client: work client
-    origin: {Provider: "work", Model: "gpt-5.5"}
+    origin: {Provider: "work", Model: "gpt-6.1-sol"}
 ```
 
 RocketClaw implements this interface. It parses the model name, selects the provider configuration, and returns the configured SDK client. An unknown provider is an error. It never falls back to another provider.
@@ -88,9 +88,9 @@ Additional providers use a top-level `providers` object and the same fields:
 Model names select providers as follows:
 
 ```text
-gpt-5.5         default `openai` provider
-openai/gpt-5.5  explicit default provider
-work/gpt-5.5    named `work` provider
+gpt-6.1-sol         default `openai` provider
+openai/gpt-6.1-sol  explicit default provider
+work/gpt-6.1-sol    named `work` provider
 ```
 
 Provider names are non-empty trimmed names without `/`; `openai` is reserved for the top-level default. Configuration validation reports the provider and invalid field.
@@ -102,8 +102,8 @@ RocketClaw uses the existing `SessionEntry.Model` value to identify which provid
 Examples:
 
 ```json
-{"model":"gpt-5.5","replay_input":[...]}
-{"model":"work/gpt-5.5","replay_input":[...]}
+{"model":"gpt-6.1-sol","replay_input":[...]}
+{"model":"work/gpt-6.1-sol","replay_input":[...]}
 ```
 
 An unqualified model, `openai/...`, an empty model, or a missing model means the default `openai` provider. A `work/...` model means provider `work`.
@@ -134,8 +134,8 @@ RocketCode does not compare providers and does not know why an entry was convert
 RocketCode saves the resolved model in the existing `SessionEntry.Model` field:
 
 ```text
-default provider: gpt-5.5
-named provider:   work/gpt-5.5
+default provider: gpt-6.1-sol
+named provider:   work/gpt-6.1-sol
 ```
 
 Active-turn checkpoints use the corresponding existing display-model field. RocketClaw can therefore apply the same provider-name rule during restart recovery without another stored field.
