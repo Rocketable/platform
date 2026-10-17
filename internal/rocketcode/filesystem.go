@@ -784,9 +784,6 @@ func (sfs *sandboxedFileSystem) Glob(ctx context.Context, pattern, path string) 
 	}
 
 	matches := strings.Split(outputText, "\n")
-	if len(matches) == 0 {
-		return "No files found"
-	}
 
 	results := make([]globMatch, 0, len(matches))
 	for _, match := range matches {
