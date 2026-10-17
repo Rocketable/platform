@@ -108,6 +108,10 @@ Host tools inside the script return full strings to the script. Only the string 
 
 A sandbox capability the Code Mode script can call directly, as opposed to a model-facing tool such as Execute. Host tools include filesystem, shell, fetch, and embedder-custom tools.
 
+### Script Call Record
+
+A small record of one host tool or MCP call a Code Mode script made. While its RocketCode Turn runs, each record has its own database row, written when the call starts and when it finishes, so the turn's other progress saves never rewrite it; the finished turn keeps its records in its trace. It holds the call's name, its arguments clipped to 4 KiB, a status, a one-line summary of the output, and the approver's outcome and reason when the approver checked the call. It never holds the output. The Web lists these records under the script's Execute call. An Execute call keeps at most 200, and none are added after the turn ends.
+
 ### Spill
 
 A turn-scoped file that holds the full Execute result when that result is too large to send to the model.

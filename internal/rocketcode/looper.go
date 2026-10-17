@@ -701,7 +701,15 @@ func (l *looper) Loop(
 
 		observations.mu.Lock()
 		observations.closed = true
-		turn.OutputTrace = append(slices.Clone(observations.trace), turn.OutputTrace...)
+
+		trace := slices.Clone(observations.trace)
+		for i := range observations.calls {
+			// Records contain only strings; JSON encoding cannot fail.
+			raw, _ := json.Marshal(&observations.calls[i])
+			trace = append(trace, raw)
+		}
+
+		turn.OutputTrace = append(trace, turn.OutputTrace...)
 
 		errSave := observations.err
 		if errSave == nil {
@@ -984,6 +992,14 @@ func (l *looper) openTurn(ctx context.Context, input *PromptInput) (step turnSte
 
 		return step, turnItems, nil, errInput, nil
 	}
+
+	// A resumed turn's Code Mode records were saved on their own, not in its step.
+	calls, err := l.Journal.CodeModeCalls(context.WithoutCancel(ctx), input.TurnID)
+	if err != nil {
+		return step, nil, nil, nil, fmt.Errorf("load code mode calls: %w", err)
+	}
+
+	l.observations.calls = CodeModeCallsFromTrace(calls)
 
 	if err := step.Record.forProvider(providerForModel(l.DisplayModel)); err != nil {
 		return step, nil, nil, nil, fmt.Errorf("convert journaled turn for provider: %w", err)
@@ -1966,9 +1982,7 @@ func (l *looper) dispatchToolCalls(
 			decision.message = toolCallFailureResult(item.Name, fmt.Errorf("check permission: %w", err)).Output
 			errDenied = err
 		} else if !decision.denied && decision.review != nil {
-			decision.review.ReviewContext = slices.Clone(l.permissionReviewInput)
-			decision.review.Review = ReviewKey(l.observations.turnID, item.CallID)
-			reviewDecision := l.PermissionReviewer.reviewPermission(ctx, decision.review, output)
+			reviewDecision := l.reviewToolCall(ctx, item.Name, item.CallID, decision.review, output)
 			decision.denied = reviewDecision.Outcome != permissionReviewOutcomeAllow
 			decision.message = formatPermissionReviewDenied(reviewDecision)
 			errDenied = errors.New("automatic permission review denied tool call")
@@ -2102,6 +2116,21 @@ func (l *looper) dispatchToolCalls(
 	}
 
 	return outputs, true, nil
+}
+
+// reviewToolCall runs the approver on a model's tool call. An Execute call's decision is its
+// whole-script review, recorded under the call. A failed save is sticky, so the call's next
+// progress write reports it.
+func (l *looper) reviewToolCall(ctx context.Context, name, callID string, request *permissionReviewRequest, output chan<- ChatResponse) permissionReviewDecision {
+	request.ReviewContext = slices.Clone(l.permissionReviewInput)
+	request.Review = ReviewKey(l.observations.turnID, callID)
+
+	decision := l.PermissionReviewer.reviewPermission(ctx, request, output)
+	if name == executeToolName {
+		_ = l.observations.recordCodeModeCall(ctx, &CodeModeCall{Type: codeModeReviewTraceType, ParentCallID: callID, Key: l.observations.turnID + "/call/" + callID, Outcome: decision.Outcome, Reason: decision.Rationale}, false)
+	}
+
+	return decision
 }
 
 // replayCall restores a journaled call: a recorded output is reused, and a started, unfinished

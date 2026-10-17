@@ -179,7 +179,7 @@ SELECT t.child_conversation_id, t.parent_source_conversation_id, t.parent_turn_i
         CASE WHEN t.child_turn_id <> '' AND (a.id IS NULL OR a.phase <> 'running') THEN 'complete' ELSE '' END),
     md5(COALESCE((SELECT string_agg(e.entry_json::text, '' ORDER BY e.id) FROM session_entries e
         WHERE e.conversation_id = t.child_conversation_id AND e.entry_json->>'turn_id' = t.child_turn_id), '')
-        || COALESCE(a.output_trace_json::text, '') || COALESCE(s.value::text, ''))
+        || COALESCE(turn_trace(a.id, a.output_trace_json)::text, '') || COALESCE(s.value::text, ''))
 FROM shadow_turns t JOIN bindings b ON b.child_conversation_id = t.child_conversation_id
 LEFT JOIN active_turns a ON a.conversation_id = t.child_conversation_id AND a.id = t.child_turn_id
 LEFT JOIN turn_steps s ON s.conversation_id = t.child_conversation_id AND s.key = t.child_turn_id

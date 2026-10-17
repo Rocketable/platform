@@ -756,6 +756,17 @@ func sessionsWriteTool(b *Bridge, msg *protocol.InboundMessage, agentName, self 
 		}}
 }
 
+// storedEventLine renders a stored item that is not a replay message: a Code Mode record shows the
+// call an Execute script made, or the approver's decision on the whole script; anything else is a
+// placeholder naming its kind.
+func storedEventLine(kind string, raw json.RawMessage) (role, text string) {
+	if calls := rocketcode.CodeModeCallsFromTrace([]json.RawMessage{raw}); len(calls) > 0 {
+		return "code_mode", calls[0].String()
+	}
+
+	return "event", "[" + kind + ": stored event not rendered]"
+}
+
 func getSessionTool(service *SessionService) rocketcode.Tool {
 	return rocketcode.Tool{
 		Name: sessionsGetToolName, Description: fmt.Sprintf("Read the newest limit (1 to %d) stored entries of a durable conversation older than before_entry_id (0 for the newest) as timestamp, role and content TSV in stored entry order, including messages, readable reasoning and tool events before compaction. When older entries exist, the last line is [next_before_entry_id=N]; pass N to read the previous page. Store-wide access includes private MCP sessions. One snapshot, no polling or read-state changes. Use rocketclaw_sessions_current_id for your owning conversation or rocketclaw_sessions_list to find another ID.", maxSessionEntries),
@@ -818,7 +829,9 @@ WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entrie
 						switch kind {
 						case "", "message", "function_call", "function_call_output", "reasoning", "compaction":
 						default:
-							fmt.Fprintf(&output, "%s\tevent\t[%s: stored event not rendered]\n", timestamp, escape.Replace(kind))
+							role, text := storedEventLine(kind, raw)
+							fmt.Fprintf(&output, "%s\t%s\t%s\n", timestamp, role, escape.Replace(text))
+
 							continue
 						}
 

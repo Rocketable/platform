@@ -582,6 +582,40 @@ func (j conversationJournal) SaveTrace(ctx context.Context, turnID string, trace
 	return errExec
 }
 
+// SaveCodeModeCall records one Code Mode record on its own row under the request's row, which
+// History adds to the row's trace (turn_trace); like SaveTrace, it cannot alter a stopped or failed
+// turn. Setting output_trace_json to itself fires the row's change notifications as a trace save
+// does, while Postgres reuses a trace large enough to be stored apart instead of writing it again.
+func (j conversationJournal) SaveCodeModeCall(ctx context.Context, turnID, key string, record json.RawMessage) error {
+	rowID, _, _ := strings.Cut(turnID, "/")
+
+	_, err := execState(ctx, j.store.db, "save code mode call", `WITH turn AS (
+    SELECT id FROM active_turns WHERE id = $1 AND terminal = ''
+), saved AS (
+    INSERT INTO code_mode_calls (turn_id, key, record) SELECT id, $2, $3 FROM turn
+    ON CONFLICT (turn_id, key) DO UPDATE SET record = excluded.record RETURNING turn_id
+)
+UPDATE active_turns a SET output_trace_json = a.output_trace_json, updated_at_unix_ns = $4 FROM saved WHERE a.id = saved.turn_id`,
+		rowID, key, string(removeSessionEntryNUL(record)), timeUnixNano(time.Now()))
+
+	return err
+}
+
+// CodeModeCalls returns the turn's Code Mode records in the order first saved. Turn IDs that share
+// the request's row (SaveTrace) keep their records apart: a record's key is a call key of its turn.
+func (j conversationJournal) CodeModeCalls(ctx context.Context, turnID string) ([]json.RawMessage, error) {
+	rowID, _, _ := strings.Cut(turnID, "/")
+
+	records, err := queryStrings(ctx, j.store.db, `SELECT record FROM code_mode_calls WHERE turn_id = $1 AND starts_with(key, $2 || '/call/') ORDER BY id`, "code mode calls", rowID, turnID)
+
+	saved := make([]json.RawMessage, 0, len(records))
+	for _, record := range records {
+		saved = append(saved, json.RawMessage(record))
+	}
+
+	return saved, err
+}
+
 // startTurnDB records a taken request as its conversation's running queue head.
 func startTurnDB(ctx context.Context, db stateStoreDB, turnID, conversationID string, inbound *protocol.InboundMessage) error {
 	data, _ := json.Marshal(inbound)
@@ -798,7 +832,7 @@ func (f *turnFinish) preserveStoppedInput(ctx context.Context, db stateStoreDB, 
 		return nil
 	}
 
-	entries, err := queryRows(ctx, db, `SELECT s.value::jsonb->'record' || jsonb_build_object('output_trace', a.output_trace_json::jsonb)
+	entries, err := queryRows(ctx, db, `SELECT s.value::jsonb->'record' || jsonb_build_object('output_trace', turn_trace(a.id, a.output_trace_json))
 FROM turn_steps s JOIN active_turns a ON a.conversation_id = s.conversation_id AND a.id = s.key
 LEFT JOIN shadow_turns t ON t.child_conversation_id = a.conversation_id AND t.child_turn_id = a.id
 WHERE s.conversation_id = $1 AND s.key = $2 AND COALESCE(s.value->'record'->>'response_id', '') = ''

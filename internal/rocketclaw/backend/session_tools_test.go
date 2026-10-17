@@ -364,6 +364,8 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 			json.RawMessage(`{"type":"reasoning","summary":[{"type":"summary_text","text":"thinking"}],"content":[{"type":"reasoning_text","text":"plaintext"}],"encrypted_content":"sealed"}`),
 			json.RawMessage(`{"type":"web_search_call","id":"search","status":"completed","action":{"type":"search","query":"query"}}`),
 			json.RawMessage(`{"type":"unknown_provider_item","encrypted_content":"sealed"}`),
+			json.RawMessage(`{"type":"rocketcode_code_mode_review","parent_call_id":"exec","outcome":"allow","reason":"The script only reads."}`),
+			json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"exec","key":"t/call/exec/host/0","name":"bash","arguments":"{\"command\":\"ls\"}","status":"ok","summary":"go.mod","outcome":"allow","reason":"Listing is read-only."}`),
 		},
 	}
 	// A synced producer schedule stores untyped bookkeeping, not a replay message, in its trace.
@@ -413,7 +415,7 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 		require.NoError(t, err)
 
 		at := entry.Timestamp.Format(time.RFC3339Nano)
-		require.Equal(t, "timestamp\trole\tcontent\n"+at+"\ttool_call\tRead [call] {}\n"+at+"\ttool_result\t[call] line\\nΩ\\t\\\\\\r\n"+at+"\ttool_result\t[parts] text\\n[non-text tool result omitted]\n"+at+"\tuser\t\n"+at+"\treasoning\tthinking\\nplaintext\n"+at+"\tevent\t[web_search_call: stored event not rendered]\n"+at+"\tevent\t[unknown_provider_item: stored event not rendered]\n"+at+"\tevent\t[producer_schedule: stored event not rendered]\n", result.Output)
+		require.Equal(t, "timestamp\trole\tcontent\n"+at+"\ttool_call\tRead [call] {}\n"+at+"\ttool_result\t[call] line\\nΩ\\t\\\\\\r\n"+at+"\ttool_result\t[parts] text\\n[non-text tool result omitted]\n"+at+"\tuser\t\n"+at+"\treasoning\tthinking\\nplaintext\n"+at+"\tevent\t[web_search_call: stored event not rendered]\n"+at+"\tevent\t[unknown_provider_item: stored event not rendered]\n"+at+"\tcode_mode\t[exec] (approver allow: The script only reads.)\n"+at+"\tcode_mode\t[exec] bash {\"command\":\"ls\"} -> ok: go.mod (approver allow: Listing is read-only.)\n"+at+"\tevent\t[producer_schedule: stored event not rendered]\n", result.Output)
 	}
 
 	require.Equal(t, before, snapshot())
@@ -677,10 +679,13 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			require.Equal(t, tc.auto, approvals > 0)
 			require.Equal(t, tc.auto, listApprovals > 0)
 
-			// Calls made inside execute are never saved with the turn.
+			// Calls made inside execute are saved with the turn only as records with a one-line summary.
 			for _, entry := range store.entries {
 				for _, raw := range entry.OutputTrace {
-					require.NotContains(t, string(raw), `"parent_call_id"`)
+					if strings.Contains(string(raw), `"parent_call_id"`) {
+						require.Contains(t, string(raw), `"type":"rocketcode_code_mode_`)
+						require.NotContains(t, string(raw), `"output"`)
+					}
 				}
 			}
 		})

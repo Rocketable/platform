@@ -19,7 +19,7 @@ const (
 	backgroundTaskResult    = "The subagent is working in the background (job ID: %s). You will be notified automatically when it finishes: its result arrives as a note.\nDO NOT sleep, poll for progress, or duplicate this subagent's work; avoid working with the same files or topics it is using.\nWork on non-overlapping tasks, or briefly tell the user what you launched and end your response."
 	backgroundExecuteParam  = "Run the script in the background and return immediately (useful for long builds and test runs). You will be notified when it completes. DO NOT poll for completion. false waits for the result. An oversized background result's result_id lasts 7 days, and load_execute_result can load it from later turns; a foreground result_id still expires at turn end."
 	backgroundTaskParam     = "Run the subagent in the background and return immediately. You will be notified when it completes. DO NOT sleep, poll, or proactively check on its progress. false waits for the result."
-	backgroundLabelParam    = "A short 3-5 word label for the script, displayed to the user."
+	executeDescriptionParam = "A short 3-5 word label for the script, displayed to the user."
 	backgroundContinueParam = "Continue a specific previous subagent by passing its continue ID. An empty string starts a new subagent."
 	backgroundModeParam     = "How the prompt reaches the subagent if it is still running: steer adds it to the running turn at its next step, enqueue runs it as a new turn after the work ahead of it, and stop stops the running turn and runs it next. A subagent that is not running runs it as its next turn in every mode. Ignored when starting a new subagent."
 	continueSteered         = "Steered: the prompt joins the subagent's running turn at its next step. That turn's result reaches you as it would have without the steer: as its job's note, as the result of the task call running it, or, for a turn the subagent started itself, only in its history; continue the subagent again to get its answer. DO NOT sleep or poll for it."
@@ -237,7 +237,6 @@ func (f *toolFactory) backgroundTool(agent *Agent, kind BackgroundKind, tool *lo
 
 	if kind == BackgroundKindExecute {
 		properties["background"] = map[string]any{"type": "boolean", "description": backgroundExecuteParam}
-		properties["description"] = map[string]any{"type": "string", "description": backgroundLabelParam}
 	} else {
 		properties["background"] = map[string]any{"type": "boolean", "description": backgroundTaskParam}
 		properties["continue"] = map[string]any{"type": "object", "additionalProperties": false, "required": []string{"session_id", "mode"}, "properties": map[string]any{

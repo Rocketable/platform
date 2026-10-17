@@ -34,7 +34,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace";
 import { cn } from "@/lib/utils";
-import type { Agent, Attachment as AttachmentMeta, BackgroundJob, ConfigView, CronJob, QueueItem, Session, TranscriptEvent, VoiceSettings } from "@/types";
+import type { Agent, Attachment as AttachmentMeta, BackgroundJob, CodeModeCall, ConfigView, CronJob, QueueItem, Session, TranscriptEvent, VoiceSettings } from "@/types";
 import { runPreload } from "@/preload";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
 import {
@@ -1875,7 +1875,7 @@ function PageTitle({ children }: { children: ReactNode }) {
   </header>;
 }
 
-type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin" | "header" | "principal" | "state" | "parentId" | "completionNotes" | "delegation" | "review">;
+type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin" | "header" | "principal" | "state" | "parentId" | "completionNotes" | "delegation" | "review" | "codeModeCalls" | "scriptReason">;
 type OriginFilter = { sandboxed: boolean; canonical: boolean };
 
 function lineId(role: Line["role"], text: string, seen: Map<string, number>) {
@@ -1957,7 +1957,7 @@ function comparisonRows(parents: Turn[], children: Turn[], binding: ShadowBindin
 function toolTitle(line: Line) {
   const name = line.toolName;
   if (!name) return "Tool result";
-  let input: { name?: string; code?: string; command?: string; path?: string };
+  let input: { name?: string; code?: string; command?: string; path?: string; description?: string };
   try {
     input = JSON.parse(line.text.slice(name.length + 1));
   } catch {
@@ -1965,6 +1965,7 @@ function toolTitle(line: Line) {
   }
   if (!input || typeof input !== "object") return name;
   if (name === "skill" && typeof input.name === "string") return `Skill · ${input.name}`;
+  if (name === "execute" && typeof input.description === "string" && input.description.trim() !== "") return input.description;
   if (name === "execute" && typeof input.code === "string") {
     const operation = input.code.match(/\b(bash|read|glob|grep)\(\s*(?:command|filePath|pattern)\s*=\s*r?("""|'''|"|')([\s\S]*?)\2/);
     if (operation) {
@@ -2125,19 +2126,89 @@ function ToolLinks({ line, title }: { line: Line; title: string }) {
   </Link>)}</Trace> : null;
 }
 
+// How a call a script made reads in its row. Its command is as written: bash's script, the path or pattern
+// read, glob and grep take, or its arguments with real line breaks.
+function codeModeCallRow(call: CodeModeCall, background: boolean, running: boolean) {
+  let command = call.arguments ?? "";
+  try {
+    const input = JSON.parse(command);
+    const text = call.name === "bash" ? input.command : ["read", "glob", "grep"].includes(call.name) ? input.filePath ?? input.pattern : undefined;
+    command = typeof text === "string" ? text : JSON.stringify(input, null, 2);
+  } catch {
+    // Clipped arguments are no longer JSON and show as sent.
+  }
+  const denied = call.status === "denied" || call.outcome === "deny";
+  const status: TraceStatus | undefined = denied || call.status === "error" ? "error" : call.status === "running" && running ? "running" : undefined;
+  return { command, status, title: `${call.name} · ${command.replace(/\s+/g, " ").slice(0, 120)}`,
+    summary: call.status === "running" ? background ? "still running when moved to the background" : "running" : call.summary,
+    description: denied ? "denied" : call.status === "error" ? "failed" : call.outcome === "allow" ? "allowed" : undefined };
+}
+
+// An Execute block follows OpenCode's Execute and ExecuteCallView (packages/tui/src/routes/session/index.tsx):
+// a closed row per call its script made, marked when it failed, with its command on expand; then its result.
+function CodeModeBlock({ line, status, rationale }: { line: Line; status?: TraceStatus; rationale?: string }) {
+  const calls = line.codeModeCalls ?? [];
+  // A review that is neither the script reason nor a row's reason, such as one whose action cannot be read
+  // back or one a background script saved after its turn ended, shows in the footer.
+  const shown = [line.scriptReason, ...calls.map((call) => call.reason)];
+  const unshown = rationale?.split("\n").filter((reason) => reason && !shown.some((text) => text?.includes(reason))).join("\n");
+  const seen = new Map<string, number>();
+  let result = line.toolParts?.map((part) => part.text).join("\n\n");
+  try {
+    // A script's result is JSON: a returned string or list of strings shows as its text.
+    const value = JSON.parse(result ?? "");
+    result = typeof value === "string" ? value : [value].flat().every((item) => typeof item === "string") ? [value].flat().join("\n\n") : JSON.stringify(value, null, 2);
+  } catch {
+    // Plain text results show as sent.
+  }
+  return <>
+    {line.scriptReason ? <p className="my-2 whitespace-pre-wrap wrap-anywhere text-muted-foreground">{line.scriptReason}</p> : null}
+    {calls.length ? <Trace className="my-2">{calls.map((call) => {
+      const row = codeModeCallRow(call, line.state === "background", status === "running");
+      return <TraceRow key={lineId("tool", `${call.name} ${call.arguments}`, seen)} open={false} icon={toolIcons[call.name] ?? <Wrench />} label={row.title} status={row.status} description={row.description}
+        title={<><span className="block truncate font-mono">{row.title}</span>{row.summary ? <span className="block truncate text-xs">{row.summary}</span> : null}</>}>
+        <CodeBlock size="sm" label={call.name} text={row.command} language={call.name === "bash" ? "bash" : ""} footer={call.outcome ? <footer data-slot="permission-review-rationale" className="px-2.5 pb-2.5 whitespace-pre-wrap wrap-anywhere text-muted-foreground">{call.outcome === "deny" ? "Denied" : "Allowed"}: {call.reason}</footer> : null} />
+      </TraceRow>;
+    })}</Trace> : null}
+    {calls.length === 200 ? <p className="text-muted-foreground">Showing the first 200 calls; the script may have made more.</p> : null}
+    {line.state === "background" ? <p className="text-muted-foreground">Moved to the background. Its result arrives in a Completion Note.</p> : null}
+    {result ? <CodeBlock size="sm" label="Result" text={result} /> : null}
+    <CodeModeScript text={line.text.slice("execute ".length)} />
+    {unshown ? <footer data-slot="permission-review-rationale" className="my-2 whitespace-pre-wrap wrap-anywhere text-muted-foreground">{unshown}</footer> : null}
+  </>;
+}
+
+// An Execute call's script shows at Everything, behind a toggle at other levels, and not at Compact.
+function CodeModeScript({ text }: { text: string }) {
+  const level = timelineLevel(useTimelineDetail())?.id;
+  const [shown, setShown] = useState(false);
+  let code = text;
+  try {
+    code = JSON.parse(text).code ?? text;
+  } catch {
+    // Unparsable arguments show as sent.
+  }
+  if (level === "compact") return null;
+  return <>
+    {level === "everything" ? null : <Button type="button" variant="ghost" size="xs" aria-expanded={shown} onClick={() => setShown(!shown)}>{shown ? "Hide script" : "Show script"}</Button>}
+    {level === "everything" || shown ? <CodeBlock size="sm" label="Script" text={code} language="python" /> : null}
+  </>;
+}
+
 function ToolLine({ line, conversationId, hasSandboxed, open }: { line: Line; conversationId: string; hasSandboxed: boolean; open?: boolean }) {
   const title = toolTitle(line);
   const rationale = use(Delegations)?.reviewRationales?.[line.review ?? ""];
+  const status = toolStatus(line, use(TurnRunning));
   const parts = [line, ...(line.toolParts ?? [])];
   const text = [
     line.toolName ? `Arguments\n${line.text.slice(line.toolName.length + 1)}` : `Result\n${line.text}`,
     ...parts.slice(1).map((part) => `${part.role === "developer" ? "Skill instructions" : "Result"}\n${part.text}`),
   ].join("\n\n");
   return (
-    <TraceRow open={open} data-tool-call-id={line.toolCallId} icon={toolIcons[line.toolName ?? ""] ?? <Wrench />} title={<span className="font-mono">{title}</span>} label={title} status={toolStatus(line, use(TurnRunning))} description={line.state}>
+    <TraceRow open={open} data-tool-call-id={line.toolCallId} icon={toolIcons[line.toolName ?? ""] ?? <Wrench />} title={<span className="font-mono">{title}</span>} label={title} status={status} description={line.state}>
       <ToolLinks line={line} title={title} />
       {line.state ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
-      <CodeBlock size="sm" label={title} text={text} footer={rationale ? <footer data-slot="permission-review-rationale" className="px-2.5 pb-2.5 whitespace-pre-wrap wrap-anywhere text-muted-foreground">{rationale}</footer> : null} />
+      {line.toolName === "execute" ? <CodeModeBlock line={line} status={status} rationale={rationale} /> : <CodeBlock size="sm" label={title} text={text} footer={rationale ? <footer data-slot="permission-review-rationale" className="px-2.5 pb-2.5 whitespace-pre-wrap wrap-anywhere text-muted-foreground">{rationale}</footer> : null} />}
       {parts.map((part) => (
         <div key={part.id}>
           <MessageAttachments attachments={part.attachments} conversationId={conversationId} />

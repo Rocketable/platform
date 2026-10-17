@@ -1,9 +1,11 @@
 package rocketcode
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"time"
@@ -16,52 +18,68 @@ const (
 	permissionReviewTimeout = 90 * time.Second
 )
 
-// PermissionReviewRationale reads only the completed final response of a saved review.
-func (e *SessionEntry) PermissionReviewRationale() string {
-	final := make(map[string]bool)
+// PermissionReview is the decision a saved permission review reached.
+type PermissionReview struct {
+	Outcome   permissionReviewOutcome
+	Rationale string
+}
 
-	progresses := PublicProgressFromTrace(e.OutputTrace)
-	for i := range progresses {
-		progress := &progresses[i]
-		if e.ResponseID != "" && progress.Kind == PublicProgressText && progress.State == PublicProgressCompleted && progress.ParentID == e.TurnID+"/"+e.ResponseID {
-			if index := strings.LastIndexByte(progress.ID, '/'); index >= 0 {
-				final[progress.ID[:index]] = true
-			}
+// PermissionReviewDecision returns the outcome and rationale of a saved
+// review's last final answer that is an allow or deny decision, or the zero
+// value. It never decodes the review prompt; CodeModeCall reads the action.
+func (e *SessionEntry) PermissionReviewDecision() PermissionReview {
+	for _, raw := range slices.Backward(e.ReplayInput) {
+		var message struct{ Role, Phase, Content string }
+		// Prompts carry content parts, which leave Content empty; Unmarshal still fills Role.
+		_ = json.Unmarshal(raw, &message)
+
+		var decision permissionReviewDecision
+		if message.Role == string(responses.EasyInputMessageRoleAssistant) && message.Phase != string(responses.EasyInputMessagePhaseCommentary) &&
+			json.Unmarshal([]byte(message.Content), &decision) == nil && (decision.Outcome == permissionReviewOutcomeAllow || decision.Outcome == permissionReviewOutcomeDeny) {
+			return PermissionReview{Outcome: decision.Outcome, Rationale: decision.Rationale}
 		}
 	}
 
-	if len(final) == 0 {
-		return ""
-	}
+	return PermissionReview{}
+}
 
-	items, err := ReplayInputToParams(e.ReplayInput)
-	if err != nil {
-		return ""
-	}
-
-	var text string
-
-	for i := range items {
-		message := items[i].OfMessage
-		if message == nil || message.Role != responses.EasyInputMessageRoleAssistant || message.Phase == responses.EasyInputMessagePhaseCommentary {
+// CodeModeCall returns the review as an Execute script's calls are recorded: the
+// whole-script decision with an empty Name, or a call the script made, with clipped
+// arguments. The action comes from the planned action that ends the review's prompt,
+// as written by permissionReviewPrompt; false means the prompt has none. Only the
+// prompt's tail is decoded: the transcript before it can be hundreds of kilobytes.
+func (r PermissionReview) CodeModeCall(e *SessionEntry) (CodeModeCall, bool) {
+	for _, raw := range e.ReplayInput {
+		// Only the delimiter's own newline is a JSON-escaped newline; the prompt's transcript
+		// lines and the action itself are JSON, which escapes the newlines they carry once more.
+		index := bytes.LastIndex(raw, []byte(`Planned action JSON:\n`))
+		if index < 0 {
 			continue
 		}
 
-		id, _ := message.ExtraFields()["id"].(string)
-		if final[id] {
-			text = message.Content.OfString.Value
-			if !message.Content.OfString.Valid() {
-				text = permissionReviewContentText(message.Content.OfInputItemContentList)
-			}
+		var text string
+
+		_ = json.NewDecoder(io.MultiReader(strings.NewReader(`"`), bytes.NewReader(raw[index:]))).Decode(&text)
+		action, _, found := strings.Cut(strings.TrimPrefix(text, "Planned action JSON:\n"), "\n>>> APPROVAL REQUEST END")
+
+		var request permissionReviewRequest
+		if !found || json.Unmarshal([]byte(action), &request) != nil || request.ToolName == "" {
+			return CodeModeCall{}, false
 		}
+
+		call := CodeModeCall{Name: request.ToolName, Arguments: clipCodeModeArguments(request.RawArguments), Outcome: r.Outcome, Reason: r.Rationale}
+
+		switch {
+		case request.ToolName == executeToolName && request.Permission == "rocketclaw":
+			call.Name, call.Arguments = "", ""
+		case request.ToolName == executeToolName && request.Permission == mcpPermissionBucket:
+			call.Name = request.Subjects[0] // An MCP call has one subject, its server.tool.
+		}
+
+		return call, true
 	}
 
-	var decision permissionReviewDecision
-	if json.Unmarshal([]byte(text), &decision) != nil || decision.Outcome != permissionReviewOutcomeAllow && decision.Outcome != permissionReviewOutcomeDeny {
-		return ""
-	}
-
-	return decision.Rationale
+	return CodeModeCall{}, false
 }
 
 func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionReviewRequest, parentOutput chan<- ChatResponse) permissionReviewDecision {

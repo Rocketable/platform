@@ -12,6 +12,11 @@ type Journal interface {
 	Save(ctx context.Context, key string, value json.RawMessage) error
 	// SaveTrace persists display-only public progress for the root turn.
 	SaveTrace(ctx context.Context, turnID string, trace []json.RawMessage) error
+	// SaveCodeModeCall persists one Code Mode record of the root turn under its key, apart from the
+	// trace, so a record is written when its call starts and finishes and never with other progress.
+	SaveCodeModeCall(ctx context.Context, turnID, key string, record json.RawMessage) error
+	// CodeModeCalls returns the root turn's saved Code Mode records in the order they were first saved.
+	CodeModeCalls(ctx context.Context, turnID string) ([]json.RawMessage, error)
 }
 
 // InertJournal records nothing and never finds a recorded step.
@@ -30,6 +35,16 @@ func (InertJournal) Save(context.Context, string, json.RawMessage) error {
 // SaveTrace discards display-only progress.
 func (InertJournal) SaveTrace(context.Context, string, []json.RawMessage) error {
 	return nil
+}
+
+// SaveCodeModeCall discards a Code Mode record.
+func (InertJournal) SaveCodeModeCall(context.Context, string, string, json.RawMessage) error {
+	return nil
+}
+
+// CodeModeCalls never finds a Code Mode record.
+func (InertJournal) CodeModeCalls(context.Context, string) ([]json.RawMessage, error) {
+	return nil, nil
 }
 
 // TracelessJournal records steps in Parent but drops traces, so nested work
@@ -59,6 +74,16 @@ func (j TracelessJournal) Save(ctx context.Context, key string, value json.RawMe
 // SaveTrace drops display-only progress.
 func (TracelessJournal) SaveTrace(context.Context, string, []json.RawMessage) error {
 	return nil
+}
+
+// SaveCodeModeCall drops a Code Mode record, which is display-only like the trace.
+func (TracelessJournal) SaveCodeModeCall(context.Context, string, string, json.RawMessage) error {
+	return nil
+}
+
+// CodeModeCalls finds no Code Mode record, as SaveCodeModeCall keeps none.
+func (TracelessJournal) CodeModeCalls(context.Context, string) ([]json.RawMessage, error) {
+	return nil, nil
 }
 
 // turnStep is a turn's recorded items under its turn ID. Response holds the latest

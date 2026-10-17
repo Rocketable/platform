@@ -20,11 +20,17 @@ var _ Journal = &mockJournal{}
 //
 //		// make and configure a mocked Journal
 //		mockedJournal := &mockJournal{
+//			CodeModeCallsFunc: func(ctx context.Context, turnID string) ([]json.RawMessage, error) {
+//				panic("mock out the CodeModeCalls method")
+//			},
 //			LoadFunc: func(ctx context.Context, key string) (json.RawMessage, bool, error) {
 //				panic("mock out the Load method")
 //			},
 //			SaveFunc: func(ctx context.Context, key string, value json.RawMessage) error {
 //				panic("mock out the Save method")
+//			},
+//			SaveCodeModeCallFunc: func(ctx context.Context, turnID string, key string, record json.RawMessage) error {
+//				panic("mock out the SaveCodeModeCall method")
 //			},
 //			SaveTraceFunc: func(ctx context.Context, turnID string, trace []json.RawMessage) error {
 //				panic("mock out the SaveTrace method")
@@ -36,17 +42,30 @@ var _ Journal = &mockJournal{}
 //
 //	}
 type mockJournal struct {
+	// CodeModeCallsFunc mocks the CodeModeCalls method.
+	CodeModeCallsFunc func(ctx context.Context, turnID string) ([]json.RawMessage, error)
+
 	// LoadFunc mocks the Load method.
 	LoadFunc func(ctx context.Context, key string) (json.RawMessage, bool, error)
 
 	// SaveFunc mocks the Save method.
 	SaveFunc func(ctx context.Context, key string, value json.RawMessage) error
 
+	// SaveCodeModeCallFunc mocks the SaveCodeModeCall method.
+	SaveCodeModeCallFunc func(ctx context.Context, turnID string, key string, record json.RawMessage) error
+
 	// SaveTraceFunc mocks the SaveTrace method.
 	SaveTraceFunc func(ctx context.Context, turnID string, trace []json.RawMessage) error
 
 	// calls tracks calls to the methods.
 	calls struct {
+		// CodeModeCalls holds details about calls to the CodeModeCalls method.
+		CodeModeCalls []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// TurnID is the turnID argument value.
+			TurnID string
+		}
 		// Load holds details about calls to the Load method.
 		Load []struct {
 			// Ctx is the ctx argument value.
@@ -63,6 +82,17 @@ type mockJournal struct {
 			// Value is the value argument value.
 			Value json.RawMessage
 		}
+		// SaveCodeModeCall holds details about calls to the SaveCodeModeCall method.
+		SaveCodeModeCall []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// TurnID is the turnID argument value.
+			TurnID string
+			// Key is the key argument value.
+			Key string
+			// Record is the record argument value.
+			Record json.RawMessage
+		}
 		// SaveTrace holds details about calls to the SaveTrace method.
 		SaveTrace []struct {
 			// Ctx is the ctx argument value.
@@ -73,9 +103,47 @@ type mockJournal struct {
 			Trace []json.RawMessage
 		}
 	}
-	lockLoad      sync.RWMutex
-	lockSave      sync.RWMutex
-	lockSaveTrace sync.RWMutex
+	lockCodeModeCalls    sync.RWMutex
+	lockLoad             sync.RWMutex
+	lockSave             sync.RWMutex
+	lockSaveCodeModeCall sync.RWMutex
+	lockSaveTrace        sync.RWMutex
+}
+
+// CodeModeCalls calls CodeModeCallsFunc.
+func (mock *mockJournal) CodeModeCalls(ctx context.Context, turnID string) ([]json.RawMessage, error) {
+	if mock.CodeModeCallsFunc == nil {
+		panic("mockJournal.CodeModeCallsFunc: method is nil but Journal.CodeModeCalls was just called")
+	}
+	callInfo := struct {
+		Ctx    context.Context
+		TurnID string
+	}{
+		Ctx:    ctx,
+		TurnID: turnID,
+	}
+	mock.lockCodeModeCalls.Lock()
+	mock.calls.CodeModeCalls = append(mock.calls.CodeModeCalls, callInfo)
+	mock.lockCodeModeCalls.Unlock()
+	return mock.CodeModeCallsFunc(ctx, turnID)
+}
+
+// CodeModeCallsCalls gets all the calls that were made to CodeModeCalls.
+// Check the length with:
+//
+//	len(mockedJournal.CodeModeCallsCalls())
+func (mock *mockJournal) CodeModeCallsCalls() []struct {
+	Ctx    context.Context
+	TurnID string
+} {
+	var calls []struct {
+		Ctx    context.Context
+		TurnID string
+	}
+	mock.lockCodeModeCalls.RLock()
+	calls = mock.calls.CodeModeCalls
+	mock.lockCodeModeCalls.RUnlock()
+	return calls
 }
 
 // Load calls LoadFunc.
@@ -151,6 +219,50 @@ func (mock *mockJournal) SaveCalls() []struct {
 	mock.lockSave.RLock()
 	calls = mock.calls.Save
 	mock.lockSave.RUnlock()
+	return calls
+}
+
+// SaveCodeModeCall calls SaveCodeModeCallFunc.
+func (mock *mockJournal) SaveCodeModeCall(ctx context.Context, turnID string, key string, record json.RawMessage) error {
+	if mock.SaveCodeModeCallFunc == nil {
+		panic("mockJournal.SaveCodeModeCallFunc: method is nil but Journal.SaveCodeModeCall was just called")
+	}
+	callInfo := struct {
+		Ctx    context.Context
+		TurnID string
+		Key    string
+		Record json.RawMessage
+	}{
+		Ctx:    ctx,
+		TurnID: turnID,
+		Key:    key,
+		Record: record,
+	}
+	mock.lockSaveCodeModeCall.Lock()
+	mock.calls.SaveCodeModeCall = append(mock.calls.SaveCodeModeCall, callInfo)
+	mock.lockSaveCodeModeCall.Unlock()
+	return mock.SaveCodeModeCallFunc(ctx, turnID, key, record)
+}
+
+// SaveCodeModeCallCalls gets all the calls that were made to SaveCodeModeCall.
+// Check the length with:
+//
+//	len(mockedJournal.SaveCodeModeCallCalls())
+func (mock *mockJournal) SaveCodeModeCallCalls() []struct {
+	Ctx    context.Context
+	TurnID string
+	Key    string
+	Record json.RawMessage
+} {
+	var calls []struct {
+		Ctx    context.Context
+		TurnID string
+		Key    string
+		Record json.RawMessage
+	}
+	mock.lockSaveCodeModeCall.RLock()
+	calls = mock.calls.SaveCodeModeCall
+	mock.lockSaveCodeModeCall.RUnlock()
 	return calls
 }
 

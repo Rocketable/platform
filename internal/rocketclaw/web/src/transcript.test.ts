@@ -545,6 +545,7 @@ test("tool disclosures match parallel results by ID and include only their loade
   expect(toolTitle(turn.items[1])).toBe("Skill · processes");
   expect(toolTitle({ toolName: "execute", text: `execute\n${JSON.stringify({ code: 'def main():\n  return bash(command=r"""set +e\n./scripts/loop-platform-deps.sh\n""")' })}` })).toBe("Run · ./scripts/loop-platform-deps.sh");
   expect(toolTitle({ toolName: "execute", text: `execute\n${JSON.stringify({ code: 'def main():\n  return read(filePath="scripts/loop-platform-deps.sh")' })}` })).toBe("Read · scripts/loop-platform-deps.sh");
+  expect(toolTitle({ toolName: "execute", text: `execute\n${JSON.stringify({ code: 'def main():\n  return read(filePath="scripts/loop-platform-deps.sh")', description: "Validate PR diff" })}` })).toBe("Validate PR diff");
 });
 
 test("public call outcomes update their original disclosures independently without merging repeated call IDs", () => {
