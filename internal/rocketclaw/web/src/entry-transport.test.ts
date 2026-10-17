@@ -133,7 +133,8 @@ test("transcript and entry HTTP proxy reach Go", async () => {
       expect(await trace.innerText()).not.toContain("rocketclaw_set_tag");
       await tool.locator('[data-slot="trace-collapsible-trigger"]').first().press("Enter");
       await toolBody.waitFor();
-      await tool.getByRole("button", { name: "Collapse tool" }).click();
+      // The transcript is still scrolling to follow the opening row, so a mouse click can release on another element.
+      await tool.getByRole("button", { name: "Collapse tool" }).press("Enter");
       await toolBody.waitFor({ state: "hidden" });
       await page.screenshot({ path: path.join(screenshots, filename) });
       await page.goto(`http://127.0.0.1:${web.port}/s/${Buffer.from(id).toString("base64url")}`);
