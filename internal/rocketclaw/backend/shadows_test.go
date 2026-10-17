@@ -266,7 +266,7 @@ func TestShadowClaimHead(t *testing.T) {
 		endTestTurn(t, store, "parent", request.turnID, "")
 	}
 
-	_, err := store.PruneStateBefore(t.Context(), time.Now().Add(time.Hour))
+	_, err := store.PruneStateBefore(t.Context(), time.Now().Add(time.Hour), 0)
 	require.NoError(t, err)
 	_, retained, err := store.Thread("parent")
 	require.NoError(t, err)
@@ -1577,7 +1577,7 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 	require.False(t, captured, "successful parent settlement removed its canonical journal")
 	// Do not start the first manager's pending children. A fresh manager must
 	// discover the ready historyless child without any incoming message.
-	_, err = store.PruneStateBefore(t.Context(), time.Now().Add(time.Hour))
+	_, err = store.PruneStateBefore(t.Context(), time.Now().Add(time.Hour), 0)
 	require.NoError(t, err)
 	restarted, shutdown := newTestBridgeManager(t, cfg, store, finals)
 	t.Cleanup(func() { require.NoError(t, shutdown()) })
@@ -1602,7 +1602,7 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 	require.Eventually(t, func() bool { active, err := store.HasActiveTurn(t.Context(), childID); return err == nil && !active }, 3*time.Second, time.Millisecond)
 	require.Len(t, finals, 1, "only parent completion was externally published")
 	require.NoError(t, shutdown())
-	_, err = store.PruneStateBefore(t.Context(), time.Now().Add(time.Hour))
+	_, err = store.PruneStateBefore(t.Context(), time.Now().Add(time.Hour), 0)
 	require.NoError(t, err)
 	_, found, err = store.Thread(childID)
 	require.NoError(t, err)

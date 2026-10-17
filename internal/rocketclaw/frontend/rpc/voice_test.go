@@ -766,7 +766,7 @@ func TestVoice(t *testing.T) {
 
 		// The 2026-10-13 failure: a call that admits no hand-off leaves the voice
 		// conversation empty, and startup cleanup deleted it.
-		_, err = h.rt.Sessions.PruneStateBefore(t.Context(), time.Now())
+		_, err = h.rt.Sessions.PruneStateBefore(t.Context(), time.Now(), 0)
 		require.NoError(t, err)
 		require.True(t, recorded(first))
 

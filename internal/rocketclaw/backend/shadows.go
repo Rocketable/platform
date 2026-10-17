@@ -16,10 +16,16 @@ import (
 	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
+var errHistoryBusy = errors.New("conversation history is busy")
+
 type noHistoryWorkers struct{}
 
 func (noHistoryWorkers) pauseHistory(context.Context, []string) ([]*Bridge, error) {
 	return nil, nil
+}
+
+func (noHistoryWorkers) historyBusy([]string) bool {
+	return false
 }
 
 // ownedHistoryIDs enumerates bindings before any cascade can erase ownership.
@@ -53,8 +59,10 @@ ORDER BY 1`, "owned history IDs", roots)
 // beginHistoryMutation returns locked ownership only after live family work settles.
 // First admission shares the root lock. A parent already past that lock can still
 // add children before its interruption settles, so enumerate again afterward.
-// No SQL lock or mutex crosses worker settlement.
-func (s *SessionService) beginHistoryMutation(ctx context.Context, roots []string) (tx *sql.Tx, ids []string, workers []*Bridge, err error) {
+// No SQL lock or mutex crosses worker settlement. An idle mutation never pauses or
+// interrupts: it fails with errHistoryBusy while any family worker or comparison
+// is live, and otherwise returns the locked family at once.
+func (s *SessionService) beginHistoryMutation(ctx context.Context, roots []string, idle bool) (tx *sql.Tx, ids []string, workers []*Bridge, err error) {
 	pausedIDs := []string{}
 	settled := false
 
@@ -95,6 +103,20 @@ func (s *SessionService) beginHistoryMutation(ctx context.Context, roots []strin
 		if slices.ContainsFunc(ids, func(id string) bool { return !slices.Contains(locked, id) }) {
 			_ = tx.Rollback()
 			continue
+		}
+
+		if idle {
+			var open bool
+			if err := queryScalar(ctx, tx, "read open comparisons", `SELECT count(*) > 0 FROM shadow_turns WHERE child_conversation_id = ANY($1) AND terminal = ''`, &open, ids); err != nil {
+				return tx, nil, workers, err
+			}
+
+			// Locks are held, so work that starts after this check waits for the commit.
+			if open || s.historyWorkers.historyBusy(ids) {
+				return tx, nil, workers, errHistoryBusy
+			}
+
+			return tx, ids, workers, nil
 		}
 
 		var pending []string
@@ -192,7 +214,7 @@ func (m *threadBridgeManager) pauseHistory(ctx context.Context, ids []string) (w
 			b.mu.Unlock()
 			releaseHistory(workers[:i])
 
-			return nil, errors.New("conversation history is busy")
+			return nil, errHistoryBusy
 		}
 
 		b.historyMutation, b.inputOpen = true, false
@@ -200,6 +222,25 @@ func (m *threadBridgeManager) pauseHistory(ctx context.Context, ids []string) (w
 	}
 
 	return workers, nil
+}
+
+// historyBusy reports whether a live worker of ids runs, holds, or awaits work.
+// It never starts a worker: a conversation without one has nothing in flight.
+func (m *threadBridgeManager) historyBusy(ids []string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return slices.ContainsFunc(ids, func(id string) bool {
+		b, ok := m.bridges[id].(*Bridge)
+		if !ok {
+			return false
+		}
+
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
+		return b.handling || b.historyMutation || len(b.requestCh) > 0 || len(b.waiting) > 0
+	})
 }
 
 func (m *threadBridgeManager) settleHistory(ctx context.Context, ids []string) ([]*Bridge, error) {

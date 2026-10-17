@@ -536,7 +536,7 @@ func TestPruneKeepsConversationsWithLiveBackgroundJobs(t *testing.T) {
 
 			_, err := store.db.ExecContext(ctx, `UPDATE background_jobs SET note_state = $1 WHERE note_state = $2`, tt.note, notePending)
 			require.NoError(t, err)
-			_, err = store.PruneStateBefore(ctx, cutoff)
+			_, err = store.PruneStateBefore(ctx, cutoff, 0)
 			require.NoError(t, err)
 
 			_, ok, err := store.Thread(thread)

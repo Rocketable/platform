@@ -104,6 +104,7 @@ type SessionService struct {
 	jobs           conversationJobs
 	historyWorkers interface {
 		pauseHistory(context.Context, []string) ([]*Bridge, error)
+		historyBusy([]string) bool
 	}
 	// spillDir is rocketcode's spill dir, which keeps conversations' retained background output.
 	spillDir string
@@ -410,7 +411,7 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 		return nil
 	}
 
-	tx, ids, workers, err := s.beginHistoryMutation(ctx, []string{session.PrivateConversationID, session.ManagedConversationID})
+	tx, ids, workers, err := s.beginHistoryMutation(ctx, []string{session.PrivateConversationID, session.ManagedConversationID}, false)
 	if err != nil {
 		return err
 	}
@@ -702,131 +703,159 @@ ORDER BY g.conversation_id`, "active goal threads", func(row rowScanner) (string
 	return threads, nil
 }
 
-// PruneStateBefore removes expired thread and external-session state.
-func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time) (PruneStateStats, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return PruneStateStats{}, fmt.Errorf("begin state prune: %w", err)
+type pruneKind int
+
+const (
+	pruneThread pruneKind = iota
+	pruneGoal
+	pruneExternalMCP
+	pruneOrphan
+)
+
+// pruneCandidate is one unit of retention: a thread, the goal of an unrecorded
+// conversation, an External MCP session's conversations, or an orphan history.
+type pruneCandidate struct {
+	kind pruneKind
+	// id is the conversation; for an External MCP session, its managed one.
+	id, private string
+	// threads counts the managed conversations the candidate removes.
+	threads int
+}
+
+// stale reports whether c is still expired. Under c's history locks the answer
+// holds until commit, because every write that revives a conversation takes them.
+func (c pruneCandidate) stale(ctx context.Context, db stateStoreDB, cutoff time.Time) (bool, error) {
+	switch c.kind {
+	case pruneOrphan:
+		orphans, err := stalePrivateConversationIDs(ctx, db, cutoff, c.id)
+		return len(orphans) > 0, err
+	case pruneGoal:
+		var managed bool
+		if err := queryScalar(ctx, db, "read goal conversation", `SELECT count(*) > 0 FROM managed_conversations WHERE conversation_id = $1`, &managed, c.id); err != nil || managed {
+			return false, err
+		}
+	case pruneThread, pruneExternalMCP:
 	}
 
-	defer func() { _ = tx.Rollback() }()
+	prune, err := shouldPruneThreadConversation(ctx, db, c.id, cutoff)
+	if err != nil || !prune || c.private == "" {
+		return prune, err
+	}
 
-	threadIDs, err := queryStrings(ctx, tx, `SELECT conversation_id FROM managed_conversations ORDER BY conversation_id`, "managed conversation IDs")
+	pending, err := conversationHasPendingWork(ctx, db, c.private)
+	if err != nil || pending {
+		return false, err
+	}
+
+	return sessionLatestBefore(ctx, db, c.private, time.Unix(0, 0).UTC(), cutoff)
+}
+
+// PruneStateBefore removes thread and external-session state that expired before
+// cutoff. It never interrupts work: each candidate is deleted in its own short
+// transaction only while its family is idle and still expired, and is otherwise
+// left for a later pass. It waits a tenth of pace after each check and pace after
+// each deletion, so a background pass stays light on the store.
+func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time, pace time.Duration) (PruneStateStats, error) {
+	threadIDs, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM managed_conversations ORDER BY conversation_id`, "managed conversation IDs")
 	if err != nil {
 		return PruneStateStats{}, err
 	}
 
-	externalSessions, err := queryMap(ctx, tx, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel, origin_pairs FROM external_mcp_sessions ORDER BY external_conversation_id`, "external MCP sessions", scanExternalMCPSession)
+	externalSessions, err := queryMap(ctx, s.db, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel, origin_pairs FROM external_mcp_sessions ORDER BY external_conversation_id`, "external MCP sessions", scanExternalMCPSession)
 	if err != nil {
 		return PruneStateStats{}, err
 	}
 
-	externalIDs := map[string]struct{}{}
-	for _, session := range externalSessions {
-		externalIDs[session.ManagedConversationID] = struct{}{}
-		externalIDs[session.PrivateConversationID] = struct{}{}
+	goalIDs, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM conversation_goals ORDER BY conversation_id`, "goal conversation IDs")
+	if err != nil {
+		return PruneStateStats{}, err
 	}
 
-	var stats PruneStateStats
+	orphans, err := stalePrivateConversationIDs(ctx, s.db, cutoff, "")
+	if err != nil {
+		return PruneStateStats{}, err
+	}
 
-	deleteConversations := map[string]struct{}{}
+	managed, external := map[string]bool{}, map[string]bool{}
+	for _, id := range threadIDs {
+		managed[id] = true
+	}
 
-	for _, conversationID := range threadIDs {
-		if _, external := externalIDs[conversationID]; external {
-			continue
+	var candidates []pruneCandidate
+
+	for _, key := range slices.Sorted(maps.Keys(externalSessions)) {
+		session := externalSessions[key]
+		c := pruneCandidate{kind: pruneExternalMCP, id: strings.TrimSpace(session.ManagedConversationID), private: strings.TrimSpace(session.PrivateConversationID)}
+		external[c.id], external[c.private] = true, true
+
+		for _, id := range []string{c.id, c.private} {
+			if id != "" && managed[id] {
+				c.threads++
+			}
 		}
 
-		prune, err := shouldPruneThreadConversation(ctx, tx, conversationID, cutoff)
-		if err != nil {
-			return PruneStateStats{}, err
-		}
+		candidates = append(candidates, c)
+	}
 
-		if prune {
-			deleteConversations[conversationID] = struct{}{}
-			stats.Threads++
+	for _, id := range threadIDs {
+		if !external[id] {
+			candidates = append(candidates, pruneCandidate{kind: pruneThread, id: id, threads: 1})
 		}
 	}
 
-	goalIDs, err := queryStrings(ctx, tx, `SELECT conversation_id FROM conversation_goals ORDER BY conversation_id`, "goal conversation IDs")
-	if err != nil {
-		return PruneStateStats{}, err
-	}
-
-	var staleGoals []string
-
-	for _, conversationID := range goalIDs {
-		if slices.Contains(threadIDs, conversationID) {
-			continue
-		}
-
-		prune, err := shouldPruneThreadConversation(ctx, tx, conversationID, cutoff)
-		if err != nil {
-			return PruneStateStats{}, err
-		}
-
-		if prune {
-			staleGoals = append(staleGoals, conversationID)
+	for _, id := range goalIDs {
+		if !managed[id] {
+			candidates = append(candidates, pruneCandidate{kind: pruneGoal, id: id})
 		}
 	}
 
-	externalStats, err := pruneExternalMCPSessions(ctx, tx, cutoff, threadIDs, externalSessions, deleteConversations)
-	if err != nil {
-		return PruneStateStats{}, err
+	for _, id := range orphans {
+		candidates = append(candidates, pruneCandidate{kind: pruneOrphan, id: id})
 	}
 
-	stats.Threads += externalStats.Threads
-	stats.ExternalMCPSessions = externalStats.ExternalMCPSessions
+	var (
+		stats       PruneStateStats
+		errCombined error
+	)
 
-	orphans, err := stalePrivateConversationIDs(ctx, tx, cutoff)
-	if err != nil {
-		return PruneStateStats{}, err
+	// ponytail: every pass checks every conversation, so it lasts at least
+	// len(candidates) × pace/10; past ~36k conversations passes run back to back.
+	// Upgrade: select only conversations last active before cutoff in SQL.
+	for _, c := range candidates {
+		// A check without locks skips most candidates cheaply; deletion checks again under locks.
+		stale, err := c.stale(ctx, s.db, cutoff)
+		pruned := false
+
+		if err == nil && stale {
+			var rows int64
+
+			rows, pruned, err = s.pruneCandidate(ctx, c, cutoff)
+			if pruned {
+				stats.Threads += c.threads
+				stats.SessionRows += rows
+
+				if c.kind == pruneExternalMCP {
+					stats.ExternalMCPSessions++
+				}
+			}
+		}
+
+		errCombined = errors.Join(errCombined, err)
+
+		wait := pace / 10
+		if pruned {
+			wait = pace
+		}
+
+		select {
+		case <-ctx.Done():
+			return stats, errors.Join(errCombined, ctx.Err())
+		case <-time.After(wait):
+		}
 	}
 
-	for _, conversationID := range orphans {
-		deleteConversations[conversationID] = struct{}{}
-	}
-
-	// Selection is read-only. End it before waiting for live workers, then delete
-	// the selected metadata and enumerated family in the mutation transaction.
-	if err := tx.Rollback(); err != nil {
-		return PruneStateStats{}, fmt.Errorf("finish state prune selection: %w", err)
-	}
-
-	tx, ids, workers, err := s.beginHistoryMutation(ctx, slices.Collect(maps.Keys(deleteConversations)))
-	if err != nil {
-		return PruneStateStats{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	defer releaseHistory(workers)
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM conversation_goals WHERE conversation_id = ANY($1)`, staleGoals); err != nil {
-		return PruneStateStats{}, fmt.Errorf("delete stale goals: %w", err)
-	}
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM external_mcp_sessions WHERE managed_conversation_id = ANY($1) OR private_conversation_id = ANY($1)`, ids); err != nil {
-		return PruneStateStats{}, fmt.Errorf("delete stale external MCP sessions: %w", err)
-	}
-
-	rows, err := deleteSessionEntries(ctx, tx, ids)
-	if err != nil {
-		return PruneStateStats{}, err
-	}
-
-	if err := deleteOwnedConversations(ctx, tx, ids); err != nil {
-		return PruneStateStats{}, err
-	}
-
-	if err := enqueueAttachmentDeletion(ctx, tx, ids); err != nil {
-		return PruneStateStats{}, err
-	}
-
-	stats.SessionRows = rows
-
-	if err := tx.Commit(); err != nil {
-		return PruneStateStats{}, fmt.Errorf("commit state prune: %w", err)
-	}
-
-	return stats, s.removeHistoryFiles(ctx, ids)
+	// Each pass also retries file deletions that an earlier removal left pending.
+	return stats, errors.Join(errCombined, s.removeHistoryFiles(ctx, nil))
 }
 
 // ObserveEntries loads observed session entries through the runtime service.
@@ -880,7 +909,7 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 		return 0, err
 	}
 
-	tx, ids, workers, err := s.beginHistoryMutation(ctx, []string{conversationID})
+	tx, ids, workers, err := s.beginHistoryMutation(ctx, []string{conversationID}, false)
 	if err != nil {
 		return 0, err
 	}
@@ -1274,6 +1303,80 @@ func (s *SessionService) Stop() error {
 	return nil
 }
 
+// pruneCandidate deletes c's family in one transaction if c is still expired and
+// idle once its history is locked. It reports whether it deleted anything.
+func (s *SessionService) pruneCandidate(ctx context.Context, c pruneCandidate, cutoff time.Time) (rows int64, pruned bool, err error) {
+	if c.kind == pruneGoal {
+		tx, err := s.beginStateTx(ctx, "goal prune")
+		if err != nil {
+			return 0, false, err
+		}
+
+		defer func() { _ = tx.Rollback() }()
+
+		if err := lockSessionHistory(ctx, tx, c.id); err != nil {
+			return 0, false, err
+		}
+
+		if stale, err := c.stale(ctx, tx, cutoff); err != nil || !stale {
+			return 0, false, err
+		}
+
+		if _, err := tx.ExecContext(ctx, `DELETE FROM conversation_goals WHERE conversation_id = $1`, c.id); err != nil {
+			return 0, false, fmt.Errorf("delete stale goal: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return 0, false, fmt.Errorf("commit goal prune: %w", err)
+		}
+
+		return 0, true, nil
+	}
+
+	roots := []string{c.id}
+	if c.private != "" {
+		roots = append(roots, c.private)
+	}
+
+	tx, ids, _, err := s.beginHistoryMutation(ctx, roots, true)
+	if errors.Is(err, errHistoryBusy) {
+		return 0, false, nil
+	}
+
+	if err != nil {
+		return 0, false, err
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	if stale, err := c.stale(ctx, tx, cutoff); err != nil || !stale {
+		return 0, false, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM external_mcp_sessions WHERE managed_conversation_id = ANY($1) OR private_conversation_id = ANY($1)`, ids); err != nil {
+		return 0, false, fmt.Errorf("delete stale external MCP sessions: %w", err)
+	}
+
+	rows, err = deleteSessionEntries(ctx, tx, ids)
+	if err != nil {
+		return 0, false, err
+	}
+
+	if err := deleteOwnedConversations(ctx, tx, ids); err != nil {
+		return 0, false, err
+	}
+
+	if err := enqueueAttachmentDeletion(ctx, tx, ids); err != nil {
+		return 0, false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, false, fmt.Errorf("commit state prune: %w", err)
+	}
+
+	return rows, true, s.removeHistoryFiles(ctx, ids)
+}
+
 // pendingProducerIDs discovers completed producers even after their active rows
 // and executable one-shot schedules have disappeared.
 func (s *SessionService) pendingProducerIDs(ctx context.Context) ([]string, error) {
@@ -1500,7 +1603,7 @@ INSERT INTO pending_attachment_deletions (id) SELECT id FROM removed`, ids)
 	return err
 }
 
-// removeHistoryFiles also retries durable pending deletions during ordinary startup prune.
+// removeHistoryFiles also retries durable pending deletions during each prune.
 func (s *SessionService) removeHistoryFiles(ctx context.Context, ids []string) error {
 	blobs, err := queryStrings(ctx, s.db, `SELECT id FROM pending_attachment_deletions ORDER BY id`, "pending attachment deletions")
 	if err != nil {
@@ -1657,12 +1760,18 @@ func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, convers
 
 	created, ok := slackStateKeyTime(conversationID)
 	if !ok {
+		// An empty conversation expires only once it is older than cutoff, so a new
+		// one survives until its first turn lands.
 		var emptyManaged bool
-		if err := queryScalar(ctx, db, "read empty managed conversation", `SELECT EXISTS (
-    SELECT 1 FROM managed_conversations m WHERE m.conversation_id = $1
-        AND NOT EXISTS (SELECT 1 FROM session_entries e WHERE e.conversation_id = m.conversation_id)
-        AND NOT EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = m.conversation_id)
-)`, &emptyManaged, conversationID); err != nil {
+		if err := queryScalar(ctx, db, "read empty managed conversation", `WITH entry AS (
+    SELECT conversation_id FROM session_entries WHERE conversation_id = $1 LIMIT 1
+), turn AS (
+    SELECT conversation_id FROM active_turns WHERE conversation_id = $1 LIMIT 1
+)
+SELECT count(*) > 0 FROM managed_conversations m
+LEFT JOIN entry e USING (conversation_id)
+LEFT JOIN turn t USING (conversation_id)
+WHERE m.conversation_id = $1 AND m.created_at < $2 AND e.conversation_id IS NULL AND t.conversation_id IS NULL`, &emptyManaged, conversationID, cutoff); err != nil {
 			return false, err
 		}
 
@@ -1793,59 +1902,9 @@ SELECT count(*) > 0 FROM pending_work`, &pending, conversationID, backgroundRunn
 	return pending, nil
 }
 
-func pruneExternalMCPSessions(ctx context.Context, tx *sql.Tx, cutoff time.Time, threadIDs []string, sessions map[string]ExternalMCPSessionState, deleteConversations map[string]struct{}) (PruneStateStats, error) {
-	var stats PruneStateStats
-
-	for _, session := range sessions {
-		privateConversationID := strings.TrimSpace(session.PrivateConversationID)
-		managedConversationID := strings.TrimSpace(session.ManagedConversationID)
-
-		pruneManaged, err := shouldPruneThreadConversation(ctx, tx, managedConversationID, cutoff)
-		if err != nil {
-			return PruneStateStats{}, err
-		}
-
-		if !pruneManaged {
-			continue
-		}
-
-		if privateConversationID != "" {
-			pending, err := conversationHasPendingWork(ctx, tx, privateConversationID)
-			if err != nil {
-				return PruneStateStats{}, err
-			}
-
-			if pending {
-				continue
-			}
-
-			prunePrivate, err := sessionLatestBefore(ctx, tx, privateConversationID, time.Unix(0, 0).UTC(), cutoff)
-			if err != nil {
-				return PruneStateStats{}, err
-			}
-
-			if !prunePrivate {
-				continue
-			}
-
-			deleteConversations[privateConversationID] = struct{}{}
-			if slices.Contains(threadIDs, privateConversationID) {
-				stats.Threads++
-			}
-		}
-
-		deleteConversations[managedConversationID] = struct{}{}
-		if slices.Contains(threadIDs, managedConversationID) {
-			stats.Threads++
-		}
-
-		stats.ExternalMCPSessions++
-	}
-
-	return stats, nil
-}
-
-func stalePrivateConversationIDs(ctx context.Context, db *sql.Tx, cutoff time.Time) ([]string, error) {
+// stalePrivateConversationIDs lists expired unreferenced private histories, only
+// conversationID's when it is not empty.
+func stalePrivateConversationIDs(ctx context.Context, db stateStoreDB, cutoff time.Time, conversationID string) ([]string, error) {
 	return queryStrings(ctx, db, `WITH private_entries AS (
     SELECT conversation_id, entry_timestamp FROM session_entries
     UNION ALL
@@ -1872,8 +1931,8 @@ SELECT h.conversation_id FROM private_entries h
 LEFT JOIN referenced_conversations r ON r.conversation_id = h.conversation_id
 WHERE (h.conversation_id LIKE 'slack-thread:%' OR h.conversation_id LIKE 'external_mcp:%'
     OR h.conversation_id LIKE 'cron:%' OR h.conversation_id LIKE 'one-off-cron:%')
-    AND r.conversation_id IS NULL
-GROUP BY h.conversation_id HAVING MAX(h.entry_timestamp) < $1`, "stale private session conversations", cutoff.UTC().Format(time.RFC3339Nano), backgroundRunning, notePending)
+    AND r.conversation_id IS NULL AND ($4 = '' OR h.conversation_id = $4)
+GROUP BY h.conversation_id HAVING MAX(h.entry_timestamp) < $1`, "stale private session conversations", cutoff.UTC().Format(time.RFC3339Nano), backgroundRunning, notePending, conversationID)
 }
 
 func deleteSessionEntries(ctx context.Context, db stateStoreDB, conversationIDs []string) (int64, error) {
