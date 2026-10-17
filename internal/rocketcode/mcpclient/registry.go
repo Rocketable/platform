@@ -102,11 +102,12 @@ func (s *Session) ListTools(ctx context.Context, server string) ([]ToolInfo, err
 			return nil, fmt.Errorf("list tools on %q: %w", server, err)
 		}
 
+		schema, _ := tool.InputSchema.(map[string]any)
 		out = append(out, ToolInfo{
 			Server:      server,
 			Name:        tool.Name,
 			Description: tool.Description,
-			InputSchema: schemaMap(tool.InputSchema),
+			InputSchema: schema,
 		})
 	}
 
@@ -308,28 +309,6 @@ func (r headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	}
 
 	return resp, nil
-}
-
-func schemaMap(schema any) map[string]any {
-	if schema == nil {
-		return nil
-	}
-
-	if m, ok := schema.(map[string]any); ok {
-		return m
-	}
-
-	data, err := json.Marshal(schema)
-	if err != nil {
-		return nil
-	}
-
-	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
-		return nil
-	}
-
-	return m
 }
 
 func flattenCallToolResult(result *mcp.CallToolResult) (string, error) {
