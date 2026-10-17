@@ -13,8 +13,6 @@ import (
 )
 
 func TestPermissionReviewRationaleUsesCompletedFinalResponse(t *testing.T) {
-	t.Parallel()
-
 	for _, tc := range []struct {
 		response, state, text, want string
 		commentary                  bool
@@ -45,6 +43,38 @@ func TestPermissionReviewRationaleUsesCompletedFinalResponse(t *testing.T) {
 		entry.ReplayInput, err = ReplayInputFromParams([]responses.ResponseInputItemUnionParam{item})
 		require.NoError(t, err)
 		require.Equal(t, tc.want, entry.PermissionReviewRationale())
+
+		if tc.state != "completed" || tc.response != "final" {
+			withoutReplay := entry
+			withoutReplay.ReplayInput = nil
+			allocs := testing.AllocsPerRun(100, func() { entry.PermissionReviewRationale() })
+			// Allow pool variation under the race detector, but not an SDK replay decode.
+			require.LessOrEqual(t, allocs, testing.AllocsPerRun(100, func() { withoutReplay.PermissionReviewRationale() })+10)
+		}
+	}
+}
+
+func BenchmarkPermissionReviewRationale(b *testing.B) {
+	for _, state := range []PublicProgressState{PublicProgressWorking, PublicProgressCompleted} {
+		b.Run(string(state), func(b *testing.B) {
+			text := `{"outcome":"allow","rationale":"The read-only check is within scope."}`
+			answer := testInputMessage(responses.EasyInputMessageRoleAssistant, text, "")
+			answer.OfMessage.SetExtraFields(map[string]any{"id": "answer"})
+			replay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+				testInputMessage(responses.EasyInputMessageRoleUser, strings.Repeat("Review the proposed read-only operation.\n", 100), ""), answer,
+			})
+			require.NoError(b, err)
+			trace, err := json.Marshal(publicProgressTrace{Type: "rocketcode_public_progress", Progress: PublicProgress{ID: "answer/0", ParentID: "review/final", Kind: PublicProgressText, State: state, Text: text}})
+			require.NoError(b, err)
+
+			entry := SessionEntry{TurnID: "review", ResponseID: "final", ReplayInput: replay, OutputTrace: []json.RawMessage{trace}}
+
+			b.ReportAllocs()
+
+			for b.Loop() {
+				entry.PermissionReviewRationale()
+			}
+		})
 	}
 }
 
