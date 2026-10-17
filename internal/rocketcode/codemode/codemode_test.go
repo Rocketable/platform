@@ -200,30 +200,42 @@ func TestRunDecideDenyDoesNotCall(t *testing.T) {
 }
 
 func TestRunInvalidSchemaArgsDoesNotCall(t *testing.T) {
-	called := false
-	tools := []ToolDesc{{
-		Server: "demo",
-		Name:   "echo",
-		InputSchema: map[string]any{
-			"type":                 "object",
-			"properties":           map[string]any{"message": map[string]any{"type": "string"}},
-			"required":             []any{"message"},
-			"additionalProperties": false,
+	for _, tc := range []struct {
+		name, expression, want string
+		schema                 map[string]any
+	}{
+		{
+			name:       "invalid arguments",
+			expression: `demo_echo(other="x")`,
+			want:       "demo_echo: invalid arguments: validate args:",
+			schema: map[string]any{
+				"type":                 "object",
+				"properties":           map[string]any{"message": map[string]any{"type": "string"}},
+				"required":             []any{"message"},
+				"additionalProperties": false,
+			},
 		},
-	}}
+		{"positional argument", `demo_echo("hi")`, "demo_echo: only keyword arguments are allowed", nil},
+		{"unencodable argument", `demo_echo(message=lambda: "hi")`, "demo_echo arguments: encode kwargs:", nil},
+		{"invalid schema type", `demo_echo()`, "parse input schema:", map[string]any{"type": 1}},
+		{"unresolved schema reference", `demo_echo()`, "resolve input schema:", map[string]any{"$ref": "#/$defs/missing"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			tools := []ToolDesc{{Server: "demo", Name: "echo", InputSchema: tc.schema}}
 
-	_, err := Run(t.Context(), `def main():
-    return demo_echo(other="x")
-`, tools, allowAll, func(context.Context, string, string, map[string]any) (string, error) {
-		called = true
-		return "", nil
-	}, noToolCallObserver, nil)
-	if err == nil {
-		t.Fatal("Run() error = nil, want schema error")
-	}
+			got, err := Run(t.Context(), "def main():\n    return "+tc.expression+"\n", tools, allowAll, func(context.Context, string, string, map[string]any) (string, error) {
+				called = true
+				return "", nil
+			}, noToolCallObserver, nil)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Run() error = %v, want %q", err, tc.want)
+			}
 
-	if called {
-		t.Fatal("call invoked with invalid args")
+			if called || got != "" {
+				t.Fatalf("Run() = %q, called = %t, want no result or tool call", got, called)
+			}
+		})
 	}
 }
 
@@ -242,12 +254,19 @@ func TestSanitizeAndStarlarkName(t *testing.T) {
 }
 
 func TestBuildCatalogCollision(t *testing.T) {
-	_, err := BuildCatalog([]ToolDesc{
+	tools := []ToolDesc{
 		{Server: "s", Name: "create-issue"},
 		{Server: "s", Name: "create_issue"},
-	})
+	}
+
+	_, err := BuildCatalog(tools)
 	if err == nil || !strings.Contains(err.Error(), "collision") {
 		t.Fatalf("BuildCatalog() error = %v, want collision", err)
+	}
+
+	got, err := Run(t.Context(), "def main():\n    return 'unused'\n", tools, allowAll, nilCall, noToolCallObserver, nil)
+	if err == nil || !strings.Contains(err.Error(), "collision") || got != "" {
+		t.Fatalf("Run() = %q, %v, want collision error and no result", got, err)
 	}
 }
 
