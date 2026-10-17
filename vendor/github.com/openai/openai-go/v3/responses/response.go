@@ -8356,11 +8356,17 @@ type ResponseError struct {
 	// A human-readable description of the error.
 	Message      string                    `json:"message" api:"required"`
 	Misalignment ResponseErrorMisalignment `json:"misalignment"`
+	// The request parameter associated with the error, or null if none was recorded.
+	Param string `json:"param" api:"nullable"`
+	// The original error type, or null if it was not recorded.
+	Type string `json:"type" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		Code         respjson.Field
 		Message      respjson.Field
 		Misalignment respjson.Field
+		Param        respjson.Field
+		Type         respjson.Field
 		ExtraFields  map[string]respjson.Field
 		raw          string
 	} `json:"-"`
@@ -13598,6 +13604,8 @@ type ResponseInputItemImageGenerationCall struct {
 	//
 	// Any of "transparent", "opaque", "auto".
 	Background string `json:"background" api:"nullable"`
+	// Details of a moderation failure, when available.
+	Error ResponseInputItemImageGenerationCallError `json:"error"`
 	// The output format used for generation.
 	//
 	// Any of "png", "webp", "jpeg".
@@ -13619,6 +13627,7 @@ type ResponseInputItemImageGenerationCall struct {
 		Type          respjson.Field
 		Action        respjson.Field
 		Background    respjson.Field
+		Error         respjson.Field
 		OutputFormat  respjson.Field
 		Quality       respjson.Field
 		RevisedPrompt respjson.Field
@@ -13631,6 +13640,61 @@ type ResponseInputItemImageGenerationCall struct {
 // Returns the unmodified JSON received from the API
 func (r ResponseInputItemImageGenerationCall) RawJSON() string { return r.JSON.raw }
 func (r *ResponseInputItemImageGenerationCall) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// Details of a moderation failure, when available.
+type ResponseInputItemImageGenerationCallError struct {
+	// The error code.
+	Code string `json:"code" api:"required"`
+	// A description of the error.
+	Message string `json:"message" api:"required"`
+	// The related request parameter.
+	Param string `json:"param" api:"required"`
+	// The error type.
+	Type string `json:"type" api:"required"`
+	// Public details for a `moderation_blocked` error, when available.
+	ModerationDetails ResponseInputItemImageGenerationCallErrorModerationDetails `json:"moderation_details"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Code              respjson.Field
+		Message           respjson.Field
+		Param             respjson.Field
+		Type              respjson.Field
+		ModerationDetails respjson.Field
+		ExtraFields       map[string]respjson.Field
+		raw               string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r ResponseInputItemImageGenerationCallError) RawJSON() string { return r.JSON.raw }
+func (r *ResponseInputItemImageGenerationCallError) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// Public details for a `moderation_blocked` error, when available.
+type ResponseInputItemImageGenerationCallErrorModerationDetails struct {
+	// Public moderation categories. New category values may be added over time.
+	Categories []string `json:"categories" api:"required"`
+	// The stage where moderation blocked the image generation call.
+	//
+	// Any of "input", "output", "unknown".
+	ModerationStage string `json:"moderation_stage" api:"required"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Categories      respjson.Field
+		ModerationStage respjson.Field
+		ExtraFields     map[string]respjson.Field
+		raw             string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r ResponseInputItemImageGenerationCallErrorModerationDetails) RawJSON() string {
+	return r.JSON.raw
+}
+func (r *ResponseInputItemImageGenerationCallErrorModerationDetails) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
@@ -15693,8 +15757,8 @@ func (u responseInputItemUnionParamAction) AsAny() any { return u.any }
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamAction) GetButton() *string {
 	switch vt := u.any.(type) {
-	case *ResponseComputerToolCallActionUnionParam:
-		return vt.GetButton()
+	case *ResponseComputerToolCallActionClickParam:
+		return &vt.Button
 	}
 	return nil
 }
@@ -15702,8 +15766,8 @@ func (u responseInputItemUnionParamAction) GetButton() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamAction) GetPath() []ResponseComputerToolCallActionDragPathParam {
 	switch vt := u.any.(type) {
-	case *ResponseComputerToolCallActionUnionParam:
-		return vt.GetPath()
+	case *ResponseComputerToolCallActionDragParam:
+		return vt.Path
 	}
 	return nil
 }
@@ -15711,8 +15775,8 @@ func (u responseInputItemUnionParamAction) GetPath() []ResponseComputerToolCallA
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamAction) GetScrollX() *int64 {
 	switch vt := u.any.(type) {
-	case *ResponseComputerToolCallActionUnionParam:
-		return vt.GetScrollX()
+	case *ResponseComputerToolCallActionScrollParam:
+		return &vt.ScrollX
 	}
 	return nil
 }
@@ -15720,8 +15784,8 @@ func (u responseInputItemUnionParamAction) GetScrollX() *int64 {
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamAction) GetScrollY() *int64 {
 	switch vt := u.any.(type) {
-	case *ResponseComputerToolCallActionUnionParam:
-		return vt.GetScrollY()
+	case *ResponseComputerToolCallActionScrollParam:
+		return &vt.ScrollY
 	}
 	return nil
 }
@@ -15729,8 +15793,8 @@ func (u responseInputItemUnionParamAction) GetScrollY() *int64 {
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamAction) GetText() *string {
 	switch vt := u.any.(type) {
-	case *ResponseComputerToolCallActionUnionParam:
-		return vt.GetText()
+	case *ResponseComputerToolCallActionTypeParam:
+		return &vt.Text
 	}
 	return nil
 }
@@ -15738,8 +15802,8 @@ func (u responseInputItemUnionParamAction) GetText() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamAction) GetQueries() []string {
 	switch vt := u.any.(type) {
-	case *ResponseFunctionWebSearchActionUnionParam:
-		return vt.GetQueries()
+	case *ResponseFunctionWebSearchActionSearchParam:
+		return vt.Queries
 	}
 	return nil
 }
@@ -15747,8 +15811,8 @@ func (u responseInputItemUnionParamAction) GetQueries() []string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamAction) GetQuery() *string {
 	switch vt := u.any.(type) {
-	case *ResponseFunctionWebSearchActionUnionParam:
-		return vt.GetQuery()
+	case *ResponseFunctionWebSearchActionSearchParam:
+		return paramutil.AddrIfPresent(vt.Query)
 	}
 	return nil
 }
@@ -15756,8 +15820,8 @@ func (u responseInputItemUnionParamAction) GetQuery() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamAction) GetSources() []ResponseFunctionWebSearchActionSearchSourceParam {
 	switch vt := u.any.(type) {
-	case *ResponseFunctionWebSearchActionUnionParam:
-		return vt.GetSources()
+	case *ResponseFunctionWebSearchActionSearchParam:
+		return vt.Sources
 	}
 	return nil
 }
@@ -15765,8 +15829,8 @@ func (u responseInputItemUnionParamAction) GetSources() []ResponseFunctionWebSea
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamAction) GetPattern() *string {
 	switch vt := u.any.(type) {
-	case *ResponseFunctionWebSearchActionUnionParam:
-		return vt.GetPattern()
+	case *ResponseFunctionWebSearchActionFindParam:
+		return &vt.Pattern
 	}
 	return nil
 }
@@ -15828,10 +15892,30 @@ func (u responseInputItemUnionParamAction) GetMaxOutputLength() *int64 {
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamAction) GetType() *string {
 	switch vt := u.any.(type) {
-	case *ResponseComputerToolCallActionUnionParam:
-		return vt.GetType()
-	case *ResponseFunctionWebSearchActionUnionParam:
-		return vt.GetType()
+	case *ResponseComputerToolCallActionClickParam:
+		return (*string)(&vt.Type)
+	case *ResponseComputerToolCallActionDoubleClickParam:
+		return (*string)(&vt.Type)
+	case *ResponseComputerToolCallActionDragParam:
+		return (*string)(&vt.Type)
+	case *ResponseComputerToolCallActionKeypressParam:
+		return (*string)(&vt.Type)
+	case *ResponseComputerToolCallActionMoveParam:
+		return (*string)(&vt.Type)
+	case *ResponseComputerToolCallActionScreenshotParam:
+		return (*string)(&vt.Type)
+	case *ResponseComputerToolCallActionScrollParam:
+		return (*string)(&vt.Type)
+	case *ResponseComputerToolCallActionTypeParam:
+		return (*string)(&vt.Type)
+	case *ResponseComputerToolCallActionWaitParam:
+		return (*string)(&vt.Type)
+	case *ResponseFunctionWebSearchActionSearchParam:
+		return (*string)(&vt.Type)
+	case *ResponseFunctionWebSearchActionOpenPageParam:
+		return (*string)(&vt.Type)
+	case *ResponseFunctionWebSearchActionFindParam:
+		return (*string)(&vt.Type)
 	case *ResponseInputItemLocalShellCallActionParam:
 		return (*string)(&vt.Type)
 	}
@@ -15841,8 +15925,14 @@ func (u responseInputItemUnionParamAction) GetType() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamAction) GetX() *int64 {
 	switch vt := u.any.(type) {
-	case *ResponseComputerToolCallActionUnionParam:
-		return vt.GetX()
+	case *ResponseComputerToolCallActionClickParam:
+		return (*int64)(&vt.X)
+	case *ResponseComputerToolCallActionDoubleClickParam:
+		return (*int64)(&vt.X)
+	case *ResponseComputerToolCallActionMoveParam:
+		return (*int64)(&vt.X)
+	case *ResponseComputerToolCallActionScrollParam:
+		return (*int64)(&vt.X)
 	}
 	return nil
 }
@@ -15850,8 +15940,14 @@ func (u responseInputItemUnionParamAction) GetX() *int64 {
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamAction) GetY() *int64 {
 	switch vt := u.any.(type) {
-	case *ResponseComputerToolCallActionUnionParam:
-		return vt.GetY()
+	case *ResponseComputerToolCallActionClickParam:
+		return (*int64)(&vt.Y)
+	case *ResponseComputerToolCallActionDoubleClickParam:
+		return (*int64)(&vt.Y)
+	case *ResponseComputerToolCallActionMoveParam:
+		return (*int64)(&vt.Y)
+	case *ResponseComputerToolCallActionScrollParam:
+		return (*int64)(&vt.Y)
 	}
 	return nil
 }
@@ -15859,8 +15955,10 @@ func (u responseInputItemUnionParamAction) GetY() *int64 {
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamAction) GetURL() *string {
 	switch vt := u.any.(type) {
-	case *ResponseFunctionWebSearchActionUnionParam:
-		return vt.GetURL()
+	case *ResponseFunctionWebSearchActionOpenPageParam:
+		return paramutil.AddrIfPresent(vt.URL)
+	case *ResponseFunctionWebSearchActionFindParam:
+		return (*string)(&vt.URL)
 	}
 	return nil
 }
@@ -15879,8 +15977,18 @@ func (u responseInputItemUnionParamAction) GetTimeoutMs() *int64 {
 // Returns a pointer to the underlying variant's Keys property, if present.
 func (u responseInputItemUnionParamAction) GetKeys() []string {
 	switch vt := u.any.(type) {
-	case *ResponseComputerToolCallActionUnionParam:
-		return vt.GetKeys()
+	case *ResponseComputerToolCallActionClickParam:
+		return vt.Keys
+	case *ResponseComputerToolCallActionDoubleClickParam:
+		return vt.Keys
+	case *ResponseComputerToolCallActionDragParam:
+		return vt.Keys
+	case *ResponseComputerToolCallActionKeypressParam:
+		return vt.Keys
+	case *ResponseComputerToolCallActionMoveParam:
+		return vt.Keys
+	case *ResponseComputerToolCallActionScrollParam:
+		return vt.Keys
 	}
 	return nil
 }
@@ -16024,22 +16132,38 @@ func (u responseInputItemUnionParamCaller) AsAny() any { return u.any }
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamCaller) GetType() *string {
 	switch vt := u.any.(type) {
-	case *ResponseFunctionToolCallCallerUnionParam:
-		return vt.GetType()
-	case *ResponseInputItemFunctionCallOutputCallerUnionParam:
-		return vt.GetType()
-	case *ResponseInputItemShellCallCallerUnionParam:
-		return vt.GetType()
-	case *ResponseInputItemShellCallOutputCallerUnionParam:
-		return vt.GetType()
-	case *ResponseInputItemApplyPatchCallCallerUnionParam:
-		return vt.GetType()
-	case *ResponseInputItemApplyPatchCallOutputCallerUnionParam:
-		return vt.GetType()
-	case *ResponseCustomToolCallOutputCallerUnionParam:
-		return vt.GetType()
-	case *ResponseCustomToolCallCallerUnionParam:
-		return vt.GetType()
+	case *ResponseFunctionToolCallCallerDirectParam:
+		return (*string)(&vt.Type)
+	case *ResponseFunctionToolCallCallerProgramParam:
+		return (*string)(&vt.Type)
+	case *ResponseInputItemFunctionCallOutputCallerDirectParam:
+		return (*string)(&vt.Type)
+	case *ResponseInputItemFunctionCallOutputCallerProgramParam:
+		return (*string)(&vt.Type)
+	case *ResponseInputItemShellCallCallerDirectParam:
+		return (*string)(&vt.Type)
+	case *ResponseInputItemShellCallCallerProgramParam:
+		return (*string)(&vt.Type)
+	case *ResponseInputItemShellCallOutputCallerDirectParam:
+		return (*string)(&vt.Type)
+	case *ResponseInputItemShellCallOutputCallerProgramParam:
+		return (*string)(&vt.Type)
+	case *ResponseInputItemApplyPatchCallCallerDirectParam:
+		return (*string)(&vt.Type)
+	case *ResponseInputItemApplyPatchCallCallerProgramParam:
+		return (*string)(&vt.Type)
+	case *ResponseInputItemApplyPatchCallOutputCallerDirectParam:
+		return (*string)(&vt.Type)
+	case *ResponseInputItemApplyPatchCallOutputCallerProgramParam:
+		return (*string)(&vt.Type)
+	case *ResponseCustomToolCallOutputCallerDirectParam:
+		return (*string)(&vt.Type)
+	case *ResponseCustomToolCallOutputCallerProgramParam:
+		return (*string)(&vt.Type)
+	case *ResponseCustomToolCallCallerDirectParam:
+		return (*string)(&vt.Type)
+	case *ResponseCustomToolCallCallerProgramParam:
+		return (*string)(&vt.Type)
 	}
 	return nil
 }
@@ -16047,22 +16171,22 @@ func (u responseInputItemUnionParamCaller) GetType() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamCaller) GetCallerID() *string {
 	switch vt := u.any.(type) {
-	case *ResponseFunctionToolCallCallerUnionParam:
-		return vt.GetCallerID()
-	case *ResponseInputItemFunctionCallOutputCallerUnionParam:
-		return vt.GetCallerID()
-	case *ResponseInputItemShellCallCallerUnionParam:
-		return vt.GetCallerID()
-	case *ResponseInputItemShellCallOutputCallerUnionParam:
-		return vt.GetCallerID()
-	case *ResponseInputItemApplyPatchCallCallerUnionParam:
-		return vt.GetCallerID()
-	case *ResponseInputItemApplyPatchCallOutputCallerUnionParam:
-		return vt.GetCallerID()
-	case *ResponseCustomToolCallOutputCallerUnionParam:
-		return vt.GetCallerID()
-	case *ResponseCustomToolCallCallerUnionParam:
-		return vt.GetCallerID()
+	case *ResponseFunctionToolCallCallerProgramParam:
+		return (*string)(&vt.CallerID)
+	case *ResponseInputItemFunctionCallOutputCallerProgramParam:
+		return (*string)(&vt.CallerID)
+	case *ResponseInputItemShellCallCallerProgramParam:
+		return (*string)(&vt.CallerID)
+	case *ResponseInputItemShellCallOutputCallerProgramParam:
+		return (*string)(&vt.CallerID)
+	case *ResponseInputItemApplyPatchCallCallerProgramParam:
+		return (*string)(&vt.CallerID)
+	case *ResponseInputItemApplyPatchCallOutputCallerProgramParam:
+		return (*string)(&vt.CallerID)
+	case *ResponseCustomToolCallOutputCallerProgramParam:
+		return (*string)(&vt.CallerID)
+	case *ResponseCustomToolCallCallerProgramParam:
+		return (*string)(&vt.CallerID)
 	}
 	return nil
 }
@@ -16127,8 +16251,10 @@ func (u responseInputItemUnionParamError) AsAny() any { return u.any }
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamError) GetCode() *int64 {
 	switch vt := u.any.(type) {
-	case *McpToolCallErrorUnionParam:
-		return vt.GetCode()
+	case *McpToolCallErrorMcpProtocolErrorParam:
+		return (*int64)(&vt.Code)
+	case *McpToolCallErrorHTTPErrorParam:
+		return (*int64)(&vt.Code)
 	}
 	return nil
 }
@@ -16136,8 +16262,10 @@ func (u responseInputItemUnionParamError) GetCode() *int64 {
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamError) GetMessage() *string {
 	switch vt := u.any.(type) {
-	case *McpToolCallErrorUnionParam:
-		return vt.GetMessage()
+	case *McpToolCallErrorMcpProtocolErrorParam:
+		return (*string)(&vt.Message)
+	case *McpToolCallErrorHTTPErrorParam:
+		return (*string)(&vt.Message)
 	}
 	return nil
 }
@@ -16145,8 +16273,12 @@ func (u responseInputItemUnionParamError) GetMessage() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamError) GetType() *string {
 	switch vt := u.any.(type) {
-	case *McpToolCallErrorUnionParam:
-		return vt.GetType()
+	case *McpToolCallErrorMcpProtocolErrorParam:
+		return (*string)(&vt.Type)
+	case *McpToolCallErrorMcpToolExecutionErrorParam:
+		return (*string)(&vt.Type)
+	case *McpToolCallErrorHTTPErrorParam:
+		return (*string)(&vt.Type)
 	}
 	return nil
 }
@@ -16154,8 +16286,8 @@ func (u responseInputItemUnionParamError) GetType() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseInputItemUnionParamError) GetContent() *any {
 	switch vt := u.any.(type) {
-	case *McpToolCallErrorUnionParam:
-		return vt.GetContent()
+	case *McpToolCallErrorMcpToolExecutionErrorParam:
+		return &vt.Content
 	}
 	return nil
 }
@@ -16564,6 +16696,8 @@ type ResponseInputItemImageGenerationCallParam struct {
 	Quality string `json:"quality,omitzero"`
 	// The image dimensions as a `WIDTHxHEIGHT` string, for example `1536x864`.
 	Size param.Opt[string] `json:"size,omitzero"`
+	// Details of a moderation failure, when available.
+	Error ResponseInputItemImageGenerationCallErrorParam `json:"error,omitzero"`
 	// The type of the image generation call. Always `image_generation_call`.
 	//
 	// This field can be elided, and will marshal its zero value as
@@ -16586,6 +16720,58 @@ func init() {
 	)
 	apijson.RegisterFieldValidator[ResponseInputItemImageGenerationCallParam](
 		"quality", "low", "medium", "high", "xhigh", "max", "auto",
+	)
+}
+
+// Details of a moderation failure, when available.
+//
+// The properties Code, Message, Param, Type are required.
+type ResponseInputItemImageGenerationCallErrorParam struct {
+	// The error code.
+	Code param.Opt[string] `json:"code,omitzero" api:"required"`
+	// The related request parameter.
+	Param param.Opt[string] `json:"param,omitzero" api:"required"`
+	// A description of the error.
+	Message string `json:"message" api:"required"`
+	// The error type.
+	Type string `json:"type" api:"required"`
+	// Public details for a `moderation_blocked` error, when available.
+	ModerationDetails ResponseInputItemImageGenerationCallErrorModerationDetailsParam `json:"moderation_details,omitzero"`
+	paramObj
+}
+
+func (r ResponseInputItemImageGenerationCallErrorParam) MarshalJSON() (data []byte, err error) {
+	type shadow ResponseInputItemImageGenerationCallErrorParam
+	return param.MarshalObject(r, (*shadow)(&r))
+}
+func (r *ResponseInputItemImageGenerationCallErrorParam) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// Public details for a `moderation_blocked` error, when available.
+//
+// The properties Categories, ModerationStage are required.
+type ResponseInputItemImageGenerationCallErrorModerationDetailsParam struct {
+	// Public moderation categories. New category values may be added over time.
+	Categories []string `json:"categories,omitzero" api:"required"`
+	// The stage where moderation blocked the image generation call.
+	//
+	// Any of "input", "output", "unknown".
+	ModerationStage string `json:"moderation_stage,omitzero" api:"required"`
+	paramObj
+}
+
+func (r ResponseInputItemImageGenerationCallErrorModerationDetailsParam) MarshalJSON() (data []byte, err error) {
+	type shadow ResponseInputItemImageGenerationCallErrorModerationDetailsParam
+	return param.MarshalObject(r, (*shadow)(&r))
+}
+func (r *ResponseInputItemImageGenerationCallErrorModerationDetailsParam) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+func init() {
+	apijson.RegisterFieldValidator[ResponseInputItemImageGenerationCallErrorModerationDetailsParam](
+		"moderation_stage", "input", "output", "unknown",
 	)
 }
 
@@ -18816,6 +19002,8 @@ type ResponseItemImageGenerationCall struct {
 	//
 	// Any of "transparent", "opaque", "auto".
 	Background string `json:"background" api:"nullable"`
+	// Details of a moderation failure, when available.
+	Error ResponseItemImageGenerationCallError `json:"error"`
 	// The output format used for generation.
 	//
 	// Any of "png", "webp", "jpeg".
@@ -18837,6 +19025,7 @@ type ResponseItemImageGenerationCall struct {
 		Type          respjson.Field
 		Action        respjson.Field
 		Background    respjson.Field
+		Error         respjson.Field
 		OutputFormat  respjson.Field
 		Quality       respjson.Field
 		RevisedPrompt respjson.Field
@@ -18849,6 +19038,59 @@ type ResponseItemImageGenerationCall struct {
 // Returns the unmodified JSON received from the API
 func (r ResponseItemImageGenerationCall) RawJSON() string { return r.JSON.raw }
 func (r *ResponseItemImageGenerationCall) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// Details of a moderation failure, when available.
+type ResponseItemImageGenerationCallError struct {
+	// The error code.
+	Code string `json:"code" api:"required"`
+	// A description of the error.
+	Message string `json:"message" api:"required"`
+	// The related request parameter.
+	Param string `json:"param" api:"required"`
+	// The error type.
+	Type string `json:"type" api:"required"`
+	// Public details for a `moderation_blocked` error, when available.
+	ModerationDetails ResponseItemImageGenerationCallErrorModerationDetails `json:"moderation_details"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Code              respjson.Field
+		Message           respjson.Field
+		Param             respjson.Field
+		Type              respjson.Field
+		ModerationDetails respjson.Field
+		ExtraFields       map[string]respjson.Field
+		raw               string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r ResponseItemImageGenerationCallError) RawJSON() string { return r.JSON.raw }
+func (r *ResponseItemImageGenerationCallError) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// Public details for a `moderation_blocked` error, when available.
+type ResponseItemImageGenerationCallErrorModerationDetails struct {
+	// Public moderation categories. New category values may be added over time.
+	Categories []string `json:"categories" api:"required"`
+	// The stage where moderation blocked the image generation call.
+	//
+	// Any of "input", "output", "unknown".
+	ModerationStage string `json:"moderation_stage" api:"required"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Categories      respjson.Field
+		ModerationStage respjson.Field
+		ExtraFields     map[string]respjson.Field
+		raw             string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r ResponseItemImageGenerationCallErrorModerationDetails) RawJSON() string { return r.JSON.raw }
+func (r *ResponseItemImageGenerationCallErrorModerationDetails) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
@@ -20162,6 +20404,8 @@ type ResponseOutputItemImageGenerationCall struct {
 	//
 	// Any of "transparent", "opaque", "auto".
 	Background string `json:"background" api:"nullable"`
+	// Details of a moderation failure, when available.
+	Error ResponseOutputItemImageGenerationCallError `json:"error"`
 	// The output format used for generation.
 	//
 	// Any of "png", "webp", "jpeg".
@@ -20183,6 +20427,7 @@ type ResponseOutputItemImageGenerationCall struct {
 		Type          respjson.Field
 		Action        respjson.Field
 		Background    respjson.Field
+		Error         respjson.Field
 		OutputFormat  respjson.Field
 		Quality       respjson.Field
 		RevisedPrompt respjson.Field
@@ -20195,6 +20440,61 @@ type ResponseOutputItemImageGenerationCall struct {
 // Returns the unmodified JSON received from the API
 func (r ResponseOutputItemImageGenerationCall) RawJSON() string { return r.JSON.raw }
 func (r *ResponseOutputItemImageGenerationCall) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// Details of a moderation failure, when available.
+type ResponseOutputItemImageGenerationCallError struct {
+	// The error code.
+	Code string `json:"code" api:"required"`
+	// A description of the error.
+	Message string `json:"message" api:"required"`
+	// The related request parameter.
+	Param string `json:"param" api:"required"`
+	// The error type.
+	Type string `json:"type" api:"required"`
+	// Public details for a `moderation_blocked` error, when available.
+	ModerationDetails ResponseOutputItemImageGenerationCallErrorModerationDetails `json:"moderation_details"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Code              respjson.Field
+		Message           respjson.Field
+		Param             respjson.Field
+		Type              respjson.Field
+		ModerationDetails respjson.Field
+		ExtraFields       map[string]respjson.Field
+		raw               string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r ResponseOutputItemImageGenerationCallError) RawJSON() string { return r.JSON.raw }
+func (r *ResponseOutputItemImageGenerationCallError) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// Public details for a `moderation_blocked` error, when available.
+type ResponseOutputItemImageGenerationCallErrorModerationDetails struct {
+	// Public moderation categories. New category values may be added over time.
+	Categories []string `json:"categories" api:"required"`
+	// The stage where moderation blocked the image generation call.
+	//
+	// Any of "input", "output", "unknown".
+	ModerationStage string `json:"moderation_stage" api:"required"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Categories      respjson.Field
+		ModerationStage respjson.Field
+		ExtraFields     map[string]respjson.Field
+		raw             string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r ResponseOutputItemImageGenerationCallErrorModerationDetails) RawJSON() string {
+	return r.JSON.raw
+}
+func (r *ResponseOutputItemImageGenerationCallErrorModerationDetails) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
@@ -27131,8 +27431,8 @@ func (u responseToolSearchOutputItemParamToolUnionFilters) AsAny() any { return 
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseToolSearchOutputItemParamToolUnionFilters) GetKey() *string {
 	switch vt := u.any.(type) {
-	case *FileSearchToolFiltersUnionParam:
-		return vt.GetKey()
+	case *shared.ComparisonFilterParam:
+		return &vt.Key
 	}
 	return nil
 }
@@ -27140,8 +27440,8 @@ func (u responseToolSearchOutputItemParamToolUnionFilters) GetKey() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseToolSearchOutputItemParamToolUnionFilters) GetValue() *shared.ComparisonFilterValueUnionParam {
 	switch vt := u.any.(type) {
-	case *FileSearchToolFiltersUnionParam:
-		return vt.GetValue()
+	case *shared.ComparisonFilterParam:
+		return &vt.Value
 	}
 	return nil
 }
@@ -27149,8 +27449,8 @@ func (u responseToolSearchOutputItemParamToolUnionFilters) GetValue() *shared.Co
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseToolSearchOutputItemParamToolUnionFilters) GetFilters() []shared.CompoundFilterFilterUnionParam {
 	switch vt := u.any.(type) {
-	case *FileSearchToolFiltersUnionParam:
-		return vt.GetFilters()
+	case *shared.CompoundFilterParam:
+		return vt.Filters
 	}
 	return nil
 }
@@ -27167,8 +27467,10 @@ func (u responseToolSearchOutputItemParamToolUnionFilters) GetAllowedDomains() [
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseToolSearchOutputItemParamToolUnionFilters) GetType() *string {
 	switch vt := u.any.(type) {
-	case *FileSearchToolFiltersUnionParam:
-		return vt.GetType()
+	case *shared.ComparisonFilterParam:
+		return (*string)(&vt.Type)
+	case *shared.CompoundFilterParam:
+		return (*string)(&vt.Type)
 	}
 	return nil
 }
@@ -27204,8 +27506,8 @@ func (u responseToolSearchOutputItemParamToolUnionEnvironment) AsAny() any { ret
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseToolSearchOutputItemParamToolUnionEnvironment) GetFileIDs() []string {
 	switch vt := u.any.(type) {
-	case *FunctionShellToolEnvironmentUnionParam:
-		return vt.GetFileIDs()
+	case *ContainerAutoParam:
+		return vt.FileIDs
 	}
 	return nil
 }
@@ -27213,8 +27515,8 @@ func (u responseToolSearchOutputItemParamToolUnionEnvironment) GetFileIDs() []st
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseToolSearchOutputItemParamToolUnionEnvironment) GetMemoryLimit() *string {
 	switch vt := u.any.(type) {
-	case *FunctionShellToolEnvironmentUnionParam:
-		return vt.GetMemoryLimit()
+	case *ContainerAutoParam:
+		return (*string)(&vt.MemoryLimit)
 	}
 	return nil
 }
@@ -27222,8 +27524,8 @@ func (u responseToolSearchOutputItemParamToolUnionEnvironment) GetMemoryLimit() 
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseToolSearchOutputItemParamToolUnionEnvironment) GetNetworkPolicy() *ContainerAutoNetworkPolicyUnionParam {
 	switch vt := u.any.(type) {
-	case *FunctionShellToolEnvironmentUnionParam:
-		return vt.GetNetworkPolicy()
+	case *ContainerAutoParam:
+		return &vt.NetworkPolicy
 	}
 	return nil
 }
@@ -27231,8 +27533,8 @@ func (u responseToolSearchOutputItemParamToolUnionEnvironment) GetNetworkPolicy(
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseToolSearchOutputItemParamToolUnionEnvironment) GetContainerID() *string {
 	switch vt := u.any.(type) {
-	case *FunctionShellToolEnvironmentUnionParam:
-		return vt.GetContainerID()
+	case *ContainerReferenceParam:
+		return &vt.ContainerID
 	}
 	return nil
 }
@@ -27240,8 +27542,12 @@ func (u responseToolSearchOutputItemParamToolUnionEnvironment) GetContainerID() 
 // Returns a pointer to the underlying variant's property, if present.
 func (u responseToolSearchOutputItemParamToolUnionEnvironment) GetType() *string {
 	switch vt := u.any.(type) {
-	case *FunctionShellToolEnvironmentUnionParam:
-		return vt.GetType()
+	case *ContainerAutoParam:
+		return (*string)(&vt.Type)
+	case *LocalEnvironmentParam:
+		return (*string)(&vt.Type)
+	case *ContainerReferenceParam:
+		return (*string)(&vt.Type)
 	}
 	return nil
 }
@@ -27251,8 +27557,10 @@ func (u responseToolSearchOutputItemParamToolUnionEnvironment) GetType() *string
 // Or use AsAny() to get the underlying value
 func (u responseToolSearchOutputItemParamToolUnionEnvironment) GetSkills() (res responseToolSearchOutputItemParamToolUnionEnvironmentSkills) {
 	switch vt := u.any.(type) {
-	case *FunctionShellToolEnvironmentUnionParam:
-		res.any = vt.GetSkills()
+	case *ContainerAutoParam:
+		res.any = &vt.Skills
+	case *LocalEnvironmentParam:
+		res.any = &vt.Skills
 	}
 	return res
 }
@@ -33610,8 +33918,8 @@ func (u toolUnionParamFilters) AsAny() any { return u.any }
 // Returns a pointer to the underlying variant's property, if present.
 func (u toolUnionParamFilters) GetKey() *string {
 	switch vt := u.any.(type) {
-	case *FileSearchToolFiltersUnionParam:
-		return vt.GetKey()
+	case *shared.ComparisonFilterParam:
+		return &vt.Key
 	}
 	return nil
 }
@@ -33619,8 +33927,8 @@ func (u toolUnionParamFilters) GetKey() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u toolUnionParamFilters) GetValue() *shared.ComparisonFilterValueUnionParam {
 	switch vt := u.any.(type) {
-	case *FileSearchToolFiltersUnionParam:
-		return vt.GetValue()
+	case *shared.ComparisonFilterParam:
+		return &vt.Value
 	}
 	return nil
 }
@@ -33628,8 +33936,8 @@ func (u toolUnionParamFilters) GetValue() *shared.ComparisonFilterValueUnionPara
 // Returns a pointer to the underlying variant's property, if present.
 func (u toolUnionParamFilters) GetFilters() []shared.CompoundFilterFilterUnionParam {
 	switch vt := u.any.(type) {
-	case *FileSearchToolFiltersUnionParam:
-		return vt.GetFilters()
+	case *shared.CompoundFilterParam:
+		return vt.Filters
 	}
 	return nil
 }
@@ -33646,8 +33954,10 @@ func (u toolUnionParamFilters) GetAllowedDomains() []string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u toolUnionParamFilters) GetType() *string {
 	switch vt := u.any.(type) {
-	case *FileSearchToolFiltersUnionParam:
-		return vt.GetType()
+	case *shared.ComparisonFilterParam:
+		return (*string)(&vt.Type)
+	case *shared.CompoundFilterParam:
+		return (*string)(&vt.Type)
 	}
 	return nil
 }
@@ -33683,8 +33993,8 @@ func (u toolUnionParamEnvironment) AsAny() any { return u.any }
 // Returns a pointer to the underlying variant's property, if present.
 func (u toolUnionParamEnvironment) GetFileIDs() []string {
 	switch vt := u.any.(type) {
-	case *FunctionShellToolEnvironmentUnionParam:
-		return vt.GetFileIDs()
+	case *ContainerAutoParam:
+		return vt.FileIDs
 	}
 	return nil
 }
@@ -33692,8 +34002,8 @@ func (u toolUnionParamEnvironment) GetFileIDs() []string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u toolUnionParamEnvironment) GetMemoryLimit() *string {
 	switch vt := u.any.(type) {
-	case *FunctionShellToolEnvironmentUnionParam:
-		return vt.GetMemoryLimit()
+	case *ContainerAutoParam:
+		return (*string)(&vt.MemoryLimit)
 	}
 	return nil
 }
@@ -33701,8 +34011,8 @@ func (u toolUnionParamEnvironment) GetMemoryLimit() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u toolUnionParamEnvironment) GetNetworkPolicy() *ContainerAutoNetworkPolicyUnionParam {
 	switch vt := u.any.(type) {
-	case *FunctionShellToolEnvironmentUnionParam:
-		return vt.GetNetworkPolicy()
+	case *ContainerAutoParam:
+		return &vt.NetworkPolicy
 	}
 	return nil
 }
@@ -33710,8 +34020,8 @@ func (u toolUnionParamEnvironment) GetNetworkPolicy() *ContainerAutoNetworkPolic
 // Returns a pointer to the underlying variant's property, if present.
 func (u toolUnionParamEnvironment) GetContainerID() *string {
 	switch vt := u.any.(type) {
-	case *FunctionShellToolEnvironmentUnionParam:
-		return vt.GetContainerID()
+	case *ContainerReferenceParam:
+		return &vt.ContainerID
 	}
 	return nil
 }
@@ -33719,8 +34029,12 @@ func (u toolUnionParamEnvironment) GetContainerID() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u toolUnionParamEnvironment) GetType() *string {
 	switch vt := u.any.(type) {
-	case *FunctionShellToolEnvironmentUnionParam:
-		return vt.GetType()
+	case *ContainerAutoParam:
+		return (*string)(&vt.Type)
+	case *LocalEnvironmentParam:
+		return (*string)(&vt.Type)
+	case *ContainerReferenceParam:
+		return (*string)(&vt.Type)
 	}
 	return nil
 }
@@ -33730,8 +34044,10 @@ func (u toolUnionParamEnvironment) GetType() *string {
 // Or use AsAny() to get the underlying value
 func (u toolUnionParamEnvironment) GetSkills() (res toolUnionParamEnvironmentSkills) {
 	switch vt := u.any.(type) {
-	case *FunctionShellToolEnvironmentUnionParam:
-		res.any = vt.GetSkills()
+	case *ContainerAutoParam:
+		res.any = &vt.Skills
+	case *LocalEnvironmentParam:
+		res.any = &vt.Skills
 	}
 	return res
 }
@@ -36286,17 +36602,20 @@ func (r *ResponseCompactParams) UnmarshalJSON(data []byte) error {
 type ResponseCompactParamsModel string
 
 const (
-	ResponseCompactParamsModelGPT6Astra            ResponseCompactParamsModel = "gpt-6-astra"
-	ResponseCompactParamsModelGPT6_1Sol            ResponseCompactParamsModel = "gpt-6.1-sol"
-	ResponseCompactParamsModelGPT6Sol              ResponseCompactParamsModel = "gpt-6-sol"
-	ResponseCompactParamsModelGPT6Luna             ResponseCompactParamsModel = "gpt-6-luna"
-	ResponseCompactParamsModelGPT5_6Sol            ResponseCompactParamsModel = "gpt-5.6-sol"
-	ResponseCompactParamsModelGPT5_6Terra          ResponseCompactParamsModel = "gpt-5.6-terra"
-	ResponseCompactParamsModelGPT5_6Luna           ResponseCompactParamsModel = "gpt-5.6-luna"
-	ResponseCompactParamsModelGPT5_5               ResponseCompactParamsModel = "gpt-5.5"
-	ResponseCompactParamsModelGPT5_5_2026_04_23    ResponseCompactParamsModel = "gpt-5.5-2026-04-23"
-	ResponseCompactParamsModelGPT5_4               ResponseCompactParamsModel = "gpt-5.4"
-	ResponseCompactParamsModelGPT5_4Mini           ResponseCompactParamsModel = "gpt-5.4-mini"
+	ResponseCompactParamsModelGPT6Astra         ResponseCompactParamsModel = "gpt-6-astra"
+	ResponseCompactParamsModelGPT6_1Sol         ResponseCompactParamsModel = "gpt-6.1-sol"
+	ResponseCompactParamsModelGPT6Sol           ResponseCompactParamsModel = "gpt-6-sol"
+	ResponseCompactParamsModelGPT6Luna          ResponseCompactParamsModel = "gpt-6-luna"
+	ResponseCompactParamsModelGPT5_6Sol         ResponseCompactParamsModel = "gpt-5.6-sol"
+	ResponseCompactParamsModelGPT5_6Terra       ResponseCompactParamsModel = "gpt-5.6-terra"
+	ResponseCompactParamsModelGPT5_6Luna        ResponseCompactParamsModel = "gpt-5.6-luna"
+	ResponseCompactParamsModelGPT5_5            ResponseCompactParamsModel = "gpt-5.5"
+	ResponseCompactParamsModelGPT5_5_2026_04_23 ResponseCompactParamsModel = "gpt-5.5-2026-04-23"
+	ResponseCompactParamsModelGPT5_4            ResponseCompactParamsModel = "gpt-5.4"
+	ResponseCompactParamsModelGPT5_4Mini        ResponseCompactParamsModel = "gpt-5.4-mini"
+	// Deprecated: Announced shutdown date: 2027-04-01. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
 	ResponseCompactParamsModelGPT5_4Nano           ResponseCompactParamsModel = "gpt-5.4-nano"
 	ResponseCompactParamsModelGPT5_4Mini2026_03_17 ResponseCompactParamsModel = "gpt-5.4-mini-2026-03-17"
 	ResponseCompactParamsModelGPT5_4Nano2026_03_17 ResponseCompactParamsModel = "gpt-5.4-nano-2026-03-17"
@@ -36312,8 +36631,11 @@ const (
 	ResponseCompactParamsModelGPT5_2ChatLatest    ResponseCompactParamsModel = "gpt-5.2-chat-latest"
 	ResponseCompactParamsModelGPT5_2Pro           ResponseCompactParamsModel = "gpt-5.2-pro"
 	ResponseCompactParamsModelGPT5_2Pro2025_12_11 ResponseCompactParamsModel = "gpt-5.2-pro-2025-12-11"
-	ResponseCompactParamsModelGPT5_1              ResponseCompactParamsModel = "gpt-5.1"
-	ResponseCompactParamsModelGPT5_1_2025_11_13   ResponseCompactParamsModel = "gpt-5.1-2025-11-13"
+	// Deprecated: Announced shutdown date: 2027-04-01. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
+	ResponseCompactParamsModelGPT5_1            ResponseCompactParamsModel = "gpt-5.1"
+	ResponseCompactParamsModelGPT5_1_2025_11_13 ResponseCompactParamsModel = "gpt-5.1-2025-11-13"
 	// Deprecated: Announced shutdown date: 2026-07-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
 	// replacements.
@@ -36357,8 +36679,14 @@ const (
 	// Deprecated: Announced shutdown date: 2026-10-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
 	// replacements.
-	ResponseCompactParamsModelGPT4_1Nano           ResponseCompactParamsModel = "gpt-4.1-nano"
-	ResponseCompactParamsModelGPT4_1_2025_04_14    ResponseCompactParamsModel = "gpt-4.1-2025-04-14"
+	ResponseCompactParamsModelGPT4_1Nano ResponseCompactParamsModel = "gpt-4.1-nano"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
+	ResponseCompactParamsModelGPT4_1_2025_04_14 ResponseCompactParamsModel = "gpt-4.1-2025-04-14"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
 	ResponseCompactParamsModelGPT4_1Mini2025_04_14 ResponseCompactParamsModel = "gpt-4.1-mini-2025-04-14"
 	// Deprecated: Announced shutdown date: 2026-10-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
@@ -36413,8 +36741,14 @@ const (
 	// replacements.
 	ResponseCompactParamsModelO1Mini2024_09_12 ResponseCompactParamsModel = "o1-mini-2024-09-12"
 	ResponseCompactParamsModelGPT4o            ResponseCompactParamsModel = "gpt-4o"
-	ResponseCompactParamsModelGPT4o2024_11_20  ResponseCompactParamsModel = "gpt-4o-2024-11-20"
-	ResponseCompactParamsModelGPT4o2024_08_06  ResponseCompactParamsModel = "gpt-4o-2024-08-06"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
+	ResponseCompactParamsModelGPT4o2024_11_20 ResponseCompactParamsModel = "gpt-4o-2024-11-20"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
+	ResponseCompactParamsModelGPT4o2024_08_06 ResponseCompactParamsModel = "gpt-4o-2024-08-06"
 	// Deprecated: Announced shutdown date: 2026-10-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
 	// replacements.
@@ -36474,8 +36808,11 @@ const (
 	// Deprecated: Announced shutdown date: 2026-02-12. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
 	// replacements.
-	ResponseCompactParamsModelCodexMiniLatest     ResponseCompactParamsModel = "codex-mini-latest"
-	ResponseCompactParamsModelGPT4oMini           ResponseCompactParamsModel = "gpt-4o-mini"
+	ResponseCompactParamsModelCodexMiniLatest ResponseCompactParamsModel = "codex-mini-latest"
+	ResponseCompactParamsModelGPT4oMini       ResponseCompactParamsModel = "gpt-4o-mini"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
 	ResponseCompactParamsModelGPT4oMini2024_07_18 ResponseCompactParamsModel = "gpt-4o-mini-2024-07-18"
 	// Deprecated: Announced shutdown date: 2026-10-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended

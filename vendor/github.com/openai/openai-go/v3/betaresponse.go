@@ -62,6 +62,7 @@ func NewBetaResponseService(opts ...option.RequestOption) (r BetaResponseService
 // [file search](https://developers.openai.com/api/docs/guides/tools-file-search)
 // to use your own data as input for the model's response.
 func (r *BetaResponseService) New(ctx context.Context, params BetaResponseNewParams, opts ...option.RequestOption) (res *BetaResponse, err error) {
+	opts = slices.Clone(opts)
 	for _, v := range params.Betas {
 		opts = append(opts, option.WithHeaderAdd("openai-beta", fmt.Sprintf("%v", v)))
 	}
@@ -88,6 +89,7 @@ func (r *BetaResponseService) NewStreaming(ctx context.Context, params BetaRespo
 		raw *http.Response
 		err error
 	)
+	opts = slices.Clone(opts)
 	for _, v := range params.Betas {
 		opts = append(opts, option.WithHeaderAdd("openai-beta", fmt.Sprintf("%v", v)))
 	}
@@ -101,6 +103,7 @@ func (r *BetaResponseService) NewStreaming(ctx context.Context, params BetaRespo
 
 // Retrieves a model response with the given ID.
 func (r *BetaResponseService) Get(ctx context.Context, responseID string, params BetaResponseGetParams, opts ...option.RequestOption) (res *BetaResponse, err error) {
+	opts = slices.Clone(opts)
 	for _, v := range params.Betas {
 		opts = append(opts, option.WithHeaderAdd("openai-beta", fmt.Sprintf("%v", v)))
 	}
@@ -121,6 +124,7 @@ func (r *BetaResponseService) GetStreaming(ctx context.Context, responseID strin
 		raw *http.Response
 		err error
 	)
+	opts = slices.Clone(opts)
 	for _, v := range params.Betas {
 		opts = append(opts, option.WithHeaderAdd("openai-beta", fmt.Sprintf("%v", v)))
 	}
@@ -138,6 +142,7 @@ func (r *BetaResponseService) GetStreaming(ctx context.Context, responseID strin
 
 // Deletes a model response with the given ID.
 func (r *BetaResponseService) Delete(ctx context.Context, responseID string, body BetaResponseDeleteParams, opts ...option.RequestOption) (err error) {
+	opts = slices.Clone(opts)
 	for _, v := range body.Betas {
 		opts = append(opts, option.WithHeaderAdd("openai-beta", fmt.Sprintf("%v", v)))
 	}
@@ -157,6 +162,7 @@ func (r *BetaResponseService) Delete(ctx context.Context, responseID string, bod
 // `background` parameter set to `true` can be cancelled.
 // [Learn more](https://developers.openai.com/api/docs/guides/background).
 func (r *BetaResponseService) Cancel(ctx context.Context, responseID string, body BetaResponseCancelParams, opts ...option.RequestOption) (res *BetaResponse, err error) {
+	opts = slices.Clone(opts)
 	for _, v := range body.Betas {
 		opts = append(opts, option.WithHeaderAdd("openai-beta", fmt.Sprintf("%v", v)))
 	}
@@ -178,6 +184,7 @@ func (r *BetaResponseService) Cancel(ctx context.Context, responseID string, bod
 // For ZDR-compatible compaction details, see
 // [Compaction (advanced)](https://developers.openai.com/api/docs/guides/conversation-state#compaction-advanced).
 func (r *BetaResponseService) Compact(ctx context.Context, params BetaResponseCompactParams, opts ...option.RequestOption) (res *BetaCompactedResponse, err error) {
+	opts = slices.Clone(opts)
 	for _, v := range params.Betas {
 		opts = append(opts, option.WithHeaderAdd("openai-beta", fmt.Sprintf("%v", v)))
 	}
@@ -4753,17 +4760,20 @@ func (r *BetaResponseInstructionsUnion) UnmarshalJSON(data []byte) error {
 type BetaResponseModel string
 
 const (
-	BetaResponseModelGPT6Astra            BetaResponseModel = "gpt-6-astra"
-	BetaResponseModelGPT6_1Sol            BetaResponseModel = "gpt-6.1-sol"
-	BetaResponseModelGPT6Sol              BetaResponseModel = "gpt-6-sol"
-	BetaResponseModelGPT6Luna             BetaResponseModel = "gpt-6-luna"
-	BetaResponseModelGPT5_6Sol            BetaResponseModel = "gpt-5.6-sol"
-	BetaResponseModelGPT5_6Terra          BetaResponseModel = "gpt-5.6-terra"
-	BetaResponseModelGPT5_6Luna           BetaResponseModel = "gpt-5.6-luna"
-	BetaResponseModelGPT5_5               BetaResponseModel = "gpt-5.5"
-	BetaResponseModelGPT5_5_2026_04_23    BetaResponseModel = "gpt-5.5-2026-04-23"
-	BetaResponseModelGPT5_4               BetaResponseModel = "gpt-5.4"
-	BetaResponseModelGPT5_4Mini           BetaResponseModel = "gpt-5.4-mini"
+	BetaResponseModelGPT6Astra         BetaResponseModel = "gpt-6-astra"
+	BetaResponseModelGPT6_1Sol         BetaResponseModel = "gpt-6.1-sol"
+	BetaResponseModelGPT6Sol           BetaResponseModel = "gpt-6-sol"
+	BetaResponseModelGPT6Luna          BetaResponseModel = "gpt-6-luna"
+	BetaResponseModelGPT5_6Sol         BetaResponseModel = "gpt-5.6-sol"
+	BetaResponseModelGPT5_6Terra       BetaResponseModel = "gpt-5.6-terra"
+	BetaResponseModelGPT5_6Luna        BetaResponseModel = "gpt-5.6-luna"
+	BetaResponseModelGPT5_5            BetaResponseModel = "gpt-5.5"
+	BetaResponseModelGPT5_5_2026_04_23 BetaResponseModel = "gpt-5.5-2026-04-23"
+	BetaResponseModelGPT5_4            BetaResponseModel = "gpt-5.4"
+	BetaResponseModelGPT5_4Mini        BetaResponseModel = "gpt-5.4-mini"
+	// Deprecated: Announced shutdown date: 2027-04-01. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
 	BetaResponseModelGPT5_4Nano           BetaResponseModel = "gpt-5.4-nano"
 	BetaResponseModelGPT5_4Mini2026_03_17 BetaResponseModel = "gpt-5.4-mini-2026-03-17"
 	BetaResponseModelGPT5_4Nano2026_03_17 BetaResponseModel = "gpt-5.4-nano-2026-03-17"
@@ -4779,8 +4789,11 @@ const (
 	BetaResponseModelGPT5_2ChatLatest    BetaResponseModel = "gpt-5.2-chat-latest"
 	BetaResponseModelGPT5_2Pro           BetaResponseModel = "gpt-5.2-pro"
 	BetaResponseModelGPT5_2Pro2025_12_11 BetaResponseModel = "gpt-5.2-pro-2025-12-11"
-	BetaResponseModelGPT5_1              BetaResponseModel = "gpt-5.1"
-	BetaResponseModelGPT5_1_2025_11_13   BetaResponseModel = "gpt-5.1-2025-11-13"
+	// Deprecated: Announced shutdown date: 2027-04-01. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
+	BetaResponseModelGPT5_1            BetaResponseModel = "gpt-5.1"
+	BetaResponseModelGPT5_1_2025_11_13 BetaResponseModel = "gpt-5.1-2025-11-13"
 	// Deprecated: Announced shutdown date: 2026-07-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
 	// replacements.
@@ -4824,8 +4837,14 @@ const (
 	// Deprecated: Announced shutdown date: 2026-10-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
 	// replacements.
-	BetaResponseModelGPT4_1Nano           BetaResponseModel = "gpt-4.1-nano"
-	BetaResponseModelGPT4_1_2025_04_14    BetaResponseModel = "gpt-4.1-2025-04-14"
+	BetaResponseModelGPT4_1Nano BetaResponseModel = "gpt-4.1-nano"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
+	BetaResponseModelGPT4_1_2025_04_14 BetaResponseModel = "gpt-4.1-2025-04-14"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
 	BetaResponseModelGPT4_1Mini2025_04_14 BetaResponseModel = "gpt-4.1-mini-2025-04-14"
 	// Deprecated: Announced shutdown date: 2026-10-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
@@ -4880,8 +4899,14 @@ const (
 	// replacements.
 	BetaResponseModelO1Mini2024_09_12 BetaResponseModel = "o1-mini-2024-09-12"
 	BetaResponseModelGPT4o            BetaResponseModel = "gpt-4o"
-	BetaResponseModelGPT4o2024_11_20  BetaResponseModel = "gpt-4o-2024-11-20"
-	BetaResponseModelGPT4o2024_08_06  BetaResponseModel = "gpt-4o-2024-08-06"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
+	BetaResponseModelGPT4o2024_11_20 BetaResponseModel = "gpt-4o-2024-11-20"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
+	BetaResponseModelGPT4o2024_08_06 BetaResponseModel = "gpt-4o-2024-08-06"
 	// Deprecated: Announced shutdown date: 2026-10-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
 	// replacements.
@@ -4941,8 +4966,11 @@ const (
 	// Deprecated: Announced shutdown date: 2026-02-12. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
 	// replacements.
-	BetaResponseModelCodexMiniLatest     BetaResponseModel = "codex-mini-latest"
-	BetaResponseModelGPT4oMini           BetaResponseModel = "gpt-4o-mini"
+	BetaResponseModelCodexMiniLatest BetaResponseModel = "codex-mini-latest"
+	BetaResponseModelGPT4oMini       BetaResponseModel = "gpt-4o-mini"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
 	BetaResponseModelGPT4oMini2024_07_18 BetaResponseModel = "gpt-4o-mini-2024-07-18"
 	// Deprecated: Announced shutdown date: 2026-10-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
@@ -9423,11 +9451,17 @@ type BetaResponseError struct {
 	// A human-readable description of the error.
 	Message      string                        `json:"message" api:"required"`
 	Misalignment BetaResponseErrorMisalignment `json:"misalignment"`
+	// The request parameter associated with the error, or null if none was recorded.
+	Param string `json:"param" api:"nullable"`
+	// The original error type, or null if it was not recorded.
+	Type string `json:"type" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		Code         respjson.Field
 		Message      respjson.Field
 		Misalignment respjson.Field
+		Param        respjson.Field
+		Type         respjson.Field
 		ExtraFields  map[string]respjson.Field
 		raw          string
 	} `json:"-"`
@@ -15846,6 +15880,8 @@ type BetaResponseInputItemImageGenerationCall struct {
 	//
 	// Any of "transparent", "opaque", "auto".
 	Background string `json:"background" api:"nullable"`
+	// Details of a moderation failure, when available.
+	Error BetaResponseInputItemImageGenerationCallError `json:"error"`
 	// The output format used for generation.
 	//
 	// Any of "png", "webp", "jpeg".
@@ -15868,6 +15904,7 @@ type BetaResponseInputItemImageGenerationCall struct {
 		Action        respjson.Field
 		Agent         respjson.Field
 		Background    respjson.Field
+		Error         respjson.Field
 		OutputFormat  respjson.Field
 		Quality       respjson.Field
 		RevisedPrompt respjson.Field
@@ -15898,6 +15935,61 @@ type BetaResponseInputItemImageGenerationCallAgent struct {
 // Returns the unmodified JSON received from the API
 func (r BetaResponseInputItemImageGenerationCallAgent) RawJSON() string { return r.JSON.raw }
 func (r *BetaResponseInputItemImageGenerationCallAgent) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// Details of a moderation failure, when available.
+type BetaResponseInputItemImageGenerationCallError struct {
+	// The error code.
+	Code string `json:"code" api:"required"`
+	// A description of the error.
+	Message string `json:"message" api:"required"`
+	// The related request parameter.
+	Param string `json:"param" api:"required"`
+	// The error type.
+	Type string `json:"type" api:"required"`
+	// Public details for a `moderation_blocked` error, when available.
+	ModerationDetails BetaResponseInputItemImageGenerationCallErrorModerationDetails `json:"moderation_details"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Code              respjson.Field
+		Message           respjson.Field
+		Param             respjson.Field
+		Type              respjson.Field
+		ModerationDetails respjson.Field
+		ExtraFields       map[string]respjson.Field
+		raw               string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r BetaResponseInputItemImageGenerationCallError) RawJSON() string { return r.JSON.raw }
+func (r *BetaResponseInputItemImageGenerationCallError) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// Public details for a `moderation_blocked` error, when available.
+type BetaResponseInputItemImageGenerationCallErrorModerationDetails struct {
+	// Public moderation categories. New category values may be added over time.
+	Categories []string `json:"categories" api:"required"`
+	// The stage where moderation blocked the image generation call.
+	//
+	// Any of "input", "output", "unknown".
+	ModerationStage string `json:"moderation_stage" api:"required"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Categories      respjson.Field
+		ModerationStage respjson.Field
+		ExtraFields     map[string]respjson.Field
+		raw             string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r BetaResponseInputItemImageGenerationCallErrorModerationDetails) RawJSON() string {
+	return r.JSON.raw
+}
+func (r *BetaResponseInputItemImageGenerationCallErrorModerationDetails) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
@@ -18564,8 +18656,8 @@ func (u betaResponseInputItemUnionParamAction) AsAny() any { return u.any }
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamAction) GetButton() *string {
 	switch vt := u.any.(type) {
-	case *BetaComputerActionUnionParam:
-		return vt.GetButton()
+	case *BetaComputerActionClickParam:
+		return &vt.Button
 	}
 	return nil
 }
@@ -18573,8 +18665,8 @@ func (u betaResponseInputItemUnionParamAction) GetButton() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamAction) GetPath() []BetaComputerActionDragPathParam {
 	switch vt := u.any.(type) {
-	case *BetaComputerActionUnionParam:
-		return vt.GetPath()
+	case *BetaComputerActionDragParam:
+		return vt.Path
 	}
 	return nil
 }
@@ -18582,8 +18674,8 @@ func (u betaResponseInputItemUnionParamAction) GetPath() []BetaComputerActionDra
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamAction) GetScrollX() *int64 {
 	switch vt := u.any.(type) {
-	case *BetaComputerActionUnionParam:
-		return vt.GetScrollX()
+	case *BetaComputerActionScrollParam:
+		return &vt.ScrollX
 	}
 	return nil
 }
@@ -18591,8 +18683,8 @@ func (u betaResponseInputItemUnionParamAction) GetScrollX() *int64 {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamAction) GetScrollY() *int64 {
 	switch vt := u.any.(type) {
-	case *BetaComputerActionUnionParam:
-		return vt.GetScrollY()
+	case *BetaComputerActionScrollParam:
+		return &vt.ScrollY
 	}
 	return nil
 }
@@ -18600,8 +18692,8 @@ func (u betaResponseInputItemUnionParamAction) GetScrollY() *int64 {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamAction) GetText() *string {
 	switch vt := u.any.(type) {
-	case *BetaComputerActionUnionParam:
-		return vt.GetText()
+	case *BetaComputerActionTypeParam:
+		return &vt.Text
 	}
 	return nil
 }
@@ -18609,8 +18701,8 @@ func (u betaResponseInputItemUnionParamAction) GetText() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamAction) GetQueries() []string {
 	switch vt := u.any.(type) {
-	case *BetaResponseFunctionWebSearchActionUnionParam:
-		return vt.GetQueries()
+	case *BetaResponseFunctionWebSearchActionSearchParam:
+		return vt.Queries
 	}
 	return nil
 }
@@ -18618,8 +18710,8 @@ func (u betaResponseInputItemUnionParamAction) GetQueries() []string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamAction) GetQuery() *string {
 	switch vt := u.any.(type) {
-	case *BetaResponseFunctionWebSearchActionUnionParam:
-		return vt.GetQuery()
+	case *BetaResponseFunctionWebSearchActionSearchParam:
+		return paramutil.AddrIfPresent(vt.Query)
 	}
 	return nil
 }
@@ -18627,8 +18719,8 @@ func (u betaResponseInputItemUnionParamAction) GetQuery() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamAction) GetSources() []BetaResponseFunctionWebSearchActionSearchSourceParam {
 	switch vt := u.any.(type) {
-	case *BetaResponseFunctionWebSearchActionUnionParam:
-		return vt.GetSources()
+	case *BetaResponseFunctionWebSearchActionSearchParam:
+		return vt.Sources
 	}
 	return nil
 }
@@ -18636,8 +18728,8 @@ func (u betaResponseInputItemUnionParamAction) GetSources() []BetaResponseFuncti
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamAction) GetPattern() *string {
 	switch vt := u.any.(type) {
-	case *BetaResponseFunctionWebSearchActionUnionParam:
-		return vt.GetPattern()
+	case *BetaResponseFunctionWebSearchActionFindInPageParam:
+		return &vt.Pattern
 	}
 	return nil
 }
@@ -18699,10 +18791,30 @@ func (u betaResponseInputItemUnionParamAction) GetMaxOutputLength() *int64 {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamAction) GetType() *string {
 	switch vt := u.any.(type) {
-	case *BetaComputerActionUnionParam:
-		return vt.GetType()
-	case *BetaResponseFunctionWebSearchActionUnionParam:
-		return vt.GetType()
+	case *BetaComputerActionClickParam:
+		return (*string)(&vt.Type)
+	case *BetaComputerActionDoubleClickParam:
+		return (*string)(&vt.Type)
+	case *BetaComputerActionDragParam:
+		return (*string)(&vt.Type)
+	case *BetaComputerActionKeypressParam:
+		return (*string)(&vt.Type)
+	case *BetaComputerActionMoveParam:
+		return (*string)(&vt.Type)
+	case *BetaComputerActionScreenshotParam:
+		return (*string)(&vt.Type)
+	case *BetaComputerActionScrollParam:
+		return (*string)(&vt.Type)
+	case *BetaComputerActionTypeParam:
+		return (*string)(&vt.Type)
+	case *BetaComputerActionWaitParam:
+		return (*string)(&vt.Type)
+	case *BetaResponseFunctionWebSearchActionSearchParam:
+		return (*string)(&vt.Type)
+	case *BetaResponseFunctionWebSearchActionOpenPageParam:
+		return (*string)(&vt.Type)
+	case *BetaResponseFunctionWebSearchActionFindInPageParam:
+		return (*string)(&vt.Type)
 	case *BetaResponseInputItemLocalShellCallActionParam:
 		return (*string)(&vt.Type)
 	}
@@ -18712,8 +18824,14 @@ func (u betaResponseInputItemUnionParamAction) GetType() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamAction) GetX() *int64 {
 	switch vt := u.any.(type) {
-	case *BetaComputerActionUnionParam:
-		return vt.GetX()
+	case *BetaComputerActionClickParam:
+		return (*int64)(&vt.X)
+	case *BetaComputerActionDoubleClickParam:
+		return (*int64)(&vt.X)
+	case *BetaComputerActionMoveParam:
+		return (*int64)(&vt.X)
+	case *BetaComputerActionScrollParam:
+		return (*int64)(&vt.X)
 	}
 	return nil
 }
@@ -18721,8 +18839,14 @@ func (u betaResponseInputItemUnionParamAction) GetX() *int64 {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamAction) GetY() *int64 {
 	switch vt := u.any.(type) {
-	case *BetaComputerActionUnionParam:
-		return vt.GetY()
+	case *BetaComputerActionClickParam:
+		return (*int64)(&vt.Y)
+	case *BetaComputerActionDoubleClickParam:
+		return (*int64)(&vt.Y)
+	case *BetaComputerActionMoveParam:
+		return (*int64)(&vt.Y)
+	case *BetaComputerActionScrollParam:
+		return (*int64)(&vt.Y)
 	}
 	return nil
 }
@@ -18730,8 +18854,10 @@ func (u betaResponseInputItemUnionParamAction) GetY() *int64 {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamAction) GetURL() *string {
 	switch vt := u.any.(type) {
-	case *BetaResponseFunctionWebSearchActionUnionParam:
-		return vt.GetURL()
+	case *BetaResponseFunctionWebSearchActionOpenPageParam:
+		return paramutil.AddrIfPresent(vt.URL)
+	case *BetaResponseFunctionWebSearchActionFindInPageParam:
+		return (*string)(&vt.URL)
 	}
 	return nil
 }
@@ -18750,8 +18876,18 @@ func (u betaResponseInputItemUnionParamAction) GetTimeoutMs() *int64 {
 // Returns a pointer to the underlying variant's Keys property, if present.
 func (u betaResponseInputItemUnionParamAction) GetKeys() []string {
 	switch vt := u.any.(type) {
-	case *BetaComputerActionUnionParam:
-		return vt.GetKeys()
+	case *BetaComputerActionClickParam:
+		return vt.Keys
+	case *BetaComputerActionDoubleClickParam:
+		return vt.Keys
+	case *BetaComputerActionDragParam:
+		return vt.Keys
+	case *BetaComputerActionKeypressParam:
+		return vt.Keys
+	case *BetaComputerActionMoveParam:
+		return vt.Keys
+	case *BetaComputerActionScrollParam:
+		return vt.Keys
 	}
 	return nil
 }
@@ -18901,22 +19037,38 @@ func (u betaResponseInputItemUnionParamCaller) AsAny() any { return u.any }
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamCaller) GetType() *string {
 	switch vt := u.any.(type) {
-	case *BetaResponseFunctionToolCallCallerUnionParam:
-		return vt.GetType()
-	case *BetaResponseInputItemFunctionCallOutputCallerUnionParam:
-		return vt.GetType()
-	case *BetaResponseInputItemShellCallCallerUnionParam:
-		return vt.GetType()
-	case *BetaResponseInputItemShellCallOutputCallerUnionParam:
-		return vt.GetType()
-	case *BetaResponseInputItemApplyPatchCallCallerUnionParam:
-		return vt.GetType()
-	case *BetaResponseInputItemApplyPatchCallOutputCallerUnionParam:
-		return vt.GetType()
-	case *BetaResponseCustomToolCallOutputCallerUnionParam:
-		return vt.GetType()
-	case *BetaResponseCustomToolCallCallerUnionParam:
-		return vt.GetType()
+	case *BetaResponseFunctionToolCallCallerDirectParam:
+		return (*string)(&vt.Type)
+	case *BetaResponseFunctionToolCallCallerProgramParam:
+		return (*string)(&vt.Type)
+	case *BetaResponseInputItemFunctionCallOutputCallerDirectParam:
+		return (*string)(&vt.Type)
+	case *BetaResponseInputItemFunctionCallOutputCallerProgramParam:
+		return (*string)(&vt.Type)
+	case *BetaResponseInputItemShellCallCallerDirectParam:
+		return (*string)(&vt.Type)
+	case *BetaResponseInputItemShellCallCallerProgramParam:
+		return (*string)(&vt.Type)
+	case *BetaResponseInputItemShellCallOutputCallerDirectParam:
+		return (*string)(&vt.Type)
+	case *BetaResponseInputItemShellCallOutputCallerProgramParam:
+		return (*string)(&vt.Type)
+	case *BetaResponseInputItemApplyPatchCallCallerDirectParam:
+		return (*string)(&vt.Type)
+	case *BetaResponseInputItemApplyPatchCallCallerProgramParam:
+		return (*string)(&vt.Type)
+	case *BetaResponseInputItemApplyPatchCallOutputCallerDirectParam:
+		return (*string)(&vt.Type)
+	case *BetaResponseInputItemApplyPatchCallOutputCallerProgramParam:
+		return (*string)(&vt.Type)
+	case *BetaResponseCustomToolCallOutputCallerDirectParam:
+		return (*string)(&vt.Type)
+	case *BetaResponseCustomToolCallOutputCallerProgramParam:
+		return (*string)(&vt.Type)
+	case *BetaResponseCustomToolCallCallerDirectParam:
+		return (*string)(&vt.Type)
+	case *BetaResponseCustomToolCallCallerProgramParam:
+		return (*string)(&vt.Type)
 	}
 	return nil
 }
@@ -18924,22 +19076,22 @@ func (u betaResponseInputItemUnionParamCaller) GetType() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamCaller) GetCallerID() *string {
 	switch vt := u.any.(type) {
-	case *BetaResponseFunctionToolCallCallerUnionParam:
-		return vt.GetCallerID()
-	case *BetaResponseInputItemFunctionCallOutputCallerUnionParam:
-		return vt.GetCallerID()
-	case *BetaResponseInputItemShellCallCallerUnionParam:
-		return vt.GetCallerID()
-	case *BetaResponseInputItemShellCallOutputCallerUnionParam:
-		return vt.GetCallerID()
-	case *BetaResponseInputItemApplyPatchCallCallerUnionParam:
-		return vt.GetCallerID()
-	case *BetaResponseInputItemApplyPatchCallOutputCallerUnionParam:
-		return vt.GetCallerID()
-	case *BetaResponseCustomToolCallOutputCallerUnionParam:
-		return vt.GetCallerID()
-	case *BetaResponseCustomToolCallCallerUnionParam:
-		return vt.GetCallerID()
+	case *BetaResponseFunctionToolCallCallerProgramParam:
+		return (*string)(&vt.CallerID)
+	case *BetaResponseInputItemFunctionCallOutputCallerProgramParam:
+		return (*string)(&vt.CallerID)
+	case *BetaResponseInputItemShellCallCallerProgramParam:
+		return (*string)(&vt.CallerID)
+	case *BetaResponseInputItemShellCallOutputCallerProgramParam:
+		return (*string)(&vt.CallerID)
+	case *BetaResponseInputItemApplyPatchCallCallerProgramParam:
+		return (*string)(&vt.CallerID)
+	case *BetaResponseInputItemApplyPatchCallOutputCallerProgramParam:
+		return (*string)(&vt.CallerID)
+	case *BetaResponseCustomToolCallOutputCallerProgramParam:
+		return (*string)(&vt.CallerID)
+	case *BetaResponseCustomToolCallCallerProgramParam:
+		return (*string)(&vt.CallerID)
 	}
 	return nil
 }
@@ -19006,8 +19158,10 @@ func (u betaResponseInputItemUnionParamError) AsAny() any { return u.any }
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamError) GetCode() *int64 {
 	switch vt := u.any.(type) {
-	case *BetaMcpToolCallErrorUnionParam:
-		return vt.GetCode()
+	case *BetaMcpToolCallErrorMcpProtocolErrorParam:
+		return (*int64)(&vt.Code)
+	case *BetaMcpToolCallErrorHTTPErrorParam:
+		return (*int64)(&vt.Code)
 	}
 	return nil
 }
@@ -19015,8 +19169,10 @@ func (u betaResponseInputItemUnionParamError) GetCode() *int64 {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamError) GetMessage() *string {
 	switch vt := u.any.(type) {
-	case *BetaMcpToolCallErrorUnionParam:
-		return vt.GetMessage()
+	case *BetaMcpToolCallErrorMcpProtocolErrorParam:
+		return (*string)(&vt.Message)
+	case *BetaMcpToolCallErrorHTTPErrorParam:
+		return (*string)(&vt.Message)
 	}
 	return nil
 }
@@ -19024,8 +19180,12 @@ func (u betaResponseInputItemUnionParamError) GetMessage() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamError) GetType() *string {
 	switch vt := u.any.(type) {
-	case *BetaMcpToolCallErrorUnionParam:
-		return vt.GetType()
+	case *BetaMcpToolCallErrorMcpProtocolErrorParam:
+		return (*string)(&vt.Type)
+	case *BetaMcpToolCallErrorMcpToolExecutionErrorParam:
+		return (*string)(&vt.Type)
+	case *BetaMcpToolCallErrorHTTPErrorParam:
+		return (*string)(&vt.Type)
 	}
 	return nil
 }
@@ -19033,8 +19193,8 @@ func (u betaResponseInputItemUnionParamError) GetType() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseInputItemUnionParamError) GetContent() *any {
 	switch vt := u.any.(type) {
-	case *BetaMcpToolCallErrorUnionParam:
-		return vt.GetContent()
+	case *BetaMcpToolCallErrorMcpToolExecutionErrorParam:
+		return &vt.Content
 	}
 	return nil
 }
@@ -20045,6 +20205,8 @@ type BetaResponseInputItemImageGenerationCallParam struct {
 	Quality string `json:"quality,omitzero"`
 	// The image dimensions as a `WIDTHxHEIGHT` string, for example `1536x864`.
 	Size param.Opt[string] `json:"size,omitzero"`
+	// Details of a moderation failure, when available.
+	Error BetaResponseInputItemImageGenerationCallErrorParam `json:"error,omitzero"`
 	// The type of the image generation call. Always `image_generation_call`.
 	//
 	// This field can be elided, and will marshal its zero value as
@@ -20085,6 +20247,58 @@ func (r BetaResponseInputItemImageGenerationCallAgentParam) MarshalJSON() (data 
 }
 func (r *BetaResponseInputItemImageGenerationCallAgentParam) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
+}
+
+// Details of a moderation failure, when available.
+//
+// The properties Code, Message, Param, Type are required.
+type BetaResponseInputItemImageGenerationCallErrorParam struct {
+	// The error code.
+	Code param.Opt[string] `json:"code,omitzero" api:"required"`
+	// The related request parameter.
+	Param param.Opt[string] `json:"param,omitzero" api:"required"`
+	// A description of the error.
+	Message string `json:"message" api:"required"`
+	// The error type.
+	Type string `json:"type" api:"required"`
+	// Public details for a `moderation_blocked` error, when available.
+	ModerationDetails BetaResponseInputItemImageGenerationCallErrorModerationDetailsParam `json:"moderation_details,omitzero"`
+	paramObj
+}
+
+func (r BetaResponseInputItemImageGenerationCallErrorParam) MarshalJSON() (data []byte, err error) {
+	type shadow BetaResponseInputItemImageGenerationCallErrorParam
+	return param.MarshalObject(r, (*shadow)(&r))
+}
+func (r *BetaResponseInputItemImageGenerationCallErrorParam) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// Public details for a `moderation_blocked` error, when available.
+//
+// The properties Categories, ModerationStage are required.
+type BetaResponseInputItemImageGenerationCallErrorModerationDetailsParam struct {
+	// Public moderation categories. New category values may be added over time.
+	Categories []string `json:"categories,omitzero" api:"required"`
+	// The stage where moderation blocked the image generation call.
+	//
+	// Any of "input", "output", "unknown".
+	ModerationStage string `json:"moderation_stage,omitzero" api:"required"`
+	paramObj
+}
+
+func (r BetaResponseInputItemImageGenerationCallErrorModerationDetailsParam) MarshalJSON() (data []byte, err error) {
+	type shadow BetaResponseInputItemImageGenerationCallErrorModerationDetailsParam
+	return param.MarshalObject(r, (*shadow)(&r))
+}
+func (r *BetaResponseInputItemImageGenerationCallErrorModerationDetailsParam) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+func init() {
+	apijson.RegisterFieldValidator[BetaResponseInputItemImageGenerationCallErrorModerationDetailsParam](
+		"moderation_stage", "input", "output", "unknown",
+	)
 }
 
 // A tool call to run a command on the local shell.
@@ -23251,6 +23465,8 @@ type BetaResponseItemImageGenerationCall struct {
 	//
 	// Any of "transparent", "opaque", "auto".
 	Background string `json:"background" api:"nullable"`
+	// Details of a moderation failure, when available.
+	Error BetaResponseItemImageGenerationCallError `json:"error"`
 	// The output format used for generation.
 	//
 	// Any of "png", "webp", "jpeg".
@@ -23273,6 +23489,7 @@ type BetaResponseItemImageGenerationCall struct {
 		Action        respjson.Field
 		Agent         respjson.Field
 		Background    respjson.Field
+		Error         respjson.Field
 		OutputFormat  respjson.Field
 		Quality       respjson.Field
 		RevisedPrompt respjson.Field
@@ -23303,6 +23520,61 @@ type BetaResponseItemImageGenerationCallAgent struct {
 // Returns the unmodified JSON received from the API
 func (r BetaResponseItemImageGenerationCallAgent) RawJSON() string { return r.JSON.raw }
 func (r *BetaResponseItemImageGenerationCallAgent) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// Details of a moderation failure, when available.
+type BetaResponseItemImageGenerationCallError struct {
+	// The error code.
+	Code string `json:"code" api:"required"`
+	// A description of the error.
+	Message string `json:"message" api:"required"`
+	// The related request parameter.
+	Param string `json:"param" api:"required"`
+	// The error type.
+	Type string `json:"type" api:"required"`
+	// Public details for a `moderation_blocked` error, when available.
+	ModerationDetails BetaResponseItemImageGenerationCallErrorModerationDetails `json:"moderation_details"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Code              respjson.Field
+		Message           respjson.Field
+		Param             respjson.Field
+		Type              respjson.Field
+		ModerationDetails respjson.Field
+		ExtraFields       map[string]respjson.Field
+		raw               string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r BetaResponseItemImageGenerationCallError) RawJSON() string { return r.JSON.raw }
+func (r *BetaResponseItemImageGenerationCallError) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// Public details for a `moderation_blocked` error, when available.
+type BetaResponseItemImageGenerationCallErrorModerationDetails struct {
+	// Public moderation categories. New category values may be added over time.
+	Categories []string `json:"categories" api:"required"`
+	// The stage where moderation blocked the image generation call.
+	//
+	// Any of "input", "output", "unknown".
+	ModerationStage string `json:"moderation_stage" api:"required"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Categories      respjson.Field
+		ModerationStage respjson.Field
+		ExtraFields     map[string]respjson.Field
+		raw             string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r BetaResponseItemImageGenerationCallErrorModerationDetails) RawJSON() string {
+	return r.JSON.raw
+}
+func (r *BetaResponseItemImageGenerationCallErrorModerationDetails) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
@@ -25604,6 +25876,8 @@ type BetaResponseOutputItemImageGenerationCall struct {
 	//
 	// Any of "transparent", "opaque", "auto".
 	Background string `json:"background" api:"nullable"`
+	// Details of a moderation failure, when available.
+	Error BetaResponseOutputItemImageGenerationCallError `json:"error"`
 	// The output format used for generation.
 	//
 	// Any of "png", "webp", "jpeg".
@@ -25626,6 +25900,7 @@ type BetaResponseOutputItemImageGenerationCall struct {
 		Action        respjson.Field
 		Agent         respjson.Field
 		Background    respjson.Field
+		Error         respjson.Field
 		OutputFormat  respjson.Field
 		Quality       respjson.Field
 		RevisedPrompt respjson.Field
@@ -25656,6 +25931,61 @@ type BetaResponseOutputItemImageGenerationCallAgent struct {
 // Returns the unmodified JSON received from the API
 func (r BetaResponseOutputItemImageGenerationCallAgent) RawJSON() string { return r.JSON.raw }
 func (r *BetaResponseOutputItemImageGenerationCallAgent) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// Details of a moderation failure, when available.
+type BetaResponseOutputItemImageGenerationCallError struct {
+	// The error code.
+	Code string `json:"code" api:"required"`
+	// A description of the error.
+	Message string `json:"message" api:"required"`
+	// The related request parameter.
+	Param string `json:"param" api:"required"`
+	// The error type.
+	Type string `json:"type" api:"required"`
+	// Public details for a `moderation_blocked` error, when available.
+	ModerationDetails BetaResponseOutputItemImageGenerationCallErrorModerationDetails `json:"moderation_details"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Code              respjson.Field
+		Message           respjson.Field
+		Param             respjson.Field
+		Type              respjson.Field
+		ModerationDetails respjson.Field
+		ExtraFields       map[string]respjson.Field
+		raw               string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r BetaResponseOutputItemImageGenerationCallError) RawJSON() string { return r.JSON.raw }
+func (r *BetaResponseOutputItemImageGenerationCallError) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// Public details for a `moderation_blocked` error, when available.
+type BetaResponseOutputItemImageGenerationCallErrorModerationDetails struct {
+	// Public moderation categories. New category values may be added over time.
+	Categories []string `json:"categories" api:"required"`
+	// The stage where moderation blocked the image generation call.
+	//
+	// Any of "input", "output", "unknown".
+	ModerationStage string `json:"moderation_stage" api:"required"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Categories      respjson.Field
+		ModerationStage respjson.Field
+		ExtraFields     map[string]respjson.Field
+		raw             string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r BetaResponseOutputItemImageGenerationCallErrorModerationDetails) RawJSON() string {
+	return r.JSON.raw
+}
+func (r *BetaResponseOutputItemImageGenerationCallErrorModerationDetails) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
@@ -31804,8 +32134,8 @@ func (u betaResponseToolSearchOutputItemParamToolUnionFilters) AsAny() any { ret
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseToolSearchOutputItemParamToolUnionFilters) GetKey() *string {
 	switch vt := u.any.(type) {
-	case *BetaFileSearchToolFiltersUnionParam:
-		return vt.GetKey()
+	case *BetaFileSearchToolFiltersComparisonFilterParam:
+		return &vt.Key
 	}
 	return nil
 }
@@ -31813,8 +32143,8 @@ func (u betaResponseToolSearchOutputItemParamToolUnionFilters) GetKey() *string 
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseToolSearchOutputItemParamToolUnionFilters) GetValue() *BetaFileSearchToolFiltersComparisonFilterValueUnionParam {
 	switch vt := u.any.(type) {
-	case *BetaFileSearchToolFiltersUnionParam:
-		return vt.GetValue()
+	case *BetaFileSearchToolFiltersComparisonFilterParam:
+		return &vt.Value
 	}
 	return nil
 }
@@ -31822,8 +32152,8 @@ func (u betaResponseToolSearchOutputItemParamToolUnionFilters) GetValue() *BetaF
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseToolSearchOutputItemParamToolUnionFilters) GetFilters() []BetaFileSearchToolFiltersCompoundFilterFilterUnionParam {
 	switch vt := u.any.(type) {
-	case *BetaFileSearchToolFiltersUnionParam:
-		return vt.GetFilters()
+	case *BetaFileSearchToolFiltersCompoundFilterParam:
+		return vt.Filters
 	}
 	return nil
 }
@@ -31840,8 +32170,10 @@ func (u betaResponseToolSearchOutputItemParamToolUnionFilters) GetAllowedDomains
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseToolSearchOutputItemParamToolUnionFilters) GetType() *string {
 	switch vt := u.any.(type) {
-	case *BetaFileSearchToolFiltersUnionParam:
-		return vt.GetType()
+	case *BetaFileSearchToolFiltersComparisonFilterParam:
+		return (*string)(&vt.Type)
+	case *BetaFileSearchToolFiltersCompoundFilterParam:
+		return (*string)(&vt.Type)
 	}
 	return nil
 }
@@ -31877,8 +32209,8 @@ func (u betaResponseToolSearchOutputItemParamToolUnionEnvironment) AsAny() any {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseToolSearchOutputItemParamToolUnionEnvironment) GetFileIDs() []string {
 	switch vt := u.any.(type) {
-	case *BetaFunctionShellToolEnvironmentUnionParam:
-		return vt.GetFileIDs()
+	case *BetaContainerAutoParam:
+		return vt.FileIDs
 	}
 	return nil
 }
@@ -31886,8 +32218,8 @@ func (u betaResponseToolSearchOutputItemParamToolUnionEnvironment) GetFileIDs() 
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseToolSearchOutputItemParamToolUnionEnvironment) GetMemoryLimit() *string {
 	switch vt := u.any.(type) {
-	case *BetaFunctionShellToolEnvironmentUnionParam:
-		return vt.GetMemoryLimit()
+	case *BetaContainerAutoParam:
+		return (*string)(&vt.MemoryLimit)
 	}
 	return nil
 }
@@ -31895,8 +32227,8 @@ func (u betaResponseToolSearchOutputItemParamToolUnionEnvironment) GetMemoryLimi
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseToolSearchOutputItemParamToolUnionEnvironment) GetNetworkPolicy() *BetaContainerAutoNetworkPolicyUnionParam {
 	switch vt := u.any.(type) {
-	case *BetaFunctionShellToolEnvironmentUnionParam:
-		return vt.GetNetworkPolicy()
+	case *BetaContainerAutoParam:
+		return &vt.NetworkPolicy
 	}
 	return nil
 }
@@ -31904,8 +32236,8 @@ func (u betaResponseToolSearchOutputItemParamToolUnionEnvironment) GetNetworkPol
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseToolSearchOutputItemParamToolUnionEnvironment) GetContainerID() *string {
 	switch vt := u.any.(type) {
-	case *BetaFunctionShellToolEnvironmentUnionParam:
-		return vt.GetContainerID()
+	case *BetaContainerReferenceParam:
+		return &vt.ContainerID
 	}
 	return nil
 }
@@ -31913,8 +32245,12 @@ func (u betaResponseToolSearchOutputItemParamToolUnionEnvironment) GetContainerI
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaResponseToolSearchOutputItemParamToolUnionEnvironment) GetType() *string {
 	switch vt := u.any.(type) {
-	case *BetaFunctionShellToolEnvironmentUnionParam:
-		return vt.GetType()
+	case *BetaContainerAutoParam:
+		return (*string)(&vt.Type)
+	case *BetaLocalEnvironmentParam:
+		return (*string)(&vt.Type)
+	case *BetaContainerReferenceParam:
+		return (*string)(&vt.Type)
 	}
 	return nil
 }
@@ -31924,8 +32260,10 @@ func (u betaResponseToolSearchOutputItemParamToolUnionEnvironment) GetType() *st
 // Or use AsAny() to get the underlying value
 func (u betaResponseToolSearchOutputItemParamToolUnionEnvironment) GetSkills() (res betaResponseToolSearchOutputItemParamToolUnionEnvironmentSkills) {
 	switch vt := u.any.(type) {
-	case *BetaFunctionShellToolEnvironmentUnionParam:
-		res.any = vt.GetSkills()
+	case *BetaContainerAutoParam:
+		res.any = &vt.Skills
+	case *BetaLocalEnvironmentParam:
+		res.any = &vt.Skills
 	}
 	return res
 }
@@ -34333,8 +34671,8 @@ func (u betaToolUnionParamFilters) AsAny() any { return u.any }
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaToolUnionParamFilters) GetKey() *string {
 	switch vt := u.any.(type) {
-	case *BetaFileSearchToolFiltersUnionParam:
-		return vt.GetKey()
+	case *BetaFileSearchToolFiltersComparisonFilterParam:
+		return &vt.Key
 	}
 	return nil
 }
@@ -34342,8 +34680,8 @@ func (u betaToolUnionParamFilters) GetKey() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaToolUnionParamFilters) GetValue() *BetaFileSearchToolFiltersComparisonFilterValueUnionParam {
 	switch vt := u.any.(type) {
-	case *BetaFileSearchToolFiltersUnionParam:
-		return vt.GetValue()
+	case *BetaFileSearchToolFiltersComparisonFilterParam:
+		return &vt.Value
 	}
 	return nil
 }
@@ -34351,8 +34689,8 @@ func (u betaToolUnionParamFilters) GetValue() *BetaFileSearchToolFiltersComparis
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaToolUnionParamFilters) GetFilters() []BetaFileSearchToolFiltersCompoundFilterFilterUnionParam {
 	switch vt := u.any.(type) {
-	case *BetaFileSearchToolFiltersUnionParam:
-		return vt.GetFilters()
+	case *BetaFileSearchToolFiltersCompoundFilterParam:
+		return vt.Filters
 	}
 	return nil
 }
@@ -34369,8 +34707,10 @@ func (u betaToolUnionParamFilters) GetAllowedDomains() []string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaToolUnionParamFilters) GetType() *string {
 	switch vt := u.any.(type) {
-	case *BetaFileSearchToolFiltersUnionParam:
-		return vt.GetType()
+	case *BetaFileSearchToolFiltersComparisonFilterParam:
+		return (*string)(&vt.Type)
+	case *BetaFileSearchToolFiltersCompoundFilterParam:
+		return (*string)(&vt.Type)
 	}
 	return nil
 }
@@ -34406,8 +34746,8 @@ func (u betaToolUnionParamEnvironment) AsAny() any { return u.any }
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaToolUnionParamEnvironment) GetFileIDs() []string {
 	switch vt := u.any.(type) {
-	case *BetaFunctionShellToolEnvironmentUnionParam:
-		return vt.GetFileIDs()
+	case *BetaContainerAutoParam:
+		return vt.FileIDs
 	}
 	return nil
 }
@@ -34415,8 +34755,8 @@ func (u betaToolUnionParamEnvironment) GetFileIDs() []string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaToolUnionParamEnvironment) GetMemoryLimit() *string {
 	switch vt := u.any.(type) {
-	case *BetaFunctionShellToolEnvironmentUnionParam:
-		return vt.GetMemoryLimit()
+	case *BetaContainerAutoParam:
+		return (*string)(&vt.MemoryLimit)
 	}
 	return nil
 }
@@ -34424,8 +34764,8 @@ func (u betaToolUnionParamEnvironment) GetMemoryLimit() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaToolUnionParamEnvironment) GetNetworkPolicy() *BetaContainerAutoNetworkPolicyUnionParam {
 	switch vt := u.any.(type) {
-	case *BetaFunctionShellToolEnvironmentUnionParam:
-		return vt.GetNetworkPolicy()
+	case *BetaContainerAutoParam:
+		return &vt.NetworkPolicy
 	}
 	return nil
 }
@@ -34433,8 +34773,8 @@ func (u betaToolUnionParamEnvironment) GetNetworkPolicy() *BetaContainerAutoNetw
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaToolUnionParamEnvironment) GetContainerID() *string {
 	switch vt := u.any.(type) {
-	case *BetaFunctionShellToolEnvironmentUnionParam:
-		return vt.GetContainerID()
+	case *BetaContainerReferenceParam:
+		return &vt.ContainerID
 	}
 	return nil
 }
@@ -34442,8 +34782,12 @@ func (u betaToolUnionParamEnvironment) GetContainerID() *string {
 // Returns a pointer to the underlying variant's property, if present.
 func (u betaToolUnionParamEnvironment) GetType() *string {
 	switch vt := u.any.(type) {
-	case *BetaFunctionShellToolEnvironmentUnionParam:
-		return vt.GetType()
+	case *BetaContainerAutoParam:
+		return (*string)(&vt.Type)
+	case *BetaLocalEnvironmentParam:
+		return (*string)(&vt.Type)
+	case *BetaContainerReferenceParam:
+		return (*string)(&vt.Type)
 	}
 	return nil
 }
@@ -34453,8 +34797,10 @@ func (u betaToolUnionParamEnvironment) GetType() *string {
 // Or use AsAny() to get the underlying value
 func (u betaToolUnionParamEnvironment) GetSkills() (res betaToolUnionParamEnvironmentSkills) {
 	switch vt := u.any.(type) {
-	case *BetaFunctionShellToolEnvironmentUnionParam:
-		res.any = vt.GetSkills()
+	case *BetaContainerAutoParam:
+		res.any = &vt.Skills
+	case *BetaLocalEnvironmentParam:
+		res.any = &vt.Skills
 	}
 	return res
 }
@@ -36671,17 +37017,20 @@ func (u *BetaResponseNewParamsInputUnion) UnmarshalJSON(data []byte) error {
 type BetaResponseNewParamsModel string
 
 const (
-	BetaResponseNewParamsModelGPT6Astra            BetaResponseNewParamsModel = "gpt-6-astra"
-	BetaResponseNewParamsModelGPT6_1Sol            BetaResponseNewParamsModel = "gpt-6.1-sol"
-	BetaResponseNewParamsModelGPT6Sol              BetaResponseNewParamsModel = "gpt-6-sol"
-	BetaResponseNewParamsModelGPT6Luna             BetaResponseNewParamsModel = "gpt-6-luna"
-	BetaResponseNewParamsModelGPT5_6Sol            BetaResponseNewParamsModel = "gpt-5.6-sol"
-	BetaResponseNewParamsModelGPT5_6Terra          BetaResponseNewParamsModel = "gpt-5.6-terra"
-	BetaResponseNewParamsModelGPT5_6Luna           BetaResponseNewParamsModel = "gpt-5.6-luna"
-	BetaResponseNewParamsModelGPT5_5               BetaResponseNewParamsModel = "gpt-5.5"
-	BetaResponseNewParamsModelGPT5_5_2026_04_23    BetaResponseNewParamsModel = "gpt-5.5-2026-04-23"
-	BetaResponseNewParamsModelGPT5_4               BetaResponseNewParamsModel = "gpt-5.4"
-	BetaResponseNewParamsModelGPT5_4Mini           BetaResponseNewParamsModel = "gpt-5.4-mini"
+	BetaResponseNewParamsModelGPT6Astra         BetaResponseNewParamsModel = "gpt-6-astra"
+	BetaResponseNewParamsModelGPT6_1Sol         BetaResponseNewParamsModel = "gpt-6.1-sol"
+	BetaResponseNewParamsModelGPT6Sol           BetaResponseNewParamsModel = "gpt-6-sol"
+	BetaResponseNewParamsModelGPT6Luna          BetaResponseNewParamsModel = "gpt-6-luna"
+	BetaResponseNewParamsModelGPT5_6Sol         BetaResponseNewParamsModel = "gpt-5.6-sol"
+	BetaResponseNewParamsModelGPT5_6Terra       BetaResponseNewParamsModel = "gpt-5.6-terra"
+	BetaResponseNewParamsModelGPT5_6Luna        BetaResponseNewParamsModel = "gpt-5.6-luna"
+	BetaResponseNewParamsModelGPT5_5            BetaResponseNewParamsModel = "gpt-5.5"
+	BetaResponseNewParamsModelGPT5_5_2026_04_23 BetaResponseNewParamsModel = "gpt-5.5-2026-04-23"
+	BetaResponseNewParamsModelGPT5_4            BetaResponseNewParamsModel = "gpt-5.4"
+	BetaResponseNewParamsModelGPT5_4Mini        BetaResponseNewParamsModel = "gpt-5.4-mini"
+	// Deprecated: Announced shutdown date: 2027-04-01. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
 	BetaResponseNewParamsModelGPT5_4Nano           BetaResponseNewParamsModel = "gpt-5.4-nano"
 	BetaResponseNewParamsModelGPT5_4Mini2026_03_17 BetaResponseNewParamsModel = "gpt-5.4-mini-2026-03-17"
 	BetaResponseNewParamsModelGPT5_4Nano2026_03_17 BetaResponseNewParamsModel = "gpt-5.4-nano-2026-03-17"
@@ -36697,8 +37046,11 @@ const (
 	BetaResponseNewParamsModelGPT5_2ChatLatest    BetaResponseNewParamsModel = "gpt-5.2-chat-latest"
 	BetaResponseNewParamsModelGPT5_2Pro           BetaResponseNewParamsModel = "gpt-5.2-pro"
 	BetaResponseNewParamsModelGPT5_2Pro2025_12_11 BetaResponseNewParamsModel = "gpt-5.2-pro-2025-12-11"
-	BetaResponseNewParamsModelGPT5_1              BetaResponseNewParamsModel = "gpt-5.1"
-	BetaResponseNewParamsModelGPT5_1_2025_11_13   BetaResponseNewParamsModel = "gpt-5.1-2025-11-13"
+	// Deprecated: Announced shutdown date: 2027-04-01. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
+	BetaResponseNewParamsModelGPT5_1            BetaResponseNewParamsModel = "gpt-5.1"
+	BetaResponseNewParamsModelGPT5_1_2025_11_13 BetaResponseNewParamsModel = "gpt-5.1-2025-11-13"
 	// Deprecated: Announced shutdown date: 2026-07-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
 	// replacements.
@@ -36742,8 +37094,14 @@ const (
 	// Deprecated: Announced shutdown date: 2026-10-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
 	// replacements.
-	BetaResponseNewParamsModelGPT4_1Nano           BetaResponseNewParamsModel = "gpt-4.1-nano"
-	BetaResponseNewParamsModelGPT4_1_2025_04_14    BetaResponseNewParamsModel = "gpt-4.1-2025-04-14"
+	BetaResponseNewParamsModelGPT4_1Nano BetaResponseNewParamsModel = "gpt-4.1-nano"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
+	BetaResponseNewParamsModelGPT4_1_2025_04_14 BetaResponseNewParamsModel = "gpt-4.1-2025-04-14"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
 	BetaResponseNewParamsModelGPT4_1Mini2025_04_14 BetaResponseNewParamsModel = "gpt-4.1-mini-2025-04-14"
 	// Deprecated: Announced shutdown date: 2026-10-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
@@ -36798,8 +37156,14 @@ const (
 	// replacements.
 	BetaResponseNewParamsModelO1Mini2024_09_12 BetaResponseNewParamsModel = "o1-mini-2024-09-12"
 	BetaResponseNewParamsModelGPT4o            BetaResponseNewParamsModel = "gpt-4o"
-	BetaResponseNewParamsModelGPT4o2024_11_20  BetaResponseNewParamsModel = "gpt-4o-2024-11-20"
-	BetaResponseNewParamsModelGPT4o2024_08_06  BetaResponseNewParamsModel = "gpt-4o-2024-08-06"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
+	BetaResponseNewParamsModelGPT4o2024_11_20 BetaResponseNewParamsModel = "gpt-4o-2024-11-20"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
+	BetaResponseNewParamsModelGPT4o2024_08_06 BetaResponseNewParamsModel = "gpt-4o-2024-08-06"
 	// Deprecated: Announced shutdown date: 2026-10-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
 	// replacements.
@@ -36859,8 +37223,11 @@ const (
 	// Deprecated: Announced shutdown date: 2026-02-12. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
 	// replacements.
-	BetaResponseNewParamsModelCodexMiniLatest     BetaResponseNewParamsModel = "codex-mini-latest"
-	BetaResponseNewParamsModelGPT4oMini           BetaResponseNewParamsModel = "gpt-4o-mini"
+	BetaResponseNewParamsModelCodexMiniLatest BetaResponseNewParamsModel = "codex-mini-latest"
+	BetaResponseNewParamsModelGPT4oMini       BetaResponseNewParamsModel = "gpt-4o-mini"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
 	BetaResponseNewParamsModelGPT4oMini2024_07_18 BetaResponseNewParamsModel = "gpt-4o-mini-2024-07-18"
 	// Deprecated: Announced shutdown date: 2026-10-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
@@ -37551,17 +37918,20 @@ func (r *BetaResponseCompactParams) UnmarshalJSON(data []byte) error {
 type BetaResponseCompactParamsModel string
 
 const (
-	BetaResponseCompactParamsModelGPT6Astra            BetaResponseCompactParamsModel = "gpt-6-astra"
-	BetaResponseCompactParamsModelGPT6_1Sol            BetaResponseCompactParamsModel = "gpt-6.1-sol"
-	BetaResponseCompactParamsModelGPT6Sol              BetaResponseCompactParamsModel = "gpt-6-sol"
-	BetaResponseCompactParamsModelGPT6Luna             BetaResponseCompactParamsModel = "gpt-6-luna"
-	BetaResponseCompactParamsModelGPT5_6Sol            BetaResponseCompactParamsModel = "gpt-5.6-sol"
-	BetaResponseCompactParamsModelGPT5_6Terra          BetaResponseCompactParamsModel = "gpt-5.6-terra"
-	BetaResponseCompactParamsModelGPT5_6Luna           BetaResponseCompactParamsModel = "gpt-5.6-luna"
-	BetaResponseCompactParamsModelGPT5_5               BetaResponseCompactParamsModel = "gpt-5.5"
-	BetaResponseCompactParamsModelGPT5_5_2026_04_23    BetaResponseCompactParamsModel = "gpt-5.5-2026-04-23"
-	BetaResponseCompactParamsModelGPT5_4               BetaResponseCompactParamsModel = "gpt-5.4"
-	BetaResponseCompactParamsModelGPT5_4Mini           BetaResponseCompactParamsModel = "gpt-5.4-mini"
+	BetaResponseCompactParamsModelGPT6Astra         BetaResponseCompactParamsModel = "gpt-6-astra"
+	BetaResponseCompactParamsModelGPT6_1Sol         BetaResponseCompactParamsModel = "gpt-6.1-sol"
+	BetaResponseCompactParamsModelGPT6Sol           BetaResponseCompactParamsModel = "gpt-6-sol"
+	BetaResponseCompactParamsModelGPT6Luna          BetaResponseCompactParamsModel = "gpt-6-luna"
+	BetaResponseCompactParamsModelGPT5_6Sol         BetaResponseCompactParamsModel = "gpt-5.6-sol"
+	BetaResponseCompactParamsModelGPT5_6Terra       BetaResponseCompactParamsModel = "gpt-5.6-terra"
+	BetaResponseCompactParamsModelGPT5_6Luna        BetaResponseCompactParamsModel = "gpt-5.6-luna"
+	BetaResponseCompactParamsModelGPT5_5            BetaResponseCompactParamsModel = "gpt-5.5"
+	BetaResponseCompactParamsModelGPT5_5_2026_04_23 BetaResponseCompactParamsModel = "gpt-5.5-2026-04-23"
+	BetaResponseCompactParamsModelGPT5_4            BetaResponseCompactParamsModel = "gpt-5.4"
+	BetaResponseCompactParamsModelGPT5_4Mini        BetaResponseCompactParamsModel = "gpt-5.4-mini"
+	// Deprecated: Announced shutdown date: 2027-04-01. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
 	BetaResponseCompactParamsModelGPT5_4Nano           BetaResponseCompactParamsModel = "gpt-5.4-nano"
 	BetaResponseCompactParamsModelGPT5_4Mini2026_03_17 BetaResponseCompactParamsModel = "gpt-5.4-mini-2026-03-17"
 	BetaResponseCompactParamsModelGPT5_4Nano2026_03_17 BetaResponseCompactParamsModel = "gpt-5.4-nano-2026-03-17"
@@ -37577,8 +37947,11 @@ const (
 	BetaResponseCompactParamsModelGPT5_2ChatLatest    BetaResponseCompactParamsModel = "gpt-5.2-chat-latest"
 	BetaResponseCompactParamsModelGPT5_2Pro           BetaResponseCompactParamsModel = "gpt-5.2-pro"
 	BetaResponseCompactParamsModelGPT5_2Pro2025_12_11 BetaResponseCompactParamsModel = "gpt-5.2-pro-2025-12-11"
-	BetaResponseCompactParamsModelGPT5_1              BetaResponseCompactParamsModel = "gpt-5.1"
-	BetaResponseCompactParamsModelGPT5_1_2025_11_13   BetaResponseCompactParamsModel = "gpt-5.1-2025-11-13"
+	// Deprecated: Announced shutdown date: 2027-04-01. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
+	BetaResponseCompactParamsModelGPT5_1            BetaResponseCompactParamsModel = "gpt-5.1"
+	BetaResponseCompactParamsModelGPT5_1_2025_11_13 BetaResponseCompactParamsModel = "gpt-5.1-2025-11-13"
 	// Deprecated: Announced shutdown date: 2026-07-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
 	// replacements.
@@ -37622,8 +37995,14 @@ const (
 	// Deprecated: Announced shutdown date: 2026-10-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
 	// replacements.
-	BetaResponseCompactParamsModelGPT4_1Nano           BetaResponseCompactParamsModel = "gpt-4.1-nano"
-	BetaResponseCompactParamsModelGPT4_1_2025_04_14    BetaResponseCompactParamsModel = "gpt-4.1-2025-04-14"
+	BetaResponseCompactParamsModelGPT4_1Nano BetaResponseCompactParamsModel = "gpt-4.1-nano"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
+	BetaResponseCompactParamsModelGPT4_1_2025_04_14 BetaResponseCompactParamsModel = "gpt-4.1-2025-04-14"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
 	BetaResponseCompactParamsModelGPT4_1Mini2025_04_14 BetaResponseCompactParamsModel = "gpt-4.1-mini-2025-04-14"
 	// Deprecated: Announced shutdown date: 2026-10-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
@@ -37678,8 +38057,14 @@ const (
 	// replacements.
 	BetaResponseCompactParamsModelO1Mini2024_09_12 BetaResponseCompactParamsModel = "o1-mini-2024-09-12"
 	BetaResponseCompactParamsModelGPT4o            BetaResponseCompactParamsModel = "gpt-4o"
-	BetaResponseCompactParamsModelGPT4o2024_11_20  BetaResponseCompactParamsModel = "gpt-4o-2024-11-20"
-	BetaResponseCompactParamsModelGPT4o2024_08_06  BetaResponseCompactParamsModel = "gpt-4o-2024-08-06"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
+	BetaResponseCompactParamsModelGPT4o2024_11_20 BetaResponseCompactParamsModel = "gpt-4o-2024-11-20"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
+	BetaResponseCompactParamsModelGPT4o2024_08_06 BetaResponseCompactParamsModel = "gpt-4o-2024-08-06"
 	// Deprecated: Announced shutdown date: 2026-10-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
 	// replacements.
@@ -37739,8 +38124,11 @@ const (
 	// Deprecated: Announced shutdown date: 2026-02-12. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
 	// replacements.
-	BetaResponseCompactParamsModelCodexMiniLatest     BetaResponseCompactParamsModel = "codex-mini-latest"
-	BetaResponseCompactParamsModelGPT4oMini           BetaResponseCompactParamsModel = "gpt-4o-mini"
+	BetaResponseCompactParamsModelCodexMiniLatest BetaResponseCompactParamsModel = "codex-mini-latest"
+	BetaResponseCompactParamsModelGPT4oMini       BetaResponseCompactParamsModel = "gpt-4o-mini"
+	// Deprecated: Announced shutdown date: 2027-01-14. See
+	// https://developers.openai.com/api/docs/deprecations for details and recommended
+	// replacements.
 	BetaResponseCompactParamsModelGPT4oMini2024_07_18 BetaResponseCompactParamsModel = "gpt-4o-mini-2024-07-18"
 	// Deprecated: Announced shutdown date: 2026-10-23. See
 	// https://developers.openai.com/api/docs/deprecations for details and recommended
