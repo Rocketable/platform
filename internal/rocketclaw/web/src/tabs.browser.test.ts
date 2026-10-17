@@ -9,6 +9,8 @@ const rows = [
   { id: "bravo", name: "Bravo", agent: "main" },
   { id: "charlie", name: "Charlie", agent: "main" },
   { id: "delta", name: "Delta", agent: "main", running: true },
+  { id: "echo", name: "Echo", agent: "ops" },
+  { id: "foxtrot", name: "Foxtrot", agent: "ops" },
 ];
 const href = (id: string) => `/s/${Buffer.from(id).toString("base64url")}`;
 
@@ -424,7 +426,8 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
   const box = await strip(page).boundingBox();
   await strip(page).dblclick({ position: { x: box.width - 4, y: box.height / 2 } });
   await page.waitForURL(`${origin}/`);
-  expect(await names(page)).toEqual(["Renamed", "Bravo", "New session", "Charlie"]);
+  // New session opens right of Bravo, then joins the Pages group after the main sessions.
+  expect(await names(page)).toEqual(["Renamed", "Bravo", "Charlie", "New session"]);
   await tab("New session").click({ button: "right" });
   expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain("Rename session");
 }), 60_000);
@@ -438,7 +441,8 @@ test("narrow top strip scrolls and running tabs keep a reachable close control",
     await page.waitForFunction((path: string) => JSON.parse(localStorage.getItem("tabs:tester") ?? "[]").some((saved: { path: string }) => saved.path === path), link);
   }
   await tab("Delta").waitFor();
-  expect(await names(page)).toEqual(["New session", "Alpha", "Bravo", "Charlie", "Delta", "Search"]);
+  // Search joins New session in the Pages group, which comes first because New session opened first.
+  expect(await names(page)).toEqual(["New session", "Search", "Alpha", "Bravo", "Charlie", "Delta"]);
   expect(await strip(page).evaluate((node: HTMLElement) => node.scrollWidth > node.clientWidth && getComputedStyle(node).overflowX === "auto")).toBe(true);
   await strip(page).evaluate((node: HTMLElement) => { node.scrollLeft = 0; });
   await strip(page).hover();
@@ -451,14 +455,14 @@ test("narrow top strip scrolls and running tabs keep a reachable close control",
   await close.focus();
   expect(await close.evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
   await page.keyboard.press("Enter");
-  expect(await names(page)).toEqual(["New session", "Alpha", "Bravo", "Charlie", "Search"]);
+  expect(await names(page)).toEqual(["New session", "Search", "Alpha", "Bravo", "Charlie"]);
   expect(page.url()).toEndWith("/search");
   expect(await tab("Search").evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
   await page.keyboard.press("Shift+F10");
   await page.getByRole("menuitem", { name: "Close", exact: true }).press("Enter");
-  await page.waitForURL(`**${href("charlie")}`);
+  await page.waitForURL(`**${href("alpha")}`);
   // The menu hands focus back as it finishes closing, which can land after the URL changes.
-  await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Open tabs"] [role="tab"][aria-label="Charlie"]'));
+  await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Open tabs"] [role="tab"][aria-label="Alpha"]'));
 }), 60_000);
 
 test("running tab shows a dot instead of close until hover or focus at desktop width", () => withPage({}, async (page, origin) => {
@@ -477,4 +481,69 @@ test("running tab shows a dot instead of close until hover or focus at desktop w
   await tab("Delta").click();
   await page.waitForURL(`**${href("delta")}`);
   expect(await dot.evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("1");
+}), 60_000);
+
+test("tabs group by agent, collapse across reloads, and move only within their group", () => withPage({}, async (page, origin) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  const header = (name: string) => strip(page).getByRole("button", { name, exact: true });
+  const headers = () => strip(page).locator("button[aria-expanded]").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => `${node.textContent} ${node.getAttribute("aria-expanded")}`));
+  const members = () => strip(page).getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => `${node.getAttribute("aria-label")} ${node.getAttribute("aria-description")}`));
+  const focused = (name: string) => tab(name).evaluate((node: HTMLElement) => document.activeElement === node);
+  const visit = async (links: [string, string][]) => {
+    for (const [link, name] of links) {
+      await page.goto(`${origin}${link}`);
+      await tab(name).waitFor();
+      await page.waitForFunction((path: string) => JSON.parse(localStorage.getItem("tabs:tester") ?? "[]").some((saved: { path: string }) => saved.path === path), link);
+    }
+  };
+  await visit([[href("alpha"), "Alpha"], [href("bravo"), "Bravo"]]);
+  // With only main sessions and no pages open, no headers show.
+  expect(await headers()).toEqual([]);
+  await visit([[href("echo"), "Echo"], ["/search", "Search"], [href("charlie"), "Charlie"], [href("foxtrot"), "Foxtrot"]]);
+  await page.waitForFunction(() => document.querySelectorAll('[aria-label="Open tabs"] button[aria-expanded]').length === 3);
+  expect(await headers()).toEqual(["main true", "ops true", "Pages true"]);
+  expect(await members()).toEqual(["Alpha main", "Bravo main", "Charlie main", "Echo ops", "Foxtrot ops", "Search Pages"]);
+
+  await tab("Charlie").click();
+  await page.waitForURL(`**${href("charlie")}`);
+  await header("ops").click();
+  expect(await names(page)).toEqual(["Alpha", "Bravo", "Charlie", "Search"]);
+  await tab("Charlie").focus();
+  await page.keyboard.press("ArrowRight");
+  expect(await focused("Search")).toBe(true);
+  await page.reload();
+  await tab("Search").waitFor();
+  expect(await headers()).toEqual(["main true", "ops false", "Pages true"]);
+  expect(await names(page)).toEqual(["Alpha", "Bravo", "Charlie", "Search"]);
+  await page.getByPlaceholder("Message or $command").focus();
+  await page.keyboard.press("Control+BracketRight");
+  await page.waitForURL(`**${href("echo")}`);
+  expect(await headers()).toEqual(["main true", "ops true", "Pages true"]);
+
+  await tab("Echo").focus();
+  await page.keyboard.press("Shift+ArrowRight");
+  expect(await names(page)).toEqual(["Alpha", "Bravo", "Charlie", "Foxtrot", "Echo", "Search"]);
+  await page.keyboard.press("Shift+ArrowRight");
+  await tab("Foxtrot").dragTo(tab("Alpha"));
+  expect(await names(page)).toEqual(["Alpha", "Bravo", "Charlie", "Foxtrot", "Echo", "Search"]);
+  await menu(page, "Alpha", "Move tabs to left");
+  await page.evaluate(() => localStorage.setItem("tab-groups-auto:tester", "{not json"));
+  await page.reload();
+  await tab("Echo").waitFor();
+  expect(await strip(page).getAttribute("aria-orientation")).toBe("vertical");
+  expect(await headers()).toEqual(["main true", "ops true", "Pages true"]);
+  expect(await names(page)).toEqual(["Alpha", "Bravo", "Charlie", "Foxtrot", "Echo", "Search"]);
+
+  // Close to the right follows the strip, so it closes the ops tabs and Search.
+  await menu(page, "Charlie", "Close to the right");
+  await page.waitForURL(`**${href("charlie")}`);
+  expect(await names(page)).toEqual(["Alpha", "Bravo", "Charlie"]);
+  expect(await headers()).toEqual([]);
+
+  // Sessions load after the tabs, so a reload keeps Pages between the agent groups.
+  await visit([["/search", "Search"], [href("echo"), "Echo"]]);
+  await page.reload();
+  await tab("Echo").waitFor();
+  expect(await headers()).toEqual(["main true", "Pages true", "ops true"]);
+  expect(await names(page)).toEqual(["Alpha", "Bravo", "Charlie", "Search", "Echo"]);
 }), 60_000);
