@@ -18,10 +18,7 @@ type LockedConfig struct {
 
 // NewLockedConfig stores an independent copy of cfg.
 func NewLockedConfig(cfg *Config) *LockedConfig {
-	locked := new(LockedConfig)
-	locked.Store(cfg)
-
-	return locked
+	return &LockedConfig{cfg: clone(cfg)}
 }
 
 // Store replaces the configuration with an independent copy.
