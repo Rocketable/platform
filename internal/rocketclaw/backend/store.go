@@ -1008,30 +1008,38 @@ type SidebarSession struct {
 }
 
 // SidebarSessions yields pinned records first, then recent-first, bytewise-ID order.
-// Conversations without stored history are omitted until their first entry arrives.
+// Conversations without stored history are omitted until their first entry arrives,
+// except while a turn runs: then its prompt is the preview and its start the update time.
 // Breaking iteration or cancelling ctx closes the database rows.
 func (s *SessionService) SidebarSessions(ctx context.Context) iter.Seq2[SidebarSession, error] {
 	return func(yield func(SidebarSession, error) bool) {
-		rows, err := s.db.QueryContext(ctx, `SELECT
+		rows, err := s.db.QueryContext(ctx, `WITH running AS (
+    SELECT DISTINCT ON (conversation_id) conversation_id, inbound_json->>'Text' AS prompt, to_timestamp(created_at_unix_ns / 1e9) AS started_at
+    FROM active_turns WHERE phase <> 'done'
+    ORDER BY conversation_id, created_at_unix_ns
+)
+SELECT
     c.conversation_id,
     c.agent,
     c.created_by,
-    s.preview,
-    s.last_updated,
-    EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = c.conversation_id AND a.phase <> 'done'),
+    CASE WHEN h.found THEN s.preview ELSE convert_to(r.prompt, 'UTF8') END,
+    CASE WHEN h.found THEN s.last_updated ELSE r.started_at END,
+    r.conversation_id IS NOT NULL,
     c.pinned,
     c.name,
     c.forked_from,
     COALESCE(t.tags, '[]'::jsonb)
 FROM managed_conversations c
--- Keep the history check per conversation and stop at its first entry.
-CROSS JOIN LATERAL (
-    SELECT 1 FROM session_entries e WHERE e.conversation_id = c.conversation_id LIMIT 1
-) h
+-- Keep the history check per conversation and stop at its first entry. A CTE
+-- would read every stored entry on each refresh, about twice as slow.
+LEFT JOIN LATERAL (
+    SELECT TRUE AS found FROM session_entries e WHERE e.conversation_id = c.conversation_id LIMIT 1
+) h ON TRUE
+LEFT JOIN running r ON r.conversation_id = c.conversation_id
 LEFT JOIN session_summaries s ON s.conversation_id = c.conversation_id
 LEFT JOIN session_tags t ON t.conversation_id = c.conversation_id
-WHERE `+visibleChatsSQL+`
-ORDER BY c.pinned DESC, COALESCE(s.last_updated, '0001-01-01 00:00:00+00'::timestamptz) DESC, c.conversation_id COLLATE "C"`, "")
+WHERE (h.found OR r.conversation_id IS NOT NULL) AND `+visibleChatsSQL+`
+ORDER BY c.pinned DESC, COALESCE(CASE WHEN h.found THEN s.last_updated ELSE r.started_at END, '0001-01-01 00:00:00+00'::timestamptz) DESC, c.conversation_id COLLATE "C"`, "")
 		if err != nil {
 			yield(SidebarSession{}, fmt.Errorf("query sidebar sessions: %w", err))
 			return

@@ -374,8 +374,11 @@ function sessionLabel(id: string) {
   return id;
 }
 
+// A session created here is titled by its first message until the session list has it.
+const firstMessages = new Map<string, string>();
+
 function sessionTitle(session: Session, loading: boolean) {
-  return session.name || rowPreview(session, loading).split("\n", 1)[0] || sessionLabel(session.id);
+  return session.name || rowPreview(session, loading).split("\n", 1)[0] || firstMessages.get(session.id) || sessionLabel(session.id);
 }
 
 function useRoute() {
@@ -2908,6 +2911,7 @@ async function sendComposer(input: {
     let sessionId = input.sessionId;
     if (sessionId === "") {
       sessionId = await input.create.mutateAsync({ agent: input.selected });
+      firstMessages.set(sessionId, optimistic.text.trim().split("\n", 1)[0]);
       input.goSession(sessionId);
     }
     optimistic.attachments = input.files.map(({ id, file }) => ({ id, name: file.name, mimeType: file.type, size: String(file.size), conversationId: sessionId, file }));

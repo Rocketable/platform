@@ -572,6 +572,48 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 	require.False(t, updated)
 }
 
+func TestSidebarSessionsListFirstTurnBeforeHistory(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	ctx := t.Context()
+	require.NoError(t, service.UpsertThread("new", ThreadState{Agent: "main"}))
+	seedActiveTurn(t, service, "new", "first-turn", nil)
+	updated, err := service.UpdateConversationDetails(ctx, "new", nil, new("Draft"))
+	require.NoError(t, err)
+	require.True(t, updated)
+
+	only := func() SidebarSession {
+		var got []SidebarSession
+
+		for row, err := range service.SidebarSessions(ctx) {
+			require.NoError(t, err)
+
+			got = append(got, row)
+		}
+
+		require.Len(t, got, 1)
+
+		return got[0]
+	}
+
+	row := only()
+	require.Equal(t, "Draft", row.Name)
+	require.True(t, row.Running)
+	require.Equal(t, "seed", row.Summary.LastMessage)
+	require.WithinDuration(t, time.Now(), row.Summary.LastUpdated, time.Minute)
+
+	_, err = service.finishTurn(ctx, "first-turn", &turnFinish{store: newSessionStore("new", service), outbound: protocol.NewOutboundMessage("new", ""), entries: []harness.SessionEntry{*testSessionEntry("question", "answer")}})
+	require.NoError(t, err)
+	require.Equal(t, "answer", only().Summary.LastMessage)
+	require.NoError(t, service.closeTurn(ctx, "first-turn"))
+
+	row = only()
+	require.Equal(t, "Draft", row.Name)
+	require.False(t, row.Running)
+	require.Equal(t, "answer", row.Summary.LastMessage)
+}
+
 func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	t.Parallel()
 
@@ -652,6 +694,12 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	require.True(t, found, "hiding empty history must preserve the conversation")
 	_, err = service.AppendEntryID(t.Context(), "empty", testSessionEntryAt(stamp, "first message"))
 	require.NoError(t, err)
+
+	// A running turn keeps a cleared chat listed.
+	for _, turnID := range []string{"active-first", "active-second"} {
+		endTestTurn(t, service, "a", turnID, protocol.TerminalStopped)
+	}
+
 	_, err = service.DeleteSession(t.Context(), "a")
 	require.NoError(t, err)
 
