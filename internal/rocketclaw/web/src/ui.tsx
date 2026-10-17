@@ -27,7 +27,6 @@ import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Attachment, AttachmentGroup, AttachmentMedia, AttachmentContent, AttachmentTitle, AttachmentDescription, AttachmentActions, AttachmentAction } from "@/components/ui/attachment";
-import { Marker, MarkerContent } from "@/components/ui/marker";
 import { Message, MessageContent } from "@/components/ui/message";
 import { MessageScrollerProvider, MessageScroller, MessageScrollerViewport, MessageScrollerContent, MessageScrollerItem, MessageScrollerButton, useMessageScroller } from "@/components/ui/message-scroller";
 import { Questionnaire, QuestionnaireActions, QuestionnaireChoice, QuestionnaireChoiceDescription, QuestionnaireChoices, QuestionnaireDescription, QuestionnaireError, QuestionnaireItem, QuestionnaireSubmit, QuestionnaireTitle } from "@/components/ui/questionnaire";
@@ -2750,16 +2749,9 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
   const followed = previewing ? { lines: previewLines ?? lines, delegations: preview.data, busy: false, more: false, terminal: undefined, shadows: undefined } : { lines, delegations, busy, more, terminal, shadows };
   const queue = useQuery({ ...queries.queue({ id }), enabled: id !== "", refetchInterval: 2000 });
   const { queued, parked } = pendingInputs(draft, queue.data ?? []);
-  // Pending steers, the revert checkpoint, and errors end the transcript so the origin switcher stays next to the composer.
+  // Pending steers and errors end the transcript so the origin switcher stays next to the composer.
   const footer = <>
     {parked.length > 0 && !previewing ? <section aria-label="Pending steers" className="mx-auto w-full max-w-3xl px-3"><p className="text-xs text-muted-foreground">Waiting to steer</p>{parked.map((line) => <TranscriptLine key={line.id} line={line} conversationId={id} hasSandboxed={false} />)}</section> : null}
-    {/* A revert leaves a Checkpoint after the kept turns: https://ui.shadcn.com/docs/ai-elements/base/checkpoint. */}
-    {draft.revertMessageId ? <div className="mx-auto w-full max-w-3xl px-3 py-2"><Marker variant="separator" role="status">
-      <MarkerContent className="max-w-full">
-        History reverted. Files and external effects are unchanged.
-        <Button size="xs" variant="outline" className="ms-2 min-h-11 sm:min-h-6" disabled={revert.pending} onClick={() => void revert.run(undefined, true)}>Redo</Button>
-      </MarkerContent>
-    </Marker></div> : null}
     {error ? <p role="alert" className="px-3 text-sm text-destructive">{error}</p> : null}
   </>;
   return (
@@ -3165,7 +3157,7 @@ function SessionComposer({
   const send = (delivery?: PromptDelivery) => {
     const command = /^\p{White_Space}*\$(fork|handoff|undo|redo)\p{White_Space}*$/u.exec(draft.text);
     if (delivery !== "STASH" && command) {
-      if (["undo", "redo"].includes(command[1])) return revert.run(undefined, command[1] === "redo");
+      if (["undo", "redo"].includes(command[1])) { setText(""); return revert.run(undefined, command[1] === "redo"); }
       if (!id) { setSendError("Open a session first."); return Promise.resolve(); }
       setCommand({ mode: command[1] as "fork" | "handoff", source: id });
       setText("");
