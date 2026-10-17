@@ -2212,7 +2212,7 @@ func (c *Connector) downloadSlackFileOrSkip(ctx context.Context, file *slack.Fil
 		return nil, skip + sizeLimitReason + "."
 	}
 
-	downloadURL := slackFileDownloadURL(file)
+	downloadURL := cmp.Or(strings.TrimSpace(file.URLPrivateDownload), strings.TrimSpace(file.URLPrivate))
 	if downloadURL == "" {
 		return nil, skip + "Slack did not provide a download URL."
 	}
@@ -2244,10 +2244,6 @@ func (c *Connector) downloadSlackFile(ctx context.Context, downloadURL string, l
 	}
 
 	return buffer.data.Bytes(), nil
-}
-
-func slackFileDownloadURL(file *slack.File) string {
-	return cmp.Or(strings.TrimSpace(file.URLPrivateDownload), strings.TrimSpace(file.URLPrivate))
 }
 
 func slackFileDisplayName(file *slack.File) string {
