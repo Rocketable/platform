@@ -19,7 +19,7 @@ New composer and handoff previews snapshot the server-resolved author only when
 identity is ready, not refreshing. Recorded history or queue data replaces that
 preview by input ID; the current viewer never supplies an author for saved messages.
 Copy puts the message text on the clipboard.
-Message text follows Slack formatting: `*bold*` and `**bold**`, `_italic_`,
+**Raw** message text follows Slack formatting: `*bold*` and `**bold**`, `_italic_`,
 `~strikethrough~`, `` `inline code` ``, fenced code blocks, `> ` quotes, and
 `- `/`* `/`1. ` lists (nested items render flat). Markdown, Slack, and bare
 `http(s)` links are clickable and open in a new tab. Slack tags show names:
@@ -29,6 +29,12 @@ that cannot be resolved shows its ID, such as `@U123`. Headings and tables stay
 literal. Session titles, turn previews, handoff results, and queued items show the
 same inline formatting on one line; their tooltips and accessible names use the
 plain text with names filled in. Copy still copies the original text.
+Chat messages default to **Markdown** output instead: GitHub-flavored Markdown with headings, tables,
+nested lists, task lists, and rules, with single line breaks kept. Code blocks,
+links, and Slack tags look as in Raw; raw HTML stays literal. The command
+palette's **Output: Raw** and **Output: Markdown** switch between them, and this
+browser remembers the choice across reloads and tabs. Search results, previews,
+and voice transcripts always use Raw.
 Code blocks and tool output are shadcn/ui
 [Code Blocks](https://ui.shadcn.com/docs/components/base/code-block) and scroll
 sideways by default. A fenced block whose language is bash/sh, CSS, diff, Go, HTML,

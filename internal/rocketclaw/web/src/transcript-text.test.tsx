@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
-import { CodeBlock, InlineText, TranscriptText, cleanText, useCleanText } from "./transcript-text";
+import { CodeBlock, InlineText, MarkdownText, TranscriptText, cleanText, useCleanText } from "./transcript-text";
 
 const names = { S0BA868QQ90: "cs-operators" };
 const entry = "<!subteam^S0BA868QQ90> *Allen now says he would buy a Windows computer if memory is the cause.*\n\nMemory exhaustion remains unverified.\n\n*Please send this revised combined reply and leave the case open.*\n\nRevised customer reply:\n```\nI wouldn’t recommend buying a Windows computer.\n```";
@@ -171,4 +171,18 @@ test("InlineText formats the first line only", () => {
 test("cleanText drops markers and substitutes resolved names", () => {
   expect(cleanText("<!subteam^S0BA868QQ90> *Allen now says*", names)).toBe("@cs-operators Allen now says");
   expect(html(<Clean text={"<!subteam^S0BA868QQ90> *Allen now says*"} />)).toBe("@cs-operators Allen now says");
+});
+
+test("MarkdownText renders headings, tables, links, code, and Slack tags without raw HTML", () => {
+  const tag = (label: string) => `<span class="font-medium text-primary">${label}</span>`;
+  expect(html(<MarkdownText text={"## Team\n\n| Name | Role |\n|---|---|\n| Alice | Developer |"} />)).toBe('<div class="markdown break-words"><h2>Team</h2>\n<div class="overflow-x-auto"><table><thead><tr><th>Name</th><th>Role</th></tr></thead><tbody><tr><td>Alice</td><td>Developer</td></tr></tbody></table></div></div>');
+  expect(html(<MarkdownText text={"see [docs](https://x.com/a), `x`, <@U1>, <#C1|general> and <!here>"} />)).toBe(`<div class="markdown break-words"><p>see <a href="https://x.com/a" class="underline" target="_blank" rel="noopener noreferrer">docs</a>, <code class="rounded-sm bg-muted px-1 font-mono text-[0.9em]">x</code>, ${tag("@U1")}, ${tag("#general")} and ${tag("@here")}</p></div>`);
+  // A leading Slack tag would otherwise start an HTML block that hides the rest of the line's Markdown.
+  const reply = html(<MarkdownText text={entry} />);
+  expect(reply).toContain(`<p>${tag("@cs-operators")} <em>Allen now says he would buy a Windows computer if memory is the cause.</em></p>`);
+  expect(reply).toContain('aria-label="Copy Code"');
+  expect(reply).toContain(">I wouldn’t recommend buying a Windows computer.\n</code>");
+  const unsafe = html(<MarkdownText text={"<script>alert(1)</script>\n\n[x](javascript:alert(1))"} />);
+  expect(unsafe).toContain("&lt;script&gt;");
+  expect(unsafe).not.toContain("javascript:");
 });

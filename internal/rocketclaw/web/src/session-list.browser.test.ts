@@ -790,7 +790,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const commandPalette = page.getByRole("dialog", { name: "Run command", exact: true });
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
     expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
-    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "List Agents", "List Skills", "Sessions: New", "Sessions: Search", "Settings", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Move tabs to left", "Tabs: Pin",
+    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "List Agents", "List Skills",
+      "Output: MarkdownCurrent · Render messages as Markdown, including headings and tables.", "Output: RawShow messages with Slack formatting.", "Sessions: New", "Sessions: Search", "Settings", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Move tabs to left", "Tabs: Pin",
       // Timeline levels follow the Config slider, with its descriptions, and mark the active level.
       "Timeline: Messages onlyHide all activity.", "Timeline: QuietGroup subagents and skills. Hide other activity.", "Timeline: CompactCurrent · Group all activity with details collapsed.",
       "Timeline: DetailedExpand execute output. Show subagents and skills separately and group other activity.", "Timeline: EverythingShow all activity separately and expanded.", "Voice"]);
@@ -919,8 +920,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       expect(await page.locator("textarea").evaluate((element: HTMLTextAreaElement) => element.scrollTop > 0)).toBe(true);
       expect(await page.locator("textarea").inputValue()).toBe(longDraft);
       await page.locator("textarea").fill("");
-      await page.locator('#transcript-scroll [data-slot="bubble-content"] div').first().click({ trial: true }); // Measure after the responsive layout finishes resizing.
-      const word = await page.locator('#transcript-scroll [data-slot="bubble-content"] div').first().evaluate((element: HTMLElement) => {
+      await page.locator('#transcript-scroll [data-slot="bubble-content"] p').first().click({ trial: true }); // Measure after the responsive layout finishes resizing.
+      const word = await page.locator('#transcript-scroll [data-slot="bubble-content"] p').first().evaluate((element: HTMLElement) => {
         const range = document.createRange();
         range.setStart(element.firstChild!, 0);
         range.setEnd(element.firstChild!, 5);
@@ -2054,7 +2055,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       ctrl.history = [...ctrl.history.filter((message) => message.entryKey !== "fenced-stream"), { entryKey: "fenced-stream", itemId: "fenced-stream:0", inputId: "", role: "assistant", text: "~~~py\n  streamed", turnId: "fenced-stream", complete: false }];
       (await transcriptStream(`code-${width}`).promise).enqueue(`data: ${JSON.stringify({ conversationId: `code-${width}`, revision: "hint" })}\n\n`);
       await transcriptPage.locator('pre[aria-label="py"]').waitFor();
-      expect(await transcriptPage.locator('pre[aria-label="py"]').textContent()).toBe("  streamed");
+      // Markdown output ends every code block with a line break, as a closed fence does.
+      expect(await transcriptPage.locator('pre[aria-label="py"]').textContent()).toBe("  streamed\n");
       // One remembered wrap setting applies to every block, inline and expanded, long tokens included.
       const fits = (label: string) => transcriptPage.locator(`#transcript-scroll pre[aria-label="${label}"]`).evaluate((el: HTMLElement) => el.scrollWidth <= el.clientWidth);
       expect([await fits("bash"), await fits("sh")]).toEqual([false, false]);
@@ -2132,6 +2134,21 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await levels.filter({ hasText: "Messages only" }).click();
     await detailPage.getByText("Build is green", { exact: true }).waitFor();
     expect(await detailPage.locator('#transcript-scroll [data-slot="trace-collapsible-trigger"]').count()).toBe(0);
+    // Chat messages render as Markdown by default; Output: Raw restores Slack formatting and persists across reloads.
+    ctrl.history = [step("assistant", "| Name | Role |\n|---|---|\n| Alice | Developer |")].map((item, index) => ({ ...item, entryKey: "table", itemId: `table:${index}`, inputId: "", turnId: "", complete: true }));
+    await detailPage.goto(`${origin}/s/${Buffer.from("markdown-output").toString("base64url")}`);
+    const table = detailPage.locator("#transcript-scroll table");
+    await table.waitFor();
+    expect(await table.locator("td").allTextContents()).toEqual(["Alice", "Developer"]);
+    await palette("Output: Raw");
+    const raw = detailPage.locator('#transcript-scroll [data-slot="bubble-content"]').getByText("| Alice | Developer |");
+    await raw.waitFor();
+    expect(await table.count()).toBe(0);
+    await detailPage.reload();
+    await raw.waitFor();
+    expect(await detailPage.evaluate(() => localStorage.getItem("output-mode"))).toBe("raw");
+    await palette("Output: Markdown");
+    await table.waitFor();
     // Pointer input reaches the Config slider: clicking its far end selects Everything.
     await detailPage.goto(`${origin}/config`);
     const sliderBox = (await detailPage.getByRole("group", { name: "Timeline detail" }).boundingBox())!;
@@ -2407,6 +2424,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     promptHold = Promise.withResolvers();
     ctrl.promptStarted = Promise.withResolvers();
     const photoPage = await browser.newPage();
+    // Raw output shows the sent text verbatim, so its trailing whitespace is observable.
+    await photoPage.addInitScript(() => localStorage.setItem("output-mode", "raw"));
     await photoPage.goto(`${origin}/s/${Buffer.from("photo-session").toString("base64url")}`);
     await photoPage.locator("textarea").fill("What's this? \n");
     await photoPage.locator('input[type="file"]').setInputFiles({ name: "photo.png", mimeType: "image/png", buffer: imageBytes });

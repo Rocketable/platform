@@ -151,7 +151,8 @@ for (const width of [1440, 390, 320]) test(`shadow comparison at ${width}px`, as
       await page.getByRole("dialog").waitFor({ state: "hidden" });
       const parent = await page.getByRole("region", { name: "Turn 3", exact: true }).boundingBox();
       const viewport = await page.locator("#transcript-scroll").boundingBox();
-      expect(parent!.y).toBeGreaterThanOrEqual(viewport!.y);
+      // The browser snaps the scroll offset to whole pixels, so the turn may start a fraction above the viewport.
+      expect(parent!.y).toBeGreaterThan(viewport!.y - 1);
       expect(parent!.y).toBeLessThan(viewport!.y + viewport!.height);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await Bun.write(path.resolve(import.meta.dir, `../../../../.tmp/rocketclaw/shadow-controls-${width}.png`), await page.screenshot({ animations: "disabled" }));

@@ -20,7 +20,7 @@ import { createContext, memo, use, useDeferredValue, useCallback, useContext, us
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
-import { CodeBlock, InlineText, TranscriptText, copyText, useCleanText } from "./transcript-text";
+import { CodeBlock, InlineText, MarkdownText, OUTPUT_KEY, TranscriptText, copyText, setPreference, useCleanText, usePreference } from "./transcript-text";
 import { projectTimeline, setTimelineRows, timelineFailure, timelineLevel, timelineLevels, useTimelineDetail, type TimelineRows } from "./timeline-detail";
 import { TimelineDetailCard } from "./timeline-detail-card";
 import { Button } from "@/components/ui/button";
@@ -1357,6 +1357,9 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
   const level = timelineLevel(useTimelineDetail());
   // The same levels and descriptions as the Config slider; the active one is marked.
   const timeline = timelineLevels.map(({ id: key, label, description, rows }) => ({ key: `timeline-${key}`, label: `Timeline: ${label}`, detail: key === level?.id ? `Current · ${description}` : description, run: () => setTimelineRows(rows) }));
+  const markdown = usePreference(OUTPUT_KEY) !== "raw";
+  const outputs = ([["raw", "Raw", "Show messages with Slack formatting."], ["markdown", "Markdown", "Render messages as Markdown, including headings and tables."]] as const)
+    .map(([key, label, description]) => ({ key: `output-${key}`, label: `Output: ${label}`, detail: (key === "markdown") === markdown ? `Current · ${description}` : description, run: () => setPreference(OUTPUT_KEY, key) }));
   const [query, setQuery] = useState("");
   const [recent, setRecent] = useState<string[]>(() => JSON.parse(localStorage.getItem("command-history") ?? "[]"));
   const [pick, setPick] = useState(0);
@@ -1395,7 +1398,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
       setMode(undefined);
     },
   });
-  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), { rows: search.rows, loadingIds: sidebar.loadingIds }, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands, ...tabCommands, ...timeline], recent);
+  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), { rows: search.rows, loadingIds: sidebar.loadingIds }, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands, ...tabCommands, ...timeline, ...outputs], recent);
   const selected = items.length === 0 ? 0 : pick % items.length;
   // The palette opens with the first rows; the full list renders in the background.
   const shown = useDeferredValue(items, items.slice(0, 50));
@@ -2148,6 +2151,7 @@ function ToolLine({ line, conversationId, hasSandboxed, open }: { line: Line; co
 }
 
 function TranscriptLine({ line, conversationId, hasSandboxed, open }: { line: Line; conversationId: string; hasSandboxed: boolean; open?: boolean }) {
+  const markdown = usePreference(OUTPUT_KEY) !== "raw";
   if (line.completionNotes?.length) return <CompletionNotes notes={line.completionNotes} />;
   // Reasoning follows https://ui.shadcn.com/docs/ai-elements/base/reasoning; saved thinking is always finished.
   if (line.role === "thinking") return <TraceRow key={String(open)} open={open} icon={<Brain />} title="Thought"><div className="whitespace-pre-wrap">{line.text}</div></TraceRow>;
@@ -2164,7 +2168,7 @@ function TranscriptLine({ line, conversationId, hasSandboxed, open }: { line: Li
         <MessageHeader header={line.header}><Bubble variant={line.role === "user" ? "secondary" : "ghost"} align={align}>
           <BubbleContent>
             <MessageAuthor principal={line.principal} role={line.role} />
-            <TranscriptText text={line.text} />
+            {markdown ? <MarkdownText text={line.text} /> : <TranscriptText text={line.text} />}
           </BubbleContent>
           <MessageAttachments attachments={line.attachments} conversationId={conversationId} />
         </Bubble></MessageHeader>
