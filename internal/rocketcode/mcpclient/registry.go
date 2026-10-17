@@ -124,10 +124,6 @@ func (s *Session) CallTool(ctx context.Context, server, tool string, args map[st
 		return "", fmt.Errorf("call %s.%s: %w", server, tool, err)
 	}
 
-	if result == nil {
-		return "", fmt.Errorf("call %s.%s: nil result", server, tool)
-	}
-
 	return flattenCallToolResult(result)
 }
 
