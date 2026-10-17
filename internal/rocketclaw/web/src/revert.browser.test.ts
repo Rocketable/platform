@@ -78,9 +78,11 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     await page.reload();
     await page.waitForFunction(() => document.querySelector("textarea")?.value === "Edited replacement");
     await page.getByText("draft.txt", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Redo", exact: true }).click();
+    // A revert shows no notice; Redo is a command and leaves no command text behind.
+    expect(await page.getByText("History reverted", { exact: false }).count()).toBe(0);
+    await input.fill("$redo"); await input.press("Enter");
     await page.getByText("Second answer", { exact: true }).waitFor();
-    expect(await input.inputValue()).toBe("Edited replacement");
+    expect(await input.inputValue()).toBe("");
     await input.fill("$undo"); await input.press("Enter");
     await page.waitForFunction(() => document.querySelector("textarea")?.value === "Second request");
     expect(await page.getByText("draft.txt", { exact: true }).count()).toBe(0);
@@ -305,9 +307,8 @@ test("revert an unsaved latest turn by input ID", async () => {
     await page.waitForFunction(() => document.querySelector("textarea")?.value === "Live request");
     await page.getByText("Working answer", { exact: true }).waitFor({ state: "detached" });
     expect(staged).toEqual(["live-input"]);
-    await page.getByRole("button", { name: "Redo", exact: true }).click();
+    await input.fill("$redo"); await input.press("Enter");
     await page.getByText("Working answer", { exact: true }).waitFor();
-    await input.fill("");
     await live.hover();
     await live.getByRole("button", { name: "Revert message", exact: true }).click();
     await page.waitForFunction(() => document.querySelector("textarea")?.value === "Live request");

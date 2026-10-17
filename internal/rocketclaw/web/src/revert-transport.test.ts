@@ -38,9 +38,8 @@ test("real HTTP Revert commits only retained context and converges across viewer
     expect(await boundary.text()).toBe("boundary-upload bytes");
     const hidden = await context.request.get(`${url}/api/DownloadAttachment?conversationId=chat&id=hidden-upload`);
     expect(hidden.status()).toBe(404);
-    await second.getByRole("button", { name: "Redo", exact: true }).waitFor();
+    await second.locator('[data-slot="message"]').getByText("abandoned answer", { exact: true }).waitFor({ state: "detached" });
     expect(await second.locator("textarea").inputValue()).toBe("Other viewer draft");
-    expect(await second.locator('[data-slot="message"]').getByText("abandoned answer", { exact: true }).count()).toBe(0);
     await first.locator("textarea").fill("$undo"); await first.locator("textarea").press("Enter");
     await first.waitForFunction(() => document.querySelector("textarea")?.value === "retained request");
     await first.getByLabel("Pending attachments").getByText("retained-upload.txt", { exact: true }).waitFor();
@@ -49,14 +48,15 @@ test("real HTTP Revert commits only retained context and converges across viewer
     expect(undone.ok()).toBe(true);
     expect(await undone.text()).toBe("retained-upload bytes");
     expect((await context.request.get(`${url}/api/DownloadAttachment?conversationId=chat&id=boundary-upload`)).status()).toBe(404);
-    await first.getByRole("button", { name: "Redo", exact: true }).click();
+    await first.locator("textarea").fill("$redo"); await first.locator("textarea").press("Enter");
+    await first.locator('[data-slot="message"]').getByText("abandoned answer", { exact: true }).waitFor();
+    expect(await first.locator("textarea").inputValue()).toBe("");
     await selected.hover(); await selected.getByRole("button", { name: "Revert message", exact: true }).click();
     await first.waitForFunction(() => document.querySelector("textarea")?.value === "abandoned request");
     await first.locator("textarea").fill("edited replacement");
     await first.getByRole("button", { name: "Send", exact: true }).click();
     await first.locator('[data-slot="message"]').getByText("branch reply", { exact: true }).waitFor();
     await second.locator('[data-slot="message"]').getByText("branch reply", { exact: true }).waitFor();
-    expect(await first.getByRole("button", { name: "Redo", exact: true }).count()).toBe(0);
     await first.reload();
     await first.locator('[data-slot="message"]').getByText("branch reply", { exact: true }).waitFor();
     expect(await first.locator("textarea").inputValue()).toBe("");
