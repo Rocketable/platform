@@ -167,7 +167,7 @@ A live spoken call between a person on the Web and OpenAI's voice model, attache
 
 ### Voice Settings
 
-One person's Web voice state, kept by the server and the same on every device: their current voice conversation for the Voice page, the agent for their next one, their voice, and whether the Voice page shows the transcript. Two people never share Voice Settings, even in one browser. Startup cleanup never deletes a person's current voice conversation, even with no messages; Reset forgets it, and ordinary cleanup applies after that. A call uses the person's voice when the conversation agent's provider offers it, and that provider's default otherwise.
+One person's Web voice state, kept by the server and the same on every device: their current voice conversation for the Voice page, the agent for their next one, their voice, and whether the Voice page shows the transcript. Two people never share Voice Settings, even in one browser. Retention cleanup never deletes a person's current voice conversation, even with no messages; Reset forgets it, and ordinary cleanup applies after that. A call uses the person's voice when the conversation agent's provider offers it, and that provider's default otherwise.
 
 ### Voice Hand-off
 

@@ -338,7 +338,7 @@ func TestShadowLifecycleSettlementFailureReleasesFamily(t *testing.T) {
 			if failure == "canceled" {
 				workers, err = manager.settleHistory(ctx, append(children, "parent"))
 			} else {
-				_, _, workers, err = store.beginHistoryMutation(ctx, []string{"parent"})
+				_, _, workers, err = store.beginHistoryMutation(ctx, []string{"parent"}, false)
 			}
 
 			require.Error(t, err)
@@ -363,7 +363,7 @@ func TestShadowLifecycleSettlementFailureReleasesFamily(t *testing.T) {
 
 			child.historyMutation, child.settlement = false, nil
 
-			tx, ids, workers, err := store.beginHistoryMutation(t.Context(), []string{"parent"})
+			tx, ids, workers, err := store.beginHistoryMutation(t.Context(), []string{"parent"}, false)
 			require.NoError(t, err, "failed settlement must not strand database locks or admission")
 			require.ElementsMatch(t, append(children, "parent"), ids)
 			require.NoError(t, tx.Commit())

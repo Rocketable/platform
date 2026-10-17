@@ -82,7 +82,7 @@ func TestSessionTags(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"resolved"}, tags)
 
-	stats, err := store.PruneStateBefore(ctx, time.Now().Add(-time.Hour))
+	stats, err := store.PruneStateBefore(ctx, time.Now().Add(-time.Hour), 0)
 	require.NoError(t, err)
 	require.Zero(t, stats.SessionRows)
 
@@ -179,7 +179,7 @@ func TestSessionTagsPrivateLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	_, err = store.toggleSessionTag(ctx, "external_mcp:pre-epoch", "customer", []string{"customer"})
 	require.NoError(t, err)
-	_, err = store.PruneStateBefore(ctx, time.Unix(-10, 0).UTC())
+	_, err = store.PruneStateBefore(ctx, time.Unix(-10, 0).UTC(), 0)
 	require.NoError(t, err)
 	tags, err := sessionTags(ctx, store.db, "external_mcp:pre-epoch")
 	require.NoError(t, err)
@@ -201,7 +201,7 @@ func TestSessionTagsPrivateLifecycle(t *testing.T) {
 	require.NoError(t, store.RegisterExternalMCPConversation("tags-bound", "main", &ExternalMCPSessionState{Agent: "main", PrivateConversationID: ids[3], ManagedConversationID: ids[4]}))
 	_, err = store.AppendEntryID(ctx, ids[4], testSessionEntryAt(cutoff.Add(time.Hour), "recent"))
 	require.NoError(t, err)
-	_, err = store.PruneStateBefore(ctx, cutoff)
+	_, err = store.PruneStateBefore(ctx, cutoff, 0)
 	require.NoError(t, err)
 
 	for i, id := range ids {
@@ -778,14 +778,14 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 40, n)
+	assert.Equal(t, 41, n)
 	require.Error(t, first.db.QueryRowContext(t.Context(), `SELECT 1 FROM store_bootstrap`).Scan(&n))
 
 	second, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop()) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 40, n)
+	assert.Equal(t, 41, n)
 }
 
 func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
@@ -833,7 +833,7 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 
 				var count int
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-				require.Equal(t, 40, count)
+				require.Equal(t, 41, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations WHERE applied_at='2026-01-01Z'`).Scan(&count))
 				require.Equal(t, prefix, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM session_tags`).Scan(&count))
@@ -886,7 +886,7 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 40, n)
+	assert.Equal(t, 41, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
 }
 
@@ -1606,7 +1606,7 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { require.NoError(t, reopened.Stop()) }()
 
-		_, err = reopened.PruneStateBefore(t.Context(), time.Unix(0, 0))
+		_, err = reopened.PruneStateBefore(t.Context(), time.Unix(0, 0), 0)
 		require.NoError(t, err, "ordinary startup prune retries after a process restart")
 		_, err = reopened.attachments.Get(t.Context(), "blob")
 		require.ErrorIs(t, err, fs.ErrNotExist)
@@ -1615,7 +1615,7 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 		// Simulate a crash after byte deletion but before the tombstone is removed.
 		_, err = reopened.db.ExecContext(t.Context(), `INSERT INTO pending_attachment_deletions (id) VALUES ('blob')`)
 		require.NoError(t, err)
-		_, err = reopened.PruneStateBefore(t.Context(), time.Unix(0, 0))
+		_, err = reopened.PruneStateBefore(t.Context(), time.Unix(0, 0), 0)
 		require.NoError(t, err)
 		require.NoError(t, reopened.db.QueryRowContext(t.Context(), `SELECT count(*) FROM pending_attachment_deletions`).Scan(&count))
 		require.Zero(t, count, "missing bytes are an idempotent deletion, not a failed retry")
@@ -1674,20 +1674,20 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 		pending, err := queryStrings(t.Context(), store.db, `SELECT id FROM pending_attachment_deletions`, "failed S3 deletion")
 		require.NoError(t, err)
 		require.Equal(t, []string{"blob"}, pending, "403 is not proof that the bytes are absent")
-		_, err = store.PruneStateBefore(t.Context(), time.Unix(0, 0))
+		_, err = store.PruneStateBefore(t.Context(), time.Unix(0, 0), 0)
 		require.Error(t, err)
 		require.Equal(t, http.MethodHead, <-requests)
 		require.Equal(t, http.MethodDelete, <-requests)
 		pending, err = queryStrings(t.Context(), store.db, `SELECT id FROM pending_attachment_deletions`, "failed S3 version deletion")
 		require.NoError(t, err)
 		require.Equal(t, []string{"blob"}, pending, "a failed permanent deletion keeps ownership")
-		_, err = store.PruneStateBefore(t.Context(), time.Unix(0, 0))
+		_, err = store.PruneStateBefore(t.Context(), time.Unix(0, 0), 0)
 		require.NoError(t, err)
 		require.Equal(t, http.MethodHead, <-requests)
 		require.Equal(t, http.MethodDelete, <-requests)
 		_, err = store.db.ExecContext(t.Context(), `INSERT INTO pending_attachment_deletions (id) VALUES ('blob')`)
 		require.NoError(t, err)
-		_, err = store.PruneStateBefore(t.Context(), time.Unix(0, 0))
+		_, err = store.PruneStateBefore(t.Context(), time.Unix(0, 0), 0)
 		require.NoError(t, err, "a missing S3 key after permanent version deletion is a completed retry")
 		require.Equal(t, http.MethodHead, <-requests)
 		require.Empty(t, requests, "a 404 must not issue another marker-producing DELETE")
@@ -1700,7 +1700,10 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 
 	for index, remove := range []func(*SessionService, string) error{
 		func(s *SessionService, id string) error { _, err := s.DeleteSession(t.Context(), id); return err },
-		func(s *SessionService, _ string) error { _, err := s.PruneStateBefore(t.Context(), cutoff); return err },
+		func(s *SessionService, _ string) error {
+			_, err := s.PruneStateBefore(t.Context(), cutoff, 0)
+			return err
+		},
 	} {
 		store, _ := newShadowTestStore(t)
 		id := protocol.SlackThreadConversationID("D_1", slackTestTS(cutoff.Add(-time.Hour)))
@@ -1911,7 +1914,10 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	}
 
 	require.NoError(t, store.UpsertThread("empty-recorded", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
+	require.NoError(t, store.UpsertThread("empty-new", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
 	require.NoError(t, store.UpsertThread("empty-running", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
+	_, err := store.db.ExecContext(t.Context(), `UPDATE managed_conversations SET created_at = $1 WHERE conversation_id = 'empty-recorded'`, oldTime)
+	require.NoError(t, err)
 	seedActiveTurn(t, store, "empty-running", "running", &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "running"})
 	require.NoError(t, store.UpsertThread(activeOldThread, ThreadState{Agent: "selected", CreatedBy: ThreadCreatedByCron}))
 
@@ -1943,7 +1949,7 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	assert.NotContains(t, listed, "cron:daily:old")
 	assert.NotContains(t, listed, "one-off-cron:daily:old")
 
-	stats, err := store.PruneStateBefore(context.Background(), cutoff)
+	stats, err := store.PruneStateBefore(context.Background(), cutoff, 0)
 	require.NoError(t, err)
 	assert.Equal(t, PruneStateStats{Threads: 2, SessionRows: 5}, stats)
 
@@ -1958,6 +1964,7 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, threadIDs, oldThread)
 	assert.NotContains(t, threadIDs, "empty-recorded")
+	assert.Contains(t, threadIDs, "empty-new", "an empty conversation newer than cutoff awaits its first turn")
 	assert.Contains(t, threadIDs, "empty-running")
 
 	thread, ok, err := store.Thread(activeOldThread)
@@ -2034,7 +2041,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 		require.NoError(t, store.PutThreadQueueItem(id, &item))
 	}
 
-	_, err = store.PruneStateBefore(t.Context(), cutoff)
+	_, err = store.PruneStateBefore(t.Context(), cutoff, 0)
 	require.NoError(t, err)
 
 	thread, ok, err := store.Thread(webID)
@@ -2073,7 +2080,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 	}
 
 	require.NoError(t, store.DeleteThreadQueueItem(privateItem.ID))
-	_, err = store.PruneStateBefore(t.Context(), cutoff)
+	_, err = store.PruneStateBefore(t.Context(), cutoff, 0)
 	require.NoError(t, err)
 	_, ok, err = store.ExternalMCPSession("public-1")
 	require.NoError(t, err)
@@ -2128,7 +2135,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 
 			scheduled := protocol.ScheduledMessageState{ConversationID: tc.conversation, Agent: "planner", Message: "pending follow-up", DueAt: cutoff.Add(5040 * time.Hour)}
 			require.NoError(t, store.PutScheduledMessage("pending", &scheduled))
-			_, err := store.PruneStateBefore(ctx, cutoff)
+			_, err := store.PruneStateBefore(ctx, cutoff, 0)
 			require.NoError(t, err)
 			messages, err := store.ScheduledMessagesForConversation(tc.conversation)
 			require.NoError(t, err)
@@ -2143,7 +2150,9 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 			}
 
 			require.NoError(t, store.ResetScheduledMessages(tc.conversation))
-			_, err = store.PruneStateBefore(ctx, cutoff)
+			_, err = store.db.ExecContext(ctx, `UPDATE managed_conversations SET created_at = $1`, cutoff.Add(-time.Hour))
+			require.NoError(t, err)
+			_, err = store.PruneStateBefore(ctx, cutoff, 0)
 			require.NoError(t, err)
 
 			for _, id := range []string{tc.conversation, tc.parent, tc.destination} {
@@ -2177,7 +2186,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 		origin := &protocol.InboundMessage{SyncDestination: managedID}
 		require.NoError(t, bridge.ScheduleMessage(origin, 5040*time.Hour, "pending follow-up", false))
 
-		_, err = store.PruneStateBefore(ctx, cutoff)
+		_, err = store.PruneStateBefore(ctx, cutoff, 0)
 		require.NoError(t, err)
 		_, ok, err := store.Thread(managedID)
 		require.NoError(t, err)
@@ -2188,7 +2197,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 		require.Len(t, effects, 1)
 		require.NoError(t, bridge.ResetScheduledMessages(origin))
 
-		_, err = store.PruneStateBefore(ctx, cutoff)
+		_, err = store.PruneStateBefore(ctx, cutoff, 0)
 		require.NoError(t, err)
 		_, ok, err = store.Thread(managedID)
 		require.NoError(t, err)
@@ -2198,6 +2207,36 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, effects)
 	})
+}
+
+func TestSessionServicePruneBacksOffFromBusyWorkers(t *testing.T) {
+	store := newTestSessionService(t)
+	cutoff := time.Unix(1_700_000_000, 0).UTC()
+	id := protocol.SlackThreadConversationID("DBUSY", slackTestTS(cutoff.Add(-time.Hour)))
+	require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "planner"}))
+	_, err := store.AppendEntryID(t.Context(), id, testSessionEntryAt(cutoff.Add(-time.Hour), id))
+	require.NoError(t, err)
+
+	worker := &Bridge{handling: true, log: store.log, config: Config{ConversationID: id, SessionService: store}}
+	store.historyWorkers = &threadBridgeManager{store: store, bridges: map[string]directBridge{id: worker}}
+
+	stats, err := store.PruneStateBefore(t.Context(), cutoff, 0)
+	require.NoError(t, err)
+	assert.Zero(t, stats)
+
+	_, ok, err := store.Thread(id)
+	require.NoError(t, err)
+	require.True(t, ok, "a stale conversation with a running worker waits for a later pass")
+	assert.False(t, worker.historyMutation, "backing off never pauses the worker")
+
+	worker.handling = false
+	stats, err = store.PruneStateBefore(t.Context(), cutoff, 0)
+	require.NoError(t, err)
+	assert.Equal(t, PruneStateStats{Threads: 1, SessionRows: 1}, stats)
+
+	_, ok, err = store.Thread(id)
+	require.NoError(t, err)
+	assert.False(t, ok)
 }
 
 func TestSessionServicePrunesStaleExternalConversationWithActiveTurn(t *testing.T) {
@@ -2215,7 +2254,7 @@ func TestSessionServicePrunesStaleExternalConversationWithActiveTurn(t *testing.
 
 	seedActiveTurn(t, store, privateConversationID, "active-mcp", &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "active-mcp"})
 
-	stats, err := store.PruneStateBefore(t.Context(), cutoff)
+	stats, err := store.PruneStateBefore(t.Context(), cutoff, 0)
 	require.NoError(t, err)
 	assert.Equal(t, PruneStateStats{Threads: 1, ExternalMCPSessions: 1, SessionRows: 2}, stats)
 
@@ -2273,7 +2312,7 @@ func TestSessionServicePrunesExternalConversationOnlyWhenAllHistoriesAreStale(t 
 				require.NoError(t, err)
 			}
 
-			_, err := store.PruneStateBefore(t.Context(), cutoff)
+			_, err := store.PruneStateBefore(t.Context(), cutoff, 0)
 			require.NoError(t, err)
 			_, ok, err := store.ExternalMCPSession("public-1")
 			require.NoError(t, err)
@@ -2496,7 +2535,7 @@ func TestVoiceSettings(t *testing.T) {
 	prune := func() {
 		t.Helper()
 
-		_, err := store.PruneStateBefore(ctx, time.Now())
+		_, err := store.PruneStateBefore(ctx, time.Now(), 0)
 		require.NoError(t, err)
 	}
 

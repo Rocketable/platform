@@ -29,6 +29,10 @@ var errShutdown = fmt.Errorf("%w: %w", protocol.ErrBridgeStopped, rocketcode.Err
 
 const (
 	stateRetention = 30 * 24 * time.Hour
+	// statePruneInterval separates background retention passes; statePrunePace
+	// is the pause after each deletion, a tenth of it after each check.
+	statePruneInterval = time.Hour
+	statePrunePace     = time.Second
 )
 
 // FrontendAssembler constructs Slack and MCP frontends for a running backend.
@@ -139,12 +143,6 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		background       *backgroundRegistry
 		stops            []func(context.Context) error
 	)
-
-	if stats, err := rocketcodeSessions.PruneStateBefore(runCtx, time.Now().Add(-stateRetention)); err != nil {
-		logger.Warn("prune stale rocketclaw state", "error", err)
-	} else if stats.Threads+stats.ExternalMCPSessions > 0 || stats.SessionRows > 0 {
-		logger.Info("pruned stale rocketclaw state", "threads", stats.Threads, "external_mcp_sessions", stats.ExternalMCPSessions, "session_rows", stats.SessionRows)
-	}
 
 	if err := rocketcodeSessions.sweepRetainedResults(); err != nil {
 		logger.Warn("sweep expired retained execute results", "error", err)
@@ -320,6 +318,34 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 	if err := threadBridges.StartQueuedConversations(runCtx); err != nil {
 		return err
 	}
+
+	pruneCtx, cancelPrune := context.WithCancel(workCtx)
+
+	var prune errgroup.Group
+	prune.Go(func() error {
+		for {
+			stats, err := rocketcodeSessions.PruneStateBefore(pruneCtx, time.Now().Add(-stateRetention), statePrunePace)
+			if err != nil && pruneCtx.Err() == nil {
+				logger.Warn("prune stale rocketclaw state", "error", err)
+			}
+
+			if stats.Threads+stats.ExternalMCPSessions > 0 || stats.SessionRows > 0 {
+				logger.Info("pruned stale rocketclaw state", "threads", stats.Threads, "external_mcp_sessions", stats.ExternalMCPSessions, "session_rows", stats.SessionRows)
+			}
+
+			select {
+			case <-pruneCtx.Done():
+				return nil
+			case <-time.After(statePruneInterval):
+			}
+		}
+	})
+
+	defer func() {
+		cancelPrune()
+
+		_ = prune.Wait()
+	}()
 
 	select {
 	case <-s.signal:
