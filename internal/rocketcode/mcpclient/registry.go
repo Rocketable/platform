@@ -288,10 +288,6 @@ func sameHostRedirects(req *http.Request, via []*http.Request) error {
 		return errors.New("stopped after 10 redirects")
 	}
 
-	if len(via) == 0 {
-		return nil
-	}
-
 	if req.URL.Host != via[0].URL.Host {
 		return fmt.Errorf("refusing cross-host redirect to %s", req.URL.Host)
 	}
