@@ -30,7 +30,7 @@ Or to pin an SDK version (see the Go compatibility note below):
 <!-- x-release-please-start-version -->
 
 ```sh
-go get -u 'github.com/openai/openai-go/v3@v3.78.0'
+go get -u 'github.com/openai/openai-go/v3@v3.79.0'
 ```
 
 <!-- x-release-please-end -->
@@ -957,6 +957,36 @@ openai.FileNewParams{
 
 ## Webhook Verification
 
+Signature verification authenticates the delivery and checks timestamp freshness.
+It does not provide exactly-once processing: the same signed request can pass
+verification more than once within the accepted timestamp window. The handlers
+below show verification only; applications must deduplicate before side effects.
+
+After successful verification, use the authenticated `webhook-id` header as a
+deduplication key, scoped to your application or endpoint. Store it durably with
+a unique constraint shared by all workers. For database effects, claim the ID
+and apply the effect in the same transaction. For example, this PostgreSQL
+pseudocode assumes `processed_webhooks` has a unique `(endpoint, delivery_id)` key:
+
+```sql
+BEGIN;
+INSERT INTO processed_webhooks (endpoint, delivery_id)
+VALUES (:endpoint, :verified_webhook_id)
+ON CONFLICT (endpoint, delivery_id) DO NOTHING
+RETURNING delivery_id;
+-- If no row was returned, acknowledge the duplicate without applying effects.
+-- Otherwise, apply the application's database changes in this transaction.
+COMMIT;
+```
+
+Roll back the claim when processing fails so a retry can succeed. For external
+effects, write a transactional outbox entry and have its worker use a stable
+idempotency key with the destination. A separate "seen" check followed by an
+insert races between workers; an in-memory set does not survive restarts or
+coordinate replicas. Retain deduplication records for the application's retry
+and replay policy, not merely the SDK's default five-minute timestamp tolerance.
+Return a successful acknowledgement for an already completed delivery.
+
 Verifying webhook signatures is _optional but encouraged_.
 
 For more information about webhooks, see [the API docs](https://platform.openai.com/docs/guides/webhooks).
@@ -1532,6 +1562,8 @@ connections use the same attested transport and bearer-token exchange, including
 custom request headers and the configured opening retry budget. Close each
 WebSocket connection to release its stream; capability `Close` retains its
 ordinary behavior of allowing already active requests to finish.
+X.509-authenticated WebSocket connections are limited to Responses. Live,
+fork, and sideband WebSocket connections do not support X.509 authentication.
 A legacy `http.Transport.Dial` remains supported for compatibility when
 `DialContext` is unset, but its in-progress
 dial call cannot itself be interrupted by context cancellation. The capability
