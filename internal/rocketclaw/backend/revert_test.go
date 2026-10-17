@@ -827,6 +827,59 @@ func TestRevertBusyAdmissionAndRecordedDrain(t *testing.T) {
 	require.Empty(t, prompt, "Undo at the beginning is a no-op")
 }
 
+func TestRevertLatestUnsavedTurn(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	_, err := s.AppendEntryID(ctx, "main", testSessionEntry("kept", "answer"))
+	require.NoError(t, err)
+
+	// A stop after provider output saves no entry, so History has no message IDs for these turns.
+	for _, turnID := range []string{"older", "latest"} {
+		require.NoError(t, upsertTestTurn(ctx, s, &testCheckpoint{TurnID: turnID, ConversationKey: "main", ResponseID: "resp-" + turnID, ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"message","role":"user","input_id":"` + turnID + `-input","content":"redo ` + turnID + `"}`),
+			json.RawMessage(`{"type":"message","id":"msg-` + turnID + `","role":"assistant","status":"completed","content":[{"type":"output_text","text":"partial","annotations":[]}]}`),
+		}}))
+		require.NoError(t, terminateTestTurn(ctx, s, turnID, protocol.TerminalStopped))
+	}
+
+	b := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
+	manager := newThreadBridgeManager(nil, s, b.log, func(Config) directBridge { return b })
+	manager.bridges["main"] = b
+	rt := &Runtime{Sessions: s, threads: manager}
+
+	_, _, err = rt.StageRevert(ctx, "main", "older-input")
+	require.ErrorContains(t, err, "not in the latest turn", "a saved entry cannot be ordered before later turns")
+
+	marker, prompt, err := rt.StageRevert(ctx, "main", "latest-input")
+	require.NoError(t, err)
+	require.Equal(t, "redo latest", prompt)
+
+	keys := func() map[string]ObservedSessionEntry {
+		transcript, err := s.ObserveTranscript(ctx, "main", 0, 0, nil)
+		require.NoError(t, err)
+
+		keys := make(map[string]ObservedSessionEntry)
+		for _, entry := range transcript {
+			keys[entry.Key] = entry
+		}
+
+		return keys
+	}
+	require.Contains(t, keys(), "turn:main:older")
+	require.NotContains(t, keys(), "turn:main:latest", "Revert hides the latest turn")
+
+	require.NoError(t, rt.ClearRevert(ctx, "main"))
+
+	restored := keys()["turn:main:latest"]
+	require.Equal(t, fmt.Sprintf("%d:0", restored.ID), marker, "the cutoff names the saved turn")
+	require.Equal(t, protocol.TerminalStopped, restored.Terminal, "Redo shows the turn as stopped")
+	require.Len(t, restored.Entry.ReplayInput, 2, "Redo restores the partial reply")
+	require.Empty(t, restored.Entry.ResponseID)
+}
+
 func TestRevertMarkerGatesDoNotReadReplay(t *testing.T) {
 	t.Parallel()
 
