@@ -34,6 +34,10 @@ func (e *SessionEntry) PermissionReviewRationale() string {
 		}
 	}
 
+	if len(final) == 0 {
+		return ""
+	}
+
 	items, err := ReplayInputToParams(e.ReplayInput)
 	if err != nil {
 		return ""
