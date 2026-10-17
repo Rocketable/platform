@@ -753,7 +753,7 @@ function ResizableAside({ side, className, children, ...props }: ComponentProps<
 }
 
 type Tab = { path: string; pinned?: boolean; preview?: boolean };
-type TabState = { owner?: string; tabs: Tab[]; active: string };
+type TabState = { owner?: string; tabs: Tab[]; active: string; collapsed: string[] };
 const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
 const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/search": ["Search", Search], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings] };
 
@@ -762,29 +762,29 @@ function pageTab(path: string): [string, typeof Search] | undefined {
   return pageTabs[path] ?? (path.startsWith("/skills/") ? [path.slice("/skills/".length), Sparkles] : undefined);
 }
 
-function pinnedFirst(tabs: Tab[]) {
-  return tabs.toSorted((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
-}
-
 // An opened location replaces the preview tab, or else opens right of the active tab.
 function openTab(state: TabState, path: string): TabState {
   if (state.tabs.some((tab) => tab.path === path)) return { ...state, active: path };
   const preview = state.tabs.findIndex((tab) => tab.preview);
   const at = preview >= 0 ? preview : state.tabs.findIndex((tab) => tab.path === state.active) + 1 || state.tabs.length;
-  return { ...state, active: path, tabs: pinnedFirst(state.tabs.toSpliced(at, Number(preview >= 0), { path, preview: true })) };
+  return { ...state, active: path, tabs: state.tabs.toSpliced(at, Number(preview >= 0), { path, preview: true }) };
 }
 
 // The URL is the active tab, so a reload keeps it and any other URL opens as a permanent tab.
 function loadTabs(owner: string | undefined, path: string): TabState {
-  let tabs: Tab[] = [];
+  let tabs: Tab[] = [], collapsed: string[] = [];
   if (owner !== undefined) {
     try {
       const stored = JSON.parse(localStorage.getItem(`tabs:${owner}`) ?? "") as Tab[];
       const flag = (value: unknown) => value === undefined || typeof value === "boolean";
       if (stored.every((tab) => typeof tab.path === "string" && flag(tab.pinned) && flag(tab.preview)) && new Set(stored.map((tab) => tab.path)).size === stored.length) tabs = stored;
     } catch { /* Missing or unreadable tabs reset to the current location. */ }
+    try {
+      const stored = JSON.parse(localStorage.getItem(`tab-groups-auto:${owner}`) ?? "[]") as string[];
+      if (stored.every((name) => typeof name === "string")) collapsed = stored;
+    } catch { /* Unreadable groups reset to expanded. */ }
   }
-  return { owner, tabs: tabs.some((tab) => tab.path === path) ? tabs : [...tabs, { path }], active: path };
+  return { owner, tabs: tabs.some((tab) => tab.path === path) ? tabs : [...tabs, { path }], active: path, collapsed };
 }
 
 function useTabs() {
@@ -794,12 +794,26 @@ function useTabs() {
   const [state, setState] = useState(() => loadTabs(owner, pathname));
   const [placement, setPlacement] = useState<"top" | "left">(() => localStorage.getItem("tab-placement") === "left" ? "left" : "top");
   const place = (value: "top" | "left") => { localStorage.setItem("tab-placement", value); setPlacement(value); };
+  const sidebar = useContext(Sidebar);
+  // A session groups under its agent once its row loads, a page under Pages, and a pinned tab under none ("").
+  const groupOf = (path: string) => {
+    const id = decodeSessionId(path.slice(3));
+    return pageTab(path) ? "Pages" : sidebar.rows.find((row) => row.id === id)?.agent || "Sessions";
+  };
+  // Until the session list loads, unpinned tabs share one group, so a reload cannot regroup them by placeholder.
+  const groups = new Map(state.tabs.map((tab) => [tab.path, tab.pinned ? "" : sidebar.rows.length ? groupOf(tab.path) : "Sessions"]));
+  // The stored order stays pinned first, then grouped in order of each group's first tab, so closing and cycling follow the strip.
+  const order = ["", ...groups.values()];
+  const sorted = state.tabs.toSorted((a, b) => order.indexOf(groups.get(a.path)!) - order.indexOf(groups.get(b.path)!));
   if (state.owner !== owner) setState(loadTabs(owner, pathname));
-  else if (state.active !== pathname) setState(openTab(state, pathname));
+  else if (state.active !== pathname) setState({ ...openTab(state, pathname), collapsed: state.collapsed.filter((name) => name !== (groups.get(pathname) ?? groupOf(pathname))) });
+  else if (sorted.some((tab, at) => tab !== state.tabs[at])) setState({ ...state, tabs: sorted });
   useEffect(() => {
-    if (state.owner !== undefined) localStorage.setItem(`tabs:${state.owner}`, JSON.stringify(state.tabs));
-  }, [state.owner, state.tabs]);
-  const update = (change: (tabs: Tab[]) => Tab[]) => setState((current) => ({ ...current, tabs: pinnedFirst(change(current.tabs)) }));
+    if (state.owner === undefined) return;
+    localStorage.setItem(`tabs:${state.owner}`, JSON.stringify(state.tabs));
+    localStorage.setItem(`tab-groups-auto:${state.owner}`, JSON.stringify(state.collapsed));
+  }, [state.owner, state.tabs, state.collapsed]);
+  const update = (change: (tabs: Tab[]) => Tab[]) => setState((current) => ({ ...current, tabs: change(current.tabs) }));
   // Closing the active tab activates the target, else its right neighbour, else its left one; no tabs leaves Home.
   const close = (paths: string[], target?: string) => {
     const doomed = new Set(paths), kept = (tab: Tab) => !doomed.has(tab.path);
@@ -812,9 +826,11 @@ function useTabs() {
   const unpinned = (tabs: Tab[]) => tabs.flatMap((tab) => tab.pinned ? [] : [tab.path]);
   const next = placement === "left" ? "top" : "left";
   return {
-    state, pathname, placement, place, close,
+    state, pathname, placement, place, close, groups,
+    toggle: (group: string) => setState((current) => ({ ...current, collapsed: current.collapsed.includes(group) ? current.collapsed.filter((name) => name !== group) : [...current.collapsed, group] })),
     promote: (path: string) => { if (state.tabs.some((tab) => tab.path === path && tab.preview)) update((tabs) => tabs.map((tab) => tab.path === path ? { ...tab, preview: false } : tab)); },
-    move: (from: string, to: string) => update((tabs) => moveQueueId(tabs.map((tab) => tab.path), from, to).map((path) => tabs.find((tab) => tab.path === path)!)),
+    // A tab moves only within its group; a drop onto another group's tab does nothing.
+    move: (from: string, to: string) => { if (groups.get(from) === groups.get(to)) update((tabs) => moveQueueId(tabs.map((tab) => tab.path), from, to).map((path) => tabs.find((tab) => tab.path === path)!)); },
     create: (id: string) => update((tabs) => tabs.map((tab) => tab.path === "/" ? { path: sessionPath(id), pinned: tab.pinned } : tab)),
     commands: (path: string) => [
       { key: "close", label: "Close", run: () => close([path]) },
@@ -827,13 +843,15 @@ function useTabs() {
   };
 }
 
-function TabStrip({ tabs: { state, pathname, close, promote, move, commands }, vertical, newChat }: { tabs: ReturnType<typeof useTabs>; vertical: boolean; newChat: () => void }) {
+function TabStrip({ tabs: { state, pathname, close, promote, move, commands, groups, toggle }, vertical, newChat }: { tabs: ReturnType<typeof useTabs>; vertical: boolean; newChat: () => void }) {
   const [menu, setMenu] = useState<{ path: string; anchor: Element | { getBoundingClientRect: () => DOMRect } }>();
   const [editing, setEditing] = useState<string>();
   const pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
   const list = useRef<HTMLDivElement>(null), refocus = useRef("");
   // Closing from the strip unmounts the focused control, so focus moves to the selected tab, as in SearchTabs.
   const selected = () => list.current!.querySelector<HTMLElement>('[aria-selected="true"]')!;
+  // Headers show only when tabs span two or more groups.
+  const headed = new Set([...groups.values()].filter(Boolean)).size > 1, folded = new Set(state.collapsed);
   return <>
     <div ref={list} role="tablist" aria-label="Open tabs" aria-orientation={vertical ? "vertical" : "horizontal"} className={cn("flex shrink-0 [scrollbar-width:thin]", vertical ? "h-full flex-col gap-0.5 overflow-y-auto p-1" : "mr-12 overflow-x-auto overflow-y-hidden border-b")}
       onContextMenu={(event) => {
@@ -871,17 +889,27 @@ function TabStrip({ tabs: { state, pathname, close, promote, move, commands }, v
           if (path !== pathname) navigate(path);
           return;
         }
-        const at = state.tabs.findIndex((item) => item.path === path);
+        // Collapsed tabs are not rendered, so keys walk the rendered tabs.
+        const items = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')];
         const step = ({ ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 } as Record<string, number>)[event.key];
-        const position = event.key === "Home" ? 0 : event.key === "End" ? state.tabs.length - 1 : step ? at + step : -1;
-        if (!state.tabs[position]) return;
+        const target = items[event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : step ? items.indexOf(tab) + step : -1];
+        if (!target) return;
         event.preventDefault();
         if (event.shiftKey && step) {
-          flushSync(() => move(path, state.tabs[position].path));
+          flushSync(() => move(path, target.closest<HTMLElement>("[data-tab]")!.dataset.tab!));
           tab.focus();
-        } else event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[position].focus();
+        } else target.focus();
       }}>
-      {state.tabs.map((tab) => <TabItem key={tab.path} tab={tab} active={tab.path === pathname} vertical={vertical} editing={tab.path === editing} endEdit={() => setEditing(undefined)} promote={() => promote(tab.path)} close={() => { flushSync(() => close([tab.path])); selected().focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} />)}
+      {state.tabs.flatMap((tab, at) => {
+        const group = headed ? groups.get(tab.path)! : "", collapsed = folded.has(group);
+        return [
+          group && (!at || groups.get(state.tabs[at - 1].path) !== group) ? <button key={`group:${group}`} type="button" aria-expanded={!collapsed} onClick={() => toggle(group)} className={cn("flex shrink-0 items-center gap-1 px-2 text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring", vertical ? "rounded-md pt-2 pb-1" : "border-r")}>
+            <ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0", !collapsed && "rotate-90")} /><span className="truncate">{group}</span>
+          </button> : null,
+          // A collapsed group still shows its active tab.
+          collapsed && tab.path !== pathname ? null : <TabItem key={tab.path} tab={tab} group={group || undefined} active={tab.path === pathname} vertical={vertical} editing={tab.path === editing} endEdit={() => setEditing(undefined)} promote={() => promote(tab.path)} close={() => { flushSync(() => close([tab.path])); selected().focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} />,
+        ];
+      })}
     </div>
     <Menu.Root open={!!menu} onOpenChange={(open) => { if (!open) setMenu(undefined); }}>
       <Menu.Portal><Menu.Positioner anchor={menu?.anchor} sideOffset={4} align="start" className="z-50 outline-none"><Menu.Popup finalFocus={() => { const key = refocus.current; refocus.current = ""; return key.startsWith("close") ? selected() : key !== "rename"; }} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none">
@@ -891,7 +919,7 @@ function TabStrip({ tabs: { state, pathname, close, promote, move, commands }, v
   </>;
 }
 
-function TabItem({ tab, active, vertical, editing, endEdit, promote, close, openMenu }: { tab: Tab; active: boolean; vertical: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: Element) => void }) {
+function TabItem({ tab, group, active, vertical, editing, endEdit, promote, close, openMenu }: { tab: Tab; group?: string; active: boolean; vertical: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: Element) => void }) {
   const sidebar = useContext(Sidebar);
   const id = tab.path.startsWith("/s/") ? decodeSessionId(tab.path.slice(3)) : "";
   const session = sidebar.rows.find((row) => row.id === id) ?? { id };
@@ -901,7 +929,7 @@ function TabItem({ tab, active, vertical, editing, endEdit, promote, close, open
   useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
   return <div data-tab={tab.path} draggable={!editing} className={cn("group flex shrink-0 items-center", vertical ? "rounded-md" : "border-r", active ? "bg-sidebar-row-active" : "hover:bg-accent")}>
     <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className={cn("flex min-w-0", vertical ? "flex-1" : "max-w-80")} />}>
-      <div ref={ref} role="tab" aria-selected={active} aria-label={title} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
+      <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={group} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
         onClick={() => { if (!active) navigate(tab.path); }} onDoubleClick={promote}>
         <Icon aria-hidden="true" className="size-4 shrink-0" />
         {session.running ? <span role="img" aria-label="Turn running" className="hidden size-2 shrink-0 rounded-full bg-foreground in-aria-selected:block [@media(hover:none)]:block" /> : null}

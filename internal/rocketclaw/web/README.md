@@ -407,8 +407,17 @@ active tab.
   as a permanent tab. Sending the first message from New session turns that tab
   into the new session's tab.
 - **Pinned tabs** are browser-only (unlike **Pin session**, which is shared and
-  orders search). They stay first, show only their icon on top placement, have no
-  close button, and survive Close others, Close to the right, and Close all.
+  orders search). They stay first, outside every group, show only their icon on top
+  placement, have no close button, and survive Close others, Close to the right,
+  and Close all.
+- **Groups.** Tabs group themselves; there is nothing to manage. A session tab
+  joins its agent's group, and page tabs, including New session, join **Pages**.
+  A session whose row has not loaded yet sits under **Sessions**. Groups keep the
+  order of their first tab, and tabs keep their order within a group. The strip,
+  closing, and Cmd/Ctrl+[ and ] all follow that order. A header button starts
+  each group, but only when the tabs span two or more groups. Clicking it
+  collapses or expands the group; a collapsed group still shows its active tab,
+  and activating any of its tabs expands it. Screen readers hear each tab's group.
 - **Context menu.** Right-click a tab, press Shift+F10 or the menu key on a focused
   tab, or use the **…** button on the active tab (for touch) to reach Close,
   Close others, Close to the right, Close all, Pin/Unpin, and Move tabs to
@@ -426,12 +435,14 @@ active tab.
   neighbour, or its left one at the end. Closing the last tab opens New session;
   New session alone does not close. Closing with the × button or the menu moves
   keyboard focus to the selected tab.
-- **Reordering.** Drag a tab onto another. With a tab focused, Shift+Arrow moves it.
+- **Reordering.** Drag a tab onto another in its group. With a tab focused,
+  Shift+Arrow moves it within its group. A move into another group does nothing.
 - **Running turns** show a dot where the close button sits. The close button replaces it on hover, on keyboard focus, on the active tab,
   and always on touch screens; on the active tab and on touch screens the dot moves
   before the title instead. Screen readers hear “Turn running”.
-- **Keyboard.** The strip is a `tablist` with one Tab stop. Arrow keys (Left/Right
-  or Up/Down), Home, and End move focus; Enter or Space activates. Anywhere in
+- **Keyboard.** The strip is a `tablist` with one Tab stop for its tabs, plus one
+  per group header. Arrow keys (Left/Right or Up/Down), Home, and End move focus
+  across the shown tabs; Enter or Space activates. Anywhere in
   the app, Cmd/Ctrl+[ and Cmd/Ctrl+] activate the previous and next tab, wrapping
   at the ends. This replaces the browser's Back/Forward for those keys.
 - **Placement.** Tabs sit on top by default or in a 14rem sidebar on the left. Switch
@@ -445,6 +456,8 @@ active tab.
   signed-in user. The address is the active tab, so a reload keeps it, and opening
   any URL, including Home (`/`), activates its tab or adds one. Unreadable or
   malformed storage (such as duplicate paths) resets to one tab for the current URL.
+  Collapsed group names are kept under `tab-groups-auto:<user>`; unreadable
+  values expand every group and keep the tabs.
   Placement is a browser-wide preference under `tab-placement` (`top` or `left`).
   Titles and running state come live from the session list; a session missing
   from it shows its ID.
