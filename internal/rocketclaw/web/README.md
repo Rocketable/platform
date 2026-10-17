@@ -427,6 +427,20 @@ active tab.
   New session alone does not close. Closing with the × button or the menu moves
   keyboard focus to the selected tab.
 - **Reordering.** Drag a tab onto another. With a tab focused, Shift+Arrow moves it.
+- **Stacks.** A stack folds several tabs into one slot of the strip, which suits a
+  crowded top strip. **Stack with left tab** in the tab menu or palette joins the
+  left neighbour's stack, or makes a stack of the two; **Unstack** takes the tab
+  out, and a stack left with one tab dissolves. The slot shows the active member,
+  or else the one it showed last, with a count badge (“2 tabs in stack”). The
+  badge opens a menu of the members: choose one to activate it in the same slot,
+  or close or unstack it from its row. Clicking the slot activates the member it
+  shows, and its × closes only that member. A tab dragged onto a slot, or moved
+  onto it with Shift+Arrow, joins that stack; one dropped or moved onto a tab
+  outside the stack leaves it. Arrow keys move between slots, while Cmd/Ctrl+[
+  and ] visit every member in order and reveal it. Pinned tabs are never
+  stacked, and pinning a stacked tab takes it out. Stacking a preview tab makes
+  it permanent. New tabs, including a preview replacement, open after the stack
+  and outside it. Screen readers hear a slot as “Stack of N tabs”.
 - **Running turns** show a dot where the close button sits. The close button replaces it on hover, on keyboard focus, on the active tab,
   and always on touch screens; on the active tab and on touch screens the dot moves
   before the title instead. Screen readers hear “Turn running”.
@@ -440,9 +454,12 @@ active tab.
 - **Left sidebar.** Drag its right edge, or focus the edge and press Left/Right, to
   resize it; the width is kept in this browser. The footer's **Hide sidebar** button
   or Cmd/Ctrl+B hides and shows it until the next reload.
-- **Storage.** Open tabs, their order, pins, and the preview flag are kept in this
+- **Storage.** Open tabs, their order, pins, the preview flag, and stack membership
+  (an optional `stack` id on each tab) are kept in this
   browser's `localStorage` under `tabs:<user>`, separately for each
-  signed-in user. The address is the active tab, so a reload keeps it, and opening
+  signed-in user. Each stack's last-shown member is kept under
+  `tab-groups-stacks:<user>`; if that is unreadable, stacks stay and show their
+  first member. The address is the active tab, so a reload keeps it, and opening
   any URL, including Home (`/`), activates its tab or adds one. Unreadable or
   malformed storage (such as duplicate paths) resets to one tab for the current URL.
   Placement is a browser-wide preference under `tab-placement` (`top` or `left`).
@@ -453,7 +470,8 @@ Tradeoffs: preview replacement keeps the strip short without manual closing, but
 an item opened once and left unpromoted vanishes on the next open, which can
 surprise people. Unlike browser-style tabs there is no
 per-tab Back/Forward or reopen-closed-tab. Unlike grouped tabs there are no
-agent/age lines or groups. Unlike warm tabs, switching sessions remounts the
+agent/age lines or named, colored groups; stacks save space but hide all but one
+member until its badge menu opens. Unlike warm tabs, switching sessions remounts the
 transcript. In exchange, the strip stays compact, and the menu, pins, and drag
 give more control than a minimal strip.
 

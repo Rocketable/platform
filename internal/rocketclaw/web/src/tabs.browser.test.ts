@@ -478,3 +478,81 @@ test("running tab shows a dot instead of close until hover or focus at desktop w
   await page.waitForURL(`**${href("delta")}`);
   expect(await dot.evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("1");
 }), 60_000);
+
+test("stacks fold tabs into one slot with a member menu and follow reload, placement, brackets, drag, unstack, pin, and close", () => withPage({}, async (page, origin) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  const badge = (count: number) => strip(page).getByRole("button", { name: `${count} tabs in stack`, exact: true });
+  for (const [id, name] of [["alpha", "Alpha"], ["bravo", "Bravo"], ["charlie", "Charlie"], ["delta", "Delta"]]) {
+    await page.goto(`${origin}${href(id)}`);
+    await tab(name).waitFor();
+  }
+  await tab("Bravo").click();
+  await page.waitForURL(`**${href("bravo")}`);
+  await menu(page, "Bravo", "Stack with left tab");
+  expect(await names(page)).toEqual(["Bravo", "Charlie", "Delta"]);
+  expect(await tab("Bravo").getAttribute("aria-description")).toBe("Stack of 2 tabs");
+  // Unreadable stack storage only forgets last-used members; membership lives on each stored tab.
+  await page.evaluate(() => localStorage.setItem("tab-groups-stacks:tester", "{not json"));
+  await page.reload();
+  await badge(2).waitFor();
+  expect(await names(page)).toEqual(["Bravo", "Charlie", "Delta"]);
+  await menu(page, "Bravo", "Move tabs to left");
+  expect(await strip(page).getAttribute("aria-orientation")).toBe("vertical");
+  expect(await names(page)).toEqual(["Bravo", "Charlie", "Delta"]);
+  await menu(page, "Bravo", "Move tabs to top");
+
+  await badge(2).click();
+  for (const name of ["Close Alpha", "Unstack Alpha", "Close Bravo", "Unstack Bravo"]) await page.getByRole("menuitem", { name, exact: true }).waitFor();
+  await page.getByRole("menuitem", { name: "Alpha", exact: true }).click();
+  await page.waitForURL(`**${href("alpha")}`);
+  expect(await names(page)).toEqual(["Alpha", "Charlie", "Delta"]);
+  await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Open tabs"] [role="tab"][aria-label="Alpha"]'));
+  await page.getByPlaceholder("Message or $command").focus();
+  await page.keyboard.press("Control+BracketRight");
+  await page.waitForURL(`**${href("bravo")}`);
+  expect(await names(page)).toEqual(["Bravo", "Charlie", "Delta"]);
+  await page.keyboard.press("Control+BracketRight");
+  await page.waitForURL(`**${href("charlie")}`);
+  expect(await names(page)).toEqual(["Bravo", "Charlie", "Delta"]);
+  await tab("Charlie").focus();
+  await page.keyboard.press("ArrowLeft");
+  expect(await tab("Bravo").evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
+  // Shift+Arrow takes the membership of the tab it lands on, like a drop.
+  await tab("Charlie").press("Shift+ArrowLeft");
+  await badge(3).waitFor();
+  expect(await names(page)).toEqual(["Charlie", "Delta"]);
+  expect(await tab("Charlie").evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
+  await page.keyboard.press("Shift+ArrowRight");
+  expect(await names(page)).toEqual(["Bravo", "Delta", "Charlie"]);
+  await page.keyboard.press("Shift+ArrowLeft");
+  expect(await names(page)).toEqual(["Bravo", "Charlie", "Delta"]);
+
+  await tab("Charlie").dragTo(tab("Bravo"));
+  await badge(3).waitFor();
+  expect(await names(page)).toEqual(["Charlie", "Delta"]);
+  await badge(3).click();
+  await page.getByRole("menuitem", { name: "Unstack Charlie", exact: true }).click();
+  await badge(2).waitFor();
+  expect(await names(page)).toEqual(["Bravo", "Charlie", "Delta"]);
+  await menu(page, "Bravo", "Unstack");
+  expect(await names(page)).toEqual(["Alpha", "Bravo", "Charlie", "Delta"]);
+  expect(await strip(page).getByRole("button", { name: /tabs in stack/ }).count()).toBe(0);
+  await menu(page, "Bravo", "Stack with left tab");
+  await menu(page, "Alpha", "Pin");
+  expect(await names(page)).toEqual(["Alpha", "Bravo", "Charlie", "Delta"]);
+  expect(await strip(page).getByRole("button", { name: /tabs in stack/ }).count()).toBe(0);
+
+  await page.setViewportSize({ width: 375, height: 700 });
+  await menu(page, "Delta", "Stack with left tab");
+  expect(await names(page)).toEqual(["Alpha", "Bravo", "Charlie"]);
+  const close = strip(page).getByRole("button", { name: "Close Charlie" });
+  for (const control of [badge(2), close]) {
+    expect(await control.evaluate((node: HTMLElement) => {
+      const rect = node.getBoundingClientRect();
+      return rect.left >= 0 && rect.right <= innerWidth && node.contains(document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2));
+    })).toBe(true);
+  }
+  await close.click();
+  await page.waitForURL(`**${href("delta")}`);
+  expect(await names(page)).toEqual(["Alpha", "Bravo", "Delta"]);
+}), 60_000);

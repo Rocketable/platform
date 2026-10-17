@@ -14,7 +14,7 @@ import { queries, mutations, listSessions, rpc, RPCError } from "./api";
 import { draftContent } from "./drafts";
 import { holdWakeLock, setVoiceSticky, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, TextCursorInput, Undo2, Wrench, X } from "lucide-react";
+import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, TextCursorInput, Undo2, Ungroup, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useDeferredValue, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -752,8 +752,10 @@ function ResizableAside({ side, className, children, ...props }: ComponentProps<
   return <aside {...props} className={cn("relative", className)} style={{ width: sizing.width, minWidth: sizing.min }}>{children}<AsideResizeHandle {...sizing} /></aside>;
 }
 
-type Tab = { path: string; pinned?: boolean; preview?: boolean };
-type TabState = { owner?: string; tabs: Tab[]; active: string };
+type Tab = { path: string; pinned?: boolean; preview?: boolean; stack?: string };
+// last maps each stack to the member it showed when it was last left.
+type TabState = { owner?: string; tabs: Tab[]; active: string; last: Record<string, string> };
+type TabCommand = { key: string; label: ReactNode; name?: string; run: () => void };
 const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
 const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/search": ["Search", Search], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings] };
 
@@ -762,29 +764,34 @@ function pageTab(path: string): [string, typeof Search] | undefined {
   return pageTabs[path] ?? (path.startsWith("/skills/") ? [path.slice("/skills/".length), Sparkles] : undefined);
 }
 
-function pinnedFirst(tabs: Tab[]) {
-  return tabs.toSorted((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
+// Pinned tabs come first, and each stack sits at its first member; a stack left with one member dissolves.
+function arrange(tabs: Tab[]) {
+  const rank = (tab: Tab) => tabs.findIndex((other) => other === tab || (!!tab.stack && other.stack === tab.stack));
+  return tabs.toSorted((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || rank(a) - rank(b)).map(({ stack, ...tab }) => stack && tabs.filter((other) => other.stack === stack).length > 1 ? { ...tab, stack } : tab);
 }
 
-// An opened location replaces the preview tab, or else opens right of the active tab.
+// An opened location replaces the preview tab, or else opens right of the active tab, outside any stack.
 function openTab(state: TabState, path: string): TabState {
-  if (state.tabs.some((tab) => tab.path === path)) return { ...state, active: path };
+  const left = state.tabs.find((tab) => tab.path === state.active)?.stack;
+  const opened = { ...state, active: path, last: left ? { ...state.last, [left]: state.active } : state.last };
+  if (state.tabs.some((tab) => tab.path === path)) return opened;
   const preview = state.tabs.findIndex((tab) => tab.preview);
   const at = preview >= 0 ? preview : state.tabs.findIndex((tab) => tab.path === state.active) + 1 || state.tabs.length;
-  return { ...state, active: path, tabs: pinnedFirst(state.tabs.toSpliced(at, Number(preview >= 0), { path, preview: true })) };
+  return { ...opened, tabs: arrange(state.tabs.toSpliced(at, Number(preview >= 0), { path, preview: true })) };
 }
 
 // The URL is the active tab, so a reload keeps it and any other URL opens as a permanent tab.
 function loadTabs(owner: string | undefined, path: string): TabState {
-  let tabs: Tab[] = [];
+  let tabs: Tab[] = [], last = {};
   if (owner !== undefined) {
     try {
       const stored = JSON.parse(localStorage.getItem(`tabs:${owner}`) ?? "") as Tab[];
       const flag = (value: unknown) => value === undefined || typeof value === "boolean";
-      if (stored.every((tab) => typeof tab.path === "string" && flag(tab.pinned) && flag(tab.preview)) && new Set(stored.map((tab) => tab.path)).size === stored.length) tabs = stored;
-    } catch { /* Missing or unreadable tabs reset to the current location. */ }
+      if (stored.every((tab) => typeof tab.path === "string" && flag(tab.pinned) && flag(tab.preview)) && new Set(stored.map((tab) => tab.path)).size === stored.length) tabs = arrange(stored);
+      last = { ...JSON.parse(localStorage.getItem(`tab-groups-stacks:${owner}`) ?? "{}") };
+    } catch { /* Missing or unreadable tabs reset to the current location; unreadable stacks forget their last-used members. */ }
   }
-  return { owner, tabs: tabs.some((tab) => tab.path === path) ? tabs : [...tabs, { path }], active: path };
+  return { owner, tabs: tabs.some((tab) => tab.path === path) ? tabs : [...tabs, { path }], active: path, last };
 }
 
 function useTabs() {
@@ -797,43 +804,59 @@ function useTabs() {
   if (state.owner !== owner) setState(loadTabs(owner, pathname));
   else if (state.active !== pathname) setState(openTab(state, pathname));
   useEffect(() => {
-    if (state.owner !== undefined) localStorage.setItem(`tabs:${state.owner}`, JSON.stringify(state.tabs));
-  }, [state.owner, state.tabs]);
-  const update = (change: (tabs: Tab[]) => Tab[]) => setState((current) => ({ ...current, tabs: pinnedFirst(change(current.tabs)) }));
+    if (state.owner === undefined) return;
+    localStorage.setItem(`tabs:${state.owner}`, JSON.stringify(state.tabs));
+    localStorage.setItem(`tab-groups-stacks:${state.owner}`, JSON.stringify(Object.fromEntries(Object.entries(state.last).filter(([stack]) => state.tabs.some((tab) => tab.stack === stack)))));
+  }, [state.owner, state.tabs, state.last]);
+  const update = (change: (tabs: Tab[]) => Tab[]) => setState((current) => ({ ...current, tabs: arrange(change(current.tabs)) }));
   // Closing the active tab activates the target, else its right neighbour, else its left one; no tabs leaves Home.
   const close = (paths: string[], target?: string) => {
     const doomed = new Set(paths), kept = (tab: Tab) => !doomed.has(tab.path);
     const rest = state.tabs.filter(kept);
-    setState({ ...state, tabs: rest.length ? rest : [{ path: "/" }] });
+    setState({ ...state, tabs: rest.length ? arrange(rest) : [{ path: "/" }] });
     if (!doomed.has(pathname) || (!rest.length && pathname === "/")) return;
     const at = state.tabs.findIndex((tab) => tab.path === pathname);
     navigate(target ?? (state.tabs.slice(at + 1).find(kept) ?? state.tabs.slice(0, at).findLast(kept))?.path ?? "/");
   };
   const unpinned = (tabs: Tab[]) => tabs.flatMap((tab) => tab.pinned ? [] : [tab.path]);
   const next = placement === "left" ? "top" : "left";
+  // Joining a stack makes a preview tab permanent, as pinning does, so the next open cannot replace it.
+  const setStack = (paths: Set<string>, id?: string) => update((tabs) => tabs.map((tab) => paths.has(tab.path) ? { ...tab, stack: id, preview: tab.preview && !id } : tab));
+  // A menu can outlive its tab, as when New session becomes the created session.
+  const stackCommands = (path: string) => {
+    const at = state.tabs.findIndex((tab) => tab.path === path), tab = state.tabs[at] ?? { path };
+    const left = state.tabs.slice(0, at).findLast((other) => !tab.stack || other.stack !== tab.stack);
+    return [
+      ...!tab.pinned && left && !left.pinned ? [{ key: "stack", label: "Stack with left tab", run: () => setStack(new Set([left.path, path]), left.stack ?? Date.now().toString(36)) }] : [],
+      ...tab.stack ? [{ key: "unstack", label: "Unstack", run: () => setStack(new Set([path])) }] : [],
+    ];
+  };
   return {
     state, pathname, placement, place, close,
     promote: (path: string) => { if (state.tabs.some((tab) => tab.path === path && tab.preview)) update((tabs) => tabs.map((tab) => tab.path === path ? { ...tab, preview: false } : tab)); },
-    move: (from: string, to: string) => update((tabs) => moveQueueId(tabs.map((tab) => tab.path), from, to).map((path) => tabs.find((tab) => tab.path === path)!)),
-    create: (id: string) => update((tabs) => tabs.map((tab) => tab.path === "/" ? { path: sessionPath(id), pinned: tab.pinned } : tab)),
+    // A moved tab takes the stack of the tab it lands on, so dropping onto a stack joins it and dropping elsewhere leaves.
+    move: (from: string, to: string) => { setStack(new Set([from]), state.tabs.find((tab) => tab.path === from)?.pinned ? undefined : state.tabs.find((tab) => tab.path === to)?.stack); update((tabs) => moveQueueId(tabs.map((tab) => tab.path), from, to).map((path) => tabs.find((tab) => tab.path === path)!)); },
+    create: (id: string) => update((tabs) => tabs.map((tab) => tab.path === "/" ? { path: sessionPath(id), pinned: tab.pinned, stack: tab.stack } : tab)),
     commands: (path: string) => [
       { key: "close", label: "Close", run: () => close([path]) },
       { key: "close-others", label: "Close others", run: () => close(unpinned(state.tabs).filter((other) => other !== path), path) },
       { key: "close-right", label: "Close to the right", run: () => close(unpinned(state.tabs.slice(state.tabs.findIndex((tab) => tab.path === path) + 1)), path) },
       { key: "close-all", label: "Close all", run: () => close(unpinned(state.tabs)) },
       { key: "pin", label: state.tabs.find((tab) => tab.path === path)?.pinned ? "Unpin" : "Pin", run: () => update((tabs) => tabs.map((tab) => tab.path === path ? { path, pinned: !tab.pinned } : tab)) },
+      ...stackCommands(path),
       { key: "placement", label: `Move tabs to ${next}`, run: () => place(next) },
     ],
   };
 }
 
 function TabStrip({ tabs: { state, pathname, close, promote, move, commands }, vertical, newChat }: { tabs: ReturnType<typeof useTabs>; vertical: boolean; newChat: () => void }) {
-  const [menu, setMenu] = useState<{ path: string; anchor: Element | { getBoundingClientRect: () => DOMRect } }>();
+  const [menu, setMenu] = useState<{ path: string; anchor: Element | { getBoundingClientRect: () => DOMRect }; members?: Tab[] }>();
   const [editing, setEditing] = useState<string>();
   const pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
   const list = useRef<HTMLDivElement>(null), refocus = useRef("");
   // Closing from the strip unmounts the focused control, so focus moves to the selected tab, as in SearchTabs.
   const selected = () => list.current!.querySelector<HTMLElement>('[aria-selected="true"]')!;
+  const item = ({ key, label, name, run }: TabCommand) => <Menu.Item key={key} aria-label={name} onClick={() => { refocus.current = key; run(); }} className="flex cursor-default items-center gap-1.5 rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent">{label}</Menu.Item>;
   return <>
     <div ref={list} role="tablist" aria-label="Open tabs" aria-orientation={vertical ? "vertical" : "horizontal"} className={cn("flex shrink-0 [scrollbar-width:thin]", vertical ? "h-full flex-col gap-0.5 overflow-y-auto p-1" : "mr-12 overflow-x-auto overflow-y-hidden border-b")}
       onContextMenu={(event) => {
@@ -871,43 +894,66 @@ function TabStrip({ tabs: { state, pathname, close, promote, move, commands }, v
           if (path !== pathname) navigate(path);
           return;
         }
-        const at = state.tabs.findIndex((item) => item.path === path);
+        // Stacks hide members, so keys walk the rendered tabs, not the stored ones.
+        const rendered = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')], at = rendered.indexOf(tab);
         const step = ({ ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 } as Record<string, number>)[event.key];
-        const position = event.key === "Home" ? 0 : event.key === "End" ? state.tabs.length - 1 : step ? at + step : -1;
-        if (!state.tabs[position]) return;
+        const target = rendered[event.key === "Home" ? 0 : event.key === "End" ? rendered.length - 1 : step ? at + step : -1];
+        if (!target) return;
         event.preventDefault();
         if (event.shiftKey && step) {
-          flushSync(() => move(path, state.tabs[position].path));
-          tab.focus();
-        } else event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[position].focus();
+          flushSync(() => move(path, target.closest<HTMLElement>("[data-tab]")!.dataset.tab!));
+          // A tab that joined a stack behind another member leaves focus on that stack's slot.
+          (tab.isConnected ? tab : target).focus();
+        } else target.focus();
       }}>
-      {state.tabs.map((tab) => <TabItem key={tab.path} tab={tab} active={tab.path === pathname} vertical={vertical} editing={tab.path === editing} endEdit={() => setEditing(undefined)} promote={() => promote(tab.path)} close={() => { flushSync(() => close([tab.path])); selected().focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} />)}
+      {state.tabs.map((tab) => {
+        // A stack shows its active member, else the one it showed last, else its first.
+        const members = state.tabs.filter((other) => tab.stack && other.stack === tab.stack);
+        const shown = members.find((other) => other.path === pathname) ?? members.find((other) => other.path === state.last[tab.stack!]) ?? members[0];
+        return shown && shown !== tab ? null : <TabItem key={tab.path} tab={tab} active={tab.path === pathname} vertical={vertical} editing={tab.path === editing} stackSize={members.length} endEdit={() => setEditing(undefined)} promote={() => promote(tab.path)} close={() => { flushSync(() => close([tab.path])); selected().focus(); }} openMenu={(anchor, stack) => setMenu({ path: tab.path, anchor, members: stack ? members : undefined })} />;
+      })}
     </div>
     <Menu.Root open={!!menu} onOpenChange={(open) => { if (!open) setMenu(undefined); }}>
-      <Menu.Portal><Menu.Positioner anchor={menu?.anchor} sideOffset={4} align="start" className="z-50 outline-none"><Menu.Popup finalFocus={() => { const key = refocus.current; refocus.current = ""; return key.startsWith("close") ? selected() : key !== "rename"; }} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none">
-        {menu ? [...menu.path.startsWith("/s/") ? [{ key: "rename", label: "Rename session", run: () => setEditing(menu.path) }] : [], ...commands(menu.path)].map(({ key, label, run }) => <Menu.Item key={key} onClick={() => { refocus.current = key; run(); }} className="flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent">{label}</Menu.Item>) : null}
+      {/* Commands that may unmount the menu's tab or button hand focus to the selected tab. */}
+      <Menu.Portal><Menu.Positioner anchor={menu?.anchor} sideOffset={4} align="start" className="z-50 outline-none"><Menu.Popup finalFocus={() => { const key = refocus.current; refocus.current = ""; return /^(close|stack|unstack|go)/.test(key) ? selected() : key !== "rename"; }} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="min-w-44 max-w-80 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none">
+        {menu?.members?.map((tab) => <StackMember key={tab.path} path={tab.path} item={item} />) ?? (menu ? [...menu.path.startsWith("/s/") ? [{ key: "rename", label: "Rename session", run: () => setEditing(menu.path) }] : [], ...commands(menu.path)].map(item) : null)}
       </Menu.Popup></Menu.Positioner></Menu.Portal>
     </Menu.Root>
   </>;
 }
 
-function TabItem({ tab, active, vertical, editing, endEdit, promote, close, openMenu }: { tab: Tab; active: boolean; vertical: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: Element) => void }) {
+function useTabTitle(path: string) {
   const sidebar = useContext(Sidebar);
-  const id = tab.path.startsWith("/s/") ? decodeSessionId(tab.path.slice(3)) : "";
+  const id = path.startsWith("/s/") ? decodeSessionId(path.slice(3)) : "";
   const session = sidebar.rows.find((row) => row.id === id) ?? { id };
-  const [label, Icon] = pageTab(tab.path) ?? [sessionTitle(session, sidebar.loadingIds.has(id)), MessageSquare];
-  const title = useCleanText(label);
+  const [label, Icon] = pageTab(path) ?? [sessionTitle(session, sidebar.loadingIds.has(id)), MessageSquare];
+  return { session, Icon, title: useCleanText(label) };
+}
+
+// A row of a stack's menu: the member's title activates it, followed by its close and unstack commands.
+function StackMember({ path, item }: { path: string; item: (command: TabCommand) => ReactNode }) {
+  const { commands, pathname } = useContext(TabActions);
+  const { Icon, title } = useTabTitle(path);
+  return <div className="flex [&>:first-child]:min-w-0 [&>:first-child]:flex-1">
+    {item({ key: "go", label: <><Icon aria-hidden="true" className="size-4 shrink-0" /><span className={cn("truncate", path === pathname && "font-medium")}>{title}</span></>, run: () => { if (path !== pathname) navigate(path); } })}
+    {commands(path).filter(({ key }) => key === "close" || key === "unstack").map(({ key, label, run }) => item({ key, label: key === "close" ? <X className="size-3.5" /> : <Ungroup className="size-3.5" />, name: `${label} ${title}`, run }))}
+  </div>;
+}
+
+function TabItem({ tab, active, vertical, editing, stackSize, endEdit, promote, close, openMenu }: { tab: Tab; active: boolean; vertical: boolean; editing: boolean; stackSize: number; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: Element, stack?: boolean) => void }) {
+  const { session, Icon, title } = useTabTitle(tab.path);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
   return <div data-tab={tab.path} draggable={!editing} className={cn("group flex shrink-0 items-center", vertical ? "rounded-md" : "border-r", active ? "bg-sidebar-row-active" : "hover:bg-accent")}>
     <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className={cn("flex min-w-0", vertical ? "flex-1" : "max-w-80")} />}>
-      <div ref={ref} role="tab" aria-selected={active} aria-label={title} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
+      <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={stackSize ? `Stack of ${stackSize} tabs` : undefined} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
         onClick={() => { if (!active) navigate(tab.path); }} onDoubleClick={promote}>
         <Icon aria-hidden="true" className="size-4 shrink-0" />
         {session.running ? <span role="img" aria-label="Turn running" className="hidden size-2 shrink-0 rounded-full bg-foreground in-aria-selected:block [@media(hover:none)]:block" /> : null}
         {editing ? <TabRename session={session} placeholder={title} endEdit={endEdit} /> : tab.pinned && !vertical ? null : <span className="truncate">{title}</span>}
       </div>
     </TooltipTrigger><TooltipContent side="bottom">{title}</TooltipContent></Tooltip>
+    {stackSize ? <button type="button" aria-label={`${stackSize} tabs in stack`} aria-haspopup="menu" className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full border bg-muted px-1 text-xs tabular-nums text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={(event) => openMenu(event.currentTarget, true)}>{stackSize}</button> : null}
     {active ? <button type="button" aria-label="Tab actions" className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground last:mr-1 hover:bg-accent hover:text-foreground" onClick={(event) => openMenu(event.currentTarget)}><Ellipsis className="size-3.5" /></button> : null}
     {tab.pinned ? null : <TabClose title={title} running={!!session.running} active={active} close={close} />}
   </div>;
