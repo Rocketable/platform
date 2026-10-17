@@ -244,6 +244,8 @@ test("room autocomplete keeps selections and full labels on each search surface"
       await surface.getByRole("button", { name: "agent:other", exact: true }).click();
       await surface.getByRole("button", { name: 'room:"Blue garden"', exact: true }).click();
       await input.fill(longRooms.map((room) => `room:${JSON.stringify(room)} `).join(""));
+      // The search spinner animates until the response; let it settle before waiting on animations.
+      await surface.getByRole("img", { name: "Searching", exact: true }).waitFor({ state: "detached" });
       for (const width of [1280, 320]) {
         await page.setViewportSize({ width, height: 800 });
         await page.evaluate(() => document.fonts.ready);
@@ -1598,8 +1600,9 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await many.waitForTimeout(300);
     expect(await many.evaluate(() => (window as unknown as { searchFetches: number }).searchFetches)).toBe(1); // Typing settles into one request.
     manySearchHold.resolve();
-    await manyDialog.getByText("Search fixture 0", { exact: true }).waitFor();
-    expect(await manyDialog.locator("li > button").count()).toBe(1);
+    // The shown list follows the response in a background render.
+    await many.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button').length === 1);
+    expect(await manyDialog.getByText("Search fixture 0", { exact: true }).count()).toBe(1);
     await manyDialog.getByPlaceholder("Search sessions").fill("not-in-any-row");
     await manyDialog.getByText("Search fixture 0", { exact: true }).waitFor();
     lastSearchHold.resolve();

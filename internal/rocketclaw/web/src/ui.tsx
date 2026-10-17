@@ -16,7 +16,7 @@ import { holdWakeLock, setVoiceSticky, startVoice, stopVoice, subscribeVoice, us
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
 import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, TextCursorInput, Undo2, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
-import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
+import { createContext, memo, use, useDeferredValue, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
@@ -408,7 +408,8 @@ function TabPane({ show, children }: { show: boolean; children: ReactNode }) {
   return <div className={cn("min-h-0 flex-1 flex-col", show ? "flex" : "hidden")}>{children}</div>;
 }
 
-function WarmTabs({ cron, agents, skills, config }: { cron: boolean; agents: boolean; skills: boolean; config: boolean }) {
+// Memoized so app-level state changes, like opening the palette, do not redraw the hidden pages.
+const WarmTabs = memo(function WarmTabs({ cron, agents, skills, config }: { cron: boolean; agents: boolean; skills: boolean; config: boolean }) {
   const [warm, setWarm] = useState({ cron, agents, skills, config });
   useEffect(() => {
     setWarm((current) => ({
@@ -451,7 +452,7 @@ function WarmTabs({ cron, agents, skills, config }: { cron: boolean; agents: boo
       ) : null}
     </>
   );
-}
+});
 
 function ProtocolGuard() {
   const proto = useQuery({ ...queries.protocol(), refetchInterval: 2000 });
@@ -1164,6 +1165,7 @@ function HandoffDialog({ command, drafts, onDraftChange }: { command: SessionCom
   } });
   const target = command.target;
   const preview = useQuery({ ...queries.history({ id: target?.conversationId ?? "" }), enabled: !!target });
+  const targetSession = useMemo(() => target && (sidebar.rows.find((row) => row.id === target.conversationId) ?? { id: target.conversationId }), [sidebar.rows, target]);
   const items = (query.trim() ? search.data ?? [] : []).map((match) => ({ key: `${match.conversationId}:${match.message.messageId}`, label: match.message.text, session: sidebar.rows.find((row) => row.id === match.conversationId) ?? { id: match.conversationId }, choose: () => {
       setQuery("");
       setCommand({ ...command, target: match });
@@ -1183,7 +1185,7 @@ function HandoffDialog({ command, drafts, onDraftChange }: { command: SessionCom
       <div className="flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain">
         <SessionCommandPicker items={[...choices, ...items]} query={query} setQuery={setQuery} forking={false} disabled={pending} />
         {target ? <div className="flex min-w-0 items-center gap-3 rounded-lg border p-2">
-          <div className="min-w-0 flex-1"><SessionRowContent session={sidebar.rows.find((row) => row.id === target.conversationId) ?? { id: target.conversationId }} /><p className="truncate text-xs text-muted-foreground"><InlineText text={target.message.text.replace(/\s+/g, " ")} /></p></div>
+          <div className="min-w-0 flex-1"><SessionRowContent session={targetSession!} /><p className="truncate text-xs text-muted-foreground"><InlineText text={target.message.text.replace(/\s+/g, " ")} /></p></div>
           <Button variant="ghost" className="min-h-11 shrink-0" disabled={pending} onClick={() => setCommand({ ...command, target: undefined })}>Change</Button>
         </div> : null}
         {error ? <p role="alert" className="break-words text-destructive">{error.message}</p> : null}
@@ -1395,6 +1397,8 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
   });
   const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), { rows: search.rows, loadingIds: sidebar.loadingIds }, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands, ...tabCommands, ...timeline], recent);
   const selected = items.length === 0 ? 0 : pick % items.length;
+  // The palette opens with the first rows; the full list renders in the background.
+  const shown = useDeferredValue(items, items.slice(0, 50));
   const choose = (item: (typeof items)[number]) => {
     if (item.disabled) return;
     if (mode === "commands") {
@@ -1431,7 +1435,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
         {runCron.error || actions.error ? <p role="alert" className="px-3 text-sm text-destructive">{(runCron.error ?? actions.error)?.message}</p> : null}
         {search.error ? <p role="alert" className="px-3 text-sm text-destructive">Search failed: {search.error}</p> : null}
         <ul data-pending={search.pending} className="max-h-[min(24rem,50vh)] overflow-y-auto p-1 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent] data-[pending=true]:opacity-50">
-          {items.length === 0 ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, search, jobs.isLoading)}</li> : items.map((item, index) => (
+          {items.length === 0 ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, search, jobs.isLoading)}</li> : shown.map((item, index) => (
             <li key={item.key}>
               <button disabled={item.disabled} ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start justify-center rounded-md px-3 text-left text-sm disabled:opacity-50", mode === "commands" ? "min-h-9 py-1.5 [@media(pointer:coarse)]:min-h-11" : "py-2", index === selected && "bg-accent")} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item)}>
                 {item.session ? <SessionRowContent session={item.session} loading={item.loading} /> : <><span className="font-medium">{item.label}</span>{item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}</>}
@@ -1471,17 +1475,21 @@ function relativeTime(iso: string) {
   return `${Math.floor(ms / 86_400_000)}d`;
 }
 
-function SessionRowContent({ session, loading = false, age = relativeTime(session.updatedAt ?? "") }: { session: Session; loading?: boolean; age?: string }) {
+// One formatter for every row: toLocaleString with options builds a new one per call. Same output.
+const updatedFormat = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric", timeZoneName: "short" });
+
+// Memoized so typing in the palette does not redraw thousands of unchanged rows.
+const SessionRowContent = memo(function SessionRowContent({ session, loading = false, age = relativeTime(session.updatedAt ?? "") }: { session: Session; loading?: boolean; age?: string }) {
   const title = sessionTitle(session, loading);
   const clean = useCleanText(title);
   const channel = slackSession(session.id) ? (session.title ?? "") : "";
   const meta = [channel, session.agent, ...(session.tags ?? [])].filter(Boolean).join(" · ");
-  const updated = session.updatedAt ? `Updated ${new Date(session.updatedAt).toLocaleString(undefined, { timeZoneName: "short" })}` : "";
+  const updated = session.updatedAt ? `Updated ${updatedFormat.format(new Date(session.updatedAt))}` : "";
   return <span className="flex min-w-0 w-full flex-1 flex-col gap-0.5">
     <span className="flex items-center gap-1.5 text-sm font-medium">{session.forkedFrom ? <GitFork role="img" aria-label="Forked session" className="size-3.5 shrink-0" /> : null}<span data-slot="session-title" className="truncate" title={clean}><InlineText text={title} /></span></span>
     <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"><span className="min-w-0 flex-1 truncate" title={meta}>{meta}</span>{session.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 shrink-0 animate-spin motion-reduce:animate-none" /> : null}{age ? <Tooltip><TooltipTrigger render={<time dateTime={session.updatedAt} />} aria-label={updated} className="shrink-0"><span className="tabular-nums">{age}</span></TooltipTrigger><TooltipContent>{updated}</TooltipContent></Tooltip> : null}</span>
   </span>;
-}
+});
 
 function useSessionActions(session: Session | undefined, onSuccess?: () => void) {
   const invalidate = useContext(SidebarInvalidation);
@@ -1803,7 +1811,7 @@ function SessionSearch({ rows, catalog, query, setQuery, search, inputRef, place
                   <CircleAlert className="size-3.5" />
                 </TooltipTrigger>
                 <TooltipContent side="bottom">Conversation list may be out of date</TooltipContent>
-              </Tooltip> : <Search className="size-3.5" />}
+              </Tooltip> : search.pending ? <LoaderCircle role="img" aria-label="Searching" className="size-3.5 animate-spin motion-reduce:animate-none" /> : <Search className="size-3.5" />}
             </span>
             {pills.map((term) => <FilterPill key={term.start} label={term.text} onClear={() => remove(term)} />)}
             <Input

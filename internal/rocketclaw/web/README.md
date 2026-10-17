@@ -505,10 +505,11 @@ Matching happens on the server: Cmd/Ctrl+P and the Search page send the typed
 query once typing pauses for 250 ms (the Search page also at least once a second
 while typing), Enter sends it at once, and a newer query cancels the older request.
 Results refresh when conversations appear in the session list. An empty
-Cmd/Ctrl+P lists the session list without a request. Until new results arrive,
-the previous list stays visible, dimmed. Enter in Cmd/Ctrl+P opens the first
-result for the text typed so far, waiting for it if needed; with no result, or
-after a failed search, it does nothing.
+Cmd/Ctrl+P lists the session list without a request; it opens with the first 50
+rows and renders the rest in the background. Until new results arrive,
+the previous list stays visible, dimmed, and a spinner replaces the search icon.
+Enter in Cmd/Ctrl+P opens the first result for the text typed so far, waiting
+for it if needed; with no result, or after a failed search, it does nothing.
 Search matches names, titles, previews, agents, session labels, origin card fields,
 and original MCP metadata keys and values, case-insensitively, as one phrase.
 `agent:main` and `room:general` are filters in the query text: exact,
