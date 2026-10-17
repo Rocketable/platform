@@ -305,7 +305,14 @@ func delegationName(name, callKey string) string {
 // ReviewKey is the child-session key segment of every automatic permission review of call callID
 // in turn turnID, before the call runs or during it, such as of a Code Mode script's tool calls.
 func ReviewKey(turnID, callID string) string {
-	return delegationName(callID+"-review", turnID+"/call/"+callID)
+	return delegationName(callID+"-review", CallKey(turnID, callID))
+}
+
+// ReviewTurn is the turn under which the automatic permission review of the call keyed callKey (see
+// ToolCallKey) saves its answer in the review's Delegation History. It has no slash, so the review's
+// retained results never nest under another turn's.
+func ReviewTurn(callKey string) string {
+	return delegationName("review", callKey)
 }
 
 // asRecordAgent returns l, or, once a steer switched the turn record to another agent type, a looper

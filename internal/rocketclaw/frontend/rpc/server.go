@@ -386,9 +386,10 @@ func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse
 				continue
 			}
 
-			// A review without a parsable action is skipped.
+			// A review without a parsable action is skipped. A review saved before turns were named
+			// after their calls has its own turn.
 			if call, ok := decision.CodeModeCall(&entries[i].Entry); ok {
-				script.codeModeCall(&call)
+				script.codeModeCall(&call, entries[i].Entry.TurnID)
 			}
 		}
 
@@ -644,7 +645,7 @@ func fallbackProgress(entry *backend.ObservedSessionEntry, progress []rocketcode
 	calls := rocketcode.CodeModeCallsFromTrace(entry.Entry.OutputTrace)
 	for i := range calls {
 		if index := slices.IndexFunc(messages, func(message *TranscriptEvent) bool { return message.ToolCallId == calls[i].ParentCallID }); index >= 0 {
-			messages[index].codeModeCall(&calls[i])
+			messages[index].codeModeCall(&calls[i], rocketcode.ReviewTurn(calls[i].Key))
 		}
 	}
 
@@ -682,22 +683,29 @@ func (e *TranscriptEvent) publicProgress(item *rocketcode.PublicProgress, entry 
 }
 
 // linkReview names, on the row of a call producer made, the Delegation History its automatic
-// permission reviews save to. The Web links it only while the response's delegations list it,
-// which also covers a review a background script saves after its row was sent.
+// permission reviews save to, and the turn there of its own review. The Web links it only while
+// the response's delegations list it, which also covers a review a background script saves after
+// its row was sent.
 func (e *TranscriptEvent) linkReview(producer string) {
 	if e.ToolName != "" {
 		e.Review = producer + "/" + rocketcode.ReviewKey(e.TurnId, e.ToolCallId)
+		e.ReviewTurn = rocketcode.ReviewTurn(rocketcode.CallKey(e.TurnId, e.ToolCallId))
 	}
 }
 
-// codeModeCall adds, up to rocketcode.MaxCodeModeCalls, a call an Execute call's script made.
-// An unnamed call carries the whole-script review.
-func (e *TranscriptEvent) codeModeCall(call *rocketcode.CodeModeCall) {
+// codeModeCall adds, up to rocketcode.MaxCodeModeCalls, a call an Execute call's script made, and
+// the turn under which its review saved the approver's answer on it. An unnamed call carries the
+// whole-script review.
+func (e *TranscriptEvent) codeModeCall(call *rocketcode.CodeModeCall, reviewTurn string) {
+	if call.Outcome == "" {
+		reviewTurn = ""
+	}
+
 	switch {
 	case call.Name == "":
-		e.ScriptReason = call.Reason
+		e.ScriptReason, e.ReviewTurn = call.Reason, reviewTurn
 	case len(e.CodeModeCalls) < rocketcode.MaxCodeModeCalls:
-		e.CodeModeCalls = append(e.CodeModeCalls, &CodeModeCall{Name: call.Name, Arguments: call.Arguments, Summary: call.Summary, Status: string(call.Status), Outcome: string(call.Outcome), Reason: call.Reason})
+		e.CodeModeCalls = append(e.CodeModeCalls, &CodeModeCall{Name: call.Name, Arguments: call.Arguments, Summary: call.Summary, Status: string(call.Status), Outcome: string(call.Outcome), Reason: call.Reason, ReviewTurn: reviewTurn})
 	}
 }
 

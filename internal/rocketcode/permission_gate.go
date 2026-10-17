@@ -35,6 +35,11 @@ func toolCallContextFrom(ctx context.Context) (toolCallContext, bool) {
 	return tc, ok && tc.looper != nil
 }
 
+// CallKey is the journal key of a model's tool call callID in turn turnID.
+func CallKey(turnID, callID string) string {
+	return turnID + "/call/" + callID
+}
+
 // ToolCallKey returns the current tool call's journal key, stable across restarts; empty outside a call.
 // Inside a Code Mode script each host call has its own key under the script's call.
 func ToolCallKey(ctx context.Context) string {
@@ -43,7 +48,7 @@ func ToolCallKey(ctx context.Context) string {
 		return ""
 	}
 
-	key := tc.observations.turnID + "/call/" + tc.callID
+	key := CallKey(tc.observations.turnID, tc.callID)
 	if host := codemode.CallKey(ctx); host != "" {
 		key += "/host/" + host
 	}
@@ -89,6 +94,7 @@ func CheckNestedToolCall(ctx context.Context, toolName string, tool *looperTool,
 
 	decision.review.ReviewContext = slices.Clone(tc.reviewInput)
 	decision.review.Review = ReviewKey(tc.observations.turnID, tc.callID)
+	decision.review.Turn = ReviewTurn(ToolCallKey(ctx))
 
 	reviewDecision := tc.looper.PermissionReviewer.reviewPermission(ctx, decision.review, tc.output)
 

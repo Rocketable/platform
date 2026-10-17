@@ -66,11 +66,17 @@ function sessionPath(id: string) {
 const Delegations = createContext<Pick<HistoryView, "delegations" | "reviewRationales"> | undefined>(undefined);
 
 // The right panel shows one delegation or one skill, so opening either replaces the other.
-function panelHref(id?: string, panel: "delegation" | "skill" | "shadow" = "delegation") {
+// A permission review can open at the approver's answer that gave a reason: the one saved under its
+// review turn, or, for reviews saved before turns were named, the first that gave the reason.
+function panelHref(id?: string, panel: "delegation" | "skill" | "shadow" = "delegation", reason?: string, turn?: string) {
   const params = new URLSearchParams(location.search);
   params.delete("delegation");
   params.delete("skill");
+  params.delete("reason");
+  params.delete("answer");
   if (id) params.set(panel, id);
+  if (reason !== undefined) params.set("reason", reason);
+  if (turn) params.set("answer", turn);
   return `${location.pathname}${params.size ? `?${params}` : ""}`;
 }
 
@@ -2072,7 +2078,7 @@ function PageTitle({ children }: { children: ReactNode }) {
   </header>;
 }
 
-type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin" | "header" | "principal" | "state" | "parentId" | "completionNotes" | "delegation" | "review" | "codeModeCalls" | "scriptReason">;
+type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin" | "header" | "principal" | "state" | "parentId" | "completionNotes" | "delegation" | "review" | "codeModeCalls" | "scriptReason" | "reviewTurn">;
 type OriginFilter = { sandboxed: boolean; canonical: boolean };
 
 function lineId(role: Line["role"], text: string, seen: Map<string, number>) {
@@ -2304,18 +2310,14 @@ function delegationOf(line: Line, delegations?: string[]) {
 
 const toolIcons: Partial<Record<string, ReactNode>> = { task: <Bot />, skill: <Sparkles />, execute: <SquareTerminal />, bash: <SquareTerminal /> };
 
-// The panels a call opens, as Trace link lines: its subagent (https://ui.shadcn.com/docs/ai-elements/base/subagent),
-// permission review, or skill.
+// The panels a call opens, as Trace link lines: its subagent (https://ui.shadcn.com/docs/ai-elements/base/subagent)
+// or skill. Its permission review opens from its reasons; see ReviewReason.
 function ToolLinks({ line, title }: { line: Line; title: string }) {
   // toolTitle names a skill call's skill as "Skill · name".
   const skill = line.toolName === "skill" && title.startsWith("Skill · ") ? title.slice("Skill · ".length) : "";
-  const delegations = use(Delegations)?.delegations;
-  const delegation = delegationOf(line, delegations);
-  // A reviewed call's row opens its permission review once the delegations list it; an older task row, the one ending in its call ID.
-  const review = (line.review && delegations?.includes(line.review) ? line.review : undefined) || line.delegation && delegations?.find((child) => child !== delegation && child.slice(child.lastIndexOf("/") + 1) === line.toolCallId);
+  const delegation = delegationOf(line, use(Delegations)?.delegations);
   const links = [
     delegation && { href: panelHref(delegation), text: "Open delegation", label: `Open delegation: ${title}`, icon: <Bot /> },
-    review && { href: panelHref(review), text: "Open permission review", label: `Open permission review: ${title}`, icon: <ShieldCheck /> },
     skill && { href: panelHref(skill, "skill"), text: "View skill", label: `View skill: ${skill}`, icon: <Sparkles /> },
   ].filter((link) => !!link);
   return links.length ? <Trace className="mb-2">{links.map((link) => <Link key={link.text} href={link.href} aria-label={link.label}>
@@ -2341,14 +2343,26 @@ function codeModeCallRow(call: CodeModeCall, background: boolean, running: boole
     description: denied ? "denied" : call.status === "error" ? "failed" : call.outcome === "allow" ? "allowed" : undefined };
 }
 
+// An approver's reason, one line under the box it explains until clicked. Its icon opens the review at
+// the answer that gave the reason.
+function ReviewReason({ review, reason, outcome, turn }: { review?: string; reason: string; outcome?: string; turn?: string }) {
+  const [open, setOpen] = useState(false);
+  return <footer data-slot="permission-review-rationale" className="-mt-1 mb-2 flex min-w-0 items-start gap-1.5 text-xs text-muted-foreground">
+    {review ? <Link href={panelHref(review, "delegation", reason, turn)} aria-label="Open permission review" title="Open permission review" className="shrink-0 py-0.5 hover:text-foreground"><ShieldCheck className="size-3.5" /></Link> : null}
+    <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className={cn("min-w-0 text-left hover:text-foreground", open ? "whitespace-pre-wrap wrap-anywhere" : "truncate")}>
+      {outcome ? `${outcome === "deny" ? "Denied" : "Allowed"}: ` : ""}{reason}
+    </button>
+  </footer>;
+}
+
 // An Execute block follows OpenCode's Execute and ExecuteCallView (packages/tui/src/routes/session/index.tsx):
 // a closed row per call its script made, marked when it failed, with its command on expand; then its result.
-function CodeModeBlock({ line, status, rationale }: { line: Line; status?: TraceStatus; rationale?: string }) {
+function CodeModeBlock({ line, status, review, rationale }: { line: Line; status?: TraceStatus; review?: string; rationale?: string }) {
   const calls = line.codeModeCalls ?? [];
   // A review that is neither the script reason nor a row's reason, such as one whose action cannot be read
-  // back or one a background script saved after its turn ended, shows in the footer.
+  // back or one a background script saved after its turn ended, shows with the script reason.
   const shown = [line.scriptReason, ...calls.map((call) => call.reason)];
-  const unshown = rationale?.split("\n").filter((reason) => reason && !shown.some((text) => text?.includes(reason))).join("\n");
+  const unshown = rationale?.split("\n").filter((reason) => reason && !shown.some((text) => text?.includes(reason)));
   const seen = new Map<string, number>();
   let result = line.toolParts?.map((part) => part.text).join("\n\n");
   try {
@@ -2359,19 +2373,21 @@ function CodeModeBlock({ line, status, rationale }: { line: Line; status?: Trace
     // Plain text results show as sent.
   }
   return <>
-    {line.scriptReason ? <p className="my-2 whitespace-pre-wrap wrap-anywhere text-muted-foreground">{line.scriptReason}</p> : null}
     {calls.length ? <Trace className="my-2">{calls.map((call) => {
       const row = codeModeCallRow(call, line.state === "background", status === "running");
       return <TraceRow key={lineId("tool", `${call.name} ${call.arguments}`, seen)} open={false} icon={toolIcons[call.name] ?? <Wrench />} label={row.title} status={row.status} description={row.description}
         title={<><span className="block truncate font-mono">{row.title}</span>{row.summary ? <span className="block truncate text-xs">{row.summary}</span> : null}</>}>
-        <CodeBlock size="sm" label={call.name} text={row.command} language={call.name === "bash" ? "bash" : ""} footer={call.outcome ? <footer data-slot="permission-review-rationale" className="px-2.5 pb-2.5 whitespace-pre-wrap wrap-anywhere text-muted-foreground">{call.outcome === "deny" ? "Denied" : "Allowed"}: {call.reason}</footer> : null} />
+        <CodeBlock size="sm" label={call.name} text={row.command} language={call.name === "bash" ? "bash" : ""} />
+        {call.outcome ? <ReviewReason review={review} reason={call.reason ?? ""} outcome={call.outcome} turn={call.reviewTurn} /> : null}
       </TraceRow>;
     })}</Trace> : null}
     {calls.length === 200 ? <p className="text-muted-foreground">Showing the first 200 calls; the script may have made more.</p> : null}
     {line.state === "background" ? <p className="text-muted-foreground">Moved to the background. Its result arrives in a Completion Note.</p> : null}
     {result ? <CodeBlock size="sm" label="Result" text={result} /> : null}
+    {/* The script reason and those reviews follow its result, or stand alone until a result arrives. */}
+    {line.scriptReason ? <ReviewReason review={review} reason={line.scriptReason} turn={line.reviewTurn} /> : null}
+    {unshown?.map((reason) => <ReviewReason key={lineId("tool", reason, seen)} review={review} reason={reason} />)}
     <CodeModeScript text={line.text.slice("execute ".length)} />
-    {unshown ? <footer data-slot="permission-review-rationale" className="my-2 whitespace-pre-wrap wrap-anywhere text-muted-foreground">{unshown}</footer> : null}
   </>;
 }
 
@@ -2394,7 +2410,11 @@ function CodeModeScript({ text }: { text: string }) {
 
 function ToolLine({ line, conversationId, hasSandboxed, open }: { line: Line; conversationId: string; hasSandboxed: boolean; open?: boolean }) {
   const title = toolTitle(line);
-  const rationale = use(Delegations)?.reviewRationales?.[line.review ?? ""];
+  const { delegations, reviewRationales } = use(Delegations) ?? {};
+  // A reviewed call opens its permission review once the delegations list it; an older task row, the one ending in its call ID.
+  const review = (line.review && delegations?.includes(line.review) ? line.review : undefined) || line.delegation && delegations?.find((child) => child !== line.delegation && child.slice(child.lastIndexOf("/") + 1) === line.toolCallId) || undefined;
+  const rationale = reviewRationales?.[review ?? ""];
+  const seen = new Map<string, number>();
   const status = toolStatus(line, use(TurnRunning));
   const parts = [line, ...(line.toolParts ?? [])];
   const text = [
@@ -2405,7 +2425,10 @@ function ToolLine({ line, conversationId, hasSandboxed, open }: { line: Line; co
     <TraceRow open={open} data-tool-call-id={line.toolCallId} icon={toolIcons[line.toolName ?? ""] ?? <Wrench />} title={<span className="font-mono">{title}</span>} label={title} status={status} description={line.state}>
       <ToolLinks line={line} title={title} />
       {line.state ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
-      {line.toolName === "execute" ? <CodeModeBlock line={line} status={status} rationale={rationale} /> : <CodeBlock size="sm" label={title} text={text} footer={rationale ? <footer data-slot="permission-review-rationale" className="px-2.5 pb-2.5 whitespace-pre-wrap wrap-anywhere text-muted-foreground">{rationale}</footer> : null} />}
+      {line.toolName === "execute" ? <CodeModeBlock line={line} status={status} review={review} rationale={rationale} /> : <>
+        <CodeBlock size="sm" label={title} text={text} />
+        {rationale?.split("\n").map((reason) => reason ? <ReviewReason key={lineId("tool", reason, seen)} review={review} reason={reason} turn={line.reviewTurn} /> : null)}
+      </>}
       {parts.map((part) => (
         <div key={part.id}>
           <MessageAttachments attachments={part.attachments} conversationId={conversationId} />
@@ -3074,14 +3097,42 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
   );
 }
 
+// Each delegation the panel shows scrolls on its own, as the conversation does. One opened at an
+// approver's answer stays there rather than following its end.
 function DelegationPanel({ id }: { id: string }) {
-  const child = new URLSearchParams(useSearch()).get("delegation") ?? "";
+  const search = new URLSearchParams(useSearch());
+  const child = search.get("delegation") ?? "";
+  return child ? <MessageScrollerProvider key={child} autoScroll={!search.has("reason")} scrollEdgeThreshold={48}><DelegationTranscript id={id} child={child} /></MessageScrollerProvider> : null;
+}
+
+// A delegation opens scrolled all the way down, or, for a review opened from a reason, at the
+// approver's answer that gave it: the latest saved under its review turn, else the first giving it.
+function DelegationTranscript({ id, child }: { id: string; child: string }) {
+  const search = new URLSearchParams(useSearch());
+  const reason = search.get("reason"), turn = search.get("answer");
   const main = useQuery({ ...queries.history({ id }), enabled: false });
-  const history = useQuery({ ...queries.history({ id: child }), enabled: child !== "" });
+  const history = useQuery(queries.history({ id: child }));
   useEffect(() => {
-    if (child && main.data?.revertMessageId && !main.data.delegations.some((level) => child === level || child.startsWith(`${level}/`))) navigate(panelHref());
+    if (main.data?.revertMessageId && !main.data.delegations.some((level) => child === level || child.startsWith(`${level}/`))) navigate(panelHref());
   }, [child, main.data]);
-  if (!child) return null;
+  const lines = historyLines(history.data?.messages ?? []);
+  const turns = transcriptTurns(lines);
+  const answers = reason === null ? [] : lines.flatMap((line) => {
+    try {
+      const rationale: unknown = line.role === "assistant" && JSON.parse(line.text).rationale;
+      return typeof rationale === "string" ? [{ line, rationale }] : [];
+    } catch {
+      return []; // Only an approver's answer is JSON.
+    }
+  });
+  const target = (answers.findLast((answer) => answer.line.turnId === turn) ?? answers.find((answer) => answer.rationale === reason))?.line;
+  const targetTurn = target && turns.find((turn) => turn.items.includes(target));
+  const targetKey = targetTurn && turnKey(targetTurn);
+  const { scrollToMessage } = useMessageScroller();
+  // An answer ends its review's turn, so the turn's end shows it, clear of the viewport's bottom fade.
+  useEffect(() => {
+    if (targetKey) scrollToMessage(`turn-${targetKey}`, { align: "end", behavior: "instant", scrollMargin: 64 });
+  }, [targetKey, scrollToMessage]);
   const opened = historyLines(main.data?.messages ?? []).map((line) => delegationOf(line, main.data?.delegations));
   const first = opened.find((level) => level && (child === level || child.startsWith(`${level}/`))) ?? child;
   const levels = [...child.matchAll(/\/|$/g)].map((match) => child.slice(0, match.index)).filter((level) => level.length >= first.length).map((level, index, all) => {
@@ -3090,7 +3141,6 @@ function DelegationPanel({ id }: { id: string }) {
     return { level, label: row ? toolTitle(row) : level.slice(level.lastIndexOf("/") + 1) };
   });
   const parent = levels.at(-2);
-  const lines = historyLines(history.data?.messages ?? []);
   const sandboxed = lines.some((line) => line.origin === "sandboxed");
   const close = () => navigate(panelHref());
   const body = <>
@@ -3101,17 +3151,22 @@ function DelegationPanel({ id }: { id: string }) {
       </nav>
       <Button variant="ghost" size="icon-sm" aria-label="Close delegation" onClick={close}><X /></Button>
     </header>
-    <ScrollArea className="min-h-0 flex-1"><div className="p-3" data-delegation-transcript>
+    <MessageScroller className="min-h-0 flex-1">
+    <MessageScrollerViewport className="overflow-x-hidden [overflow-anchor:none]"><div className="min-h-full p-3" data-delegation-transcript>
       {/* A subagent is a session, so its own Background Jobs list and stop here as a chat's do. */}
       {history.data?.backgroundJobs.length ? <BackgroundJobs id={child} jobs={history.data.backgroundJobs} onChange={history.refetch} openCall={(callId) => document.querySelector(`[data-delegation-transcript] [data-tool-call-id="${CSS.escape(callId)}"]`)?.scrollIntoView({ block: "center" })} /> : null}
       {history.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading delegation…</p> : null}
       {history.error ? <p role="alert" className="text-sm text-destructive">{history.error.message}</p> : null}
       {history.data?.messages.length === 0 ? <p role="status" className="text-sm text-muted-foreground">No saved transcript</p> : null}
-      <Delegations value={history.data}>
-        <TranscriptLines rows={transcriptTurns(lines).flatMap((turn) => [...turn.user, ...turn.items]).map((line) => ({ kind: "line", line }))} conversationId={child} hasSandboxed={sandboxed} />
-      </Delegations>
+      <Delegations value={history.data}><MessageScrollerContent>
+        {turns.map((turn) => <MessageScrollerItem key={turnKey(turn)} messageId={`turn-${turnKey(turn)}`}>
+          <TranscriptLines rows={[...turn.user, ...turn.items].map((line) => ({ kind: "line", line }))} conversationId={child} hasSandboxed={sandboxed} />
+        </MessageScrollerItem>)}
+      </MessageScrollerContent></Delegations>
       {history.isSuccess ? <Link href={panelHref(parent?.level)} className="block w-fit text-xs text-muted-foreground underline hover:text-foreground">{parent ? `Back to ${parent.label}` : "Back to conversation"}</Link> : null}
-    </div></ScrollArea>
+    </div></MessageScrollerViewport>
+    <MessageScrollerButton aria-label="Scroll to latest" title="Scroll to latest" behavior="instant" />
+    </MessageScroller>
   </>;
   return <SidePanel label="Delegation" close={close}>{body}</SidePanel>;
 }
