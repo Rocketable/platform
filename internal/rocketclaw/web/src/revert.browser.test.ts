@@ -300,7 +300,9 @@ test("revert an unsaved latest turn by input ID", async () => {
     const live = message("Live request");
     await revert("Live request").waitFor({ state: "attached" });
     expect(await revert("Saved request").count()).toBe(1);
-    expect(await revert("Stopped request").count()).toBe(0);
+    // An older stopped turn cannot be reverted, so its Revert stays in place, disabled, saying why.
+    expect(await revert("Stopped request").isDisabled()).toBe(true);
+    expect(await revert("Stopped request").locator("..").getAttribute("title")).toBe("This message can't be reverted");
     // Like OpenCode's undo, $undo starts from the newest request, not the newest saved one.
     const input = page.locator("textarea");
     await input.fill("$undo"); await input.press("Enter");

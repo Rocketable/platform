@@ -128,7 +128,7 @@ for (const width of [1440, 390, 320]) test(`shadow comparison at ${width}px`, as
     }
     expect(streams).toEqual(["parent"]);
     expect(reads).not.toContain("not-a-binding");
-    expect(await page.locator("[data-shadow-cell]").getByRole("button", { name: "Revert message" }).count()).toBe(0);
+    expect(await page.locator("[data-shadow-cell]").getByRole("button", { name: "Revert message", includeHidden: true }).evaluateAll((nodes: Element[]) => nodes.length > 0 && nodes.every((node) => (node as HTMLButtonElement).disabled))).toBe(true);
     expect(await page.getByText("Turn failed.", { exact: true }).count()).toBe(1);
     for (const label of ["Waiting for parent input…", "Completed silently.", "Turn stopped.", "Not attached for this turn or inactive agent segment."]) expect(await page.getByText(label, { exact: true }).count()).toBe(1);
     const updated = histories.get("b")!;

@@ -11,7 +11,7 @@ const api = new API({ cwd: import.meta.dir });
 const source = (await (await api.updateSnapshot({ openProject: "../tsconfig.json" })).getProjects()[0].program.getSourceFile(`${import.meta.dir}/ui.tsx`))!;
 await api.close();
 const footer = source.statements.find((node) => isFunctionDeclaration(node) && node.name?.text === "MessageFooter")!;
-const imports = source.statements.filter(isImportDeclaration).filter((node) => ["lucide-react", "@/components/ui/button", "@/components/ui/dialog", "@/components/ui/tooltip", "@/lib/utils"].includes((node.moduleSpecifier as StringLiteral).text)).map((node) => {
+const imports = source.statements.filter(isImportDeclaration).filter((node) => ["@/lib/utils"].includes((node.moduleSpecifier as StringLiteral).text)).map((node) => {
   const module = (node.moduleSpecifier as StringLiteral).text;
   return `import ${node.importClause!.getText(source)} from ${JSON.stringify(Bun.resolveSync(module.replace(/^@\//, "./"), import.meta.dir))};`;
 }).join("\n");
@@ -40,16 +40,4 @@ test("footer shows compact settings and aligns with ghost message text", () => {
   expect(renderToStaticMarkup(createElement(MessageFooter, { line: {}, hasSandboxed: false }))).toBe("");
   const html = renderToStaticMarkup(createElement(MessageFooter, { line: { role: "assistant", agent: "planner" }, hasSandboxed: false }));
   expect(html).toContain("group-has-data-[variant=ghost]/message:px-0");
-});
-
-test("stored headers add a labeled info button in the footer without backfilling legacy messages", () => {
-  for (const role of ["user", "developer", "assistant", "thinking", "tool"]) {
-    const html = renderToStaticMarkup(createElement(MessageFooter, { line: { role, header: "[exact <header>]", agent: "planner" }, hasSandboxed: false }));
-    expect(html).toContain('data-slot="message-footer"');
-    expect(html).toContain("<button");
-    expect(html).toContain('aria-label="Show message header"');
-    expect(html).toContain('aria-haspopup="dialog"');
-    expect(html.includes("planner")).toBe(role === "assistant");
-    expect(renderToStaticMarkup(createElement(MessageFooter, { line: { role }, hasSandboxed: false }))).toBe("");
-  }
 });

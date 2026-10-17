@@ -2650,9 +2650,11 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await authorChat.locator('[data-slot="bubble-content"]').filter({ hasText: "not metadata" }).locator('[data-slot="message-author"]').count()).toBe(0);
     expect(await authorChat.locator('[data-slot="bubble-content"]').filter({ hasText: "Assistant unchanged" }).locator('[data-slot="message-author"]').count()).toBe(0);
     await savedBubble.hover();
-    await savedBubble.locator("..").locator("..").getByRole("button", { name: "Show message header" }).click();
-    expect(await authorPage.getByRole("dialog", { name: "Message header", exact: true }).locator('[data-slot="dialog-description"]').textContent()).toBe(rawHeader);
+    const headerTip = authorPage.locator('[data-slot="tooltip-content"]');
+    await headerTip.waitFor();
+    expect(await headerTip.textContent()).toBe(rawHeader);
     await authorPage.keyboard.press("Escape");
+    await headerTip.waitFor({ state: "hidden" });
     for (const width of [1280, 320]) {
       await authorPage.setViewportSize({ width, height: 844 });
       await savedBubble.locator('[data-slot="message-author"]').scrollIntoViewIfNeeded();
