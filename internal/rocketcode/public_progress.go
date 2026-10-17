@@ -98,7 +98,6 @@ const (
 	codeModeCallTraceType   = "rocketcode_code_mode_call"
 	codeModeReviewTraceType = "rocketcode_code_mode_review"
 	// MaxCodeModeCalls bounds an Execute call's records, which History loads with the turn.
-	// ponytail: dropped calls are not counted; counting them needs an overflow record per Execute call.
 	MaxCodeModeCalls         = 200
 	maxCodeModeCallArguments = 4 << 10
 )
