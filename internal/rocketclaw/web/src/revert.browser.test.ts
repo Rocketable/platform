@@ -247,3 +247,72 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     expect(errors).toEqual([]);
   } finally { await browser.close(); server.stop(true); }
 }, 60_000);
+
+// OpenCode reverts a running turn's message after interrupting it; History has no message ID for it yet.
+test("revert an unsaved latest turn by input ID", async () => {
+  const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
+  const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
+  const event = (entryKey: string, role: string, text: string, extra: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ entryKey, itemId: `${entryKey}:${role}`, inputId: "", turnId: entryKey, role, text, complete: true, ...extra });
+  const messages = [
+    event("1", "user", "Saved request", { messageId: "1:0", inputId: "saved-input" }), event("1", "assistant", "Saved answer", { messageId: "1:1" }),
+    event("turn:chat:stopped", "user", "Stopped request", { inputId: "stopped-input" }),
+    event("turn:chat:live", "user", "Live request", { inputId: "live-input" }), event("turn:chat:live", "assistant", "Working answer", { complete: false }),
+  ];
+  let marker = "";
+  const staged: (string | undefined)[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "chat", name: "Chat", agent: "main" }], owner: "alice", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (!url.pathname.startsWith("/api/")) {
+      const file = Bun.file(path.join(dist, url.pathname));
+      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+    }
+    const input = await request.json() as { messageId?: string };
+    switch (url.pathname) {
+      case "/api/Identity": return Response.json({ username: "alice", principal: "Alice" });
+      case "/api/Protocol": return Response.json({ protoSha256: "revert-unsaved" });
+      case "/api/ListConfig": return Response.json({ config: { workspace: "first" } });
+      case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
+      case "/api/ListSkills": return Response.json({ skills: [] });
+      case "/api/ListWorkflows": return Response.json({ workflows: [] });
+      case "/api/ListQueue": return Response.json({ items: [] });
+      case "/api/History": {
+        const visible = marker ? messages.slice(0, 3) : messages;
+        return Response.json({ messages: visible, origin: "", delegations: [], revision: marker || "running", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(visible.map((item) => item.entryKey))], running: !marker, terminal: "", start: "0", more: false, revertEligible: true, revertMessageId: marker, canUndo: true });
+      }
+      case "/api/StageRevert": staged.push(input.messageId); marker = "9:0"; return Response.json({ revertMessageId: marker, prompt: messages[3] });
+      case "/api/ClearRevert": marker = ""; return Response.json({});
+      default: return Response.json({});
+    }
+  } });
+  const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const errors: string[] = [];
+    page.on("pageerror", (error: Error) => errors.push(error.message));
+    await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat")}`);
+    const message = (text: string) => page.locator('[data-slot="message"]').filter({ hasText: text });
+    // Message actions stay invisible until hover, so count hidden buttons too.
+    const revert = (text: string) => message(text).getByRole("button", { name: "Revert message", exact: true, includeHidden: true });
+    const live = message("Live request");
+    await revert("Live request").waitFor({ state: "attached" });
+    expect(await revert("Saved request").count()).toBe(1);
+    expect(await revert("Stopped request").count()).toBe(0);
+    // Like OpenCode's undo, $undo starts from the newest request, not the newest saved one.
+    const input = page.locator("textarea");
+    await input.fill("$undo"); await input.press("Enter");
+    await page.waitForFunction(() => document.querySelector("textarea")?.value === "Live request");
+    await page.getByText("Working answer", { exact: true }).waitFor({ state: "detached" });
+    expect(staged).toEqual(["live-input"]);
+    await page.getByRole("button", { name: "Redo", exact: true }).click();
+    await page.getByText("Working answer", { exact: true }).waitFor();
+    await input.fill("");
+    await live.hover();
+    await live.getByRole("button", { name: "Revert message", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("textarea")?.value === "Live request");
+    await page.getByText("Working answer", { exact: true }).waitFor({ state: "detached" });
+    expect(staged).toEqual(["live-input", "live-input"]);
+    expect(errors).toEqual([]);
+  } finally { await browser.close(); server.stop(true); }
+}, 60_000);

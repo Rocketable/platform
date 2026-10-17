@@ -10,7 +10,7 @@ const api = new API({ cwd: import.meta.dir });
 const source = (await (await api.updateSnapshot({ openProject: "../tsconfig.json" })).getProjects()[0].program.getSourceFile(`${import.meta.dir}/ui.tsx`))!;
 await api.close();
 const transpiler = new Bun.Transpiler({ loader: "tsx" });
-const names = ["historyPage", "shadowHistory", "applyHistoryDelta", "readHistoryDelta", "readEarlierHistory", "sendComposer", "revertComposer", "restoreFiles", "promoteComposer", "popComposer", "switchQueueAgent", "stopComposer", "historyLines", "pendingInputs", "lineId", "isStopCommand", "transcriptTurns", "toolTitle", "comparisonRows", "turnKey", "mergeShadowBindings"];
+const names = ["historyPage", "shadowHistory", "applyHistoryDelta", "readHistoryDelta", "readEarlierHistory", "sendComposer", "revertComposer", "unsavedRequest", "restoreFiles", "promoteComposer", "popComposer", "switchQueueAgent", "stopComposer", "historyLines", "pendingInputs", "lineId", "isStopCommand", "transcriptTurns", "toolTitle", "comparisonRows", "turnKey", "mergeShadowBindings"];
 const functions = source.statements.filter((node) => (isFunctionDeclaration(node) ? names.includes(node.name?.text ?? "") : isVariableStatement(node) && node.declarationList.declarations.some((declaration) => names.includes(declaration.name.getText(source))))).map((node) => node.getText(source)).join("\n");
 const javascript = transpiler.transformSync(`import { QueryClient, queryOptions } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nimport { captureException } from ${JSON.stringify(Bun.resolveSync("@sentry/react", import.meta.dir))};\nimport { queries, mutations } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};\nconst queryClient = new QueryClient();\n${functions}\nexport { ${names.filter((name) => !["historyPage", "lineId", "isStopCommand", "switchQueueAgent"].includes(name)).join(", ")}, queryClient };`);
 const { shadowHistory, applyHistoryDelta, readHistoryDelta, readEarlierHistory, sendComposer, revertComposer, promoteComposer, popComposer, stopComposer, historyLines, pendingInputs, transcriptTurns, toolTitle, comparisonRows, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
@@ -409,7 +409,7 @@ test("revert replaces only the captured untouched draft, Redo leaves it alone, a
   const response = Promise.withResolvers<Response>();
   const requests: { id: string; messageId?: string }[] = [];
   globalThis.fetch = Object.assign(async (_url: URL | RequestInfo, init?: RequestInit) => { requests.push(JSON.parse(init!.body as string)); return response.promise; }, { preconnect: original.preconnect });
-  const owner = { sessionId: "first", text: "previous", files: [{ id: "old", file: new File(["old"], "old.txt") }], agent: "current", edit: 0, submission: 0, sending: false, historyEpoch: 0 };
+  const owner = { sessionId: "first", text: "previous", files: [{ id: "old", file: new File(["old"], "old.txt") }], agent: "current", edit: 0, submission: 0, sending: false, historyEpoch: 0, lines: [] };
   const other = { text: "another session" };
   try {
     const staging = revertComposer(owner, "9007199254740993:4", false, async () => {}, () => {});

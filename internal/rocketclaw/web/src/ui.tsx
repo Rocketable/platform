@@ -647,7 +647,8 @@ function SidebarOwner({ children }: { children: ReactNode }) {
 
 type PendingFile = { id: string; file: File };
 type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; reviewRationales?: Record<string, string>; shadows?: ShadowBinding[]; earlierShadows?: { from: string; before: string; shadows: ShadowBinding[] }[]; movable?: boolean; jobs?: BackgroundJob[]; questions?: PendingQuestion[]; error: string; edit: number; submission: number; historyEpoch?: number; revertEligible?: boolean; revertMessageId?: string; canUndo?: boolean; reverting?: boolean; focus?: number; hydrated?: boolean; persistenceKey?: string; persistedEdit?: number; persistenceError?: string };
-const RevertActions = createContext<{ available: boolean; pending: boolean; run: (messageId?: string, redo?: boolean) => Promise<void> } | undefined>(undefined);
+// latest is the newest turn's entry key: its unsaved messages revert by input ID.
+const RevertActions = createContext<{ available: boolean; pending: boolean; latest?: string; run: (messageId?: string, redo?: boolean) => Promise<void> } | undefined>(undefined);
 const DraftScope = createContext<string | undefined>(undefined);
 
 function BottomNavigation({ children }: { children: ReactNode }) {
@@ -1348,7 +1349,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
   const actions = useSessionActions(sidebar.rows.find((row) => row.id === id), () => setMode(undefined));
   const choices = useQuery({ ...queries.agents({ conversationId: id }), enabled: id !== "" });
   const draft = drafts.get(id);
-  const commands = id ? dollarCommands.filter(({ name }) => name !== "cron" && name !== "queue" && (name !== "undo" || draft?.revertEligible && draft.canUndo) && (name !== "redo" || draft?.revertEligible && draft.revertMessageId) && (name !== "stop" || (draft?.busy ?? sidebar.rows.find((row) => row.id === id)?.running)) && (name !== "agent" || !!choices.data?.agents.length)).map(({ name, label }) => ({ key: name, label: ["fork", "handoff", "stop", "agent"].includes(name) ? `Sessions: ${label}` : `Command: ${label} ($${name})`, disabled: [!draft?.hydrated, draft?.sending, draft?.reverting].some(Boolean), run: () => {
+  const commands = id ? dollarCommands.filter(({ name }) => name !== "cron" && name !== "queue" && (name !== "undo" || draft?.revertEligible && (draft.canUndo || !draft.revertMessageId && !!unsavedRequest(draft.lines))) && (name !== "redo" || draft?.revertEligible && draft.revertMessageId) && (name !== "stop" || (draft?.busy ?? sidebar.rows.find((row) => row.id === id)?.running)) && (name !== "agent" || !!choices.data?.agents.length)).map(({ name, label }) => ({ key: name, label: ["fork", "handoff", "stop", "agent"].includes(name) ? `Sessions: ${label}` : `Command: ${label} ($${name})`, disabled: [!draft?.hydrated, draft?.sending, draft?.reverting].some(Boolean), run: () => {
     if (name === "fork" || name === "handoff") setCommand({ mode: name, source: id });
     else composer.current!(name);
   } })) : [];
@@ -2020,7 +2021,7 @@ function MessageActions({ line, hasSandboxed }: { line: Line; hasSandboxed: bool
         setError(true);
       }
     }}>{copied === line.text && !error ? <Check /> : <Copy />}</Button>
-    {revert?.available && line.role === "user" && line.messageId && line.entryKey ? <Button type="button" size="icon-xs" variant="ghost" className="size-11 sm:size-6" aria-label="Revert message" title="Revert message" disabled={revert.pending} onClick={() => void revert.run(line.messageId)}><Undo2 /></Button> : null}
+    {revert?.available && line.role === "user" && line.entryKey && (line.messageId || line.inputId && line.entryKey === revert.latest) ? <Button type="button" size="icon-xs" variant="ghost" className="size-11 sm:size-6" aria-label="Revert message" title="Revert message" disabled={revert.pending} onClick={() => void revert.run(line.messageId || line.inputId)}><Undo2 /></Button> : null}
     <span role="status" className={error ? "text-xs text-destructive" : "sr-only"}>{error ? "Could not copy. Select and copy the text." : copied === line.text ? "Copied" : ""}</span>
   </div>;
 }
@@ -2743,7 +2744,8 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
   const visibleFilter = { sandboxed: filter.sandboxed || matchedOrigin === "sandboxed", canonical: filter.canonical || matchedOrigin === "canonical" };
   const runRevert = useCallback((messageId?: string, redo?: boolean) => revertComposer(draft, messageId, !!redo, refreshHistory, onDraftChange), [draft, refreshHistory, onDraftChange]);
   const available = !!draft.revertEligible && !previewing, pending = [draft.reverting, draft.sending, !draft.hydrated].some(Boolean);
-  const revert = useMemo(() => ({ available, pending, run: runRevert }), [available, pending, runRevert]);
+  const latest = lines.findLast((line) => line.entryKey)?.entryKey;
+  const revert = useMemo(() => ({ available, pending, latest, run: runRevert }), [available, pending, latest, runRevert]);
   const error = [scopeError, historyError].find(Boolean);
   const followed = previewing ? { lines: previewLines ?? lines, delegations: preview.data, busy: false, more: false, terminal: undefined, shadows: undefined } : { lines, delegations, busy, more, terminal, shadows };
   const queue = useQuery({ ...queries.queue({ id }), enabled: id !== "", refetchInterval: 2000 });
@@ -2949,10 +2951,18 @@ async function sendComposer(input: {
   }
 }
 
+// The newest turn's last request when that turn has not saved it, named by its input ID.
+function unsavedRequest(lines: Line[]) {
+  const latest = lines.findLast((line) => line.entryKey)?.entryKey;
+  return lines.findLast((line) => line.role === "user" && line.entryKey === latest && !line.messageId)?.inputId || undefined;
+}
+
 // OpenCode V2 packages/app/src/session/revert.ts: only the dispatched session
-// owns restored content. Redo changes history, never the composer.
+// owns restored content. Redo changes history, never the composer. Undo starts
+// from the newest request, even one its running turn has not saved yet.
 async function revertComposer(draft: ComposerDraft, messageId: string | undefined, redo: boolean, refresh: () => Promise<unknown>, changed: () => void) {
   if (draft.reverting || draft.sending) return;
+  if (!redo && !draft.revertMessageId) messageId ??= unsavedRequest(draft.lines);
   const edit = draft.edit, submission = draft.submission;
   draft.reverting = true;
   draft.historyEpoch = (draft.historyEpoch ?? 0) + 1;

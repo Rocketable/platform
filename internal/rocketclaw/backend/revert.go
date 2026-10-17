@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -299,8 +300,105 @@ func pruneRevertDelegations(ctx context.Context, db stateStoreDB, conversationID
 	return nil
 }
 
+// revertInputDB finds the user message a Web input ID names: its saved message
+// ID, or else the turn whose unsaved record holds it.
+func revertInputDB(ctx context.Context, db stateStoreDB, conversationID, inputID string) (messageID, turnID string, err error) {
+	err = db.QueryRowContext(ctx, `WITH saved AS (
+    SELECT e.id::text || ':' || (items.ordinal - 1)::text AS message_id FROM session_entries e
+    CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) WITH ORDINALITY AS items(item, ordinal)
+    WHERE e.conversation_id = $1 AND items.item->>'input_id' = $2 ORDER BY e.id DESC, items.ordinal DESC LIMIT 1
+), recorded AS (
+    SELECT s.key AS turn_id FROM turn_steps s
+    CROSS JOIN LATERAL jsonb_array_elements(NULLIF(s.value::jsonb->'record'->'replay_input', 'null'::jsonb)) AS items(item)
+    WHERE s.conversation_id = $1 AND items.item->>'input_id' = $2 LIMIT 1
+)
+SELECT COALESCE(saved.message_id, ''), COALESCE(recorded.turn_id, '') FROM saved FULL JOIN recorded ON TRUE`, conversationID, inputID).Scan(&messageID, &turnID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", errors.New("revert message is no longer in the session")
+	}
+
+	if err != nil {
+		return "", "", fmt.Errorf("read reverted input: %w", err)
+	}
+
+	return messageID, turnID, nil
+}
+
+// revertTargetDB resolves a saved message ID, or a Web input ID whose turn may
+// not have saved it yet. That boundary has only the turn ID selecting its comparisons.
+func revertTargetDB(ctx context.Context, db stateStoreDB, conversationID, target string) (ObservedSessionEntry, error) {
+	messageID, turnID := target, ""
+	if !strings.Contains(target, ":") {
+		var err error
+		if messageID, turnID, err = revertInputDB(ctx, db, conversationID, target); err != nil {
+			return ObservedSessionEntry{}, err
+		}
+	}
+
+	if messageID == "" {
+		return ObservedSessionEntry{ID: math.MaxInt64, Entry: rocketcode.SessionEntry{TurnID: turnID}}, nil
+	}
+
+	boundary, _, err := revertBoundary(ctx, db, conversationID, messageID)
+
+	return boundary, err
+}
+
+// saveRevertTurnDB returns the saved message ID of a settled turn's input. When
+// that turn saved nothing, it saves the latest turn's record as preserveStoppedInput
+// does, so Redo restores it like OpenCode keeps an interrupted turn's messages.
+// Records hold only finished items (rocketcode saveTurn).
+func saveRevertTurnDB(ctx context.Context, db stateStoreDB, conversationID, inputID, turnID string) (string, error) {
+	messageID, _, err := revertInputDB(ctx, db, conversationID, inputID)
+	if err != nil || messageID != "" {
+		return messageID, err
+	}
+
+	entries, err := queryRows(ctx, db, `WITH turn AS (
+    SELECT a.id, a.history_anchor_id, a.created_at_unix_ns, a.output_trace_json, s.value FROM active_turns a
+    JOIN turn_steps s ON s.conversation_id = a.conversation_id AND s.key = a.id
+    WHERE a.conversation_id = $1 AND a.id = $2 AND a.terminal <> ''
+), later AS (
+    SELECT t.id FROM turn t JOIN session_entries e ON e.conversation_id = $1 AND e.id > t.history_anchor_id
+    UNION SELECT t.id FROM turn t JOIN active_turns l ON l.conversation_id = $1 AND l.created_at_unix_ns > t.created_at_unix_ns
+)
+SELECT ((t.value::jsonb->'record') - 'response_id') || jsonb_build_object('output_trace', t.output_trace_json::jsonb)
+FROM turn t LEFT JOIN later USING (id) WHERE later.id IS NULL`, "reverted turn", func(row rowScanner) (rocketcode.SessionEntry, error) {
+		var (
+			raw   []byte
+			entry rocketcode.SessionEntry
+		)
+		if err := row.Scan(&raw); err != nil {
+			return entry, fmt.Errorf("read reverted turn: %w", err)
+		}
+
+		if err := json.Unmarshal(raw, &entry); err != nil {
+			return entry, fmt.Errorf("decode reverted turn: %w", err)
+		}
+
+		return entry, nil
+	}, conversationID, turnID)
+	if err != nil {
+		return "", err
+	}
+
+	if len(entries) == 0 {
+		return "", errors.New("revert message is not in the latest turn")
+	}
+
+	if _, err := appendSessionEntryDB(ctx, db, conversationID, conversationID, &entries[0]); err != nil {
+		return "", err
+	}
+
+	messageID, _, err = revertInputDB(ctx, db, conversationID, inputID)
+
+	return messageID, err
+}
+
 // StageRevert settles the recorded bridge before changing its cutoff. Like
 // packages/app/src/session/revert.ts, interruption is not effect rollback.
+// before is a saved message ID, or the Web input ID of a message whose turn has
+// not saved it, as when that turn is running.
 func (r *Runtime) StageRevert(ctx context.Context, conversationID, before string) (marker, prompt string, err error) {
 	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
 		return "", "", err
@@ -320,7 +418,9 @@ func (r *Runtime) StageRevert(ctx context.Context, conversationID, before string
 		return marker, "", err
 	}
 
-	boundary, _, err := revertBoundary(ctx, r.Sessions.db, conversationID, cmp.Or(before, predecessor))
+	target := cmp.Or(before, predecessor)
+
+	boundary, err := revertTargetDB(ctx, r.Sessions.db, conversationID, target)
 	if err != nil {
 		return "", "", err
 	}
@@ -402,6 +502,12 @@ func (r *Runtime) StageRevert(ctx context.Context, conversationID, before string
 
 	if active, err := r.Sessions.HasActiveTurn(ctx, conversationID); err != nil || active {
 		return "", "", errors.Join(err, errors.New("revert requires settled delivery"))
+	}
+
+	if !strings.Contains(target, ":") {
+		if before, err = saveRevertTurnDB(ctx, tx, conversationID, target, boundary.Entry.TurnID); err != nil {
+			return "", "", err
+		}
 	}
 
 	marker, prompt, err = stageRevertDB(ctx, tx, conversationID, before)
