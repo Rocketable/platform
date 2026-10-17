@@ -274,15 +274,12 @@ func listAllowedTools(ctx context.Context, session *mcpclient.Session, permissio
 	_ = group.Wait()
 
 	var (
-		tools  []codemode.ToolDesc
-		notes  []string
-		failed int
+		tools []codemode.ToolDesc
+		notes []string
 	)
 
 	for _, result := range results {
 		if result.note != "" {
-			failed++
-
 			notes = append(notes, result.note)
 
 			continue
@@ -291,7 +288,7 @@ func listAllowedTools(ctx context.Context, session *mcpclient.Session, permissio
 		tools = append(tools, result.tools...)
 	}
 
-	if failed == len(servers) {
+	if len(notes) == len(servers) {
 		return nil, notes, fmt.Errorf("list mcp tools: %s", strings.Join(notes, "; "))
 	}
 
