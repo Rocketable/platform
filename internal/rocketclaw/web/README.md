@@ -427,11 +427,26 @@ active tab.
   New session alone does not close. Closing with the × button or the menu moves
   keyboard focus to the selected tab.
 - **Reordering.** Drag a tab onto another. With a tab focused, Shift+Arrow moves it.
+- **Sections.** A tab's menu offers **New section here**, which starts a section
+  at that tab and edits its name in the header: Enter or clicking away saves,
+  Escape cancels. An unnamed section shows as "Section N" by position. Headers
+  sit in the tab order, and a tab belongs to the nearest header above it, so
+  dragging a tab past a header moves it to that section, and dropping a tab on a
+  header makes it the section's first tab. Closing, moving, or pinning a
+  section's first tab leaves the header above the next tab, and a section left
+  with no tabs disappears. Pinned tabs stay above every section. Clicking a
+  header collapses or expands its section; a collapsed section still shows the
+  active tab, and activating any of its tabs, for example with Cmd/Ctrl+],
+  expands it. The header's **…** button, a right-click, or Shift+F10 or the menu
+  key on the focused header opens **Rename section** and **Delete section**.
+  Deleting removes only the header, so its tabs join the section above. On the
+  left, headers are rows; on top, they are small labels between tabs. Screen
+  readers hear a header's expanded state and each tab's section.
 - **Running turns** show a dot where the close button sits. The close button replaces it on hover, on keyboard focus, on the active tab,
   and always on touch screens; on the active tab and on touch screens the dot moves
   before the title instead. Screen readers hear “Turn running”.
 - **Keyboard.** The strip is a `tablist` with one Tab stop. Arrow keys (Left/Right
-  or Up/Down), Home, and End move focus; Enter or Space activates. Anywhere in
+  or Up/Down), Home, and End move focus among the visible tabs; Enter or Space activates. Anywhere in
   the app, Cmd/Ctrl+[ and Cmd/Ctrl+] activate the previous and next tab, wrapping
   at the ends. This replaces the browser's Back/Forward for those keys.
 - **Placement.** Tabs sit on top by default or in a 14rem sidebar on the left. Switch
@@ -445,6 +460,9 @@ active tab.
   signed-in user. The address is the active tab, so a reload keeps it, and opening
   any URL, including Home (`/`), activates its tab or adds one. Unreadable or
   malformed storage (such as duplicate paths) resets to one tab for the current URL.
+  A section is a `section` id on its first tab; section names and collapsed
+  sections live under `tab-groups-sections:<user>`. Unreadable section storage
+  removes the sections and keeps every tab.
   Placement is a browser-wide preference under `tab-placement` (`top` or `left`).
   Titles and running state come live from the session list; a session missing
   from it shows its ID.

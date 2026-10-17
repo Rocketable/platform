@@ -461,6 +461,77 @@ test("narrow top strip scrolls and running tabs keep a reachable close control",
   await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Open tabs"] [role="tab"][aria-label="Charlie"]'));
 }), 60_000);
 
+test("sections follow tab position, collapse, and survive reload in both placements", () => withPage({}, async (page, origin) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  // Visible tabs by name, with section headers as [name].
+  const layout = () => strip(page).locator('[role="tab"], [aria-expanded]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.role === "tab" ? node.getAttribute("aria-label") : `[${node.textContent}]`));
+  for (const { id, name } of rows) {
+    await page.goto(`${origin}${href(id)}`);
+    await tab(name).waitFor();
+    await page.waitForFunction((path: string) => JSON.parse(localStorage.getItem("tabs:tester") ?? "[]").some((saved: { path: string }) => saved.path === path), href(id));
+  }
+  const field = strip(page).getByRole("textbox", { name: "Section name" });
+  await menu(page, "Bravo", "New section here");
+  expect(await field.evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
+  await field.press("Enter");
+  await menu(page, "Delta", "New section here");
+  await field.fill("Later");
+  await field.press("Enter");
+  expect(await layout()).toEqual(["Alpha", "[Section 1]", "Bravo", "Charlie", "[Later]", "Delta"]);
+  await strip(page).getByRole("button", { name: "Section 1", exact: true }).focus();
+  await page.keyboard.press("Shift+F10");
+  await page.getByRole("menuitem", { name: "Rename section", exact: true }).click();
+  await field.fill("Work");
+  await field.press("Enter");
+  await strip(page).getByRole("button", { name: "Actions for Work" }).click();
+  expect(await page.getByRole("menuitem").allInnerTexts()).toEqual(["Rename section", "Delete section"]);
+  await page.keyboard.press("Escape");
+  await page.getByRole("menu").waitFor({ state: "hidden" });
+  expect(await layout()).toEqual(["Alpha", "[Work]", "Bravo", "Charlie", "[Later]", "Delta"]);
+  expect(await tab("Charlie").getAttribute("aria-description")).toBe("In Work");
+  expect(await tab("Alpha").getAttribute("aria-description")).toBeNull();
+
+  const header = strip(page).getByRole("button", { name: "Work", exact: true });
+  await tab("Alpha").click();
+  await page.waitForURL(`**${href("alpha")}`);
+  await header.click();
+  expect(await header.getAttribute("aria-expanded")).toBe("false");
+  expect(await layout()).toEqual(["Alpha", "[Work]", "[Later]", "Delta"]);
+  await menu(page, "Alpha", "Move tabs to left");
+  expect(await strip(page).getAttribute("aria-orientation")).toBe("vertical");
+  await tab("Alpha").focus();
+  await page.keyboard.press("ArrowDown");
+  expect(await tab("Delta").evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
+  await page.reload();
+  await tab("Delta").waitFor();
+  expect(await layout()).toEqual(["Alpha", "[Work]", "[Later]", "Delta"]);
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("tabs:tester"))).map((saved: { path: string }) => saved.path)).toEqual(rows.map(({ id }) => href(id)));
+  await page.getByPlaceholder("Message or $command").focus();
+  await page.keyboard.press("Control+BracketRight");
+  await page.waitForURL(`**${href("bravo")}`);
+  expect(await header.getAttribute("aria-expanded")).toBe("true");
+
+  await strip(page).getByRole("button", { name: "Close Bravo" }).click();
+  await page.waitForURL(`**${href("charlie")}`);
+  expect(await layout()).toEqual(["Alpha", "[Work]", "Charlie", "[Later]", "Delta"]);
+  await tab("Alpha").dragTo(header);
+  expect(await layout()).toEqual(["[Work]", "Alpha", "Charlie", "[Later]", "Delta"]);
+  await menu(page, "Alpha", "Pin");
+  expect(await layout()).toEqual(["Alpha", "[Work]", "Charlie", "[Later]", "Delta"]);
+  await tab("Delta").dragTo(header);
+  expect(await layout()).toEqual(["Alpha", "[Work]", "Delta", "Charlie"]);
+  await strip(page).getByRole("button", { name: "Actions for Work" }).click();
+  await page.getByRole("menuitem", { name: "Delete section" }).click();
+  expect(await layout()).toEqual(["Alpha", "Delta", "Charlie"]);
+  await menu(page, "Charlie", "New section here");
+  await field.press("Enter");
+  expect(await layout()).toEqual(["Alpha", "Delta", "[Section 1]", "Charlie"]);
+  await page.evaluate(() => localStorage.setItem("tab-groups-sections:tester", "{not json"));
+  await page.reload();
+  await tab("Alpha").waitFor();
+  expect(await layout()).toEqual(["Alpha", "Delta", "Charlie"]);
+}), 60_000);
+
 test("running tab shows a dot instead of close until hover or focus at desktop width", () => withPage({}, async (page, origin) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   await page.goto(`${origin}${href("delta")}`);
