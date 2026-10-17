@@ -381,6 +381,7 @@ Prompt
 		fsys := fstest.MapFS{
 			"review.md": testMapFile(`---
 description: Review code: security and performance
+verbosity: level: high
 model: openai/gpt-5.4
 ---
 
@@ -392,6 +393,7 @@ Strictly follow the rules.
 
 		require.Empty(t, result.Errors)
 		require.Equal(t, "Review code: security and performance", result.Agents.Items["review"].Description)
+		require.Equal(t, "level: high", result.Agents.Items["review"].Verbosity)
 		require.Equal(t, "openai/gpt-5.4", result.Agents.Items["review"].Model)
 	})
 

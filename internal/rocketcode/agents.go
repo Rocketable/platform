@@ -307,18 +307,15 @@ func frontmatterField(frontmatter *yaml.Node, key string) *yaml.Node {
 
 func sanitizeAgentFrontmatter(frontmatterText string) string {
 	lines := strings.Split(frontmatterText, "\n")
-	result := make([]string, 0, len(lines))
 
-	for _, line := range lines {
+	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
-			result = append(result, line)
 			continue
 		}
 
 		parts := strings.SplitN(line, ":", 2)
 		if len(parts) != 2 {
-			result = append(result, line)
 			continue
 		}
 
@@ -326,14 +323,13 @@ func sanitizeAgentFrontmatter(frontmatterText string) string {
 
 		value := strings.TrimSpace(parts[1])
 		if key == "" || value == "" || value == ">" || value == "|" || strings.HasPrefix(value, "\"") || strings.HasPrefix(value, "'") || !strings.Contains(value, ":") {
-			result = append(result, line)
 			continue
 		}
 
-		result = append(result, key+": |-", "  "+value)
+		lines[i] = key + ": |-\n  " + value
 	}
 
-	return strings.Join(result, "\n")
+	return strings.Join(lines, "\n")
 }
 
 func parseAgentOutputSchema(schema *yaml.Node) (map[string]any, error) {
