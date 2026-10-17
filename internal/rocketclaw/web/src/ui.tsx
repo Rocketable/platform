@@ -752,8 +752,9 @@ function ResizableAside({ side, className, children, ...props }: ComponentProps<
   return <aside {...props} className={cn("relative", className)} style={{ width: sizing.width, minWidth: sizing.min }}>{children}<AsideResizeHandle {...sizing} /></aside>;
 }
 
-type Tab = { path: string; pinned?: boolean; preview?: boolean };
-type TabState = { owner?: string; tabs: Tab[]; active: string };
+// A tab carrying section starts that section; later tabs belong to it until the next one.
+type Tab = { path: string; pinned?: boolean; preview?: boolean; section?: string };
+type TabState = { owner?: string; tabs: Tab[]; active: string; names: Record<string, string>; collapsed: string[] };
 const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
 const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/search": ["Search", Search], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings] };
 
@@ -762,29 +763,58 @@ function pageTab(path: string): [string, typeof Search] | undefined {
   return pageTabs[path] ?? (path.startsWith("/skills/") ? [path.slice("/skills/".length), Sparkles] : undefined);
 }
 
-function pinnedFirst(tabs: Tab[]) {
-  return tabs.toSorted((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
+// While tabs change, each section header is a token of its own, keyed by its id, so it stays where it is.
+const unfold = (tabs: Tab[]): Tab[] => tabs.flatMap(({ section, ...tab }) => section ? [{ path: section, section }, tab] : [tab]);
+
+// Pinned tabs go first, and each header starts the tab after it; a header with no tab after it is gone.
+function arrange(tokens: Tab[]) {
+  let section: string | undefined;
+  return tokens.toSorted((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).flatMap((tab) => {
+    if (tab.section) {
+      section = tab.section;
+      return [];
+    }
+    const placed = section ? { ...tab, section } : tab;
+    section = undefined;
+    return [placed];
+  });
 }
 
-// An opened location replaces the preview tab, or else opens right of the active tab.
+// Each tab's section id, or "" before the first header.
+function sectionsOf(tabs: Tab[]) {
+  let section = "";
+  return tabs.map((tab) => (section = tab.section ?? section));
+}
+
+// An opened location replaces the preview tab, or else opens right of the active tab; activating a tab expands its section.
 function openTab(state: TabState, path: string): TabState {
-  if (state.tabs.some((tab) => tab.path === path)) return { ...state, active: path };
-  const preview = state.tabs.findIndex((tab) => tab.preview);
-  const at = preview >= 0 ? preview : state.tabs.findIndex((tab) => tab.path === state.active) + 1 || state.tabs.length;
-  return { ...state, active: path, tabs: pinnedFirst(state.tabs.toSpliced(at, Number(preview >= 0), { path, preview: true })) };
+  let tabs = state.tabs;
+  if (!tabs.some((tab) => tab.path === path)) {
+    const tokens = unfold(tabs), preview = tokens.findIndex((tab) => tab.preview);
+    const at = preview >= 0 ? preview : tokens.findIndex((tab) => tab.path === state.active) + 1 || tokens.length;
+    tabs = arrange(tokens.toSpliced(at, Number(preview >= 0), { path, preview: true }));
+  }
+  const section = sectionsOf(tabs)[tabs.findIndex((tab) => tab.path === path)];
+  return { ...state, active: path, tabs, collapsed: state.collapsed.filter((id) => id !== section) };
 }
 
 // The URL is the active tab, so a reload keeps it and any other URL opens as a permanent tab.
 function loadTabs(owner: string | undefined, path: string): TabState {
-  let tabs: Tab[] = [];
+  let tabs: Tab[] = [], sections = { names: {} as Record<string, string>, collapsed: [] as string[] };
   if (owner !== undefined) {
     try {
       const stored = JSON.parse(localStorage.getItem(`tabs:${owner}`) ?? "") as Tab[];
       const flag = (value: unknown) => value === undefined || typeof value === "boolean";
       if (stored.every((tab) => typeof tab.path === "string" && flag(tab.pinned) && flag(tab.preview)) && new Set(stored.map((tab) => tab.path)).size === stored.length) tabs = stored;
     } catch { /* Missing or unreadable tabs reset to the current location. */ }
+    try {
+      const stored = JSON.parse(localStorage.getItem(`tab-groups-sections:${owner}`) ?? "") as typeof sections;
+      if (Object.values(stored.names).every((name) => typeof name === "string") && stored.collapsed.every((id) => typeof id === "string")) sections = stored;
+    } catch { /* Missing or unreadable sections reset; the tabs stay open. */ }
   }
-  return { owner, tabs: tabs.some((tab) => tab.path === path) ? tabs : [...tabs, { path }], active: path };
+  // A tab starts a section only while that section is named in storage.
+  tabs = tabs.map((tab) => typeof sections.names[tab.section!] === "string" ? tab : { ...tab, section: undefined });
+  return { owner, tabs: tabs.some((tab) => tab.path === path) ? tabs : [...tabs, { path }], active: path, ...sections };
 }
 
 function useTabs() {
@@ -797,13 +827,16 @@ function useTabs() {
   if (state.owner !== owner) setState(loadTabs(owner, pathname));
   else if (state.active !== pathname) setState(openTab(state, pathname));
   useEffect(() => {
-    if (state.owner !== undefined) localStorage.setItem(`tabs:${state.owner}`, JSON.stringify(state.tabs));
-  }, [state.owner, state.tabs]);
-  const update = (change: (tabs: Tab[]) => Tab[]) => setState((current) => ({ ...current, tabs: pinnedFirst(change(current.tabs)) }));
+    if (state.owner === undefined) return;
+    localStorage.setItem(`tabs:${state.owner}`, JSON.stringify(state.tabs));
+    const names = Object.fromEntries(state.tabs.flatMap((tab) => tab.section ? [[tab.section, state.names[tab.section]]] : []));
+    localStorage.setItem(`tab-groups-sections:${state.owner}`, JSON.stringify({ names, collapsed: state.collapsed.filter((id) => id in names) }));
+  }, [state.owner, state.tabs, state.names, state.collapsed]);
+  const update = (change: (tokens: Tab[]) => Tab[]) => setState((current) => ({ ...current, tabs: arrange(change(unfold(current.tabs))) }));
   // Closing the active tab activates the target, else its right neighbour, else its left one; no tabs leaves Home.
   const close = (paths: string[], target?: string) => {
     const doomed = new Set(paths), kept = (tab: Tab) => !doomed.has(tab.path);
-    const rest = state.tabs.filter(kept);
+    const rest = arrange(unfold(state.tabs).filter(kept));
     setState({ ...state, tabs: rest.length ? rest : [{ path: "/" }] });
     if (!doomed.has(pathname) || (!rest.length && pathname === "/")) return;
     const at = state.tabs.findIndex((tab) => tab.path === pathname);
@@ -814,7 +847,19 @@ function useTabs() {
   return {
     state, pathname, placement, place, close,
     promote: (path: string) => { if (state.tabs.some((tab) => tab.path === path && tab.preview)) update((tabs) => tabs.map((tab) => tab.path === path ? { ...tab, preview: false } : tab)); },
-    move: (from: string, to: string) => update((tabs) => moveQueueId(tabs.map((tab) => tab.path), from, to).map((path) => tabs.find((tab) => tab.path === path)!)),
+    // A tab takes the place of the tab it lands on; one dropped on a section header becomes that section's first tab.
+    move: (from: string, to: string) => update((tokens) => {
+      const i = tokens.findIndex((tab) => tab.path === from), j = tokens.findIndex((tab) => tab.path === to);
+      return i < 0 ? tokens : tokens.toSpliced(i, 1).toSpliced(j + Number(i > j && !!tokens[j].section), 0, tokens[i]);
+    }),
+    addSection: (path: string) => {
+      const id = crypto.getRandomValues(new Uint32Array(4)).join("-");
+      setState((current) => ({ ...current, names: { ...current.names, [id]: "" }, tabs: current.tabs.map((tab) => tab.path === path ? { ...tab, section: id } : tab) }));
+      return id;
+    },
+    nameSection: (id: string, name: string) => setState((current) => ({ ...current, names: { ...current.names, [id]: name } })),
+    deleteSection: (id: string) => setState((current) => ({ ...current, tabs: current.tabs.map((tab) => tab.section === id ? { ...tab, section: undefined } : tab) })),
+    toggleSection: (id: string) => setState((current) => ({ ...current, collapsed: current.collapsed.includes(id) ? current.collapsed.filter((other) => other !== id) : [...current.collapsed, id] })),
     create: (id: string) => update((tabs) => tabs.map((tab) => tab.path === "/" ? { path: sessionPath(id), pinned: tab.pinned } : tab)),
     commands: (path: string) => [
       { key: "close", label: "Close", run: () => close([path]) },
@@ -827,13 +872,28 @@ function useTabs() {
   };
 }
 
-function TabStrip({ tabs: { state, pathname, close, promote, move, commands }, vertical, newChat }: { tabs: ReturnType<typeof useTabs>; vertical: boolean; newChat: () => void }) {
+function TabStrip({ tabs: { state, pathname, close, promote, move, commands, addSection, nameSection, deleteSection, toggleSection }, vertical, newChat }: { tabs: ReturnType<typeof useTabs>; vertical: boolean; newChat: () => void }) {
+  // A menu or edit names a tab by its path, or a section header by its id.
   const [menu, setMenu] = useState<{ path: string; anchor: Element | { getBoundingClientRect: () => DOMRect } }>();
   const [editing, setEditing] = useState<string>();
   const pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
   const list = useRef<HTMLDivElement>(null), refocus = useRef("");
   // Closing from the strip unmounts the focused control, so focus moves to the selected tab, as in SearchTabs.
   const selected = () => list.current!.querySelector<HTMLElement>('[aria-selected="true"]')!;
+  const owners = sectionsOf(state.tabs), heads = state.tabs.flatMap((tab) => tab.section ? [tab.section] : []);
+  const titleOf = (id: string) => state.names[id] || `Section ${heads.indexOf(id) + 1}`;
+  // A collapsed section shows only its header and, if it holds it, the active tab.
+  const collapsed = new Set(state.collapsed), visible = (tab: Tab, index: number) => tab.path === pathname || !collapsed.has(owners[index]);
+  const shown = state.tabs.filter(visible);
+  const menuTab = state.tabs.find((tab) => tab.path === menu?.path);
+  const items = !menu ? [] : !menuTab ? [
+    { key: "rename-section", label: "Rename section", run: () => setEditing(menu.path) },
+    { key: "delete-section", label: "Delete section", run: () => deleteSection(menu.path) },
+  ] : [
+    ...menu.path.startsWith("/s/") ? [{ key: "rename", label: "Rename session", run: () => setEditing(menu.path) }] : [],
+    ...menuTab.pinned || menuTab.section ? [] : [{ key: "new-section", label: "New section here", run: () => setEditing(addSection(menu.path)) }],
+    ...commands(menu.path),
+  ];
   return <>
     <div ref={list} role="tablist" aria-label="Open tabs" aria-orientation={vertical ? "vertical" : "horizontal"} className={cn("flex shrink-0 [scrollbar-width:thin]", vertical ? "h-full flex-col gap-0.5 overflow-y-auto p-1" : "mr-12 overflow-x-auto overflow-y-hidden border-b")}
       onContextMenu={(event) => {
@@ -848,7 +908,7 @@ function TabStrip({ tabs: { state, pathname, close, promote, move, commands }, v
       onWheel={(event) => { if (!vertical) event.currentTarget.scrollLeft += event.deltaY * (event.deltaMode ? 16 : 1); }}
       onAuxClick={(event) => {
         const path = pathOf(event);
-        if (event.button !== 1 || !path) return;
+        if (event.button !== 1 || !path?.startsWith("/")) return;
         event.preventDefault();
         close([path]);
       }}
@@ -871,27 +931,49 @@ function TabStrip({ tabs: { state, pathname, close, promote, move, commands }, v
           if (path !== pathname) navigate(path);
           return;
         }
-        const at = state.tabs.findIndex((item) => item.path === path);
+        const at = shown.findIndex((item) => item.path === path);
         const step = ({ ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 } as Record<string, number>)[event.key];
-        const position = event.key === "Home" ? 0 : event.key === "End" ? state.tabs.length - 1 : step ? at + step : -1;
-        if (!state.tabs[position]) return;
+        const position = event.key === "Home" ? 0 : event.key === "End" ? shown.length - 1 : step ? at + step : -1;
+        if (!shown[position]) return;
         event.preventDefault();
         if (event.shiftKey && step) {
-          flushSync(() => move(path, state.tabs[position].path));
+          flushSync(() => move(path, shown[position].path));
           tab.focus();
         } else event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[position].focus();
       }}>
-      {state.tabs.map((tab) => <TabItem key={tab.path} tab={tab} active={tab.path === pathname} vertical={vertical} editing={tab.path === editing} endEdit={() => setEditing(undefined)} promote={() => promote(tab.path)} close={() => { flushSync(() => close([tab.path])); selected().focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} />)}
+      {state.tabs.flatMap((tab, index) => {
+        const { section } = tab, owner = owners[index];
+        return [
+          section ? <SectionHeader key={section} id={section} name={state.names[section]} label={titleOf(section)} vertical={vertical} collapsed={collapsed.has(section)} editing={section === editing} toggle={() => toggleSection(section)} rename={(name) => { nameSection(section, name); setEditing(undefined); }} openMenu={(anchor) => setMenu({ path: section, anchor })} /> : null,
+          visible(tab, index) ? <TabItem key={tab.path} tab={tab} description={owner ? `In ${titleOf(owner)}` : undefined} active={tab.path === pathname} vertical={vertical} editing={tab.path === editing} endEdit={() => setEditing(undefined)} promote={() => promote(tab.path)} close={() => { flushSync(() => close([tab.path])); selected().focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} /> : null,
+        ];
+      })}
     </div>
     <Menu.Root open={!!menu} onOpenChange={(open) => { if (!open) setMenu(undefined); }}>
-      <Menu.Portal><Menu.Positioner anchor={menu?.anchor} sideOffset={4} align="start" className="z-50 outline-none"><Menu.Popup finalFocus={() => { const key = refocus.current; refocus.current = ""; return key.startsWith("close") ? selected() : key !== "rename"; }} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none">
-        {menu ? [...menu.path.startsWith("/s/") ? [{ key: "rename", label: "Rename session", run: () => setEditing(menu.path) }] : [], ...commands(menu.path)].map(({ key, label, run }) => <Menu.Item key={key} onClick={() => { refocus.current = key; run(); }} className="flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent">{label}</Menu.Item>) : null}
+      <Menu.Portal><Menu.Positioner anchor={menu?.anchor} sideOffset={4} align="start" className="z-50 outline-none"><Menu.Popup finalFocus={() => { const key = refocus.current; refocus.current = ""; return key.startsWith("close") || key === "delete-section" ? selected() : !["rename", "rename-section", "new-section"].includes(key); }} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none">
+        {items.map(({ key, label, run }) => <Menu.Item key={key} onClick={() => { refocus.current = key; run(); }} className="flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent">{label}</Menu.Item>)}
       </Menu.Popup></Menu.Positioner></Menu.Portal>
     </Menu.Root>
   </>;
 }
 
-function TabItem({ tab, active, vertical, editing, endEdit, promote, close, openMenu }: { tab: Tab; active: boolean; vertical: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: Element) => void }) {
+// Clicking a header collapses its section; its menu opens from the … button, Shift+F10, the menu key, or right-click.
+function SectionHeader({ id, name, label, vertical, collapsed, editing, toggle, rename, openMenu }: { id: string; name: string; label: string; vertical: boolean; collapsed: boolean; editing: boolean; toggle: () => void; rename: (name: string) => void; openMenu: (anchor: Element) => void }) {
+  const Chevron = collapsed ? ChevronRight : ChevronDown;
+  return <div data-tab={id} className={cn("flex shrink-0 items-center gap-0.5 pl-1 text-xs text-muted-foreground", vertical ? "mt-1" : "max-w-40 border-r")}>
+    {editing ? <NameField label="Section name" name={name} placeholder={label} save={rename} /> : <button type="button" aria-expanded={!collapsed} className="flex min-w-0 flex-1 items-center gap-1 rounded-sm py-1 font-medium hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={toggle}
+      onKeyDown={(event) => {
+        if (!(event.shiftKey && event.key === "F10") && event.key !== "ContextMenu") return;
+        event.preventDefault();
+        openMenu(event.currentTarget);
+      }}>
+      <Chevron aria-hidden="true" className="size-3 shrink-0" /><span className="truncate">{label}</span>
+    </button>}
+    <button type="button" aria-label={`Actions for ${label}`} className="flex size-6 shrink-0 items-center justify-center rounded-sm hover:bg-accent hover:text-foreground" onClick={(event) => openMenu(event.currentTarget)}><Ellipsis className="size-3.5" /></button>
+  </div>;
+}
+
+function TabItem({ tab, description, active, vertical, editing, endEdit, promote, close, openMenu }: { tab: Tab; description?: string; active: boolean; vertical: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: Element) => void }) {
   const sidebar = useContext(Sidebar);
   const id = tab.path.startsWith("/s/") ? decodeSessionId(tab.path.slice(3)) : "";
   const session = sidebar.rows.find((row) => row.id === id) ?? { id };
@@ -901,7 +983,7 @@ function TabItem({ tab, active, vertical, editing, endEdit, promote, close, open
   useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
   return <div data-tab={tab.path} draggable={!editing} className={cn("group flex shrink-0 items-center", vertical ? "rounded-md" : "border-r", active ? "bg-sidebar-row-active" : "hover:bg-accent")}>
     <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className={cn("flex min-w-0", vertical ? "flex-1" : "max-w-80")} />}>
-      <div ref={ref} role="tab" aria-selected={active} aria-label={title} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
+      <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={description} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
         onClick={() => { if (!active) navigate(tab.path); }} onDoubleClick={promote}>
         <Icon aria-hidden="true" className="size-4 shrink-0" />
         {session.running ? <span role="img" aria-label="Turn running" className="hidden size-2 shrink-0 rounded-full bg-foreground in-aria-selected:block [@media(hover:none)]:block" /> : null}
@@ -913,21 +995,25 @@ function TabItem({ tab, active, vertical, editing, endEdit, promote, close, open
   </div>;
 }
 
-// Enter and leaving the field save; Escape restores the old name first, so its blur saves nothing.
-function TabRename({ session, placeholder, endEdit }: { session: Session; placeholder: string; endEdit: () => void }) {
-  const sidebar = useContext(Sidebar);
-  const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: () => { sidebar.invalidateQueries(); endEdit(); } });
-  const name = session.name ?? "";
+// Enter and leaving the field save; Escape restores the old name first, so its blur saves it unchanged.
+function NameField({ label, name, placeholder, error, save }: { label: string; name: string; placeholder: string; error?: Error | null; save: (name: string) => void }) {
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => input.current!.focus(), []);
-  return <input ref={input} aria-label="Session name" defaultValue={name} placeholder={placeholder} aria-invalid={!!update.error} title={update.error?.message} className="min-w-0 flex-1 rounded-sm bg-background px-1 text-foreground not-italic outline-1 outline-ring aria-invalid:outline-destructive"
+  return <input ref={input} aria-label={label} defaultValue={name} placeholder={placeholder} aria-invalid={!!error} title={error?.message} className="min-w-0 flex-1 rounded-sm bg-background px-1 text-foreground not-italic outline-1 outline-ring aria-invalid:outline-destructive"
     onFocus={(event) => event.currentTarget.select()}
     onClick={(event) => event.stopPropagation()}
     onKeyDown={(event) => {
       if (event.key === "Escape") { event.preventDefault(); event.currentTarget.value = name; }
       if (event.key === "Enter" || event.key === "Escape") event.currentTarget.blur();
     }}
-    onBlur={(event) => { const value = event.currentTarget.value; if (value === name) endEdit(); else update.mutate({ id: session.id, name: value }); }} />;
+    onBlur={(event) => save(event.currentTarget.value)} />;
+}
+
+function TabRename({ session, placeholder, endEdit }: { session: Session; placeholder: string; endEdit: () => void }) {
+  const sidebar = useContext(Sidebar);
+  const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: () => { sidebar.invalidateQueries(); endEdit(); } });
+  const name = session.name ?? "";
+  return <NameField label="Session name" name={name} placeholder={placeholder} error={update.error} save={(value) => { if (value === name) endEdit(); else update.mutate({ id: session.id, name: value }); }} />;
 }
 
 // A running turn's dot holds the close button's place until hover, focus, or activation.
