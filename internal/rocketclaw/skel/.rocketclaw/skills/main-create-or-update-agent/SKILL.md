@@ -66,7 +66,7 @@ For edit-only agents, an `edit` allow also permits reading the same path unless 
 
 For bash agents, rocketcode checks permissions against each parsed shell call. Multi-command scripts need every parsed call allowed.
 
-Automatic permission review rules use `auto` or `auto(<agent-name>)`. Bare `auto` uses RocketCode's embedded `guardian` reviewer. `auto(<agent-name>)` uses that loaded custom reviewer agent. RocketClaw always enables RocketCode automatic review; failed review, invalid reviewer output, recursive review, timeout, or rejection denies the tool call. Do not create or rename an agent to `guardian`, because that name is reserved for the embedded reviewer. Custom reviewer agents should normally set `reasoningEffort: low` because each automatic permission review has 90 seconds to return a valid decision.
+Automatic permission review rules use `auto` or `auto(<agent-name>)`. Bare `auto` uses RocketCode's embedded `guardian` reviewer. `auto(<agent-name>)` uses that loaded custom reviewer agent. RocketClaw always enables RocketCode automatic review; failed review, invalid reviewer output, recursive review, timeout, or rejection denies the tool call. Do not create or rename an agent to `guardian`, because that name is reserved for the embedded reviewer. Custom reviewer agents should normally use a `#low` model suffix, such as `model: gpt-6.1-sol#low`, because each automatic permission review has 90 seconds to return a valid decision.
 
 If the human wants whole-script review rather than just reviews of nested calls, set `permission.rocketclaw.code_mode_approve: auto` or `auto(<agent-name>)`. Omit it (or set `allow`) when no whole-script review is requested. Other `rocketclaw` wildcard rules do not change its default `allow`.
 

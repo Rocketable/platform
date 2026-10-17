@@ -225,8 +225,7 @@ Agents are top-level Markdown files in `agents/*.md`. The filename without `.md`
 ```yaml
 ---
 description: Short human-readable purpose
-model: gpt-6.1-sol
-reasoningEffort: high
+model: gpt-6.1-sol#high
 verbosity: medium
 maxRecursion: 2
 customShell: /usr/local/bin/agent-sandbox
@@ -272,8 +271,8 @@ Known frontmatter fields:
 | Field | Meaning |
 | --- | --- |
 | `description` | Required short purpose shown when selecting agents. |
-| `model` | Required concrete model or `{{ model "name" }}` placeholder configured in `models`. |
-| `reasoningEffort` | Optional model reasoning effort. Avoid `xhigh`; `rocketclaw lint` reports it. |
+| `model` | Required concrete model or `{{ model "name" }}` placeholder configured in `models`, with an optional `#effort` reasoning-effort suffix such as `gpt-6.1-sol#high`. Avoid `#xhigh`; `rocketclaw lint` reports it. |
+| `reasoningEffort` | Deprecated; use the `model` suffix. A `model` suffix wins over this field. |
 | `verbosity` | Optional model verbosity. |
 | `maxRecursion` | Optional task delegation depth for inferences started with this agent. Omitted or `-1` is unlimited, `0` disables `task`, and positive integers allow that many levels. |
 | `customShell` | Optional program that runs this agent's shell commands instead of `/bin/bash`, called as `<customShell> <command>`. The value must be a string holding an absolute path; any other value stops this agent from loading. It names one program; the value cannot carry extra arguments. Omit it to keep default bash. See the wrapper contract below. |
@@ -320,7 +319,7 @@ Permission actions:
 | `allow` | Run matching tool calls without automatic review. |
 | `deny` | Block matching tool calls. Use it after a broader allow to subtract specific subjects. |
 | `auto` | Ask RocketCode's embedded `guardian` automatic reviewer. RocketClaw enables automatic review. Review failure, invalid JSON, or denial blocks the call. |
-| `auto(agent-name)` | Ask the named loaded custom reviewer agent. Do not create an agent named `guardian`; that name is reserved. Custom reviewer agents should normally set `reasoningEffort: low` because each automatic permission review has 90 seconds to return a valid decision. |
+| `auto(agent-name)` | Ask the named loaded custom reviewer agent. Do not create an agent named `guardian`; that name is reserved. Custom reviewer agents should normally use a `#low` model suffix because each automatic permission review has 90 seconds to return a valid decision. |
 
 Guardrails and approval reviewers are separate mechanisms. `guardrail` reviews inter-agent delegation and child responses; `auto` and `auto(agent-name)` review tool execution permission. Finished guardrail checks, automatic reviews, and Task subagents are saved, and the web chat opens them from the tool row that started them.
 
@@ -340,7 +339,7 @@ Permission buckets:
 | `workflow` | Workflow stems for `rocketclaw_dynamic_workflow`. |
 | `mcp` | Outbound MCP as `server.tool` or wildcards such as `demo.*`. Gates nested MCP builtins inside `execute`. Host grants alone can still surface `execute` without mcp. |
 
-Run `rocketclaw lint` after agent, skill, or script edits. It checks write-to-execute risk, read-plus-execute leakage, task delegation cycles, delegation-chain escalation, external-content contamination, plural `permissions`, missing guardrails, excessive `reasoningEffort`, a misspelled `customShell` key, and `edit` permissions that could change a sandboxed agent's file or wrapper.
+Run `rocketclaw lint` after agent, skill, or script edits. It checks write-to-execute risk, read-plus-execute leakage, task delegation cycles, delegation-chain escalation, external-content contamination, plural `permissions`, missing guardrails, excessive reasoning effort, a misspelled `customShell` key, and `edit` permissions that could change a sandboxed agent's file or wrapper.
 
 ## Subcommands
 
