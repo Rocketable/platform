@@ -713,7 +713,9 @@ The handoff panel keeps **Preview**, **Copy**, and **Stash** actions visible.
 **Preview** opens the full document; selecting a destination shows its conversation
 below the panel and hides the composer until the handoff is closed.
 Conversations without stored history stay out of the session list until their first
-entry arrives. Clearing all stored history hides the conversation again without
+entry arrives, except while a turn runs: a new session is listed during its first
+turn, titled by the start of that message, so it can be renamed before its first reply.
+Clearing all stored history hides the conversation again once no turn runs, without
 deleting its record or its Slack messages.
 On desktop, the page header's close button closes that page's tab (see
 [Tabs](#tabs)), and Escape on a page does too unless a dialog or tooltip is open.
