@@ -442,9 +442,7 @@ func (r *Runtime) StageRevert(ctx context.Context, conversationID, before string
 
 	b.mu.Unlock()
 	defer func() {
-		b.mu.Lock()
-		b.historyMutation = false
-		b.mu.Unlock()
+		releaseHistory([]*Bridge{b})
 
 		if err != nil {
 			_ = b.pickLaterWork(ctx, false)
