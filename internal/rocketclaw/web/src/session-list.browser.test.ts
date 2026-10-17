@@ -2105,6 +2105,14 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await detailPage.locator("footer").getByRole("button", { name: "Open command palette" }).click();
       await detailPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: new RegExp(`^${name}`) }).click();
     };
+    // At Detailed the lone thought is its own group, and opening it shows the thought without a second Thought row.
+    await palette("Timeline: Detailed");
+    transcriptStreams.clear();
+    await detailPage.reload();
+    const thought = detailPage.locator('#transcript-scroll [data-slot="trace-collapsible-trigger"]').filter({ hasText: /^Thought$/ });
+    await thought.click();
+    await detailPage.getByText("Planning the check", { exact: true }).waitFor();
+    expect(await thought.count()).toBe(1);
     await palette("Timeline: Everything");
     await detailPage.locator('pre[aria-label="Run · make test"]').waitFor();
     expect(JSON.parse((await detailPage.evaluate(() => localStorage.getItem("timeline-detail")))!).rows.execute).toEqual({ placement: "separate", details: "expanded" });
