@@ -528,10 +528,7 @@ func codeModeSearch(index []codeModeSearchEntry, args map[string]any) string {
 		}{Offset: end}
 	}
 
-	raw, err := json.Marshal(out)
-	if err != nil {
-		return `{"items":[],"remaining":0,"next":null}`
-	}
+	raw, _ := json.Marshal(out)
 
 	return string(raw)
 }
