@@ -55,10 +55,10 @@ relabel saved messages. Missing historical values are omitted, and old bare
 model names are shown as recorded without an assumed provider. Optimistic
 inputs are enriched by message ID when their consuming runtime is ready.
 Tool progress shows its state and producer settings, without a Copy action.
-Completed automatic permission reviews show their recorded rationale as a plain-text
-footer inside the tool response, including reviews of nested host-tool calls.
-The permission-review link remains available. Pending reviews and histories
-without a recorded completed final response have no footer.
+Completed automatic permission reviews show their recorded rationale as one line
+of small text under the tool response, including reviews of nested host-tool
+calls; its icon opens the review. Pending reviews and histories without a
+recorded completed final response have no footer.
 Reasoning groups have no footer or Copy action.
 When a session contains sandboxed messages, a slim button group above the
 composer highlights both `sandboxed` and `canonical` by default. Each button
@@ -867,28 +867,35 @@ work as usual. If someone else already answered or the turn ended, the card goes
 away and says so.
 A tool row whose call delegated work (an `auto` permission review, a guardrail
 check, or a Task subagent) shows **Open delegation**. A `task` row opens its
-subagent, and a row that continued a subagent opens that subagent. A row whose call
-was reviewed, before it ran or during it, such as of a Code Mode script's tool
-calls, shows **Open permission review** instead, or as well on a `task` row;
-rows saved before reviews had their own history open it as **Open delegation**,
-except a `task` row's. Each link opens its Delegation
-History read-only beside the chat on wide screens and full screen on narrow
-ones, with breadcrumbs for nested delegations. The panel lives in the
-`delegation` query parameter, so Back, Forward, and reload keep it. A link at the
+subagent, and a row that continued a subagent opens that subagent. Rows saved
+before reviews had their own history open a review as **Open delegation**,
+except a `task` row's. A call the approver reviewed, before it ran or during it,
+such as a Code Mode script and each of its tool calls, shows each of the
+approver's reasons as one line under its box, cut off until clicked. The shield
+icon at the left of the line opens the permission review at the approver's
+answer on that very call: each review saves its answer under a turn named after
+the call it checks, so two calls given the same reason open their own answers.
+Reviews saved before that open at the first answer giving the reason. Each link
+opens its Delegation History read-only beside the chat on wide screens and full
+screen on narrow ones, with breadcrumbs for nested delegations. The panel lives
+in the `delegation` query parameter, the reason in `reason`, and the answer's
+turn in `answer`, so Back, Forward, and reload keep it. It opens scrolled to
+that answer, or all the way down when there is none, and has the same
+scroll-to-latest arrow as the conversation. A link at the
 end of each transcript goes back up one level. Only finished delegations are
 saved. On wide screens the delegation panel can be resized by dragging its
 inner edge, and the width is remembered.
 Each tool call has one labeled disclosure containing its arguments and matching
 result. Loaded skill instructions fold with their skill call. Long results have a
 collapse control at the bottom as well as the header. An Execute call is titled
-with the model's description of its script and shows the approver's reason for
-the whole script, when one reviewed it. Below that, one row per call the script
-made, added when the call starts, shows the call's command, the last line of its
+with the model's description of its script. One row per call the script made,
+added when the call starts, shows the call's command, the last line of its
 output (or its size for binary output), and whether it was allowed, denied, or
-failed, with the approver's reason when it checked the call. An approver reason
-that matches no row, such as one saved after the turn ended, shows in a footer at
-the end of the block. The output itself is never kept. Chats from before calls were recorded list only the calls the approver
-checked. The script's result follows as text. The Starlark source shows at the
+failed, with the approver's reason when it checked the call. The output itself is never kept. Chats from before calls were recorded list only the calls the approver
+checked. The script's result follows as text. Under it come the approver's
+reason for the whole script, when `code_mode_approve` sent the script for
+review, and any reason that matches no row, such as one saved after the turn
+ended. Until the result arrives, those reasons show on their own. The Starlark source shows at the
 Everything timeline level, behind a Show script toggle at Detailed, and not at
 Compact. Files the script attached with `rocketclaw_attach_files_to_response` show
 on the turn's final reply. Cron run previews and the

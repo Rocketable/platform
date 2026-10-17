@@ -1083,11 +1083,18 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 
 	// A new-format call's reviews are never parsed: its rows and reason come from its records.
 	review("new", testReviewEntry(t, "", script, "PARSED SCRIPT REASON"), testReviewEntry(t, "", &testPlannedAction{"bash", "bash", `{"command":"PARSED"}`, []string{"PARSED"}}, "checked"))
-	review("old",
+	old := []*rocketcode.SessionEntry{
 		testReviewEntry(t, "Earlier transcript.\n", script, "script ok"),
 		testReviewEntry(t, "", &testPlannedAction{"bash", "bash", `{"command":"ls -la"}`, []string{"ls -la"}}, "ls is safe"),
 		testReviewEntry(t, "", &testPlannedAction{"bash", "bash", big, []string{"echo"}}, "echo is safe"),
-		testReviewEntry(t, "", &testPlannedAction{"execute", "mcp", `{"query":"is:open"}`, []string{"github.search_issues"}}, "search is read-only"))
+		testReviewEntry(t, "", &testPlannedAction{"execute", "mcp", `{"query":"is:open"}`, []string{"github.search_issues"}}, "search is read-only"),
+	}
+	// Reviews saved before turns were named after their calls each have a turn of their own.
+	for i, entry := range old {
+		entry.TurnID = fmt.Sprintf("old-%d", i)
+	}
+
+	review("old", old...)
 
 	broken := testReviewEntry(t, "", script, "unparsable action")
 	broken.ReplayInput[0] = json.RawMessage(strings.ReplaceAll(string(broken.ReplayInput[0]), "Planned action JSON:", "missing"))
@@ -1104,7 +1111,7 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 
 	replay := append(append([]json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"ask"}`)}, testCallItems("execute", "new", "old", "broken", "capped")...), testCallItems("bash", "top")...)
 	_, err = sessions.AppendEntryID(ctx, "chat", &rocketcode.SessionEntry{Type: "turn", TurnID: "turn", ReplayInput: replay, OutputTrace: []json.RawMessage{
-		json.RawMessage(`{"type":"rocketcode_code_mode_review","parent_call_id":"new","outcome":"allow","reason":"script reason"}`),
+		json.RawMessage(`{"type":"rocketcode_code_mode_review","parent_call_id":"new","key":"turn/call/new","outcome":"allow","reason":"script reason"}`),
 		json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"new","key":"turn/call/new/host/0","name":"bash","arguments":"{\"command\":\"printf one\"}","status":"ok","summary":"one"}`),
 		json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"new","key":"turn/call/new/host/1","name":"read","arguments":"{\"filePath\":\"a.txt\"}","status":"ok","summary":"(End of file - total 2 lines)"}`),
 		json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"new","key":"turn/call/new/host/2","name":"bash","arguments":"{\"command\":\"PARSED\"}","status":"denied","summary":"denied","outcome":"deny","reason":"checked"}`),
@@ -1127,20 +1134,21 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 	require.Len(t, calls, 5)
 
 	for id, want := range map[string]*TranscriptEvent{
-		"new": {ScriptReason: "script reason", CodeModeCalls: []*CodeModeCall{
+		// Each reviewed call names the turn its review saved the approver's answer under.
+		"new": {ScriptReason: "script reason", ReviewTurn: rocketcode.ReviewTurn("turn/call/new"), CodeModeCalls: []*CodeModeCall{
 			{Name: "bash", Arguments: `{"command":"printf one"}`, Status: "ok", Summary: "one"},
 			{Name: "read", Arguments: `{"filePath":"a.txt"}`, Status: "ok", Summary: "(End of file - total 2 lines)"},
-			{Name: "bash", Arguments: `{"command":"PARSED"}`, Status: "denied", Summary: "denied", Outcome: "deny", Reason: "checked"},
+			{Name: "bash", Arguments: `{"command":"PARSED"}`, Status: "denied", Summary: "denied", Outcome: "deny", Reason: "checked", ReviewTurn: rocketcode.ReviewTurn("turn/call/new/host/2")},
 		}},
-		"old": {ScriptReason: "script ok", CodeModeCalls: []*CodeModeCall{
-			{Name: "bash", Arguments: `{"command":"ls -la"}`, Outcome: "allow", Reason: "ls is safe"},
-			{Name: "bash", Arguments: clipped, Outcome: "allow", Reason: "echo is safe"},
-			{Name: "github.search_issues", Arguments: `{"query":"is:open"}`, Outcome: "allow", Reason: "search is read-only"},
+		"old": {ScriptReason: "script ok", ReviewTurn: "old-0", CodeModeCalls: []*CodeModeCall{
+			{Name: "bash", Arguments: `{"command":"ls -la"}`, Outcome: "allow", Reason: "ls is safe", ReviewTurn: "old-1"},
+			{Name: "bash", Arguments: clipped, Outcome: "allow", Reason: "echo is safe", ReviewTurn: "old-2"},
+			{Name: "github.search_issues", Arguments: `{"query":"is:open"}`, Outcome: "allow", Reason: "search is read-only", ReviewTurn: "old-3"},
 		}},
-		"broken": {},
-		"top":    {},
+		"broken": {ReviewTurn: rocketcode.ReviewTurn("turn/call/broken")},
+		"top":    {ReviewTurn: rocketcode.ReviewTurn("turn/call/top")},
 	} {
-		got := &TranscriptEvent{ScriptReason: calls[id].GetScriptReason(), CodeModeCalls: calls[id].GetCodeModeCalls()}
+		got := &TranscriptEvent{ScriptReason: calls[id].GetScriptReason(), ReviewTurn: calls[id].GetReviewTurn(), CodeModeCalls: calls[id].GetCodeModeCalls()}
 		require.True(t, proto.Equal(want, got), "%s: %v", id, got)
 	}
 

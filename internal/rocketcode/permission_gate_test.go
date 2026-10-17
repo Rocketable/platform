@@ -97,4 +97,5 @@ func TestCheckNestedPermissionAutoWithReviewerAllow(t *testing.T) {
 
 	requests := reviewedRequests(reviewer)
 	require.Equal(t, []string{reviewKey("turn-1", "call_0"), reviewKey("turn-1", "call_0"), reviewKey("turn-2", "call_0")}, []string{requests[0].Review, requests[1].Review, requests[2].Review})
+	require.Equal(t, ReviewTurn(CallKey("turn-2", "call_0")), requests[2].Turn, "the review's turn is named after the call it checks")
 }

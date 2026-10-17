@@ -803,6 +803,7 @@ func TestPermissionReviewKeyIsUniquePerToolCall(t *testing.T) {
 	require.Len(t, saved["/"+reviewKey("turn-1", "call_0")], 2, "both runs of turn-1 review under one key")
 	require.Len(t, saved["/"+reviewKey("turn-2", "call_0")], 1)
 	require.Equal(t, "guardian", saved["/"+reviewKey("turn-2", "call_0")][0].Agent)
+	require.Equal(t, ReviewTurn(CallKey("turn-2", "call_0")), saved["/"+reviewKey("turn-2", "call_0")][0].TurnID, "a review saves its answer under the turn named after the call it checks")
 	require.Equal(t, PublicProgressBlocked, rows[2].State)
 	require.Len(t, saved, 2, "the reviews of both turns")
 }

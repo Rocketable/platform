@@ -268,11 +268,15 @@ message TranscriptEvent {
   repeated CodeModeCall code_mode_calls = 24;
   // On an Execute call's first event: the automatic approver's reason for its whole script.
   string script_reason = 25;
+  // Turn under which review saves the approver's answer on this call itself, such as on an
+  // Execute call's whole script. Reviews saved before turns were named have another turn.
+  string review_turn = 26;
 }
 
 // One call an Execute script made. Arguments are clipped to 4 KiB; summary is one line of its
 // output. Status is running, ok, error, or denied, and empty when read from an older chat's
-// review. Outcome (allow or deny) and reason are set only when the automatic approver ran.
+// review. Outcome (allow or deny), reason, and review_turn, the turn under which the script's
+// review saves the approver's answer on this call, are set only when the automatic approver ran.
 message CodeModeCall {
   string name = 1;
   string arguments = 2;
@@ -280,6 +284,7 @@ message CodeModeCall {
   string status = 4;
   string outcome = 5;
   string reason = 6;
+  string review_turn = 7;
 }
 
 // Attachment download frames carry at most 256 KiB. History carries metadata only.

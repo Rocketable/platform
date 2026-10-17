@@ -86,7 +86,7 @@ function searchedCode(text: string, needle?: string) {
 // A titled Code Block with wrap, expand and copy; compact keeps only the expand and copy buttons.
 // Copy uses copyText rather than CodeBlockCopyButton, which needs the Clipboard API that plain HTTP lacks.
 // A known language is highlighted, except while search highlights a needle.
-export function CodeBlock({ text, label = "Code", compact = false, needle, size, language = "", footer }: { text: string; label?: string; compact?: boolean; needle?: string; size?: "sm"; language?: string; footer?: ReactNode }) {
+export function CodeBlock({ text, label = "Code", compact = false, needle, size, language = "" }: { text: string; label?: string; compact?: boolean; needle?: string; size?: "sm"; language?: string }) {
   const lines = useHighlightedCode(text, needle ? "" : language);
   // The hook returns plain strings until a language loads; plain text then stays one text node.
   const code = lines.some((line) => typeof line !== "string") ? <span>{lines.flatMap((line, index) => index ? ["\n", line] : [line])}{text.endsWith("\n") ? "\n" : ""}</span> : searchedCode(text, needle);
@@ -115,11 +115,10 @@ export function CodeBlock({ text, label = "Code", compact = false, needle, size,
         <CodeBlockActions>{wrapToggle}{expand}{copy}{status}</CodeBlockActions>
       </CodeBlockHeader>
       {content("max-h-64")}
-      {footer}
     </CodeBlockFrame>}
     <DialogContent className="flex h-[calc(100dvh-2rem)] min-w-0 flex-col sm:max-w-[calc(100%-2rem)]" aria-describedby={undefined}>
       <div className="flex min-w-0 items-center gap-2 pr-10"><div className="mr-auto min-w-0 break-words"><DialogTitle>{label}</DialogTitle></div>{wrapToggle}{copy}{status}</div>
-      <CodeBlockFrame className="min-h-0 flex-1">{content("min-h-0 flex-1")}{footer}</CodeBlockFrame>
+      <CodeBlockFrame className="min-h-0 flex-1">{content("min-h-0 flex-1")}</CodeBlockFrame>
     </DialogContent>
   </Dialog>;
 }

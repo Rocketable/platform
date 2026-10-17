@@ -254,6 +254,8 @@ type permissionReviewRequest struct {
 	ReviewContext    []responses.ResponseInputItemUnionParam `json:"-"`
 	// Review is the review's child-session key segment, from the reviewed call's tool call key.
 	Review string `json:"-"`
+	// Turn is the review's turn in that history, from the key of the call it checks (see ReviewTurn).
+	Turn string `json:"-"`
 }
 
 type permissionReviewRiskLevel string
@@ -2124,10 +2126,11 @@ func (l *looper) dispatchToolCalls(
 func (l *looper) reviewToolCall(ctx context.Context, name, callID string, request *permissionReviewRequest, output chan<- ChatResponse) permissionReviewDecision {
 	request.ReviewContext = slices.Clone(l.permissionReviewInput)
 	request.Review = ReviewKey(l.observations.turnID, callID)
+	request.Turn = ReviewTurn(CallKey(l.observations.turnID, callID))
 
 	decision := l.PermissionReviewer.reviewPermission(ctx, request, output)
 	if name == executeToolName {
-		_ = l.observations.recordCodeModeCall(ctx, &CodeModeCall{Type: codeModeReviewTraceType, ParentCallID: callID, Key: l.observations.turnID + "/call/" + callID, Outcome: decision.Outcome, Reason: decision.Rationale}, false)
+		_ = l.observations.recordCodeModeCall(ctx, &CodeModeCall{Type: codeModeReviewTraceType, ParentCallID: callID, Key: CallKey(l.observations.turnID, callID), Outcome: decision.Outcome, Reason: decision.Rationale}, false)
 	}
 
 	return decision

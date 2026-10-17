@@ -226,10 +226,15 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 				require.Equal(t, []bool{tc.job.Detached, true}, detached, "the script sees when its job leaves the turn")
 				require.Equal(t, map[bool]int{true: 0, false: 1}[tc.job.Detached], nested, "only attached work reaches the turn")
 
+				turns := []string{}
+
 				for _, request := range reviewedRequests(loop.PermissionReviewer.(*mockPermissionReviewer)) {
 					require.Equal(t, turnReview, request.ReviewContext)
 					require.Equal(t, reviewKey("turn", "call-1"), request.Review, "a script's host calls, even after its turn, review under the script's call")
+					turns = append(turns, request.Turn)
 				}
+
+				require.Contains(t, turns, ReviewTurn(loop.observations.calls[0].Key), "a host call's review turn comes from the key its record keeps")
 			})
 		})
 	}
