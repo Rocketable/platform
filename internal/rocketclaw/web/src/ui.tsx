@@ -263,10 +263,10 @@ function QueuePanel({
             >
               <GripVertical className="h-3.5 w-3.5" />
             </button>
-            <div className="min-w-0 flex-1">
-              <MessageAuthor principal={item.principal} />
-              <span className="block truncate text-sm"><InlineText text={item.text.replace(/\s+/g, " ")} /></span>
-            </div>
+            <span className="min-w-0 flex-1 truncate text-sm">
+              {item.principal ? <span data-slot="message-author" className="text-muted-foreground after:content-['_·_']">{item.principal}</span> : null}
+              <span><InlineText text={item.text.replace(/\s+/g, " ")} /></span>
+            </span>
             <MessageAttachments attachments={item.attachments} conversationId={conversationId} />
             <Button
               type="button"
