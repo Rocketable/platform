@@ -55,6 +55,13 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
 const strip = (page: any) => page.getByRole("tablist", { name: "Open tabs" });
 const names = (page: any) => strip(page).getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
 const italic = (tab: any) => tab.evaluate((node: HTMLElement) => getComputedStyle(node).fontStyle === "italic");
+// Group headers are the strip's only controls that report aria-expanded.
+const order = (page: any) => strip(page).locator('[role="tab"], [aria-expanded]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
+async function openSaved(page: any, origin: string, link: string, name: string) {
+  await page.goto(`${origin}${link}`);
+  await strip(page).getByRole("tab", { name, exact: true }).waitFor();
+  await page.waitForFunction((path: string) => JSON.parse(localStorage.getItem("tabs:tester") ?? "[]").some((saved: { path: string }) => saved.path === path), link);
+}
 async function openFromPalette(page: any, name: string) {
   await page.keyboard.press("Control+p");
   const palette = page.getByRole("dialog", { name: "Go to session" });
@@ -66,6 +73,11 @@ async function openFromPalette(page: any, name: string) {
 async function menu(page: any, name: string, item: string) {
   await strip(page).getByRole("tab", { name, exact: true }).click({ button: "right" });
   await page.getByRole("menuitem", { name: item, exact: true }).click();
+  await page.getByRole("menu").waitFor({ state: "hidden" });
+}
+async function chooseSpace(page: any, item: string, role = "menuitem") {
+  await page.getByRole("button", { name: /^Space: / }).click();
+  await page.getByRole(role, { name: item, exact: true }).click();
   await page.getByRole("menu").waitFor({ state: "hidden" });
 }
 
@@ -477,4 +489,279 @@ test("running tab shows a dot instead of close until hover or focus at desktop w
   await tab("Delta").click();
   await page.waitForURL(`**${href("delta")}`);
   expect(await dot.evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("1");
+}), 60_000);
+
+test("tab groups take a name and color, collapse, adopt opened tabs, follow drags, and survive reload", () => withPage({}, async (page, origin) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  const header = strip(page).getByRole("button", { name: "Work", exact: true });
+  const field = page.getByRole("textbox", { name: "Group name" });
+  for (const [id, name] of [["alpha", "Alpha"], ["bravo", "Bravo"], ["charlie", "Charlie"]]) await openSaved(page, origin, href(id), name);
+  await menu(page, "Alpha", "Add to new group");
+  await field.waitFor();
+  expect(await field.evaluate((node: HTMLInputElement) => document.activeElement === node)).toBe(true);
+  await page.keyboard.type("Work");
+  expect(await field.inputValue()).toBe("Work");
+  await page.getByRole("radio", { name: "Green" }).check();
+  await page.keyboard.press("Escape");
+  await field.waitFor({ state: "detached" });
+  await menu(page, "Bravo", 'Add to group "Work"');
+  expect(await order(page)).toEqual(["Work", "Alpha", "Bravo", "Charlie"]);
+  expect(await tab("Bravo").getAttribute("aria-description")).toBe("Group Work, Space: Main");
+  expect(await tab("Charlie").getAttribute("aria-description")).toBe("Space: Main");
+
+  await page.reload();
+  await tab("Charlie").waitFor();
+  expect(await order(page)).toEqual(["Work", "Alpha", "Bravo", "Charlie"]);
+  await strip(page).getByRole("button", { name: "Edit Work", exact: true }).click();
+  expect(await field.inputValue()).toBe("Work");
+  expect(await page.getByRole("radio", { name: "Green" }).isChecked()).toBe(true);
+  await page.keyboard.press("Escape");
+  await field.waitFor({ state: "detached" });
+  await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Open tabs"] [aria-label="Work"]'));
+
+  await header.click();
+  expect(await header.getAttribute("aria-expanded")).toBe("false");
+  expect(await order(page)).toEqual(["Work", "Charlie"]);
+  await page.getByPlaceholder("Message or $command").focus();
+  await page.keyboard.press("Control+BracketRight");
+  await page.waitForURL(`**${href("alpha")}`);
+  expect(await header.getAttribute("aria-expanded")).toBe("true");
+  expect(await order(page)).toEqual(["Work", "Alpha", "Bravo", "Charlie"]);
+
+  await tab("Bravo").click();
+  await page.waitForURL(`**${href("bravo")}`);
+  await openFromPalette(page, "Delta");
+  await page.waitForURL(`**${href("delta")}`);
+  expect(await order(page)).toEqual(["Work", "Alpha", "Bravo", "Delta", "Charlie"]);
+  expect(await tab("Delta").getAttribute("aria-description")).toBe("Group Work, Space: Main");
+  await tab("Charlie").dragTo(tab("Alpha"));
+  expect(await order(page)).toEqual(["Work", "Charlie", "Alpha", "Bravo", "Delta"]);
+  await menu(page, "Delta", "Remove from group");
+  expect(await order(page)).toEqual(["Work", "Charlie", "Alpha", "Bravo", "Delta"]);
+  expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main");
+  await tab("Alpha").dragTo(tab("Delta"));
+  expect(await order(page)).toEqual(["Work", "Charlie", "Bravo", "Delta", "Alpha"]);
+  expect(await tab("Alpha").getAttribute("aria-description")).toBe("Space: Main");
+}), 60_000);
+
+test("tab group editor moves New session in, ungroups, and closes; pins leave groups; collapsed groups skip arrow keys; bad group storage resets", () => withPage({}, async (page, origin) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  const field = page.getByRole("textbox", { name: "Group name" });
+  for (const [link, name] of [["/", "New session"], [href("alpha"), "Alpha"], [href("bravo"), "Bravo"], [href("charlie"), "Charlie"]]) await openSaved(page, origin, link, name);
+  await menu(page, "Alpha", "Add to new group");
+  await page.keyboard.type("Work");
+  await page.keyboard.press("Enter");
+  await field.waitFor({ state: "detached" });
+  await menu(page, "Bravo", 'Add to group "Work"');
+  expect(await order(page)).toEqual(["New session", "Work", "Alpha", "Bravo", "Charlie"]);
+
+  await strip(page).getByRole("button", { name: "Edit Work", exact: true }).click();
+  await page.getByRole("button", { name: "New tab in group", exact: true }).click();
+  await page.waitForURL(`${origin}/`);
+  expect(await order(page)).toEqual(["Work", "Alpha", "Bravo", "New session", "Charlie"]);
+  expect(await tab("New session").getAttribute("aria-selected")).toBe("true");
+  await menu(page, "Bravo", "Pin");
+  expect(await order(page)).toEqual(["Bravo", "Work", "Alpha", "New session", "Charlie"]);
+  expect(await tab("Bravo").getAttribute("aria-description")).toBeNull();
+
+  await menu(page, "Charlie", "Move tabs to left");
+  await tab("Charlie").click();
+  await page.waitForURL(`**${href("charlie")}`);
+  await strip(page).getByRole("button", { name: "Work", exact: true }).click();
+  await page.reload();
+  await tab("Charlie").waitFor();
+  expect(await strip(page).getAttribute("aria-orientation")).toBe("vertical");
+  expect(await order(page)).toEqual(["Bravo", "Work", "Charlie"]);
+  await tab("Bravo").focus();
+  await page.keyboard.press("ArrowDown");
+  expect(await tab("Charlie").evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
+
+  await strip(page).getByRole("button", { name: "Work", exact: true }).focus();
+  await page.keyboard.press("Shift+F10");
+  await page.getByRole("button", { name: "Ungroup", exact: true }).click();
+  expect(await order(page)).toEqual(["Bravo", "Alpha", "New session", "Charlie"]);
+  // The editor hands focus back as it finishes closing.
+  await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Open tabs"] [role="tab"][aria-label="Charlie"]'));
+
+  await tab("Alpha").click();
+  await page.waitForURL(`**${href("alpha")}`);
+  await menu(page, "Alpha", "Add to new group");
+  await page.keyboard.press("Escape");
+  await field.waitFor({ state: "detached" });
+  await menu(page, "New session", 'Add to group "Grey group"');
+  expect(await order(page)).toEqual(["Bravo", "Grey group", "Alpha", "New session", "Charlie"]);
+  await strip(page).getByRole("button", { name: "Edit Grey group", exact: true }).click();
+  await page.getByRole("button", { name: "Close group", exact: true }).click();
+  await page.waitForURL(`**${href("charlie")}`);
+  expect(await order(page)).toEqual(["Bravo", "Charlie"]);
+
+  await menu(page, "Charlie", "Add to new group");
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => localStorage.getItem("tab-groups-chrome-spaces:tester")!.includes("Grey"));
+  await page.evaluate(() => localStorage.setItem("tab-groups-chrome-spaces:tester", "{not json"));
+  await page.reload();
+  await tab("Charlie").waitFor();
+  expect(await order(page)).toEqual(["Bravo", "Charlie"]);
+  expect(await tab("Charlie").getAttribute("aria-description")).toBe("Space: Main");
+}), 60_000);
+
+test("spaces show only their own tabs, return to their last tab, follow opened tabs, and survive reload", () => withPage({}, async (page, origin) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  const space = page.getByRole("button", { name: /^Space: / });
+  const choose = (item: string, role?: string) => chooseSpace(page, item, role);
+  for (const [link, name] of [["/", "New session"], [href("alpha"), "Alpha"], [href("bravo"), "Bravo"], [href("charlie"), "Charlie"]]) await openSaved(page, origin, link, name);
+  expect(await space.getAttribute("aria-label")).toBe("Space: Main");
+  expect(await tab("Charlie").getAttribute("aria-description")).toBe("Space: Main");
+
+  // A new space takes New session along and is named in place.
+  await choose("New space");
+  await page.waitForURL(`${origin}/`);
+  await page.getByRole("textbox", { name: "Space name" }).waitFor();
+  await page.keyboard.type("Ops");
+  await page.keyboard.press("Enter");
+  expect(await space.getAttribute("aria-label")).toBe("Space: Ops");
+  expect(await names(page)).toEqual(["New session"]);
+  expect(page.url()).toBe(`${origin}/`);
+
+  await choose("Main", "menuitemradio");
+  await page.waitForURL(`**${href("charlie")}`);
+  expect(await names(page)).toEqual(["Alpha", "Bravo", "Charlie"]);
+  await menu(page, "Bravo", 'Move to "Ops"');
+  expect(await names(page)).toEqual(["Alpha", "Charlie"]);
+  await tab("Alpha").focus();
+  await page.keyboard.press("ArrowRight");
+  expect(await tab("Charlie").evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
+  await choose("Ops", "menuitemradio");
+  await page.waitForURL(`${origin}/`);
+  expect(await names(page)).toEqual(["New session", "Bravo"]);
+  await tab("Bravo").click();
+  await choose("Main", "menuitemradio");
+  await page.waitForURL(`**${href("charlie")}`);
+
+  // Opening a tab that lives in another space switches to it, and reload keeps both.
+  await openFromPalette(page, "Bravo");
+  await page.waitForURL(`**${href("bravo")}`);
+  expect(await space.getAttribute("aria-label")).toBe("Space: Ops");
+  await page.reload();
+  await tab("Bravo").waitFor();
+  expect(await space.getAttribute("aria-label")).toBe("Space: Ops");
+  expect(await names(page)).toEqual(["New session", "Bravo"]);
+  await page.keyboard.press("Control+BracketRight");
+  await page.waitForURL(`${origin}/`);
+
+  await menu(page, "Bravo", "Close all");
+  await page.waitForURL(`${origin}/`);
+  expect(await names(page)).toEqual(["New session"]);
+  expect(await space.getAttribute("aria-label")).toBe("Space: Ops");
+  await openFromPalette(page, "Bravo");
+  await choose("Main", "menuitemradio");
+  await page.waitForURL(`**${href("charlie")}`);
+  expect(await names(page)).toEqual(["Alpha", "Charlie"]);
+  // New session is never duplicated: opening it brings its tab into this space.
+  await page.getByRole("button", { name: "New session", exact: true }).click();
+  await page.waitForURL(`${origin}/`);
+  expect(await names(page)).toEqual(["Alpha", "Charlie", "New session"]);
+  expect(await space.getAttribute("aria-label")).toBe("Space: Main");
+
+  await menu(page, "Alpha", "Pin");
+  await choose("Ops", "menuitemradio");
+  await page.waitForURL(`**${href("bravo")}`);
+  expect(await names(page)).toEqual(["Alpha", "Bravo"]);
+
+  // Deleting a space moves its tabs to the first space, and the last space stays.
+  await choose("Delete space");
+  expect(await space.getAttribute("aria-label")).toBe("Space: Main");
+  expect(await names(page)).toEqual(["Alpha", "Charlie", "New session", "Bravo"]);
+  expect(page.url()).toEndWith(href("bravo"));
+  await space.click();
+  await page.getByRole("menuitem", { name: "Rename space" }).waitFor();
+  expect(await page.getByRole("menuitem").allInnerTexts()).toEqual(["New space", "Rename space"]);
+  await page.keyboard.press("Escape");
+
+  // Unreadable spaces reset to Main and keep every tab; the menu also sits atop left tabs.
+  await page.evaluate(() => localStorage.setItem("tab-groups-chrome-spaces:tester", "{not json"));
+  await page.reload();
+  await tab("Bravo").waitFor();
+  expect(await names(page)).toEqual(["Alpha", "Charlie", "New session", "Bravo"]);
+  await menu(page, "Bravo", "Move tabs to left");
+  const [button, list] = [await space.boundingBox(), await strip(page).boundingBox()];
+  expect(button.y + button.height).toBeLessThanOrEqual(list.y);
+}), 60_000);
+
+test("a group lives in one space: menus offer only this space's groups, groups move whole, and New tab in group brings New session", () => withPage({}, async (page, origin) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  const header = strip(page).getByRole("button", { name: "Work", exact: true }), edit = strip(page).getByRole("button", { name: "Edit Work", exact: true });
+  const editor = (item: string) => edit.click().then(() => page.getByRole("button", { name: item, exact: true }).click());
+  const green = page.getByRole("radio", { name: "Green" });
+  for (const [link, name] of [["/", "New session"], [href("alpha"), "Alpha"], [href("bravo"), "Bravo"], [href("charlie"), "Charlie"]]) await openSaved(page, origin, link, name);
+  await menu(page, "Alpha", "Add to new group");
+  await page.keyboard.type("Work");
+  await green.check();
+  await page.keyboard.press("Escape");
+  await menu(page, "Bravo", 'Add to group "Work"');
+
+  // A new space takes New session, and its tab menu offers no group from Main.
+  await chooseSpace(page, "New space");
+  await page.getByRole("textbox", { name: "Space name" }).fill("Ops");
+  await page.keyboard.press("Enter");
+  await tab("New session").click({ button: "right" });
+  expect(await page.getByRole("menuitem").allInnerTexts()).toEqual(["Close", "Close others", "Close to the right", "Close all", "Pin", "Add to new group", 'Move to "Main"', "Move tabs to left"]);
+  await page.keyboard.press("Escape");
+
+  // Moving the group keeps its name and color; moving one member out of it leaves the group.
+  await chooseSpace(page, "Main", "menuitemradio");
+  await page.waitForURL(`**${href("charlie")}`);
+  expect(await order(page)).toEqual(["Work", "Alpha", "Bravo", "Charlie"]);
+  await editor('Move group to "Ops"');
+  expect(await order(page)).toEqual(["Charlie"]);
+  await chooseSpace(page, "Ops", "menuitemradio");
+  await page.waitForURL(`${origin}/`);
+  expect(await order(page)).toEqual(["New session", "Work", "Alpha", "Bravo"]);
+  await edit.click();
+  expect(await green.isChecked()).toBe(true);
+  await page.keyboard.press("Escape");
+  await menu(page, "Alpha", 'Move to "Main"');
+  expect(await order(page)).toEqual(["New session", "Work", "Bravo"]);
+  await header.click();
+  await chooseSpace(page, "Main", "menuitemradio");
+  await page.waitForURL(`**${href("charlie")}`);
+  expect(await order(page)).toEqual(["Alpha", "Charlie"]);
+  expect(await tab("Alpha").getAttribute("aria-description")).toBe("Space: Main");
+  await menu(page, "Charlie", "Pin");
+
+  // Reload keeps spaces, groups, colors, collapsed state, and memberships; the pinned tab shows everywhere in no group.
+  await page.reload();
+  await tab("Charlie").waitFor();
+  expect(await order(page)).toEqual(["Charlie", "Alpha"]);
+  await chooseSpace(page, "Ops", "menuitemradio");
+  await page.waitForURL(`${origin}/`);
+  expect(await order(page)).toEqual(["Charlie", "New session", "Work"]);
+  expect(await header.getAttribute("aria-expanded")).toBe("false");
+  await edit.click();
+  expect(await green.isChecked()).toBe(true);
+  await page.keyboard.press("Escape");
+  await header.click();
+  expect(await order(page)).toEqual(["Charlie", "New session", "Work", "Bravo"]);
+  expect(await tab("Bravo").getAttribute("aria-description")).toBe("Group Work, Space: Ops");
+  expect(await tab("Charlie").getAttribute("aria-description")).toBeNull();
+
+  // New tab in group brings New session over from Main.
+  await chooseSpace(page, "Main", "menuitemradio");
+  await page.getByRole("button", { name: "New session", exact: true }).click();
+  await page.waitForURL(`${origin}/`);
+  expect(await order(page)).toEqual(["Charlie", "New session", "Alpha"]);
+  await chooseSpace(page, "Ops", "menuitemradio");
+  await page.waitForURL(`**${href("bravo")}`);
+  await editor("New tab in group");
+  await page.waitForURL(`${origin}/`);
+  expect(await order(page)).toEqual(["Charlie", "Work", "Bravo", "New session"]);
+  expect(await tab("New session").getAttribute("aria-description")).toBe("Group Work, Space: Ops");
+
+  // Deleting Ops moves the collapsed group, intact, to Main.
+  await header.click();
+  await chooseSpace(page, "Delete space");
+  expect(await page.getByRole("button", { name: /^Space: / }).getAttribute("aria-label")).toBe("Space: Main");
+  expect(await order(page)).toEqual(["Charlie", "Alpha", "Work", "New session"]);
+  expect(await header.getAttribute("aria-expanded")).toBe("false");
+  expect(await tab("New session").getAttribute("aria-description")).toBe("Group Work, Space: Main");
 }), 60_000);

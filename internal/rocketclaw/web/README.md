@@ -427,6 +427,47 @@ active tab.
   New session alone does not close. Closing with the × button or the menu moves
   keyboard focus to the selected tab.
 - **Reordering.** Drag a tab onto another. With a tab focused, Shift+Arrow moves it.
+  A moved tab joins the group of the tab it lands on, or leaves its group when it
+  lands on an ungrouped tab.
+- **Groups.** Named, colored groups of adjacent tabs, as in Chrome. The tab menu
+  offers **Add to new group** (an unnamed group in the next color, with its
+  editor open and the name field focused), **Add to group "…"** for each other
+  group, and **Remove from group**. A group's header sits before its tabs: a
+  colored chip with the name, or a color dot when unnamed. Clicking it collapses
+  or expands the group. Right-click, Shift+F10, or the header's **…** button opens
+  the editor: name, nine colors, **New tab in group** (moves New session into the
+  group, or opens it there), **Ungroup**, and **Close group**, which closes the
+  members by the usual close rules. On the left, members sit under the header
+  behind a colored rule; on top, they get a colored underline. A tab opened while
+  a grouped tab is active joins that group. Pinned tabs are never grouped:
+  pinning a tab removes it from its group. A collapsed group still shows its
+  active tab, and activating any hidden tab, including with Cmd/Ctrl+[ and ],
+  expands its group. Arrow keys skip hidden tabs. Headers report
+  `aria-expanded`.
+- **Spaces.** Every unpinned tab belongs to one named space, and the strip shows
+  only the current space's tabs plus the pinned tabs, which show in every space.
+  The space button at the start of the strip names the current space; its menu
+  lists the spaces to switch to and offers **New space**, **Rename space**, and
+  **Delete space**. A space is named in place of the button: Enter or clicking
+  away saves, and Escape or a blank name keeps the old name. Switching returns to
+  the space's last active tab, or to its first tab. New session is one tab, so
+  entering an empty space, opening New session, or closing a space's last tab
+  moves that tab into the current space. Opening a location that is open in
+  another space switches to that space. The tab menu offers **Move to "<space>"**
+  for each other space, and moving the active tab follows it. Deleting a space
+  moves its tabs to the first space; the last space cannot be deleted. A tab
+  moved between spaces becomes permanent, so each space keeps at most one preview
+  tab. Unpinning puts a tab in the current space. Close others, Close to the
+  right, Close all, Cmd/Ctrl+[ and ], and the preview tab act only within the
+  current space. Screen readers hear each unpinned tab's group, if any, and space
+  as its description, such as “Group Work, Space: Main”.
+- **Groups in spaces.** A group lives in one space. The tab menu offers only the
+  current space's groups, and **Move to "<space>"** takes a tab out of its group.
+  The group editor adds **Move group to "<space>"** for each other space: it
+  moves every member and keeps the group's name, color, and collapsed state, and
+  moving the active tab's group follows it. Deleting a space moves its groups,
+  intact, to the first space. **New tab in group** brings New session into the
+  group's space as well as the group.
 - **Running turns** show a dot where the close button sits. The close button replaces it on hover, on keyboard focus, on the active tab,
   and always on touch screens; on the active tab and on touch screens the dot moves
   before the title instead. Screen readers hear “Turn running”.
@@ -440,9 +481,14 @@ active tab.
 - **Left sidebar.** Drag its right edge, or focus the edge and press Left/Right, to
   resize it; the width is kept in this browser. The footer's **Hide sidebar** button
   or Cmd/Ctrl+B hides and shows it until the next reload.
-- **Storage.** Open tabs, their order, pins, and the preview flag are kept in this
-  browser's `localStorage` under `tabs:<user>`, separately for each
-  signed-in user. The address is the active tab, so a reload keeps it, and opening
+- **Storage.** Open tabs, their order, pins, the preview flag, and each tab's group
+  and space are kept in this browser's `localStorage` under `tabs:<user>`,
+  separately for each signed-in user. The spaces, their names, the current space,
+  each space's last active tab, and the groups' names, colors, and collapsed state
+  live under one key, `tab-groups-chrome-spaces:<user>`; groups with no tabs are
+  dropped. Unreadable space and group storage resets to one **Main** space with no
+  groups and keeps every tab; tabs whose space is gone join the first space, and
+  tabs whose group is gone leave it. The address is the active tab, so a reload keeps it, and opening
   any URL, including Home (`/`), activates its tab or adds one. Unreadable or
   malformed storage (such as duplicate paths) resets to one tab for the current URL.
   Placement is a browser-wide preference under `tab-placement` (`top` or `left`).
@@ -453,7 +499,9 @@ Tradeoffs: preview replacement keeps the strip short without manual closing, but
 an item opened once and left unpromoted vanishes on the next open, which can
 surprise people. Unlike browser-style tabs there is no
 per-tab Back/Forward or reopen-closed-tab. Unlike grouped tabs there are no
-agent/age lines or groups. Unlike warm tabs, switching sessions remounts the
+agent/age lines. Spaces hide every other space's tabs, which keeps one task in
+focus but means a tab in another space is reached through the space menu, the
+palette, or a link rather than at a glance. Unlike warm tabs, switching sessions remounts the
 transcript. In exchange, the strip stays compact, and the menu, pins, and drag
 give more control than a minimal strip.
 
