@@ -32,6 +32,15 @@ func TestRunRejectsInvalidArgs(t *testing.T) {
 	}
 }
 
+func TestRunCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if err := Run(ctx, "funneld", []string{"--unknown"}); err != context.Canceled {
+		t.Fatalf("Run with canceled context error = %v; want %v", err, context.Canceled)
+	}
+}
+
 func TestLoadConfigFromArgs(t *testing.T) {
 	path := writeConfig(t, `{
 		"host": "https://example.ts.net",
