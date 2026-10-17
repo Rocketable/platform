@@ -45,6 +45,8 @@ func TestRunOAILoginRejectsInvalidArgumentsBeforeHelp(t *testing.T) {
 		{args: []string{"--bad", "--help"}, want: `unknown flag "--bad"`},
 		{args: []string{"--headless", "--headless", "help"}, want: "duplicate --headless"},
 		{args: []string{"work", "openai", "-h"}, want: "more than one provider"},
+		{args: []string{"--aws-secrets-manager-arn"}, want: "flag needs an argument: -aws-secrets-manager-arn"},
+		{args: []string{"--aws-secrets-manager-arn=first", "--aws-secrets-manager-arn=second"}, want: "duplicate --aws-secrets-manager-arn"},
 	} {
 		err := runOAILogin(tt.args)
 		require.ErrorContains(t, err, tt.want)
@@ -140,20 +142,57 @@ func TestSaveOAILoginRejectsConfigChangedDuringOAuth(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		data string
+		want string
 	}{
-		{name: "missing provider", data: `{"openai":{"rocketcode_auth":"api_key"},"providers":{}}`},
-		{name: "malformed providers", data: `{"openai":{"rocketcode_auth":"api_key"},"providers":[]}`},
-		{name: "malformed provider", data: `{"openai":{"rocketcode_auth":"api_key"},"providers":{"work":[]}}`},
+		{name: "missing provider", data: `{"openai":{"rocketcode_auth":"api_key"},"providers":{}}`, want: "provider"},
+		{name: "malformed providers", data: `{"openai":{"rocketcode_auth":"api_key"},"providers":[]}`, want: "provider"},
+		{name: "malformed provider", data: `{"openai":{"rocketcode_auth":"api_key"},"providers":{"work":[]}}`, want: "provider"},
+		{name: "malformed JSON", data: `{`, want: "parse config JSON"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			require.NoError(t, os.WriteFile(defaultConfigPath, []byte(tt.data), 0o640))
-			var err error
-			require.NotPanics(t, func() {
-				_, _, err = saveOAILogin(defaultConfigPath, workspace, config.DefaultRuntimeDir, "work", oai.Token{Refresh: "refresh"})
-			})
-			require.ErrorContains(t, err, "provider")
+			_, _, err := saveOAILogin(defaultConfigPath, workspace, config.DefaultRuntimeDir, "work", oai.Token{Refresh: "refresh"})
+			require.ErrorContains(t, err, tt.want)
+			data, err := os.ReadFile(defaultConfigPath)
+			require.NoError(t, err)
+			assert.Equal(t, tt.data, string(data))
 		})
 	}
+}
+
+func TestSaveOAILoginReportsMissingConfigPaths(t *testing.T) {
+	for _, tt := range []struct {
+		path string
+		want string
+	}{
+		{path: "missing/config.json", want: "open config lock"},
+		{path: "config.json", want: "read config"},
+	} {
+		t.Run(tt.want, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tt.path)
+			_, _, err := saveOAILogin(path, t.TempDir(), config.DefaultRuntimeDir, "work", oai.Token{Refresh: "refresh"})
+			require.ErrorContains(t, err, tt.want)
+			require.ErrorIs(t, err, os.ErrNotExist)
+		})
+	}
+}
+
+func TestSaveOAILoginLeavesConfigAndCredentialsUnchangedWhenConfigCommitFails(t *testing.T) {
+	workspace := prepareOAIConfig(t)
+	original, err := os.ReadFile(defaultConfigPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(defaultConfigPath+".lock", nil, 0o600))
+	require.NoError(t, os.Chmod(".", 0o500))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(".", 0o700)) })
+
+	_, _, err = saveOAILogin(defaultConfigPath, workspace, config.DefaultRuntimeDir, "work", oai.Token{Refresh: "refresh"})
+	require.ErrorContains(t, err, "commit config")
+	require.ErrorIs(t, err, os.ErrPermission)
+	data, err := os.ReadFile(defaultConfigPath)
+	require.NoError(t, err)
+	assert.Equal(t, original, data)
+	_, err = oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, "work")
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestSaveOAILoginPreservesFullFileMode(t *testing.T) {
