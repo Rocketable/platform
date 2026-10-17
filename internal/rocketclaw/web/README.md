@@ -832,9 +832,17 @@ saved. On wide screens the delegation panel can be resized by dragging its
 inner edge, and the width is remembered.
 Each tool call has one labeled disclosure containing its arguments and matching
 result. Loaded skill instructions fold with their skill call. Long results have a
-collapse control at the bottom as well as the header. An Execute call shows only
-the script's final result; the tool calls the script made are neither shown nor
-kept. Files the script attached with `rocketclaw_attach_files_to_response` show
+collapse control at the bottom as well as the header. An Execute call is titled
+with the model's description of its script and shows the approver's reason for
+the whole script, when one reviewed it. Below that, one row per call the script
+made, added when the call starts, shows the call's command, the last line of its
+output (or its size for binary output), and whether it was allowed, denied, or
+failed, with the approver's reason when it checked the call. An approver reason
+that matches no row, such as one saved after the turn ended, shows in a footer at
+the end of the block. The output itself is never kept. Chats from before calls were recorded list only the calls the approver
+checked. The script's result follows as text. The Starlark source shows at the
+Everything timeline level, behind a Show script toggle at Detailed, and not at
+Compact. Files the script attached with `rocketclaw_attach_files_to_response` show
 on the turn's final reply. Cron run previews and the
 delegation panel keep every disclosure open.
 The transcript has a visible scrollbar and a side rail with one jump marker per

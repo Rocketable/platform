@@ -3,6 +3,7 @@ package rocketcode
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -250,7 +251,8 @@ func TestCustomToolsAreCodeModeOnlyInsideExecute(t *testing.T) {
 
 	assert.True(t, sawNested, "expected nested ask_user_question diagnostic")
 
-	// Only the script's own result is kept; calls made inside it are never saved with the turn.
+	// A call made inside the script is saved on its own as a record with a one-line summary, not in the trace.
+	assert.Equal(t, []CodeModeCall{{Type: codeModeCallTraceType, ParentCallID: "exec-1", Key: "/call/exec-1/host/0", Name: "ask_user_question", Arguments: `{"question":"ship it?"}`, Status: codeModeCallOK, Summary: "answer:ship it?"}}, observations.calls)
 	assert.Empty(t, observations.trace)
 }
 
@@ -338,9 +340,13 @@ func TestCodeModeHostsSurviveModelWithoutHosts(t *testing.T) {
 	ctx := withToolCallContext(t.Context(), looper, nil, "")
 
 	run := model[executeToolName]
-	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return read(filePath=\"a.txt\")\n"}`), nil, emptyToolCallMetadata())
-	require.NoError(t, err)
-	assert.Contains(t, result.Output, "hello")
+
+	var result ToolResult
+	for _, args := range []string{`{"code":"def main():\n    return read(filePath=\"a.txt\")\n"}`, `{"code":"def main():\n    return read(filePath=\"a.txt\")\n","description":"Read a"}`} {
+		result, err = run.Call(ctx, json.RawMessage(args), nil, emptyToolCallMetadata())
+		require.NoError(t, err)
+		assert.Contains(t, result.Output, "hello")
+	}
 
 	full := strings.Repeat("line\n", 2100)
 	require.NoError(t, root.WriteFile("large.txt", []byte(full), 0o600))
@@ -836,6 +842,7 @@ func TestExecuteWholeScriptApproval(t *testing.T) {
 			}
 
 			require.Len(t, requests, 1)
+			require.Equal(t, CodeModeCall{Type: codeModeReviewTraceType, ParentCallID: "call", Key: loop.observations.turnID + "/call/call", Outcome: tc.outcome, Reason: "review decision"}, loop.observations.calls[0], "the whole-script decision is recorded under the call")
 			require.Equal(t, executeToolName, requests[0].ToolName)
 			require.Equal(t, "rocketclaw", requests[0].Permission)
 			require.Equal(t, []string{"code_mode_approve"}, requests[0].Subjects)
@@ -1042,11 +1049,13 @@ func TestExecuteReplaysRecordedHostCalls(t *testing.T) {
 	journal.SaveTraceFunc = func(ctx context.Context, _ string, _ []json.RawMessage) error {
 		return ctx.Err()
 	}
+	// Each run resumes the same turn, whose trace a restart restores.
+	observations := &turnObservations{journal: journal, turnID: "turn-1"}
 	execute := func(code string) (string, error) {
 		t.Helper()
 
 		model, _ := (&toolFactory{baseTools: makeSandboxedTools(sfs, nil)}).assembleTools(&Agent{Permission: permissions})
-		looper := &looper{Journal: journal, observations: &turnObservations{journal: journal, turnID: "turn-1"}, Permissions: permissions, Tools: model, CodeModeHosts: map[string]looperTool{"note": host("note"), "other": host("other"), "drain": drain}}
+		looper := &looper{Journal: journal, observations: observations, Permissions: permissions, Tools: model, CodeModeHosts: map[string]looperTool{"note": host("note"), "other": host("other"), "drain": drain}}
 		ctx := withToolCallContext(base, looper, nil, "call-1")
 
 		raw, err := json.Marshal(map[string]string{"code": code})
@@ -1075,10 +1084,23 @@ func TestExecuteReplaysRecordedHostCalls(t *testing.T) {
 		require.True(t, strings.HasPrefix(key, "turn-1/call/call-1/host/"), key)
 	}
 
+	recorded := slices.Clone(observations.calls)
+
+	summaries := make([]string, 0, 3)
+
+	for _, record := range recorded {
+		require.Equal(t, codeModeCallOK, record.Status)
+
+		summaries = append(summaries, record.Summary)
+	}
+
+	require.ElementsMatch(t, []string{`note{"text":"one"}`, `note{"text":"left"}`, `note{"text":"right"}`}, summaries)
+
 	calls = nil
 
 	require.Equal(t, first, run(script), "a replayed script returns its recorded results")
 	require.Empty(t, calls, "completed host calls and gather branches are not repeated")
+	require.Equal(t, recorded, observations.calls, "a replayed script adds no second record")
 
 	rewrite := func(edit func(*hostCallStep)) {
 		t.Helper()
@@ -1107,11 +1129,13 @@ func TestExecuteReplaysRecordedHostCalls(t *testing.T) {
 
 	require.Empty(t, calls, "a recorded failure is replayed without running the call")
 	require.Contains(t, fmt.Sprint(failed, err), "note failed")
+	require.Equal(t, recorded, observations.calls, "a replayed interruption or failure keeps the first run's record")
 
 	diverged := run("def main():\n    return other(text=\"one\")\n")
 
 	require.Equal(t, []string{`other{"text":"one"}`}, calls, "a recording for a different tool runs live")
 	require.Contains(t, diverged, "other")
+	require.Equal(t, `other{"text":"one"}`, observations.calls[0].Summary, "a call run live replaces its key's record")
 
 	calls = nil
 
@@ -1127,4 +1151,160 @@ func TestExecuteReplaysRecordedHostCalls(t *testing.T) {
 
 	require.Contains(t, run(drainScript), "drained", "a host call running at shutdown finishes and is recorded")
 	require.Empty(t, calls, "the recorded host call is not repeated")
+}
+
+func TestExecuteRecordsEachCommand(t *testing.T) {
+	root, err := os.OpenRoot(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.MkdirAll(".tmp/shell", 0o700))
+	require.NoError(t, root.WriteFile("notes.txt", []byte("alpha\nbeta\n"), 0o600))
+
+	shellTemp := testShellTempConfig(t, root, filepath.Join(root.Name(), ".tmp", "shell"))
+	url := startRocketCodeMCPHTTPServer(t, func(server *mcp.Server) {
+		for _, name := range []string{"checked", "danger", "risky"} {
+			mcp.AddTool(server, &mcp.Tool{Name: name}, func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
+				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: name + " said\nhello\n"}}}, nil, nil
+			})
+		}
+	})
+	reg, err := mcpclient.New(root.Name(), map[string]mcpclient.ServerConfig{"demo": {URL: url}})
+	require.NoError(t, err)
+
+	loop := testLooper(mockResponses())
+	outputs := map[string]string{"long": "x" + strings.Repeat("é", 150), "nul": "a\x00" + strings.Repeat("b", 2000), "invalid": "\xff" + strings.Repeat("c", 1024)}
+	emit := testLooperTool("emit")
+	emit.codeModeOnly = true
+	emit.Call = func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
+		var args struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return ToolResult{}, fmt.Errorf("decode emit args: %w", err)
+		}
+
+		switch args.Text {
+		case "fail":
+			return ToolResult{}, errors.New("first line\nboom")
+		case "peek": // The call reports its own record while it runs.
+			loop.observations.mu.Lock()
+			defer loop.observations.mu.Unlock()
+
+			for _, record := range loop.observations.calls {
+				if record.Key == ToolCallKey(ctx) {
+					return TextToolResult(string(record.Status)), nil
+				}
+			}
+		}
+
+		return TextToolResult(outputs[args.Text]), nil
+	}
+	probe := testLooperTool("probe")
+	probe.codeModeOnly = true
+	probe.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+		return TextToolResult("probed"), nil
+	}
+
+	base := makeSandboxedTools(&sandboxedFileSystem{root: root}, newSandboxedShellSystem(root, &shellTemp, nil, DefaultShellCommand))
+	base["emit"], base["probe"] = emit, probe
+
+	const rules = "rocketclaw: {code_mode_approve: auto}\nbash: {'*': allow, 'rm *': deny}\nread: allow\nemit: allow\nprobe: auto\nmcp: {'demo.*': allow, 'demo.checked': auto, 'demo.risky': auto"
+
+	loop.agent = Agent{Name: "main", Permission: parsePermissionYAML(t, rules+"}")}
+	loop.Tools, loop.CodeModeHosts = (&toolFactory{mcpRegistry: reg, baseTools: base}).assembleTools(&loop.agent)
+	// The gate refuses an MCP tool the script could list, as after a permission change.
+	loop.Permissions = parsePermissionYAML(t, rules+", 'demo.danger': deny}")
+	loop.AutoApprovePermissions = true
+	loop.observations = &turnObservations{journal: InertJournal{}, turnID: "turn"}
+	loop.PermissionReviewer = &mockPermissionReviewer{reviewPermissionFunc: func(_ context.Context, request *permissionReviewRequest, _ chan<- ChatResponse) permissionReviewDecision {
+		switch {
+		case request.Permission == "rocketclaw":
+			return permissionReviewDecision{Outcome: permissionReviewOutcomeAllow, Rationale: "script ok"}
+		case strings.Contains(request.RawArguments, "bad") || slices.Contains(request.Subjects, "demo.risky"):
+			return permissionReviewDecision{Outcome: permissionReviewOutcomeDeny, Rationale: "too risky"}
+		}
+
+		return permissionReviewDecision{Outcome: permissionReviewOutcomeAllow, Rationale: "looks safe"}
+	}}
+
+	scripts := map[string]string{
+		"main": `def main():
+    bash(command=r'''printf 'one\ntwo\nthree\n\n\n' ''')
+    bash(command=r'''echo failed; exit 3''')
+    read(filePath="notes.txt")
+    emit(text="long")
+    emit(text="nul")
+    emit(text="invalid")
+    emit(text="big", pad="x" + "é" * 3000)
+    emit(text="peek")
+    probe(text="fine")
+    demo_checked()
+    return "done"
+`,
+		"rule-denied":         "def main():\n    return bash(command=r'''rm notes.txt''')\n",
+		"approver-denied":     "def main():\n    return probe(text=\"bad\")\n",
+		"failed":              "def main():\n    return emit(text=\"fail\")\n",
+		"mcp-rule-denied":     "def main():\n    return demo_danger()\n",
+		"mcp-approver-denied": "def main():\n    return demo_risky()\n",
+		"cap":                 "def main():\n    for i in range(201):\n        emit(text=\"x\")\n    return \"done\"\n",
+	}
+
+	calls := make([]responses.ResponseFunctionToolCall, 0, len(scripts))
+
+	for _, id := range slices.Sorted(maps.Keys(scripts)) {
+		raw, err := json.Marshal(executeParams{Code: scripts[id]})
+		require.NoError(t, err)
+
+		calls = append(calls, testFunctionCall(id, id, executeToolName, string(raw)))
+	}
+
+	_, _, err = loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", calls), nil, nil)
+	require.NoError(t, err)
+
+	records := map[string][]CodeModeCall{}
+	for _, record := range loop.observations.calls {
+		records[record.ParentCallID] = append(records[record.ParentCallID], record)
+	}
+
+	record := func(parent string, index int, name, arguments string, status codeModeCallStatus, summary string, outcome permissionReviewOutcome, reason string) CodeModeCall {
+		return CodeModeCall{Type: codeModeCallTraceType, ParentCallID: parent, Key: fmt.Sprintf("turn/call/%s/host/%d", parent, index), Name: name, Arguments: arguments, Status: status, Summary: summary, Outcome: outcome, Reason: reason}
+	}
+	review := func(parent string) CodeModeCall {
+		return CodeModeCall{Type: codeModeReviewTraceType, ParentCallID: parent, Key: "turn/call/" + parent, Outcome: permissionReviewOutcomeAllow, Reason: "script ok"}
+	}
+	reviewDenied := "tool call denied: automatic permission review rejected the action: too risky. Choose a different action."
+
+	require.Equal(t, []CodeModeCall{
+		review("main"),
+		record("main", 0, "bash", `{"command":"printf 'one\\ntwo\\nthree\\n\\n\\n' "}`, codeModeCallOK, "three", "", ""),
+		record("main", 1, "bash", `{"command":"echo failed; exit 3"}`, codeModeCallError, "failed", "", ""),
+		record("main", 2, "read", `{"filePath":"notes.txt"}`, codeModeCallOK, "(End of file - total 2 lines)", "", ""),
+		record("main", 3, "emit", `{"text":"long"}`, codeModeCallOK, "x"+strings.Repeat("é", 99), "", ""),
+		record("main", 4, "emit", `{"text":"nul"}`, codeModeCallOK, "2 KiB of binary output", "", ""),
+		record("main", 5, "emit", `{"text":"invalid"}`, codeModeCallOK, "2 KiB of binary output", "", ""),
+		record("main", 6, "emit", `{"pad":"x`+strings.Repeat("é", 2043)+"…[truncated]", codeModeCallOK, "", "", ""),
+		record("main", 7, "emit", `{"text":"peek"}`, codeModeCallOK, "running", "", ""),
+		record("main", 8, "probe", `{"text":"fine"}`, codeModeCallOK, "probed", permissionReviewOutcomeAllow, "looks safe"),
+		record("main", 9, "demo.checked", `{}`, codeModeCallOK, "hello", permissionReviewOutcomeAllow, "looks safe"),
+	}, records["main"])
+	require.Equal(t, []CodeModeCall{
+		review("rule-denied"),
+		record("rule-denied", 0, "bash", `{"command":"rm notes.txt"}`, codeModeCallDenied, `tool call denied: permission "bash" rejected subject "rm notes.txt" by rule "rm *" => deny. Choose a different action.`, "", ""),
+	}, records["rule-denied"])
+	require.Equal(t, []CodeModeCall{
+		review("approver-denied"),
+		record("approver-denied", 0, "probe", `{"text":"bad"}`, codeModeCallDenied, reviewDenied, permissionReviewOutcomeDeny, "too risky"),
+	}, records["approver-denied"])
+	require.Equal(t, []CodeModeCall{review("failed"), record("failed", 0, "emit", `{"text":"fail"}`, codeModeCallError, "boom", "", "")}, records["failed"])
+	require.Equal(t, []CodeModeCall{
+		review("mcp-rule-denied"),
+		record("mcp-rule-denied", 0, "demo.danger", `{}`, codeModeCallDenied, `tool call denied: permission "mcp" rejected subject "demo.danger" by rule "demo.danger" => deny. Choose a different action.`, "", ""),
+	}, records["mcp-rule-denied"])
+	require.Equal(t, []CodeModeCall{
+		review("mcp-approver-denied"),
+		record("mcp-approver-denied", 0, "demo.risky", `{}`, codeModeCallDenied, reviewDenied, permissionReviewOutcomeDeny, "too risky"),
+	}, records["mcp-approver-denied"])
+
+	require.Len(t, records["cap"], 1+MaxCodeModeCalls, "the 201st call of one script adds no record")
+	require.Equal(t, record("cap", MaxCodeModeCalls-1, "emit", `{"text":"x"}`, codeModeCallOK, "", "", ""), records["cap"][MaxCodeModeCalls])
 }

@@ -363,7 +363,7 @@ func saveRevertTurnDB(ctx context.Context, db stateStoreDB, conversationID, inpu
     SELECT t.id FROM turn t JOIN session_entries e ON e.conversation_id = $1 AND e.id > t.history_anchor_id
     UNION SELECT t.id FROM turn t JOIN active_turns l ON l.conversation_id = $1 AND l.created_at_unix_ns > t.created_at_unix_ns
 )
-SELECT ((t.value::jsonb->'record') - 'response_id') || jsonb_build_object('output_trace', t.output_trace_json::jsonb)
+SELECT ((t.value::jsonb->'record') - 'response_id') || jsonb_build_object('output_trace', turn_trace(t.id, t.output_trace_json))
 FROM turn t LEFT JOIN later USING (id) WHERE later.id IS NULL`, "reverted turn", func(row rowScanner) (rocketcode.SessionEntry, error) {
 		var (
 			raw   []byte

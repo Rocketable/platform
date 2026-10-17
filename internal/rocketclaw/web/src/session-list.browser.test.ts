@@ -2114,7 +2114,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await detailPage.getByText("Planning the check", { exact: true }).waitFor();
     expect(await thought.count()).toBe(1);
     await palette("Timeline: Everything");
-    await detailPage.locator('pre[aria-label="Run · make test"]').waitFor();
+    await detailPage.locator('pre[aria-label="Script"]').waitFor();
     expect(JSON.parse((await detailPage.evaluate(() => localStorage.getItem("timeline-detail")))!).rows.execute).toEqual({ placement: "separate", details: "expanded" });
     // A skill row opens its skill in the right panel, which links to the skill's own page and back to the list.
     await detailPage.getByRole("link", { name: "View skill: release", exact: true }).click();
@@ -2133,7 +2133,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await detailPage.getByRole("link", { name: "release", exact: true }).click();
     await detailPage.waitForURL(`${origin}/skills/release`);
     await detailPage.goto(`${origin}/s/${Buffer.from("timeline-detail").toString("base64url")}`);
-    await detailPage.locator('pre[aria-label="Run · make test"]').waitFor();
+    await detailPage.locator('pre[aria-label="Script"]').waitFor();
     await detailPage.locator("footer").getByRole("button", { name: "Open command palette" }).click();
     const levels = detailPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: /^Timeline: / });
     expect(await levels.filter({ hasText: "Current · " }).allTextContents()).toEqual(["Timeline: EverythingCurrent · Show all activity separately and expanded."]);

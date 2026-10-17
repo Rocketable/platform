@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 )
 
 // PublicProgressKind identifies display-only root activity, never replay input.
@@ -77,6 +81,131 @@ func PublicProgressFromTrace(traces []json.RawMessage) []PublicProgress {
 	return progress
 }
 
+// codeModeCallStatus is the state of one call an Execute script made.
+type codeModeCallStatus string
+
+// A call fails with codeModeCallError, as does a bash command that exits non-zero.
+const (
+	codeModeCallRunning codeModeCallStatus = "running"
+	codeModeCallOK      codeModeCallStatus = "ok"
+	codeModeCallError   codeModeCallStatus = "error"
+	codeModeCallDenied  codeModeCallStatus = "denied"
+)
+
+const (
+	// codeModeCallTraceType records one call an Execute script made, and codeModeReviewTraceType
+	// the approver's whole-script decision. Neither is a model item, so replay never reads them.
+	codeModeCallTraceType   = "rocketcode_code_mode_call"
+	codeModeReviewTraceType = "rocketcode_code_mode_review"
+	// MaxCodeModeCalls bounds an Execute call's records, which History loads with the turn.
+	// ponytail: dropped calls are not counted; counting them needs an overflow record per Execute call.
+	MaxCodeModeCalls         = 200
+	maxCodeModeCallArguments = 4 << 10
+)
+
+// CodeModeCall is a call an Execute script made, as saved on its own while its turn runs, then
+// in the turn trace, and shown in history. It keeps no output beyond Summary. Key is the call's
+// ToolCallKey; Outcome and Reason are set only when the approver ran. A review record, with no
+// Name, holds the approver's decision on the whole script under its Execute call's key.
+type CodeModeCall struct {
+	Type         string                  `json:"type"`
+	ParentCallID string                  `json:"parent_call_id"`
+	Key          string                  `json:"key,omitempty"`
+	Name         string                  `json:"name,omitempty"`
+	Arguments    string                  `json:"arguments,omitempty"`
+	Status       codeModeCallStatus      `json:"status,omitempty"`
+	Summary      string                  `json:"summary,omitempty"`
+	Outcome      permissionReviewOutcome `json:"outcome,omitempty"`
+	Reason       string                  `json:"reason,omitempty"`
+}
+
+// CodeModeCallsFromTrace decodes a turn trace's Code Mode records in trace order.
+func CodeModeCallsFromTrace(traces []json.RawMessage) []CodeModeCall {
+	var calls []CodeModeCall
+
+	for _, raw := range traces {
+		var record CodeModeCall
+		if json.Unmarshal(raw, &record) == nil && (record.Type == codeModeCallTraceType || record.Type == codeModeReviewTraceType) {
+			calls = append(calls, record)
+		}
+	}
+
+	return calls
+}
+
+// String renders the record on one line for an agent reading a session: the call, its status and
+// output summary, and the approver's decision when it ran. A whole-script review has only the decision.
+func (r *CodeModeCall) String() string {
+	text := "[" + r.ParentCallID + "]"
+	if r.Name != "" {
+		text += " " + r.Name + " " + r.Arguments + " -> " + string(r.Status)
+		if r.Summary != "" {
+			text += ": " + r.Summary
+		}
+	}
+
+	if r.Outcome != "" {
+		text += " (approver " + string(r.Outcome) + ": " + r.Reason + ")"
+	}
+
+	return text
+}
+
+// codeModeCallRecord starts the record of the Code Mode call running under ctx.
+func codeModeCallRecord(ctx context.Context, name string, raw json.RawMessage) CodeModeCall {
+	tc, _ := toolCallContextFrom(ctx)
+
+	return CodeModeCall{Type: codeModeCallTraceType, ParentCallID: tc.callID, Key: ToolCallKey(ctx), Name: name, Arguments: clipCodeModeArguments(string(raw)), Status: codeModeCallRunning}
+}
+
+// clipCodeModeArguments bounds a Code Mode call's arguments as shown in history.
+func clipCodeModeArguments(arguments string) string {
+	if len(arguments) > maxCodeModeCallArguments {
+		arguments = strings.ToValidUTF8(arguments[:maxCodeModeCallArguments], "") + "…[truncated]"
+	}
+
+	return arguments
+}
+
+// finish sets the call's final status and summary. The summary is the last non-empty line of what the
+// script received, or of the error, or the size of binary output; never the output itself.
+func (r *CodeModeCall) finish(result ToolResult, errCall error) *CodeModeCall {
+	text := attachmentOutputMessage(result)
+
+	r.Status = codeModeCallOK
+	if bash, ok := result.Data.(BashResult); ok && bash.ErrorCode != "" {
+		r.Status = codeModeCallError
+	}
+
+	if errCall != nil {
+		text, r.Status = errCall.Error(), codeModeCallError
+		if _, ok := errors.AsType[permissionDeniedError](errCall); ok {
+			r.Status = codeModeCallDenied
+		}
+	}
+
+	if !utf8.ValidString(text) || strings.ContainsRune(text, 0) {
+		r.Summary = fmt.Sprintf("%d KiB of binary output", (len(text)+1023)/1024)
+
+		return r
+	}
+
+	text = strings.TrimRightFunc(text, unicode.IsSpace)
+	line := text[strings.LastIndexByte(text, '\n')+1:]
+	// read's output closes with a tag; the line before it tells how much was read.
+	if line == "</content>" {
+		text = strings.TrimRightFunc(strings.TrimSuffix(text, line), unicode.IsSpace)
+		line = text[strings.LastIndexByte(text, '\n')+1:]
+	}
+
+	r.Summary = strings.TrimSpace(line)
+	if len(r.Summary) > 200 {
+		r.Summary = strings.ToValidUTF8(r.Summary[:200], "")
+	}
+
+	return r
+}
+
 // turnObservations owns trace merging and all persistence through final closure.
 // Workers submit immutable snapshots; replay stays on the root goroutine.
 type turnObservations struct {
@@ -87,6 +216,11 @@ type turnObservations struct {
 	trace  []json.RawMessage
 	closed bool
 	err    error
+	// reviews holds approver decisions by ToolCallKey until their Code Mode call's record finishes.
+	reviews map[string]permissionReviewDecision
+	// calls holds the turn's Code Mode records in the order they were first saved. The trace never
+	// carries them while the turn runs, so its saves do not rewrite them.
+	calls []CodeModeCall
 }
 
 func (o *turnObservations) observe(ctx context.Context, progress *PublicProgress) error {
@@ -187,6 +321,66 @@ func (o *turnObservations) replaceResponse(ctx context.Context, parentID string,
 	}
 
 	return o.saveTraceLocked(ctx, trace)
+}
+
+// recordCodeModeCall saves a record on its own, as a new one or over the one with its key. A replay
+// from the journal leaves a finished record unchanged, so a resumed script keeps what its first run
+// recorded. A finished call takes the approver decision noted under its key.
+func (o *turnObservations) recordCodeModeCall(ctx context.Context, record *CodeModeCall, replay bool) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	if review, ok := o.reviews[record.Key]; ok && record.Status != codeModeCallRunning {
+		delete(o.reviews, record.Key)
+		record.Outcome, record.Reason = review.Outcome, review.Rationale
+	}
+
+	if o.closed {
+		return nil
+	}
+
+	if o.err != nil {
+		return o.err
+	}
+
+	index, calls := -1, 0
+
+	for i := range o.calls {
+		existing := &o.calls[i]
+		if existing.Type != record.Type || existing.ParentCallID != record.ParentCallID {
+			continue
+		}
+
+		calls++
+
+		if existing.Key == record.Key {
+			index = i
+		}
+	}
+
+	if index >= 0 && replay && o.calls[index].Status != codeModeCallRunning {
+		return nil
+	}
+
+	if index < 0 && record.Type == codeModeCallTraceType && calls >= MaxCodeModeCalls {
+		return nil
+	}
+
+	// Records contain only strings; JSON encoding cannot fail.
+	raw, _ := json.Marshal(record)
+	// Like trace saves, record saves must outlive cancellation of the work they record.
+	if err := o.journal.SaveCodeModeCall(context.WithoutCancel(ctx), o.turnID, record.Key, raw); err != nil {
+		o.err = progressPersistenceError{err: err}
+		return o.err
+	}
+
+	if index < 0 {
+		o.calls = append(o.calls, *record)
+	} else {
+		o.calls[index] = *record
+	}
+
+	return nil
 }
 
 func (o *turnObservations) saveTraceLocked(ctx context.Context, trace []json.RawMessage) error {

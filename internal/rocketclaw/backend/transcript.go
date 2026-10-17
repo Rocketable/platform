@@ -126,7 +126,7 @@ func observeTranscriptDB(ctx context.Context, db stateStoreDB, conversationID st
     WHERE e.id >= $3 AND ($4::bigint = 0 OR e.id < $4)
     UNION ALL
     SELECT 0, (COALESCE(s.value::jsonb->'record', '{}'::jsonb) || jsonb_build_object(
-        'version', 1, 'type', 'turn', 'turn_id', a.id, 'output_trace', a.output_trace_json::jsonb
+        'version', 1, 'type', 'turn', 'turn_id', a.id, 'output_trace', turn_trace(a.id, a.output_trace_json)
     ))::text, CASE WHEN a.conversation_id = $1 THEN '' ELSE a.conversation_id END, a.conversation_id <> $1,
         a.terminal = '', a.terminal, a.created_at_unix_ns, a.id, 1, a.anchor, -1, a.marker
     FROM readable_turns a LEFT JOIN turn_steps s ON s.conversation_id = a.conversation_id AND s.key = a.id

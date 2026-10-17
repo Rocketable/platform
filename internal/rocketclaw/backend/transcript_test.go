@@ -772,6 +772,80 @@ func TestActiveTurnOutputTracePersistence(t *testing.T) {
 	require.NotContains(t, logs.String(), `"duration_ms":`)
 }
 
+func TestCodeModeCallsSavedOnTheirOwn(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	journal := conversationJournal{store: s, conversationID: "main", log: slog.New(slog.DiscardHandler)}
+	progress := json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"exec","kind":"tool","state":"working","text":"execute"}}`)
+	require.NoError(t, upsertTestTurn(ctx, s, &testCheckpoint{TurnID: "turn-1", ConversationKey: "main", ReplayInput: testSessionEntry("hello", "").ReplayInput, OutputTrace: []json.RawMessage{progress}}))
+
+	next, stop := iter.Pull2(s.Changes(ctx, "main"))
+	defer stop()
+
+	_, err, ok := next()
+	require.True(t, ok)
+	require.NoError(t, err)
+
+	save := func(turnID, host, status string) {
+		t.Helper()
+
+		key := turnID + "/call/exec/host/" + host
+		require.NoError(t, journal.SaveCodeModeCall(ctx, turnID, key, json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"exec","key":"`+key+`","name":"bash","status":"`+status+`"}`)))
+	}
+	calls := func(trace []json.RawMessage) []string {
+		records := harness.CodeModeCallsFromTrace(trace)
+		out := make([]string, 0, len(records))
+
+		for _, call := range records {
+			out = append(out, call.Key+" "+string(call.Status))
+		}
+
+		return out
+	}
+
+	save("turn-1", "10", "running")
+
+	_, err, ok = next()
+	require.True(t, ok, "a record save notifies the chat as a trace save does")
+	require.NoError(t, err)
+
+	before, err := s.ObserveTranscript(ctx, "main", 0, 0, nil)
+	require.NoError(t, err)
+	save("turn-1", "2", "running")
+	save("turn-1", "10", "ok")
+	save("turn-1/retry/1", "0", "ok")
+
+	saved, err := journal.CodeModeCalls(ctx, "turn-1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"turn-1/call/exec/host/10 ok", "turn-1/call/exec/host/2 running"}, calls(saved), "a turn reads its own records in the order first saved")
+
+	entries, err := s.ObserveTranscript(ctx, "main", 0, 0, map[string]string{before[0].Key: before[0].Revision})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.JSONEq(t, string(progress), string(entries[0].Entry.OutputTrace[0]), "a record changes the turn's revision and follows its trace")
+	require.Equal(t, []string{"turn-1/call/exec/host/10 ok", "turn-1/call/exec/host/2 running", "turn-1/retry/1/call/exec/host/0 ok"}, calls(entries[0].Entry.OutputTrace))
+
+	var trace string
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT output_trace_json FROM active_turns WHERE id = 'turn-1'`).Scan(&trace))
+	require.JSONEq(t, `[`+string(progress)+`]`, trace, "records never enter the row's trace")
+
+	require.NoError(t, terminateTestTurn(ctx, s, "turn-1", protocol.TerminalStopped))
+	save("turn-1", "3", "running")
+
+	entries, err = s.ObserveTranscript(ctx, "main", 0, 0, nil)
+	require.NoError(t, err)
+	require.Len(t, calls(entries[0].Entry.OutputTrace), 3, "a stopped turn keeps its records and takes no more")
+
+	require.NoError(t, clearTestTurn(ctx, s, "turn-1"))
+	save("turn-1", "4", "running")
+
+	saved, err = journal.CodeModeCalls(ctx, "turn-1")
+	require.NoError(t, err)
+	require.Empty(t, saved, "a cleared row takes its records with it and cannot be recreated by one")
+}
+
 // testCheckpoint seeds a running turn as a taken request records it: the row
 // holds live trace and the journal root step holds the turn's record.
 type testCheckpoint struct {

@@ -84,6 +84,9 @@ func TestTurnObservationsPersistAfterChildCancellation(t *testing.T) {
 	journal.SaveTraceFunc = func(ctx context.Context, _ string, _ []json.RawMessage) error {
 		return ctx.Err()
 	}
+	journal.SaveCodeModeCallFunc = func(ctx context.Context, _, _ string, _ json.RawMessage) error {
+		return ctx.Err()
+	}
 	owner := turnObservations{journal: journal, turnID: "turn-1"}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -92,11 +95,22 @@ func TestTurnObservationsPersistAfterChildCancellation(t *testing.T) {
 	require.NoError(t, owner.observe(ctx, &progress))
 	require.NoError(t, owner.finishCall(t.Context(), &progress, PublicProgressCompleted))
 	require.NoError(t, owner.replaceResponse(t.Context(), "", []PublicProgress{{ID: "answer-1", Kind: PublicProgressText, State: PublicProgressCompleted, Text: "done"}}))
+	require.NoError(t, owner.recordCodeModeCall(ctx, &CodeModeCall{Type: codeModeCallTraceType, ParentCallID: "execute-1", Key: "turn-1/call/execute-1/host/0", Name: "bash", Status: codeModeCallRunning}, false))
 
 	require.NoError(t, t.Context().Err(), "child cancellation must not cancel the turn")
 	require.Len(t, journal.SaveTraceCalls(), 3)
 	require.Len(t, owner.trace, 2, "tool completion and answer remain stored")
 	require.Equal(t, PublicProgressCompleted, PublicProgressFromTrace(owner.trace)[0].State)
+
+	// The script call record is saved on its own, never with a trace save.
+	saved := journal.SaveCodeModeCallCalls()
+	require.Len(t, saved, 1)
+	require.Equal(t, "turn-1/call/execute-1/host/0", saved[0].Key)
+	require.Equal(t, owner.calls, CodeModeCallsFromTrace([]json.RawMessage{saved[0].Record}))
+
+	for _, call := range journal.SaveTraceCalls() {
+		require.Empty(t, CodeModeCallsFromTrace(call.Trace))
+	}
 }
 
 func TestPublicProgressTraceAllowlist(t *testing.T) {

@@ -18,9 +18,9 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// todayExecuteParameters and todayTaskParameters are the pre-background definitions.
+// todayExecuteParameters and todayTaskParameters are the definitions without background mode.
 const (
-	todayExecuteParameters = `{"additionalProperties":false,"properties":{"code":{"description":"Starlark source defining def main() that returns a string (or JSON-encodable value). Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. execute code is a JSON string — JSON still wraps it in \"...\". Inside that string, bash(command=...) takes r'''...''' only, not Starlark \"...\" or '...'. r\"...\" is raw but single-line; a real newline needs r'''...'''. Example execute argument: {\"code\":\"def main():\\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\\n\"}. $ is valid inside a closed Starlark string, not interpolation. bash(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun. Concurrency: gather([lambda: …], concurrency=16) — one list of zero-arg lambdas, not varargs.","type":"string"}},"required":["code"],"type":"object"}`
+	todayExecuteParameters = `{"additionalProperties":false,"properties":{"code":{"description":"Starlark source defining def main() that returns a string (or JSON-encodable value). Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. execute code is a JSON string — JSON still wraps it in \"...\". Inside that string, bash(command=...) takes r'''...''' only, not Starlark \"...\" or '...'. r\"...\" is raw but single-line; a real newline needs r'''...'''. Example execute argument: {\"code\":\"def main():\\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\\n\"}. $ is valid inside a closed Starlark string, not interpolation. bash(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun. Concurrency: gather([lambda: …], concurrency=16) — one list of zero-arg lambdas, not varargs.","type":"string"},"description":{"description":"A short 3-5 word label for the script, displayed to the user.","type":"string"}},"required":["code","description"],"type":"object"}`
 	todayTaskParameters    = `{"additionalProperties":false,"properties":{"command":{"type":"string"},"description":{"type":"string"},"prompt":{"type":"string"},"subagent_type":{"type":"string"}},"required":["command","description","prompt","subagent_type"],"type":"object"}`
 	backgroundPermissions  = `{rocketclaw: {allow_background: allow}, task: allow, read: allow, probe: auto}`
 )
@@ -69,7 +69,7 @@ func TestBackgroundSchemasFollowPermission(t *testing.T) {
 			require.Equal(t, "boolean", execute.Properties["background"].Type)
 			require.Equal(t, backgroundExecuteParam, execute.Properties["background"].Description)
 			require.Contains(t, execute.Properties["background"].Description, "result_id lasts 7 days")
-			require.Equal(t, backgroundLabelParam, execute.Properties["description"].Description)
+			require.Equal(t, executeDescriptionParam, execute.Properties["description"].Description)
 			require.Equal(t, "boolean", task.Properties["background"].Type)
 			require.Equal(t, backgroundTaskParam, task.Properties["background"].Description)
 
@@ -182,6 +182,7 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 
 				outputs, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-1", tc.tool, tc.args)}), nil, output)
 				require.NoError(t, err)
+				synctest.Wait() // A started script blocks in its first probe.
 
 				text := fmt.Sprintf(backgroundExecuteResult, tc.job.ID)
 				if tc.tool == "task" {
@@ -196,6 +197,7 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 				// The turn moves on and closes; the job keeps its own review context and output sink.
 				loop.permissionReviewInput = nil
 
+				loop.observations.close()
 				close(output)
 
 				nested := 0
@@ -212,8 +214,13 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 
 				if !tc.run {
 					require.Empty(t, detached, "a resumed background call does not rerun its work")
+					require.Empty(t, loop.observations.calls)
+
 					return
 				}
+
+				// The probe running at closure keeps its status; the script's later probe is not recorded.
+				require.Equal(t, []CodeModeCall{{Type: codeModeCallTraceType, ParentCallID: "call-1", Key: "turn/call/call-1/host/0", Name: "probe", Arguments: "{}", Status: codeModeCallRunning}}, loop.observations.calls)
 
 				require.Equal(t, "probedprobed", finished)
 				require.Equal(t, []bool{tc.job.Detached, true}, detached, "the script sees when its job leaves the turn")
@@ -281,9 +288,16 @@ func TestBackgroundForegroundCallKeepsTurnCancellation(t *testing.T) {
 
 				require.Equal(t, tc.cause == ErrShutdown, finished, "a non-resumable host call finishes through shutdown")
 
+				record := CodeModeCall{Type: codeModeCallTraceType, ParentCallID: "call-1", Key: "turn/call/call-1/host/0", Name: "probe", Arguments: "{}", Status: codeModeCallOK, Summary: "probed", Outcome: permissionReviewOutcomeAllow, Reason: "ok"}
+
 				if tc.cause == errTurnInterrupted {
 					require.ErrorIs(t, seen, errTurnInterrupted)
+
+					// A cancelled call does not keep showing as running.
+					record.Status, record.Summary = codeModeCallError, "probe: "+errTurnInterrupted.Error()
 				}
+
+				require.Equal(t, []CodeModeCall{record}, loop.observations.calls)
 			})
 		})
 	}

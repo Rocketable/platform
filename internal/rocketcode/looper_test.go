@@ -205,11 +205,13 @@ func compactParams(mock *mockResponsesAPI) []responses.ResponseCompactParams {
 	return out
 }
 
-// recordingJournal keeps journaled steps in memory so tests can resume from them.
+// recordingJournal keeps journaled steps and Code Mode records in memory so tests can resume from them.
 func recordingJournal() *mockJournal {
 	var mu sync.Mutex
 
 	steps := map[string]json.RawMessage{}
+	// keys holds Code Mode record keys in the order first saved.
+	keys, records := []string{}, map[string]json.RawMessage{}
 
 	return &mockJournal{
 		LoadFunc: func(_ context.Context, key string) (json.RawMessage, bool, error) {
@@ -229,6 +231,32 @@ func recordingJournal() *mockJournal {
 			return nil
 		},
 		SaveTraceFunc: func(context.Context, string, []json.RawMessage) error { return nil },
+		SaveCodeModeCallFunc: func(_ context.Context, _, key string, record json.RawMessage) error {
+			mu.Lock()
+			defer mu.Unlock()
+
+			if _, ok := records[key]; !ok {
+				keys = append(keys, key)
+			}
+
+			records[key] = slices.Clone(record)
+
+			return nil
+		},
+		CodeModeCallsFunc: func(_ context.Context, turnID string) ([]json.RawMessage, error) {
+			mu.Lock()
+			defer mu.Unlock()
+
+			var saved []json.RawMessage
+
+			for _, key := range keys {
+				if strings.HasPrefix(key, turnID+"/call/") {
+					saved = append(saved, records[key])
+				}
+			}
+
+			return saved, nil
+		},
 	}
 }
 
@@ -3033,6 +3061,44 @@ func TestLooperResumedFinalAnswerSkipsModelCall(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, got)
 	require.Empty(t, newParams(mock), "a recorded final answer finishes without calling the model")
+}
+
+func TestLooperResumedTurnKeepsCodeModeCalls(t *testing.T) {
+	journal := recordingJournal()
+	ctx, cancel := context.WithCancel(t.Context())
+	cut := testLooper(mockResponseFunc(func(context.Context, *responses.ResponseNewParams) (*responses.Response, error) {
+		cancel()
+		return nil, context.Canceled
+	}))
+	_, err := runJournaledTurn(ctx, cut, journal, "question")
+	require.ErrorContains(t, err, "request response")
+
+	// The cut-off run had saved a script call record on its own.
+	record := CodeModeCall{Type: codeModeCallTraceType, ParentCallID: "exec", Key: "turn-1/call/exec/host/0", Name: "bash", Arguments: `{"command":"ls"}`, Status: codeModeCallOK, Summary: "go.mod"}
+	raw, err := json.Marshal(&record)
+	require.NoError(t, err)
+	require.NoError(t, journal.SaveCodeModeCall(t.Context(), "turn-1", record.Key, raw))
+
+	output := make(chan ChatResponse, 20)
+	input := make(chan PromptInput, 1)
+	prompt := testPromptInput(PromptInputRoleUser, "question", output)
+
+	prompt.TurnID = "turn-1"
+	input <- prompt
+
+	close(input)
+
+	resumed := testLooper(mockResponses(responseWithMessage("resp-final", "answer")))
+	resumed.Journal = journal
+
+	var saved []SessionEntry
+
+	require.NoError(t, resumed.Loop(t.Context(), input, emptySession(), func(entry SessionEntry) error {
+		saved = append(saved, entry)
+		return nil
+	}, make(chan os.Signal, 1)))
+	require.Len(t, saved, 1)
+	require.Equal(t, []CodeModeCall{record}, CodeModeCallsFromTrace(saved[0].OutputTrace), "the finished turn keeps a record saved before its restart")
 }
 
 func TestLooperPrintsCommentaryResponses(t *testing.T) {

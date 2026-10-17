@@ -334,6 +334,15 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 
 func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse) error {
 	response.ReviewRationales = make(map[string]string)
+	// Execute calls saved before their scripts' calls were recorded list the calls their reviews checked.
+	unrecorded := make(map[string]*TranscriptEvent)
+
+	for _, event := range response.Messages {
+		if event.ToolName == "execute" && len(event.CodeModeCalls) == 0 && event.ScriptReason == "" {
+			unrecorded[event.Review] = event
+		}
+	}
+
 	for _, review := range response.Delegations {
 		if !strings.Contains(review[strings.LastIndexByte(review, '/')+1:], "-review-") {
 			continue
@@ -346,9 +355,21 @@ func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse
 
 		var rationales []string
 
+		script := unrecorded[review]
+
 		for i := range entries {
-			if rationale := entries[i].Entry.PermissionReviewRationale(); rationale != "" {
-				rationales = append(rationales, rationale)
+			decision := entries[i].Entry.PermissionReviewDecision()
+			if decision.Rationale != "" {
+				rationales = append(rationales, decision.Rationale)
+			}
+
+			if script == nil {
+				continue
+			}
+
+			// A review without a parsable action is skipped.
+			if call, ok := decision.CodeModeCall(&entries[i].Entry); ok {
+				script.codeModeCall(&call)
 			}
 		}
 
@@ -464,7 +485,7 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 
 	messages = fallbackProgress(entry, progress, replayText, replayResults, replayCalls, conversationID, messages)
 
-	// Files a turn attached show on its final reply; calls made inside its scripts are never kept.
+	// Files a turn attached show on its final reply.
 	if entry.Entry.TurnID == "" {
 		return messages, nil
 	}
@@ -541,7 +562,8 @@ func (e *TranscriptEvent) publicText(content json.RawMessage, id, messageStatus 
 	return messages, nil
 }
 
-// fallbackProgress merges missing observations before their next surviving public identity.
+// fallbackProgress merges missing observations before their next surviving public identity,
+// then attaches each script's recorded calls.
 func fallbackProgress(entry *backend.ObservedSessionEntry, progress []rocketcode.PublicProgress, replayText, replayResults, replayCalls map[string]bool, conversationID string, messages []*TranscriptEvent) []*TranscriptEvent {
 	producer := cmp.Or(entry.SourceConversationID, conversationID)
 
@@ -598,6 +620,15 @@ func fallbackProgress(entry *backend.ObservedSessionEntry, progress []rocketcode
 		messages = slices.Insert(messages, position, event)
 	}
 
+	// A script's calls ride on its Execute call's first event, which a running turn may project
+	// from progress before the call reaches replay.
+	calls := rocketcode.CodeModeCallsFromTrace(entry.Entry.OutputTrace)
+	for i := range calls {
+		if index := slices.IndexFunc(messages, func(message *TranscriptEvent) bool { return message.ToolCallId == calls[i].ParentCallID }); index >= 0 {
+			messages[index].codeModeCall(&calls[i])
+		}
+	}
+
 	return messages
 }
 
@@ -637,6 +668,17 @@ func (e *TranscriptEvent) publicProgress(item *rocketcode.PublicProgress, entry 
 func (e *TranscriptEvent) linkReview(producer string) {
 	if e.ToolName != "" {
 		e.Review = producer + "/" + rocketcode.ReviewKey(e.TurnId, e.ToolCallId)
+	}
+}
+
+// codeModeCall adds, up to rocketcode.MaxCodeModeCalls, a call an Execute call's script made.
+// An unnamed call carries the whole-script review.
+func (e *TranscriptEvent) codeModeCall(call *rocketcode.CodeModeCall) {
+	switch {
+	case call.Name == "":
+		e.ScriptReason = call.Reason
+	case len(e.CodeModeCalls) < rocketcode.MaxCodeModeCalls:
+		e.CodeModeCalls = append(e.CodeModeCalls, &CodeModeCall{Name: call.Name, Arguments: call.Arguments, Summary: call.Summary, Status: string(call.Status), Outcome: string(call.Outcome), Reason: call.Reason})
 	}
 }
 

@@ -80,7 +80,7 @@ func CheckNestedToolCall(ctx context.Context, toolName string, tool *looperTool,
 	}
 
 	if decision.denied {
-		return errors.New(decision.message)
+		return permissionDeniedError(decision.message)
 	}
 
 	if decision.review == nil {
@@ -91,11 +91,28 @@ func CheckNestedToolCall(ctx context.Context, toolName string, tool *looperTool,
 	decision.review.Review = ReviewKey(tc.observations.turnID, tc.callID)
 
 	reviewDecision := tc.looper.PermissionReviewer.reviewPermission(ctx, decision.review, tc.output)
+
+	// The call's record takes the decision when it finishes; see recordCodeModeCall.
+	tc.observations.mu.Lock()
+	if tc.observations.reviews == nil {
+		tc.observations.reviews = map[string]permissionReviewDecision{}
+	}
+
+	tc.observations.reviews[ToolCallKey(ctx)] = reviewDecision
+	tc.observations.mu.Unlock()
+
 	if reviewDecision.Outcome != permissionReviewOutcomeAllow {
-		return errors.New(formatPermissionReviewDenied(reviewDecision))
+		return permissionDeniedError(formatPermissionReviewDenied(reviewDecision))
 	}
 
 	return nil
+}
+
+// permissionDeniedError is a nested call refused by a permission rule or the approver.
+type permissionDeniedError string
+
+func (e permissionDeniedError) Error() string {
+	return string(e)
 }
 
 // CheckNestedPermission is a single-subject helper used by MCP builtins.

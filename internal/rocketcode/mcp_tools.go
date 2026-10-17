@@ -214,6 +214,7 @@ func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool)
 					"type":        "string",
 					"description": fmt.Sprintf("Starlark source defining def main() that returns a string (or JSON-encodable value). %s Concurrency: gather([lambda: …], concurrency=%d) — one list of zero-arg lambdas, not varargs.", codeModeRawStringRule, codemode.DefaultConcurrency),
 				},
+				"description": map[string]any{"type": "string", "description": executeDescriptionParam},
 			}),
 			Permission:         "rocketclaw",
 			resumable:          true,
@@ -347,7 +348,17 @@ func callExecute(ctx context.Context, registry *mcpclient.Registry, permissions 
 
 	out, errRun := codemode.Run(ctx, params.Code, mcpTools,
 		func(ctx context.Context, subject string, args map[string]any) error {
-			return CheckNestedPermission(ctx, executeToolName, mcpPermissionBucket, subject, args)
+			errCheck := CheckNestedPermission(ctx, executeToolName, mcpPermissionBucket, subject, args)
+			if errCheck == nil {
+				return nil
+			}
+
+			// A refused MCP call never reaches recordHostCall. CheckNestedPermission already encoded its args.
+			raw, _ := json.Marshal(args)
+			tc, _ := toolCallContextFrom(ctx)
+			record := codeModeCallRecord(ctx, subject, raw)
+
+			return errors.Join(errCheck, tc.observations.recordCodeModeCall(ctx, record.finish(ToolResult{}, errCheck), false))
 		},
 		mcpCall,
 		emitNestedExecuteToolDiagnostic,
@@ -818,6 +829,7 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 	sum := sha256.Sum256(raw)
 	key := ToolCallKey(ctx)
 	want := hostCallStep{Name: name, Hash: hex.EncodeToString(sum[:])}
+	record := codeModeCallRecord(ctx, name, raw)
 
 	var step hostCallStep
 
@@ -829,17 +841,23 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 	if found && step.Name == want.Name && step.Hash == want.Hash {
 		switch {
 		case step.Err != "":
-			return ToolResult{}, errors.New(step.Err)
+			errStep := errors.New(step.Err)
+
+			return ToolResult{}, errors.Join(errStep, tc.observations.recordCodeModeCall(ctx, record.finish(ToolResult{}, errStep), true))
 		case step.Done:
 			result := TextToolResult(step.Output)
 			if step.Bash != nil {
 				result.Data = *step.Bash
 			}
 
-			return result, nil
+			return result, tc.observations.recordCodeModeCall(ctx, record.finish(result, nil), true)
 		case !resumable:
-			return ToolResult{}, errHostCallInterrupted
+			return ToolResult{}, errors.Join(errHostCallInterrupted, tc.observations.recordCodeModeCall(ctx, record.finish(ToolResult{}, errHostCallInterrupted), true))
 		}
+	}
+
+	if err := tc.observations.recordCodeModeCall(ctx, &record, false); err != nil {
+		return ToolResult{}, err
 	}
 
 	if err := saveStep(ctx, tc.looper.Journal, key, &want); err != nil {
@@ -851,7 +869,8 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 
 	result, errRun := run(runCtx)
 	if errRun != nil && runCtx.Err() != nil {
-		return result, errRun
+		// A cancelled call is not journaled, so a resumed turn runs it again and replaces this record.
+		return result, errors.Join(errRun, tc.observations.recordCodeModeCall(ctx, record.finish(result, errRun), false))
 	}
 
 	want.Done, want.Output = true, attachmentOutputMessage(result)
@@ -863,7 +882,7 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 		want.Err = errRun.Error()
 	}
 
-	return result, errors.Join(errRun, saveStep(ctx, tc.looper.Journal, key, &want))
+	return result, errors.Join(errRun, saveStep(ctx, tc.looper.Journal, key, &want), tc.observations.recordCodeModeCall(ctx, record.finish(result, errRun), false))
 }
 
 // emitNestedExecuteToolDiagnostic reports a nested code-mode tool call into thinking traces.

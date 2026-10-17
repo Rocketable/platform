@@ -33,6 +33,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestPublicProgressRealBrowser(t *testing.T) {
@@ -1006,4 +1007,217 @@ func TestHistoryPublicProgress(t *testing.T) {
 		require.False(t, last.Complete)
 		require.False(t, view.Running)
 	}
+}
+
+type testPlannedAction struct {
+	ToolName     string   `json:"tool_name"`
+	Permission   string   `json:"permission"`
+	RawArguments string   `json:"raw_arguments"`
+	Subjects     []string `json:"subjects"`
+}
+
+// testReviewEntry saves a review as the approver does: its prompt ends with the planned action
+// and its final answer holds the decision.
+func testReviewEntry(tb testing.TB, transcript string, action *testPlannedAction, rationale string) *rocketcode.SessionEntry {
+	tb.Helper()
+
+	type part struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+
+	planned, err := json.Marshal(action)
+	require.NoError(tb, err)
+	prompt, err := json.Marshal(struct {
+		Type    string `json:"type"`
+		Role    string `json:"role"`
+		Content []part `json:"content"`
+	}{"message", "user", []part{{"input_text", transcript + "Planned action JSON:\n" + string(planned) + "\n>>> APPROVAL REQUEST END\n"}}})
+	require.NoError(tb, err)
+	decision, err := json.Marshal(struct {
+		Outcome   string `json:"outcome"`
+		Rationale string `json:"rationale"`
+	}{"allow", rationale})
+	require.NoError(tb, err)
+	answer, err := json.Marshal(struct {
+		Type    string `json:"type"`
+		Role    string `json:"role"`
+		Phase   string `json:"phase"`
+		Content string `json:"content"`
+	}{"message", "assistant", "final_answer", string(decision)})
+	require.NoError(tb, err)
+
+	return &rocketcode.SessionEntry{Type: "turn", TurnID: "review", ReplayInput: []json.RawMessage{prompt, answer}}
+}
+
+func testCallItems(name string, ids ...string) []json.RawMessage {
+	items := make([]json.RawMessage, 0, 2*len(ids))
+	for _, id := range ids {
+		items = append(items, json.RawMessage(`{"type":"function_call","call_id":"`+id+`","name":"`+name+`","arguments":"{}"}`), json.RawMessage(`{"type":"function_call_output","call_id":"`+id+`","output":"`+id+` result"}`))
+	}
+
+	return items
+}
+
+func TestHistoryCodeModeCalls(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	seeded := openTestTurns(t, dsn)
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg), usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+
+	review := func(callID string, entries ...*rocketcode.SessionEntry) {
+		for _, entry := range entries {
+			_, err := sessions.AppendEntryID(ctx, "chat/"+rocketcode.ReviewKey("turn", callID), entry)
+			require.NoError(t, err)
+		}
+	}
+	script := &testPlannedAction{"execute", "rocketclaw", `{"code":"def main():\n    return bash(command=\"ls\")"}`, []string{"code_mode_approve"}}
+	big := `{"command":"echo ` + strings.Repeat("é", 2100) + `"}`
+	clipped := big[:4095] + "…[truncated]" // 4096 bytes would split an é.
+
+	// A new-format call's reviews are never parsed: its rows and reason come from its records.
+	review("new", testReviewEntry(t, "", script, "PARSED SCRIPT REASON"), testReviewEntry(t, "", &testPlannedAction{"bash", "bash", `{"command":"PARSED"}`, []string{"PARSED"}}, "checked"))
+	review("old",
+		testReviewEntry(t, "Earlier transcript.\n", script, "script ok"),
+		testReviewEntry(t, "", &testPlannedAction{"bash", "bash", `{"command":"ls -la"}`, []string{"ls -la"}}, "ls is safe"),
+		testReviewEntry(t, "", &testPlannedAction{"bash", "bash", big, []string{"echo"}}, "echo is safe"),
+		testReviewEntry(t, "", &testPlannedAction{"execute", "mcp", `{"query":"is:open"}`, []string{"github.search_issues"}}, "search is read-only"))
+
+	broken := testReviewEntry(t, "", script, "unparsable action")
+	broken.ReplayInput[0] = json.RawMessage(strings.ReplaceAll(string(broken.ReplayInput[0]), "Planned action JSON:", "missing"))
+	review("broken", broken)
+
+	capped := make([]*rocketcode.SessionEntry, 0, 201)
+	for i := range 201 {
+		capped = append(capped, testReviewEntry(t, "", &testPlannedAction{"bash", "bash", fmt.Sprintf(`{"command":"echo %d"}`, i), nil}, "fine"))
+	}
+
+	review("capped", capped...)
+	// A top-level review saved over HTTP keeps no progress trace.
+	review("top", testReviewEntry(t, "", &testPlannedAction{"bash", "bash", `{"command":"ls"}`, []string{"ls"}}, "top is safe"))
+
+	replay := append(append([]json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"ask"}`)}, testCallItems("execute", "new", "old", "broken", "capped")...), testCallItems("bash", "top")...)
+	_, err = sessions.AppendEntryID(ctx, "chat", &rocketcode.SessionEntry{Type: "turn", TurnID: "turn", ReplayInput: replay, OutputTrace: []json.RawMessage{
+		json.RawMessage(`{"type":"rocketcode_code_mode_review","parent_call_id":"new","outcome":"allow","reason":"script reason"}`),
+		json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"new","key":"turn/call/new/host/0","name":"bash","arguments":"{\"command\":\"printf one\"}","status":"ok","summary":"one"}`),
+		json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"new","key":"turn/call/new/host/1","name":"read","arguments":"{\"filePath\":\"a.txt\"}","status":"ok","summary":"(End of file - total 2 lines)"}`),
+		json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"new","key":"turn/call/new/host/2","name":"bash","arguments":"{\"command\":\"PARSED\"}","status":"denied","summary":"denied","outcome":"deny","reason":"checked"}`),
+	}})
+	require.NoError(t, err)
+
+	view, err := server.history(ctx, &HistoryRequest{Id: "chat"})
+	require.NoError(t, err)
+
+	calls := make(map[string]*TranscriptEvent)
+
+	for _, message := range view.Messages {
+		if message.ToolName != "" {
+			calls[message.ToolCallId] = message
+		} else {
+			require.Empty(t, message.GetCodeModeCalls(), "calls ride only on their Execute call's row")
+		}
+	}
+
+	require.Len(t, calls, 5)
+
+	for id, want := range map[string]*TranscriptEvent{
+		"new": {ScriptReason: "script reason", CodeModeCalls: []*CodeModeCall{
+			{Name: "bash", Arguments: `{"command":"printf one"}`, Status: "ok", Summary: "one"},
+			{Name: "read", Arguments: `{"filePath":"a.txt"}`, Status: "ok", Summary: "(End of file - total 2 lines)"},
+			{Name: "bash", Arguments: `{"command":"PARSED"}`, Status: "denied", Summary: "denied", Outcome: "deny", Reason: "checked"},
+		}},
+		"old": {ScriptReason: "script ok", CodeModeCalls: []*CodeModeCall{
+			{Name: "bash", Arguments: `{"command":"ls -la"}`, Outcome: "allow", Reason: "ls is safe"},
+			{Name: "bash", Arguments: clipped, Outcome: "allow", Reason: "echo is safe"},
+			{Name: "github.search_issues", Arguments: `{"query":"is:open"}`, Outcome: "allow", Reason: "search is read-only"},
+		}},
+		"broken": {},
+		"top":    {},
+	} {
+		got := &TranscriptEvent{ScriptReason: calls[id].GetScriptReason(), CodeModeCalls: calls[id].GetCodeModeCalls()}
+		require.True(t, proto.Equal(want, got), "%s: %v", id, got)
+	}
+
+	require.Len(t, calls["capped"].GetCodeModeCalls(), 200, "an older chat lists at most 200 reviewed calls per script")
+	require.JSONEq(t, `{"command":"echo 199"}`, calls["capped"].GetCodeModeCalls()[199].GetArguments())
+	require.Equal(t, "top is safe", view.ReviewRationales["chat/"+rocketcode.ReviewKey("turn", "top")], "an HTTP review's reason reaches its top-level row")
+	require.Equal(t, "unparsable action", view.ReviewRationales["chat/"+rocketcode.ReviewKey("turn", "broken")])
+
+	// A follow-up poll carries no Execute events, so it has no rows to fill from reviews.
+	poll, err := server.history(ctx, &HistoryRequest{Id: "chat", Revision: view.Revision})
+	require.NoError(t, err)
+	require.Empty(t, poll.Messages)
+	require.Equal(t, view.ReviewRationales, poll.ReviewRationales)
+
+	// A running turn shows its script's calls, each saved on its own row, before the Execute call reaches replay.
+	require.NoError(t, sessions.UpsertThread("live", backend.ThreadState{Agent: "main"}))
+	require.NoError(t, seeded.UpsertActiveTurn(ctx, &testCheckpoint{TurnID: "live-turn", ConversationKey: "live", Agent: "main", ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","content":"ask"}`),
+	}, OutputTrace: []json.RawMessage{
+		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"run","parent_id":"live-turn/response","kind":"tool","state":"working"}}`),
+	}}))
+	_, err = seeded.db.ExecContext(ctx, `INSERT INTO code_mode_calls (turn_id, key, record) VALUES ('live-turn', 'live-turn/call/run/host/0', $1)`,
+		`{"type":"rocketcode_code_mode_call","parent_call_id":"run","key":"live-turn/call/run/host/0","name":"bash","arguments":"{\"command\":\"sleep 9\"}","status":"running"}`)
+	require.NoError(t, err)
+
+	live, err := server.history(ctx, &HistoryRequest{Id: "live"})
+	require.NoError(t, err)
+	require.True(t, live.Running)
+
+	running := slices.IndexFunc(live.Messages, func(message *TranscriptEvent) bool { return message.ToolCallId == "run" })
+	require.GreaterOrEqual(t, running, 0)
+	require.True(t, proto.Equal(&CodeModeCall{Name: "bash", Arguments: `{"command":"sleep 9"}`, Status: "running"}, live.Messages[running].GetCodeModeCalls()[0]), "%v", live.Messages[running])
+}
+
+// BenchmarkHistoryReviewedScripts reads a chat of 100 reviewed Execute calls saved before their
+// calls were recorded, each review prompt about 300 KB.
+func BenchmarkHistoryReviewedScripts(b *testing.B) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(b, err)
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: b.TempDir()}
+	sessions, err := backend.NewSessionServiceIn(b.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(b, err)
+	b.Cleanup(func() { require.NoError(b, sessions.Stop()) })
+	require.NoError(b, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg), usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	ctx := metadata.NewIncomingContext(b.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	transcript := strings.Repeat("An earlier turn of the reviewed conversation.\n", 300<<10/46)
+
+	for turn := range 10 {
+		turnID := fmt.Sprintf("turn-%d", turn)
+		ids := make([]string, 10)
+
+		for call := range ids {
+			ids[call] = fmt.Sprintf("call-%d", call)
+			_, err := sessions.AppendEntryID(ctx, "chat/"+rocketcode.ReviewKey(turnID, ids[call]), testReviewEntry(b, transcript, &testPlannedAction{"bash", "bash", `{"command":"ls"}`, []string{"ls"}}, "ls is safe"))
+			require.NoError(b, err)
+		}
+
+		_, err := sessions.AppendEntryID(ctx, "chat", &rocketcode.SessionEntry{Type: "turn", TurnID: turnID, ReplayInput: append([]json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"ask"}`)}, testCallItems("execute", ids...)...)})
+		require.NoError(b, err)
+	}
+
+	cold, err := server.history(ctx, &HistoryRequest{Id: "chat"})
+	require.NoError(b, err)
+	require.Len(b, cold.ReviewRationales, 100)
+
+	b.Run("cold", func(b *testing.B) {
+		for b.Loop() {
+			_, err := server.history(ctx, &HistoryRequest{Id: "chat"})
+			require.NoError(b, err)
+		}
+	})
+	b.Run("poll", func(b *testing.B) {
+		for b.Loop() {
+			poll, err := server.history(ctx, &HistoryRequest{Id: "chat", Revision: cold.Revision})
+			require.NoError(b, err)
+			require.Empty(b, poll.Messages)
+		}
+	})
 }
