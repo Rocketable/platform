@@ -427,6 +427,23 @@ active tab.
   New session alone does not close. Closing with the × button or the menu moves
   keyboard focus to the selected tab.
 - **Reordering.** Drag a tab onto another. With a tab focused, Shift+Arrow moves it.
+  A moved tab joins the group of the tab it lands on, or leaves its group when it
+  lands on an ungrouped tab.
+- **Groups.** Named, colored groups of adjacent tabs, as in Chrome. The tab menu
+  offers **Add to new group** (an unnamed group in the next color, with its
+  editor open and the name field focused), **Add to group "…"** for each other
+  group, and **Remove from group**. A group's header sits before its tabs: a
+  colored chip with the name, or a color dot when unnamed. Clicking it collapses
+  or expands the group. Right-click, Shift+F10, or the header's **…** button opens
+  the editor: name, nine colors, **New tab in group** (moves New session into the
+  group, or opens it there), **Ungroup**, and **Close group**, which closes the
+  members by the usual close rules. On the left, members sit under the header
+  behind a colored rule; on top, they get a colored underline. A tab opened while
+  a grouped tab is active joins that group. Pinned tabs are never grouped:
+  pinning a tab removes it from its group. A collapsed group still shows its
+  active tab, and activating any hidden tab, including with Cmd/Ctrl+[ and ],
+  expands its group. Arrow keys skip hidden tabs. Headers report
+  `aria-expanded`, and grouped tabs name their group in `aria-description`.
 - **Running turns** show a dot where the close button sits. The close button replaces it on hover, on keyboard focus, on the active tab,
   and always on touch screens; on the active tab and on touch screens the dot moves
   before the title instead. Screen readers hear “Turn running”.
@@ -445,6 +462,10 @@ active tab.
   signed-in user. The address is the active tab, so a reload keeps it, and opening
   any URL, including Home (`/`), activates its tab or adds one. Unreadable or
   malformed storage (such as duplicate paths) resets to one tab for the current URL.
+  Each tab's group is a `group` field on its stored tab; group names, colors,
+  and collapsed state are kept under `tab-groups-chrome:<user>`, and groups with
+  no tabs are dropped. Unreadable group storage resets to no groups and keeps
+  every tab open.
   Placement is a browser-wide preference under `tab-placement` (`top` or `left`).
   Titles and running state come live from the session list; a session missing
   from it shows its ID.
