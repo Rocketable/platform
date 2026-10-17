@@ -96,10 +96,7 @@ test("transcript and entry HTTP proxy reach Go", async () => {
       await replyCopy.click();
       expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("answer two");
       expect(await page.locator('[data-slot="message-footer"]').filter({ hasText: "legacy-model" }).count()).toBe(1);
-      const userFooters = page.locator('[data-slot="message"][data-align="end"] [data-slot="message-footer"]');
-      expect(await userFooters.allInnerTexts()).toEqual([""]);
-      expect(await userFooters.getByRole("button", { name: "Show message header", includeHidden: true }).count()).toBe(1);
-      expect(await userFooters.locator(":scope > span").count()).toBe(0);
+      expect(await page.locator('[data-slot="message"][data-align="end"] [data-slot="message-footer"]').count()).toBe(0);
       const user = page.locator('[data-slot="message"][data-align="end"]').filter({ hasText: "human two" });
       expect(await user.locator('[data-slot="bubble-content"] [data-slot="message-author"]').textContent()).toBe("alice");
       expect(await user.locator('[data-slot="message-author"]').isVisible()).toBe(true);
@@ -108,7 +105,7 @@ test("transcript and entry HTTP proxy reach Go", async () => {
       if (width === 390) await user.locator('[data-slot="bubble-content"]').tap();
       else await user.hover();
       await userCopy.waitFor({ state: "visible" });
-      expect(await user.getByRole("button", { name: "Show message header" }).count()).toBe(1);
+      expect(await user.locator('[data-slot="message-actions"] button').evaluateAll((nodes: Element[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["Revert message", "Copy message"]);
       await replyCopy.waitFor({ state: "hidden" });
       await userCopy.click();
       expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("human two");

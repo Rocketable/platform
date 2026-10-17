@@ -77,7 +77,7 @@ test("real child-only changes refresh paired shadow turns through the parent str
     await alignment();
     const denied = await page.request.post(`${url}/api/Prompt`, { data: { id: bindingB.childConversationId, text: "Direct child prompt", messageId: "forbidden" } });
     expect(denied.status()).toBe(403);
-    expect(await page.locator("[data-shadow-cell]").getByRole("button", { name: "Revert message" }).count()).toBe(0);
+    expect(await page.locator("[data-shadow-cell]").getByRole("button", { name: "Revert message", includeHidden: true }).evaluateAll((nodes: Element[]) => nodes.length > 0 && nodes.every((node) => (node as HTMLButtonElement).disabled))).toBe(true);
     expect(streams).toEqual(["parent"]);
     expect(errors).toEqual([]);
     console.log("Witnessed two completed shadow histories, durable paired rows, child-only refresh, one parent stream, and HTTP child-write denial.");

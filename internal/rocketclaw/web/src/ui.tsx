@@ -4,7 +4,7 @@ import { QueryClient, QueryCache, MutationCache, QueryClientProvider, queryOptio
 import { captureException } from "@sentry/react";
 import { Menu } from "@base-ui/react/menu";
 import { Tabs } from "@base-ui/react/tabs";
-import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from "@/components/ui/input-group";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -14,9 +14,9 @@ import { queries, mutations, listSessions, rpc, RPCError } from "./api";
 import { draftContent } from "./drafts";
 import { holdWakeLock, setVoiceSticky, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, TextCursorInput, Undo2, Wrench, X } from "lucide-react";
+import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, TextCursorInput, Undo2, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
-import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
+import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
@@ -1990,27 +1990,43 @@ function MessageFooter({ line, hasSandboxed }: { line: Line; hasSandboxed: boole
   const attribution = [line.agent, model && (line.agent ? `(${model})` : model)].filter(Boolean).join(" ");
   const origin = hasSandboxed && ["sandboxed", "canonical"].includes(line.origin ?? "") ? line.origin : "";
   const text = line.role === "assistant" || line.state ? [attribution, origin].filter(Boolean).join(" - ") : "";
-  return text || line.header ? <div data-slot="message-footer" className="flex max-w-full items-center gap-1 break-words px-3 text-[11px] text-muted-foreground/85 group-has-data-[variant=ghost]/message:px-0">
-    {text ? <span className="min-w-0">{text}</span> : null}
-    {line.header ? <Dialog>
-      <Tooltip>
-        <TooltipTrigger render={<DialogTrigger render={<Button type="button" variant="ghost" size="icon-xs" className="size-11 sm:size-6" />} />} aria-label="Show message header"><Info aria-hidden="true" data-icon="inline-start" /></TooltipTrigger>
-        <TooltipContent className="max-w-[min(24rem,calc(100vw-2rem))] whitespace-pre-wrap [overflow-wrap:anywhere]">{line.header}</TooltipContent>
-      </Tooltip>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
-        <DialogTitle className="mr-8">Message header</DialogTitle>
-        <DialogDescription className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{line.header}</DialogDescription>
-      </DialogContent>
-    </Dialog> : null}
+  return text ? <div data-slot="message-footer" className="flex max-w-full items-center gap-1 break-words px-3 text-[11px] text-muted-foreground/85 group-has-data-[variant=ghost]/message:px-0">
+    <span className="min-w-0">{text}</span>
   </div> : null;
 }
 
+// A stored header shows after the pointer rests on the bubble, or after holding a blank part of it on
+// touch, where holding text still selects it.
+function MessageHeader({ header, children }: { header?: string; children: ReactElement }) {
+  const [open, setOpen] = useState(false);
+  const hold = useRef<ReturnType<typeof setTimeout>>(undefined);
+  if (!header) return children;
+  return <Tooltip open={open} onOpenChange={setOpen}>
+    <TooltipTrigger data-slot="bubble" delay={1500} render={children} onPointerDown={(event) => {
+      if (event.pointerType === "touch" && (event.target as Element).matches('[data-slot="bubble"], [data-slot="bubble-content"], [data-slot="message-author"]')) hold.current = setTimeout(() => setOpen(true), 500);
+    }} onPointerUp={() => clearTimeout(hold.current)} onPointerCancel={() => clearTimeout(hold.current)} />
+    <TooltipContent className="max-w-[min(24rem,calc(100vw-2rem))] whitespace-pre-wrap [overflow-wrap:anywhere]">{header}</TooltipContent>
+  </Tooltip>;
+}
+
+// Revert keeps its place on every user message; where it cannot apply it is disabled and says why.
+// A disabled button takes no pointer events, so its reason sits on the wrapper.
+function RevertButton({ line }: { line: Line }) {
+  const revert = useContext(RevertActions);
+  const revertable = !!revert?.available && !!line.entryKey && !!(line.messageId || line.inputId && line.entryKey === revert.latest);
+  const reason = !revert?.available ? "Revert isn't available in this session" : revertable ? "Revert message" : "This message can't be reverted";
+  return <span className="flex" title={reason}><Button type="button" size="icon-xs" variant="ghost" className="size-11 sm:size-6" aria-label="Revert message" disabled={!revertable || revert!.pending} onClick={() => void revert!.run(line.messageId || line.inputId)}><Undo2 /></Button></span>;
+}
+
+// Copy is always last, with Revert before it on user messages, so the row keeps its shape
+// whether or not the session allows reverting.
 function MessageActions({ line, hasSandboxed }: { line: Line; hasSandboxed: boolean }) {
   const [copied, setCopied] = useState<string>();
   const [error, setError] = useState(false);
-  const revert = useContext(RevertActions);
   return <div data-slot="message-actions" className={cn("invisible flex max-w-full items-center gap-1 group-focus-visible/message:visible [@media(hover:hover)]:group-hover/message:visible [@media(hover:hover)]:group-has-[:focus-visible]/message:visible [@media(hover:none)]:group-focus-within/message:visible", line.role === "user" && "self-end")}>
-    {line.role === "assistant" || line.header ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
+    <MessageFooter line={line} hasSandboxed={hasSandboxed} />
+    <span role="status" className={error ? "text-xs text-destructive" : "sr-only"}>{error ? "Could not copy. Select and copy the text." : copied === line.text ? "Copied" : ""}</span>
+    {line.role === "user" ? <RevertButton line={line} /> : null}
     <Button type="button" size="icon-xs" variant="ghost" aria-label="Copy message" title="Copy message" onClick={async () => {
       setError(false);
       try {
@@ -2020,8 +2036,6 @@ function MessageActions({ line, hasSandboxed }: { line: Line; hasSandboxed: bool
         setError(true);
       }
     }}>{copied === line.text && !error ? <Check /> : <Copy />}</Button>
-    {revert?.available && line.role === "user" && line.entryKey && (line.messageId || line.inputId && line.entryKey === revert.latest) ? <Button type="button" size="icon-xs" variant="ghost" className="size-11 sm:size-6" aria-label="Revert message" title="Revert message" disabled={revert.pending} onClick={() => void revert.run(line.messageId || line.inputId)}><Undo2 /></Button> : null}
-    <span role="status" className={error ? "text-xs text-destructive" : "sr-only"}>{error ? "Could not copy. Select and copy the text." : copied === line.text ? "Copied" : ""}</span>
   </div>;
 }
 
@@ -2131,7 +2145,6 @@ function TranscriptLine({ line, conversationId, hasSandboxed, open }: { line: Li
   if (line.role === "thinking") return <TraceRow key={String(open)} open={open} icon={<Brain />} title="Thought"><div className="whitespace-pre-wrap">{line.text}</div></TraceRow>;
   if (line.role === "developer") return <TraceRow key={String(open)} open={open} icon={<ScrollText />} title="Instructions">
     <CodeBlock size="sm" label="Instructions" text={line.text} />
-    {line.header ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
   </TraceRow>;
   if (line.role === "tool") return <ToolLine key={String(open)} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} open={open} />;
   const align = line.role === "user" ? "end" : undefined;
@@ -2140,13 +2153,13 @@ function TranscriptLine({ line, conversationId, hasSandboxed, open }: { line: Li
       if (event.pointerType === "touch" && !(event.target as Element).closest("button, a, input, textarea, summary")) event.currentTarget.focus({ preventScroll: true, focusVisible: false });
     }}>
       <MessageContent>
-        <Bubble variant={line.role === "user" ? "secondary" : "ghost"} align={align}>
+        <MessageHeader header={line.header}><Bubble variant={line.role === "user" ? "secondary" : "ghost"} align={align}>
           <BubbleContent>
             <MessageAuthor principal={line.principal} role={line.role} />
             <TranscriptText text={line.text} />
           </BubbleContent>
           <MessageAttachments attachments={line.attachments} conversationId={conversationId} />
-        </Bubble>
+        </Bubble></MessageHeader>
         <MessageActions line={line} hasSandboxed={hasSandboxed} />
       </MessageContent>
     </Message>

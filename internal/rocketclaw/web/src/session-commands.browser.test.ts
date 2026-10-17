@@ -111,45 +111,57 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     page.on("pageerror", (error: Error) => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("source")}`);
     const headerMessage = page.locator('[data-message-id="1:0"]');
-    const headerButton = headerMessage.getByRole("button", { name: "Show message header", exact: true, includeHidden: true });
     const copyButton = headerMessage.getByRole("button", { name: "Copy message", exact: true, includeHidden: true });
-    await headerButton.waitFor({ state: "attached" });
-    expect(await headerButton.isVisible()).toBe(false);
+    const revertButton = headerMessage.getByRole("button", { name: "Revert message", exact: true, includeHidden: true });
+    await copyButton.waitFor({ state: "attached" });
     expect(await copyButton.isVisible()).toBe(false);
+    // Copy is always last with Revert before it; a session that cannot revert says why instead of hiding it.
+    expect(await headerMessage.locator('[data-slot="message-actions"] button').evaluateAll((nodes: Element[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["Revert message", "Copy message"]);
+    expect(await revertButton.isDisabled()).toBe(true);
+    expect(await revertButton.locator("..").getAttribute("title")).toBe("Revert isn't available in this session");
     if (width >= 640) await headerMessage.hover();
     else await headerMessage.getByText("First request", { exact: true }).tap();
-    await headerButton.waitFor();
+    await copyButton.waitFor();
     // A tap focuses the message to show its actions; only keyboard focus draws the ring.
     if (width < 640) expect(await headerMessage.evaluate((node: HTMLElement) => document.activeElement === node && getComputedStyle(node).outlineStyle)).toBe("none");
-    expect(await copyButton.isVisible()).toBe(true);
-    expect(await page.getByRole("button", { name: "Show message header", exact: true, includeHidden: true }).count()).toBe(1);
+    const tooltip = page.locator('[data-slot="tooltip-content"]');
+    expect(await tooltip.count()).toBe(0);
+    const bubble = headerMessage.locator('[data-slot="bubble-content"]');
     if (width >= 640) {
-      await headerButton.hover();
-      const tooltip = page.locator('[data-slot="tooltip-content"]');
+      // The header waits for the pointer to rest on the bubble.
+      const started = Date.now();
+      await bubble.hover();
       await tooltip.waitFor();
-      expect(await tooltip.textContent()).toBe(header);
-      await page.keyboard.press("Escape");
-      await tooltip.waitFor({ state: "hidden" });
+      expect(Date.now() - started).toBeGreaterThanOrEqual(1400);
+    } else {
+      // Holding text still selects it; holding blank bubble space shows the header.
+      const cdp = await page.context().newCDPSession(page);
+      const hold = async (x: number, y: number) => {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+        const started = Date.now();
+        await tooltip.waitFor({ timeout: 1000 }).catch(() => {});
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        return Date.now() - started;
+      };
+      const text = (await headerMessage.getByText("First request", { exact: true }).boundingBox())!;
+      await hold(text.x + 4, text.y + text.height / 2);
+      expect(await tooltip.count()).toBe(0);
+      const box = (await bubble.boundingBox())!;
+      expect(await hold(box.x + 4, box.y + box.height / 2)).toBeGreaterThanOrEqual(450);
     }
-    await headerButton.click();
-    const headerDialog = page.getByRole("dialog", { name: "Message header", exact: true });
-    await headerDialog.waitFor();
-    expect(await headerDialog.locator('[data-slot="dialog-description"]').textContent()).toBe(header);
-    expect(await headerDialog.evaluate((node: HTMLElement) => node.scrollWidth <= node.clientWidth)).toBe(true);
-    await page.keyboard.press("Escape");
-    await headerDialog.waitFor({ state: "hidden" });
+    expect(await tooltip.textContent()).toBe(header);
+    expect(await tooltip.evaluate((node: HTMLElement) => node.getBoundingClientRect().right <= innerWidth)).toBe(true);
+    if (width >= 640) await page.keyboard.press("Escape");
+    else await page.locator("textarea").tap();
+    await tooltip.waitFor({ state: "hidden" });
     await page.mouse.move(0, 0);
     await page.locator("textarea").focus();
-    await headerButton.waitFor({ state: "hidden" });
-    expect(await copyButton.isVisible()).toBe(false);
+    await copyButton.waitFor({ state: "hidden" });
     await headerMessage.focus();
-    await headerButton.waitFor();
+    await copyButton.waitFor();
+    // The disabled Revert takes no focus, so Tab reaches Copy.
     await page.keyboard.press("Tab");
-    expect(await headerButton.evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
-    await page.keyboard.press("Enter");
-    await headerDialog.waitFor();
-    await page.keyboard.press("Escape");
-    await headerDialog.waitFor({ state: "hidden" });
+    expect(await copyButton.evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
     const composer = page.locator("textarea");
     await composer.fill("$fork");
     await composer.press("Enter");
