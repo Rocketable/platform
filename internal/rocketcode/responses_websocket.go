@@ -14,7 +14,6 @@ import (
 	"sync"
 
 	"github.com/gorilla/websocket"
-	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 )
@@ -119,10 +118,6 @@ func (o *responseObservations) observeResponse(ctx context.Context, event *respo
 type responsesWebsocketDoer struct {
 	mu   sync.Mutex
 	conn *websocket.Conn
-}
-
-func newResponsesAPI(client *openai.Client) responseServiceClient {
-	return responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}}
 }
 
 func (d *responsesWebsocketDoer) middleware(req *http.Request, next option.MiddlewareNext, observer responseObserver) (*http.Response, error) {
