@@ -42,8 +42,6 @@ func testExternalMCPRelay(text string, attachments []protocol.OutboundAttachment
 
 func TestSlackImageHelpers(t *testing.T) {
 	assert.Equal(t, "photo (image/png)", slackFileDescriptor(&slack.File{Name: " photo ", Mimetype: " image/png "}))
-	assert.Equal(t, "https://example.com/download", slackFileDownloadURL(&slack.File{URLPrivate: "https://example.com/private", URLPrivateDownload: " https://example.com/download "}))
-	assert.Equal(t, "https://example.com/private", slackFileDownloadURL(&slack.File{URLPrivate: " https://example.com/private "}))
 	assert.Equal(t, "title", slackFileDisplayName(&slack.File{Title: " title ", ID: "F123"}))
 	assert.Equal(t, "F123", slackFileDisplayName(&slack.File{ID: " F123 "}))
 	assert.Equal(t, "unnamed file", slackFileDisplayName(&slack.File{}))
@@ -359,8 +357,8 @@ func TestDownloadSlackAttachmentsDownloadsImageFilesAsAttachments(t *testing.T) 
 
 	connector := newTestConnector(server.URL)
 	files := []slack.File{
-		{Name: "photo.png", Mimetype: "image/png", Size: len(imageData), URLPrivateDownload: server.URL + "/photo.png"},
-		{Name: "not-image.png", Mimetype: "image/png", Size: len("not an image"), URLPrivateDownload: server.URL + "/not-image.png"},
+		{Name: "photo.png", Mimetype: "image/png", Size: len(imageData), URLPrivateDownload: " " + server.URL + "/photo.png ", URLPrivate: server.URL + "/not-image.png"},
+		{Name: "not-image.png", Mimetype: "image/png", Size: len("not an image"), URLPrivate: " " + server.URL + "/not-image.png "},
 	}
 
 	attachments, textAttachments, presence, warnings := connector.downloadSlackAttachments(context.Background(), files)
