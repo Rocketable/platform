@@ -52,7 +52,7 @@ func newShadowTestStore(t *testing.T) (*SessionService, *os.Root) {
 	for _, name := range []string{"main", "main/a", "main/z"} {
 		file := filepath.Join(config.DefaultRuntimeDir, "agents", name+".md")
 		require.NoError(t, root.MkdirAll(filepath.Dir(file), 0o700))
-		require.NoError(t, root.WriteFile(file, []byte("---\nmodel: gpt-5.5\n---\nPrompt "+name), 0o600))
+		require.NoError(t, root.WriteFile(file, []byte("---\nmodel: gpt-6.1-sol\n---\nPrompt "+name), 0o600))
 	}
 
 	return newTestSessionServiceAt(t, workspace), root
@@ -1392,7 +1392,7 @@ func TestShadowAdmissionPinsAgent(t *testing.T) {
 	require.Equal(t, "main", result.attribution.Agent)
 	// Let the parent and both shadows reach the provider before shutdown cancels their requests.
 	for range 3 {
-		require.Equal(t, "gpt-5.5", <-requests)
+		require.Equal(t, "gpt-6.1-sol", <-requests)
 	}
 }
 
@@ -1511,7 +1511,7 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &snapshot))
 	// Change the definition after capture, before either loop journals the input.
-	require.NoError(t, root.WriteFile(filepath.Join(config.DefaultRuntimeDir, "agents", "main.md"), []byte("---\nmodel: gpt-5.5\nadditionalInstructions: new frame\npermission: {}\n---\nnew system"), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(config.DefaultRuntimeDir, "agents", "main.md"), []byte("---\nmodel: gpt-6.1-sol\nadditionalInstructions: new frame\npermission: {}\n---\nnew system"), 0o600))
 
 	changed := replayInputForMessage("developer", "changed metadata must not replace captured metadata")
 	_, err = store.AppendEntryID(t.Context(), "parent", &rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: changed})

@@ -640,7 +640,7 @@ func TestSearchMessagesFindsHistoryMessages(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\nmodel: gpt-5.5\n---\nHelp."), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\nmodel: gpt-6.1-sol\n---\nHelp."), 0o600))
 
 	server := &Server{
 		backend:   withoutBackgroundJobs(),
@@ -756,11 +756,11 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
 
 	for _, name := range []string{"main", "planner", "selected"} {
-		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", name+".md"), []byte("---\nmodel: gpt-5.5\n---\nHelp."), 0o600))
+		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", name+".md"), []byte("---\nmodel: gpt-6.1-sol\n---\nHelp."), 0o600))
 	}
 
 	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents", "main"), 0o700))
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main", "alternative.md"), []byte("---\nmodel: gpt-5.5\n---\nCompare."), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main", "alternative.md"), []byte("---\nmodel: gpt-6.1-sol\n---\nCompare."), 0o600))
 
 	rt := &backend.Runtime{Sessions: sessions}
 
@@ -1766,8 +1766,8 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 	}
 
 	cfg.Overlays = []string{"local-overlay"}
-	cfg.Models = map[string]string{"zeta": "gpt-5.5", "alpha": "gpt-5.4"}
-	cfg.Logging.Level, cfg.AutoApproverModel = "info", "gpt-5.5"
+	cfg.Models = map[string]string{"zeta": "gpt-6.1-sol", "alpha": "gpt-5.4"}
+	cfg.Logging.Level, cfg.AutoApproverModel = "info", "gpt-6.1-sol"
 	cfg.MCPExternal.Enabled, cfg.Instrumentation.Enabled = true, true
 	cfg.OpenAI.APIKey, cfg.OpenAI.RocketCodeAuth = "secret-provider-key", "secret-auth-path"
 	cfg.Slack.BotToken, cfg.Slack.AppToken = "secret-bot-token", "secret-app-token"
@@ -1782,7 +1782,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 	view, err := invoke[ListConfigResponse](ctx, connection, "ListConfig", &ListConfigRequest{})
 	require.NoError(t, err)
 
-	wantConfig := &ConfigView{Workspace: cfg.Workspace, Overlays: []string{"local-overlay"}, Models: []*ConfigModel{{Name: "alpha", Model: "gpt-5.4"}, {Name: "zeta", Model: "gpt-5.5"}}, SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"main"}}}, McpServers: []string{"alpha", "zeta"}, LoggingLevel: "info", AutoApproverModel: "gpt-5.5", InstrumentationEnabled: true, McpExternal: true}
+	wantConfig := &ConfigView{Workspace: cfg.Workspace, Overlays: []string{"local-overlay"}, Models: []*ConfigModel{{Name: "alpha", Model: "gpt-5.4"}, {Name: "zeta", Model: "gpt-6.1-sol"}}, SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"main"}}}, McpServers: []string{"alpha", "zeta"}, LoggingLevel: "info", AutoApproverModel: "gpt-6.1-sol", InstrumentationEnabled: true, McpExternal: true}
 	require.True(t, proto.Equal(wantConfig, view.Config), "unexpected config view: %v", view.Config)
 	encodedView, err := proto.Marshal(view)
 	require.NoError(t, err)
@@ -1814,8 +1814,8 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 		require.True(t, proto.Equal(want, skills.Skills[i]), "unexpected skill: %v", skills.Skills[i])
 	}
 
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md"), []byte("---\nmodel: gpt-5.5\ncustomShell: /usr/local/bin/agent-sandbox\npermission:\n  skill: {alpha: allow, zeta: auto}\n---\nHelp."), 0o600))
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "selected.md"), []byte("---\nmodel: gpt-5.5\npermission:\n  skill: {alpha: deny, zeta: allow}\n---\nHelp."), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md"), []byte("---\nmodel: gpt-6.1-sol\ncustomShell: /usr/local/bin/agent-sandbox\npermission:\n  skill: {alpha: allow, zeta: auto}\n---\nHelp."), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "selected.md"), []byte("---\nmodel: gpt-6.1-sol\npermission:\n  skill: {alpha: deny, zeta: allow}\n---\nHelp."), 0o600))
 
 	for _, tc := range []struct {
 		agent string
@@ -2023,7 +2023,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 	require.Len(t, choices.Agents, 1)
 	require.Equal(t, "main", choices.Agents[0].Name)
 	require.Equal(t, "planner", choices.CurrentAgent, "stored current agent survives removal from the loaded choices")
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md"), []byte("---\nmodel: gpt-5.5\n---\nHelp."), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md"), []byte("---\nmodel: gpt-6.1-sol\n---\nHelp."), 0o600))
 
 	for _, hidden := range []string{"private-X", "cron:cron/daily.md:20000102T030405.000000006Z:a", "one-off-cron:cron/daily.md:20000102T030405.000000006Z:b"} {
 		_, err := invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: hidden})

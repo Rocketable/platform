@@ -1020,7 +1020,7 @@ func TestRevertStashKeepsVoiceInbound(t *testing.T) {
 	crashed.config.ConversationID = "main"
 
 	workspace := crashed.runtime.Clone().Workspace
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  skill:\n    docs-helper: allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  skill:\n    docs-helper: allow\n---\nPrompt\n")
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
 

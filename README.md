@@ -136,7 +136,7 @@ On shutdown, tool calls already running finish and are saved, and background job
 
 ## Agents and permissions
 
-Each agent file must set `model`, either as a model name such as `gpt-5.5` or as a name mapped in `rocketclaw.json` (see [Models and providers](#models-and-providers)).
+Each agent file must set `model`, either as a model name such as `gpt-6.1-sol` or as a name mapped in `rocketclaw.json` (see [Models and providers](#models-and-providers)).
 
 The root `AGENTS.md` goes into every agent's instructions. To leave it out for one agent, add this to that agent's frontmatter:
 
@@ -232,7 +232,7 @@ The top-level `openai` object is the default model provider. Add more under `pro
 {
   "openai": {"rocketcode_auth": "chatgpt"},
   "providers": {"work": {"rocketcode_auth": "chatgpt"}},
-  "models": {"coding-high": "work/gpt-5.5"}
+  "models": {"coding-high": "work/gpt-6.1-sol"}
 }
 ```
 
@@ -240,7 +240,7 @@ The top-level `openai` object is the default model provider. Add more under `pro
 model: '{{ model "coding-high" }}'
 ```
 
-`work/gpt-5.5` uses the `work` provider, and a bare `gpt-5.5` uses `openai`. RocketClaw never switches to another provider on its own. Each provider compacts conversation history at 200000 tokens unless you set `autocompaction_threshold`.
+`work/gpt-6.1-sol` uses the `work` provider, and a bare `gpt-6.1-sol` uses `openai`. RocketClaw never switches to another provider on its own. Each provider compacts conversation history at 200000 tokens unless you set `autocompaction_threshold`.
 
 Set `prompt_cache_markers_relative_position` (a negative number) only on a provider that accepts Anthropic `cache_control` markers, such as CLIProxyAPI in front of Claude. RocketClaw then marks one text piece of the last request message, counted from the end: `-2` marks the piece before the last. Automatic permission reviews send the planned action as the last piece, so `-2` lets the next review reuse the cached transcript. Leave it unset for OpenAI and other providers that reject unknown fields.
 

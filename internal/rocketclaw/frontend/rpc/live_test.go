@@ -83,7 +83,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 				text = ""
 			}
 
-			assert.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"resp","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"`+text+`","annotations":[]}]}]}}`)))
+			assert.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"resp","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"`+text+`","annotations":[]}]}]}}`)))
 		}))
 		t.Cleanup(provider.Close)
 		cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}, OpenAI: config.OpenAIConfig{APIKey: "owned-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}}
@@ -93,7 +93,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 		require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
-		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\ndescription: Owned browser fixture\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nReply plainly.\n"), 0o600))
+		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\ndescription: Owned browser fixture\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nReply plainly.\n"), 0o600))
 
 		ctx, cancel := context.WithCancel(t.Context())
 		t.Cleanup(cancel)
@@ -500,7 +500,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 
 		requests <- string(request)
 
-		assert.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"branch","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"reply","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"branch reply","annotations":[]}]}]}}`)))
+		assert.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"branch","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"reply","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"branch reply","annotations":[]}]}]}}`)))
 	}))
 	t.Cleanup(provider.Close)
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}, OpenAI: config.OpenAIConfig{APIKey: "owned-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}}
@@ -508,7 +508,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\ndescription: Revert fixture\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nReply plainly.\n"), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\ndescription: Revert fixture\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nReply plainly.\n"), 0o600))
 	require.NoError(t, root.WriteFile("external-effect.txt", []byte("already happened"), 0o600))
 	ctx, cancel := context.WithCancel(t.Context())
 	ready := make(chan *backend.Runtime)

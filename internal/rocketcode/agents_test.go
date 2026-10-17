@@ -158,7 +158,7 @@ func TestLoadAgents(t *testing.T) {
 		fsys := fstest.MapFS{
 			"review.md": testMapFileMode(0o640, `---
 description: Reviews code for correctness
-model: gpt-5.5
+model: gpt-6.1-sol
 reasoningEffort: high
 verbosity: low
 maxRecursion: 2
@@ -195,7 +195,7 @@ ignored
 		review := result.Agents.Items["review"]
 		require.Equal(t, "review", review.Name)
 		require.Equal(t, "Reviews code for correctness", review.Description)
-		require.Equal(t, "gpt-5.5", review.Model)
+		require.Equal(t, "gpt-6.1-sol", review.Model)
 		require.Equal(t, "high", review.ReasoningEffort)
 		require.Equal(t, "low", review.Verbosity)
 		require.NotNil(t, review.MaxRecursion)

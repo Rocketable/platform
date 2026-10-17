@@ -33,7 +33,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.Mkdir("agents", 0o755))
 
-	const agent = "---\ndescription: Lifecycle test agent\nmodel: gpt-5.5\n---\nRespond concisely.\n"
+	const agent = "---\ndescription: Lifecycle test agent\nmodel: gpt-6.1-sol\n---\nRespond concisely.\n"
 	require.NoError(t, root.WriteFile("agents/main.md", []byte(agent), 0o600))
 
 	resources := make([]*os.File, 2)
@@ -180,14 +180,14 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Queue recovery\nmodel: gpt-5.5\npermission: {}\n---\nRespond concisely.\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Queue recovery\nmodel: gpt-6.1-sol\npermission: {}\n---\nRespond concisely.\n")
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.json"), []byte(`{}`), 0o600))
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Connection", "close")
 
-		_, errWrite := w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}]}`))
+		_, errWrite := w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}]}`))
 		if errWrite != nil {
 			t.Error(errWrite)
 		}
@@ -296,7 +296,7 @@ func TestStartupResumedSubagentIsBusyForFrontends(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -411,7 +411,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 		t.Run(fmt.Sprintf("background=%v", background), func(t *testing.T) {
 			workspace := t.TempDir()
 			require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
-			require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "waiter.md"), []byte("---\ndescription: Waiter\nmode: primary\nmodel: gpt-5.5\npermission:\n  bash:\n    \"*\": allow\n  rocketclaw:\n    allow_background: allow\n---\nPrompt\n"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "waiter.md"), []byte("---\ndescription: Waiter\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  bash:\n    \"*\": allow\n  rocketclaw:\n    allow_background: allow\n---\nPrompt\n"), 0o600))
 			started, finished, pid := filepath.Join(workspace, "started"), filepath.Join(workspace, "done"), filepath.Join(workspace, "pid")
 			sleep := map[bool]string{false: "2", true: "60"}[background]
 			waiting, ended := filepath.Join(workspace, "waiting"), filepath.Join(workspace, "ended")
@@ -437,7 +437,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 				}
 
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[` + output + `]}`))
+				_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[` + output + `]}`))
 			}))
 			t.Cleanup(server.Close)
 
@@ -577,7 +577,7 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n"), 0o600))
 
 	bodies := make(chan string, 4)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -585,7 +585,7 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 		bodies <- string(body)
 
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}]}`))
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}]}`))
 	}))
 	t.Cleanup(server.Close)
 

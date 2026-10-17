@@ -50,7 +50,7 @@ func newResumeTestBridges(t *testing.T, blocked bool) (newBridge func() *Bridge,
 	t.Helper()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	service = newTestSessionServiceAt(t, workspace)
@@ -77,7 +77,7 @@ func newResumeTestBridges(t *testing.T, blocked bool) (newBridge func() *Bridge,
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}]}`))
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}]}`))
 	}))
 	t.Cleanup(server.Close)
 	t.Cleanup(func() { close(release) })
@@ -498,8 +498,8 @@ func TestLegacyCronScheduleResumesIntoCanonical(t *testing.T) {
 		t.Run(owner, func(t *testing.T) {
 			newBridge, store, calls, finals := newResumeTestBridges(t, false)
 			runtime := newBridge().runtime
-			writeAgent(t, runtime.Clone().Workspace, "a-selected", "---\ndescription: Selected\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nSelected canonical instructions\n")
-			writeAgent(t, runtime.Clone().Workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  rocketclaw: allow\n---\nProducer instructions\n")
+			writeAgent(t, runtime.Clone().Workspace, "a-selected", "---\ndescription: Selected\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nSelected canonical instructions\n")
+			writeAgent(t, runtime.Clone().Workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw: allow\n---\nProducer instructions\n")
 
 			destination := owner
 			if destination == "" {
@@ -665,8 +665,8 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "job", "---\ndescription: Job\nmode: primary\nmodel: gpt-5.5\npermission:\n  rocketclaw: allow\n---\nProducer instructions\n")
-	writeAgent(t, workspace, "canonical", "---\ndescription: Canonical\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nCanonical instructions\n")
+	writeAgent(t, workspace, "job", "---\ndescription: Job\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw: allow\n---\nProducer instructions\n")
+	writeAgent(t, workspace, "canonical", "---\ndescription: Canonical\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nCanonical instructions\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
@@ -865,7 +865,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 
 			runtime := newBridge().runtime
 			if state == "completed before Sync" {
-				writeAgent(t, runtime.Clone().Workspace, "a-loaded", "---\ndescription: First loaded\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nSorted fallback instructions\n")
+				writeAgent(t, runtime.Clone().Workspace, "a-loaded", "---\ndescription: First loaded\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nSorted fallback instructions\n")
 			}
 
 			require.NoError(t, store.UpsertThread("cron:pending", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
@@ -901,7 +901,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 			}
 
 			if state == "existing Web" || state == "binding before projection" {
-				writeAgent(t, runtime.Clone().Workspace, "selected", "---\ndescription: Selected\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nSelected Web instructions\n")
+				writeAgent(t, runtime.Clone().Workspace, "selected", "---\ndescription: Selected\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nSelected Web instructions\n")
 				require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "web:cron:pending", Agent: "selected"}))
 
 				if state == "binding before projection" {
@@ -1135,7 +1135,7 @@ func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 
 			manager, _ := newTestBridgeManager(t, newBridge().runtime, service, finals)
 			if stored != "row" && stored != "queued" {
-				writeAgent(t, newBridge().runtime.Clone().Workspace, "selected", "---\ndescription: Selected\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nSelected canonical instructions\n")
+				writeAgent(t, newBridge().runtime.Clone().Workspace, "selected", "---\ndescription: Selected\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nSelected canonical instructions\n")
 				require.NoError(t, startTurnDB(t.Context(), service.db, "turn-private", privateID, msg))
 				data, err := json.Marshal(protocol.ScheduledMessageState{ConversationID: privateID, Agent: "main", Message: "scheduled follow up", DueAt: time.Now().Add(-time.Minute)})
 				require.NoError(t, err)
@@ -1248,7 +1248,7 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 	service := newTestSessionServiceAt(t, workspace)
 
@@ -1260,7 +1260,7 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 
 		if strings.Contains(string(body), "function_call_output") || !strings.Contains(string(body), "ship it?") {
-			_, _ = w.Write([]byte(`{"id":"resp_2","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}]}`))
+			_, _ = w.Write([]byte(`{"id":"resp_2","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}]}`))
 			return
 		}
 
@@ -1416,7 +1416,7 @@ func TestResumedTurnFailurePostsInternalErrorFinal(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 	service := newTestSessionServiceAt(t, workspace)
 
@@ -1595,7 +1595,7 @@ func TestInterruptedWorkflowResumesWithRecordedWorkers(t *testing.T) {
 	for _, stop := range []bool{false, true} {
 		t.Run(map[bool]string{false: "resume", true: "stop"}[stop], func(t *testing.T) {
 			workspace := t.TempDir()
-			writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
+			writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
 			require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 			require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "workflows"), 0o755))
 			require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "workflows", "audit.star"), []byte(`meta = {"name": "audit", "description": "Audit", "phases": ["one", "two", "three"]}
@@ -1635,7 +1635,7 @@ def main(args):
 				}
 
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"` + strings.ToUpper(worker) + `","annotations":[]}]}]}`))
+				_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"` + strings.ToUpper(worker) + `","annotations":[]}]}]}`))
 			}))
 			t.Cleanup(server.Close)
 
@@ -1786,14 +1786,14 @@ func TestRestartResumesBackgroundSubagent(t *testing.T) {
 			default:
 			}
 
-			_, _ = w.Write([]byte(`{"id":"resp_2","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_2","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"found it","annotations":[]}]}]}`))
+			_, _ = w.Write([]byte(`{"id":"resp_2","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_2","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"found it","annotations":[]}]}]}`))
 		case !strings.Contains(body, "function_call_output"):
-			_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_t","name":"task","arguments":"{\"description\":\"research\",\"prompt\":\"research the flaky test\",\"subagent_type\":\"researcher\",\"background\":true}"}]}`))
+			_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_t","name":"task","arguments":"{\"description\":\"research\",\"prompt\":\"research the flaky test\",\"subagent_type\":\"researcher\",\"background\":true}"}]}`))
 		default:
 			answerNoteTest(w, r, n, body)
 		}
 	})
-	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-5.5\npermission:\n  task: allow\n  rocketclaw:\n    allow_background: allow\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n  rocketclaw:\n    allow_background: allow\n---\nPrompt\n")
 
 	first, shutdown := nt.run(t, ignoreOutbound)
 	registry := nt.bridge(t, first, nt.conversationID).background
@@ -1834,7 +1834,7 @@ func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
 
 	nt := newNoteTest(t, func(w http.ResponseWriter, _ *http.Request, _ int, _ string) {
 		// A cron run's reply is its report.
-		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Report finished.","annotations":[]}]}]}`))
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Report finished.","annotations":[]}]}]}`))
 	})
 	first, shutdown := nt.run(t, ignoreOutbound)
 	report := protocol.SlackThreadConversationID("C1", "1.2")

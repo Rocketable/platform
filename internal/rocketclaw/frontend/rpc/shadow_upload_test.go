@@ -37,7 +37,7 @@ func TestShadowUploadCardsAndDownloads(t *testing.T) {
 	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents", "main"), 0o700))
 
 	for _, name := range []string{"main", "main/a"} {
-		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", name+".md"), []byte("---\nmodel: gpt-5.5\n---\nReply."), 0o600))
+		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", name+".md"), []byte("---\nmodel: gpt-6.1-sol\n---\nReply."), 0o600))
 	}
 
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))

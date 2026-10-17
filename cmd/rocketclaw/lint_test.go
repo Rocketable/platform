@@ -110,7 +110,7 @@ func writeLintConfig(t *testing.T, workspace string, models ...map[string]string
 
 func writeLintAgent(t *testing.T, root, name, content string, models ...string) {
 	t.Helper()
-	model := "gpt-5.5"
+	model := "gpt-6.1-sol"
 	if len(models) > 0 {
 		model = models[0]
 	}

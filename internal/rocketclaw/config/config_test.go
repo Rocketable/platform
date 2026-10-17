@@ -165,13 +165,13 @@ func TestLoadPreservesModelConfig(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "workspace": ".",
 	  "models": {"coding-high": "software-development-sol", "review-fast": "gpt-5.6-luna"},
-	  "auto_approver_model": " openai/gpt-5.5 ",
+	  "auto_approver_model": " openai/gpt-6.1-sol ",
 	  "openai": {"api_key": "test-key"},
 	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
 	  "mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
 	}`)
 
-	assert.Equal(t, "gpt-5.5", cfg.AutoApproverModel)
+	assert.Equal(t, "gpt-6.1-sol", cfg.AutoApproverModel)
 	assert.Equal(t, map[string]string{"coding-high": "software-development-sol", "review-fast": "gpt-5.6-luna"}, cfg.Models)
 }
 
@@ -315,9 +315,9 @@ func TestValidateAutoApproverModels(t *testing.T) {
 		want    string
 		wantErr string
 	}{
-		{model: "gpt-5.5", want: "gpt-5.5"},
-		{model: " openai/gpt-5.5 ", want: "gpt-5.5"},
-		{model: " work/gpt-5.5 ", want: "work/gpt-5.5"},
+		{model: "gpt-6.1-sol", want: "gpt-6.1-sol"},
+		{model: " openai/gpt-6.1-sol ", want: "gpt-6.1-sol"},
+		{model: " work/gpt-6.1-sol ", want: "work/gpt-6.1-sol"},
 		{model: "anthropic/api/claude-sonnet-5-5", want: "anthropic/api/claude-sonnet-5-5"},
 		{model: "/", wantErr: "expected model or provider/model"},
 		{model: "work//model", wantErr: "expected model or provider/model"},
@@ -344,7 +344,7 @@ func TestValidateRejectsInvalidModels(t *testing.T) {
 		name   string
 		models map[string]string
 	}{
-		{name: "empty name", models: map[string]string{" ": "gpt-5.5"}},
+		{name: "empty name", models: map[string]string{" ": "gpt-6.1-sol"}},
 		{name: "empty model", models: map[string]string{"coding-high": " "}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -373,7 +373,7 @@ func TestRenderAgentModel(t *testing.T) {
 		want    string
 		wantErr string
 	}{
-		{name: "concrete", model: "gpt-5.5", want: "gpt-5.5"},
+		{name: "concrete", model: "gpt-6.1-sol", want: "gpt-6.1-sol"},
 		{name: "placeholder", model: `{{ model "coding-high" }}`, want: "software-development-sol"},
 		{name: "arbitrary quoted name", model: `{{ model "quoted\"placeholder" }}`, want: "gpt-5.6-luna"},
 		{name: "missing", model: `{{ model "missing" }}`, wantErr: `model "missing" is not configured`},
@@ -398,9 +398,9 @@ func TestRenderAgentModel(t *testing.T) {
 func TestRenderAgentModelPreservesNamedProvider(t *testing.T) {
 	cfg := validConfig()
 
-	got, err := cfg.RenderAgentModel(" work/gpt-5.5 ")
+	got, err := cfg.RenderAgentModel(" work/gpt-6.1-sol ")
 	require.NoError(t, err)
-	assert.Equal(t, "work/gpt-5.5", got)
+	assert.Equal(t, "work/gpt-6.1-sol", got)
 }
 
 func TestLoadPreservesInstrumentationConfig(t *testing.T) {

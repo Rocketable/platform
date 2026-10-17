@@ -143,7 +143,7 @@ func TestWorkflowAgentRunnerUsesRootCustomShell(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
 	require.NoError(t, root.WriteFile("enter.sh", []byte("#!/bin/sh\nprintf 'custom:%s:%s' \"$#\" \"$1\""), 0o755))
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\ncustomShell: "+filepath.Join(workspace, "enter.sh")+"\npermission:\n  bash: {\"*\": allow}\n---\nMain prompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\ncustomShell: "+filepath.Join(workspace, "enter.sh")+"\npermission:\n  bash: {\"*\": allow}\n---\nMain prompt\n")
 
 	var (
 		mu          sync.Mutex
@@ -175,7 +175,7 @@ func TestWorkflowAgentRunnerUsesRootCustomShell(t *testing.T) {
 			Description string `json:"description"`
 		}{"def main():\n    return bash(command=r'''printf plain''')\n", "probe"}) // Encoding strings cannot fail.
 
-		_, err = fmt.Fprintf(w, `{"id":"response_call","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_bash","name":"execute","arguments":%q}]}`, arguments)
+		_, err = fmt.Fprintf(w, `{"id":"response_call","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_bash","name":"execute","arguments":%q}]}`, arguments)
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -200,7 +200,7 @@ func TestWorkflowAgentRunnerTagLimits(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeMainAgentSkills(t, workspace, "---\nmodel: gpt-5.5\npermission:\n  read: allow\n  rocketclaw:\n    rocketclaw_set_tag: [[customer, internal]]\n---\nBase prompt\n")
+	writeMainAgentSkills(t, workspace, "---\nmodel: gpt-6.1-sol\npermission:\n  read: allow\n  rocketclaw:\n    rocketclaw_set_tag: [[customer, internal]]\n---\nBase prompt\n")
 	service := newTestSessionServiceAt(t, workspace)
 
 	var tools []string
@@ -295,7 +295,7 @@ func TestWorkflowPermissionReviewerTagGuidance(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeMainAgentSkills(t, workspace, "---\nmodel: gpt-5.5\npermission:\n  read: auto(reviewer)\n  rocketclaw:\n    rocketclaw_set_tag: [[worker]]\n---\nWorker prompt\n")
+	writeMainAgentSkills(t, workspace, "---\nmodel: gpt-6.1-sol\npermission:\n  read: auto(reviewer)\n  rocketclaw:\n    rocketclaw_set_tag: [[worker]]\n---\nWorker prompt\n")
 	writeAgent(t, workspace, "reviewer", "---\ndescription: Reviewer\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[review, published]]\n---\nReviewer prompt\n")
 	root, err := os.OpenRoot(workspace)
 
@@ -363,7 +363,7 @@ func TestWorkflowAgentRunnerResolvesNamedProviderModel(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\n---\nMain prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	defaultRequests := make(chan struct{}, 1)
@@ -419,7 +419,7 @@ func TestWorkflowAgentRunnerUsesConfiguredAutoApproverModel(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  rocketclaw:\n    code_mode_approve: auto\n  bash:\n    \"printf ok\": auto\n---\nMain prompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw:\n    code_mode_approve: auto\n  bash:\n    \"printf ok\": auto\n---\nMain prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var models []string
@@ -454,14 +454,14 @@ func TestWorkflowAgentRunnerUsesConfiguredAutoApproverModel(t *testing.T) {
 	result, err := run.Run(t.Context(), &workflow.AgentRequest{Prompt: "run", Worker: workflow.Worker{Name: "worker", Instructions: "work", Tools: []string{"execute"}}})
 	require.NoError(t, err)
 	require.JSONEq(t, `"done"`, string(result))
-	require.Equal(t, []string{"gpt-5.5", "review-model", "review-model", "gpt-5.5"}, models)
+	require.Equal(t, []string{"gpt-6.1-sol", "review-model", "review-model", "gpt-6.1-sol"}, models)
 }
 
 func TestWorkflowAgentRunnerStructuredOutputUsesFinalAssistantMessage(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  read: {\"*\": allow}\n---\nMain prompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission:\n  read: {\"*\": allow}\n---\nMain prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "README.md"), []byte("PRIVATE TOOL RESULT"), 0o644))
 
@@ -473,7 +473,7 @@ func TestWorkflowAgentRunnerStructuredOutputUsesFinalAssistantMessage(t *testing
 
 		switch requests {
 		case 1:
-			_, err := w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"rsn_1","type":"reasoning","summary":[{"type":"summary_text","text":"checking context"}]},{"id":"msg_1","type":"message","status":"completed","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"checking the fixture","annotations":[]}]},{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"execute","arguments":"{\"code\":\"def main():\\n    return read(filePath=\\\"README.md\\\")\\n\"}"}]}`))
+			_, err := w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"rsn_1","type":"reasoning","summary":[{"type":"summary_text","text":"checking context"}]},{"id":"msg_1","type":"message","status":"completed","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"checking the fixture","annotations":[]}]},{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"execute","arguments":"{\"code\":\"def main():\\n    return read(filePath=\\\"README.md\\\")\\n\"}"}]}`))
 			assert.NoError(t, err)
 		case 2:
 			writeRawRunMessage(t, w, "resp_2", "msg_2", `{"ok":true,"private":"PRIVATE WORKER RESULT"}`)
@@ -509,7 +509,7 @@ func TestWorkflowExplicitSkillWithoutAvailableSubjects(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  skill:\n    unavailable: allow\n---\nMain prompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission:\n  skill:\n    unavailable: allow\n---\nMain prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var request map[string]any
@@ -540,7 +540,7 @@ func TestWorkflowAgentRunnerReplaysOnlyMatchingRecordedWorker(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\n---\nMain prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	requests := 0
@@ -570,7 +570,7 @@ func TestWorkflowAgentRunnerRejectsInvalidOverridesAndStructuredOutput(t *testin
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  read: {\"*\": allow}\n---\nMain prompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission:\n  read: {\"*\": allow}\n---\nMain prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	requests := 0
@@ -582,7 +582,7 @@ func TestWorkflowAgentRunnerRejectsInvalidOverridesAndStructuredOutput(t *testin
 	}))
 	t.Cleanup(server.Close)
 
-	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, Models: map[string]string{"known": "gpt-5.5", "broken": `{{ model "missing" }}`, "unavailable": "unknown/model"}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), "main", rocketcode.InertJournal{}, slog.New(slog.DiscardHandler))
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, Models: map[string]string{"known": "gpt-6.1-sol", "broken": `{{ model "missing" }}`, "unavailable": "unknown/model"}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), "main", rocketcode.InertJournal{}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, run.Close()) })
 
@@ -605,7 +605,7 @@ func TestWorkflowAgentRunnerMissingPermissionEnvironment(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  edit: {'${ROCKETCLAW_METADATA_FRUIT}/note.txt': allow}\n---\nMain prompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission:\n  edit: {'${ROCKETCLAW_METADATA_FRUIT}/note.txt': allow}\n---\nMain prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -627,7 +627,7 @@ func TestWorkflowAgentRunnerConcurrentDirectoriesAndCancellation(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\n---\nMain prompt\n")
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
@@ -738,7 +738,7 @@ func TestWorkflowAgentRunnerReportsSetupFailures(t *testing.T) {
 				workspace = filepath.Join(workspace, "missing")
 				want = "open workspace root"
 			case "blocked runtime directory":
-				writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
+				writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\n---\nMain prompt\n")
 				require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
 				require.NoError(t, root.WriteFile(".rocketclaw/.rocketcode", []byte("not a directory"), 0o600))
 
@@ -764,7 +764,7 @@ func TestWorkflowAgentRunnerReturnsShellDirectoryCleanupError(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			workspace := t.TempDir()
-			writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
+			writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\n---\nMain prompt\n")
 			root, err := os.OpenRoot(workspace)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, root.Close()) })
@@ -856,13 +856,13 @@ func writeRawRunFunctionCall(t *testing.T, w http.ResponseWriter, responseID, na
 
 	data, err := json.Marshal(args)
 	require.NoError(t, err)
-	_, err = fmt.Fprintf(w, `{"id":%q,"object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":%q,"type":"function_call","status":"completed","call_id":%q,"name":%q,"arguments":%q}]}`, responseID, "fc_call_1", "call_1", name, string(data))
+	_, err = fmt.Fprintf(w, `{"id":%q,"object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":%q,"type":"function_call","status":"completed","call_id":%q,"name":%q,"arguments":%q}]}`, responseID, "fc_call_1", "call_1", name, string(data))
 	require.NoError(t, err)
 }
 
 func writeRawRunMessage(t *testing.T, w http.ResponseWriter, responseID, messageID, text string) {
 	t.Helper()
 
-	_, err := fmt.Fprintf(w, `{"id":%q,"object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":%q,"type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":%q,"annotations":[]}]}]}`, responseID, messageID, text)
+	_, err := fmt.Fprintf(w, `{"id":%q,"object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":%q,"type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":%q,"annotations":[]}]}]}`, responseID, messageID, text)
 	require.NoError(t, err)
 }

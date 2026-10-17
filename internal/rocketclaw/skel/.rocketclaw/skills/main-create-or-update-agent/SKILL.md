@@ -188,7 +188,7 @@ The resulting frontmatter must include at least:
 - `description`
 - `model`
 
-The `model` value is required. Use a concrete model such as `gpt-5.5`, or `{{ model "name" }}` when `name` already exists in the selected config's `models` object. If the human has not specified either one, ask before writing the file. Do not invent a mapping.
+The `model` value is required. Use a concrete model such as `gpt-6.1-sol`, or `{{ model "name" }}` when `name` already exists in the selected config's `models` object. If the human has not specified either one, ask before writing the file. Do not invent a mapping.
 
 When updating an existing agent, preserve the existing non-empty `model` unless the human explicitly asked to change it. If the existing agent has no `model` or an empty `model`, ask the human which model to use and add it.
 

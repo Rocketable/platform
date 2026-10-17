@@ -476,14 +476,14 @@ func TestNewResponsesAPIUsesWebsocketWhenURLIsWebsocket(t *testing.T) {
 
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(websocketAPIBaseURL(server.URL)))
 	api := newResponsesAPI(&client)
-	resp, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-5.5"}, inertResponseObserver{})
+	resp, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-6.1-sol"}, inertResponseObserver{})
 	require.NoError(t, err)
 	require.Equal(t, "resp_ws", resp.ID)
 
 	var event map[string]any
 	require.NoError(t, json.Unmarshal(create, &event))
 	require.Equal(t, "response.create", event["type"])
-	require.Equal(t, "gpt-5.5", event["model"])
+	require.Equal(t, "gpt-6.1-sol", event["model"])
 }
 
 func TestNewResponsesAPIUsesClientHTTPClientWhenURLIsHTTPS(t *testing.T) {
@@ -509,7 +509,7 @@ func TestNewResponsesAPIUsesClientHTTPClientWhenURLIsHTTPS(t *testing.T) {
 		option.WithHTTPClient(&http.Client{Transport: transport}),
 	)
 	api := newResponsesAPI(&client)
-	resp, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-5.5"}, inertResponseObserver{})
+	resp, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-6.1-sol"}, inertResponseObserver{})
 	require.NoError(t, err)
 	require.Equal(t, "resp_auth", resp.ID)
 	require.True(t, transport.used)
@@ -555,7 +555,7 @@ func TestNewResponsesAPIKeepsHTTPWhenURLIsNotWebsocket(t *testing.T) {
 
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL+"/v1"), option.WithUnsafeAllowHTTP())
 	api := newResponsesAPI(&client)
-	resp, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-5.5"}, inertResponseObserver{})
+	resp, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-6.1-sol"}, inertResponseObserver{})
 	require.NoError(t, err)
 	require.Equal(t, "resp_http", resp.ID)
 	require.False(t, sawWebsocket)
@@ -585,7 +585,7 @@ func TestNewResponsesAPICompactsOverHTTPWhenURLIsWebsocket(t *testing.T) {
 
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(websocketAPIBaseURL(server.URL)))
 	api := newResponsesAPI(&client)
-	resp, err := api.Compact(t.Context(), &responses.ResponseCompactParams{Model: "gpt-5.5"})
+	resp, err := api.Compact(t.Context(), &responses.ResponseCompactParams{Model: "gpt-6.1-sol"})
 	require.NoError(t, err)
 	require.Equal(t, "cmp_1", resp.ID)
 }
@@ -623,7 +623,7 @@ func TestNewResponsesAPIMapsWebsocketError(t *testing.T) {
 
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(websocketAPIBaseURL(server.URL)))
 	api := newResponsesAPI(&client)
-	_, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-5.5"}, inertResponseObserver{})
+	_, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-6.1-sol"}, inertResponseObserver{})
 	require.Error(t, err)
 	errAPI, ok := errors.AsType[*openai.Error](err)
 	require.True(t, ok)

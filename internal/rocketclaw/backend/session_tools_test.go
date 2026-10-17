@@ -35,7 +35,7 @@ func TestSessionTagToolsBridge(t *testing.T) {
 				groups = "    rocketclaw_set_tag: [[triage, investigating, resolved], [customer, internal]]\n"
 			}
 
-			writeMainAgentSkills(t, workspace, "---\nmodel: gpt-5.5\npermission:\n  read: allow\n  rocketclaw:\n    '*': allow\n    rocketclaw_get_tags: allow\n"+groups+"---\nPrompt\n")
+			writeMainAgentSkills(t, workspace, "---\nmodel: gpt-6.1-sol\npermission:\n  read: allow\n  rocketclaw:\n    '*': allow\n    rocketclaw_get_tags: allow\n"+groups+"---\nPrompt\n")
 			service := newTestSessionServiceAt(t, workspace)
 			// A real PostgreSQL write failure must reach the tool without changing active tags.
 			_, err := service.db.ExecContext(t.Context(), `ALTER TABLE session_tags ADD CONSTRAINT reject_resolved CHECK (NOT (tags ? 'resolved'))`)
@@ -215,7 +215,7 @@ func TestSessionTagChildAuthority(t *testing.T) {
 				for _, agent := range []struct {
 					name, model, tag string
 					enabled          bool
-				}{{"main", "gpt-5.5", "root-only", tc.root}, {"helper", "gpt-5.4", "child-only", tc.child}} {
+				}{{"main", "gpt-6.1-sol", "root-only", tc.root}, {"helper", "gpt-5.4", "child-only", tc.child}} {
 					groups := ""
 					if agent.enabled {
 						groups = "    rocketclaw_set_tag: [[" + agent.tag + "]]\n"
@@ -617,7 +617,7 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			workspace := t.TempDir()
-			writeMainAgentSkills(t, workspace, "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  read: allow\n  rocketclaw:\n    "+tc.rules+"\n---\nPrompt\n")
+			writeMainAgentSkills(t, workspace, "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission:\n  read: allow\n  rocketclaw:\n    "+tc.rules+"\n---\nPrompt\n")
 			service := newTestSessionServiceAt(t, workspace)
 			history := newSessionStore("external_mcp:private", service)
 

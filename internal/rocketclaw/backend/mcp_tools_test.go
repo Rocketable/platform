@@ -77,7 +77,7 @@ func TestWorkflowPrepareOmitsMCPTools(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeMainAgentSkills(t, workspace, "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  read: {\"*\": allow}\n  mcp: {\"demo.*\": allow}\n---\nPrompt\n")
+	writeMainAgentSkills(t, workspace, "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission:\n  read: {\"*\": allow}\n  mcp: {\"demo.*\": allow}\n---\nPrompt\n")
 
 	cfg := &config.Config{
 		Workspace: workspace,

@@ -220,7 +220,7 @@ func TestShadowLifecycleDefinitionFailureAndRetry(t *testing.T) {
 
 			switch failure {
 			case "invalid definition":
-				require.NoError(t, root.WriteFile(filepath.Join(dir, "a.md"), []byte("---\nmodel: gpt-5.5\n---\nFixed"), 0o600))
+				require.NoError(t, root.WriteFile(filepath.Join(dir, "a.md"), []byte("---\nmodel: gpt-6.1-sol\n---\nFixed"), 0o600))
 			case "escaping directory":
 				require.NoError(t, root.Remove(dir))
 				require.NoError(t, root.Rename(dir+"-saved", dir))

@@ -88,7 +88,7 @@ func TestRuntimeSummaryBackfillLifecycle(t *testing.T) {
 			defer func() { require.NoError(t, root.Close()) }()
 
 			require.NoError(t, root.Mkdir("agents", 0o755))
-			require.NoError(t, root.WriteFile("agents/main.md", []byte("---\ndescription: Backfill test\nmodel: gpt-5.5\n---\nRespond concisely.\n"), 0o600))
+			require.NoError(t, root.WriteFile("agents/main.md", []byte("---\ndescription: Backfill test\nmodel: gpt-6.1-sol\n---\nRespond concisely.\n"), 0o600))
 			logFile, err := root.Create("runtime.log")
 
 			require.NoError(t, err)
@@ -387,7 +387,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := newTestSessionService(t)
 		workspace := t.TempDir()
-		writeAgent(t, workspace, "main", "---\nmodel: gpt-5.5\npermission:\n  rocketclaw:\n    rocketclaw_current_session_id: allow\n    rocketclaw_get_tags: allow\n    rocketclaw_set_tag: [[red, yellow]]\n---\nPrompt\n")
+		writeAgent(t, workspace, "main", "---\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw:\n    rocketclaw_current_session_id: allow\n    rocketclaw_get_tags: allow\n    rocketclaw_set_tag: [[red, yellow]]\n---\nPrompt\n")
 
 		var tagOutputs []string
 
@@ -841,7 +841,7 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
@@ -853,7 +853,7 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Connection", "close")
 
-		_, errWrite := w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}]}`))
+		_, errWrite := w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}]}`))
 		if errWrite != nil {
 			t.Error(errWrite)
 		}
@@ -1473,7 +1473,7 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 				Background   bool   `json:"background"`
 				Continue     string `json:"continue"`
 			}{"research", "research the flaky test", "researcher", false, ""})
-			_, _ = fmt.Fprintf(w, `{"id":"resp_0","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_e","name":"execute","arguments":%q},{"id":"fc_2","type":"function_call","status":"completed","call_id":"call_t","name":"task","arguments":%q}]}`, execute, task)
+			_, _ = fmt.Fprintf(w, `{"id":"resp_0","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_e","name":"execute","arguments":%q},{"id":"fc_2","type":"function_call","status":"completed","call_id":"call_t","name":"task","arguments":%q}]}`, execute, task)
 		case strings.Contains(body, `"content":"research the flaky test"`):
 			select {
 			case <-release:
@@ -1481,14 +1481,14 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 				return
 			}
 
-			_, _ = w.Write([]byte(`{"id":"resp_s","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_s","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"found it","annotations":[]}]}]}`))
+			_, _ = w.Write([]byte(`{"id":"resp_s","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_s","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"found it","annotations":[]}]}]}`))
 		default:
 			answerNoteTest(w, r, n, body)
 		}
 	})
 	releaseSubagent := sync.OnceFunc(func() { close(release) })
 	t.Cleanup(releaseSubagent) // Before the provider closes, which waits for the held request.
-	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-5.5\npermission:\n  task: allow\n  rocketclaw:\n    allow_background: allow\n    ask_user_question: allow\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n  rocketclaw:\n    allow_background: allow\n    ask_user_question: allow\n---\nPrompt\n")
 
 	asked, withdrawn := make(chan string, 1), make(chan error, 1)
 	asker := &userQuestionAskerMock{AskUserQuestionFunc: func(ctx context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
@@ -1584,10 +1584,10 @@ func TestMoveToBackgroundSkipsDeniedAgent(t *testing.T) {
 		arguments, _ := json.Marshal(struct {
 			Code string `json:"code"`
 		}{code}) // Encoding a string cannot fail.
-		_, _ = fmt.Fprintf(w, `{"id":"resp_0","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_e","name":"execute","arguments":%q}]}`, arguments)
+		_, _ = fmt.Fprintf(w, `{"id":"resp_0","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_e","name":"execute","arguments":%q}]}`, arguments)
 	})
 	gate = filepath.Join(nt.cfg.Workspace, "gate")
-	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-5.5\npermission:\n  bash: {\"*\": allow}\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n---\nPrompt\n")
 
 	manager, _ := nt.run(t, ignoreOutbound)
 	bridge := nt.bridge(t, manager, nt.conversationID)

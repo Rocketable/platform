@@ -1352,7 +1352,7 @@ func TestTransportPrefixesCompactionWhenUsageExceedsThreshold(t *testing.T) {
 	for _, threshold := range []float64{10, 0, -5} {
 		t.Run(fmt.Sprintf("threshold %g", threshold), func(t *testing.T) {
 			body, compactCalls := runAutoCompactTransportTest(t,
-				fmt.Sprintf(`{"model":"gpt-5.5","instructions":"be brief","store":false,"context_management":[{"type":"compaction","compact_threshold":%g}],"input":[{"id":"item-1","type":"message"}]}`, threshold),
+				fmt.Sprintf(`{"model":"gpt-6.1-sol","instructions":"be brief","store":false,"context_management":[{"type":"compaction","compact_threshold":%g}],"input":[{"id":"item-1","type":"message"}]}`, threshold),
 				codexStream(`{"id":"resp","usage":{"total_tokens":100},"output":[]}`, `{"id":"msg","type":"message"}`),
 				`{"output":[{"content":"private-content-value","encrypted_content":"sealed","id":"cmp_1","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}]}`,
 			)
@@ -1400,7 +1400,7 @@ func TestTransportRetriesContextOverflowAfterCompaction(t *testing.T) {
 
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexFailedStream("context_length_exceeded", "Your input exceeds the context window of this model. Please adjust your input and try again."))), Header: make(http.Header)}, nil
 		case 2:
-			require.JSONEq(t, `{"instructions":"","input":[{"encrypted_content":"sealed","id":"cmp_1","type":"compaction"}],"model":"gpt-5.5","store":false,"stream":true}`, string(data))
+			require.JSONEq(t, `{"instructions":"","input":[{"encrypted_content":"sealed","id":"cmp_1","type":"compaction"}],"model":"gpt-6.1-sol","store":false,"stream":true}`, string(data))
 
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexStream(`{"id":"resp","output":[]}`, `{"id":"msg","type":"message"}`))), Header: make(http.Header)}, nil
 		default:
@@ -1410,7 +1410,7 @@ func TestTransportRetriesContextOverflowAfterCompaction(t *testing.T) {
 		return nil, nil
 	})}
 
-	req := requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-5.5","store":false,"context_management":[{"type":"compaction","compact_threshold":10}],"input":[{"id":"item-1","type":"message"}]}`)
+	req := requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-6.1-sol","store":false,"context_management":[{"type":"compaction","compact_threshold":10}],"input":[{"id":"item-1","type":"message"}]}`)
 	req.Header.Set("X-Stainless-Retry-Count", "2")
 	resp, err := transport.RoundTrip(req)
 	require.NoError(t, err)
@@ -1469,7 +1469,7 @@ func TestTransportDoesNotRetryNonContextStreamFailure(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexFailedStream("rate_limit_exceeded", "wait"))), Header: make(http.Header)}, nil
 	})}
 
-	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-5.5","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`))
+	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`))
 	if resp != nil {
 		t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
 	}
@@ -1504,7 +1504,7 @@ func TestTransportKeepsOriginalContextErrorWhenCompactReturnsNoItem(t *testing.T
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexFailedStream("context_length_exceeded", "too large"))), Header: make(http.Header)}, nil
 	})}
 
-	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-5.5","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`))
+	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`))
 	if resp != nil {
 		t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
 	}
@@ -1520,7 +1520,7 @@ func TestTransportKeepsOriginalContextErrorWhenCompactReturnsNoItem(t *testing.T
 
 func TestTransportSkipsCompactionWithUnansweredFunctionCall(t *testing.T) {
 	body, compactCalls := runAutoCompactTransportTest(t,
-		`{"model":"gpt-5.5","context_management":[{"compact_threshold":10}],"input":[{"type":"function_call","call_id":"call_1"}]}`,
+		`{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":10}],"input":[{"type":"function_call","call_id":"call_1"}]}`,
 		codexStream(`{"id":"resp","usage":{"total_tokens":100},"output":[]}`, `{"id":"msg","type":"message"}`),
 		`{"output":[{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}]}`,
 	)
@@ -1535,7 +1535,7 @@ func TestCodexInputHasUnansweredFunctionCallRejectsMalformedInput(t *testing.T) 
 
 func TestTransportCompactsWithAnsweredFunctionCall(t *testing.T) {
 	_, compactCalls := runAutoCompactTransportTest(t,
-		`{"model":"gpt-5.5","context_management":[{"compact_threshold":10}],"input":[{"type":"function_call","call_id":"call_1"},{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`,
+		`{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":10}],"input":[{"type":"function_call","call_id":"call_1"},{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`,
 		codexStream(`{"id":"resp","usage":{"total_tokens":100},"output":[]}`, `{"id":"msg","type":"message"}`),
 		`{"output":[{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}]}`,
 	)
@@ -1545,7 +1545,7 @@ func TestTransportCompactsWithAnsweredFunctionCall(t *testing.T) {
 
 func TestTransportSkipsCompactionWhenResponseAlreadyHasCompaction(t *testing.T) {
 	_, compactCalls := runAutoCompactTransportTest(t,
-		`{"model":"gpt-5.5","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`,
+		`{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`,
 		codexStream(`{"id":"resp","usage":{"total_tokens":100},"output":[]}`, `{"id":"cmp_existing","type":"compaction","encrypted_content":"sealed"}`),
 		`{"output":[{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}]}`,
 	)
@@ -1555,7 +1555,7 @@ func TestTransportSkipsCompactionWhenResponseAlreadyHasCompaction(t *testing.T) 
 
 func TestTransportSkipsCompactionBelowThreshold(t *testing.T) {
 	_, compactCalls := runAutoCompactTransportTest(t,
-		`{"model":"gpt-5.5","context_management":[{"compact_threshold":100}],"input":[{"type":"message"}]}`,
+		`{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":100}],"input":[{"type":"message"}]}`,
 		codexStream(`{"id":"resp","usage":{"total_tokens":10},"output":[]}`, `{"id":"msg","type":"message"}`),
 		`{"output":[{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}]}`,
 	)
@@ -1565,7 +1565,7 @@ func TestTransportSkipsCompactionBelowThreshold(t *testing.T) {
 
 func TestTransportNormalizesCompactionSummary(t *testing.T) {
 	body, compactCalls := runAutoCompactTransportTest(t,
-		`{"model":"gpt-5.5","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`,
+		`{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`,
 		codexStream(`{"id":"resp","usage":{"total_tokens":100},"output":[]}`, `{"id":"msg","type":"message"}`),
 		`{"output":[{"id":"cmp_1","type":"compaction_summary","encrypted_content":"sealed"}]}`,
 	)
@@ -1577,7 +1577,7 @@ func TestTransportNormalizesCompactionSummary(t *testing.T) {
 
 func TestTransportLeavesResponseWhenCompactResponseHasNoCompaction(t *testing.T) {
 	body, compactCalls := runAutoCompactTransportTest(t,
-		`{"model":"gpt-5.5","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`,
+		`{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`,
 		codexStream(`{"id":"resp","usage":{"total_tokens":100},"output":[]}`, `{"id":"msg","type":"message"}`),
 		`{"output":[{"id":"compact-msg","type":"message"},{},{"type":null},{"type":42},{"type":{}},{"type":[]}]}`,
 	)
@@ -1593,7 +1593,7 @@ func TestCodexCompactionHandlesErrorAndFallbackBranches(t *testing.T) {
 	errCompactRead := errors.New("compact read failed")
 	responseBody := `{"usage":{"total_tokens":100},"output":[]}`
 	originalBody := `{"usage":{"total_tokens":100},"output":[{"id":"msg","type":"message"}]}`
-	requestBody := `{"model":"gpt-5.5","instructions":"","input":[{"type":"message"}]}`
+	requestBody := `{"model":"gpt-6.1-sol","instructions":"","input":[{"type":"message"}]}`
 	compactBase := func(status int, compactBody io.Reader, errRoundTrip error) func(*testing.T, *int) http.RoundTripper {
 		return func(t *testing.T, compactCalls *int) http.RoundTripper {
 			t.Helper()
@@ -1682,7 +1682,7 @@ func TestCodexCompactionHandlesErrorAndFallbackBranches(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-5.5","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`)
+			req := requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`)
 			threshold, err := cleanCodexRequest(req, true)
 			require.NoError(t, err)
 			require.NotNil(t, threshold)
@@ -2046,7 +2046,7 @@ func TestTransportUsesRecoveredTokenForCompaction(t *testing.T) {
 		return nil, nil
 	})}
 
-	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-5.5","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`))
+	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
 	require.Equal(t, 2, responseCalls)
@@ -2202,7 +2202,7 @@ func TestTransportLeavesCompactRequestsAsJSON(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"id":"resp_1","object":"response.compaction","output":[{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}]}`)), Header: make(http.Header)}, nil
 	})}
 
-	req := requestWithPathAndBody("/backend-api/codex/responses/compact", `{"model":"gpt-5.5","input":[{"id":"item-1","type":"message"},{"content":"summary","encrypted_content":"sealed","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}]}`)
+	req := requestWithPathAndBody("/backend-api/codex/responses/compact", `{"model":"gpt-6.1-sol","input":[{"id":"item-1","type":"message"},{"content":"summary","encrypted_content":"sealed","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}]}`)
 	req.Header.Set("Authorization", "Bearer dummy")
 
 	resp, err := transport.RoundTrip(req)
@@ -2310,7 +2310,7 @@ func runAutoCompactTransportTest(t *testing.T, requestBody, streamBody, compactB
 
 			data, err := io.ReadAll(req.Body)
 			require.NoError(t, err)
-			require.Contains(t, string(data), `"model":"gpt-5.5"`)
+			require.Contains(t, string(data), `"model":"gpt-6.1-sol"`)
 			require.Contains(t, string(data), `"input"`)
 			require.NotContains(t, string(data), `context_management`)
 			require.NotContains(t, string(data), `"id"`)

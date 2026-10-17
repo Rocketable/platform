@@ -213,7 +213,7 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "assistant", "---\ndescription: Main\nmodel: gpt-5.4\nreasoningEffort: high\nverbosity: low\npermission:\n  bash:\n    \"gh *\": allow\n  rocketclaw:\n    code_mode_approve: auto(release-reviewer)\n---\nPrompt\n")
 	writeAgent(t, workspace, "restricted", "---\ndescription: Restricted\nmodel: gpt-5.4\npermission:\n  task:\n    \"go-reviewer\": allow\n---\nPrompt\n")
-	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: gpt-5.5\n---\nPrompt\n")
+	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: gpt-6.1-sol\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	root, err := os.OpenRoot(workspace)
@@ -222,7 +222,7 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	defer func() { require.NoError(t, root.Close()) }()
 
 	require.NoError(t, root.MkdirAll(filepath.Join(config.DefaultRuntimeDir, "agents", "assistant"), 0o700))
-	require.NoError(t, root.WriteFile(filepath.Join(config.DefaultRuntimeDir, "agents", "assistant", "alternative.md"), []byte("---\nmodel: gpt-5.5\n---\nAlternative"), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(config.DefaultRuntimeDir, "agents", "assistant", "alternative.md"), []byte("---\nmodel: gpt-6.1-sol\n---\nAlternative"), 0o600))
 
 	agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
 	require.NoError(t, err)
@@ -233,7 +233,7 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	restricted := agents.Items["restricted"]
 
 	require.Equal(t, "gpt-5.4", primary.Model)
-	require.Equal(t, "gpt-5.5", helper.Model)
+	require.Equal(t, "gpt-6.1-sol", helper.Model)
 	require.True(t, permissionSetAllows(primary.Permission, "bash", "gh *"))
 	require.Equal(t, rocketcode.PermissionRule{Pattern: "code_mode_approve", Action: rocketcode.PermissionAuto, Reviewer: "release-reviewer"}, primary.Permission.Buckets[1].Rules[0])
 	require.False(t, permissionSetAllows(primary.Permission, "task", "*"))
@@ -295,7 +295,7 @@ func TestLoadRocketCodeDefinitionsPreservesGuardrailReference(t *testing.T) {
 
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\nmode: primary\nguardrail: guardrail\n---\nPrompt\n")
-	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: gpt-5.5\nreasoningEffort: low\nverbosity: low\npermission:\n  read:\n    \"docs/*\": allow\n---\nCheck delegated work\n")
+	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: gpt-6.1-sol\nreasoningEffort: low\nverbosity: low\npermission:\n  read:\n    \"docs/*\": allow\n---\nCheck delegated work\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	root, err := os.OpenRoot(workspace)
@@ -311,7 +311,7 @@ func TestLoadRocketCodeDefinitionsPreservesGuardrailReference(t *testing.T) {
 
 	require.Equal(t, "guardrail", main.Guardrail)
 	require.Equal(t, "Check delegated work", guardrail.Prompt)
-	require.Equal(t, "gpt-5.5", guardrail.Model)
+	require.Equal(t, "gpt-6.1-sol", guardrail.Model)
 	require.Equal(t, "low", guardrail.ReasoningEffort)
 	require.Equal(t, "low", guardrail.Verbosity)
 	action, matched := guardrail.Permission.Evaluate("read", "docs/a.md")
@@ -474,9 +474,9 @@ func TestLoadRuntimeDefinitionsUsesLoadedModels(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, stage, "agents"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, stage, "skills"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, stage, "agents", "main.md"), []byte("---\ndescription: Main\nmodel: '{{ model \"loaded\" }}'\n---\nPrompt\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.json"), []byte(`{"models":{"disk":"gpt-5.5"}}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.json"), []byte(`{"models":{"disk":"gpt-6.1-sol"}}`), 0o600))
 
-	_, _, err := LoadRuntimeDefinitions(config.NewLockedConfig(&config.Config{Workspace: workspace, Models: map[string]string{"loaded": "gpt-5.5"}}), stage)
+	_, _, err := LoadRuntimeDefinitions(config.NewLockedConfig(&config.Config{Workspace: workspace, Models: map[string]string{"loaded": "gpt-6.1-sol"}}), stage)
 	require.NoError(t, err)
 }
 

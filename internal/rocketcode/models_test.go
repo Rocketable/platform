@@ -71,7 +71,7 @@ func TestNewWithModelResolverRejectsEmptyRootModelWithoutResolving(t *testing.T)
 				calls++
 				client := openai.NewClient()
 
-				return &client, ProviderOrigin{Provider: "openai", Model: "gpt-5.5"}, nil
+				return &client, ProviderOrigin{Provider: "openai", Model: "gpt-6.1-sol"}, nil
 			})
 
 			_, err := NewWithModelResolver(resolver, testConfig(dir), root, Agents{Items: map[string]Agent{
@@ -94,7 +94,7 @@ func TestNewAppliesAgentOutputSchema(t *testing.T) {
 	loop, err := NewWithModelResolver(testModelResolverFunc(func(model string) (*openai.Client, ProviderOrigin, error) {
 		return &client, ProviderOrigin{Provider: "openai", Model: model}, nil
 	}), testConfig(dir), root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Model: "gpt-5.5", Prompt: "prompt", OutputSchema: map[string]any{
+		"main": {Name: "main", Model: "gpt-6.1-sol", Prompt: "prompt", OutputSchema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{"answer": map[string]any{"type": "string"}},
 			"required":   []any{"answer"},
@@ -122,8 +122,8 @@ func TestNewWithModelResolverResolvesRootAgent(t *testing.T) {
 
 	resolver := testModelResolverFunc(func(model string) (*openai.Client, ProviderOrigin, error) {
 		resolved = append(resolved, model)
-		if model == "work/gpt-5.5" {
-			return workClient, ProviderOrigin{Provider: "work", Model: "gpt-5.5"}, nil
+		if model == "work/gpt-6.1-sol" {
+			return workClient, ProviderOrigin{Provider: "work", Model: "gpt-6.1-sol"}, nil
 		}
 
 		return defaultClient, ProviderOrigin{Provider: "openai", Model: model}, nil
@@ -131,12 +131,12 @@ func TestNewWithModelResolverResolvesRootAgent(t *testing.T) {
 	cfg := testConfig(dir)
 	cfg.ShellEnv = map[string]string{"ROCKETCLAW_METADATA_FRUIT": "banana"}
 	agents := Agents{Items: map[string]Agent{
-		"main":   {Name: "main", Model: "work/gpt-5.5", Prompt: "prompt", Permission: parsePermissionYAML(t, `edit: {".tmp/${ROCKETCLAW_METADATA_FRUIT}/note.txt": allow}`)},
+		"main":   {Name: "main", Model: "work/gpt-6.1-sol", Prompt: "prompt", Permission: parsePermissionYAML(t, `edit: {".tmp/${ROCKETCLAW_METADATA_FRUIT}/note.txt": allow}`)},
 		"unused": {Name: "unused", Model: "   ", Prompt: "unused", Permission: parsePermissionYAML(t, `edit: {"unused/note.txt": allow}`)},
 	}}
 	loop, err := NewWithModelResolver(resolver, cfg, root, agents, Skills{Items: map[string]Skill{}}, "main", nil)
 	require.NoError(t, err)
-	require.Equal(t, []string{"work/gpt-5.5"}, resolved)
+	require.Equal(t, []string{"work/gpt-6.1-sol"}, resolved)
 	require.Contains(t, loop.SystemPrompt, ".tmp/banana/note.txt")
 	action, _ := loop.Permissions.Evaluate("edit", ".tmp/banana/note.txt")
 	require.Equal(t, PermissionAllow, action)
@@ -150,7 +150,7 @@ func TestNewWithModelResolverResolvesRootAgent(t *testing.T) {
 	close(input)
 	require.NoError(t, loop.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1)))
 	require.Len(t, workRequests, 1)
-	require.Contains(t, <-workRequests, `"model":"gpt-5.5"`)
+	require.Contains(t, <-workRequests, `"model":"gpt-6.1-sol"`)
 	require.Empty(t, defaultRequests)
 
 	for _, env := range []map[string]string{nil, {}, {"ROCKETCLAW_METADATA_FRUIT": ""}} {
@@ -182,10 +182,10 @@ func TestNewWithModelResolverRejectsUnknownProvider(t *testing.T) {
 			return nil, ProviderOrigin{}, errors.New("unknown provider work")
 		}, wantText: "unknown provider work"},
 		{name: "nil client", resolve: func(string) (*openai.Client, ProviderOrigin, error) {
-			return nil, ProviderOrigin{Provider: "work", Model: "gpt-5.5"}, nil
+			return nil, ProviderOrigin{Provider: "work", Model: "gpt-6.1-sol"}, nil
 		}, wantText: "client is required"},
 		{name: "empty provider", resolve: func(string) (*openai.Client, ProviderOrigin, error) {
-			return &client, ProviderOrigin{Model: "gpt-5.5"}, nil
+			return &client, ProviderOrigin{Model: "gpt-6.1-sol"}, nil
 		}, wantText: "provider is required"},
 		{name: "empty model", resolve: func(string) (*openai.Client, ProviderOrigin, error) {
 			return &client, ProviderOrigin{Provider: "work"}, nil
@@ -195,7 +195,7 @@ func TestNewWithModelResolverRejectsUnknownProvider(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := NewWithModelResolver(tt.resolve, testConfig(dir), root, Agents{Items: map[string]Agent{
-				"main": {Name: "main", Model: "work/gpt-5.5", Prompt: "prompt"},
+				"main": {Name: "main", Model: "work/gpt-6.1-sol", Prompt: "prompt"},
 			}}, Skills{Items: map[string]Skill{}}, "main", nil)
 
 			require.ErrorContains(t, err, tt.wantText)
@@ -213,9 +213,9 @@ func TestNewUsesResolverCompactThreshold(t *testing.T) {
 	cfg := testConfig(dir)
 	cfg.CompactThreshold = 11111
 	loop, err := NewWithModelResolver(testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
-		return &client, ProviderOrigin{Provider: "work", Model: "gpt-5.5", CompactThreshold: 80000}, nil
+		return &client, ProviderOrigin{Provider: "work", Model: "gpt-6.1-sol", CompactThreshold: 80000}, nil
 	}), cfg, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Model: "work/gpt-5.5", Prompt: "prompt"},
+		"main": {Name: "main", Model: "work/gpt-6.1-sol", Prompt: "prompt"},
 	}}, Skills{Items: map[string]Skill{}}, "main", nil)
 
 	require.NoError(t, err)
@@ -232,9 +232,9 @@ func TestNewUsesConfigCompactThresholdWhenResolverOmitsIt(t *testing.T) {
 	cfg := testConfig(dir)
 	cfg.CompactThreshold = 11111
 	loop, err := NewWithModelResolver(testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
-		return &client, ProviderOrigin{Provider: "openai", Model: "gpt-5.5"}, nil
+		return &client, ProviderOrigin{Provider: "openai", Model: "gpt-6.1-sol"}, nil
 	}), cfg, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Model: "gpt-5.5", Prompt: "prompt"},
+		"main": {Name: "main", Model: "gpt-6.1-sol", Prompt: "prompt"},
 	}}, Skills{Items: map[string]Skill{}}, "main", nil)
 
 	require.NoError(t, err)
@@ -248,7 +248,7 @@ func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	client, _ := testResolverClient(t, "answer")
 	resolver := testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
-		return client, ProviderOrigin{Provider: "work", Model: "gpt-5.5"}, nil
+		return client, ProviderOrigin{Provider: "work", Model: "gpt-6.1-sol"}, nil
 	})
 	cfg := testConfig(dir)
 	cfg.ReasoningEffort = "low"
@@ -260,9 +260,9 @@ func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
 			}}, Skills{Items: map[string]Skill{}}, "main", nil)
 
 			require.NoError(t, err)
-			require.Equal(t, "gpt-5.5", loop.Model)
-			require.Equal(t, "work/gpt-5.5", loop.DisplayModel)
-			require.Equal(t, ProviderOrigin{Provider: "work", Model: "gpt-5.5"}, loop.ProviderOrigin)
+			require.Equal(t, "gpt-6.1-sol", loop.Model)
+			require.Equal(t, "work/gpt-6.1-sol", loop.DisplayModel)
+			require.Equal(t, ProviderOrigin{Provider: "work", Model: "gpt-6.1-sol"}, loop.ProviderOrigin)
 
 			require.Equal(t, cmp.Or(effort, "low"), string(loop.ReasoningEffort))
 
@@ -284,7 +284,7 @@ func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
 			var restored SessionEntry
 			require.NoError(t, json.Unmarshal([]byte(marshalJSON(t, saved)), &restored))
 			require.Equal(t, "main", restored.Agent)
-			require.Equal(t, "work/gpt-5.5", restored.Model)
+			require.Equal(t, "work/gpt-6.1-sol", restored.Model)
 			require.Equal(t, new(string(loop.ReasoningEffort)), restored.ReasoningEffort)
 			require.Equal(t, restored.ReasoningEffort, turnSaves(t, sink)[0].Record.ReasoningEffort)
 		})
@@ -311,9 +311,9 @@ func TestParseModelRef(t *testing.T) {
 	for _, tc := range []struct{ name, model, apiModel string }{
 		{name: "empty", model: "", apiModel: "gpt-6-luna"},
 		{name: "whitespace", model: "   ", apiModel: "gpt-6-luna"},
-		{name: "openai", model: "gpt-5.5", apiModel: "gpt-5.5"},
-		{name: "legacy openai prefix", model: "openai/gpt-5.5", apiModel: "gpt-5.5"},
-		{name: "trimmed prefix", model: " openai/gpt-5.5 ", apiModel: "gpt-5.5"},
+		{name: "openai", model: "gpt-6.1-sol", apiModel: "gpt-6.1-sol"},
+		{name: "legacy openai prefix", model: "openai/gpt-6.1-sol", apiModel: "gpt-6.1-sol"},
+		{name: "trimmed prefix", model: " openai/gpt-6.1-sol ", apiModel: "gpt-6.1-sol"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			parsed, err := parseModelRef(tc.model)
@@ -332,12 +332,12 @@ func TestNewWithProvidersNormalizesOpenAIPrefixedAgentModel(t *testing.T) {
 
 	openAIClient := openai.NewClient()
 	loop, err := NewWithProviders(Providers{OpenAI: &openAIClient}, testConfig(dir), root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Model: "openai/gpt-5.5", Prompt: "prompt"},
+		"main": {Name: "main", Model: "openai/gpt-6.1-sol", Prompt: "prompt"},
 	}}, Skills{Items: map[string]Skill{}}, "main", nil)
 
 	require.NoError(t, err)
-	require.Equal(t, "openai/gpt-5.5", loop.DisplayModel)
-	require.Equal(t, "gpt-5.5", loop.Model)
+	require.Equal(t, "openai/gpt-6.1-sol", loop.DisplayModel)
+	require.Equal(t, "gpt-6.1-sol", loop.Model)
 }
 
 func TestNewWithProvidersRejectsNonOpenAIProviderQualifiedAgentModel(t *testing.T) {
@@ -362,7 +362,7 @@ func TestNewWithProvidersRejectsEmptyAgentModel(t *testing.T) {
 
 	client := openai.NewClient()
 	config := testConfig(dir)
-	config.Model = "gpt-5.5"
+	config.Model = "gpt-6.1-sol"
 	_, err = NewWithProviders(Providers{OpenAI: &client}, config, root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Prompt: "prompt"},
 	}}, Skills{Items: map[string]Skill{}}, "main", nil)
@@ -386,7 +386,7 @@ func TestOpenAIResponsesModeUsesResponsesEndpoint(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 
-		_, err = io.WriteString(w, `{"id":"resp-local","object":"response","created_at":1,"model":"gpt-5.5","output":[{"id":"msg-1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"responses answer"}]}],"parallel_tool_calls":true}`)
+		_, err = io.WriteString(w, `{"id":"resp-local","object":"response","created_at":1,"model":"gpt-6.1-sol","output":[{"id":"msg-1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"responses answer"}]}],"parallel_tool_calls":true}`)
 		if err != nil {
 			t.Errorf("write response body: %v", err)
 		}
@@ -406,7 +406,7 @@ func TestOpenAIResponsesModeUsesResponsesEndpoint(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "/responses", route)
-	require.Contains(t, body, `"model":"gpt-5.5"`)
+	require.Contains(t, body, `"model":"gpt-6.1-sol"`)
 	require.NotContains(t, body, `"messages"`)
 	require.Equal(t, []ChatResponse{assistantMessage("responses answer")}, collectResponses(output))
 }
@@ -431,7 +431,7 @@ func TestOpenAIResponsesModeStripsPersistedCompactionMetadata(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 
-		_, err = io.WriteString(w, `{"id":"resp-local","object":"response","created_at":1,"model":"gpt-5.5","output":[{"id":"msg-1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"responses answer"}]}],"parallel_tool_calls":true}`)
+		_, err = io.WriteString(w, `{"id":"resp-local","object":"response","created_at":1,"model":"gpt-6.1-sol","output":[{"id":"msg-1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"responses answer"}]}],"parallel_tool_calls":true}`)
 		if err != nil {
 			t.Errorf("write response body: %v", err)
 		}
@@ -466,9 +466,9 @@ func testOpenAILoop(t *testing.T, client *openai.Client) *Runtime {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	config := testConfig(dir)
-	config.Model = "gpt-5.5"
+	config.Model = "gpt-6.1-sol"
 	loop, err := NewWithProviders(Providers{OpenAI: client}, config, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Model: "gpt-5.5", Prompt: "prompt"},
+		"main": {Name: "main", Model: "gpt-6.1-sol", Prompt: "prompt"},
 	}}, Skills{Items: map[string]Skill{}}, "main", nil)
 	require.NoError(t, err)
 
