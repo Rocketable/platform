@@ -48,17 +48,19 @@ ORDER BY id`, "rocketcode session entries", scanObservedEntry, conversationID)
 
 // scanObservedEntry reads id, entry_json, source_conversation_id, synced, and
 // revert_index from effective_entries.
+// The JSON is decoded before advancing rows; retained fields own their bytes.
+// RawBytes also prevents cancellation from closing rows during decoding.
 func scanObservedEntry(row rowScanner) (ObservedSessionEntry, error) {
 	var (
 		entry ObservedSessionEntry
-		raw   string
+		raw   sql.RawBytes
 		index int
 	)
 	if err := row.Scan(&entry.ID, &raw, &entry.SourceConversationID, &entry.Synced, &index); err != nil {
 		return ObservedSessionEntry{}, fmt.Errorf("scan rocketcode session entry: %w", err)
 	}
 
-	if err := json.Unmarshal([]byte(raw), &entry.Entry); err != nil {
+	if err := json.Unmarshal(raw, &entry.Entry); err != nil {
 		return ObservedSessionEntry{}, fmt.Errorf("parse rocketcode session entry: %w", err)
 	}
 

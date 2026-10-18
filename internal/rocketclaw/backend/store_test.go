@@ -419,6 +419,33 @@ func BenchmarkRemoveSessionEntryNUL(b *testing.B) {
 	}
 }
 
+func BenchmarkObserveEntries(b *testing.B) {
+	service, err := NewSessionService(b.TempDir())
+	require.NoError(b, err)
+	b.Cleanup(func() { require.NoError(b, service.Stop()) })
+
+	entry := testSessionEntry(strings.Repeat("synthetic entry ", 4096), "assistant")
+	for range 32 {
+		_, err := service.AppendEntryID(b.Context(), "benchmark", entry)
+		require.NoError(b, err)
+	}
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		entries, err := service.ObserveEntries(b.Context(), "benchmark")
+		require.NoError(b, err)
+		require.Len(b, entries, 32)
+	}
+}
+
+func TestObserveEntriesJSONAllocationBudget(t *testing.T) {
+	// Decoded entries own their JSON; the input conversion can reuse the row buffer.
+	result := testing.Benchmark(BenchmarkObserveEntries)
+	require.Positive(t, result.N)
+	require.Less(t, result.AllocedBytesPerOp(), int64(6<<20))
+}
+
 func TestSessionStoreAppendAndLoad(t *testing.T) {
 	t.Parallel()
 
