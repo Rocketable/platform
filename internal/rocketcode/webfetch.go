@@ -21,21 +21,17 @@ const (
 	maxWebFetchTimeout     = 120 * time.Second
 )
 
-func webFetchDescription() string {
-	return strings.Join([]string{
-		"- Fetches content from a specified URL",
-		"- Takes a URL and optional format as input",
-		"- Fetches the URL content, converts to requested format (markdown by default)",
-		"- Returns the content in the specified format",
-		"- Use this tool when you need to retrieve and analyze web content",
-		"",
-		"Usage notes:",
-		"- The URL must be a fully-formed valid URL",
-		"- Format options: markdown (default), text, or html",
-		"- This tool is read-only and does not modify any files",
-		"- Image and PDF responses are returned as model-visible attachments",
-	}, "\n")
-}
+const webFetchDescription = `- Fetches content from a specified URL
+- Takes a URL and optional format as input
+- Fetches the URL content, converts to requested format (markdown by default)
+- Returns the content in the specified format
+- Use this tool when you need to retrieve and analyze web content
+
+Usage notes:
+- The URL must be a fully-formed valid URL
+- Format options: markdown (default), text, or html
+- This tool is read-only and does not modify any files
+- Image and PDF responses are returned as model-visible attachments`
 
 func webFetch(ctx context.Context, params webFetchToolParams) (ToolResult, error) {
 	if !strings.HasPrefix(params.URL, "http://") && !strings.HasPrefix(params.URL, "https://") {

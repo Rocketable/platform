@@ -365,7 +365,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 			},
 		},
 		"webfetch": {
-			Definition: *functionTool("webfetch", webFetchDescription(), map[string]any{
+			Definition: *functionTool("webfetch", webFetchDescription, map[string]any{
 				"url":       map[string]any{"type": "string"},
 				"format":    map[string]any{"type": "string", "enum": []string{"text", "markdown", "html"}},
 				"timeout_s": map[string]any{"type": "integer"},
