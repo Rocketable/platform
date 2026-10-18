@@ -16,7 +16,7 @@ import { queries, mutations, listSessions, rpc, RPCError } from "./api";
 import { draftContent } from "./drafts";
 import { holdWakeLock, setVoiceSticky, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Layers, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Tag, TextCursorInput, Undo2, Wrench, X } from "lucide-react";
+import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Layers, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Tag, TextCursorInput, Undo2, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useDeferredValue, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -1286,15 +1286,12 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
                   <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="New session" onClick={newChat}>
                     <SquarePen className="size-[var(--navigation-icon)]" />
                   </TooltipTrigger><TooltipContent side="top">New session</TooltipContent></Tooltip>
-                  <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Search sessions" onClick={() => openPalette("sessions")}>
+                  <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Search sessions and commands" onClick={() => openPalette("sessions")}>
                     <Search className="size-[var(--navigation-icon)]" />
-                  </TooltipTrigger><TooltipContent side="top">Search sessions</TooltipContent></Tooltip>
+                  </TooltipTrigger><TooltipContent side="top">Search sessions and commands</TooltipContent></Tooltip>
                   <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Voice" onClick={() => navigate("/voice")}>
                     <Mic className="size-[var(--navigation-icon)]" />
                   </TooltipTrigger><TooltipContent side="top">Voice</TooltipContent></Tooltip>
-                  <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Open command palette" onClick={() => openPalette("commands")}>
-                    <Command className="size-[var(--navigation-icon)]" />
-                  </TooltipTrigger><TooltipContent side="top">Open command palette</TooltipContent></Tooltip>
                   <CopyPageLink />
                 </div>
               </div>
@@ -1465,31 +1462,39 @@ function paletteRows(
   actions: { key: string; label: string; detail?: string; keep?: boolean; disabled?: boolean; run: () => void }[],
   recent: string[],
 ): { key: string; label?: string; detail?: string; session?: Session; loading?: boolean; keep?: boolean; disabled?: boolean; run: () => void }[] {
-  if (mode === "sessions") {
-    return sidebar.rows.map((session) => ({
-      key: session.id,
-      session, loading: sidebar.loadingIds.has(session.id),
-      run: () => navigate(sessionPath(session.id)),
-    }));
-  }
   if (mode === "cron") {
     return (jobs ?? []).filter((job) => job.status !== "ran" && (needle === "" || `${job.stem} ${job.schedule ?? ""} ${job.agent ?? ""} ${job.channel ?? ""}`.toLowerCase().includes(needle))).map((job) => ({
       key: job.stem, label: job.stem, detail: [job.schedule, job.agent, job.channel].filter(Boolean).join(" · "), keep: true, run: () => runStem(job.stem),
     }));
   }
-  return [
+  // Match quality: 0 the whole label, 1 one contiguous run, 2 three or more letters in order with gaps, 3 none; all case-insensitive.
+  const tier = (label: string) => {
+    const text = label.toLowerCase(), letters = [...needle];
+    if (text === needle) return 0;
+    if (text.includes(needle)) return 1;
+    let at = 0;
+    for (const char of text) if (char === letters[at]) at++;
+    return letters.length >= 3 && at === letters.length ? 2 : 3;
+  };
+  // Session search lists commands, which match at once, above the server's rows; an empty query or a filter lists sessions only.
+  const commands = mode === "sessions" && (needle === "" || /(?:^|\s)(?:tag|cron|agent|room|principal|is|sort):\S/.test(needle)) ? [] : [
     ...actions,
     { key: "new", label: "Sessions: New", run: newChat },
     { key: "search", label: "Sessions: Search", run: () => navigate("/search") },
     { key: "run-cron", label: "Cron: Run", keep: true, run: openCron },
     ...([["voice", "Voice"], ["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
     // VS Code: src/vs/platform/quickinput/browser/commandsQuickAccess.ts, _getPicks.
-  ].filter((item) => needle === "" || item.label.toLowerCase().includes(needle)).sort((a, b) => {
-    // Recently run commands come first, except Timeline levels, which always keep the Config slider's order.
+  ].filter((item) => tier(item.label) < 3).sort((a, b) => {
+    // Better matches come first. Within a tier, recently run commands lead, except Timeline levels, which always keep the Config slider's order.
     const level = (key: string) => timelineLevels.findIndex(({ id }) => key === `timeline-${id}`);
     const rank = (key: string) => level(key) >= 0 ? Infinity : recent.indexOf(key) + 1 || Infinity;
-    return rank(a.key) - rank(b.key) || (level(a.key) >= 0 && level(b.key) >= 0 ? level(a.key) - level(b.key) : a.label.localeCompare(b.label));
+    return tier(a.label) - tier(b.label) || rank(a.key) - rank(b.key) || (level(a.key) >= 0 && level(b.key) >= 0 ? level(a.key) - level(b.key) : a.label.localeCompare(b.label));
   });
+  return mode === "commands" ? commands : [...commands, ...sidebar.rows.map((session) => ({
+    key: session.id,
+    session, loading: sidebar.loadingIds.has(session.id),
+    run: () => navigate(sessionPath(session.id)),
+  }))];
 }
 
 // The server reads and matches the query. While typing, an unfinished last word is left out; Enter sends everything.
@@ -1567,7 +1572,7 @@ function matchedRows(response: SearchSessionsResponse | undefined, rows: Session
   return { found, missing: found.length < matches.length };
 }
 
-const paletteCopy = { sessions: { title: "Go to session", desc: "Search and open a session.", placeholder: "Search sessions" }, commands: { title: "Run command", desc: "Search and run a command.", placeholder: "Type a command" },
+const paletteCopy = { sessions: { title: "Go to session or command", desc: "Search and open a session, or run a command.", placeholder: "Search sessions and commands" }, commands: { title: "Run command", desc: "Search and run a command.", placeholder: "Type a command" },
   cron: { title: "Run cron", desc: "Search and run a cron job.", placeholder: "Search cron jobs" } };
 
 // "Sessions: New on <server>" turns the palette into a folder picker for a remote OpenCode
@@ -1611,6 +1616,8 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
   const [recent, setRecent] = useState<string[]>(() => JSON.parse(localStorage.getItem("command-history") ?? "[]"));
   const [pick, setPick] = useState(0);
   const [entered, setEntered] = useState(false);
+  // Whether the arrows moved the highlight since the last edit.
+  const moved = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => {
     const viewport = window.visualViewport;
@@ -1630,7 +1637,8 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
       style.removeProperty("--search-height");
     };
   }, [mode]);
-  useLayoutEffect(() => { input.current?.focus(); }, []);
+  // Leaving session search for cron or folders swaps the input, so each mode focuses its own.
+  useLayoutEffect(() => { if (mode !== undefined) input.current?.focus(); }, [mode]);
   const agents = useQuery({ ...queries.agents(), staleTime: 60_000, enabled: mode === "sessions" });
   const active = useRef<HTMLButtonElement>(null);
   const search = useSessionSearch(mode === "sessions" ? query : "", false, entered);
@@ -1645,7 +1653,8 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
       setMode(undefined);
     },
   });
-  const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(0); }, paletteCopy[mode ?? "sessions"]);
+  // The folder picker leaves session search, so typed folders are never sent as a search.
+  const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(0); setMode("commands"); }, paletteCopy[mode ?? "sessions"]);
   const inSpace = useInSpace();
   const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim().toLowerCase(), { rows: search.rows, loadingIds: sidebar.loadingIds }, jobs.data?.filter(inSpace), newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...timeline, ...outputs], recent));
   const selected = items.length === 0 ? 0 : pick % items.length;
@@ -1653,7 +1662,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
   const shown = useDeferredValue(items, items.slice(0, 50));
   const choose = (item: (typeof items)[number]) => {
     if (item.disabled) return;
-    if (mode === "commands") {
+    if (mode !== "cron" && !item.session) {
       const next = [item.key, ...recent.filter((key) => key !== item.key)].slice(0, 50);
       localStorage.setItem("command-history", JSON.stringify(next));
       setRecent(next);
@@ -1666,9 +1675,13 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
   const copy = remote.copy;
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     const next = paletteMove(event, selected, items.length, () => {
+      const item = items[selected];
+      // In session search, Enter runs a command containing the typed text or one picked with the arrows; a fuzzy one on top yields to the sessions.
+      if (item && !item.session && (mode !== "sessions" || moved.current || item.label!.toLowerCase().includes(query.trim().toLowerCase()))) return choose(item);
       setEntered(true);
-      search.enter(() => { if (items[selected]) choose(items[selected]); }, (session) => choose({ key: session.id, run: () => navigate(sessionPath(session.id)) }));
+      search.enter(() => { const row = item?.session ? item : items.find(({ session }) => session); if (row) choose(row); }, (session) => choose({ key: session.id, session, run: () => navigate(sessionPath(session.id)) }));
     });
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") moved.current = true;
     if (event.key !== "Enter") setPick(next);
   };
   return (
@@ -1676,7 +1689,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
       <DialogContent initialFocus={input} showCloseButton={false} className="top-[20%] flex max-h-[75vh] translate-y-0 flex-col overflow-hidden sm:max-w-lg [@media(pointer:coarse)]:top-[var(--search-top,1rem)] [@media(pointer:coarse)]:max-h-[var(--search-height,75vh)]">
         <DialogTitle className="sr-only">{copy.title}</DialogTitle>
         <DialogDescription className="sr-only">{copy.desc}</DialogDescription>
-        {mode === "sessions" ? <SessionSearch rows={sidebar.rows} catalog={agents.data?.agents ?? []} query={query} setQuery={(update) => { setPick(0); setEntered(false); setQuery(update); }} search={search} inputRef={input} placeholder={copy.placeholder} onKeyDown={onKeyDown} /> : <Input
+        {mode === "sessions" ? <SessionSearch rows={sidebar.rows} catalog={agents.data?.agents ?? []} query={query} setQuery={(update) => { setPick(0); setEntered(false); moved.current = false; setQuery(update); }} search={search} inputRef={input} placeholder={copy.placeholder} onKeyDown={onKeyDown} /> : <Input
           ref={input}
           value={query}
           onChange={(event) => { setPick(0); setQuery(event.target.value); }}
@@ -1687,10 +1700,10 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
         {runCron.error || actions.error ? <p role="alert" className="px-3 text-sm text-destructive">{(runCron.error ?? actions.error)?.message}</p> : null}
         {remote.alert}
         {search.error ? <p role="alert" className="px-3 text-sm text-destructive">Search failed: {search.error}</p> : null}
-        <ul data-pending={search.pending} className="max-h-[min(24rem,50vh)] overflow-y-auto p-1 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent] data-[pending=true]:opacity-50">
+        <ul data-pending={search.pending} className="max-h-[min(24rem,50vh)] overflow-y-auto p-1 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
           {items.length === 0 ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, search, jobs.isLoading, remote.empty)}</li> : shown.map((item, index) => (
             <li key={item.key}>
-              <button disabled={item.disabled} ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start justify-center rounded-md px-3 text-left text-sm disabled:opacity-50", mode === "commands" ? "min-h-9 py-1.5 [@media(pointer:coarse)]:min-h-11" : "py-2", index === selected && "bg-accent")} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item)}>
+              <button disabled={item.disabled} ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start justify-center rounded-md px-3 text-left text-sm disabled:opacity-50", item.session ? "py-2" : "min-h-9 py-1.5 [@media(pointer:coarse)]:min-h-11", item.session && search.pending && "opacity-50", index === selected && "bg-accent")} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item)}>
                 {item.session ? <SessionRowContent session={item.session} loading={item.loading} /> : <><span className="font-medium">{item.label}</span>{item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}</>}
               </button>
             </li>

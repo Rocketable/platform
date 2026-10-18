@@ -100,7 +100,7 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
       // ended, so the click opens an interaction span for the frame.
       await page.addScriptTag({ content: `document.body.click(); const until = performance.now() + 150; while (performance.now() < until) {} document.body.append("slow script"); holdFrame("script", "^classic-script:");` });
     }
-    await page.getByRole("button", { name: "Open command palette", exact: true }).click();
+    await page.keyboard.press("Control+Shift+p");
     await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
     await page.getByRole("dialog").waitFor({ state: "detached" });
     await page.waitForURL("**/search");

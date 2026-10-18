@@ -214,8 +214,8 @@ test("room autocomplete keeps selections and full labels on each search surface"
       await page.goto(origin + (palette ? "/" : "/search"));
       await page.locator("footer").waitFor();
       if (palette) await page.keyboard.press("Control+p");
-      const surface = palette ? page.getByRole("dialog", { name: "Go to session", exact: true }) : page.getByRole("tabpanel", { name: "Search", exact: true });
-      const input = surface.getByRole("textbox", { name: "Search sessions", exact: true });
+      const surface = palette ? page.getByRole("dialog", { name: "Go to session or command", exact: true }) : page.getByRole("tabpanel", { name: "Search", exact: true });
+      const input = surface.getByRole("textbox", { name: palette ? "Search sessions and commands" : "Search sessions", exact: true });
       await input.fill("room:am");
       await surface.getByRole("button", { name: "amber", exact: true }).click();
       await surface.getByRole("button", { name: "room:amber", exact: true }).waitFor();
@@ -619,7 +619,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     };
     const goToSession = async (target: typeof page, text: string) => {
       await openSessions(target);
-      await target.getByRole("dialog", { name: "Go to session", exact: true }).getByRole("button").filter({ hasText: text }).click();
+      await target.getByRole("dialog", { name: "Go to session or command", exact: true }).getByRole("button").filter({ hasText: text }).click();
     };
     await page.addInitScript(() => {
       const open = IDBFactory.prototype.open;
@@ -690,8 +690,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     });
     identityHold.resolve();
     await page.keyboard.press("Control+p");
-    const sessionPalette = page.getByRole("dialog", { name: "Go to session", exact: true });
-    const search = sessionPalette.getByPlaceholder("Search sessions", { exact: true });
+    const sessionPalette = page.getByRole("dialog", { name: "Go to session or command", exact: true });
+    const search = sessionPalette.getByPlaceholder("Search sessions and commands", { exact: true });
     await shown(sessionPalette, "Huge");
     await hidden(sessionPalette, "will vanish");
     expect(historyRequests).toEqual([]);
@@ -725,18 +725,18 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
 
     const navigation = page.locator("footer");
     const compactHeight = (await navigation.boundingBox())!.height;
-    const navigationCommands = navigation.getByRole("button", { name: "Open command palette", exact: true });
-    expect(await navigation.locator("#bottom-navigation button:visible").count()).toBe(5);
+    const navigationSearch = navigation.getByRole("button", { name: "Search sessions and commands", exact: true });
+    expect(await navigation.locator("#bottom-navigation button:visible").count()).toBe(4);
     expect(await navigation.getByRole("link").count()).toBe(0);
-    expect((await navigationCommands.boundingBox())!.width).toBe(48);
-    expect((await navigationCommands.locator("svg").boundingBox())!.width).toBe(24);
+    expect((await navigationSearch.boundingBox())!.width).toBe(48);
+    expect((await navigationSearch.locator("svg").boundingBox())!.width).toBe(24);
     await page.mouse.move(0, 0);
     await navigation.getByRole("button", { name: "Hide bottom navigation" }).click();
-    expect(await navigationCommands.isVisible()).toBe(false);
+    expect(await navigationSearch.isVisible()).toBe(false);
     expect((await navigation.boundingBox())!.height).toBeLessThan(compactHeight);
     expect(await navigation.getByRole("button", { name: "Show bottom navigation" }).getAttribute("aria-expanded")).toBe("false");
     await navigation.getByRole("button", { name: "Show bottom navigation" }).press("Enter");
-    expect(await navigationCommands.isVisible()).toBe(true);
+    expect(await navigationSearch.isVisible()).toBe(true);
     await navigation.getByRole("button", { name: "Hide bottom navigation" }).press("Space");
     await navigation.getByRole("button", { name: "Show bottom navigation" }).click();
     expect((await navigation.boundingBox())!.height).toBe(compactHeight);
@@ -744,7 +744,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await page.locator("header:visible").count()).toBe(0);
     await page.keyboard.press("Control+p");
     expect(await sessionPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
-    await sessionPalette.getByPlaceholder("Search sessions", { exact: true }).waitFor();
+    await search.waitFor();
     await sessionPalette.getByRole("button").filter({ hasText: "saved preview" }).waitFor();
     // The palette scales in; measure alignment only after its opening animation settles.
     await sessionPalette.evaluate((node: HTMLElement) => Promise.all(node.getAnimations({ subtree: true }).map((animation) => animation.finished)));
@@ -800,25 +800,44 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       "Timeline: DetailedExpand execute output. Show subagents and skills separately and group other activity.", "Timeline: EverythingShow all activity separately and expanded.", "Voice"]);
     await page.keyboard.press("Escape");
     await commandPalette.waitFor({ state: "hidden" });
-    await navigationCommands.click();
-    await commandPalette.waitFor();
+    // The search button opens one palette: sessions only when empty, matching commands above sessions once typed.
+    await page.evaluate(() => localStorage.setItem("command-history", JSON.stringify(["tab-close-others"])));
+    await navigationSearch.click();
+    await sessionPalette.getByRole("button").filter({ hasText: "saved preview" }).waitFor();
+    expect(await sessionPalette.getByRole("button", { name: "Settings", exact: true }).count()).toBe(0);
+    const commandRows = sessionPalette.locator("ul > li > button").filter({ hasNot: page.locator('[data-slot="session-title"]') });
+    await search.fill("tabs: close");
+    // An exact match leads; recent then alphabetical contiguous matches follow, ahead of the server's sessions.
+    expect(await commandRows.allTextContents()).toEqual(["Tabs: Close", "Tabs: Close others", "Tabs: Close all", "Tabs: Close to the right"]);
+    expect(await sessionPalette.locator("ul > li > button").first().textContent()).toBe("Tabs: Close");
+    await search.fill("tabs: close t");
+    expect(await commandRows.allTextContents()).toEqual(["Tabs: Close to the right", "Tabs: Close others"]); // A contiguous match beats a recent fuzzy one.
+    await search.fill("cron: run"); // A bare key is not a filter.
+    await sessionPalette.getByRole("button", { name: "Cron: Run", exact: true }).waitFor();
+    await search.fill("is:pinned cron: run");
+    await sessionPalette.getByRole("button", { name: "Cron: Run", exact: true }).waitFor({ state: "detached" });
+    await search.fill("cron: run");
+    await search.press("Enter");
+    const cronPicker = page.getByRole("dialog", { name: "Run cron", exact: true }).getByPlaceholder("Search cron jobs", { exact: true });
+    await cronPicker.waitFor();
+    expect(await cronPicker.evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
     await page.keyboard.press("Escape");
-    await commandPalette.waitFor({ state: "hidden" });
+    await cronPicker.waitFor({ state: "hidden" });
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForFunction(() => document.querySelector('button[aria-label="Hide bottom navigation"]')!.getBoundingClientRect().height >= 44);
     expect((await navigation.getByRole("button", { name: "Hide bottom navigation" }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
-    expect((await navigationCommands.boundingBox())!.width).toBeGreaterThanOrEqual(44);
+    expect((await navigationSearch.boundingBox())!.width).toBeGreaterThanOrEqual(44);
     const newBounds = (await navigation.getByRole("button", { name: "New session", exact: true }).boundingBox())!;
-    const navigationSearchBounds = (await navigation.getByRole("button", { name: "Search sessions", exact: true }).boundingBox())!;
+    const navigationSearchBounds = (await navigationSearch.boundingBox())!;
     expect(navigationSearchBounds.x - newBounds.x - newBounds.width).toBeGreaterThanOrEqual(8);
     await page.mouse.move(0, 0);
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await navigation.getByRole("button", { name: "Hide bottom navigation" }).tap();
-    expect(await navigationCommands.isVisible()).toBe(false);
+    expect(await navigationSearch.isVisible()).toBe(false);
     await navigation.getByRole("button", { name: "Show bottom navigation" }).tap();
-    expect(await navigationCommands.isVisible()).toBe(true);
+    expect(await navigationSearch.isVisible()).toBe(true);
     expect(await navigation.getByRole("button", { name: "Hide bottom navigation" }).evaluate((element: HTMLElement) => {
       const style = getComputedStyle(element);
       return [style.borderTopWidth, style.boxShadow, style.backgroundColor];
@@ -831,18 +850,18 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + 40 }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     await navigation.getByRole("button", { name: "Show bottom navigation" }).waitFor();
-    expect(await navigationCommands.isVisible()).toBe(false);
+    expect(await navigationSearch.isVisible()).toBe(false);
     const showHandle = (await navigation.getByRole("button", { name: "Show bottom navigation" }).boundingBox())!;
     const showY = showHandle.y + showHandle.height / 2;
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y: showY }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: showY - 40 }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     await navigation.getByRole("button", { name: "Hide bottom navigation" }).waitFor();
-    expect(await navigationCommands.isVisible()).toBe(true);
+    expect(await navigationSearch.isVisible()).toBe(true);
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + 40 }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] });
-    expect(await navigationCommands.isVisible()).toBe(true);
+    expect(await navigationSearch.isVisible()).toBe(true);
     expect((await navigation.getByRole("button", { name: "Hide bottom navigation" }).locator("..").boundingBox())!.height).toBe(16);
     await touch.detach();
     expect(ctrl.listCalls).toBe(heldCalls);
@@ -859,8 +878,20 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await skillComposer.fill("");
 
     await skillComposer.fill("retained through browser history");
-    await navigationCommands.click();
-    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "List Agents" }).click();
+    await navigationSearch.click();
+    const listAgents = sessionPalette.getByRole("button", { name: "List Agents", exact: true });
+    await search.fill("lag");
+    await listAgents.waitFor();
+    await search.fill("lg"); // Fuzzy matching starts at three letters.
+    await listAgents.waitFor({ state: "detached" });
+    await search.fill("lag");
+    await search.press("Enter"); // A fuzzy command on top yields to the sessions, and none match.
+    await page.waitForTimeout(300); // Past the search pause.
+    expect(page.url()).toBe(origin + "/");
+    expect(await listAgents.isVisible()).toBe(true);
+    await search.press("ArrowDown");
+    await search.press("ArrowUp");
+    await search.press("Enter"); // Picked with the arrows, it runs without waiting for session results.
     await page.waitForURL("**/agents");
     await page.getByRole("button", { name: /^other/ }).click();
     expect(await page.getByRole("heading", { name: "Shell" }).locator("..").getByText("/usr/local/bin/agent-sandbox").textContent()).toBe("/usr/local/bin/agent-sandbox");
@@ -1434,7 +1465,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await runningPage.setViewportSize({ width, height: 844 });
       await runningPage.goto(origin);
       await openSessions(runningPage);
-      const runningPalette = runningPage.getByRole("dialog", { name: "Go to session", exact: true });
+      const runningPalette = runningPage.getByRole("dialog", { name: "Go to session or command", exact: true });
       const indicator = runningPalette.getByRole("img", { name: "Turn running", exact: true });
       await indicator.waitFor();
       await runningPalette.evaluate(async (element: HTMLElement) => {
@@ -1464,9 +1495,9 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     for (const hasTouch of [false, true]) {
       const layoutPage = await browser.newPage({ hasTouch, viewport: { width: 390, height: 844 } });
       await layoutPage.goto(origin);
-      await layoutPage.getByRole("button", { name: "Search sessions", exact: true }).waitFor();
+      await layoutPage.getByRole("button", { name: "Search sessions and commands", exact: true }).waitFor();
       await layoutPage.keyboard.press("Control+p");
-      const layoutDialog = layoutPage.getByRole("dialog", { name: "Go to session", exact: true });
+      const layoutDialog = layoutPage.getByRole("dialog", { name: "Go to session or command", exact: true });
       await layoutDialog.waitFor();
       for (const width of [390, 1024, 1280]) {
         await layoutPage.setViewportSize({ width, height: 844 });
@@ -1498,7 +1529,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await matrix.route("**/api/ListAgents", (route: { fulfill(options: { json: unknown }): Promise<void> }) => route.fulfill({ json: { agents: suggestionAgents } }));
     await matrix.goto(origin);
     await openSessions(matrix);
-    const matrixDialog = matrix.getByRole("dialog", { name: "Go to session", exact: true });
+    const matrixDialog = matrix.getByRole("dialog", { name: "Go to session or command", exact: true });
     const matrixSearch = matrixDialog.getByPlaceholder("Search sessions");
     await matrixDialog.getByText("Winner", { exact: true }).waitFor();
     await matrix.keyboard.press("Escape");
@@ -1507,7 +1538,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await matrix.keyboard.press(entry);
       await matrixSearch.waitFor();
       expect(await matrixSearch.inputValue()).toBe("");
-      await matrix.waitForFunction(() => document.activeElement?.getAttribute("placeholder") === "Search sessions");
+      await matrix.waitForFunction(() => document.activeElement?.getAttribute("placeholder") === "Search sessions and commands");
       expect(await matrixSearch.evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
       expect(await matrixDialog.getByRole("button", { name: /^(agent:|room:)/ }).count()).toBe(0);
       expect(await matrixDialog.locator('li > button.bg-accent [data-slot="session-title"]').innerText()).toBe("Winner");
@@ -1551,14 +1582,14 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       expect((await matrixSearch.boundingBox())!.width).toBeGreaterThanOrEqual(96);
     }
     await matrix.keyboard.press("Escape");
-    const searchButton = matrix.getByRole("button", { name: "Search sessions", exact: true });
+    const searchButton = matrix.getByRole("button", { name: "Search sessions and commands", exact: true });
     await searchButton.scrollIntoViewIfNeeded();
     expect((await searchButton.boundingBox())!.width).toBeGreaterThanOrEqual(44);
     await searchButton.focus();
     await matrix.keyboard.press("Control+p");
     expect(await matrixSearch.inputValue()).toBe("");
     await matrixSearch.press("Escape");
-    await matrix.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Search sessions");
+    await matrix.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Search sessions and commands");
     await matrix.mouse.move(0, 0);
     await matrix.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await matrix.getByRole("button", { name: "Hide bottom navigation" }).click();
@@ -1573,7 +1604,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const failure = await browser.newPage();
     await failure.goto(origin);
     await openSessions(failure);
-    const failureDialog = failure.getByRole("dialog", { name: "Go to session", exact: true });
+    const failureDialog = failure.getByRole("dialog", { name: "Go to session or command", exact: true });
     await failureDialog.getByText("Winner", { exact: true }).waitFor();
     await failureDialog.getByPlaceholder("Search sessions").fill("absent");
     await failureDialog.getByRole("alert").filter({ hasText: "Search failed: search unavailable" }).waitFor();
@@ -1597,7 +1628,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     });
     await many.goto(origin);
     await openSessions(many);
-    const manyDialog = many.getByRole("dialog", { name: "Go to session", exact: true });
+    const manyDialog = many.getByRole("dialog", { name: "Go to session or command", exact: true });
     await many.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button').length === 96);
     await manyDialog.getByPlaceholder("Search sessions").pressSequentially("origin-only-needle", { delay: 20 });
     await many.waitForFunction(() => document.querySelector('[role="dialog"] ul[data-pending="true"]') !== null); // The previous list stays, dimmed.
@@ -1628,7 +1659,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     });
     await pendingPage.goto(origin);
     await openSessions(pendingPage);
-    const pendingDialog = pendingPage.getByRole("dialog", { name: "Go to session", exact: true });
+    const pendingDialog = pendingPage.getByRole("dialog", { name: "Go to session or command", exact: true });
     const pendingSearch = pendingDialog.getByPlaceholder("Search sessions");
     await shown(pendingDialog, "matching active");
     for (const prefix of ["agent:main", "room:missing"]) {
@@ -1649,7 +1680,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await navPage.route("**/api/ListAgents", (route: { fulfill(options: { json: unknown }): Promise<void> }) => route.fulfill({ json: { agents: suggestionAgents } }));
     await navPage.goto(origin);
     await openSessions(navPage);
-    const navPalette = navPage.getByRole("dialog", { name: "Go to session", exact: true });
+    const navPalette = navPage.getByRole("dialog", { name: "Go to session or command", exact: true });
     const navSearch = navPalette.getByPlaceholder("Search sessions");
     await navSearch.fill("agent:");
     await navPalette.getByRole("button", { name: "main gpt", exact: true }).waitFor();
@@ -1667,7 +1698,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await navPage.keyboard.press("Escape");
     const footer = navPage.locator("footer");
     const openPage = async (name: string) => {
-      await footer.getByRole("button", { name: "Open command palette" }).click();
+      await navPage.keyboard.press("Control+Shift+p");
       await navPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: ({ Cron: "Cron: Dashboard", Agents: "List Agents", Skills: "List Skills", Config: "Settings" } as Record<string, string>)[name], exact: true }).click();
       await navPage.locator('[data-slot="dialog-overlay"]').waitFor({ state: "hidden" });
       // The top-left corner is a tab, whose tooltip would take the next Escape.
@@ -1682,7 +1713,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       expect(await navTabs.getByRole("tab", { name: name === "Config" ? "Settings" : name, exact: true }).count()).toBe(0);
     };
     // Escape first closes search suggestions without leaving the page.
-    await footer.getByRole("button", { name: "Open command palette", exact: true }).click();
+    await navPage.keyboard.press("Control+Shift+p");
     await navPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
     await navPage.getByRole("dialog").waitFor({ state: "detached" });
     await navPage.waitForURL("**/search");
@@ -1759,7 +1790,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       } else {
         expect(Math.abs(groupBox!.x + groupBox!.width / 2 - width / 2)).toBeLessThan(1);
       }
-      expect(await newChat.locator("..").getByRole("button").count()).toBe(5);
+      expect(await newChat.locator("..").getByRole("button").count()).toBe(4);
       const creations = ctrl.createdAgents.length;
       await newChat.click();
       await navPage.waitForURL(`${origin}/`);
@@ -2105,7 +2136,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await grouped.textContent()).toBe("Used 2 tools");
     expect(await grouped.getAttribute("aria-expanded")).toBe("true");
     const palette = async (name: string) => {
-      await detailPage.locator("footer").getByRole("button", { name: "Open command palette" }).click();
+      await detailPage.keyboard.press("Control+Shift+p");
       await detailPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: new RegExp(`^${name}`) }).click();
     };
     // At Detailed the lone thought is its own group, and opening it shows the thought without a second Thought row.
@@ -2137,7 +2168,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await detailPage.waitForURL(`${origin}/skills/release`);
     await detailPage.goto(`${origin}/s/${Buffer.from("timeline-detail").toString("base64url")}`);
     await detailPage.locator('pre[aria-label="Script"]').waitFor();
-    await detailPage.locator("footer").getByRole("button", { name: "Open command palette" }).click();
+    await detailPage.keyboard.press("Control+Shift+p");
     const levels = detailPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: /^Timeline: / });
     expect(await levels.filter({ hasText: "Current · " }).allTextContents()).toEqual(["Timeline: EverythingCurrent · Show all activity separately and expanded."]);
     // Running a level does not move it to the top with recent commands.
@@ -2224,7 +2255,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await detailsPage.locator("main").getByRole("button", { name: "Pin session", exact: true }).click();
       await detailsPage.locator("main").getByRole("button", { name: "Unpin session", exact: true }).waitFor();
       await detailsPage.keyboard.press("Control+p");
-      const detailsPalette = detailsPage.getByRole("dialog", { name: "Go to session", exact: true });
+      const detailsPalette = detailsPage.getByRole("dialog", { name: "Go to session or command", exact: true });
       const search = detailsPalette.getByPlaceholder("Search sessions");
       const settled = () => detailsPalette.locator('ul[data-pending="false"]').waitFor();
       await search.fill("IS:PINNED");
@@ -2323,7 +2354,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     });
     await attachmentPage.getByRole("button", { name: "Remove image.png", exact: true }).click();
     await attachmentPage.locator("textarea").fill("  exact file draft\n");
-    await attachmentPage.locator("footer").getByRole("button", { name: "Open command palette" }).click();
+    await attachmentPage.keyboard.press("Control+Shift+p");
     await attachmentPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Settings" }).click();
     await attachmentPage.goBack();
     await attachmentPage.getByRole("button", { name: "Remove keep.bin", exact: true }).waitFor();
@@ -2480,18 +2511,18 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await photoPage.close();
     const desktopPage = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     await desktopPage.goto(origin);
-    const desktopCommands = desktopPage.locator("footer").getByRole("button", { name: "Open command palette" });
-    await desktopCommands.waitFor();
-    expect((await desktopCommands.boundingBox())!.width).toBe(32);
-    expect((await desktopCommands.locator("svg").boundingBox())!.width).toBe(24);
-    const commandsBox = (await desktopCommands.boundingBox())!;
-    await desktopCommands.hover();
-    expect((await desktopCommands.boundingBox())!.x).toBe(commandsBox.x);
+    const desktopSearch = desktopPage.locator("footer").getByRole("button", { name: "Search sessions and commands" });
+    await desktopSearch.waitFor();
+    expect((await desktopSearch.boundingBox())!.width).toBe(32);
+    expect((await desktopSearch.locator("svg").boundingBox())!.width).toBe(24);
+    const commandsBox = (await desktopSearch.boundingBox())!;
+    await desktopSearch.hover();
+    expect((await desktopSearch.boundingBox())!.x).toBe(commandsBox.x);
     expect(await desktopPage.locator("#bottom-navigation > :last-child").evaluate((el: HTMLElement) => {
       const style = getComputedStyle(el);
       return [style.overflowY, style.scrollbarWidth];
     })).toEqual(["hidden", "none"]);
-    for (const name of ["New session", "Search sessions", "Open command palette"]) {
+    for (const name of ["New session", "Search sessions and commands"]) {
       const control = desktopPage.locator("footer").getByRole("button", { name, exact: true });
       await control.hover();
       await desktopPage.locator('[data-slot="tooltip-content"]').filter({ hasText: name }).waitFor();
@@ -2499,15 +2530,16 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await desktopPage.locator('[data-slot="tooltip-content"]').filter({ hasText: name }).waitFor({ state: "hidden" });
     }
     await desktopPage.keyboard.press("Tab");
-    await desktopCommands.focus();
-    await desktopPage.locator('[data-slot="tooltip-content"]').filter({ hasText: "Open command palette" }).waitFor();
+    await desktopSearch.focus();
+    await desktopPage.locator('[data-slot="tooltip-content"]').filter({ hasText: "Search sessions and commands" }).waitFor();
     await desktopPage.keyboard.press("Escape");
     await desktopPage.getByRole("button", { name: "Hide bottom navigation" }).click();
-    expect(await desktopCommands.isVisible()).toBe(false);
+    expect(await desktopSearch.isVisible()).toBe(false);
     await desktopPage.getByRole("button", { name: "Show bottom navigation" }).click();
     await desktopPage.setViewportSize({ width: 320, height: 640 });
-    await desktopPage.locator("footer").getByRole("button", { name: "Open command palette" }).click();
-    await desktopPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Settings" }).click();
+    await desktopSearch.click();
+    await desktopPage.getByRole("dialog", { name: "Go to session or command" }).getByPlaceholder("Search sessions and commands").fill("settings");
+    await desktopPage.getByRole("dialog", { name: "Go to session or command" }).getByRole("button", { name: "Settings", exact: true }).click();
     await desktopPage.waitForURL("**/config");
     expect(await desktopPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await desktopPage.close();
@@ -2796,7 +2828,7 @@ test("session titles and turn-rail previews format tags and markup", async () =>
     await page.goto(`http://127.0.0.1:${server.port}/s/${Buffer.from("alert").toString("base64url")}`);
     await page.locator("footer").waitFor({ state: "attached" });
     await page.keyboard.press("Control+p");
-    const title = page.getByRole("dialog", { name: "Go to session", exact: true }).locator('[data-slot="session-title"]');
+    const title = page.getByRole("dialog", { name: "Go to session or command", exact: true }).locator('[data-slot="session-title"]');
     await title.getByText("@handle Red alert", { exact: true }).waitFor();
     expect(await title.textContent()).toBe("@handle Red alert");
     expect(await title.locator("strong").textContent()).toBe("Red alert");
