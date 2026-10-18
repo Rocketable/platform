@@ -24,7 +24,9 @@ jobs:
           go-version-file: go.mod
           cache: false
       # setup-go keys its cache on go.sum alone and never refreshes it; main saves a fresh one per commit.
-      - &restore-go
+      # main builds from scratch so each saved cache holds one build: restoring before saving piles up
+      # outputs Go trims only after 5 unused days.
+      - if: github.ref != 'refs/heads/main'
         uses: actions/cache/restore@v6
         with:
           path: |
@@ -51,8 +53,7 @@ jobs:
       - run: make -C internal/rocketclaw -o web-assets -o vendor lint
       - run: make -C internal/rocketcode lint
       - run: make -C internal/funneld lint
-      - &save-go
-        if: github.ref == 'refs/heads/main'
+      - if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v6
         with:
           path: |
@@ -66,14 +67,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - *setup-go
-      - *restore-go
+      - &restore-go-build
+        if: github.ref != 'refs/heads/main'
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/go-build
+          key: go-${{ github.job }}-${{ github.sha }}
+          restore-keys: go-${{ github.job }}-
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
       - run: go test -race -count 1 ./...
         working-directory: internal/rocketcode
       - run: go test ../../cmd/funneld ./...
         working-directory: internal/funneld
-      - *save-go
+      # Matrix shards compile the same packages, so only the first saves.
+      - &save-go-build
+        if: github.ref == 'refs/heads/main' && strategy.job-index == 0
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.cache/go-build
+          key: go-${{ github.job }}-${{ github.sha }}
 
   rocketclaw:
     runs-on: ubuntu-latest
@@ -90,7 +103,7 @@ jobs:
           postgres:18 > "$RUNNER_TEMP/postgres.log" 2>&1 &
       - uses: actions/checkout@v7
       - *setup-go
-      - *restore-go
+      - *restore-go-build
       - *setup-bun
       - *node-modules
       - run: bun install --frozen-lockfile
@@ -125,7 +138,7 @@ jobs:
           name: coverage-${{ matrix.shard }}
           path: internal/rocketclaw/coverage-${{ matrix.shard }}.out
           overwrite: true
-      - *save-go
+      - *save-go-build
 
   coverage:
     needs: rocketclaw
