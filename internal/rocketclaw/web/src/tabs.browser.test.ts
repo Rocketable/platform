@@ -180,7 +180,7 @@ for (const width of [1280, 320]) test(`copy page link across pages at ${width}px
       const { x, y, width, height } = node.getBoundingClientRect();
       return { x, y, width, height };
     }));
-    expect(boxes).toHaveLength(5);
+    expect(boxes).toHaveLength(4);
     for (const [index, box] of boxes.entries()) {
       expect(box.x).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(width);
@@ -222,10 +222,10 @@ for (const width of [1280, 320]) test(`copy page link across pages at ${width}px
   await copy.click();
   await status.filter({ hasText: "Page link copied" }).waitFor();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${origin}/`);
-  await page.getByRole("button", { name: "Search sessions", exact: true }).click();
+  await page.getByRole("button", { name: "Search sessions and commands", exact: true }).click();
   await page.getByRole("dialog", { name: "Go to session" }).waitFor();
   await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: "Open command palette", exact: true }).click();
+  await page.keyboard.press("Control+Shift+p");
   await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search", exact: true }).click();
   await page.getByRole("dialog").waitFor({ state: "detached" });
   await page.waitForURL((url: URL) => url.pathname === "/search");

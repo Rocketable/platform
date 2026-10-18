@@ -285,7 +285,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("forked").replace(/=+$/, "")}`);
     await composer.waitFor();
     await page.keyboard.press("Control+p");
-    const palette = page.getByRole("dialog", { name: "Go to session", exact: true });
+    const palette = page.getByRole("dialog", { name: "Go to session or command", exact: true });
     const search = palette.getByPlaceholder("Search sessions");
     const destinationRow = palette.locator("li").filter({ hasText: "Podcast editing notes" });
     await destinationRow.waitFor();

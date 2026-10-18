@@ -56,7 +56,7 @@ test("remote OpenCode sessions list, open in the relay frame, tag, and start", a
     expect(calls.filter(({ path, body }) => (path === "/api/History" || path === "/stream" || path === "/api/ListQueue") && body.id?.startsWith("opencode:"))).toEqual([]);
 
     // People type any tag on a remote session; tags already in use are suggested, agent tags are not offered.
-    await page.getByRole("button", { name: "Open command palette" }).click();
+    await page.keyboard.press("Control+Shift+p");
     await page.getByPlaceholder("Type a command").fill("tag");
     expect(await page.getByRole("button", { name: "Sessions: Add tag customer" }).count()).toBe(0);
     await page.getByRole("button", { name: "Sessions: Add tag…" }).click();
@@ -77,7 +77,7 @@ test("remote OpenCode sessions list, open in the relay frame, tag, and start", a
     await page.getByText("This OpenCode session is no longer available.").waitFor();
 
     // A new session takes a typed folder; a failed create shows its error and the next try opens the session.
-    await page.getByRole("button", { name: "Open command palette" }).click();
+    await page.keyboard.press("Control+Shift+p");
     await page.getByPlaceholder("Type a command").fill("new on box");
     await page.getByRole("button", { name: "Sessions: New on box" }).click();
     const folder = page.getByPlaceholder("Folder on box, like /srv/app");

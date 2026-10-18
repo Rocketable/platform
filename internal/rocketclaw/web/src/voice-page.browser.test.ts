@@ -115,7 +115,8 @@ test("Voice page keeps each person's conversation and settings on the server, an
     const stored = () => settings().conversationId;
     const picker = page.getByRole("button", { name: "Choose agent", exact: true });
     await page.goto(origin);
-    await page.getByRole("button", { name: "Open command palette", exact: true }).click();
+    await page.getByRole("button", { name: "Search sessions and commands" }).waitFor(); // The shortcut listens once the app renders.
+    await page.keyboard.press("Control+Shift+p");
     await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Voice", exact: true }).click();
     await page.waitForURL("**/voice");
     await page.getByRole("tablist", { name: "Open tabs" }).getByRole("tab", { name: "Voice", exact: true }).waitFor();

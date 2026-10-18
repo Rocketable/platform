@@ -65,12 +65,12 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     const searches = page.getByRole("tablist", { name: "Searches" });
     const tabs = searches.getByRole("tab");
     await page.goto(`http://127.0.0.1:${server.port}/`);
-    // The footer Search button is Cmd/Ctrl+P; the Search page is the "Sessions: Search" command.
+    // The footer Search button is Cmd/Ctrl+P; the Search page is the "Sessions: Search" command, also under Cmd/Ctrl+Shift+P.
     await page.getByRole("button", { name: "Search sessions" }).click();
     await page.getByRole("dialog", { name: "Go to session" }).getByPlaceholder("Search sessions").waitFor();
     expect(new URL(page.url()).pathname).toBe("/");
     await page.keyboard.press("Escape");
-    await page.getByRole("button", { name: "Open command palette", exact: true }).click();
+    await page.keyboard.press("Control+Shift+p");
     await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
     await page.getByRole("dialog").waitFor({ state: "detached" });
     await page.waitForURL("**/search");
@@ -79,7 +79,8 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     expect(await tabs.count()).toBe(1);
     expect(await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith("search-tabs:")))).toEqual([]);
     await page.goto(`http://127.0.0.1:${server.port}/`);
-    await page.getByRole("button", { name: "Open command palette", exact: true }).click();
+    await page.getByRole("button", { name: "Search sessions and commands" }).waitFor(); // The shortcut listens once the app renders.
+    await page.keyboard.press("Control+Shift+p");
     await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
     await page.getByRole("dialog").waitFor({ state: "detached" });
     expect(await tabs.count()).toBe(1);
@@ -313,7 +314,7 @@ test("Cmd+P asks the server as you type, shows its pills, and Enter opens the fi
   try {
     const page = await browser.newPage();
     await page.goto(origin);
-    await page.getByRole("button", { name: "Search sessions", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Search sessions and commands", exact: true }).waitFor();
     await page.keyboard.press("Control+p");
     const palette = page.getByRole("dialog", { name: "Go to session" });
     const input = palette.getByPlaceholder("Search sessions");
@@ -635,13 +636,13 @@ test("message matches jump after history loads and last close returns to the las
       return !!viewport && !!target && target.bottom > viewport.top && target.top < viewport.bottom;
     });
     await page.getByRole("button", { name: "sandboxed" }).click();
-    await page.getByRole("button", { name: "Open command palette", exact: true }).click();
+    await page.keyboard.press("Control+Shift+p");
     await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
     await page.getByRole("dialog").waitFor({ state: "detached" });
     await page.getByRole("link", { name: /one user 1/ }).click();
     await page.waitForFunction(() => document.querySelector('[data-message-id="one-u1"]')?.getBoundingClientRect().height !== 0);
     expect(await page.getByRole("button", { name: "sandboxed" }).getAttribute("aria-pressed")).toBe("true");
-    await page.getByRole("button", { name: "Open command palette", exact: true }).click();
+    await page.keyboard.press("Control+Shift+p");
     await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
     await page.getByRole("dialog").waitFor({ state: "detached" });
     await page.getByRole("link", { name: /one assistant 1/ }).click();
@@ -678,7 +679,7 @@ test("message matches jump after history loads and last close returns to the las
       return viewport.scrollTop === 0 && localStorage.getItem("last-seen:tester") === `/s/dHdv?message=${visible.at(-1)?.dataset.messageId}`;
     });
     const lastSeen = await page.evaluate(() => localStorage.getItem("last-seen:tester"));
-    await page.getByRole("button", { name: "Open command palette", exact: true }).click();
+    await page.keyboard.press("Control+Shift+p");
     await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
     await page.getByRole("dialog").waitFor({ state: "detached" });
     await page.getByRole("button", { name: "Close search 1" }).click();

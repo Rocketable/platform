@@ -533,10 +533,10 @@ retaining a 44px touch target. The handle stays
 visible when the controls are hidden and supports Enter/Space when focused.
 Touch devices and narrow screens use 48px navigation targets and 8px gaps;
 desktop uses 32px targets and 4px gaps. Icons are 24px in both layouts.
-The centered bar has New session, Search sessions, Voice, Open command palette,
-and Copy page link.
+The centered bar has New session, Search sessions and commands, Voice, and Copy
+page link.
 Cmd/Ctrl+Alt+N opens a new session. The magnifying glass beside New session opens
-the session palette, like Cmd/Ctrl+P. The **Sessions: Search** command opens
+the palette, like Cmd/Ctrl+P. The **Sessions: Search** command opens
 the Search page. Each search has its own editable tab, saved in this browser for
 the confirmed user. Click another tab to switch searches; click the selected tab
 to edit its name in place. Enter or clicking away saves; Escape cancels.
@@ -563,8 +563,17 @@ with the same query, or saves a new one, so Back from a result
 reuses that tab. Older links and saved searches with `agent=` or `room=` filters are
 read once as the query `agent:<value> room:<value> <query>`, quoting values that
 contain spaces, and saved searches are rewritten that way. Cmd/Ctrl+P still opens
-the session-search dialog, which lists every conversation. Each dialog opening
+the palette, which lists every conversation. Each dialog opening
 clears text, pills, and result selection and focuses the input.
+Once text is typed, matching commands appear above the conversations; an empty
+query, or one with a filter such as `tag:customer` or `is:pinned`, lists
+conversations only. A bare key such as `cron:` is not a filter. Commands match
+case-insensitively: a label equal to the text comes first, then labels containing
+it, then, once three or more characters are typed, labels containing them in order
+with gaps. Within each group the command order below applies. Enter runs the
+highlighted command at once when its label contains the text or it was picked
+with the arrow keys; otherwise Enter opens the first conversation, as above.
+Clicking a command always runs it.
 
 Matching happens on the server: Cmd/Ctrl+P and the Search page send the typed
 query once typing pauses for 250 ms (the Search page also at least once a second
@@ -621,7 +630,7 @@ until every chat has a summary it says results may be incomplete, instead of
 reporting “No matches”. A message hit from a stopped or failed turn opens its
 chat without jumping to a message. A failed search shows an error: the Search
 page offers Retry, and Cmd/Ctrl+P retries on the next keystroke.
-The command button and Cmd/Ctrl+Shift+P open the command palette. It always offers
+Cmd/Ctrl+Shift+P opens the same palette with commands only. It always offers
 **Sessions: New**, **Sessions: Search**, **Voice**, **Cron: Dashboard**, **Cron: Run**,
 **List Agents**, **List Skills**, and **Settings**.
 Timeline detail levels are also available, from `Timeline: Messages only` through
@@ -778,7 +787,7 @@ Clearing all stored history hides the conversation again once no turn runs, with
 deleting its record or its Slack messages.
 On desktop, the page header's close button closes that page's tab (see
 [Tabs](#tabs)), and Escape on a page does too unless a dialog or tooltip is open.
-New chat, search, and the command palette form a centered group in the footer.
+New chat and search form a centered group in the footer.
 The theme toggle floats in the upper-right corner of the page and switches light, dark, and system. Config has a select for the color theme. The choices are Neutral, Harbor, Grove, Ember, Violet, Rose, Sand, Lagoon, Slate, Copper, Ink, Signal, Go - Playground, and Go - Sources. Ink and Signal are high contrast. The Go themes adapt Mike Gleason jr Couturier's light themes, with local dark variations. The choice is stored in the browser, not on the server. See [theme sources and licenses](../../../THEMES.md) for attribution and reuse terms.
 Config's Timeline section has the **Timeline detail** card, following OpenCode v2. A
 five-stop slider picks Messages only, Quiet, Compact, Detailed, or Everything, and an
