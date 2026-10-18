@@ -1890,19 +1890,13 @@ func (l *looper) compactThreshold() int64 {
 }
 
 func pruneHistoryBeforeLatestCompaction(items []responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam {
-	latest := -1
-
-	for i := range items {
+	for i := range slices.Backward(items) {
 		if items[i].OfCompaction != nil {
-			latest = i
+			return items[i:]
 		}
 	}
 
-	if latest <= 0 {
-		return items
-	}
-
-	return items[latest:]
+	return items
 }
 
 func (l *looper) dispatchToolCalls(
