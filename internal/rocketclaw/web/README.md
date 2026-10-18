@@ -483,8 +483,10 @@ active tab.
   the app, Cmd/Ctrl+[ and Cmd/Ctrl+] activate the previous and next tab, wrapping
   at the ends. This replaces the browser's Back/Forward for those keys.
 - **Placement.** Tabs sit on top by default or in a 14rem sidebar on the left. Switch
-  from **Settings → Appearance → Tabs**, the context menu, or the palette. Below the `md` breakpoint, left falls back
-  to top, and the top strip scrolls horizontally; a mouse wheel scrolls it sideways.
+  from **Settings → Appearance → Tabs**, the context menu, or the palette. Below the `md` breakpoint, the left
+  sidebar is a drawer: the **Show sidebar** button at the top left or a swipe right opens it, and picking a tab,
+  tapping outside, Escape, or a swipe left closes it. A swipe that starts on a text field, a slider, or something
+  that scrolls sideways is left to that element. The top strip scrolls horizontally; a mouse wheel scrolls it sideways.
 - **Left sidebar.** Drag its right edge, or focus the edge and press Left/Right, to
   resize it; the width is kept in this browser. The footer's **Hide sidebar** button
   or Cmd/Ctrl+B hides and shows it until the next reload.
