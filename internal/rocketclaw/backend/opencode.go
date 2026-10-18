@@ -56,8 +56,6 @@ func (s *SessionService) SyncOpenCode(ctx context.Context, servers map[string]co
 	pruned := make(map[string]time.Time, len(servers))
 
 	for {
-		// ponytail: servers poll one after another, so one hanging server delays the rest by up
-		// to its request timeout; run one loop per server if that lag shows up with many servers.
 		for name, server := range servers {
 			_ = s.syncOpenCode(ctx, name, server)
 
