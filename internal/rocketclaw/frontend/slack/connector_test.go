@@ -46,8 +46,6 @@ func TestSlackImageHelpers(t *testing.T) {
 	assert.Equal(t, "F123", slackFileDisplayName(&slack.File{ID: " F123 "}))
 	assert.Equal(t, "unnamed file", slackFileDisplayName(&slack.File{}))
 	assert.Equal(t, "report.txt", slackFileDescriptor(&slack.File{Name: " report.txt "}))
-	assert.True(t, isSlackImageFile(&slack.File{Mimetype: " image/png "}))
-	assert.False(t, isSlackImageFile(&slack.File{Mimetype: " application/pdf "}))
 	assert.True(t, protocol.IsTextAttachment("payload.json", "application/octet-stream"))
 	assert.True(t, protocol.IsTextAttachment("report", "text/csv; charset=utf-8"))
 	assert.False(t, protocol.IsTextAttachment("archive.zip", "application/zip"))
@@ -357,7 +355,7 @@ func TestDownloadSlackAttachmentsDownloadsImageFilesAsAttachments(t *testing.T) 
 
 	connector := newTestConnector(server.URL)
 	files := []slack.File{
-		{Name: "photo.png", Mimetype: "image/png", Size: len(imageData), URLPrivateDownload: " " + server.URL + "/photo.png ", URLPrivate: server.URL + "/not-image.png"},
+		{Name: "photo.png", Mimetype: " image/png ", Size: len(imageData), URLPrivateDownload: " " + server.URL + "/photo.png ", URLPrivate: server.URL + "/not-image.png"},
 		{Name: "not-image.png", Mimetype: "image/png", Size: len("not an image"), URLPrivate: " " + server.URL + "/not-image.png "},
 	}
 
@@ -378,7 +376,7 @@ func TestDownloadSlackAttachmentsDownloadsImageFilesAsAttachments(t *testing.T) 
 func TestDownloadSlackAttachmentsReportsSkippedAttachments(t *testing.T) {
 	connector := &Connector{log: testLogger()}
 	files := []slack.File{
-		{Name: "doc.pdf", Mimetype: "application/pdf"},
+		{Name: "doc.pdf", Mimetype: " application/pdf "},
 		{Name: "payload", Mimetype: "application/json", Size: 12},
 		{Name: "large.txt", Mimetype: "text/plain", Size: protocol.MaxInboundTextAttachmentBytes + 1},
 		{Name: "missing.txt", Mimetype: "text/plain", Size: 12},
