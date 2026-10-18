@@ -5,8 +5,8 @@ Quickweb serves static applets from the current working directory and gives each
 ## Run
 
 ```sh
-cd ./alitu-quickweb
-go run github.com/Rocketable/platform/cmd/quickweb@main --db ./alitu-quickweb.sqlite --addr 0.0.0.0:8797 --service-name alitu-quickweb
+cd ./my-quickweb
+go run github.com/Rocketable/platform/cmd/quickweb@main --db ./my-quickweb.sqlite --addr 0.0.0.0:8797 --service-name my-quickweb
 ```
 
 Quickweb does not have a `--root` flag. The content root is always the process working directory.
@@ -56,8 +56,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/wallace/alitu-quickweb
-ExecStart=/usr/bin/go run github.com/Rocketable/platform/cmd/quickweb@main --db /home/wallace/alitu-quickweb/alitu-quickweb.sqlite --addr 0.0.0.0:8797 --service-name alitu-quickweb
+WorkingDirectory=/srv/my-quickweb
+ExecStart=/usr/bin/go run github.com/Rocketable/platform/cmd/quickweb@main --db /srv/my-quickweb/my-quickweb.sqlite --addr 0.0.0.0:8797 --service-name my-quickweb
 Restart=on-failure
 RestartSec=5s
 
