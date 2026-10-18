@@ -2512,6 +2512,9 @@ func TestVoiceSettings(t *testing.T) {
 	create := func(id string) {
 		t.Helper()
 		require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}))
+		// Retention fixtures must not depend on the database and host clocks agreeing.
+		_, err := store.db.ExecContext(ctx, `UPDATE managed_conversations SET created_at = $1 WHERE conversation_id = $2`, time.Unix(0, 0), id)
+		require.NoError(t, err)
 	}
 	create("voice-a")
 	create("voice-b")
@@ -2535,7 +2538,7 @@ func TestVoiceSettings(t *testing.T) {
 	prune := func() {
 		t.Helper()
 
-		_, err := store.PruneStateBefore(ctx, time.Now(), 0)
+		_, err := store.PruneStateBefore(ctx, time.Unix(1, 0), 0)
 		require.NoError(t, err)
 	}
 
