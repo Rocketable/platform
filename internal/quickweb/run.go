@@ -210,8 +210,8 @@ Agent guidance:
 
 Example:
 
-  $ cd ./alitu-quickweb
-  $ %[1]s --db ./alitu-quickweb.sqlite --addr 0.0.0.0:8797 --service-name alitu-quickweb
+  $ cd ./my-quickweb
+  $ %[1]s --db ./my-quickweb.sqlite --addr 0.0.0.0:8797 --service-name my-quickweb
 
 Systemd example:
 
@@ -222,8 +222,8 @@ Systemd example:
 
   [Service]
   Type=simple
-  WorkingDirectory=/home/wallace/alitu-quickweb
-  ExecStart=/usr/bin/go run github.com/Rocketable/platform/cmd/quickweb@main --db /home/wallace/alitu-quickweb/alitu-quickweb.sqlite --addr 0.0.0.0:8797 --service-name alitu-quickweb
+  WorkingDirectory=/srv/my-quickweb
+  ExecStart=/usr/bin/go run github.com/Rocketable/platform/cmd/quickweb@main --db /srv/my-quickweb/my-quickweb.sqlite --addr 0.0.0.0:8797 --service-name my-quickweb
   Restart=on-failure
   RestartSec=5s
 

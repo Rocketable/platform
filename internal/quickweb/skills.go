@@ -55,8 +55,8 @@ Runtime flags:
 Example:
 
 ` + "```sh" + `
-cd ./alitu-quickweb
-quickweb --db ./alitu-quickweb.sqlite --addr 0.0.0.0:8797 --service-name alitu-quickweb
+cd ./my-quickweb
+quickweb --db ./my-quickweb.sqlite --addr 0.0.0.0:8797 --service-name my-quickweb
 ` + "```" + `
 
 Verify startup with ` + "`GET /healthz`" + ` and confirm the logged content root is the intended directory.
