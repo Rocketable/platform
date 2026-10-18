@@ -1275,11 +1275,28 @@ func TestPruneHistoryBeforeLatestCompaction(t *testing.T) {
 		responses.ResponseInputItemParamOfMessage("new", responses.EasyInputMessageRole("user")),
 	}
 
-	pruned := pruneHistoryBeforeLatestCompaction(items)
+	for _, tt := range []struct {
+		name  string
+		items []responses.ResponseInputItemUnionParam
+		start int
+	}{
+		{name: "nil"},
+		{name: "empty", items: items[:0]},
+		{name: "no compaction", items: items[:1]},
+		{name: "first item", items: items[1:3]},
+		{name: "last item", items: items[:4], start: 3},
+		{name: "latest compaction", items: items, start: 3},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pruned := pruneHistoryBeforeLatestCompaction(tt.items)
+			require.Equal(t, tt.items[tt.start:], pruned)
+			require.Equal(t, cap(tt.items)-tt.start, cap(pruned))
 
-	require.Len(t, pruned, 2)
-	require.JSONEq(t, `{"encrypted_content":"second","type":"compaction"}`, marshalJSON(t, pruned[0]))
-	require.Contains(t, marshalJSON(t, pruned[1]), `"content":"new"`)
+			if len(pruned) > 0 {
+				require.Same(t, &tt.items[tt.start], &pruned[0])
+			}
+		})
+	}
 }
 
 func TestLooperPermissionReviewUsesPrunedHistory(t *testing.T) {
