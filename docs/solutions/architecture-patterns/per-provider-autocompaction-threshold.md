@@ -52,7 +52,7 @@ The copy path is:
 
 `normalizeConfig` also writes `defaultCompactThreshold` onto `Config.CompactThreshold` when the factory input is `0` (`internal/rocketcode/rocketcode.go:520-522`). RocketClaw `NewWithModelResolver` sites either pass `CompactThreshold: 0` or omit the field (same zero). The RocketClaw path depends on the resolver origin plus that default.
 
-The standalone RocketCode resolver does not copy a threshold (`internal/rocketcode/models.go:38`). Standalone relies on `Config.CompactThreshold` / env, not provider JSON.
+The standalone RocketCode resolver does not copy a threshold (`internal/rocketcode/models.go:38`). It relies on `Config.CompactThreshold`, not provider JSON.
 
 ChatGPT / Codex cannot keep `context_management` on the wire. `cleanCodexRequest` reads `compact_threshold` out of that array, then deletes `context_management` (and `max_output_tokens`) (`internal/rocketclaw/oai/oauth.go:727-741`, `internal/rocketclaw/oai/oauth.go:792-807`). After a successful `/responses` call, `codexCompaction` compares `usage.total_tokens` to the extracted threshold and, when usage is not strictly below the threshold and the output has no compaction item yet, prepends a Codex compact result (`internal/rocketclaw/oai/oauth.go:901-961`). Codex does not honor the OpenAI Responses compaction field directly; the transport reconstructs the same trigger.
 
