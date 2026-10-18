@@ -349,6 +349,7 @@ func TestTaskTool(t *testing.T) {
 		require.Equal(t, "guard carefully", newParams(mock)[0].Instructions.Value)
 		require.NotNil(t, newParams(mock)[0].Text.Format.OfJSONSchema)
 		require.Equal(t, "guardrail_decision", newParams(mock)[0].Text.Format.OfJSONSchema.Name)
+		require.JSONEq(t, `{"type":"json_schema","name":"guardrail_decision","strict":true,"schema":{"type":"object","properties":{"approved":{"type":"boolean"},"reason":{"type":"string"}},"required":["approved","reason"],"additionalProperties":false}}`, marshalJSON(t, newParams(mock)[0].Text.Format))
 		require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), "Current Action: delegation")
 		require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), "The agent main wants to delegate to review:")
 		require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), "check this")

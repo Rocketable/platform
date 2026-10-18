@@ -347,11 +347,7 @@ func permissionReviewContentText[T interface{ GetText() *string }](content []T) 
 }
 
 func permissionReviewResponseFormat() responses.ResponseFormatTextConfigUnionParam {
-	var jsonSchema responses.ResponseFormatTextJSONSchemaConfigParam
-
-	jsonSchema.Name = "permission_review_decision"
-	jsonSchema.Strict = openai.Bool(true)
-	jsonSchema.Schema = map[string]any{
+	format := responses.ResponseFormatTextConfigParamOfJSONSchema("permission_review_decision", map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"risk_level":         map[string]any{"type": "string", "enum": []string{"low", "medium", "high", "critical"}, "description": "Intrinsic risk of the planned action: low for routine reversible work, medium for bounded side effects, high for dangerous or costly-to-reverse actions, and critical for obvious credential exfiltration, major irreversible destruction, or broad persistent security weakening."},
@@ -361,11 +357,8 @@ func permissionReviewResponseFormat() responses.ResponseFormatTextConfigUnionPar
 		},
 		"required":             []string{"risk_level", "user_authorization", "outcome", "rationale"},
 		"additionalProperties": false,
-	}
+	})
+	format.OfJSONSchema.Strict = openai.Bool(true)
 
-	var responseFormat responses.ResponseFormatTextConfigUnionParam
-
-	responseFormat.OfJSONSchema = &jsonSchema
-
-	return responseFormat
+	return format
 }

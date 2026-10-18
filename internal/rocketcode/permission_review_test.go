@@ -136,6 +136,7 @@ func TestPermissionReviewCodeModeCallUsesPlannedAction(t *testing.T) {
 func TestPermissionReviewResponseFormatUsesStrictFourFieldSchema(t *testing.T) {
 	format := permissionReviewResponseFormat()
 	require.NotNil(t, format.OfJSONSchema)
+	require.Equal(t, "permission_review_decision", format.OfJSONSchema.Name)
 	require.True(t, format.OfJSONSchema.Strict.Valid())
 	require.True(t, format.OfJSONSchema.Strict.Value)
 
