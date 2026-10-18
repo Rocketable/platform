@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -1370,7 +1371,11 @@ func TestShadowAdmissionPinsAgent(t *testing.T) {
 			Model string `json:"model"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Error(err)
+			// Shutdown cancels requests still in flight, which can cut a body short.
+			if !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Error(err)
+			}
+
 			return
 		}
 
