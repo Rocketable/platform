@@ -1050,7 +1050,7 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 func TestLooperProgressiveCompactionKeepsToolCallWithOutput(t *testing.T) {
 	for _, failedResponse := range []bool{false, true} {
 		t.Run(fmt.Sprintf("failed_response=%t", failedResponse), func(t *testing.T) {
-			toolCall := functionCallReplayInput("tool-1", "call-1", "lookup", `{"q":"x"}`)
+			toolCall := responses.ResponseInputItemUnionParam{OfFunctionCall: &responses.ResponseFunctionToolCallParam{Arguments: `{"q":"x"}`, CallID: "call-1", Name: "lookup", ID: openai.String("tool-1"), Type: "function_call"}}
 			toolOutputParam := toolCallOutput("call-1", TextToolResult("result"))
 			toolOutput := responses.ResponseInputItemUnionParam{OfFunctionCallOutput: &toolOutputParam}
 			replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
@@ -1096,7 +1096,7 @@ func TestLooperProgressiveCompactionKeepsToolCallWithOutput(t *testing.T) {
 }
 
 func TestLooperDoesNotCompactUnansweredToolCall(t *testing.T) {
-	toolCall := functionCallReplayInput("tool-1", "call-1", "lookup", `{"q":"x"}`)
+	toolCall := responses.ResponseInputItemUnionParam{OfFunctionCall: &responses.ResponseFunctionToolCallParam{Arguments: `{"q":"x"}`, CallID: "call-1", Name: "lookup", ID: openai.String("tool-1"), Type: "function_call"}}
 	replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
 		testInputMessage(responses.EasyInputMessageRole("user"), "old question", ""),
 		toolCall,

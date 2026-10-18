@@ -2458,7 +2458,7 @@ func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion) (respo
 
 		return compactionReplayInput(item.ID, item.EncryptedContent, summary), true
 	case "function_call":
-		return functionCallReplayInput(item.ID, item.CallID, item.Name, item.Arguments.OfString), true
+		return responses.ResponseInputItemUnionParam{OfFunctionCall: &responses.ResponseFunctionToolCallParam{Arguments: item.Arguments.OfString, CallID: item.CallID, Name: item.Name, ID: openai.String(item.ID), Type: "function_call"}}, true
 	case "web_search_call":
 		action, ok := webSearchOutputActionParam(&item.Action)
 		if !ok {
@@ -2513,10 +2513,6 @@ func CompactionCheckpointText(compaction *responses.ResponseCompactionItemParam)
 	}
 
 	return "<context_checkpoint>\nPrior conversation was compacted, but only provider-native encrypted compaction data is available for a different provider. The compacted details cannot be rehydrated here.\n</context_checkpoint>"
-}
-
-func functionCallReplayInput(id, callID, name, arguments string) responses.ResponseInputItemUnionParam {
-	return responses.ResponseInputItemUnionParam{OfFunctionCall: &responses.ResponseFunctionToolCallParam{Arguments: arguments, CallID: callID, Name: name, ID: openai.String(id), Type: "function_call"}}
 }
 
 func webSearchOutputActionParam(action *responses.ResponseOutputItemUnionAction) (responses.ResponseFunctionWebSearchActionUnionParam, bool) {

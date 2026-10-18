@@ -51,7 +51,7 @@ func TestPermissionReviewDecisionUsesFinalAnswer(t *testing.T) {
 		{name: "websocket trace", answer: []responses.ResponseInputItemUnionParam{websocketAnswer}, trace: websocketTrace, want: PermissionReview{Outcome: "allow", Rationale: "The read-only check is within scope."}},
 		{name: "commentary then final", answer: []responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleAssistant, `{"outcome":"deny","rationale":"Commentary is not a final decision"}`, "commentary"), final(`{"outcome":"allow","rationale":"Final answer wins."}`)}, want: PermissionReview{Outcome: "allow", Rationale: "Final answer wins."}},
 		{name: "commentary only", answer: []responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleAssistant, `{"outcome":"allow","rationale":"Commentary is not a final decision"}`, "commentary")}},
-		{name: "read-only tool call", answer: []responses.ResponseInputItemUnionParam{functionCallReplayInput("tool-1", "call-1", "read", `{"filePath":"README.md"}`), {OfFunctionCallOutput: &toolResult}, final(`{"outcome":"allow","rationale":"Checked the file first."}`)}, want: PermissionReview{Outcome: "allow", Rationale: "Checked the file first."}},
+		{name: "read-only tool call", answer: []responses.ResponseInputItemUnionParam{{OfFunctionCall: &responses.ResponseFunctionToolCallParam{Arguments: `{"filePath":"README.md"}`, CallID: "call-1", Name: "read", ID: openai.String("tool-1"), Type: "function_call"}}, {OfFunctionCallOutput: &toolResult}, final(`{"outcome":"allow","rationale":"Checked the file first."}`)}, want: PermissionReview{Outcome: "allow", Rationale: "Checked the file first."}},
 		{name: "unknown outcome", answer: []responses.ResponseInputItemUnionParam{final(`{"outcome":"unknown","rationale":"Not a decision"}`)}},
 		{name: "not structured", answer: []responses.ResponseInputItemUnionParam{final(`not structured output`)}},
 	} {
@@ -294,7 +294,7 @@ func TestPermissionReviewPromptIncludesReviewContextAndPlannedAction(t *testing.
 		Reviewer:     "guardian",
 		ReviewContext: []responses.ResponseInputItemUnionParam{
 			testInputMessage(responses.EasyInputMessageRoleUser, "please deploy prod", ""),
-			functionCallReplayInput("tool-1", "call-1", "lookup", `{"q":"deploy"}`),
+			{OfFunctionCall: &responses.ResponseFunctionToolCallParam{Arguments: `{"q":"deploy"}`, CallID: "call-1", Name: "lookup", ID: openai.String("tool-1"), Type: "function_call"}},
 			{OfFunctionCallOutput: &toolResult},
 		},
 	}
