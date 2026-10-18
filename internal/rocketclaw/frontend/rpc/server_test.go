@@ -1817,7 +1817,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 		require.True(t, proto.Equal(want, skills.Skills[i]), "unexpected skill: %v", skills.Skills[i])
 	}
 
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md"), []byte("---\nmodel: gpt-6.1-sol\ncustomShell: /usr/local/bin/agent-sandbox\npermission:\n  skill: {alpha: allow, zeta: auto}\n---\nHelp."), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md"), []byte("---\nmodel: gpt-6.1-sol\ncustomShell: /usr/local/bin/agent-sandbox\nspace: Billing\npermission:\n  skill: {alpha: allow, zeta: auto}\n---\nHelp."), 0o600))
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "selected.md"), []byte("---\nmodel: gpt-6.1-sol\npermission:\n  skill: {alpha: deny, zeta: allow}\n---\nHelp."), 0o600))
 
 	for _, tc := range []struct {
@@ -1919,6 +1919,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 	}
 
 	require.Equal(t, []string{"", "/usr/local/bin/agent-sandbox", ""}, []string{catalog.Agents[0].CustomShell, catalog.Agents[1].CustomShell, catalog.Agents[2].CustomShell})
+	require.Equal(t, []string{"", "Billing", ""}, []string{catalog.Agents[0].GetSpace(), catalog.Agents[1].GetSpace(), catalog.Agents[2].GetSpace()})
 	require.Equal(t, "marin", catalog.Agents[0].Voices[0], "an API-key agent offers the public voices, its default first")
 
 	created, err := invoke[CreateSessionResponse](ctx, connection, "CreateSession", &CreateSessionRequest{Agent: "planner"})
@@ -2026,7 +2027,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 	require.Len(t, choices.Agents, 1)
 	require.Equal(t, "main", choices.Agents[0].Name)
 	require.Equal(t, "planner", choices.CurrentAgent, "stored current agent survives removal from the loaded choices")
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md"), []byte("---\nmodel: gpt-6.1-sol\n---\nHelp."), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md"), []byte("---\nmodel: gpt-6.1-sol\nspace: Billing\n---\nHelp."), 0o600))
 
 	for _, hidden := range []string{"private-X", "cron:cron/daily.md:20000102T030405.000000006Z:a", "one-off-cron:cron/daily.md:20000102T030405.000000006Z:b"} {
 		_, err := invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: hidden})
@@ -2080,8 +2081,9 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 	require.Empty(t, emptyJobs.Jobs)
 	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "cron"), 0o700))
 
-	for _, name := range []string{"zeta", "alpha"} {
-		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "cron", name+".md"), []byte("---\nschedule: 24h\nagent: planner\nchannel: '#ops'\n---\nCron body\n"), 0o600))
+	// alpha inherits planner's space; zeta names its own.
+	for name, space := range map[string]string{"zeta": "\nspace: Ops", "alpha": ""} {
+		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "cron", name+".md"), []byte("---\nschedule: 24h\nagent: planner\nchannel: '#ops'"+space+"\n---\nCron body\n"), 0o600))
 	}
 
 	next := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
@@ -2092,8 +2094,17 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 	require.Len(t, jobs.Jobs, 2)
 
 	for i, name := range []string{"alpha", "zeta"} {
-		require.True(t, proto.Equal(&CronJob{Stem: name, Schedule: "24h", Body: "Cron body\n", Agent: "planner", Channel: "#ops", Origin: "cron/" + name + ".md", NextRun: next.Format(time.RFC3339Nano), Upcoming: []string{next.Format(time.RFC3339Nano)}}, jobs.Jobs[i]), "unexpected job: %v", jobs.Jobs[i])
+		require.True(t, proto.Equal(&CronJob{Stem: name, Schedule: "24h", Body: "Cron body\n", Agent: "planner", Channel: "#ops", Origin: "cron/" + name + ".md", NextRun: next.Format(time.RFC3339Nano), Upcoming: []string{next.Format(time.RFC3339Nano)}, Space: jobs.Jobs[i].GetSpace()}, jobs.Jobs[i]), "unexpected job: %v", jobs.Jobs[i])
 	}
+
+	require.Equal(t, []string{"Billing", "Ops"}, []string{jobs.Jobs[0].GetSpace(), jobs.Jobs[1].GetSpace()}, "alpha inherits planner's space; zeta names its own")
+
+	// Cron spaces fall back to agent spaces, so agent definition failures fail the listing.
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "broken.md"), []byte("---\nmodel: [\n---\nHelp."), 0o600))
+
+	_, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+	require.ErrorContains(t, err, "load web cron agents")
+	require.NoError(t, root.Remove(filepath.Join(cfg.RuntimeDirName(), "agents", "broken.md")))
 
 	// Seed the exact persisted relation written by Sync, without changing Sync.
 	sources := []string{"cron:cron/report:daily.md:20260905T010000.000000001Z:first", "one-off-cron:cron/report_daily.md:20260905T020000.000000002Z:second"}

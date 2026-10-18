@@ -348,6 +348,8 @@ Prompt
 			{name: "custom shell number", field: "customShell", value: "123", want: "main.md: customShell:"},
 			{name: "custom shell sequence", field: "customShell", value: "[/a]", want: "main.md: customShell:"},
 			{name: "custom shell map", field: "customShell", value: "{a: b}", want: "main.md: customShell:"},
+			{name: "space sequence", field: "space", value: "[Billing]", want: "main.md: space:"},
+			{name: "space number", field: "space", value: "123", want: "main.md: space:"},
 		}
 
 		for _, tt := range tests {
@@ -367,10 +369,11 @@ Prompt
 		result := LoadAgents(fstest.MapFS{
 			"sandboxed.md": testMapFile("---\ndescription: Sandboxed\nmodel: gpt-5.4\ncustomShell: /opt/sandbox/enter\n---\nPrompt\n"),
 			"host.md":      testMapFile("---\ndescription: Host\nmodel: gpt-5.4\n---\nPrompt\n"),
-			"fallback.md":  testMapFile("---\ndescription: Review: code\nmodel: gpt-5.4\ncustomShell: /opt/sandbox/enter\n---\nPrompt\n"),
+			"fallback.md":  testMapFile("---\ndescription: Review: code\nmodel: gpt-5.4\ncustomShell: /opt/sandbox/enter\nspace: Billing\n---\nPrompt\n"),
 		}, passThroughAgentModel)
 
 		require.Empty(t, result.Errors)
+		require.Equal(t, "Billing", result.Agents.Items["fallback"].Space, "space survives fallback sanitization")
 		require.Equal(t, "/opt/sandbox/enter", result.Agents.Items["sandboxed"].CustomShell)
 		require.Empty(t, result.Agents.Items["host"].CustomShell)
 		require.Equal(t, "Review: code", result.Agents.Items["fallback"].Description)

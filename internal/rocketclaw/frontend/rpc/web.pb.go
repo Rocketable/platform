@@ -2861,17 +2861,19 @@ func (x *PromptResponse) GetPrivateText() string {
 }
 
 type CronJob struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Stem          string                 `protobuf:"bytes,1,opt,name=stem,proto3" json:"stem,omitempty"`
-	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
-	LastRun       string                 `protobuf:"bytes,3,opt,name=last_run,json=lastRun,proto3" json:"last_run,omitempty"`
-	NextRun       string                 `protobuf:"bytes,4,opt,name=next_run,json=nextRun,proto3" json:"next_run,omitempty"`
-	Schedule      string                 `protobuf:"bytes,5,opt,name=schedule,proto3" json:"schedule,omitempty"`
-	Body          string                 `protobuf:"bytes,6,opt,name=body,proto3" json:"body,omitempty"`
-	Agent         string                 `protobuf:"bytes,7,opt,name=agent,proto3" json:"agent,omitempty"`
-	Channel       string                 `protobuf:"bytes,8,opt,name=channel,proto3" json:"channel,omitempty"`
-	Upcoming      []string               `protobuf:"bytes,9,rep,name=upcoming,proto3" json:"upcoming,omitempty"`
-	Origin        string                 `protobuf:"bytes,10,opt,name=origin,proto3" json:"origin,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Stem     string                 `protobuf:"bytes,1,opt,name=stem,proto3" json:"stem,omitempty"`
+	Status   string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	LastRun  string                 `protobuf:"bytes,3,opt,name=last_run,json=lastRun,proto3" json:"last_run,omitempty"`
+	NextRun  string                 `protobuf:"bytes,4,opt,name=next_run,json=nextRun,proto3" json:"next_run,omitempty"`
+	Schedule string                 `protobuf:"bytes,5,opt,name=schedule,proto3" json:"schedule,omitempty"`
+	Body     string                 `protobuf:"bytes,6,opt,name=body,proto3" json:"body,omitempty"`
+	Agent    string                 `protobuf:"bytes,7,opt,name=agent,proto3" json:"agent,omitempty"`
+	Channel  string                 `protobuf:"bytes,8,opt,name=channel,proto3" json:"channel,omitempty"`
+	Upcoming []string               `protobuf:"bytes,9,rep,name=upcoming,proto3" json:"upcoming,omitempty"`
+	Origin   string                 `protobuf:"bytes,10,opt,name=origin,proto3" json:"origin,omitempty"`
+	// The job's space, else its agent's; empty shows the job in every space.
+	Space         string `protobuf:"bytes,11,opt,name=space,proto3" json:"space,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2976,6 +2978,13 @@ func (x *CronJob) GetOrigin() string {
 	return ""
 }
 
+func (x *CronJob) GetSpace() string {
+	if x != nil {
+		return x.Space
+	}
+	return ""
+}
+
 type Agent struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	Name        string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -2988,7 +2997,9 @@ type Agent struct {
 	Origin      string                 `protobuf:"bytes,8,opt,name=origin,proto3" json:"origin,omitempty"`
 	CustomShell string                 `protobuf:"bytes,9,opt,name=custom_shell,json=customShell,proto3" json:"custom_shell,omitempty"`
 	// Voices a call with this agent may use, the default first; empty when its provider offers none.
-	Voices        []string `protobuf:"bytes,10,rep,name=voices,proto3" json:"voices,omitempty"`
+	Voices []string `protobuf:"bytes,10,rep,name=voices,proto3" json:"voices,omitempty"`
+	// New sessions in another space do not offer this agent; empty offers it in every space.
+	Space         string `protobuf:"bytes,11,opt,name=space,proto3" json:"space,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3091,6 +3102,13 @@ func (x *Agent) GetVoices() []string {
 		return x.Voices
 	}
 	return nil
+}
+
+func (x *Agent) GetSpace() string {
+	if x != nil {
+		return x.Space
+	}
+	return ""
 }
 
 type ListAgentsRequest struct {
@@ -5909,7 +5927,7 @@ const file_web_proto_rawDesc = "" +
 	"\n" +
 	"message_id\x18\x05 \x01(\tR\tmessageId\"3\n" +
 	"\x0ePromptResponse\x12!\n" +
-	"\fprivate_text\x18\x01 \x01(\tR\vprivateText\"\xff\x01\n" +
+	"\fprivate_text\x18\x01 \x01(\tR\vprivateText\"\x95\x02\n" +
 	"\aCronJob\x12\x12\n" +
 	"\x04stem\x18\x01 \x01(\tR\x04stem\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x19\n" +
@@ -5921,7 +5939,8 @@ const file_web_proto_rawDesc = "" +
 	"\achannel\x18\b \x01(\tR\achannel\x12\x1a\n" +
 	"\bupcoming\x18\t \x03(\tR\bupcoming\x12\x16\n" +
 	"\x06origin\x18\n" +
-	" \x01(\tR\x06origin\"\x9c\x02\n" +
+	" \x01(\tR\x06origin\x12\x14\n" +
+	"\x05space\x18\v \x01(\tR\x05space\"\xb2\x02\n" +
 	"\x05Agent\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05model\x18\x02 \x01(\tR\x05model\x12\x1c\n" +
@@ -5933,7 +5952,8 @@ const file_web_proto_rawDesc = "" +
 	"\x06origin\x18\b \x01(\tR\x06origin\x12!\n" +
 	"\fcustom_shell\x18\t \x01(\tR\vcustomShell\x12\x16\n" +
 	"\x06voices\x18\n" +
-	" \x03(\tR\x06voices\"<\n" +
+	" \x03(\tR\x06voices\x12\x14\n" +
+	"\x05space\x18\v \x01(\tR\x05space\"<\n" +
 	"\x11ListAgentsRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\"]\n" +
 	"\x12ListAgentsResponse\x12\"\n" +

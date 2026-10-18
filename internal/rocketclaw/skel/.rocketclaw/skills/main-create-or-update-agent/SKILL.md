@@ -237,6 +237,8 @@ A missing program makes ``!`…` `` lines expand to empty text and makes `bash` 
 
 The optional `schema.output` frontmatter field is a YAML JSON Schema for that agent's own final response. When present, RocketCode requests OpenAI structured output. Do not put it on guardrail or permission-reviewer agents; those runs keep fixed decision schemas. Invalid schemas fail agent loading.
 
+The optional `space` frontmatter field is one Web space name string. A new Web session in a space offers only agents without `space` and those whose `space` matches that space's name, ignoring case; a cron without its own `space` uses its agent's. Set or change it only when the human asks, and carry it over on updates and renames. A non-string value fails agent loading.
+
 Preserve any other valid frontmatter keys unless the human asked to change them.
 
 The body of the file should contain the agent's purpose and operating instructions based on what the human asked for.

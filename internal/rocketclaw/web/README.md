@@ -462,6 +462,12 @@ active tab.
   right, Close all, Cmd/Ctrl+[ and ], and the preview tab act only within the
   current space. Screen readers hear each unpinned tab's group, if any, and space
   as its description, such as “Group Work, Space: Main”.
+- **Agents and crons in spaces.** An agent or cron whose frontmatter sets
+  `space:` belongs to the space of that name, ignoring case; a cron without one
+  takes its agent's. New session's agent picker offers only agents without a
+  space and the current space's agents; existing sessions offer every agent. The
+  Cron page and Run cron palette likewise hide crons, and their runs, that belong
+  to another space.
 - **Groups in spaces.** A group lives in one space. The tab menu offers only the
   current space's groups, and moving a tab to another space takes it out of its group.
   The group editor adds **Move group to "<space>"** for each other space: it

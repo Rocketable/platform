@@ -30,7 +30,9 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/Protocol": return Response.json({ protoSha256: "tabs" });
       case "/api/ListConfig": return Response.json({ config: { workspace: "tabs" } });
-      case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
+      case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }, { name: "opsbot", space: "OPS" }], currentAgent: "main" });
+      case "/api/ListCronJobs": return Response.json({ jobs: [{ stem: "daily", status: "" }, { stem: "opsreport", status: "", space: "Ops" },
+        { stem: "opsreport", status: "ran", lastRun: new Date().toISOString() }, { stem: "retired", status: "ran", lastRun: new Date().toISOString() }] });
       case "/api/History": return Response.json({ messages: [], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
       case "/api/CreateSession": return Response.json({ id: "fresh" });
       case "/api/Prompt": prompts.push(input); return Response.json({ privateText: "" });
@@ -686,6 +688,50 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   await menu(page, "Bravo", "Move tabs to left");
   const [button, list] = [await space.boundingBox(), await strip(page).boundingBox()];
   expect(button.y + button.height).toBeLessThanOrEqual(list.y);
+}), 60_000);
+
+test("a space offers New session its own and spaceless agents, and shows its own and spaceless cron jobs, ignoring case", () => withPage({}, async (page, origin) => {
+  const agents = async () => {
+    await page.getByRole("button", { name: "Choose agent", exact: true }).click();
+    await page.getByRole("menuitemradio", { name: "main", exact: true }).waitFor();
+    const listed = await page.getByRole("menuitemradio").allInnerTexts();
+    await page.keyboard.press("Escape");
+    return listed.map((text: string) => text.trim());
+  };
+  const runnable = async () => {
+    await page.keyboard.press("Control+Shift+p");
+    await page.getByRole("button", { name: "Cron: Run", exact: true }).click();
+    const palette = page.getByRole("dialog", { name: "Run cron", exact: true });
+    await palette.getByRole("button", { name: "daily", exact: true }).waitFor();
+    const listed = await palette.getByRole("button").allTextContents();
+    await page.keyboard.press("Escape");
+    await palette.waitFor({ state: "hidden" });
+    return listed;
+  };
+  const dashboard = async () => {
+    await page.getByRole("button", { name: "Preview latest run of daily", exact: true }).waitFor();
+    return (await page.getByRole("button", { name: /^Preview latest run of / }).evaluateAll((nodes: HTMLElement[]) => nodes.filter((node) => node.checkVisibility()).map((node) => node.getAttribute("aria-label")))).map((label: string) => label.replace("Preview latest run of ", ""));
+  };
+  // Main is spaceless for both: an existing session keeps every agent, New session drops opsbot, and opsreport hides with its run.
+  await openSaved(page, origin, href("alpha"), "Alpha");
+  expect(await agents()).toEqual(["main", "opsbot"]);
+  await openSaved(page, origin, "/cron", "Cron");
+  expect(await dashboard()).toEqual(["daily", "retired"]);
+  await openSaved(page, origin, "/", "New session");
+  expect(await agents()).toEqual(["main"]);
+  expect(await runnable()).toEqual(["daily"]);
+  // The OPS agent and the Ops job belong to a space named ops.
+  await chooseSpace(page, "New space");
+  await page.getByRole("textbox", { name: "Space name" }).waitFor();
+  await page.keyboard.type("ops");
+  await page.keyboard.press("Enter");
+  expect(await agents()).toEqual(["main", "opsbot"]);
+  expect(await runnable()).toEqual(["daily", "opsreport"]);
+  await chooseSpace(page, "Main", "menuitemradio");
+  await menu(page, "Cron", "Move to space", "ops");
+  await chooseSpace(page, "ops", "menuitemradio");
+  await strip(page).getByRole("tab", { name: "Cron", exact: true }).click();
+  expect(await dashboard()).toEqual(["daily", "opsreport", "retired"]);
 }), 60_000);
 
 test("a group lives in one space: menus offer only this space's groups, groups move whole, and New tab in group brings New session", () => withPage({}, async (page, origin) => {

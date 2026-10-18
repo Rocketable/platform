@@ -915,6 +915,13 @@ function useTabs() {
   };
 }
 
+// Agents and cron jobs without a space show in every space; the rest only in the space of that name, ignoring case.
+function useInSpace() {
+  const { state } = useContext(TabActions);
+  const name = state.spaces.find((space) => space.id === state.space)?.name.toLowerCase();
+  return (item: { space?: string }) => !item.space || item.space.toLowerCase() === name;
+}
+
 function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs>; vertical: boolean; newChat: () => void }) {
   const { state, shown, groups, pathname, close, promote, move, commands, edit, editor, setEditor, groupCommands } = tabs, space = state.spaces.find((item) => item.id === state.space)?.name;
   const [menu, setMenu] = useState<{ path: string; anchor: Element | { getBoundingClientRect: () => DOMRect } }>();
@@ -1579,7 +1586,8 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
     },
   });
   const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(0); }, paletteCopy[mode ?? "sessions"]);
-  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim().toLowerCase(), { rows: search.rows, loadingIds: sidebar.loadingIds }, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...timeline, ...outputs], recent));
+  const inSpace = useInSpace();
+  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim().toLowerCase(), { rows: search.rows, loadingIds: sidebar.loadingIds }, jobs.data?.filter(inSpace), newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...timeline, ...outputs], recent));
   const selected = items.length === 0 ? 0 : pick % items.length;
   // The palette opens with the first rows; the full list renders in the background.
   const shown = useDeferredValue(items, items.slice(0, 50));
@@ -3505,7 +3513,9 @@ function SessionComposer({
   // Clearing the send error also dismisses this composer's failed call.
   const setSendError = (value: string) => { draft.error = value; onDraftChange(); if (!value && voice.state === "error") stopVoice(); };
   const currentAgent = id === "" ? "main" : agents.data?.currentAgent ?? "";
-  const catalog = agents.data?.agents ?? [];
+  const inSpace = useInSpace();
+  // A new session offers only the agents its space shows; an existing one keeps every agent.
+  const catalog = (agents.data?.agents ?? []).filter((item) => id !== "" || inSpace(item));
   // Sends switch to the shown agent, so an unlisted current agent moves to the first listed one.
   const selected = [agent, currentAgent].find((name) => catalog.some((item) => item.name === name)) ?? catalog[0]?.name ?? currentAgent;
   const skills = useQuery({ ...queries.skills({ agent: selected }), enabled: selected !== "", placeholderData: undefined });
@@ -3957,7 +3967,10 @@ function CronPage() {
   const [confirmStem, setConfirmStem] = useState("");
   const confirmTrigger = useRef<HTMLButtonElement>(null);
   const [preview, setPreview] = useState<CronJob | null>(null);
-  const rows = jobs.data ?? [];
+  const inSpace = useInSpace();
+  // Runs carry no space, so a job outside this space hides its runs too.
+  const away = new Set((jobs.data ?? []).filter((job) => !inSpace(job)).map((job) => job.stem));
+  const rows = (jobs.data ?? []).filter((job) => !away.has(job.stem));
   const defs = rows.filter((job) => job.status !== "ran");
   const runs = rows.filter((job) => job.status === "ran");
   const start = Date.now() - 12 * 3_600_000;

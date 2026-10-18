@@ -766,6 +766,10 @@ func TestLoadDefinitionDefaultsBlankAgent(t *testing.T) {
 	if def.agent != "main" {
 		t.Fatalf("definition agent = %q; want main", def.agent)
 	}
+
+	defNull, err := loadDefinition([]byte("---\nschedule: 1h\nagent: null\nchannel: '#ops'\n---\nBody"), "cron/test.md")
+	require.NoError(t, err)
+	require.Equal(t, "main", defNull.agent)
 }
 
 func TestLoadOneOffCronjobValidatesTargetsAndPreparesPrompt(t *testing.T) {
@@ -797,7 +801,7 @@ func TestLoadOneOffCronjobValidatesTargetsAndPreparesPrompt(t *testing.T) {
 		t.Fatalf("prompt = %q; want body plus exposed tool instruction", job.Prompt)
 	}
 
-	for _, target := range []string{"", "nested/daily", "daily.txt", "daily.example", "."} {
+	for _, target := range []string{"", "nested/daily", "daily.txt", "daily.example", "daily.example.md", "."} {
 		if _, err := m.LoadOneOffCronjob(target); err == nil {
 			t.Fatalf("LoadOneOffCronjob(%q) succeeded; want error", target)
 		}

@@ -113,13 +113,14 @@ func ParseCronDefinition(data []byte, relativePath string) (protocol.OneOffCronj
 		return protocol.OneOffCronjob{}, nil, fmt.Errorf("parse cronjob %s schedules: timestamp schedules cannot be combined with other schedules", relativePath)
 	}
 
-	return protocol.OneOffCronjob{RelativePath: relativePath, Agent: cmp.Or(string(raw.Agent), "main"), TextChannel: string(raw.Channel), Prompt: body}, schedules, nil
+	return protocol.OneOffCronjob{RelativePath: relativePath, Agent: cmp.Or(string(raw.Agent), "main"), TextChannel: string(raw.Channel), Space: raw.Space, Prompt: body}, schedules, nil
 }
 
 type cronFrontmatter struct {
 	Schedule cronFrontmatterSchedule `json:"schedule"`
 	Agent    cronFrontmatterAgent    `json:"agent"`
 	Channel  cronFrontmatterChannel  `json:"channel"`
+	Space    string                  `json:"space"`
 }
 
 type cronFrontmatterSchedule struct {
