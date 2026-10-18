@@ -141,6 +141,14 @@ Mentions in `#ops` start conversations with agent `main`. Switch a conversation 
 }
 ```
 
+`opencode` lists remote OpenCode servers whose root sessions appear in the Web session list. Names follow the `mcp_servers` rule. Each entry needs `url` (the server's `opencode serve` address), `password` (a pairing token: `opencode pair`, then open the `/auth/connect/<code>` link with `Accept: application/json`), and `port`. RocketClaw relays each server on its own `port`, on the Web listen host and on the tailnet node when `web.tsnet` is set, and adds the password itself. The relay admits only callers the Web admits (`web_users` or a Tailscale user), and each of them gets full control of that OpenCode server, including its shell. Open the relay port in tailnet ACLs if they restrict ports. Changing `opencode` requires restart.
+
+```json
+"opencode": {
+  "devbox": { "url": "http://devbox.example.ts.net:4096", "password": "…", "port": 4100 }
+}
+```
+
 Agents use filesystem, shell, fetch, patch, and outbound MCP through the Code Mode `execute` tool (not as separate top-level tools). After the right permission grants, call `execute` with a short Starlark script (`def main()`). Inside the script: host builtins `read(...)`, `apply_patch(...)`, `glob(...)`, `grep(...)`, `webfetch(...)`, `bash(command=r'''…''')` with their normal permission buckets and subjects (including multi-subject `bash`); RocketClaw platform tools such as `ask_user_question(...)`, `rocketclaw_reload(...)`, `rocketclaw_update_goal(...)` (also still available top-level when eligible); MCP as `server_toolname(...)` after `permission.mcp` (permission subjects use raw `server.tool`). execute `code` is a JSON string (JSON still uses `"..."`). Inside it, `bash(command=...)` takes `r'''...'''` only, not Starlark `"..."` or `'...'`. Example: `{"code":"def main():\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\n"}`. `r"..."` is raw but single-line; a real newline needs `r'''...'''`. `$` is valid inside a closed Starlark string. The script is parsed before host tools run; a `codemode.star` error means nothing ran. `bash(...)` results are text-like (`str(result)` before find/split). Discover tools with in-script `search(query="", namespace="", offset=0, limit=10)` (JSON items with path/description/signature/callable). A short Code Mode catalog is also in the system prompt. Skills, `task`, hosted `websearch`, and RocketClaw platform tools stay top-level when eligible.
 
 To review the entire `execute` script before any nested call, set `permission.rocketclaw.code_mode_approve` in the agent frontmatter to `auto` (built-in guardian) or `auto(release-reviewer)` (named loaded agent). Set it to `allow` or omit it to skip whole-script review; the default is always `allow`. This decision never grants nested tool permissions, which are checked separately.

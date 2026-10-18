@@ -439,6 +439,19 @@ The HTTP proxy forwards only the connection's remote IP. It ignores
 headers. Do not put another HTTP reverse proxy in front of it: that would identify
 the proxy rather than the browser.
 
+Each `opencode` server gets a relay on its own `port`, on the Web listen host and,
+with `web.tsnet`, on the tailnet node. The relay admits exactly the browsers the
+Web admits (by IP on the plain listener, by Tailscale user on the tailnet), adds
+the server's password, and serves OpenCode's own web app, which the Web frames at
+`/server/<base64url relay origin>/session/<id>`. It refuses any request, WebSocket
+upgrades included, whose `Origin` is another site, sends OpenCode its own origin so
+OpenCode's terminal origin check still holds, and lets only pages on the same host
+frame it. Everyone the Web admits gets full control of every configured OpenCode
+server, including its shell. Remote sessions are listed from a copy RocketClaw
+syncs every 5 seconds; once a day the server's full list removes copies of sessions
+it no longer has. `Prompt` refuses their `opencode:` IDs. People tag remote sessions
+with any tag and RocketClaw sessions with tags their agent allows.
+
 Phones get the secure page that voice needs from the `web.tsnet` listener (see the
 root README for setup). There, a wrapping handler asks the node's `LocalClient().WhoIs`
 about the connection's remote address and refuses tagged or unknown callers. It

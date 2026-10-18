@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -22,7 +23,7 @@ import (
 // startTailnet starts the Web's tsnet node and serves handler over HTTPS on the tailnet in
 // serving, and returns what closes it. It never waits on a person: a logged-out node without
 // an auth key is closed at once, and the Web serves only its plain listener.
-func startTailnet(rt *backend.Runtime, tailnet *config.TsnetConfig, handler http.Handler, serving *errgroup.Group) (func() error, error) {
+func startTailnet(rt *backend.Runtime, tailnet *config.TsnetConfig, handler http.Handler, relays map[int]http.Handler, serving *errgroup.Group) (func() error, error) {
 	node, err := newTailnetNode(tailnet)
 	if err != nil {
 		return nil, err
@@ -46,7 +47,7 @@ func startTailnet(rt *backend.Runtime, tailnet *config.TsnetConfig, handler http
 	tailnetServer := &http.Server{Handler: rpc.NewTailnetHandler(node.client, handler), TLSConfig: &tls.Config{GetCertificate: node.client.GetCertificate}}
 
 	serving.Go(func() error {
-		err := serveTailnet(ctxUp, rt, node, tailnetServer)
+		err := serveTailnet(ctxUp, rt, node, tailnetServer, relays)
 
 		switch {
 		case ctxUp.Err() != nil:
@@ -138,7 +139,7 @@ func tailnetWait(watcher *local.IPNBusWatcher) (tailnetStep, string, error) {
 
 // serveTailnet serves the Web over HTTPS once the node runs. A node that loses its
 // login stops with errTailnetLogin instead of waiting on a link nobody sees.
-func serveTailnet(ctx context.Context, rt *backend.Runtime, node *tailnetNode, server *http.Server) error {
+func serveTailnet(ctx context.Context, rt *backend.Runtime, node *tailnetNode, server *http.Server, relays map[int]http.Handler) error {
 	watcher, err := node.client.WatchIPNBus(ctx, ipn.NotifyInitialState)
 	if err != nil {
 		return fmt.Errorf("watch Tailscale node: %w", err)
@@ -179,6 +180,17 @@ func serveTailnet(ctx context.Context, rt *backend.Runtime, node *tailnetNode, s
 	}
 
 	rt.Log.Info("started Web HTTPS on the tailnet", "domains", domains)
+
+	// Relay servers stop when closing the node closes their listeners.
+	for port, relay := range relays {
+		relayListener, err := node.server.Listen("tcp", ":"+strconv.Itoa(port))
+		if err != nil {
+			return fmt.Errorf("listen for an OpenCode relay on the tailnet: %w", err)
+		}
+
+		relayServer := &http.Server{Handler: rpc.NewTailnetHandler(node.client, relay), TLSConfig: server.TLSConfig}
+		go func() { _ = relayServer.ServeTLS(relayListener, "", "") }()
+	}
 
 	_ = rt.Cfg.Do(func(cfg *config.Config) error {
 		cfg.Web.Tsnet.Origin = "https://" + domains[0]

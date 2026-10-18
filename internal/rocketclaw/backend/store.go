@@ -447,7 +447,16 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 // UpdateConversationDetails changes shared display metadata without touching history.
 // Nil fields are left unchanged.
 func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversationID string, pinned *bool, name *string) (bool, error) {
-	rows, err := execRows(ctx, s.db, "update conversation details", "count conversation details update", `UPDATE managed_conversations SET pinned = COALESCE($2, pinned), name = COALESCE($3, name) WHERE conversation_id = $1`, conversationID, pinned, name)
+	var rows int
+
+	err := queryScalar(ctx, s.db, "update conversation details", `WITH local AS (
+    UPDATE managed_conversations SET pinned = COALESCE($2, pinned), name = COALESCE($3, name) WHERE conversation_id = $1 RETURNING 1
+), remote AS (
+    UPDATE opencode_sessions SET pinned = COALESCE($2, pinned), name = COALESCE($3, name) WHERE conversation_id = $1 RETURNING 1
+), touched AS (
+    SELECT * FROM local UNION ALL SELECT * FROM remote
+)
+SELECT count(*) FROM touched`, &rows, conversationID, pinned, name)
 
 	return rows > 0, err
 }
@@ -1041,6 +1050,10 @@ type SidebarSession struct {
 	Name         string
 	ForkedFrom   string
 	Tags         []string
+	// Server names the remote OpenCode server of a synced session, empty for RocketClaw's own.
+	Server    string
+	Directory string
+	Offline   bool
 }
 
 // SidebarSessions yields pinned records first, then recent-first, bytewise-ID order.
@@ -1055,17 +1068,21 @@ running AS (
     FROM active_turns WHERE phase <> 'done'
     ORDER BY conversation_id, created_at_unix_ns
 )
+, local AS (
 SELECT
     c.conversation_id,
     c.agent,
     c.created_by,
-    CASE WHEN h.found THEN s.preview ELSE convert_to(r.prompt, 'UTF8') END,
-    CASE WHEN h.found THEN s.last_updated ELSE r.started_at END,
-    r.conversation_id IS NOT NULL,
+    CASE WHEN h.found THEN s.preview ELSE convert_to(r.prompt, 'UTF8') END AS preview,
+    CASE WHEN h.found THEN s.last_updated ELSE r.started_at END AS updated,
+    r.conversation_id IS NOT NULL AS running,
     c.pinned,
     c.name,
     c.forked_from,
-    COALESCE(t.tags, '[]'::jsonb)
+    COALESCE(t.tags, '[]'::jsonb) AS tags,
+    '' AS server,
+    '' AS directory,
+    FALSE AS offline
 FROM visible_chats c
 -- Exception to the no-subquery rule: keep the history check per conversation and stop at its
 -- first entry. A CTE would read every stored entry on each refresh, about twice as slow.
@@ -1076,7 +1093,18 @@ LEFT JOIN running r ON r.conversation_id = c.conversation_id
 LEFT JOIN session_summaries s ON s.conversation_id = c.conversation_id
 LEFT JOIN session_tags t ON t.conversation_id = c.conversation_id
 WHERE h.found OR r.conversation_id IS NOT NULL
-ORDER BY c.pinned DESC, COALESCE(CASE WHEN h.found THEN s.last_updated ELSE r.started_at END, '0001-01-01 00:00:00+00'::timestamptz) DESC, c.conversation_id COLLATE "C"`, "")
+), remote AS (
+SELECT o.conversation_id, '', '', convert_to(o.title, 'UTF8'), o.updated_at, o.running, o.pinned, o.name, '', COALESCE(t.tags, '[]'::jsonb),
+    o.server, o.directory, o.synced_at < now() - interval '15 seconds'
+FROM opencode_sessions o
+LEFT JOIN session_tags t ON t.conversation_id = o.conversation_id
+-- Rows of servers no longer configured stay stored, hidden, and return with their server.
+WHERE o.server = ANY($2)
+), chats AS (
+SELECT * FROM local UNION ALL SELECT * FROM remote
+)
+SELECT * FROM chats
+ORDER BY pinned DESC, COALESCE(updated, '0001-01-01 00:00:00+00'::timestamptz) DESC, conversation_id COLLATE "C"`, "", slices.Collect(maps.Keys(s.definitions.Clone().OpenCode)))
 		if err != nil {
 			yield(SidebarSession{}, fmt.Errorf("query sidebar sessions: %w", err))
 			return
@@ -1090,7 +1118,7 @@ ORDER BY c.pinned DESC, COALESCE(CASE WHEN h.found THEN s.last_updated ELSE r.st
 				tags    []byte
 				updated sql.NullTime
 			)
-			if err := rows.Scan(&row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Pinned, &row.Name, &row.ForkedFrom, &tags); err != nil {
+			if err := rows.Scan(&row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
 				return
 			}

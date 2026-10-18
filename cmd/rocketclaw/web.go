@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc"
@@ -32,14 +33,20 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 		}))
 	httpServer := &http.Server{Handler: rpc.NewHTTPHandler(connection, cfg.Web.Sentry)}
 	server := grpc.NewServer()
-	rpc.New(rt, rt.Sessions, rt.Cfg, channels, cronjobs).Register(server)
+	web := rpc.New(rt, rt.Sessions, rt.Cfg, channels, cronjobs)
+	web.Register(server)
 
 	var serving errgroup.Group
 
 	closeTailnet := func() error { return nil }
 
+	relays := make(map[int]http.Handler, len(cfg.OpenCode))
+	for _, server := range cfg.OpenCode {
+		relays[server.Port] = rpc.NewOpenCodeRelay(server)
+	}
+
 	if tailnet := cfg.Web.Tsnet; tailnet != nil {
-		if closeTailnet, err = startTailnet(rt, tailnet, httpServer.Handler, &serving); err != nil {
+		if closeTailnet, err = startTailnet(rt, tailnet, httpServer.Handler, relays, &serving); err != nil {
 			_ = httpListener.Close()
 			_ = listener.Close()
 			_ = connection.Close()
@@ -64,17 +71,54 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 	})
 	rt.Log.Info("started Web HTTP", "address", httpListener.Addr().String())
 
-	return func(context.Context) error {
-		errHTTP := httpServer.Close()
+	ctxSync, cancelSync := context.WithCancel(context.Background())
+	if len(cfg.OpenCode) > 0 {
+		serving.Go(func() error {
+			rt.Sessions.SyncOpenCode(ctxSync, cfg.OpenCode)
+			return nil
+		})
+	}
+
+	var relayServers []*http.Server
+
+	stop := func(context.Context) error {
+		errs := []error{httpServer.Close()}
 		_ = httpListener.Close()
-		errTailnet := closeTailnet()
+
+		for _, relay := range relayServers {
+			errs = append(errs, relay.Close())
+		}
+
+		cancelSync()
+		errs = append(errs, closeTailnet())
 
 		server.Stop()
 
-		if err := errors.Join(errHTTP, errTailnet, serving.Wait(), connection.Close()); err != nil {
+		if err := errors.Join(append(errs, serving.Wait(), connection.Close())...); err != nil {
 			return fmt.Errorf("stop Web: %w", err)
 		}
 
 		return nil
-	}, nil
+	}
+
+	host, _, _ := net.SplitHostPort(cfg.Web.ListenAddress) // Listening on it above proved it parses.
+	for port, relay := range relays {
+		listener, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+		if err != nil {
+			return nil, errors.Join(fmt.Errorf("start OpenCode relay: %w", err), stop(context.Background()))
+		}
+
+		relayServer := &http.Server{Handler: web.AdmitHTTP(relay)}
+		relayServers = append(relayServers, relayServer)
+
+		serving.Go(func() error {
+			if err := relayServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("serve OpenCode relay: %w", err)
+			}
+
+			return nil
+		})
+	}
+
+	return stop, nil
 }

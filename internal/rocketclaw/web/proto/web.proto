@@ -24,6 +24,10 @@ message Session {
   // The chat's recorded origin is a cron run, even after human follow-ups.
   bool cron = 15;
   string cron_name = 16;
+  // A remote OpenCode session names its configured server and folder; offline while it is unreachable.
+  string server = 17;
+  string directory = 18;
+  bool offline = 19;
 }
 
 message HistoryRequest {
@@ -137,12 +141,23 @@ message ListSessionsResponse {
   string owner = 2;
   bool upstream_success = 3;
   bool summaries_complete = 4;
+  // Sent with the completion message: remote servers, and per agent the tags people may set
+  // on its sessions. Remote OpenCode sessions take any tag.
+  map<string, int32> opencode_servers = 5; // Server name to its relay port.
+  map<string, TagChoices> agent_tags = 6;
+}
+
+message TagChoices {
+  repeated string tags = 1;
 }
 
 message CreateSessionRequest {
   string name = 1;
   string agent = 2;
   string source_conversation_id = 3;
+  // Set together to create a remote OpenCode session in that folder.
+  string opencode_server = 4;
+  string directory = 5;
 }
 
 message CreateSessionResponse {
@@ -416,6 +431,8 @@ message UpdateSessionRequest {
   optional bool pinned = 2;
   optional string name = 3;
   reserved 4, 5;
+  // Toggles a tag a person chose: any tag on a remote OpenCode session, or one its agent allows.
+  optional string tag = 6;
 }
 
 message UpdateSessionResponse {}

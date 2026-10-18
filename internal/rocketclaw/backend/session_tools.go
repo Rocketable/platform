@@ -459,7 +459,8 @@ func (s *SessionService) searchSessionsWithin(ctx context.Context, criteria stri
 
 	for i := range search.Matches {
 		// Summary times compare as the bounds do: UTC RFC3339Nano text without Z.
-		if summary := search.Matches[i].Chat.Session.Summary; summary != nil {
+		// Remote OpenCode sessions are for people only; agents never see them.
+		if summary := search.Matches[i].Chat.Session.Summary; summary != nil && search.Matches[i].Chat.Session.Server == "" {
 			if at := strings.TrimSuffix(summary.LastUpdated.Format(time.RFC3339Nano), "Z"); at >= params.Since && (params.Until == "" || at < params.Until) {
 				matches = append(matches, search.Matches[i])
 			}

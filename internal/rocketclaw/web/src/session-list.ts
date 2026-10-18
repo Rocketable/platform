@@ -1,5 +1,5 @@
 import { RPCError } from "./api";
-import type { Session, SessionBatch } from "./types";
+import type { Remote, Session, SessionBatch } from "./types";
 
 export const MISSING_SUMMARY = "loading...";
 export const SESSION_HISTORY_CHANNEL = "rocketclaw-session-history";
@@ -138,6 +138,7 @@ export type EnumerationResult = {
   exhausted: boolean;
   // An owner mismatch or explicit authentication rejection requires live identity revalidation.
   mismatch: boolean;
+  remote?: Remote;
 };
 
 export async function readSessionEnumeration(
@@ -156,6 +157,7 @@ export async function readSessionEnumeration(
   let summariesComplete = true;
   let exhausted = false;
   let mismatch = false;
+  let remote: Remote | undefined;
   const cancel = () => clearTimeout(timer);
   const flush = () => {
     timer = undefined;
@@ -179,6 +181,7 @@ export async function readSessionEnumeration(
         summaries.set(row.id, batch.summariesComplete);
       }
       upstreamSuccess = batch.upstreamSuccess;
+      if (upstreamSuccess) remote = { servers: batch.opencodeServers ?? {}, agentTags: Object.fromEntries(Object.entries(batch.agentTags ?? {}).map(([agent, choices]) => [agent, choices.tags ?? []])) };
       summariesComplete &&= batch.summariesComplete;
       dirty = true;
       // First useful row is immediate; subsequent display work coalesces over
@@ -199,5 +202,5 @@ export async function readSessionEnumeration(
     signal?.removeEventListener("abort", cancel);
   }
   flush();
-  return { received: [...byID.values()], upstreamSuccess, summariesComplete, exhausted, mismatch };
+  return { received: [...byID.values()], upstreamSuccess, summariesComplete, exhausted, mismatch, remote };
 }
