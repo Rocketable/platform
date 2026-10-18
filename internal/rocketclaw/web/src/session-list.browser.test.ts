@@ -385,6 +385,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
   const wireTail = Promise.withResolvers<void>();
   const ownerTail = Promise.withResolvers<void>();
   let blocked = Promise.withResolvers<void>();
+  let listStarted = Promise.withResolvers<void>();
   const ctrl = {
     username: "alice",
     principal: "Alice Smith",
@@ -461,6 +462,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     if (url.pathname === "/api/ListSessions") return new Response(new ReadableStream({ async start(controller) {
       listResponse = controller;
       ctrl.listCalls++;
+      listStarted.resolve();
       try {
         await blocked.promise;
         for await (const value of ctrl.yieldBatches()) controller.enqueue(`data: ${JSON.stringify(value)}\n\n`);
@@ -703,7 +705,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
 
     const putsBeforeLive = await page.evaluate(() => (window as unknown as { __snapshotPuts: number }).__snapshotPuts);
     ctrl.yieldBatches = complete([row("kept", "saved preview"), row("gone", "will vanish"), row("slack-thread:C:1", "filter preview")]);
-    const refreshRequest = page.waitForRequest("**/api/ListSessions*");
+    listStarted = Promise.withResolvers<void>();
+    const refreshRequest = listStarted.promise;
     blocked.resolve();
     blocked = Promise.withResolvers();
     await page.keyboard.press("Control+p");
