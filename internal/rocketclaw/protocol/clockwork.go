@@ -17,9 +17,7 @@ func Clone[T any](p *T) *T {
 		return nil
 	}
 
-	clone := *p
-
-	return &clone
+	return new(*p)
 }
 
 // CloneOutboundMessage returns a deep copy suitable for an independent connector delivery.
