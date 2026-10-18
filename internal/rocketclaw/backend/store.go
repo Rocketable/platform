@@ -818,9 +818,6 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time,
 		errCombined error
 	)
 
-	// ponytail: every pass checks every conversation, so it lasts at least
-	// len(candidates) × pace/10; past ~36k conversations passes run back to back.
-	// Upgrade: select only conversations last active before cutoff in SQL.
 	for _, c := range candidates {
 		// A check without locks skips most candidates cheaply; deletion checks again under locks.
 		stale, err := c.stale(ctx, s.db, cutoff)
