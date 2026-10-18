@@ -208,6 +208,19 @@ editor
 	}, result.Findings)
 }
 
+// Lint reads the frontmatter the runtime loaded, so agents the runtime accepts lint too.
+func TestLintAcceptsAgentsTheRuntimeLoads(t *testing.T) {
+	runtimeRoot := t.TempDir()
+	writeAgent(t, runtimeRoot, "colon.md", "---\ndescription: Use when: tests fail\n---\ncolon\n")
+	require.NoError(t, os.WriteFile(filepath.Join(runtimeRoot, "agents", "crlf.md"), []byte("---\r\nmodel: gpt-6.1-sol\r\ndescription: crlf\r\npermissions: {}\r\n---\r\ncrlf\r\n"), 0o644))
+
+	result, err := Lint(runtimeRoot, new(config.Config))
+	require.NoError(t, err)
+	assert.Equal(t, []Finding{
+		{Code: rc006, Severity: "error", Path: "agents/crlf.md", Message: "plural permissions frontmatter is ignored; use permission", keys: []string{"permissions"}},
+	}, result.Findings)
+}
+
 func TestLintReasoningEffortXHighError(t *testing.T) {
 	runtimeRoot := t.TempDir()
 	writeAgent(t, runtimeRoot, "expensive.md", `---
