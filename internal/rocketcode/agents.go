@@ -28,6 +28,7 @@ type Agent struct {
 	MaxRecursion    *int
 	Guardrail       string
 	CustomShell     string
+	Space           string
 	Prompt          string
 	Location        string
 	Permission      PermissionSet
@@ -231,6 +232,16 @@ func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, e
 		customShell = field.Value
 	}
 
+	var space string
+
+	if field := frontmatterField(frontmatterNode, "space"); field != nil {
+		if field.Kind != yaml.ScalarNode || field.ShortTag() != "!!str" {
+			return Agent{}, fmt.Errorf("%s: space: must be a string", filePath)
+		}
+
+		space = field.Value
+	}
+
 	outputSchema, err := parseAgentOutputSchema(frontmatterField(frontmatterNode, "schema"))
 	if err != nil {
 		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
@@ -245,6 +256,7 @@ func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, e
 		MaxRecursion:    maxRecursion,
 		Guardrail:       argString(frontmatter, "guardrail"),
 		CustomShell:     customShell,
+		Space:           space,
 		Prompt:          strings.TrimSpace(prompt),
 		Location:        filePath,
 		Permission:      permission,

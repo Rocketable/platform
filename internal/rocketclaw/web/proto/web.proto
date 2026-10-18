@@ -327,6 +327,8 @@ message CronJob {
   string channel = 8;
   repeated string upcoming = 9;
   string origin = 10;
+  // The job's space, else its agent's; empty shows the job in every space.
+  string space = 11;
 }
 
 message Agent {
@@ -341,6 +343,8 @@ message Agent {
   string custom_shell = 9;
   // Voices a call with this agent may use, the default first; empty when its provider offers none.
   repeated string voices = 10;
+  // New sessions in another space do not offer this agent; empty offers it in every space.
+  string space = 11;
 }
 
 message ListAgentsRequest { string conversation_id = 1; }

@@ -51,15 +51,15 @@ type cronScheduleStore interface {
 }
 
 type definition struct {
-	relativePath, agent, textChannel, body string
-	schedules                              []config.CronSchedule
+	relativePath, agent, textChannel, body, space string
+	schedules                                     []config.CronSchedule
 }
 
 // Job is the read-only presentation of a loaded definition and its next triggers.
 type Job struct {
-	RelativePath, Agent, TextChannel, Body string
-	Schedules                              []string
-	Upcoming                               []time.Time
+	RelativePath, Agent, TextChannel, Body, Space string
+	Schedules                                     []string
+	Upcoming                                      []time.Time
 }
 
 const (
@@ -209,7 +209,7 @@ func (m *Manager) Jobs() ([]Job, error) {
 
 	jobs := make([]Job, 0, len(definitions))
 	for _, definition := range definitions {
-		job := Job{RelativePath: definition.relativePath, Agent: definition.agent, TextChannel: definition.textChannel, Body: definition.body}
+		job := Job{RelativePath: definition.relativePath, Agent: definition.agent, TextChannel: definition.textChannel, Body: definition.body, Space: definition.space}
 		for i, schedule := range definition.schedules {
 			job.Schedules = append(job.Schedules, schedule.Raw)
 			if !schedule.DueAt.IsZero() && !schedule.DueAt.Before(now) && !schedule.DueAt.After(now.Add(24*time.Hour)) {
@@ -553,6 +553,7 @@ func loadDefinition(data []byte, relativePath string) (definition, error) {
 		agent:        job.Agent,
 		textChannel:  job.TextChannel,
 		body:         job.Prompt,
+		space:        job.Space,
 		schedules:    schedules,
 	}, nil
 }

@@ -856,10 +856,17 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 		return nil, fmt.Errorf("list web cron jobs: %w", err)
 	}
 
+	agents, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	if err != nil {
+		return nil, fmt.Errorf("load web cron agents: %w", err)
+	}
+
 	response := &ListCronJobsResponse{}
 
-	for _, job := range jobs {
-		row := &CronJob{Stem: strings.TrimSuffix(strings.TrimPrefix(job.RelativePath, "cron/"), ".md"), Schedule: strings.Join(job.Schedules, ", "), Body: job.Body, Agent: job.Agent, Channel: job.TextChannel, Origin: job.RelativePath}
+	for i := range jobs {
+		job := &jobs[i]
+
+		row := &CronJob{Stem: strings.TrimSuffix(strings.TrimPrefix(job.RelativePath, "cron/"), ".md"), Schedule: strings.Join(job.Schedules, ", "), Body: job.Body, Agent: job.Agent, Channel: job.TextChannel, Origin: job.RelativePath, Space: cmp.Or(job.Space, agents.Items[job.Agent].Space)}
 		for _, at := range job.Upcoming {
 			row.Upcoming = append(row.Upcoming, at.Format(time.RFC3339Nano))
 		}
@@ -1127,7 +1134,7 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 			}
 		}
 
-		response.Agents = append(response.Agents, &Agent{Name: name, Model: agent.Model, Reasoning: agent.ReasoningEffort, Description: agent.Description, Verbosity: agent.Verbosity, Prompt: agent.Prompt, CustomShell: agent.CustomShell, Voices: voices})
+		response.Agents = append(response.Agents, &Agent{Name: name, Model: agent.Model, Reasoning: agent.ReasoningEffort, Description: agent.Description, Verbosity: agent.Verbosity, Prompt: agent.Prompt, CustomShell: agent.CustomShell, Voices: voices, Space: agent.Space})
 	}
 
 	return response, nil
