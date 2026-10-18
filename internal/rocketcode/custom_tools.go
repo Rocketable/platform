@@ -171,10 +171,7 @@ func customToolParameters(parameters map[string]any) (map[string]any, error) {
 				result["properties"] = properties
 			}
 
-			typedProperties, ok := properties.(map[string]any)
-			if !ok {
-				return nil, errors.New("parameters.properties must be an object")
-			}
+			typedProperties := properties.(map[string]any)
 
 			if _, ok := result["additionalProperties"]; !ok {
 				result["additionalProperties"] = false
