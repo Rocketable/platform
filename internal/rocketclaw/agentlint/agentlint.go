@@ -3,7 +3,6 @@ package agentlint
 
 import (
 	"cmp"
-	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -204,22 +203,9 @@ func loadRuntimeAgentInfos(runtimeRoot string, cfg *config.Config) (map[string]*
 		agent := agentLoad.Agents.Items[name]
 		filePath := filepath.ToSlash(filepath.Join("agents", agent.Location))
 
-		data, err := os.ReadFile(filepath.Join(agentsRoot, agent.Location))
-		if err != nil {
-			return nil, nil, fmt.Errorf("read agent %s: %w", agent.Location, err)
-		}
-
-		frontmatter, err := parseFrontmatter(string(data))
-		if err != nil {
-			return nil, nil, fmt.Errorf("parse agent metadata %s: %w", agent.Location, err)
-		}
-
+		frontmatter := agent.FrontmatterNode
 		suppressions := map[string][]string{}
 		infos[name] = &agentInfo{agent: agent, filePath: filePath, suppressions: suppressions}
-
-		if frontmatter == nil || frontmatter.Kind != yaml.MappingNode {
-			continue
-		}
 
 		for i := 0; i+1 < len(frontmatter.Content); i += 2 {
 			key := frontmatter.Content[i]
@@ -237,28 +223,6 @@ func loadRuntimeAgentInfos(runtimeRoot string, cfg *config.Config) (map[string]*
 	}
 
 	return infos, findings, nil
-}
-
-func parseFrontmatter(content string) (*yaml.Node, error) {
-	if !strings.HasPrefix(content, "---\n") {
-		return nil, errors.New("missing YAML frontmatter")
-	}
-
-	end := strings.Index(content[4:], "\n---")
-	if end < 0 {
-		return nil, errors.New("missing YAML frontmatter terminator")
-	}
-
-	var root yaml.Node
-	if err := yaml.Unmarshal([]byte(content[4:4+end]), &root); err != nil {
-		return nil, fmt.Errorf("unmarshal YAML frontmatter: %w", err)
-	}
-
-	if len(root.Content) == 0 {
-		return nil, nil
-	}
-
-	return root.Content[0], nil
 }
 
 func collectSuppressions(filePath, key string, node *yaml.Node, suppressions map[string][]string, findings *[]Finding) {

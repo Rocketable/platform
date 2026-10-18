@@ -34,6 +34,7 @@ type Agent struct {
 	Permission      PermissionSet
 	OutputSchema    map[string]any
 	Frontmatter     map[string]any
+	FrontmatterNode *yaml.Node
 	FileMode        fs.FileMode
 }
 
@@ -262,6 +263,7 @@ func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, e
 		Permission:      permission,
 		OutputSchema:    outputSchema,
 		Frontmatter:     frontmatter,
+		FrontmatterNode: frontmatterNode,
 		FileMode:        info.Mode(),
 	}, nil
 }
