@@ -542,11 +542,7 @@ func emitSubagentDiagnostic(output chan<- ChatResponse, diagnostic *SubagentDiag
 }
 
 func guardrailResponseFormat() responses.ResponseFormatTextConfigUnionParam {
-	var jsonSchema responses.ResponseFormatTextJSONSchemaConfigParam
-
-	jsonSchema.Name = "guardrail_decision"
-	jsonSchema.Strict = openai.Bool(true)
-	jsonSchema.Schema = map[string]any{
+	format := responses.ResponseFormatTextConfigParamOfJSONSchema("guardrail_decision", map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"approved": map[string]any{"type": "boolean"},
@@ -554,13 +550,10 @@ func guardrailResponseFormat() responses.ResponseFormatTextConfigUnionParam {
 		},
 		"required":             []string{"approved", "reason"},
 		"additionalProperties": false,
-	}
+	})
+	format.OfJSONSchema.Strict = openai.Bool(true)
 
-	var responseFormat responses.ResponseFormatTextConfigUnionParam
-
-	responseFormat.OfJSONSchema = &jsonSchema
-
-	return responseFormat
+	return format
 }
 
 func subagentResponseLabel(kind string) string {
