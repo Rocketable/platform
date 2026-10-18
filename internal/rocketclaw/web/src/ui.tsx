@@ -4,6 +4,7 @@ import { QueryClient, QueryCache, MutationCache, QueryClientProvider, queryOptio
 import { captureException } from "@sentry/react";
 import { Menu } from "@base-ui/react/menu";
 import { Popover } from "@base-ui/react/popover";
+import { Drawer } from "@base-ui/react/drawer";
 import { Tabs } from "@base-ui/react/tabs";
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -695,10 +696,70 @@ function BottomNavigation({ children }: { children: ReactNode }) {
   );
 }
 
-function SidebarToggle({ open, setOpen }: { open: boolean; setOpen: Dispatch<SetStateAction<boolean>> }) {
+// Wide screens show the left tabs beside the page until hidden; narrow ones show them in a drawer that closes when the address changes, such as when a tab is picked.
+function useTabSidebar(pathname: string) {
+  const medium = useMedia("(min-width: 48rem)");
+  const [shown, setShown] = useState(true);
+  const [drawerAt, setDrawerAt] = useState<string>();
+  if (drawerAt && drawerAt !== pathname) setDrawerAt(undefined);
+  const open = medium ? shown : drawerAt === pathname;
+  return { medium, open, toggle: () => medium ? setShown(!shown) : setDrawerAt(open ? undefined : pathname) };
+}
+
+// The drawer opens from the top-left button or a rightward swipe that starts anywhere except text fields, sliders,
+// sideways scrollers, and open popups; a leftward swipe closes it. While it listens, the page claims sideways pans:
+// a browser that takes one over (such as Chrome on Linux) cancels the pointer and can replay a stale touch from the
+// previous gesture, which reads as a vertical scroll.
+function TabDrawer({ medium, open, toggle, children }: ReturnType<typeof useTabSidebar> & { children: ReactNode }) {
+  const swiped = useEffectEvent(toggle);
+  useEffect(() => {
+    if (medium || open) return;
+    document.documentElement.style.touchAction = "pan-y pinch-zoom";
+    let start: { x: number; y: number } | undefined;
+    const begin = (event: TouchEvent) => {
+      start = undefined;
+      if (event.touches.length !== 1 || document.querySelector('[role="dialog"], [role="listbox"], [role="menu"]')) return;
+      for (let node = event.target as Element | null; node; node = node.parentElement) {
+        if (node.matches('input, textarea, select, [contenteditable], [data-slot="slider"]') || (node.scrollWidth > node.clientWidth && /auto|scroll/.test(getComputedStyle(node).overflowX))) return;
+      }
+      start = { x: event.touches[0].clientX, y: event.touches[0].clientY };
+    };
+    const move = (event: TouchEvent) => {
+      if (!start) return;
+      const dx = event.touches[0].clientX - start.x, dy = Math.abs(event.touches[0].clientY - start.y);
+      // A touch that moves mostly vertically first is a scroll, so its later sideways movement is ignored.
+      if (dy > 8 && dy > dx) start = undefined;
+      else if (dx >= 48) { start = undefined; swiped(); }
+    };
+    addEventListener("touchstart", begin, { passive: true });
+    addEventListener("touchmove", move, { passive: true });
+    return () => {
+      document.documentElement.style.touchAction = "";
+      removeEventListener("touchstart", begin);
+      removeEventListener("touchmove", move);
+    };
+  }, [medium, open]);
+  if (medium) return null;
+  return <>
+    <div className="flex h-12 shrink-0 items-center border-b px-1 [--navigation-button:2.5rem] [--navigation-icon:1.25rem]"><SidebarToggle open={open} toggle={toggle} /></div>
+    <Drawer.Root open={open} onOpenChange={toggle} swipeDirection="left">
+      <Drawer.Portal>
+        <Drawer.Backdrop className="fixed inset-0 z-50 bg-black/10 opacity-[calc(1-var(--drawer-swipe-progress))] transition-opacity duration-200 data-swiping:duration-0 data-starting-style:opacity-0 data-ending-style:opacity-0 supports-backdrop-filter:backdrop-blur-xs" />
+        <Drawer.Viewport className="fixed inset-0 z-50 flex">
+          <Drawer.Popup id="tab-sidebar" className="flex h-full w-3/4 max-w-sm flex-col border-r bg-popover text-sm text-popover-foreground shadow-lg outline-none touch-auto [transform:translateX(var(--drawer-swipe-movement-x))] transition-transform duration-200 ease-in-out data-swiping:select-none data-starting-style:[transform:translateX(-100%)] data-ending-style:[transform:translateX(-100%)]">
+            <Drawer.Title className="sr-only">Tabs</Drawer.Title>
+            {children}
+          </Drawer.Popup>
+        </Drawer.Viewport>
+      </Drawer.Portal>
+    </Drawer.Root>
+  </>;
+}
+
+function SidebarToggle({ open, toggle }: { open: boolean; toggle: () => void }) {
   const label = open ? "Hide sidebar" : "Show sidebar";
   const Icon = open ? PanelLeftClose : PanelLeftOpen;
-  return <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)]" />} aria-label={label} aria-expanded={open} aria-controls="tab-sidebar" onClick={() => setOpen((value) => !value)}>
+  return <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)]" />} aria-label={label} aria-expanded={open} aria-controls="tab-sidebar" onClick={toggle}>
     <Icon className="size-[var(--navigation-icon)]" />
   </TooltipTrigger><TooltipContent side="top">{label}</TooltipContent></Tooltip>;
 }
@@ -1143,10 +1204,9 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const [conversation, setConversation] = useState({ id: "", created: "", key: 0 });
   const newChatOwner = useRef<(() => unknown) | undefined>(undefined);
   const tabs = useTabs();
-  const medium = useMedia("(min-width: 48rem)");
-  const vertical = tabs.placement === "left" && medium;
-  const [tabsOpen, setTabsOpen] = useState(true);
   const { close: closeTab, shown: openTabs, pathname } = tabs;
+  const sidebar = useTabSidebar(pathname);
+  const vertical = tabs.placement === "left" && sidebar.medium;
   const newChat = useCallback(() => {
     const draft = drafts.get("") ?? drafts.get(conversation.id)!;
     if ([!scope, draft.reverting, !draft.hydrated].some(Boolean)) return;
@@ -1178,7 +1238,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
     }
     if (vertical && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.code === "KeyB") {
       event.preventDefault();
-      setTabsOpen((open) => !open);
+      sidebar.toggle();
       return;
     }
     if ((event.metaKey || event.ctrlKey) && event.altKey && !event.shiftKey && event.code === "KeyN") {
@@ -1220,7 +1280,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
             <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} />
          <div className="flex h-dvh min-h-0 flex-col overflow-hidden overscroll-y-none bg-background">
             <BottomNavigation>
-              {vertical ? <SidebarToggle open={tabsOpen} setOpen={setTabsOpen} /> : null}
+              {vertical ? <SidebarToggle open={sidebar.open} toggle={sidebar.toggle} /> : null}
               <div className="min-w-0 max-w-full justify-self-center overflow-x-auto md:col-start-2 overflow-y-hidden scrollbar-none">
                 <div className="flex w-max items-center gap-[var(--navigation-gap)]">
                   <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="New session" onClick={newChat}>
@@ -1240,9 +1300,9 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               </div>
             </BottomNavigation>
             <div className="fixed top-2 right-2 z-40 rounded-md bg-background shadow-sm"><ThemeToggle /></div>
-          {vertical ? null : <TabStrip tabs={tabs} vertical={false} newChat={newChat} />}
+          {tabs.placement === "left" ? <TabDrawer {...sidebar}><TabStrip tabs={tabs} vertical newChat={newChat} /></TabDrawer> : <TabStrip tabs={tabs} vertical={false} newChat={newChat} />}
           <div className="flex min-h-0 min-w-0 flex-1">
-            {vertical ? <ResizableAside side="tabs" id="tab-sidebar" className={cn("border-r", !tabsOpen && "hidden")}><TabStrip tabs={tabs} vertical newChat={newChat} /></ResizableAside> : null}
+            {vertical ? <ResizableAside side="tabs" id="tab-sidebar" className={cn("border-r", !sidebar.open && "hidden")}><TabStrip tabs={tabs} vertical newChat={newChat} /></ResizableAside> : null}
             <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]", command?.target && "pt-[min(75dvh,30rem)]")}>
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
               {route.search ? <SearchPage /> : null}

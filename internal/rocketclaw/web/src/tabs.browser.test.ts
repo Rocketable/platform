@@ -366,7 +366,7 @@ test("storage reset, deep links, keyboard, page close, palette commands, and pla
   expect(await strip(page).getAttribute("aria-orientation")).toBe("vertical");
   expect((await strip(page).boundingBox()).width).toBe(width + 16);
   await page.setViewportSize({ width: 375, height: 700 });
-  await page.waitForFunction(() => document.querySelector('[role="tablist"][aria-label="Open tabs"]')!.getAttribute("aria-orientation") === "horizontal");
+  await strip(page).waitFor({ state: "detached" });
   await page.keyboard.press("Control+Shift+p");
   await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Tabs: Move tabs to top" }).click();
   expect(await page.evaluate(() => localStorage.getItem("tab-placement"))).toBe("top");
@@ -473,6 +473,53 @@ test("narrow top strip scrolls and running tabs keep a reachable close control",
   await page.waitForURL(`**${href("charlie")}`);
   // The menu hands focus back as it finishes closing, which can land after the URL changes.
   await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Open tabs"] [role="tab"][aria-label="Charlie"]'));
+}), 60_000);
+
+test("narrow left placement is a drawer opened by the top-left button or a right swipe and closed by a pick, Escape, or a left swipe", () => withPage({ viewport: { width: 375, height: 700 }, hasTouch: true }, async (page, origin) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  await openSaved(page, origin, href("alpha"), "Alpha");
+  await openSaved(page, origin, href("bravo"), "Bravo");
+  await page.evaluate(() => localStorage.setItem("tab-placement", "left"));
+  await page.reload();
+  const toggle = page.getByRole("button", { name: "Show sidebar", exact: true });
+  const box = (await toggle.boundingBox())!;
+  expect(box.x + box.y).toBeLessThan(24);
+  expect(await page.locator("footer").getByRole("button", { name: "Show sidebar" }).count()).toBe(0);
+  expect(await strip(page).count()).toBe(0);
+
+  await toggle.tap();
+  expect(await strip(page).getAttribute("aria-orientation")).toBe("vertical");
+  await tab("Alpha").tap();
+  await page.waitForURL(`**${href("alpha")}`);
+  await strip(page).waitFor({ state: "detached" });
+
+  const cdp = await page.context().newCDPSession(page);
+  // Moves come at a finger's 60 Hz pace: Chrome on Linux turns an instant burst into a fling that navigates back.
+  const swipe = async (x: number, y: number, dx: number) => {
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+    for (let step = 1; step <= 12; step++) {
+      await page.waitForTimeout(16);
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + dx * step / 12, y }] });
+    }
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  };
+  // A swipe that starts in a text field is left to the field.
+  const field = (await page.getByPlaceholder("Message or $command").boundingBox())!;
+  await swipe(field.x + 20, field.y + 20, 200);
+  await page.waitForTimeout(300);
+  expect(await strip(page).count()).toBe(0);
+  await swipe(100, 300, 200);
+  await strip(page).waitFor();
+  await swipe(250, 300, -230);
+  await strip(page).waitFor({ state: "detached" });
+
+  // Escape closes only the drawer, not the non-chat tab behind it.
+  await page.goto(`${origin}/config`);
+  await toggle.tap();
+  expect(await names(page)).toContain("Settings");
+  await page.keyboard.press("Escape");
+  await strip(page).waitFor({ state: "detached" });
+  expect(new URL(page.url()).pathname).toBe("/config");
 }), 60_000);
 
 test("running tab shows a dot instead of close until hover or focus at desktop width", () => withPage({}, async (page, origin) => {
