@@ -1148,6 +1148,61 @@ func TestLooperDoesNotCompactOtherProviderErrors(t *testing.T) {
 	require.Empty(t, compactParams(mock))
 }
 
+func TestLooperStopsOnCompactedRetryError(t *testing.T) {
+	for _, failedResponse := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failed_response=%t", failedResponse), func(t *testing.T) {
+			errProvider := &openai.Error{Code: "invalid_prompt", Message: "bad prompt", StatusCode: http.StatusBadRequest}
+			mock := mockResponses()
+			queueCompactResponses(mock, compactedResponse("cmp", "sealed"))
+			mock.NewFunc = func(context.Context, *responses.ResponseNewParams, responseObserver, ...option.RequestOption) (*responses.Response, error) {
+				if len(newParams(mock)) == 1 {
+					return nil, contextLengthExceededError()
+				}
+
+				if failedResponse {
+					return failedResponseWithCode("resp-invalid", responses.ResponseErrorCodeInvalidPrompt, "bad prompt"), nil
+				}
+
+				return nil, errProvider
+			}
+			loop := testLooper(mock)
+			loop.Diagnostics = true
+			output := make(chan ChatResponse, 10)
+
+			input := make(chan PromptInput, 1)
+			input <- testPromptInput(PromptInputRoleUser, "new question", output)
+
+			close(input)
+
+			replay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+				testInputMessage(responses.EasyInputMessageRoleUser, "old question", ""),
+				testInputMessage(responses.EasyInputMessageRoleAssistant, "old answer", ""),
+			})
+			require.NoError(t, err)
+
+			err = loop.Loop(t.Context(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", ReplayInput: replay}}), discardSession, make(chan os.Signal, 1))
+			diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticError, Code: "invalid_prompt", Message: "bad prompt", HTTPStatus: http.StatusBadRequest}
+
+			if failedResponse {
+				errFailure, ok := errors.AsType[*responseFailureError](err)
+				require.True(t, ok, "expected failed response, got %v", err)
+				require.Equal(t, "resp-invalid", errFailure.responseID)
+				require.Equal(t, responses.ResponseErrorCodeInvalidPrompt, errFailure.code)
+
+				diagnostic.HTTPStatus = 0
+				diagnostic.ResponseStatus = string(responses.ResponseStatusFailed)
+				diagnostic.ResponseID = "resp-invalid"
+			} else {
+				require.ErrorIs(t, err, errProvider)
+			}
+
+			require.Len(t, compactParams(mock), 1)
+			require.Len(t, newParams(mock), 2, "a terminal retry error must stop further requests")
+			require.Equal(t, []ChatResponse{providerDiagnosticResponse(diagnostic)}, collectResponses(output))
+		})
+	}
+}
+
 func TestLooperPersistsAndReplaysWebSearchCalls(t *testing.T) {
 	mock := mockResponses(
 		responseWithWebSearchAndMessage("resp-search", "golang release", "answer with citation"),
