@@ -2079,7 +2079,7 @@ func (c *Connector) downloadSlackAttachments(ctx context.Context, files []slack.
 	for i := range files {
 		file := &files[i]
 
-		if !isSlackImageFile(file) {
+		if !strings.HasPrefix(protocol.NormalizeMIMEType(file.Mimetype), "image/") {
 			if protocol.IsTextAttachment(slackFileDisplayName(file), file.Mimetype) {
 				data, warning := c.downloadSlackFileOrSkip(ctx, file, protocol.MaxInboundTextAttachmentBytes, "text attachment", "it exceeded the text file size limit")
 				if warning != "" {
@@ -2138,10 +2138,6 @@ func (c *Connector) downloadSlackAttachments(ctx context.Context, files []slack.
 	}
 
 	return attachments, textAttachments, presence, warnings
-}
-
-func isSlackImageFile(file *slack.File) bool {
-	return strings.HasPrefix(protocol.NormalizeMIMEType(file.Mimetype), "image/")
 }
 
 func (c *Connector) downloadSlackFileOrSkip(ctx context.Context, file *slack.File, limit int, kind, sizeLimitReason string) (data []byte, warning string) {
