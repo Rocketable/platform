@@ -453,8 +453,9 @@ active tab.
   the space's last active tab, or to its first tab. New session is one tab, so
   entering an empty space, opening New session, or closing a space's last tab
   moves that tab into the current space. Opening a location that is open in
-  another space switches to that space. The tab menu offers **Move to "<space>"**
-  for each other space, and moving the active tab follows it. Deleting a space
+  another space switches to that space. The tab menu's **Move to space** submenu
+  lists each other space, and moving the active tab follows it; the command
+  palette offers the same moves as **Tabs: Move to "<space>"**. Deleting a space
   moves its tabs to the first space; the last space cannot be deleted. A tab
   moved between spaces becomes permanent, so each space keeps at most one preview
   tab. Unpinning puts a tab in the current space. Close others, Close to the
@@ -462,7 +463,7 @@ active tab.
   current space. Screen readers hear each unpinned tab's group, if any, and space
   as its description, such as “Group Work, Space: Main”.
 - **Groups in spaces.** A group lives in one space. The tab menu offers only the
-  current space's groups, and **Move to "<space>"** takes a tab out of its group.
+  current space's groups, and moving a tab to another space takes it out of its group.
   The group editor adds **Move group to "<space>"** for each other space: it
   moves every member and keeps the group's name, color, and collapsed state, and
   moving the active tab's group follows it. Deleting a space moves its groups,

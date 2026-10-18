@@ -899,7 +899,7 @@ function useTabs() {
           ...groups.filter((group) => group.id !== tab?.group).map((group) => ({ key: `group-${group.id}`, label: `Add to group "${groupName(group)}"`, run: () => update((tabs) => join(tabs, path, group.id, state.space)) })),
           ...tab?.group ? [{ key: "group-remove", label: "Remove from group", run: () => regroup((item) => item.path === path) }] : [],
           // Moving a tab makes it permanent and takes it out of its group; moving the active tab follows it to its new space.
-          ...state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move to "${space.name}"`, run: () => setState(openTab({ ...state, tabs: state.tabs.map((tab) => tab.path === path ? { path, space: space.id } : tab) }, state.active)) })),
+          ...state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move to "${space.name}"`, space: space.name, run: () => setState(openTab({ ...state, tabs: state.tabs.map((tab) => tab.path === path ? { path, space: space.id } : tab) }, state.active)) })),
         ],
         { key: "placement", label: `Move tabs to ${next}`, run: () => place(next) },
       ];
@@ -925,6 +925,10 @@ function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs
   const selected = () => list.current!.querySelector<HTMLElement>('[aria-selected="true"]')!;
   const header = () => list.current!.querySelector<HTMLElement>(`[data-group="${editor?.id}"]`);
   const group = groups.find((item) => item.id === editor?.id);
+  const items: { key: string; label: string; space?: string; run: () => void }[] = menu ? [...menu.path.startsWith("/s/") ? [{ key: "rename", label: "Rename session", run: () => setEditing(menu.path) }] : [], ...commands(menu.path)] : [];
+  const moves = items.filter((item) => item.space !== undefined);
+  const popupClass = "min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none", itemClass = "flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent";
+  const option = ({ key, label, run }: (typeof items)[number]) => <Menu.Item key={key} onClick={() => { refocus.current = key; run(); }} className={itemClass}>{label}</Menu.Item>;
   return <div className={cn("flex shrink-0", vertical ? "h-full flex-col" : "mr-12 border-b")}>
     <SpaceMenu tabs={tabs} name={space} vertical={vertical} />
     <div ref={list} role="tablist" aria-label="Open tabs" aria-orientation={vertical ? "vertical" : "horizontal"} className={cn("flex [scrollbar-width:thin]", vertical ? "min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-1" : "min-w-0 flex-1 overflow-x-auto overflow-y-hidden")}
@@ -1003,8 +1007,12 @@ function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs
       </Popover.Popup></Popover.Positioner></Popover.Portal>
     </Popover.Root>
     <Menu.Root open={!!menu} onOpenChange={(open) => { if (!open) setMenu(undefined); }}>
-      <Menu.Portal><Menu.Positioner anchor={menu?.anchor} sideOffset={4} align="start" className="z-50 outline-none"><Menu.Popup finalFocus={() => { const key = refocus.current; refocus.current = ""; return key.startsWith("close") ? selected() : !["rename", "group-new"].includes(key); }} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none">
-        {menu ? [...menu.path.startsWith("/s/") ? [{ key: "rename", label: "Rename session", run: () => setEditing(menu.path) }] : [], ...commands(menu.path)].map(({ key, label, run }) => <Menu.Item key={key} onClick={() => { refocus.current = key; run(); }} className="flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent">{label}</Menu.Item>) : null}
+      <Menu.Portal><Menu.Positioner anchor={menu?.anchor} sideOffset={4} align="start" className="z-50 outline-none"><Menu.Popup finalFocus={() => { const key = refocus.current; refocus.current = ""; return key.startsWith("close") ? selected() : !["rename", "group-new"].includes(key); }} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className={popupClass}>
+        {/* Moves to other spaces sit in one submenu, named by space. */}
+        {items.map((item) => item.space === undefined ? option(item) : item !== moves[0] ? null : <Menu.SubmenuRoot key="spaces">
+          <Menu.SubmenuTrigger className={cn(itemClass, "justify-between gap-4 data-popup-open:bg-accent")}>Move to space<ChevronRight className="size-4" /></Menu.SubmenuTrigger>
+          <Menu.Portal><Menu.Positioner className="z-50 outline-none"><Menu.Popup className={popupClass}>{moves.map((move) => option({ ...move, label: move.space! }))}</Menu.Popup></Menu.Positioner></Menu.Portal>
+        </Menu.SubmenuRoot>)}
       </Menu.Popup></Menu.Positioner></Menu.Portal>
     </Menu.Root>
   </div>;

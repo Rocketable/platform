@@ -70,9 +70,9 @@ async function openFromPalette(page: any, name: string) {
   await palette.getByPlaceholder("Search sessions").press("Enter");
   await palette.waitFor({ state: "hidden" });
 }
-async function menu(page: any, name: string, item: string) {
+async function menu(page: any, name: string, ...items: string[]) {
   await strip(page).getByRole("tab", { name, exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: item, exact: true }).click();
+  for (const item of items) await page.getByRole("menuitem", { name: item, exact: true }).click();
   await page.getByRole("menu").waitFor({ state: "hidden" });
 }
 async function chooseSpace(page: any, item: string, role = "menuitem") {
@@ -626,7 +626,7 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   await choose("Main", "menuitemradio");
   await page.waitForURL(`**${href("charlie")}`);
   expect(await names(page)).toEqual(["Alpha", "Bravo", "Charlie"]);
-  await menu(page, "Bravo", 'Move to "Ops"');
+  await menu(page, "Bravo", "Move to space", "Ops");
   expect(await names(page)).toEqual(["Alpha", "Charlie"]);
   await tab("Alpha").focus();
   await page.keyboard.press("ArrowRight");
@@ -705,7 +705,12 @@ test("a group lives in one space: menus offer only this space's groups, groups m
   await page.getByRole("textbox", { name: "Space name" }).fill("Ops");
   await page.keyboard.press("Enter");
   await tab("New session").click({ button: "right" });
-  expect(await page.getByRole("menuitem").allInnerTexts()).toEqual(["Close", "Close others", "Close to the right", "Close all", "Pin", "Add to new group", 'Move to "Main"', "Move tabs to left"]);
+  expect(await page.getByRole("menuitem").allInnerTexts()).toEqual(["Close", "Close others", "Close to the right", "Close all", "Pin", "Add to new group", "Move to space", "Move tabs to left"]);
+  await page.getByRole("menuitem", { name: "Move to space", exact: true }).click();
+  const spaces = page.getByRole("menu").nth(1);
+  await spaces.waitFor();
+  expect(await spaces.getByRole("menuitem").allInnerTexts()).toEqual(["Main"]);
+  await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
 
   // Moving the group keeps its name and color; moving one member out of it leaves the group.
@@ -720,7 +725,7 @@ test("a group lives in one space: menus offer only this space's groups, groups m
   await edit.click();
   expect(await green.isChecked()).toBe(true);
   await page.keyboard.press("Escape");
-  await menu(page, "Alpha", 'Move to "Main"');
+  await menu(page, "Alpha", "Move to space", "Main");
   expect(await order(page)).toEqual(["New session", "Work", "Bravo"]);
   await header.click();
   await chooseSpace(page, "Main", "menuitemradio");
