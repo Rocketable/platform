@@ -19,7 +19,7 @@ test("transcript and entry HTTP proxy reach Go", async () => {
   expect(await call("Identity")).toEqual({ username: "alice", principal: "alice" });
   const batches = await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`));
   expect(batches.flatMap((batch) => batch.sessions.map((session) => session.id))).toEqual(["empty-web", id]);
-  expect(batches.at(-1)).toEqual({ sessions: [], owner: "alice", upstreamSuccess: true, summariesComplete: true });
+  expect(batches.at(-1)).toEqual({ sessions: [], owner: "alice", upstreamSuccess: true, summariesComplete: true, opencodeServers: {}, agentTags: {} });
   const original = batches.flatMap((batch) => batch.sessions).find((session) => session.id === id)!;
   for (const details of [{ id, pinned: true }, { id, name: " Launch " }, { id, pinned: false }, { id, name: "" }]) {
     await call("UpdateSession", details);

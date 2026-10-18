@@ -15,7 +15,7 @@ import { queries, mutations, listSessions, rpc, RPCError } from "./api";
 import { draftContent } from "./drafts";
 import { holdWakeLock, setVoiceSticky, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Layers, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, TextCursorInput, Undo2, Wrench, X } from "lucide-react";
+import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Layers, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Tag, TextCursorInput, Undo2, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useDeferredValue, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -35,7 +35,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace";
 import { cn } from "@/lib/utils";
-import type { Agent, Attachment as AttachmentMeta, BackgroundJob, CodeModeCall, ConfigView, CronJob, QueueItem, Session, TranscriptEvent, VoiceSettings } from "@/types";
+import type { Agent, Attachment as AttachmentMeta, BackgroundJob, CodeModeCall, ConfigView, CronJob, QueueItem, Remote, Session, TranscriptEvent, VoiceSettings } from "@/types";
 import { runPreload } from "@/preload";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
 import {
@@ -56,7 +56,7 @@ const queryClient = new QueryClient({
   queryCache: new QueryCache({ onError: (error) => { captureException(error); } }),
   mutationCache: new MutationCache({ onError: (error) => { captureException(error); } }),
 });
-type SessionCommand = { mode: "fork" | "handoff" | "name"; source: string; target?: MessageMatch };
+type SessionCommand = { mode: "fork" | "handoff" | "name" | "tag"; source: string; target?: MessageMatch };
 const SessionCommands = createContext<{ command?: SessionCommand; setCommand: Dispatch<SetStateAction<SessionCommand | undefined>>; composer: RefObject<((command: string) => void) | null> }>(null!);
 
 function sessionPath(id: string) {
@@ -483,6 +483,7 @@ type SidebarView = {
   enumerationComplete: boolean;
   summariesComplete: boolean;
   loadingIds: ReadonlySet<string>;
+  remote?: Remote;
 };
 
 type SidebarState = SidebarView & {
@@ -605,10 +606,10 @@ function SidebarOwner({ children }: { children: ReactNode }) {
         } else if (shouldCommitSnapshot(result)) {
           committed.current = true;
           rowsRef.current = result.received;
-          setView({ rows: result.received, enumerationComplete: true, summariesComplete: true, refreshing: false, loadingIds: new Set() });
+          setView({ rows: result.received, enumerationComplete: true, summariesComplete: true, refreshing: false, loadingIds: new Set(), remote: result.remote });
           void saveCompleteSessions(currentOwner, currentProtocol, result.received, snapshotGeneration).catch(() => {});
         } else {
-          setView((current) => ({ ...current, enumerationComplete: result.exhausted && result.upstreamSuccess && !result.mismatch, refreshing: false }));
+          setView((current) => ({ ...current, enumerationComplete: result.exhausted && result.upstreamSuccess && !result.mismatch, refreshing: false, remote: result.remote ?? current.remote }));
         }
       }).then(() => {
         if (!ac.signal.aborted && captured === gen.current) void delay(2000, ac.signal).then(tick);
@@ -1103,7 +1104,8 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const composer = useRef<((command: string) => void) | null>(null);
   const commands = useMemo(() => ({ command, setCommand, composer }), [command]);
   const route = useRoute();
-  const showChat = ![route.cron, route.agents, route.skills, route.skill, route.config, route.search, route.voice].some(Boolean);
+  // The reserved prefix decides before the session list arrives, so a remote ID never mounts the transcript.
+  const showChat = ![route.cron, route.agents, route.skills, route.skill, route.config, route.search, route.voice, route.id.startsWith("opencode:")].some(Boolean);
   // The screen stays on while the Voice page is open or a call runs.
   const awake = useSyncExternalStore(subscribeVoice, () => route.voice || !["idle", "error"].includes(voiceView().state));
   useEffect(() => awake ? holdWakeLock() : undefined, [awake]);
@@ -1117,7 +1119,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
       void persistComposerDraft(draft)?.finally(() => setDraftVersion((version) => version + 1));
     }
   }, [drafts]);
-  const [conversation, setConversation] = useState({ id: route.id, created: "", key: 0 });
+  const [conversation, setConversation] = useState({ id: "", created: "", key: 0 });
   const newChatOwner = useRef<(() => unknown) | undefined>(undefined);
   const tabs = useTabs();
   const medium = useMedia("(min-width: 48rem)");
@@ -1225,6 +1227,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               {route.search ? <SearchPage /> : null}
               {route.voice ? <VoicePage /> : null}
               <SkillPage name={route.skill} />
+              <RemoteSession key={route.id} id={route.id} />
               <TabPane show={showChat}>
                 <MessageScrollerProvider key={conversation.key} autoScroll scrollEdgeThreshold={48}>
                   <Transcript id={conversation.id} drafts={drafts} scopeError={scopeError} onDraftChange={onDraftChange} onCreated={(id) => { tabs.create(id); setConversation((current) => ({ ...current, created: id })); }} />
@@ -1239,7 +1242,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
 }
 
 function SessionCommandDialog({ command, drafts, onDraftChange }: { command: SessionCommand; drafts: Map<string, ComposerDraft>; onDraftChange: () => void }) {
-  if (command.mode === "name") return <NameSessionDialog id={command.source} />;
+  if (command.mode === "name" || command.mode === "tag") return <NameSessionDialog id={command.source} tag={command.mode === "tag"} />;
   return command.mode === "fork" ? <ForkDialog source={command.source} drafts={drafts} onDraftChange={onDraftChange} /> : <HandoffDialog command={command} drafts={drafts} onDraftChange={onDraftChange} />;
 }
 
@@ -1486,6 +1489,25 @@ function matchedRows(response: SearchSessionsResponse | undefined, rows: Session
 const paletteCopy = { sessions: { title: "Go to session", desc: "Search and open a session.", placeholder: "Search sessions" }, commands: { title: "Run command", desc: "Search and run a command.", placeholder: "Type a command" },
   cron: { title: "Run cron", desc: "Search and run a cron job.", placeholder: "Search cron jobs" } };
 
+// "Sessions: New on <server>" turns the palette into a folder picker for a remote OpenCode
+// session: a typed folder, or one of that server's sessions' folders.
+function useRemoteCreation(query: string, close: () => void, restart: () => void, copy: { title: string; desc: string; placeholder: string }) {
+  const sidebar = useContext(Sidebar);
+  const [server, setServer] = useState<string>();
+  const create = useMutation({ mutationFn: mutations.createSession, onSuccess: (created) => { sidebar.invalidateQueries(); close(); navigate(sessionPath(created)); } });
+  const typed = query.trim();
+  const items: ReturnType<typeof paletteRows> = !server ? [] : [...new Set([typed, ...sidebar.rows.flatMap((row) => row.server === server && row.directory ? [row.directory] : [])])]
+    .filter((directory) => directory.startsWith("/") && directory.toLowerCase().includes(typed.toLowerCase()))
+    .map((directory) => ({ key: `folder-${directory}`, label: directory, keep: true, disabled: create.isPending, run: () => create.mutate({ opencodeServer: server, directory }) }));
+  return {
+    pick: (palette: () => typeof items) => server ? items : palette(),
+    commands: Object.keys(sidebar.remote?.servers ?? {}).toSorted().map((name) => ({ key: `opencode-${name}`, label: `Sessions: New on ${name}`, keep: true, run: () => { restart(); setServer(name); } })),
+    copy: server ? { title: `New session on ${server}`, desc: "Type or pick a folder for the new OpenCode session.", placeholder: `Folder on ${server}, like /srv/app` } : copy,
+    empty: server && `No known folders on ${server} yet; type one`,
+    alert: create.error ? <p role="alert" className="px-3 text-sm text-destructive">{create.error.message}</p> : null,
+  };
+}
+
 function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string, ComposerDraft>; mode: "sessions" | "commands" | "cron" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | undefined) => void; newChat: () => void }) {
   const sidebar = useContext(Sidebar);
   const { setCommand, composer } = useContext(SessionCommands);
@@ -1542,7 +1564,8 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
       setMode(undefined);
     },
   });
-  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), { rows: search.rows, loadingIds: sidebar.loadingIds }, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...commands, ...tabCommands, ...timeline, ...outputs], recent);
+  const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(0); }, paletteCopy[mode ?? "sessions"]);
+  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim().toLowerCase(), { rows: search.rows, loadingIds: sidebar.loadingIds }, jobs.data, newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...timeline, ...outputs], recent));
   const selected = items.length === 0 ? 0 : pick % items.length;
   // The palette opens with the first rows; the full list renders in the background.
   const shown = useDeferredValue(items, items.slice(0, 50));
@@ -1558,7 +1581,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
     item.run();
   };
   useEffect(() => { active.current?.scrollIntoView({ block: "nearest" }); }, [selected, mode]);
-  const copy = paletteCopy[mode ?? "sessions"];
+  const copy = remote.copy;
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     const next = paletteMove(event, selected, items.length, () => {
       setEntered(true);
@@ -1580,9 +1603,10 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
           onKeyDown={onKeyDown}
         />}
         {runCron.error || actions.error ? <p role="alert" className="px-3 text-sm text-destructive">{(runCron.error ?? actions.error)?.message}</p> : null}
+        {remote.alert}
         {search.error ? <p role="alert" className="px-3 text-sm text-destructive">Search failed: {search.error}</p> : null}
         <ul data-pending={search.pending} className="max-h-[min(24rem,50vh)] overflow-y-auto p-1 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent] data-[pending=true]:opacity-50">
-          {items.length === 0 ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, search, jobs.isLoading)}</li> : shown.map((item, index) => (
+          {items.length === 0 ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, search, jobs.isLoading, remote.empty)}</li> : shown.map((item, index) => (
             <li key={item.key}>
               <button disabled={item.disabled} ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start justify-center rounded-md px-3 text-left text-sm disabled:opacity-50", mode === "commands" ? "min-h-9 py-1.5 [@media(pointer:coarse)]:min-h-11" : "py-2", index === selected && "bg-accent")} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item)}>
                 {item.session ? <SessionRowContent session={item.session} loading={item.loading} /> : <><span className="font-medium">{item.label}</span>{item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}</>}
@@ -1595,7 +1619,8 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
   );
 }
 
-function paletteEmpty(mode: "sessions" | "commands" | "cron" | undefined, sidebar: SidebarView, search: ReturnType<typeof useSessionSearch>, loadingJobs: boolean) {
+function paletteEmpty(mode: "sessions" | "commands" | "cron" | undefined, sidebar: SidebarView, search: ReturnType<typeof useSessionSearch>, loadingJobs: boolean, folders?: string) {
+  if (folders) return folders;
   if (mode === "sessions" && search.error) return "Search incomplete";
   if (mode === "sessions" && (!searchIsAuthoritative(sidebar) || search.pending || search.missing)) return "loading...";
   return mode === "cron" && loadingJobs ? "Loading…" : "No matches";
@@ -1630,24 +1655,49 @@ const SessionRowContent = memo(function SessionRowContent({ session, loading = f
   const title = sessionTitle(session, loading);
   const clean = useCleanText(title);
   const channel = slackSession(session.id) ? (session.title ?? "") : "";
-  const meta = [channel, session.agent, ...(session.tags ?? [])].filter(Boolean).join(" · ");
+  const meta = [channel, session.server, session.offline ? "offline" : "", session.agent, ...(session.tags ?? [])].filter(Boolean).join(" · ");
   const updated = session.updatedAt ? `Updated ${updatedFormat.format(new Date(session.updatedAt))}` : "";
-  return <span className="flex min-w-0 w-full flex-1 flex-col gap-0.5">
+  return <span className={cn("flex min-w-0 w-full flex-1 flex-col gap-0.5", session.offline && "opacity-60")}>
     <span className="flex items-center gap-1.5 text-sm font-medium">{session.forkedFrom ? <GitFork role="img" aria-label="Forked session" className="size-3.5 shrink-0" /> : null}<span data-slot="session-title" className="truncate" title={clean}><InlineText text={title} /></span></span>
     <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"><span className="min-w-0 flex-1 truncate" title={meta}>{meta}</span>{session.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 shrink-0 animate-spin motion-reduce:animate-none" /> : null}{age ? <Tooltip><TooltipTrigger render={<time dateTime={session.updatedAt} />} aria-label={updated} className="shrink-0"><span className="tabular-nums">{age}</span></TooltipTrigger><TooltipContent>{updated}</TooltipContent></Tooltip> : null}</span>
   </span>;
 });
 
+// A remote OpenCode session shows OpenCode's own web app through its server's relay
+// (internal/rocketclaw/frontend/rpc/relay.go). A frame already open stays while the server blips.
+function RemoteSession({ id }: { id: string }) {
+  const sidebar = useContext(Sidebar);
+  const session = sidebar.rows.find((row) => row.id === id);
+  const port = sidebar.remote?.servers[session?.server ?? ""];
+  const [opened, setOpened] = useState(false);
+  const ready = !!port && !!session && !session.offline;
+  useEffect(() => { if (ready) setOpened(true); }, [ready]);
+  if (!id.startsWith("opencode:")) return null;
+  if (!session || !port) return <p role="status" className="m-auto p-4 text-sm text-muted-foreground">{sidebar.enumerationComplete ? "This OpenCode session is no longer available." : "Loading…"}</p>;
+  if (session.offline && !opened) return <p role="status" className="m-auto p-4 text-sm text-muted-foreground">{session.server} is offline; this session reopens when it is reachable.</p>;
+  const origin = `${location.protocol}//${location.hostname}:${port}`;
+  // Approved exception: the relay is another origin (its own port), so allow-same-origin cannot
+  // reach this page; OpenCode needs it for storage and a real Origin, which the relay requires.
+  // react-doctor-disable-next-line react-doctor/iframe-missing-sandbox
+  return <iframe title={sessionTitle(session, false)} sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals" className="min-h-0 w-full flex-1 border-0" src={`${origin}/server/${encodeSessionId(origin)}/session/${id.split(":").slice(2).join(":")}`} />;
+}
+
 function useSessionActions(session: Session | undefined, onSuccess?: () => void) {
   const invalidate = useContext(SidebarInvalidation);
+  const agentTags = useContext(Sidebar).remote?.agentTags ?? {};
   const { setCommand } = useContext(SessionCommands);
   const saved = () => { invalidate(); onSuccess?.(); };
   const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: saved });
   const id = session?.id ?? "";
+  const tags = new Set(session?.tags);
+  // People tag remote OpenCode sessions freely and RocketClaw sessions only as their agent allows.
+  const choices = session?.server ? [...tags] : agentTags[session?.agent ?? ""] ?? [];
   const items = session ? [
     ...(session.forkedFrom ? [{ key: "origin", label: "Open original conversation", icon: CornerUpLeft, run: () => navigate(sessionPath(session.forkedFrom!)) }] : []),
     { key: "name", label: "Name session", icon: TextCursorInput, run: () => setCommand({ mode: "name", source: id }) },
     { key: "pin", label: session.pinned ? "Unpin session" : "Pin session", icon: Pin, pressed: !!session.pinned, keep: true, run: () => update.mutate({ id, pinned: !session.pinned }) },
+    ...choices.map((tag) => ({ key: `tag-${tag}`, label: `${tags.has(tag) ? "Remove" : "Add"} tag ${tag}`, icon: Tag, pressed: tags.has(tag), keep: true, run: () => update.mutate({ id, tag }) })),
+    ...(session.server ? [{ key: "add-tag", label: "Add tag…", icon: Tag, run: () => setCommand({ mode: "tag", source: id }) }] : []),
   ].map((item) => ({ ...item, disabled: update.isPending })) : [];
   return { items, error: update.error };
 }
@@ -1664,22 +1714,28 @@ function SessionHeaderActions({ id }: { id: string }) {
   return <SessionActions session={sidebar.rows.find((row) => row.id === id)} />;
 }
 
-function NameSessionDialog({ id }: { id: string }) {
+// With tag, it adds a typed tag to a remote OpenCode session, suggesting tags already in use.
+function NameSessionDialog({ id, tag = false }: { id: string; tag?: boolean }) {
   const sidebar = useContext(Sidebar);
   const session = sidebar.rows.find((row) => row.id === id);
   const { setCommand } = useContext(SessionCommands);
-  const [value, setValue] = useState(session?.name ?? "");
+  const [value, setValue] = useState(tag ? "" : session?.name ?? "");
   const nameId = useId();
+  const listId = useId();
+  const used = [...new Set(sidebar.rows.flatMap((row) => row.tags ?? []))].toSorted();
   const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: () => { sidebar.invalidateQueries(); setCommand(undefined); } });
+  // The tag RPC toggles, so a tag the session already has is left alone.
+  const save = () => tag ? (session?.tags?.includes(value.trim()) ? setCommand(undefined) : update.mutate({ id, tag: value })) : update.mutate({ id, name: value });
   return <Dialog open onOpenChange={(open) => { if (!open) setCommand(undefined); }}>
         <DialogContent>
-          <DialogTitle>Name session</DialogTitle>
-          <DialogDescription>Shared with everyone who can see this session. Leave blank to show the last message.</DialogDescription>
-          <form className="mt-4 flex flex-col gap-3" action={() => update.mutate({ id, name: value })}>
+          <DialogTitle>{tag ? "Add tag" : "Name session"}</DialogTitle>
+          <DialogDescription>{tag ? "Pick a tag already in use or type a new one. Search tag:<name> to find tagged sessions." : "Shared with everyone who can see this session. Leave blank to show the last message."}</DialogDescription>
+          <form className="mt-4 flex flex-col gap-3" action={save}>
             <FieldGroup>
               <Field data-invalid={!!update.error}>
-                <FieldLabel htmlFor={nameId}>Session name</FieldLabel>
-                <Input id={nameId} name="name" type="text" value={value} aria-invalid={!!update.error} onChange={(event) => setValue(event.target.value)} />
+                <FieldLabel htmlFor={nameId}>{tag ? "Tag" : "Session name"}</FieldLabel>
+                <Input id={nameId} name="name" type="text" list={tag ? listId : undefined} value={value} aria-invalid={!!update.error} onChange={(event) => setValue(event.target.value)} />
+                {tag ? <datalist id={listId}>{used.map((name) => <option key={name} value={name} />)}</datalist> : null}
                 {update.error ? <FieldError>{update.error.message}</FieldError> : null}
               </Field>
             </FieldGroup>

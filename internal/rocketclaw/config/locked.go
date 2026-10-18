@@ -56,6 +56,7 @@ func clone(source *Config) Config {
 	cfg.WebUsers = maps.Clone(cfg.WebUsers)
 	cfg.Environment = slices.Clone(cfg.Environment)
 	cfg.Providers = maps.Clone(cfg.Providers)
+	cfg.OpenCode = maps.Clone(cfg.OpenCode)
 
 	cfg.MCPServers = maps.Clone(cfg.MCPServers)
 	for name, server := range cfg.MCPServers {

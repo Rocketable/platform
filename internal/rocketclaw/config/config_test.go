@@ -575,6 +575,40 @@ func TestValidateMCPServers(t *testing.T) {
 	}
 }
 
+func TestValidateOpenCode(t *testing.T) {
+	valid := OpenCodeConfig{URL: "https://box.example:4096", Password: "token", Port: 4100}
+
+	for _, tt := range []struct {
+		name    string
+		mutate  func(*OpenCodeConfig)
+		key     string
+		wantErr string
+	}{
+		{name: "valid", mutate: func(*OpenCodeConfig) {}, key: "box"},
+		{name: "bad scheme", mutate: func(s *OpenCodeConfig) { s.URL = "ftp://box" }, key: "box", wantErr: `opencode["box"]: url must be an http or https URL`},
+		{name: "empty password", mutate: func(s *OpenCodeConfig) { s.Password = "" }, key: "box", wantErr: `opencode["box"]: password is required`},
+		{name: "port out of range", mutate: func(s *OpenCodeConfig) { s.Port = 70000 }, key: "box", wantErr: `opencode["box"]: port must be between 1 and 65535`},
+		{name: "bad name", mutate: func(*OpenCodeConfig) {}, key: "box:1", wantErr: `opencode["box:1"]`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := valid
+			tt.mutate(&server)
+
+			cfg := validConfig()
+			cfg.OpenCode = map[string]OpenCodeConfig{tt.key: server}
+
+			err := cfg.Validate()
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, cfg.OpenCode, clone(cfg).OpenCode)
+		})
+	}
+}
+
 func TestLoadOmitsMCPServers(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "workspace": ".",

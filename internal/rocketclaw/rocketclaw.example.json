@@ -47,6 +47,13 @@
       }
     }
   },
+  "opencode": {
+    "devbox": {
+      "url": "http://devbox.example.ts.net:4096",
+      "password": "set-me",
+      "port": 4100
+    }
+  },
   "slack": {
     "bot_token": "xoxb-...",
     "app_token": "xapp-...",

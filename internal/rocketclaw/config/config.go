@@ -32,6 +32,7 @@ type Config struct {
 	Logging           LoggingConfig              `json:"logging"`
 	MCPExternal       MCPExternalConfig          `json:"mcp_external"`
 	MCPServers        map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+	OpenCode          map[string]OpenCodeConfig  `json:"opencode,omitempty"`
 	Slack             SlackConfig                `json:"slack"`
 	OpenAI            OpenAIConfig               `json:"openai"`
 	Providers         map[string]OpenAIConfig    `json:"providers,omitempty"`
@@ -156,6 +157,13 @@ type MCPServerConfig struct {
 	Cwd     string            `json:"cwd,omitempty"`
 	URL     string            `json:"url,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// OpenCodeConfig names one remote OpenCode server the Web lists and relays on Port.
+type OpenCodeConfig struct {
+	URL      string `json:"url"`
+	Password string `json:"password"`
+	Port     int    `json:"port"`
 }
 
 // MCP server names follow the same character rules as MCP tool names in the
@@ -425,6 +433,10 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if err := c.validateOpenCode(); err != nil {
+		return err
+	}
+
 	return c.validateSlack()
 }
 
@@ -592,6 +604,28 @@ func (c *Config) validateMCPServers() error {
 		}
 
 		c.MCPServers[name] = server
+	}
+
+	return nil
+}
+
+// validateOpenCode leaves port clashes to the relay listeners, which fail startup on bind.
+func (c *Config) validateOpenCode() error {
+	for _, name := range slices.Sorted(maps.Keys(c.OpenCode)) {
+		server := c.OpenCode[name]
+		errName := validateMCPServerName(name)
+		parsed, errURL := url.Parse(server.URL)
+
+		switch {
+		case errName != nil:
+			return fmt.Errorf("opencode[%q]: %w", name, errName)
+		case errURL != nil || (parsed.Scheme != "http" && parsed.Scheme != "https"):
+			return fmt.Errorf("opencode[%q]: url must be an http or https URL", name)
+		case server.Password == "":
+			return fmt.Errorf("opencode[%q]: password is required", name)
+		case server.Port < 1 || server.Port > 65535:
+			return fmt.Errorf("opencode[%q]: port must be between 1 and 65535", name)
+		}
 	}
 
 	return nil

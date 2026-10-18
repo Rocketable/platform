@@ -9,7 +9,9 @@ export type PendingQuestion = { id: string; question: string; details: string; o
 export type SessionEntryMeta = { id: string; type?: string; timestamp?: string };
 export type SessionEntryData = { id: string; json?: string };
 export type QueueItem = { id: string; text: string; attachments?: Attachment[]; delivery?: PromptDelivery; principal?: string };
-export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; allowedAgents?: string[]; running?: boolean; pinned?: boolean; name?: string; forkedFrom?: string; tags?: string[]; cron?: boolean; cronName?: string };
+export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; allowedAgents?: string[]; running?: boolean; pinned?: boolean; name?: string; forkedFrom?: string; tags?: string[]; cron?: boolean; cronName?: string; server?: string; directory?: string; offline?: boolean };
+// Remote OpenCode servers with their relay ports, and the tags people may set on their sessions.
+export type Remote = { servers: Record<string, number>; agentTags: Record<string, string[]> };
 export type OriginPair = { key: string; value: string };
 export type ChatOrigin = { kind: string; sourcePath?: string; stem?: string; runKind?: string; runId?: string; agent?: string; ranAt?: string; externalConversationId?: string; pairs?: OriginPair[] };
 export type ShadowTurn = { parentSourceConversationId: string; parentTurnId: string; childTurnId: string; order: string; running: boolean; terminal: string; revision: string };
@@ -19,7 +21,7 @@ export type MessageMatch = { conversationId: string; message: TranscriptEvent };
 export type SearchMessagesResponse = { matches?: MessageMatch[]; tagIds?: string[]; indexComplete?: boolean };
 // Term offsets are UTF-16 positions in the sent query; an empty match field means only message text matched.
 export type SearchSessionsResponse = { terms: { key: string; text: string; start: number; end: number }[]; text: string; needle: string; matches: { conversationId: string; field: string; text: string }[]; messages: MessageMatch[]; mentionIds: string[]; principals?: string[]; indexComplete: boolean; summariesComplete: boolean };
-export type SessionBatch = { sessions: Session[]; owner: string; upstreamSuccess: boolean; summariesComplete: boolean };
+export type SessionBatch = { sessions: Session[]; owner: string; upstreamSuccess: boolean; summariesComplete: boolean; opencodeServers?: Remote["servers"]; agentTags?: Record<string, { tags?: string[] }> };
 export type AgentChoices = { agents: Agent[]; currentAgent: string };
 export type CronJob = { stem: string; status: string; lastRun: string; nextRun: string; schedule?: string; body?: string; agent?: string; channel?: string; upcoming?: string[]; origin?: string };
 // VoiceSettings is the signed-in person's voice state, kept by the server; conversationId is empty when none is current.

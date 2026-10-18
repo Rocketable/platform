@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -13,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
@@ -149,4 +152,82 @@ func TestWebRPC(t *testing.T) {
 	// Immediate shutdown is valid even before Serve's goroutine is scheduled.
 	stop, err = startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
 	require.NoError(t, err)
+}
+
+func TestWebRPCRelaysAndSyncsOpenCode(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if user, password, ok := r.BasicAuth(); !ok || user != "opencode" || password != "pw" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		switch r.URL.Path {
+		case "/api/session":
+			_, _ = w.Write([]byte(`{"data":[{"id":"ses_a","title":"Alpha","time":{"updated":1000},"location":{"directory":"/srv"}}]}`))
+		case "/api/session/active":
+			_, _ = w.Write([]byte(`{"data":{}}`))
+		default:
+			_, _ = w.Write([]byte("opencode web"))
+		}
+	}))
+	t.Cleanup(upstream.Close)
+
+	// A port that was free a moment ago becomes the relay's.
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := probe.Addr().(*net.TCPAddr).Port
+	require.NoError(t, probe.Close())
+
+	servers := map[string]config.OpenCodeConfig{"box": {URL: upstream.URL, Password: "pw", Port: port}}
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenCode: servers}, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	cfg := &config.Config{Workspace: t.TempDir(), Web: config.WebConfig{ListenAddress: "127.0.0.1:0"}, WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}, OpenCode: servers}
+	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.DiscardHandler), Sessions: sessions}
+	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
+	require.NoError(t, err)
+
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/", port), http.NoBody)
+	require.NoError(t, err)
+	response, err := http.DefaultClient.Do(request)
+	require.NoError(t, err)
+	body, err := io.ReadAll(response.Body)
+	require.NoError(t, errors.Join(err, response.Body.Close()))
+	assert.Equal(t, "opencode web", string(body), "the relay serves OpenCode with its password")
+
+	// The sync's first poll runs when the Web starts.
+	require.Eventually(t, func() bool {
+		for row, err := range sessions.SidebarSessions(t.Context()) {
+			if err == nil && row.Conversation.ID == "opencode:box:ses_a" {
+				return true
+			}
+		}
+
+		return false
+	}, 10*time.Second, 50*time.Millisecond)
+
+	require.NoError(t, stop(t.Context()))
+}
+
+func TestWebRPCFailsWhenARelayPortIsTaken(t *testing.T) {
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, taken.Close()) })
+
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close()
+
+	servers := map[string]config.OpenCodeConfig{"box": {URL: gone.URL, Password: "pw", Port: taken.Addr().(*net.TCPAddr).Port}}
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenCode: servers}, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	cfg := &config.Config{Workspace: t.TempDir(), Web: config.WebConfig{ListenAddress: "127.0.0.1:0"}, OpenCode: servers}
+	_, err = startWebRPC(&backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.DiscardHandler), Sessions: sessions}, &mockWebChannels{}, &mockWebCron{})
+	require.ErrorContains(t, err, "start OpenCode relay")
 }

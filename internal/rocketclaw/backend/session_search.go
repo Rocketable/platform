@@ -343,7 +343,7 @@ func (s *SessionService) SearchSessions(ctx context.Context, query string, messa
 				preview = row.Summary.LastMessage
 			}
 
-			if !withHits && !strings.Contains(strings.ToLower(row.Name+" "+chat.Room+" "+preview+" "+row.Conversation.Agent+" "+label), search.Needle) && !strings.Contains(chat.Origin, search.Needle) {
+			if !withHits && !strings.Contains(strings.ToLower(row.Name+" "+chat.Room+" "+preview+" "+row.Conversation.Agent+" "+label+" "+row.Server+" "+row.Directory), search.Needle) && !strings.Contains(chat.Origin, search.Needle) {
 				continue
 			}
 

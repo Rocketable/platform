@@ -159,10 +159,15 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 
 	complete := true
 
-	var (
-		allChoices []string
-		loaded     bool
-	)
+	// One definitions load serves every row's agent choices and the remote tags.
+	agents := sync.OnceValues(func() (rocketcode.Agents, error) {
+		definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+		if err != nil {
+			return rocketcode.Agents{}, fmt.Errorf("load web agents: %w", err)
+		}
+
+		return definitions, nil
+	})
 
 	for chat, err := range s.sessions.SidebarChats(ctx, s.channels) {
 		if err != nil {
@@ -173,15 +178,14 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 		conversation := row.Conversation
 		complete = complete && row.Summary != nil
 
-		if !loaded {
-			if allChoices, err = s.agentChoices(ctx, ""); err != nil {
-				return err
-			}
-
-			loaded = true
+		definitions, err := agents()
+		if err != nil {
+			return err
 		}
 
-		session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, AllowedAgents: allChoices, Running: row.Running, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName}
+		allChoices := definitions.PrimaryNames()
+
+		session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, AllowedAgents: allChoices, Running: row.Running, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline}
 
 		if _, _, slack := protocol.SlackThreadTarget(conversation.ID); slack {
 			session.AllowedAgents = slices.DeleteFunc(slices.Clone(allChoices), func(name string) bool { return !slices.Contains(chat.RoomAgents, name) })
@@ -206,7 +210,22 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 		}
 	}
 
-	if err := stream.SendMsg(&ListSessionsResponse{Owner: owner, UpstreamSuccess: true, SummariesComplete: complete}); err != nil {
+	done := &ListSessionsResponse{Owner: owner, UpstreamSuccess: true, SummariesComplete: complete, OpencodeServers: make(map[string]int32)}
+	for name, server := range s.cfg.Clone().OpenCode {
+		done.OpencodeServers[name] = int32(server.Port)
+	}
+
+	definitions, err := agents()
+	if err != nil {
+		return err
+	}
+
+	done.AgentTags = make(map[string]*TagChoices)
+	for agent, tags := range backend.AgentTags(definitions) {
+		done.AgentTags[agent] = &TagChoices{Tags: tags}
+	}
+
+	if err := stream.SendMsg(done); err != nil {
 		return fmt.Errorf("send web session completion: %w", err)
 	}
 
@@ -928,6 +947,24 @@ func (s *Server) updateSession(ctx context.Context, request *UpdateSessionReques
 		request.Name = new(strings.TrimSpace(*request.Name))
 	}
 
+	if request.Tag != nil {
+		tag := strings.TrimSpace(*request.Tag)
+		if tag == "" || strings.ContainsRune(tag, '\x00') {
+			return nil, fmt.Errorf("update web conversation: %w", status.Error(codes.InvalidArgument, "a tag cannot be blank or contain a null character"))
+		}
+
+		definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+		if err != nil {
+			return nil, fmt.Errorf("load web agents: %w", err)
+		}
+
+		if err := s.sessions.ToggleManualTag(ctx, definitions, request.Id, tag); errors.Is(err, backend.ErrTagNotAllowed) {
+			return nil, fmt.Errorf("update web conversation: %w", status.Error(codes.InvalidArgument, "this session's agent does not allow that tag"))
+		} else if err != nil {
+			return nil, fmt.Errorf("update web conversation: %w", err)
+		}
+	}
+
 	updated, err := s.sessions.UpdateConversationDetails(ctx, request.Id, request.Pinned, request.Name)
 	if err != nil {
 		return nil, fmt.Errorf("update web conversation: %w", err)
@@ -1122,6 +1159,20 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 		return nil, err
 	}
 
+	if name := request.OpencodeServer; name != "" {
+		server, ok := s.cfg.Clone().OpenCode[name]
+		if !ok {
+			return nil, fmt.Errorf("create opencode session: %w", status.Error(codes.InvalidArgument, "select a configured OpenCode server"))
+		}
+
+		id, err := s.sessions.CreateOpenCodeSession(ctx, name, server, request.Directory)
+		if err != nil {
+			return nil, fmt.Errorf("create opencode session: %w", status.Error(codes.Unavailable, err.Error()))
+		}
+
+		return &CreateSessionResponse{Id: id}, nil
+	}
+
 	source := request.SourceConversationId
 	if _, ok := backend.ParseCronRun(source); source != "" && !ok {
 		return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.InvalidArgument, "source must be a recorded cron run"))
@@ -1174,7 +1225,7 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		return nil, err
 	}
 
-	if err := s.visibleConversation(ctx, request.Id); err != nil {
+	if err := s.promptable(ctx, request.Id); err != nil {
 		return nil, err
 	}
 
@@ -1507,6 +1558,16 @@ func (s *Server) answerQuestion(ctx context.Context, request *AnswerQuestionRequ
 	}
 
 	return &AnswerQuestionResponse{}, nil
+}
+
+// promptable admits prompts only to visible RocketClaw conversations. A remote OpenCode
+// session may have no opencode_sessions row yet, so its reserved prefix decides.
+func (s *Server) promptable(ctx context.Context, id string) error {
+	if strings.HasPrefix(id, "opencode:") {
+		return fmt.Errorf("web prompt: %w", status.Error(codes.InvalidArgument, "remote OpenCode sessions are driven in their own frame"))
+	}
+
+	return s.visibleConversation(ctx, id)
 }
 
 func (s *Server) visibleConversation(ctx context.Context, id string) error {
