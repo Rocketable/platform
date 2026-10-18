@@ -159,12 +159,16 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 
 	complete := true
 
+	var allChoices []string
+
 	// One definitions load serves every row's agent choices and the remote tags.
 	agents := sync.OnceValues(func() (rocketcode.Agents, error) {
 		definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
 		if err != nil {
 			return rocketcode.Agents{}, fmt.Errorf("load web agents: %w", err)
 		}
+
+		allChoices = definitions.PrimaryNames()
 
 		return definitions, nil
 	})
@@ -178,12 +182,9 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 		conversation := row.Conversation
 		complete = complete && row.Summary != nil
 
-		definitions, err := agents()
-		if err != nil {
+		if _, err := agents(); err != nil {
 			return err
 		}
-
-		allChoices := definitions.PrimaryNames()
 
 		session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, AllowedAgents: allChoices, Running: row.Running, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline}
 
