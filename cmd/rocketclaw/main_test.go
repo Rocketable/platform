@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -170,11 +171,17 @@ func TestRunDispatchesSubcommandErrorsBeforeDefaultConfig(t *testing.T) {
 		{name: "agent graph flags", args: []string{"agent-graph", "--bad-flag"}, want: "parse agent-graph flags"},
 		{name: "lint config", args: []string{"lint", "current"}, want: "load config"},
 		{name: "agent graph config", args: []string{"agent-graph", "current"}, want: "load config"},
+		{name: "oai login config", args: []string{"oai", "login", "--headless"}, want: "load runtime config"},
+		{name: "oai list config", args: []string{"oai", "list"}, want: "load runtime config"},
+		{name: "oai logout config", args: []string{"oai", "logout"}, want: "load runtime config"},
+		{name: "oai list flags", args: []string{"oai", "list", "--bad-flag"}, want: "parse oai list flags"},
+		{name: "ts flags", args: []string{"ts", "login", "--bad-flag"}, want: "parse ts login flags"},
+		{name: "ts config", args: []string{"ts", "login"}, want: "load runtime config"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			err := run(tt.args)
 			require.ErrorContains(t, err, tt.want)
-			if tt.name == "lint config" || tt.name == "agent graph config" {
+			if strings.HasSuffix(tt.name, " config") {
 				require.ErrorIs(t, err, os.ErrNotExist)
 			}
 		})

@@ -76,9 +76,18 @@ func TestCommandsAcceptSecretsARNFlag(t *testing.T) {
 	t.Run("oai login", func(t *testing.T) {
 		prepareOAIConfig(t)
 		mockDeviceLogin(t, "work-refresh")
-		synctest.Test(t, func(t *testing.T) {
-			require.NoError(t, runOAILogin([]string{"--aws-secrets-manager-arn", testSecretsARN, "work", "--headless"}))
-		})
+		for _, args := range [][]string{
+			{"--aws-secrets-manager-arn", testSecretsARN, "work", "--headless"},
+			{"--aws-secrets-manager-arn=" + testSecretsARN, "work", "--headless"},
+		} {
+			_, _, arn, _, err := parseOAILogin(args)
+			require.NoError(t, err)
+			assert.Equal(t, testSecretsARN, arn)
+
+			synctest.Test(t, func(t *testing.T) {
+				require.NoError(t, runOAILogin(args))
+			})
+		}
 	})
 }
 
