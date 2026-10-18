@@ -2,6 +2,9 @@ package config
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -59,6 +62,57 @@ func TestAWSFetcherRejectsIncompleteARN(t *testing.T) {
 	require.ErrorContains(t, err, "femto")
 	_, ok := errors.AsType[*SecretFetchError](err)
 	assert.True(t, ok)
+}
+
+func TestAWSFetcherReadsSecretString(t *testing.T) {
+	for _, tt := range []struct {
+		name, body, want string
+		status           int
+		errWant          error
+	}{
+		{name: "secret", body: `{"SecretString":"alpha"}`, want: "alpha"},
+		{name: "empty", body: `{"SecretString":""}`, errWant: errSecretEmpty},
+		{name: "missing", status: http.StatusBadRequest, body: `{"__type":"ResourceNotFoundException","message":"gone"}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "secretsmanager.GetSecretValue", r.Header.Get("X-Amz-Target"))
+				w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+
+				if tt.status != 0 {
+					w.WriteHeader(tt.status)
+				}
+
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			t.Cleanup(server.Close)
+			home := t.TempDir()
+			t.Setenv("AWS_CONFIG_FILE", filepath.Join(home, "config"))
+			t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(home, "credentials"))
+			t.Setenv("AWS_PROFILE", "")
+			t.Setenv("AWS_ACCESS_KEY_ID", "test")
+			t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+			t.Setenv("AWS_ENDPOINT_URL", server.URL)
+
+			got, err := AWSFetcher{}.SecretString(testSecretARN)
+			if tt.want != "" {
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+
+				return
+			}
+
+			fetchErr, ok := errors.AsType[*SecretFetchError](err)
+			require.True(t, ok, "%v", err)
+			assert.Equal(t, testSecretARN, fetchErr.ARN)
+
+			if tt.errWant != nil {
+				require.ErrorIs(t, err, tt.errWant)
+			} else {
+				require.ErrorContains(t, err, "ResourceNotFoundException")
+			}
+		})
+	}
 }
 
 func TestSecretFetchErrorUnwraps(t *testing.T) {

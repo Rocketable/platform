@@ -47,6 +47,19 @@ def main(args):
 		}
 	})
 
+	t.Run("worker prints its name and is true", func(t *testing.T) {
+		definition := engineDefinition(t, "w = worker(name=\"researcher\", instructions=\"i\")\ndef main(args): return [str(w), bool(w)]")
+
+		result, err := Run(t.Context(), definition, RunRequest{RunID: "worker-value"}, &agentRunnerMock{RunFunc: inertAgent})
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+
+		if result.Text != `["<worker researcher>",true]` {
+			t.Fatalf("Run() result = %+v, want worker string and truth", result)
+		}
+	})
+
 	t.Run("structured agent result is native Starlark", func(t *testing.T) {
 		definition := engineDefinition(t, `
 def main(args):
@@ -156,6 +169,7 @@ func TestRunRejectsInvalidValues(t *testing.T) {
 		{name: "non-string dict key", body: `def main(args): return {1: "x"}`, want: "string"},
 		{name: "non-finite float", body: `def main(args): return 1e308 * 1e308`, want: "finite"},
 		{name: "worker result", body: "w = worker(name=\"w\", instructions=\"i\")\ndef main(args): return w", want: "worker"},
+		{name: "worker dict key", body: "w = worker(name=\"w\", instructions=\"i\")\ndef main(args): return {w: 1}", want: "worker is unhashable"},
 		{name: "callable result", body: `def main(args): return main`, want: "function"},
 		{name: "set result", body: `def main(args): return set([1])`, want: "set"},
 		{name: "nested tuple set", body: `def main(args): return (1, (set([1]),))`, want: "set is not JSON-compatible"},
