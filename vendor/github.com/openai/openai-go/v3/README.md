@@ -30,7 +30,7 @@ Or to pin an SDK version (see the Go compatibility note below):
 <!-- x-release-please-start-version -->
 
 ```sh
-go get -u 'github.com/openai/openai-go/v3@v3.81.0'
+go get -u 'github.com/openai/openai-go/v3@v3.82.0'
 ```
 
 <!-- x-release-please-end -->
@@ -1718,6 +1718,35 @@ This package generally follows [SemVer](https://semver.org/spec/v2.0.0.html) con
 We take backwards-compatibility seriously and work hard to ensure you can rely on a smooth upgrade experience.
 
 We are keen for your feedback; please open an [issue](https://www.github.com/openai/openai-go/issues) with questions, bugs, or suggestions.
+
+## Reconnecting a WebSocket session
+
+`packages/websocket.OpenSession` can reopen a failed connection. Pass it a
+function that opens a connection with a fresh authenticated request on each
+attempt. Reconnecting is off by default. When enabled, keep calling `Recv` so the
+SDK can detect connection failures. An event that ends a response or session does
+not itself trigger a reconnect.
+
+The SDK keeps the same session object and allows five reconnect attempts in total
+by default. Retry delays grow to eight seconds by default. `Close` or `Abort`
+cancels pending retries. Reopening does not restore server state. For a Realtime
+model session, restore any session settings and conversation state your application needs.
+Pause other application sends while restoring state; the callback does not block them.
+
+By default, sends while reconnecting fail without writing. Set `MaxPendingBytes`
+to hold unsent commands up to that size in bytes. After restoring session state,
+call `FlushPending` to send them, or `TakePending` to remove them without sending.
+`FlushPending` returns `ErrPendingLimit` while the connection is recovering or
+another send, serialization, or flush is in progress. Retry the flush when it is ready.
+A waiting `Send` still respects its context. It returns nil only after a local
+write succeeds. This does not confirm that the server received the command.
+The SDK does not resend commands it already tried to send.
+
+Generated API methods must support this feature before you can enable it with
+`option.WithWebSocketReconnect(true)`. For methods that support it,
+`option.WithWebSocketRecovery` sets limits and an optional `OnReconnected`
+callback. Other methods ignore these options. Existing `websocket.Options` fields
+and defaults stay the same.
 
 ## Contributing
 
