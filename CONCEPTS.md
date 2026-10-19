@@ -177,6 +177,20 @@ One person's Web voice state, kept by the server and the same on every device: t
 
 A task the voice model passes to the conversation's agent during a Voice Session. Each one becomes a Web user message marked `media=Voice`: Codex's `<realtime_delegation>` block, holding the request and what the person and the voice model said since the previous hand-off, taken the moment the hand-off arrives. Hand-offs are admitted in arrival order without waiting for the agent. Nothing about the agent's work reaches the voice model while it runs; the final reply of a turn the session handed off is spoken once, as written, unless it is over about 990 tokens or a message typed later in the call supersedes it. A pending question is announced once and answered in the app, never by a hand-off. Not to be confused with a Delegation History, which is work a tool call delegated inside RocketCode.
 
+## Hosted Pages
+
+### Hosted Page
+
+A file an agent published with `rocketclaw_store`, served by RocketClaw under a URL that names the agent's space, the agent, and the file path. It belongs to the agent, not to a space: when the agent's `space:` changes, its pages move with it and links under the old space name redirect. Only people the Web admits can open one. Page scripts run walled off from RocketClaw and can only read their own agent's Page Data.
+
+### Page Data
+
+An agent's JSON key-value entries, written with `rocketclaw_kv_store`. The agent reads and writes them; its Hosted Pages may only read them. Each agent, shadow agents included, has its own.
+
+### Page Index
+
+The list of Hosted Pages a Web space shows: HTML pages of agents whose space matches the space's name, ignoring case, plus agents with no space.
+
 ## Process layout
 
 ### Backend

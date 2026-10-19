@@ -14,7 +14,7 @@ import (
 func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	desc := grpc.ServiceDesc{ServiceName: "rpc.Web", HandlerType: (*any)(nil), Metadata: "web.proto"}
 
-	for _, method := range []string{"Protocol", "Identity", "Reload", "Prompt", "History", "ForkSession", "StageRevert", "ClearRevert", "SearchMessages", "SearchSessions", "SlackNames", "Handoff", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "ListWorkflows", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "ReorderQueue", "MoveToBackground", "StopBackgroundJob", "AnswerQuestion", "VoiceSettings"} {
+	for _, method := range []string{"Protocol", "Identity", "Reload", "Prompt", "History", "ForkSession", "StageRevert", "ClearRevert", "SearchMessages", "SearchSessions", "SlackNames", "Handoff", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "ListWorkflows", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "ReorderQueue", "MoveToBackground", "StopBackgroundJob", "AnswerQuestion", "VoiceSettings", "GetPage", "ListPages"} {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 
@@ -124,8 +124,8 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 		return s.LoadSessionEntries(ctx, request.(*SessionEntriesRequest))
 	case "DeleteSessionEntries":
 		return s.DeleteSessionEntries(ctx, request.(*SessionEntriesRequest))
-	default: // Protocol negotiates the schema, not a browser principal.
-		return &ProtocolResponse{ProtoSha256: protoSHA256}, nil
+	default:
+		return s.pageCall(ctx, request)
 	}
 }
 

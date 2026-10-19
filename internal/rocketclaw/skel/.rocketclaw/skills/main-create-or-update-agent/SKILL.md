@@ -90,6 +90,8 @@ permission:
 
 There is no separate stop tool: `rocketclaw_sessions_write` with `mode: stop` and an empty `prompt` stops a session. The session read tools `rocketclaw_sessions_list`, `rocketclaw_sessions_get`, `rocketclaw_sessions_current_id`, and `rocketclaw_sessions_get_url` each need their own `allow` rule.
 
+The Hosted Page tools `rocketclaw_store`, `rocketclaw_read`, `rocketclaw_delete`, `rocketclaw_list`, `rocketclaw_kv_store`, and `rocketclaw_kv_read` each need their own `allow` rule too. Grant them to agents that publish reports, dashboards, or graphs; their pages show in the space named by the agent's `space:`.
+
 Prefer exact `allow` for low-risk deterministic opt-ins. Use `auto` only for operations where the human wants a reviewer judgment at runtime, for example:
 
 ```yaml

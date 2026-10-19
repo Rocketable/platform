@@ -386,6 +386,34 @@ message ListCronJobsResponse {
   repeated CronJob jobs = 1;
 }
 
+// PageRequest names an agent's Hosted Page file, or its Page Data entry when data is set.
+// An empty path or one ending in / names index.html.
+message PageRequest {
+  string agent = 1;
+  string path = 2;
+  bool data = 3;
+}
+
+// Page is a stored file or Page Data entry with its agent's current space.
+message Page {
+  string space = 1;
+  string content_type = 2;
+  bytes body = 3;
+}
+
+message ListPagesRequest {}
+
+// ListPagesResponse lists the HTML files of agents that still exist.
+message ListPagesResponse {
+  repeated PageEntry pages = 1;
+}
+
+message PageEntry {
+  string agent = 1;
+  string space = 2;
+  string path = 3;
+}
+
 message RunCronJobRequest {
   string stem = 1;
 }
@@ -605,6 +633,8 @@ service Web {
   rpc Prompt(PromptRequest) returns (PromptResponse);
   rpc ListCronJobs(ListCronJobsRequest) returns (ListCronJobsResponse);
   rpc RunCronJob(RunCronJobRequest) returns (RunCronJobResponse);
+  rpc GetPage(PageRequest) returns (Page);
+  rpc ListPages(ListPagesRequest) returns (ListPagesResponse);
   rpc AnswerQuestion(AnswerQuestionRequest) returns (AnswerQuestionResponse);
   rpc History(HistoryRequest) returns (HistoryResponse);
   rpc ForkSession(ForkSessionRequest) returns (ForkSessionResponse);

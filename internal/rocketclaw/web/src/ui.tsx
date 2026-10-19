@@ -16,7 +16,7 @@ import { queries, mutations, listSessions, rpc, RPCError } from "./api";
 import { draftContent } from "./drafts";
 import { holdWakeLock, setVoiceSticky, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Layers, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Tag, TextCursorInput, Undo2, Wrench, X } from "lucide-react";
+import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, Layers, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Tag, TextCursorInput, Undo2, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useDeferredValue, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -399,6 +399,9 @@ function useRoute() {
   const config = pathname === "/config";
   const search = pathname === "/search";
   const voice = pathname === "/voice";
+  const pages = pathname === "/pages";
+  // A page path keeps its escaped agent and file path after the space segment.
+  const page = pathname.startsWith("/pages/") ? pathname.split("/").slice(3).join("/") : "";
   const id = pathname.startsWith("/s/") ? decodeSessionId(pathname.slice(3)) : "";
   return {
     cron,
@@ -408,6 +411,8 @@ function useRoute() {
     config,
     search,
     voice,
+    pages,
+    page,
     id,
     goHome: () => navigate("/"),
     goCron: () => navigate("/cron"),
@@ -826,11 +831,26 @@ type TabGroup = { id: string; name: string; color: string; collapsed?: boolean }
 type Space = { id: string; name: string; last?: string };
 type TabState = { owner?: string; tabs: Tab[]; active: string; groups: TabGroup[]; spaces: Space[]; space: string };
 const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
-const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/search": ["Search", Search], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings] };
+const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/search": ["Search", Search], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files] };
 
-// A skill's page tab is titled with its name.
+// A hosted page, from its escaped agent and file path, is labeled "<agent> · <path>".
+function pageLabel(page: string) {
+  const [agent, ...path] = page.split("/").map(decodeURIComponent);
+  return `${agent} · ${path.join("/")}`;
+}
+
+// A skill's page tab is titled with its name, and a hosted page's tab with its label.
 function pageTab(path: string): [string, typeof Search] | undefined {
+  if (path.startsWith("/pages/")) return [pageLabel(path.split("/").slice(3).join("/")), FileText];
   return pageTabs[path] ?? (path.startsWith("/skills/") ? [path.slice("/skills/".length), Sparkles] : undefined);
+}
+
+// A hosted page opens in the space named by its link's space segment, ignoring case, else in the current space.
+// A segment naming a space, or "-", becomes that space's exact name, so one page has one tab per space.
+function pageSpace(state: Pick<TabState, "spaces" | "space">, path: string): [string, string] {
+  const [, root, segment, ...rest] = path.split("/");
+  const space = root === "pages" && rest.length ? state.spaces.find((item) => item.name.toLowerCase() === decodeURIComponent(segment).toLowerCase()) ?? (segment === "-" ? state.spaces.find((item) => item.id === state.space) : undefined) : undefined;
+  return space ? [`/pages/${encodeURIComponent(space.name)}/${rest.join("/")}`, space.id] : [path, state.space];
 }
 
 // Group colors light enough for black text in both themes.
@@ -857,8 +877,9 @@ function home(tabs: Tab[], space: string) {
 
 // An opened location replaces the current space's preview tab, or else opens right of the active tab, inside the active tab's group.
 // Activating any other tab enters its space, where it becomes the last active tab, and expands its group.
-function openTab(state: TabState, path: string): TabState {
-  const open = state.tabs.find((tab) => tab.path === path), current = open && path !== "/" ? open.space! : state.space;
+function openTab(state: TabState, link: string): TabState {
+  const [path, target] = pageSpace(state, link);
+  const open = state.tabs.find((tab) => tab.path === path), current = open && path !== "/" ? open.space! : target;
   const preview = state.tabs.findIndex((tab) => tab.preview && tab.space === current);
   const group = state.tabs.find((tab) => tab.path === state.active && tab.space === current)?.group;
   const at = preview >= 0 ? preview : state.tabs.findIndex((tab) => tab.path === state.active) + 1 || state.tabs.length;
@@ -884,9 +905,10 @@ function loadTabs(owner: string | undefined, path: string): TabState {
     } catch { /* Missing or unreadable spaces and groups reset to Main with no groups and keep every tab. */ }
   }
   // Tabs saved by other builds, or left in a lost space or group, belong to the first space and no group.
-  tabs = (tabs.some((tab) => tab.path === path) ? tabs : [...tabs, { path, space: view.space }]).map(({ group, space, ...tab }) => ({ ...tab,
+  const [link, target] = pageSpace(view, path);
+  tabs = (tabs.some((tab) => tab.path === link) ? tabs : [...tabs, { path: link, space: target }]).map(({ group, space, ...tab }) => ({ ...tab,
     group: view.groups.some((item) => item.id === group) ? group : undefined, space: view.spaces.some((item) => item.id === space) ? space : view.spaces[0].id }));
-  return openTab({ owner, tabs: arrange(tabs), active: path, ...view }, path);
+  return openTab({ owner, tabs: arrange(tabs), active: link, ...view }, link);
 }
 
 function useTabs() {
@@ -898,7 +920,13 @@ function useTabs() {
   const [editor, setEditor] = useState<{ id: string; open: boolean }>();
   const place = (value: "top" | "left") => { localStorage.setItem("tab-placement", value); setPlacement(value); };
   if (state.owner !== owner) setState(loadTabs(owner, pathname));
-  else if (state.active !== pathname) setState(openTab(state, pathname));
+  else if (state.active !== pageSpace(state, pathname)[0]) setState(openTab(state, pathname));
+  // A page link whose space segment was rewritten shows the rewritten path, once the owner's spaces are known.
+  useEffect(() => {
+    if (state.owner === undefined || state.active === pathname) return;
+    history.replaceState(history.state, "", state.active + location.search);
+    dispatchEvent(new PopStateEvent("popstate"));
+  }, [state.owner, state.active, pathname]);
   // Groups without members are not stored.
   useEffect(() => {
     if (state.owner === undefined) return;
@@ -1187,7 +1215,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const commands = useMemo(() => ({ command, setCommand, composer }), [command]);
   const route = useRoute();
   // The reserved prefix decides before the session list arrives, so a remote ID never mounts the transcript.
-  const showChat = ![route.cron, route.agents, route.skills, route.skill, route.config, route.search, route.voice, route.id.startsWith("opencode:")].some(Boolean);
+  const showChat = ![route.cron, route.agents, route.skills, route.skill, route.config, route.search, route.voice, route.pages, route.page, route.id.startsWith("opencode:")].some(Boolean);
   // The screen stays on while the Voice page is open or a call runs.
   const awake = useSyncExternalStore(subscribeVoice, () => route.voice || !["idle", "error"].includes(voiceView().state));
   useEffect(() => awake ? holdWakeLock() : undefined, [awake]);
@@ -1304,6 +1332,8 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
               {route.search ? <SearchPage /> : null}
               {route.voice ? <VoicePage /> : null}
+              <PageIndex show={route.pages} />
+              <HostedPage key={route.page} page={route.page} />
               <SkillPage name={route.skill} />
               <RemoteSession key={route.id} id={route.id} />
               <TabPane show={showChat}>
@@ -1482,7 +1512,7 @@ function paletteRows(
     { key: "new", label: "Sessions: New", run: newChat },
     { key: "search", label: "Sessions: Search", run: () => navigate("/search") },
     { key: "run-cron", label: "Cron: Run", keep: true, run: openCron },
-    ...([["voice", "Voice"], ["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
+    ...([["voice", "Voice"], ["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"], ["pages", "Pages: Index"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
     // VS Code: src/vs/platform/quickinput/browser/commandsQuickAccess.ts, _getPicks.
   ].filter((item) => tier(item.label) < 3).sort((a, b) => {
     // Better matches come first. Within a tier, recently run commands lead, except Timeline levels, which always keep the Config slider's order.
@@ -1776,6 +1806,50 @@ function RemoteSession({ id }: { id: string }) {
   // reach this page; OpenCode needs it for storage and a real Origin, which the relay requires.
   // react-doctor-disable-next-line react-doctor/iframe-missing-sandbox
   return <iframe title={sessionTitle(session, false)} sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals" className="min-h-0 w-full flex-1 border-0" src={`${origin}/server/${encodeSessionId(origin)}/session/${id.split(":").slice(2).join(":")}`} />;
+}
+
+// A hosted page runs in an opaque origin and reads its agent's Page Data by asking this tab. The answer goes only
+// to this frame and only with this load's token, which a document the frame navigates to never sees.
+function HostedPage({ page }: { page: string }) {
+  const frame = useRef<HTMLIFrameElement>(null);
+  const [token] = useState(() => crypto.getRandomValues(new Uint32Array(4)).join("-"));
+  const agent = decodeURIComponent(page.split("/")[0]);
+  useEffect(() => {
+    const read = async ({ source, data }: MessageEvent) => {
+      if (source !== frame.current?.contentWindow || data?.type !== "rocketclaw.read" || data.token !== token) return;
+      const reply = await rpc<{ body: string }>("GetPage", { agent, path: data.key, data: true }).then(
+        ({ body }) => ({ value: JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(body), (char) => char.charCodeAt(0)))) }),
+        (error: Error) => ({ error: error.message }));
+      (source as Window).postMessage({ type: "rocketclaw.read", id: data.id, ...reply }, "*");
+    };
+    addEventListener("message", read);
+    return () => removeEventListener("message", read);
+  }, [agent, token]);
+  if (!page) return null;
+  return <iframe ref={frame} title={pageLabel(page)} sandbox="allow-scripts allow-popups allow-forms allow-modals allow-downloads" className="min-h-0 w-full flex-1 border-0" src={`/pages-raw/${page}#rc=${token}`} />;
+}
+
+// The current space's pages and spaceless agents' pages, which the server lists by agent and path. Each links
+// under this space's name, which pageSpace gives a "-" link.
+function PageIndex({ show }: { show: boolean }) {
+  const pages = useQuery({ ...queries.pages(), staleTime: 10_000, enabled: show });
+  const inSpace = useInSpace();
+  const { state } = useContext(TabActions);
+  const rows = (pages.data ?? []).filter(inSpace);
+  if (!show) return null;
+  return (
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 overflow-y-auto p-4">
+      <PageTitle>Pages</PageTitle>
+      {pages.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
+      {pages.error ? <p className="text-sm text-destructive">{pages.error.message}</p> : null}
+      {pages.isSuccess && rows.length === 0 ? <p className="text-sm text-muted-foreground">No pages in this space</p> : null}
+      <ul className="flex flex-col gap-1">
+        {rows.map((page) => <li key={`${page.agent}/${page.path}`}>
+          <Link href={pageSpace(state, `/pages/-/${encodeURIComponent(page.agent)}/${page.path.split("/").map(encodeURIComponent).join("/")}`)[0]} className="block break-words py-1 text-sm hover:underline">{page.agent} · {page.path}</Link>
+        </li>)}
+      </ul>
+    </div>
+  );
 }
 
 function useSessionActions(session: Session | undefined, onSuccess?: () => void) {

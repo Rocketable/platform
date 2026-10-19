@@ -11,6 +11,7 @@ import (
 	"mime"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -31,11 +32,16 @@ import (
 // NewHTTPHandler bridges the browser API to the local Web service.
 func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("GET /", web.Handler(sentry))
+	app := web.Handler(sentry)
+	mux.Handle("GET /", app)
 	mux.Handle("GET /api/", http.NotFoundHandler())
 	mux.Handle("POST /api/", http.NotFoundHandler())
 
-	for method := range strings.FieldsSeq("Protocol Identity Reload Prompt History ForkSession StageRevert ClearRevert SearchMessages SearchSessions SlackNames Handoff ListAgents CreateSession ListConfig ListSkills ListWorkflows UpdateSession ListCronJobs RunCronJob ListSessionEntries LoadSessionEntries DeleteSessionEntries ListQueue SteerQueueItem PopQueueItem RemoveQueueItem ReorderQueue MoveToBackground StopBackgroundJob AnswerQuestion VoiceSettings") {
+	for _, route := range []string{"GET /pages/{space}/{agent}/{path...}", "GET /pages-raw/{agent}/{path...}"} {
+		mux.HandleFunc(route, servePage(connection, app))
+	}
+
+	for method := range strings.FieldsSeq("Protocol Identity Reload Prompt History ForkSession StageRevert ClearRevert SearchMessages SearchSessions SlackNames Handoff ListAgents CreateSession ListConfig ListSkills ListWorkflows UpdateSession ListCronJobs RunCronJob GetPage ListPages ListSessionEntries LoadSessionEntries DeleteSessionEntries ListQueue SteerQueueItem PopQueueItem RemoveQueueItem ReorderQueue MoveToBackground StopBackgroundJob AnswerQuestion VoiceSettings") {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 		responseType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Output().FullName())
@@ -159,6 +165,32 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 
 		mux.ServeHTTP(w, r.WithContext(ctx))
 	}))
+}
+
+// servePage answers /pages-raw/ with the file, sandboxed into an opaque origin, and /pages/ with the Web app,
+// after redirecting a link that names a space other than the agent's.
+func servePage(connection *grpc.ClientConn, app http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		page := &Page{}
+		if err := connection.Invoke(r.Context(), "/rpc.Web/GetPage", &PageRequest{Agent: r.PathValue("agent"), Path: r.PathValue("path")}, page, grpc.MaxCallRecvMsgSize(math.MaxInt32)); err != nil {
+			httpRPCError(w, err)
+			return
+		}
+
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/pages-raw/"):
+			w.Header().Set("Content-Type", page.ContentType)
+			w.Header().Set("Content-Security-Policy", "sandbox allow-scripts allow-popups allow-forms allow-modals allow-downloads")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("Cache-Control", "no-store")
+			_, _ = w.Write(page.Body)
+		case page.Space != "" && !strings.EqualFold(page.Space, r.PathValue("space")):
+			// Keep the request's escaped agent, path, and query; only the space segment moves.
+			http.Redirect(w, r, "/pages/"+url.PathEscape(page.Space)+"/"+strings.SplitN(r.URL.RequestURI(), "/", 4)[3], http.StatusPermanentRedirect)
+		default:
+			app.ServeHTTP(w, r)
+		}
+	}
 }
 
 // tailnetWhoIs is satisfied by *local.Client.
