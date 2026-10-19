@@ -32,9 +32,8 @@ func TestExternalMCPOriginPairsMigration(t *testing.T) {
 	store := newTestSessionService(t)
 	source := migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}
 	set := migrate.MigrationSet{TableName: "pg_migrations"}
-	n, err := set.ExecMaxContext(t.Context(), store.db, "postgres", source, migrate.Down, 25)
+	_, err := set.ExecVersionContext(t.Context(), store.db, "postgres", source, migrate.Down, 24)
 	require.NoError(t, err)
-	require.Equal(t, 25, n)
 	_, err = store.db.ExecContext(t.Context(), `INSERT INTO external_mcp_sessions
 (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) VALUES
 ('with-details', 'private', 'managed', 'helper', '#triage'),
@@ -48,18 +47,13 @@ INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUE
 	require.NoError(t, err)
 
 	for range 2 {
-		n, err = set.ExecMaxContext(t.Context(), store.db, "postgres", source, migrate.Up, 1)
+		n, err := set.ExecMaxContext(t.Context(), store.db, "postgres", source, migrate.Up, 1)
 		require.NoError(t, err)
 		require.Equal(t, 1, n)
 
-		binding, found, err := store.ExternalMCPSession("with-details")
+		pairs, err := queryStrings(t.Context(), store.db, `SELECT external_conversation_id || ':' || origin_pairs::text FROM external_mcp_sessions ORDER BY 1`, "migrated origin pairs")
 		require.NoError(t, err)
-		require.True(t, found)
-		require.Equal(t, map[string]string{"topic": "first", "note": "Unicode Ω"}, binding.OriginPairs)
-		binding, found, err = store.ExternalMCPSession("without-details")
-		require.NoError(t, err)
-		require.True(t, found)
-		require.Nil(t, binding.OriginPairs)
+		require.Equal(t, []string{`with-details:{"note": "Unicode Ω", "topic": "first"}`, "without-details:null"}, pairs)
 		// This deliberately tests physical migration output at schema 024,
 		// before the current application's history projection columns exist.
 		entries, err := queryStrings(t.Context(), store.db, `SELECT conversation_id || ':' || (entry_json->>'type') FROM session_entries ORDER BY conversation_id`, "migrated origin entries")
@@ -93,8 +87,8 @@ func TestChatOriginFactsReportsFailures(t *testing.T) {
 
 	require.Equal(t, 1, seen, "stopping early ends the scan")
 
-	_, err := store.db.ExecContext(ctx, `INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel, origin_pairs)
-VALUES ('external', 'private', 'first', 'helper', '#triage', '"not an object"')`)
+	_, err := store.db.ExecContext(ctx, `UPDATE conversations SET external_id = 'external', external_run = 'private', external_agent = 'helper', external_channel = '#triage',
+    origin_pairs = '"not an object"' WHERE conversation_id = 'first'`)
 	require.NoError(t, err)
 
 	var errs []error

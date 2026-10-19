@@ -95,10 +95,9 @@ func (s *SessionService) ForkConversation(ctx context.Context, source string, de
 		return "", err
 	}
 
-	// The new chat's history is copied below through the indexed append; it keeps its source's birth space.
-	if _, err := tx.ExecContext(ctx, `WITH indexed AS (INSERT INTO message_search_indexed (conversation_id) VALUES ($1)),
-source AS (SELECT space_id FROM managed_conversations WHERE conversation_id = $4)
-INSERT INTO managed_conversations (conversation_id, agent, created_by, forked_from, space_id) SELECT $1, $2, $3, $4, max(space_id) FROM source`, destination.ID, destination.Agent, destination.CreatedBy, source); err != nil {
+	// The new chat's history is copied below; it keeps its source's birth space.
+	if _, err := tx.ExecContext(ctx, `WITH source AS (SELECT space_id FROM conversations WHERE conversation_id = $4)
+INSERT INTO conversations (conversation_id, agent, created_by, forked_from, space_id, kind, listed) SELECT $1, $2, $3, $4, max(space_id), $5, TRUE FROM source`, destination.ID, destination.Agent, destination.CreatedBy, source, KindWebChat); err != nil {
 		return "", fmt.Errorf("create fork: %w", err)
 	}
 
@@ -160,26 +159,33 @@ func (s *SessionService) copySessionPrefix(ctx context.Context, db stateStoreDB,
 	}
 
 	for i := range entries {
-		if _, err := appendSessionEntryDB(ctx, db, destination, destination, &entries[i]); err != nil {
+		if _, err := appendSessionEntryDB(ctx, db, destination, &entries[i]); err != nil {
 			return "", err
 		}
 	}
 
 	// Copied system inputs show their Completion Notes from the finished jobs their IDs list, so
 	// copy those as consumed notes that wake nothing. Running jobs stay with the source.
-	if _, err := db.ExecContext(ctx, `WITH producers AS (
+	// A copied delegation keys the copy of its parent as its source did; it never expires on its own.
+	if _, err := db.ExecContext(ctx, `WITH RECURSIVE producers AS (
     SELECT DISTINCT unnest($2::text[]) AS id
-), delegations AS (INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
-SELECT $1 || substr(e.conversation_id, length(p.id) + 1), e.entry_json, e.entry_timestamp
-FROM producers p
-JOIN session_entries e ON e.conversation_id COLLATE "C" >= p.id || '/' AND e.conversation_id COLLATE "C" < p.id || '0'
+), delegations AS (
+    SELECT p.id AS producer, c.* FROM producers p JOIN conversations c ON c.parent_conversation_id = p.id
+    UNION ALL SELECT d.producer, c.* FROM delegations d JOIN conversations c ON c.parent_conversation_id = d.conversation_id
+), copied_conversations AS (
+    INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, retention, call_turn, call_id)
+    SELECT $1 || substr(conversation_id, length(producer) + 1), agent, '', $1 || substr(parent_conversation_id, length(producer) + 1), kind, FALSE,
+        CASE WHEN retention = 'record' THEN 'record' ELSE 'nested' END, call_turn, call_id FROM delegations
+), copied_entries AS (INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
+SELECT $1 || substr(e.conversation_id, length(d.producer) + 1), e.entry_json, e.entry_timestamp
+FROM delegations d JOIN entries e USING (conversation_id)
 ORDER BY e.id), noted_jobs AS (
-    SELECT DISTINCT unnest(string_to_array(i->>'input_id', ' ')) AS job_id FROM session_entries e, jsonb_array_elements(e.entry_json::jsonb->'replay_input') i
+    SELECT DISTINCT unnest(string_to_array(i->>'input_id', ' ')) AS job_id FROM entries e, jsonb_array_elements(e.entry_json::jsonb->'replay_input') i
     WHERE e.conversation_id = $1 AND (i->>'prompt_header' = '[System]' OR starts_with(i->>'prompt_header', '[System '))
 )
-INSERT INTO background_jobs (conversation_id, job_id, kind, status, agent, label, call_id, subagent_key, origin_json, sync_destination, runner_id, note_state, wake, claimed_turn_id, created_at_unix_ns, finished_at_unix_ns, result)
-SELECT $1, job_id, kind, status, agent, label, call_id, subagent_key, origin_json, '', runner_id, $3, FALSE, '', created_at_unix_ns, finished_at_unix_ns, result
-FROM background_jobs JOIN noted_jobs USING (job_id) WHERE conversation_id = ANY($2) AND status <> $4`, destination, producers, noteConsumed, backgroundRunning); err != nil {
+INSERT INTO turns (conversation_id, input_id, kind, takes_lane, phase, terminal, agent, label, call_id, subagent_key, inbound_json, runner_id, note, wake, wake_attempts, run_at_unix_ns, claimed_by, created_at_unix_ns, updated_at_unix_ns, result, message)
+SELECT $1, input_id, kind, FALSE, phase, terminal, agent, label, call_id, subagent_key, inbound_json, runner_id, $3, FALSE, 0, 0, '', created_at_unix_ns, updated_at_unix_ns, result, ''
+FROM turns JOIN noted_jobs ON job_id = input_id WHERE conversation_id = ANY($2) AND NOT takes_lane AND phase = 'done'`, destination, producers, noteConsumed); err != nil {
 		return "", fmt.Errorf("copy fork delegations and completion notes: %w", err)
 	}
 

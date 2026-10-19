@@ -26,7 +26,7 @@ for (const mode of ["initial", "cached", "earlier"] as const) test(`shadow refre
       streams.push(url.searchParams.get("id")!);
       return new Response(new ReadableStream<string>({ start(controller) { stream = controller; controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     }
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "parent", agent: "main" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "parent", agent: "main" }], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));

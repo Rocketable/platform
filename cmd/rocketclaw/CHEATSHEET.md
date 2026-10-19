@@ -61,7 +61,7 @@ Add `users:read.email` too, then reinstall the app, so a Slack mention's turn ge
 | Mention while the agent works | Mention the bot during a running turn. | Waits and runs as the next turn; it never steers. Mentions also wait behind an active goal. Each mention is accepted once, even if Slack delivers it again. |
 | Stop a running turn | Press Slack's Stop on a running mention turn, or use **Stop turn** or `$stop` in Web. | Slack's Stop needs agent sessions (see Slack Native Stop) and an allowlisted user. Report threads and Web-started turns have no Slack stop control. |
 | Cron report thread | Read the report in Slack; follow up from its conversation in Web. | Read-only: replies and mentions in the thread are ignored. |
-| External MCP conversation | Call `session_prompt` with an external conversation ID, agent, and configured channel. | The ID owns one private MCP session and one managed Slack session on the same thread. The MCP agent stays fixed. MCP history copies into managed history; Slack history does not copy back. The Slack thread is read-only. |
+| External MCP conversation | Call `session_prompt` with an external conversation ID, agent, and configured channel. | The ID owns one private MCP session and one managed Slack session on the same thread. The MCP agent stays fixed. Managed history shows MCP history; MCP history does not show Slack history. The Slack thread is read-only. |
 
 ## Goal Examples
 

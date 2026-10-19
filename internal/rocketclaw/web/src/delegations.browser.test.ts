@@ -1,20 +1,20 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
 import { timelineLevels } from "./timeline-detail";
-import type { CodeModeCall, TranscriptEvent } from "./types";
+import type { CodeModeCall, HistoryView, TranscriptEvent } from "./types";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
-type History = { messages: TranscriptEvent[]; delegations: string[]; reviewRationales?: Record<string, string> };
+type History = { messages: TranscriptEvent[]; delegations: string[]; reviewRationales?: Record<string, string>; lineage?: HistoryView["lineage"] };
 const event = (role: string, text: string, tool: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ role, text, complete: true, entryKey: "", itemId: "", inputId: "", turnId: "", ...tool });
 
 function serve(histories: Record<string, History>) {
   return Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "chat", agent: "main" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "chat", agent: "main" }], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
@@ -41,15 +41,16 @@ function serve(histories: Record<string, History>) {
 for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel at ${width}px`, async () => {
   const { chromium: engine } = await import(playwright!);
   const histories: Record<string, History> = {
-    // A task row opens the subagent its progress records, also when it continued it; an older row without one opens the listed delegation ending in its call ID.
-    // A row's reasons open its permission review only once the delegations list it; an older task row's, the one saved under its call ID.
-    chat: { messages: [event("user", "Run the review", { messageId: "1:0" }), event("tool", `task {"description":"Review"}`, { toolName: "task", toolCallId: "call-task", delegation: "chat/call-task-0a1b2c3d" }), event("tool", `bash {"command":"ls"}`, { toolName: "bash", toolCallId: "call-plain", review: "chat/call-plain-review-9f9f9f9f" }), event("tool", `task {"description":"Again"}`, { toolName: "task", toolCallId: "call-again", delegation: "chat/call-task-0a1b2c3d" }),
-      event("tool", `bash {"command":"rm"}`, { toolName: "bash", toolCallId: "call_0", review: "chat/call_0-review-1a2b3c4d" }), event("tool", "blocked", { toolCallId: "call_0" }), event("tool", `task {"description":"Fresh"}`, { toolName: "task", toolCallId: "call-fresh", delegation: "chat/call-fresh-2b3c4d5e", review: "chat/call-fresh-review-3c4d5e6f" }), event("tool", `bash {"command":"old"}`, { toolName: "bash", toolCallId: "call-old" }), event("assistant", "Review finished")],
+    // A task row opens the subagent its progress records, also when it continued it, or the one the server linked to an older row.
+    // A row's reasons open its permission review only once the delegations list it, or the one the server linked to an older task row.
+    chat: { messages: [event("user", "Run the review", { messageId: "1:0" }), event("tool", `task {"description":"Review"}`, { toolName: "task", toolCallId: "call-task", delegation: "chat/call-task-0a1b2c3d", review: "chat/call-task" }), event("tool", `bash {"command":"ls"}`, { toolName: "bash", toolCallId: "call-plain", review: "chat/call-plain-review-9f9f9f9f" }), event("tool", `task {"description":"Again"}`, { toolName: "task", toolCallId: "call-again", delegation: "chat/call-task-0a1b2c3d" }),
+      event("tool", `bash {"command":"rm"}`, { toolName: "bash", toolCallId: "call_0", review: "chat/call_0-review-1a2b3c4d" }), event("tool", "blocked", { toolCallId: "call_0" }), event("tool", `task {"description":"Fresh"}`, { toolName: "task", toolCallId: "call-fresh", delegation: "chat/call-fresh-2b3c4d5e", review: "chat/call-fresh-review-3c4d5e6f" }), event("tool", `bash {"command":"old"}`, { toolName: "bash", toolCallId: "call-old", delegation: "chat/call-old" }), event("assistant", "Review finished")],
       delegations: ["chat/call-task", "chat/call-task-0a1b2c3d", "chat/call_0-review-1a2b3c4d", "chat/call-fresh-2b3c4d5e", "chat/call-fresh-review-3c4d5e6f", "chat/call-old"], reviewRationales: { "chat/call-task": "The task is in scope.", "chat/call_0-review-1a2b3c4d": "The requested change is outside the allowed scope.", "chat/call-fresh-review-3c4d5e6f": "The read-only check is within the requested scope." } },
-    "chat/call-task": { messages: [event("assistant", "Task call allowed")], delegations: [] },
-    "chat/call_0-review-1a2b3c4d": { messages: [event("assistant", "Bash call allowed")], delegations: [] },
-    "chat/call-task-0a1b2c3d": { messages: [event("user", "Review this"), event("tool", `execute {"code":"print('checking every configured region for configuration drift')"}`, { toolName: "execute", toolCallId: "call-inner" }), event("assistant", "Child done")], delegations: ["chat/call-task-0a1b2c3d/call-inner"] },
-    "chat/call-task-0a1b2c3d/call-inner": { messages: [event("assistant", "Inner review allowed")], delegations: [] },
+    "chat/call-task": { messages: [event("assistant", "Task call allowed")], delegations: [], lineage: [{ id: "chat" }, { id: "chat/call-task", kind: "SUBAGENT" }] },
+    "chat/call_0-review-1a2b3c4d": { messages: [event("assistant", "Bash call allowed")], delegations: [], lineage: [{ id: "chat" }, { id: "chat/call_0-review-1a2b3c4d", kind: "REVIEW" }] },
+    "chat/call-task-0a1b2c3d": { messages: [event("user", "Review this"), event("tool", `execute {"code":"print('checking every configured region for configuration drift')"}`, { toolName: "execute", toolCallId: "call-inner", delegation: "chat/call-task-0a1b2c3d/call-inner" }), event("assistant", "Child done")], delegations: ["chat/call-task-0a1b2c3d/call-inner"],
+      lineage: [{ id: "chat" }, { id: "chat/call-task-0a1b2c3d", kind: "SUBAGENT", agent: "reviewer" }] },
+    "chat/call-task-0a1b2c3d/call-inner": { messages: [event("assistant", "Inner review allowed")], delegations: [], lineage: [{ id: "chat" }, { id: "chat/call-task-0a1b2c3d", kind: "SUBAGENT", agent: "reviewer" }, { id: "chat/call-task-0a1b2c3d/call-inner", kind: "SUBAGENT" }] },
   };
   const server = serve(histories);
   const browser = await engine.launch({ executablePath: chromium, headless: true });

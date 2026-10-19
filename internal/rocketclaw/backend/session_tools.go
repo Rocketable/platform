@@ -16,6 +16,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketcode"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -30,6 +31,8 @@ const (
 	// Store-wide session reads compete with live turns for the State Store, so each call is capped.
 	maxListedSessions = 200
 	maxSessionEntries = 100
+	// summaryReaders is how many listed sessions' summaries are read at once.
+	summaryReaders = 8
 )
 
 // topLevelSessionCreator returns who created id when id is a top-level session: a chat Web shows.
@@ -44,15 +47,21 @@ func (s *SessionService) topLevelSessionCreator(ctx context.Context, id string) 
 	return spawnedBy, err
 }
 
-// startSubagent records the subagent session conversationID of parent, run by agent, unless recorded. A
+// startSubagent records the subagent session at key under conversation, run by agent, unless recorded. A
 // continue, unlike a new subagent, needs a session saved before: recorded, or a Delegation History older
-// than subagent sessions.
-func (s *SessionService) startSubagent(ctx context.Context, conversationID, parent, agent string, isNew bool) error {
+// than subagent sessions. The guardrail review its delegation saved there first becomes the session.
+func (s *SessionService) startSubagent(ctx context.Context, conversation string, key rocketcode.ChildKey, agent string, isNew bool) error {
+	conversationID, parent := conversation+key.Path, conversation+key.Parent
+
 	started, err := execRows(ctx, s.db, "start subagent session", "count started subagent session", `WITH saved AS (
-    SELECT count(*) AS entries FROM session_entries WHERE conversation_id = $1
+    SELECT count(*) AS entries FROM entries WHERE conversation_id = $1
+), parent AS (
+    SELECT max(slack_channel) AS slack_channel FROM conversations WHERE conversation_id = $2
 )
-INSERT INTO managed_conversations (conversation_id, agent, created_by, parent_conversation_id) SELECT $1, $3, '', $2 FROM saved WHERE $4 OR entries > 0
-ON CONFLICT (conversation_id) DO NOTHING`, conversationID, parent, agent, isNew)
+INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, slack_channel, call_turn, call_id)
+SELECT $1, $3, '', $2, $5, FALSE, p.slack_channel, $6, $7 FROM saved, parent p WHERE $4 OR entries > 0
+ON CONFLICT (conversation_id) DO UPDATE SET agent = excluded.agent, kind = excluded.kind, retention = 'record' WHERE conversations.retention <> 'record'`,
+		conversationID, parent, agent, isNew, KindSubagent, key.Turn, key.Call)
 	if err != nil || started > 0 || isNew {
 		return err
 	}
@@ -61,7 +70,7 @@ ON CONFLICT (conversation_id) DO NOTHING`, conversationID, parent, agent, isNew)
 		return err
 	}
 
-	return fmt.Errorf("continue ID %q has no saved subagent history in this conversation", strings.TrimPrefix(conversationID, parent))
+	return fmt.Errorf("continue ID %q has no saved subagent history in this conversation", key.Path)
 }
 
 // subagentLineage returns the top-level session the subagent session conversationID belongs to, the turn
@@ -71,15 +80,16 @@ ON CONFLICT (conversation_id) DO NOTHING`, conversationID, parent, agent, isNew)
 func (s *SessionService) subagentLineage(ctx context.Context, conversationID string) (root, turnID string, origin *protocol.InboundMessage, jobs []backgroundKey, err error) {
 	var inbound, inputs []byte
 	if err := s.db.QueryRowContext(ctx, `WITH RECURSIVE lineage AS (
-    SELECT conversation_id, parent_conversation_id, producer_inbound_json FROM managed_conversations WHERE conversation_id = $1
-    UNION ALL SELECT c.conversation_id, c.parent_conversation_id, c.producer_inbound_json FROM managed_conversations c JOIN lineage l ON c.conversation_id = l.parent_conversation_id
-), turns AS (
-    SELECT l.*, t.id, t.inbound_json FROM lineage l LEFT JOIN active_turns t ON t.conversation_id = l.conversation_id AND t.phase = $2
+    SELECT conversation_id, parent_conversation_id, producer_inbound_json, reports_to FROM conversations WHERE conversation_id = $1
+    UNION ALL SELECT c.conversation_id, c.parent_conversation_id, c.producer_inbound_json, c.reports_to FROM conversations c JOIN lineage l ON c.conversation_id = l.parent_conversation_id
+), lineage_turns AS (
+    SELECT l.*, t.id, t.inbound_json FROM lineage l LEFT JOIN turns t ON t.conversation_id = l.conversation_id AND t.phase = $2 AND t.takes_lane
 ), inputs AS (
-    SELECT COALESCE(jsonb_agg(jsonb_build_array(parent_conversation_id, COALESCE(inbound_json->'Metadata'->>'web_message_id', ''))) FILTER (WHERE parent_conversation_id <> ''), '[]') AS pairs FROM turns
+    SELECT COALESCE(jsonb_agg(jsonb_build_array(parent_conversation_id, COALESCE(inbound_json->'Metadata'->>'web_message_id', ''))) FILTER (WHERE parent_conversation_id IS NOT NULL), '[]') AS pairs FROM lineage_turns
 )
-SELECT t.conversation_id, COALESCE(t.id, ''), COALESCE(t.inbound_json, t.producer_inbound_json, '{}'), i.pairs
-FROM turns t CROSS JOIN inputs i WHERE t.parent_conversation_id = ''`, conversationID, turnRunning).Scan(&root, &turnID, &inbound, &inputs); err != nil {
+SELECT t.conversation_id, COALESCE(t.id, ''), COALESCE(t.inbound_json::jsonb,
+    jsonb_set(t.producer_inbound_json::jsonb, '{SyncDestination}', to_jsonb(COALESCE(t.reports_to, ''))), '{}'), i.pairs
+FROM lineage_turns t CROSS JOIN inputs i WHERE t.parent_conversation_id IS NULL`, conversationID, turnRunning).Scan(&root, &turnID, &inbound, &inputs); err != nil {
 		return "", "", nil, nil, fmt.Errorf("read subagent lineage: %w", err)
 	}
 
@@ -103,7 +113,12 @@ func (s *SessionService) checkSessionTarget(ctx context.Context, children bool, 
 		return err
 	}
 
-	if target == owner || target == syncDestination || s.reservedFor(target) == owner {
+	var reportsTo string
+	if err := queryScalar(ctx, s.db, "read session destination", `SELECT COALESCE(max(reports_to), '') FROM conversations WHERE conversation_id = $1`, &reportsTo, owner); err != nil {
+		return err
+	}
+
+	if target == owner || target == syncDestination || target == reportsTo {
 		return fmt.Errorf("session %q is this session", target)
 	}
 
@@ -275,7 +290,7 @@ func listSessionsTool(service *SessionService, threads *threadBridgeManager) roc
 			"Query language: tag:V, cron:V, agent:V and room:V match V exactly and case-sensitively; model:V matches part of the agent's configured model, ignoring case; V may be a JSON-quoted string such as tag:\"Needs review\"; is:pinned, is:forked and is:cron; sort:newest or sort:oldest. Room terms match either room; other filters use AND. Unknown or malformed terms are searched as text. "+
 			"All remaining text is ONE case-insensitive phrase, not separate keywords, matched against name, room, agent, preview, session label, chat origin and message text. "+
 			"With criteria, rows add name, agent, room, tags and matched (the field holding the phrase, or messages when only message text did), and a messages block lists up to 3 matching messages per listed chat; rocketclaw_sessions_get with a row's before_entry_id and limit 1 shows that message. Messages of stopped turns are not listed. "+
-			"Trailing lines show how criteria was read and whether the limit cut results or the message index or session summaries were incomplete.", maxListedSessions),
+			"Trailing lines show how criteria was read and whether the limit cut results.", maxListedSessions),
 		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsListToolName},
 		Subjects: func(json.RawMessage) ([]string, error) { return []string{sessionsListToolName}, nil },
 		Parameters: map[string]any{"properties": map[string]any{
@@ -333,12 +348,25 @@ func listSessionsTool(service *SessionService, threads *threadBridgeManager) roc
 			if criteria := strings.TrimSpace(params.Criteria); criteria == "" {
 				// Stored timestamps are UTC RFC3339Nano. Removing Z makes text order exact
 				// even across whole/fractional seconds, without PostgreSQL's microsecond rounding.
-				ids, err = queryStrings(ctx, service.db, `SELECT conversation_id FROM session_entries e
-WHERE NOT EXISTS (SELECT 1 FROM shadow_bindings b WHERE b.child_conversation_id = e.conversation_id OR starts_with(e.conversation_id, b.child_conversation_id || '/'))
-GROUP BY conversation_id
+				// A chat's entries include those of the hidden runs reporting to it or it continues, as its history does.
+				ids, err = queryStrings(ctx, service.db, `WITH RECURSIVE runs AS (
+    SELECT conversation_id, reports_to FROM conversations WHERE reports_to IS NOT NULL
+), viewed AS (
+    SELECT e.conversation_id, e.entry_timestamp FROM entries e LEFT JOIN runs r USING (conversation_id)
+    WHERE e.audience <> CASE WHEN r.reports_to IS NULL THEN 'sandbox' ELSE 'visible' END
+    UNION ALL SELECT r.reports_to, e.entry_timestamp FROM runs r JOIN entries e USING (conversation_id) WHERE e.audience <> 'sandbox'
+    UNION ALL SELECT c.conversation_id, e.entry_timestamp FROM conversations c JOIN entries e ON e.conversation_id = c.continues
+    WHERE c.continues IS NOT NULL AND e.audience <> 'sandbox'
+), starts AS (
+    SELECT DISTINCT conversation_id AS id FROM viewed
+), `+ancestorsSQL+`, shadowed AS (
+    SELECT DISTINCT a.id AS conversation_id FROM ancestors a JOIN conversations b ON b.conversation_id = a.conversation_id WHERE b.shadow_parent IS NOT NULL
+)
+SELECT v.conversation_id FROM viewed v LEFT JOIN shadowed s USING (conversation_id) WHERE s.conversation_id IS NULL
+GROUP BY v.conversation_id
 HAVING MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") >= $1 COLLATE "C"
 AND ($2 = '' OR MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") < $2 COLLATE "C")
-ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, conversation_id COLLATE "C" LIMIT $3`, "session tool candidates", params.Since, params.Until, params.Limit)
+ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, v.conversation_id COLLATE "C" LIMIT $3`, "session tool candidates", params.Since, params.Until, params.Limit)
 			} else {
 				threads.mu.Lock()
 				slack := threads.slackLookups
@@ -431,14 +459,6 @@ ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, conversation_id COLL
 				if more := len(matches) - len(ids); more > 0 {
 					fmt.Fprintf(&output, "[truncated: %d more matching sessions]\n", more)
 				}
-
-				if !search.IndexComplete {
-					output.WriteString("[message index incomplete]\n")
-				}
-
-				if !search.SummariesComplete {
-					output.WriteString("[session summaries incomplete]\n")
-				}
 			}
 
 			return rocketcode.TextToolResult(output.String()), nil
@@ -476,55 +496,83 @@ func (s *SessionService) searchSessionsWithin(ctx context.Context, criteria stri
 	return search, matches, nil
 }
 
+// sessionToolSummaries reads, newest first, only the entries that hold each conversation's last
+// user and assistant messages: first its newest entry, then, when that lacks one, all of them.
 func (s *SessionService) sessionToolSummaries(ctx context.Context, ids []string, preview bool) ([]sessionListSummary, error) {
-	// Selected conversations still require a full-history scan. A dedicated summary
-	// projection is the upgrade path if measured inspection cost warrants it.
-	summaries := make([]sessionListSummary, 0, len(ids))
-	for _, id := range ids {
-		entries, err := queryRows(ctx, s.db, `SELECT entry_json FROM session_entries WHERE conversation_id = $1 ORDER BY id`, "session tool entries", func(row rowScanner) (rocketcode.SessionEntry, error) {
-			var (
-				raw   string
-				entry rocketcode.SessionEntry
-			)
-			if err := row.Scan(&raw); err != nil {
-				return entry, fmt.Errorf("scan session tool entry: %w", err)
-			}
+	summaries := make([]sessionListSummary, len(ids))
+	group, ctx := errgroup.WithContext(ctx)
+	group.SetLimit(summaryReaders)
 
-			if err := json.Unmarshal([]byte(raw), &entry); err != nil {
-				return entry, fmt.Errorf("decode session tool entry: %w", err)
-			}
+	for i, id := range ids {
+		group.Go(func() error {
+			summary := &summaries[i]
+			summary.ConversationID = id
 
-			return entry, nil
-		}, id)
-		if err != nil {
-			return nil, err
-		}
+			for _, limit := range []int{1, 0} {
+				// Of an entry's replay input, only message items, and items that cannot be decoded, matter.
+				err := readRows(ctx, s.db, `WITH `+sessionHistorySQL+`, counted AS (
+    SELECT id, entry_json, count(*) OVER () AS turns FROM viewed_rows
+), newest AS (
+    SELECT c.*, e.entry_timestamp FROM counted c JOIN entries e USING (id) ORDER BY c.id DESC LIMIT NULLIF($2, 0)
+), fields AS (
+    -- json_to_record parses each entry once; every ->> on it parses the whole entry again. Without
+    -- previews the stored time stands for the entry's.
+    SELECT n.id, n.turns, COALESCE(f."timestamp", n.entry_timestamp) AS "timestamp", f.replay_input FROM newest n,
+        json_to_record(CASE WHEN $3 THEN n.entry_json END) AS f("timestamp" text, replay_input json)
+)
+SELECT f.turns, json_build_object('timestamp', f."timestamp", 'replay_input',
+    json_agg(i.item ORDER BY i.n) FILTER (WHERE i.n IS NOT NULL AND COALESCE(i.item->>'type', 'message') = 'message')) FROM fields f
+LEFT JOIN LATERAL json_array_elements(f.replay_input) WITH ORDINALITY AS i(item, n) ON TRUE
+GROUP BY f.id, f.turns, f."timestamp" ORDER BY f.id DESC`, "session tool entries", func(row rowScanner) error {
+					var (
+						raw   []byte
+						entry rocketcode.SessionEntry
+					)
+					if err := row.Scan(&summary.Turns, &raw); err != nil {
+						return fmt.Errorf("scan session tool entry: %w", err)
+					}
 
-		summary := sessionListSummary{ConversationID: id, Turns: len(entries)}
-		for i := range entries {
-			entry := &entries[i]
-			summary.LastUpdated = entry.Timestamp.Format(time.RFC3339)
+					if err := json.Unmarshal(raw, &entry); err != nil {
+						return fmt.Errorf("decode session tool entry: %w", err)
+					}
 
-			if !preview {
-				continue
-			}
+					summary.LastUpdated = cmp.Or(summary.LastUpdated, entry.Timestamp.Format(time.RFC3339))
 
-			messages, err := replayInputMessages(entry.ReplayInput)
-			if err != nil {
-				return nil, err
-			}
+					if !preview {
+						return nil
+					}
 
-			for _, message := range messages {
-				switch message.role {
-				case "user":
-					summary.LastUserMessage = message.text
-				case "assistant":
-					summary.LastAssistantMessage = message.text
+					messages, err := replayInputMessages(entry.ReplayInput)
+					if err != nil {
+						return err
+					}
+
+					for _, message := range slices.Backward(messages) {
+						switch {
+						case message.role == "user" && summary.LastUserMessage == "":
+							summary.LastUserMessage = message.text
+						case message.role == "assistant" && summary.LastAssistantMessage == "":
+							summary.LastAssistantMessage = message.text
+						}
+					}
+
+					return nil
+				}, id, limit, preview)
+				if err != nil {
+					return err
+				}
+
+				if !preview || summary.Turns <= 1 || summary.LastUserMessage != "" && summary.LastAssistantMessage != "" {
+					break
 				}
 			}
-		}
 
-		summaries = append(summaries, summary)
+			return nil
+		})
+	}
+
+	if err := group.Wait(); err != nil {
+		return nil, fmt.Errorf("read session summaries: %w", err)
 	}
 
 	return summaries, nil
@@ -609,28 +657,10 @@ func (s *SessionService) postStopLines(ctx context.Context, conversationID strin
 		return err
 	}
 
-	lines, err := queryRows(ctx, tx, `WITH running AS (SELECT count(*) AS turns FROM active_turns WHERE conversation_id = $1 AND phase = $3),
-parked AS (DELETE FROM turn_steps USING running WHERE conversation_id = $1 AND starts_with(key, $2) AND turns = 0 RETURNING value)
-SELECT value FROM parked ORDER BY (value::jsonb->>'timestamp')::timestamptz`, "parked stop lines", func(row rowScanner) (line rocketcode.SessionEntry, err error) {
-		var raw []byte
-		if err := row.Scan(&raw); err != nil {
-			return line, fmt.Errorf("scan parked stop line: %w", err)
-		}
-
-		if err := json.Unmarshal(raw, &line); err != nil {
-			return line, fmt.Errorf("decode parked stop line: %w", err)
-		}
-
-		return line, nil
-	}, conversationID, stopLineStep, turnRunning)
-	if err != nil {
+	if _, err := appendQueriedEntries(ctx, tx, conversationID, "parked stop lines", `WITH running AS (SELECT count(*) AS turns FROM turns WHERE conversation_id = $1 AND phase = $3 AND takes_lane),
+parked AS (DELETE FROM steps USING running WHERE conversation_id = $1 AND starts_with(key, $2) AND turns = 0 RETURNING value)
+SELECT value FROM parked ORDER BY (value::jsonb->>'timestamp')::timestamptz`, conversationID, stopLineStep, turnRunning); err != nil {
 		return err
-	}
-
-	for i := range lines {
-		if _, err := appendSessionEntryDB(ctx, tx, conversationID, conversationID, &lines[i]); err != nil {
-			return err
-		}
 	}
 
 	if err := tx.Commit(); err != nil {

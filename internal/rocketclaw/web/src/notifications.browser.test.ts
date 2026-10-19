@@ -16,7 +16,7 @@ test("an open RocketClaw or OpenCode tab that finishes answering raises a deskto
   const { chromium: engine } = await import(playwright!);
   let rows: Session[] = [
     { id: "chat", agent: "main", preview: "Chat work", running: true },
-    { id: "opencode:box:ses_a", preview: "Alpha work", server: "box", directory: "/srv/app", running: true, reply: "All **green**:\n\n- 12 tests pass" },
+    { id: "opencode:box:ses_a", kind: "REMOTE_OPENCODE", remoteSessionId: "ses_a", preview: "Alpha work", server: "box", directory: "/srv/app", running: true, reply: "All **green**:\n\n- 12 tests pass" },
     { id: "idle", agent: "main", preview: "Idle work" },
     { id: "closed", agent: "main", preview: "Closed work", running: true },
   ];
@@ -26,7 +26,7 @@ test("an open RocketClaw or OpenCode tab that finishes answering raises a deskto
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/ListSessions") {
       listed++;
-      return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, summariesComplete: true, opencodeServers: { box: 4100 } })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+      return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, opencodeServers: { box: 4100 } })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     }
     if (!url.pathname.startsWith("/api/")) {
       const file = Bun.file(path.join(dist, url.pathname));
@@ -39,7 +39,7 @@ test("an open RocketClaw or OpenCode tab that finishes answering raises a deskto
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], messages: [], revision: input.id, reset: true, entryKeys: [], running: false, start: "0", more: false });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: ["chat", "opencode:box:ses_a", "idle"].map((id) => ({ path: `/s/${encode(id)}`, space: "main" })), groups: [], space: "main", last: {}, placement: "TOP" }, revision: "1" });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [["/s/", "chat"], ["/oc/", "opencode:box:ses_a"], ["/s/", "idle"]].map(([route, id]) => ({ path: `${route}${encode(id)}`, space: "main" })), groups: [], space: "main", last: {}, placement: "TOP" }, revision: "1" });
       default: return Response.json({});
     }
   } });
@@ -99,7 +99,7 @@ test("an open RocketClaw or OpenCode tab that finishes answering raises a deskto
 
     // Clicking a notification opens its tab and closes it.
     await page.evaluate(() => (window.notes[0] as unknown as Notification).onclick!(new Event("click")));
-    await page.waitForURL(`${base}/s/${encode("opencode:box:ses_a")}`);
+    await page.waitForURL(`${base}/oc/${encode("opencode:box:ses_a")}`);
     expect((await notes())[0].closed).toBe(true);
     expect(errors).toEqual([]);
   } finally {

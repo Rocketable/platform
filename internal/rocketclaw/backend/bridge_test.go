@@ -656,6 +656,29 @@ func TestPickLaterWorkWaitsWhenParkedAfterFutureScheduled(t *testing.T) {
 	assert.Empty(t, bridge.requestCh)
 }
 
+// A one-time reminder waits as a turn of its conversation, which neither the lane's later work nor
+// the waiting-turn claim starts before its run-at time.
+func TestScheduledTurnWaitsForRunAt(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "later", DueAt: time.Now().UTC().Add(time.Hour)}))
+
+	reasons, err := queryStrings(t.Context(), store.db, `SELECT reason FROM turns WHERE conversation_id = $1 AND input_id = 's1' AND phase = 'waiting'`, "scheduled turn", conversationID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"scheduled"}, reasons)
+
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
+	assert.Empty(t, bridge.requestCh)
+
+	admitted, err := bridge.activateInbound(t.Context(), &bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "later", false), queueItemID: "s1"})
+	require.NoError(t, err)
+	assert.False(t, admitted, "the queued-input claim does not start a scheduled turn")
+	assert.Empty(t, runningTestTurns(t, store))
+}
+
 func TestPickLaterWorkStartsParkedQueueAfterScheduledCancel(t *testing.T) {
 	t.Parallel()
 
@@ -663,9 +686,7 @@ func TestPickLaterWorkStartsParkedQueueAfterScheduledCancel(t *testing.T) {
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "Ship README", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, ParkAfter: "s1", SlackChannel: "C123", SlackTS: "111.222"}))
 	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "scheduled", DueAt: time.Now().UTC().Add(time.Hour)}))
-	deleted, err := (stateDAO{db: store.db}).deleteScheduledMessage(t.Context(), "s1")
-	require.NoError(t, err)
-	require.True(t, deleted)
+	require.NoError(t, store.ResetScheduledMessages(conversationID))
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 
@@ -736,6 +757,7 @@ func TestPickLaterWorkSkipsWhenGoalStillActive(t *testing.T) {
 
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "ship it", MaxTurns: 3}))
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0}))
 
@@ -777,6 +799,7 @@ func TestPickLaterWorkAfterStopGoalStartsLaterWork(t *testing.T) {
 
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "ship it", MaxTurns: 3}))
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, SlackChannel: "C123", SlackTS: "111.222"}))
 	require.NoError(t, store.StopGoal(conversationID))
@@ -903,6 +926,7 @@ func newGoalAccountingTestBridge(t *testing.T) *Bridge {
 	t.Helper()
 
 	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"thread-1": KindWebChat})
 
 	return &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "thread-1", SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{})}
 }
@@ -922,6 +946,7 @@ func newGoalCheckTestBridge(t *testing.T, agent, script string) *Bridge {
 	require.NoError(t, root.Close())
 
 	store := newTestSessionServiceAt(t, workspace)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"thread-1": KindWebChat})
 
 	return &Bridge{
 		log:     slog.New(slog.DiscardHandler),
@@ -971,7 +996,7 @@ func runTestTurn(ctx context.Context, b *Bridge, msg *protocol.InboundMessage, t
 	result, err := b.runTurn(ctx, msg, turnID, turnID, &finish)
 
 	for i := range finish.entries {
-		if _, errAppend := appendSessionEntryDB(context.WithoutCancel(ctx), b.config.SessionService.db, finish.store.conversationID, finish.store.conversationID, &finish.entries[i]); errAppend != nil {
+		if _, errAppend := appendSessionEntryDB(context.WithoutCancel(ctx), b.config.SessionService.db, finish.store.conversationID, &finish.entries[i]); errAppend != nil {
 			return result, errAppend
 		}
 	}
@@ -1096,6 +1121,7 @@ func TestPublishFinalDoesNotReuseCompletedGoal(t *testing.T) {
 	defer bus.Close()
 
 	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"thread-1": KindWebChat})
 	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: "ship it", MaxTurns: 3}))
 	_, err := store.UpdateGoalStatus("thread-1", GoalStatusComplete, "done")
 	require.NoError(t, err)
@@ -2496,6 +2522,7 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 	inbound.ConversationID, inbound.SyncDestination = privateConversationID, threadKey
 	require.NoError(t, startTurnDB(t.Context(), service.db, "producer", privateConversationID, inbound))
 	bridge := NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: privateConversationID, Agent: "planner", SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge.activeTurnID = "producer" // The producer turn is running.
 	require.NoError(t, bridge.ScheduleMessage(inbound, 100*time.Millisecond, "later", false))
 	_, err = service.finishTurn(t.Context(), "producer", &turnFinish{store: newSessionStore(privateConversationID, service), entries: []rocketcode.SessionEntry{*testSessionEntry("producer context", "producer answer")}, outbound: protocol.NewOutboundMessage(privateConversationID, "")})
 	require.NoError(t, err)
@@ -2523,7 +2550,7 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 	assert.Equal(t, "[System additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nlater", request.Input[len(request.Input)-1].Content)
 	entries, err := service.ObserveEntries(t.Context(), privateConversationID)
 	require.NoError(t, err)
-	assert.Len(t, entries, 2, "the canonical scheduled turn does not enter private history")
+	assert.Len(t, entries, 1, "the canonical scheduled turn does not enter private history")
 }
 
 func TestBridgeSuccessfulWorkflowPersistsRunSummary(t *testing.T) {
@@ -2579,6 +2606,7 @@ func TestBridgeSuccessfulWorkflowPersistsRunSummary(t *testing.T) {
 
 		service := newTestSessionServiceAt(t, workspace)
 		pairID := protocol.SlackThreadConversationID("C123", "111.222")
+		recordTestConversations(t, service, "main", map[string]ConversationKind{pairID: KindSlackThread})
 
 		bus := newTestBus()
 		t.Cleanup(bus.Close)
@@ -2930,14 +2958,6 @@ func TestWorkflowRunSummaryIsVisibleWithoutIntermediateOutput(t *testing.T) {
 	assert.Equal(t, "turn", entries[1].Entry.Type)
 }
 
-// turnPairBusy reports whether pairID is reserved.
-func turnPairBusy(service *SessionService, pairID string) bool {
-	service.turnGatesMu.Lock()
-	defer service.turnGatesMu.Unlock()
-
-	return service.turnGates[pairID] != nil
-}
-
 func TestBridgeScheduleMessageUsesOwningSlackThread(t *testing.T) {
 	t.Parallel()
 
@@ -3236,6 +3256,7 @@ func TestBridgeResetScheduledMessagesDeletesPersistedAndCancelsArmed(t *testing.
 		bridge.stopCh = make(chan struct{})
 
 		require.NoError(t, bridge.ScheduleMessage(new(protocol.InboundMessage), 5*time.Second, "later", false))
+		require.NoError(t, bridge.ScheduleMessage(new(protocol.InboundMessage), 5*time.Second, "every", true))
 		require.NoError(t, store.PutScheduledMessage("other", &protocol.ScheduledMessageState{ConversationID: "other", Agent: "main", Message: "keep", DueAt: time.Now().UTC().Add(time.Hour)}))
 
 		require.NoError(t, bridge.ResetScheduledMessages(new(protocol.InboundMessage)))
@@ -3832,9 +3853,9 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  edit:\n    '.tmp/${ROCKETCLAW_METADATA_A}/note.txt': allow\n  read: allow\n  bash: auto\n---\nPrompt\n")
 
 	managedBridge := &Bridge{runtime: bridge.runtime, config: Config{ConversationID: managedConversationID, Agent: "planner", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
-	_, err = service.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
+	_, err = service.db.ExecContext(t.Context(), `INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
 SELECT $1, (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id, 'sync_source_conversation_id', conversation_id))::json, entry_timestamp
-FROM session_entries WHERE conversation_id = $2 ORDER BY id`, managedConversationID, bridge.config.ConversationID)
+FROM entries WHERE conversation_id = $2 ORDER BY id`, managedConversationID, bridge.config.ConversationID)
 	require.NoError(t, err)
 
 	managedEntries, err := service.ObserveEntries(context.Background(), managedConversationID)
@@ -4422,9 +4443,11 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 	require.NotContains(t, logs.String(), "also explain")
 	require.Less(t, strings.Index(logs.String(), `"event":"first_response_item"`), strings.Index(logs.String(), `"event":"first_assistant_text"`))
 	require.Less(t, strings.Index(logs.String(), `"event":"generation_finished"`), strings.Index(logs.String(), `"event":"delivery_acknowledged"`))
-	require.Equal(t, "reviewer", bridge.pendingOutput.Agent)
-	require.Equal(t, "work/model-b", bridge.pendingOutput.Model)
-	require.Equal(t, new("low"), bridge.pendingOutput.ReasoningEffort)
+	relay := readRocketCodeOutbound(t, bus)
+	require.Equal(t, "destination", relay.ConversationID, "the run's chat gets its final reply")
+	require.Equal(t, "reviewer", relay.Agent)
+	require.Equal(t, "work/model-b", relay.Model)
+	require.Equal(t, new("low"), relay.ReasoningEffort)
 	entries, err := service.ObserveEntries(t.Context(), conversationID)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -4493,6 +4516,7 @@ func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"thread-1": KindWebChat})
 	require.NoError(t, service.BeginGoal("thread-1", &GoalState{Objective: "ship it", MaxTurns: 5}))
 	_, err = service.UpdateGoalStatus("thread-1", GoalStatusProgress, "patched parser; checking connectors")
 	require.NoError(t, err)
@@ -4556,6 +4580,7 @@ func TestRunTurnSkipsActiveGoalDeveloperMessageWithoutNote(t *testing.T) {
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"thread-1": KindWebChat})
 	require.NoError(t, service.BeginGoal("thread-1", &GoalState{Objective: "ship it", MaxTurns: 5}))
 
 	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "thread-1", Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
@@ -4659,6 +4684,7 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 	inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.1"}
 	assert.False(t, bridge.newOutboundMessage(inbound, "turn-1", "reply", false).GoalTurn)
 
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"thread-1": KindWebChat, "thread-2": KindWebChat})
 	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: "ship it", MaxTurns: 3}))
 
 	outbound := bridge.newOutboundMessage(inbound, "turn-2", "reply", false)
@@ -4720,6 +4746,7 @@ func TestWorkflowFinalOutboundPreservesMetadata(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"thread-1": KindWebChat})
 	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: "ship it", MaxTurns: 3}))
 	bridge := &Bridge{config: Config{ConversationID: "thread-1", Agent: "main", SessionService: store}}
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow audit", true)
@@ -5036,7 +5063,7 @@ func (nt *noteTest) waitIdle(t *testing.T, manager *threadBridgeManager, convers
 
 	bridge := nt.bridge(t, manager, conversationID)
 	require.Eventually(t, func() bool {
-		running, err := queryStrings(context.Background(), nt.service.db, `SELECT id FROM active_turns WHERE phase <> $1`, "running turns", turnDone)
+		running, err := queryStrings(context.Background(), nt.service.db, `SELECT id FROM turns WHERE phase NOT IN ($1, $2) AND takes_lane`, "running turns", turnWaiting, turnDone)
 		return err == nil && len(running) == 0 && !bridge.handlingSnapshot() && len(bridge.requestCh) == 0
 	}, 10*time.Second, 10*time.Millisecond)
 }
@@ -5066,7 +5093,7 @@ func readFinalFor(t *testing.T, finals chan *protocol.OutboundMessage, conversat
 func noteStates(t *testing.T, service *SessionService) []string {
 	t.Helper()
 
-	states, err := queryStrings(t.Context(), service.db, `SELECT job_id || ' ' || note_state || ' ' || wake::text FROM background_jobs ORDER BY job_id`, "note states")
+	states, err := queryStrings(t.Context(), service.db, `SELECT j.input_id || ' ' || j.note || ' ' || j.wake::text`+testJobsSQL+` ORDER BY j.input_id`, "note states")
 	require.NoError(t, err)
 
 	return states
@@ -5219,7 +5246,7 @@ func TestStoppedInitialTurnDoesNotReplayPendingNotes(t *testing.T) {
 
 			if human {
 				// A previously released note waits for human work rather than waking another turn.
-				_, err := nt.service.db.ExecContext(t.Context(), `UPDATE background_jobs SET wake = FALSE WHERE conversation_id = $1`, nt.conversationID)
+				_, err := nt.service.db.ExecContext(t.Context(), `UPDATE turns SET wake = FALSE WHERE conversation_id = $1 AND NOT takes_lane`, nt.conversationID)
 				require.NoError(t, err)
 			}
 
@@ -5415,7 +5442,7 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 		require.NoError(t, manager.StartActiveTurns(t.Context()))
 		readFinalFor(t, nt.finals, "cron:daily")
 		require.Eventually(t, func() bool {
-			destinations, err := queryStrings(context.Background(), nt.service.db, `SELECT sync_destination || ' ' || (origin_json::jsonb->>'SyncDestination') FROM background_jobs`, "job destinations")
+			destinations, err := queryStrings(context.Background(), nt.service.db, `SELECT COALESCE(c.reports_to, '') || ' ' || COALESCE(NULLIF(j.inbound_json->>'SyncDestination', ''), c.reports_to, '')`+testJobsSQL, "job destinations")
 			return err == nil && slices.Equal(destinations, []string{report + " " + report})
 		}, 10*time.Second, 10*time.Millisecond, "the job reports to the posted thread")
 
@@ -5453,7 +5480,7 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 		readFinalFor(t, nt.finals, "cron:daily")
 		<-roots
 		require.Eventually(t, func() bool {
-			destinations, err := queryStrings(context.Background(), nt.service.db, `SELECT sync_destination FROM background_jobs`, "job destinations")
+			destinations, err := queryStrings(context.Background(), nt.service.db, `SELECT COALESCE(c.reports_to, '')`+testJobsSQL, "job destinations")
 			return err == nil && slices.Equal(destinations, []string{report})
 		}, 10*time.Second, 10*time.Millisecond)
 
@@ -5560,7 +5587,7 @@ func TestHiddenRunFailedWakeRetries(t *testing.T) {
 			t.Helper()
 
 			var state string
-			require.NoError(t, nt.service.db.QueryRowContext(t.Context(), `SELECT note_state || ' ' || wake::text || ' ' || wake_attempts || ' ' || wake_after_unix_ns FROM background_jobs`).Scan(&state))
+			require.NoError(t, nt.service.db.QueryRowContext(t.Context(), `SELECT j.note || ' ' || j.wake::text || ' ' || j.wake_attempts || ' ' || j.run_at_unix_ns`+testJobsSQL).Scan(&state))
 			assert.Equal(t, "pending true "+strconv.Itoa(attempts)+" "+strconv.FormatInt(time.Now().Add(delay).UnixNano(), 10), state)
 		}
 
@@ -5645,7 +5672,8 @@ func TestEmptyProducerWakeLeavesDestinationFree(t *testing.T) {
 
 	nt.waitIdle(t, manager, managed)
 	assert.Empty(t, nt.requests)
-	assert.False(t, turnPairBusy(nt.service, managed), "the destination is not left reserved")
+	destination := nt.bridge(t, manager, managed)
+	assert.Same(t, destination, destination.stopTarget(), "a stop on the destination is not left routed to the producer")
 }
 
 // After a hidden producer's turn ends, schedules stay private, a nested workflow runs, and turn-bound tools refuse.

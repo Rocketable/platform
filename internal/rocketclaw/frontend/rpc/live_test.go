@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"log/slog"
 	"net"
 	"net/http"
@@ -365,7 +366,7 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
-	_, err = seeded.db.ExecContext(t.Context(), `INSERT INTO session_entries (id, conversation_id, entry_json, entry_timestamp) VALUES
+	_, err = seeded.db.ExecContext(t.Context(), `INSERT INTO entries (id, conversation_id, entry_json, entry_timestamp) VALUES
         (9007199254741001, 'chat', '{"type":"turn","replay_input":[{"type":"message","role":"user","prompt_header":"[Web principal=\"alice\"]","content":"[Web principal=\"alice\"]\n\n  $skill exact\n"},{"type":"message","role":"assistant","content":"answer"}]}', '')`)
 	require.NoError(t, err)
 
@@ -382,7 +383,7 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
 	engine.StageRevertFunc = func(_ context.Context, id, before string) (string, string, error) {
 		require.Equal(t, "chat", id)
 		require.Equal(t, marker, before)
-		_, err := seeded.db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = $2 WHERE conversation_id = $1`, "chat", marker)
+		_, err := seeded.db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $2 WHERE conversation_id = $1`, "chat", marker)
 		require.NoError(t, err)
 
 		return marker, "  $skill exact\n", nil
@@ -403,7 +404,7 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
 	engine.ClearRevertFunc = func(_ context.Context, id string) error {
 		require.Equal(t, "chat", id)
 
-		_, err := seeded.db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = '' WHERE conversation_id = $1`, "chat")
+		_, err := seeded.db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = $1`, "chat")
 		require.NoError(t, err)
 
 		return nil
@@ -606,6 +607,9 @@ func TestHistoryFollowsNewestEntries(t *testing.T) {
 		return id
 	}
 	ids := []int64{appendTurn("one", json.RawMessage(`{"type":"function_call","call_id":"early","name":"task","arguments":"{}"}`)), appendTurn("two"), appendTurn("three"), appendTurn("four")}
+
+	openTestTurns(t, dsn).RecordLegacyDelegation(t, "chat", "early")
+
 	_, err = sessions.AppendEntryID(ctx, "chat/early", &rocketcode.SessionEntry{Type: "turn"})
 	require.NoError(t, err)
 
@@ -659,7 +663,7 @@ func TestHistoryFollowsNewestEntries(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
-	_, err = db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('chat', '{"output_trace":1}', '')`)
+	_, err = db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('chat', '{"output_trace":1}', '')`)
 	require.NoError(t, err)
 	appendTurn("readable")
 
@@ -672,7 +676,110 @@ func TestHistoryFollowsNewestEntries(t *testing.T) {
 	cancel()
 
 	_, err = server.history(canceled, &HistoryRequest{Id: "cron:chat", Limit: 1})
-	require.ErrorContains(t, err, "read web history page")
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+// An open chat follows a hidden run reporting to it: its new entry and its running turn arrive
+// in the view without a reset, and its changes wake the chat's stream.
+func TestHistoryFollowsHiddenRun(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	for _, id := range []string{"chat", "external_mcp:main:run"} {
+		require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main"}))
+	}
+
+	db, err := sql.Open("pgx", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	_, err = db.ExecContext(t.Context(), `UPDATE conversations SET reports_to = 'chat' WHERE conversation_id = 'external_mcp:main:run'`)
+	require.NoError(t, err)
+
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg), usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+
+	_, err = sessions.AppendEntryID(ctx, "chat", &rocketcode.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"person"}`)}})
+	require.NoError(t, err)
+
+	initial, err := server.history(ctx, &HistoryRequest{Id: "chat"})
+	require.NoError(t, err)
+
+	changes, stop := iter.Pull2(sessions.Changes(t.Context(), "chat"))
+	defer stop()
+
+	_, err, _ = changes()
+	require.NoError(t, err, "initial refresh")
+
+	_, err = sessions.AppendEntryID(ctx, "external_mcp:main:run", &rocketcode.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"mcp call"}`)}})
+	require.NoError(t, err)
+
+	change, err, _ := changes()
+	require.NoError(t, err)
+	require.Equal(t, "chat", change.ConversationID, "the run's entry wakes its chat")
+
+	entry, err := server.history(ctx, &HistoryRequest{Id: "chat", Revision: initial.Revision})
+	require.NoError(t, err)
+	require.False(t, entry.Reset_)
+	require.Equal(t, "mcp call", entry.Messages[len(entry.Messages)-1].Text)
+
+	_, err = db.ExecContext(t.Context(), `INSERT INTO turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id)
+VALUES ('run-turn', 'external_mcp:main:run', '{"SyncDestination":"chat"}', '[{"type":"rocketcode_public_progress","progress":{"id":"run/0","kind":"text","state":"working","text":"working on it"}}]', 1, 1, 0)`)
+	require.NoError(t, err)
+
+	change, err, _ = changes()
+	require.NoError(t, err)
+	require.Equal(t, "chat", change.ConversationID, "the run's running turn wakes its chat")
+
+	running, err := server.history(ctx, &HistoryRequest{Id: "chat", Revision: entry.Revision})
+	require.NoError(t, err)
+	require.False(t, running.Reset_)
+	require.Contains(t, running.EntryKeys, "turn:external_mcp:main:run:run-turn")
+}
+
+// A background task saved before 2026-10-22 names no subagent on its row; its row opens the one its call started.
+func TestHistoryLinksBackgroundTaskSubagent(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg), usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+
+	_, err = sessions.AppendEntryID(ctx, "chat", &rocketcode.SessionEntry{Type: "turn", TurnID: "turn", ResponseID: "response", ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","content":"look in the background"}`),
+		json.RawMessage(`{"type":"function_call","call_id":"D","name":"task","arguments":"{}"}`),
+		json.RawMessage(`{"type":"function_call_output","call_id":"D","output":"started"}`),
+	}, OutputTrace: []json.RawMessage{
+		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"D","parent_id":"turn/response","kind":"tool","state":"background","agent":"main"}}`),
+	}})
+	require.NoError(t, err)
+	_, err = openTestTurns(t, dsn).db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, retention, call_turn, call_id)
+VALUES ('chat/D-0a1b2c3d', 'child', '', 'chat', 'subagent', FALSE, 'nested', 'turn', 'D')`)
+	require.NoError(t, err)
+	_, err = sessions.AppendEntryID(ctx, "chat/D-0a1b2c3d", &rocketcode.SessionEntry{Type: "turn"})
+	require.NoError(t, err)
+
+	history, err := server.history(ctx, &HistoryRequest{Id: "chat"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"chat/D-0a1b2c3d"}, history.Delegations)
+
+	var linked []string
+
+	for _, message := range history.Messages {
+		if message.ToolCallId == "D" {
+			linked = append(linked, message.Delegation)
+		}
+	}
+
+	require.Equal(t, []string{"chat/D-0a1b2c3d", "chat/D-0a1b2c3d"}, linked)
 }
 
 func TestHistoryPublicProgress(t *testing.T) {
@@ -701,7 +808,8 @@ func TestHistoryPublicProgress(t *testing.T) {
 	}}
 	require.NoError(t, seeded.UpsertActiveTurn(ctx, checkpoint))
 	// A was reviewed before it ran and B only during its run; both save under the call's review key.
-	reviews := []string{"public/" + rocketcode.ReviewKey("turn", "A"), "public/" + rocketcode.ReviewKey("turn", "B")}
+	reviews := []string{seeded.RecordReview(t, "public", "turn", "A"), seeded.RecordReview(t, "public", "turn", "B")}
+
 	for _, review := range reviews {
 		_, err := sessions.AppendEntryID(ctx, review, &rocketcode.SessionEntry{Type: "turn", TurnID: "review", ResponseID: "final", ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"message","id":"answer","role":"assistant","content":"{\"outcome\":\"allow\",\"rationale\":\"The read-only check is within scope.\"}"}`),
@@ -1072,6 +1180,8 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 
 	review := func(callID string, entries ...*rocketcode.SessionEntry) {
+		seeded.RecordReview(t, "chat", "turn", callID)
+
 		for _, entry := range entries {
 			_, err := sessions.AppendEntryID(ctx, "chat/"+rocketcode.ReviewKey("turn", callID), entry)
 			require.NoError(t, err)
@@ -1170,7 +1280,7 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 	}, OutputTrace: []json.RawMessage{
 		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"run","parent_id":"live-turn/response","kind":"tool","state":"working"}}`),
 	}}))
-	_, err = seeded.db.ExecContext(ctx, `INSERT INTO code_mode_calls (turn_id, key, record) VALUES ('live-turn', 'live-turn/call/run/host/0', $1)`,
+	_, err = seeded.db.ExecContext(ctx, `INSERT INTO steps (conversation_id, key, value) VALUES ('live', 'live-turn/code_mode/live-turn/call/run/host/0', $1)`,
 		`{"type":"rocketcode_code_mode_call","parent_call_id":"run","key":"live-turn/call/run/host/0","name":"bash","arguments":"{\"command\":\"sleep 9\"}","status":"running"}`)
 	require.NoError(t, err)
 
@@ -1188,6 +1298,7 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 func BenchmarkHistoryReviewedScripts(b *testing.B) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(b, err)
+	seeded := openTestTurns(b, dsn)
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: b.TempDir()}
 	sessions, err := backend.NewSessionServiceIn(b.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(b, err)
@@ -1203,6 +1314,7 @@ func BenchmarkHistoryReviewedScripts(b *testing.B) {
 
 		for call := range ids {
 			ids[call] = fmt.Sprintf("call-%d", call)
+			seeded.RecordReview(b, "chat", turnID, ids[call])
 			_, err := sessions.AppendEntryID(ctx, "chat/"+rocketcode.ReviewKey(turnID, ids[call]), testReviewEntry(b, transcript, &testPlannedAction{"bash", "bash", `{"command":"ls"}`, []string{"ls"}}, "ls is safe"))
 			require.NoError(b, err)
 		}

@@ -50,7 +50,7 @@ func TestShadowUploadCardsAndDownloads(t *testing.T) {
 	seeded := openTestTurns(t, dsn)
 
 	var child string
-	require.NoError(t, seeded.db.QueryRow(`SELECT child_conversation_id FROM shadow_bindings`).Scan(&child))
+	require.NoError(t, seeded.db.QueryRow(`SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL`).Scan(&child))
 
 	server := New(withoutBackgroundJobs(), sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{})
 	listener, err := net.Listen("unix", testSocketPath(t))
@@ -117,7 +117,7 @@ func TestShadowUploadCardsAndDownloads(t *testing.T) {
 		if completed {
 			_, err = sessions.AppendEntryID(t.Context(), child, &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "child-turn", ReplayInput: replay})
 			require.NoError(t, err)
-			_, err = seeded.db.Exec(`DELETE FROM active_turns WHERE id = 'child-turn'`)
+			_, err = seeded.db.Exec(`DELETE FROM turns WHERE id = 'child-turn'`)
 			require.NoError(t, err)
 			_, err = seeded.db.Exec(`UPDATE shadow_turns SET input_closed = TRUE, terminal = 'complete', inputs = '[]', context_entries = '[]', environment = '{}', inbound_json = '{}'`)
 			require.NoError(t, err)
@@ -161,14 +161,14 @@ func TestShadowUploadCardsAndDownloads(t *testing.T) {
 	entries, err := sessions.ObserveEntries(t.Context(), "parent")
 	require.NoError(t, err)
 	require.Equal(t, replay, entries[0].Entry.ReplayInput, "model input text and attachment references are untouched")
-	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{Agent: "main", PrivateConversationID: "parent", ManagedConversationID: "visible"}))
 	require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "visible", Agent: "main"}))
+	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{Agent: "main", PrivateConversationID: "parent", ManagedConversationID: "visible"}))
 
 	for _, projection := range []struct {
 		destination          string
 		consumed, unconsumed int
 	}{{"visible", http.StatusOK, http.StatusNotFound}, {"", http.StatusForbidden, http.StatusForbidden}} {
-		_, err = seeded.db.Exec(`UPDATE managed_conversations SET producer_inbound_json = json_build_object('SyncDestination', $1::text) WHERE conversation_id = 'parent'`, projection.destination)
+		_, err = seeded.db.Exec(`UPDATE conversations SET producer_inbound_json = json_build_object('SyncDestination', $1::text), reports_to = NULLIF($1, '') WHERE conversation_id = 'parent'`, projection.destination)
 		require.NoError(t, err)
 
 		for _, request := range []struct {

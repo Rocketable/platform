@@ -193,9 +193,10 @@ content. Checkpoint visibility follows the transcript's terminal, supersession, 
 revert rules.
 When no human destination has a copy, Web shows “No delivered chat” with an
 **Open chat** action. `CreateSession.source_conversation_id` accepts a recorded Cron
-producer and creates or reuses `web:<source ID>`, then calls `SyncConversation`.
-Creation and sync are idempotent, including concurrent opens and retries after a
-failed sync. This creates a writable Web conversation, without Slack creation or
+producer and creates or reuses `web:<source ID>`, which continues the run: it shows
+the run's messages under their own IDs before its own, without copying them, and
+adopts a run that reports to no chat. Creation is idempotent, including concurrent
+opens. This creates a writable Web conversation, without Slack creation or
 Cron execution. The Web chat ID retains its source cron ID to resolve the current definition's channel for
 agent choices in the picker, session list, and server-side agent changes. Choices use
 the current configured channel agent order intersected with loaded agents; if no

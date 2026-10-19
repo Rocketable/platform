@@ -105,6 +105,9 @@ type channelFactsStore interface {
 	ChannelFact(ctx context.Context, workspaceID, channelID string) (string, bool, error)
 	RecordChannelFact(ctx context.Context, workspaceID, channelID, name string, observedAt time.Time) error
 	SlackChannelIDs(ctx context.Context) ([]string, error)
+	// SlackThread returns the channel and thread a conversation was stored with; the thread is
+	// empty unless the conversation is a Slack thread.
+	SlackThread(ctx context.Context, conversationID string) (channelID, threadTS string, err error)
 	// Turn steps record Slack surfaces under a conversation's turns so a resumed turn re-attaches to them.
 	LoadTurnStep(ctx context.Context, conversationID, key string) (json.RawMessage, bool, error)
 	SaveTurnStep(ctx context.Context, conversationID, key string, value json.RawMessage) error
@@ -672,17 +675,22 @@ func (c *Connector) slackFooter(ctx context.Context, agent, state, conversationI
 // started the turn: "working" until its final names how it ended. Report threads, other
 // conversations, and output without a turn get none.
 func (c *Connector) mentionFooter(ctx context.Context, msg *protocol.OutboundMessage) (string, []slack.Block) {
-	channelID, threadTS, ok := protocol.SlackThreadTarget(msg.ConversationID)
-	if !ok || msg.TurnID == "" || msg.ExternalConversationID != "" {
+	if msg.TurnID == "" || msg.ExternalConversationID != "" {
 		return "", nil
 	}
 
-	_, report, err := c.threadRouter.MentionThread(protocol.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS})
+	channelID, threadTS, err := c.facts.SlackThread(ctx, msg.ConversationID)
+
+	report := false
+	if err == nil && threadTS != "" {
+		_, report, err = c.threadRouter.MentionThread(protocol.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS})
+	}
+
 	if err != nil {
 		c.log.Warn("read Slack thread for footer", "conversation_id", msg.ConversationID, "error", err)
 	}
 
-	if err != nil || report {
+	if err != nil || threadTS == "" || report {
 		return "", nil
 	}
 
@@ -740,12 +748,20 @@ func (c *Connector) sessionTurn(conversationID string) (turnID string, processin
 // the root's current blocks are read first and only a trailing footer is replaced. A failure
 // is logged.
 func (c *Connector) editMCPRootFooter(ctx context.Context, msg *protocol.OutboundMessage) {
-	channelID, threadTS, managed := protocol.SlackThreadTarget(msg.ConversationID)
-	if !managed || msg.ExternalConversationID == "" {
+	if msg.ExternalConversationID == "" {
 		return
 	}
 
-	messages, _, _, err := c.api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{ChannelID: channelID, Timestamp: threadTS, Limit: 1})
+	channelID, threadTS, err := c.facts.SlackThread(ctx, msg.ConversationID)
+	if err == nil && threadTS == "" {
+		return
+	}
+
+	var messages []slack.Message
+	if err == nil {
+		messages, _, _, err = c.api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{ChannelID: channelID, Timestamp: threadTS, Limit: 1})
+	}
+
 	if err == nil && len(messages) > 0 {
 		blocks := messages[0].Blocks.BlockSet
 		if last := len(blocks) - 1; last >= 0 && blocks[last].BlockType() == slack.MBTContext {

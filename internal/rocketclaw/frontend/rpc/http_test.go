@@ -321,7 +321,7 @@ func TestHTTPStreams(t *testing.T) {
 					}
 
 					require.NoError(t, stream.SendMsg(&ListSessionsResponse{Sessions: []*Session{{Title: strings.Repeat("x", 100000), Tags: []string{"customer", "quote\" 日本語"}}}}))
-					require.NoError(t, stream.SendMsg(&ListSessionsResponse{SummariesComplete: true}))
+					require.NoError(t, stream.SendMsg(&ListSessionsResponse{Owner: "second frame"}))
 
 					if scenario == "wirecut" {
 						<-stream.Context().Done()
@@ -439,7 +439,7 @@ func TestHTTPStreams(t *testing.T) {
 					line, err := reader.ReadString('\n')
 					require.NoError(t, err)
 
-					if strings.Contains(line, `"summariesComplete":true`) {
+					if strings.Contains(line, `"owner":"second frame"`) {
 						break
 					}
 				}
@@ -536,7 +536,7 @@ func TestHTTPStreams(t *testing.T) {
 				}
 				require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(first, "data: ")), &batch))
 				require.Equal(t, []string{"customer", "quote\" 日本語"}, batch.Sessions[0].Tags)
-				require.Contains(t, string(body), `"summariesComplete":true`)
+				require.Contains(t, string(body), `"owner":"second frame"`)
 
 				if scenario == "complete" {
 					require.True(t, strings.HasSuffix(string(body), "event: complete\ndata: {}\n\n"))

@@ -73,10 +73,10 @@ func TestShadowBindingsCreation(t *testing.T) {
 
 	require.NoError(t, group.Wait())
 	require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "other", Agent: "main"}))
-	bindings, err := queryStrings(t.Context(), store.db, `SELECT parent_conversation_id || ':' || parent_agent || ':' || shadow_agent FROM shadow_bindings ORDER BY 1`, "test shadow bindings")
+	bindings, err := queryStrings(t.Context(), store.db, `SELECT shadow_parent || ':' || parent_agent || ':' || shadow_agent FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "test shadow bindings")
 	require.NoError(t, err)
 	require.Equal(t, []string{"other:main:main/a", "other:main:main/z", "parent:main:main/a", "parent:main:main/z"}, bindings)
-	children, err := queryStrings(t.Context(), store.db, `SELECT child_conversation_id FROM shadow_bindings ORDER BY 1`, "test shadow children")
+	children, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "test shadow children")
 	require.NoError(t, err)
 	require.Len(t, children, 4)
 
@@ -90,7 +90,7 @@ func TestShadowBindingsCreation(t *testing.T) {
 	}
 
 	var count int
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM shadow_bindings`).Scan(&count))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM conversations WHERE shadow_parent IS NOT NULL`).Scan(&count))
 	require.Equal(t, 4, count, "a bound child never creates another shadow family")
 }
 
@@ -98,7 +98,7 @@ func TestShadowActivationRollback(t *testing.T) {
 	for _, kind := range []string{"queue", "schedule", "note"} {
 		t.Run(kind, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)
-			_, err := (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"})
+			_, err := (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat})
 			require.NoError(t, err)
 
 			bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
@@ -122,21 +122,22 @@ func TestShadowActivationRollback(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			_, err = store.db.ExecContext(t.Context(), `ALTER TABLE active_turns ADD CONSTRAINT reject_activation CHECK (conversation_id <> 'parent')`)
+			_, err = store.db.ExecContext(t.Context(), `CREATE FUNCTION reject_activation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'activation rejected'; END $$;
+CREATE TRIGGER reject_activation BEFORE INSERT OR UPDATE OF inbound_json ON turns FOR EACH ROW WHEN (NEW.conversation_id = 'parent') EXECUTE FUNCTION reject_activation()`)
 			require.NoError(t, err)
 			admitted, err := bridge.activateInbound(t.Context(), &request)
 			require.ErrorContains(t, err, "start active turn")
 			require.False(t, admitted)
 			require.Empty(t, request.turnID)
 
-			for _, table := range []string{"shadow_bindings", "shadow_turns", "active_turns"} {
+			for _, table := range []string{"conversations WHERE shadow_parent IS NOT NULL", "shadow_turns", "turns WHERE phase <> 'waiting' AND takes_lane"} {
 				var count int
 				require.NoError(t, store.db.QueryRowContext(t.Context(), "SELECT count(*) FROM "+table).Scan(&count))
 				require.Zero(t, count, table)
 			}
 
 			var count int
-			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM managed_conversations`).Scan(&count))
+			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM conversations`).Scan(&count))
 			require.Equal(t, 1, count, "rolled-back attachment leaves no child sessions")
 
 			switch kind {
@@ -150,11 +151,11 @@ func TestShadowActivationRollback(t *testing.T) {
 				require.Len(t, items, 1)
 			case "note":
 				var claim string
-				require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT claimed_turn_id FROM background_jobs WHERE conversation_id = 'parent'`).Scan(&claim))
+				require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT j.claimed_by`+testJobsSQL+` AND j.conversation_id = 'parent'`).Scan(&claim))
 				require.Empty(t, claim)
 			}
 
-			_, err = store.db.ExecContext(t.Context(), `ALTER TABLE active_turns DROP CONSTRAINT reject_activation`)
+			_, err = store.db.ExecContext(t.Context(), `DROP TRIGGER reject_activation ON turns`)
 			require.NoError(t, err)
 			admitted, err = bridge.activateInbound(t.Context(), &request)
 			require.NoError(t, err)
@@ -170,7 +171,7 @@ func TestShadowActivationRollback(t *testing.T) {
 
 func TestShadowSeedAndFork(t *testing.T) {
 	store, root := newShadowTestStore(t)
-	_, err := (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"})
+	_, err := (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat})
 	require.NoError(t, err)
 
 	attachment := protocol.OutboundAttachment{ID: "original", Name: "seed.txt", MIMEType: "text/plain", Data: []byte("seed bytes")}
@@ -180,6 +181,7 @@ func TestShadowSeedAndFork(t *testing.T) {
 	entry.ReplayInput = append(entry.ReplayInput, json.RawMessage(`{"type":"message","role":"user","prompt_header":"[System]","input_id":"finished running","content":"Completion Note"}`))
 	_, err = store.AppendEntryID(t.Context(), "parent", entry)
 	require.NoError(t, err)
+	require.NoError(t, store.startSubagent(t.Context(), "parent", rocketcode.ChildKey{Path: "/task", Turn: "turn-1", Call: "task"}, "helper", true))
 	_, err = store.AppendEntryID(t.Context(), "parent/task", testSessionEntry("delegated", "seed child"))
 	require.NoError(t, err)
 
@@ -206,7 +208,7 @@ func TestShadowSeedAndFork(t *testing.T) {
 	require.True(t, admitted)
 	_, err = store.ForkConversation(t.Context(), "parent", protocol.Conversation{ID: "fork", Agent: "main"}, "")
 	require.NoError(t, err)
-	children, err := queryStrings(t.Context(), store.db, `SELECT child_conversation_id FROM shadow_bindings ORDER BY 1`, "seed children")
+	children, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "seed children")
 	require.NoError(t, err)
 	require.Len(t, children, 4, "fork attaches its own children, not copies of source comparisons")
 
@@ -227,15 +229,19 @@ func TestShadowSeedAndFork(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, delegations, 1)
 
+		var parent, call string
+		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT parent_conversation_id, call_id FROM conversations WHERE conversation_id = $1`, child+"/task").Scan(&parent, &call))
+		require.Equal(t, []string{child, "task"}, []string{parent, call}, "a seeded delegation nests under its copy's parent, started by the same call")
+
 		data, err := spill.ReadFile(filepath.Join(rocketcodeRetainedDir(child), "result.txt"))
 		require.NoError(t, err)
 		require.Equal(t, "retained seed", string(data))
 
 		var count int
-		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM background_jobs WHERE conversation_id = $1 AND note_state = $2 AND NOT wake AND sync_destination = ''`, child, noteConsumed).Scan(&count))
+		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*)`+testJobsSQL+` AND j.conversation_id = $1 AND j.note = $2 AND NOT j.wake AND c.reports_to IS NULL`, child, noteConsumed).Scan(&count))
 		require.Equal(t, 1, count)
 		require.Empty(t, backgroundJobIDs(t, store, child))
-		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM active_turns WHERE conversation_id = $1`, child).Scan(&count))
+		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM turns WHERE conversation_id = $1 AND takes_lane`, child).Scan(&count))
 		require.Zero(t, count, "copying seeds performs no execution")
 	}
 	// Removed definitions keep existing ownership but do not get new manifests.
@@ -254,6 +260,7 @@ func TestShadowSeedAndFork(t *testing.T) {
 func TestShadowClaimHead(t *testing.T) {
 	store, _ := newShadowTestStore(t)
 	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"visible": KindWebChat})
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
 
 	for range 2 {
@@ -275,7 +282,7 @@ func TestShadowClaimHead(t *testing.T) {
 	require.True(t, retained, "pending manifests protect their historyless parent as well as their children")
 
 	var child string
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings WHERE shadow_agent = 'main/a'`).Scan(&child))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'main/a'`).Scan(&child))
 
 	inputs, err := json.Marshal([]rocketcode.PromptInput{{ID: "input", Texts: []string{"canonical input"}}})
 	require.NoError(t, err)
@@ -296,7 +303,7 @@ func TestShadowClaimHead(t *testing.T) {
 	require.False(t, claimed)
 
 	var uncommitted int
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM active_turns WHERE conversation_id = $1`, child).Scan(&uncommitted))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM turns WHERE conversation_id = $1`, child).Scan(&uncommitted))
 	require.Zero(t, uncommitted, "failed claim rolls back the child history anchor")
 	_, err = store.db.ExecContext(t.Context(), `ALTER TABLE shadow_turns DROP CONSTRAINT reject_claim`)
 	require.NoError(t, err)
@@ -354,7 +361,8 @@ func TestShadowClaimHead(t *testing.T) {
 	require.NotEqual(t, first.id, second.id)
 
 	var anchor, last int64
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT history_anchor_id, (SELECT max(id) FROM session_entries WHERE conversation_id = $2) FROM active_turns WHERE id = $1`, second.id, child).Scan(&anchor, &last))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `WITH last_entry AS (SELECT max(id) AS id FROM entries WHERE conversation_id = $2)
+SELECT t.history_anchor_id, l.id FROM turns t CROSS JOIN last_entry l WHERE t.id = $1`, second.id, child).Scan(&anchor, &last))
 	require.Positive(t, anchor)
 	require.Equal(t, last, anchor, "the second anchor includes the settled first child response")
 
@@ -377,9 +385,9 @@ func TestShadowImplicitCreation(t *testing.T) {
 	accepted, err := manager.SubmitMention(t.Context(), "main", slackTarget("C1", "1.1"), inbound)
 	require.NoError(t, err)
 	require.True(t, accepted)
-	parents, err := queryStrings(t.Context(), store.db, `SELECT parent_conversation_id FROM shadow_bindings GROUP BY 1 HAVING count(*) = 2 ORDER BY 1`, "implicit shadow parents")
+	parents, err := queryStrings(t.Context(), store.db, `SELECT shadow_parent FROM conversations WHERE shadow_parent IS NOT NULL GROUP BY 1 HAVING count(*) = 2 ORDER BY 1`, "implicit shadow parents")
 	require.NoError(t, err)
-	require.Equal(t, []string{"cron:private", conversation, "visible"}, parents)
+	require.Equal(t, []string{"cron:private", "mcp:private", conversation, "visible"}, parents)
 
 	var count int
 	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM shadow_turns`).Scan(&count))
@@ -390,6 +398,7 @@ func TestShadowExecutionOwnerEntrypoints(t *testing.T) {
 	for _, entrypoint := range []string{"web", "slack", "cron", "external MCP", "scheduled", "goal continuation", "background wake"} {
 		t.Run(entrypoint, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)
+			recordTestConversations(t, store, "main", map[string]ConversationKind{"visible": KindWebChat})
 			visible := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "visible", Agent: "main", SessionService: store}}
 			owner := visible
 			inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "input", true)
@@ -503,7 +512,7 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 			require.NoError(t, err)
 
 			var childID string
-			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings WHERE shadow_agent = 'main/a'`).Scan(&childID))
+			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'main/a'`).Scan(&childID))
 			turn, claimed, err := store.claimShadowTurn(t.Context(), childID)
 			require.NoError(t, err)
 			require.True(t, claimed)
@@ -539,6 +548,7 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 			manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(c *Config) directBridge {
 				return NewConversation(cfg, publisher, &Config{ConversationID: c.ConversationID, Agent: c.Agent, SessionService: store}, slog.New(slog.DiscardHandler))
 			}})
+			require.NoError(t, store.startSubagent(t.Context(), childID, rocketcode.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, "main", true))
 			managed, err := manager.ensureThreadBridge(t.Context(), childID+"/call-1", ThreadState{Agent: "main", parent: childID})
 			require.NoError(t, err)
 
@@ -611,7 +621,7 @@ func TestShadowConsumedBatchIsAtomic(t *testing.T) {
 	parent.activeTurnID, parent.inputOpen, parent.notesOpen = request.turnID, true, true
 
 	var claim string
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT claimed_turn_id FROM background_jobs WHERE job_id = 'note'`).Scan(&claim))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT j.claimed_by`+testJobsSQL+` AND j.input_id = 'note'`).Scan(&claim))
 	require.Empty(t, claim)
 	_, err = store.db.ExecContext(t.Context(), `ALTER TABLE shadow_turns DROP CONSTRAINT reject_fanout`)
 	require.NoError(t, err)
@@ -643,8 +653,8 @@ func TestShadowConsumedBatchIsAtomic(t *testing.T) {
 		require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ConversationID: "parent", Message: id}))
 	}
 
-	require.NoError(t, store.SaveTurnStep(t.Context(), "parent", request.turnID, json.RawMessage(`{"applied_input_ids":["s1"],"record":{"version":1,"type":"turn","replay_input":[{"type":"compaction","id":"cmp","encrypted_content":"summary"}]}}`)))
 	entry := rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: request.turnID, ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"compaction","id":"cmp","encrypted_content":"summary"}`)}}
+	require.NoError(t, saveTestTurn(t.Context(), store, "parent", request.turnID, []string{"s1"}, &entry))
 	_, err = store.finishTurn(t.Context(), request.turnID, &turnFinish{store: newSessionStore("parent", store), outbound: protocol.NewOutboundMessage("parent", "answer"), entries: []rocketcode.SessionEntry{entry}})
 	require.NoError(t, err)
 	waiting, err := store.ThreadQueueForConversation("parent")
@@ -762,7 +772,7 @@ func TestShadowLiveFinalDrain(t *testing.T) {
 	require.NotEqual(t, first[0].Instructions, first[1].Instructions)
 
 	var childID string
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings`).Scan(&childID))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL`).Scan(&childID))
 	manager.mu.Lock()
 	child := manager.bridges[childID].(*Bridge)
 	manager.mu.Unlock()
@@ -857,7 +867,7 @@ func TestShadowStoppedInitialInputParity(t *testing.T) {
 			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
 
 			var childID string
-			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings`).Scan(&childID))
+			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL`).Scan(&childID))
 
 			finals := make(chan *protocol.OutboundMessage, 8)
 			manager, shutdown := newTestBridgeManager(t, cfg, store, finals)
@@ -987,7 +997,7 @@ func TestShadowFirstReconciliationClear(t *testing.T) {
 	var count int
 	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM shadow_turns`).Scan(&count))
 	require.Zero(t, count, "newly committed children must not escape history clear")
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM shadow_bindings`).Scan(&count))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM conversations WHERE shadow_parent IS NOT NULL`).Scan(&count))
 	require.Equal(t, 2, count, "history clear retains the first admitted bindings")
 
 	bridge := &Bridge{config: Config{ConversationID: "parent", Agent: "main", SessionService: store}, log: store.log}
@@ -1109,7 +1119,7 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 			}
 
 			var childID string
-			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings WHERE parent_conversation_id = $1`, ownerID).Scan(&childID))
+			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_parent = $1`, ownerID).Scan(&childID))
 
 			if mutation == "external MCP removal" {
 				require.NoError(t, store.SaveAttachment(t.Context(), childID, "", &protocol.OutboundAttachment{ID: "live-child-blob", Name: "result", Data: []byte("bytes")}, false))
@@ -1119,7 +1129,7 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 					require.True(t, <-cancelled)
 				}
 
-				for _, table := range []string{"managed_conversations", "active_turns", "shadow_turns", "turn_steps", "session_entries", "attachments", "external_mcp_sessions", "pending_attachment_deletions"} {
+				for _, table := range []string{"conversations", "turns", "shadow_turns", "steps", "entries", "attachments", "pending_attachment_deletions"} {
 					var count int
 					require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM `+table).Scan(&count))
 					require.Zero(t, count, table+" must not survive live family removal")
@@ -1290,12 +1300,14 @@ func TestShadowSiblingFailureIsIndependent(t *testing.T) {
 	require.Equal(t, "answer gpt-parent", readFinal(t, finals).Text)
 
 	var good, failed string
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings WHERE shadow_agent = 'main/a'`).Scan(&good))
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings WHERE shadow_agent = 'main/z'`).Scan(&failed))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'main/a'`).Scan(&good))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'main/z'`).Scan(&failed))
 	require.Eventually(t, func() bool {
 		var settled int
 
-		err := store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM shadow_turns s WHERE child_conversation_id IN ($1, $2) AND child_turn_id <> '' AND NOT EXISTS (SELECT 1 FROM active_turns a WHERE a.id = s.child_turn_id AND a.phase <> $3)`, good, failed, turnDone).Scan(&settled)
+		err := store.db.QueryRowContext(t.Context(), `WITH unsettled AS (SELECT id FROM turns WHERE phase <> $3)
+SELECT count(*) FROM shadow_turns s LEFT JOIN unsettled u ON u.id = s.child_turn_id
+WHERE s.child_conversation_id IN ($1, $2) AND s.child_turn_id <> '' AND u.id IS NULL`, good, failed, turnDone).Scan(&settled)
 
 		return err == nil && settled == 2
 	}, 3*time.Second, time.Millisecond)
@@ -1305,7 +1317,7 @@ func TestShadowSiblingFailureIsIndependent(t *testing.T) {
 	require.Contains(t, string(entries[0].Entry.ReplayInput[len(entries[0].Entry.ReplayInput)-1]), "answer gpt-good")
 
 	var terminal protocol.Terminal
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT terminal FROM active_turns WHERE conversation_id = $1`, failed).Scan(&terminal))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT terminal FROM turns WHERE conversation_id = $1`, failed).Scan(&terminal))
 	require.Equal(t, protocol.TerminalFailed, terminal)
 	require.Empty(t, finals, "the failed child's error is local too")
 }
@@ -1393,7 +1405,7 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 	require.True(t, journaled, "unaccepted final response survives failed closure")
 	_, err = store.db.ExecContext(t.Context(), `ALTER TABLE shadow_turns DROP CONSTRAINT reject_close`)
 	require.NoError(t, err)
-	_, err = store.db.ExecContext(t.Context(), `ALTER TABLE active_turns ADD CONSTRAINT reject_finish CHECK (phase <> 'delivering')`)
+	_, err = store.db.ExecContext(t.Context(), `ALTER TABLE turns ADD CONSTRAINT reject_finish CHECK (phase <> 'delivering')`)
 	require.NoError(t, err)
 	parent.handle(t.Context(), &request)
 	require.Empty(t, finals, "failed settlement cannot deliver after durable closure")
@@ -1409,7 +1421,7 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 	accepted, err := parent.slipSteer(&late)
 	require.NoError(t, err)
 	require.False(t, accepted)
-	_, err = store.db.ExecContext(t.Context(), `ALTER TABLE active_turns DROP CONSTRAINT reject_finish`)
+	_, err = store.db.ExecContext(t.Context(), `ALTER TABLE turns DROP CONSTRAINT reject_finish`)
 	require.NoError(t, err)
 	parent.handle(t.Context(), &request)
 
@@ -1441,7 +1453,7 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 	require.NotContains(t, string(childInput[2]), "raw admission")
 
 	var childID string
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings`).Scan(&childID))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL`).Scan(&childID))
 	require.Eventually(t, func() bool { active, err := store.HasActiveTurn(t.Context(), childID); return err == nil && !active }, 3*time.Second, time.Millisecond)
 	require.Len(t, finals, 1, "only parent completion was externally published")
 	require.NoError(t, shutdown())
@@ -1518,7 +1530,7 @@ func TestShadowFinalWaitCancellationAndClosure(t *testing.T) {
 	require.NoError(t, err)
 
 	var childID string
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings ORDER BY shadow_agent LIMIT 1`).Scan(&childID))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY shadow_agent LIMIT 1`).Scan(&childID))
 	turn, claimed, err := store.claimShadowTurn(t.Context(), childID)
 	require.NoError(t, err)
 	require.True(t, claimed)
@@ -1586,7 +1598,7 @@ func startShadowStepTurn(t *testing.T) (*SessionService, *Bridge, map[string]*Br
 
 	for _, agent := range []string{"main/a", "main/z"} {
 		var id string
-		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings WHERE shadow_agent = $1`, agent).Scan(&id))
+		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL AND shadow_agent = $1`, agent).Scan(&id))
 		turn, claimed, err := store.claimShadowTurn(t.Context(), id)
 		require.NoError(t, err)
 		require.True(t, claimed)
@@ -1743,13 +1755,13 @@ func TestHistoryMutationSharesLockOrder(t *testing.T) {
 			web := "web:" + tc.producer
 
 			for _, id := range []string{tc.producer, web, tc.child} {
-				_, err := (stateDAO{db: s.db}).createConversation(ctx, protocol.Conversation{ID: id, Agent: "main"})
+				_, err := (stateDAO{db: s.db}).createConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}, conversationFacts{kind: KindWebChat})
 				require.NoError(t, err)
 			}
 
-			_, err := s.db.ExecContext(ctx, `UPDATE managed_conversations SET producer_inbound_json = json_build_object('SyncDestination', $2::text) WHERE conversation_id = $1`, tc.producer, web)
+			_, err := s.db.ExecContext(ctx, `UPDATE conversations SET producer_inbound_json = json_build_object('SyncDestination', $2::text), reports_to = $2 WHERE conversation_id = $1`, tc.producer, web)
 			require.NoError(t, err)
-			_, err = s.db.ExecContext(ctx, `INSERT INTO shadow_bindings (child_conversation_id, parent_conversation_id, parent_agent, shadow_agent) VALUES ($1, $2, 'main', 'shadow')`, tc.child, tc.producer)
+			_, err = s.db.ExecContext(ctx, `UPDATE conversations SET shadow_parent = $2, parent_agent = 'main', shadow_agent = 'shadow' WHERE conversation_id = $1`, tc.child, tc.producer)
 			require.NoError(t, err)
 
 			holder, err := s.db.BeginTx(ctx, nil)

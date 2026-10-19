@@ -24,6 +24,8 @@ func TestStopBackgroundJobTool(t *testing.T) {
 
 	defer close(release)
 
+	reportTestRun(t, store, "cron:daily", "main")
+
 	for i, job := range []struct{ conversationID, destination string }{{"main", ""}, {"main", ""}, {"cron:daily", "main"}, {"other", ""}} {
 		turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: job.conversationID, origin: &protocol.InboundMessage{SyncDestination: job.destination}}
 		_, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: fmt.Sprintf("turn-1/call/%d", i), Kind: rocketcode.BackgroundKindExecute, Detached: true}, blockedWork(started, release))

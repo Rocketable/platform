@@ -37,7 +37,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace";
 import { cn } from "@/lib/utils";
-import type { Agent, Attachment as AttachmentMeta, BackgroundJob, CodeModeCall, ConfigView, CronJob, QueueItem, Remote, Session, SavedTabs, TranscriptEvent, VoiceSettings } from "@/types";
+import type { Agent, Attachment as AttachmentMeta, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, Remote, Session, SavedTabs, TranscriptEvent, VoiceSettings } from "@/types";
 import { runPreload } from "@/preload";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
 import {
@@ -46,7 +46,6 @@ import {
   loadSnapshotGeneration,
   mergeSessionRows,
   readSessionEnumeration,
-  rowPreview,
   saveCompleteSessions,
   SESSION_HISTORY_CHANNEL,
   searchIsAuthoritative,
@@ -63,6 +62,16 @@ const SessionCommands = createContext<{ command?: SessionCommand; setCommand: Di
 
 function sessionPath(id: string) {
   return `/s/${encodeSessionId(id)}`;
+}
+
+// A remote OpenCode session opens at /oc/, so its path says what it is before the session list arrives.
+function rowPath(session: { id: string; kind?: ConversationKind }) {
+  return session.kind === "REMOTE_OPENCODE" ? `/oc/${encodeSessionId(session.id)}` : sessionPath(session.id);
+}
+
+// pathSession is the session a /s/ or /oc/ path opens, else "".
+function pathSession(path: string) {
+  return path.startsWith("/s/") ? decodeSessionId(path.slice(3)) : path.startsWith("/oc/") ? decodeSessionId(path.slice(4)) : "";
 }
 
 const Delegations = createContext<Pick<HistoryView, "delegations" | "reviewRationales"> | undefined>(undefined);
@@ -91,13 +100,13 @@ function useMedia(query: string) {
   return useSyncExternalStore(subscribe, () => matchMedia(query).matches);
 }
 
-function slackSession(id: string) {
-  return id.startsWith("slack-thread:");
+function slackSession(session: { kind?: ConversationKind }) {
+  return session.kind === "SLACK_THREAD";
 }
 
-function slackRooms(sessions: { id: string; title?: string }[]) {
+function slackRooms(sessions: { id: string; title?: string; kind?: ConversationKind }[]) {
   return [...new Set(sessions.flatMap((session) =>
-    slackSession(session.id) && session.title ? [session.title] : []
+    slackSession(session) && session.title ? [session.title] : []
   ))];
 }
 
@@ -408,22 +417,12 @@ function composerLabels(asking: boolean, busy: boolean, id: string) {
   return { placeholder: id ? "Message or $command" : "Message a new session", sendLabel: "Send message" };
 }
 
-function sessionLabel(id: string) {
-  if (id.startsWith("web-session:")) {
-    return id.slice("web-session:".length);
-  }
-  if (slackSession(id)) {
-    const parts = id.split(":");
-    return parts[1] ? `slack ${parts[1]}` : id;
-  }
-  return id;
-}
 
 // A session created here is titled by its first message, or a cron run by its cron's name, until the session list has it.
 const firstMessages = new Map<string, string>();
 
-function sessionTitle(session: Session, loading: boolean) {
-  return session.name || rowPreview(session, loading).split("\n", 1)[0] || firstMessages.get(session.id) || sessionLabel(session.id);
+function sessionTitle(session: Session) {
+  return session.name || (session.preview ?? "").split("\n", 1)[0] || firstMessages.get(session.id) || session.label || session.id;
 }
 
 function useRoute() {
@@ -441,6 +440,7 @@ function useRoute() {
   // A page path keeps its escaped agent and file path after the space segment.
   const page = pathname.startsWith("/pages/") ? pathname.split("/").slice(3).join("/") : "";
   const id = pathname.startsWith("/s/") ? decodeSessionId(pathname.slice(3)) : "";
+  const remote = pathname.startsWith("/oc/") ? decodeSessionId(pathname.slice(4)) : "";
   return {
     cron,
     agents,
@@ -453,6 +453,7 @@ function useRoute() {
     shortcuts,
     page,
     id,
+    remote,
     goHome: () => navigate("/"),
     goCron: () => navigate("/cron"),
     goSession: (sessionId: string) => navigate(sessionPath(sessionId)),
@@ -547,8 +548,6 @@ type SidebarView = {
   rows: Session[];
   refreshing: boolean;
   enumerationComplete: boolean;
-  summariesComplete: boolean;
-  loadingIds: ReadonlySet<string>;
   remote?: Remote;
 };
 
@@ -560,8 +559,6 @@ const Sidebar = createContext<SidebarState>({
   rows: [],
   refreshing: false,
   enumerationComplete: false,
-  summariesComplete: false,
-  loadingIds: new Set(),
   invalidateQueries: () => {},
 });
 const SidebarInvalidation = createContext<() => void>(() => {});
@@ -589,7 +586,7 @@ function SidebarOwner({ children }: { children: ReactNode }) {
   const identityRejected = identity.isError;
   const [identityGeneration, setIdentityGeneration] = useState(0);
   const [generation, setGeneration] = useState(0);
-  const [view, setView] = useState<SidebarView>({ rows: [], refreshing: false, enumerationComplete: false, summariesComplete: false, loadingIds: new Set() });
+  const [view, setView] = useState<SidebarView>({ rows: [], refreshing: false, enumerationComplete: false });
   const gen = useRef(0);
   const rowsRef = useRef<Session[]>([]);
   const committed = useRef(false);
@@ -604,7 +601,7 @@ function SidebarOwner({ children }: { children: ReactNode }) {
     gen.current += 1;
     rowsRef.current = [];
     committed.current = false;
-    setView({ rows: [], refreshing: false, enumerationComplete: false, summariesComplete: false, loadingIds: new Set() });
+    setView({ rows: [], refreshing: false, enumerationComplete: false });
   }, []);
   useEffect(() => {
     const prev = ownerRef.current;
@@ -644,22 +641,15 @@ function SidebarOwner({ children }: { children: ReactNode }) {
     const ac = new AbortController();
     const tick = async () => {
       if (ac.signal.aborted || captured !== gen.current) return;
-      setView((current) => ({ ...current, refreshing: true, enumerationComplete: false, summariesComplete: true }));
+      setView((current) => ({ ...current, refreshing: true, enumerationComplete: false }));
       const snapshotGeneration = await loadSnapshotGeneration(currentOwner, currentProtocol).catch(() => undefined);
       if (ac.signal.aborted || captured !== gen.current) return;
-      readSessionEnumeration(currentOwner, Promise.resolve(listSessions(ac.signal)), () => rowsRef.current, (merged, summaries, complete) => {
+      readSessionEnumeration(currentOwner, Promise.resolve(listSessions(ac.signal)), () => rowsRef.current, (merged) => {
         if (ac.signal.aborted || captured !== gen.current) {
           return;
         }
         rowsRef.current = merged;
-        setView((current) => {
-          const next = new Set(current.loadingIds);
-          for (const [id, ready] of summaries) {
-            if (ready) next.delete(id);
-            else next.add(id);
-          }
-          return { ...current, rows: merged, summariesComplete: complete, loadingIds: next };
-        });
+        setView((current) => ({ ...current, rows: merged }));
       }, ac.signal).then((result) => {
         if (ac.signal.aborted || captured !== gen.current) {
           return;
@@ -672,7 +662,7 @@ function SidebarOwner({ children }: { children: ReactNode }) {
         } else if (shouldCommitSnapshot(result)) {
           committed.current = true;
           rowsRef.current = result.received;
-          setView({ rows: result.received, enumerationComplete: true, summariesComplete: true, refreshing: false, loadingIds: new Set(), remote: result.remote });
+          setView({ rows: result.received, enumerationComplete: true, refreshing: false, remote: result.remote });
           void saveCompleteSessions(currentOwner, currentProtocol, result.received, snapshotGeneration).catch(() => {});
         } else {
           setView((current) => ({ ...current, enumerationComplete: result.exhausted && result.upstreamSuccess && !result.mismatch, refreshing: false, remote: result.remote ?? current.remote }));
@@ -694,11 +684,7 @@ function SidebarOwner({ children }: { children: ReactNode }) {
     bump();
     committed.current = false;
     rowsRef.current = stripSessionHistory(rowsRef.current, id);
-    setView((current) => {
-      const next = new Set(current.loadingIds);
-      next.delete(id);
-      return { ...current, rows: rowsRef.current, loadingIds: next };
-    });
+    setView((current) => ({ ...current, rows: rowsRef.current }));
   }, [owner, protocol.data, bump]);
   useEffect(() => {
     const channel = new BroadcastChannel(SESSION_HISTORY_CHANNEL);
@@ -717,9 +703,9 @@ function SidebarOwner({ children }: { children: ReactNode }) {
 }
 
 type PendingFile = { id: string; file: File };
-type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; reviewRationales?: Record<string, string>; shadows?: ShadowBinding[]; earlierShadows?: { from: string; before: string; shadows: ShadowBinding[] }[]; movable?: boolean; jobs?: BackgroundJob[]; questions?: PendingQuestion[]; error: string; edit: number; submission: number; historyEpoch?: number; revertEligible?: boolean; revertMessageId?: string; canUndo?: boolean; reverting?: boolean; focus?: number; hydrated?: boolean; persistenceKey?: string; persistedEdit?: number; persistenceError?: string };
+type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; missing?: boolean; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; reviewRationales?: Record<string, string>; shadows?: ShadowBinding[]; earlierShadows?: { from: string; before: string; shadows: ShadowBinding[] }[]; movable?: boolean; jobs?: BackgroundJob[]; questions?: PendingQuestion[]; error: string; edit: number; submission: number; historyEpoch?: number; revertEligible?: boolean; revertMessageId?: string; revertFloor?: string; canUndo?: boolean; reverting?: boolean; focus?: number; hydrated?: boolean; persistenceKey?: string; persistedEdit?: number; persistenceError?: string };
 // latest is the newest turn's entry key: its unsaved messages revert by input ID.
-const RevertActions = createContext<{ available: boolean; pending: boolean; latest?: string; run: (messageId?: string, redo?: boolean) => Promise<void> } | undefined>(undefined);
+const RevertActions = createContext<{ available: boolean; pending: boolean; latest?: string; floor?: string; run: (messageId?: string, redo?: boolean) => Promise<void> } | undefined>(undefined);
 const DraftScope = createContext<string | undefined>(undefined);
 
 function BottomNavigation({ children }: { children: ReactNode }) {
@@ -941,7 +927,7 @@ function openTab(state: TabState, link: string, preview = true): TabState {
   const slot = preview ? state.tabs.findIndex((tab) => tab.preview && tab.space === current) : -1;
   const group = state.tabs.find((tab) => tab.path === state.active && tab.space === current)?.group;
   const at = slot >= 0 ? slot : state.tabs.findIndex((tab) => tab.path === state.active) + 1 || state.tabs.length;
-  const added = state.tabs.toSpliced(at, Number(slot >= 0), { path, preview, group, space: current, unplaced: path.startsWith("/s/") || undefined });
+  const added = state.tabs.toSpliced(at, Number(slot >= 0), { path, preview, group, space: current, unplaced: pathSession(path) !== "" || undefined });
   return { ...state, active: path, space: current, last: { ...state.last, [current]: path },
     groups: state.groups.map((item) => item.id === open?.group && path !== state.active ? { ...item, collapsed: false } : item),
     tabs: !open ? arrange(group && state.tabs[at]?.group !== group ? join(added, path, group, current) : added) : path === "/" ? home(state.tabs, current) : preview ? state.tabs : state.tabs.map((tab) => tab.path === path ? { ...tab, preview: false } : tab) };
@@ -965,7 +951,7 @@ function savedTabs(owner?: string, saved?: Pick<SavedTabs, "spaces" | "state">):
 function loadTabs(path: string, owner?: string, saved?: SavedTabs): TabState {
   const state = savedTabs(owner, saved);
   const [link, target] = pageSpace(state, path);
-  const tabs = state.tabs.some((tab) => tab.path === link) ? state.tabs : arrange([...state.tabs, { path: link, space: target, unplaced: link.startsWith("/s/") || undefined }]);
+  const tabs = state.tabs.some((tab) => tab.path === link) ? state.tabs : arrange([...state.tabs, { path: link, space: target, unplaced: pathSession(link) !== "" || undefined }]);
   return openTab({ ...state, tabs, active: link }, link);
 }
 
@@ -1074,7 +1060,7 @@ function useTabs() {
   const settle = (rows: Session[]) => {
     if (!document.hasFocus() || saved.isFetching) return;
     for (const tab of state.tabs.filter((item) => item.unplaced)) {
-      const birth = rows.find((row) => sessionPath(row.id) === tab.path)?.spaceId;
+      const birth = rows.find((row) => rowPath(row) === tab.path)?.spaceId;
       if (birth === undefined) continue;
       if (birth && !state.spaces.some((space) => space.id === birth)) {
         void mutations.tabs({}).then((view) => setState((current) => view.spaces.some((space) => space.id === birth) ? { ...current, spaces: view.spaces } : current));
@@ -1140,7 +1126,7 @@ function useTabs() {
     create: (id: string) => update((tabs) => tabs.map((tab) => tab.path === "/" ? { path: sessionPath(id), pinned: tab.pinned, group: tab.group, space: tab.space, unplaced: true } : tab)),
     commands: (path: string, rows: Session[]) => {
       const tab = state.tabs.find((item) => item.path === path);
-      const birth = state.spaces.find((space) => space.id === rows.find((row) => sessionPath(row.id) === path)?.spaceId);
+      const birth = state.spaces.find((space) => space.id === rows.find((row) => rowPath(row) === path)?.spaceId);
       return [
         { key: "close", label: "Close", run: () => close([path]) },
         { key: "close-others", label: "Close others", run: () => close(unpinned(shown).filter((other) => other !== path), path) },
@@ -1197,12 +1183,12 @@ function TabNotifications() {
     if (!("Notification" in window) || Notification.permission !== "granted") return;
     for (const row of rows) {
       if (row.running || !ran.has(row.id)) continue;
-      const path = sessionPath(row.id);
+      const path = rowPath(row);
       if (!state.tabs.some((tab) => tab.path === path) || (document.hasFocus() && state.active === path)) continue;
       // A notification replacing one with its tag alerts again in Chromium only with renotify, which TypeScript's DOM types omit.
       const reply = cleanText((row.server ? row.reply : row.preview) ?? "", {}).replace(/\s+/g, " ").trim();
       const options = { body: reply.length > 200 ? `${reply.slice(0, 199)}…` : reply || "Finished answering", tag: row.id, renotify: true };
-      const title = row.server || !row.agent ? sessionTitle(row, false) : row.name || row.agent;
+      const title = row.server || !row.agent ? sessionTitle(row) : row.name || row.agent;
       let notification: Notification;
       // Android Chrome shows notifications only from a service worker, which this app lacks: its constructor throws.
       try { notification = new Notification(cleanText(title, {}), options); } catch { return; }
@@ -1240,7 +1226,7 @@ function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs
   const selected = () => list.current!.querySelector<HTMLElement>('[aria-selected="true"]')!;
   const header = () => list.current!.querySelector<HTMLElement>(`[data-group="${editor?.id}"]`);
   const group = groups.find((item) => item.id === editor?.id);
-  const items: { key: string; label: string; space?: string; run: () => void }[] = menu ? [...menu.path.startsWith("/s/") ? [{ key: "rename", label: "Rename session", run: () => setEditing(menu.path) }] : [], ...commands(menu.path, rows)] : [];
+  const items: { key: string; label: string; space?: string; run: () => void }[] = menu ? [...pathSession(menu.path) ? [{ key: "rename", label: "Rename session", run: () => setEditing(menu.path) }] : [], ...commands(menu.path, rows)] : [];
   const moves = items.filter((item) => item.space !== undefined);
   const popupClass = "min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none", itemClass = "flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent";
   const option = ({ key, label, run }: (typeof items)[number]) => <Menu.Item key={key} onClick={() => { refocus.current = key; run(); }} className={itemClass}>{label}</Menu.Item>;
@@ -1374,10 +1360,10 @@ function tabActivity(session: Session) {
 
 function TabItem({ tab, description, rule, active, vertical, editing, endEdit, promote, close, openMenu }: { tab: Tab; description?: string; rule?: ReactNode; active: boolean; vertical: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: Element) => void }) {
   const sidebar = useContext(Sidebar);
-  const id = tab.path.startsWith("/s/") ? decodeSessionId(tab.path.slice(3)) : "";
+  const id = pathSession(tab.path);
   const session = sidebar.rows.find((row) => row.id === id) ?? { id };
   const [activity, SessionIcon] = tabActivity(session);
-  const [label, Icon] = pageTab(tab.path) ?? [sessionTitle(session, sidebar.loadingIds.has(id)), SessionIcon];
+  const [label, Icon] = pageTab(tab.path) ?? [sessionTitle(session), SessionIcon];
   const title = useCleanText(label);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
@@ -1434,8 +1420,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const composer = useRef<((command: string) => void) | null>(null);
   const commands = useMemo(() => ({ command, setCommand, composer }), [command]);
   const route = useRoute();
-  // The reserved prefix decides before the session list arrives, so a remote ID never mounts the transcript.
-  const showChat = ![route.cron, route.agents, route.skills, route.skill, route.config, route.search, route.voice, route.pages, route.shortcuts, route.page, route.id.startsWith("opencode:")].some(Boolean);
+  const showChat = ![route.cron, route.agents, route.skills, route.skill, route.config, route.search, route.voice, route.pages, route.shortcuts, route.page, route.remote].some(Boolean);
   // The screen stays on while the Voice page is open or a call runs.
   const awake = useSyncExternalStore(subscribeVoice, () => route.voice || !["idle", "error"].includes(voiceView().state));
   useEffect(() => awake ? holdWakeLock() : undefined, [awake]);
@@ -1555,7 +1540,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               <ShortcutsPage show={route.shortcuts} />
               <HostedPage key={route.page} page={route.page} />
               <SkillPage name={route.skill} />
-              <RemoteSession key={route.id} id={route.id} />
+              <RemoteSession key={route.remote} id={route.remote} />
               <TabPane show={showChat}>
                 <MessageScrollerProvider key={conversation.key} autoScroll scrollEdgeThreshold={48}>
                   <Transcript id={conversation.id} drafts={drafts} scopeError={scopeError} onDraftChange={onDraftChange} onCreated={(id) => { tabs.create(id); setConversation((current) => ({ ...current, created: id })); }} />
@@ -1710,7 +1695,7 @@ function SessionCommandPicker({ items, query, setQuery, forking, disabled }: { i
 function paletteRows(
   mode: "sessions" | "commands" | "cron",
   typed: string,
-  sidebar: { rows: Session[]; loadingIds: ReadonlySet<string> },
+  rows: Session[],
   jobs: { stem: string; status: string; schedule?: string; agent?: string; channel?: string }[] | undefined,
   newChat: () => void,
   open: (path: string) => void,
@@ -1718,7 +1703,7 @@ function paletteRows(
   runStem: (stem: string) => void,
   actions: { key: string; label: string; detail?: string; keep?: boolean; disabled?: boolean; run: () => void }[],
   recent: string[],
-): { key: string; label?: string; detail?: string; session?: Session; loading?: boolean; keep?: boolean; disabled?: boolean; run: () => void }[] {
+): { key: string; label?: string; detail?: string; session?: Session; keep?: boolean; disabled?: boolean; run: () => void }[] {
   const needle = typed.toLowerCase();
   if (mode === "cron") {
     return (jobs ?? []).filter((job) => job.status !== "ran" && (needle === "" || `${job.stem} ${job.schedule ?? ""} ${job.agent ?? ""} ${job.channel ?? ""}`.toLowerCase().includes(needle))).map((job) => ({
@@ -1749,7 +1734,7 @@ function paletteRows(
     return tier(a.label) - tier(b.label) || rank(a.key) - rank(b.key) || (level(a.key) >= 0 && level(b.key) >= 0 ? level(a.key) - level(b.key) : a.label.localeCompare(b.label));
   });
   // Each session is one row, as in the session list; message and field hits belong to /search, which typed text can open last.
-  return mode === "commands" ? commands : [...commands, ...sidebar.rows.map((session) => ({ key: session.id, session, loading: sidebar.loadingIds.has(session.id), run: () => open(sessionPath(session.id)) })),
+  return mode === "commands" ? commands : [...commands, ...rows.map((session) => ({ key: session.id, session, run: () => open(rowPath(session)) })),
     ...typed ? [{ key: searchEverywhereKey, label: `Search everywhere for '${typed}'`, run: () => navigate(`/search?${new URLSearchParams({ q: typed })}`) }] : []];
 }
 
@@ -1836,7 +1821,7 @@ function usePaletteSessions(query: string, sessions: boolean, entered: boolean) 
   const free = query.replace(new RegExp(`(?:^|\\s)(?:${filterKeys}):(?:"(?:[^"\\\\]|\\\\.)*"?|\\S*)`, "gi"), " ").trim().toLowerCase();
   const filtered = sessions && free !== query.trim().toLowerCase();
   const search = useSessionSearch(filtered ? query : "", "filters", entered);
-  const raw = useMemo(() => sessions ? rows.map((row) => sessionTitle(row, false)) : [], [rows, sessions]);
+  const raw = useMemo(() => sessions ? rows.map((row) => sessionTitle(row)) : [], [rows, sessions]);
   const names = useSlackNames(useMemo(() => [...new Set(raw.flatMap(mentionIds))], [raw]));
   // Titles are cleaned and lowered once per list or name change, so a keystroke only scans them.
   const titles = useMemo(() => raw.map((title) => cleanText(title, names).toLowerCase()), [raw, names]);
@@ -1860,7 +1845,7 @@ function useRemoteCreation(query: string, close: () => void, restart: () => void
   const sidebar = useContext(Sidebar);
   const tabs = useContext(TabActions);
   const [server, setServer] = useState<string>();
-  const create = useMutation({ mutationFn: mutations.createSession, onSuccess: (created) => { sidebar.invalidateQueries(); close(); tabs.open(sessionPath(created)); } });
+  const create = useMutation({ mutationFn: mutations.createSession, onSuccess: (created) => { sidebar.invalidateQueries(); close(); tabs.open(rowPath({ id: created, kind: "REMOTE_OPENCODE" })); } });
   const typed = query.trim();
   const items: ReturnType<typeof paletteRows> = !server ? [] : [...new Set([typed, ...sidebar.rows.flatMap((row) => row.server === server && row.directory ? [row.directory] : [])])]
     .filter((directory) => directory.startsWith("/") && directory.toLowerCase().includes(typed.toLowerCase()))
@@ -1882,12 +1867,12 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
   // command, returns there first, so commands render, and run, with that location's state.
   const at = () => location.pathname + location.search + location.hash;
   const [origin] = useState(() => ({ path: location.pathname, href: at() }));
-  const id = origin.path.startsWith("/s/") ? decodeSessionId(origin.path.slice(3)) : "";
+  const id = pathSession(origin.path);
   const tabs = useContext(TabActions);
   const back = () => { if (at() !== origin.href) flushSync(() => navigate(origin.href, true)); };
   // Only a session that opens in this space is shown, so browsing never switches spaces.
   const peek = (session?: Session) => {
-    const path = session ? sessionPath(session.id) : "", tab = tabs.state.tabs.find((item) => item.path === path);
+    const path = session ? rowPath(session) : "", tab = tabs.state.tabs.find((item) => item.path === path);
     const here = session && (tab ? tab.space === tabs.state.space : !session.spaceId || session.spaceId === tabs.state.space);
     const target = here ? path : origin.href;
     if (target !== at()) navigate(target, true);
@@ -1951,7 +1936,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
   // The folder picker leaves session search, so typed folders are never sent as a search.
   const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(0); setMode("commands"); }, paletteCopy[mode ?? "sessions"]);
   const inSpace = useInSpace();
-  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), { rows, loadingIds: sidebar.loadingIds }, jobs.data?.filter(inSpace), newChat, tabs.open, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...keyCommands, ...timeline, ...outputs], recent));
+  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, jobs.data?.filter(inSpace), newChat, tabs.open, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...keyCommands, ...timeline, ...outputs], recent));
   const selected = items.length === 0 ? 0 : pick % items.length;
   // The palette opens with the first rows; the full list renders in the background.
   const shown = useDeferredValue(items, items.slice(0, 50));
@@ -1975,7 +1960,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
       // In session search, Enter runs a command containing the typed text or one picked with the arrows; a fuzzy one on top yields to the sessions, then to Search for plain text.
       if (item && !item.session && (mode !== "sessions" || moved.current || item.key !== searchEverywhereKey && item.label!.toLowerCase().includes(query.trim().toLowerCase()))) return choose(item);
       setEntered(true);
-      search.enter(() => { const row = item?.session ? item : items.find(({ session }) => session) ?? items.find(({ key }) => !filtered && key === searchEverywhereKey); if (row) choose(row); }, (sessions) => { const session = sessions.find(matches); if (session) choose({ key: session.id, session, run: () => tabs.open(sessionPath(session.id)) }); });
+      search.enter(() => { const row = item?.session ? item : items.find(({ session }) => session) ?? items.find(({ key }) => !filtered && key === searchEverywhereKey); if (row) choose(row); }, (sessions) => { const session = sessions.find(matches); if (session) choose({ key: session.id, session, run: () => tabs.open(rowPath(session)) }); });
     });
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       moved.current = true;
@@ -2004,7 +1989,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
           {shown.map((item, index) => (
             <li key={item.key}>
               <button disabled={item.disabled} ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start justify-center rounded-md px-3 text-left text-sm disabled:opacity-50", item.session ? "py-2" : "min-h-9 py-1.5 [@media(pointer:coarse)]:min-h-11", item.session && search.pending && "opacity-50", index === selected && "bg-accent")} onMouseDown={(event) => { event.preventDefault(); if (!item.session) peek(); }} onClick={() => choose(item)}>
-                {item.session ? <SessionRowContent session={item.session} loading={item.loading} needle={free} /> : <PaletteCommandContent item={item} mode={mode} />}
+                {item.session ? <SessionRowContent session={item.session} needle={free} /> : <PaletteCommandContent item={item} mode={mode} />}
               </button>
             </li>
           ))}
@@ -2082,13 +2067,13 @@ function relativeTime(iso: string) {
 const updatedFormat = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric", timeZoneName: "short" });
 
 // Memoized so typing in the palette does not redraw thousands of unchanged rows.
-const SessionRowContent = memo(function SessionRowContent({ session, loading = false, age = relativeTime(session.updatedAt ?? ""), needle }: { session: Session; loading?: boolean; age?: string; needle?: string }) {
-  const title = sessionTitle(session, loading);
+const SessionRowContent = memo(function SessionRowContent({ session, age = relativeTime(session.updatedAt ?? ""), needle }: { session: Session; age?: string; needle?: string }) {
+  const title = sessionTitle(session);
   const clean = useCleanText(title);
   // A match past the title's start shows from a little before it, so a long title's "…" never hides it.
   const at = needle ? clean.toLowerCase().indexOf(needle) : -1;
   const shown = at > 24 ? "…" + clean.slice(clean.lastIndexOf(" ", at - 16) + 1) : title;
-  const channel = slackSession(session.id) ? (session.title ?? "") : "";
+  const channel = slackSession(session) ? (session.title ?? "") : "";
   const meta = [channel, session.server, session.offline ? "offline" : "", session.agent, ...(session.tags ?? [])].filter(Boolean).join(" · ");
   const updated = session.updatedAt ? `Updated ${updatedFormat.format(new Date(session.updatedAt))}` : "";
   return <span className={cn("flex min-w-0 w-full flex-1 flex-col gap-0.5", session.offline && "opacity-60")}>
@@ -2106,14 +2091,14 @@ function RemoteSession({ id }: { id: string }) {
   const [opened, setOpened] = useState(false);
   const ready = !!port && !!session && !session.offline;
   useEffect(() => { if (ready) setOpened(true); }, [ready]);
-  if (!id.startsWith("opencode:")) return null;
+  if (!id) return null;
   if (!session || !port) return <p role="status" className="m-auto p-4 text-sm text-muted-foreground">{sidebar.enumerationComplete ? "This OpenCode session is no longer available." : "Loading…"}</p>;
   if (session.offline && !opened) return <p role="status" className="m-auto p-4 text-sm text-muted-foreground">{session.server} is offline; this session reopens when it is reachable.</p>;
   const origin = `${location.protocol}//${location.hostname}:${port}`;
   // Approved exception: the relay is another origin (its own port), so allow-same-origin cannot
   // reach this page; OpenCode needs it for storage and a real Origin, which the relay requires.
   // react-doctor-disable-next-line react-doctor/iframe-missing-sandbox
-  return <iframe title={sessionTitle(session, false)} sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals" className="min-h-0 w-full flex-1 border-0" src={`${origin}/server/${encodeSessionId(origin)}/session/${id.split(":").slice(2).join(":")}`} />;
+  return <iframe title={sessionTitle(session)} sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals" className="min-h-0 w-full flex-1 border-0" src={`${origin}/server/${encodeSessionId(origin)}/session/${encodeURIComponent(session.remoteSessionId ?? "")}`} />;
 }
 
 // A hosted page runs in an opaque origin and reads its agent's Page Data by asking this tab. The answer goes only
@@ -2371,13 +2356,13 @@ function windowed(text: string, needle: string, tagIds: string[]) {
 
 function SearchResultGroup({ session, hits, text, field, needle, tagIds }: { session: Session; hits: MessageMatch[]; text: string; field: string; needle: string; tagIds: string[] }) {
   const count = hits.length + Number(!!field);
-  const label = sessionTitle(session, false);
+  const label = sessionTitle(session);
   const clean = useCleanText(label);
   const row = (href: string, kind: string, body: string, key?: string) => <li key={key}><Link href={href} className="flex min-h-11 min-w-0 items-start gap-3 px-2 py-1 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring sm:min-h-7"><span className="w-16 shrink-0 text-xs text-muted-foreground">{kind}</span><div className="min-w-0"><TranscriptText text={windowed(body, needle, tagIds)} needle={needle} interactive={false} /></div></Link></li>;
   return <li role="group" aria-label={clean} className="min-w-0">
-    <h2 className="flex min-w-0 items-center gap-1 text-sm font-medium"><Link href={sessionPath(session.id)} title={clean} className="min-w-0 truncate py-1 hover:underline focus-visible:outline-2 focus-visible:outline-ring"><InlineText text={label} /></Link><span className="shrink-0 text-muted-foreground">({count})</span>{session.pinned ? <Pin aria-label="Pinned" className="size-3 shrink-0" /> : null}</h2>
+    <h2 className="flex min-w-0 items-center gap-1 text-sm font-medium"><Link href={rowPath(session)} title={clean} className="min-w-0 truncate py-1 hover:underline focus-visible:outline-2 focus-visible:outline-ring"><InlineText text={label} /></Link><span className="shrink-0 text-muted-foreground">({count})</span>{session.pinned ? <Pin aria-label="Pinned" className="size-3 shrink-0" /> : null}</h2>
     <ul className="mt-1 border-l pl-2 text-sm leading-5">
-      {field ? row(sessionPath(session.id), field, text) : null}
+      {field ? row(rowPath(session), field, text) : null}
       {hits.map((match, i) => row(sessionPath(session.id) + (match.message.messageId ? `?message=${encodeURIComponent(match.message.messageId)}` : ""), match.message.role === "user" ? "You" : "Assistant", match.message.text, match.message.messageId || String(i)))}
     </ul>
   </li>;
@@ -2385,14 +2370,11 @@ function SearchResultGroup({ session, hits, text, field, needle, tagIds }: { ses
 
 // The palette lists sessions itself when nothing matched, so only /search passes empty.
 function SearchStatus({ search, empty = false, incomplete = false }: { search: ReturnType<typeof useSessionSearch>; empty?: boolean; incomplete?: boolean }) {
-  const { pending, error, response } = search;
-  const unindexed = !pending && response?.indexComplete === false, unsummarized = !pending && response?.summariesComplete === false;
+  const { pending, error } = search;
   return <>
     {pending ? <p role="status" className="text-muted-foreground">Searching…</p> : null}
     {error ? <p role="alert" className="text-destructive">Search failed: {error} <button type="button" className="underline" onClick={() => void search.run(search.sent)}>Retry</button></p> : null}
-    {unindexed ? <p role="status" className="text-muted-foreground">Message results may be incomplete while chats are still being indexed.</p> : null}
-    {unsummarized ? <p role="status" className="text-muted-foreground">Results may be incomplete while chat summaries are still loading.</p> : null}
-    {empty && (incomplete || !unindexed && !unsummarized) ? <p role="status" className="text-muted-foreground">{incomplete ? "Session search is still loading." : "No matches"}</p> : null}
+    {empty ? <p role="status" className="text-muted-foreground">{incomplete ? "Session search is still loading." : "No matches"}</p> : null}
   </>;
 }
 
@@ -2710,12 +2692,20 @@ function MessageHeader({ header, children }: { header?: string; children: ReactE
   </Tooltip>;
 }
 
+// Undo keeps floor, the newest message from a cron run, External MCP, or Slack, and every message before it.
+function keptByFloor(messageId?: string, floor?: string) {
+  if (!messageId || !floor) return false;
+  const [entry, index] = messageId.split(":").map(Number), [floorEntry, floorIndex] = floor.split(":").map(Number);
+  return entry < floorEntry || entry === floorEntry && index <= floorIndex;
+}
+
 // Revert keeps its place on every user message; where it cannot apply it is disabled and says why.
 // A disabled button takes no pointer events, so its reason sits on the wrapper.
 function RevertButton({ line }: { line: Line }) {
   const revert = useContext(RevertActions);
-  const revertable = !!revert?.available && !!line.entryKey && !!(line.messageId || line.inputId && line.entryKey === revert.latest);
-  const reason = !revert?.available ? "Revert isn't available in this session" : revertable ? "Revert message" : "This message can't be reverted";
+  const kept = keptByFloor(line.messageId, revert?.floor);
+  const revertable = !!revert?.available && !!line.entryKey && !kept && !!(line.messageId || line.inputId && line.entryKey === revert.latest);
+  const reason = !revert?.available ? "Revert isn't available in this session" : kept ? "Revert can't go back past a message from a cron run, External MCP, or Slack" : revertable ? "Revert message" : "This message can't be reverted";
   return <span className="flex" title={reason}><Button type="button" size="icon-xs" variant="ghost" className="size-11 sm:size-6" aria-label="Revert message" disabled={!revertable || revert!.pending} onClick={() => void revert!.run(line.messageId || line.inputId)}><Undo2 /></Button></span>;
 }
 
@@ -2786,11 +2776,6 @@ function CompletionNotes({ notes }: { notes: BackgroundJob[] }) {
   </TraceRow>);
 }
 
-// A task row opens the subagent its call recorded; older rows open the delegation ending in their call ID.
-function delegationOf(line: Line, delegations?: string[]) {
-  return line.delegation || delegations?.find((child) => child.slice(child.lastIndexOf("/") + 1) === line.toolCallId);
-}
-
 const toolIcons: Partial<Record<string, ReactNode>> = { task: <Bot />, skill: <Sparkles />, execute: <SquareTerminal />, bash: <SquareTerminal /> };
 
 // The panels a call opens, as Trace link lines: its subagent (https://ui.shadcn.com/docs/ai-elements/base/subagent)
@@ -2798,7 +2783,7 @@ const toolIcons: Partial<Record<string, ReactNode>> = { task: <Bot />, skill: <S
 function ToolLinks({ line, title }: { line: Line; title: string }) {
   // toolTitle names a skill call's skill as "Skill · name".
   const skill = line.toolName === "skill" && title.startsWith("Skill · ") ? title.slice("Skill · ".length) : "";
-  const delegation = delegationOf(line, use(Delegations)?.delegations);
+  const delegation = line.delegation;
   const links = [
     delegation && { href: panelHref(delegation), text: "Open delegation", label: `Open delegation: ${title}`, icon: <Bot /> },
     skill && { href: panelHref(skill, "skill"), text: "View skill", label: `View skill: ${skill}`, icon: <Sparkles /> },
@@ -2893,8 +2878,8 @@ function CodeModeScript({ text }: { text: string }) {
 function ToolLine({ line, conversationId, hasSandboxed, open }: { line: Line; conversationId: string; hasSandboxed: boolean; open?: boolean }) {
   const title = toolTitle(line);
   const { delegations, reviewRationales } = use(Delegations) ?? {};
-  // A reviewed call opens its permission review once the delegations list it; an older task row, the one ending in its call ID.
-  const review = (line.review && delegations?.includes(line.review) ? line.review : undefined) || line.delegation && delegations?.find((child) => child !== line.delegation && child.slice(child.lastIndexOf("/") + 1) === line.toolCallId) || undefined;
+  // A reviewed call opens its permission review once the delegations list it.
+  const review = line.review && delegations?.includes(line.review) ? line.review : undefined;
   const rationale = reviewRationales?.[review ?? ""];
   const seen = new Map<string, number>();
   const status = toolStatus(line, use(TurnRunning));
@@ -3310,6 +3295,7 @@ function applyHistoryDelta(draft: ComposerDraft, view: HistoryView) {
   draft.origin = view.origin;
   draft.revertEligible = view.revertEligible;
   draft.revertMessageId = view.revertMessageId;
+  draft.revertFloor = view.revertFloor;
   draft.canUndo = view.canUndo;
   draft.movable = view.movable;
   draft.jobs = view.backgroundJobs;
@@ -3317,6 +3303,7 @@ function applyHistoryDelta(draft: ComposerDraft, view: HistoryView) {
   draft.shadows = view.shadows;
   draft.revision = view.revision;
   draft.historyError = "";
+  draft.missing = false;
   return newlyConsumed;
 }
 
@@ -3369,7 +3356,8 @@ function readHistoryDelta(id: string, draft: ComposerDraft, onDraftChange: () =>
       } catch (err) {
         if (signal?.aborted) throw err;
         // A history failure must not turn an accepted Prompt into a failed send.
-        captureException(err);
+        draft.missing = err instanceof RPCError && err.code === 5;
+        if (!draft.missing) captureException(err);
         draft.historyError = err instanceof Error ? err.message : "history failed";
       }
       onDraftChange();
@@ -3548,7 +3536,8 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
   const runRevert = useCallback((messageId?: string, redo?: boolean) => revertComposer(draft, messageId, !!redo, refreshHistory, onDraftChange), [draft, refreshHistory, onDraftChange]);
   const available = !!draft.revertEligible && !previewing, pending = [draft.reverting, draft.sending, !draft.hydrated].some(Boolean);
   const latest = lines.findLast((line) => line.entryKey)?.entryKey;
-  const revert = useMemo(() => ({ available, pending, latest, run: runRevert }), [available, pending, latest, runRevert]);
+  const floor = draft.revertFloor;
+  const revert = useMemo(() => ({ available, pending, latest, floor, run: runRevert }), [available, pending, latest, floor, runRevert]);
   const error = [scopeError, historyError].find(Boolean);
   const followed = previewing ? { lines: previewLines ?? lines, delegations: preview.data, busy: false, more: false, terminal: undefined, shadows: undefined } : { lines, delegations, busy, more, terminal, shadows };
   const queue = useQuery({ ...queries.queue({ id }), enabled: id !== "", refetchInterval: 2000 });
@@ -3558,6 +3547,8 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
     {parked.length > 0 && !previewing ? <section aria-label="Pending steers" className="mx-auto w-full max-w-3xl px-3"><p className="text-xs text-muted-foreground">Waiting to steer</p>{parked.map((line) => <TranscriptLine key={line.id} line={line} conversationId={id} hasSandboxed={false} />)}</section> : null}
     {error ? <p role="alert" className="px-3 text-sm text-destructive">{error}</p> : null}
   </>;
+  // A chat with no record has nothing to show or send to.
+  if (draft.missing) return <p role="status" className="m-auto p-6 text-sm text-muted-foreground">This chat doesn't exist. <Link href="/" className="underline">Start a new chat</Link></p>;
   return (
     <RevertActions value={revert}>
       <Delegations value={followed.delegations}><TranscriptLog conversationId={id} lines={followed.lines} opening={opening} working={followed.busy} terminal={followed.terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} more={followed.more} loadEarlier={loadEarlier} movable={movable} refreshHistory={refreshHistory} shadows={followed.shadows} footer={footer}>
@@ -3594,9 +3585,11 @@ function DelegationTranscript({ id, child }: { id: string; child: string }) {
   const reason = search.get("reason"), turn = search.get("answer");
   const main = useQuery({ ...queries.history({ id }), enabled: false });
   const history = useQuery(queries.history({ id: child }));
+  // Lineage runs from the chat down to child; it is child alone until child's history loads.
+  const lineage = useMemo(() => history.data?.lineage ?? [{ id: child }], [history.data, child]);
   useEffect(() => {
-    if (main.data?.revertMessageId && !main.data.delegations.some((level) => child === level || child.startsWith(`${level}/`))) navigate(panelHref());
-  }, [child, main.data]);
+    if (history.data && main.data?.revertMessageId && !main.data.delegations.some((level) => lineage.some((at) => at.id === level))) navigate(panelHref());
+  }, [history.data, lineage, main.data]);
   const lines = historyLines(history.data?.messages ?? []);
   const turns = transcriptTurns(lines);
   const answers = reason === null ? [] : lines.flatMap((line) => {
@@ -3615,12 +3608,13 @@ function DelegationTranscript({ id, child }: { id: string; child: string }) {
   useEffect(() => {
     if (targetKey) scrollToMessage(`turn-${targetKey}`, { align: "end", behavior: "instant", scrollMargin: 64 });
   }, [targetKey, scrollToMessage]);
-  const opened = historyLines(main.data?.messages ?? []).map((line) => delegationOf(line, main.data?.delegations));
-  const first = opened.find((level) => level && (child === level || child.startsWith(`${level}/`))) ?? child;
-  const levels = [...child.matchAll(/\/|$/g)].map((match) => child.slice(0, match.index)).filter((level) => level.length >= first.length).map((level, index, all) => {
-    const parent = queryClient.getQueryData<HistoryView>(queries.history({ id: index ? all[index - 1] : id }).queryKey);
-    const row = historyLines(parent?.messages ?? []).find((line) => line.toolName && [delegationOf(line, parent?.delegations), line.review].includes(level));
-    return { level, label: row ? toolTitle(row) : level.slice(level.lastIndexOf("/") + 1) };
+  const opened = new Set(historyLines(main.data?.messages ?? []).map((line) => line.delegation));
+  // The breadcrumbs start at the level a row of the chat opens, else at child.
+  const first = lineage.findIndex((level) => opened.has(level.id));
+  const levels = lineage.slice(first < 0 ? -1 : first).map(({ id: level, kind, agent }, index, all) => {
+    const parent = queryClient.getQueryData<HistoryView>(queries.history({ id: index ? all[index - 1].id : id }).queryKey);
+    const row = historyLines(parent?.messages ?? []).find((line) => line.toolName && [line.delegation, line.review].includes(level));
+    return { level, label: row ? toolTitle(row) : kind === "REVIEW" ? "Review" : agent || level };
   });
   const parent = levels.at(-2);
   const sandboxed = lines.some((line) => line.origin === "sandboxed");

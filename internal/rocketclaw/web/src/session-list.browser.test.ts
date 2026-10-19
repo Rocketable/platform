@@ -176,7 +176,7 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
       const url = new URL(request.url);
       if (!url.pathname.startsWith("/api/")) return new Response(Bun.file(path.join(dist, url.pathname.startsWith("/assets/") ? url.pathname : "index.html")));
-      if (url.pathname === "/api/ListSessions") return new Response('data: {"sessions":[],"owner":"tester","upstreamSuccess":true,"summariesComplete":true}\n\nevent: complete\ndata: {}\n\n', { headers: { "Content-Type": "text/event-stream" } });
+      if (url.pathname === "/api/ListSessions") return new Response('data: {"sessions":[],"owner":"tester","upstreamSuccess":true}\n\nevent: complete\ndata: {}\n\n', { headers: { "Content-Type": "text/event-stream" } });
       if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
       if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "command-hints" });
       if (url.pathname === "/api/ListConfig") return Response.json({ config: {} });
@@ -260,9 +260,9 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
 test("room autocomplete keeps selections and full labels on each search surface", async () => {
   const { chromium: engine } = await import(playwright!);
   const rows: Session[] = [
-    { id: "slack-thread:C11:1", title: "amber", preview: "Amber result", agent: "main" },
-    { id: "slack-thread:C12:1", title: "Blue garden", preview: "Blue result", agent: "main" },
-    { id: "slack-thread:C13:1", title: "cobalt", preview: "Cobalt result", agent: "other" },
+    { id: "slack-thread:C11:1", kind: "SLACK_THREAD", title: "amber", preview: "Amber result", agent: "main" },
+    { id: "slack-thread:C12:1", kind: "SLACK_THREAD", title: "Blue garden", preview: "Blue result", agent: "main" },
+    { id: "slack-thread:C13:1", kind: "SLACK_THREAD", title: "cobalt", preview: "Cobalt result", agent: "other" },
   ];
   const queries: string[] = [];
   const longRooms = ["synthetic-observatory-room-with-a-long-shared-prefix-for-wrapping-amber", "synthetic observatory room with a long shared prefix for wrapping blue"];
@@ -273,7 +273,7 @@ test("room autocomplete keeps selections and full labels on each search surface"
   };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) return new Response(Bun.file(path.join(dist, url.pathname.startsWith("/assets/") ? url.pathname : "index.html")));
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "room-search" });
@@ -289,7 +289,7 @@ test("room autocomplete keeps selections and full labels on each search surface"
         const start = query.indexOf(text);
         return start < 0 ? [] : [{ key: text.split(":")[0], text, start, end: start + text.length }];
       }).sort((a, b) => a.start - b.start);
-      return Response.json({ terms, text: "", needle: "", matches: (results[query] ?? []).map((index) => ({ conversationId: rows[index].id, field: "Preview", text: rows[index].preview })), messages: [], mentionIds: [], indexComplete: true, summariesComplete: true });
+      return Response.json({ terms, text: "", needle: "", matches: (results[query] ?? []).map((index) => ({ conversationId: rows[index].id, field: "Preview", text: rows[index].preview })), messages: [], mentionIds: [] });
     }
     if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
     return Response.json({});
@@ -389,7 +389,7 @@ test("actual App renders independent public lifecycle and reconnect replacements
     const url = new URL(request.url);
     if (url.pathname === "/current.js") return new Response(script, { headers: { "Content-Type": "text/javascript" } });
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { stream.resolve(controller); controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "public", agent: "main", title: "Public progress" }], owner: "alice", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "public", agent: "main", title: "Public progress" }], owner: "alice", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
       if (url.pathname.startsWith("/assets/")) return new Response(Bun.file(path.join(dist, url.pathname)));
       return new Response(html, { headers: { "Content-Type": "text/html" } });
@@ -510,12 +510,13 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
   const row = (id: string, preview: string): Session => ({
     id, title: "room", preview, updatedAt: "2026-09-09T00:00:00.123456Z", agent: "main",
   });
+  const slackRow = (id: string, preview: string): Session => ({ ...row(id, preview), kind: "SLACK_THREAD" });
   const batch = (sessions: Session[], flags: Partial<SessionBatch> = {}): SessionBatch => ({
-    sessions, owner: flags.owner ?? ctrl.username, upstreamSuccess: flags.upstreamSuccess ?? false, summariesComplete: flags.summariesComplete ?? true,
+    sessions, owner: flags.owner ?? ctrl.username, upstreamSuccess: flags.upstreamSuccess ?? false,
   });
   const complete = (sessions: Session[], owner = ctrl.username) => async function* () {
     if (sessions.length > 0) yield batch(sessions, { owner });
-    yield batch([], { owner, upstreamSuccess: true, summariesComplete: true });
+    yield batch([], { owner, upstreamSuccess: true });
   };
   const uploadedFiles: { meta: Attachment; data: Buffer }[] = [];
   const imageBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1kAAAAASUVORK5CYII=", "base64");
@@ -644,7 +645,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
           if (ctrl.searchError) throw new RPCError("search unavailable", 13);
           return Response.json({
             terms: (searchTerms[input.query] ?? []).map((text) => ({ key: text.slice(0, text.indexOf(":")), text, start: input.query.indexOf(text), end: input.query.indexOf(text) + text.length })),
-            text: input.query, needle: input.query.toLowerCase(), matches: (searches[input.query] ?? []).map((conversationId) => ({ conversationId, field: "Preview", text: "" })), messages: [], mentionIds: [], indexComplete: true, summariesComplete: true,
+            text: input.query, needle: input.query.toLowerCase(), matches: (searches[input.query] ?? []).map((conversationId) => ({ conversationId, field: "Preview", text: "" })), messages: [], mentionIds: [],
           });
         case "/api/History":
           historyRequests.push(input);
@@ -800,7 +801,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     historyRequests.length = 0;
 
     const putsBeforeLive = await page.evaluate(() => (window as unknown as { __snapshotPuts: number }).__snapshotPuts);
-    ctrl.yieldBatches = complete([row("kept", "saved preview"), row("gone", "will vanish"), row("slack-thread:C:1", "filter preview")]);
+    ctrl.yieldBatches = complete([row("kept", "saved preview"), row("gone", "will vanish"), slackRow("slack-thread:C:1", "filter preview")]);
     listStarted = Promise.withResolvers<void>();
     const refreshRequest = listStarted.promise;
     blocked.resolve();
@@ -1290,7 +1291,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await search.fill("preview");
     await shown(sessionPalette, "filter preview");
     ctrl.yieldBatches = async function* () {
-      for (const session of [row("kept", "merged-live"), row("extra", "prefix-only"), ...Array.from({ length: 446 }, (_, i) => ({ ...row(i < 2 ? `slack-thread:C:${i + 2}` : `prefix-${i}`, `partial preview ${i}`), agent: i === 1 ? "other" : "main" }))]) {
+      for (const session of [row("kept", "merged-live"), row("extra", "prefix-only"), ...Array.from({ length: 446 }, (_, i) => ({ ...(i < 2 ? slackRow(`slack-thread:C:${i + 2}`, `partial preview ${i}`) : row(`prefix-${i}`, `partial preview ${i}`)), agent: i === 1 ? "other" : "main" }))]) {
         yield batch([session]);
       }
       await new Promise(() => {});
@@ -1324,7 +1325,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await hidden(sessionPalette, "prefix-only");
 
     ctrl.yieldBatches = async function* () {
-      yield batch([row("kept", "should-not-save")], { upstreamSuccess: true, summariesComplete: true });
+      yield batch([row("kept", "should-not-save")], { upstreamSuccess: true });
       throw new Error("late");
     };
     blocked.resolve();
@@ -1336,7 +1337,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await hidden(sessionPalette, "should-not-save");
 
     ctrl.yieldBatches = async function* () {
-      yield batch([row("kept", "wire-terminal")], { upstreamSuccess: true, summariesComplete: true });
+      yield batch([row("kept", "wire-terminal")], { upstreamSuccess: true });
       await wireTail.promise;
     };
     blocked.resolve();
@@ -1362,21 +1363,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await openSessions(page);
     await shown(sessionPalette, "saved preview");
 
-    const putsBeforeIncomplete = await page.evaluate(() => (window as unknown as { __snapshotPuts: number }).__snapshotPuts);
-    const beforeIncomplete = await page.evaluate(snapshot, ["alice", "test-protocol"]);
-    ctrl.yieldBatches = async function* () {
-      yield batch([row("kept", ""), row("ghost", "")], { summariesComplete: false });
-      yield batch([], { upstreamSuccess: true, summariesComplete: false });
-    };
+    ctrl.yieldBatches = complete([row("kept", "backfilled preview")]);
     blocked.resolve();
-    await page.getByText("loading...", { exact: true }).first().waitFor({ state: "visible", timeout: 15_000 });
     await page.keyboard.press("Control+p");
     await search.fill("tag:zzz-nope");
-    await shown(sessionPalette, "loading...");
-    await staleIndicator.waitFor({ state: "visible" });
-    expect(await page.evaluate(() => (window as unknown as { __snapshotPuts: number }).__snapshotPuts)).toBe(putsBeforeIncomplete);
-    expect(await page.evaluate(snapshot, ["alice", "test-protocol"])).toEqual(beforeIncomplete);
-    ctrl.yieldBatches = complete([row("kept", "backfilled preview")]);
     await shown(sessionPalette, "No matches");
     await hidden(sessionPalette, "loading...");
     expect(await staleIndicator.count()).toBe(0);
@@ -1574,7 +1564,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     }
     const runningPage = await context.newPage();
     for (const width of [1280, 390]) {
-      ctrl.yieldBatches = complete([{ ...row("slack-thread:C:running-chat", "latest user message"), running: true }], "bob");
+      ctrl.yieldBatches = complete([{ ...slackRow("slack-thread:C:running-chat", "latest user message"), running: true }], "bob");
       await runningPage.setViewportSize({ width, height: 844 });
       await runningPage.goto(origin);
       await openSessions(runningPage);
@@ -1589,7 +1579,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       expect(await runningRow.locator("span[title]:not([data-slot])").getAttribute("title")).toBe("room · main");
       expect((await runningRow.locator("span[title]:not([data-slot])").boundingBox())!.x).toBe((await runningRow.locator('[data-slot="session-title"]').boundingBox())!.x);
       expect((await indicator.boundingBox())!.x).toBeGreaterThan((await runningRow.locator("span[title]:not([data-slot])").boundingBox())!.x);
-      ctrl.yieldBatches = complete([{ ...row("slack-thread:C:running-chat", "latest assistant reply"), running: false }], "bob");
+      ctrl.yieldBatches = complete([{ ...slackRow("slack-thread:C:running-chat", "latest assistant reply"), running: false }], "bob");
       await runningPalette.getByText("latest assistant reply", { exact: true }).waitFor();
       expect(await indicator.count()).toBe(0);
       expect(await runningPalette.getByRole("button").filter({ hasText: "latest assistant reply" }).boundingBox()).toEqual(before);
@@ -1597,12 +1587,12 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await runningPage.close();
     // Exercise the palette layout and suggestions against the built App.
     const matrixRows = [
-      { ...row("slack-thread:C:winner", "row and origin union"), name: "Winner", pinned: true, forkedFrom: "original", tags: ["customer", "Needs review", 'say "hello"'] },
-      row("slack-thread:C:another", "Another unpinned chat"),
-      { ...row("slack-thread:C:other-agent", "Other agent"), agent: "other", pinned: true },
-      { ...row("slack-thread:D:other-room", "Other room"), title: "different", pinned: true },
-      row("slack-thread:C:unpinned", "Unpinned chat"),
-      { ...row("slack-thread:C:customer-union", "Customer chat"), tags: ["customer"] },
+      { ...slackRow("slack-thread:C:winner", "row and origin union"), name: "Winner", pinned: true, forkedFrom: "original", tags: ["customer", "Needs review", 'say "hello"'] },
+      slackRow("slack-thread:C:another", "Another unpinned chat"),
+      { ...slackRow("slack-thread:C:other-agent", "Other agent"), agent: "other", pinned: true },
+      { ...slackRow("slack-thread:D:other-room", "Other room"), title: "different", pinned: true },
+      slackRow("slack-thread:C:unpinned", "Unpinned chat"),
+      { ...slackRow("slack-thread:C:customer-union", "Customer chat"), tags: ["customer"] },
     ];
     ctrl.yieldBatches = complete(matrixRows);
     for (const hasTouch of [false, true]) {
@@ -1759,9 +1749,9 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await many.evaluate(() => (window as unknown as { searchFetches: number }).searchFetches)).toBe(2);
     await many.close();
     ctrl.rows = [
-      row("slack-thread:C:active", "matching active"),
-      { ...row("slack-thread:C:resolved", "matching resolved"), tags: ["customer", "resolved"] },
-      { ...row("slack-thread:C:other", "matching other agent"), agent: "other" },
+      slackRow("slack-thread:C:active", "matching active"),
+      { ...slackRow("slack-thread:C:resolved", "matching resolved"), tags: ["customer", "resolved"] },
+      { ...slackRow("slack-thread:C:other", "matching other agent"), agent: "other" },
       row("web-session:other-room", "matching other room"),
     ];
     ctrl.yieldBatches = complete(ctrl.rows);
@@ -3148,7 +3138,7 @@ test("session titles and turn-rail previews format tags and markup", async () =>
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "alert", preview, agent: "main" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "alert", preview, agent: "main" }], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));

@@ -254,16 +254,20 @@ func (f *toolFactory) backgroundTool(agent *Agent, kind BackgroundKind, tool *lo
 		}
 
 		job := BackgroundJob{ID: ToolCallKey(ctx), Kind: kind, Label: params.Description, Agent: agent.Name, CallID: metadata.callID, Detached: params.Background, Prompt: params.Prompt}
-		continueLine := ""
+		continueLine, subagent := "", ""
 
 		if kind == BackgroundKindTask {
-			job.SubagentKey = f.childKey + "/" + delegationName(metadata.callID, job.ID)
+			subagent = "/" + delegationName(metadata.callID, job.ID)
+
 			if id := params.Continue.SessionID; id != "" {
-				if name, ok := strings.CutPrefix(id, f.childKey+"/"); !ok || name == "" || strings.Contains(name, "/") {
+				name, ok := strings.CutPrefix(id, f.childKey.Path+"/")
+				if !ok || name == "" || strings.Contains(name, "/") {
 					return ToolResult{}, fmt.Errorf(continueNotChild, id)
 				}
 
-				job.SubagentKey = id
+				// A continue writes an existing session; a new one starts as this call's.
+				subagent = "/" + name
+				key := ChildKey{Path: subagent, Turn: metadata.observations.turnID, Call: metadata.callID}.under(f.childKey.Path)
 
 				// The named type takes the subagent over (OpenCode packages/core/src/tool/plugin/subagent.ts). A busy
 				// subagent takes the prompt without its task call, so the type's guardrail reviews it here.
@@ -273,13 +277,13 @@ func (f *toolFactory) backgroundTool(agent *Agent, kind BackgroundKind, tool *lo
 				}
 
 				progress := *metadata.progress
-				progress.Kind, progress.Agent, progress.Model, progress.SubagentKey = PublicProgressDelegation, child.Name, "", id
+				progress.Kind, progress.Agent, progress.Model, progress.SubagentKey = PublicProgressDelegation, child.Name, "", subagent
 
-				if blocked, err := f.guardTask(ctx, &child, ChildRunStageDelegation, agent.Name, params.Prompt, "", &progress, metadata, output); err != nil || blocked != "" {
+				if blocked, err := f.guardTask(ctx, &child, key, ChildRunStageDelegation, agent.Name, params.Prompt, "", &progress, metadata, output); err != nil || blocked != "" {
 					return TextToolResult(fmt.Sprintf(taskContinueID, id) + blocked), err
 				}
 
-				steered, err := f.childSessions.WriteSubagent(ctx, &SubagentWrite{Key: id, CallKey: job.ID, Agent: child.Name, Delegator: agent.Name, Prompt: params.Prompt, Mode: params.Continue.Mode})
+				steered, err := f.childSessions.WriteSubagent(ctx, &SubagentWrite{Key: key, CallKey: job.ID, Agent: child.Name, Delegator: agent.Name, Prompt: params.Prompt, Mode: params.Continue.Mode})
 				if err != nil {
 					return ToolResult{}, fmt.Errorf("write subagent: %w", err)
 				}
@@ -289,6 +293,7 @@ func (f *toolFactory) backgroundTool(agent *Agent, kind BackgroundKind, tool *lo
 				}
 			}
 
+			job.SubagentKey = f.childKey.Path + subagent
 			continueLine = fmt.Sprintf(taskContinueID, job.SubagentKey)
 		}
 
@@ -308,7 +313,11 @@ func (f *toolFactory) backgroundTool(agent *Agent, kind BackgroundKind, tool *lo
 
 		work.Detach()
 
-		if err := metadata.observations.finishCall(context.WithoutCancel(ctx), metadata.progress, PublicProgressBackground); err != nil {
+		// The row names its subagent by its key under the history that holds the call.
+		progress := *metadata.progress
+		progress.SubagentKey = subagent
+
+		if err := metadata.observations.finishCall(context.WithoutCancel(ctx), &progress, PublicProgressBackground); err != nil {
 			return ToolResult{}, err
 		}
 

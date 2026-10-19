@@ -17,14 +17,14 @@ func TestRuntimeCompletionNotesReadStoredJobs(t *testing.T) {
 
 	script := testBackgroundJob(conversationID, "turn-1/call/a")
 	subagent := testBackgroundJob(conversationID+"/t-1", "turn-1/call/t-1/task/call/b")
-	subagent.kind, subagent.label, subagent.subagentKey = backgroundTask, "research", "/b-2"
+	subagent.kind, subagent.label, subagent.subagentKey = turnNote, "research", "/b-2"
 
 	for _, job := range []*backgroundJob{script, subagent} {
 		createTestBackgroundJob(t, store, job)
 		finishTestBackgroundJob(t, store, job, backgroundCompleted, false)
 	}
 
-	_, err := store.db.ExecContext(t.Context(), `UPDATE background_jobs SET note_state = $1`, noteConsumed)
+	_, err := store.db.ExecContext(t.Context(), `UPDATE turns SET note = $1 WHERE NOT takes_lane`, noteConsumed)
 	require.NoError(t, err)
 
 	notes, err := rt.CompletionNotes(t.Context(), conversationID, []string{script.jobID, subagent.jobID, "turn-1/call/unknown"})

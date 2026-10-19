@@ -93,7 +93,7 @@ func TestShadowReviewDefinitionIsolation(t *testing.T) {
 			}
 
 			var good string
-			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings WHERE shadow_agent = 'main/z'`).Scan(&good))
+			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'main/z'`).Scan(&good))
 			require.Eventually(t, func() bool {
 				entries, err := store.ObserveEntries(t.Context(), good)
 				return err == nil && len(entries) == 1
@@ -104,7 +104,7 @@ func TestShadowReviewDefinitionIsolation(t *testing.T) {
 
 			if failure != "new malformed" {
 				var broken string
-				require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings WHERE shadow_agent = 'main/a'`).Scan(&broken))
+				require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'main/a'`).Scan(&broken))
 				// Existing durable work must fail locally, never run a default agent.
 				inbound, err := json.Marshal(protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "saved input", true))
 				require.NoError(t, err)
@@ -115,13 +115,13 @@ func TestShadowReviewDefinitionIsolation(t *testing.T) {
 				require.Eventually(t, func() bool {
 					var failed bool
 
-					err := store.db.QueryRowContext(t.Context(), `SELECT EXISTS (SELECT 1 FROM active_turns WHERE conversation_id = $1 AND terminal = $2)`, broken, protocol.TerminalFailed).Scan(&failed)
+					err := store.db.QueryRowContext(t.Context(), `SELECT count(*) > 0 FROM turns WHERE conversation_id = $1 AND terminal = $2`, broken, protocol.TerminalFailed).Scan(&failed)
 
 					return err == nil && failed
 				}, 3*time.Second, time.Millisecond)
 
 				var message string
-				require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT outbound_json->>'Text' FROM active_turns WHERE conversation_id = $1 AND terminal = $2`, broken, protocol.TerminalFailed).Scan(&message))
+				require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT outbound_json->>'Text' FROM turns WHERE conversation_id = $1 AND terminal = $2`, broken, protocol.TerminalFailed).Scan(&message))
 				require.Contains(t, message, `missing required default agent "main/a"`)
 			}
 
@@ -156,7 +156,7 @@ func TestShadowReviewOwnershipReadIsolation(t *testing.T) {
 
 	defer func() { _ = tx.Rollback() }()
 
-	_, err = tx.ExecContext(t.Context(), `LOCK TABLE shadow_bindings IN ACCESS EXCLUSIVE MODE`)
+	_, err = tx.ExecContext(t.Context(), `LOCK TABLE conversations IN ACCESS EXCLUSIVE MODE`)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -166,14 +166,19 @@ func TestShadowReviewOwnershipReadIsolation(t *testing.T) {
 
 	done := make(chan error, 1)
 
-	group.Go(func() error { done <- manager.PickLaterWork(ctx, "blocked"); return nil })
+	group.Go(func() error {
+		_, err := manager.ensureThreadBridge(ctx, "blocked", ThreadState{Agent: "main"})
+		done <- err
+
+		return nil
+	})
 
 	defer func() { _ = tx.Rollback(); require.NoError(t, group.Wait()) }()
 
 	require.Eventually(t, func() bool {
 		var blocked bool
 
-		err := store.db.QueryRowContext(t.Context(), `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE relation = 'shadow_bindings'::regclass AND NOT granted AND mode = 'AccessShareLock')`).Scan(&blocked)
+		err := store.db.QueryRowContext(t.Context(), `SELECT count(*) > 0 FROM pg_locks WHERE relation = 'conversations'::regclass AND NOT granted AND mode = 'AccessShareLock'`).Scan(&blocked)
 
 		return err == nil && blocked
 	}, 3*time.Second, time.Millisecond)
@@ -226,7 +231,7 @@ func TestShadowReviewOwnershipReadIsolation(t *testing.T) {
 	require.Eventually(t, func() bool {
 		var blocked int
 
-		err := store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_locks WHERE relation = 'shadow_bindings'::regclass AND NOT granted AND mode = 'AccessShareLock'`).Scan(&blocked)
+		err := store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_locks WHERE relation = 'conversations'::regclass AND NOT granted AND mode = 'AccessShareLock'`).Scan(&blocked)
 
 		return err == nil && blocked == 2
 	}, 3*time.Second, time.Millisecond)

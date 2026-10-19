@@ -1,0 +1,298 @@
+package backend
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/stretchr/testify/require"
+)
+
+// TestStateStoreEquivalenceFixture builds, at this tree's schema, a small State Store with
+// the shapes the State Store refactor moves, through this tree's own code paths: real
+// bridges against a fake provider for turns, and the test helpers for the rest. It leaves
+// work unfinished for TestStateStoreEquivalenceDrain. run.sh copies it into the base tree (FIXTURE=1).
+func TestStateStoreEquivalenceFixture(t *testing.T) {
+	databaseURL, workspace := os.Getenv("ROCKETCLAW_EQUIV_FIXTURE_URL"), os.Getenv("ROCKETCLAW_EQUIV_FIXTURE_WORKSPACE")
+	if databaseURL == "" || workspace == "" {
+		t.Skip("set ROCKETCLAW_EQUIV_FIXTURE_URL and ROCKETCLAW_EQUIV_FIXTURE_WORKSPACE to build the equivalence fixture")
+	}
+
+	ctx := t.Context()
+	primary := "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n"
+
+	for _, agent := range []string{"main", "job", "channel-agent", "reviewer"} {
+		writeAgent(t, workspace, agent, primary)
+	}
+
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "agents", "reviewer"), 0o755))
+	writeAgent(t, workspace, "reviewer/alt", "---\nmodel: gpt-6.1-sol\n---\nShadow prompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	words := strings.Fields("granite harbor lantern meadow quartz saffron tundra velvet willow zephyr ox ai to be jasmine copper falcon nebula orchid pylon")
+	hold, holdStop := make(chan struct{}), make(chan struct{})
+
+	var (
+		mu    sync.Mutex
+		count int
+	)
+
+	requests := make(chan struct{}, 256)
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requests <- struct{}{}
+
+		for word, release := range map[string]chan struct{}{"HOLDME": hold, "HOLDSTOP": holdStop} {
+			if strings.Contains(string(body), word) {
+				select {
+				case <-release:
+				case <-r.Context().Done():
+					return
+				}
+			}
+		}
+
+		mu.Lock()
+		count++
+		n := count
+		mu.Unlock()
+
+		text, _ := json.Marshal(fmt.Sprintf("Answer %d mentions %s and %s.", n, words[n%len(words)], words[(n*7)%len(words)]))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"id":"resp_%d","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_%d","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":%s,"annotations":[]}]}]}`, n, n, text)
+	}))
+	t.Cleanup(provider.Close)
+
+	// Remote sessions with and without a selected agent and model; ses_b's shell runs in the background.
+	remoteAlpha, remoteFast := openCodeTestSession("ses_a", "Remote alpha", "/srv/app", 3000), openCodeTestSession("ses_c", "Remote fast", "/srv/app", 2500)
+	remoteAlpha.Agent, remoteAlpha.Model.ProviderID, remoteAlpha.Model.ID = "build", "anthropic", "claude-opus-4-7"
+	remoteFast.Agent, remoteFast.Model.ProviderID, remoteFast.Model.ID = "plan", "anthropic", "claude-opus-4-7-fast"
+	remote := httptest.NewServer(&fakeOpenCode{sessions: []openCodeSession{remoteAlpha, remoteFast, openCodeTestSession("ses_b", "Remote beta", "/srv/api", 2000)}})
+	t.Cleanup(remote.Close)
+
+	cfg := &config.Config{DatabaseURL: databaseURL, Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: provider.URL},
+		Slack:    config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"channel-agent"}}}},
+		OpenCode: map[string]config.OpenCodeConfig{"box": {URL: remote.URL, Password: "pw", Port: 4100}}}
+	locked := config.NewLockedConfig(cfg)
+	log := slog.New(slog.DiscardHandler)
+
+	s, err := NewSessionServiceIn(ctx, cfg, log)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, s.Stop()) })
+
+	publisher := &outboundPublisherMock{PublishOutboundFunc: func(_ context.Context, message *protocol.OutboundMessage) error {
+		message.MarkDelivered(nil)
+		return nil
+	}}
+
+	var (
+		manager  *threadBridgeManager
+		registry *backgroundRegistry
+	)
+
+	manager = newThreadBridgeManager(locked, s, log, &bridgeFactoryMock{newBridgeFunc: func(bridgeCfg *Config) directBridge {
+		bridgeCfg.SessionService, bridgeCfg.RequestRestart = s, &runtimeRestarterMock{restartFunc: testNoopRestart}
+		bridge := NewConversation(locked, publisher, bridgeCfg, log)
+		bridge.threads, bridge.background = manager, registry
+
+		return bridge
+	}})
+	manager.cronRoots = newCronRoots(func(*protocol.OutboundMessage) {})
+	registry = newBackgroundRegistry(s, manager, log)
+	s.jobs = registry
+	rt := &Runtime{Sessions: s, threads: manager, Cfg: locked, Log: log, background: registry}
+	shutdown := runTestManager(t, manager)
+
+	n := 0
+	web := func(id, text string, kind protocol.InboundKind) *protocol.InboundMessage {
+		n++
+		msg := protocol.NewInboundMessageFromContent(protocol.SourceWeb, kind, &protocol.InboundContent{Text: text}, true)
+		msg.ConversationID = id
+		msg.Metadata[protocol.InboundPrincipalMetadataKey], msg.Metadata[protocol.InboundPrincipalNameMetadataKey], msg.Metadata[protocol.InboundPrincipalEmailMetadataKey] = "Alice Example", "Alice Example", "alice@example.com"
+		msg.Metadata["web_message_id"] = fmt.Sprintf("fixture-%d", n)
+
+		return msg
+	}
+	chat := func(id, agent string, prompts ...string) {
+		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: agent, CreatedBy: "alice@example.com"}))
+
+		for _, prompt := range prompts {
+			require.NoError(t, rt.RunTurn(ctx, web(id, prompt, protocol.InboundKindSteer)))
+		}
+	}
+	// cronRun runs a cron job as cmd/rocketclaw's cronRunner does.
+	cronRun := func(id, destination string) {
+		if destination != "" {
+			require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: destination, Agent: "channel-agent", CreatedBy: "cron"}))
+		}
+
+		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "job", CreatedBy: "cron"}))
+
+		msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "Cron job prompt about quartz inventory and harbor schedule", false)
+		msg.ConversationID, msg.RequireOutputDecision, msg.SyncDestination = id, true, destination
+		msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "job", RanAt: "2026-10-19T08:00:00Z"}
+
+		if destination == "" {
+			msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "#ops"}
+			require.NoError(t, rt.RunTurn(ctx, msg))
+
+			return
+		}
+
+		require.NoError(t, rt.RunTurn(ctx, msg))
+		require.NoError(t, rt.SyncConversation(ctx, id, destination))
+	}
+	awaitRequest := func() {
+		select {
+		case <-requests:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for a provider request")
+		}
+	}
+
+	alpha, beta := "web-session:alpha", "web-session:beta"
+	chat(alpha, "main", "Plan the granite migration", "Explain lantern routing", "Compare meadow and quartz", "Summarize saffron notes", "List tundra risks",
+		"Draft velvet release", "Check willow metrics", "Review zephyr alerts", "Close the copper ticket")
+	chat(beta, "main", "Hello beta about falcon", "Nebula follow up", "Orchid wrap up")
+
+	slack := protocol.SlackThreadConversationID("C123", "111.222")
+	require.NoError(t, s.UpsertThread(slack, ThreadState{Agent: "main"}))
+
+	for i, text := range []string{"Slack asks about pylon status", "Slack follows up on pylon"} {
+		msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, text, true)
+		msg.ConversationID, msg.SlackReply = slack, &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: fmt.Sprintf("111.3%02d", i), ThreadTS: "111.222"}
+		msg.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "Bob Slack"}
+		require.NoError(t, rt.RunTurn(ctx, msg))
+	}
+
+	// A cron run reports to a new Slack thread (a copy of its history), and is continued in Web.
+	runA := "cron:cron/daily.md:20261019T080000.000000000Z:a1"
+	cronRun(runA, "")
+	chat("web:"+runA, "main")
+	require.NoError(t, rt.SyncConversation(ctx, runA, "web:"+runA))
+	require.NoError(t, rt.RunTurn(ctx, web("web:"+runA, "Continue the quartz inventory in Web", protocol.InboundKindSteer)))
+
+	// A one-off cron run reports to a Web chat, with a pending schedule effect.
+	runB := "one-off-cron:cron/daily.md:20261019T090000.000000000Z:b1"
+	cronRun(runB, beta)
+
+	schedule, err := json.Marshal(protocol.ScheduledMessageState{ConversationID: runB, Agent: "job", Message: "check the harbor again", DueAt: time.Now().Add(48 * time.Hour).UTC()})
+	require.NoError(t, err)
+	_, err = s.AppendEntryID(ctx, runB, &rocketcode.SessionEntry{Version: 1, Type: producerScheduleEntryType, Timestamp: time.Now(), OutputTrace: []json.RawMessage{schedule}})
+	require.NoError(t, err)
+
+	// A delegation history and an External MCP binding with private and managed histories.
+	_, err = s.AppendEntryID(ctx, alpha+"/call-1", testSessionEntry("delegated granite research", "delegated meadow findings"))
+	require.NoError(t, err)
+
+	managed := protocol.SlackThreadConversationID("C900", "900.1")
+	require.NoError(t, s.RegisterExternalMCPConversation("ext-1", "main", &ExternalMCPSessionState{Agent: "main", PrivateConversationID: "external_mcp:main:ext-1", ManagedConversationID: managed, SlackChannel: "C900", OriginPairs: map[string]string{"customer": "Carol"}}))
+	_, err = s.AppendEntryID(ctx, "external_mcp:main:ext-1", testSessionEntry("private mcp falcon prompt", "private mcp nebula answer"))
+	require.NoError(t, err)
+
+	// A shadowed chat whose shadow runs each turn.
+	chat("web-session:shadowed", "reviewer", "Shadowed orchid question")
+
+	// A stopped turn.
+	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "web-session:stopped", Agent: "main", CreatedBy: "alice@example.com"}))
+
+	stopped := make(chan error, 1)
+	go func() {
+		stopped <- rt.RunTurn(ctx, web("web-session:stopped", "HOLDSTOP then stop this saffron task", protocol.InboundKindSteer))
+	}()
+
+	awaitRequest()
+
+	cancel := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindCancel, "", true)
+	cancel.ConversationID = "web-session:stopped"
+	require.NoError(t, rt.RunTurn(ctx, cancel))
+	close(holdStop)
+	t.Logf("stopped turn: %v", <-stopped)
+
+	// An undo staged in a chat.
+	chat("web-session:undo", "main", "First undo velvet prompt", "Second undo willow prompt")
+	undo, err := s.ObserveEntries(ctx, "web-session:undo")
+	require.NoError(t, err)
+	_, _, err = rt.StageRevert(ctx, "web-session:undo", fmt.Sprintf("%d:0", undo[len(undo)-1].ID))
+	require.NoError(t, err)
+
+	// Pins, names, tags, reminders, a goal, remote sessions, Background Jobs.
+	pinned, name := true, "Alpha planning"
+	_, err = s.UpdateConversationDetails(ctx, alpha, &pinned, &name)
+	require.NoError(t, err)
+	_, err = s.toggleSessionTag(ctx, beta, "customer", []string{"customer"})
+	require.NoError(t, err)
+	require.NoError(t, s.PutScheduledMessage("reminder-once", &protocol.ScheduledMessageState{ConversationID: alpha, Agent: "main", Message: "Remind me about granite", DueAt: time.Now().Add(24 * time.Hour).UTC()}))
+	require.NoError(t, s.PutScheduledMessage("reminder-recurring", &protocol.ScheduledMessageState{ConversationID: beta, Agent: "main", Message: "Weekly falcon check", DueAt: time.Now().Add(72 * time.Hour).UTC(), Recurring: true, Interval: 7 * 24 * time.Hour}))
+	require.NoError(t, s.BeginGoal(beta, &GoalState{Objective: "Ship the falcon report", MaxTurns: 5, PrincipalName: "Alice Example", PrincipalEmail: "alice@example.com"}))
+	require.NoError(t, s.syncOpenCode(ctx, "box", cfg.OpenCode["box"], &openCodeShells{running: map[string]string{"sh_1": "ses_b"}}))
+	// The last sync was an hour ago, as on any copy, so offline reads the same whenever it is captured.
+	_, err = s.db.ExecContext(ctx, `UPDATE opencode_sessions SET synced_at = synced_at - interval '1 hour'`)
+	require.NoError(t, err)
+
+	done := testBackgroundJob(alpha, "turn-done/call/a")
+	createTestBackgroundJob(t, s, done)
+	finishTestBackgroundJob(t, s, done, backgroundCompleted, false)
+
+	runJob := testBackgroundJob(runB, "turn-run/call/b")
+	runJob.origin = &protocol.InboundMessage{Source: protocol.SourceSystem, SyncDestination: beta}
+	createTestBackgroundJob(t, s, runJob)
+	finishTestBackgroundJob(t, s, runJob, backgroundCompleted, true)
+
+	// Queued and stashed work behind a turn still running when the process stops.
+	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "web-session:queued", Agent: "main", CreatedBy: "alice@example.com"}))
+
+	running := make(chan error, 1)
+	go func() {
+		running <- rt.RunTurn(context.WithoutCancel(ctx), web("web-session:queued", "HOLDME long lantern task", protocol.InboundKindSteer))
+	}()
+
+	awaitRequest()
+
+	for _, kind := range []protocol.InboundKind{protocol.InboundKindEnqueue, protocol.InboundKindHeld} {
+		msg := web("web-session:queued", "Queued "+string(kind)+" pylon follow up", kind)
+		require.NoError(t, rt.StashQueueItem(ctx, "web-session:queued", &protocol.ThreadQueueItem{ID: msg.Metadata["web_message_id"], Message: msg.Text, Principal: "Alice Example", Source: protocol.SourceWeb,
+			Kind: kind, Content: protocol.InboundContent{Text: msg.Text}, StashAt: time.Now().UTC(), Inbound: msg}))
+	}
+
+	require.NoError(t, shutdown())
+	t.Logf("queued turn after shutdown: %v", <-running)
+	close(hold)
+
+	// Work a stopped process leaves unfinished, for the drain: a running turn of a shadowed chat
+	// with its pending shadow manifest, and running script and task Background Jobs.
+	seedActiveTurn(t, s, "web-session:shadowed", "turn-unfinished", nil)
+	require.NoError(t, s.startShadowManifests(ctx, s.db, "web-session:shadowed", "reviewer", "turn-unfinished", web("web-session:shadowed", "unfinished", protocol.InboundKindSteer)))
+	createTestBackgroundJob(t, s, testBackgroundJob(alpha, "turn-live/call/script"))
+
+	task := testBackgroundJob(beta, "turn-live/call/task")
+	task.kind, task.subagentKey = backgroundTask, "/call-task"
+	createTestBackgroundJob(t, s, task)
+
+	counts, err := queryStrings(ctx, s.db, `WITH counts AS (
+    SELECT 'managed_conversations' AS t, count(*) AS n FROM managed_conversations
+    UNION ALL SELECT 'session_entries', count(*) FROM session_entries
+    UNION ALL SELECT 'active_turns ' || phase || '/' || terminal, count(*) FROM active_turns GROUP BY phase, terminal
+    UNION ALL SELECT 'thread_queue ' || kind, count(*) FROM thread_queue GROUP BY kind
+    UNION ALL SELECT 'background_jobs ' || status, count(*) FROM background_jobs GROUP BY status
+    UNION ALL SELECT 'shadow_turns ' || terminal || '/' || (child_turn_id = '')::text, count(*) FROM shadow_turns GROUP BY 1
+    UNION ALL SELECT 'scheduled_messages', count(*) FROM scheduled_messages
+    UNION ALL SELECT 'opencode_sessions', count(*) FROM opencode_sessions
+)
+SELECT t || ' ' || n FROM counts ORDER BY 1`, "fixture counts")
+	require.NoError(t, err)
+	t.Logf("fixture rows:\n%s", strings.Join(counts, "\n"))
+}

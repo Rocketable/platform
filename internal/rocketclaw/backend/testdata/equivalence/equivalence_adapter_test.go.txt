@@ -1,0 +1,102 @@
+package backend
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+)
+
+// ---- Tree adapter: the only part that differs between the before and after trees. ----
+
+// run.sh replaces BASE_COMMIT with the base revision's commit ID.
+const equivTree = "before (BASE_COMMIT)"
+
+// equivSkipped names surfaces this tree cannot capture.
+const equivSkipped = "none"
+
+// equivConversationIDs lists every conversation ID any table of this schema holds.
+func equivConversationIDs(ctx context.Context, db stateStoreDB) ([]string, error) {
+	return queryStrings(ctx, db, `WITH ids AS (
+    SELECT conversation_id FROM managed_conversations
+    UNION SELECT conversation_id FROM session_entries
+    UNION SELECT conversation_id FROM active_turns
+    UNION SELECT conversation_id FROM thread_queue
+    UNION SELECT conversation_id FROM background_jobs
+    UNION SELECT conversation_id FROM scheduled_messages
+    UNION SELECT conversation_id FROM conversation_goals
+    UNION SELECT child_conversation_id FROM shadow_bindings
+    UNION SELECT conversation_id FROM opencode_sessions
+)
+SELECT conversation_id FROM ids ORDER BY conversation_id COLLATE "C"`, "equivalence conversation IDs")
+}
+
+// equivOpenCodeServers lists the remote OpenCode servers whose sessions are stored.
+func equivOpenCodeServers(ctx context.Context, db stateStoreDB) ([]string, error) {
+	return queryStrings(ctx, db, `SELECT DISTINCT server COLLATE "C" FROM opencode_sessions ORDER BY 1`, "equivalence OpenCode servers")
+}
+
+// equivSidebarFacts returns a sidebar row's Slack channel and the cron path of the run it continues.
+// Before, both are parsed from the conversation ID, as Web did.
+func equivSidebarFacts(row *SidebarSession) (channel, cronPath string) {
+	channel, _, _ = protocol.SlackThreadTarget(row.Conversation.ID)
+	if source, ok := strings.CutPrefix(row.Conversation.ID, "web:"); ok {
+		run, _ := ParseCronRun(source)
+		cronPath = run.path
+	}
+
+	return channel, cronPath
+}
+
+// equivDelegations lists the IDs of a history page's delegations.
+func equivDelegations(view *HistorySnapshot) []string {
+	return view.Delegations
+}
+
+// equivSubagents lists none: this tree cannot tell a page's subagent sessions apart.
+func equivSubagents(*HistorySnapshot) []string {
+	return nil
+}
+
+// equivCronRun locates a cron run source; before, Web parsed it from the run's ID.
+func equivCronRun(source *CronRunSource) (path string, at time.Time) {
+	run, _ := ParseCronRun(source.SourceConversationID)
+
+	return run.path, run.At
+}
+
+// equivSearchMessages fails when the search index is incomplete, since before it then misses messages.
+func equivSearchMessages(ctx context.Context, s *SessionService, needle string) ([]MessageSearchHit, error) {
+	hits, complete, err := s.SearchMessages(ctx, needle, nil)
+	if err == nil && !complete {
+		err = errors.New("message search index is incomplete")
+	}
+
+	return hits, err
+}
+
+// equivSidebarChats reads every sidebar chat.
+func equivSidebarChats(ctx context.Context, s *SessionService) ([]SidebarChat, error) {
+	var chats []SidebarChat
+
+	for chat, err := range s.SidebarChats(ctx, noSlackLookups{}) {
+		if err != nil {
+			return nil, err
+		}
+
+		chats = append(chats, chat)
+	}
+
+	return chats, nil
+}
+
+func equivPrincipals(ctx context.Context, s *SessionService) (map[string][]string, error) {
+	principals, complete, err := s.messagePrincipals(ctx)
+	if err == nil && !complete {
+		err = errors.New("message search index is incomplete")
+	}
+
+	return principals, err
+}

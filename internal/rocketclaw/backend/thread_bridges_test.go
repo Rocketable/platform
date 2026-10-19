@@ -165,7 +165,7 @@ func TestThreadBridgeManagerDropsBridgeWhenThreadIsNotPersisted(t *testing.T) {
 
 	start := &threadStart{agent: "main"}
 
-	_, err := store.db.ExecContext(t.Context(), `ALTER TABLE managed_conversations ADD CONSTRAINT reject_thread CHECK (false) NOT VALID`)
+	_, err := store.db.ExecContext(t.Context(), `ALTER TABLE conversations ADD CONSTRAINT reject_thread CHECK (false) NOT VALID`)
 	require.NoError(t, err)
 	_, err = manager.createSession(t.Context(), start, nil, "", nil)
 	require.ErrorContains(t, err, "persist new Web session")
@@ -379,6 +379,7 @@ func TestThreadBridgeManagerAllowsGoalAfterCompletedGoal(t *testing.T) {
 
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
+	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "first", MaxTurns: 5}))
 	_, err := store.UpdateGoalStatus(conversationID, GoalStatusComplete, "done")
 	require.NoError(t, err)
@@ -458,6 +459,7 @@ func TestThreadBridgeManagerInterruptSlackThreadInterruptsActiveTurn(t *testing.
 
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
+	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "first", MaxTurns: 5}))
 
 	marker := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "111.222"}
@@ -552,10 +554,11 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(output.Output), &result))
 
 	conversationID := result.SessionID
-	_, _, slack := protocol.SlackThreadTarget(conversationID)
+	_, slackThread, err := store.SlackThread(t.Context(), conversationID)
+	require.NoError(t, err)
 
 	require.NotEmpty(t, conversationID)
-	assert.False(t, slack)
+	assert.Empty(t, slackThread)
 	assert.JSONEq(t, fmt.Sprintf(`{"outcome":"created","session_id":%q,"url":%q}`, conversationID, "http://100.95.197.99:8080/s/"+base64.RawURLEncoding.EncodeToString([]byte(conversationID))), output.Output)
 	assert.Equal(t, Config{ConversationID: conversationID, Agent: "main"}, created)
 	require.Len(t, submittedMessages(bridge), 1)
@@ -575,7 +578,7 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 	assert.Equal(t, ThreadState{Agent: "main", CreatedBy: "Alice", spawnedBy: "web:caller"}, thread, "the creator is recorded")
 
 	var name string
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT name FROM managed_conversations WHERE conversation_id = $1`, conversationID).Scan(&name))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT name FROM conversations WHERE conversation_id = $1`, conversationID).Scan(&name))
 	assert.Equal(t, "Child", name)
 
 	_, err = write.Call(t.Context(), []byte(`{"session_id":"","mode":"steer","title":"","prompt":"again","agent":""}`), nil)
@@ -628,7 +631,7 @@ func TestSessionsWriteRejectsUnavailableAgents(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	write(new(protocol.InboundMessage), "main", "", "tailscale")
 
-	conversations, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM managed_conversations`, "conversations")
+	conversations, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations`, "conversations")
 	require.NoError(t, err)
 	assert.Empty(t, conversations, "a failed URL lookup creates no session")
 }
@@ -937,7 +940,7 @@ func TestWriteSessionDeliversByMode(t *testing.T) {
 
 		bridge := runningTestBridge(t, store, manager, target)
 		bridge.inputOpen = false
-		_, err := store.db.ExecContext(t.Context(), `UPDATE managed_conversations SET revert_message_id = 'staged' WHERE conversation_id = $1`, target)
+		_, err := store.db.ExecContext(t.Context(), `UPDATE conversations SET revert_message_id = 'staged' WHERE conversation_id = $1`, target)
 		require.NoError(t, err)
 
 		for _, mode := range []sessionWriteMode{sessionWriteEnqueue, sessionWriteSteer} {
@@ -947,12 +950,12 @@ func TestWriteSessionDeliversByMode(t *testing.T) {
 		}
 
 		var marker string
-		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT revert_message_id FROM managed_conversations WHERE conversation_id = $1`, target).Scan(&marker))
+		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT revert_message_id FROM conversations WHERE conversation_id = $1`, target).Scan(&marker))
 		assert.Equal(t, "staged", marker, "a write never commits a staged revert")
 		assert.Empty(t, bridge.requestCh)
 		assert.Equal(t, []string{"enqueue", "steer"}, queueIDs(t, store, target))
 
-		_, err = store.db.ExecContext(t.Context(), `UPDATE managed_conversations SET revert_message_id = '' WHERE conversation_id = $1`, target)
+		_, err = store.db.ExecContext(t.Context(), `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = $1`, target)
 		require.NoError(t, err)
 		require.NoError(t, manager.PickLaterWork(t.Context(), target))
 		assert.Equal(t, "enqueue", (<-bridge.requestCh).queueItemID, "the writes run once the revert is cancelled")
@@ -1032,7 +1035,7 @@ func TestWriteSessionReleasesHeldRequest(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			_, err := store.db.ExecContext(t.Context(), `UPDATE thread_queue SET kind = 'held' WHERE queue_item_id = 'held'`) // As a stopped parent's wait does.
+			_, err := store.db.ExecContext(t.Context(), `UPDATE turns SET reason = 'held', delivery = 'held' WHERE input_id = 'held' AND phase = 'waiting'`) // As a stopped parent's wait does.
 			require.NoError(t, err)
 
 			request := <-bridge.requestCh
@@ -1055,7 +1058,7 @@ func TestWriteSessionReleasesHeldRequest(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, []string{"earlier", "held", "next"}, queueIDs(t, store, target))
 
-			held, err := queryStrings(t.Context(), store.db, `SELECT queue_item_id FROM thread_queue WHERE conversation_id = $1 AND kind = 'held' ORDER BY 1`, "held rows", target)
+			held, err := queryStrings(t.Context(), store.db, `SELECT input_id FROM turns WHERE conversation_id = $1 AND phase = 'waiting' AND delivery = 'held' ORDER BY 1`, "held rows", target)
 			require.NoError(t, err)
 			assert.Equal(t, []string{"agent stash", "by hand"}, held)
 		})
@@ -1079,7 +1082,7 @@ func TestWebWriteRunsReleasedRequestFirst(t *testing.T) {
 			_, _, err := manager.writeSession(t.Context(), target, "held", sessionWriteEnqueue, agentWrite("parent work"))
 			require.NoError(t, err)
 			require.Equal(t, "held", (<-bridge.requestCh).queueItemID)
-			_, err = store.db.ExecContext(t.Context(), `UPDATE thread_queue SET kind = 'held' WHERE queue_item_id = 'held'`) // As a stopped parent's wait does.
+			_, err = store.db.ExecContext(t.Context(), `UPDATE turns SET reason = 'held', delivery = 'held' WHERE input_id = 'held' AND phase = 'waiting'`) // As a stopped parent's wait does.
 			require.NoError(t, err)
 
 			bridge.requestCh <- bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindSteer, "lined up", true)}

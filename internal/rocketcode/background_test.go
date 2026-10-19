@@ -192,7 +192,10 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 				require.Equal(t, text, outputs[0].Result.Output)
 				require.Len(t, jobs.RunCalls(), 1)
 				require.Equal(t, tc.job, *jobs.RunCalls()[0].Job)
-				require.Equal(t, PublicProgressBackground, PublicProgressFromTrace(loop.observations.trace)[0].State)
+				// A task's row names its subagent even when the call moves before the subagent reports.
+				traced := PublicProgressFromTrace(loop.observations.trace)[0]
+				require.Equal(t, PublicProgressBackground, traced.State)
+				require.Equal(t, tc.job.SubagentKey, traced.SubagentKey)
 
 				// The turn moves on and closes; the job keeps its own review context and output sink.
 				loop.permissionReviewInput = nil
@@ -230,7 +233,7 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 
 				for _, request := range reviewedRequests(loop.PermissionReviewer.(*mockPermissionReviewer)) {
 					require.Equal(t, turnReview, request.ReviewContext)
-					require.Equal(t, reviewKey("turn", "call-1"), request.Review, "a script's host calls, even after its turn, review under the script's call")
+					require.Equal(t, ChildKey{Path: "/" + reviewKey("turn", "call-1"), Turn: "turn", Call: "call-1"}, request.Review, "a script's host calls, even after its turn, review under the script's call")
 					turns = append(turns, request.Turn)
 				}
 
@@ -332,8 +335,8 @@ func TestTaskWritesSubagentSession(t *testing.T) {
 	require.Equal(t, []string{key, "reviewer", "openai/gpt-5.4"}, []string{progress[0].SubagentKey, progress[0].Agent, progress[0].Model}, "a continue call's row opens the subagent it continued")
 
 	writes := sessions.WriteSubagentCalls()
-	require.Equal(t, SubagentWrite{Key: key, CallKey: "turn-call-1/call/call-1", Agent: "child", Delegator: "main", Prompt: "run the tests"}, *writes[0].Write)
-	require.Equal(t, SubagentWrite{Key: key, CallKey: "turn-call-2/call/call-2", Agent: "reviewer", Delegator: "main", Prompt: "report the results", Mode: ContinueEnqueue}, *writes[1].Write)
+	require.Equal(t, SubagentWrite{Key: ChildKey{Path: key, Turn: "turn-call-1", Call: "call-1"}, CallKey: "turn-call-1/call/call-1", Agent: "child", Delegator: "main", Prompt: "run the tests"}, *writes[0].Write)
+	require.Equal(t, SubagentWrite{Key: ChildKey{Path: key, Turn: "turn-call-2", Call: "call-2"}, CallKey: "turn-call-2/call/call-2", Agent: "reviewer", Delegator: "main", Prompt: "report the results", Mode: ContinueEnqueue}, *writes[1].Write)
 	require.Equal(t, "turn-call-2/call/call-2", sessions.AwaitSubagentCalls()[1].CallKey)
 
 	for _, params := range newParams(mock) {
@@ -503,7 +506,7 @@ func TestSteerSwitchedSubagentAnswerGuardedByFinalType(t *testing.T) {
 	mock := mockResponses(responseWithMessage("gate", `{"approved":true,"reason":""}`), responseWithMessage("review", `{"approved":false,"reason":"strict says no"}`))
 	factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"child": child, "reviewer": reviewer, "lenient": testAgentWithPrompt("lenient", "LENIENT PROMPT"), "strict": testAgentWithPrompt("strict", "STRICT PROMPT")}})
 	factory.childSessions = &mockChildSessions{
-		AppendChildEntryFunc: func(context.Context, string, *SessionEntry) error { return nil },
+		AppendChildEntryFunc: func(context.Context, ChildKey, *SessionEntry) error { return nil },
 		WriteSubagentFunc:    func(context.Context, *SubagentWrite) (bool, error) { return false, nil },
 		AwaitSubagentFunc: func(context.Context, string, string) (string, ReplayAttribution, error) {
 			return "leaked", ReplayAttribution{Agent: "reviewer", Model: "openai/gpt-6.1-sol"}, nil
@@ -608,11 +611,11 @@ func answeringSessions(saved map[string][]SessionEntry, steered bool) *mockChild
 	)
 
 	return &mockChildSessions{
-		AppendChildEntryFunc: func(_ context.Context, key string, entry *SessionEntry) error {
+		AppendChildEntryFunc: func(_ context.Context, key ChildKey, entry *SessionEntry) error {
 			mu.Lock()
 			defer mu.Unlock()
 
-			saved[key] = append(saved[key], *entry)
+			saved[key.Path] = append(saved[key.Path], *entry)
 
 			return nil
 		},
@@ -620,7 +623,7 @@ func answeringSessions(saved map[string][]SessionEntry, steered bool) *mockChild
 			mu.Lock()
 			defer mu.Unlock()
 
-			writes[write.Key] = *write
+			writes[write.Key.Path] = *write
 
 			return steered, nil
 		},

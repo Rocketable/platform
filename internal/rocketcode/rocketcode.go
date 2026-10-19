@@ -86,7 +86,7 @@ const (
 // ChildSessions stores finished guardrail and permission review turns, and runs Task subagents as
 // sessions of the embedder, on the turn runner its other sessions use.
 type ChildSessions interface {
-	AppendChildEntry(ctx context.Context, key string, entry *SessionEntry) error
+	AppendChildEntry(ctx context.Context, key ChildKey, entry *SessionEntry) error
 	// WriteSubagent delivers write to its subagent session, which it starts when new, and reports
 	// whether write joined the session's running turn. A replayed write delivers nothing again.
 	WriteSubagent(ctx context.Context, write *SubagentWrite) (steered bool, err error)
@@ -95,10 +95,25 @@ type ChildSessions interface {
 	AwaitSubagent(ctx context.Context, key, callKey string) (string, ReplayAttribution, error)
 }
 
+// ChildKey names a child session by Path, its key under the embedder's session, which an empty Path
+// names. A new child starts under the child at key Parent, by call Call of turn Turn there.
+type ChildKey struct {
+	Path, Parent, Turn, Call string
+}
+
+// under places k, a key relative to the child at key parent, under the embedder's session.
+func (k ChildKey) under(parent string) ChildKey {
+	k.Path, k.Parent = parent+k.Path, parent
+
+	return k
+}
+
 // SubagentWrite is a task call's prompt to a subagent session.
 type SubagentWrite struct {
-	// Key is the session's child key; CallKey is the task call's tool call key, which identifies the write.
-	Key, CallKey string
+	// Key is the session's child key.
+	Key ChildKey
+	// CallKey is the task call's tool call key, which identifies the write.
+	CallKey string
 	// Agent is the subagent type that runs Prompt, and Delegator the agent that wrote it.
 	Agent, Delegator, Prompt string
 	// Mode is a continue's mode; empty for a new subagent.
@@ -109,7 +124,7 @@ type SubagentWrite struct {
 type InertChildSessions struct{}
 
 // AppendChildEntry discards one child session entry.
-func (InertChildSessions) AppendChildEntry(context.Context, string, *SessionEntry) error {
+func (InertChildSessions) AppendChildEntry(context.Context, ChildKey, *SessionEntry) error {
 	return nil
 }
 

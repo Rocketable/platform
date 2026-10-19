@@ -94,10 +94,13 @@ attachments stay in comparison and do not create extra connector deliveries.
 
 ## Revert, Undo, and Redo
 
-Recorded user messages in top-level pure Web sessions have a **Revert message**
-action alongside Copy. Hover on desktop, tap on touch screens, or focus the
-message with the keyboard. Slack, External MCP, Cron-origin and delegation
-histories do not support Revert. Pending inputs keep their withdrawal controls.
+Recorded user messages in Web chats, Slack threads, and shadows have a **Revert
+message** action alongside Copy. Hover on desktop, tap on touch screens, or focus
+the message with the keyboard. Revert reaches only the messages after the newest
+one from a cron run, External MCP, or Slack: that message and everything before
+it stay, and their Revert is disabled. Hidden cron and External MCP runs and
+delegation histories do not support Revert. Pending inputs keep their withdrawal
+controls.
 
 Revert stops and settles active work, hides the selected request and everything
 after it, and replaces that session's composer text and files with the request.
@@ -918,7 +921,7 @@ Runs without a delivered chat still appear, with their timestamp and “No deliv
 chat” with **Open chat** to inspect their recorded reasoning and tool activity.
 Click a recorded run marker or the bar (for the latest run) to preview that run;
 every recorded run offers **Open chat**. Undelivered runs create or reuse a writable
-Web chat with the run's synced history, without rerunning the job or creating a Slack
+Web chat that shows the run's history, without rerunning the job or creating a Slack
 thread. Repeated opens return the same chat. Its agent choices follow the current
 cron definition's channel and configured channel agents; if those choices cannot
 be computed, all loaded agents are available. The first allowed loaded agent is

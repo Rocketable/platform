@@ -86,7 +86,7 @@ func TestBackgroundJobRunsDetachedOnce(t *testing.T) {
 
 	row := testBackgroundRow(t, store, "main", job.ID)
 	require.Equal(t, backgroundRunning, row.status)
-	require.Equal(t, backgroundExecute, row.kind)
+	require.Equal(t, turnScript, row.kind)
 	require.Equal(t, "tests", row.label)
 	require.Equal(t, registry.runnerID, row.runnerID)
 	require.True(t, row.origin.RequireOutputDecision)
@@ -119,7 +119,7 @@ func TestBackgroundJobFinishRetried(t *testing.T) {
 
 	_, err := store.db.ExecContext(t.Context(), `CREATE SEQUENCE finish_attempts;
 CREATE FUNCTION fail_first_finish() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('finish_attempts') = 1 THEN RAISE EXCEPTION 'database restarting'; END IF; RETURN NEW; END $$;
-CREATE TRIGGER fail_first_finish BEFORE UPDATE OF status ON background_jobs FOR EACH ROW EXECUTE FUNCTION fail_first_finish()`)
+CREATE TRIGGER fail_first_finish BEFORE UPDATE OF phase ON turns FOR EACH ROW EXECUTE FUNCTION fail_first_finish()`)
 	require.NoError(t, err)
 
 	_, err = turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/a", Kind: rocketcode.BackgroundKindExecute, Detached: true}, blockedWork(started, release))
@@ -142,6 +142,8 @@ func TestBackgroundJobStop(t *testing.T) {
 	started, release := make(chan struct{}, 2), make(chan struct{})
 
 	defer close(release)
+
+	reportTestRun(t, store, "cron:daily", "main")
 
 	for conversationID, destination := range map[string]string{"main": "", "cron:daily": "main"} {
 		turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: conversationID, origin: &protocol.InboundMessage{SyncDestination: destination}}
@@ -175,7 +177,7 @@ func TestBackgroundJobStop(t *testing.T) {
 func backgroundRows(t *testing.T, store *SessionService) []string {
 	t.Helper()
 
-	rows, err := queryStrings(t.Context(), store.db, `SELECT kind || ' ' || status || ' ' || note_state || ' ' || result FROM background_jobs ORDER BY kind, job_id`, "background rows")
+	rows, err := queryStrings(t.Context(), store.db, `SELECT CASE j.kind WHEN 'script' THEN 'execute' ELSE 'task' END || ' ' || `+testJobStatusSQL+` || ' ' || j.note || ' ' || j.result`+testJobsSQL+` ORDER BY 1, j.input_id`, "background rows")
 	require.NoError(t, err)
 
 	return rows
@@ -197,7 +199,7 @@ func TestStoppedSubagentStaysStopped(t *testing.T) {
 	require.NoError(t, err)
 	<-started
 
-	_, err = store.db.ExecContext(t.Context(), `INSERT INTO active_turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id) VALUES ('turn-a', 'main/a', '{"Metadata":{"web_message_id":"main/turn-1/call/a"}}', '[]', 1, 1, 0)`)
+	_, err = store.db.ExecContext(t.Context(), `INSERT INTO turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id) VALUES ('turn-a', 'main/a', '{"Metadata":{"web_message_id":"main/turn-1/call/a"}}', '[]', 1, 1, 0)`)
 	require.NoError(t, err)
 
 	waiting := &backgroundWorkMock{RunBackgroundFunc: func(ctx context.Context) (string, error) {
@@ -217,7 +219,7 @@ func TestStoppedSubagentStaysStopped(t *testing.T) {
 	require.Equal(t, "main/a", <-interrupted, "the subagent's running turn stops with its task")
 
 	require.Eventually(t, func() bool {
-		states, err := queryStrings(context.Background(), store.db, `SELECT status || ' ' || note_state FROM background_jobs WHERE job_id = 'turn-2/call/x'`, "owned job state")
+		states, err := queryStrings(context.Background(), store.db, `SELECT `+testJobStatusSQL+` || ' ' || j.note`+testJobsSQL+` AND j.input_id = 'turn-2/call/x'`, "owned job state")
 		return err == nil && slices.Equal(states, []string{"stopped none"})
 	}, 5*time.Second, 5*time.Millisecond, "the subagent's own job stops with it and leaves no note")
 	require.Equal(t, notePending, testBackgroundRow(t, store, "main", "turn-1/call/a").noteState, "the parent still learns of the stop")
@@ -241,8 +243,9 @@ func TestStoppedWaitStopsSubagentTurn(t *testing.T) {
 			registry := newBackgroundRegistry(store, notes, testLogger())
 			t.Cleanup(registry.shutdown)
 
-			require.NoError(t, store.startSubagent(t.Context(), "main/a", "main", "researcher", true))
-			_, err := store.db.ExecContext(t.Context(), `INSERT INTO active_turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id) VALUES ('turn-a', 'main/a', '{"Metadata":{"web_message_id":"main/turn-0/call/busy"}}', '[]', 1, 1, 0)`)
+			recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
+			require.NoError(t, store.startSubagent(t.Context(), "main", rocketcode.ChildKey{Path: "/a", Turn: "turn-0", Call: "busy"}, "researcher", true))
+			_, err := store.db.ExecContext(t.Context(), `INSERT INTO turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id) VALUES ('turn-a', 'main/a', '{"Metadata":{"web_message_id":"main/turn-0/call/busy"}}', '[]', 1, 1, 0)`)
 			require.NoError(t, err)
 
 			for _, id := range []string{"main/turn-1/call/w", "main/turn-1/call/job"} {
@@ -263,7 +266,7 @@ func TestStoppedWaitStopsSubagentTurn(t *testing.T) {
 			require.ErrorIs(t, err, tc.cause)
 			require.Len(t, notes.InterruptConversationCalls(), map[bool]int{false: 0, true: 1}[tc.stops])
 
-			kinds, err := queryStrings(t.Context(), store.db, `SELECT queue_item_id || ' ' || kind FROM thread_queue ORDER BY 1`, "queue kinds")
+			kinds, err := queryStrings(t.Context(), store.db, `SELECT input_id || ' ' || delivery FROM turns WHERE phase = 'waiting' ORDER BY 1`, "queue kinds")
 			require.NoError(t, err)
 			require.Equal(t, []string{"main/turn-1/call/job enqueue", "main/turn-1/call/w " + map[bool]string{false: "enqueue", true: "held"}[tc.held]}, kinds)
 		})
@@ -310,7 +313,7 @@ func TestBackgroundJobAttachedCall(t *testing.T) {
 	t.Run("moved without a row", func(t *testing.T) {
 		started := make(chan struct{}, 1)
 		_, err := store.db.ExecContext(t.Context(), `CREATE FUNCTION refuse_row() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'database restarting'; END $$;
-CREATE TRIGGER refuse_row BEFORE INSERT ON background_jobs FOR EACH ROW EXECUTE FUNCTION refuse_row()`)
+CREATE TRIGGER refuse_row BEFORE INSERT ON turns FOR EACH ROW EXECUTE FUNCTION refuse_row()`)
 		require.NoError(t, err)
 
 		var call errgroup.Group
@@ -330,7 +333,7 @@ CREATE TRIGGER refuse_row BEFORE INSERT ON background_jobs FOR EACH ROW EXECUTE 
 		require.False(t, registry.movable("main"))
 		require.Len(t, work.DetachCalls(), 1, "the work detaches before its row is written")
 
-		_, err = store.db.ExecContext(t.Context(), `DROP TRIGGER refuse_row ON background_jobs`)
+		_, err = store.db.ExecContext(t.Context(), `DROP TRIGGER refuse_row ON turns`)
 		require.NoError(t, err)
 	})
 
@@ -474,7 +477,7 @@ func TestRestartSettlesRunningJobs(t *testing.T) {
 	}
 
 	task := testBackgroundJob("main", "turn-1/call/a")
-	task.kind, task.subagentKey, task.label, task.input = backgroundTask, "/a", "research", "find the bug"
+	task.kind, task.subagentKey, task.label, task.input = turnNote, "/a", "research", "find the bug"
 	createTestBackgroundJob(t, store, task)
 
 	note := testBackgroundJob("main/b", "turn-1/call/n")
@@ -522,7 +525,7 @@ func TestRestartSettlesRunningJobs(t *testing.T) {
 	require.Equal(t, []string{task.jobID, registry.runnerID, "find the bug"}, []string{calls[0].Job.jobID, calls[0].Job.runnerID, calls[0].Job.input}, "the task waits again for its subagent's turn")
 
 	rows := func() []string {
-		rows, err := queryStrings(t.Context(), store.db, `SELECT job_id || ' ' || status || ' ' || note_state || ' ' || wake::text || ' ' || result FROM background_jobs ORDER BY 1`, "background rows")
+		rows, err := queryStrings(t.Context(), store.db, `SELECT j.input_id || ' ' || `+testJobStatusSQL+` || ' ' || j.note || ' ' || j.wake::text || ' ' || j.result`+testJobsSQL+` ORDER BY 1`, "background rows")
 		require.NoError(t, err)
 
 		return rows

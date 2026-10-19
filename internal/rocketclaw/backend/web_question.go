@@ -13,7 +13,7 @@ import (
 // webQuestionStep suffixes the turn step a Web question is saved under.
 const webQuestionStep = "/web-question"
 
-const saveWebQuestionStep = `INSERT INTO turn_steps (conversation_id, key, value) VALUES ($1, $2, $3) ON CONFLICT (conversation_id, key) DO UPDATE SET value = excluded.value`
+const saveWebQuestionStep = `INSERT INTO steps (conversation_id, key, value) VALUES ($1, $2, $3) ON CONFLICT (conversation_id, key) DO UPDATE SET value = excluded.value`
 
 // QuestionNotPendingError reports an answer to a question no Web turn waits on, or one already answered.
 type QuestionNotPendingError struct{ ConversationID, QuestionID string }
@@ -79,7 +79,7 @@ func (q *webQuestions) AskUserQuestion(ctx context.Context, req *protocol.AskUse
 			return protocol.AskUserQuestionAnswer{}, errWait
 		}
 
-		return protocol.AskUserQuestionAnswer{}, errors.Join(errWait, q.change(context.WithoutCancel(ctx), `DELETE FROM turn_steps WHERE conversation_id = $1 AND key = $2`, req.ConversationID, req.ID+webQuestionStep))
+		return protocol.AskUserQuestionAnswer{}, errors.Join(errWait, q.change(context.WithoutCancel(ctx), `DELETE FROM steps WHERE conversation_id = $1 AND key = $2`, req.ConversationID, req.ID+webQuestionStep))
 	}
 }
 
@@ -94,8 +94,8 @@ func (q *webQuestions) change(ctx context.Context, statement, conversationID, ke
 // PendingQuestions lists, in key order, the unanswered questions saved by conversationID's Web
 // turns. A question stays listed while its turn resumes after a restart.
 func (r *Runtime) PendingQuestions(ctx context.Context, conversationID string) ([]protocol.AskUserQuestionRequest, error) {
-	return queryRows(ctx, r.Sessions.db, `SELECT value FROM turn_steps q WHERE conversation_id = $1 AND key LIKE '%`+webQuestionStep+`'
-    AND NOT EXISTS (SELECT 1 FROM turn_steps a WHERE a.conversation_id = $1 AND a.key = left(q.key, -length('`+webQuestionStep+`')) || '/answer') ORDER BY key`, "pending Web questions", func(row rowScanner) (protocol.AskUserQuestionRequest, error) {
+	return queryRows(ctx, r.Sessions.db, `SELECT q.value FROM steps q LEFT JOIN steps a ON a.conversation_id = $1 AND a.key = left(q.key, -length('`+webQuestionStep+`')) || '/answer'
+WHERE q.conversation_id = $1 AND q.key LIKE '%`+webQuestionStep+`' AND a.key IS NULL ORDER BY q.key`, "pending Web questions", func(row rowScanner) (protocol.AskUserQuestionRequest, error) {
 		var (
 			data []byte
 			req  protocol.AskUserQuestionRequest

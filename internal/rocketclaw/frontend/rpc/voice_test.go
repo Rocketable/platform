@@ -218,6 +218,8 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 		require.NoError(t, h.rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: id, CreatedBy: "alice"}))
 	}
 
+	require.NoError(t, h.rt.CreateConversation(ctx, protocol.Conversation{ID: "cron:main", Agent: "main", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/main.md", At: time.Unix(1, 0)}}))
+
 	return h
 }
 

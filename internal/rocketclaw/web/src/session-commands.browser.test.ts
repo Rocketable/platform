@@ -41,7 +41,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
       expect(await request.text()).toBe("keep attachment");
       return Response.json({ id: "uploaded-draft", name: "draft.txt", mimeType: "text/plain", size: "15", conversationId: url.searchParams.get("conversationId") });
     }
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: Object.keys(histories).map((id) => ({ id, name: id === "destination" ? "Podcast editing notes with a very long conversation title" : id, agent: "main", preview: histories[id].at(-1)?.text, forkedFrom: forkParents[id], ...details[id] })), owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: Object.keys(histories).map((id) => ({ id, name: id === "destination" ? "Podcast editing notes with a very long conversation title" : id, agent: "main", preview: histories[id].at(-1)?.text, forkedFrom: forkParents[id], ...details[id] })), owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
@@ -76,7 +76,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
         await handoffReady.promise;
         return Response.json({ document: handoffDocument });
       // Fixed fixture: the server reads IS:FORKED as the fork filter.
-      case "/api/SearchSessions": return Response.json({ terms: [], text: "", needle: "", matches: input.query === "IS:FORKED" ? [{ conversationId: "forked", field: "Preview", text: "" }] : [], messages: [], mentionIds: [], indexComplete: true, summariesComplete: true });
+      case "/api/SearchSessions": return Response.json({ terms: [], text: "", needle: "", matches: input.query === "IS:FORKED" ? [{ conversationId: "forked", field: "Preview", text: "" }] : [], messages: [], mentionIds: [] });
       case "/api/SearchMessages": searches.push(input.query); return Response.json({ matches: Object.entries(histories).flatMap(([conversationId, messages]) => messages.filter((item) => item.text.toLowerCase().includes(input.query.toLowerCase())).map((message) => ({ conversationId, message }))) });
       case "/api/CreateSession": await newSessionReady.promise; histories.created = []; return Response.json({ id: "created" });
       case "/api/Prompt": {
@@ -519,7 +519,7 @@ test("handoff hits and queued items format tags and markup", async () => {
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "source", agent: "main", name: "Source" }, { id: "dest", agent: "main", name: "Dest" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "source", agent: "main", name: "Source" }, { id: "dest", agent: "main", name: "Dest" }], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));

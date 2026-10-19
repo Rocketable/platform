@@ -15,7 +15,7 @@ async function withPage(spaces: string[], run: (page: any, origin: string, reads
   const saved = { spaces: spaces.map((name, index) => ({ id: `s${index}`, name })), state: { tabs: [], groups: [], space: "s0", last: {}, placement: "TOP" } };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname.startsWith("/pages-raw/")) return new Response(script, { headers: { "Content-Type": "text/html", "Content-Security-Policy": "sandbox allow-scripts allow-popups allow-forms allow-modals allow-downloads" } });
     if (!url.pathname.startsWith("/api/")) {
       const file = Bun.file(path.join(dist, url.pathname));

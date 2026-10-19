@@ -161,8 +161,6 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 		return err
 	}
 
-	complete := true
-
 	var allChoices []string
 
 	// One definitions load serves every row's agent choices and the remote tags.
@@ -177,30 +175,23 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 		return definitions, nil
 	})
 
-	for chat, err := range s.sessions.SidebarChats(ctx, s.channels) {
+	for chat, err := range s.sessions.SidebarChats(ctx, s.channels, nil) {
 		if err != nil {
 			return err
 		}
 
 		row := &chat.Session
 		conversation := row.Conversation
-		complete = complete && row.Summary != nil
 
 		if _, err := agents(); err != nil {
 			return err
 		}
 
-		session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, AllowedAgents: allChoices, Running: row.Running, Background: row.Background, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model}
+		session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, AllowedAgents: s.cronChoices(allChoices, row.CronPath), Running: row.Running, Background: row.Background, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model,
+			Kind: conversationKind(row.Kind), RemoteSessionId: row.RemoteSession, Label: row.Label()}
 
-		if _, _, slack := protocol.SlackThreadTarget(conversation.ID); slack {
+		if row.SlackChannel != "" {
 			session.AllowedAgents = slices.DeleteFunc(slices.Clone(allChoices), func(name string) bool { return !slices.Contains(chat.RoomAgents, name) })
-		}
-
-		if strings.HasPrefix(conversation.ID, "web:") {
-			session.AllowedAgents, err = s.agentChoices(ctx, conversation.ID)
-			if err != nil {
-				return err
-			}
 		}
 
 		if summary := row.Summary; summary != nil {
@@ -210,12 +201,12 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 			}
 		}
 
-		if err := stream.SendMsg(&ListSessionsResponse{Sessions: []*Session{session}, Owner: owner, SummariesComplete: row.Summary != nil}); err != nil {
+		if err := stream.SendMsg(&ListSessionsResponse{Sessions: []*Session{session}, Owner: owner}); err != nil {
 			return fmt.Errorf("send web session: %w", err)
 		}
 	}
 
-	done := &ListSessionsResponse{Owner: owner, UpstreamSuccess: true, SummariesComplete: complete, OpencodeServers: make(map[string]int32)}
+	done := &ListSessionsResponse{Owner: owner, UpstreamSuccess: true, OpencodeServers: make(map[string]int32)}
 	for name, server := range s.cfg.Clone().OpenCode {
 		done.OpencodeServers[name] = int32(server.Port)
 	}
@@ -249,7 +240,11 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 	}
 
 	// Cron producer history is readable without granting chat or mutation access.
-	cronTrace := strings.HasPrefix(request.Id, "cron:") || strings.HasPrefix(request.Id, "one-off-cron:")
+	_, cronTrace, err := s.sessions.CronRun(ctx, request.Id)
+	if err != nil {
+		return nil, fmt.Errorf("resolve web cron trace: %w", err)
+	}
+
 	if !cronTrace {
 		if err := s.readableConversation(ctx, request.Id); err != nil {
 			return nil, err
@@ -274,7 +269,10 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 
 	entries, from, oldest := view.Entries, view.Inventory.From, view.Inventory.Oldest
 
-	response := &HistoryResponse{Reset_: view.Reset, Start: from, More: from > oldest, RevertEligible: view.Eligible, RevertMessageId: view.Inventory.Marker, CanUndo: view.Predecessor != "", Delegations: view.Delegations}
+	response := &HistoryResponse{Reset_: view.Reset, Start: from, More: from > oldest, RevertEligible: view.Eligible, RevertMessageId: view.Inventory.Marker, RevertFloor: view.Floor, CanUndo: view.Predecessor != ""}
+
+	byCall := response.addDelegations(&view)
+
 	for i := range view.Shadows {
 		binding := &view.Shadows[i]
 
@@ -332,16 +330,18 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 
 		response.ReplacedKeys = append(response.ReplacedKeys, entry.Key)
 
-		messages, err := s.transcriptEntry(ctx, root, entry, request.Id, calls[producer])
+		messages, err := s.transcriptEntry(ctx, root, entry, request.Id, cronTrace, calls[producer])
 		if err != nil {
 			return nil, err
 		}
+
+		linkCalls(messages, byCall[producer], response.Delegations)
 
 		response.Messages = append(response.Messages, messages...)
 	}
 
 	if request.GetBefore() > 0 {
-		return response, s.reviewRationales(ctx, response) // Settled pages are read once, not followed.
+		return response, s.reviewRationales(ctx, response, view.Reviews) // Settled pages are read once, not followed.
 	}
 
 	for _, key := range slices.Sorted(maps.Keys(previous.Entries)) {
@@ -353,10 +353,10 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 	data, _ = json.Marshal(current)
 	response.Revision = base64.RawURLEncoding.EncodeToString(data)
 
-	return response, s.reviewRationales(ctx, response)
+	return response, s.reviewRationales(ctx, response, view.Reviews)
 }
 
-func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse) error {
+func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse, reviews []string) error {
 	response.ReviewRationales = make(map[string]string)
 	// Execute calls saved before their scripts' calls were recorded list the calls their reviews checked.
 	unrecorded := make(map[string]*TranscriptEvent)
@@ -367,11 +367,7 @@ func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse
 		}
 	}
 
-	for _, review := range response.Delegations {
-		if !strings.Contains(review[strings.LastIndexByte(review, '/')+1:], "-review-") {
-			continue
-		}
-
+	for _, review := range reviews {
 		entries, err := s.sessions.ObserveEntries(ctx, review)
 		if err != nil {
 			return fmt.Errorf("read permission review: %w", err)
@@ -406,7 +402,8 @@ func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse
 	return nil
 }
 
-func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *backend.ObservedSessionEntry, conversationID string, calls map[string]string) ([]*TranscriptEvent, error) {
+// transcriptEntry projects entry as conversationID's History shows it; cronTrace marks a cron run's own trace.
+func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *backend.ObservedSessionEntry, conversationID string, cronTrace bool, calls map[string]string) ([]*TranscriptEvent, error) {
 	items, err := rocketcode.ReplayInputToParams(entry.Entry.ReplayInput)
 	if err != nil {
 		return nil, fmt.Errorf("decode web history: %w", err)
@@ -478,7 +475,7 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 			}
 		}
 
-		event.attribute(entry.Entry.AttributionAt(i), producer, conversationID)
+		event.attribute(entry.Entry.AttributionAt(i), producer, conversationID, cronTrace)
 		event.EntryKey, event.TurnId = entry.Key, entry.Entry.TurnID
 		event.ItemId = fmt.Sprintf("%s:%d", entry.Key, i)
 
@@ -508,7 +505,7 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 		messages = append(messages, texts...)
 	}
 
-	messages = fallbackProgress(entry, progress, replayText, replayResults, replayCalls, conversationID, messages)
+	messages = fallbackProgress(entry, progress, replayText, replayResults, replayCalls, conversationID, cronTrace, messages)
 
 	// Files a turn attached show on its final reply.
 	if entry.Entry.TurnID == "" {
@@ -589,7 +586,7 @@ func (e *TranscriptEvent) publicText(content json.RawMessage, id, messageStatus 
 
 // fallbackProgress merges missing observations before their next surviving public identity,
 // then attaches each script's recorded calls.
-func fallbackProgress(entry *backend.ObservedSessionEntry, progress []rocketcode.PublicProgress, replayText, replayResults, replayCalls map[string]bool, conversationID string, messages []*TranscriptEvent) []*TranscriptEvent {
+func fallbackProgress(entry *backend.ObservedSessionEntry, progress []rocketcode.PublicProgress, replayText, replayResults, replayCalls map[string]bool, conversationID string, cronTrace bool, messages []*TranscriptEvent) []*TranscriptEvent {
 	producer := cmp.Or(entry.SourceConversationID, conversationID)
 
 	for i := range progress {
@@ -619,7 +616,7 @@ func fallbackProgress(entry *backend.ObservedSessionEntry, progress []rocketcode
 			event.Text = item.Text
 		}
 
-		event.attribute(entry.Entry.AttributionAt(len(entry.Entry.ReplayInput)), producer, conversationID)
+		event.attribute(entry.Entry.AttributionAt(len(entry.Entry.ReplayInput)), producer, conversationID, cronTrace)
 		event.publicProgress(item, entry, producer)
 
 		if item.Kind != rocketcode.PublicProgressText {
@@ -670,7 +667,7 @@ func (e *TranscriptEvent) publicProgress(item *rocketcode.PublicProgress, entry 
 	}
 
 	if item.SubagentKey != "" {
-		e.Delegation = producer + item.SubagentKey[strings.LastIndexByte(item.SubagentKey, '/'):]
+		e.Delegation = producer + item.SubagentKey
 	}
 
 	e.Complete = e.State != "working" && e.State != "review"
@@ -698,6 +695,48 @@ func (e *TranscriptEvent) linkReview(producer string) {
 	}
 }
 
+// addDelegations adds view's delegations and lineage to r, and returns, by the history that made
+// the call and the call's ID, the subagent the call started and the histories saved under a call's
+// ID before delegations had their own key.
+func (r *HistoryResponse) addDelegations(view *backend.HistorySnapshot) map[string]map[string]backend.Delegation {
+	for i := range view.Lineage {
+		level := &view.Lineage[i]
+		r.Lineage = append(r.Lineage, &LineageLevel{Id: level.Conversation.ID, Kind: conversationKind(level.Kind), Agent: level.Conversation.Agent})
+	}
+
+	byCall := make(map[string]map[string]backend.Delegation)
+
+	for _, delegation := range view.Delegations {
+		r.Delegations = append(r.Delegations, delegation.ID)
+		if delegation.Legacy || delegation.Kind == backend.KindSubagent {
+			if byCall[delegation.Parent] == nil {
+				byCall[delegation.Parent] = make(map[string]backend.Delegation)
+			}
+
+			byCall[delegation.Parent][delegation.CallID] = delegation
+		}
+	}
+
+	return byCall
+}
+
+// linkCalls links the rows of each call whose ID children holds. Rows that name no subagent open
+// the call's, as a background task's rows saved before 2026-10-22 name none. Otherwise a history
+// saved under the call's ID alone is the call's permission review, unless delegations list its own.
+func linkCalls(messages []*TranscriptEvent, children map[string]backend.Delegation, delegations []string) {
+	for _, e := range messages {
+		child, ok := children[e.ToolCallId]
+
+		switch {
+		case !ok:
+		case e.Delegation == "":
+			e.Delegation = child.ID
+		case child.Legacy && e.Delegation != child.ID && !slices.Contains(delegations, e.Review):
+			e.Review = child.ID
+		}
+	}
+}
+
 // codeModeCall adds, up to rocketcode.MaxCodeModeCalls, a call an Execute call's script made, and
 // the turn under which its review saved the approver's answer on it. An unnamed call carries the
 // whole-script review.
@@ -714,12 +753,11 @@ func (e *TranscriptEvent) codeModeCall(call *rocketcode.CodeModeCall, reviewTurn
 	}
 }
 
-func (e *TranscriptEvent) attribute(snapshot rocketcode.ReplayAttribution, source, destination string) {
+func (e *TranscriptEvent) attribute(snapshot rocketcode.ReplayAttribution, source, destination string, cronTrace bool) {
 	e.Agent, e.Model, e.ReasoningEffort = snapshot.Agent, snapshot.Model, snapshot.ReasoningEffort
 	e.Origin = "canonical"
 
-	_, cron := backend.ParseCronRun(source)
-	if source != destination || cron {
+	if source != destination || cronTrace {
 		e.Origin = "sandboxed"
 	}
 }
@@ -836,9 +874,39 @@ func historyEvent(item *responses.ResponseInputItemUnionParam, raw json.RawMessa
 	return &TranscriptEvent{Role: role, Text: text, Header: header, Principal: backend.PromptPrincipal(header), InputId: inputID, Complete: true}, nil
 }
 
-func (s *Server) humanConversation(id string) (bool, error) {
-	// These are the private producer locators minted by frontend/cron/manager.go.
-	if strings.HasPrefix(id, "cron:") || strings.HasPrefix(id, "one-off-cron:") {
+// conversationKinds is each recorded conversation kind as Web names it.
+func conversationKind(kind backend.ConversationKind) ConversationKind {
+	switch kind {
+	case backend.KindWebChat:
+		return ConversationKind_WEB_CHAT
+	case backend.KindSlackThread:
+		return ConversationKind_SLACK_THREAD
+	case backend.KindCronRun:
+		return ConversationKind_CRON_RUN
+	case backend.KindOneOffCronRun:
+		return ConversationKind_ONE_OFF_CRON_RUN
+	case backend.KindExternalMCPRun:
+		return ConversationKind_EXTERNAL_MCP_RUN
+	case backend.KindSubagent:
+		return ConversationKind_SUBAGENT
+	case backend.KindReview:
+		return ConversationKind_REVIEW
+	case backend.KindShadow:
+		return ConversationKind_SHADOW
+	case backend.KindRemote:
+		return ConversationKind_REMOTE_OPENCODE
+	}
+
+	return ConversationKind_WEB_CHAT
+}
+
+func (s *Server) humanConversation(ctx context.Context, id string) (bool, error) {
+	_, run, err := s.sessions.CronRun(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("resolve web conversation visibility: %w", err)
+	}
+
+	if run {
 		return false, nil
 	}
 
@@ -870,7 +938,7 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 	for i := range jobs {
 		job := &jobs[i]
 
-		row := &CronJob{Stem: strings.TrimSuffix(strings.TrimPrefix(job.RelativePath, "cron/"), ".md"), Schedule: strings.Join(job.Schedules, ", "), Body: job.Body, Agent: job.Agent, Channel: job.TextChannel, Origin: job.RelativePath, Space: cmp.Or(job.Space, agents.Items[job.Agent].Space)}
+		row := &CronJob{Stem: cronStem(job.RelativePath), Schedule: strings.Join(job.Schedules, ", "), Body: job.Body, Agent: job.Agent, Channel: job.TextChannel, Origin: job.RelativePath, Space: cmp.Or(job.Space, agents.Items[job.Agent].Space)}
 		for _, at := range job.Upcoming {
 			row.Upcoming = append(row.Upcoming, at.Format(time.RFC3339Nano))
 		}
@@ -895,12 +963,7 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 	delivered := map[string]bool{}
 
 	for _, source := range sources {
-		run, ok := backend.ParseCronRun(source.SourceConversationID)
-		if !ok {
-			continue
-		}
-
-		row := &CronJob{Stem: run.Stem, Status: "ran", LastRun: run.At.Format("2006-01-02T15:04:05.000000000Z"), NextRun: source.ConversationID, Origin: source.SourceConversationID}
+		row := &CronJob{Stem: cronStem(source.Run.Path), Status: "ran", LastRun: source.Run.At.Format("2006-01-02T15:04:05.000000000Z"), NextRun: source.ConversationID, Origin: source.SourceConversationID}
 		// Private cron records contribute timing only, never replay content.
 		if source.ConversationID == source.SourceConversationID {
 			row.NextRun = ""
@@ -1100,7 +1163,6 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 
 	allowed := definitions.PrimaryNames()
 
-	channel, _, slack := protocol.SlackThreadTarget(id)
 	if id != "" {
 		if err := s.visibleConversation(ctx, id); err != nil {
 			return nil, err
@@ -1112,16 +1174,24 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 		}
 
 		response.CurrentAgent = thread.Agent
-	}
 
-	if slack {
-		_, allowed, err = s.channels.SidebarChannelAgentChoices(ctx, channel)
-	} else if strings.HasPrefix(id, "web:") {
-		allowed, err = s.agentChoices(ctx, id)
-	}
+		channel, _, err := s.sessions.SlackThread(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("read web Slack thread: %w", err)
+		}
 
-	if err != nil {
-		return nil, fmt.Errorf("web channel choices: %w", err)
+		var path string
+		if channel != "" {
+			_, allowed, err = s.channels.SidebarChannelAgentChoices(ctx, channel)
+		} else if path, _, err = s.sessions.CronRun(ctx, id); err != nil {
+			err = fmt.Errorf("read web cron run: %w", err)
+		}
+
+		if err != nil {
+			return nil, fmt.Errorf("web channel choices: %w", err)
+		}
+
+		allowed = s.cronChoices(allowed, path)
 	}
 
 	allowed = sameSpace(definitions, response.CurrentAgent, allowed)
@@ -1183,33 +1253,54 @@ func sameSpace(agents rocketcode.Agents, current string, allowed []string) []str
 	return same
 }
 
+// agentChoices lists the primary agents a conversation offers: those its Slack thread's channel
+// allows, those the cron job of the cron run it is or continues offers in Web, else every one.
 func (s *Server) agentChoices(ctx context.Context, id string) ([]string, error) {
-	cfg := s.cfg.Clone()
-
-	definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, cfg.RuntimeDirName())
+	definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
 		return nil, fmt.Errorf("load web agents: %w", err)
 	}
 
 	choices := definitions.PrimaryNames()
 
-	if channel, _, slack := protocol.SlackThreadTarget(id); slack {
+	channel, _, err := s.sessions.SlackThread(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("read web Slack thread: %w", err)
+	}
+
+	if channel != "" {
 		allowed, err := s.channels.ChannelAgentChoices(ctx, channel)
 		if err != nil {
 			return nil, fmt.Errorf("web channel choices: %w", err)
 		}
 
-		choices = slices.DeleteFunc(choices, func(name string) bool { return !slices.Contains(allowed, name) })
-	} else if id != "" {
-		if run, ok := backend.ParseCronRun(strings.TrimPrefix(id, "web:")); ok {
-			job, err := s.cronjobs.LoadOneOffCronjob(run.Stem)
-			if err == nil {
-				return cfg.CronWebAgentChoices(choices, &job), nil
-			}
-		}
+		return slices.DeleteFunc(choices, func(name string) bool { return !slices.Contains(allowed, name) }), nil
 	}
 
-	return choices, nil
+	path, _, err := s.sessions.CronRun(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("read web cron run: %w", err)
+	}
+
+	return s.cronChoices(choices, path), nil
+}
+
+// cronChoices narrows choices to those the cron job at path offers in Web, while it still loads.
+func (s *Server) cronChoices(choices []string, path string) []string {
+	if path == "" {
+		return choices
+	}
+
+	if job, err := s.cronjobs.LoadOneOffCronjob(cronStem(path)); err == nil {
+		return s.cfg.Clone().CronWebAgentChoices(choices, &job)
+	}
+
+	return choices
+}
+
+// cronStem is the name a cron job at path is listed and loaded by.
+func cronStem(path string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(path, "cron/"), ".md")
 }
 
 func (s *Server) createSession(ctx context.Context, request *CreateSessionRequest) (*CreateSessionResponse, error) {
@@ -1233,7 +1324,22 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 	}
 
 	source := request.SourceConversationId
-	if _, ok := backend.ParseCronRun(source); source != "" && !ok {
+
+	path, run, err := s.sessions.CronRun(ctx, source)
+	if err != nil {
+		return nil, fmt.Errorf("read cron conversation: %w", err)
+	}
+
+	if source != "" && !run {
+		_, found, err := s.sessions.ConversationKind(ctx, source)
+		if err != nil {
+			return nil, fmt.Errorf("read cron conversation: %w", err)
+		}
+
+		if !found {
+			return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.NotFound, "source cron run is not recorded"))
+		}
+
 		return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.InvalidArgument, "source must be a recorded cron run"))
 	}
 
@@ -1261,7 +1367,7 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 		if !recorded {
 			return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.NotFound, "cron run is not recorded"))
 		}
-		// CreateConversation preserves existing rows; a stable ID also survives failed syncs.
+		// CreateConversation preserves existing rows, so continuing again returns the same chat.
 		id = "web:" + source
 	}
 
@@ -1273,8 +1379,8 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 
 	space := agents.Items[request.Agent].Space
 
-	if run, ok := backend.ParseCronRun(source); ok {
-		if job, err := s.cronjobs.LoadOneOffCronjob(run.Stem); err == nil {
+	if path != "" {
+		if job, err := s.cronjobs.LoadOneOffCronjob(cronStem(path)); err == nil {
 			space = cmp.Or(job.Space, agents.Items[job.Agent].Space)
 		}
 	}
@@ -1295,8 +1401,8 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 	}
 
 	if source != "" {
-		if err := s.backend.SyncConversation(ctx, source, id); err != nil {
-			return nil, fmt.Errorf("sync cron conversation: %w", err)
+		if err := s.backend.ContinueRun(ctx, source, id); err != nil {
+			return nil, fmt.Errorf("continue cron run: %w", err)
 		}
 	}
 
@@ -1580,7 +1686,12 @@ func (s *Server) reorderQueue(ctx context.Context, request *ReorderQueueRequest)
 func (s *Server) listPending(ctx context.Context, response *HistoryResponse, request *HistoryRequest) error {
 	// Only the History RPC's latest page of a chat carries the running list; cron traces and
 	// internal history reads (search, attachments, session commands) never need it.
-	if request.GetBefore() != 0 || strings.HasPrefix(request.Id, "cron:") || strings.HasPrefix(request.Id, "one-off-cron:") {
+	_, cronTrace, err := s.sessions.CronRun(ctx, request.Id)
+	if err != nil {
+		return fmt.Errorf("read web cron trace: %w", err)
+	}
+
+	if request.GetBefore() != 0 || cronTrace {
 		return nil
 	}
 
@@ -1665,11 +1776,10 @@ func (s *Server) answerQuestion(ctx context.Context, request *AnswerQuestionRequ
 	return &AnswerQuestionResponse{}, nil
 }
 
-// promptable admits prompts only to visible RocketClaw conversations. A remote OpenCode
-// session may have no opencode_sessions row yet, so its reserved prefix decides.
+// promptable admits prompts only to visible RocketClaw conversations.
 func (s *Server) promptable(ctx context.Context, id string) error {
-	if strings.HasPrefix(id, "opencode:") {
-		return fmt.Errorf("web prompt: %w", status.Error(codes.InvalidArgument, "remote OpenCode sessions are driven in their own frame"))
+	if kind, _, err := s.sessions.ConversationKind(ctx, id); err != nil || kind == backend.KindRemote {
+		return fmt.Errorf("web prompt: %w", cmp.Or(err, status.Error(codes.InvalidArgument, "remote OpenCode sessions are driven in their own frame")))
 	}
 
 	return s.visibleConversation(ctx, id)
@@ -1684,6 +1794,15 @@ func (s *Server) visibleConversation(ctx context.Context, id string) error {
 		return fmt.Errorf("web queue: %w", status.Error(codes.InvalidArgument, "conversation ID is required"))
 	}
 
+	_, found, err := s.sessions.ConversationKind(ctx, id)
+	if err != nil {
+		return fmt.Errorf("resolve web conversation visibility: %w", err)
+	}
+
+	if !found {
+		return fmt.Errorf("web conversation: %w", status.Error(codes.NotFound, "conversation is not recorded"))
+	}
+
 	parent, err := s.sessions.ShadowParent(ctx, id)
 	if err != nil {
 		return fmt.Errorf("resolve web conversation visibility: %w", err)
@@ -1693,7 +1812,7 @@ func (s *Server) visibleConversation(ctx context.Context, id string) error {
 		return fmt.Errorf("web comparison: %w", status.Error(codes.PermissionDenied, "shadow sessions are read-only"))
 	}
 
-	visible, err := s.humanConversation(id)
+	visible, err := s.humanConversation(ctx, id)
 	if err != nil {
 		return err
 	}

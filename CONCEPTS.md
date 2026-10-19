@@ -40,11 +40,11 @@ Historical name for a later-turn prompt stashed from Slack with `$enqueue`. Remo
 
 ### Thread Queue
 
-The durable, conversation-local list of later work: accepted Slack mentions, work queued or stashed from Web, messages another session's agent queues, stashes, or sends with `stop` through `rocketclaw_sessions_write` or, into a Subagent Session, through `task`, and External MCP `session_prompt` calls that arrive while the paired thread has an active turn. Saved rows that never started run after a restart without another incoming message.
+The durable, conversation-local list of later work: accepted Slack mentions, work queued or stashed from Web, messages another session's agent queues, stashes, or sends with `stop` through `rocketclaw_sessions_write` or, into a Subagent Session, through `task`, and External MCP `session_prompt` calls that arrive while the paired thread has an active turn. Each item is a waiting turn of its conversation, queued, stashed, or held, keyed by its input ID; starting it turns that row into the running turn. Saved items that never started run after a restart without another incoming message.
 
 An agent-written item carries its sender: the sending session and agent. Web shows that sender where a person's Principal would be, and the item can be popped, promoted, reordered, or removed like any other. It is never a person's input, even after a person promotes it. A `stop` write goes ahead of every earlier item. A `stop` write without a prompt adds no item: it only posts a line naming the sender into the transcript, once the stopped turn has saved.
 
-Each accepted mention is one item with ID `slack:<channel>:<message ts>`, accepted at most once per conversation. Web shows these rows together with the conversation's scheduled messages and can promote or remove them; Slack is not told. After a turn ends, a still-continuing goal wins the next slot. Otherwise the next item is the first remaining row that is ready: a queued row is ready in its list position; a scheduled message is ready at its due time. A not-yet-due scheduled row blocks later rows until it runs or is cancelled.
+Each accepted mention is one item with ID `slack:<channel>:<message ts>`, accepted at most once per conversation. Web shows these items together with the conversation's scheduled messages (a one-time one is also a waiting turn, due at its time) and can promote or remove them; Slack is not told. After a turn ends, a still-continuing goal wins the next slot. Otherwise the next item is the first remaining row that is ready: a queued row is ready in its list position; a scheduled message is ready at its due time. A not-yet-due scheduled row blocks later rows until it runs or is cancelled.
 
 ### Buffered Follow-Up
 
@@ -138,7 +138,7 @@ A Task subagent run as a session like any other, on the same turn runner as top-
 
 An Execute script or Task subagent that keeps running after its tool call returned, owned by the conversation (a Subagent Session included) that started it. Only agents allowed by `permission.rocketclaw.allow_background` can start one, and a human can move running work into one from Web.
 
-A Background Job's ID is the tool call key that started it. It ends as completed, failed, stopped, or killed, and each ending produces one Completion Note. An oversized result of a background Execute is retained privately for 7 days instead of becoming a Spill, and `load_execute_result` reads it from any turn of the owning conversation. A background Task job waits for its Subagent Session's turn; stopping it stops that turn and the subagent's own jobs.
+A Background Job's ID is the tool call key that started it. It is saved as a turn of its owner that does not take the lane, and it is listed and woken where its owner reports to, if anywhere. It ends as completed, failed, stopped, or killed, and each ending produces one Completion Note, kept on the job's turn. An oversized result of a background Execute is retained privately for 7 days instead of becoming a Spill, and `load_execute_result` reads it from any turn of the owning conversation. A background Task job waits for its Subagent Session's turn; stopping it stops that turn and the subagent's own jobs.
 
 ### Completion Note
 
@@ -165,7 +165,7 @@ real in the shared workspace; output separation is not a dry-run sandbox.
 
 ### Private Producer Conversation
 
-A hidden conversation that runs work for a human-visible destination conversation, such as an External MCP case or a one-off cron run. Its turns carry that destination as their sync destination: while a turn runs, the destination's history shows it live; Sync then copies the history there. Web lists only the destination, and session tags set during the turn land on the destination.
+A hidden conversation that runs work for a human-visible destination conversation, such as an External MCP case or a one-off cron run. Its conversation row records that destination as the one it reports to. The destination's history shows the run's visible messages in place, live while a turn runs, without copying them; what only the run's own context needs stays out of the destination. Web lists only the destination, and session tags set during the turn land on the destination.
 
 ## Web Voice
 
@@ -225,13 +225,13 @@ The shared language frontends and backend import. A frontend drops protocol mess
 
 RocketClaw's durable database for sessions, Managed Slack Thread routing, goals, cron, scheduled messages, the Thread Queue, External MCP bindings, and the Step Journal.
 
-The State Store is PostgreSQL.
+The State Store is PostgreSQL. Each fact lives in one place. `conversations` has one row for every conversation of every kind, with what it is, whether Web lists it, where it reports to, and its facts: Slack thread, summary, tags, goal, External MCP binding, and shadow parent. `turns` holds every turn: waiting (Thread Queue items and one-time reminders), running, delivering, or done, Background Jobs included. `entries` holds saved history, `steps` the Step Journal, and `schedules` cron lines and recurring reminders. Attachments, Slack channel facts, Voice Settings, Hosted Pages, Spaces and tabs, the run lock, and shadow comparison turns keep tables of their own. Tables a release retires keep their rows under a `legacy_` name until a later release drops them.
 
 ### Step Journal
 
 The durable, conversation-local record of every completed step of in-progress work. Steps include model responses, tool call results, Code Mode host and MCP calls, workflow worker results, pending questions, and accepted steers.
 
-An interrupted turn resumes from its last recorded step. Completed steps return their recorded results instead of running again. A clean shutdown lets running calls finish, so only a call cut off by a crash or a forced exit, which started without a recorded result, is reported to the model as interrupted. A turn's steps are cleared when it finishes.
+A running turn saves each item of its record once, as a step of its own, instead of rewriting the whole record. An interrupted turn resumes from its last recorded step. Completed steps return their recorded results instead of running again. A clean shutdown lets running calls finish, so only a call cut off by a crash or a forced exit, which started without a recorded result, is reported to the model as interrupted. A turn's steps are cleared when it ends; a stopped or failed turn keeps its record and consumed inputs on its turn, where History reads them.
 
 ## Relationships
 

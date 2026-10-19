@@ -145,7 +145,7 @@ func remoteSidebar(t *testing.T, s *SessionService) []SidebarSession {
 
 	var rows []SidebarSession
 
-	for row, err := range s.SidebarSessions(t.Context()) {
+	for row, err := range s.sidebarSessions(t.Context(), nil) {
 		require.NoError(t, err)
 
 		if row.Server != "" {
@@ -233,7 +233,7 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	require.ErrorAs(t, errSync, new(*openCodeError))
 	require.EqualError(t, errSync, "opencode box /api/session?parentID=null&limit=100: status 401")
 
-	_, err = s.db.ExecContext(ctx, `UPDATE opencode_sessions SET synced_at = now() - interval '1 minute'`)
+	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET synced_at = now() - interval '1 minute' WHERE kind = 'remote'`)
 	require.NoError(t, err)
 
 	rows = remoteSidebar(t, s)
@@ -332,7 +332,7 @@ func TestSyncOpenCodeKeepsRowsOutsideTheWindow(t *testing.T) {
 	// The newest 100 form a full window: the oldest row leaves the fetch but stays listed, online.
 	oldest := "opencode:box:" + fake.sessions[openCodeSyncLimit].ID
 	fake.sessions = fake.sessions[:openCodeSyncLimit]
-	_, err := s.db.ExecContext(ctx, `UPDATE opencode_sessions SET synced_at = now() - interval '1 minute'`)
+	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET synced_at = now() - interval '1 minute' WHERE kind = 'remote'`)
 	require.NoError(t, err)
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 
@@ -359,8 +359,8 @@ func TestToggleManualTag(t *testing.T) {
 	agents := rocketcode.Agents{Items: map[string]rocketcode.Agent{"main": {Frontmatter: map[string]any{"permission": map[string]any{"rocketclaw": map[string]any{setTagToolName: []any{[]any{"customer", "internal"}}}}}}}}
 
 	require.NoError(t, s.UpsertThread("web", ThreadState{Agent: "main"}))
-	_, err := s.db.ExecContext(ctx, `INSERT INTO opencode_sessions (conversation_id, server, title, directory, updated_at, running, synced_at)
-VALUES ('opencode:box:ses_a', 'box', '', '/srv', now(), FALSE, now())`)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, remote_session)
+VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', '', '/srv', now(), FALSE, now(), 'ses_a')`)
 	require.NoError(t, err)
 
 	for _, step := range [][2]string{{"web", "customer"}, {"web", "internal"}, {"opencode:box:ses_a", "billing"}, {"opencode:box:ses_a", "urgent"}} {
@@ -375,6 +375,17 @@ VALUES ('opencode:box:ses_a', 'box', '', '/srv', now(), FALSE, now())`)
 		require.NoError(t, err)
 		assert.Equal(t, want, tags, id)
 	}
+
+	// Tags, pins, and names of both kinds are facts on their own conversation rows.
+	for _, id := range []string{"web", "opencode:box:ses_a"} {
+		updated, err := s.UpdateConversationDetails(ctx, id, new(true), new("Named "+id))
+		require.NoError(t, err)
+		require.True(t, updated)
+	}
+
+	facts, err := queryStrings(ctx, s.db, `SELECT concat_ws(' ', conversation_id, kind, tags::text, pinned, name) FROM conversations ORDER BY 1`, "conversation facts")
+	require.NoError(t, err)
+	assert.Equal(t, []string{`opencode:box:ses_a remote ["billing", "urgent"] t Named opencode:box:ses_a`, `web web_chat ["internal"] t Named web`}, facts)
 }
 
 func TestOpenCodeUpstreamFailuresWriteNothing(t *testing.T) {
@@ -488,8 +499,9 @@ func TestCreateOpenCodeSessionListsItAtOnce(t *testing.T) {
 
 func TestSidebarHidesUnconfiguredOpenCodeServers(t *testing.T) {
 	s := newOpenCodeTestService(t, "box")
-	_, err := s.db.ExecContext(t.Context(), `INSERT INTO opencode_sessions (conversation_id, server, title, directory, updated_at, running, synced_at, pinned)
-VALUES ('opencode:box:ses_a', 'box', '', '/srv', now(), FALSE, now(), FALSE), ('opencode:gone:ses_b', 'gone', '', '/srv', now(), FALSE, now(), TRUE)`)
+	_, err := s.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, pinned, remote_session)
+VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', '', '/srv', now(), FALSE, now(), FALSE, 'ses_a'),
+    ('opencode:gone:ses_b', '', '', 'remote', FALSE, 'remote', 'gone', '', '/srv', now(), FALSE, now(), TRUE, 'ses_b')`)
 	require.NoError(t, err)
 
 	rows := remoteSidebar(t, s)
@@ -511,14 +523,14 @@ VALUES ('opencode:box:ses_a', 'box', '', '/srv', now(), FALSE, now(), FALSE), ('
 // updated time included, stays as it was.
 func TestDeleteSessionRefusesRemoteSessions(t *testing.T) {
 	s := newOpenCodeTestService(t, "box")
-	_, err := s.db.ExecContext(t.Context(), `INSERT INTO opencode_sessions (conversation_id, server, title, directory, updated_at, running, synced_at)
-VALUES ('opencode:box:ses_a', 'box', 'title', '/srv', '2026-10-01T00:00:00Z', FALSE, now())`)
+	_, err := s.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, remote_session)
+VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', 'title', '/srv', '2026-10-01T00:00:00Z', FALSE, now(), 'ses_a')`)
 	require.NoError(t, err)
 
 	_, err = s.DeleteSession(t.Context(), "opencode:box:ses_a")
 	require.ErrorIs(t, err, ErrRemoteSession)
 
 	var updated time.Time
-	require.NoError(t, s.db.QueryRowContext(t.Context(), `SELECT updated_at FROM opencode_sessions WHERE conversation_id = 'opencode:box:ses_a'`).Scan(&updated))
+	require.NoError(t, s.db.QueryRowContext(t.Context(), `SELECT last_updated FROM conversations WHERE conversation_id = 'opencode:box:ses_a'`).Scan(&updated))
 	assert.Equal(t, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), updated.UTC())
 }

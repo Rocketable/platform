@@ -1364,7 +1364,7 @@ func TestChannelFactsRenameRaceAndLookupHarvest(t *testing.T) {
 func TestChannelFactsRefreshRetryRetentionAndConvergence(t *testing.T) {
 	store := newTestStoredChannelFacts(t)
 	for _, id := range []string{"C1", "G1", "G2"} {
-		require.NoError(t, store.UpsertThread(protocol.SlackThreadConversationID(id, "1.1"), backend.ThreadState{Agent: "main"}))
+		require.NoError(t, store.RegisterExternalMCPConversation("public-"+id, "main", &backend.ExternalMCPSessionState{Thread: protocol.SlackReplyTarget{ChannelID: id, ThreadTS: "1.1"}, Agent: "main", PrivateConversationID: "private-" + id, ManagedConversationID: protocol.SlackThreadConversationID(id, "1.1")}))
 		require.NoError(t, store.RecordChannelFact(t.Context(), "T1", id, "old", time.Unix(1, 0)))
 	}
 
@@ -4467,8 +4467,19 @@ func newTestChannelFacts() *channelFactsStoreMock {
 		ChannelFactFunc:       func(context.Context, string, string) (string, bool, error) { return "", false, nil },
 		RecordChannelFactFunc: func(context.Context, string, string, string, time.Time) error { return nil },
 		SlackChannelIDsFunc:   func(context.Context) ([]string, error) { return nil, nil },
-		LoadTurnStepFunc:      func(context.Context, string, string) (json.RawMessage, bool, error) { return nil, false, nil },
-		SaveTurnStepFunc:      func(context.Context, string, string, json.RawMessage) error { return nil },
+		// A test names each Slack thread's conversation slack-thread:<channel>:<thread>, as the code creating it does.
+		SlackThreadFunc: func(_ context.Context, id string) (string, string, error) {
+			rest, ok := strings.CutPrefix(id, "slack-thread:")
+			if !ok {
+				return "", "", nil
+			}
+
+			channel, thread, _ := strings.Cut(rest, ":")
+
+			return channel, thread, nil
+		},
+		LoadTurnStepFunc: func(context.Context, string, string) (json.RawMessage, bool, error) { return nil, false, nil },
+		SaveTurnStepFunc: func(context.Context, string, string, json.RawMessage) error { return nil },
 	}
 }
 

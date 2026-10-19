@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -681,9 +682,10 @@ func TestSearchSessionsResponse(t *testing.T) {
 
 	_, err = sessions.UpdateConversationDetails(ctx, "web-session:desk", nil, new("Billing desk"))
 	require.NoError(t, err)
-	_, err = db.ExecContext(ctx, `INSERT INTO session_tags (conversation_id, tags) VALUES ('slack-thread:C1:1.1', '["A"]'), ('web-session:desk', '["A"]'), ('web-session:lower', '["a"]')`)
+	_, err = db.ExecContext(ctx, `UPDATE conversations c SET tags = v.tags::jsonb FROM (VALUES ('slack-thread:C1:1.1', '["A"]'), ('web-session:desk', '["A"]'), ('web-session:lower', '["a"]')) v(id, tags)
+WHERE c.conversation_id = v.id`)
 	require.NoError(t, err)
-	_, err = db.ExecContext(ctx, `DELETE FROM session_summaries WHERE conversation_id = 'web-session:lower'`)
+	_, err = db.ExecContext(ctx, `UPDATE conversations SET preview = NULL, last_updated = NULL WHERE conversation_id = 'web-session:lower'`)
 	require.NoError(t, err)
 
 	channels := &mockChannels{
@@ -707,8 +709,7 @@ func TestSearchSessionsResponse(t *testing.T) {
 		Messages: []*MessageMatch{{ConversationId: "slack-thread:C1:1.1", Message: &TranscriptEvent{
 			Role: "user", Text: "ping <@U7> about billing", MessageId: fmt.Sprintf("%d:0", entries["slack-thread:C1:1.1"]),
 		}}},
-		MentionIds:    []string{"U7"},
-		IndexComplete: true,
+		MentionIds: []string{"U7"},
 	}, response), "%v", response)
 
 	// Filters wins over messages: every tag:A chat passes, whatever the free text, and no message is read.
@@ -728,16 +729,10 @@ func TestSearchMessagesFindsHistoryMessages(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	seeded := openTestTurns(t, dsn)
-	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenAI: config.OpenAIConfig{APIKey: "test"}}
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
-
-	root, err := os.OpenRoot(cfg.Workspace)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\nmodel: gpt-6.1-sol\n---\nHelp."), 0o600))
 
 	server := &Server{
 		backend:   withoutBackgroundJobs(),
@@ -764,36 +759,12 @@ func TestSearchMessagesFindsHistoryMessages(t *testing.T) {
 		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"kept/0","parent_id":"stopped/response","kind":"text","state":"working","text":"progress only text","agent":"main","model":"root/model"}}`),
 	}}))
 	require.NoError(t, seeded.SetActiveTurnTerminal(ctx, "stopped", protocol.TerminalStopped))
-	// An older binary ended the turn without indexing it; only the backfill reaches it.
-	_, err = seeded.db.ExecContext(ctx, `DELETE FROM message_search_indexed WHERE conversation_id = 'source'`)
+	// The stopped turn's search text, as the backend writes it when the turn ends.
+	_, err = seeded.db.ExecContext(ctx, `UPDATE turns SET search_text = '0 0 ["user","","stopped request","stopped request"]' || E'\n' || '1 0 ["assistant","","stopped answer","stopped answer"]' WHERE id = 'stopped'`)
 	require.NoError(t, err)
-
-	incomplete, err := server.searchMessages(ctx, &SearchMessagesRequest{Query: "request"})
-	require.NoError(t, err)
-	require.False(t, incomplete.IndexComplete)
-
-	runCtx, cancel := context.WithCancel(t.Context())
-	ready := make(chan *backend.Runtime)
-	assembly := &mockFrontendAssembler{AssembleFunc: func(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
-		ready <- rt
-		return nil, rt.RunCtx.Done(), nil, nil // Public assembler permits absent Slack.
-	}, ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil }}
-
-	var running errgroup.Group
-	running.Go(func() error { return backend.Run(runCtx, cfg, "", slog.New(slog.DiscardHandler), assembly) })
-	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
-
-	rt := <-ready
-
-	require.Eventually(t, func() bool {
-		response, err := server.searchMessages(ctx, &SearchMessagesRequest{Query: "request"})
-		return err == nil && response.IndexComplete
-	}, 10*time.Second, 10*time.Millisecond, "the startup backfill indexes the unmarked chat")
 
 	_, err = sessions.ForkConversation(ctx, "source", protocol.Conversation{ID: "fork", Agent: "main", CreatedBy: "alice"}, "")
 	require.NoError(t, err)
-	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "synced", Agent: "main", CreatedBy: "alice"}))
-	require.NoError(t, rt.SyncConversation(ctx, "source", "synced"))
 	require.NoError(t, seeded.UpsertActiveTurn(ctx, &testCheckpoint{TurnID: "running", ConversationKey: "fork", Agent: "main", ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","content":"running request"}`),
 	}}))
@@ -803,7 +774,7 @@ func TestSearchMessagesFindsHistoryMessages(t *testing.T) {
 
 	var shown []string
 
-	for _, id := range []string{"source", "fork", "synced"} {
+	for _, id := range []string{"source", "fork"} {
 		history, err := server.history(ctx, &HistoryRequest{Id: id})
 		require.NoError(t, err)
 
@@ -829,7 +800,6 @@ func TestSearchMessagesFindsHistoryMessages(t *testing.T) {
 	require.Equal(t, []string{
 		"header request", "plain answer", "attached request", "first part", "second part", "stopped request", "stopped answer", "progress only text",
 		"header request", "plain answer", "attached request", "first part", "second part", "running request",
-		"header request", "plain answer", "attached request", "first part", "second part",
 	}, shown)
 }
 
@@ -877,6 +847,7 @@ func TestSessionEntries(t *testing.T) {
 		PendingQuestionsFunc:   withoutBackgroundJobs().PendingQuestionsFunc,
 		SubscribeFunc:          rt.Subscribe,
 		CreateConversationFunc: rt.CreateConversation,
+		ContinueRunFunc:        rt.ContinueRun,
 		ListConversationsFunc:  rt.ListConversations,
 		RunTurnFunc: func(_ context.Context, inbound *protocol.InboundMessage) error {
 			turns = append(turns, inbound)
@@ -1105,7 +1076,10 @@ func TestSessionEntries(t *testing.T) {
 		}
 
 		_, err = invoke[PromptResponse](browser, connection, "Prompt", &PromptRequest{Id: "unrecorded", Text: "hello"})
-		require.ErrorContains(t, err, "not recorded")
+		require.Equal(t, codes.NotFound, status.Code(err), "an unrecorded conversation is not found before anything runs")
+		// This test's backend records the prompt it is handed, then refuses to run it.
+		_, err = invoke[PromptResponse](browser, connection, "Prompt", &PromptRequest{Id: created.Id, Text: "hello"})
+		require.ErrorContains(t, err, "is not recorded")
 
 		inbound := turns[len(turns)-1]
 		require.Equal(t, "Alice Smith", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
@@ -1128,7 +1102,7 @@ func TestSessionEntries(t *testing.T) {
 
 	empty, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
-	require.True(t, proto.Equal(&ListSessionsResponse{Owner: "alice", UpstreamSuccess: true, SummariesComplete: true}, empty))
+	require.True(t, proto.Equal(&ListSessionsResponse{Owner: "alice", UpstreamSuccess: true}, empty))
 
 	// Invalid protobuf bytes must fail decoding, even for an otherwise empty request.
 	malformedIdentity := &IdentityRequest{}
@@ -1148,6 +1122,9 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, codes.Internal, status.Code(err))
 	require.ErrorContains(t, err, "received no request message")
 
+	// This test's backend records each prompt it is handed, then refuses to run it.
+	require.NoError(t, sessions.UpsertThread("prompted", backend.ThreadState{Agent: "main"}))
+
 	for _, tt := range []struct {
 		text, want string
 		delivery   PromptDelivery
@@ -1159,13 +1136,13 @@ func TestSessionEntries(t *testing.T) {
 		{"\uFEFF$stash keep literal", "\uFEFF$stash keep literal", PromptDelivery_STEER},
 		{"$workflow audit  src", "$workflow audit  src", PromptDelivery_STEER},
 	} {
-		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: "unrecorded", Text: tt.text, Delivery: tt.delivery, MessageId: "direct-message"})
-		require.ErrorContains(t, err, `conversation "unrecorded" is not recorded`)
+		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: "prompted", Text: tt.text, Delivery: tt.delivery, MessageId: "direct-message"})
+		require.ErrorContains(t, err, `conversation "prompted" is not recorded`)
 
 		inbound := turns[len(turns)-1]
 		require.Equal(t, protocol.InboundKindSteer, inbound.Kind)
 		require.Equal(t, protocol.SourceWeb, inbound.Source)
-		require.Equal(t, "unrecorded", inbound.ConversationID)
+		require.Equal(t, "prompted", inbound.ConversationID)
 		require.True(t, inbound.Human)
 		require.Equal(t, tt.want, inbound.Text)
 		require.Equal(t, tt.want, inbound.Metadata[protocol.InboundRawTextMetadataKey])
@@ -1175,8 +1152,13 @@ func TestSessionEntries(t *testing.T) {
 
 	const id = "slack-thread:C1:1.1"
 
+	// Cron runs, recorded as the cron runner records them, are private.
+	for _, run := range []string{"cron:private", "one-off-cron:private"} {
+		require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "producer", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/private.md", At: time.Unix(1, 0), OneOff: run == "one-off-cron:private"}}))
+	}
+
 	thread := backend.ThreadState{Agent: "main"}
-	require.NoError(t, sessions.UpsertThread(id, thread))
+	seeded.RecordSlackThread(t, sessions, id, thread)
 	require.NoError(t, sessions.BeginGoal(id, &backend.GoalState{Objective: "keep goal", MaxTurns: 3}))
 	goal, exists, err := sessions.Goal(id)
 	require.NoError(t, err)
@@ -1266,10 +1248,11 @@ func TestSessionEntries(t *testing.T) {
 	loaded, err = invoke[LoadSessionEntriesResponse](ctx, connection, "LoadSessionEntries", request)
 	require.NoError(t, err)
 	require.Empty(t, loaded.Entries)
-	loaded, err = invoke[LoadSessionEntriesResponse](ctx, connection, "LoadSessionEntries", &SessionEntriesRequest{Id: "unrelated"})
+
+	untouched, err := sessions.ObserveEntries(ctx, "unrelated")
 	require.NoError(t, err)
-	require.Len(t, loaded.Entries, 1)
-	require.Equal(t, unrelated, loaded.Entries[0].Id)
+	require.Len(t, untouched, 1)
+	require.Equal(t, unrelated, untouched[0].ID)
 
 	after, exists, err := sessions.Thread(id)
 	require.NoError(t, err)
@@ -1576,34 +1559,38 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, id, turns[len(turns)-1].ConversationID)
 
 	// Discovery starts from recorded conversations, never orphaned entry rows.
-	for _, hidden := range []string{"private-X", "cron:cron/daily.md:20000102T030405.000000006Z:a", "one-off-cron:cron/daily.md:20000102T030405.000000006Z:b"} {
-		require.NoError(t, sessions.UpsertThread(hidden, backend.ThreadState{Agent: "producer"}))
+	at := time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC)
+	for hidden, run := range map[string]*protocol.CronRun{"cron:cron/daily.md:20000102T030405.000000006Z:a": {Path: "cron/daily.md", At: at}, "one-off-cron:cron/daily.md:20000102T030405.000000006Z:b": {Path: "cron/daily.md", At: at, OneOff: true}} {
+		require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: hidden, Agent: "producer", Run: run}))
 	}
 
+	require.NoError(t, sessions.UpsertThread("private-X", backend.ThreadState{Agent: "producer"}))
 	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: id, Agent: "producer", SlackChannel: "#ops"}))
+
+	_, err = seeded.db.ExecContext(ctx, `UPDATE conversations SET kind = 'external_mcp_run', listed = FALSE WHERE conversation_id = 'private-X'`)
+	require.NoError(t, err)
 	require.NoError(t, sessions.UpsertThread("empty-web", backend.ThreadState{Agent: "selected"}))
 
 	listedSessions, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
 	require.Empty(t, listedSessions.Sessions, "empty and deleted histories are hidden")
-	require.True(t, listedSessions.SummariesComplete)
 
 	// Missing summaries do not expose empty conversation records either.
 	db, err := sql.Open("pgx", dsn)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
-	_, err = db.ExecContext(ctx, `DELETE FROM session_summaries WHERE conversation_id = 'empty-web'`)
+	_, err = db.ExecContext(ctx, `UPDATE conversations SET preview = NULL, last_updated = NULL WHERE conversation_id = 'empty-web'`)
 	require.NoError(t, err)
 	loading, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
 	require.True(t, loading.UpstreamSuccess)
-	require.True(t, loading.SummariesComplete)
 	require.Empty(t, loading.Sessions)
 
 	_, err = sessions.AppendEntryID(ctx, "empty-web", &rocketcode.SessionEntry{Timestamp: time.Now().UTC()})
 	require.NoError(t, err)
-	_, err = db.ExecContext(ctx, `INSERT INTO session_tags (conversation_id, tags) VALUES ('empty-web', '["customer","triage"]'), ('private-X', '["private"]'), ('empty-tag-only', '["customer"]')`)
+	_, err = db.ExecContext(ctx, `UPDATE conversations c SET tags = v.tags::jsonb FROM (VALUES ('empty-web', '["customer","triage"]'), ('private-X', '["private"]')) v(id, tags)
+WHERE c.conversation_id = v.id`)
 	require.NoError(t, err)
 	listedSessions, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
@@ -1612,7 +1599,7 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, "selected", listedSessions.Sessions[0].Agent)
 	require.Equal(t, []string{"customer", "triage"}, listedSessions.Sessions[0].Tags)
 	beforeTagChange := proto.Clone(listedSessions.Sessions[0]).(*Session)
-	_, err = db.ExecContext(ctx, `UPDATE session_tags SET tags = '["resolved"]' WHERE conversation_id = 'empty-web'`)
+	_, err = db.ExecContext(ctx, `UPDATE conversations SET tags = '["resolved"]' WHERE conversation_id = 'empty-web'`)
 	require.NoError(t, err)
 	listedSessions, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
@@ -1629,22 +1616,23 @@ func TestSessionEntries(t *testing.T) {
 	require.Empty(t, emptyHistory.Messages)
 
 	t.Run("shadow metadata follows parent history without messages", func(t *testing.T) {
-		_, err := db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by)
-VALUES ('shadow-test-a', 'main/a', 'alice'), ('shadow-test-z', 'main/z', 'alice')`)
+		_, err := db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
+VALUES ('shadow-test-a', 'main/a', 'alice', 'shadow', FALSE), ('shadow-test-z', 'main/z', 'alice', 'shadow', FALSE);
+INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, call_turn, call_id)
+VALUES ('shadow-test-a/task', 'main', '', 'shadow-test-a', 'subagent', FALSE, 'turn', 'task'), ('shadow-test-z/task', 'main', '', 'shadow-test-z', 'subagent', FALSE, 'turn', 'task')`)
 
 		require.NoError(t, err)
 		defer func() {
-			_, err := db.ExecContext(ctx, `DELETE FROM managed_conversations WHERE conversation_id IN ('shadow-test-a', 'shadow-test-z')`)
+			_, err := db.ExecContext(ctx, `DELETE FROM conversations WHERE conversation_id IN ('shadow-test-a/task', 'shadow-test-z/task'); DELETE FROM conversations WHERE conversation_id IN ('shadow-test-a', 'shadow-test-z')`)
 			require.NoError(t, err)
 		}()
 
-		_, err = db.ExecContext(ctx, `INSERT INTO shadow_bindings
-(child_conversation_id, parent_conversation_id, parent_agent, shadow_agent)
-VALUES ('shadow-test-z', $1, 'main', 'main/z'), ('shadow-test-a', $1, 'main', 'main/a')`, id)
+		_, err = db.ExecContext(ctx, `UPDATE conversations c SET shadow_parent = $1, parent_agent = 'main', shadow_agent = v.agent
+FROM (VALUES ('shadow-test-z', 'main/z'), ('shadow-test-a', 'main/a')) v(id, agent) WHERE c.conversation_id = v.id`, id)
 		require.NoError(t, err)
 		_, err = db.ExecContext(ctx, `INSERT INTO shadow_turns
 (child_conversation_id, parent_source_conversation_id, parent_turn_id, inbound_json)
-SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shadow_bindings WHERE parent_conversation_id = $1`, id)
+SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE shadow_parent = $1`, id)
 		require.NoError(t, err)
 		waiting, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, Revision: emptyHistory.Revision})
 		require.NoError(t, err)
@@ -1700,7 +1688,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 			}
 		}
 
-		_, err = db.ExecContext(ctx, `UPDATE shadow_bindings SET parent_conversation_id = 'private-X' WHERE child_conversation_id = 'shadow-test-z'`)
+		_, err = db.ExecContext(ctx, `UPDATE conversations SET shadow_parent = 'private-X' WHERE conversation_id = 'shadow-test-z'`)
 		require.NoError(t, err)
 
 		for _, child := range []string{"shadow-test-z", "shadow-test-z/task"} {
@@ -1946,7 +1934,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 	entry.ReplayInput = []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"Copied producer answer"}`)}
 	_, err = sessions.AppendEntryID(ctx, id, &entry)
 	require.NoError(t, err)
-	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', 0, 'sync_source_conversation_id', 'private-X'))::json WHERE conversation_id=$1`, id)
+	_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', 0, 'sync_source_conversation_id', 'private-X'))::json WHERE conversation_id=$1`, id)
 	require.NoError(t, err)
 	httpServer := startHTTPTestServer(t, connection)
 
@@ -2000,7 +1988,11 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 
 	remaining, err = sessions.ObserveEntries(ctx, id)
 	require.NoError(t, err)
-	require.Empty(t, remaining)
+	require.Len(t, remaining, 1, "the wipe keeps the copied producer answer")
+	// The rest of this test starts from an empty thread.
+	_, err = db.ExecContext(ctx, `WITH gone AS (DELETE FROM entries WHERE conversation_id = $1)
+UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALSE, first_source = NULL WHERE conversation_id = $1`, id)
+	require.NoError(t, err)
 
 	after, exists, err = sessions.Thread(id)
 	require.NoError(t, err)
@@ -2119,7 +2111,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 	}
 
 	for _, extra := range []string{"slack-thread:C1:2.2", "slack-thread:C2:3.3"} {
-		require.NoError(t, sessions.UpsertThread(extra, backend.ThreadState{Agent: "main"}))
+		seeded.RecordSlackThread(t, sessions, extra, backend.ThreadState{Agent: "main"})
 		_, err := sessions.AppendEntryID(ctx, extra, &rocketcode.SessionEntry{})
 		require.NoError(t, err)
 	}
@@ -2144,20 +2136,22 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 	require.Empty(t, listedSessions.Sessions[2].AllowedAgents, "unknown channel must not guess policy")
 	require.Equal(t, identity.Username, listedSessions.Owner)
 	require.True(t, listedSessions.UpstreamSuccess)
-	require.True(t, listedSessions.SummariesComplete)
 
 	channelTitle = "renamed"
 	listedSessions, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
 
 	for _, session := range listedSessions.Sessions {
-		switch channel, _, slack := protocol.SlackThreadTarget(session.Id); {
-		case !slack:
+		channel, _, err := sessions.SlackThread(ctx, session.Id)
+		require.NoError(t, err)
+
+		switch channel {
+		case "":
 			require.Empty(t, session.Title)
-		case channel == "C1":
+		case "C1":
 			require.Equal(t, "renamed", session.Title)
 			require.Equal(t, []string{"main", "planner"}, session.AllowedAgents)
-		case channel == "C2":
+		case "C2":
 			require.Equal(t, "C2", session.Title)
 			require.Empty(t, session.AllowedAgents)
 		}
@@ -2250,7 +2244,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 	}
 
 	next := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
-	require.NoError(t, sessions.SyncCronSchedules([]backend.CronScheduleState{{ScheduleID: "cron/alpha.md#0#24h", RelativePath: "cron/alpha.md", NextDue: next}, {ScheduleID: "cron/zeta.md#0#24h", RelativePath: "cron/zeta.md", NextDue: next}}, time.Now()))
+	require.NoError(t, sessions.SyncCronSchedules([]backend.CronScheduleState{{ScheduleID: "cron/alpha.md#0#24h", RelativePath: "cron/alpha.md", NextDue: next}, {ScheduleID: "cron/zeta.md#0#24h", RelativePath: "cron/zeta.md", NextDue: next}}))
 
 	jobs, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
@@ -2271,8 +2265,10 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 
 	// Seed the exact persisted relation written by Sync, without changing Sync.
 	sources := []string{"cron:cron/report:daily.md:20260905T010000.000000001Z:first", "one-off-cron:cron/report_daily.md:20260905T020000.000000002Z:second"}
-	for _, source := range sources {
-		require.NoError(t, sessions.UpsertThread(source, backend.ThreadState{Agent: "producer"}))
+	runs := []*protocol.CronRun{{Path: "cron/report:daily.md", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}, {Path: "cron/report_daily.md", At: time.Date(2026, 9, 5, 2, 0, 0, 2, time.UTC), OneOff: true}}
+
+	for i, source := range sources {
+		require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: source, Agent: "producer", Run: runs[i]}))
 
 		runEntry := entry
 		runEntry.ReplayInput = []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"` + source + `"}`)}
@@ -2286,14 +2282,14 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 		for range 2 {
 			destinationEntry, err := sessions.AppendEntryID(ctx, id, &runEntry)
 			require.NoError(t, err)
-			_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint))::json WHERE id = $2`, sourceEntry, destinationEntry)
+			_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint))::json WHERE id = $2`, sourceEntry, destinationEntry)
 			require.NoError(t, err)
 		}
 
 		for _, hiddenDestination := range []string{"private-X", "unrecorded-history-destination"} {
 			destinationEntry, err := sessions.AppendEntryID(ctx, hiddenDestination, &entry)
 			require.NoError(t, err)
-			_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint))::json WHERE id = $2`, sourceEntry, destinationEntry)
+			_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint))::json WHERE id = $2`, sourceEntry, destinationEntry)
 			require.NoError(t, err)
 		}
 	}
@@ -2315,7 +2311,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 	require.NoError(t, err)
 	require.Empty(t, preview.Messages)
 	// A preview must not decode replay content belonging to another run.
-	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', '[{"type":"compaction","content":42}]')::json WHERE id = $1`, observed[3].ID)
+	_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', '[{"type":"reasoning","summary":42}]')::json WHERE id = $1`, observed[3].ID)
 	require.NoError(t, err)
 	preview, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, SourceConversationId: sources[0]})
 	require.NoError(t, err)
@@ -2323,22 +2319,24 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 
 	_, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, SourceConversationId: sources[1]})
 	require.ErrorContains(t, err, "decode web history")
-	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', (SELECT entry_json::jsonb->'replay_input' FROM session_entries WHERE id = $1))::json WHERE id = $2`, observed[2].ID, observed[3].ID)
+	_, err = db.ExecContext(ctx, `WITH original AS (SELECT entry_json::jsonb->'replay_input' AS replay FROM entries WHERE id = $1)
+UPDATE entries e SET entry_json = jsonb_set(e.entry_json::jsonb, '{replay_input}', o.replay)::json FROM original o WHERE e.id = $2`, observed[2].ID, observed[3].ID)
 	require.NoError(t, err)
 
 	// Both transcript and delegation inventory ignore physically superseded
 	// checkpoints, even when their unreadable detail survives in the journal.
 	corrupt := "cron:corrupt-delegations"
+	require.NoError(t, sessions.UpsertThread(corrupt, backend.ThreadState{Agent: "main"}))
 	_, err = sessions.AppendEntryID(ctx, corrupt, &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "corrupt-turn", Timestamp: time.Now()})
 	require.NoError(t, err)
 	require.NoError(t, seeded.UpsertActiveTurn(ctx, &testCheckpoint{TurnID: "corrupt-turn", ConversationKey: corrupt, Agent: "main"}))
-	_, err = db.ExecContext(ctx, `UPDATE turn_steps SET value = '{"record":{"replay_input":{}}}' WHERE key = 'corrupt-turn'`)
+	_, err = db.ExecContext(ctx, `INSERT INTO steps (conversation_id, key, value) VALUES ($1, 'corrupt-turn/replay_input/0000000000', '7')`, corrupt)
 	require.NoError(t, err)
 	corruptView, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: corrupt})
 	require.NoError(t, err)
 	require.Empty(t, corruptView.Delegations)
 
-	for _, table := range []string{"active_turns", "session_entries", "session_summaries"} {
+	for _, table := range []string{"turns", "entries"} {
 		_, err = db.ExecContext(ctx, "DELETE FROM "+table+" WHERE conversation_id = $1", corrupt)
 		require.NoError(t, err)
 	}
@@ -2370,7 +2368,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 		require.Len(t, source, 1)
 		copied, err := sessions.AppendEntryID(ctx, destination, &source[0].Entry)
 		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint))::json WHERE id = $2`, source[0].ID, copied)
+		_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint))::json WHERE id = $2`, source[0].ID, copied)
 		require.NoError(t, err)
 
 		listed, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
@@ -2379,29 +2377,30 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 		want := &ListCronJobsResponse{Jobs: append(slices.Clone(jobs.Jobs[:3]), &CronJob{Stem: "report:daily", Status: "ran", LastRun: "2026-09-05T01:00:00.000000001Z", NextRun: destination, Origin: sources[0]}, jobs.Jobs[3])}
 		require.True(t, proto.Equal(want, listed), "unexpected cron destinations: %v", listed)
 
-		_, err = sessions.DeleteSession(ctx, destination)
+		// A wipe keeps a copied cron report, so remove the copy itself.
+		_, err = db.ExecContext(ctx, `DELETE FROM entries WHERE conversation_id = $1`, destination)
 		require.NoError(t, err)
 	})
 
 	// A destination's revert cutoff hides the deliveries after it; that run stays a private execution.
-	_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = $1 WHERE conversation_id = $2`, fmt.Sprintf("%d:0", observed[2].ID), id)
+	_, err = db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $1 WHERE conversation_id = $2`, fmt.Sprintf("%d:0", observed[2].ID), id)
 	require.NoError(t, err)
 	reverted, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
 	require.Len(t, reverted.Jobs, 4)
 	require.Equal(t, []string{"", id}, []string{reverted.Jobs[2].NextRun, reverted.Jobs[3].NextRun})
-	_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = '' WHERE conversation_id = $1`, id)
+	_, err = db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = $1`, id)
 	require.NoError(t, err)
 
 	undelivered := "cron:cron/silent.md:20260905T030000.000000003Z:third"
-	require.NoError(t, sessions.UpsertThread(undelivered, backend.ThreadState{Agent: "producer"}))
+	require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: undelivered, Agent: "producer", Run: &protocol.CronRun{Path: "cron/silent.md", At: time.Date(2026, 9, 5, 3, 0, 0, 3, time.UTC)}}))
 
 	traceEntry := entry
 	traceEntry.ReplayInput = []json.RawMessage{
 		json.RawMessage(`{"type":"function_call","call_id":"silent-tool","name":"inspect","arguments":"{}"}`),
 		json.RawMessage(`{"type":"function_call_output","call_id":"silent-tool","output":"Nothing\u0000 to deliver"}`),
 	}
-	traceEntryID, err := sessions.AppendEntryID(ctx, undelivered, &traceEntry)
+	_, err = sessions.AppendEntryID(ctx, undelivered, &traceEntry)
 	require.NoError(t, err)
 	withSilent, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
@@ -2419,7 +2418,8 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 	for _, prefix := range []string{"cron:", "one-off-cron:"} {
 		t.Run(prefix+"checkpoint-only run is listed", func(t *testing.T) {
 			source := prefix + "cron/checkpoint.md:20000102T030405.000000006Z:pending"
-			require.NoError(t, sessions.UpsertThread(source, backend.ThreadState{Agent: "producer"}))
+			run := &protocol.CronRun{Path: "cron/checkpoint.md", At: time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC), OneOff: prefix == "one-off-cron:"}
+			require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: source, Agent: "producer", Run: run}))
 			require.NoError(t, seeded.UpsertActiveTurn(ctx, &testCheckpoint{TurnID: source, ConversationKey: source, Agent: "producer", ReplayInput: []json.RawMessage{
 				json.RawMessage(`{"type":"message","role":"assistant","content":"Private checkpoint content"}`),
 			}}))
@@ -2462,7 +2462,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 			}
 
 			require.NoError(t, seeded.SetActiveTurnTerminal(ctx, source, protocol.TerminalFailed))
-			_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = '0:0' WHERE conversation_id = $1`, source)
+			_, err = db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '0:0' WHERE conversation_id = $1`, source)
 			require.NoError(t, err)
 			reverted, err := sessions.ObserveTranscript(ctx, source, 0, 0, nil)
 			require.NoError(t, err)
@@ -2472,13 +2472,13 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 			require.NoError(t, err)
 			require.True(t, proto.Equal(withSilent, listed), "reverted checkpoint changed inventory: %v", listed)
 
-			_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = '' WHERE conversation_id = $1`, source)
+			_, err = db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = $1`, source)
 			require.NoError(t, err)
 			savedID, err := sessions.AppendEntryID(ctx, source, &transcript[0].Entry)
 			require.NoError(t, err)
 
 			for _, marker := range []string{fmt.Sprintf("%d:1", savedID), fmt.Sprintf("%d:0", savedID), "0:0"} {
-				_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = $1 WHERE conversation_id = $2`, marker, source)
+				_, err = db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $1 WHERE conversation_id = $2`, marker, source)
 				require.NoError(t, err)
 				transcript, err := sessions.ObserveTranscript(ctx, source, 0, 0, nil)
 				require.NoError(t, err)
@@ -2502,11 +2502,11 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 		producer.ConversationID, producer.RequireOutputDecision = undelivered, true
 		routing, err := json.Marshal(producer)
 		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET producer_inbound_json = $2::json WHERE conversation_id = $1`, undelivered, string(routing))
+		_, err = db.ExecContext(ctx, `UPDATE conversations SET producer_inbound_json = $2::json WHERE conversation_id = $1`, undelivered, string(routing))
 		require.NoError(t, err)
 		schedule, err := json.Marshal(protocol.ScheduledMessageState{ConversationID: undelivered, Agent: "producer", Message: "later", DueAt: time.Now().Add(time.Hour)})
 		require.NoError(t, err)
-		effectID, err := sessions.AppendEntryID(ctx, undelivered, &rocketcode.SessionEntry{Version: 1, Type: "producer_schedule", Timestamp: entry.Timestamp, OutputTrace: []json.RawMessage{schedule}})
+		_, err = sessions.AppendEntryID(ctx, undelivered, &rocketcode.SessionEntry{Version: 1, Type: "producer_schedule", Timestamp: entry.Timestamp, OutputTrace: []json.RawMessage{schedule}})
 		require.NoError(t, err)
 
 		path := filepath.Join(cfg.RuntimeDirName(), "cron", "silent.md")
@@ -2525,12 +2525,6 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 		server.cfg.Store(cfg)
 
 		request := &CreateSessionRequest{SourceConversationId: undelivered}
-		core.SyncConversationFunc = func(context.Context, string, string) error { return errors.New("sync interrupted") }
-		_, err = invoke[CreateSessionResponse](ctx, connection, "CreateSession", request)
-		require.ErrorContains(t, err, "sync interrupted")
-		// The RPC delegates history copying to SyncConversation; its transaction and
-		// concurrent deduplication are covered by backend runtime tests.
-		core.SyncConversationFunc = func(context.Context, string, string) error { return nil }
 
 		var opens errgroup.Group
 
@@ -2554,19 +2548,14 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 
 		webID := ids[0]
 		require.Equal(t, "web:"+undelivered, webID)
-		_, _, slack := protocol.SlackThreadTarget(webID)
-		require.False(t, slack)
+		_, slackThread, err := sessions.SlackThread(ctx, webID)
+		require.NoError(t, err)
+		require.Empty(t, slackThread)
 
 		thread, found, err := sessions.Thread(webID)
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, backend.ThreadState{Agent: "selected", CreatedBy: "alice"}, thread)
-		require.Len(t, core.SyncConversationCalls(), len(ids)+1)
-
-		for _, call := range core.SyncConversationCalls() {
-			require.Equal(t, undelivered, call.S)
-			require.Equal(t, webID, call.S1)
-		}
 
 		conversations, err := rt.ListConversations(ctx)
 		require.NoError(t, err)
@@ -2581,39 +2570,21 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 
 		require.Equal(t, 1, count)
 
-		var (
-			owner   string
-			through int64
-		)
+		var owner string
 
-		require.NoError(t, db.QueryRowContext(ctx, `SELECT producer_inbound_json->>'SyncDestination', producer_effects_through_id FROM managed_conversations WHERE conversation_id = $1`, undelivered).Scan(&owner, &through))
-		require.Empty(t, owner, "opening Web cannot bind a still-unresolved cron")
-		require.Zero(t, through, "history-only opening cannot consume the pending effect")
-		// Seed the persisted provenance produced by the real SyncConversation.
-		_, err = db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) SELECT $1, (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id))::json, entry_timestamp FROM session_entries WHERE id=$2`, webID, traceEntryID)
-		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT COALESCE(reports_to, '') FROM conversations WHERE conversation_id = $1`, undelivered).Scan(&owner))
+		require.Equal(t, webID, owner, "the chat continuing an unbound run adopts it")
 		history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: webID})
 		require.NoError(t, err)
 
 		trace.Origin = `{"agent":"producer","kind":"cron","ranAt":"2026-09-05T03:00:00.000000003Z","runId":"` + undelivered + `","runKind":"scheduled","sourcePath":"cron/silent.md","stem":"silent"}`
-		require.Len(t, history.Messages, len(trace.Messages))
-
-		for i := range trace.Messages {
-			require.NotEmpty(t, history.Messages[i].MessageId)
-			trace.Messages[i].MessageId = history.Messages[i].MessageId // Copied rows have destination-local message IDs.
-			key, _, _ := strings.Cut(history.Messages[i].MessageId, ":")
-			trace.Messages[i].EntryKey = key
-			trace.Messages[i].ItemId = history.Messages[i].MessageId
-			trace.Messages[i].ParentId = history.Messages[i].ParentId // Call groups are destination-local too.
-		}
-
 		require.Equal(t, trace.Origin, history.Origin)
 		require.Equal(t, trace.Messages, history.Messages)
 		require.True(t, history.Reset_)
 		require.NotEmpty(t, history.Revision)
 		// The backend tests exercise delivery binding and atomic effect consumption.
 		// Model their resulting facts here; reopening Web must leave them untouched.
-		_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET producer_inbound_json = jsonb_set(producer_inbound_json::jsonb, '{SyncDestination}', to_jsonb($2::text))::json, producer_effects_through_id = $3 WHERE conversation_id = $1`, undelivered, id, effectID)
+		_, err = db.ExecContext(ctx, `UPDATE conversations SET reports_to = $2 WHERE conversation_id = $1`, undelivered, id)
 		require.NoError(t, err)
 
 		_, err = sessions.AppendEntryID(ctx, webID, &rocketcode.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"later"}`)}})
@@ -2624,13 +2595,13 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 		require.Equal(t, trace.Origin, latest.Origin, "the creating entry decides the origin outside the newest entries")
 
 		var broken int64
-		require.NoError(t, db.QueryRowContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, '{"version":"broken"}', '') RETURNING id`, webID).Scan(&broken))
+		require.NoError(t, db.QueryRowContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, '{"version":"broken"}', '') RETURNING id`, webID).Scan(&broken))
 		origins, err := invoke[SearchSessionsResponse](ctx, connection, "SearchSessions", &SearchSessionsRequest{Query: "CRON/SILENT.MD"})
 		require.NoError(t, err, "origin search reads only the creating entry")
 		require.Len(t, origins.GetMatches(), 1, "the cron run itself stays hidden")
 		require.Equal(t, webID, origins.GetMatches()[0].GetConversationId())
 
-		_, err = db.ExecContext(ctx, `DELETE FROM session_entries WHERE id = $1`, broken)
+		_, err = db.ExecContext(ctx, `DELETE FROM entries WHERE id = $1`, broken)
 		require.NoError(t, err)
 
 		spaces, err := sessions.Spaces(ctx)
@@ -2703,9 +2674,8 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 		thread, _, err = sessions.Thread(webID)
 		require.NoError(t, err)
 		require.Equal(t, "selected", thread.Agent, "reopening preserves the user's selection")
-		require.NoError(t, db.QueryRowContext(ctx, `SELECT producer_inbound_json->>'SyncDestination', producer_effects_through_id FROM managed_conversations WHERE conversation_id = $1`, undelivered).Scan(&owner, &through))
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT reports_to FROM conversations WHERE conversation_id = $1`, undelivered).Scan(&owner))
 		require.Equal(t, id, owner, "reopening an alternate history destination cannot replace the delivered owner")
-		require.Equal(t, effectID, through, "consumed effects remain consumed")
 
 		pending, err := sessions.ScheduledMessagesForConversation(webID)
 		require.NoError(t, err)
@@ -2723,7 +2693,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 		for _, test := range []struct {
 			source string
 			code   codes.Code
-		}{{"private-X", codes.InvalidArgument}, {id, codes.InvalidArgument}, {"cron:invalid", codes.InvalidArgument}, {undelivered + "-missing", codes.NotFound}} {
+		}{{"private-X", codes.InvalidArgument}, {id, codes.InvalidArgument}, {"cron:invalid", codes.NotFound}, {undelivered + "-missing", codes.NotFound}} {
 			_, err := invoke[CreateSessionResponse](ctx, connection, "CreateSession", &CreateSessionRequest{SourceConversationId: test.source})
 			require.Equal(t, test.code, status.Code(err))
 		}
@@ -2791,13 +2761,12 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 		require.Equal(t, codes.Unauthenticated, status.Code(err))
 	}
 
-	// A missing projection is not a complete snapshot, even when enumeration succeeds.
-	_, err = db.ExecContext(ctx, `DELETE FROM session_summaries WHERE conversation_id = $1`, id)
+	// A missing projection leaves its row without preview or time; summaries are always complete.
+	_, err = db.ExecContext(ctx, `UPDATE conversations SET preview = NULL, last_updated = NULL WHERE conversation_id = $1`, id)
 	require.NoError(t, err)
 	incomplete, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
 	require.True(t, incomplete.UpstreamSuccess)
-	require.False(t, incomplete.SummariesComplete)
 
 	for _, row := range incomplete.Sessions {
 		if row.Id == id {
@@ -2872,7 +2841,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 		require.NoError(t, err)
 		defer func() { require.NoError(t, transaction.Rollback()) }()
 
-		_, err = transaction.ExecContext(t.Context(), `LOCK TABLE managed_conversations IN ACCESS EXCLUSIVE MODE`)
+		_, err = transaction.ExecContext(t.Context(), `LOCK TABLE conversations IN ACCESS EXCLUSIVE MODE`)
 		require.NoError(t, err)
 
 		// Shadow visibility also reads managed ownership, so the locked lookup
@@ -2886,6 +2855,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 
 	t.Run("durable attachments", func(t *testing.T) {
 		const conversation = "attachment-visible"
+		require.NoError(t, sessions.UpsertThread(conversation, backend.ThreadState{Agent: "main"}))
 
 		previousRunTurn := core.RunTurnFunc
 
@@ -3019,7 +2989,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 			require.Equal(t, conversation, event.ConversationId)
 			require.Equal(t, 2, event.ProtoReflect().Descriptor().Fields().Len(), "signals cannot carry renderable fields")
 
-			_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = entry_json WHERE conversation_id = $1`, conversation)
+			_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = entry_json WHERE conversation_id = $1`, conversation)
 			require.NoError(t, err)
 			require.NoError(t, stream.RecvMsg(event))
 			require.NotEmpty(t, event.Revision)
@@ -3041,7 +3011,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 				require.ErrorContains(t, err, "load input attachment metadata")
 				_, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation})
 				require.ErrorContains(t, err, "load input attachment metadata")
-				_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = entry_json WHERE conversation_id = $1`, conversation)
+				_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = entry_json WHERE conversation_id = $1`, conversation)
 				require.NoError(t, err)
 				require.NoError(t, stream.RecvMsg(event))
 
@@ -3263,12 +3233,16 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 			json.RawMessage(`{"type":"function_call_output","call_id":"private-file","output":"queued attachments for final response: private-generated"}`),
 		}})
 		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) SELECT $1, (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id))::json, entry_timestamp FROM session_entries WHERE id=$2`, conversation, sourceID)
+		_, err = db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) SELECT $1, (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id))::json, entry_timestamp FROM entries WHERE id=$2`, conversation, sourceID)
 		require.NoError(t, err)
 		_, err = sessions.AppendEntryID(ctx, conversation, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"function_call","call_id":"own","name":"task","arguments":"{}"}`),
 		}})
 		require.NoError(t, err)
+
+		for _, call := range [][2]string{{conversation, "own"}, {conversation + "/own", "nested"}, {conversation, "unshown"}, {"private-X", "private-file"}, {"private-X", "unmirrored"}} {
+			testTurns{db: db}.RecordLegacyDelegation(t, call[0], call[1])
+		}
 
 		for _, delegation := range []string{conversation + "/own", conversation + "/own/nested", conversation + "/unshown", "private-X/private-file", "private-X/unmirrored", "private-Xother/decoy"} {
 			_, err = sessions.AppendEntryID(ctx, delegation, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now()})
@@ -3333,6 +3307,9 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 			})
 		}
 
+		// A wipe keeps messages copied from a run, so remove the copy before wiping the rest.
+		_, err = db.ExecContext(ctx, `DELETE FROM entries WHERE conversation_id = $1 AND entry_json::jsonb ? 'sync_source_entry_id'`, conversation)
+		require.NoError(t, err)
 		_, err = sessions.DeleteSession(ctx, conversation)
 		require.NoError(t, err)
 		stream, err := connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/DownloadAttachment")
@@ -3471,7 +3448,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 			`[{"type":"compaction","content":42}]`,
 			`[{"type":"function_call","name":"rocketclaw_attach_files_to_response","call_id":"broken","arguments":"invalid"},{"type":"function_call_output","call_id":"broken","output":"queued attachments for final response"}]`,
 		} {
-			_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', $1::jsonb)::json WHERE id = $2`, replay, entryID)
+			_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', $1::jsonb)::json WHERE id = $2`, replay, entryID)
 			require.NoError(t, err)
 
 			for _, call := range []struct {
@@ -3494,10 +3471,10 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 
 		data, err := json.Marshal(entry)
 		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = $1 WHERE id = $2`, string(data), entryID)
+		_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = $1 WHERE id = $2`, string(data), entryID)
 		require.NoError(t, err)
 
-		for _, table := range []string{"session_entries", "attachments", "external_mcp_sessions", "message_search"} {
+		for _, table := range []string{"entries", "attachments"} {
 			t.Run("unavailable "+table, func(t *testing.T) {
 				_, err := db.ExecContext(ctx, "ALTER TABLE "+table+" RENAME TO unavailable_command_table")
 				require.NoError(t, err)
@@ -3509,12 +3486,9 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 				_, err = invoke[ForkSessionResponse](ctx, connection, "ForkSession", &ForkSessionRequest{Id: source})
 				require.Error(t, err)
 
-				if table == "session_entries" || table == "external_mcp_sessions" {
+				if table == "entries" {
 					_, err = invoke[HandoffResponse](ctx, connection, "Handoff", &HandoffRequest{Id: source})
 					require.Error(t, err)
-				}
-
-				if table == "external_mcp_sessions" || table == "message_search" {
 					_, err = invoke[SearchMessagesResponse](ctx, connection, "SearchMessages", &SearchMessagesRequest{Query: "handoff"})
 					require.Error(t, err)
 				}
@@ -3678,6 +3652,108 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 	require.Len(t, catalog.Agents, 3, "the unselected catalog is independent of the database")
 }
 
+// KTD4: continuing a cron run in Web opens web:<run>, which shows the run's messages under their
+// own IDs and then its own, as its agent sees them, without copying a row. A run that reports
+// nowhere is adopted; one bound to its Slack report stays shown there too. Continuing again
+// returns the same chat.
+func TestContinueCronRun(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	root, err := os.OpenRoot(cfg.Workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\nmodel: gpt-6.1-sol\n---\nHelp."), 0o600))
+
+	db, err := sql.Open("pgx", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	core := withoutBackgroundJobs()
+	rt := &backend.Runtime{Sessions: sessions}
+	core.CreateConversationFunc, core.ContinueRunFunc = rt.CreateConversation, rt.ContinueRun
+	cronjobs := &mockCronJobs{LoadOneOffCronjobFunc: func(string) (protocol.OneOffCronjob, error) { return protocol.OneOffCronjob{}, os.ErrNotExist }}
+	server := &Server{backend: core, sessions: sessions, cfg: config.NewLockedConfig(cfg), cronjobs: cronjobs, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+
+	texts := func(id string) (shown []string) {
+		history, err := server.history(ctx, &HistoryRequest{Id: id})
+		require.NoError(t, err)
+
+		for _, message := range history.Messages {
+			shown = append(shown, message.MessageId+" "+message.Text)
+		}
+
+		return shown
+	}
+
+	for name, report := range map[string]string{"unbound": "", "bound": "slack-thread:C1:1.2"} {
+		t.Run(name, func(t *testing.T) {
+			run := "cron:cron/daily.md:20260905T010000.000000001Z:" + name
+			require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "main", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/daily.md", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}}))
+
+			if report != "" {
+				require.NoError(t, sessions.UpsertThread(report, backend.ThreadState{Agent: "main", CreatedBy: backend.ThreadCreatedByCron}))
+				_, err := db.ExecContext(ctx, `UPDATE conversations SET reports_to = $2 WHERE conversation_id = $1`, run, report)
+				require.NoError(t, err)
+			}
+
+			runEntry, err := sessions.AppendEntryID(ctx, run, &rocketcode.SessionEntry{Type: "turn", Timestamp: time.Now().UTC(), ReplayInput: []json.RawMessage{
+				json.RawMessage(`{"type":"message","role":"user","content":"daily prompt"}`), json.RawMessage(`{"type":"message","role":"assistant","content":"daily report"}`),
+			}})
+			require.NoError(t, err)
+
+			want := []string{fmt.Sprintf("%d:0 daily prompt", runEntry), fmt.Sprintf("%d:1 daily report", runEntry)}
+
+			var before, after int
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM entries`).Scan(&before))
+
+			for range 2 {
+				created, err := server.createSession(ctx, &CreateSessionRequest{SourceConversationId: run})
+				require.NoError(t, err)
+				require.Equal(t, "web:"+run, created.Id)
+			}
+
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM entries`).Scan(&after))
+			require.Equal(t, before, after, "nothing is copied")
+			require.Equal(t, want, texts("web:"+run))
+
+			var reportsTo string
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT reports_to FROM conversations WHERE conversation_id = $1`, run).Scan(&reportsTo))
+			require.Equal(t, cmp.Or(report, "web:"+run), reportsTo, "an unbound run is adopted; a bound one keeps its report")
+
+			if report != "" {
+				require.Equal(t, want, texts(report), "the Slack report still shows the run")
+			}
+
+			var listed bool
+
+			rooms := &mockChannels{SidebarChannelAgentChoicesFunc: func(context.Context, string) (string, []string, error) { return "", nil, nil }}
+			for chat, err := range sessions.SidebarChats(ctx, rooms, nil) {
+				require.NoError(t, err)
+
+				listed = listed || chat.Session.Conversation.ID == "web:"+run && chat.Session.Summary.LastMessage == "daily report"
+			}
+
+			require.True(t, listed, "the chat is listed with the run's last message")
+
+			_, err = sessions.AppendEntryID(ctx, "web:"+run, &rocketcode.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"follow-up"}`)}})
+			require.NoError(t, err)
+
+			agent, err := sessions.ObserveEntries(ctx, "web:"+run)
+			require.NoError(t, err)
+			require.Len(t, agent, 2)
+			require.Equal(t, runEntry, agent[0].ID, "the agent sees the run's messages before the chat's own")
+			require.JSONEq(t, `{"type":"message","role":"user","content":"follow-up"}`, string(agent[1].Entry.ReplayInput[0]))
+		})
+	}
+}
+
 // withoutBackgroundJobs is a backend with no Background Jobs, nothing to move, and no pending questions.
 func withoutBackgroundJobs() *mockBackend {
 	return &mockBackend{
@@ -3723,10 +3799,6 @@ func invoke[Response any](ctx context.Context, connection *grpc.ClientConn, meth
 			}
 
 			proto.Merge(any(response).(proto.Message), any(chunk).(proto.Message))
-
-			if terminal := any(chunk).(*ListSessionsResponse); terminal.UpstreamSuccess {
-				any(response).(*ListSessionsResponse).SummariesComplete = terminal.SummariesComplete
-			}
 		}
 	}
 
@@ -3789,9 +3861,11 @@ func TestBackgroundJobRPCs(t *testing.T) {
 
 	const cronRun = "cron:cron/daily.md:20000102T030405.000000006Z:a"
 
-	for _, id := range []string{"chat", cronRun, "private-X"} {
+	for _, id := range []string{"chat", "private-X"} {
 		require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main"}))
 	}
+
+	require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(t.Context(), protocol.Conversation{ID: cronRun, Agent: "main", Run: &protocol.CronRun{Path: "cron/daily.md", At: time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC)}}))
 
 	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "chat", Agent: "main", SlackChannel: "#ops"}))
 
@@ -3911,6 +3985,13 @@ func TestBackgroundJobRPCs(t *testing.T) {
 	require.Len(t, core.StopBackgroundJobCalls(), 1)
 	require.Equal(t, "turn-9/call/k", core.StopBackgroundJobCalls()[0].S1)
 
+	db, err := sql.Open("pgx", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	_, err = db.ExecContext(ctx, `UPDATE conversations SET reports_to = 'chat' WHERE conversation_id = $1`, cronRun)
+	require.NoError(t, err)
+
 	joinCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -3922,12 +4003,8 @@ func TestBackgroundJobRPCs(t *testing.T) {
 	change := &ConversationChange{}
 	require.NoError(t, stream.RecvMsg(change)) // The stream's opening wake-up.
 
-	db, err := sql.Open("pgx", dsn)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
-
-	_, err = db.ExecContext(ctx, `INSERT INTO background_jobs (conversation_id, job_id, kind, status, agent, label, call_id, subagent_key, origin_json, sync_destination, runner_id, note_state, wake, claimed_turn_id, created_at_unix_ns, finished_at_unix_ns, result)
-VALUES ($1, 'turn-9/call/k', 'task', 'running', 'main', 'report', 'k', '/k', '{}', 'chat', 'runner', 'none', FALSE, '', 1, 0, '')`, cronRun)
+	_, err = db.ExecContext(ctx, `INSERT INTO turns (conversation_id, input_id, kind, takes_lane, agent, label, call_id, subagent_key, inbound_json, runner_id, note, wake, wake_attempts, run_at_unix_ns, claimed_by, created_at_unix_ns, updated_at_unix_ns, result, message)
+VALUES ($1, 'turn-9/call/k', 'note', FALSE, 'main', 'report', 'k', '/k', '{}', 'runner', 'none', FALSE, 0, 0, '', 1, 1, '', '')`, cronRun)
 	require.NoError(t, err)
 	require.NoError(t, stream.RecvMsg(change))
 	require.Equal(t, "chat", change.ConversationId, "a hidden run's job change wakes its destination")
@@ -3944,6 +4021,7 @@ func TestQuestionRPCs(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
+	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
 	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "chat", Agent: "main", SlackChannel: "#ops"}))
 
 	pending := []protocol.AskUserQuestionRequest{{ID: "turn-1/call/q", ConversationID: "chat", Question: "Which?", Details: "Pick any", Options: []protocol.AskUserQuestionOption{{Label: "A", Value: "a", Description: "first"}, {Label: "B", Value: "b"}}, Multiple: true}}
@@ -3983,7 +4061,7 @@ func TestQuestionRPCs(t *testing.T) {
 	_, err = invoke[AnswerQuestionResponse](t.Context(), connection, "AnswerQuestion", &AnswerQuestionRequest{ConversationId: "chat", AskId: "turn-1/call/q", Custom: "no principal"})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
 	_, err = invoke[AnswerQuestionResponse](ctx, connection, "AnswerQuestion", &AnswerQuestionRequest{ConversationId: "private-X", AskId: "turn-1/call/q"})
-	require.Equal(t, codes.PermissionDenied, status.Code(err))
+	require.Equal(t, codes.NotFound, status.Code(err), "this test binds the private run without recording it")
 	require.Empty(t, core.AnswerQuestionCalls(), "refused callers never reach the backend")
 
 	answer, err := http.Post(startHTTPTestServer(t, connection).URL+"/api/AnswerQuestion", "application/json", strings.NewReader(`{"conversationId":"chat","askId":"turn-1/call/q","selected":["a","b"],"custom":"and c"}`))
@@ -3995,9 +4073,8 @@ func TestQuestionRPCs(t *testing.T) {
 	for _, request := range []*AnswerQuestionRequest{{ConversationId: "chat", AskId: "turn-1/call/q", Custom: "second"}, {ConversationId: "web:other", AskId: "turn-1/call/q"}} {
 		_, err = invoke[AnswerQuestionResponse](ctx, connection, "AnswerQuestion", request)
 		require.Equal(t, codes.NotFound, status.Code(err), "%v", request)
-		require.ErrorContains(t, err, "no longer pending")
+		require.ErrorContains(t, err, map[string]string{"chat": "no longer pending", "web:other": "conversation is not recorded"}[request.ConversationId])
 	}
 
-	require.Len(t, core.AnswerQuestionCalls(), 3)
-	require.Equal(t, "web:other", core.AnswerQuestionCalls()[2].S)
+	require.Len(t, core.AnswerQuestionCalls(), 2, "an unrecorded conversation never reaches the backend")
 }

@@ -104,7 +104,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 
 	childFactory := *f
 	childFactory.inPermissionReview = true
-	childFactory.childKey = f.childKey + "/" + request.Review
+	childFactory.childKey = request.Review.under(f.childKey.Path)
 
 	child, err := childFactory.newLooper(&agent, childFactory.childSystemPrompt(&agent))
 	if err != nil {

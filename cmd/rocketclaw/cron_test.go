@@ -17,15 +17,15 @@ func TestCronRunnerRejectsChannelWithoutAgents(t *testing.T) {
 	require.ErrorContains(t, err, "has no configured agents")
 }
 
-func TestCronProducerAlwaysSyncsBeforeReturning(t *testing.T) {
+// A run with a destination records it and runs; the destination shows the run without a copy.
+func TestCronProducerRunsWithDestination(t *testing.T) {
 	progressCronjob := &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "job-agent", RanAt: "2000-01-02T03:04:05Z"}
-	for _, outcome := range []string{"normal", "run-error", "interrupted", "sync-error"} {
+	for _, outcome := range []string{"normal", "run-error", "interrupted"} {
 		t.Run(outcome, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			var operations []string
 			errRun := errors.New("producer run failed")
-			errSync := errors.New("producer sync failed")
 			core := &BackendMock{
 				CreateConversationFunc: func(_ context.Context, conversation protocol.Conversation) error {
 					operations = append(operations, "create:"+conversation.ID+":"+conversation.Agent)
@@ -47,14 +47,6 @@ func TestCronProducerAlwaysSyncsBeforeReturning(t *testing.T) {
 					}
 					return nil
 				},
-				SyncConversationFunc: func(syncCtx context.Context, source, destination string) error {
-					require.NoError(t, syncCtx.Err())
-					operations = append(operations, "sync:"+source+":"+destination)
-					if outcome == "sync-error" {
-						return errSync
-					}
-					return nil
-				},
 			}
 			runner := &cronRunner{backend: core, config: &config.Config{Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"channel-agent"}}}}}}
 			progress := &backend.RawRunProgress{ConversationID: "X", TextChannel: "#ops", Cronjob: progressCronjob}
@@ -66,14 +58,43 @@ func TestCronProducerAlwaysSyncsBeforeReturning(t *testing.T) {
 				require.ErrorIs(t, err, errRun)
 			case "interrupted":
 				require.ErrorIs(t, err, context.Canceled)
-			case "sync-error":
-				require.ErrorIs(t, err, errSync)
 			default:
 				require.NoError(t, err)
 			}
-			want := []string{"create:slack-thread:C1:1.2:channel-agent", "create:X:job-agent", "run:X", "sync:X:slack-thread:C1:1.2"}
+			want := []string{"create:slack-thread:C1:1.2:channel-agent", "create:X:job-agent", "run:X"}
 			require.Equal(t, want, operations)
 		})
+	}
+}
+
+// A run with no channel needs no Slack configuration, has no Slack target, and records its
+// destination, when it has one, under the cron's own agent.
+func TestCronRunWithoutChannelPostsNowhere(t *testing.T) {
+	for _, destination := range []string{"", "web-chat"} {
+		var created []string
+
+		core := &BackendMock{
+			CreateConversationFunc: func(_ context.Context, conversation protocol.Conversation) error {
+				created = append(created, conversation.ID+":"+conversation.Agent)
+				return nil
+			},
+			RunTurnFunc: func(_ context.Context, inbound *protocol.InboundMessage) error {
+				require.Nil(t, inbound.SlackReply)
+				require.Equal(t, destination, inbound.SyncDestination)
+				return nil
+			},
+		}
+		runner := &cronRunner{backend: core, config: &config.Config{}}
+		result, err := runner.Run(t.Context(), "job", "prompt", &backend.RawRunProgress{ConversationID: "X", SyncDestination: destination})
+		require.NoError(t, err)
+		require.Equal(t, destination, result.ConversationID)
+
+		want := []string{"X:job"}
+		if destination != "" {
+			want = []string{destination + ":job", "X:job"}
+		}
+
+		require.Equal(t, want, created)
 	}
 }
 

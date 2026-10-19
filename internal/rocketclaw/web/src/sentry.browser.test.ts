@@ -65,10 +65,10 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
         searchStarted.resolve();
         await searchCancelled.promise;
       }
-      return Response.json({ terms: [], text: input.query, needle: input.query, matches: [], messages: [], mentionIds: [], indexComplete: true, summariesComplete: true });
+      return Response.json({ terms: [], text: input.query, needle: input.query, matches: [], messages: [], mentionIds: [] });
     }
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "sentry" } });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "sentry-test" });

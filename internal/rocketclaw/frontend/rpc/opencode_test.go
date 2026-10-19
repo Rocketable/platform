@@ -81,10 +81,7 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "RocketClaw sessions take only tags their agent allows")
 
 	_, err = server.prompt(ctx, &PromptRequest{Id: created.Id, Text: "hello"})
-	assert.Equal(t, codes.InvalidArgument, status.Code(err))
-
-	_, err = server.prompt(ctx, &PromptRequest{Id: "opencode:box:ses_unsynced", Text: "hello"})
-	assert.Equal(t, codes.InvalidArgument, status.Code(err), "the reserved prefix decides before any row exists")
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "a remote session is recorded from its creation, before any sync")
 
 	var (
 		rows []*Session
@@ -108,7 +105,7 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	assert.Equal(t, []string{"billing"}, rows[0].GetTags())
 	assert.False(t, rows[0].GetOffline())
 	assert.True(t, proto.Equal(&ListSessionsResponse{
-		Owner: "alice", UpstreamSuccess: true, SummariesComplete: true,
+		Owner: "alice", UpstreamSuccess: true,
 		OpencodeServers: map[string]int32{"box": 4100, "down": 4101},
 		AgentTags:       map[string]*TagChoices{"main": {Tags: []string{"customer", "internal"}}},
 	}, done), "%v", done)

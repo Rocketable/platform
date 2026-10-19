@@ -37,6 +37,24 @@ message Session {
   bool background = 22;
   // A remote OpenCode session's selected model, "<provider>/<model>"; agent is its selected agent.
   string model = 23;
+  ConversationKind kind = 24;
+  // A remote OpenCode session's own ID on its server.
+  string remote_session_id = 25;
+  // What the session is called when it has no name or preview.
+  string label = 26;
+}
+
+// What a conversation is, as RocketClaw records it when it creates the conversation.
+enum ConversationKind {
+  WEB_CHAT = 0;
+  SLACK_THREAD = 1;
+  CRON_RUN = 2;
+  ONE_OFF_CRON_RUN = 3;
+  EXTERNAL_MCP_RUN = 4;
+  SUBAGENT = 5;
+  REVIEW = 6;
+  SHADOW = 7;
+  REMOTE_OPENCODE = 8;
 }
 
 message HistoryRequest {
@@ -73,6 +91,9 @@ message HistoryResponse {
   bool revert_eligible = 13;
   string revert_message_id = 14;
   bool can_undo = 15;
+  // Message ID of the newest message undo must keep: one from a cron run, External MCP, or Slack.
+  // Empty when undo may reach the first message.
+  string revert_floor = 21;
   // An allowed agent's execute or task call runs attached, so MoveToBackground has work to move.
   bool movable = 16;
   // Background Jobs running or holding an undelivered Completion Note, including those of hidden
@@ -83,6 +104,14 @@ message HistoryResponse {
   // Page-scoped turn correlations, including shadows without transcript output.
   repeated ShadowBinding shadows = 19;
   map<string, string> review_rationales = 20;
+  // The conversations this one nests under, from its top-level conversation down, then itself.
+  repeated LineageLevel lineage = 22;
+}
+
+message LineageLevel {
+  string id = 1;
+  ConversationKind kind = 2;
+  string agent = 3;
 }
 
 message ShadowBinding {
@@ -149,7 +178,7 @@ message ListSessionsResponse {
   repeated Session sessions = 1;
   string owner = 2;
   bool upstream_success = 3;
-  bool summaries_complete = 4;
+  reserved 4;
   // Sent with the completion message: remote servers, and per agent the tags people may set
   // on its sessions. Remote OpenCode sessions take any tag.
   map<string, int32> opencode_servers = 5; // Server name to its relay port.
@@ -193,7 +222,7 @@ message MessageMatch {
 message SearchMessagesResponse {
   repeated MessageMatch matches = 1;
   repeated string tag_ids = 2;
-  bool index_complete = 3;
+  reserved 3;
 }
 // filters applies only the filters, leaving free text to the caller, and wins over messages.
 message SearchSessionsRequest { string query = 1; bool messages = 2; bool filters = 3; }
@@ -219,8 +248,7 @@ message SearchSessionsResponse {
   repeated SessionMatch matches = 4;
   repeated MessageMatch messages = 5;
   repeated string mention_ids = 6;
-  bool index_complete = 7;
-  bool summaries_complete = 8;
+  reserved 7, 8;
   repeated string principals = 9;
 }
 

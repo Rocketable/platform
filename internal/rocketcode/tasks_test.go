@@ -40,7 +40,7 @@ func TestTaskPublicLifecycleKeepsReviewContentPrivate(t *testing.T) {
 					"guard": testAgent("guard"),
 				}})
 				factory.childSessions = &mockChildSessions{
-					AppendChildEntryFunc: func(context.Context, string, *SessionEntry) error { return nil },
+					AppendChildEntryFunc: func(context.Context, ChildKey, *SessionEntry) error { return nil },
 					WriteSubagentFunc:    func(context.Context, *SubagentWrite) (bool, error) { return false, nil },
 					AwaitSubagentFunc: func(context.Context, string, string) (string, ReplayAttribution, error) {
 						return "CHILD_PRIVATE_SENTINEL", ReplayAttribution{Agent: "child", Model: "canonical-provider/canonical-model"}, nil
@@ -171,7 +171,7 @@ func TestTaskPublicLifecycleFailureAndCancellation(t *testing.T) {
 					agent.Guardrail = "guard"
 					factory.agents.Items["child"] = agent
 					factory.agents.Items["guard"] = testAgent("guard")
-					factory.childSessions.(*mockChildSessions).AppendChildEntryFunc = func(context.Context, string, *SessionEntry) error { return nil }
+					factory.childSessions.(*mockChildSessions).AppendChildEntryFunc = func(context.Context, ChildKey, *SessionEntry) error { return nil }
 				}
 
 				sink := recordingJournal()
@@ -281,7 +281,7 @@ func TestTaskResolvesGuardrailModelIndependently(t *testing.T) {
 		json.RawMessage(`{"type":"message","role":"developer","content":"This external MCP thread has metadata:\nROCKETCLAW_METADATA_TICKET_ID=\"123\""}`),
 	}}}
 
-	decision := factory.runGuardrail(context.Background(), &agent, ChildRunStageDelegation, "review", "child", "/call-1", toolCallMetadata{}, testTaskOutput())
+	decision := factory.runGuardrail(context.Background(), &agent, ChildRunStageDelegation, "review", "child", ChildKey{Path: "/call-1"}, toolCallMetadata{}, testTaskOutput())
 
 	require.False(t, decision.Approved)
 	require.Equal(t, "blocked", decision.Reason)
@@ -751,10 +751,14 @@ func TestChildRunsAppendUnderToolCallKeys(t *testing.T) {
 	got := make([]string, 0, len(calls))
 
 	for _, call := range calls {
-		got = append(got, call.Key+" "+call.Entry.Agent)
+		got = append(got, call.Key.Path+" "+call.Entry.Agent)
 	}
 
-	review, task := calls[0].Key, calls[2].Key
+	review, task := calls[0].Key.Path, calls[2].Key.Path
+	require.Equal(t, [][3]string{{"", "call-probe", calls[0].Key.Turn}, {"", "call-task", calls[0].Key.Turn}}, [][3]string{
+		{calls[0].Key.Parent, calls[0].Key.Call, calls[0].Key.Turn}, {calls[2].Key.Parent, calls[2].Key.Call, calls[2].Key.Turn},
+	}, "a review and a subagent record the call of the turn that started them")
+	require.NotEmpty(t, calls[0].Key.Turn)
 	require.Regexp(t, `^/call-probe-review-[0-9a-f]{8}$`, review, "a review's key adds its reviewed call key's hash to its call ID")
 	require.Regexp(t, `^/call-task-[0-9a-f]{8}$`, task, "a task's key adds its tool call key's hash to its call ID")
 	require.Equal(t, []string{
@@ -834,8 +838,20 @@ func TestTaskSubagentKeyIsUniquePerToolCall(t *testing.T) {
 	require.NotEqual(t, keys[0], keys[2])
 
 	for i, call := range sessions.WriteSubagentCalls() {
-		require.Equal(t, keys[i], call.Write.Key)
+		require.Equal(t, keys[i], call.Write.Key.Path)
 	}
+
+	// Inside a guardrail run, whose history is its subagent's, the row names the new subagent under
+	// that history, and the subagent starts under it.
+	factory.childKey = ChildKey{Path: "/guard"}
+	parent := testLooper(mockResponses())
+	parent.observations.turnID = "turn-3"
+	_, err := task.Call(withToolCallContext(t.Context(), parent, nil, "call_0"), json.RawMessage(`{"subagent_type":"child","prompt":"look","description":"Review","command":""}`), nil, toolCallMetadata{callID: "call_0", observations: parent.observations, progress: &PublicProgress{ID: "call_0"}})
+	require.NoError(t, err)
+
+	progress := PublicProgressFromTrace(parent.observations.trace)
+	require.Equal(t, taskKey("turn-3", "call_0"), progress[len(progress)-1].SubagentKey)
+	require.Equal(t, ChildKey{Path: "/guard" + taskKey("turn-3", "call_0"), Parent: "/guard", Turn: "turn-3", Call: "call_0"}, sessions.WriteSubagentCalls()[3].Write.Key)
 }
 
 // taskKey is the subagent key of a new root task call keyed turnID + "/call/" + callID.

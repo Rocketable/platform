@@ -11,8 +11,8 @@ const encode = (text: string) => btoa(text).replace(/\+/g, "-").replace(/\//g, "
 test("remote OpenCode sessions list, open in the relay frame, tag, and start", async () => {
   const { chromium: engine } = await import(playwright!);
   const rows: Session[] = [
-    { id: "opencode:box:ses_a", preview: "Alpha work", server: "box", directory: "/srv/app", updatedAt: new Date().toISOString() },
-    { id: "opencode:box:ses_off", preview: "Old work", server: "box", directory: "/srv/old", offline: true, tags: ["billing"] },
+    { id: "opencode:box:ses_a", kind: "REMOTE_OPENCODE", remoteSessionId: "ses_a", preview: "Alpha work", server: "box", directory: "/srv/app", updatedAt: new Date().toISOString() },
+    { id: "opencode:box:ses_off", kind: "REMOTE_OPENCODE", remoteSessionId: "ses_off", preview: "Old work", server: "box", directory: "/srv/old", offline: true, tags: ["billing"] },
   ];
   const calls: { path: string; body: { id?: string; [key: string]: unknown } }[] = [];
   let failCreate = true;
@@ -22,7 +22,7 @@ test("remote OpenCode sessions list, open in the relay frame, tag, and start", a
       calls.push({ path: url.pathname, body: { id: url.searchParams.get("id") ?? "" } });
       return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     }
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, summariesComplete: true, opencodeServers: { box: 4100 }, agentTags: { main: { tags: ["customer"] } } })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, opencodeServers: { box: 4100 }, agentTags: { main: { tags: ["customer"] } } })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
@@ -48,7 +48,7 @@ test("remote OpenCode sessions list, open in the relay frame, tag, and start", a
     const base = `http://127.0.0.1:${server.port}`;
 
     // The frame loads OpenCode's own session page from the relay on the same host.
-    await page.goto(`${base}/s/${encode("opencode:box:ses_a")}`);
+    await page.goto(`${base}/oc/${encode("opencode:box:ses_a")}`);
     const frame = page.locator("iframe");
     await frame.waitFor({ state: "attached" });
     const relay = "http://127.0.0.1:4100";
@@ -74,7 +74,7 @@ test("remote OpenCode sessions list, open in the relay frame, tag, and start", a
     await page.getByRole("dialog", { name: "Go to session" }).getByText("Old work").click();
     await page.getByText("box is offline; this session reopens when it is reachable.").waitFor();
     expect(await frame.count()).toBe(0);
-    await page.goto(`${base}/s/${encode("opencode:box:ses_gone")}`);
+    await page.goto(`${base}/oc/${encode("opencode:box:ses_gone")}`);
     await page.getByText("This OpenCode session is no longer available.").waitFor();
 
     // A new session takes a typed folder; a failed create shows its error and the next try opens the session.
@@ -89,11 +89,12 @@ test("remote OpenCode sessions list, open in the relay frame, tag, and start", a
     await folder.press("Enter");
     await page.getByText("box did not answer").waitFor();
     await folder.press("Enter");
-    await page.waitForURL(`${base}/s/${encode("opencode:box:ses_new")}`);
+    await page.waitForURL(`${base}/oc/${encode("opencode:box:ses_new")}`);
     expect(await tabs.getByRole("tab", { name: "Alpha work", exact: true }).count()).toBe(1);
     expect(await tabs.getByRole("tab").count()).toBe(2);
     expect(await tabs.locator('[aria-selected="true"]').evaluate((node: HTMLElement) => getComputedStyle(node).fontStyle)).not.toBe("italic");
     expect(calls.filter(({ path }) => path === "/api/CreateSession").map(({ body }) => body)).toEqual([{ opencodeServer: "box", directory: "/srv/fresh" }, { opencodeServer: "box", directory: "/srv/fresh" }]);
+
     expect(errors).toEqual([]);
   } finally {
     await browser.close();
