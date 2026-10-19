@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { listSessions } from "./api";
 import type { HistoryView } from "./types";
 
 // Go's TestShadowsRealBackendBrowser owns the real backend, provider and store.
@@ -9,12 +10,14 @@ test("real child-only changes refresh paired shadow turns through the parent str
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     const errors: string[] = [], streams: string[] = [], reads: string[] = [];
+    let pendingReads = 0;
     page.on("pageerror", (error: Error) => errors.push(error.message));
     page.on("request", (request: { url(): string; postDataJSON(): { id: string } }) => {
       const requestURL = new URL(request.url());
       if (requestURL.pathname === "/stream") streams.push(requestURL.searchParams.get("id")!);
-      if (requestURL.pathname === "/api/History") reads.push(request.postDataJSON().id);
+      if (requestURL.pathname === "/api/History") { reads.push(request.postDataJSON().id); pendingReads++; }
     });
+    for (const settled of ["requestfinished", "requestfailed"]) page.on(settled, (request: { url(): string }) => { if (new URL(request.url()).pathname === "/api/History") pendingReads--; });
     await page.goto(`${url}/s/${btoa("parent")}`);
     const a = page.getByRole("tab", { name: "main/a", exact: true });
     const b = page.getByRole("tab", { name: "main/b", exact: true });
@@ -43,7 +46,11 @@ test("real child-only changes refresh paired shadow turns through the parent str
     expect(parentText.every((text: string) => !text.includes("gpt-shadow"))).toBe(true);
     expect((await page.locator("[data-shadow-cell]").allTextContents()).join("\n")).not.toContain("answer");
     // Inactive B has no browser reads. A held child does not create a polling
-    // loop during this bounded observation window either.
+    // loop during this bounded observation window either. Send returns while the
+    // parent turn is still delivering; its close re-reads History once more, so
+    // observe from the closed turn after the page's reads settle.
+    while ((await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`))).some((batch) => batch.sessions.some((session) => session.id === "parent" && session.running))) await page.waitForTimeout(10);
+    for (let settled = -1; pendingReads || settled !== reads.length; await page.waitForTimeout(100)) settled = reads.length;
     const heldReads = reads.length;
     await page.waitForTimeout(300);
     expect(reads.length).toBe(heldReads);
