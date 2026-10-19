@@ -1210,7 +1210,12 @@ function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs
     <Popover.Root open={!!editor?.open && !!group} onOpenChange={(open) => setEditor((current) => current && { ...current, open })}>
       <Popover.Portal><Popover.Positioner anchor={header} sideOffset={4} align="start" className="z-50 outline-none"><Popover.Popup aria-label="Edit group" finalFocus={() => header()?.querySelector("button") ?? selected()} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="flex w-56 flex-col gap-2 rounded-md border bg-popover p-2 text-popover-foreground shadow-md outline-none">
         {group ? <>
-          <Input aria-label="Group name" placeholder="Name this group" value={group.name} onChange={(event) => edit(group.id, { name: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") setEditor({ id: group.id, open: false }); }} />
+          {/* Leaving the field saves the name, as tab state redraws the whole app; a save per key made typing lag. */}
+          <Input aria-label="Group name" placeholder="Name this group" defaultValue={group.name} onBlur={(event) => { if (event.target.value !== group.name) edit(group.id, { name: event.target.value }); }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === "Escape") event.currentTarget.blur();
+              if (event.key === "Enter") setEditor({ id: group.id, open: false });
+            }} />
           <div role="radiogroup" aria-label="Group color" className="flex flex-wrap gap-2 px-1 py-1">
             {Object.entries(groupColors).map(([color, background]) => <input key={color} type="radio" name="group-color" aria-label={color} checked={group.color === color} onChange={() => edit(group.id, { color })} className={cn("size-5 cursor-pointer appearance-none rounded-full checked:outline-2 checked:outline-offset-2 checked:outline-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring", background)} />)}
           </div>
