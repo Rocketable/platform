@@ -1135,12 +1135,12 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 
 	for id, want := range map[string]*TranscriptEvent{
 		// Each reviewed call names the turn its review saved the approver's answer under.
-		"new": {ScriptReason: "script reason", ReviewTurn: rocketcode.ReviewTurn("turn/call/new"), CodeModeCalls: []*CodeModeCall{
-			{Name: "bash", Arguments: `{"command":"printf one"}`, Status: "ok", Summary: "one"},
-			{Name: "read", Arguments: `{"filePath":"a.txt"}`, Status: "ok", Summary: "(End of file - total 2 lines)"},
-			{Name: "bash", Arguments: `{"command":"PARSED"}`, Status: "denied", Summary: "denied", Outcome: "deny", Reason: "checked", ReviewTurn: rocketcode.ReviewTurn("turn/call/new/host/2")},
+		"new": {ScriptReason: "script reason", ScriptOutcome: "allow", ReviewTurn: rocketcode.ReviewTurn("turn/call/new"), CodeModeCalls: []*CodeModeCall{
+			{Name: "bash", Arguments: `{"command":"printf one"}`, Status: "ok"},
+			{Name: "read", Arguments: `{"filePath":"a.txt"}`, Status: "ok"},
+			{Name: "bash", Arguments: `{"command":"PARSED"}`, Status: "denied", Outcome: "deny", Reason: "checked", ReviewTurn: rocketcode.ReviewTurn("turn/call/new/host/2")},
 		}},
-		"old": {ScriptReason: "script ok", ReviewTurn: "old-0", CodeModeCalls: []*CodeModeCall{
+		"old": {ScriptReason: "script ok", ScriptOutcome: "allow", ReviewTurn: "old-0", CodeModeCalls: []*CodeModeCall{
 			{Name: "bash", Arguments: `{"command":"ls -la"}`, Outcome: "allow", Reason: "ls is safe", ReviewTurn: "old-1"},
 			{Name: "bash", Arguments: clipped, Outcome: "allow", Reason: "echo is safe", ReviewTurn: "old-2"},
 			{Name: "github.search_issues", Arguments: `{"query":"is:open"}`, Outcome: "allow", Reason: "search is read-only", ReviewTurn: "old-3"},
@@ -1148,7 +1148,7 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 		"broken": {ReviewTurn: rocketcode.ReviewTurn("turn/call/broken")},
 		"top":    {ReviewTurn: rocketcode.ReviewTurn("turn/call/top")},
 	} {
-		got := &TranscriptEvent{ScriptReason: calls[id].GetScriptReason(), ReviewTurn: calls[id].GetReviewTurn(), CodeModeCalls: calls[id].GetCodeModeCalls()}
+		got := &TranscriptEvent{ScriptReason: calls[id].GetScriptReason(), ScriptOutcome: calls[id].GetScriptOutcome(), ReviewTurn: calls[id].GetReviewTurn(), CodeModeCalls: calls[id].GetCodeModeCalls()}
 		require.True(t, proto.Equal(want, got), "%s: %v", id, got)
 	}
 

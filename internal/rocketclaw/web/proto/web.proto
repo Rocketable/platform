@@ -271,16 +271,18 @@ message TranscriptEvent {
   // Turn under which review saves the approver's answer on this call itself, such as on an
   // Execute call's whole script. Reviews saved before turns were named have another turn.
   string review_turn = 26;
+  // The automatic approver's outcome (allow or deny) for script_reason.
+  string script_outcome = 27;
 }
 
-// One call an Execute script made. Arguments are clipped to 4 KiB; summary is one line of its
-// output. Status is running, ok, error, or denied, and empty when read from an older chat's
-// review. Outcome (allow or deny), reason, and review_turn, the turn under which the script's
-// review saves the approver's answer on this call, are set only when the automatic approver ran.
+// One call an Execute script made. Arguments are clipped to 4 KiB. Status is running, ok, error,
+// or denied, and empty when read from an older chat's review. Outcome (allow or deny), reason, and
+// review_turn, the turn under which the script's review saves the approver's answer on this call,
+// are set only when the automatic approver ran.
 message CodeModeCall {
   string name = 1;
   string arguments = 2;
-  string summary = 3;
+  reserved 3;
   string status = 4;
   string outcome = 5;
   string reason = 6;

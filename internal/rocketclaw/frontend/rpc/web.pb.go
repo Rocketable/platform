@@ -2341,7 +2341,9 @@ type TranscriptEvent struct {
 	ScriptReason string `protobuf:"bytes,25,opt,name=script_reason,json=scriptReason,proto3" json:"script_reason,omitempty"`
 	// Turn under which review saves the approver's answer on this call itself, such as on an
 	// Execute call's whole script. Reviews saved before turns were named have another turn.
-	ReviewTurn    string `protobuf:"bytes,26,opt,name=review_turn,json=reviewTurn,proto3" json:"review_turn,omitempty"`
+	ReviewTurn string `protobuf:"bytes,26,opt,name=review_turn,json=reviewTurn,proto3" json:"review_turn,omitempty"`
+	// The automatic approver's outcome (allow or deny) for script_reason.
+	ScriptOutcome string `protobuf:"bytes,27,opt,name=script_outcome,json=scriptOutcome,proto3" json:"script_outcome,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2551,15 +2553,21 @@ func (x *TranscriptEvent) GetReviewTurn() string {
 	return ""
 }
 
-// One call an Execute script made. Arguments are clipped to 4 KiB; summary is one line of its
-// output. Status is running, ok, error, or denied, and empty when read from an older chat's
-// review. Outcome (allow or deny), reason, and review_turn, the turn under which the script's
-// review saves the approver's answer on this call, are set only when the automatic approver ran.
+func (x *TranscriptEvent) GetScriptOutcome() string {
+	if x != nil {
+		return x.ScriptOutcome
+	}
+	return ""
+}
+
+// One call an Execute script made. Arguments are clipped to 4 KiB. Status is running, ok, error,
+// or denied, and empty when read from an older chat's review. Outcome (allow or deny), reason, and
+// review_turn, the turn under which the script's review saves the approver's answer on this call,
+// are set only when the automatic approver ran.
 type CodeModeCall struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Arguments     string                 `protobuf:"bytes,2,opt,name=arguments,proto3" json:"arguments,omitempty"`
-	Summary       string                 `protobuf:"bytes,3,opt,name=summary,proto3" json:"summary,omitempty"`
 	Status        string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
 	Outcome       string                 `protobuf:"bytes,5,opt,name=outcome,proto3" json:"outcome,omitempty"`
 	Reason        string                 `protobuf:"bytes,6,opt,name=reason,proto3" json:"reason,omitempty"`
@@ -2608,13 +2616,6 @@ func (x *CodeModeCall) GetName() string {
 func (x *CodeModeCall) GetArguments() string {
 	if x != nil {
 		return x.Arguments
-	}
-	return ""
-}
-
-func (x *CodeModeCall) GetSummary() string {
-	if x != nil {
-		return x.Summary
 	}
 	return ""
 }
@@ -6131,7 +6132,7 @@ const file_web_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"Y\n" +
 	"\x12ConversationChange\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x1a\n" +
-	"\brevision\x18\x02 \x01(\tR\brevision\"\xc0\x06\n" +
+	"\brevision\x18\x02 \x01(\tR\brevision\"\xe7\x06\n" +
 	"\x0fTranscriptEvent\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x12\n" +
 	"\x04role\x18\x03 \x01(\tR\x04role\x12\x1a\n" +
@@ -6163,17 +6164,17 @@ const file_web_proto_rawDesc = "" +
 	"\x0fcode_mode_calls\x18\x18 \x03(\v2\x11.rpc.CodeModeCallR\rcodeModeCalls\x12#\n" +
 	"\rscript_reason\x18\x19 \x01(\tR\fscriptReason\x12\x1f\n" +
 	"\vreview_turn\x18\x1a \x01(\tR\n" +
-	"reviewTurnB\x13\n" +
-	"\x11_reasoning_effortJ\x04\b\x02\x10\x03\"\xc5\x01\n" +
+	"reviewTurn\x12%\n" +
+	"\x0escript_outcome\x18\x1b \x01(\tR\rscriptOutcomeB\x13\n" +
+	"\x11_reasoning_effortJ\x04\b\x02\x10\x03\"\xb1\x01\n" +
 	"\fCodeModeCall\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
-	"\targuments\x18\x02 \x01(\tR\targuments\x12\x18\n" +
-	"\asummary\x18\x03 \x01(\tR\asummary\x12\x16\n" +
+	"\targuments\x18\x02 \x01(\tR\targuments\x12\x16\n" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x12\x18\n" +
 	"\aoutcome\x18\x05 \x01(\tR\aoutcome\x12\x16\n" +
 	"\x06reason\x18\x06 \x01(\tR\x06reason\x12\x1f\n" +
 	"\vreview_turn\x18\a \x01(\tR\n" +
-	"reviewTurn\"\xcf\x01\n" +
+	"reviewTurnJ\x04\b\x03\x10\x04\"\xcf\x01\n" +
 	"\n" +
 	"Attachment\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
