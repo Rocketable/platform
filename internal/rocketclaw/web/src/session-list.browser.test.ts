@@ -807,10 +807,12 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await sessionPalette.getByRole("button", { name: "Settings", exact: true }).count()).toBe(0);
     const commandRows = sessionPalette.locator("ul > li > button").filter({ hasNot: page.locator('[data-slot="session-title"]') });
     await search.fill("tabs: close");
+    await sessionPalette.getByRole("button", { name: "Tabs: Close", exact: true }).waitFor();
     // An exact match leads; recent then alphabetical contiguous matches follow, ahead of the server's sessions.
     expect(await commandRows.allTextContents()).toEqual(["Tabs: Close", "Tabs: Close others", "Tabs: Close all", "Tabs: Close to the right"]);
     expect(await sessionPalette.locator("ul > li > button").first().textContent()).toBe("Tabs: Close");
     await search.fill("tabs: close t");
+    await sessionPalette.getByRole("button", { name: "Tabs: Close all", exact: true }).waitFor({ state: "detached" });
     expect(await commandRows.allTextContents()).toEqual(["Tabs: Close to the right", "Tabs: Close others"]); // A contiguous match beats a recent fuzzy one.
     await search.fill("cron: run"); // A bare key is not a filter.
     await sessionPalette.getByRole("button", { name: "Cron: Run", exact: true }).waitFor();
