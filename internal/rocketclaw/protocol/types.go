@@ -321,11 +321,7 @@ func NewOutboundMessage(conversationID, text string) *OutboundMessage {
 
 // CloneOutboundAttachments returns a deep copy of attachments.
 func CloneOutboundAttachments(attachments []OutboundAttachment) []OutboundAttachment {
-	if len(attachments) == 0 {
-		return nil
-	}
-
-	cloned := slices.Clip(slices.Clone(attachments))
+	cloned := slices.Clip(append([]OutboundAttachment(nil), attachments...))
 	for i := range cloned {
 		cloned[i].Data = append([]byte(nil), cloned[i].Data...)
 	}

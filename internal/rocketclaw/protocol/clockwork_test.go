@@ -7,6 +7,10 @@ import (
 )
 
 func TestCloneOutboundMessageDeepCopiesDeliveryData(t *testing.T) {
+	for _, empty := range [][]OutboundAttachment{nil, {}, make([]OutboundAttachment, 0, 2)} {
+		require.Nil(t, CloneOutboundAttachments(empty))
+	}
+
 	message := NewOutboundMessage("conversation", "reply")
 	message.ConsumedID, message.ConsumedText, message.ConsumedRawText = "web-input", "same text attachment:ref", "same text"
 	message.ConsumedSource = SourceWeb
@@ -19,11 +23,14 @@ func TestCloneOutboundMessageDeepCopiesDeliveryData(t *testing.T) {
 		{ID: "report", Name: "report.txt", MIMEType: "text/plain", Data: []byte("report"), OriginalUnverified: true, Size: 6},
 		{ID: "image", Name: "image.png", MIMEType: "image/png", Data: []byte("image"), Size: 5},
 	}
+	// Ten entries expose the copy's spare capacity without Clip.
+	message.Attachments = append(message.Attachments, make([]OutboundAttachment, 8)...)
 
 	clone := CloneOutboundMessage(message)
 
 	require.NotSame(t, message, clone)
 	require.Equal(t, message.Attachments, clone.Attachments)
+	require.Equal(t, len(clone.Attachments), cap(clone.Attachments))
 	require.Equal(t, "web-input", clone.ConsumedID)
 	require.Equal(t, "same text attachment:ref", clone.ConsumedText)
 	require.Equal(t, "same text", clone.ConsumedRawText)
