@@ -1,6 +1,6 @@
 COVERPROFILE ?= .coverage.out
 COVERPKG ?= github.com/Rocketable/platform/cmd/rocketclaw,./...
-COVERAGE_REQUIRED ?= 85.6
+COVERAGE_REQUIRED ?= 91.7
 GOTESTRUN ?= .
 GO_SOURCE_CLOC_BUDGET ?= 24250
 GO_SOURCE_CLOC_HAZARD_ZONE ?= 500
@@ -60,7 +60,7 @@ check-cloc-budget:
 
 check-coverage: coverage-profile
 	@set -eu; \
-	current=$$(go tool cover -func="$(COVERPROFILE)" | awk '/^total:/ { gsub("%", "", $$3); print $$3 }'); \
+	current=$$(grep -v '\.pb\.go:' "$(COVERPROFILE)" | go tool cover -func=/dev/stdin | awk '/^total:/ { gsub("%", "", $$3); print $$3 }'); \
 	[ -n "$$current" ] || { printf "coverage budget failed: unable to read coverage total\n"; exit 1; }; \
 	awk -v current="$$current" -v required="$(COVERAGE_REQUIRED)" 'BEGIN { if (current + 0 < required + 0) { printf "coverage budget failed: current %.1f%% < required %.1f%%\n", current, required; exit 1 } printf "coverage budget ok: current %.1f%% >= required %.1f%%\n", current, required }'
 
