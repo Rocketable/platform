@@ -433,6 +433,15 @@ active tab.
   neighbour, or its left one at the end. Closing the last tab opens New session;
   New session alone does not close. Closing with the × button or the menu moves
   keyboard focus to the selected tab.
+- **Notifications.** When an open session tab, RocketClaw or remote OpenCode,
+  finishes answering, the browser shows a desktop notification with the tab's
+  title; clicking it opens the tab. The tab in view (the active tab while the
+  window has focus) does not notify, though another RocketClaw window with the
+  same tab open still does. Notifications are on by default: the first click or
+  key press asks for the browser's permission, the earliest a browser allows;
+  turn them off in the browser's site settings. A finished turn is noticed on the session list's
+  poll, so a reply shorter than one poll may not notify, and a hidden window may
+  notify late.
 - **Reordering.** Drag a tab onto another. With a tab focused, Shift+Arrow moves it.
   A moved tab joins the group of the tab it lands on, or leaves its group when it
   lands on an ungrouped tab.

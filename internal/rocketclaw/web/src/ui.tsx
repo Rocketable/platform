@@ -22,7 +22,7 @@ import { createContext, memo, use, useDeferredValue, useCallback, useContext, us
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
-import { CodeBlock, InlineText, MarkdownText, OUTPUT_KEY, TranscriptText, copyText, setPreference, useCleanText, usePreference } from "./transcript-text";
+import { CodeBlock, InlineText, MarkdownText, OUTPUT_KEY, TranscriptText, cleanText, copyText, setPreference, useCleanText, usePreference } from "./transcript-text";
 import { projectTimeline, setTimelineRows, timelineFailure, timelineLevel, timelineLevels, useTimelineDetail, type TimelineRows } from "./timeline-detail";
 import { TimelineDetailCard } from "./timeline-detail-card";
 import { Button } from "@/components/ui/button";
@@ -1114,11 +1114,47 @@ function useTabs() {
   };
 }
 
-// Sessions follow their sidebar rows to the spaces they were born in. Only this reads the rows, so their updates
-// do not redraw the whole app.
+// Sessions follow their sidebar rows to the spaces they were born in. Only this and TabNotifications read the rows
+// at the top, so their updates do not redraw the whole app.
 function TabPlacement() {
   const { rows } = useContext(Sidebar), { settle } = useContext(TabActions);
   useEffect(() => settle(rows), [rows, settle]);
+  return null;
+}
+
+// An open session tab whose turn ends raises a desktop notification that opens it, unless it is the tab in view.
+// ponytail: rows refresh on the sidebar poll, so a turn shorter than a poll goes unseen and a hidden window's
+// throttled timers can delay the notification; server push would fix both. Every window that saw the turn notifies
+// under the session's tag, so the system shows one notification, even while another window has the tab in view.
+function TabNotifications() {
+  const { rows } = useContext(Sidebar), { state } = useContext(TabActions);
+  const running = useRef(new Set<string>());
+  useEffect(() => {
+    const ran = running.current;
+    running.current = new Set(rows.flatMap((row) => row.running ? [row.id] : []));
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    for (const row of rows) {
+      if (row.running || !ran.has(row.id)) continue;
+      const path = sessionPath(row.id);
+      if (!state.tabs.some((tab) => tab.path === path) || (document.hasFocus() && state.active === path)) continue;
+      // A notification replacing one with its tag alerts again in Chromium only with renotify, which TypeScript's DOM types omit.
+      const options = { body: "Finished answering", tag: row.id, renotify: true };
+      let notification: Notification;
+      // Android Chrome shows notifications only from a service worker, which this app lacks: its constructor throws.
+      try { notification = new Notification(cleanText(sessionTitle(row, false), {}), options); } catch { return; }
+      notification.onclick = () => { focus(); navigate(path); notification.close(); };
+    }
+  }, [rows, state.tabs, state.active]);
+  // Notifications are on by default: the browser asks for its permission on the first click or key press, the
+  // earliest a browser lets a page ask.
+  useEffect(() => {
+    if (!("Notification" in window) || Notification.permission !== "default") return;
+    const ask = () => { stop(); void Notification.requestPermission(); };
+    const stop = () => { removeEventListener("click", ask, true); removeEventListener("keydown", ask, true); };
+    addEventListener("click", ask, true);
+    addEventListener("keydown", ask, true);
+    return stop;
+  }, []);
   return null;
 }
 
@@ -1427,7 +1463,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
     setConversation({ id: route.id, created: "", key: created ? conversation.key : conversation.key + 1 });
   }
   return (
-          <DraftScope value={scope}><SessionCommands value={commands}><TabActions value={tabs}><TabPlacement />
+          <DraftScope value={scope}><SessionCommands value={commands}><TabActions value={tabs}><TabPlacement /><TabNotifications />
            {command ? <SessionCommandDialog key={`${command.mode}:${command.source}`} command={command} drafts={drafts} onDraftChange={onDraftChange} /> : null}
             <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} />
          <div className="flex h-dvh min-h-0 flex-col overflow-hidden overscroll-y-none bg-background">
