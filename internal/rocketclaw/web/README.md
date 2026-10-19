@@ -662,8 +662,7 @@ Rows keep compact spacing and touch-sized targets on mobile.
 For the current session it also offers **Open original conversation** (when forked),
 **Name session**, **Pin/Unpin**, **Fork session**,
 **Handoff session**, **Choose agent**, and **Stop turn** while running.
-The composer's session buttons and the palette use the same session-action definitions. Fork, handoff,
-rename, and agent selection open their controls directly.
+Fork, handoff, rename, and agent selection open their controls directly.
 **Command: Start goal ($goal)**, **Command: Run workflow ($workflow)**,
 **Command: Invoke skill ($skill)**, **Command: Enqueue work ($enqueue)**,
 **Command: Stash work ($stash)**, and **Command: Steer turn ($steer)**
@@ -770,7 +769,7 @@ you send a message. Active, unrecorded output and queued work are not copied.
 Copied Completion Notes keep their rows and the scripts' retained oversized output,
 which expires when the source's does; running Background Jobs stay with the source.
 Forked sessions show a fork glyph in session rows. Use **Open original conversation**
-beside the composer's session buttons or in the command palette to return to the
+in the command palette to return to the
 immediate source, or search `is:forked` to find forks.
 Session rows show the title, Slack channel when available, agent name and active
 tags, fork/running indicators, and relative time. Metadata text starts at the row's
@@ -818,7 +817,7 @@ The down-arrow appears above the chat composer when away from the latest message
 It scrolls to the latest message and resumes following live replies. Reading earlier
 messages keeps automatic scrolling paused.
 
-Pin a session with the pin button in the composer or from the command palette.
+Pin a session from the command palette.
 Pinned sessions sort first and keep their normal recent-first order within that
 group. Search `is:pinned` to find only pinned sessions; text and other
 filters still apply.
