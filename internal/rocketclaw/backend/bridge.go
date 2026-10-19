@@ -2338,6 +2338,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	customTools = append(customTools, sessionsWriteTool(b, origin, rootAgent, self))
+	customTools = append(customTools, pageTools(b.config.SessionService, root, b.threads, rootAgent, agents.Items[rootAgent].Space)...)
 
 	rocketcodeConfig := b.rocketcodeConfig(shellTempDir, shellEnv, customTools...)
 

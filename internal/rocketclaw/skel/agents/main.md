@@ -10,6 +10,12 @@ permission:
   rocketclaw:
     rocketclaw_restart: "allow"
     rocketclaw_sessions_write: "allow"
+    rocketclaw_store: "allow"
+    rocketclaw_read: "allow"
+    rocketclaw_delete: "allow"
+    rocketclaw_list: "allow"
+    rocketclaw_kv_store: "allow"
+    rocketclaw_kv_read: "allow"
 ---
 
 # Basic Behavior Guidelines

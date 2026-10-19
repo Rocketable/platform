@@ -5597,13 +5597,13 @@ func TestBackgroundScriptUsesOriginTurnTools(t *testing.T) {
 	assert.Len(t, scheduled, 1, "its private schedule reaches the destination with the wake's sync")
 }
 
-// Exactly the three turn-bound platform tools refuse to run in background work.
+// Exactly the three turn-bound platform tools refuse to run in background work; the page tools are not among them.
 func TestTurnBoundPlatformTools(t *testing.T) {
 	t.Parallel()
 
 	origin := new(protocol.InboundMessage)
 	bridge := &Bridge{runtime: new(config.LockedConfig), config: Config{ConversationID: "main", SessionService: newTestSessionService(t)}, log: slog.New(slog.DiscardHandler)}
-	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []rocketcode.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(testNoopRestart), attachFilesTool(nil, bridge.config.SessionService, "main", "turn-1"), askUserQuestionTool(&userQuestionAskerMock{}, origin), sessionsWriteTool(bridge, origin, "main", "main"), currentSessionIDTool("main")})
+	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []rocketcode.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(testNoopRestart), attachFilesTool(nil, bridge.config.SessionService, "main", "turn-1"), askUserQuestionTool(&userQuestionAskerMock{}, origin), sessionsWriteTool(bridge, origin, "main", "main"), currentSessionIDTool("main")}, pageTools(bridge.config.SessionService, nil, nil, "main", ""))
 
 	var bound []string
 

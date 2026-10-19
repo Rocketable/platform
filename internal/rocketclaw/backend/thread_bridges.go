@@ -380,30 +380,14 @@ func (m *threadBridgeManager) SubmitMention(ctx context.Context, agent string, t
 	return true, m.PickLaterWork(ctx, conversationID)
 }
 
-// WebURL links to conversationID at the tsnet node's HTTPS origin once it serves.
-// Before that it uses this machine's Tailscale IPv4 on the Web port, asking
-// tailscale on every call, so a changed address needs no restart.
+// WebURL links to conversationID at webOrigin.
 func (m *threadBridgeManager) WebURL(ctx context.Context, conversationID string) (string, error) {
-	cfg := m.runtime.Clone()
-	path := "/s/" + base64.RawURLEncoding.EncodeToString([]byte(conversationID))
-
-	if cfg.Web.Tsnet != nil && cfg.Web.Tsnet.Origin != "" {
-		return cfg.Web.Tsnet.Origin + path, nil
-	}
-
-	_, port, err := net.SplitHostPort(cfg.Web.ListenAddress)
+	origin, err := m.webOrigin(ctx)
 	if err != nil {
-		return "", fmt.Errorf("web.listen_address: %w", err)
+		return "", err
 	}
 
-	tailscaleIPs, err := exec.CommandContext(ctx, "tailscale", "ip", "-4").Output()
-	if err != nil {
-		return "", fmt.Errorf("find this machine's Tailscale IPv4 for Web links: %w", err)
-	}
-
-	host, _, _ := strings.Cut(strings.TrimSpace(string(tailscaleIPs)), "\n")
-
-	return "http://" + net.JoinHostPort(host, port) + path, nil
+	return origin + "/s/" + base64.RawURLEncoding.EncodeToString([]byte(conversationID)), nil
 }
 
 func (m *threadBridgeManager) InterruptThread(target protocol.TextConversationTarget) (*protocol.InboundMessage, error) {
@@ -473,6 +457,30 @@ func (m *threadBridgeManager) InterruptConversation(conversationID string) *prot
 	}
 
 	return managed.InterruptActiveTurn()
+}
+
+// webOrigin is the tsnet node's HTTPS origin once it serves. Before that it is
+// this machine's Tailscale IPv4 on the Web port, asking tailscale on every
+// call, so a changed address needs no restart.
+func (m *threadBridgeManager) webOrigin(ctx context.Context) (string, error) {
+	cfg := m.runtime.Clone()
+	if cfg.Web.Tsnet != nil && cfg.Web.Tsnet.Origin != "" {
+		return cfg.Web.Tsnet.Origin, nil
+	}
+
+	_, port, err := net.SplitHostPort(cfg.Web.ListenAddress)
+	if err != nil {
+		return "", fmt.Errorf("web.listen_address: %w", err)
+	}
+
+	tailscaleIPs, err := exec.CommandContext(ctx, "tailscale", "ip", "-4").Output()
+	if err != nil {
+		return "", fmt.Errorf("find this machine's Tailscale IPv4 for Web links: %w", err)
+	}
+
+	host, _, _ := strings.Cut(strings.TrimSpace(string(tailscaleIPs)), "\n")
+
+	return "http://" + net.JoinHostPort(host, port), nil
 }
 
 // createSession creates a Web session named title for start's agent, unless allowed excludes it, and

@@ -30,6 +30,7 @@ export type VoiceSettings = { conversationId: string; agent: string; voice: stri
 export type Agent = { name: string; model?: string; reasoning?: string; description?: string; verbosity?: string; prompt?: string; permissions?: string; origin?: string; customShell?: string; voices?: string[]; space?: string };
 export type Skill = { name: string; description?: string; license?: string; compatibility?: string; content?: string; origin?: string };
 export type Workflow = { name: string; description?: string };
+export type PageEntry = { agent: string; space?: string; path: string };
 export type ConfigView = { workspace?: string; overlays?: string[]; models?: { name?: string; model?: string }[]; slackChannels?: { channel?: string; agents?: string[] }[]; mcpServers?: string[]; loggingLevel?: string; autoApproverModel?: string; instrumentationEnabled?: boolean; mcpExternal?: boolean; tailscaleUser?: string };
 export type SlackNamesResponse = { names?: Record<string, string> };
 // The first Voice frame carries the answer SDP and its wire dialect; notices may follow; a call ends with at most one ended frame.

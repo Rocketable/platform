@@ -1,5 +1,5 @@
 import { captureException } from "@sentry/react";
-import type { AgentChoices, ChatOrigin, ConfigView, CronJob, HistoryView, PromptDelivery, QueueItem, SearchMessagesResponse, SessionBatch, Skill, SlackNamesResponse, TranscriptEvent, VoiceSettings, Workflow } from "./types";
+import type { AgentChoices, ChatOrigin, ConfigView, CronJob, HistoryView, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SessionBatch, Skill, SlackNamesResponse, TranscriptEvent, VoiceSettings, Workflow } from "./types";
 
 export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
@@ -75,6 +75,7 @@ export const queries = {
   skills: (input?: { agent: string }) => ({ queryKey: ["skills", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ skills: Skill[] }>("ListSkills", input, signal)).skills }),
   workflows: () => ({ queryKey: ["workflows"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ workflows: Workflow[] }>("ListWorkflows", {}, signal)).workflows }),
   cronJobs: () => ({ queryKey: ["cronJobs"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ jobs: CronJob[] }>("ListCronJobs", {}, signal)).jobs }),
+  pages: () => ({ queryKey: ["pages"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ pages?: PageEntry[] }>("ListPages", {}, signal)).pages ?? [] }),
   config: () => ({ queryKey: ["config"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ config: ConfigView }>("ListConfig", {}, signal)).config }),
   history: (input: { id: string; sourceConversationId?: string; revision?: string; limit?: number; before?: string; from?: string }) => ({ queryKey: ["history", input], queryFn: async ({ signal }: { signal?: AbortSignal }): Promise<HistoryView> => {
     const body = await rpc<Omit<HistoryView, "origin"> & { origin: string }>("History", input, signal);
