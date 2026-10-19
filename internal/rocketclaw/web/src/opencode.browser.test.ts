@@ -36,6 +36,7 @@ test("remote OpenCode sessions list, open in the relay frame, tag, and start", a
       case "/api/CreateSession":
         if (failCreate) { failCreate = false; return Response.json({ code: 14, message: "box did not answer" }, { status: 503 }); }
         return Response.json({ id: "opencode:box:ses_new" });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
       default: return Response.json({});
     }
   } });

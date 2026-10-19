@@ -186,7 +186,7 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 			return err
 		}
 
-		session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, AllowedAgents: allChoices, Running: row.Running, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline}
+		session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, AllowedAgents: allChoices, Running: row.Running, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID}
 
 		if _, _, slack := protocol.SlackThreadTarget(conversation.ID); slack {
 			session.AllowedAgents = slices.DeleteFunc(slices.Clone(allChoices), func(name string) bool { return !slices.Contains(chat.RoomAgents, name) })
@@ -934,8 +934,13 @@ func (s *Server) runCronJob(ctx context.Context, request *RunCronJobRequest) (*R
 		return nil, fmt.Errorf("load web cron job: %w", err)
 	}
 
+	agents, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	if err != nil {
+		return nil, fmt.Errorf("load web cron agents: %w", err)
+	}
+
 	id := rand.Text()
-	if err := s.backend.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: job.Agent, CreatedBy: principal}); err != nil {
+	if err := s.backend.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: job.Agent, CreatedBy: principal, Space: cmp.Or(job.Space, agents.Items[job.Agent].Space)}); err != nil {
 		return nil, fmt.Errorf("create web cron conversation: %w", err)
 	}
 
@@ -1115,6 +1120,7 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 		return nil, fmt.Errorf("web channel choices: %w", err)
 	}
 
+	allowed = sameSpace(definitions, response.CurrentAgent, allowed)
 	cfg := s.cfg.Clone()
 
 	// Keep the allowed order: Slack channels list their default agent first.
@@ -1138,6 +1144,39 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 	}
 
 	return response, nil
+}
+
+// sessionAgentChoices is agentChoices narrowed to the space of the session's agent, as $agent offers them.
+func (s *Server) sessionAgentChoices(ctx context.Context, id string) ([]string, error) {
+	choices, err := s.agentChoices(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	thread, _, err := s.sessions.Thread(id)
+	if err != nil {
+		return nil, fmt.Errorf("read selected conversation: %w", err)
+	}
+
+	definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	if err != nil {
+		return nil, fmt.Errorf("load web agents: %w", err)
+	}
+
+	return sameSpace(definitions, thread.Agent, choices), nil
+}
+
+// sameSpace keeps the allowed agents in current's space, ignoring case, when current has one.
+// When that leaves none, every allowed agent stays.
+func sameSpace(agents rocketcode.Agents, current string, allowed []string) []string {
+	space := agents.Items[current].Space
+
+	same := slices.DeleteFunc(slices.Clone(allowed), func(name string) bool { return !strings.EqualFold(agents.Items[name].Space, space) })
+	if space == "" || len(same) == 0 {
+		return allowed
+	}
+
+	return same
 }
 
 func (s *Server) agentChoices(ctx context.Context, id string) ([]string, error) {
@@ -1222,7 +1261,32 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 		id = "web:" + source
 	}
 
-	if err := s.backend.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: request.Agent, CreatedBy: principal}); err != nil {
+	// A session is born in its cron's or agent's space, else in the space the person is in.
+	agents, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	if err != nil {
+		return nil, fmt.Errorf("load web agents: %w", err)
+	}
+
+	space := agents.Items[request.Agent].Space
+
+	if run, ok := backend.ParseCronRun(source); ok {
+		if job, err := s.cronjobs.LoadOneOffCronjob(run.Stem); err == nil {
+			space = cmp.Or(job.Space, agents.Items[job.Agent].Space)
+		}
+	}
+
+	if space == "" {
+		spaces, err := s.sessions.Spaces(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("read web spaces: %w", err)
+		}
+
+		if i := slices.IndexFunc(spaces, func(item backend.Space) bool { return item.ID == request.SpaceId }); i >= 0 {
+			space = spaces[i].Name
+		}
+	}
+
+	if err := s.backend.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: request.Agent, CreatedBy: principal, Space: space}); err != nil {
 		return nil, fmt.Errorf("create web conversation: %w", err)
 	}
 
@@ -1267,7 +1331,7 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 	}
 
 	if len(words) > 0 && words[0] == "$agent" {
-		choices, err := s.agentChoices(ctx, request.Id)
+		choices, err := s.sessionAgentChoices(ctx, request.Id)
 		if err != nil {
 			return nil, err
 		}

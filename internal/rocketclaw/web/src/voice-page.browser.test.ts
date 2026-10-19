@@ -20,6 +20,7 @@ test("Voice page keeps each person's conversation and settings on the server, an
   let username = "tester", reads = 0, updateFails = false, reading: PromiseWithResolvers<void> | undefined;
   const people: Record<string, { conversationId: string; agent: string; voice: string; transcript: boolean }> = {};
   const settings = (person = username) => people[person] ??= { conversationId: "", agent: "", voice: "", transcript: false };
+  const tabs: Record<string, object> = {};
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -76,6 +77,11 @@ test("Voice page keeps each person's conversation and settings on the server, an
         return pc.localDescription!.sdp;
       }, sdp);
       return new Response(new ReadableStream({ start(controller) { voiceStream = controller; controller.enqueue(`data: ${JSON.stringify({ answer: { sdp: answer, route: "public" } })}\n\ndata: ${JSON.stringify({ notice })}\n\n`); } }), { headers: { "Content-Type": "text/event-stream" } });
+    }
+    // Tabs answers with each person's last saved state, as the server does, so a reload keeps the page's own tab.
+    if (url.pathname === "/api/Tabs") {
+      tabs[username] = (await request.json() as { state?: object }).state ?? tabs[username] ?? { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" };
+      return Response.json({ spaces: [{ id: "main", name: "Main" }], state: tabs[username] });
     }
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = Bun.file(path.join(dist, url.pathname));

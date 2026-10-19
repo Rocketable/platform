@@ -805,14 +805,14 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 44, n)
+	assert.Equal(t, 45, n)
 	require.Error(t, first.db.QueryRowContext(t.Context(), `SELECT 1 FROM store_bootstrap`).Scan(&n))
 
 	second, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop()) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 44, n)
+	assert.Equal(t, 45, n)
 }
 
 func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
@@ -860,7 +860,7 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 
 				var count int
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-				require.Equal(t, 44, count)
+				require.Equal(t, 45, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations WHERE applied_at='2026-01-01Z'`).Scan(&count))
 				require.Equal(t, prefix, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM session_tags`).Scan(&count))
@@ -913,7 +913,7 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 44, n)
+	assert.Equal(t, 45, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
 }
 
@@ -2596,4 +2596,94 @@ func TestVoiceSettings(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, VoiceSettings{Agent: "main", Voice: "cedar", Transcript: true}, settings("alice"), "a deleted conversation clears only the pointer")
 	assert.Equal(t, VoiceSettings{Transcript: true}, settings("bob"))
+}
+
+func TestWebSpaces(t *testing.T) {
+	store := newTestSessionService(t)
+	ctx := t.Context()
+
+	spaces := func() []Space {
+		t.Helper()
+
+		list, err := store.Spaces(ctx)
+		require.NoError(t, err)
+
+		return list
+	}
+	birth := func(id, space string) string {
+		t.Helper()
+		require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main", Space: space}))
+
+		var spaceID string
+		require.NoError(t, store.db.QueryRowContext(ctx, `SELECT COALESCE(space_id, '') FROM managed_conversations WHERE conversation_id = $1`, id).Scan(&spaceID))
+
+		return spaceID
+	}
+
+	assert.Equal(t, []Space{{ID: "main", Name: "Main"}}, spaces())
+
+	require.NoError(t, store.CreateSpace(ctx, "Ops"))
+	require.ErrorIs(t, store.CreateSpace(ctx, "ops"), ErrSpaceRejected, "names are unique ignoring case")
+
+	ops := spaces()[1]
+	require.NoError(t, store.RenameSpace(ctx, ops.ID, "Operations"))
+	require.NoError(t, store.RenameSpace(ctx, ops.ID, "operations"), "a space may change its own name's case")
+	require.ErrorIs(t, store.RenameSpace(ctx, ops.ID, "MAIN"), ErrSpaceRejected)
+	assert.Equal(t, []Space{{ID: "main", Name: "Main"}, {ID: ops.ID, Name: "operations"}}, spaces(), "renames keep the id; the list is oldest first")
+
+	banana := birth("banana-1", "Banana")
+	assert.Equal(t, []Space{{ID: "main", Name: "Main"}, {ID: ops.ID, Name: "operations"}, {ID: banana, Name: "Banana"}}, spaces(), "a missing birth space is created")
+	assert.Equal(t, banana, birth("banana-2", "banana"), "an existing space is reused ignoring case")
+	assert.Equal(t, ops.ID, birth("ops-1", "Operations"))
+	assert.Empty(t, birth("none", ""), "no name, no birth space")
+
+	require.NoError(t, store.DeleteSpace(ctx, banana))
+	assert.Empty(t, birth("banana-1", "Banana"), "deleting a space clears the birth space of sessions born there; an existing session never recreates it")
+
+	// Deleting the last space waits for a delete of the only other space in flight, then refuses: the last space stays.
+	tx, err := store.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `DELETE FROM web_spaces WHERE id = $1`, ops.ID)
+	require.NoError(t, err)
+
+	deleted := make(chan error, 1)
+	go func() { deleted <- store.DeleteSpace(ctx, "main") }()
+
+	assert.Eventually(t, func() bool {
+		var waiting bool
+
+		_ = store.db.QueryRowContext(ctx, `SELECT count(*) > 0 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%web_spaces%'`).Scan(&waiting)
+
+		return waiting || len(deleted) > 0
+	}, 5*time.Second, time.Millisecond)
+	require.NoError(t, tx.Commit())
+	require.ErrorIs(t, <-deleted, ErrSpaceRejected)
+	assert.Equal(t, []Space{{ID: "main", Name: "Main"}}, spaces())
+
+	state, revision, err := store.TabState(ctx, "alice")
+	require.NoError(t, err)
+	assert.Nil(t, state)
+	assert.Zero(t, revision)
+
+	save := func(state string, revision int64) bool {
+		t.Helper()
+
+		saved, err := store.SaveTabState(ctx, "alice", []byte(state), revision)
+		require.NoError(t, err)
+
+		return saved
+	}
+	assert.True(t, save("first", 0))
+	assert.False(t, save("stale", 0), "a save made from an older version is refused")
+	assert.True(t, save("second", 1))
+
+	state, revision, err = store.TabState(ctx, "alice")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("second"), state)
+	assert.Equal(t, int64(2), revision)
+
+	state, revision, err = store.TabState(ctx, "bob")
+	require.NoError(t, err)
+	assert.Nil(t, state, "each person has their own state")
+	assert.Zero(t, revision)
 }

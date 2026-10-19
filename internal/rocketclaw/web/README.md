@@ -445,20 +445,23 @@ active tab.
   active tab, and activating any hidden tab, including with Cmd/Ctrl+[ and ],
   expands its group. Arrow keys skip hidden tabs. Headers report
   `aria-expanded`.
-- **Spaces.** Every tab, pinned or not, belongs to one named space, and the strip
-  shows only the current space's tabs. A pinned tab saved without a space by an
-  older build belongs to the first space.
-  The space button at the start of the strip names the current space; its menu
-  lists the spaces to switch to and offers **New space**, **Rename space**, and
-  **Delete space**. A space is named in place of the button: Enter or clicking
-  away saves, and Escape or a blank name keeps the old name. Switching returns to
+- **Spaces.** Spaces are shared by everyone: the server keeps one list, oldest
+  first, starting with **Main**, and names are unique ignoring case. Every tab,
+  pinned or not, belongs to one space, and the strip shows only the current
+  space's tabs. The space button at the start of the strip names the current
+  space; its menu lists the spaces to switch to and offers **New space**,
+  **Rename space**, and **Delete space**, which change the space for everyone.
+  A new space takes the first free "Space N" name and is then named in place of
+  the button: Enter or clicking away saves, and Escape, a blank name, or a name
+  another space has keeps the old name. Switching returns to
   the space's last active tab, or to its first tab. New session is one tab, so
   entering an empty space, opening New session, or closing a space's last tab
   moves that tab into the current space. Opening a location that is open in
   another space switches to that space. The tab menu's **Move to space** submenu
   lists each other space, a moved pinned tab stays pinned, and moving the active tab follows it; the command
-  palette offers the same moves as **Tabs: Move to "<space>"**. Deleting a space
-  moves its tabs to the first space; the last space cannot be deleted. A tab
+  palette offers the same moves as **Tabs: Move to "<space>"**. Moving a tab is
+  your own: it moves only in your tabs. Deleting a space moves its tabs to the
+  first space; the last space cannot be deleted. A tab
   moved between spaces becomes permanent, so each space keeps at most one preview
   tab. Pinning and unpinning keep a tab in its space. Close others, Close to the
   right, Close all, Cmd/Ctrl+[ and ], and the preview tab act only within the
@@ -466,10 +469,20 @@ active tab.
   as its description, such as “Group Work, Space: Main”.
 - **Agents and crons in spaces.** An agent or cron whose frontmatter sets
   `space:` belongs to the space of that name, ignoring case; a cron without one
-  takes its agent's. New session's agent picker offers only agents without a
-  space and the current space's agents; existing sessions offer every agent. The
-  Cron page and Run cron palette likewise hide crons, and their runs, that belong
-  to another space.
+  takes its agent's. The Cron page and Run cron palette hide crons, and their
+  runs, that belong to another space.
+- **Birth space.** A session is born in its agent's space; a Run cron session, a
+  cron's report thread, or a chat continuing a cron run in its cron's space, else
+  the cron agent's; any other Web session in the space you were in. A space named
+  this way that does not exist yet is created with the session. A session opens
+  in the space it was born in, and after its first message a new session moves
+  there and takes you along. When you have moved a session's tab elsewhere, its tab
+  menu offers **Restore to "<space>"**. Sessions from before birth spaces, and
+  sessions started outside the Web other than cron report threads, have none and
+  open in the current space.
+- **Agent picker.** New session offers every agent. Once a session's agent has a
+  space, its picker and `$agent` offer only agents with that space, ignoring case;
+  when that leaves none the Slack channel or cron allows, they offer all of those.
 - **Groups in spaces.** A group lives in one space. The tab menu offers only the
   current space's groups, and moving a tab to another space takes it out of its group.
   The group editor adds **Move group to "<space>"** for each other space: it
@@ -492,19 +505,22 @@ active tab.
 - **Left sidebar.** Drag its right edge, or focus the edge and press Left/Right, to
   resize it; the width is kept in this browser. The footer's **Hide sidebar** button
   or Cmd/Ctrl+B hides and shows it until the next reload.
-- **Storage.** Open tabs, their order, pins, the preview flag, and each tab's group
-  and space are kept in this browser's `localStorage` under `tabs:<user>`,
-  separately for each signed-in user. The spaces, their names, the current space,
-  each space's last active tab, and the groups' names, colors, and collapsed state
-  live under one key, `tab-groups-chrome-spaces:<user>`; groups with no tabs are
-  dropped. Unreadable space and group storage resets to one **Main** space with no
-  groups and keeps every tab; tabs whose space is gone join the first space, and
-  tabs whose group is gone leave it. The address is the active tab, so a reload keeps it, and opening
-  any URL, including Home (`/`), activates its tab or adds one. Unreadable or
-  malformed storage (such as duplicate paths) resets to one tab for the current URL.
-  Placement is a browser-wide preference under `tab-placement` (`top` or `left`).
-  Titles and running state come live from the session list; a session missing
-  from it shows its ID.
+- **Storage.** The server keeps each person's tabs, so they follow you to every
+  device: open tabs, their order, pins, the preview flag, each tab's group and
+  space, the groups' names, colors, and collapsed state, the current space, each
+  space's last active tab, and the placement. Each change saves the whole state,
+  one save at a time. A save made from tabs older than another window's save is
+  refused; the window then merges in that newer save, keeping what it opened,
+  closed, or changed itself, and saves again, so neither window's changes are
+  lost. Saved tabs that can no longer be read count as none and are replaced by
+  the next save. Groups with no tabs are dropped, tabs whose space is gone join
+  the first space keeping their group, and tabs whose group is gone leave it. A
+  window reloads them when it becomes visible or regains focus: it takes in
+  changes made elsewhere, merged with its own unsaved ones, but stays on its own
+  tab, unless that tab was closed elsewhere. The address is the active tab, so a
+  reload keeps it, and opening any URL, including Home (`/`), activates its tab or adds one. Tabs once kept in
+  `localStorage` are not carried over. Titles and running state come live from
+  the session list; a session missing from it shows its ID.
 
 Tradeoffs: preview replacement keeps the strip short without manual closing, but
 an item opened once and left unpromoted vanishes on the next open, which can

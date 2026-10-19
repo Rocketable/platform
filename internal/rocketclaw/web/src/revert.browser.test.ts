@@ -40,6 +40,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
       }
       case "/api/ClearRevert": marker = ""; return Response.json({});
       case "/api/Prompt": prompts.push(input); return Response.json({ privateText: "" });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
       default: return Response.json({});
     }
   } });
@@ -285,6 +286,7 @@ test("revert an unsaved latest turn by input ID", async () => {
       }
       case "/api/StageRevert": staged.push(input.messageId); marker = "9:0"; return Response.json({ revertMessageId: marker, prompt: messages[3] });
       case "/api/ClearRevert": marker = ""; return Response.json({});
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
       default: return Response.json({});
     }
   } });

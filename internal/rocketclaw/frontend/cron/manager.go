@@ -450,7 +450,7 @@ func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 	progress := &backend.RawRunProgress{
 		ConversationID: cronTraceConversationID(cronTracePrefix, definition.relativePath, startedAt),
 		TextChannel:    definition.textChannel,
-		Cronjob:        &protocol.CronjobMessage{RelativePath: definition.relativePath, Agent: definition.agent, RanAt: ranAt},
+		Cronjob:        &protocol.CronjobMessage{RelativePath: definition.relativePath, Agent: definition.agent, RanAt: ranAt, Space: definition.space},
 	}
 	log = log.With("conversation_id", progress.ConversationID)
 	log.Info("starting cronjob", "event", "cron_started", "prompt_len", len(prompt))

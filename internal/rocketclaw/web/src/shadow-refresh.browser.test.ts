@@ -46,6 +46,7 @@ for (const mode of ["initial", "cached", "earlier"] as const) test(`shadow refre
         if (hold) { hold = false; started.resolve(); return delayed.promise; }
         return Response.json(child);
       }
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
       default: return Response.json({});
     }
   } });

@@ -15,8 +15,9 @@ var ErrBridgeStopped = errors.New("bridge stopped")
 
 // Conversation is an explicitly recorded conversation and its selected agent.
 // IDs are opaque to the Backend; frontends resolve presentation and policy.
+// Space names the Web space it is born in, created when missing; empty for none.
 type Conversation struct {
-	ID, Agent, CreatedBy string
+	ID, Agent, CreatedBy, Space string
 }
 
 // ShadowBinding identifies a parent's independent comparison session. Turns

@@ -177,6 +177,16 @@ One person's Web voice state, kept by the server and the same on every device: t
 
 A task the voice model passes to the conversation's agent during a Voice Session. Each one becomes a Web user message marked `media=Voice`: Codex's `<realtime_delegation>` block, holding the request and what the person and the voice model said since the previous hand-off, taken the moment the hand-off arrives. Hand-offs are admitted in arrival order without waiting for the agent. Nothing about the agent's work reaches the voice model while it runs; the final reply of a turn the session handed off is spoken once, as written, unless it is over about 990 tokens or a message typed later in the call supersedes it. A pending question is announced once and answered in the app, never by a hand-off. Not to be confused with a Delegation History, which is work a tool call delegated inside RocketCode.
 
+## Web Spaces
+
+### Space
+
+A named place in the Web that holds tabs, shared by everyone: the server keeps one list, oldest first, with names unique ignoring case, and the last one cannot be deleted. An agent or cron names its space by name with `space:`; tabs and sessions refer to a space by its ID, so a rename keeps them in it. Where each tab sits, and which space a person is in, is that person's own and follows them across devices.
+
+### Birth Space
+
+The Space a session was born in: its agent's `space:`, or for a cron's sessions the cron's, else the cron agent's, else for a Web session the space the person was in. A named space that does not exist yet is created with the session. A session opens in its Birth Space; a person may move its tab elsewhere and later restore it. Deleting the space clears it. Sessions from before Birth Spaces, and those started outside the Web other than cron report threads, have none.
+
 ## Hosted Pages
 
 ### Hosted Page

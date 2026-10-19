@@ -15,6 +15,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	harness "github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type stateDAO struct {
@@ -32,7 +33,14 @@ func (d stateDAO) createConversation(ctx context.Context, conversation protocol.
 		return false, err
 	}
 
-	created, err := execRows(ctx, d.db, "create conversation", "count created conversation", `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, $2, $3) ON CONFLICT (conversation_id) DO NOTHING`, conversation.ID, conversation.Agent, conversation.CreatedBy)
+	// A new conversation's named birth space is created when missing; each aggregate yields one row, NULL without a name.
+	created, err := execRows(ctx, d.db, "create conversation", "count created conversation", `WITH existing AS (SELECT count(*) AS n FROM managed_conversations WHERE conversation_id = $1),
+space AS (
+    INSERT INTO web_spaces (name) SELECT $4::text FROM existing WHERE n = 0 AND $4 <> ''
+    ON CONFLICT ((lower(name))) DO UPDATE SET name = web_spaces.name RETURNING id
+)
+INSERT INTO managed_conversations (conversation_id, agent, created_by, space_id) SELECT $1, $2, $3, max(id) FROM space
+ON CONFLICT (conversation_id) DO NOTHING`, conversation.ID, conversation.Agent, conversation.CreatedBy, conversation.Space)
 	if err != nil {
 		return false, err
 	}
@@ -262,6 +270,75 @@ func (s *SessionService) UpdateVoiceSettings(ctx context.Context, username strin
 ON CONFLICT (username) DO UPDATE SET agent = COALESCE($2, voice_settings.agent), voice = COALESCE($3, voice_settings.voice), transcript = COALESCE($4, voice_settings.transcript)`, username, agent, voice, transcript)
 
 	return err
+}
+
+// Space is a Web space every person shares.
+type Space struct{ ID, Name string }
+
+// ErrSpaceRejected reports a space name another space has, ignoring case, or deleting the last space.
+var ErrSpaceRejected = errors.New("another space has that name, or it is the last space")
+
+// Spaces lists the Web spaces, oldest first.
+func (s *SessionService) Spaces(ctx context.Context) ([]Space, error) {
+	return queryRows(ctx, s.db, `SELECT id, name FROM web_spaces ORDER BY created_at, id`, "web spaces", func(row rowScanner) (Space, error) {
+		var space Space
+		return space, row.Scan(&space.ID, &space.Name)
+	})
+}
+
+// CreateSpace adds a space named name.
+func (s *SessionService) CreateSpace(ctx context.Context, name string) error {
+	return spaceNameError(execState(ctx, s.db, "create space", `INSERT INTO web_spaces (name) VALUES ($1)`, name))
+}
+
+// RenameSpace renames space id to name.
+func (s *SessionService) RenameSpace(ctx context.Context, id, name string) error {
+	return spaceNameError(execState(ctx, s.db, "rename space", `UPDATE web_spaces SET name = $2 WHERE id = $1`, id, name))
+}
+
+// spaceNameError reports a name another space has, ignoring case, as ErrSpaceRejected.
+func spaceNameError(_ sql.Result, err error) error {
+	if errPg, ok := errors.AsType[*pgconn.PgError](err); ok && errPg.Code == "23505" /* unique_violation */ {
+		return fmt.Errorf("%w: %w", ErrSpaceRejected, err)
+	}
+
+	return err
+}
+
+// DeleteSpace deletes space id unless it is the last space. Sessions born there lose their birth space.
+// Locking every space, in id order, makes concurrent deletes take turns, so two cannot remove the last two.
+func (s *SessionService) DeleteSpace(ctx context.Context, id string) error {
+	deleted, err := execRows(ctx, s.db, "delete space", "count deleted space", `WITH locked AS (SELECT id FROM web_spaces ORDER BY id FOR UPDATE),
+others AS (SELECT id FROM locked WHERE id <> $1 LIMIT 1)
+DELETE FROM web_spaces USING others WHERE web_spaces.id = $1`, id)
+	if err == nil && deleted == 0 {
+		return ErrSpaceRejected
+	}
+
+	return err
+}
+
+// TabState returns username's saved Web tab state and its revision; nil and 0 when none is saved.
+func (s *SessionService) TabState(ctx context.Context, username string) (state []byte, revision int64, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT state, revision FROM web_tab_states WHERE username = $1`, username).Scan(&state, &revision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, 0, nil
+	}
+
+	if err != nil {
+		return nil, 0, fmt.Errorf("read tab state: %w", err)
+	}
+
+	return state, revision, nil
+}
+
+// SaveTabState replaces username's saved Web tab state when it was made from the saved revision,
+// and reports whether it did.
+func (s *SessionService) SaveTabState(ctx context.Context, username string, state []byte, revision int64) (bool, error) {
+	saved, err := execRows(ctx, s.db, "save tab state", "count saved tab state", `INSERT INTO web_tab_states (username, state, revision) VALUES ($1, $2, $3 + 1)
+ON CONFLICT (username) DO UPDATE SET state = excluded.state, revision = excluded.revision WHERE web_tab_states.revision = $3`, username, state, revision)
+
+	return saved > 0, err
 }
 
 // SetThreadAgentIfExists updates a managed conversation agent without creating a thread.

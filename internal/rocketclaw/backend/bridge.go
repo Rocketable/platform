@@ -1259,7 +1259,9 @@ func (b *Bridge) handoffProducer(ctx context.Context) error {
 				return errors.New("create canonical web conversation: no loaded agents")
 			}
 
-			if _, err := dao.createConversation(ctx, protocol.Conversation{ID: web, Agent: choices[0], CreatedBy: string(ThreadCreatedByCron)}); err != nil {
+			// Like the report thread, the chat is born in the cron's space, else its agent's.
+			space := cmp.Or(inbound.Cronjob.Space, definitions.Items[inbound.Cronjob.Agent].Space)
+			if _, err := dao.createConversation(ctx, protocol.Conversation{ID: web, Agent: choices[0], CreatedBy: string(ThreadCreatedByCron), Space: space}); err != nil {
 				return err
 			}
 
@@ -1736,6 +1738,11 @@ func (b *Bridge) postCronRoot(ctx context.Context, outbound *protocol.OutboundMe
 		return fmt.Errorf("cron destination %q has no configured agents", outbound.SlackReply.ChannelID)
 	}
 
+	agents, _, err := LoadRuntimeDefinitions(b.runtime, runtimeCfg.RuntimeDirName())
+	if err != nil {
+		return fmt.Errorf("load cron agents: %w", err)
+	}
+
 	b.threads.mu.Lock()
 	roots := b.threads.cronRoots
 	b.threads.mu.Unlock()
@@ -1747,8 +1754,11 @@ func (b *Bridge) postCronRoot(ctx context.Context, outbound *protocol.OutboundMe
 
 	destinationID := protocol.SlackThreadConversationID(root.ChannelID, root.ThreadID)
 
+	// The thread is born in the cron's space, else its agent's, whichever agent the channel gives it.
+	space := cmp.Or(outbound.Cronjob.Space, agents.Items[outbound.Cronjob.Agent].Space)
+
 	ctx = context.WithoutCancel(ctx)
-	if err := (&Runtime{Sessions: b.config.SessionService}).CreateConversation(ctx, protocol.Conversation{ID: destinationID, Agent: channel.Agents[0], CreatedBy: string(ThreadCreatedByCron)}); err != nil {
+	if err := (&Runtime{Sessions: b.config.SessionService}).CreateConversation(ctx, protocol.Conversation{ID: destinationID, Agent: channel.Agents[0], CreatedBy: string(ThreadCreatedByCron), Space: space}); err != nil {
 		return fmt.Errorf("record cronjob thread: %w", err)
 	}
 

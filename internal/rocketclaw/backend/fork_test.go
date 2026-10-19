@@ -21,7 +21,7 @@ func TestForkConversation(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
 	runtime := &Runtime{Sessions: sessions}
-	require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "source", Agent: "main"}))
+	require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "source", Agent: "main", Space: "Ops"}))
 	_, err = sessions.toggleSessionTag(t.Context(), "source", "customer", []string{"customer"})
 	require.NoError(t, err)
 
@@ -163,9 +163,13 @@ func TestForkConversation(t *testing.T) {
 
 	parents := map[string]string{"middle": "source", "full": "source", "child": "middle"}
 
+	spaces, err := sessions.Spaces(t.Context())
+	require.NoError(t, err)
+
 	for row, err := range sessions.SidebarSessions(t.Context()) {
 		require.NoError(t, err)
 		require.Equal(t, parents[row.Conversation.ID], row.ForkedFrom)
+		require.Equal(t, spaces[1].ID, row.SpaceID, "a fork keeps its source's birth space")
 		delete(parents, row.Conversation.ID)
 	}
 

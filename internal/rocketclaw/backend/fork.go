@@ -95,9 +95,10 @@ func (s *SessionService) ForkConversation(ctx context.Context, source string, de
 		return "", err
 	}
 
-	// The new chat's history is copied below through the indexed append.
-	if _, err := tx.ExecContext(ctx, `WITH indexed AS (INSERT INTO message_search_indexed (conversation_id) VALUES ($1))
-INSERT INTO managed_conversations (conversation_id, agent, created_by, forked_from) VALUES ($1, $2, $3, $4)`, destination.ID, destination.Agent, destination.CreatedBy, source); err != nil {
+	// The new chat's history is copied below through the indexed append; it keeps its source's birth space.
+	if _, err := tx.ExecContext(ctx, `WITH indexed AS (INSERT INTO message_search_indexed (conversation_id) VALUES ($1)),
+source AS (SELECT space_id FROM managed_conversations WHERE conversation_id = $4)
+INSERT INTO managed_conversations (conversation_id, agent, created_by, forked_from, space_id) SELECT $1, $2, $3, $4, max(space_id) FROM source`, destination.ID, destination.Agent, destination.CreatedBy, source); err != nil {
 		return "", fmt.Errorf("create fork: %w", err)
 	}
 
