@@ -382,7 +382,7 @@ function sessionLabel(id: string) {
   return id;
 }
 
-// A session created here is titled by its first message until the session list has it.
+// A session created here is titled by its first message, or a cron run by its cron's name, until the session list has it.
 const firstMessages = new Map<string, string>();
 
 function sessionTitle(session: Session, loading: boolean) {
@@ -1645,10 +1645,11 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
   const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000, enabled: mode === "commands" || mode === "cron" });
   const runCron = useMutation({
     mutationFn: mutations.runCron,
-    onSuccess: (id) => {
+    onSuccess: (id, { stem }) => {
       void queryClient.invalidateQueries({ queryKey: ["cronJobs"] });
       sidebar.invalidateQueries();
       if (id === "") return;
+      firstMessages.set(id, stem);
       navigate(sessionPath(id));
       setMode(undefined);
     },
@@ -4155,7 +4156,7 @@ function CronPage() {
             <div className="mt-6 flex justify-end gap-2">
               <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
               <Button onClick={() => {
-                run.mutate({ stem: confirmStem }, { onSuccess: (id) => { if (id !== "") route.goSession(id); } });
+                run.mutate({ stem: confirmStem }, { onSuccess: (id, { stem }) => { if (id === "") return; firstMessages.set(id, stem); route.goSession(id); } });
                 setConfirmStem("");
               }}>Run</Button>
             </div>
