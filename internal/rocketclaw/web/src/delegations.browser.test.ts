@@ -190,20 +190,20 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
     "chat/call-c-review-2": "Listing files is read-only.",
   }, messages: [
     event("user", "Check the diff", { messageId: "1:0" }),
-    script("call-a", { code: 'def main():\n    print("checked")', description: "Validate PR diff" }, { review: "chat/call-a-review-1", reviewTurn: "t-script", scriptReason: "The script only reads the diff.", codeModeCalls: [
-      call("bash", { command: "cat <<'EOF'\nline one\nline two\nEOF" }, { summary: "line two", outcome: "allow", reason: "Reading the diff is in scope.", reviewTurn: "t-read" }),
-      call("bash", { command: "git diff" }, { summary: "diff", outcome: "allow", reason: "Reading the diff is in scope.", reviewTurn: "t-diff" }),
-      call("bash", { command: "rm -rf build" }, { status: "denied", summary: "denied by the approver", outcome: "deny", reason: "Deleting files is out of scope.", reviewTurn: "t-rm" }),
-      call("bash", { command: "rm go.sum" }, { status: "denied", summary: "denied by a rule" }),
-      call("grep", { pattern: "TODO" }, { status: "error", summary: "exit status 2" }),
-      call("read", '{"filePath":"go.mod","limit":1…[truncated]', { summary: "(End of file - total 3 lines)" }),
+    script("call-a", { code: 'def main():\n    print("checked")', description: "Validate PR diff" }, { review: "chat/call-a-review-1", reviewTurn: "t-script", scriptReason: "The script only reads the diff.", scriptOutcome: "allow", codeModeCalls: [
+      call("bash", { command: "cat <<'EOF'\nline one\nline two\nEOF" }, { outcome: "allow", reason: "Reading the diff is in scope.", reviewTurn: "t-read" }),
+      call("bash", { command: "git diff" }, { outcome: "allow", reason: "Reading the diff is in scope.", reviewTurn: "t-diff" }),
+      call("bash", { command: "rm -rf build" }, { status: "denied", outcome: "deny", reason: "Deleting files is out of scope.", reviewTurn: "t-rm" }),
+      call("bash", { command: "rm go.sum" }, { status: "denied" }),
+      call("grep", { pattern: "TODO" }, { status: "error" }),
+      call("read", '{"filePath":"go.mod","limit":1…[truncated]'),
     ] }),
     result("call-a", JSON.stringify(["<path>go.mod</path>\nmodule x", "checked"])),
     script("call-b", { code: 'def main():\n    bash(command="sleep 600")' }, { state: "background", codeModeCalls: [call("bash", { command: "sleep 600" }, { status: "running" })] }),
     result("call-b", "moved", { state: "background" }),
     script("call-c", { code: 'def main():\n    return bash(command="ls")' }, { review: "chat/call-c-review-2" }),
     result("call-c", "tool call failed: boom"),
-    script("call-d", { code: "def main():\n    pass", description: "Emit many" }, { codeModeCalls: Array.from({ length: 200 }, () => call("emit", { text: "x" }, { summary: "x" })) }),
+    script("call-d", { code: "def main():\n    pass", description: "Emit many" }, { codeModeCalls: Array.from({ length: 200 }, () => call("emit", { text: "x" })) }),
     result("call-d", "emitted"),
     script("call-e", { code: "def main():\n    pass", description: "Still testing" }, { state: "working", scriptReason: "Running tests is in scope.", codeModeCalls: [call("bash", { command: "make test" }, { status: "running" })] }),
     event("assistant", "Done"),
@@ -230,7 +230,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
     expect(await trigger("call-c").getAttribute("title")).toBe("Run · ls");
     // Only the script reason and reasons no row shows follow the result, one footer each.
     const reasons = (id: string) => block(id).locator('[data-slot="code-block"]:has(> [aria-label="Result"]) ~ footer[data-slot="permission-review-rationale"]');
-    expect(await reasons("call-a").allTextContents()).toEqual(["The script only reads the diff.", "The late cleanup is in scope."]);
+    expect(await reasons("call-a").allTextContents()).toEqual(["Allowed: The script only reads the diff.", "The late cleanup is in scope."]);
     expect(await reasons("call-c").allTextContents()).toEqual(["Listing files is read-only."]);
     expect(await reasons("call-d").count()).toBe(0);
     // A script still running has no result yet; its reason stands alone.
@@ -247,31 +247,31 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
     await a.locator('[aria-label="Script"] span[style*="--shiki"]').first().waitFor();
     expect(await a.locator('[aria-label="Script"]').innerText()).toBe('def main():\n    print("checked")');
     const heredoc = row("call-a", "bash · cat <<'EOF' line one line two EOF");
-    expect(await heredoc.locator('[data-slot="trace-line"]').innerText()).toBe("bash · cat <<'EOF' line one line two EOF\nline two\nallowed");
+    expect(await heredoc.locator('[data-slot="trace-line"]').innerText()).toBe("bash · cat <<'EOF' line one line two EOF");
     await heredoc.locator('> [data-slot="trace-collapsible-trigger"]').click();
     await heredoc.locator('[aria-label="bash"] span[style*="--shiki"]').first().waitFor();
     expect(await heredoc.locator('[aria-label="bash"]').innerText()).toBe("cat <<'EOF'\nline one\nline two\nEOF");
     expect(await heredoc.locator('[data-slot="code-block"] + [data-slot="permission-review-rationale"]').innerText()).toBe("Allowed: Reading the diff is in scope.");
     const denied = row("call-a", "bash · rm -rf build");
     expect(await denied.locator('[data-slot="trace-line"]').getAttribute("data-status")).toBe("error");
-    expect(await denied.locator('[data-slot="trace-line"]').innerText()).toBe("bash · rm -rf build\ndenied by the approver\ndenied");
+    expect(await denied.locator('[data-slot="trace-line"]').innerText()).toBe("bash · rm -rf build\ndenied");
     expect(await denied.locator('[data-slot="permission-review-rationale"]').textContent()).toBe("Denied: Deleting files is out of scope.");
     const rule = row("call-a", "bash · rm go.sum");
-    expect(await rule.locator('[data-slot="trace-line"]').innerText()).toBe("bash · rm go.sum\ndenied by a rule\ndenied");
+    expect(await rule.locator('[data-slot="trace-line"]').innerText()).toBe("bash · rm go.sum\ndenied");
     expect(await rule.locator('[data-slot="permission-review-rationale"]').count()).toBe(0);
     const failed = row("call-a", "grep · TODO");
     expect(await failed.locator('[data-slot="trace-line"]').getAttribute("data-status")).toBe("error");
-    expect(await failed.locator('[data-slot="trace-line"]').innerText()).toBe("grep · TODO\nexit status 2\nfailed");
+    expect(await failed.locator('[data-slot="trace-line"]').innerText()).toBe("grep · TODO\nfailed");
     const clipped = row("call-a", 'read · {"filePath":"go.mod","limit":1…[truncated]');
     expect(await clipped.locator('[aria-label="read"]').textContent()).toBe('{"filePath":"go.mod","limit":1…[truncated]');
     expect(await clipped.locator('[data-slot="permission-review-rationale"]').count()).toBe(0);
     expect(await block("call-b").getByText("Moved to the background. Its result arrives in a Completion Note.", { exact: true }).isVisible()).toBe(true);
     const waiting = row("call-b", "bash · sleep 600").locator('[data-slot="trace-line"]');
-    expect(await waiting.innerText()).toBe("bash · sleep 600\nstill running when moved to the background");
+    expect(await waiting.innerText()).toBe("bash · sleep 600");
     expect(await waiting.getAttribute("data-status")).toBe(null);
     const running = row("call-e", "bash · make test").locator('[data-slot="trace-line"]');
     expect(await running.getAttribute("data-status")).toBe("running");
-    expect(await running.innerText()).toBe("bash · make test\nrunning");
+    expect(await running.innerText()).toBe("bash · make test");
     expect(await block("call-d").getByText("Showing the first 200 calls; the script may have made more.", { exact: true }).isVisible()).toBe(true);
     expect(await block("call-c").getByText("Showing the first 200 calls; the script may have made more.", { exact: true }).count()).toBe(0);
     await a.scrollIntoViewIfNeeded();

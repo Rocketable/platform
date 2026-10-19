@@ -704,9 +704,9 @@ func (e *TranscriptEvent) codeModeCall(call *rocketcode.CodeModeCall, reviewTurn
 
 	switch {
 	case call.Name == "":
-		e.ScriptReason, e.ReviewTurn = call.Reason, reviewTurn
+		e.ScriptReason, e.ScriptOutcome, e.ReviewTurn = call.Reason, string(call.Outcome), reviewTurn
 	case len(e.CodeModeCalls) < rocketcode.MaxCodeModeCalls:
-		e.CodeModeCalls = append(e.CodeModeCalls, &CodeModeCall{Name: call.Name, Arguments: call.Arguments, Summary: call.Summary, Status: string(call.Status), Outcome: string(call.Outcome), Reason: call.Reason, ReviewTurn: reviewTurn})
+		e.CodeModeCalls = append(e.CodeModeCalls, &CodeModeCall{Name: call.Name, Arguments: call.Arguments, Status: string(call.Status), Outcome: string(call.Outcome), Reason: call.Reason, ReviewTurn: reviewTurn})
 	}
 }
 

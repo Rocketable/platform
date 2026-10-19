@@ -2243,7 +2243,7 @@ function PageTitle({ children }: { children: ReactNode }) {
   </header>;
 }
 
-type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin" | "header" | "principal" | "state" | "parentId" | "completionNotes" | "delegation" | "review" | "codeModeCalls" | "scriptReason" | "reviewTurn">;
+type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; complete?: boolean; entryKey?: string; inputId?: string; messageId?: string; turnId?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin" | "header" | "principal" | "state" | "parentId" | "completionNotes" | "delegation" | "review" | "codeModeCalls" | "scriptReason" | "scriptOutcome" | "reviewTurn">;
 type OriginFilter = { sandboxed: boolean; canonical: boolean };
 
 function lineId(role: Line["role"], text: string, seen: Map<string, number>) {
@@ -2492,7 +2492,7 @@ function ToolLinks({ line, title }: { line: Line; title: string }) {
 
 // How a call a script made reads in its row. Its command is as written: bash's script, the path or pattern
 // read, glob and grep take, or its arguments with real line breaks.
-function codeModeCallRow(call: CodeModeCall, background: boolean, running: boolean) {
+function codeModeCallRow(call: CodeModeCall, running: boolean) {
   let command = call.arguments ?? "";
   try {
     const input = JSON.parse(command);
@@ -2504,8 +2504,7 @@ function codeModeCallRow(call: CodeModeCall, background: boolean, running: boole
   const denied = call.status === "denied" || call.outcome === "deny";
   const status: TraceStatus | undefined = denied || call.status === "error" ? "error" : call.status === "running" && running ? "running" : undefined;
   return { command, status, title: `${call.name} · ${command.replace(/\s+/g, " ").slice(0, 120)}`,
-    summary: call.status === "running" ? background ? "still running when moved to the background" : "running" : call.summary,
-    description: denied ? "denied" : call.status === "error" ? "failed" : call.outcome === "allow" ? "allowed" : undefined };
+    description: denied ? "denied" : call.status === "error" ? "failed" : undefined };
 }
 
 // An approver's reason, one line under the box it explains until clicked. Its icon opens the review at
@@ -2539,9 +2538,9 @@ function CodeModeBlock({ line, status, review, rationale }: { line: Line; status
   }
   return <>
     {calls.length ? <Trace className="my-2">{calls.map((call) => {
-      const row = codeModeCallRow(call, line.state === "background", status === "running");
+      const row = codeModeCallRow(call, status === "running");
       return <TraceRow key={lineId("tool", `${call.name} ${call.arguments}`, seen)} open={false} icon={toolIcons[call.name] ?? <Wrench />} label={row.title} status={row.status} description={row.description}
-        title={<><span className="block truncate font-mono">{row.title}</span>{row.summary ? <span className="block truncate text-xs">{row.summary}</span> : null}</>}>
+        title={<span className="block truncate font-mono">{row.title}</span>}>
         <CodeBlock size="sm" label={call.name} text={row.command} language={call.name === "bash" ? "bash" : ""} />
         {call.outcome ? <ReviewReason review={review} reason={call.reason ?? ""} outcome={call.outcome} turn={call.reviewTurn} /> : null}
       </TraceRow>;
@@ -2550,7 +2549,7 @@ function CodeModeBlock({ line, status, review, rationale }: { line: Line; status
     {line.state === "background" ? <p className="text-muted-foreground">Moved to the background. Its result arrives in a Completion Note.</p> : null}
     {result ? <CodeBlock size="sm" label="Result" text={result} /> : null}
     {/* The script reason and those reviews follow its result, or stand alone until a result arrives. */}
-    {line.scriptReason ? <ReviewReason review={review} reason={line.scriptReason} turn={line.reviewTurn} /> : null}
+    {line.scriptReason ? <ReviewReason review={review} reason={line.scriptReason} outcome={line.scriptOutcome} turn={line.reviewTurn} /> : null}
     {unshown?.map((reason) => <ReviewReason key={lineId("tool", reason, seen)} review={review} reason={reason} />)}
     <CodeModeScript text={line.text.slice("execute ".length)} />
   </>;

@@ -909,11 +909,11 @@ Each tool call has one labeled disclosure containing its arguments and matching
 result. Loaded skill instructions fold with their skill call. Long results have a
 collapse control at the bottom as well as the header. An Execute call is titled
 with the model's description of its script. One row per call the script made,
-added when the call starts, shows the call's command, the last line of its
-output (or its size for binary output), and whether it was allowed, denied, or
-failed, with the approver's reason when it checked the call. The output itself is never kept. Chats from before calls were recorded list only the calls the approver
+added when the call starts, shows the call's command and whether it was denied
+or failed, with the approver's reason when it checked the call. Its output is not
+shown. Chats from before calls were recorded list only the calls the approver
 checked. The script's result follows as text. Under it come the approver's
-reason for the whole script, when `code_mode_approve` sent the script for
+decision and reason for the whole script, when `code_mode_approve` sent the script for
 review, and any reason that matches no row, such as one saved after the turn
 ended. Until the result arrives, those reasons show on their own. The Starlark source shows at the
 Everything timeline level, behind a Show script toggle at Detailed, and not at
