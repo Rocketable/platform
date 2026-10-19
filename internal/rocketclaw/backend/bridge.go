@@ -134,6 +134,9 @@ type Bridge struct {
 	historyMutation       bool
 	waiting               []bridgeRequest
 	settlement            *turnCompletion
+	// timerWaiting records a schedule timer that found the bridge handling. The turn may have
+	// looked for later work before that timer fired, so the end of handling arms another.
+	timerWaiting bool
 	// notesOpen reports that the running turn takes Completion Notes at its next step, so a new
 	// Completion Note waits for it rather than waking the conversation. notesOffered are the
 	// notes it holds that it already took.
@@ -775,10 +778,15 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 		b.activeReply = nil
 		b.activeCompletion = nil
 		b.settlement = nil
-		b.handling, b.activeTurnInterrupted = false, false
+		waiting := b.timerWaiting
+		b.handling, b.activeTurnInterrupted, b.timerWaiting = false, false, false
 
 		close(settlement.done)
 		b.mu.Unlock()
+
+		if waiting {
+			b.armScheduledMessage("", &protocol.ScheduledMessageState{ConversationID: b.config.ConversationID, DueAt: time.Now()})
+		}
 	}()
 
 	if request.syncSource != "" {
@@ -802,8 +810,13 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 
 		defer func() {
 			request.producer.mu.Lock()
-			request.producer.handling, request.producer.activeTurnInterrupted = false, false
+			waiting := request.producer.timerWaiting
+			request.producer.handling, request.producer.activeTurnInterrupted, request.producer.timerWaiting = false, false, false
 			request.producer.mu.Unlock()
+
+			if waiting {
+				request.producer.armScheduledMessage("", &protocol.ScheduledMessageState{ConversationID: request.producer.config.ConversationID, DueAt: time.Now()})
+			}
 		}()
 
 		b.config.SessionService.reserveTurnPair(b.config.ConversationID, request.producer.config.ConversationID)
@@ -1023,7 +1036,10 @@ func claimWakeNotes(ctx context.Context, tx stateStoreDB, conversationID, turnID
 
 func (b *Bridge) pickLaterWork(ctx context.Context, fromTimer bool) error {
 	b.mu.Lock()
-	stopped, handling, notesOpen, mutation := b.stopped, b.handling, b.notesOpen, b.historyMutation
+	stopped, notesOpen, mutation := b.stopped, b.notesOpen, b.historyMutation
+	// A timer leaves later work to a running turn, whose end arms another timer.
+	busy := fromTimer && b.handling
+	b.timerWaiting = b.timerWaiting || busy
 	b.mu.Unlock()
 
 	if mutation {
@@ -1045,13 +1061,8 @@ func (b *Bridge) pickLaterWork(ctx context.Context, fromTimer bool) error {
 		return fmt.Errorf("pick later work: %w", protocol.ErrBridgeStopped)
 	}
 
-	if fromTimer && (handling || len(b.requestCh) > 0) {
+	if busy || len(b.requestCh) > 0 {
 		b.log.Info("later work blocked", "event", "queue_blocked", "conversation_id", b.config.ConversationID, "blocker", "active_or_queued_request")
-		return nil
-	}
-
-	if !fromTimer && len(b.requestCh) > 0 {
-		b.log.Info("later work blocked", "event", "queue_blocked", "conversation_id", b.config.ConversationID, "blocker", "queued_request")
 		return nil
 	}
 
