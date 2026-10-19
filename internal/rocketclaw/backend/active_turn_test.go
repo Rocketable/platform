@@ -496,9 +496,16 @@ func TestStartActiveTurnsStartsRowWorkers(t *testing.T) {
 func newTestBridgeManager(t *testing.T, cfg *config.LockedConfig, service *SessionService, finals chan *protocol.OutboundMessage) (manager *threadBridgeManager, shutdown func() error) {
 	t.Helper()
 
-	manager = newThreadBridgeManager(cfg, service, slog.New(slog.DiscardHandler), func(bridgeCfg Config) directBridge {
+	probe := &probeBuffer{} // PROBE
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("PROBE bridge logs:\n%s", probe.String())
+		}
+	})
+	probeLog := slog.New(slog.NewTextHandler(probe, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	manager = newThreadBridgeManager(cfg, service, probeLog, func(bridgeCfg Config) directBridge {
 		bridgeCfg.SessionService, bridgeCfg.RequestRestart = service, testNoopRestart
-		return NewConversation(cfg, finalsPublisher{finals: finals}, &bridgeCfg, slog.New(slog.DiscardHandler))
+		return NewConversation(cfg, finalsPublisher{finals: finals}, &bridgeCfg, probeLog)
 	})
 
 	return manager, runTestManager(t, manager)
@@ -2415,4 +2422,24 @@ func TestBackgroundSubagentRefusesTurnBoundTools(t *testing.T) {
 			})
 		}
 	}
+}
+
+// PROBE: a locked log buffer for the CI flake probe.
+type probeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (p *probeBuffer) Write(b []byte) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.buf.Write(b)
+}
+
+func (p *probeBuffer) String() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.buf.String()
 }

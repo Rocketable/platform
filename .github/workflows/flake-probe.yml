@@ -1,0 +1,44 @@
+name: flake-probe (temporary, do not merge)
+
+on:
+  pull_request:
+
+env:
+  ROCKETCLAW_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/rocketclaw_test?sslmode=disable
+
+jobs:
+  cron:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        copy: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+      - name: Start PostgreSQL
+        run: >-
+          nohup docker run -d --name postgres -p 5432:5432
+          -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rocketclaw_test
+          postgres:18 > "$RUNNER_TEMP/postgres.log" 2>&1 &
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/go-build
+          key: go-rocketclaw-${{ github.sha }}
+          restore-keys: go-rocketclaw-
+      - name: Wait for PostgreSQL
+        timeout-minutes: 2
+        run: until docker exec postgres pg_isready -h 127.0.0.1 -U postgres -d rocketclaw_test; do sleep 1; done
+      - name: Cron test under backend load
+        working-directory: internal/rocketclaw
+        run: |
+          go test -race -c -o "$RUNNER_TEMP/backend.test" ./backend
+          cd backend
+          ( "$RUNNER_TEMP/backend.test" -test.count 1 > "$RUNNER_TEMP/load.log" 2>&1 || true ) &
+          "$RUNNER_TEMP/backend.test" -test.run '^TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue$' -test.count 20 -test.v 2>&1 | tee "$RUNNER_TEMP/cron.log"
+          wait
+      - if: always()
+        run: grep -c -- '--- PASS\|--- FAIL' "$RUNNER_TEMP/cron.log" || true
