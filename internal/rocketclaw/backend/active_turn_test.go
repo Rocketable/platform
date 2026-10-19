@@ -356,11 +356,16 @@ func TestStopBeforeTurnRegistersCancelStopsTurn(t *testing.T) {
 	newBridge, service, requests, finals := newResumeTestBridges(t, false)
 	bridge := newBridge()
 	runTestBridge(t, bridge)
-	// A first turn outlasts startup and its own end, which take the history lock too.
+	// Wait for the first turn's cleanup to release the history lock after handling ends.
 	require.NoError(t, bridge.Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "first", true)))
 	assert.Equal(t, "answer", readFinal(t, finals).Text)
 	<-requests
-	require.Eventually(t, func() bool { return !bridge.handlingSnapshot() }, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		bridge.mu.Lock()
+		defer bridge.mu.Unlock()
+
+		return bridge.settlement == nil
+	}, 5*time.Second, 10*time.Millisecond)
 
 	// The held history lock parks the handler in activation, after handling starts.
 	tx, err := service.db.BeginTx(t.Context(), nil)
