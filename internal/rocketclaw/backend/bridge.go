@@ -1394,6 +1394,12 @@ func (b *Bridge) submitDueScheduled(ctx context.Context, id string, armed *proto
 		return nil
 	}
 
+	// A stopped bridge cannot submit the run, so claiming it would skip it.
+	if b.stopped {
+		b.mu.Unlock()
+		return fmt.Errorf("submit scheduled message: %w", protocol.ErrBridgeStopped)
+	}
+
 	stored, ready, err := b.config.SessionService.ClaimScheduledMessage(id, armed.ConversationID, armed.DueAt, now)
 	b.mu.Unlock()
 
