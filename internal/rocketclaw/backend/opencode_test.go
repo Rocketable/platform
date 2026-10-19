@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,8 @@ type fakeOpenCode struct {
 	sessions []openCodeSession
 	active   []string
 	created  []string
+	// replies holds each session's newest assistant text; a session missing here fails the read.
+	replies map[string]string
 }
 
 func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +49,17 @@ func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.created = append(f.created, body.Location.Directory)
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": openCodeTestSession("ses_new", "", body.Location.Directory, 5000)})
+	default:
+		id, _ := strings.CutSuffix(strings.TrimPrefix(r.URL.Path, "/api/session/"), "/message")
+
+		reply, ok := f.replies[id]
+		if !ok || r.URL.RawQuery != "type=assistant&order=desc&limit=1" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		text, _ := json.Marshal(reply)
+		_, _ = fmt.Fprintf(w, `{"data":[{"content":[{"type":"reasoning","text":"thinking"},{"type":"text","text":%s},{"type":"tool"}]}]}`, text)
 	}
 }
 
@@ -112,6 +126,28 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	assert.True(t, rows[1].Running)
 	assert.False(t, rows[0].Running)
 	assert.False(t, rows[0].Offline)
+
+	// A session seen running and then idle stores its newest assistant text and keeps it while idle,
+	// even when a later read would fail; a failed read when the next turn ends clears it.
+	fake.active, fake.replies = nil, map[string]string{"ses_b": "Done: tests pass."}
+
+	require.NoError(t, s.syncOpenCode(ctx, "box", box))
+
+	fake.replies = nil
+
+	require.NoError(t, s.syncOpenCode(ctx, "box", box))
+
+	rows = remoteSidebar(t, s)
+	assert.Equal(t, []string{"", "Done: tests pass.", ""}, []string{rows[0].Reply, rows[1].Reply, rows[2].Reply})
+
+	fake.active = []string{"ses_b"}
+
+	require.NoError(t, s.syncOpenCode(ctx, "box", box))
+
+	fake.active = nil
+
+	require.NoError(t, s.syncOpenCode(ctx, "box", box))
+	assert.Empty(t, remoteSidebar(t, s)[1].Reply)
 
 	// Pin, name, and tag survive later syncs and state pruning.
 	updated, err := s.UpdateConversationDetails(ctx, "opencode:box:ses_c", new(true), new("old work"))

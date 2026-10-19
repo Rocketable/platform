@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -93,30 +94,81 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		return err
 	}
 
+	ran := map[string]bool{}
+
+	if err := readRows(ctx, s.db, `SELECT conversation_id FROM opencode_sessions WHERE server = $1 AND running`, "running opencode sessions", func(row rowScanner) error {
+		var id string
+		if err := row.Scan(&id); err != nil {
+			return fmt.Errorf("scan running opencode session: %w", err)
+		}
+
+		ran[id] = true
+
+		return nil
+	}, name); err != nil {
+		return err
+	}
+
 	var (
 		ids, titles, directories []string
 		updated                  []time.Time
 		running                  []bool
+		replies                  []*string
 		oldest                   time.Time
 	)
 
 	for _, session := range sessions.Data {
+		id := "opencode:" + name + ":" + session.ID
 		oldest = time.UnixMilli(session.Time.Updated).UTC()
 		_, busy := active.Data[session.ID]
-		ids, titles, directories = append(ids, "opencode:"+name+":"+session.ID), append(titles, session.Title), append(directories, session.Location.Directory)
-		updated, running = append(updated, oldest), append(running, busy)
+
+		// A session the last sync saw running and this one sees idle finished a turn. Its reply is
+		// written with its idle state, so a reader never sees the turn end without it. A failed
+		// read clears the reply rather than holding back the whole list.
+		var reply *string
+
+		if ran[id] && !busy {
+			var messages struct {
+				Data []struct {
+					Content []struct {
+						Type string `json:"type"`
+						Text string `json:"text"`
+					} `json:"content"`
+				} `json:"data"`
+			}
+
+			reply = new("")
+
+			if openCodeCall(ctx, name, server, http.MethodGet, "/api/session/"+url.PathEscape(session.ID)+"/message?type=assistant&order=desc&limit=1", nil, &messages) == nil {
+				var texts []string
+
+				for _, message := range messages.Data {
+					for _, part := range message.Content {
+						if part.Type == "text" {
+							texts = append(texts, part.Text)
+						}
+					}
+				}
+
+				*reply = strings.Join(texts, "\n")
+			}
+		}
+
+		ids, titles, directories = append(ids, id), append(titles, session.Title), append(directories, session.Location.Directory)
+		updated, running, replies = append(updated, oldest), append(running, busy), append(replies, reply)
 	}
 
 	// A fetch below the limit is the whole root set, so every missing row was deleted; a full
 	// fetch proves deletions only inside its window. Rows stamped after the poll started were
 	// created meanwhile and stay. Kept rows are stamped too: offline means unreachable only.
 	_, err := execState(ctx, s.db, "sync opencode sessions", `WITH incoming AS (
-    SELECT * FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[]) AS t(conversation_id, title, directory, updated_at, running)
+    SELECT * FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[]) AS t(conversation_id, title, directory, updated_at, running, reply)
 ), upserted AS (
-    INSERT INTO opencode_sessions (conversation_id, server, title, directory, updated_at, running, synced_at)
-    SELECT conversation_id, $1, title, directory, updated_at, running, now() FROM incoming
+    INSERT INTO opencode_sessions (conversation_id, server, title, directory, updated_at, running, synced_at, reply)
+    SELECT conversation_id, $1, title, directory, updated_at, running, now(), reply FROM incoming
     ON CONFLICT (conversation_id) DO UPDATE SET title = excluded.title, directory = excluded.directory,
-        updated_at = excluded.updated_at, running = excluded.running, synced_at = excluded.synced_at
+        updated_at = excluded.updated_at, running = excluded.running, synced_at = excluded.synced_at,
+        reply = COALESCE(excluded.reply, opencode_sessions.reply)
 ), removed AS (
     DELETE FROM opencode_sessions WHERE server = $1 AND conversation_id <> ALL($2) AND synced_at < $9 AND ($7 OR updated_at >= $8) RETURNING conversation_id
 ), untagged AS (
@@ -124,7 +176,7 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 )
 UPDATE opencode_sessions SET synced_at = now(), running = FALSE
 WHERE server = $1 AND conversation_id <> ALL($2) AND NOT (synced_at < $9 AND ($7 OR updated_at >= $8))`,
-		name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started)
+		name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies)
 
 	return err
 }

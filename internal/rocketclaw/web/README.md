@@ -434,8 +434,10 @@ active tab.
   New session alone does not close. Closing with the × button or the menu moves
   keyboard focus to the selected tab.
 - **Notifications.** When an open session tab, RocketClaw or remote OpenCode,
-  finishes answering, the browser shows a desktop notification with the tab's
-  title; clicking it opens the tab. The tab in view (the active tab while the
+  finishes answering, the browser shows a desktop notification with the start
+  of its reply. A RocketClaw session's notification is titled by its name, or
+  its agent when it has none; an OpenCode session's by its tab title. Clicking
+  the notification opens the tab. The tab in view (the active tab while the
   window has focus) does not notify, though another RocketClaw window with the
   same tab open still does. Notifications are on by default: the first click or
   key press asks for the browser's permission, the earliest a browser allows;

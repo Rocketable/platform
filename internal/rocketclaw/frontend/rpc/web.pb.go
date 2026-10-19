@@ -228,7 +228,9 @@ type Session struct {
 	Directory string `protobuf:"bytes,18,opt,name=directory,proto3" json:"directory,omitempty"`
 	Offline   bool   `protobuf:"varint,19,opt,name=offline,proto3" json:"offline,omitempty"`
 	// The Web space the session was born in, empty for none.
-	SpaceId       string `protobuf:"bytes,20,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
+	SpaceId string `protobuf:"bytes,20,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
+	// A remote OpenCode session's newest assistant text, read when its last seen turn ended.
+	Reply         string `protobuf:"bytes,21,opt,name=reply,proto3" json:"reply,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -378,6 +380,13 @@ func (x *Session) GetOffline() bool {
 func (x *Session) GetSpaceId() string {
 	if x != nil {
 		return x.SpaceId
+	}
+	return ""
+}
+
+func (x *Session) GetReply() string {
+	if x != nil {
+		return x.Reply
 	}
 	return ""
 }
@@ -6436,7 +6445,7 @@ var File_web_proto protoreflect.FileDescriptor
 const file_web_proto_rawDesc = "" +
 	"\n" +
 	"\tweb.proto\x12\x03rpc\"\x15\n" +
-	"\x13ListSessionsRequest\"\xce\x03\n" +
+	"\x13ListSessionsRequest\"\xe4\x03\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
@@ -6457,7 +6466,8 @@ const file_web_proto_rawDesc = "" +
 	"\x06server\x18\x11 \x01(\tR\x06server\x12\x1c\n" +
 	"\tdirectory\x18\x12 \x01(\tR\tdirectory\x12\x18\n" +
 	"\aoffline\x18\x13 \x01(\bR\aoffline\x12\x19\n" +
-	"\bspace_id\x18\x14 \x01(\tR\aspaceIdJ\x04\b\x06\x10\aJ\x04\b\v\x10\fJ\x04\b\f\x10\r\"\xba\x01\n" +
+	"\bspace_id\x18\x14 \x01(\tR\aspaceId\x12\x14\n" +
+	"\x05reply\x18\x15 \x01(\tR\x05replyJ\x04\b\x06\x10\aJ\x04\b\v\x10\fJ\x04\b\f\x10\r\"\xba\x01\n" +
 	"\x0eHistoryRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x124\n" +
 	"\x16source_conversation_id\x18\x02 \x01(\tR\x14sourceConversationId\x12\x1a\n" +
