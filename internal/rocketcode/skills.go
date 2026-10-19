@@ -345,7 +345,12 @@ func permissionPrompt(permissions PermissionSet) string {
 			lines = append(lines, "")
 		}
 
-		lines = append(lines, "## "+permissionPromptName(bucket.Name)+" Permissions", "")
+		name := bucket.Name
+		if name != "" {
+			name = strings.ToUpper(name[:1]) + name[1:]
+		}
+
+		lines = append(lines, "## "+name+" Permissions", "")
 		lines = append(lines, permissionRuleLines(bucket.Rules)...)
 	}
 
@@ -390,14 +395,6 @@ func permissionRuleLines(rules []PermissionRule) []string {
 	}
 
 	return lines
-}
-
-func permissionPromptName(name string) string {
-	if name == "" {
-		return name
-	}
-
-	return strings.ToUpper(name[:1]) + name[1:]
 }
 
 func loadSkill(fsys fs.FS, filePath string) (Skill, error) {
