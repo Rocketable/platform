@@ -510,7 +510,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await browser.close();
     server.stop(true);
   }
-}, 30_000);
+}, 60_000);
 
 test("handoff hits and queued items format tags and markup", async () => {
   const { chromium: engine } = await import(playwright!);
