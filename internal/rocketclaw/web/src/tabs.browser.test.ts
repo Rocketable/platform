@@ -4,18 +4,37 @@ import path from "node:path";
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
-const rows = [
+const rows: { id: string; name: string; agent: string; running?: boolean; spaceId?: string }[] = [
   { id: "alpha", name: "Alpha", agent: "main" },
   { id: "bravo", name: "Bravo", agent: "main" },
   { id: "charlie", name: "Charlie", agent: "main" },
   { id: "delta", name: "Delta", agent: "main", running: true },
+  // Echo was born in the ops space.
+  { id: "echo", name: "Echo", agent: "main", spaceId: "ops" },
 ];
 const href = (id: string) => `/s/${Buffer.from(id).toString("base64url")}`;
+type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; pinned?: boolean; group?: string; space?: string }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; placement: string }; revision: number; refused: number };
 
-async function withPage(options: object, run: (page: any, origin: string, prompts: { id: string; text: string }[]) => Promise<void>) {
+// Mirrors the server's Tabs call: it saves the state or changes one space, then answers with every space and the saved state.
+// A taken name, ignoring case, and deleting the last space are refused, and a save made from an older revision is stale.
+function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string }) {
+  const taken = (name: string, id?: string) => saved.spaces.some((space) => space.id !== id && space.name.toLowerCase() === name.toLowerCase());
+  if ([input.createSpace && taken(input.createSpace), input.renameSpace && taken(input.renameSpace.name, input.renameSpace.id), input.deleteSpace && saved.spaces.length === 1].some(Boolean)) {
+    return Response.json({ message: "another space has that name, or it is the last space", code: 3 }, { status: 400 });
+  }
+  if (input.state && (input.revision ?? 0) !== saved.revision) return Response.json({ ...saved, stale: !!++saved.refused });
+  if (input.state) [saved.state, saved.revision] = [input.state, saved.revision + 1];
+  if (input.createSpace) saved.spaces.push({ id: `space-${saved.spaces.length}-${input.createSpace}`, name: input.createSpace });
+  if (input.renameSpace) saved.spaces.find((space) => space.id === input.renameSpace!.id)!.name = input.renameSpace.name;
+  if (input.deleteSpace) saved.spaces = saved.spaces.filter((space) => space.id !== input.deleteSpace);
+  return Response.json(saved);
+}
+
+async function withPage(options: object, run: (page: any, origin: string, prompts: { id: string; text: string }[], saved: Saved) => Promise<void>) {
   const { chromium: engine } = await import(playwright!);
   const prompts: { id: string; text: string }[] = [];
   const sessions = structuredClone(rows);
+  const saved: Saved = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "", last: {}, placement: "TOP" }, revision: 0, refused: 0 };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -24,7 +43,7 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
     }
-    const input = await request.json().catch(() => ({})) as { id: string; text: string; name: string; query: string };
+    const input = await request.json().catch(() => ({})) as { id: string; text: string; name: string; query: string; agent?: string } & Parameters<typeof tabsCall>[1];
     if (url.pathname === "/api/UpdateSession") sessions.find((row) => row.id === input.id)!.name = input.name;
     switch (url.pathname) {
       case "/api/Identity": return Response.json({ username: "tester" });
@@ -34,8 +53,15 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
       case "/api/ListCronJobs": return Response.json({ jobs: [{ stem: "daily", status: "" }, { stem: "opsreport", status: "", space: "Ops" },
         { stem: "opsreport", status: "ran", lastRun: new Date().toISOString() }, { stem: "retired", status: "ran", lastRun: new Date().toISOString() }] });
       case "/api/History": return Response.json({ messages: [], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
-      case "/api/CreateSession": return Response.json({ id: "fresh" });
+      case "/api/CreateSession":
+        // opsbot names the OPS space, which its first session creates, as the server does.
+        if (input.agent === "opsbot") {
+          saved.spaces.push({ id: "ops", name: "OPS" });
+          sessions.push({ id: "fresh", name: "Ops chat", agent: "opsbot", spaceId: "ops" });
+        }
+        return Response.json({ id: "fresh" });
       case "/api/Prompt": prompts.push(input); return Response.json({ privateText: "" });
+      case "/api/Tabs": return tabsCall(saved, input);
       // Fixed fixture: searching a row's exact name returns that row.
       case "/api/SearchSessions": return Response.json({ terms: [], text: input.query, needle: input.query.toLowerCase(), matches: rows.filter((row) => row.name === input.query).map((row) => ({ conversationId: row.id, field: "Name", text: row.name })), messages: [], mentionIds: [], indexComplete: true, summariesComplete: true });
       default: return Response.json({});
@@ -46,7 +72,7 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, ...options });
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
-    await run(page, `http://127.0.0.1:${server.port}`, prompts);
+    await run(page, `http://127.0.0.1:${server.port}`, prompts, saved);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();
@@ -59,10 +85,14 @@ const names = (page: any) => strip(page).getByRole("tab").evaluateAll((nodes: HT
 const italic = (tab: any) => tab.evaluate((node: HTMLElement) => getComputedStyle(node).fontStyle === "italic");
 // Group headers are the strip's only controls that report aria-expanded.
 const order = (page: any) => strip(page).locator('[role="tab"], [aria-expanded]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
-async function openSaved(page: any, origin: string, link: string, name: string) {
+// Saves reach the server after the page changes, so a test waits for them before reloading.
+async function until(check: () => boolean) {
+  for (const started = Date.now(); !check(); await Bun.sleep(10)) if (Date.now() - started > 5_000) throw new Error("the saved tab state never matched");
+}
+async function openSaved(page: any, origin: string, link: string, name: string, saved: Saved) {
   await page.goto(`${origin}${link}`);
   await strip(page).getByRole("tab", { name, exact: true }).waitFor();
-  await page.waitForFunction((path: string) => JSON.parse(localStorage.getItem("tabs:tester") ?? "[]").some((saved: { path: string }) => saved.path === path), link);
+  await until(() => saved.state.tabs.some((tab) => tab.path === link));
 }
 async function openFromPalette(page: any, name: string) {
   await page.keyboard.press("Control+p");
@@ -83,7 +113,7 @@ async function chooseSpace(page: any, item: string, role = "menuitem") {
   await page.getByRole("menu").waitFor({ state: "hidden" });
 }
 
-test("preview tabs, promotion, pins, close commands, middle-click, and drag survive reload", () => withPage({}, async (page, origin, prompts) => {
+test("preview tabs, promotion, pins, close commands, middle-click, and drag survive reload", () => withPage({}, async (page, origin, prompts, saved) => {
   await page.goto(`${origin}/`);
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   await tab("New session").waitFor();
@@ -144,6 +174,7 @@ test("preview tabs, promotion, pins, close commands, middle-click, and drag surv
   expect(await names(page)).toEqual(["Alpha", "Bravo", "Charlie"]);
   await tab("Charlie").dragTo(tab("Bravo"));
   expect(await names(page)).toEqual(["Alpha", "Charlie", "Bravo"]);
+  await until(() => saved.state.tabs.map((tab) => tab.path).join() === [href("alpha"), href("charlie"), href("bravo")].join());
   await page.reload();
   await tab("Charlie").waitFor();
   expect(await names(page)).toEqual(["Alpha", "Charlie", "Bravo"]);
@@ -288,18 +319,11 @@ test("copy page link on plain HTTP without Clipboard API", () => withPage({ perm
   expect(await copy.locator("svg.lucide-check").count()).toBe(0);
 }), 30_000);
 
-test("storage reset, deep links, keyboard, page close, palette commands, and placement", () => withPage({}, async (page, origin) => {
+test("saved tabs, deep links, keyboard, page close, palette commands, and placement", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
-  await page.goto(`${origin}/`);
-  await page.waitForFunction(() => localStorage.getItem("tabs:tester") !== null);
-  for (const stored of ["{not json", JSON.stringify([{ path: href("charlie"), preview: "false" }, { path: href("charlie") }])]) {
-    await page.evaluate((value: string) => localStorage.setItem("tabs:tester", value), stored);
-    await page.goto(`${origin}${href("alpha")}`);
-    await tab("Alpha").waitFor();
-    expect(await names(page)).toEqual(["Alpha"]);
-  }
-  await page.goto(`${origin}${href("bravo")}`);
-  await tab("Bravo").waitFor();
+  await openSaved(page, origin, href("alpha"), "Alpha", saved);
+  expect(await names(page)).toEqual(["Alpha"]);
+  await openSaved(page, origin, href("bravo"), "Bravo", saved);
   expect(await names(page)).toEqual(["Alpha", "Bravo"]);
   expect(await tab("Bravo").getAttribute("aria-selected")).toBe("true");
   await page.reload();
@@ -349,7 +373,7 @@ test("storage reset, deep links, keyboard, page close, palette commands, and pla
   await strip(page).getByRole("button", { name: "Tab actions" }).click();
   await page.getByRole("menuitem", { name: "Move tabs to left" }).click();
   expect(await strip(page).getAttribute("aria-orientation")).toBe("vertical");
-  expect(await page.evaluate(() => localStorage.getItem("tab-placement"))).toBe("left");
+  await until(() => saved.state.placement === "LEFT");
   expect(await tab("Alpha").innerText()).toBe("Alpha");
   const mainBox = await page.getByRole("main").boundingBox();
   expect((await strip(page).boundingBox()).x + (await strip(page).boundingBox()).width).toBeLessThanOrEqual(mainBox.x);
@@ -370,7 +394,7 @@ test("storage reset, deep links, keyboard, page close, palette commands, and pla
   await strip(page).waitFor({ state: "detached" });
   await page.keyboard.press("Control+Shift+p");
   await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Tabs: Move tabs to top" }).click();
-  expect(await page.evaluate(() => localStorage.getItem("tab-placement"))).toBe("top");
+  await until(() => saved.state.placement === "TOP");
 
   // Settings offers the same placement switch.
   const orientation = (value: string) => page.waitForFunction((expected: string) => document.querySelector('[role="tablist"][aria-label="Open tabs"]')!.getAttribute("aria-orientation") === expected, value);
@@ -384,12 +408,12 @@ test("storage reset, deep links, keyboard, page close, palette commands, and pla
   await placement.click();
   await page.getByRole("option", { name: "Left sidebar" }).click();
   await orientation("vertical");
-  expect(await page.evaluate(() => localStorage.getItem("tab-placement"))).toBe("left");
+  await until(() => saved.state.placement === "LEFT");
   expect(await placement.innerText()).toBe("Left sidebar");
   await placement.click();
   await page.getByRole("option", { name: "Top" }).click();
   await orientation("horizontal");
-  expect(await page.evaluate(() => localStorage.getItem("tab-placement"))).toBe("top");
+  await until(() => saved.state.placement === "TOP");
 }), 60_000);
 
 test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and double-clicking empty strip opens a new session", () => withPage({}, async (page, origin) => {
@@ -444,13 +468,13 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
   expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain("Rename session");
 }), 60_000);
 
-test("narrow top strip scrolls and running tabs keep a reachable close control", () => withPage({ viewport: { width: 375, height: 700 }, hasTouch: true }, async (page, origin) => {
+test("narrow top strip scrolls and running tabs keep a reachable close control", () => withPage({ viewport: { width: 375, height: 700 }, hasTouch: true }, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   for (const [link, name] of [["/", "New session"], [href("alpha"), "Alpha"], [href("bravo"), "Bravo"], [href("charlie"), "Charlie"], [href("delta"), "Delta"], ["/search", "Search"]]) {
     await page.goto(`${origin}${link}`);
     await tab(name).waitFor();
-    // The strip draws before Identity loads, but only an owner's tabs are saved; leaving earlier drops this tab.
-    await page.waitForFunction((path: string) => JSON.parse(localStorage.getItem("tabs:tester") ?? "[]").some((saved: { path: string }) => saved.path === path), link);
+    // The strip draws before the saved tabs load, but only loaded tabs are saved; leaving earlier drops this tab.
+    await until(() => saved.state.tabs.some((tab) => tab.path === link));
   }
   await tab("Delta").waitFor();
   expect(await names(page)).toEqual(["New session", "Alpha", "Bravo", "Charlie", "Delta", "Search"]);
@@ -476,11 +500,12 @@ test("narrow top strip scrolls and running tabs keep a reachable close control",
   await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Open tabs"] [role="tab"][aria-label="Charlie"]'));
 }), 60_000);
 
-test("narrow left placement is a drawer opened by the top-left button or a right swipe and closed by a pick, Escape, or a left swipe", () => withPage({ viewport: { width: 375, height: 700 }, hasTouch: true }, async (page, origin) => {
+test("narrow left placement is a drawer opened by the top-left button or a right swipe and closed by a pick, Escape, or a left swipe", () => withPage({ viewport: { width: 375, height: 700 }, hasTouch: true }, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
-  await openSaved(page, origin, href("alpha"), "Alpha");
-  await openSaved(page, origin, href("bravo"), "Bravo");
-  await page.evaluate(() => localStorage.setItem("tab-placement", "left"));
+  await openSaved(page, origin, href("alpha"), "Alpha", saved);
+  await openSaved(page, origin, href("bravo"), "Bravo", saved);
+  await menu(page, "Bravo", "Move tabs to left");
+  await until(() => saved.state.placement === "LEFT");
   await page.reload();
   const toggle = page.getByRole("button", { name: "Show sidebar", exact: true });
   const box = (await toggle.boundingBox())!;
@@ -541,11 +566,11 @@ test("running tab shows a dot instead of close until hover or focus at desktop w
   expect(await dot.evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("1");
 }), 60_000);
 
-test("tab groups take a name and color, collapse, adopt opened tabs, follow drags, and survive reload", () => withPage({}, async (page, origin) => {
+test("tab groups take a name and color, collapse, adopt opened tabs, follow drags, and survive reload", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const header = strip(page).getByRole("button", { name: "Work", exact: true });
   const field = page.getByRole("textbox", { name: "Group name" });
-  for (const [id, name] of [["alpha", "Alpha"], ["bravo", "Bravo"], ["charlie", "Charlie"]]) await openSaved(page, origin, href(id), name);
+  for (const [id, name] of [["alpha", "Alpha"], ["bravo", "Bravo"], ["charlie", "Charlie"]]) await openSaved(page, origin, href(id), name, saved);
   await menu(page, "Alpha", "Add to new group");
   await field.waitFor();
   expect(await field.evaluate((node: HTMLInputElement) => document.activeElement === node)).toBe(true);
@@ -559,6 +584,7 @@ test("tab groups take a name and color, collapse, adopt opened tabs, follow drag
   expect(await tab("Bravo").getAttribute("aria-description")).toBe("Group Work, Space: Main");
   expect(await tab("Charlie").getAttribute("aria-description")).toBe("Space: Main");
 
+  await until(() => saved.state.groups.some((group) => group.name === "Work") && saved.state.tabs.filter((tab) => tab.group).length === 2);
   await page.reload();
   await tab("Charlie").waitFor();
   expect(await order(page)).toEqual(["Work", "Alpha", "Bravo", "Charlie"]);
@@ -594,10 +620,10 @@ test("tab groups take a name and color, collapse, adopt opened tabs, follow drag
   expect(await tab("Alpha").getAttribute("aria-description")).toBe("Space: Main");
 }), 60_000);
 
-test("tab group editor moves New session in, ungroups, and closes; pins leave groups; collapsed groups skip arrow keys; bad group storage resets", () => withPage({}, async (page, origin) => {
+test("tab group editor moves New session in, ungroups, and closes; pins leave groups; collapsed groups skip arrow keys; a lost group is dropped", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const field = page.getByRole("textbox", { name: "Group name" });
-  for (const [link, name] of [["/", "New session"], [href("alpha"), "Alpha"], [href("bravo"), "Bravo"], [href("charlie"), "Charlie"]]) await openSaved(page, origin, link, name);
+  for (const [link, name] of [["/", "New session"], [href("alpha"), "Alpha"], [href("bravo"), "Bravo"], [href("charlie"), "Charlie"]]) await openSaved(page, origin, link, name, saved);
   await menu(page, "Alpha", "Add to new group");
   await page.keyboard.type("Work");
   await page.keyboard.press("Enter");
@@ -618,6 +644,7 @@ test("tab group editor moves New session in, ungroups, and closes; pins leave gr
   await tab("Charlie").click();
   await page.waitForURL(`**${href("charlie")}`);
   await strip(page).getByRole("button", { name: "Work", exact: true }).click();
+  await until(() => saved.state.placement === "LEFT" && saved.state.groups.some((group) => group.collapsed));
   await page.reload();
   await tab("Charlie").waitFor();
   expect(await strip(page).getAttribute("aria-orientation")).toBe("vertical");
@@ -647,19 +674,20 @@ test("tab group editor moves New session in, ungroups, and closes; pins leave gr
 
   await menu(page, "Charlie", "Add to new group");
   await page.keyboard.press("Escape");
-  await page.waitForFunction(() => localStorage.getItem("tab-groups-chrome-spaces:tester")!.includes("Grey"));
-  await page.evaluate(() => localStorage.setItem("tab-groups-chrome-spaces:tester", "{not json"));
+  // A tab whose group the saved state no longer has leaves the group.
+  await until(() => saved.state.groups.some((group) => group.color === "Grey"));
+  saved.state.groups = [];
   await page.reload();
   await tab("Charlie").waitFor();
   expect(await order(page)).toEqual(["Bravo", "Charlie"]);
   expect(await tab("Charlie").getAttribute("aria-description")).toBe("Space: Main");
 }), 60_000);
 
-test("spaces show only their own tabs, return to their last tab, follow opened tabs, and survive reload", () => withPage({}, async (page, origin) => {
+test("spaces show only their own tabs, return to their last tab, follow opened tabs, and survive reload", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const space = page.getByRole("button", { name: /^Space: / });
   const choose = (item: string, role?: string) => chooseSpace(page, item, role);
-  for (const [link, name] of [["/", "New session"], [href("alpha"), "Alpha"], [href("bravo"), "Bravo"], [href("charlie"), "Charlie"]]) await openSaved(page, origin, link, name);
+  for (const [link, name] of [["/", "New session"], [href("alpha"), "Alpha"], [href("bravo"), "Bravo"], [href("charlie"), "Charlie"]]) await openSaved(page, origin, link, name, saved);
   expect(await space.getAttribute("aria-label")).toBe("Space: Main");
   expect(await tab("Charlie").getAttribute("aria-description")).toBe("Space: Main");
 
@@ -669,7 +697,7 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   await page.getByRole("textbox", { name: "Space name" }).waitFor();
   await page.keyboard.type("Ops");
   await page.keyboard.press("Enter");
-  expect(await space.getAttribute("aria-label")).toBe("Space: Ops");
+  await page.getByRole("button", { name: "Space: Ops" }).waitFor();
   expect(await names(page)).toEqual(["New session"]);
   expect(page.url()).toBe(`${origin}/`);
 
@@ -692,6 +720,7 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   await openFromPalette(page, "Bravo");
   await page.waitForURL(`**${href("bravo")}`);
   expect(await space.getAttribute("aria-label")).toBe("Space: Ops");
+  await until(() => saved.state.space !== "main" && Object.values(saved.state.last).includes(href("bravo")));
   await page.reload();
   await tab("Bravo").waitFor();
   expect(await space.getAttribute("aria-label")).toBe("Space: Ops");
@@ -731,7 +760,7 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
 
   // Deleting a space moves its tabs, pinned ones still pinned, to the first space, and the last space stays.
   await choose("Delete space");
-  expect(await space.getAttribute("aria-label")).toBe("Space: Main");
+  await page.getByRole("button", { name: "Space: Main" }).waitFor();
   expect(await names(page)).toEqual(["Alpha", "Charlie", "New session", "Bravo"]);
   expect(page.url()).toEndWith(href("bravo"));
   await space.click();
@@ -739,8 +768,10 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   expect(await page.getByRole("menuitem").allInnerTexts()).toEqual(["New space", "Rename space"]);
   await page.keyboard.press("Escape");
 
-  // A pinned tab saved without a space, as older builds stored it, shows only in the first space.
-  await page.evaluate(() => localStorage.setItem("tabs:tester", JSON.stringify(JSON.parse(localStorage.getItem("tabs:tester")!).map((tab: { pinned?: boolean; space?: string }) => ({ ...tab, space: tab.pinned ? undefined : tab.space })))));
+  // A pinned tab saved without a space shows only in the first space.
+  const settled = () => until(() => saved.spaces.length === 1 && saved.state.tabs.every((tab) => tab.space === "main"));
+  await settled();
+  saved.state.tabs = saved.state.tabs.map((tab) => ({ ...tab, space: tab.pinned ? "" : tab.space }));
   await page.reload();
   await tab("Bravo").waitFor();
   await choose("New space");
@@ -749,17 +780,21 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   expect(await names(page)).toEqual(["New session"]);
   await choose("Delete space");
 
-  // Unreadable spaces reset to Main and keep every tab; the menu also sits atop left tabs.
-  await page.evaluate(() => localStorage.setItem("tab-groups-chrome-spaces:tester", "{not json"));
+  // A space deleted elsewhere hands its tabs, groups kept, to the first space; the menu also sits atop left tabs.
+  await page.getByRole("button", { name: "Space: Main" }).waitFor();
+  await settled();
+  saved.state.tabs = saved.state.tabs.map((tab) => tab.path === href("bravo") ? { ...tab, space: "gone", group: "kept" } : tab);
+  saved.state.groups = [{ id: "kept", name: "Kept", color: "Blue" }];
   await page.reload();
   await tab("Bravo").waitFor();
   expect(await names(page)).toEqual(["Alpha", "Charlie", "New session", "Bravo"]);
+  expect(await tab("Bravo").getAttribute("aria-description")).toBe("Group Kept, Space: Main");
   await menu(page, "Bravo", "Move tabs to left");
   const [button, list] = [await space.boundingBox(), await strip(page).boundingBox()];
   expect(button.y + button.height).toBeLessThanOrEqual(list.y);
 }), 60_000);
 
-test("a space offers New session its own and spaceless agents, and shows its own and spaceless cron jobs, ignoring case", () => withPage({}, async (page, origin) => {
+test("New session offers every agent, and a space shows its own and spaceless cron jobs, ignoring case", () => withPage({}, async (page, origin, _prompts, saved) => {
   const agents = async () => {
     await page.getByRole("button", { name: "Choose agent", exact: true }).click();
     await page.getByRole("menuitemradio", { name: "main", exact: true }).waitFor();
@@ -781,19 +816,20 @@ test("a space offers New session its own and spaceless agents, and shows its own
     await page.getByRole("button", { name: "Preview latest run of daily", exact: true }).waitFor();
     return (await page.getByRole("button", { name: /^Preview latest run of / }).evaluateAll((nodes: HTMLElement[]) => nodes.filter((node) => node.checkVisibility()).map((node) => node.getAttribute("aria-label")))).map((label: string) => label.replace("Preview latest run of ", ""));
   };
-  // Main is spaceless for both: an existing session keeps every agent, New session drops opsbot, and opsreport hides with its run.
-  await openSaved(page, origin, href("alpha"), "Alpha");
+  // Main shows only spaceless cron jobs: opsreport hides with its run. Every session lists the agents the server offers.
+  await openSaved(page, origin, href("alpha"), "Alpha", saved);
   expect(await agents()).toEqual(["main", "opsbot"]);
-  await openSaved(page, origin, "/cron", "Cron");
+  await openSaved(page, origin, "/cron", "Cron", saved);
   expect(await dashboard()).toEqual(["daily", "retired"]);
-  await openSaved(page, origin, "/", "New session");
-  expect(await agents()).toEqual(["main"]);
+  await openSaved(page, origin, "/", "New session", saved);
+  expect(await agents()).toEqual(["main", "opsbot"]);
   expect(await runnable()).toEqual(["daily"]);
   // The OPS agent and the Ops job belong to a space named ops.
   await chooseSpace(page, "New space");
   await page.getByRole("textbox", { name: "Space name" }).waitFor();
   await page.keyboard.type("ops");
   await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "Space: ops" }).waitFor();
   expect(await agents()).toEqual(["main", "opsbot"]);
   expect(await runnable()).toEqual(["daily", "opsreport"]);
   await chooseSpace(page, "Main", "menuitemradio");
@@ -803,12 +839,12 @@ test("a space offers New session its own and spaceless agents, and shows its own
   expect(await dashboard()).toEqual(["daily", "opsreport", "retired"]);
 }), 60_000);
 
-test("a group lives in one space: menus offer only this space's groups, groups move whole, and New tab in group brings New session", () => withPage({}, async (page, origin) => {
+test("a group lives in one space: menus offer only this space's groups, groups move whole, and New tab in group brings New session", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const header = strip(page).getByRole("button", { name: "Work", exact: true }), edit = strip(page).getByRole("button", { name: "Edit Work", exact: true });
   const editor = (item: string) => edit.click().then(() => page.getByRole("button", { name: item, exact: true }).click());
   const green = page.getByRole("radio", { name: "Green" });
-  for (const [link, name] of [["/", "New session"], [href("alpha"), "Alpha"], [href("bravo"), "Bravo"], [href("charlie"), "Charlie"]]) await openSaved(page, origin, link, name);
+  for (const [link, name] of [["/", "New session"], [href("alpha"), "Alpha"], [href("bravo"), "Bravo"], [href("charlie"), "Charlie"]]) await openSaved(page, origin, link, name, saved);
   await menu(page, "Alpha", "Add to new group");
   await page.keyboard.type("Work");
   await green.check();
@@ -819,6 +855,7 @@ test("a group lives in one space: menus offer only this space's groups, groups m
   await chooseSpace(page, "New space");
   await page.getByRole("textbox", { name: "Space name" }).fill("Ops");
   await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "Space: Ops" }).waitFor();
   await tab("New session").click({ button: "right" });
   expect(await page.getByRole("menuitem").allInnerTexts()).toEqual(["Close", "Close others", "Close to the right", "Close all", "Pin", "Add to new group", "Move to space", "Move tabs to left"]);
   await page.getByRole("menuitem", { name: "Move to space", exact: true }).click();
@@ -850,6 +887,7 @@ test("a group lives in one space: menus offer only this space's groups, groups m
   await menu(page, "Charlie", "Pin");
 
   // Reload keeps spaces, groups, colors, collapsed state, and memberships; the pinned tab stays in Main in no group.
+  await until(() => saved.state.tabs.some((tab) => tab.path === href("charlie") && tab.pinned) && saved.state.groups.some((group) => group.collapsed));
   await page.reload();
   await tab("Charlie").waitFor();
   expect(await order(page)).toEqual(["Charlie", "Alpha"]);
@@ -880,8 +918,70 @@ test("a group lives in one space: menus offer only this space's groups, groups m
   // Deleting Ops moves the collapsed group, intact, to Main.
   await header.click();
   await chooseSpace(page, "Delete space");
-  expect(await page.getByRole("button", { name: /^Space: / }).getAttribute("aria-label")).toBe("Space: Main");
+  await page.getByRole("button", { name: "Space: Main" }).waitFor();
   expect(await order(page)).toEqual(["Charlie", "Alpha", "Work", "New session"]);
   expect(await header.getAttribute("aria-expanded")).toBe("false");
   expect(await tab("New session").getAttribute("aria-description")).toBe("Group Work, Space: Main");
 }), 60_000);
+
+test("a first message to an agent with a space creates the space and takes the session there", () => withPage({}, async (page, origin) => {
+  await page.goto(`${origin}/`);
+  await page.getByRole("button", { name: "Space: Main" }).waitFor();
+  await page.getByRole("button", { name: "Choose agent", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: "opsbot", exact: true }).click();
+  await page.getByPlaceholder("Message a new session").fill("hello");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await page.waitForURL(`**${href("fresh")}`);
+  await page.getByRole("button", { name: "Space: OPS" }).waitFor();
+  expect(await names(page)).toEqual(["Ops chat"]);
+}), 30_000);
+
+test("a session opens in the space it was born in, and a moved one can be restored there", () => withPage({}, async (page, origin, _prompts, saved) => {
+  saved.spaces.push({ id: "ops", name: "OPS" });
+  await openSaved(page, origin, href("alpha"), "Alpha", saved);
+  await openFromPalette(page, "Echo");
+  await page.waitForURL(`**${href("echo")}`);
+  await page.getByRole("button", { name: "Space: OPS" }).waitFor();
+  expect(await names(page)).toEqual(["Echo"]);
+  await menu(page, "Echo", "Move to space", "Main");
+  await page.getByRole("button", { name: "Space: Main" }).waitFor();
+  expect(await names(page)).toEqual(["Alpha", "Echo"]);
+  await menu(page, "Echo", 'Restore to "OPS"');
+  await page.getByRole("button", { name: "Space: OPS" }).waitFor();
+  await strip(page).getByRole("tab", { name: "Echo", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Close", exact: true }).waitFor();
+  expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain('Restore to "OPS"');
+  await page.keyboard.press("Escape");
+}), 30_000);
+
+test("tabs follow a person across windows: a window takes in changes on focus but stays on its own tab", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const other = await page.context().browser().newPage();
+  await openSaved(page, origin, href("alpha"), "Alpha", saved);
+  await openSaved(page, origin, href("bravo"), "Bravo", saved);
+  await openSaved(other, origin, href("charlie"), "Charlie", saved);
+  expect(await names(other)).toEqual(["Alpha", "Bravo", "Charlie"]);
+
+  // The other window closes the tab this one shows, and opens another: this window moves off the closed tab.
+  await menu(other, "Bravo", "Close");
+  await until(() => !saved.state.tabs.some((tab) => tab.path === href("bravo")));
+  await page.evaluate(() => { dispatchEvent(new Event("visibilitychange")); });
+  await page.waitForURL(`**${href("charlie")}`);
+  expect(await names(page)).toEqual(["Alpha", "Charlie"]);
+
+  // A tab opened elsewhere shows up on focus alone, and this window stays where it is.
+  await openSaved(other, origin, href("delta"), "Delta", saved);
+  await page.evaluate(() => { dispatchEvent(new Event("focus")); });
+  await strip(page).getByRole("tab", { name: "Delta", exact: true }).waitFor();
+  expect(page.url()).toEndWith(href("charlie"));
+}), 60_000);
+
+test("a change made from tabs older than another window's save keeps both", () => withPage({}, async (page, origin, _prompts, saved) => {
+  await openSaved(page, origin, href("alpha"), "Alpha", saved);
+  // Another window opens Charlie, and this one, without reloading, opens Bravo: its save is refused and merged.
+  [saved.state.tabs, saved.revision] = [[...saved.state.tabs, { path: href("charlie"), space: "main" }], saved.revision + 1];
+  await openFromPalette(page, "Bravo");
+  await strip(page).getByRole("tab", { name: "Charlie", exact: true }).waitFor();
+  await until(() => ["alpha", "bravo", "charlie"].every((id) => saved.state.tabs.some((tab) => tab.path === href(id))));
+  expect(await names(page)).toEqual(["Alpha", "Bravo", "Charlie"]);
+  expect(saved.refused).toBe(1);
+}), 30_000);

@@ -47,6 +47,7 @@ for (const width of [1440, 390, 320]) test(`shadow comparison at ${width}px`, as
         return Response.json(histories.get(input.id)!);
       }
       case "/api/ListQueue": return Response.json({ items: width === 320 ? [{ id: "steer", text: "Pending steer", delivery: "STEER" }] : [] });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
       default: return Response.json({});
     }
   } });

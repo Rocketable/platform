@@ -9,7 +9,7 @@ export type PendingQuestion = { id: string; question: string; details: string; o
 export type SessionEntryMeta = { id: string; type?: string; timestamp?: string };
 export type SessionEntryData = { id: string; json?: string };
 export type QueueItem = { id: string; text: string; attachments?: Attachment[]; delivery?: PromptDelivery; principal?: string };
-export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; allowedAgents?: string[]; running?: boolean; pinned?: boolean; name?: string; forkedFrom?: string; tags?: string[]; cron?: boolean; cronName?: string; server?: string; directory?: string; offline?: boolean };
+export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; allowedAgents?: string[]; running?: boolean; pinned?: boolean; name?: string; forkedFrom?: string; tags?: string[]; cron?: boolean; cronName?: string; server?: string; directory?: string; offline?: boolean; spaceId?: string };
 // Remote OpenCode servers with their relay ports, and the tags people may set on their sessions.
 export type Remote = { servers: Record<string, number>; agentTags: Record<string, string[]> };
 export type OriginPair = { key: string; value: string };
@@ -37,3 +37,6 @@ export type SlackNamesResponse = { names?: Record<string, string> };
 export type VoiceRoute = "public" | "codex";
 export type VoiceEndReason = "stopped" | "replaced" | "expired" | "safety" | "closed" | "lost" | "error";
 export type VoiceEvent = { answer?: { sdp: string; route: VoiceRoute }; notice?: string; typed?: boolean; reply?: string; reconnecting?: boolean; ended?: { reason: VoiceEndReason } };
+// SavedTabs is every Web space and the signed-in person's saved tabs; last names the last tab of each space by space id.
+// revision counts saves; stale reports a save refused because it was made from an older revision than the one saved.
+export type SavedTabs = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; pinned?: boolean; preview?: boolean; group?: string; space?: string }[]; groups: { id: string; name: string; color: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; placement: "TOP" | "LEFT" }; revision: string; stale?: boolean };

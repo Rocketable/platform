@@ -28,6 +28,8 @@ message Session {
   string server = 17;
   string directory = 18;
   bool offline = 19;
+  // The Web space the session was born in, empty for none.
+  string space_id = 20;
 }
 
 message HistoryRequest {
@@ -158,6 +160,8 @@ message CreateSessionRequest {
   // Set together to create a remote OpenCode session in that folder.
   string opencode_server = 4;
   string directory = 5;
+  // The Web space the person is in; a session whose agent names no space is born there.
+  string space_id = 6;
 }
 
 message CreateSessionResponse {
@@ -596,6 +600,61 @@ message VoiceSettingsResponse {
   bool transcript = 4;
 }
 
+// A Web space every person shares.
+message Space {
+  string id = 1;
+  string name = 2;
+}
+
+// One of a person's Web tabs: its location, pin, preview, group, and space ids.
+message Tab {
+  string path = 1;
+  bool pinned = 2;
+  bool preview = 3;
+  string group = 4;
+  string space = 5;
+}
+
+message TabGroup {
+  string id = 1;
+  string name = 2;
+  string color = 3;
+  bool collapsed = 4;
+}
+
+enum TabPlacement {
+  TOP = 0;
+  LEFT = 1;
+}
+
+// TabState is one person's Web tabs and groups, the space they are in, and the last tab of each space by space id.
+message TabState {
+  repeated Tab tabs = 1;
+  repeated TabGroup groups = 2;
+  string space = 3;
+  map<string, string> last = 4;
+  TabPlacement placement = 5;
+}
+
+// TabsRequest saves the caller's tab state when set, else creates, renames, or deletes one space.
+// revision is the saved revision the state was made from.
+message TabsRequest {
+  TabState state = 1;
+  string create_space = 2;
+  Space rename_space = 3;
+  string delete_space = 4;
+  int64 revision = 5;
+}
+
+// TabsResponse is every space, oldest first, and the caller's saved tab state and its revision.
+// stale reports a refused save: the state was made from an older revision than the one saved.
+message TabsResponse {
+  repeated Space spaces = 1;
+  TabState state = 2;
+  int64 revision = 3;
+  bool stale = 4;
+}
+
 // The first event answers the browser's SDP offer; the last ends the call.
 // A notice in between reports a hand-off the agent could not accept; typed
 // says a typed message superseded voice, so the browser mutes the voice
@@ -632,6 +691,7 @@ service Web {
   rpc Join(JoinRequest) returns (stream ConversationChange);
   rpc Voice(VoiceRequest) returns (stream VoiceEvent);
   rpc VoiceSettings(VoiceSettingsRequest) returns (VoiceSettingsResponse);
+  rpc Tabs(TabsRequest) returns (TabsResponse);
   rpc Prompt(PromptRequest) returns (PromptResponse);
   rpc ListCronJobs(ListCronJobsRequest) returns (ListCronJobsResponse);
   rpc RunCronJob(RunCronJobRequest) returns (RunCronJobResponse);

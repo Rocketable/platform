@@ -510,6 +510,9 @@ func newCronTestManager(t *testing.T, service *SessionService) (manager *threadB
 	t.Helper()
 
 	cfg = &config.Config{Workspace: t.TempDir(), Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"channel-agent"}}}}}
+	// A cron's report root reads the agents, as in any workspace.
+	require.NoError(t, os.MkdirAll(filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "agents"), 0o755))
+
 	roots, finals = make(chan *protocol.OutboundMessage, 4), make(chan *protocol.OutboundMessage, 4)
 	manager, _ = newTestBridgeManager(t, config.NewLockedConfig(cfg), service, finals)
 	manager.cronRoots = newCronRoots(func(message *protocol.OutboundMessage) { roots <- message })
@@ -552,6 +555,7 @@ func TestResumedCronRowPostsRootOnce(t *testing.T) {
 	service := newTestSessionService(t)
 	manager, cfg, roots, finals := newCronTestManager(t, service)
 	msg := seedCronRun(t, service, "cron:daily")
+	writeAgent(t, cfg.Workspace, "job", "---\ndescription: Job\nmode: primary\nmodel: gpt-6.1-sol\nspace: Reports\npermission: {}\n---\nRun the job.\n")
 
 	crashed := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
 	replay := replayInputForMessage("user", "job prompt")
@@ -574,6 +578,16 @@ func TestResumedCronRowPostsRootOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, recorded)
 	assert.Equal(t, ThreadState{Agent: "channel-agent", CreatedBy: ThreadCreatedByCron}, thread)
+
+	// The cron names no space, so the report thread is born in its agent's, whichever agent the channel gives it.
+	spaces, err := service.Spaces(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "Reports", spaces[len(spaces)-1].Name)
+
+	for row, err := range service.SidebarSessions(t.Context()) {
+		require.NoError(t, err)
+		assert.Equal(t, spaces[len(spaces)-1].ID, row.SpaceID)
+	}
 
 	entries, err := service.ObserveEntries(t.Context(), destination)
 	require.NoError(t, err)
@@ -630,8 +644,8 @@ func TestLegacyCronScheduleResumesIntoCanonical(t *testing.T) {
 			}
 
 			require.NoError(t, store.UpsertThread("cron:legacy", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
-			// Back to before 027_producer_handoff and the fifteen migrations that follow it.
-			_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(t.Context(), store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 16)
+			// Back to before 027_producer_handoff and the sixteen migrations that follow it.
+			_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(t.Context(), store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 17)
 			require.NoError(t, err)
 
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "original legacy job", false)

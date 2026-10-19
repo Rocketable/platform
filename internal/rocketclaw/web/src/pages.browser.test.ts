@@ -11,6 +11,8 @@ const script = `<script>window.replies = []; addEventListener("message", (event)
 async function withPage(spaces: string[], run: (page: any, origin: string, reads: object[]) => Promise<void>, options = {}) {
   const { chromium: engine } = await import(playwright!);
   const reads: object[] = [];
+  // The shared spaces, and the tab state the page saves.
+  const saved = { spaces: spaces.map((name, index) => ({ id: `s${index}`, name })), state: { tabs: [], groups: [], space: "s0", last: {}, placement: "TOP" } };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
@@ -19,13 +21,14 @@ async function withPage(spaces: string[], run: (page: any, origin: string, reads
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
     }
-    const input = await request.json().catch(() => ({})) as { agent: string; path: string; data: boolean };
+    const input = await request.json().catch(() => ({})) as { agent: string; path: string; data: boolean; state?: typeof saved.state };
     switch (url.pathname) {
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/Protocol": return Response.json({ protoSha256: "pages" });
       case "/api/ListConfig": return Response.json({ config: { workspace: "pages" } });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListPages": return Response.json({ pages });
+      case "/api/Tabs": if (input.state) saved.state = input.state; return Response.json(saved);
       case "/api/GetPage":
         reads.push(input);
         return input.agent === "reporter" && input.path === "revenue" && input.data ? Response.json({ space: "Billing", contentType: "application/json", body: Buffer.from(`{"total":3}`).toString("base64") }) : Response.json({ code: 5, message: "page not found" }, { status: 404 });
@@ -38,8 +41,6 @@ async function withPage(spaces: string[], run: (page: any, origin: string, reads
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
     const origin = `http://127.0.0.1:${server.port}`;
-    await page.goto(`${origin}/agents`);
-    await page.evaluate((names: string[]) => localStorage.setItem("tab-groups-chrome-spaces:tester", JSON.stringify({ groups: [], spaces: names.map((name, index) => ({ id: `s${index}`, name })), space: "s0" })), spaces);
     await page.goto(`${origin}/`);
     await strip(page).getByRole("tab", { name: "New session", exact: true }).waitFor();
     await run(page, origin, reads);
@@ -62,8 +63,8 @@ async function chooseSpace(page: any, name: string) {
 
 test("a page link opens in the space named by its segment, ignoring case, on a fresh load and in the app", () => withPage(["Main", "billing"], async (page, origin) => {
   await page.goto(`${origin}/pages/Billing/reporter/index.html`);
-  await strip(page).getByRole("tab", { name: "reporter · index.html", exact: true }).waitFor();
-  expect(await space(page)).toBe("Space: billing");
+  // The strip draws before the spaces load; the tab then moves to the space its link names.
+  await page.getByRole("button", { name: "Space: billing" }).waitFor();
   await page.waitForURL(`${origin}/pages/billing/reporter/index.html`);
 
   await chooseSpace(page, "Main");

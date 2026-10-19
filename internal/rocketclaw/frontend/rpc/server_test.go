@@ -1930,9 +1930,54 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, backend.ThreadState{Agent: "planner", CreatedBy: "alice"}, createdThread)
+
+	// A session is born in its agent's space, created when missing, else in the space the person is in, if it still exists.
+	spaces, err := sessions.Spaces(ctx)
+	require.NoError(t, err)
+
+	billing := spaces[len(spaces)-1]
+	require.Equal(t, "Billing", billing.Name)
+
+	births := map[string]string{}
+
+	for _, born := range []struct{ agent, space, want string }{{"planner", "", billing.ID}, {"main", billing.ID, billing.ID}, {"main", "deleted-space", ""}} {
+		plain, err := invoke[CreateSessionResponse](ctx, connection, "CreateSession", &CreateSessionRequest{Agent: born.agent, SpaceId: born.space})
+		require.NoError(t, err)
+
+		births[plain.Id] = born.want
+	}
+
+	for id := range births {
+		_, err = sessions.AppendEntryID(ctx, id, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now()})
+		require.NoError(t, err)
+	}
+
+	rows, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
+	require.NoError(t, err)
+
+	for _, row := range rows.Sessions {
+		if born, ok := births[row.Id]; ok {
+			assert.Equal(t, born, row.SpaceId)
+			delete(births, row.Id)
+			_, err = sessions.DeleteSession(ctx, row.Id)
+			require.NoError(t, err)
+		}
+	}
+
+	assert.Empty(t, births)
+
 	_, err = invoke[CreateSessionResponse](ctx, connection, "CreateSession", &CreateSessionRequest{Agent: "missing"})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 	_, err = invoke[CreateSessionResponse](ctx, connection, "CreateSession", &CreateSessionRequest{Agent: "main/alternative"})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+
+	// A session whose agent has a space offers only that space's agents, in the picker and to $agent.
+	scoped, err := invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: created.Id})
+	require.NoError(t, err)
+	require.Len(t, scoped.Agents, 1)
+	require.Equal(t, "planner", scoped.Agents[0].Name)
+
+	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: created.Id, Text: "$agent main"})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
 	historyBefore, err := sessions.ObserveEntries(ctx, "empty-web")
@@ -1956,7 +2001,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 		code      codes.Code
 	}{
 		{id, "planner", codes.InvalidArgument},
-		{created.Id, "selected", codes.OK},
+		{created.Id, "selected", codes.InvalidArgument}, // planner's Billing space offers only Billing agents
 		{created.Id, "main/alternative", codes.InvalidArgument},
 		{"empty-web", "missing", codes.InvalidArgument},
 		{"private-X", "main", codes.PermissionDenied},
@@ -2018,8 +2063,20 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 	choices, err := invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
 	require.NoError(t, err)
 	require.Equal(t, "planner", choices.CurrentAgent)
-	require.Equal(t, []string{"planner", "main"}, []string{choices.Agents[0].Name, choices.Agents[1].Name}, "Slack channels list agents in their configured order")
+	require.Len(t, choices.Agents, 1, "a planner thread offers only Billing agents, though its channel also allows main")
+	require.Equal(t, "planner", choices.Agents[0].Name)
 	require.Len(t, channels.ChannelAgentChoicesCalls(), channelCalls)
+
+	// When the space leaves none of the channel's agents, the picker offers the channel's agents.
+	sidebarPolicy := channels.SidebarChannelAgentChoicesFunc
+	channels.SidebarChannelAgentChoicesFunc = func(context.Context, string) (string, []string, error) { return "triage", []string{"main"}, nil }
+	choices, err = invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
+	require.NoError(t, err)
+	require.Len(t, choices.Agents, 1)
+	require.Equal(t, "main", choices.Agents[0].Name)
+
+	channels.SidebarChannelAgentChoicesFunc = sidebarPolicy
+
 	require.NoError(t, root.Remove(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md")))
 
 	choices, err = invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
@@ -2348,7 +2405,8 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 
 		path := filepath.Join(cfg.RuntimeDirName(), "cron", "silent.md")
 
-		require.NoError(t, root.WriteFile(path, []byte("---\nschedule: 24h\nagent: planner\nchannel: '#ops'\n---\nSilent\n"), 0o600))
+		// The cron names Ops, so chats continuing its runs are born there, not in planner's Billing.
+		require.NoError(t, root.WriteFile(path, []byte("---\nschedule: 24h\nagent: planner\nspace: Ops\nchannel: '#ops'\n---\nSilent\n"), 0o600))
 		defer func() { require.NoError(t, root.Remove(path)) }()
 
 		originalAgents := cfg.Slack.Channels[0].Agents
@@ -2469,6 +2527,19 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 		_, err = db.ExecContext(ctx, `DELETE FROM session_entries WHERE id = $1`, broken)
 		require.NoError(t, err)
 
+		spaces, err := sessions.Spaces(ctx)
+		require.NoError(t, err)
+
+		opsID := spaces[slices.IndexFunc(spaces, func(space backend.Space) bool { return space.Name == "Ops" })].ID
+
+		// Narrowing to an agent's space is covered above; here a cron chat switches freely among its allowed agents.
+		planner := filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md")
+
+		require.NoError(t, root.WriteFile(planner, []byte("---\nmodel: gpt-6.1-sol\n---\nHelp."), 0o600))
+		defer func() {
+			require.NoError(t, root.WriteFile(planner, []byte("---\nmodel: gpt-6.1-sol\nspace: Billing\n---\nHelp."), 0o600))
+		}()
+
 		for _, test := range []struct {
 			name, channel string
 			agents, want  []string
@@ -2505,6 +2576,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 
 				index := slices.IndexFunc(listed.Sessions, func(session *Session) bool { return session.Id == webID })
 				require.NotEqual(t, -1, index)
+				require.Equal(t, opsID, listed.Sessions[index].SpaceId, "the chat keeps the space its cron named when it was opened")
 				require.ElementsMatch(t, test.want, listed.Sessions[index].AllowedAgents)
 				require.True(t, listed.Sessions[index].Cron, "cron origin survives follow-ups and config changes")
 
@@ -2593,6 +2665,17 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 	failed, err := invoke[RunCronJobResponse](ctx, connection, "RunCronJob", &RunCronJobRequest{Stem: "alpha"})
 	require.NoError(t, err)
 	require.NotEmpty(t, failed.Id)
+
+	// A Run cron session is born in the cron's space, else its agent's: alpha inherits planner's Billing.
+	_, err = sessions.AppendEntryID(ctx, failed.Id, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now()})
+	require.NoError(t, err)
+	runRows, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
+	require.NoError(t, err)
+	spaces, err = sessions.Spaces(ctx)
+	require.NoError(t, err)
+
+	ran := runRows.Sessions[slices.IndexFunc(runRows.Sessions, func(row *Session) bool { return row.Id == failed.Id })]
+	assert.Equal(t, spaces[slices.IndexFunc(spaces, func(space backend.Space) bool { return space.Name == "Billing" })].ID, ran.SpaceId)
 
 	_, err = invoke[RunCronJobResponse](ctx, connection, "RunCronJob", &RunCronJobRequest{Stem: "../escape"})
 	require.ErrorContains(t, err, "nested paths are not allowed")

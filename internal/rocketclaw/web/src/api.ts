@@ -1,5 +1,5 @@
 import { captureException } from "@sentry/react";
-import type { AgentChoices, ChatOrigin, ConfigView, CronJob, HistoryView, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SessionBatch, Skill, SlackNamesResponse, TranscriptEvent, VoiceSettings, Workflow } from "./types";
+import type { AgentChoices, ChatOrigin, ConfigView, CronJob, HistoryView, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, TranscriptEvent, VoiceSettings, Workflow } from "./types";
 
 export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
@@ -84,6 +84,7 @@ export const queries = {
   queue: (input: { id: string }) => ({ queryKey: ["queue", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ items: QueueItem[] }>("ListQueue", input, signal)).items }),
   // The server answers for the signed-in person; the username keeps one person's settings out of another's cache.
   voiceSettings: (username: string) => ({ queryKey: ["voiceSettings", username], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<VoiceSettings>("VoiceSettings", {}, signal) }),
+  tabs: (username: string) => ({ queryKey: ["tabs", username], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<SavedTabs>("Tabs", {}, signal) }),
 };
 
 export const mutations = {
@@ -91,7 +92,7 @@ export const mutations = {
   clearRevert: (input: { id: string }) => rpc("ClearRevert", input),
   forkSession: (input: { id: string; before?: string }) => rpc<{ id: string; prompt: TranscriptEvent }>("ForkSession", input),
   popQueueItem: (input: { id: string; itemId: string }) => rpc("PopQueueItem", input),
-  createSession: async (input: { name?: string; agent?: string; sourceConversationId?: string; opencodeServer?: string; directory?: string }) => (await rpc<{ id: string }>("CreateSession", input)).id,
+  createSession: async (input: { name?: string; agent?: string; sourceConversationId?: string; opencodeServer?: string; directory?: string; spaceId?: string }) => (await rpc<{ id: string }>("CreateSession", input)).id,
   prompt: async (input: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string }) => (await rpc<{ privateText: string }>("Prompt", input)).privateText,
   runCron: async (input: { stem: string }) => (await rpc<{ id: string }>("RunCronJob", input)).id,
   updateSession: (input: { id: string; pinned?: boolean; name?: string; tag?: string }) => rpc("UpdateSession", input),
@@ -102,4 +103,5 @@ export const mutations = {
   stopBackgroundJob: (input: { conversationId: string; jobId: string }) => rpc("StopBackgroundJob", input),
   answerQuestion: (input: { conversationId: string; askId: string; selected?: string[]; custom?: string }) => rpc("AnswerQuestion", input),
   voiceSettings: (input: { action: "START" | "RESET" | "UPDATE"; conversationId?: string; agent?: string; voice?: string; transcript?: boolean }) => rpc<VoiceSettings>("VoiceSettings", input),
+  tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string }) => rpc<SavedTabs>("Tabs", input),
 };

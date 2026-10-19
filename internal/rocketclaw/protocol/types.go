@@ -122,6 +122,8 @@ type OutboundAttachment struct {
 // CronjobMessage identifies a human-visible cronjob result.
 type CronjobMessage struct {
 	RelativePath, Agent, RanAt string
+	// Space is the cron's own Web space, empty when it names none.
+	Space string
 }
 
 // ExternalMCPRelay carries one MCP request to its Slack surface.

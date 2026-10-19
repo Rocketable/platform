@@ -15,6 +15,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -388,12 +389,13 @@ func TestOneOffCronjobRunsImmediatelyAndDeletesFile(t *testing.T) {
 	}
 
 	cronPath := filepath.Join(cronDir, "due.md")
-	if err := os.WriteFile(cronPath, []byte("---\nschedule: \"2000-01-01T00:00:00Z\"\nchannel: '#ops'\n---\nBody"), 0o644); err != nil {
+	if err := os.WriteFile(cronPath, []byte("---\nschedule: \"2000-01-01T00:00:00Z\"\nchannel: '#ops'\nspace: Ops\n---\nBody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	runDone := make(chan struct{})
-	m := New(workspace, ".", []string{"#ops", "#triage"}, newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(workspace, ".", []string{"#ops", "#triage"}, newCronScheduleStore(t), &runnerMock{RunFunc: func(_ context.Context, _, _ string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+		assert.Equal(t, "Ops", progress.Cronjob.Space, "the run carries the cron's space to its report thread")
 		close(runDone)
 
 		return protocol.CronRunResult{}, nil

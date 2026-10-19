@@ -82,7 +82,7 @@ channel: "C0123456789"
 
 Do not write `channel: #triage`; YAML parses that as an empty value/comment. If the human gives a channel name without `#`, ask whether to use the configured Slack display form with `#` or a configured channel ID rather than silently rewriting it.
 
-The optional `space:` frontmatter value is one Web space name, such as `space: "Billing"`. Without it, the cron uses its agent's `space`. Web's Cron page and Run cron palette show a cron only in the space of that name, ignoring case; a cron with no space shows in every space. Set or change `space:` only when the human asks.
+The optional `space:` frontmatter value is one Web space name, such as `space: "Billing"`. Without it, the cron uses its agent's `space`. Its runs are born in that space, which is created when missing. Web's Cron page and Run cron palette show a cron only in the space of that name, ignoring case; a cron with no space shows in every space. Set or change `space:` only when the human asks.
 
 Cron output starts a fresh managed thread. That thread is read-only in Slack; follow-up happens in its Web conversation (the report root's footer links it).
 

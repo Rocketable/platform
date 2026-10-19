@@ -17,6 +17,8 @@ func (s *Server) pageCall(ctx context.Context, request any) (any, error) {
 		return s.getPage(ctx, request)
 	case *ListPagesRequest:
 		return s.listPages(ctx)
+	case *TabsRequest:
+		return s.tabs(ctx, request)
 	default:
 		return &ProtocolResponse{ProtoSha256: protoSHA256}, nil
 	}
