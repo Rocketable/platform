@@ -1056,6 +1056,8 @@ type SidebarSession struct {
 	Offline   bool
 	// SpaceID is the Web space the session was born in, empty for none.
 	SpaceID string
+	// Reply is a remote OpenCode session's newest assistant text, read when its last seen turn ended.
+	Reply string
 }
 
 // SidebarSessions yields pinned records first, then recent-first, bytewise-ID order.
@@ -1085,7 +1087,8 @@ SELECT
     '' AS server,
     '' AS directory,
     FALSE AS offline,
-    COALESCE(c.space_id, '') AS space_id
+    COALESCE(c.space_id, '') AS space_id,
+    '' AS reply
 FROM visible_chats c
 -- Exception to the no-subquery rule: keep the history check per conversation and stop at its
 -- first entry. A CTE would read every stored entry on each refresh, about twice as slow.
@@ -1098,7 +1101,7 @@ LEFT JOIN session_tags t ON t.conversation_id = c.conversation_id
 WHERE h.found OR r.conversation_id IS NOT NULL
 ), remote AS (
 SELECT o.conversation_id, '', '', convert_to(o.title, 'UTF8'), o.updated_at, o.running, o.pinned, o.name, '', COALESCE(t.tags, '[]'::jsonb),
-    o.server, o.directory, o.synced_at < now() - interval '15 seconds', ''
+    o.server, o.directory, o.synced_at < now() - interval '15 seconds', '', COALESCE(o.reply, '')
 FROM opencode_sessions o
 LEFT JOIN session_tags t ON t.conversation_id = o.conversation_id
 -- Rows of servers no longer configured stay stored, hidden, and return with their server.
@@ -1121,7 +1124,7 @@ ORDER BY pinned DESC, COALESCE(updated, '0001-01-01 00:00:00+00'::timestamptz) D
 				tags    []byte
 				updated sql.NullTime
 			)
-			if err := rows.Scan(&row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID); err != nil {
+			if err := rows.Scan(&row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
 				return
 			}

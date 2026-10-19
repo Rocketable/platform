@@ -30,6 +30,8 @@ message Session {
   bool offline = 19;
   // The Web space the session was born in, empty for none.
   string space_id = 20;
+  // A remote OpenCode session's newest assistant text, read when its last seen turn ended.
+  string reply = 21;
 }
 
 message HistoryRequest {

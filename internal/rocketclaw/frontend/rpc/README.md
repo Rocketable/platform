@@ -449,7 +449,8 @@ OpenCode's terminal origin check still holds, and lets only pages on the same ho
 frame it. Everyone the Web admits gets full control of every configured OpenCode
 server, including its shell. Remote sessions are listed from a copy RocketClaw
 syncs every 5 seconds; once a day the server's full list removes copies of sessions
-it no longer has. `Prompt` refuses their `opencode:` IDs. People tag remote sessions
+it no longer has. When a sync sees a session's turn end, it also copies the text of
+its newest assistant message, which the Web's notification shows. `Prompt` refuses their `opencode:` IDs. People tag remote sessions
 with any tag and RocketClaw sessions with tags their agent allows.
 
 Phones get the secure page that voice needs from the `web.tsnet` listener (see the

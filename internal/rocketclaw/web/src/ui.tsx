@@ -1123,6 +1123,8 @@ function TabPlacement() {
 }
 
 // An open session tab whose turn ends raises a desktop notification that opens it, unless it is the tab in view.
+// It is titled by the session's name, else its agent, or a remote OpenCode session by its tab title, and shows
+// the start of the reply: a RocketClaw row's preview is its last message, an OpenCode row's reply its last answer.
 // ponytail: rows refresh on the sidebar poll, so a turn shorter than a poll goes unseen and a hidden window's
 // throttled timers can delay the notification; server push would fix both. Every window that saw the turn notifies
 // under the session's tag, so the system shows one notification, even while another window has the tab in view.
@@ -1138,10 +1140,12 @@ function TabNotifications() {
       const path = sessionPath(row.id);
       if (!state.tabs.some((tab) => tab.path === path) || (document.hasFocus() && state.active === path)) continue;
       // A notification replacing one with its tag alerts again in Chromium only with renotify, which TypeScript's DOM types omit.
-      const options = { body: "Finished answering", tag: row.id, renotify: true };
+      const reply = cleanText((row.server ? row.reply : row.preview) ?? "", {}).replace(/\s+/g, " ").trim();
+      const options = { body: reply.length > 200 ? `${reply.slice(0, 199)}…` : reply || "Finished answering", tag: row.id, renotify: true };
+      const title = row.server || !row.agent ? sessionTitle(row, false) : row.name || row.agent;
       let notification: Notification;
       // Android Chrome shows notifications only from a service worker, which this app lacks: its constructor throws.
-      try { notification = new Notification(cleanText(sessionTitle(row, false), {}), options); } catch { return; }
+      try { notification = new Notification(cleanText(title, {}), options); } catch { return; }
       notification.onclick = () => { focus(); navigate(path); notification.close(); };
     }
   }, [rows, state.tabs, state.active]);

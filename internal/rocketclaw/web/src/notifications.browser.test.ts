@@ -16,7 +16,7 @@ test("an open RocketClaw or OpenCode tab that finishes answering raises a deskto
   const { chromium: engine } = await import(playwright!);
   let rows: Session[] = [
     { id: "chat", agent: "main", preview: "Chat work", running: true },
-    { id: "opencode:box:ses_a", preview: "Alpha work", server: "box", directory: "/srv/app", running: true },
+    { id: "opencode:box:ses_a", preview: "Alpha work", server: "box", directory: "/srv/app", running: true, reply: "All **green**:\n\n- 12 tests pass" },
     { id: "idle", agent: "main", preview: "Idle work" },
     { id: "closed", agent: "main", preview: "Closed work", running: true },
   ];
@@ -83,17 +83,19 @@ test("an open RocketClaw or OpenCode tab that finishes answering raises a deskto
     await page.waitForFunction(() => window.asked);
 
     // In a focused window, only the tab not in view notifies; a row never seen running, or without a tab, stays quiet.
+    // An OpenCode notification keeps the tab title and shows the start of its reply as plain text.
     rows = rows.map((row) => ({ ...row, running: false }));
     await polls();
-    expect(await notes()).toEqual([{ title: "Alpha work", body: "Finished answering", tag: "opencode:box:ses_a", closed: false }]);
+    expect(await notes()).toEqual([{ title: "Alpha work", body: "All green: - 12 tests pass", tag: "opencode:box:ses_a", closed: false }]);
 
-    // With the window in the background, the active tab notifies too.
+    // With the window in the background, the active tab notifies too. An unnamed RocketClaw session is titled by
+    // its agent and shows its last message, cut to 200 characters.
     rows = rows.map((row) => row.id === "chat" ? { ...row, running: true } : row);
     await polls();
     await page.evaluate(() => { window.focused = false; });
-    rows = rows.map((row) => ({ ...row, running: false }));
+    rows = rows.map((row) => ({ ...row, running: false, preview: row.id === "chat" ? `Chat work\n${"x".repeat(300)}` : row.preview }));
     await polls();
-    expect((await notes()).slice(1)).toEqual([{ title: "Chat work", body: "Finished answering", tag: "chat", closed: false }]);
+    expect((await notes()).slice(1)).toEqual([{ title: "main", body: `Chat work ${"x".repeat(189)}…`, tag: "chat", closed: false }]);
 
     // Clicking a notification opens its tab and closes it.
     await page.evaluate(() => (window.notes[0] as unknown as Notification).onclick!(new Event("click")));
