@@ -849,16 +849,16 @@ function join(tabs: Tab[], path: string, group: string, space: string) {
   return rest.toSpliced(rest.findLastIndex((item) => item.group === group) + 1, 0, { path, preview: tab?.space === space && tab.preview, group, space });
 }
 
-// New session is one location, so the space that opens it takes its tab, out of any group; a pinned one already shows everywhere.
+// New session is one location, so the space that opens it takes its tab, out of any group, keeping its pin.
 // Like every tab moved between spaces, it becomes permanent, so each space keeps at most one preview tab.
 function home(tabs: Tab[], space: string) {
-  return tabs.some((tab) => tab.path === "/") ? tabs.map((tab) => tab.path === "/" && !tab.pinned && tab.space !== space ? { path: "/", space } : tab) : [...tabs, { path: "/", space }];
+  return tabs.some((tab) => tab.path === "/") ? tabs.map((tab) => tab.path === "/" && tab.space !== space ? { path: "/", pinned: tab.pinned, space } : tab) : [...tabs, { path: "/", space }];
 }
 
 // An opened location replaces the current space's preview tab, or else opens right of the active tab, inside the active tab's group.
-// Activating any other tab enters its space, where it becomes the last active tab, and expands its group; pinned tabs show in every space.
+// Activating any other tab enters its space, where it becomes the last active tab, and expands its group.
 function openTab(state: TabState, path: string): TabState {
-  const open = state.tabs.find((tab) => tab.path === path), current = open && !open.pinned && path !== "/" ? open.space! : state.space;
+  const open = state.tabs.find((tab) => tab.path === path), current = open && path !== "/" ? open.space! : state.space;
   const preview = state.tabs.findIndex((tab) => tab.preview && tab.space === current);
   const group = state.tabs.find((tab) => tab.path === state.active && tab.space === current)?.group;
   const at = preview >= 0 ? preview : state.tabs.findIndex((tab) => tab.path === state.active) + 1 || state.tabs.length;
@@ -885,7 +885,7 @@ function loadTabs(owner: string | undefined, path: string): TabState {
   }
   // Tabs saved by other builds, or left in a lost space or group, belong to the first space and no group.
   tabs = (tabs.some((tab) => tab.path === path) ? tabs : [...tabs, { path, space: view.space }]).map(({ group, space, ...tab }) => ({ ...tab,
-    group: view.groups.some((item) => item.id === group) ? group : undefined, space: tab.pinned || view.spaces.some((item) => item.id === space) ? space : view.spaces[0].id }));
+    group: view.groups.some((item) => item.id === group) ? group : undefined, space: view.spaces.some((item) => item.id === space) ? space : view.spaces[0].id }));
   return openTab({ owner, tabs: arrange(tabs), active: path, ...view }, path);
 }
 
@@ -908,8 +908,8 @@ function useTabs() {
   const update = (change: (tabs: Tab[]) => Tab[]) => setState((current) => ({ ...current, tabs: arrange(change(current.tabs)) }));
   const regroup = (match: (tab: Tab) => boolean, group?: string) => update((tabs) => tabs.map((tab) => match(tab) ? { ...tab, group } : tab));
   const edit = (id: string, change: Partial<TabGroup>) => setState((current) => ({ ...current, groups: current.groups.map((group) => group.id === id ? { ...group, ...change } : group) }));
-  // The strip and menus show only the current space's tabs and groups, plus the pinned tabs.
-  const shown = state.tabs.filter((tab) => tab.pinned || tab.space === state.space);
+  // The strip and menus show only the current space's tabs and groups.
+  const shown = state.tabs.filter((tab) => tab.space === state.space);
   const groups = state.groups.filter((group) => shown.some((tab) => tab.group === group.id));
   // Closing the active tab activates the target, else its right neighbour, else its left one, in this space; an emptied space gets New session.
   const close = (paths: string[], target?: string) => {
@@ -922,7 +922,7 @@ function useTabs() {
   };
   // Entering a space returns to its last active tab, else its first tab, else New session.
   const enter = (id: string, spaces = state.spaces) => {
-    const there = state.tabs.filter((tab) => tab.pinned || tab.space === id), last = spaces.find((space) => space.id === id)?.last;
+    const there = state.tabs.filter((tab) => tab.space === id), last = spaces.find((space) => space.id === id)?.last;
     const path = (there.find((tab) => tab.path === last) ?? there.find((tab) => !tab.pinned))?.path ?? "/";
     setState(openTab({ ...state, spaces, space: id }, path));
     if (path !== pathname) navigate(path);
@@ -936,7 +936,7 @@ function useTabs() {
     // Deleting a space moves its tabs, made permanent, and their groups to the first remaining space.
     deleteSpace: () => {
       const spaces = state.spaces.filter((space) => space.id !== state.space);
-      setState(openTab({ ...state, spaces, space: spaces[0].id, tabs: state.tabs.map((tab) => tab.space === state.space ? { path: tab.path, group: tab.group, space: spaces[0].id } : tab) }, state.active));
+      setState(openTab({ ...state, spaces, space: spaces[0].id, tabs: state.tabs.map((tab) => tab.space === state.space ? { path: tab.path, pinned: tab.pinned, group: tab.group, space: spaces[0].id } : tab) }, state.active));
     },
     promote: (path: string) => { if (state.tabs.some((tab) => tab.path === path && tab.preview)) update((tabs) => tabs.map((tab) => tab.path === path ? { ...tab, preview: false } : tab)); },
     // A moved tab takes the group of the tab it lands on.
@@ -949,7 +949,7 @@ function useTabs() {
         { key: "close-others", label: "Close others", run: () => close(unpinned(shown).filter((other) => other !== path), path) },
         { key: "close-right", label: "Close to the right", run: () => close(unpinned(shown.slice(shown.findIndex((tab) => tab.path === path) + 1)), path) },
         { key: "close-all", label: "Close all", run: () => close(unpinned(shown)) },
-        { key: "pin", label: tab?.pinned ? "Unpin" : "Pin", run: () => update((tabs) => tabs.map((tab) => tab.path !== path ? tab : tab.pinned ? { path, space: state.space } : { path, pinned: true })) },
+        { key: "pin", label: tab?.pinned ? "Unpin" : "Pin", run: () => update((tabs) => tabs.map((tab) => tab.path !== path ? tab : tab.pinned ? { path, space: state.space } : { path, pinned: true, space: state.space })) },
         ...tab?.pinned ? [] : [
           { key: "group-new", label: "Add to new group", run: () => {
             const id = crypto.getRandomValues(new Uint32Array(2)).join("-");
@@ -959,9 +959,9 @@ function useTabs() {
           } },
           ...groups.filter((group) => group.id !== tab?.group).map((group) => ({ key: `group-${group.id}`, label: `Add to group "${groupName(group)}"`, run: () => update((tabs) => join(tabs, path, group.id, state.space)) })),
           ...tab?.group ? [{ key: "group-remove", label: "Remove from group", run: () => regroup((item) => item.path === path) }] : [],
-          // Moving a tab makes it permanent and takes it out of its group; moving the active tab follows it to its new space.
-          ...state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move to "${space.name}"`, space: space.name, run: () => setState(openTab({ ...state, tabs: state.tabs.map((tab) => tab.path === path ? { path, space: space.id } : tab) }, state.active)) })),
         ],
+        // Moving a tab makes it permanent and takes it out of its group, keeping its pin; moving the active tab follows it to its new space.
+        ...state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move to "${space.name}"`, space: space.name, run: () => setState(openTab({ ...state, tabs: state.tabs.map((tab) => tab.path === path ? { path, pinned: tab.pinned, space: space.id } : tab) }, state.active)) })),
         { key: "placement", label: `Move tabs to ${next}`, run: () => place(next) },
       ];
     },
@@ -1133,7 +1133,7 @@ function TabItem({ tab, description, rule, active, vertical, editing, endEdit, p
       </div>
     </TooltipTrigger><TooltipContent side="bottom">{title}</TooltipContent></Tooltip>
     {active ? <button type="button" aria-label="Tab actions" className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground last:mr-1 hover:bg-accent hover:text-foreground" onClick={(event) => openMenu(event.currentTarget)}><Ellipsis className="size-3.5" /></button> : null}
-    {tab.pinned ? null : <TabClose title={title} running={!!session.running} active={active} close={close} />}
+    {tab.pinned ? <span className="mr-1 flex size-6 shrink-0 items-center justify-center text-muted-foreground"><Pin aria-label="Pinned" className="size-3.5" /></span> : <TabClose title={title} running={!!session.running} active={active} close={close} />}
   </div>;
 }
 

@@ -407,8 +407,9 @@ active tab.
   as a permanent tab. Sending the first message from New session turns that tab
   into the new session's tab.
 - **Pinned tabs** are browser-only (unlike **Pin session**, which is shared and
-  orders search). They stay first, show only their icon on top placement, have no
-  close button, and survive Close others, Close to the right, and Close all.
+  orders search). They stay first, show only their icon on top placement, show a
+  pin where the close button would be, and survive Close others, Close to the
+  right, and Close all.
 - **Context menu.** Right-click a tab, press Shift+F10 or the menu key on a focused
   tab, or use the **…** button on the active tab (for touch) to reach Close,
   Close others, Close to the right, Close all, Pin/Unpin, and Move tabs to
@@ -444,8 +445,9 @@ active tab.
   active tab, and activating any hidden tab, including with Cmd/Ctrl+[ and ],
   expands its group. Arrow keys skip hidden tabs. Headers report
   `aria-expanded`.
-- **Spaces.** Every unpinned tab belongs to one named space, and the strip shows
-  only the current space's tabs plus the pinned tabs, which show in every space.
+- **Spaces.** Every tab, pinned or not, belongs to one named space, and the strip
+  shows only the current space's tabs. A pinned tab saved without a space by an
+  older build belongs to the first space.
   The space button at the start of the strip names the current space; its menu
   lists the spaces to switch to and offers **New space**, **Rename space**, and
   **Delete space**. A space is named in place of the button: Enter or clicking
@@ -454,11 +456,11 @@ active tab.
   entering an empty space, opening New session, or closing a space's last tab
   moves that tab into the current space. Opening a location that is open in
   another space switches to that space. The tab menu's **Move to space** submenu
-  lists each other space, and moving the active tab follows it; the command
+  lists each other space, a moved pinned tab stays pinned, and moving the active tab follows it; the command
   palette offers the same moves as **Tabs: Move to "<space>"**. Deleting a space
   moves its tabs to the first space; the last space cannot be deleted. A tab
   moved between spaces becomes permanent, so each space keeps at most one preview
-  tab. Unpinning puts a tab in the current space. Close others, Close to the
+  tab. Pinning and unpinning keep a tab in its space. Close others, Close to the
   right, Close all, Cmd/Ctrl+[ and ], and the preview tab act only within the
   current space. Screen readers hear each unpinned tab's group, if any, and space
   as its description, such as “Group Work, Space: Main”.

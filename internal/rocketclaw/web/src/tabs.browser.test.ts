@@ -119,6 +119,7 @@ test("preview tabs, promotion, pins, close commands, middle-click, and drag surv
   await menu(page, "Alpha", "Pin");
   expect(await names(page)).toEqual(["Alpha", "hello", "Bravo", "Charlie", "Delta"]);
   expect(await tab("Alpha").innerText()).toBe("");
+  expect(await strip(page).locator('[aria-label="Pinned"]').count()).toBe(1);
   await menu(page, "Bravo", "Close to the right");
   expect(await names(page)).toEqual(["Alpha", "hello", "Bravo"]);
   await page.waitForURL(`**${href("bravo")}`);
@@ -712,12 +713,23 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   expect(await names(page)).toEqual(["Alpha", "Charlie", "New session"]);
   expect(await space.getAttribute("aria-label")).toBe("Space: Main");
 
+  // A pinned tab stays in its space and moves, still pinned, like any other tab.
   await menu(page, "Alpha", "Pin");
   await choose("Ops", "menuitemradio");
   await page.waitForURL(`**${href("bravo")}`);
+  expect(await names(page)).toEqual(["Bravo"]);
+  await choose("Main", "menuitemradio");
+  await page.waitForURL(`${origin}/`);
+  await menu(page, "Alpha", "Move to space", "Ops");
+  expect(await names(page)).toEqual(["Charlie", "New session"]);
+  await choose("Ops", "menuitemradio");
+  await page.waitForURL(`**${href("bravo")}`);
   expect(await names(page)).toEqual(["Alpha", "Bravo"]);
+  await tab("Alpha").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Unpin", exact: true }).waitFor();
+  await page.keyboard.press("Escape");
 
-  // Deleting a space moves its tabs to the first space, and the last space stays.
+  // Deleting a space moves its tabs, pinned ones still pinned, to the first space, and the last space stays.
   await choose("Delete space");
   expect(await space.getAttribute("aria-label")).toBe("Space: Main");
   expect(await names(page)).toEqual(["Alpha", "Charlie", "New session", "Bravo"]);
@@ -726,6 +738,16 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   await page.getByRole("menuitem", { name: "Rename space" }).waitFor();
   expect(await page.getByRole("menuitem").allInnerTexts()).toEqual(["New space", "Rename space"]);
   await page.keyboard.press("Escape");
+
+  // A pinned tab saved without a space, as older builds stored it, shows only in the first space.
+  await page.evaluate(() => localStorage.setItem("tabs:tester", JSON.stringify(JSON.parse(localStorage.getItem("tabs:tester")!).map((tab: { pinned?: boolean; space?: string }) => ({ ...tab, space: tab.pinned ? undefined : tab.space })))));
+  await page.reload();
+  await tab("Bravo").waitFor();
+  await choose("New space");
+  await page.getByRole("textbox", { name: "Space name" }).waitFor();
+  await page.keyboard.press("Escape");
+  expect(await names(page)).toEqual(["New session"]);
+  await choose("Delete space");
 
   // Unreadable spaces reset to Main and keep every tab; the menu also sits atop left tabs.
   await page.evaluate(() => localStorage.setItem("tab-groups-chrome-spaces:tester", "{not json"));
@@ -827,32 +849,32 @@ test("a group lives in one space: menus offer only this space's groups, groups m
   expect(await tab("Alpha").getAttribute("aria-description")).toBe("Space: Main");
   await menu(page, "Charlie", "Pin");
 
-  // Reload keeps spaces, groups, colors, collapsed state, and memberships; the pinned tab shows everywhere in no group.
+  // Reload keeps spaces, groups, colors, collapsed state, and memberships; the pinned tab stays in Main in no group.
   await page.reload();
   await tab("Charlie").waitFor();
   expect(await order(page)).toEqual(["Charlie", "Alpha"]);
   await chooseSpace(page, "Ops", "menuitemradio");
   await page.waitForURL(`${origin}/`);
-  expect(await order(page)).toEqual(["Charlie", "New session", "Work"]);
+  expect(await order(page)).toEqual(["New session", "Work"]);
   expect(await header.getAttribute("aria-expanded")).toBe("false");
   await edit.click();
   expect(await green.isChecked()).toBe(true);
   await page.keyboard.press("Escape");
   await header.click();
-  expect(await order(page)).toEqual(["Charlie", "New session", "Work", "Bravo"]);
+  expect(await order(page)).toEqual(["New session", "Work", "Bravo"]);
   expect(await tab("Bravo").getAttribute("aria-description")).toBe("Group Work, Space: Ops");
-  expect(await tab("Charlie").getAttribute("aria-description")).toBeNull();
 
   // New tab in group brings New session over from Main.
   await chooseSpace(page, "Main", "menuitemradio");
   await page.getByRole("button", { name: "New session", exact: true }).click();
   await page.waitForURL(`${origin}/`);
   expect(await order(page)).toEqual(["Charlie", "New session", "Alpha"]);
+  expect(await tab("Charlie").getAttribute("aria-description")).toBeNull();
   await chooseSpace(page, "Ops", "menuitemradio");
   await page.waitForURL(`**${href("bravo")}`);
   await editor("New tab in group");
   await page.waitForURL(`${origin}/`);
-  expect(await order(page)).toEqual(["Charlie", "Work", "Bravo", "New session"]);
+  expect(await order(page)).toEqual(["Work", "Bravo", "New session"]);
   expect(await tab("New session").getAttribute("aria-description")).toBe("Group Work, Space: Ops");
 
   // Deleting Ops moves the collapsed group, intact, to Main.
