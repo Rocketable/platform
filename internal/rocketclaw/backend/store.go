@@ -1167,27 +1167,21 @@ func (s *SessionService) ChatOriginFacts(ctx context.Context, id string) iter.Se
 	return func(yield func(ChatOriginFacts, error) bool) {
 		rows, err := s.db.QueryContext(ctx, `WITH `+visibleChatsSQL+`,
 visible AS (SELECT conversation_id, created_by, conversation_id LIKE 'web:cron:%' OR conversation_id LIKE 'web:one-off-cron:%' AS named_run FROM visible_chats),
-creating_entries AS (
-    SELECT c.conversation_id, e.entry_json->>'sync_source_conversation_id' AS source,
-        e.entry_json->>'sync_source_entry_id' AS source_entry_id
+-- Per-chat lookups only: joining a CTE of creating sources made the planner rescan it for every chat.
+-- json_to_record parses each json entry once; every ->> on it parses the whole entry again.
+attributed_conversations AS (
+    SELECT c.conversation_id, c.created_by, COALESCE(e.source, source.conversation_id, '') AS creating_source,
+        CASE WHEN c.named_run THEN substr(c.conversation_id, 5) ELSE COALESCE(e.source, source.conversation_id) END AS producer_id
     FROM visible c
     -- Exception to the no-subquery rule: no CTE can stop at a chat's first entry, so a CTE reads all history.
-    CROSS JOIN LATERAL (
-        SELECT entry_json FROM session_entries WHERE conversation_id = c.conversation_id ORDER BY id LIMIT 1
-    ) e
-    WHERE NOT c.named_run AND (c.conversation_id NOT LIKE 'slack-thread:%' OR c.created_by = $2)
-),
-creating_sources AS (
-    SELECT conversation_id, source FROM creating_entries WHERE source IS NOT NULL
-    UNION ALL
-    SELECT e.conversation_id, COALESCE(source.conversation_id, '') FROM creating_entries e
-    LEFT JOIN session_entries source ON source.id = e.source_entry_id::bigint
-    WHERE e.source IS NULL
-),
-attributed_conversations AS (
-    SELECT c.conversation_id, c.created_by, COALESCE(s.source, '') AS creating_source,
-        CASE WHEN c.named_run THEN substr(c.conversation_id, 5) ELSE s.source END AS producer_id
-    FROM visible c LEFT JOIN creating_sources s ON s.conversation_id = c.conversation_id
+    LEFT JOIN LATERAL (
+        -- A known source leaves source_entry_id NULL, so no source entry is read for it.
+        SELECT f.sync_source_conversation_id AS source,
+            CASE WHEN f.sync_source_conversation_id IS NULL THEN f.sync_source_entry_id::bigint END AS source_entry_id
+        FROM session_entries, json_to_record(entry_json) AS f(sync_source_conversation_id text, sync_source_entry_id text)
+        WHERE conversation_id = c.conversation_id ORDER BY id LIMIT 1
+    ) e ON NOT c.named_run AND (c.conversation_id NOT LIKE 'slack-thread:%' OR c.created_by = $2)
+    LEFT JOIN session_entries source ON source.id = e.source_entry_id
 )
 SELECT c.conversation_id, c.created_by, COALESCE(m.external_conversation_id, ''), COALESCE(m.agent, ''),
     COALESCE(m.managed_conversation_id, ''), COALESCE(m.origin_pairs, 'null'), c.creating_source, COALESCE(producer.agent, '')
