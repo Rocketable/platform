@@ -436,10 +436,10 @@ active tab.
   group, and **Remove from group**. A group's header sits before its tabs: a
   colored chip with the name, or a color dot when unnamed. Clicking it collapses
   or expands the group. Right-click, Shift+F10, or the header's **…** button opens
-  the editor: name, nine colors, **New tab in group** (moves New session into the
-  group, or opens it there), **Ungroup**, and **Close group**, which closes the
-  members by the usual close rules. On the left, members sit under the header
-  behind a colored rule; on top, they get a colored underline. A tab opened while
+  the editor: name (saved on Enter or leaving the field), nine colors, **New tab
+  in group** (moves New session into the group, or opens it there), **Ungroup**,
+  and **Close group**, which closes the members by the usual close rules. On the
+  left, members sit under the header behind a colored rule; on top, they get a colored underline. A tab opened while
   a grouped tab is active joins that group. Pinned tabs are never grouped:
   pinning a tab removes it from its group. A collapsed group still shows its
   active tab, and activating any hidden tab, including with Cmd/Ctrl+[ and ],
