@@ -1938,6 +1938,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await runGroup.locator("details[open]").count()).toBe(0);
     cronHold.resolve("new-cron-chat");
     await cronPage.waitForURL("**/s/bmV3LWNyb24tY2hhdA");
+    await cronPage.getByRole("tab", { name: "daily", exact: true }).waitFor();
     await cronPage.close();
 
     ctrl.history = Array.from({ length: 20 }, (_, i) => [

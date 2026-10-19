@@ -663,7 +663,7 @@ Bare `$goal` privately shows usage, and `$stop` ends the goal.
 The Stash button and shortcut still hold the entire draft literally, including
 any `$command` text. Slack has no commands: `$` text in a Slack mention reaches
 the agent as ordinary text.
-Run cron opens a new session immediately. The job still runs privately, but its turn shows live in the chat, with **Working…**, and is replaced by the copied history when it finishes. The same holds for every hidden cron or External MCP run that reports to a chat.
+Run cron opens a new session immediately, titled by the cron's name until its first message arrives. The job still runs privately, but its turn shows live in the chat, with **Working…**, and is replaced by the copied history when it finishes. The same holds for every hidden cron or External MCP run that reports to a chat.
 A chat that began as a cron run or an external MCP call starts with a collapsed origin card. Use show more to see its details; the card scrolls with the messages. An ordinary chat has no origin card.
 The composer's session buttons appear only on desktop; on mobile, the command
 palette offers the same actions.
