@@ -3,6 +3,7 @@ package cronfrontend
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"os"
@@ -22,6 +23,15 @@ import (
 func newCronScheduleStore(t *testing.T) *backend.SessionService {
 	t.Helper()
 
+	store, _ := newCronScheduleStoreDB(t)
+
+	return store
+}
+
+// newCronScheduleStoreDB also opens the store's database, for a runner that records its run's turn as the backend does.
+func newCronScheduleStoreDB(t *testing.T) (*backend.SessionService, *sql.DB) {
+	t.Helper()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +48,11 @@ func newCronScheduleStore(t *testing.T) *backend.SessionService {
 		}
 	})
 
-	return store
+	db, err := sql.Open("pgx", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	return store, db
 }
 
 func TestJobsProjectsDefinitionsAndPersistedTriggers(t *testing.T) {
@@ -57,7 +71,7 @@ func TestJobsProjectsDefinitionsAndPersistedTriggers(t *testing.T) {
 	require.NoError(t, err)
 
 	states := manager.scheduledStates(definitions, start)
-	require.NoError(t, store.SyncCronSchedules(states, start))
+	require.NoError(t, store.SyncCronSchedules(states))
 
 	jobs, err := manager.Jobs()
 	require.NoError(t, err)
@@ -557,7 +571,7 @@ func TestScanScheduledUsesLatestDefinitionAndPersistsState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := store.SyncCronSchedules(m.scheduledStates(defs, start), start); err != nil {
+	if err := store.SyncCronSchedules(m.scheduledStates(defs, start)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -604,7 +618,7 @@ func TestScanScheduledInvalidLiveChannelRunsNothingUntilRepaired(t *testing.T) {
 	m.now = func() time.Time { return start }
 	definitions, err := loadDefinitionsIn(workspace, ".", m.channels)
 	require.NoError(t, err)
-	require.NoError(t, store.SyncCronSchedules(m.scheduledStates(definitions, start), start))
+	require.NoError(t, store.SyncCronSchedules(m.scheduledStates(definitions, start)))
 
 	require.NoError(t, os.WriteFile(cronPath, []byte("---\nschedule: 1s\nchannel: '#private'\n---\ninvalid"), 0o644))
 
@@ -639,11 +653,15 @@ func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store := newCronScheduleStore(t)
-	runStarted := make(chan struct{}, 2)
+	store, db := newCronScheduleStoreDB(t)
+	runStarted := make(chan error, 2)
 	release := make(chan struct{})
-	m := New(workspace, ".", []string{"#ops"}, store, &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
-		runStarted <- struct{}{}
+	m := New(workspace, ".", []string{"#ops"}, store, &runnerMock{RunFunc: func(ctx context.Context, _, _ string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+		// As the backend's runner does, the run's conversation holds a running turn while the run goes.
+		_, errConversation := db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, cron_path) VALUES ($1, 'helper', 'cron', 'cron_run', FALSE, $2)`, progress.ConversationID, progress.Run.Path)
+
+		_, errTurn := db.ExecContext(ctx, `INSERT INTO turns (id, conversation_id, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $1, 0, 0)`, progress.ConversationID)
+		runStarted <- errors.Join(errConversation, errTurn)
 
 		<-release
 
@@ -658,7 +676,7 @@ func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := store.SyncCronSchedules(m.scheduledStates(defs, start), start); err != nil {
+	if err := store.SyncCronSchedules(m.scheduledStates(defs, start)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -668,7 +686,8 @@ func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 	}
 
 	select {
-	case <-runStarted:
+	case err := <-runStarted:
+		require.NoError(t, err)
 	case <-time.After(time.Second):
 		t.Fatal("scheduled cronjob did not run")
 	}
@@ -678,8 +697,8 @@ func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 	}
 
 	select {
-	case <-runStarted:
-		t.Fatal("same-file scheduled cronjob overlapped or replayed backlog")
+	case err := <-runStarted:
+		t.Fatal("same-file scheduled cronjob overlapped or replayed backlog", err)
 	default:
 	}
 

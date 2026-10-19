@@ -1,6 +1,7 @@
 package rocketcode
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -253,8 +254,8 @@ type permissionReviewRequest struct {
 	Reviewer         string                                  `json:"reviewer"`
 	ReviewerEmbedded bool                                    `json:"reviewer_embedded"`
 	ReviewContext    []responses.ResponseInputItemUnionParam `json:"-"`
-	// Review is the review's child-session key segment, from the reviewed call's tool call key.
-	Review string `json:"-"`
+	// Review is the review's child-session key under the reviewing session, which the reviewed call starts.
+	Review ChildKey `json:"-"`
 	// Turn is the review's turn in that history, from the key of the call it checks (see ReviewTurn).
 	Turn string `json:"-"`
 }
@@ -988,14 +989,22 @@ func (l *looper) openTurn(ctx context.Context, input *PromptInput) (step turnSte
 			step.AppliedInputIDs = []string{input.ID}
 		}
 
-		if err := saveStep(ctx, l.Journal, step.Record.TurnID, &step); err != nil {
+		if err := l.saveTurn(ctx, &step.Record, nil, step.AppliedInputIDs); err != nil {
 			return step, nil, nil, nil, err
 		}
 
 		return step, turnItems, nil, errInput, nil
 	}
 
-	// A resumed turn's Code Mode records were saved on their own, not in its step.
+	// A resumed turn's lists and Code Mode records were saved on their own, not in its step.
+	for list, items := range map[TurnList]*[]json.RawMessage{TurnReplayInput: &step.Record.ReplayInput, TurnOutputTrace: &step.Record.OutputTrace, TurnTrace: &step.Trace} {
+		if *items, err = l.Journal.Items(context.WithoutCancel(ctx), input.TurnID, list); err != nil {
+			return step, nil, nil, nil, fmt.Errorf("load journaled %s: %w", list, err)
+		}
+	}
+
+	l.observations.saved = step
+
 	calls, err := l.Journal.CodeModeCalls(context.WithoutCancel(ctx), input.TurnID)
 	if err != nil {
 		return step, nil, nil, nil, fmt.Errorf("load code mode calls: %w", err)
@@ -1031,19 +1040,56 @@ func (l *looper) openTurn(ctx context.Context, input *PromptInput) (step turnSte
 	return step, turnItems, pending, nil, nil
 }
 
-// saveTurn journals the turn's items, trace, and the provider response whose calls are not yet appended.
+// saveTurn journals the turn's step, with the provider response whose calls are not yet appended,
+// and of its record's items and trace only those that changed since its last save.
 func (l *looper) saveTurn(ctx context.Context, record *SessionEntry, resp *responses.Response, applied []string) error {
-	step := turnStep{Record: *record, AppliedInputIDs: applied}
+	o := l.observations
+	step := turnStep{Record: *record, AppliedInputIDs: applied, Revision: o.saved.Revision + 1}
 
-	l.observations.mu.Lock()
-	step.Trace = slices.Clone(l.observations.trace)
-	l.observations.mu.Unlock()
+	o.mu.Lock()
+	step.Trace = slices.Clone(o.trace)
+	o.mu.Unlock()
 
 	if resp != nil {
 		step.Response = json.RawMessage(resp.RawJSON())
 	}
 
-	return saveStep(ctx, l.Journal, record.TurnID, &step)
+	head := step
+	head.Record.ReplayInput, head.Record.OutputTrace, head.Trace = nil, nil, nil
+
+	raw, err := json.Marshal(&head)
+	if err != nil {
+		return fmt.Errorf("encode journal turn %q: %w", record.TurnID, err)
+	}
+
+	lists := []TurnItems{{List: TurnReplayInput, Items: step.Record.ReplayInput}, {List: TurnOutputTrace, Items: step.Record.OutputTrace}, {List: TurnTrace, Items: step.Trace}}
+	for i, saved := range [][]json.RawMessage{o.saved.Record.ReplayInput, o.saved.Record.OutputTrace, o.saved.Trace} {
+		list := &lists[i]
+		for list.From < min(len(saved), len(list.Items)) && bytes.Equal(saved[list.From], list.Items[list.From]) {
+			list.From++
+		}
+
+		// Each item is encoded as it was within its encoded step, so it reads back as it always has.
+		changed := make([]json.RawMessage, 0, len(list.Items)-list.From)
+		for _, item := range list.Items[list.From:] {
+			encoded, err := json.Marshal(item)
+			if err != nil {
+				return fmt.Errorf("encode journal turn %q %s item: %w", record.TurnID, list.List, err)
+			}
+
+			changed = append(changed, encoded)
+		}
+
+		list.Items = changed
+	}
+
+	if err := l.Journal.SaveTurn(context.WithoutCancel(ctx), record.TurnID, raw, lists); err != nil {
+		return fmt.Errorf("save journal turn %q: %w", record.TurnID, err)
+	}
+
+	o.saved = step
+
+	return nil
 }
 
 func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Response, reviewContext []responses.ResponseInputItemUnionParam, doomLoop *doomLoopTrap, output chan<- ChatResponse) (hadToolCalls, compactionOnly bool, toolOutputs []dispatchedToolOutput, interrupted bool, err error) {
@@ -2111,7 +2157,7 @@ func (l *looper) dispatchToolCalls(
 // progress write reports it.
 func (l *looper) reviewToolCall(ctx context.Context, name, callID string, request *permissionReviewRequest, output chan<- ChatResponse) permissionReviewDecision {
 	request.ReviewContext = slices.Clone(l.permissionReviewInput)
-	request.Review = ReviewKey(l.observations.turnID, callID)
+	request.Review = ChildKey{Path: "/" + ReviewKey(l.observations.turnID, callID), Turn: l.observations.turnID, Call: callID}
 	request.Turn = ReviewTurn(CallKey(l.observations.turnID, callID))
 
 	decision := l.PermissionReviewer.reviewPermission(ctx, request, output)

@@ -12,7 +12,7 @@ const response = (query: string, matches: Match[] = [], terms: (string | [string
     const [text, start] = typeof term === "string" ? [term, query.indexOf(term)] : term;
     return { key: text.slice(0, text.indexOf(":")).toLowerCase(), text, start, end: start + text.length };
   }),
-  text: query, needle: query.toLowerCase(), matches: matches.map((match) => ({ field: "Preview", text: "", ...match })), messages: [], mentionIds: [], indexComplete: true, summariesComplete: true, ...extra,
+  text: query, needle: query.toLowerCase(), matches: matches.map((match) => ({ field: "Preview", text: "", ...match })), messages: [], mentionIds: [], ...extra,
 });
 
 // serve answers the App's requests with rows and a SearchSessions fixture, and records every API path.
@@ -22,7 +22,7 @@ function serve(rows: object[], search: (input: { query: string; filters?: boolea
     const url = new URL(request.url);
     paths.add(url.pathname);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search" });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents });
@@ -47,7 +47,7 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async (request) => {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner, upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner, upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: owner });
     if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "search" } });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-page" });
@@ -412,7 +412,6 @@ test("/search renders the server's groups, notices and pills", async () => {
     if (query === "agent:main" && requests.filter((request) => request.query === query).length === 1) await hold.promise;
     switch (query) {
       case "needle": return response(query, [{ conversationId: "third", field: "" }, { conversationId: "second", text: "Needle notes\nOther text" }, { conversationId: "fourth", field: "Origin", text: "cron source: /notes/needle.md" }], [], { messages: [message("1:0", "user", "Context before NEEDLE then needle"), message("1:1", "assistant", "A second needle response")] });
-      case "partial": return response(query, [], [], { indexComplete: false, summariesComplete: false });
       case "chat is:pinned": return response(query, [{ conversationId: "third", field: "Name", text: "Pinned conversation" }], ["is:pinned"]);
       case "outage tag:": return response(query, [{ conversationId: "fourth", field: "Name", text: "Origin chat" }]);
       case "prefix-agent:main agent:main": return response(query, [], [["agent:main", 18]]);
@@ -444,11 +443,6 @@ test("/search renders the server's groups, notices and pills", async () => {
     expect(await field.getByText("Origin", { exact: true }).count()).toBe(1);
     expect(await field.locator("mark").textContent()).toBe("needle");
     expect(requests).toEqual([{ query: "needle", messages: true }]);
-
-    await search.fill("partial");
-    await results.getByText("Message results may be incomplete while chats are still being indexed.").waitFor();
-    await results.getByText("Results may be incomplete while chat summaries are still loading.").waitFor();
-    expect(await results.getByText("No matches").count()).toBe(0);
 
     await search.fill("chat is:pinned"); // A saved query ending in a filter reopens with that filter.
     await results.getByRole("group", { name: "Pinned conversation" }).waitFor();
@@ -535,7 +529,7 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
   const rows = [
     { id: "third", name: "Pinned conversation", preview: "Other text", agent: "main", pinned: true },
     { id: "second", name: "", title: "", preview: "Needle notes\nOther text", agent: "main" },
-    { id: "opencode:box:ses", name: "Remote", preview: "Other text", server: "box", agent: "build", model: "anthropic/claude-opus-4-7" },
+    { id: "opencode:box:ses", kind: "REMOTE_OPENCODE", remoteSessionId: "ses", name: "Remote", preview: "Other text", server: "box", agent: "build", model: "anthropic/claude-opus-4-7" },
     { id: "md", name: "", preview: "**Done.** Updated the runbook", agent: "main" },
     { id: "long", name: "Weekly report about many unrelated things and then the deploy checklist", agent: "main" },
   ];
@@ -616,7 +610,7 @@ test("newer search replaces an in-flight search and retries errors", async () =>
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "chat", name: "A chat", preview: "" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "chat", name: "A chat", preview: "" }], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-race" });
     if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "search" } });
@@ -714,7 +708,7 @@ test("message matches jump after history loads and last close returns to the las
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "one", name: "First chat" }, { id: "two", name: "Second chat" }], owner, upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "one", name: "First chat" }, { id: "two", name: "Second chat" }], owner, upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: owner });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "jump" });
     if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "search" } });
@@ -827,7 +821,7 @@ test("search formats rows, windows around matches, and resolves tag names", asyn
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "formatted", name: "", preview, tags: ["x"], agent: "main" }, { id: "long", name: "Long chat", preview: "", agent: "main" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "formatted", name: "", preview, tags: ["x"], agent: "main" }, { id: "long", name: "Long chat", preview: "", agent: "main" }], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-format" });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });

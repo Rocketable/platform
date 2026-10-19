@@ -17,7 +17,7 @@ test("first Go row and composer choices arrive before the blocked tail", async (
     const iterator = listSessions(abort.signal, `${url}/api/ListSessions`);
     expect(await iterator.next()).toMatchObject({ done: false, value: {
       sessions: [{ id: "slack-thread:C1:1.1", title: "C1", agent: "main", updatedAt: "1970-01-01T00:00:02.123456Z", allowedAgents: ["main"] }],
-      owner: "alice", upstreamSuccess: false, summariesComplete: true,
+      owner: "alice", upstreamSuccess: false,
     } });
     const pending = iterator.next();
     const choices: AgentChoices = await call("ListAgents", { conversationId: "slack-thread:C1:1.1" });

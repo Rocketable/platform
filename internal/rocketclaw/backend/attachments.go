@@ -99,8 +99,13 @@ func (s *SessionService) AttachmentMetadata(ctx context.Context, conversationID,
 // TurnAttachments returns, in the order they were attached, the files turnID's final reply sends,
 // naming the owner of those its subagent sessions attached.
 func (s *SessionService) TurnAttachments(ctx context.Context, conversationID, turnID string) ([]protocol.OutboundAttachment, error) {
-	return queryRows(ctx, s.db, `SELECT id, COALESCE(NULLIF(conversation_id, $1), ''), name, mime_type, size, original_unverified FROM attachments
-WHERE (conversation_id = $1 OR starts_with(conversation_id, $1 || '/')) AND turn_id = $2 ORDER BY seq`, "turn attachments", func(row rowScanner) (protocol.OutboundAttachment, error) {
+	return queryRows(ctx, s.db, `WITH RECURSIVE roots AS (
+    SELECT $1::text AS id
+), `+descendantsSQL+`, owners AS (
+    SELECT id AS conversation_id FROM roots UNION ALL SELECT conversation_id FROM descendants
+)
+SELECT a.id, COALESCE(NULLIF(a.conversation_id, $1), ''), a.name, a.mime_type, a.size, a.original_unverified FROM owners o
+JOIN attachments a USING (conversation_id) WHERE a.turn_id = $2 ORDER BY a.seq`, "turn attachments", func(row rowScanner) (protocol.OutboundAttachment, error) {
 		var attachment protocol.OutboundAttachment
 		if err := row.Scan(&attachment.ID, &attachment.ConversationID, &attachment.Name, &attachment.MIMEType, &attachment.Size, &attachment.OriginalUnverified); err != nil {
 			return protocol.OutboundAttachment{}, fmt.Errorf("scan turn attachment: %w", err)
@@ -200,7 +205,7 @@ func (s *SessionService) RevertAttachmentMetadata(ctx context.Context, conversat
 	var raw json.RawMessage
 
 	err := queryScalar(ctx, s.db, "read reverted attachment owner", `SELECT e.entry_json->'replay_input'->split_part(m.revert_message_id, ':', 2)::integer
-    FROM managed_conversations m JOIN session_entries e ON e.conversation_id = m.conversation_id
+    FROM conversations m JOIN entries e ON e.conversation_id = m.conversation_id
         AND e.id = NULLIF(split_part(m.revert_message_id, ':', 1), '')::bigint
     WHERE m.conversation_id = $1 AND m.revert_message_id <> ''`, &raw, conversationID)
 	if err != nil {

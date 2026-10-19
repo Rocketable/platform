@@ -139,8 +139,8 @@ func startExternalMCPServer(
 				return externalmcp.SessionResult{}, fmt.Errorf("external_conversation_id %q has incomplete persisted state", externalConversationID)
 			}
 
-			channelID, threadTS, ok := protocol.SlackThreadTarget(session.ManagedConversationID)
-			if !ok {
+			channelID, threadTS := session.Thread.ChannelID, session.Thread.ThreadTS
+			if threadTS == "" {
 				return externalmcp.SessionResult{}, fmt.Errorf("external_conversation_id %q has invalid persisted managed conversation ID", externalConversationID)
 			}
 
@@ -188,7 +188,7 @@ func startExternalMCPServer(
 		managedConversationID := protocol.SlackThreadConversationID(reply.SlackReply.ChannelID, reply.SlackReply.ThreadTS)
 
 		createdConversationID = managedConversationID
-		if err := store.RegisterExternalMCPConversation(externalConversationID, managedAgent, &backend.ExternalMCPSessionState{Agent: usedAgent, PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, SlackChannel: slackChannel, OriginPairs: metadata}); err != nil {
+		if err := store.RegisterExternalMCPConversation(externalConversationID, managedAgent, &backend.ExternalMCPSessionState{Agent: usedAgent, PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, SlackChannel: slackChannel, OriginPairs: metadata, Thread: *reply.SlackReply}); err != nil {
 			return externalmcp.SessionResult{}, fmt.Errorf("persist external MCP conversation: %w", err)
 		}
 
@@ -278,13 +278,8 @@ func submitExternalMCPInput(ctx context.Context, turns frontend.Backend, usedAge
 
 	resultCh := inbound.EnableResponseWait()
 
-	if err := turns.CreateConversation(ctx, protocol.Conversation{ID: conversationID, Agent: usedAgent}); err != nil {
-		return externalmcp.SessionResult{}, false, fmt.Errorf("submit external MCP input to agent %q: %w", usedAgent, err)
-	}
-	errRun := turns.RunTurn(ctx, inbound)
-	errSync := turns.SyncConversation(context.WithoutCancel(ctx), conversationID, inbound.SyncDestination)
-	if err := errors.Join(errRun, errSync); err != nil {
-		return externalmcp.SessionResult{}, errors.Is(errRun, protocol.ErrBridgeStopped), fmt.Errorf("submit external MCP input to agent %q: %w", usedAgent, err)
+	if err := turns.RunTurn(ctx, inbound); err != nil {
+		return externalmcp.SessionResult{}, errors.Is(err, protocol.ErrBridgeStopped), fmt.Errorf("submit external MCP input to agent %q: %w", usedAgent, err)
 	}
 
 	select {

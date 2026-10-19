@@ -49,7 +49,7 @@ type toolFactory struct {
 	observability              ObservabilityConfig
 	childSessions              ChildSessions
 	backgroundJobs             BackgroundJobs
-	childKey                   string
+	childKey                   ChildKey
 
 	// inGuardrailRun reports whether this factory is executing a guardrail agent.
 	// When false, task calls apply target-agent guardrails. When true, nested task calls skip guardrail checks.

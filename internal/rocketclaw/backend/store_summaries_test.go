@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"iter"
-	"log/slog"
 	"net"
 	"net/url"
 	"strings"
@@ -40,10 +39,8 @@ func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			entry := &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(2, 123456789).UTC(), ReplayInput: []json.RawMessage{json.RawMessage(tc.raw)}}
 			insertSessionEntryWithoutSummary(t, service, tc.name, entry)
-			require.NoError(t, service.backfillSessionSummary(t.Context(), tc.name))
-			initial, err := service.ListSessions(t.Context(), []string{tc.name})
-			require.NoError(t, err)
-			require.Equal(t, tc.want, initial[0].LastMessage)
+			require.NoError(t, service.UpsertThread(tc.name, ThreadState{Agent: "main"}))
+			require.Equal(t, tc.want, sidebarSummaries(t, service)[tc.name].LastMessage)
 			// Following appends use only the stored summary.
 			for _, message := range []struct{ role, text, want string }{
 				{"assistant", "answer\x00", "answer"},
@@ -57,276 +54,31 @@ func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
 				replay := replayInputForMessage(message.role, message.text)
 				_, err := service.AppendEntryID(t.Context(), tc.name, &harness.SessionEntry{Timestamp: time.Unix(1, 987654321).UTC(), ReplayInput: replay})
 				require.NoError(t, err)
-				summaries, err := service.ListSessions(t.Context(), []string{tc.name})
-				require.NoError(t, err)
-				require.Equal(t, message.want, summaries[0].LastMessage)
+				require.Equal(t, message.want, sidebarSummaries(t, service)[tc.name].LastMessage)
 			}
 			// A poisoned old row detects accidental history reads on initialized append/list paths.
-			_, err = service.db.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{"timestamp":false}' WHERE conversation_id = $1`, tc.name)
+			_, err = service.db.ExecContext(t.Context(), `UPDATE entries SET entry_json = '{"timestamp":false}' WHERE conversation_id = $1`, tc.name)
 			require.NoError(t, err)
 			_, err = service.AppendEntryID(t.Context(), tc.name, &harness.SessionEntry{Timestamp: time.Unix(1, 987654321).UTC()})
 			require.NoError(t, err)
-			summaries, err := service.ListSessions(t.Context(), []string{tc.name})
-			require.NoError(t, err)
-			require.Equal(t, []protocol.SessionSummary{{ConversationID: tc.name, LastMessage: "latest user", LastUpdated: time.Unix(1, 987654000).UTC()}}, summaries)
+			require.Equal(t, &protocol.SessionSummary{ConversationID: tc.name, LastMessage: "latest user", LastUpdated: time.Unix(1, 987654000).UTC()}, sidebarSummaries(t, service)[tc.name])
 		})
 	}
 }
 
-func TestSessionSummaryBackfillBatchesDiscovery(t *testing.T) {
-	t.Parallel()
+// sidebarSummaries returns the summary of each chat the sidebar lists, by conversation ID.
+func sidebarSummaries(t *testing.T, s *SessionService) map[string]*protocol.SessionSummary {
+	t.Helper()
 
-	service := newTestSessionService(t)
-	// Flush the same connection's scan statistics without timing-based waits.
-	service.db.SetMaxOpenConns(1)
+	summaries := map[string]*protocol.SessionSummary{}
 
-	const backlog = 8
-	for i := range backlog {
-		insertSessionEntryWithoutSummary(t, service, fmt.Sprintf("history-%d", i), testSessionEntry("question", "answer"))
-	}
-	// A history arriving after discovery must still be picked up by the next batch.
-	_, err := service.db.ExecContext(t.Context(), `CREATE FUNCTION add_late_history() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-    INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('a-late-history', '{}', 'invalid');
-    RETURN NEW;
-END;
-$$;
-CREATE TRIGGER add_late_history AFTER INSERT ON session_summaries
-FOR EACH ROW WHEN (NEW.conversation_id = 'history-0') EXECUTE FUNCTION add_late_history();`)
-	require.NoError(t, err)
-	_, err = service.db.ExecContext(t.Context(), `SELECT pg_stat_force_next_flush()`)
-	require.NoError(t, err)
-
-	var before, after int64
-	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT pg_stat_get_numscans('managed_conversations'::regclass)`).Scan(&before))
-
-	require.NoError(t, service.backfillSessionSummaries(t.Context()))
-	_, err = service.db.ExecContext(t.Context(), `SELECT pg_stat_force_next_flush()`)
-	require.NoError(t, err)
-	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT pg_stat_get_numscans('managed_conversations'::regclass)`).Scan(&after))
-	// Membership rechecks use the primary key; discovery needs three table scans:
-	// the initial backlog, the late arrival, and the final empty check.
-	require.Equal(t, int64(3), after-before)
-
-	var summaries, answers int
-	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT count(*), count(*) FILTER (WHERE preview = 'answer'::bytea) FROM session_summaries`).Scan(&summaries, &answers))
-	require.Equal(t, backlog+1, summaries)
-	require.Equal(t, backlog, answers)
-}
-
-func TestSessionSummaryBackfillProgressFailureAndResume(t *testing.T) {
-	workspace := t.TempDir()
-	service := newTestSessionServiceAt(t, workspace)
-	insertSessionEntryWithoutSummary(t, service, "a-private", testSessionEntry("alpha\x00", "answer"))
-	insertSessionEntryWithoutSummary(t, service, "b-empty", &harness.SessionEntry{})
-	_, err := service.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('c-bad', '{"timestamp":false}', 'invalid')`)
-	require.NoError(t, err)
-
-	var before string
-	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT json_agg(e ORDER BY id)::text FROM session_entries e`).Scan(&before))
-	tx, err := service.db.BeginTx(t.Context(), nil)
-	require.NoError(t, err)
-
-	defer func() { _ = tx.Rollback() }()
-
-	require.NoError(t, lockSessionHistory(t.Context(), tx, "b-empty"))
-
-	var holder int
-	require.NoError(t, tx.QueryRowContext(t.Context(), `SELECT pg_backend_pid()`).Scan(&holder))
-
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	var group errgroup.Group
-	group.Go(func() error {
-		if err := service.backfillSessionSummaries(ctx); err != nil {
-			return fmt.Errorf("interrupted backfill: %w", err)
-		}
-
-		return nil
-	})
-	// Cancel only once the backfill, past a-private, waits on b-empty's history lock.
-	require.Eventually(t, func() bool {
-		var blocked bool
-
-		err := service.db.QueryRowContext(t.Context(), `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))`, holder).Scan(&blocked)
+	for row, err := range s.sidebarSessions(t.Context(), nil) {
 		require.NoError(t, err)
 
-		return blocked
-	}, 5*time.Second, time.Millisecond)
-	cancel()
-	require.Error(t, group.Wait())
-	require.NoError(t, tx.Rollback())
-	require.NoError(t, service.Stop())
-	service = newTestSessionServiceAt(t, workspace)
-	summaries, err := service.ListSessions(t.Context(), []string{"a-private", "b-empty", "c-bad"})
-	require.NoError(t, err)
-	require.Equal(t, []protocol.SessionSummary{{ConversationID: "a-private", LastMessage: "answer", LastUpdated: time.Unix(1, 0).UTC()}}, summaries)
-	require.ErrorContains(t, service.backfillSessionSummaries(t.Context()), "parse session summary history")
-
-	var after string
-	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT json_agg(e ORDER BY id)::text FROM session_entries e`).Scan(&after))
-	require.Equal(t, before, after, "interruption and restart must not mutate replay rows")
-	summaries, err = service.ListSessions(t.Context(), []string{"a-private", "b-empty", "c-bad"})
-	require.NoError(t, err)
-	require.Equal(t, []protocol.SessionSummary{{ConversationID: "a-private", LastMessage: "answer", LastUpdated: time.Unix(1, 0).UTC()}, {ConversationID: "b-empty"}}, summaries)
-	_, err = service.db.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{}' WHERE conversation_id = 'c-bad'`)
-	require.NoError(t, err)
-	// The final invalid timestamp must leave the last valid timestamp in ID order.
-	insertSessionEntryWithoutSummary(t, service, "c-bad", testSessionEntryAt(time.Unix(9, 123456789).UTC(), "nine"))
-	insertSessionEntryWithoutSummary(t, service, "c-bad", testSessionEntryAt(time.Unix(4, 123456789).UTC(), "four"))
-	_, err = service.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('c-bad', '{}', 'invalid')`)
-	require.NoError(t, err)
-	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT json_agg(e ORDER BY id)::text FROM session_entries e`).Scan(&before))
-	require.NoError(t, service.Stop())
-	service = newTestSessionServiceAt(t, workspace)
-	require.NoError(t, service.backfillSessionSummaries(t.Context()))
-	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT json_agg(e ORDER BY id)::text FROM session_entries e`).Scan(&after))
-	require.Equal(t, before, after, "resumed backfill must not mutate replay rows")
-	summaries, err = service.ListSessions(t.Context(), []string{"c-bad"})
-	require.NoError(t, err)
-	require.Equal(t, []protocol.SessionSummary{{ConversationID: "c-bad", LastMessage: "assistant", LastUpdated: time.Unix(4, 123456000).UTC()}}, summaries)
-	ids, err := queryStrings(t.Context(), service.db, `SELECT conversation_id FROM managed_conversations ORDER BY conversation_id`, "managed conversation IDs")
-	require.NoError(t, err)
-	require.Empty(t, ids)
-}
-
-func TestLastMessageMigrationRebuildsExistingPreviews(t *testing.T) {
-	t.Parallel()
-
-	service := newTestSessionService(t)
-	entry := testSessionEntry("question", "answer")
-	_, err := service.AppendEntryID(t.Context(), "existing", entry)
-	require.NoError(t, err)
-	_, err = service.db.ExecContext(t.Context(), `UPDATE session_summaries SET preview = 'question'::bytea;
-DELETE FROM pg_migrations WHERE id = '011_last_message_summaries.sql'`)
-	require.NoError(t, err)
-	require.NoError(t, initializeSessionDB(t.Context(), service.db, slog.New(slog.DiscardHandler)))
-	summaries, err := service.ListSessions(t.Context(), []string{"existing"})
-	require.NoError(t, err)
-	require.Empty(t, summaries)
-	require.NoError(t, service.backfillSessionSummaries(t.Context()))
-	summaries, err = service.ListSessions(t.Context(), []string{"existing"})
-	require.NoError(t, err)
-	require.Equal(t, "answer", summaries[0].LastMessage)
-	entries, err := service.ObserveEntries(t.Context(), "existing")
-	require.NoError(t, err)
-	require.Equal(t, *entry, entries[0].Entry)
-}
-
-func TestSessionSummaryBackfillOverlapsMutation(t *testing.T) {
-	t.Parallel()
-
-	for _, tc := range []struct {
-		action string
-		orphan bool
-	}{
-		{"append", true}, {"delete", true},
-		{"upsert", false}, {"upsert", true},
-		{"create", false}, {"create", true},
-		{"external MCP", false}, {"external MCP", true},
-	} {
-		t.Run(fmt.Sprintf("%s/orphan=%t", tc.action, tc.orphan), func(t *testing.T) {
-			service := newTestSessionService(t)
-
-			id := t.Name()
-			if tc.orphan {
-				insertSessionEntryWithoutSummary(t, service, id, testSessionEntry("old", "answer"))
-			}
-
-			tx, err := service.db.BeginTx(t.Context(), nil)
-			require.NoError(t, err)
-
-			defer func() { _ = tx.Rollback() }()
-
-			require.NoError(t, lockSessionHistory(t.Context(), tx, id))
-
-			var group errgroup.Group
-			group.Go(func() error {
-				if err := service.backfillSessionSummary(t.Context(), id); err != nil {
-					return fmt.Errorf("backfill during mutation: %w", err)
-				}
-
-				return nil
-			})
-			group.Go(func() error {
-				if tc.action == "delete" {
-					_, err := service.DeleteSession(t.Context(), id)
-					return err
-				}
-
-				_, err := service.AppendEntryID(t.Context(), id, testSessionEntry("new", "answer"))
-
-				return err
-			})
-
-			wantWaiters := 2
-			if tc.action == "delete" {
-				wantWaiters++
-
-				group.Go(func() error {
-					_, err := service.AppendEntryID(t.Context(), id, testSessionEntryAt(time.Unix(3, 123456789).UTC(), "new 日本"))
-					return err
-				})
-			}
-
-			if tc.action != "append" && tc.action != "delete" {
-				wantWaiters++
-
-				group.Go(func() error {
-					switch tc.action {
-					case "upsert":
-						return service.UpsertThread(id, ThreadState{Agent: "main"})
-					case "create":
-						runtime := &Runtime{Sessions: service}
-						return runtime.CreateConversation(t.Context(), protocol.Conversation{ID: id, Agent: "main"})
-					}
-
-					return service.RegisterExternalMCPConversation("public", "main", &ExternalMCPSessionState{PrivateConversationID: "private", ManagedConversationID: id, Agent: "main"})
-				})
-			}
-
-			require.Eventually(t, func() bool {
-				var waiting int
-
-				err := service.db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND classid = 87901 AND objid = (hashtext($1)::bigint & 4294967295)::oid AND objsubid = 2 AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`, id).Scan(&waiting)
-				require.NoError(t, err)
-
-				return waiting == wantWaiters
-			}, 5*time.Second, time.Millisecond)
-			require.NoError(t, tx.Commit())
-			require.NoError(t, group.Wait())
-			// A previously selected backfill candidate must also be harmless after mutation.
-			require.NoError(t, service.backfillSessionSummary(t.Context(), id))
-			summaries, err := service.ListSessions(t.Context(), []string{id})
-			require.NoError(t, err)
-
-			want := protocol.SessionSummary{ConversationID: id}
-			entries, err := service.ObserveEntries(t.Context(), id)
-			require.NoError(t, err)
-
-			if tc.action == "delete" {
-				require.LessOrEqual(t, len(entries), 1, "delete removes the old entry regardless of append order")
-			} else {
-				require.NotEmpty(t, entries)
-			}
-
-			if len(entries) > 0 {
-				last := entries[len(entries)-1].Entry
-				messages, err := replayInputMessages(last.ReplayInput)
-				require.NoError(t, err)
-
-				want.LastMessage, want.LastUpdated = messages[len(messages)-1].text, last.Timestamp.Truncate(time.Microsecond)
-				if tc.action == "delete" {
-					require.Equal(t, "assistant", want.LastMessage)
-				} else {
-					require.Equal(t, "answer", want.LastMessage)
-				}
-			}
-
-			require.Equal(t, []protocol.SessionSummary{want}, summaries)
-		})
+		summaries[row.Conversation.ID] = row.Summary
 	}
+
+	return summaries
 }
 
 func TestConversationSummaryInitializationRollsBackOnFailure(t *testing.T) {
@@ -351,21 +103,21 @@ func TestConversationSummaryInitializationRollsBackOnFailure(t *testing.T) {
 
 				switch failure.name {
 				case "orphan decode":
-					_, err = inspection.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{"timestamp":false}' WHERE conversation_id = 'history'`)
+					_, err = inspection.ExecContext(t.Context(), `UPDATE entries SET entry_json = '{"timestamp":false}' WHERE conversation_id = 'history'`)
 					require.NoError(t, err)
 				case "replay decode":
-					_, err = inspection.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{"replay_input":[{"type":"compaction","content":42}]}' WHERE conversation_id = 'history'`)
+					_, err = inspection.ExecContext(t.Context(), `UPDATE entries SET entry_json = '{"replay_input":[{"type":"compaction","content":42}]}' WHERE conversation_id = 'history'`)
 					require.NoError(t, err)
 				case "summary write":
 					// A real database write rejection must roll back the earlier record/binding inserts.
-					_, err = inspection.ExecContext(t.Context(), `ALTER TABLE session_summaries ADD CONSTRAINT reject_summary CHECK (conversation_id <> 'history')`)
+					_, err = inspection.ExecContext(t.Context(), `ALTER TABLE conversations ADD CONSTRAINT reject_summary CHECK (conversation_id <> 'history' OR preview IS NULL)`)
 					require.NoError(t, err)
 				case "database unavailable":
 					require.NoError(t, service.Stop())
 				}
 
 				var before string
-				require.NoError(t, inspection.QueryRowContext(t.Context(), `SELECT entry_json FROM session_entries WHERE conversation_id = 'history'`).Scan(&before))
+				require.NoError(t, inspection.QueryRowContext(t.Context(), `SELECT entry_json FROM entries WHERE conversation_id = 'history'`).Scan(&before))
 
 				switch creation {
 				case "upsert":
@@ -379,17 +131,13 @@ func TestConversationSummaryInitializationRollsBackOnFailure(t *testing.T) {
 
 				require.ErrorContains(t, err, failure.message)
 
-				var recorded, summarized, bound bool
-				require.NoError(t, inspection.QueryRowContext(t.Context(), `SELECT
-EXISTS (SELECT 1 FROM managed_conversations WHERE conversation_id = 'history'),
-EXISTS (SELECT 1 FROM session_summaries WHERE conversation_id = 'history'),
-EXISTS (SELECT 1 FROM external_mcp_sessions WHERE external_conversation_id = 'public')`).Scan(&recorded, &summarized, &bound))
+				// The preview and binding live on the rolled-back rows.
+				var recorded bool
+				require.NoError(t, inspection.QueryRowContext(t.Context(), `SELECT count(*) > 0 FROM conversations`).Scan(&recorded))
 				require.False(t, recorded)
-				require.False(t, summarized)
-				require.False(t, bound)
 
 				var after string
-				require.NoError(t, inspection.QueryRowContext(t.Context(), `SELECT entry_json FROM session_entries WHERE conversation_id = 'history'`).Scan(&after))
+				require.NoError(t, inspection.QueryRowContext(t.Context(), `SELECT entry_json FROM entries WHERE conversation_id = 'history'`).Scan(&after))
 				require.Equal(t, before, after, "failed initialization must preserve the orphan history")
 			})
 		}
@@ -399,7 +147,7 @@ EXISTS (SELECT 1 FROM external_mcp_sessions WHERE external_conversation_id = 'pu
 func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing.T) {
 	t.Parallel()
 
-	for _, creation := range []string{"backfill", "upsert", "create", "external MCP"} {
+	for _, creation := range []string{"upsert", "create", "external MCP"} {
 		t.Run(creation, func(t *testing.T) {
 			workspace := t.TempDir()
 			service := newTestSessionServiceAt(t, workspace)
@@ -407,10 +155,6 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 
 			for _, id := range []string{"empty", "history"} {
 				switch creation {
-				case "backfill":
-					// A managed row from before summary initialization was introduced.
-					_, err := service.db.ExecContext(t.Context(), `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, 'main', '')`, id)
-					require.NoError(t, err)
 				case "upsert":
 					require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
 				case "create":
@@ -421,11 +165,7 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 				}
 			}
 
-			if creation == "backfill" {
-				require.NoError(t, service.backfillSessionSummaries(t.Context()))
-			}
-
-			_, err := service.db.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{"timestamp":false}'`)
+			_, err := service.db.ExecContext(t.Context(), `UPDATE entries SET entry_json = '{"timestamp":false}'`)
 			require.NoError(t, err)
 
 			// Pin the listing pool's session setting; the lock uses a separate connection.
@@ -443,32 +183,39 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 			defer func() { require.NoError(t, transaction.Rollback()) }()
 
 			// Checking entry presence must not decode replay or wait for history writers.
-			_, err = transaction.ExecContext(t.Context(), `LOCK TABLE session_entries IN EXCLUSIVE MODE`)
+			_, err = transaction.ExecContext(t.Context(), `LOCK TABLE entries IN EXCLUSIVE MODE`)
 			require.NoError(t, err)
 
 			var rows []SidebarSession
 
-			for row, err := range service.SidebarSessions(t.Context()) {
+			for row, err := range service.sidebarSessions(t.Context(), nil) {
 				require.NoError(t, err, "sidebar enumeration must not decode replay history")
 
 				rows = append(rows, row)
 			}
 
+			origin, kind := ChatOriginFacts{ConversationID: "history"}, KindWebChat
+			if creation == "external MCP" {
+				origin.ExternalConversationID, origin.Binding = "public-history", ExternalMCPSessionState{Agent: "main", ManagedConversationID: "history"}
+				kind = KindSlackThread
+			}
+
 			require.Equal(t, []SidebarSession{
-				{Conversation: protocol.Conversation{ID: "history", Agent: "main"}, Summary: &protocol.SessionSummary{ConversationID: "history", LastMessage: "assistant", LastUpdated: time.Unix(2, 123456000).UTC()}, Tags: []string{}},
+				{Conversation: protocol.Conversation{ID: "history", Agent: "main"}, Kind: kind, Summary: &protocol.SessionSummary{ConversationID: "history", LastMessage: "assistant", LastUpdated: time.Unix(2, 123456000).UTC()}, Tags: []string{}, Origin: origin},
 			}, rows)
 		})
 	}
 }
 
-func TestSidebarSessionsHistoryChecksUseIndexedLookups(t *testing.T) {
+// Whether a chat has history is stored on its row (saveSessionSummary), so listing reads no entry.
+func TestSidebarSessionsReadNoHistory(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
 	service.db.SetMaxOpenConns(1)
 
 	ctx := t.Context()
-	_, err := service.db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
+	_, err := service.db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
 SELECT 'history-only-' || n, '{}', '' FROM generate_series(1, 4096) n`)
 	require.NoError(t, err)
 
@@ -481,21 +228,21 @@ SELECT 'history-only-' || n, '{}', '' FROM generate_series(1, 4096) n`)
 		require.NoError(t, err)
 	}
 
-	_, err = service.db.ExecContext(ctx, `ANALYZE session_entries; ANALYZE managed_conversations`)
+	_, err = service.db.ExecContext(ctx, `ANALYZE entries; ANALYZE conversations`)
 	require.NoError(t, err)
 	_, err = service.db.ExecContext(ctx, `SELECT pg_stat_force_next_flush()`)
 	require.NoError(t, err)
 
-	const historyReads = `SELECT pg_stat_get_tuples_returned('session_entries'::regclass)
+	const historyReads = `SELECT pg_stat_get_tuples_returned('entries'::regclass)
     + COALESCE(SUM(pg_stat_get_tuples_returned(indexrelid)), 0)
-FROM pg_index WHERE indrelid = 'session_entries'::regclass`
+FROM pg_index WHERE indrelid = 'entries'::regclass`
 
 	var before, after int64
 	require.NoError(t, service.db.QueryRowContext(ctx, historyReads).Scan(&before))
 
 	var ids []string
 
-	for row, err := range service.SidebarSessions(ctx) {
+	for row, err := range service.sidebarSessions(ctx, nil) {
 		require.NoError(t, err)
 
 		ids = append(ids, row.Conversation.ID)
@@ -506,7 +253,7 @@ FROM pg_index WHERE indrelid = 'session_entries'::regclass`
 	_, err = service.db.ExecContext(ctx, `SELECT pg_stat_force_next_flush()`)
 	require.NoError(t, err)
 	require.NoError(t, service.db.QueryRowContext(ctx, historyReads).Scan(&after))
-	require.Equal(t, int64(1), after-before, "sidebar history checks must stop at the first indexed entry")
+	require.Zero(t, after-before, "the sidebar reads no entry")
 }
 
 func TestSidebarSessionPinsAndNames(t *testing.T) {
@@ -535,7 +282,7 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 
 	var ids []string
 
-	for row, err := range service.SidebarSessions(ctx) {
+	for row, err := range service.sidebarSessions(ctx, nil) {
 		require.NoError(t, err)
 
 		ids = append(ids, row.Conversation.ID)
@@ -554,7 +301,7 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 	_, err = service.UpdateConversationDetails(ctx, "a", nil, new(""))
 	require.NoError(t, err)
 
-	for row, err := range service.SidebarSessions(ctx) {
+	for row, err := range service.sidebarSessions(ctx, nil) {
 		require.NoError(t, err)
 
 		switch row.Conversation.ID {
@@ -586,7 +333,7 @@ func TestSidebarSessionsListFirstTurnBeforeHistory(t *testing.T) {
 	only := func() SidebarSession {
 		var got []SidebarSession
 
-		for row, err := range service.SidebarSessions(ctx) {
+		for row, err := range service.sidebarSessions(ctx, nil) {
 			require.NoError(t, err)
 
 			got = append(got, row)
@@ -618,6 +365,8 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"cron:private": KindCronRun, "one-off-cron:private": KindOneOffCronRun, "private": KindExternalMCPRun})
+
 	for _, id := range []string{"a", "Z", "ä", "empty", "missing", "zero", "cron:private", "one-off-cron:private", "private"} {
 		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
 
@@ -642,15 +391,16 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	_, err := service.AppendEntryID(t.Context(), "zero", &harness.SessionEntry{})
 	require.NoError(t, err)
 	insertSessionEntryWithoutSummary(t, service, "missing", testSessionEntry("old", "answer"))
-	_, err = service.db.ExecContext(t.Context(), `DELETE FROM session_summaries WHERE conversation_id = 'missing'`)
+	// A summary missing since before migration 052, which still stored that the chat has entries.
+	_, err = service.db.ExecContext(t.Context(), `UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = TRUE WHERE conversation_id = 'missing'`)
 	require.NoError(t, err)
 	// Enumeration must not parse replay even for missing summaries.
-	_, err = service.db.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{"timestamp":false}'`)
+	_, err = service.db.ExecContext(t.Context(), `UPDATE entries SET entry_json = '{"timestamp":false}'`)
 	require.NoError(t, err)
 
 	var got []SidebarSession
 
-	for row, err := range service.SidebarSessions(t.Context()) {
+	for row, err := range service.sidebarSessions(t.Context(), nil) {
 		require.NoError(t, err)
 
 		got = append(got, row)
@@ -659,7 +409,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	want := make([]SidebarSession, 0, 5)
 
 	for _, id := range []string{"Z", "a", "ä", "missing", "zero"} {
-		row := SidebarSession{Conversation: protocol.Conversation{ID: id, Agent: "main"}, Running: id == "a"}
+		row := SidebarSession{Conversation: protocol.Conversation{ID: id, Agent: "main"}, Kind: KindWebChat, Running: id == "a", Origin: ChatOriginFacts{ConversationID: id}}
 
 		row.Tags = []string{"customer"}
 		if id == "zero" {
@@ -679,7 +429,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	_, err = service.toggleSessionTag(t.Context(), "a", "internal", []string{"customer", "internal"})
 	require.NoError(t, err)
 
-	for row, err := range service.SidebarSessions(t.Context()) {
+	for row, err := range service.sidebarSessions(t.Context(), nil) {
 		require.NoError(t, err)
 
 		if row.Conversation.ID == "a" {
@@ -705,7 +455,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 
 	var remaining []string
 
-	for row, err := range service.SidebarSessions(t.Context()) {
+	for row, err := range service.sidebarSessions(t.Context(), nil) {
 		require.NoError(t, err)
 
 		remaining = append(remaining, row.Conversation.ID)
@@ -714,19 +464,12 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	require.Equal(t, []string{"Z", "empty", "ä", "missing", "zero"}, remaining)
 
 	// PostgreSQL accepts infinity timestamps, but Go time.Time cannot represent them.
-	// A bad stored row after a valid prefix must stop enumeration with a scan error.
-	_, err = service.db.ExecContext(t.Context(), `UPDATE session_summaries SET last_updated = '-infinity' WHERE conversation_id = 'zero'`)
+	// A bad stored row stops enumeration with a scan error before any row.
+	_, err = service.db.ExecContext(t.Context(), `UPDATE conversations SET last_updated = '-infinity' WHERE conversation_id = 'zero'`)
 	require.NoError(t, err)
 
-	next, stop := iter.Pull2(service.SidebarSessions(t.Context()))
+	next, stop := iter.Pull2(service.sidebarSessions(t.Context(), nil))
 	defer stop()
-
-	for _, id := range remaining[:len(remaining)-1] {
-		row, err, ok := next()
-		require.True(t, ok)
-		require.NoError(t, err)
-		require.Equal(t, id, row.Conversation.ID)
-	}
 
 	_, err, ok := next()
 	require.True(t, ok)
@@ -762,7 +505,7 @@ func BenchmarkSidebarSessions(b *testing.B) {
 	for b.Loop() {
 		var rows []SidebarSession
 
-		for row, err := range service.SidebarSessions(b.Context()) {
+		for row, err := range service.sidebarSessions(b.Context(), nil) {
 			require.NoError(b, err)
 
 			rows = append(rows, row)
@@ -790,43 +533,20 @@ func TestSidebarSessionsCloseRowsOnEarlyStopAndCancellation(t *testing.T) {
 
 	before := service.db.Stats().InUse
 
-	next, stop := iter.Pull2(service.SidebarSessions(t.Context()))
+	next, stop := iter.Pull2(service.sidebarSessions(t.Context(), nil))
 	defer stop()
 
 	row, err, ok := next()
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "a", row.Conversation.ID)
-	require.Equal(t, before+1, service.db.Stats().InUse, "the first row arrives while the database cursor is still open")
 	stop()
 	require.Equal(t, before, service.db.Stats().InUse)
 	ctx, cancel := context.WithCancel(t.Context())
-
-	next, stop = iter.Pull2(service.SidebarSessions(ctx))
-	defer stop()
-
-	_, err, ok = next()
-	require.NoError(t, err)
-	require.True(t, ok)
 	cancel()
 
-	for {
-		_, err, ok = next()
-		if err != nil {
-			require.ErrorIs(t, err, context.Canceled)
-			break
-		}
-
-		if !ok {
-			t.Fatal("cancelled enumeration completed successfully")
-		}
-	}
-
-	stop()
-	require.Equal(t, before, service.db.Stats().InUse)
-
 	// Cancellation before the first read must also report failure, not an empty list.
-	next, stop = iter.Pull2(service.SidebarSessions(ctx))
+	next, stop = iter.Pull2(service.sidebarSessions(ctx, nil))
 	defer stop()
 
 	row, err, ok = next()
@@ -963,27 +683,19 @@ func TestSidebarSessionsCancelPendingDatabaseRow(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	next, stop := iter.Pull2(service.SidebarSessions(ctx))
-
-	defer func() {
-		cancel()
-		stop()
-	}()
-
-	row, err, ok := next()
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, "a", row.Conversation.ID)
-	<-tail
-
 	var reading errgroup.Group
 	reading.Go(func() error {
-		_, err, _ := next()
-		return err
+		for _, err := range service.sidebarSessions(ctx, nil) {
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
 	})
+	<-tail
 	cancel()
 	require.ErrorIs(t, reading.Wait(), context.Canceled)
-	stop()
 	require.NoError(t, proxy.Wait())
 	require.Zero(t, service.db.Stats().InUse)
 }
@@ -995,6 +707,116 @@ func insertSessionEntryWithoutSummary(t *testing.T, service *SessionService, con
 	require.NoError(t, err)
 
 	data = removeSessionEntryNUL(data)
-	_, err = service.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, $2, $3)`, conversationID, string(data), entry.Timestamp.UTC().Format(time.RFC3339Nano))
+	_, err = service.db.ExecContext(t.Context(), `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, $2, $3)`, conversationID, string(data), entry.Timestamp.UTC().Format(time.RFC3339Nano))
 	require.NoError(t, err)
+}
+
+// Saving an entry writes its conversation's preview and time in the same transaction, and a
+// failed save leaves both as they were.
+func TestEntryPreviewCommitsWithItsEntry(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	ctx := t.Context()
+	require.NoError(t, service.UpsertThread("chat", ThreadState{Agent: "main"}))
+	_, err := service.AppendEntryID(ctx, "chat", testSessionEntry("question", "first"))
+	require.NoError(t, err)
+
+	preview := func(db stateStoreDB) string {
+		var (
+			text string
+			at   time.Time
+		)
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT convert_from(preview, 'UTF8'), last_updated FROM conversations WHERE conversation_id = 'chat'`).Scan(&text, &at))
+
+		return text + " " + at.UTC().Format(time.RFC3339)
+	}
+
+	before := preview(service.db)
+	require.Equal(t, "first 1970-01-01T00:00:01Z", before)
+
+	second := testSessionEntry("question", "second")
+	second.Timestamp = time.Unix(2, 0).UTC()
+	tx, err := service.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = appendSessionEntryDB(ctx, tx, "chat", second)
+	require.NoError(t, err)
+	require.Equal(t, "second 1970-01-01T00:00:02Z", preview(tx), "the saving transaction sees its preview")
+	require.NoError(t, tx.Rollback())
+	require.Equal(t, before, preview(service.db), "a rolled-back save leaves the preview")
+
+	// A rejected preview write fails the save, so neither the entry nor its preview lands.
+	_, err = service.db.ExecContext(ctx, `ALTER TABLE conversations ADD CONSTRAINT reject_preview CHECK (preview <> 'third') NOT VALID`)
+	require.NoError(t, err)
+	_, err = service.AppendEntryID(ctx, "chat", testSessionEntry("question", "third"))
+	require.ErrorContains(t, err, "write session summary")
+	require.Equal(t, before, preview(service.db), "a failed save leaves the preview")
+
+	entries, err := service.ObserveEntries(ctx, "chat")
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	_, err = service.AppendEntryID(ctx, "chat", second)
+	require.NoError(t, err)
+	require.Equal(t, "second 1970-01-01T00:00:02Z", preview(service.db))
+}
+
+// The entry facts a chat's row stores for the sidebar and its origin follow the writes that change
+// them: a run attached with entries older than the chat's own, a run reporting after them, and
+// clearing the chat's history.
+func TestChatEntryFactsFollowWrites(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"early": KindCronRun, "late": KindCronRun})
+
+	for _, id := range []string{"attached", "own"} {
+		require.NoError(t, s.UpsertThread(id, ThreadState{Agent: "main"}))
+	}
+
+	facts := func(id string) (hasEntries bool, creatingSource string) {
+		require.NoError(t, s.db.QueryRowContext(ctx, `SELECT has_entries FROM conversations WHERE conversation_id = $1`, id).Scan(&hasEntries))
+
+		for origin, err := range s.ChatOriginFacts(ctx, id) {
+			require.NoError(t, err)
+
+			creatingSource = origin.CreatingSource
+		}
+
+		return hasEntries, creatingSource
+	}
+
+	for _, id := range []string{"early", "own", "attached"} {
+		_, err := s.AppendEntryID(ctx, id, testSessionEntry("question", "answer"))
+		require.NoError(t, err)
+	}
+
+	hasEntries, source := facts("attached")
+	require.True(t, hasEntries)
+	require.Empty(t, source, "the chat's own entry came first")
+
+	for run, chat := range map[string]string{"early": "attached", "late": "own"} {
+		inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "report", true)
+		inbound.ConversationID, inbound.SyncDestination = run, chat
+		require.NoError(t, startTurnDB(ctx, s.db, "turn-"+run, run, inbound))
+	}
+
+	_, err := s.AppendEntryID(ctx, "late", testSessionEntry("report", "done"))
+	require.NoError(t, err)
+
+	hasEntries, source = facts("attached")
+	require.True(t, hasEntries)
+	require.Equal(t, "early", source, "the attached run's older entry is now the chat's first")
+
+	hasEntries, source = facts("own")
+	require.True(t, hasEntries)
+	require.Empty(t, source, "a run reporting later leaves the chat's own entry first")
+
+	_, err = s.DeleteSession(ctx, "attached")
+	require.NoError(t, err)
+
+	hasEntries, source = facts("attached")
+	require.False(t, hasEntries)
+	require.Equal(t, "early", source, "clearing the chat keeps its run's entry, as undo does")
 }

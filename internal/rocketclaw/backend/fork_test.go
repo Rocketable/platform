@@ -59,7 +59,10 @@ func TestForkConversation(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	note := []protocol.BackgroundJob{{ID: "turn-1/call/a", Kind: "execute", State: "completed", Label: "tests", ToolCallID: "call", Note: backgroundNote(&backgroundJob{jobID: "turn-1/call/a", kind: backgroundExecute, status: backgroundCompleted, label: "tests", result: "completed"})}}
+	note := []protocol.BackgroundJob{{ID: "turn-1/call/a", Kind: "execute", State: "completed", Label: "tests", ToolCallID: "call", Note: backgroundNote(&backgroundJob{jobID: "turn-1/call/a", kind: turnScript, status: backgroundCompleted, label: "tests", result: "completed"})}}
+
+	require.NoError(t, sessions.startSubagent(t.Context(), "source", rocketcode.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, "helper", true))
+	require.NoError(t, sessions.startSubagent(t.Context(), "source/call-1", rocketcode.ChildKey{Path: "/call-2", Turn: "turn-2", Call: "call-2"}, "helper", true))
 
 	for _, delegation := range []string{"source/call-1", "source/call-1/call-2"} {
 		_, err = sessions.AppendEntryID(t.Context(), delegation, testSessionEntry(delegation, "child"))
@@ -84,7 +87,7 @@ func TestForkConversation(t *testing.T) {
 			require.Empty(t, tags)
 
 			var parent string
-			require.NoError(t, sessions.db.QueryRowContext(t.Context(), `SELECT forked_from FROM managed_conversations WHERE conversation_id = $1`, tt.name).Scan(&parent))
+			require.NoError(t, sessions.db.QueryRowContext(t.Context(), `SELECT forked_from FROM conversations WHERE conversation_id = $1`, tt.name).Scan(&parent))
 			require.Equal(t, "source", parent)
 			require.NotContains(t, prompt, "original-file")
 			entries, err := sessions.ObserveEntries(t.Context(), tt.name)
@@ -114,10 +117,14 @@ func TestForkConversation(t *testing.T) {
 			}
 
 			// A fork's subagents continue from the copied histories.
-			for _, delegation := range []string{"/call-1", "/call-1/call-2"} {
+			for delegation, parent := range map[string]string{"/call-1": "", "/call-1/call-2": "/call-1"} {
 				copied, err := sessions.ObserveEntries(t.Context(), tt.name+delegation)
 				require.NoError(t, err)
 				require.Len(t, copied, 1)
+
+				var copiedParent string
+				require.NoError(t, sessions.db.QueryRowContext(t.Context(), `SELECT parent_conversation_id FROM conversations WHERE conversation_id = $1`, tt.name+delegation).Scan(&copiedParent))
+				require.Equal(t, tt.name+parent, copiedParent, "a copied delegation nests under the copy of its parent")
 			}
 
 			require.NotContains(t, prompt, "[Slack]")
@@ -166,7 +173,7 @@ func TestForkConversation(t *testing.T) {
 	spaces, err := sessions.Spaces(t.Context())
 	require.NoError(t, err)
 
-	for row, err := range sessions.SidebarSessions(t.Context()) {
+	for row, err := range sessions.sidebarSessions(t.Context(), nil) {
 		require.NoError(t, err)
 		require.Equal(t, parents[row.Conversation.ID], row.ForkedFrom)
 		require.Equal(t, spaces[1].ID, row.SpaceID, "a fork keeps its source's birth space")
@@ -176,9 +183,10 @@ func TestForkConversation(t *testing.T) {
 	require.Empty(t, parents)
 	_, err = sessions.DeleteSession(t.Context(), "full")
 	require.NoError(t, err)
-	notes, err = runtime.CompletionNotes(t.Context(), "full", []string{"turn-1/call/a"})
+	kept, err := sessions.ObserveEntries(t.Context(), "full")
 	require.NoError(t, err)
-	require.Empty(t, notes, "the copied jobs go with their fork")
+	require.Len(t, kept, 1)
+	require.Len(t, kept[0].Entry.ReplayInput, 2, "a wipe keeps the copied Slack message and its answer, as undo does")
 }
 
 func TestForkConversationRollsBackFailedCopies(t *testing.T) {
@@ -188,9 +196,9 @@ func TestForkConversationRollsBackFailedCopies(t *testing.T) {
 		name, constraint, message string
 	}{
 		{"attachment", "ALTER TABLE attachments ADD CONSTRAINT reject_fork CHECK (conversation_id <> 'fork')", "record fork attachment"},
-		{"summary", "ALTER TABLE session_summaries ADD CONSTRAINT reject_fork CHECK (conversation_id <> 'fork')", "write session summary"},
-		{"entry", "ALTER TABLE session_entries ADD CONSTRAINT reject_fork CHECK (conversation_id <> 'fork')", "append rocketcode session entry"},
-		{"commit", "ALTER TABLE managed_conversations ADD CONSTRAINT reject_fork UNIQUE (agent) DEFERRABLE INITIALLY DEFERRED", "commit fork"},
+		{"summary", "ALTER TABLE conversations ADD CONSTRAINT reject_fork CHECK (conversation_id <> 'fork' OR preview IS NULL)", "write session summary"},
+		{"entry", "ALTER TABLE entries ADD CONSTRAINT reject_fork CHECK (conversation_id <> 'fork')", "append rocketcode session entry"},
+		{"commit", "ALTER TABLE conversations ADD CONSTRAINT reject_fork UNIQUE (agent) DEFERRABLE INITIALLY DEFERRED", "commit fork"},
 		{"missing file", "", "read fork attachment"},
 		{"read only files", "", "copy fork attachment"},
 	} {
@@ -235,7 +243,7 @@ func TestForkConversationRollsBackFailedCopies(t *testing.T) {
 			require.NoError(t, err)
 			require.Empty(t, entries)
 
-			for _, table := range []string{"attachments", "session_summaries"} {
+			for _, table := range []string{"attachments", "conversations"} {
 				var count int
 				require.NoError(t, sessions.db.QueryRowContext(t.Context(), "SELECT count(*) FROM "+table+" WHERE conversation_id = 'fork'").Scan(&count))
 				require.Zero(t, count, table)
@@ -261,17 +269,17 @@ func TestForkConversationRejectsUnreadableHistory(t *testing.T) {
 		`{"replay_input":42}`,
 	} {
 		var id int64
-		require.NoError(t, sessions.db.QueryRowContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('source', $1, '') RETURNING id`, raw).Scan(&id))
+		require.NoError(t, sessions.db.QueryRowContext(t.Context(), `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('source', $1, '') RETURNING id`, raw).Scan(&id))
 		_, err := sessions.ForkConversation(t.Context(), "source", protocol.Conversation{ID: "fork", Agent: "main"}, fmt.Sprintf("%d:0", id))
 		require.Error(t, err, raw)
 		_, recorded, err := sessions.Thread("fork")
 		require.NoError(t, err)
 		require.False(t, recorded)
-		_, err = sessions.db.ExecContext(t.Context(), `DELETE FROM session_entries WHERE id = $1`, id)
+		_, err = sessions.db.ExecContext(t.Context(), `DELETE FROM entries WHERE id = $1`, id)
 		require.NoError(t, err)
 	}
 
-	_, err = sessions.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('source', '{"sync_source_entry_id":-1,"replay_input":[{"type":"message","role":"user","content":"deleted producer"}]}', '')`)
+	_, err = sessions.db.ExecContext(t.Context(), `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('source', '{"sync_source_entry_id":-1,"replay_input":[{"type":"message","role":"user","content":"deleted producer"}]}', '')`)
 	require.NoError(t, err)
 	_, err = sessions.ForkConversation(t.Context(), "source", protocol.Conversation{ID: "fork", Agent: "main"}, "")
 	require.NoError(t, err)

@@ -14,8 +14,7 @@ import (
 	harness "github.com/Rocketable/platform/internal/rocketcode"
 )
 
-// Background backfill shares this transaction lock with history mutation. It
-// also covers missing summaries and private histories without managed rows.
+// lockSessionHistory serializes a conversation's history and the facts its row derives from it.
 func lockSessionHistory(ctx context.Context, db stateStoreDB, conversationID string) error {
 	_, err := execState(ctx, db, "lock session history", `SELECT pg_advisory_xact_lock(87901, hashtext($1))`, conversationID)
 	return err
@@ -26,11 +25,14 @@ func lockSessionHistory(ctx context.Context, db stateStoreDB, conversationID str
 // Shadow histories go last because lockShadowHistory reaches them through their
 // parent's lock. Taking two locks any other way can deadlock against it.
 func lockHistories(ctx context.Context, db stateStoreDB, ids []string) error {
-	shadows, err := queryStrings(ctx, db, `WITH candidates AS (
+	if len(ids) == 1 {
+		return lockSessionHistory(ctx, db, ids[0])
+	}
+
+	shadows, err := queryStrings(ctx, db, `WITH RECURSIVE starts AS (
     SELECT unnest($1::text[]) AS id
-)
-SELECT DISTINCT c.id FROM candidates c
-JOIN shadow_bindings b ON c.id = b.child_conversation_id OR starts_with(c.id, b.child_conversation_id || '/')`, "shadow history IDs", ids)
+), `+ancestorsSQL+`
+SELECT DISTINCT a.id FROM ancestors a JOIN conversations b ON b.conversation_id = a.conversation_id WHERE b.shadow_parent IS NOT NULL`, "shadow history IDs", ids)
 	if err != nil {
 		return err
 	}
@@ -56,14 +58,14 @@ JOIN shadow_bindings b ON c.id = b.child_conversation_id OR starts_with(c.id, b.
 	return nil
 }
 
-// loadSessionSummary decodes history only when its durable projection is missing.
+// loadSessionSummary decodes history only when its row has no preview yet.
 // The caller holds the history lock until the projection is committed.
 func loadSessionSummary(ctx context.Context, db stateStoreDB, conversationID string) (protocol.SessionSummary, error) {
 	summary := protocol.SessionSummary{ConversationID: conversationID}
 
 	var preview []byte
 
-	err := db.QueryRowContext(ctx, `SELECT preview, last_updated FROM session_summaries WHERE conversation_id = $1`, conversationID).Scan(&preview, &summary.LastUpdated)
+	err := db.QueryRowContext(ctx, `SELECT preview, last_updated FROM conversations WHERE conversation_id = $1 AND last_updated IS NOT NULL`, conversationID).Scan(&preview, &summary.LastUpdated)
 	if err == nil {
 		summary.LastMessage = string(preview)
 		return summary, nil
@@ -73,7 +75,7 @@ func loadSessionSummary(ctx context.Context, db stateStoreDB, conversationID str
 		return summary, fmt.Errorf("read session summary: %w", err)
 	}
 
-	err = readRows(ctx, db, `SELECT entry_json, entry_timestamp FROM session_entries WHERE conversation_id = $1 ORDER BY id`, "session summary history", func(row rowScanner) error {
+	err = readRows(ctx, db, `SELECT entry_json, entry_timestamp FROM entries WHERE conversation_id = $1 ORDER BY id`, "session summary history", func(row rowScanner) error {
 		var raw, timestamp string
 		if err := row.Scan(&raw, &timestamp); err != nil {
 			return fmt.Errorf("scan session summary history: %w", err)
@@ -116,67 +118,26 @@ func projectSessionSummary(summary *protocol.SessionSummary, entry *harness.Sess
 	return nil
 }
 
+// entryFactsSQL is the CTE facts of conversation $1's entry facts (migration 052): whether it has
+// entries of its own, and where its earliest shown entry came from, as ChatOriginFacts reads it.
+const entryFactsSQL = `WITH own AS (
+    SELECT id, f.sync_source_conversation_id AS source, CASE WHEN f.sync_source_conversation_id IS NULL THEN f.sync_source_entry_id::bigint END AS source_entry_id
+    FROM entries, json_to_record(entry_json) AS f(sync_source_conversation_id text, sync_source_entry_id text) WHERE conversation_id = $1 ORDER BY id LIMIT 1
+), reported AS (
+    SELECT e.id, e.conversation_id AS source FROM conversations m JOIN entries e USING (conversation_id)
+    WHERE m.reports_to = $1 AND e.audience <> 'sandbox' ORDER BY e.id LIMIT 1
+), firsts AS (
+    SELECT o.id, COALESCE(o.source, s.conversation_id) AS source, TRUE AS own FROM own o LEFT JOIN entries s ON s.id = o.source_entry_id
+    UNION ALL SELECT id, source, FALSE FROM reported
+), facts AS (
+    SELECT COALESCE(bool_or(own), FALSE) AS has_entries, (array_agg(source ORDER BY id))[1] AS first_source FROM firsts
+)`
+
+// saveSessionSummary saves the summary with its conversation's entry facts.
 func saveSessionSummary(ctx context.Context, db stateStoreDB, summary protocol.SessionSummary) error {
-	_, err := execState(ctx, db, "write session summary", `INSERT INTO session_summaries (conversation_id, preview, last_updated) VALUES ($1, $2, $3)
-ON CONFLICT (conversation_id) DO UPDATE SET preview = EXCLUDED.preview, last_updated = EXCLUDED.last_updated`, summary.ConversationID, []byte(summary.LastMessage), summary.LastUpdated)
+	_, err := execState(ctx, db, "write session summary", entryFactsSQL+`
+UPDATE conversations SET preview = $2, last_updated = $3, has_entries = f.has_entries, first_source = f.first_source FROM facts f
+WHERE conversation_id = $1`, summary.ConversationID, []byte(summary.LastMessage), summary.LastUpdated)
 
 	return err
-}
-
-func (s *SessionService) backfillSessionSummaries(ctx context.Context) error {
-	for {
-		conversationIDs, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM
-(SELECT conversation_id FROM managed_conversations UNION SELECT conversation_id FROM session_entries) c
-WHERE NOT EXISTS (SELECT 1 FROM session_summaries s WHERE s.conversation_id = c.conversation_id)
-ORDER BY conversation_id COLLATE "C"`, "missing session summaries")
-		if err != nil {
-			return err
-		}
-
-		if len(conversationIDs) == 0 {
-			return nil
-		}
-
-		for _, conversationID := range conversationIDs {
-			if err := s.backfillSessionSummary(ctx, conversationID); err != nil {
-				return err
-			}
-		}
-	}
-}
-
-func (s *SessionService) backfillSessionSummary(ctx context.Context, conversationID string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin session summary backfill: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if err := lockSessionHistory(ctx, tx, conversationID); err != nil {
-		return err
-	}
-
-	var missing bool
-	if err := tx.QueryRowContext(ctx, `SELECT (EXISTS (SELECT 1 FROM managed_conversations WHERE conversation_id = $1)
-OR EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1))
-AND NOT EXISTS (SELECT 1 FROM session_summaries WHERE conversation_id = $1)`, conversationID).Scan(&missing); err != nil {
-		return fmt.Errorf("check session summary backfill: %w", err)
-	}
-
-	if missing {
-		summary, err := loadSessionSummary(ctx, tx, conversationID)
-		if err != nil {
-			return err
-		}
-
-		if err := saveSessionSummary(ctx, tx, summary); err != nil {
-			return err
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit session summary backfill: %w", err)
-	}
-
-	return nil
 }

@@ -201,6 +201,8 @@ func TestNestedWorkflowSessionTags(t *testing.T) {
 	require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
 	require.NoError(t, root.WriteFile(".rocketclaw/workflows/tag.star", []byte("meta = {\"name\": \"tag\", \"description\": \"Tag\"}\ndef main(args): return agent(\"tag\", label=\"worker\")\n"), 0o600))
 	service := newTestSessionServiceAt(t, workspace)
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"visible": KindWebChat})
+
 	requests := 0
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -240,7 +242,7 @@ func TestNestedWorkflowSessionTags(t *testing.T) {
 		require.Equal(t, 2, requests, "a rerun returns the finished worker's recorded result")
 	}
 
-	ids, err := queryStrings(t.Context(), service.db, "SELECT conversation_id FROM session_tags", "tag owners")
+	ids, err := queryStrings(t.Context(), service.db, "SELECT conversation_id FROM conversations WHERE tags IS NOT NULL", "tag owners")
 	require.NoError(t, err)
 	require.Equal(t, []string{"visible"}, ids)
 	tags, err := sessionTags(t.Context(), service.db, "visible")

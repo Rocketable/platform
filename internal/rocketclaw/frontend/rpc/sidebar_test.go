@@ -143,8 +143,8 @@ func TestSidebarSendFailures(t *testing.T) {
 		name     string
 		response *ListSessionsResponse
 	}{
-		{"empty completion", &ListSessionsResponse{Owner: "alice", UpstreamSuccess: true, SummariesComplete: true}},
-		{"session row", &ListSessionsResponse{Owner: "alice", Sessions: []*Session{{Id: "web", Agent: "main", AllowedAgents: []string{"main"}}}, SummariesComplete: true}},
+		{"empty completion", &ListSessionsResponse{Owner: "alice", UpstreamSuccess: true}},
+		{"session row", &ListSessionsResponse{Owner: "alice", Sessions: []*Session{{Id: "web", Agent: "main", AllowedAgents: []string{"main"}, Label: "web"}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.name == "session row" {
@@ -185,7 +185,7 @@ func TestSidebarHTTPStreamsBeforeGoTailAndCancels(t *testing.T) {
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\nmodel: gpt-6.1-sol\n---\nHelp."), 0o600))
 
 	for i, id := range []string{"slack-thread:C1:1.1", "slack-thread:C2:2.2"} {
-		require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main"}))
+		openTestTurns(t, dsn).RecordSlackThread(t, sessions, id, backend.ThreadState{Agent: "main"})
 		_, err := sessions.AppendEntryID(t.Context(), id, &rocketcode.SessionEntry{Timestamp: time.Unix(int64(2-i), 123456789).UTC()})
 		require.NoError(t, err)
 	}

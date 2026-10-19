@@ -11,16 +11,19 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
-// CreateConversation records an explicit ID without changing existing selection.
+// CreateConversation records an explicit ID, a Web chat or a cron run, without changing existing selection.
 func (r *Runtime) CreateConversation(ctx context.Context, conversation protocol.Conversation) error {
-	tx, err := r.Sessions.db.BeginTx(ctx, nil)
+	return r.Sessions.recordConversation(ctx, conversation, conversationFacts{kind: KindWebChat})
+}
+
+func (s *SessionService) recordConversation(ctx context.Context, conversation protocol.Conversation, facts conversationFacts) error {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin conversation creation: %w", err)
 	}
@@ -30,13 +33,13 @@ func (r *Runtime) CreateConversation(ctx context.Context, conversation protocol.
 		return err
 	}
 
-	created, err := (stateDAO{db: tx}).createConversation(ctx, conversation)
+	created, err := (stateDAO{db: tx}).createConversation(ctx, conversation, facts)
 	if err != nil {
 		return err
 	}
 
 	if created {
-		if _, err := r.Sessions.reconcileShadows(ctx, tx, conversation.ID, conversation.Agent); err != nil {
+		if _, err := s.reconcileShadows(ctx, tx, conversation.ID, conversation.Agent); err != nil {
 			return err
 		}
 	}
@@ -48,157 +51,66 @@ func (r *Runtime) CreateConversation(ctx context.Context, conversation protocol.
 	return nil
 }
 
-// SyncConversation exposes surviving source work in an existing destination.
-// The producer's own occupancy is not a competing destination turn.
-func (r *Runtime) SyncConversation(ctx context.Context, source, destination string) error {
-	bridges := make([]*Bridge, 0, 2)
-
-	for _, id := range []string{source, destination} {
-		managed, err := r.threads.recordedBridge(ctx, id)
-		if err != nil {
-			return err
-		}
-
-		bridges = append(bridges, managed)
-	}
-
-	if r.Sessions.reservedFor(destination) == source {
-		return bridges[1].syncConversation(ctx, bridges[0])
-	}
-
-	completion := &turnCompletion{done: make(chan struct{})}
-	if err := bridges[1].enqueue(ctx, &bridgeRequest{syncSource: source, producer: bridges[0], completion: completion}, "sync conversation"); err != nil {
+// ContinueRun has a conversation show, and search find, a hidden run's history before its own,
+// taking the run's preview when it first does, and adopts the run when it reports to no
+// conversation. Nothing is copied, and continuing again changes nothing.
+func (r *Runtime) ContinueRun(ctx context.Context, run, conversationID string) error {
+	tx, err := r.Sessions.beginStateTx(ctx, "run continuation")
+	if err != nil {
 		return err
 	}
-
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("wait for conversation sync: %w", ctx.Err())
-	case <-bridges[1].stopCh:
-		return fmt.Errorf("wait for conversation sync: %w", protocol.ErrBridgeStopped)
-	case <-completion.done:
-		return completion.err
-	}
-}
-
-func (b *Bridge) syncConversation(ctx context.Context, source *Bridge) error {
-	store := b.config.SessionService
-	// Scheduled claims hold b.mu while waiting for history; snapshot before taking history locks.
-	agent := b.agentSnapshot()
-
-	tx, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin conversation sync: %w", err)
-	}
-
 	defer func() { _ = tx.Rollback() }()
 
-	if err := lockHistories(ctx, tx, []string{source.config.ConversationID, b.config.ConversationID}); err != nil {
+	if err := lockHistories(ctx, tx, []string{run, conversationID}); err != nil {
 		return err
 	}
 
-	dao := stateDAO{db: tx}
+	if _, err := execState(ctx, tx, "link continued run", `UPDATE conversations c SET continues = $2, cron_run = $2,
+    preview = COALESCE(p.preview, c.preview), last_updated = COALESCE(p.last_updated, c.last_updated) FROM conversations p WHERE c.conversation_id = $1 AND c.continues IS NULL AND p.conversation_id = $2`, conversationID, run); err != nil {
+		return err
+	}
 
-	entries, err := dao.observedEntries(ctx, source.config.ConversationID)
+	if err := refreshPrincipals(ctx, tx, []string{conversationID}); err != nil {
+		return err
+	}
+
+	owner, schedules, err := (stateDAO{db: tx}).bindRun(ctx, run, conversationID)
 	if err != nil {
 		return err
-	}
-
-	summary, err := loadSessionSummary(ctx, tx, b.config.ConversationID)
-	if err != nil {
-		return err
-	}
-
-	changed := false
-
-	for i := range entries {
-		observed := &entries[i]
-
-		producer := observed.SourceConversationID
-		if !observed.Synced {
-			producer = source.config.ConversationID
-		}
-
-		entry, err := externalMCPManagedEntry(&observed.Entry)
-		if err != nil {
-			return err
-		}
-
-		data, err := json.Marshal(entry)
-		if err != nil {
-			return fmt.Errorf("encode synced entry: %w", err)
-		}
-
-		data = removeSessionEntryNUL(data)
-
-		var id int64
-
-		err = tx.QueryRowContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
-SELECT $1, ($2::jsonb || jsonb_build_object('sync_source_entry_id', $3::bigint, 'sync_source_conversation_id', $5::text))::json, $4
-WHERE NOT EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1 AND entry_json::jsonb->>'sync_source_entry_id' = $3::text) RETURNING id`, b.config.ConversationID, string(data), observed.ID, entry.Timestamp.UTC().Format(time.RFC3339Nano), producer).Scan(&id)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
-		}
-
-		if err != nil {
-			return fmt.Errorf("insert synced entry: %w", err)
-		}
-
-		if err := indexEntryMessages(ctx, tx, b.config.ConversationID, producer, id, "", entry.ReplayInput); err != nil {
-			return err
-		}
-
-		changed = true
-
-		if err := projectSessionSummary(&summary, &entry, entry.Timestamp.UTC().Format(time.RFC3339Nano)); err != nil {
-			return err
-		}
-	}
-
-	schedules, err := dao.projectProducerEffects(ctx, source.config.ConversationID, b.config.ConversationID, agent)
-	if err != nil {
-		return err
-	}
-
-	if changed {
-		if err := saveSessionSummary(ctx, tx, summary); err != nil {
-			return err
-		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit conversation sync: %w", err)
+		return fmt.Errorf("commit run continuation: %w", err)
 	}
 
-	for id, scheduled := range schedules {
-		b.armScheduledMessage(id, &scheduled)
+	return r.threads.armSchedules(ctx, owner, schedules)
+}
+
+// SlackThread returns the Slack channel and thread conversationID was stored with: both for a
+// Slack thread, empty for a conversation that is none.
+func (s *SessionService) SlackThread(ctx context.Context, conversationID string) (channelID, threadTS string, err error) {
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(max(slack_channel), ''), COALESCE(max(slack_thread), '') FROM conversations
+WHERE conversation_id = $1`, conversationID).Scan(&channelID, &threadTS); err != nil {
+		return "", "", fmt.Errorf("read Slack thread: %w", err)
 	}
 
-	source.mu.Lock()
-	output := source.pendingOutput
-	source.mu.Unlock()
+	return channelID, threadTS, nil
+}
 
-	if output != nil {
-		message := protocol.CloneOutboundMessage(output)
-
-		message.ConversationID = b.config.ConversationID
-		if err := b.bus.PublishOutbound(ctx, message); err != nil {
-			return fmt.Errorf("publish synced output: %w", err)
-		}
-
-		source.mu.Lock()
-		source.pendingOutput = nil
-		source.mu.Unlock()
+// CronRun reports whether conversationID is a cron run, recorded or not, and the definition path
+// of the cron run it is or, as a Web chat, continues; empty when that is unknown.
+func (s *SessionService) CronRun(ctx context.Context, conversationID string) (path string, run bool, err error) {
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(max(COALESCE(c.cron_path, r.cron_path)), ''), COALESCE(bool_or(c.kind IN ($2, $3)), FALSE)
+FROM conversations c LEFT JOIN conversations r ON r.conversation_id = c.cron_run WHERE c.conversation_id = $1`, conversationID, KindCronRun, KindOneOffCronRun).Scan(&path, &run); err != nil {
+		return "", false, fmt.Errorf("read cron run: %w", err)
 	}
 
-	store.completeTurnPairReservation(b.config.ConversationID, source.config.ConversationID)
-
-	return nil
+	return path, run, nil
 }
 
 // ListConversations returns recorded conversations, never discovered pair IDs.
 func (r *Runtime) ListConversations(ctx context.Context) (conversations []protocol.Conversation, err error) {
-	rows, err := r.Sessions.db.QueryContext(ctx, `SELECT conversation_id, agent, created_by FROM managed_conversations ORDER BY conversation_id`)
+	rows, err := r.Sessions.db.QueryContext(ctx, `SELECT conversation_id, agent, created_by FROM conversations WHERE kind <> 'remote' ORDER BY conversation_id`)
 	if err != nil {
 		return nil, fmt.Errorf("list conversations: %w", err)
 	}
@@ -226,17 +138,16 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 		return err
 	}
 
-	conversationID := inbound.ConversationID
-	if inbound.Kind == protocol.InboundKindCancel {
-		conversationID = cmp.Or(r.Sessions.reservedFor(conversationID), conversationID)
-	}
-
-	bridge, err := r.threads.recordedBridge(ctx, conversationID)
+	bridge, err := r.threads.recordedBridge(ctx, inbound.ConversationID)
 	if err != nil {
 		return err
 	}
 
+	conversationID := inbound.ConversationID
 	if inbound.Kind == protocol.InboundKindCancel {
+		bridge = bridge.stopTarget()
+		conversationID = bridge.config.ConversationID
+
 		if err := r.Sessions.StopGoal(conversationID); err != nil {
 			return err
 		}
@@ -404,7 +315,7 @@ func (r *Runtime) PopQueueItem(ctx context.Context, conversationID, id string) (
 		return r.mutateWebQueue(ctx, conversationID, id, protocol.InboundKindEnqueue)
 	}
 
-	changed, err := execRows(ctx, r.Sessions.db, "pop queue item", "count popped queue items", popQueueItemSQL, conversationID, id, protocol.InboundKindEnqueue, protocol.InboundKindHeld)
+	changed, err := execRows(ctx, r.Sessions.db, "pop queue item", "count popped queue items", popQueueItemSQL, conversationID, id, protocol.InboundKindEnqueue, protocol.InboundKindHeld, waitQueued)
 	if err != nil || changed == 0 {
 		return false, err
 	}
@@ -459,7 +370,7 @@ func (r *Runtime) EditQueueItem(ctx context.Context, conversationID, id, text st
 	}
 
 	var marker string
-	if err := queryScalar(ctx, tx, "read queue edit cutoff", `SELECT COALESCE(revert_message_id, '') FROM managed_conversations WHERE conversation_id = $1`, &marker, conversationID); err != nil {
+	if err := queryScalar(ctx, tx, "read queue edit cutoff", `SELECT COALESCE(revert_message_id, '') FROM conversations WHERE conversation_id = $1`, &marker, conversationID); err != nil {
 		return false, err
 	}
 
@@ -467,8 +378,8 @@ func (r *Runtime) EditQueueItem(ctx context.Context, conversationID, id, text st
 		return false, errors.New("conversation history is reverted")
 	}
 
-	item, err := scanThreadQueueItem(tx.QueryRowContext(ctx, `SELECT queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply, inbound_json
-FROM thread_queue WHERE conversation_id = $1 AND queue_item_id = $2 AND kind IN ($3, $4) FOR UPDATE`, conversationID, id, protocol.InboundKindEnqueue, protocol.InboundKindHeld))
+	item, err := scanThreadQueueItem(tx.QueryRowContext(ctx, `SELECT `+waitingColumns+` FROM turns
+WHERE conversation_id = $1 AND input_id = $2 AND phase = $3 AND reason <> $4 AND delivery IN ($5, $6) FOR UPDATE`, conversationID, id, turnWaiting, waitScheduled, protocol.InboundKindEnqueue, protocol.InboundKindHeld))
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -510,7 +421,7 @@ FROM thread_queue WHERE conversation_id = $1 AND queue_item_id = $2 AND kind IN 
 	}
 
 	content, _ := json.Marshal(item.Content)
-	if _, err := tx.ExecContext(ctx, `UPDATE thread_queue SET message = $3, content = $4, inbound_json = $5 WHERE conversation_id = $1 AND queue_item_id = $2`, conversationID, id, text, content, inbound); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE turns SET message = $3, content = $4, inbound_json = $5 WHERE conversation_id = $1 AND input_id = $2 AND phase = 'waiting'`, conversationID, id, text, content, inbound); err != nil {
 		return false, fmt.Errorf("edit queue text: %w", err)
 	}
 
@@ -558,7 +469,7 @@ func (r *Runtime) ReorderQueueItems(conversationID string, ids []string) error {
 	}
 
 	for i, id := range ids {
-		if _, err := r.Sessions.db.ExecContext(context.Background(), `UPDATE thread_queue SET position=$1 WHERE conversation_id=$2 AND queue_item_id=$3`, i, conversationID, id); err != nil {
+		if _, err := r.Sessions.db.ExecContext(context.Background(), `UPDATE turns SET position = $1 WHERE conversation_id = $2 AND input_id = $3 AND phase = 'waiting'`, i, conversationID, id); err != nil {
 			return fmt.Errorf("reorder thread queue: %w", err)
 		}
 	}
@@ -638,7 +549,7 @@ func (r *Runtime) MoveToBackground(ctx context.Context, conversationID string) (
 	var listed strings.Builder
 
 	for _, run := range moved {
-		fmt.Fprintf(&listed, "- %s: %s (job ID: %s)\n", run.row.kind, cmp.Or(run.row.label, run.row.jobID), run.row.jobID)
+		fmt.Fprintf(&listed, "- %s: %s (job ID: %s)\n", run.row.kind.tool(), cmp.Or(run.row.label, run.row.jobID), run.row.jobID)
 	}
 
 	if listed.Len() > 0 {
@@ -691,7 +602,7 @@ func listedBackgroundJobs(jobs []backgroundJob, conversationID string) []protoco
 	for i := range jobs {
 		job := &jobs[i]
 
-		listed[i] = protocol.BackgroundJob{ID: job.jobID, Kind: string(job.kind), State: string(job.status), Label: job.label, ToolCallID: job.callID, SubagentKey: job.subagentKey, Hidden: job.conversationID != conversationID}
+		listed[i] = protocol.BackgroundJob{ID: job.jobID, Kind: string(job.kind.tool()), State: string(job.status), Label: job.label, ToolCallID: job.callID, SubagentKey: job.subagentKey, Hidden: job.conversationID != conversationID}
 		if job.status == backgroundStopped {
 			listed[i].StoppedBy = strings.TrimPrefix(job.result, "stopped by ")
 		}

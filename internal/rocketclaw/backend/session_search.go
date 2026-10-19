@@ -13,8 +13,9 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/jackc/pgx/v5"
+	"golang.org/x/sync/errgroup"
 )
 
 // SearchKey is the lowercased key of a session search filter term.
@@ -96,9 +97,8 @@ type SessionSearch struct {
 	Matches      []SessionMatch
 	Hits         []MessageSearchHit
 	// MentionIDs are the Slack user and group IDs whose mention a hit holds.
-	MentionIDs                       []string
-	IndexComplete, SummariesComplete bool
-	Principals                       []string
+	MentionIDs []string
+	Principals []string
 }
 
 // parseSessionQuery reads query as Web's search regex
@@ -189,59 +189,111 @@ func parseSessionQuery(query string) (terms []SearchTerm, text string) {
 	return terms, strings.TrimSpace(rest.String())
 }
 
-// SidebarChats yields SidebarSessions with their room, resolved through slack
-// once per channel, cron and origin.
-func (s *SessionService) SidebarChats(ctx context.Context, slack slackLookup) iter.Seq2[SidebarChat, error] {
+// SidebarChats yields the sidebar's chats, or only those of chats when not nil, with their room,
+// resolved through slack once per channel, cron and origin.
+func (s *SessionService) SidebarChats(ctx context.Context, slack slackLookup, chats []string) iter.Seq2[SidebarChat, error] {
 	return func(yield func(SidebarChat, error) bool) {
-		var origins map[string]SidebarChat
-
 		rooms := make(map[string]SidebarChat)
 
-		for row, err := range s.SidebarSessions(ctx) {
-			if err != nil {
-				yield(SidebarChat{}, err)
-				return
+		for row, err := range s.sidebarSessions(ctx, chats) {
+			var chat SidebarChat
+			if err == nil {
+				chat, err = sidebarChat(ctx, slack, rooms, &row)
 			}
 
-			// Read origins after the row snapshot: a first cron sync must not add
-			// a listed chat newer than its origin facts.
-			if origins == nil {
-				origins = make(map[string]SidebarChat)
-
-				for facts, err := range s.ChatOriginFacts(ctx, "") {
-					if err != nil {
-						yield(SidebarChat{}, err)
-						return
-					}
-
-					origin, text := DecideOrigin(&facts)
-					cron, ok := origin.(cronOrigin)
-					origins[facts.ConversationID] = SidebarChat{Cron: ok, CronName: cron.Stem, Origin: text}
-				}
-			}
-
-			chat := origins[row.Conversation.ID]
-			chat.Session = row
-
-			if channel, _, ok := protocol.SlackThreadTarget(row.Conversation.ID); ok {
-				room, loaded := rooms[channel]
-				if !loaded {
-					if room.Room, room.RoomAgents, err = slack.SidebarChannelAgentChoices(ctx, channel); err != nil {
-						yield(SidebarChat{}, fmt.Errorf("resolve sidebar room: %w", err))
-						return
-					}
-
-					rooms[channel] = room
-				}
-
-				chat.Room, chat.RoomAgents = room.Room, room.RoomAgents
-			}
-
-			if !yield(chat, nil) {
+			if !yield(chat, err) || err != nil {
 				return
 			}
 		}
 	}
+}
+
+// sidebarChat is row with its cron, origin and room (sidebarRoom).
+func sidebarChat(ctx context.Context, slack slackLookup, rooms map[string]SidebarChat, row *SidebarSession) (SidebarChat, error) {
+	origin, text := DecideOrigin(&row.Origin)
+	cron, ok := origin.(cronOrigin)
+	chat := SidebarChat{Session: *row, Cron: ok, CronName: cron.Stem, Origin: text}
+
+	if row.SlackChannel != "" {
+		room, err := sidebarRoom(ctx, slack, rooms, row.SlackChannel)
+		if err != nil {
+			return SidebarChat{}, err
+		}
+
+		chat.Room, chat.RoomAgents = room.Room, room.RoomAgents
+	}
+
+	return chat, nil
+}
+
+// sidebarRoom is the room of channel and the agents it allows, which rooms holds once resolved through slack.
+func sidebarRoom(ctx context.Context, slack slackLookup, rooms map[string]SidebarChat, channel string) (SidebarChat, error) {
+	room, loaded := rooms[channel]
+	if !loaded {
+		var err error
+		if room.Room, room.RoomAgents, err = slack.SidebarChannelAgentChoices(ctx, channel); err != nil {
+			return SidebarChat{}, fmt.Errorf("resolve sidebar room: %w", err)
+		}
+
+		rooms[channel] = room
+	}
+
+	return room, nil
+}
+
+// searchCandidates returns the chats Web lists and the remote sessions whose fields or origin may
+// hold needle, a text without spaces lowercased: those whose search words (migration 052) or running
+// prompt hold it, or whose producer's do, or whose room does, which it resolves into rooms. A needle
+// with a non-ASCII rune is only in texts holding a rune Go lowercases into it, one of its simple
+// case folds, which lowercasing ASCII letters keeps.
+func (s *SessionService) searchCandidates(ctx context.Context, slack slackLookup, rooms map[string]SidebarChat, needle string) ([]string, error) {
+	patterns := []string{containsPattern(needle)}
+
+	if i := strings.IndexFunc(needle, func(r rune) bool { return r >= utf8.RuneSelf }); i >= 0 {
+		r, _ := utf8.DecodeRuneInString(needle[i:])
+		patterns = []string{containsPattern(string(r))}
+
+		for fold := unicode.SimpleFold(r); fold != r; fold = unicode.SimpleFold(fold) {
+			patterns = append(patterns, containsPattern(string(fold)))
+		}
+	}
+
+	channels, err := queryStrings(ctx, s.db, `SELECT DISTINCT slack_channel FROM conversations WHERE listed AND slack_channel IS NOT NULL`, "sidebar Slack channels")
+	if err != nil {
+		return nil, err
+	}
+
+	matched := []string{}
+
+	for _, channel := range channels {
+		room, err := sidebarRoom(ctx, slack, rooms, channel)
+		if err != nil {
+			return nil, err
+		}
+
+		if strings.Contains(strings.ToLower(room.Room), needle) {
+			matched = append(matched, channel)
+		}
+	}
+
+	candidates := []string{} // Not nil, which would read every chat.
+	err = s.readParallelRows(ctx, `WITH own AS (
+    SELECT conversation_id, listed OR server IS NOT NULL AS shown, cron_run_at_unix_ns IS NOT NULL AS run FROM conversations WHERE search_words LIKE ANY ($6)
+), `+visibleChatsSQL+chatOriginSQL+`, found AS (
+    SELECT conversation_id FROM own WHERE shown
+    UNION ALL SELECT c.conversation_id FROM creating c JOIN own p ON p.conversation_id = c.creating_source AND p.run
+    UNION ALL SELECT c.conversation_id FROM visible_chats c JOIN turns t ON t.conversation_id = c.conversation_id AND t.phase NOT IN ('waiting', 'done') AND t.takes_lane
+    WHERE lower(replace(replace(t.inbound_json->>'Text', U&'\0130', 'i'), U&'\212A', 'k') COLLATE "C") LIKE ANY ($6)
+    -- A needle holding what JSON escapes, or spanning a pair, can only be read from the decoded pairs.
+    UNION ALL SELECT conversation_id FROM origins c WHERE $5::text[] <> '{}' AND c.slack_channel = ANY($5) OR $4 ~ '[="\\[:cntrl:]]' AND c.pairs <> 'null'
+        OR (c.managed = c.conversation_id) <> (c.run_at IS NOT NULL) AND strpos('cron source: stem: run kind: scheduled one-off id: agent: ran at: external mcp conversation:', $4) > 0
+)
+SELECT DISTINCT conversation_id FROM found`, "session search candidates", func(row rowScanner) error {
+		candidates = append(candidates, "")
+		return row.Scan(&candidates[len(candidates)-1])
+	}, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, KindOneOffCronRun, needle, matched, patterns)
+
+	return candidates, err
 }
 
 // passes requires any room term to match, and every other filter term. A model
@@ -282,15 +334,13 @@ func (c *SidebarChat) passes(terms []SearchTerm, principals []string) bool {
 	return !hasRoom || roomMatch
 }
 
-// sessionLabel is the label Web shows for a chat without a name or preview.
-func sessionLabel(id string) string {
-	if rest, ok := strings.CutPrefix(id, "slack-thread:"); ok {
-		if channel, _, _ := strings.Cut(rest, ":"); channel != "" {
-			return "slack " + channel
-		}
+// Label is what Web calls the chat when it has no name or preview.
+func (row *SidebarSession) Label() string {
+	if row.SlackChannel != "" {
+		return "slack " + row.SlackChannel
 	}
 
-	return strings.TrimPrefix(id, "web-session:")
+	return strings.TrimPrefix(row.Conversation.ID, "web-session:")
 }
 
 // SearchSessions reads query in Web's session search language and finds, among
@@ -299,72 +349,97 @@ func sessionLabel(id string) string {
 // sidebar order, chats with hits first; with one, they follow summary time.
 // Either way, chats whose whole model is a model: value come first.
 func (s *SessionService) SearchSessions(ctx context.Context, query string, scope SearchScope, slack slackLookup) (*SessionSearch, error) {
-	search := &SessionSearch{IndexComplete: true, SummariesComplete: true}
+	search := &SessionSearch{}
 	search.Terms, search.Text = parseSessionQuery(query)
 	search.Needle = strings.ToLower(search.Text)
 
-	principals, complete, err := s.messagePrincipals(ctx)
+	var (
+		principals map[string][]string
+		found      []MessageSearchHit
+		mentions   map[string]string
+		chats      []string // nil reads every chat.
+	)
+
+	rooms := make(map[string]SidebarChat)
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.Go(func() (err error) {
+		principals, search.Principals, err = s.messagePrincipals(groupCtx)
+		return err
+	})
+
+	if scope == SearchMessages && search.Needle != "" {
+		group.Go(func() (err error) {
+			found, mentions, err = s.SearchMessagesMentioning(groupCtx, search.Needle, slack)
+			return err
+		})
+	}
+
+	// A needle without spaces reads only the chats that may match it, and those with hits;
+	// any other search, and one leaving free text to the caller, reads every chat, alongside
+	// the reads above.
+	var rows []SidebarSession
+
+	narrow := scope != SearchFilters && search.Needle != "" && !strings.Contains(search.Needle, " ")
+	if narrow {
+		group.Go(func() (err error) {
+			chats, err = s.searchCandidates(groupCtx, slack, rooms, search.Needle)
+			return err
+		})
+	} else {
+		group.Go(func() (err error) {
+			rows, err = s.sidebarRows(groupCtx, nil)
+			return err
+		})
+	}
+
+	if err := group.Wait(); err != nil {
+		return nil, fmt.Errorf("search sessions: %w", err)
+	}
+
+	if narrow {
+		var err error
+		if rows, err = s.sidebarRows(ctx, readChats(chats, found)); err != nil {
+			return nil, err
+		}
+	}
+
+	agents, err := s.modelAgents(search.Terms)
 	if err != nil {
 		return nil, err
 	}
 
-	if slices.ContainsFunc(search.Terms, func(term SearchTerm) bool { return term.Key == keyPrincipal }) {
-		search.IndexComplete = complete
-	}
-
-	// A RocketClaw chat's model is its agent's configured model, read only for a model: term.
-	var agents rocketcode.Agents
-	if slices.ContainsFunc(search.Terms, func(term SearchTerm) bool { return term.Key == keyModel }) {
-		if agents, _, err = LoadRuntimeDefinitions(s.definitions, s.definitions.Clone().RuntimeDirName()); err != nil {
-			return nil, fmt.Errorf("load agents for model search: %w", err)
-		}
-	}
-
-	var chats []SidebarChat
+	var listed []SidebarChat
 
 	hits := make(map[string]bool) // Whether each chat that passed the filters has hits.
 
-	for chat, err := range s.SidebarChats(ctx, slack) {
+	for i := range rows {
+		chat, err := sidebarChat(ctx, slack, rooms, &rows[i])
 		if err != nil {
 			return nil, err
 		}
-
-		search.SummariesComplete = search.SummariesComplete && chat.Session.Summary != nil
-		search.Principals = append(search.Principals, principals[chat.Session.Conversation.ID]...)
 
 		if chat.Session.Server == "" {
 			chat.Session.Model = agents.Items[chat.Session.Conversation.Agent].Model
 		}
 
 		if chat.passes(search.Terms, principals[chat.Session.Conversation.ID]) {
-			chats = append(chats, chat)
+			listed = append(listed, chat)
 			hits[chat.Session.Conversation.ID] = false
 		}
 	}
 
-	slices.Sort(search.Principals)
-	search.Principals = slices.Compact(search.Principals)
-
-	if scope == SearchMessages && search.Needle != "" {
-		found, mentions, complete, err := s.SearchMessagesMentioning(ctx, search.Needle, slack)
-		if err != nil {
-			return nil, err
+	for _, hit := range found {
+		if _, passed := hits[hit.ConversationID]; passed {
+			hits[hit.ConversationID] = true
+			search.Hits = append(search.Hits, hit)
 		}
-
-		for _, hit := range found {
-			if _, passed := hits[hit.ConversationID]; passed {
-				hits[hit.ConversationID] = true
-				search.Hits = append(search.Hits, hit)
-			}
-		}
-
-		search.MentionIDs = MentionedIDs(search.Hits, mentions)
-		search.IndexComplete = search.IndexComplete && complete
 	}
 
+	search.MentionIDs = MentionedIDs(search.Hits, mentions)
+
 	for _, withHits := range []bool{true, false} {
-		for i := range chats {
-			chat := &chats[i]
+		for i := range listed {
+			chat := &listed[i]
 
 			row := &chat.Session
 			if hits[row.Conversation.ID] != withHits {
@@ -376,14 +451,14 @@ func (s *SessionService) SearchSessions(ctx context.Context, query string, scope
 				continue
 			}
 
-			label := sessionLabel(row.Conversation.ID)
+			label := row.Label()
 
 			var preview string
 			if row.Summary != nil {
 				preview = row.Summary.LastMessage
 			}
 
-			if !withHits && !strings.Contains(strings.ToLower(row.Name+" "+chat.Room+" "+preview+" "+row.Conversation.Agent+" "+label+" "+row.Server+" "+row.Directory), search.Needle) && !strings.Contains(chat.Origin, search.Needle) {
+			if !withHits && search.Needle != "" && !strings.Contains(strings.ToLower(row.Name+" "+chat.Room+" "+preview+" "+row.Conversation.Agent+" "+label+" "+row.Server+" "+row.Directory), search.Needle) && !strings.Contains(chat.Origin, search.Needle) {
 				continue
 			}
 
@@ -410,6 +485,53 @@ func (s *SessionService) SearchSessions(ctx context.Context, query string, scope
 	search.sortMatches()
 
 	return search, nil
+}
+
+// readChats are the chats a narrow search reads: candidates and those with hits, each once, or nil
+// for every chat when they are many, as reading a long list costs more than reading every chat,
+// which SearchSessions filters the same way.
+// ponytail: a fixed cut, near where Wallace's 5.8k chats break even; it could follow the chat count.
+func readChats(candidates []string, hits []MessageSearchHit) []string {
+	for _, hit := range hits {
+		candidates = append(candidates, hit.ConversationID)
+	}
+
+	slices.Sort(candidates)
+
+	if candidates = slices.Compact(candidates); len(candidates) > 2000 {
+		return nil
+	}
+
+	return candidates
+}
+
+// sidebarRows collects sidebarSessions of chats.
+func (s *SessionService) sidebarRows(ctx context.Context, chats []string) ([]SidebarSession, error) {
+	var rows []SidebarSession
+
+	for row, err := range s.sidebarSessions(ctx, chats) {
+		if err != nil {
+			return nil, err
+		}
+
+		rows = append(rows, row)
+	}
+
+	return rows, nil
+}
+
+// modelAgents are the agents whose configured models are RocketClaw chats' models, loaded only for a model: term.
+func (s *SessionService) modelAgents(terms []SearchTerm) (rocketcode.Agents, error) {
+	if !slices.ContainsFunc(terms, func(term SearchTerm) bool { return term.Key == keyModel }) {
+		return rocketcode.Agents{}, nil
+	}
+
+	agents, _, err := LoadRuntimeDefinitions(s.definitions, s.definitions.Clone().RuntimeDirName())
+	if err != nil {
+		return rocketcode.Agents{}, fmt.Errorf("load agents for model search: %w", err)
+	}
+
+	return agents, nil
 }
 
 // sortMatches puts chats whose whole model is a model: value, ignoring case,

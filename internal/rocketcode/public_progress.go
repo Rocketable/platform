@@ -2,6 +2,7 @@ package rocketcode
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -49,8 +50,8 @@ type PublicProgress struct {
 	Text     string              `json:"text,omitempty"`
 	Agent    string              `json:"agent,omitempty"`
 	Model    string              `json:"model,omitempty"`
-	// SubagentKey is the child-session key of the subagent a task call runs or continues, as
-	// OpenCode keeps a task part's child session ID in its metadata.
+	// SubagentKey is the key of the subagent a task call runs or continues under the history that
+	// holds the call, as OpenCode keeps a task part's child session ID in its metadata.
 	SubagentKey string `json:"subagent_key,omitempty"`
 }
 
@@ -220,6 +221,8 @@ type turnObservations struct {
 	// calls holds the turn's Code Mode records in the order they were first saved. The trace never
 	// carries them while the turn runs, so its saves do not rewrite them.
 	calls []CodeModeCall
+	// saved is the turn's step as last journaled (looper.saveTurn); only the root goroutine uses it.
+	saved turnStep
 }
 
 func (o *turnObservations) observe(ctx context.Context, progress *PublicProgress) error {
@@ -243,6 +246,9 @@ func (o *turnObservations) finishCall(ctx context.Context, progress *PublicProgr
 			break
 		}
 	}
+
+	// A task call can move before its subagent reports, so the row names the subagent itself.
+	snapshot.SubagentKey = cmp.Or(snapshot.SubagentKey, progress.SubagentKey)
 
 	if snapshot.State != PublicProgressBlocked {
 		snapshot.State = state

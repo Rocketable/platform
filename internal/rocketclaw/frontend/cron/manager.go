@@ -44,10 +44,9 @@ type Manager struct {
 
 type cronScheduleStore interface {
 	ResetCronSchedules() error
-	SyncCronSchedules([]backend.CronScheduleState, time.Time) error
+	SyncCronSchedules([]backend.CronScheduleState) error
 	DueCronSchedules(time.Time) ([]backend.CronScheduleState, error)
-	ClaimCronSchedule(backend.CronScheduleState, time.Time, time.Time) (string, bool, error)
-	CompleteCronRun(string, time.Time) error
+	ClaimCronSchedule(backend.CronScheduleState, time.Time, time.Time) (bool, error)
 }
 
 type definition struct {
@@ -106,7 +105,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("reset cron schedules: %w", err)
 	}
 
-	if err := m.store.SyncCronSchedules(m.scheduledStates(definitions, now), now); err != nil {
+	if err := m.store.SyncCronSchedules(m.scheduledStates(definitions, now)); err != nil {
 		return fmt.Errorf("sync cron schedules: %w", err)
 	}
 
@@ -234,7 +233,8 @@ func (m *Manager) Jobs() ([]Job, error) {
 func (m *Manager) RunOneOffCronjob(ctx context.Context, job *protocol.OneOffCronjob) (protocol.CronRunResult, error) {
 	raw := new(backend.RawRunProgress)
 
-	raw.ConversationID = cronTraceConversationID(oneOffCronTracePrefix, job.RelativePath, m.now())
+	raw.Run = &protocol.CronRun{Path: job.RelativePath, At: m.now(), OneOff: true}
+	raw.ConversationID = cronTraceConversationID(oneOffCronTracePrefix, job.RelativePath, raw.Run.At)
 	raw.SyncDestination = job.ConversationID
 	raw.Cronjob = &protocol.CronjobMessage{RelativePath: job.RelativePath, Agent: job.Agent, RanAt: m.now().Format(time.RFC3339)}
 	raw.TextChannel = job.TextChannel
@@ -333,7 +333,7 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 	}
 
 	states := m.scheduledStates(definitions, now)
-	if err := m.store.SyncCronSchedules(states, now); err != nil {
+	if err := m.store.SyncCronSchedules(states); err != nil {
 		return fmt.Errorf("sync cron schedules: %w", err)
 	}
 
@@ -378,7 +378,7 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 			continue
 		}
 
-		relativePath, ok, err := m.store.ClaimCronSchedule(state, scheduled.NextDue, now)
+		ok, err := m.store.ClaimCronSchedule(state, scheduled.NextDue, now)
 		if err != nil {
 			return fmt.Errorf("claim cron schedule: %w", err)
 		}
@@ -390,11 +390,6 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 		m.mu.Lock()
 		if m.closed {
 			m.mu.Unlock()
-
-			if err := m.store.CompleteCronRun(relativePath, m.now()); err != nil {
-				return fmt.Errorf("complete cron run after stopped claim: %w", err)
-			}
-
 			continue
 		}
 
@@ -402,21 +397,15 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 		m.mu.Unlock()
 
 		startedFiles[definition.relativePath] = struct{}{}
-		go m.runScheduled(ctx, relativePath, &definition)
+
+		go func() {
+			defer m.wg.Done()
+
+			m.executeJob(ctx, &definition)
+		}()
 	}
 
 	return nil
-}
-
-func (m *Manager) runScheduled(ctx context.Context, relativePath string, definition *definition) {
-	defer m.wg.Done()
-	defer func() {
-		if err := m.store.CompleteCronRun(relativePath, m.now()); err != nil {
-			m.log.Error("complete cron run", "file", relativePath, "error", err)
-		}
-	}()
-
-	m.executeJob(ctx, definition)
 }
 
 func (m *Manager) scheduledStates(definitions []definition, now time.Time) []backend.CronScheduleState {
@@ -444,11 +433,17 @@ const cronReplyInstruction = "Your reply is posted to the channel exactly as wri
 func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 	startedAt := m.now()
 	ranAt := startedAt.Format(time.RFC3339)
-	prompt := m.preparePrompt(definition.body)
+	// A run with no channel posts nowhere, so only a channel's runs learn that their reply is posted.
+	prompt := definition.body
+	if definition.textChannel != "" {
+		prompt = m.preparePrompt(definition.body)
+	}
+
 	log := m.log.With("file", definition.relativePath, "agent", definition.agent, "ran_at", ranAt)
 
 	progress := &backend.RawRunProgress{
 		ConversationID: cronTraceConversationID(cronTracePrefix, definition.relativePath, startedAt),
+		Run:            &protocol.CronRun{Path: definition.relativePath, At: startedAt},
 		TextChannel:    definition.textChannel,
 		Cronjob:        &protocol.CronjobMessage{RelativePath: definition.relativePath, Agent: definition.agent, RanAt: ranAt, Space: definition.space},
 	}
@@ -534,7 +529,7 @@ func loadDefinitionsIn(workspace, runtimeDir string, channels []string) ([]defin
 	}
 
 	for _, definition := range definitions {
-		if !slices.Contains(channels, definition.textChannel) {
+		if definition.textChannel != "" && !slices.Contains(channels, definition.textChannel) {
 			return nil, fmt.Errorf("cronjob %s channel %q is not configured", definition.relativePath, definition.textChannel)
 		}
 	}

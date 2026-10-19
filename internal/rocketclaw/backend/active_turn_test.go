@@ -3,6 +3,7 @@ package backend
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -24,7 +25,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketcode"
-	migrate "github.com/rubenv/sql-migrate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -157,6 +157,7 @@ func TestStoppedInitialRequestKeepsAcceptedInput(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, transcript, 1)
 	assert.Equal(t, protocol.TerminalStopped, transcript[0].Terminal)
+	require.Empty(t, testTurnStepKeys(t, service, conversationID), "the stopped turn leaves no step")
 
 	next := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "Continue with a summary.", true)
 	require.NoError(t, bridge.Submit(t.Context(), next))
@@ -231,7 +232,7 @@ func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
 	require.NoError(t, err)
 
 	var persisted string
-	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT outbound_json::text FROM active_turns WHERE id = 'turn-finished'`).Scan(&persisted))
+	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT outbound_json::text FROM turns WHERE id = 'turn-finished'`).Scan(&persisted))
 	assert.NotContains(t, persisted, base64.StdEncoding.EncodeToString(outbound.Attachments[0].Data), "a finished turn keeps only attachment IDs, so large files fit")
 
 	late := []rocketcode.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), TurnID: "turn-finished"}}
@@ -258,6 +259,51 @@ func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
 	continued := readFinal(t, finals)
 	assert.Equal(t, "answer", continued.Text, "the goal continues once after the redelivered turn")
 	assert.Len(t, requests, 1, "only the continuation calls the model")
+}
+
+// A runner that missed its turn's stop and saves and finishes afterwards leaves the stopped turn as
+// it was when it stopped, both in what Web shows and in what the agent replays.
+func TestLateRunnerLeavesStoppedTurn(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	ctx := t.Context()
+	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "ask", true)
+	require.NoError(t, startTurnDB(ctx, service.db, "turn-1", "chat", inbound))
+
+	save := func(items ...string) {
+		record := rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "turn-1"}
+		for _, text := range items {
+			record.ReplayInput = append(record.ReplayInput, json.RawMessage(`{"type":"message","role":"assistant","content":"`+text+`"}`))
+		}
+
+		require.NoError(t, saveTestTurn(ctx, service, "chat", "turn-1", nil, &record))
+	}
+	finish := func(terminal protocol.Terminal, text string) {
+		outbound := &protocol.OutboundMessage{ConversationID: "chat", TurnID: "turn-1", Text: text, Terminal: terminal}
+		_, err := service.finishTurn(ctx, "turn-1", &turnFinish{store: newSessionStore("chat", service), outbound: outbound, terminal: terminal})
+		require.NoError(t, err)
+	}
+	observe := func() string {
+		transcript, err := service.ObserveTranscript(ctx, "chat", 0, 0, nil)
+		require.NoError(t, err)
+
+		data, err := json.Marshal(transcript)
+		require.NoError(t, err)
+
+		return string(data)
+	}
+
+	save("partial")
+	finish(protocol.TerminalStopped, "")
+
+	stopped := observe()
+	require.Contains(t, stopped, "partial")
+
+	save("partial", "written after the stop")
+	finish(protocol.TerminalComplete, "late answer")
+
+	require.Equal(t, stopped, observe())
 }
 
 func TestFinishTurnKeepsLargeAttachment(t *testing.T) {
@@ -400,12 +446,12 @@ func TestStopBeforeProducerTurnRegistersCancelStopsTurn(t *testing.T) {
 		require.NoError(t, nt.bridge(t, manager, managed).enqueue(t.Context(), &bridgeRequest{inbound: origin, producer: nt.bridge(t, manager, private)}, "test"))
 	}
 
-	// The held history lock parks the handler in activation, after it reserved the destination.
+	// The held history lock parks the handler in activation, after it took the producer's request.
 	tx, err := nt.service.db.BeginTx(t.Context(), nil)
 	require.NoError(t, err)
 	require.NoError(t, lockSessionHistory(t.Context(), tx, private))
 	submit("stop me")
-	require.Eventually(t, func() bool { return nt.service.reservedFor(managed) == private }, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, nt.bridge(t, manager, private).handlingSnapshot, 5*time.Second, 10*time.Millisecond)
 
 	manager.InterruptConversation(managed)
 	require.NoError(t, tx.Rollback())
@@ -419,7 +465,7 @@ func TestStopBeforeProducerTurnRegistersCancelStopsTurn(t *testing.T) {
 	assert.Len(t, nt.requests, 1)
 }
 
-// Turn IDs key active_turns across conversations, so two issued within one
+// Turn IDs key turns across conversations, so two issued within one
 // clock tick still differ, in issue order.
 func TestNewTurnIDIncreases(t *testing.T) {
 	t.Parallel()
@@ -491,6 +537,15 @@ func TestStartActiveTurnsStartsRowWorkers(t *testing.T) {
 	assert.Contains(t, logs.String(), `msg="active turn worker conversation is not recorded" component=thread_bridges conversation_id=`+unrecordedID)
 }
 
+// seedProducerEffects records a hidden run's schedule changes under its turn, as its tools do.
+func seedProducerEffects(t *testing.T, store *SessionService, conversationID, turnID string, effects ...producerEffect) {
+	t.Helper()
+
+	data, err := json.Marshal(effects)
+	require.NoError(t, err)
+	require.NoError(t, store.SaveTurnStep(t.Context(), conversationID, turnID+producerEffectsStep, data))
+}
+
 // newTestBridgeManager returns a running manager of real bridges that publish to
 // finals, and the shutdown that stops its loops.
 func newTestBridgeManager(t *testing.T, cfg *config.LockedConfig, service *SessionService, finals chan *protocol.OutboundMessage) (manager *threadBridgeManager, shutdown func() error) {
@@ -502,6 +557,34 @@ func newTestBridgeManager(t *testing.T, cfg *config.LockedConfig, service *Sessi
 	}})
 
 	return manager, runTestManager(t, manager)
+}
+
+// A one-time reminder that came due while the process was down runs once at the next startup, and
+// the startup after that does not run it again.
+func TestOverdueScheduledTurnRunsOnceAfterRestart(t *testing.T) {
+	t.Parallel()
+
+	newBridge, service, requests, finals := newResumeTestBridges(t, false)
+	cfg, conversationID := newBridge().runtime, newBridge().config.ConversationID
+	require.NoError(t, service.PutScheduledMessage("missed", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "due while down", DueAt: time.Now().Add(-time.Hour)}))
+
+	manager, shutdown := newTestBridgeManager(t, cfg, service, finals)
+	require.NoError(t, manager.StartQueuedConversations(t.Context()))
+	require.NoError(t, manager.StartPendingScheduledMessages(t.Context()))
+	assert.Equal(t, conversationID, readFinal(t, finals).ConversationID)
+	require.Contains(t, <-requests, "due while down")
+	require.Eventually(t, func() bool {
+		messages, err := service.ScheduledMessages()
+		require.NoError(t, err)
+
+		return len(messages) == 0 && len(runningTestTurns(t, service)) == 0
+	}, 5*time.Second, 10*time.Millisecond)
+	require.NoError(t, shutdown())
+
+	manager, _ = newTestBridgeManager(t, cfg, service, finals)
+	require.NoError(t, manager.StartQueuedConversations(t.Context()))
+	require.NoError(t, manager.StartPendingScheduledMessages(t.Context()))
+	require.Never(t, func() bool { return len(requests) > 0 }, 300*time.Millisecond, 10*time.Millisecond, "the reminder ran once")
 }
 
 // newCronTestManager returns a manager for one #ops channel whose cron roots
@@ -536,7 +619,7 @@ func newCronRoots(sent func(*protocol.OutboundMessage)) *slackFrontendMock {
 func seedCronRun(t *testing.T, service *SessionService, runID string) *protocol.InboundMessage {
 	t.Helper()
 
-	require.NoError(t, service.UpsertThread(runID, ThreadState{Agent: "job", CreatedBy: ThreadCreatedByCron}))
+	require.NoError(t, service.recordConversation(t.Context(), protocol.Conversation{ID: runID, Agent: "job", CreatedBy: string(ThreadCreatedByCron), Run: &protocol.CronRun{Path: "cron/daily.md"}}, conversationFacts{}))
 
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "job prompt", false)
 	msg.ConversationID, msg.RequireOutputDecision = runID, true
@@ -545,6 +628,34 @@ func seedCronRun(t *testing.T, service *SessionService, runID string) *protocol.
 	require.NoError(t, startTurnDB(t.Context(), service.db, "turn-cron", runID, msg))
 
 	return msg
+}
+
+// A cron run with no channel delivers its report to no Slack thread and stays unbound.
+func TestCronRunWithoutChannelPostsNoRoot(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	manager, cfg, roots, finals := newCronTestManager(t, service)
+	require.NoError(t, service.recordConversation(t.Context(), protocol.Conversation{ID: "cron:quiet", Agent: "job", CreatedBy: string(ThreadCreatedByCron), Run: &protocol.CronRun{Path: "cron/quiet.md"}}, conversationFacts{}))
+
+	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "job prompt", false)
+	msg.ConversationID, msg.RequireOutputDecision = "cron:quiet", true
+	msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/quiet.md", Agent: "job", RanAt: "2000-01-02T03:04:05Z"}
+	require.NoError(t, startTurnDB(t.Context(), service.db, "turn-quiet", "cron:quiet", msg))
+	writeAgent(t, cfg.Workspace, "job", "---\ndescription: Job\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nRun the job.\n")
+
+	crashed := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:quiet", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
+	_, err := service.finishTurn(t.Context(), "turn-quiet", &turnFinish{store: newSessionStore("cron:quiet", service), entries: []rocketcode.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replayInputForMessage("user", "job prompt")}}, outbound: crashed.newOutboundMessage(msg, "turn-quiet", "quiet report", true)})
+	require.NoError(t, err)
+
+	require.NoError(t, manager.StartActiveTurns(t.Context()))
+	assert.Equal(t, "quiet report", readFinal(t, finals).Text)
+	require.Eventually(t, func() bool { return len(runningTestTurns(t, service)) == 0 }, 5*time.Second, 10*time.Millisecond)
+	assert.Empty(t, roots, "no report root is posted")
+
+	var reportsTo sql.NullString
+	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT reports_to FROM conversations WHERE conversation_id = 'cron:quiet'`).Scan(&reportsTo))
+	assert.False(t, reportsTo.Valid, "the run reports to no chat until it is continued in Web")
 }
 
 // AE2: a scheduled cron row resumed after restart posts its report root once in
@@ -584,14 +695,33 @@ func TestResumedCronRowPostsRootOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "Reports", spaces[len(spaces)-1].Name)
 
-	for row, err := range service.SidebarSessions(t.Context()) {
+	for row, err := range service.sidebarSessions(t.Context(), nil) {
 		require.NoError(t, err)
 		assert.Equal(t, spaces[len(spaces)-1].ID, row.SpaceID)
 	}
 
 	entries, err := service.ObserveEntries(t.Context(), destination)
 	require.NoError(t, err)
-	assert.Len(t, entries, 1, "the run's history is copied into the report thread")
+	assert.Len(t, entries, 1, "the report thread shows the run's history")
+
+	var copies int
+	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT count(*) FROM entries WHERE conversation_id = $1`, destination).Scan(&copies))
+	assert.Zero(t, copies, "binding the run copies no entries into the report thread")
+
+	listed := false
+
+	for row, err := range service.sidebarSessions(t.Context(), nil) {
+		require.NoError(t, err)
+
+		if row.Conversation.ID == destination {
+			listed = true
+
+			require.NotNil(t, row.Summary)
+			assert.Equal(t, "job prompt", row.Summary.LastMessage, "a thread whose only content is the run lists the run's preview")
+		}
+	}
+
+	assert.True(t, listed)
 	assert.Empty(t, roots, "the root is posted once")
 
 	footers := manager.cronRoots.(*slackFrontendMock).EditCronjobRootFooterCalls()
@@ -600,16 +730,14 @@ func TestResumedCronRowPostsRootOnce(t *testing.T) {
 	assert.Equal(t, destination, footers[0].ConversationID, "the footer links the bound report thread")
 	assert.Equal(t, "turn-cron", footers[0].Msg.TurnID)
 
-	owner, _, err := (stateDAO{db: service.db}).producer(t.Context(), "cron:daily")
-	require.NoError(t, err)
-	assert.Equal(t, destination, owner.SyncDestination, "the delivered root survives turn close")
+	var owner string
+	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT reports_to FROM conversations WHERE conversation_id = 'cron:daily'`).Scan(&owner))
+	assert.Equal(t, destination, owner, "the delivered root survives turn close")
 	_, err = manager.switchConversationAgent(destination, "selected")
 	require.NoError(t, err)
-	data, err := json.Marshal(protocol.ScheduledMessageState{ConversationID: "cron:daily", Agent: "job", Message: "later", DueAt: time.Now().Add(time.Hour)})
+	run, err := manager.recordedBridge(t.Context(), "cron:daily")
 	require.NoError(t, err)
-	_, err = service.AppendEntryID(t.Context(), "cron:daily", &rocketcode.SessionEntry{Version: 1, Type: producerScheduleEntryType, Timestamp: time.Now(), OutputTrace: []json.RawMessage{data}})
-	require.NoError(t, err)
-	require.NoError(t, manager.StartPendingScheduledMessages(t.Context()))
+	require.NoError(t, run.ScheduleMessage(msg, time.Hour, "later", false))
 
 	pending, err := service.ScheduledMessagesForConversation(destination)
 	require.NoError(t, err)
@@ -620,176 +748,6 @@ func TestResumedCronRowPostsRootOnce(t *testing.T) {
 	}
 
 	assert.Empty(t, roots, "recovery reuses the delivered root")
-}
-
-func TestLegacyCronScheduleResumesIntoCanonical(t *testing.T) {
-	t.Parallel()
-
-	for _, owner := range []string{"", "slack-thread:C1:1.2"} {
-		t.Run(owner, func(t *testing.T) {
-			newBridge, store, calls, finals := newResumeTestBridges(t, false)
-			runtime := newBridge().runtime
-			writeAgent(t, runtime.Clone().Workspace, "a-selected", "---\ndescription: Selected\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nSelected canonical instructions\n")
-			writeAgent(t, runtime.Clone().Workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw: {rocketclaw_schedule_message: allow}\n---\nProducer instructions\n")
-
-			destination := owner
-			if destination == "" {
-				destination = "web:cron:legacy"
-			}
-
-			if owner != "" {
-				require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: destination, Agent: "a-selected"}))
-				_, err := store.AppendEntryID(t.Context(), destination, testSessionEntry("canonical history", "canonical answer"))
-				require.NoError(t, err)
-			}
-
-			require.NoError(t, store.UpsertThread("cron:legacy", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
-			// Back to before 027_producer_handoff and the twenty-one migrations that follow it.
-			_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(t.Context(), store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 22)
-			require.NoError(t, err)
-
-			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "original legacy job", false)
-			inbound.ConversationID, inbound.RequireOutputDecision = "cron:legacy", true
-			inbound.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/missing.md", Agent: "main"}
-			data, err := json.Marshal(inbound)
-			require.NoError(t, err)
-			_, err = store.db.ExecContext(t.Context(), `INSERT INTO active_turns (id, conversation_id, inbound_json, output_trace_json, history_anchor_id, created_at_unix_ns, updated_at_unix_ns, phase) VALUES ('legacy-turn', 'cron:legacy', $1, '[]', 0, 1, 1, 'running')`, string(data))
-			require.NoError(t, err)
-
-			if owner != "" {
-				// This legacy delivery fact authorizes the existing destination.
-				require.NoError(t, store.SaveTurnStep(t.Context(), "cron:legacy", "legacy-turn/cron-root", []byte(`{"ChannelID":"C1","MessageID":"1.2"}`)))
-			}
-
-			code := "def main():\n    return rocketclaw_schedule_message(message=\"legacy follow up\", send_this_in=\"1h\", recurring=True)\n"
-			arguments, err := json.Marshal(struct {
-				Code string `json:"code"`
-			}{Code: code})
-			require.NoError(t, err)
-			call, err := json.Marshal(struct {
-				Type      string `json:"type"`
-				ID        string `json:"id"`
-				CallID    string `json:"call_id"`
-				Name      string `json:"name"`
-				Arguments string `json:"arguments"`
-			}{Type: "function_call", ID: "fc_legacy", CallID: "legacy_schedule", Name: "execute", Arguments: string(arguments)})
-			require.NoError(t, err)
-			// Seed the actual provider/tool journal shape, not a producer effect.
-			replay := replayInputForMessage("user", "original legacy job")
-
-			record := rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "legacy-turn", Timestamp: time.Now(), ReplayInput: append(replay, call), OutputTrace: []json.RawMessage{call}}
-			data, err = json.Marshal(struct {
-				Record   rocketcode.SessionEntry `json:"record"`
-				Response json.RawMessage         `json:"response"`
-			}{Record: record, Response: json.RawMessage(`{"id":"resp_legacy","object":"response","status":"completed","output":[` + string(call) + `]}`)})
-			require.NoError(t, err)
-			require.NoError(t, store.SaveTurnStep(t.Context(), "cron:legacy", "legacy-turn", data))
-			require.NoError(t, store.SaveTurnStep(t.Context(), "cron:legacy", "legacy-turn/call/legacy_schedule", []byte(`{"output":[{"type":"function_call_output","call_id":"legacy_schedule","output":"legacy scheduling result"}]}`)))
-
-			legacy := protocol.ScheduledMessageState{ConversationID: "cron:legacy", Agent: "main", Message: "legacy follow up", DueAt: time.Now().Add(time.Hour).UTC(), Recurring: true, Interval: time.Hour}
-			require.NoError(t, store.PutScheduledMessage("legacy-id", &legacy))
-			require.NoError(t, initializeSessionDB(t.Context(), store.db, slog.New(slog.DiscardHandler)))
-
-			// Finish the resumed job with an empty (silent) reply; scheduling must replay.
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				body, err := io.ReadAll(r.Body)
-				assert.NoError(t, err)
-				w.Header().Set("Content-Type", "application/json")
-
-				calls <- string(body)
-
-				switch {
-				case strings.Contains(string(body), "Selected canonical instructions"):
-					writeRawRunMessage(t, w, "followup", "followup", "canonical answer")
-				default:
-					writeRawRunMessage(t, w, "done", "done", "")
-				}
-			}))
-			t.Cleanup(server.Close)
-			require.NoError(t, runtime.Do(func(cfg *config.Config) error {
-				cfg.OpenAI.APIBaseURL = server.URL
-				return nil
-			}))
-			manager, _ := newTestBridgeManager(t, runtime, store, finals)
-			roots := make(chan *protocol.OutboundMessage, 1)
-			manager.cronRoots = &slackFrontendMock{SendCronjobRootFunc: func(_ context.Context, message *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
-				roots <- message
-				return protocol.TextConversationTarget{ChannelID: "C1", ThreadID: "1.2"}, nil
-			}}
-			require.NoError(t, manager.StartActiveTurns(t.Context()))
-			original := readFinal(t, finals)
-			assert.Equal(t, "cron:legacy", original.ConversationID)
-			assert.Empty(t, original.Text, "the original silent report remains private")
-			require.Eventually(t, func() bool { return len(runningTestTurns(t, store)) == 0 }, 5*time.Second, 10*time.Millisecond)
-			// Finish the completion handoff before inspecting its pre-admission state.
-			require.NoError(t, manager.PickLaterWork(t.Context(), "cron:legacy"))
-
-			if owner == "" {
-				_, recorded, err := store.Thread(destination)
-				require.NoError(t, err)
-				assert.False(t, recorded, "legacy silent work creates Web only when due")
-			} else {
-				legacy.ConversationID, legacy.Agent = destination, "a-selected"
-			}
-
-			messages, err := store.ScheduledMessagesForConversation(legacy.ConversationID)
-			require.NoError(t, err)
-			require.Equal(t, map[string]protocol.ScheduledMessageState{"legacy-id": legacy}, messages, "handoff preserves the row and timestamps exactly")
-			legacy.DueAt = time.Now().Add(-time.Minute).UTC()
-			require.NoError(t, store.PutScheduledMessage("legacy-id", &legacy))
-			require.NoError(t, manager.StartPendingScheduledMessages(t.Context()))
-
-			if owner != "" {
-				require.NoError(t, manager.PickLaterWork(t.Context(), destination))
-			}
-
-			followup := readFinal(t, finals)
-			assert.Equal(t, destination, followup.ConversationID)
-			assert.Equal(t, "a-selected", followup.Agent)
-			assert.Nil(t, followup.SlackReply)
-			assert.Nil(t, followup.Cronjob)
-			require.Eventually(t, func() bool { return len(runningTestTurns(t, store)) == 0 }, 5*time.Second, 10*time.Millisecond)
-
-			var canonicalBody string
-
-			for len(calls) > 0 {
-				body := <-calls
-				if strings.Contains(body, "Selected canonical instructions") {
-					canonicalBody = body
-				}
-			}
-
-			if owner != "" {
-				assert.Contains(t, canonicalBody, "canonical history")
-			}
-
-			assert.Contains(t, canonicalBody, "original legacy job")
-
-			var request struct {
-				Input []json.RawMessage `json:"input"`
-			}
-			require.NoError(t, json.Unmarshal([]byte(canonicalBody), &request))
-			prompts, err := replayInputMessages(request.Input)
-			require.NoError(t, err)
-			require.NotEmpty(t, prompts)
-			assert.Equal(t, "[System additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nlegacy follow up", prompts[len(prompts)-1].text)
-
-			messages, err = store.ScheduledMessagesForConversation(destination)
-			require.NoError(t, err)
-			require.Len(t, messages, 1)
-			assert.True(t, messages["legacy-id"].DueAt.After(legacy.DueAt), "ordinary recurring admission advances the preserved schedule")
-			legacy.ConversationID, legacy.Agent, legacy.DueAt = destination, "a-selected", messages["legacy-id"].DueAt
-			assert.Equal(t, legacy, messages["legacy-id"], "ID and recurring cadence survive rehoming")
-
-			private, err := store.ScheduledMessagesForConversation("cron:legacy")
-			require.NoError(t, err)
-			assert.Empty(t, private)
-			effects, err := (stateDAO{db: store.db}).producerEffects(t.Context(), "cron:legacy", 0)
-			require.NoError(t, err)
-			assert.Empty(t, effects, "replayed scheduling output must not create a new intent")
-			assert.Empty(t, roots, "neither silent Web nor retained delivery creates another Slack root")
-		})
-	}
 }
 
 func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
@@ -857,10 +815,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 
 	scheduled, err := service.ScheduledMessagesForConversation("cron:daily")
 	require.NoError(t, err)
-	require.Empty(t, scheduled, "a real silent cron tool call must not create executable private work")
-	effects, err := (stateDAO{db: service.db}).producerEffects(t.Context(), "cron:daily", 0)
-	require.NoError(t, err)
-	require.Len(t, effects, 3)
+	require.Len(t, scheduled, 3, "the run's schedules wait with it")
 
 	// The live tool schedules beyond the test timeout, so HTTP/database latency
 	// cannot make correct due-time Web creation fail this pre-due assertion.
@@ -868,19 +823,24 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, recorded, "Web creation waits until due")
 
-	// Entries are append-only through SessionService. Update only the original
-	// one-shot payloads here to control due data, not the production clock;
-	// preserve their IDs/order and leave the recurring effect unchanged.
+	// Update only the one-shot due times here to control due data, not the production
+	// clock; leave the recurring schedule unchanged.
 	due := time.Now().Add(time.Second)
 
-	for i := range 2 {
-		var scheduled protocol.ScheduledMessageState
-		require.NoError(t, json.Unmarshal(effects[i].Entry.OutputTrace[0], &scheduled))
-		scheduled.DueAt = due.Add(time.Duration(i) * 200 * time.Millisecond)
-		data, err := json.Marshal(scheduled)
-		require.NoError(t, err)
-		_, err = service.db.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{output_trace,0}', $2::jsonb)::json WHERE id = $1`, effects[i].ID, string(data))
-		require.NoError(t, err)
+	var recurringEffect protocol.ScheduledMessageState
+
+	for id, message := range scheduled {
+		if message.Recurring {
+			recurringEffect = message
+			continue
+		}
+
+		message.DueAt = due
+		if message.Message == "second follow up" {
+			message.DueAt = due.Add(200 * time.Millisecond)
+		}
+
+		require.NoError(t, service.PutScheduledMessage(id, &message))
 	}
 
 	require.NoError(t, manager.PickLaterWork(t.Context(), "cron:daily"))
@@ -935,17 +895,14 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	require.Empty(t, requests, "all one-shot requests and finals are consumed before restart")
 
 	assert.Empty(t, roots, "silent fallback never creates a Slack root")
-	inbound, through, err := (stateDAO{db: service.db}).producer(t.Context(), "cron:daily")
-	require.NoError(t, err)
-	assert.Equal(t, "web:cron:daily", inbound.SyncDestination)
-	assert.Equal(t, effects[len(effects)-1].ID, through)
+
+	var owner string
+	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT reports_to FROM conversations WHERE conversation_id = 'cron:daily'`).Scan(&owner))
+	assert.Equal(t, "web:cron:daily", owner)
 
 	pending, err := service.ScheduledMessagesForConversation("web:cron:daily")
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
-
-	var recurringEffect protocol.ScheduledMessageState
-	require.NoError(t, json.Unmarshal(effects[2].Entry.OutputTrace[0], &recurringEffect))
 
 	for _, message := range pending {
 		assert.True(t, message.Recurring)
@@ -987,7 +944,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	assert.Empty(t, roots)
 	private, err := service.ObserveEntries(t.Context(), "cron:daily")
 	require.NoError(t, err)
-	assert.Len(t, private, 4, "canonical turns never append to producer history")
+	assert.Len(t, private, 1, "canonical turns never append to producer history")
 
 	for _, state := range []string{"completed before Sync", "binding before projection", "existing Web", "reset cancels", "reset then future", "creation failure", "Sync failure", "live creation failure", "live Sync failure", "live read failure", "due creation failure", "due read failure"} {
 		t.Run(state, func(t *testing.T) {
@@ -1006,23 +963,19 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 			inbound.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/missing.md", Agent: "main"}
 			require.NoError(t, startTurnDB(t.Context(), store.db, "pending", "cron:pending", inbound))
 
-			data, err := json.Marshal(protocol.ScheduledMessageState{ConversationID: "cron:pending", Agent: "main", Message: "pending follow up", DueAt: time.Now().Add(-time.Minute)})
-			require.NoError(t, err)
-			_, err = store.AppendEntryID(t.Context(), "cron:pending", &rocketcode.SessionEntry{Version: 1, Type: producerScheduleEntryType, Timestamp: time.Now(), OutputTrace: []json.RawMessage{data}})
-			require.NoError(t, err)
+			effects := []producerEffect{{Schedule: &protocol.ScheduledMessageState{Message: "pending follow up", DueAt: time.Now().Add(-time.Minute)}}}
 
 			if strings.HasPrefix(state, "reset") {
 				require.NoError(t, store.PutScheduledMessage("legacy-before-reset", &protocol.ScheduledMessageState{ConversationID: "cron:pending", Agent: "main", Message: "legacy follow up", DueAt: time.Now().Add(-time.Minute)}))
-				_, err = store.AppendEntryID(t.Context(), "cron:pending", &rocketcode.SessionEntry{Version: 1, Type: producerResetEntryType, Timestamp: time.Now()})
-				require.NoError(t, err)
+
+				effects = append(effects, producerEffect{Reset: true})
 
 				if state == "reset then future" {
-					data, err = json.Marshal(protocol.ScheduledMessageState{ConversationID: "cron:pending", Agent: "main", Message: "future follow up", DueAt: time.Now().Add(time.Hour)})
-					require.NoError(t, err)
-					_, err = store.AppendEntryID(t.Context(), "cron:pending", &rocketcode.SessionEntry{Version: 1, Type: producerScheduleEntryType, Timestamp: time.Now(), OutputTrace: []json.RawMessage{data}})
-					require.NoError(t, err)
+					effects = append(effects, producerEffect{Schedule: &protocol.ScheduledMessageState{Message: "future follow up", DueAt: time.Now().Add(time.Hour)}})
 				}
 			}
+
+			seedProducerEffects(t, store, "cron:pending", "pending", effects...)
 
 			delivery, err := store.finishTurn(t.Context(), "pending", &turnFinish{store: newSessionStore("cron:pending", store), entries: []rocketcode.SessionEntry{*testSessionEntry("original job", "private answer")}, outbound: protocol.NewOutboundMessage("cron:pending", "")})
 			require.NoError(t, err)
@@ -1036,7 +989,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 				require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "web:cron:pending", Agent: "selected"}))
 
 				if state == "binding before projection" {
-					_, err = (stateDAO{db: store.db}).bindProducer(t.Context(), "cron:pending", "web:cron:pending")
+					_, _, err = (stateDAO{db: store.db}).bindProducer(t.Context(), "cron:pending", "web:cron:pending")
 					require.NoError(t, err)
 				}
 			}
@@ -1050,19 +1003,24 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 				t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
 				// Fail metadata reads only after delivery closes the original turn.
 				// A sequence proves the failed attempt even when its query rolls back.
+				// STABLE lets reads that select no producer routing, as notify triggers do, skip it.
 				_, err = store.db.ExecContext(t.Context(), `
 CREATE SEQUENCE handoff_reads;
-ALTER TABLE managed_conversations RENAME TO unavailable_conversations;
-CREATE FUNCTION unavailable_producer(inbound json) RETURNS json LANGUAGE plpgsql AS $$
+ALTER TABLE conversations RENAME TO unavailable_conversations;
+CREATE FUNCTION unavailable_producer(inbound json) RETURNS json LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    live BIGINT;
 BEGIN
-    IF EXISTS (SELECT 1 FROM active_turns WHERE conversation_id = 'cron:pending' AND phase <> 'done') THEN
+    SELECT count(*) INTO live FROM turns WHERE conversation_id = 'cron:pending' AND phase NOT IN ('waiting', 'done');
+    IF live > 0 THEN
         RETURN inbound;
     END IF;
     PERFORM nextval('handoff_reads');
     RAISE EXCEPTION 'producer metadata unavailable';
 END $$;
-CREATE VIEW managed_conversations AS
-SELECT conversation_id, revert_message_id, unavailable_producer(producer_inbound_json) AS producer_inbound_json FROM unavailable_conversations`)
+CREATE VIEW conversations AS
+SELECT conversation_id, revert_message_id, reports_to, unavailable_producer(producer_inbound_json) AS producer_inbound_json,
+    shadow_parent, running, preview, last_updated, parent_conversation_id, call_id FROM unavailable_conversations`)
 				require.NoError(t, err)
 
 				if state == "live read failure" {
@@ -1078,20 +1036,17 @@ SELECT conversation_id, revert_message_id, unavailable_producer(producer_inbound
 					return attempted
 				}, 5*time.Second, 10*time.Millisecond)
 
-				var through int64
-				require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT producer_effects_through_id FROM unavailable_conversations WHERE conversation_id = 'cron:pending'`).Scan(&through))
-				assert.Zero(t, through)
 				assert.Empty(t, calls)
 				require.Empty(t, runningTestTurns(t, store), "delivery closed the original turn before the metadata read failed")
-				_, err = store.db.ExecContext(t.Context(), `DROP VIEW managed_conversations; ALTER TABLE unavailable_conversations RENAME TO managed_conversations; DROP FUNCTION unavailable_producer(json)`)
+				_, err = store.db.ExecContext(t.Context(), `DROP VIEW conversations; ALTER TABLE unavailable_conversations RENAME TO conversations; DROP FUNCTION unavailable_producer(json)`)
 				require.NoError(t, err)
 			} else if strings.HasSuffix(state, "failure") {
-				statement := `ALTER TABLE managed_conversations ADD CONSTRAINT reject_handoff CHECK (conversation_id <> 'web:cron:pending') NOT VALID`
-				table := "managed_conversations"
+				statement := `ALTER TABLE conversations ADD CONSTRAINT reject_handoff CHECK (conversation_id <> 'web:cron:pending') NOT VALID`
+				table := "conversations"
 
 				if strings.HasSuffix(state, "Sync failure") {
-					statement = `ALTER TABLE scheduled_messages ADD CONSTRAINT reject_handoff CHECK (message <> 'pending follow up')`
-					table = "scheduled_messages"
+					statement = `ALTER TABLE turns ADD CONSTRAINT reject_handoff CHECK (message <> 'pending follow up') NOT VALID`
+					table = "turns"
 				}
 
 				if state == "due creation failure" {
@@ -1099,7 +1054,7 @@ SELECT conversation_id, revert_message_id, unavailable_producer(producer_inbound
 					_, err = store.db.ExecContext(t.Context(), `CREATE SEQUENCE handoff_attempts`)
 					require.NoError(t, err)
 
-					statement = `ALTER TABLE managed_conversations ADD CONSTRAINT reject_handoff CHECK (conversation_id <> 'web:cron:pending' OR nextval('handoff_attempts') < 0) NOT VALID`
+					statement = `ALTER TABLE conversations ADD CONSTRAINT reject_handoff CHECK (conversation_id <> 'web:cron:pending' OR nextval('handoff_attempts') < 0) NOT VALID`
 				}
 
 				_, err = store.db.ExecContext(t.Context(), statement)
@@ -1127,9 +1082,6 @@ SELECT conversation_id, revert_message_id, unavailable_producer(producer_inbound
 					require.ErrorContains(t, manager.StartPendingScheduledMessages(t.Context()), "reject_handoff")
 				}
 
-				_, through, err := (stateDAO{db: store.db}).producer(t.Context(), "cron:pending")
-				require.NoError(t, err)
-				assert.Zero(t, through)
 				assert.Empty(t, calls, "failed handoff must not run privately")
 				_, err = store.db.ExecContext(t.Context(), "ALTER TABLE "+table+" DROP CONSTRAINT reject_handoff")
 				require.NoError(t, err)
@@ -1229,7 +1181,7 @@ func TestCronRootFooterLinksBoundDestination(t *testing.T) {
 			const existing = "web:cron:daily"
 
 			require.NoError(t, (&Runtime{Sessions: service}).CreateConversation(t.Context(), protocol.Conversation{ID: existing, Agent: "selected"}))
-			_, err := (stateDAO{db: service.db}).bindProducer(t.Context(), "cron:daily", existing)
+			_, _, err := (stateDAO{db: service.db}).bindProducer(t.Context(), "cron:daily", existing)
 			require.NoError(t, err)
 
 			bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
@@ -1254,7 +1206,7 @@ func TestCronRootFooterLinksBoundDestination(t *testing.T) {
 func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 	t.Parallel()
 
-	for _, stored := range []string{"row", "queued", "completed before Sync", "binding before projection", "projection before arming", "due while producing", "projection failure"} {
+	for _, stored := range []string{"row", "queued", "completed before Sync", "binding before projection", "due while producing"} {
 		t.Run(stored, func(t *testing.T) {
 			newBridge, service, requests, finals := newResumeTestBridges(t, false)
 			managedID, privateID := newBridge().config.ConversationID, "external_mcp:main:private"
@@ -1268,10 +1220,7 @@ func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 			if stored != "row" && stored != "queued" {
 				writeAgent(t, newBridge().runtime.Clone().Workspace, "selected", "---\ndescription: Selected\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nSelected canonical instructions\n")
 				require.NoError(t, startTurnDB(t.Context(), service.db, "turn-private", privateID, msg))
-				data, err := json.Marshal(protocol.ScheduledMessageState{ConversationID: privateID, Agent: "main", Message: "scheduled follow up", DueAt: time.Now().Add(-time.Minute)})
-				require.NoError(t, err)
-				effectID, err := service.AppendEntryID(t.Context(), privateID, &rocketcode.SessionEntry{Version: 1, Type: producerScheduleEntryType, Timestamp: time.Now(), OutputTrace: []json.RawMessage{data}})
-				require.NoError(t, err)
+				seedProducerEffects(t, service, privateID, "turn-private", producerEffect{Schedule: &protocol.ScheduledMessageState{Message: "scheduled follow up", DueAt: time.Now().Add(-time.Minute)}})
 
 				if stored == "due while producing" {
 					require.NoError(t, manager.StartPendingScheduledMessages(t.Context()))
@@ -1290,32 +1239,15 @@ func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 					return
 				}
 
-				_, err = service.finishTurn(t.Context(), "turn-private", &turnFinish{store: newSessionStore(privateID, service), entries: []rocketcode.SessionEntry{*testSessionEntry("support ticket", "original answer")}, outbound: protocol.NewOutboundMessage(privateID, "original answer")})
+				_, err := service.finishTurn(t.Context(), "turn-private", &turnFinish{store: newSessionStore(privateID, service), entries: []rocketcode.SessionEntry{*testSessionEntry("support ticket", "original answer")}, outbound: protocol.NewOutboundMessage(privateID, "original answer")})
 				require.NoError(t, err)
 				require.NoError(t, service.closeTurn(t.Context(), "turn-private"))
 				require.Empty(t, runningTestTurns(t, service), "startup must recover without an unfinished producer row")
 
-				if stored == "projection before arming" {
-					// Persist the atomic projection but lose the process before any timer is armed.
-					require.NoError(t, service.PutScheduledMessage("projected", &protocol.ScheduledMessageState{ConversationID: managedID, Agent: "main", Message: "scheduled follow up", DueAt: time.Now().Add(-time.Minute)}))
-					require.NoError(t, (stateDAO{db: service.db}).advanceProducerEffects(t.Context(), privateID, effectID))
-				}
-
 				if stored == "binding before projection" {
-					owner, err := (stateDAO{db: service.db}).bindProducer(t.Context(), privateID, managedID)
+					owner, _, err := (stateDAO{db: service.db}).bindProducer(t.Context(), privateID, managedID)
 					require.NoError(t, err)
 					assert.Equal(t, managedID, owner)
-				}
-
-				if stored == "projection failure" {
-					_, err := service.db.ExecContext(t.Context(), `ALTER TABLE scheduled_messages ADD CONSTRAINT reject_handoff CHECK (message <> 'scheduled follow up')`)
-					require.NoError(t, err)
-					require.ErrorContains(t, manager.StartPendingScheduledMessages(t.Context()), "reject_handoff")
-					_, through, err := (stateDAO{db: service.db}).producer(t.Context(), privateID)
-					require.NoError(t, err)
-					assert.Zero(t, through, "a failed projection leaves progress pending")
-					_, err = service.db.ExecContext(t.Context(), `ALTER TABLE scheduled_messages DROP CONSTRAINT reject_handoff`)
-					require.NoError(t, err)
 				}
 
 				_, err = manager.switchConversationAgent(managedID, "selected")
@@ -1653,7 +1585,7 @@ func TestRowRunsBeforeLiveMessage(t *testing.T) {
 // An output-decision retry interrupted mid-way resumes that retry without
 // repeating the finished first turn, and delivers once.
 // A cron turn mid-flight does not hold up shutdown: once bridges stop, the cron
-// runner's RunTurn and its follow-up sync return, so cron manager Stop does not block.
+// runner's RunTurn returns, so cron manager Stop does not block.
 func TestShutdownReleasesCronRunnerWait(t *testing.T) {
 	t.Parallel()
 
@@ -1671,34 +1603,16 @@ func TestShutdownReleasesCronRunnerWait(t *testing.T) {
 
 	done := make(chan error, 1)
 
-	go func() {
-		errRun := rt.RunTurn(t.Context(), inbound)
-		done <- errors.Join(errRun, rt.SyncConversation(context.WithoutCancel(t.Context()), "cron:daily", template.config.ConversationID))
-	}()
+	go func() { done <- rt.RunTurn(t.Context(), inbound) }()
 
 	<-requests
-
-	require.NoError(t, service.UpsertThread("cron:weekly", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
-
-	destination, err := rt.threads.recordedBridge(t.Context(), template.config.ConversationID)
-	require.NoError(t, err)
-
-	synced := make(chan error, 1)
-
-	go func() {
-		synced <- rt.SyncConversation(context.WithoutCancel(t.Context()), "cron:weekly", template.config.ConversationID)
-	}()
-
-	require.Eventually(t, func() bool { return len(destination.requestCh) == 1 }, 5*time.Second, 10*time.Millisecond)
 	require.NoError(t, shutdown())
 
-	for _, waiting := range []chan error{done, synced} {
-		select {
-		case err := <-waiting:
-			require.ErrorIs(t, err, protocol.ErrBridgeStopped)
-		case <-time.After(5 * time.Second):
-			t.Fatal("the cron runner still waits after bridges stopped")
-		}
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, protocol.ErrBridgeStopped)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the cron runner still waits after bridges stopped")
 	}
 
 	assert.Len(t, runningTestTurns(t, service), 1, "the cron row resumes after restart")
@@ -1943,10 +1857,10 @@ func TestRestartResumesBackgroundSubagent(t *testing.T) {
 	require.NoError(t, shutdown())
 	registry.shutdown()
 
-	jobs, err := queryStrings(t.Context(), nt.service.db, `SELECT job_id FROM background_jobs WHERE kind = 'task' AND status = 'running'`, "running tasks")
+	jobs, err := queryStrings(t.Context(), nt.service.db, `SELECT j.input_id`+testJobsSQL+` AND j.kind = 'note' AND j.phase = 'running'`, "running tasks")
 	require.NoError(t, err)
 	require.Len(t, jobs, 1)
-	keys, err := queryStrings(t.Context(), nt.service.db, `SELECT subagent_key FROM background_jobs WHERE job_id = $1`, "task subagent key", jobs[0])
+	keys, err := queryStrings(t.Context(), nt.service.db, `SELECT j.subagent_key`+testJobsSQL+` AND j.input_id = $1`, "task subagent key", jobs[0])
 	require.NoError(t, err)
 	require.Regexp(t, `^/call_t-[0-9a-f]{8}$`, keys[0])
 
@@ -1990,7 +1904,7 @@ func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
 	require.NoError(t, first.StartActiveTurns(t.Context()))
 	assert.Equal(t, "Report started", readFinalFor(t, nt.finals, "cron:nightly").Text)
 	require.Eventually(t, func() bool {
-		destinations, err := queryStrings(context.Background(), nt.service.db, `SELECT sync_destination FROM background_jobs`, "job destinations")
+		destinations, err := queryStrings(context.Background(), nt.service.db, `SELECT COALESCE(c.reports_to, '')`+testJobsSQL, "job destinations")
 		return err == nil && slices.Equal(destinations, []string{report})
 	}, 10*time.Second, 10*time.Millisecond)
 	nt.waitIdle(t, first, report)
@@ -2027,7 +1941,7 @@ func TestRestartDropsJobsOfDeletedConversation(t *testing.T) {
 
 	nt := newNoteTest(t, answerNoteTest)
 	task := testBackgroundJob(nt.conversationID, "turn-0/call/a")
-	task.kind, task.subagentKey = backgroundTask, "/a"
+	task.kind, task.subagentKey = turnNote, "/a"
 
 	for _, job := range []*backgroundJob{task, testBackgroundJob(nt.conversationID, "turn-0/call/b")} {
 		createTestBackgroundJob(t, nt.service, job)
@@ -2096,13 +2010,18 @@ func TestTaskRunsSubagentAsSession(t *testing.T) {
 	assert.Contains(t, answered, `<task_result>\nfound it\n</task_result>`)
 	assert.Equal(t, "answer", readFinal(t, nt.finals).Text)
 
-	keys, err := queryStrings(t.Context(), nt.service.db, `SELECT conversation_id FROM managed_conversations WHERE parent_conversation_id = $1`, "subagent sessions", nt.conversationID)
+	keys, err := queryStrings(t.Context(), nt.service.db, `SELECT conversation_id FROM conversations WHERE parent_conversation_id = $1`, "subagent sessions", nt.conversationID)
 	require.NoError(t, err)
 	require.Len(t, keys, 1)
 
 	subagent := keys[0]
 	key := strings.TrimPrefix(subagent, nt.conversationID)
 	assert.Contains(t, answered, "continue ID: "+key)
+
+	var callTurn, callID string
+	require.NoError(t, nt.service.db.QueryRowContext(t.Context(), `SELECT call_turn, call_id FROM conversations WHERE conversation_id = $1`, subagent).Scan(&callTurn, &callID))
+	assert.NotEmpty(t, callTurn, "the subagent records the turn of its task call")
+	assert.True(t, strings.HasPrefix(key, "/"+callID+"-"), "the subagent records its task call: %q of %q", callID, key)
 
 	saved, err := nt.service.ObserveEntries(t.Context(), subagent)
 	require.NoError(t, err)
@@ -2114,16 +2033,17 @@ func TestTaskRunsSubagentAsSession(t *testing.T) {
 
 	// With no turn of its own running, a hidden run's subagent acts, as the run does, for the run's visible destination.
 	nt.waitIdle(t, manager, nt.conversationID)
-	_, err = nt.service.db.ExecContext(t.Context(), `UPDATE managed_conversations SET producer_inbound_json = '{"SyncDestination":"web-chat"}' WHERE conversation_id = $1`, nt.conversationID)
+	recordTestConversations(t, nt.service, "main", map[string]ConversationKind{"web-chat": KindWebChat})
+	_, err = nt.service.db.ExecContext(t.Context(), `UPDATE conversations SET producer_inbound_json = '{"SyncDestination":"web-chat"}', reports_to = 'web-chat' WHERE conversation_id = $1`, nt.conversationID)
 	require.NoError(t, err)
 	root, turnID, origin, jobs, err := nt.service.subagentLineage(t.Context(), subagent)
 	require.NoError(t, err)
 	assert.Equal(t, []any{nt.conversationID, "", "web-chat", []backgroundKey{{nt.conversationID, ""}}}, []any{root, turnID, origin.SyncDestination, jobs}, "the subagent acts for its top-level session, one delegation below it")
-	_, err = nt.service.db.ExecContext(t.Context(), `UPDATE managed_conversations SET producer_inbound_json = NULL WHERE conversation_id = $1`, nt.conversationID)
+	_, err = nt.service.db.ExecContext(t.Context(), `UPDATE conversations SET producer_inbound_json = NULL, reports_to = NULL WHERE conversation_id = $1`, nt.conversationID)
 	require.NoError(t, err)
 
-	write := &rocketcode.SubagentWrite{Key: key, Agent: "researcher", Delegator: "main", Prompt: "research the flaky test"}
-	inputs, err := queryStrings(t.Context(), nt.service.db, `WITH items AS (SELECT jsonb_array_elements(entry_json::jsonb->'replay_input') AS item FROM session_entries WHERE conversation_id = $1)
+	write := &rocketcode.SubagentWrite{Key: rocketcode.ChildKey{Path: key}, Agent: "researcher", Delegator: "main", Prompt: "research the flaky test"}
+	inputs, err := queryStrings(t.Context(), nt.service.db, `WITH items AS (SELECT jsonb_array_elements(entry_json::jsonb->'replay_input') AS item FROM entries WHERE conversation_id = $1)
 SELECT item->>'input_id' FROM items WHERE item->>'input_id' <> ''`, "subagent inputs", subagent)
 	require.NoError(t, err)
 	require.Len(t, inputs, 1)
@@ -2139,12 +2059,12 @@ SELECT item->>'input_id' FROM items WHERE item->>'input_id' <> ''`, "subagent in
 	assert.Empty(t, nt.requests, "a replayed call delivers nothing and answers from the saved turn")
 
 	// A continue's prompt runs as the subagent's next turn; a steer joins it while it runs.
-	_, err = parent.WriteSubagent(t.Context(), &rocketcode.SubagentWrite{Key: key, CallKey: "turn-2/call/c", Agent: "researcher", Delegator: "main", Prompt: "check again", Mode: rocketcode.ContinueEnqueue})
+	_, err = parent.WriteSubagent(t.Context(), &rocketcode.SubagentWrite{Key: rocketcode.ChildKey{Path: key}, CallKey: "turn-2/call/c", Agent: "researcher", Delegator: "main", Prompt: "check again", Mode: rocketcode.ContinueEnqueue})
 	require.NoError(t, err)
 	nt.request(t)
 	<-held
 
-	steered, err = parent.WriteSubagent(t.Context(), &rocketcode.SubagentWrite{Key: key, CallKey: "turn-2/call/s", Agent: "researcher", Delegator: "main", Prompt: "also the logs", Mode: rocketcode.ContinueSteer})
+	steered, err = parent.WriteSubagent(t.Context(), &rocketcode.SubagentWrite{Key: rocketcode.ChildKey{Path: key}, CallKey: "turn-2/call/s", Agent: "researcher", Delegator: "main", Prompt: "also the logs", Mode: rocketcode.ContinueSteer})
 	require.NoError(t, err)
 	assert.True(t, steered, "the steer joins the running turn")
 	close(release)
@@ -2180,7 +2100,7 @@ func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 
 	manager, shutdown := nt.run(t, ignoreOutbound)
 	parent, subagent := nt.bridge(t, manager, nt.conversationID), nt.conversationID+"/a"
-	_, err := parent.WriteSubagent(t.Context(), &rocketcode.SubagentWrite{Key: "/a", CallKey: "turn-0/call/busy", Agent: "researcher", Delegator: "main", Prompt: "busy work"})
+	_, err := parent.WriteSubagent(t.Context(), &rocketcode.SubagentWrite{Key: rocketcode.ChildKey{Path: "/a", Turn: "turn-0", Call: "busy"}, CallKey: "turn-0/call/busy", Agent: "researcher", Delegator: "main", Prompt: "busy work"})
 	require.NoError(t, err)
 	assert.Contains(t, nt.request(t), "busy work")
 
@@ -2195,7 +2115,7 @@ func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 	}, 10*time.Second, 10*time.Millisecond, "the parent's task call waits")
 	require.Len(t, queueIDs(t, nt.service, subagent), 1, "the parent's prompt waits behind the running turn")
 
-	_, err = parent.WriteSubagent(t.Context(), &rocketcode.SubagentWrite{Key: "/a", CallKey: "turn-0/call/job", Agent: "researcher", Delegator: "main", Prompt: "job work", Mode: rocketcode.ContinueEnqueue})
+	_, err = parent.WriteSubagent(t.Context(), &rocketcode.SubagentWrite{Key: rocketcode.ChildKey{Path: "/a"}, CallKey: "turn-0/call/job", Agent: "researcher", Delegator: "main", Prompt: "job work", Mode: rocketcode.ContinueEnqueue})
 	require.NoError(t, err)
 
 	manager.InterruptConversation(nt.conversationID)
@@ -2231,7 +2151,7 @@ func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 	require.NotEmpty(t, transcript)
 	assert.Equal(t, protocol.TerminalStopped, transcript[0].Terminal, "the subagent's running turn stops with its waiting parent")
 
-	answers, err := queryStrings(t.Context(), nt.service.db, `SELECT conversation_id FROM session_entries WHERE entry_json::text LIKE '%parent work done%'`, "answer sessions")
+	answers, err := queryStrings(t.Context(), nt.service.db, `SELECT conversation_id FROM entries WHERE entry_json::text LIKE '%parent work done%'`, "answer sessions")
 	require.NoError(t, err)
 	assert.Equal(t, []string{subagent}, answers, "the answer stays in the subagent's transcript")
 	assert.Empty(t, noteStates(t, nt.service), "the parent gets no note")
@@ -2317,7 +2237,7 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 			assert.Contains(t, body, attachFilesToolName+"(")
 			assert.NotContains(t, body, scheduleMessageToolName+"(", "a subagent is not offered scheduling")
 
-			created, err := queryStrings(t.Context(), nt.service.db, `SELECT agent || ' ' || created_by FROM managed_conversations WHERE spawned_by = $1`, "created sessions", root)
+			created, err := queryStrings(t.Context(), nt.service.db, `SELECT agent || ' ' || created_by FROM conversations WHERE spawned_by = $1`, "created sessions", root)
 			require.NoError(t, err)
 			assert.Equal(t, []string{tc.agent + " " + tc.maker}, created, "the created session keeps the top-level turn's agent and creator")
 

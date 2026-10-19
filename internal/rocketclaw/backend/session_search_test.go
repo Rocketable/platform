@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	harness "github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/require"
 )
@@ -38,6 +42,21 @@ func newSessionSearchFixture(t *testing.T) (*SessionService, *slackFrontendMock)
 	s := newTestSessionService(t)
 	ctx := t.Context()
 
+	daily, weekly := strings.TrimPrefix(searchChatD, "web:"), strings.TrimPrefix(searchChatE, "web:")
+	for id, facts := range map[string]conversationFacts{
+		searchChatA: {kind: KindSlackThread, slackChannel: "C1", slackThread: "1.1"}, searchChatB: {kind: KindSlackThread, slackChannel: "C9", slackThread: "2.2"},
+		searchChatD: {kind: KindWebChat, cronRun: daily}, searchChatE: {kind: KindWebChat, cronRun: weekly}, "external_mcp:private": {kind: KindExternalMCPRun},
+	} {
+		require.NoError(t, s.recordConversation(ctx, protocol.Conversation{ID: id}, facts))
+	}
+
+	for id, run := range map[string]*protocol.CronRun{
+		daily:  {Path: "cron/daily.md", At: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
+		weekly: {Path: "cron/Weekly report.md", At: time.Date(2026, 1, 3, 3, 4, 5, 0, time.UTC), OneOff: true},
+	} {
+		require.NoError(t, s.recordConversation(ctx, protocol.Conversation{ID: id, Run: run}, conversationFacts{}))
+	}
+
 	for _, chat := range []struct {
 		id, agent, user, preview string
 		day                      int
@@ -60,7 +79,7 @@ func newSessionSearchFixture(t *testing.T) (*SessionService, *slackFrontendMock)
 		require.NoError(t, err)
 	}
 
-	// A Delegation History has entries but no managed_conversations row; Web never shows it.
+	// A Delegation History has entries but no conversations row; Web never shows it.
 	_, err := s.AppendEntryID(ctx, searchChatD+"/call-1", testSessionEntry("billing delegated", "support child"))
 	require.NoError(t, err)
 
@@ -70,7 +89,7 @@ func newSessionSearchFixture(t *testing.T) (*SessionService, *slackFrontendMock)
 	require.NoError(t, err)
 	_, err = s.UpdateConversationDetails(ctx, searchChatW, nil, new("support"))
 	require.NoError(t, err)
-	_, err = s.db.ExecContext(ctx, `UPDATE managed_conversations SET forked_from = 'original' WHERE conversation_id = $1`, searchChatA)
+	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET forked_from = 'original' WHERE conversation_id = $1`, searchChatA)
 	require.NoError(t, err)
 
 	for _, tag := range []string{"customer", "Needs review", `say "hello"`, "is:pinned", "*"} {
@@ -118,7 +137,7 @@ func TestSearchSessionsPrincipalCriteria(t *testing.T) {
 	ctx := t.Context()
 	require.NoError(t, s.UpsertThread("written-web", ThreadState{Agent: "main"}))
 	require.NoError(t, s.UpsertThread(searchChatW, ThreadState{Agent: "other", CreatedBy: ThreadCreator(`Writer "One"`)}))
-	require.NoError(t, s.startSubagent(ctx, "written-web/call-1", "written-web", "main", true), "an unindexed subagent session leaves search complete")
+	require.NoError(t, s.startSubagent(ctx, "written-web", harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, "main", true), "an unindexed subagent session leaves search complete")
 
 	var authored int64
 
@@ -160,7 +179,7 @@ func TestSearchSessionsPrincipalCriteria(t *testing.T) {
 		{`principal:""`, nil},
 		{`principal:"bad\q"`, nil},
 	} {
-		search, matches := searchTestSessions(t, s, slack, tc.query, SearchMessages)
+		_, matches := searchTestSessions(t, s, slack, tc.query, SearchMessages)
 
 		ids := make([]string, 0, len(matches))
 		for _, match := range matches {
@@ -168,7 +187,6 @@ func TestSearchSessionsPrincipalCriteria(t *testing.T) {
 		}
 
 		require.True(t, slices.Equal(tc.ids, ids), "%s: chats %q", tc.query, ids)
-		require.True(t, search.IndexComplete)
 	}
 
 	_, _, err := stageRevertDB(ctx, s.db, "written-web", fmt.Sprintf("%d:0", authored))
@@ -181,14 +199,6 @@ func TestSearchSessionsPrincipalCriteria(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, criteria, 1)
 	require.Equal(t, searchChatA, criteria[0].Chat.Session.Conversation.ID)
-	unindexMessageSearch(t, s)
-	search, matches := searchTestSessions(t, s, slack, `principal:"Writer \"One\""`, SearchFields)
-	require.Empty(t, matches)
-	require.False(t, search.IndexComplete)
-	require.NoError(t, s.backfillMessageSearch(ctx))
-	search, matches = searchTestSessions(t, s, slack, `principal:"Writer \"One\""`, SearchFields)
-	require.Len(t, matches, 2)
-	require.True(t, search.IndexComplete)
 }
 
 // Ported from session-list.test.ts; its unfinished words are read as free text.
@@ -280,8 +290,6 @@ func TestSearchSessionsReadsTermsAndFilters(t *testing.T) {
 		require.Equal(t, strings.ToLower(tc.text), search.Needle, tc.query)
 		require.True(t, slices.Equal(tc.ids, ids), "%s: chats %q", tc.query, ids)
 		require.Len(t, slack.SidebarChannelAgentChoicesCalls(), calls+2, "one room lookup per channel")
-		require.True(t, search.SummariesComplete)
-		require.True(t, search.IndexComplete)
 	}
 }
 
@@ -322,11 +330,84 @@ func TestSearchSessionsFilters(t *testing.T) {
 
 	for _, query := range []string{"tag:customer", "agent:other", "is:cron"} {
 		_, bare := searchTestSessions(t, s, slack, query, SearchFilters)
-		search, typed := searchTestSessions(t, s, slack, query+" billing nothing-holds-this", SearchFilters)
 		require.NotEmpty(t, bare, query)
-		require.Equal(t, bare, typed, query)
-		require.Empty(t, search.Hits, query)
+
+		for _, text := range []string{" billing nothing-holds-this", " nothing-holds-this"} {
+			search, typed := searchTestSessions(t, s, slack, query+text, SearchFilters)
+			require.Equal(t, bare, typed, query+text)
+			require.Empty(t, search.Hits, query+text)
+		}
 	}
+}
+
+// An ASCII needle reads only the chats whose words may hold it, so each word a match can come from
+// must keep its chat: a cron run's time and kind, a pair spanning its "=", and names whose İ
+// and K (Kelvin sign) lowercase into ASCII.
+func TestSearchSessionsReadsEveryMatchingWord(t *testing.T) {
+	t.Parallel()
+
+	s, slack := newSessionSearchFixture(t)
+
+	for id, name := range map[string]string{searchChatH: "İSTANBUL ȒOAD", searchChatB: "\u212aELVIN"} {
+		_, err := s.UpdateConversationDetails(t.Context(), id, nil, new(name))
+		require.NoError(t, err)
+	}
+
+	for _, tc := range []struct {
+		query string
+		want  []searchTestMatch
+	}{
+		{"03:04:05z", []searchTestMatch{{searchChatD, fieldOrigin, ""}, {searchChatE, fieldOrigin, ""}}},
+		{"scheduled", []searchTestMatch{{searchChatD, fieldOrigin, ""}}},
+		{"ticket=t-1", []searchTestMatch{{searchChatX, fieldOrigin, ""}}},
+		{"istanbul", []searchTestMatch{{searchChatH, fieldName, "İSTANBUL ȒOAD"}}},
+		{"ȓoad", []searchTestMatch{{searchChatH, fieldName, "İSTANBUL ȒOAD"}}},
+		{"kelvin", []searchTestMatch{{searchChatB, fieldName, "\u212aELVIN"}}},
+	} {
+		_, matches := searchTestSessions(t, s, slack, tc.query, SearchFields)
+		for i := range matches {
+			if matches[i].Field == fieldOrigin {
+				matches[i].Text = ""
+			}
+		}
+
+		require.Equal(t, tc.want, matches, tc.query)
+	}
+}
+
+// searchCandidates reads every rune Go lowercases into a non-ASCII rune among its simple case folds.
+func TestSimpleFoldsHoldWhatLowercasesIntoRune(t *testing.T) {
+	t.Parallel()
+
+	for r := range unicode.MaxRune + 1 {
+		lower := unicode.ToLower(r)
+		if lower < utf8.RuneSelf || lower == r {
+			continue
+		}
+
+		fold := unicode.SimpleFold(lower)
+		for fold != lower && fold != r {
+			fold = unicode.SimpleFold(fold)
+		}
+
+		require.Equal(t, r, fold, "%U lowercases into %U", r, lower)
+	}
+}
+
+// A narrow search reads each candidate and chat with hits once, or every chat when they are many.
+func TestReadChats(t *testing.T) {
+	t.Parallel()
+
+	hits := []MessageSearchHit{{ConversationID: "b"}, {ConversationID: "b"}, {ConversationID: "c"}}
+	require.Equal(t, []string{"a", "b", "c"}, readChats([]string{"b", "a"}, hits))
+	require.Equal(t, []string{}, readChats([]string{}, nil))
+
+	many := make([]string, 2001)
+	for i := range many {
+		many[i] = strconv.Itoa(i)
+	}
+
+	require.Nil(t, readChats(many, nil))
 }
 
 func TestSearchSessionsMessageHits(t *testing.T) {
@@ -361,27 +442,9 @@ func TestSearchSessionsMessageHits(t *testing.T) {
 		require.True(t, slices.Equal(tc.hits, hits), "%s: hits %q", tc.query, hits)
 		require.Equal(t, tc.mentions, search.MentionIDs, tc.query)
 		require.True(t, slices.Equal(tc.want, matches), "%s: %q", tc.query, matches)
-		require.True(t, search.IndexComplete, tc.query)
 	}
 
 	require.Equal(t, "ada", slack.SlackTagsMatchingCalls()[len(slack.SlackTagsMatchingCalls())-1].S)
-
-	unindexMessageSearch(t, s)
-
-	search, _ := searchTestSessions(t, s, slack, "billing", SearchMessages)
-	require.False(t, search.IndexComplete)
-
-	search, _ = searchTestSessions(t, s, slack, "billing", SearchFields)
-	require.True(t, search.IndexComplete, "no message search ran")
-	require.True(t, search.SummariesComplete)
-
-	require.NoError(t, s.UpsertThread("missing", ThreadState{Agent: "main"}))
-	insertSessionEntryWithoutSummary(t, s, "missing", testSessionEntry("old", "answer"))
-	_, err := s.db.ExecContext(t.Context(), `DELETE FROM session_summaries WHERE conversation_id = 'missing'`)
-	require.NoError(t, err)
-
-	search, _ = searchTestSessions(t, s, slack, "tag:customer", SearchFields)
-	require.False(t, search.SummariesComplete, "a visible chat without a summary counts even when filtered out")
 }
 
 func TestSearchSessionsSortOrder(t *testing.T) {
@@ -395,7 +458,8 @@ func TestSearchSessionsSortOrder(t *testing.T) {
 	}
 
 	insertSessionEntryWithoutSummary(t, s, "c", testSessionEntry("old", "answer"))
-	_, err := s.db.ExecContext(ctx, `DELETE FROM session_summaries WHERE conversation_id = 'c'`)
+	// A summary missing since before migration 052, which still stored that the chat has entries.
+	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = TRUE WHERE conversation_id = 'c'`)
 	require.NoError(t, err)
 	_, err = s.AppendEntryID(ctx, "d", &harness.SessionEntry{})
 	require.NoError(t, err)
@@ -409,7 +473,7 @@ func TestSearchSessionsSortOrder(t *testing.T) {
 	require.NoError(t, err)
 
 	for query, want := range map[string][]string{"sort:oldest": {"b", "a", "e", "c", "d"}, "sort:newest": {"a", "e", "b", "c", "d"}, "": {"b", "a", "e", "c", "d"}} {
-		search, matches := searchTestSessions(t, s, noSlackLookups{}, query, SearchFields)
+		_, matches := searchTestSessions(t, s, noSlackLookups{}, query, SearchFields)
 
 		ids := make([]string, 0, len(matches))
 		for _, match := range matches {
@@ -417,7 +481,6 @@ func TestSearchSessionsSortOrder(t *testing.T) {
 		}
 
 		require.Equal(t, want, ids, query)
-		require.False(t, search.SummariesComplete)
 		require.Contains(t, matches, searchTestMatch{"c", fieldPreview, "c"}, "an empty preview shows the session label")
 	}
 }
@@ -461,21 +524,4 @@ func TestSearchSessionsLongQueryParse(t *testing.T) {
 	require.Equal(t, SearchTerm{Key: keyTag, Text: "tag:a", Value: "a", Start: 8 * (pairs - 1), End: 8*(pairs-1) + 5}, terms[pairs-1])
 	require.Len(t, text, 2*pairs-1)
 	require.Less(t, elapsed, 2*time.Second)
-}
-
-func TestSearchSessionsOriginFailure(t *testing.T) {
-	t.Parallel()
-
-	s, slack := newSessionSearchFixture(t)
-	ctx := t.Context()
-	// A creating entry whose source entry ID is not a number fails the origin
-	// query after the sidebar rows have been read.
-	_, err := s.db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{sync_source_entry_id}', '"x"')::json WHERE conversation_id = $1`, searchChatW)
-	require.NoError(t, err)
-
-	_, err = s.SearchSessions(ctx, "billing", SearchFields, slack)
-	require.ErrorContains(t, err, "bigint")
-
-	_, err = listSessionsTool(s, &threadBridgeManager{slackLookups: slack}).Call(ctx, json.RawMessage(`{"criteria":"billing","since":"1970-01-01T00:00:00Z","until":"","limit":10,"include_message_preview":false}`), nil)
-	require.ErrorContains(t, err, "bigint")
 }

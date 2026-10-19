@@ -200,8 +200,8 @@ func TestWebRPCRelaysAndSyncsOpenCode(t *testing.T) {
 
 	// The sync's first poll runs when the Web starts.
 	require.Eventually(t, func() bool {
-		for row, err := range sessions.SidebarSessions(t.Context()) {
-			if err == nil && row.Conversation.ID == "opencode:box:ses_a" {
+		for chat, err := range sessions.SidebarChats(t.Context(), &mockWebChannels{}, nil) {
+			if err == nil && chat.Session.Conversation.ID == "opencode:box:ses_a" {
 				return true
 			}
 		}

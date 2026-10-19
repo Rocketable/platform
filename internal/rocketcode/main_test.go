@@ -113,7 +113,7 @@ func TestRuntimeAwaitTask(t *testing.T) {
 	require.Empty(t, agents.Errors)
 
 	sessions := &mockChildSessions{
-		AppendChildEntryFunc: func(context.Context, string, *SessionEntry) error { return nil },
+		AppendChildEntryFunc: func(context.Context, ChildKey, *SessionEntry) error { return nil },
 		AwaitSubagentFunc: func(_ context.Context, key, _ string) (string, ReplayAttribution, error) {
 			if key == "/call-1" {
 				return "found it", ReplayAttribution{Agent: "researcher"}, nil

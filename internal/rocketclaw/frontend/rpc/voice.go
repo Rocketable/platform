@@ -664,7 +664,7 @@ func (c *voiceCall) snapshot(ctx context.Context, root *os.Root, from int64, lim
 			continue
 		}
 
-		messages, err := c.server.transcriptEntry(ctx, root, entry, c.conversationID, map[string]string{})
+		messages, err := c.server.transcriptEntry(ctx, root, entry, c.conversationID, false, map[string]string{})
 		if err != nil {
 			return snapshot, 0, err
 		}

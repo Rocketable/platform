@@ -35,6 +35,9 @@ var _ frontend.Backend = &BackendMock{}
 //			CompletionNotesFunc: func(context1 context.Context, s string, strings []string) ([]protocol.BackgroundJob, error) {
 //				panic("mock out the CompletionNotes method")
 //			},
+//			ContinueRunFunc: func(context1 context.Context, s string, s1 string) error {
+//				panic("mock out the ContinueRun method")
+//			},
 //			CreateConversationFunc: func(context1 context.Context, conversation protocol.Conversation) error {
 //				panic("mock out the CreateConversation method")
 //			},
@@ -89,9 +92,6 @@ var _ frontend.Backend = &BackendMock{}
 //			SwitchConversationAgentFunc: func(s string, s1 string) (bool, error) {
 //				panic("mock out the SwitchConversationAgent method")
 //			},
-//			SyncConversationFunc: func(context1 context.Context, s string, s1 string) error {
-//				panic("mock out the SyncConversation method")
-//			},
 //			WorkflowDescriptionsFunc: func() ([]protocol.WorkflowDescription, error) {
 //				panic("mock out the WorkflowDescriptions method")
 //			},
@@ -113,6 +113,9 @@ type BackendMock struct {
 
 	// CompletionNotesFunc mocks the CompletionNotes method.
 	CompletionNotesFunc func(context1 context.Context, s string, strings []string) ([]protocol.BackgroundJob, error)
+
+	// ContinueRunFunc mocks the ContinueRun method.
+	ContinueRunFunc func(context1 context.Context, s string, s1 string) error
 
 	// CreateConversationFunc mocks the CreateConversation method.
 	CreateConversationFunc func(context1 context.Context, conversation protocol.Conversation) error
@@ -168,9 +171,6 @@ type BackendMock struct {
 	// SwitchConversationAgentFunc mocks the SwitchConversationAgent method.
 	SwitchConversationAgentFunc func(s string, s1 string) (bool, error)
 
-	// SyncConversationFunc mocks the SyncConversation method.
-	SyncConversationFunc func(context1 context.Context, s string, s1 string) error
-
 	// WorkflowDescriptionsFunc mocks the WorkflowDescriptions method.
 	WorkflowDescriptionsFunc func() ([]protocol.WorkflowDescription, error)
 
@@ -209,6 +209,15 @@ type BackendMock struct {
 			S string
 			// Strings is the strings argument value.
 			Strings []string
+		}
+		// ContinueRun holds details about calls to the ContinueRun method.
+		ContinueRun []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+			// S1 is the s1 argument value.
+			S1 string
 		}
 		// CreateConversation holds details about calls to the CreateConversation method.
 		CreateConversation []struct {
@@ -346,15 +355,6 @@ type BackendMock struct {
 			// S1 is the s1 argument value.
 			S1 string
 		}
-		// SyncConversation holds details about calls to the SyncConversation method.
-		SyncConversation []struct {
-			// Context1 is the context1 argument value.
-			Context1 context.Context
-			// S is the s argument value.
-			S string
-			// S1 is the s1 argument value.
-			S1 string
-		}
 		// WorkflowDescriptions holds details about calls to the WorkflowDescriptions method.
 		WorkflowDescriptions []struct {
 		}
@@ -363,6 +363,7 @@ type BackendMock struct {
 	lockBackgroundJobs          sync.RWMutex
 	lockClearRevert             sync.RWMutex
 	lockCompletionNotes         sync.RWMutex
+	lockContinueRun             sync.RWMutex
 	lockCreateConversation      sync.RWMutex
 	lockDeleteQueueItem         sync.RWMutex
 	lockEditQueueItem           sync.RWMutex
@@ -381,7 +382,6 @@ type BackendMock struct {
 	lockStopBackgroundJob       sync.RWMutex
 	lockSubscribe               sync.RWMutex
 	lockSwitchConversationAgent sync.RWMutex
-	lockSyncConversation        sync.RWMutex
 	lockWorkflowDescriptions    sync.RWMutex
 }
 
@@ -538,6 +538,46 @@ func (mock *BackendMock) CompletionNotesCalls() []struct {
 	mock.lockCompletionNotes.RLock()
 	calls = mock.calls.CompletionNotes
 	mock.lockCompletionNotes.RUnlock()
+	return calls
+}
+
+// ContinueRun calls ContinueRunFunc.
+func (mock *BackendMock) ContinueRun(context1 context.Context, s string, s1 string) error {
+	if mock.ContinueRunFunc == nil {
+		panic("BackendMock.ContinueRunFunc: method is nil but Backend.ContinueRun was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+		S1       string
+	}{
+		Context1: context1,
+		S:        s,
+		S1:       s1,
+	}
+	mock.lockContinueRun.Lock()
+	mock.calls.ContinueRun = append(mock.calls.ContinueRun, callInfo)
+	mock.lockContinueRun.Unlock()
+	return mock.ContinueRunFunc(context1, s, s1)
+}
+
+// ContinueRunCalls gets all the calls that were made to ContinueRun.
+// Check the length with:
+//
+//	len(mockedBackend.ContinueRunCalls())
+func (mock *BackendMock) ContinueRunCalls() []struct {
+	Context1 context.Context
+	S        string
+	S1       string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+		S1       string
+	}
+	mock.lockContinueRun.RLock()
+	calls = mock.calls.ContinueRun
+	mock.lockContinueRun.RUnlock()
 	return calls
 }
 
@@ -1206,46 +1246,6 @@ func (mock *BackendMock) SwitchConversationAgentCalls() []struct {
 	mock.lockSwitchConversationAgent.RLock()
 	calls = mock.calls.SwitchConversationAgent
 	mock.lockSwitchConversationAgent.RUnlock()
-	return calls
-}
-
-// SyncConversation calls SyncConversationFunc.
-func (mock *BackendMock) SyncConversation(context1 context.Context, s string, s1 string) error {
-	if mock.SyncConversationFunc == nil {
-		panic("BackendMock.SyncConversationFunc: method is nil but Backend.SyncConversation was just called")
-	}
-	callInfo := struct {
-		Context1 context.Context
-		S        string
-		S1       string
-	}{
-		Context1: context1,
-		S:        s,
-		S1:       s1,
-	}
-	mock.lockSyncConversation.Lock()
-	mock.calls.SyncConversation = append(mock.calls.SyncConversation, callInfo)
-	mock.lockSyncConversation.Unlock()
-	return mock.SyncConversationFunc(context1, s, s1)
-}
-
-// SyncConversationCalls gets all the calls that were made to SyncConversation.
-// Check the length with:
-//
-//	len(mockedBackend.SyncConversationCalls())
-func (mock *BackendMock) SyncConversationCalls() []struct {
-	Context1 context.Context
-	S        string
-	S1       string
-} {
-	var calls []struct {
-		Context1 context.Context
-		S        string
-		S1       string
-	}
-	mock.lockSyncConversation.RLock()
-	calls = mock.calls.SyncConversation
-	mock.lockSyncConversation.RUnlock()
 	return calls
 }
 

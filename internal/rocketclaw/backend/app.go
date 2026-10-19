@@ -161,7 +161,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	})
 }
 
-func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same runtime wiring as Run, held under pglock.Do.
+func (s *lockedRun) Run(runCtx context.Context) error {
 	s.detach()
 
 	cfg, configPath, logger, rocketcodeSessions := s.cfg.Clone(), s.configPath, s.logger, s.sessions
@@ -182,30 +182,6 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 	if err := rocketcodeSessions.sweepRetainedResults(); err != nil {
 		logger.Warn("sweep expired retained execute results", "error", err)
 	}
-
-	backfillCtx, cancelBackfill := context.WithCancel(runCtx)
-
-	var backfill errgroup.Group
-	backfill.Go(func() error {
-		if err := rocketcodeSessions.backfillSessionSummaries(backfillCtx); err != nil && backfillCtx.Err() == nil {
-			logger.Error("backfill session summaries", "error", err)
-		}
-
-		return nil
-	})
-	backfill.Go(func() error {
-		if err := rocketcodeSessions.backfillMessageSearch(backfillCtx); err != nil && backfillCtx.Err() == nil {
-			logger.Error("backfill message search", "error", err)
-		}
-
-		return nil
-	})
-
-	defer func() {
-		cancelBackfill()
-
-		_ = backfill.Wait()
-	}()
 
 	if err := skel.SyncInWithOverlays(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, logger); err != nil {
 		return fmt.Errorf("sync rocketclaw skeleton: %w", err)

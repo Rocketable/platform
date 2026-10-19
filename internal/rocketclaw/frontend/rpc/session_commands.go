@@ -136,14 +136,13 @@ type messageSearch struct {
 }
 
 func (work messageSearch) search(scanCtx context.Context, s *Server) (any, error) {
-	hits, mentions, complete, err := s.sessions.SearchMessagesMentioning(scanCtx, work.needle, s.channels)
+	hits, mentions, err := s.sessions.SearchMessagesMentioning(scanCtx, work.needle, s.channels)
 	if err != nil {
 		return nil, fmt.Errorf("web message search: %w", err)
 	}
 
 	work.response.Matches = messageMatches(hits)
 	work.response.TagIds = backend.MentionedIDs(hits, mentions)
-	work.response.IndexComplete = complete
 
 	return work.response, nil
 }
@@ -183,7 +182,7 @@ func (work sessionSearch) search(scanCtx context.Context, s *Server) (any, error
 		return nil, fmt.Errorf("web session search: %w", err)
 	}
 
-	response := &SearchSessionsResponse{Text: search.Text, Needle: search.Needle, Messages: messageMatches(search.Hits), MentionIds: search.MentionIDs, IndexComplete: search.IndexComplete, SummariesComplete: search.SummariesComplete, Principals: search.Principals}
+	response := &SearchSessionsResponse{Text: search.Text, Needle: search.Needle, Messages: messageMatches(search.Hits), MentionIds: search.MentionIDs, Principals: search.Principals}
 	for _, term := range search.Terms {
 		response.Terms = append(response.Terms, &SearchTerm{Key: string(term.Key), Text: term.Text, Start: int32(term.Start), End: int32(term.End)})
 	}

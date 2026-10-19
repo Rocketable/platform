@@ -3,7 +3,6 @@ package backend
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -77,314 +76,10 @@ func TestRuntimeRecordsExplicitConversationsWithoutResettingSelection(t *testing
 	require.Equal(t, []protocol.Conversation{{ID: "opaque", Agent: "selected", CreatedBy: "cron"}}, conversations)
 }
 
-func TestRuntimeSummaryBackfillLifecycle(t *testing.T) {
-	t.Parallel()
-
-	for _, mode := range []string{"cancel", "startup failure", "decode failure", "database failure"} {
-		t.Run(mode, func(t *testing.T) {
-			workspace := t.TempDir()
-			root, err := os.OpenRoot(workspace)
-
-			require.NoError(t, err)
-			defer func() { require.NoError(t, root.Close()) }()
-
-			require.NoError(t, root.Mkdir("agents", 0o755))
-			require.NoError(t, root.WriteFile("agents/main.md", []byte("---\ndescription: Backfill test\nmodel: gpt-6.1-sol\n---\nRespond concisely.\n"), 0o600))
-			logFile, err := root.Create("runtime.log")
-
-			require.NoError(t, err)
-			defer func() { require.NoError(t, logFile.Close()) }()
-
-			service := newTestSessionServiceAt(t, workspace)
-			historyID := "bad:" + workspace
-			_, err = service.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, '{"timestamp":false}', $2)`, historyID, time.Now().UTC().Format(time.RFC3339Nano))
-			require.NoError(t, err)
-
-			if mode == "database failure" {
-				_, err = service.db.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{}' WHERE conversation_id = $1`, historyID)
-				require.NoError(t, err)
-				_, err = service.db.ExecContext(t.Context(), `ALTER TABLE session_summaries ADD CONSTRAINT reject_backfill CHECK (conversation_id = 'live')`)
-				require.NoError(t, err)
-			}
-
-			// A chat saved before message search; its backfill waits on the same held locks.
-			searchID := "search" + strings.ReplaceAll(workspace, "/", ":")
-			_, err = service.db.ExecContext(t.Context(), `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, 'main', '')`, searchID)
-			require.NoError(t, err)
-			insertSessionEntryWithoutSummary(t, service, searchID, testSessionEntry("saved question", "saved answer"))
-
-			tx, err := service.db.BeginTx(t.Context(), nil)
-			require.NoError(t, err)
-
-			defer func() { _ = tx.Rollback() }()
-
-			require.NoError(t, lockSessionHistory(t.Context(), tx, historyID))
-			require.NoError(t, lockSessionHistory(t.Context(), tx, searchID))
-
-			// Another worker in the same database must not count as this backfill.
-			unrelatedID := "unrelated:" + workspace
-			unrelatedTx, err := service.db.BeginTx(t.Context(), nil)
-			require.NoError(t, err)
-			require.NoError(t, lockSessionHistory(t.Context(), unrelatedTx, unrelatedID))
-
-			var unrelated errgroup.Group
-			unrelated.Go(func() error {
-				if err := lockSessionHistory(t.Context(), service.db, unrelatedID); err != nil {
-					return fmt.Errorf("wait for unrelated history lock: %w", err)
-				}
-
-				return nil
-			})
-
-			defer func() {
-				require.NoError(t, unrelatedTx.Rollback())
-				require.NoError(t, unrelated.Wait())
-			}()
-
-			require.Eventually(t, func() bool {
-				var waiting bool
-
-				err := service.db.QueryRowContext(t.Context(), `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND classid = 87901 AND objid = (hashtext($1)::bigint & 4294967295)::oid AND objsubid = 2 AND database = (SELECT oid FROM pg_database WHERE datname = current_database()))`, unrelatedID).Scan(&waiting)
-				require.NoError(t, err)
-
-				return waiting
-			}, 5*time.Second, time.Millisecond)
-
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-
-			var backfillPID, searchPID int
-
-			assembler := &frontendAssemblerMock{
-				ValidateAssetsFunc: func(*config.Config, string, []string) error {
-					// Wait for actual contention of both backfills, rather than assuming they started.
-					require.Eventually(t, func() bool {
-						for id, pid := range map[string]*int{historyID: &backfillPID, searchID: &searchPID} {
-							err := service.db.QueryRowContext(t.Context(), `SELECT COALESCE((SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND classid = 87901 AND objid = (hashtext($1)::bigint & 4294967295)::oid AND objsubid = 2 AND database = (SELECT oid FROM pg_database WHERE datname = current_database())), 0)`, id).Scan(pid)
-							require.NoError(t, err)
-						}
-
-						return backfillPID != 0 && searchPID != 0
-					}, 5*time.Second, time.Millisecond)
-
-					if mode == "startup failure" {
-						return errors.New("frontend startup failure")
-					}
-
-					return nil
-				},
-				AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
-					if mode == "decode failure" || mode == "database failure" {
-						require.NoError(t, tx.Commit())
-
-						wantFailure := "parse session summary history"
-						if mode == "database failure" {
-							wantFailure = "reject_backfill"
-						}
-
-						require.Eventually(t, func() bool {
-							data, err := root.ReadFile("runtime.log")
-							require.NoError(t, err)
-
-							return strings.Contains(string(data), wantFailure)
-						}, 5*time.Second, time.Millisecond)
-						// A failed summary backfill leaves the message search backfill running.
-						require.Eventually(t, func() bool {
-							var marked bool
-							require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT EXISTS (SELECT 1 FROM message_search_indexed WHERE conversation_id = $1)`, searchID).Scan(&marked))
-
-							return marked
-						}, 5*time.Second, time.Millisecond)
-					}
-					// Both blocked and failed backfill leave ordinary work and list reads available.
-					require.NoError(t, rt.RunCtx.Err())
-					_, err := rt.Sessions.AppendEntryID(ctx, "live", testSessionEntry("available", "answer"))
-					require.NoError(t, err)
-					summaries, err := rt.Sessions.ListSessions(ctx, []string{"live", historyID})
-					require.NoError(t, err)
-					require.Equal(t, []protocol.SessionSummary{{ConversationID: "live", LastMessage: "answer", LastUpdated: time.Unix(1, 0).UTC()}}, summaries)
-
-					cancel()
-
-					return nil, nil, nil, nil
-				},
-			}
-
-			err = Run(ctx, &config.Config{Workspace: workspace, DatabaseURL: testStoreDSN(workspace)}, filepath.Join(workspace, "rocketclaw.json"), slog.New(slog.NewTextHandler(logFile, nil)), assembler)
-			if mode == "startup failure" {
-				require.ErrorContains(t, err, "frontend startup failure")
-			} else {
-				require.NoError(t, err)
-			}
-
-			// Run cancels and joins the Go worker before closing its database pool.
-			// PostgreSQL processes connection closure separately; observe that exact
-			// backend disappearing, while the unrelated waiter remains blocked.
-			require.Eventually(t, func() bool {
-				var stopped bool
-
-				err := service.db.QueryRowContext(t.Context(), `SELECT NOT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid IN ($1, $2))`, backfillPID, searchPID).Scan(&stopped)
-				require.NoError(t, err)
-
-				return stopped
-			}, 5*time.Second, time.Millisecond, "the observed backfill backends must terminate after Run returns")
-		})
-	}
-}
-
-func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
-	t.Run("sync does not hold history while waiting for bridge", func(t *testing.T) {
-		store := newTestSessionService(t)
-		manager, _, _, _ := newCronTestManager(t, store)
-		ctx := t.Context()
-		bridges := make([]*Bridge, 0, 2)
-
-		for _, id := range []string{t.Name() + "-source", t.Name() + "-destination"} {
-			require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "job"}))
-			bridge, err := manager.recordedBridge(t.Context(), id)
-			require.NoError(t, err)
-
-			bridges = append(bridges, bridge)
-		}
-
-		source, destination := bridges[0], bridges[1]
-		blocker, err := store.db.BeginTx(ctx, nil)
-		require.NoError(t, err)
-
-		defer func() { _ = blocker.Rollback() }()
-
-		require.NoError(t, lockSessionHistory(ctx, blocker, destination.config.ConversationID))
-
-		var holder int
-		require.NoError(t, blocker.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&holder))
-
-		var syncing errgroup.Group
-		syncing.Go(func() error { return destination.syncConversation(ctx, source) })
-
-		defer func() {
-			_ = blocker.Rollback()
-
-			require.NoError(t, syncing.Wait())
-		}()
-
-		require.Eventually(t, func() bool {
-			var blocked bool
-			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))`, holder).Scan(&blocked))
-
-			return blocked
-		}, 5*time.Second, time.Millisecond)
-
-		// Scheduled claims hold the bridge mutex while waiting for this history lock.
-		destination.mu.Lock()
-		defer destination.mu.Unlock()
-
-		require.NoError(t, blocker.Commit())
-
-		probe, err := store.db.BeginTx(ctx, nil)
-		require.NoError(t, err)
-
-		defer func() { _ = probe.Rollback() }()
-
-		require.Eventually(t, func() bool {
-			var available bool
-			require.NoError(t, probe.QueryRowContext(ctx, `SELECT pg_try_advisory_xact_lock(87901, hashtext($1))`, destination.config.ConversationID).Scan(&available))
-
-			return available
-		}, 5*time.Second, time.Millisecond, "sync must release history without acquiring the bridge mutex")
-	})
-
-	t.Run("history before delivered owner", func(t *testing.T) {
-		store := newTestSessionService(t)
-		store.db.SetMaxOpenConns(1)
-		manager, cfg, roots, finals := newCronTestManager(t, store)
-		ctx := t.Context()
-		msg := seedCronRun(t, store, "cron:daily")
-		source := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: msg.ConversationID, Agent: "job", SessionService: store}, slog.New(slog.DiscardHandler))
-		source.threads = manager
-		require.NoError(t, source.ScheduleMessage(msg, time.Hour, "discard before sync", false))
-		require.NoError(t, source.ResetScheduledMessages(msg))
-		require.NoError(t, source.ScheduleMessage(msg, 2*time.Hour, "after sync", true))
-		endTestTurn(t, store, msg.ConversationID, "turn-cron", protocol.TerminalComplete)
-
-		rt := &Runtime{Sessions: store}
-		ownerID := protocol.SlackThreadConversationID("C1", "1.2")
-		sourceEntries, err := store.ObserveEntries(ctx, msg.ConversationID)
-		require.NoError(t, err)
-		require.Len(t, sourceEntries, 3)
-
-		var expected protocol.ScheduledMessageState
-		require.NoError(t, json.Unmarshal(sourceEntries[2].Entry.OutputTrace[0], &expected))
-
-		expected.ConversationID, expected.Agent = ownerID, "selected"
-		for _, id := range []string{"web:cron:daily", ownerID} {
-			require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "selected"}))
-			_, err := store.AppendEntryID(ctx, id, testSessionEntry("existing history", "existing answer"))
-			require.NoError(t, err)
-			destination, err := manager.recordedBridge(t.Context(), id)
-			require.NoError(t, err)
-			require.NoError(t, destination.syncConversation(ctx, source))
-
-			scheduled, err := store.ScheduledMessagesForConversation(id)
-			require.NoError(t, err)
-			require.Empty(t, scheduled, "unbound history copies must not apply effects")
-		}
-
-		inbound, through, err := (stateDAO{db: store.db}).producer(ctx, msg.ConversationID)
-		require.NoError(t, err)
-		require.Empty(t, inbound.SyncDestination, "arbitrary Sync must not choose the owner")
-		require.Zero(t, through)
-
-		beforeEntries, err := store.ObserveEntries(ctx, ownerID)
-		require.NoError(t, err)
-		require.Len(t, beforeEntries, 4)
-
-		require.NoError(t, store.PutScheduledMessage("existing", &protocol.ScheduledMessageState{ConversationID: ownerID, Agent: "selected", Message: "preserve on rollback", DueAt: time.Now().Add(time.Hour)}))
-		beforeSchedules, err := store.ScheduledMessagesForConversation(ownerID)
-		require.NoError(t, err)
-		_, err = store.db.ExecContext(ctx, `ALTER TABLE managed_conversations ADD CONSTRAINT reject_effect_progress CHECK (producer_effects_through_id = 0) NOT VALID`)
-		require.NoError(t, err)
-
-		outbound := source.newOutboundMessage(msg, "turn-cron", "report", true)
-		require.ErrorContains(t, source.postCronRoot(ctx, outbound), "reject_effect_progress")
-		readFinal(t, roots)
-
-		inbound, through, err = (stateDAO{db: store.db}).producer(ctx, msg.ConversationID)
-		require.NoError(t, err)
-		require.Equal(t, ownerID, inbound.SyncDestination, "delivered binding must survive projection failure")
-		require.Zero(t, through)
-
-		afterSchedules, err := store.ScheduledMessagesForConversation(ownerID)
-		require.NoError(t, err)
-		require.Equal(t, beforeSchedules, afterSchedules, "failed cursor write must roll back schedule/reset effects")
-
-		_, err = store.db.ExecContext(ctx, `ALTER TABLE managed_conversations DROP CONSTRAINT reject_effect_progress`)
-		require.NoError(t, err)
-		require.NoError(t, source.postCronRoot(ctx, outbound))
-		readFinal(t, roots)
-
-		thread, recorded, err := store.Thread(ownerID)
-		require.NoError(t, err)
-		require.True(t, recorded)
-		require.Equal(t, "selected", thread.Agent, "delivery replay must preserve the canonical selection")
-
-		afterEntries, err := store.ObserveEntries(ctx, ownerID)
-		require.NoError(t, err)
-		require.Equal(t, beforeEntries, afterEntries, "effects must apply even with zero inserted history rows")
-
-		inbound, through, err = (stateDAO{db: store.db}).producer(ctx, msg.ConversationID)
-		require.NoError(t, err)
-		require.Equal(t, ownerID, inbound.SyncDestination)
-		require.Equal(t, sourceEntries[2].ID, through)
-
-		scheduled, err := store.ScheduledMessagesForConversation(ownerID)
-		require.NoError(t, err)
-		require.Len(t, scheduled, 1)
-
-		for _, message := range scheduled {
-			require.Equal(t, expected, message, "projection preserves the due time and recurring cadence")
-		}
-	})
-
+// A hidden run reports to its destination: its tag tools act there, its reply reaches the
+// destination once, the destination shows its history without copies, and its schedule changes
+// take effect there only when its turn succeeds (AE2).
+func TestRuntimeProducerReportsToDestination(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := newTestSessionService(t)
 		workspace := t.TempDir()
@@ -431,7 +126,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		shutdown := runTestManager(t, rt.threads)
 		defer func() { require.NoError(t, shutdown()) }()
 
-		for _, id := range []string{"X", "Y", "Z"} {
+		for _, id := range []string{"Y", "X"} {
 			require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}))
 			_, err := store.toggleSessionTag(ctx, id, id+"-tag", []string{id + "-tag"})
 			require.NoError(t, err)
@@ -450,9 +145,6 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 				delivered = append(delivered, event.Message.ConversationID)
 				if event.Message.ConversationID == "Y" && event.Message.SlackReply.MessageTS == "producer" {
 					assert.Equal(t, "X", event.Message.SourceConversationID)
-					assert.Equal(t, "producer", event.Message.Agent)
-					assert.Equal(t, "work/producer", event.Message.Model)
-					assert.Equal(t, new("high"), event.Message.ReasoningEffort)
 				}
 
 				deliveryOrder = append(deliveryOrder, event.Message.SlackReply.MessageTS)
@@ -467,79 +159,8 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		server.Close()
 		// The private producer's tag tools act on its human-visible destination, while its session ID stays private.
 		require.Equal(t, []string{strings.Join([]string{`{"tags":["Y-tag","red"]}`, `{"tags":["Y-tag","yellow"]}`, `{"tags":["Y-tag","yellow"]}`, `{"tags":["Y-tag"]}`, `{"tags":["Y-tag"]}`, `{"tags":["Y-tag","yellow"]}`, "X"}, "\n")}, tagOutputs)
-
-		source := rt.threads.bridges["X"].(*Bridge)
-		source.mu.Lock()
-		source.pendingOutput.Agent, source.pendingOutput.Model, source.pendingOutput.ReasoningEffort = "producer", "work/producer", new("high")
-		source.mu.Unlock()
-		require.NoError(t, startTurnDB(ctx, store.db, "producer-effects", "X", producer))
-		require.NoError(t, source.ScheduleMessage(producer, time.Hour, "discard before sync", false))
-		require.NoError(t, source.ResetScheduledMessages(producer))
-		require.NoError(t, source.ScheduleMessage(producer, time.Hour, "after sync", false))
-		endTestTurn(t, store, "X", "producer-effects", protocol.TerminalComplete)
-		// A copied row's ID, not timestamp magnitude, determines the last update.
-		_, err := store.AppendEntryID(ctx, "X", &rocketcode.SessionEntry{Timestamp: time.Unix(1, 123456789).UTC()})
-		require.NoError(t, err)
-
-		scheduled, err := store.ScheduledMessagesForConversation("X")
-		require.NoError(t, err)
-		require.Empty(t, scheduled)
-
-		require.NoError(t, store.PutScheduledMessage("existing", &protocol.ScheduledMessageState{ConversationID: "Y", Agent: "main", Message: "preserve on rollback", DueAt: time.Now().Add(time.Hour)}))
-
-		waitingFinished := false
-
-		var waiting errgroup.Group
-		waiting.Go(func() error {
-			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindEnqueue, "", true)
-			inbound.ConversationID = "Y"
-			inbound.AttachmentPresence = protocol.AttachmentPresenceImages
-			inbound.SlackReply = &protocol.SlackReplyTarget{MessageTS: "human"}
-
-			err := rt.RunTurn(ctx, inbound)
-			waitingFinished = true
-
-			return err
-		})
 		synctest.Wait()
-		require.Equal(t, []string{"X", "X"}, delivered)
-
-		beforeEntries, err := store.ObserveEntries(ctx, "Y")
-		require.NoError(t, err)
-		beforeSummaries, err := store.ListSessions(ctx, []string{"Y"})
-		require.NoError(t, err)
-		beforeSchedules, err := store.ScheduledMessagesForConversation("Y")
-		require.NoError(t, err)
-		// Reject the summary only after Sync has copied entries and applied schedules.
-		_, err = store.db.ExecContext(ctx, `ALTER TABLE session_summaries ADD CONSTRAINT reject_sync_summary CHECK (conversation_id <> 'Y') NOT VALID`)
-		require.NoError(t, err)
-		err = rt.SyncConversation(ctx, "X", "Y")
-		require.ErrorContains(t, err, "write session summary")
-		require.ErrorContains(t, err, "reject_sync_summary")
-		require.NoError(t, ctx.Err())
-		synctest.Wait()
-		require.False(t, waitingFinished, "failed Sync must retain the destination reservation")
-		require.Equal(t, []string{"X", "X"}, delivered)
-
-		afterEntries, err := store.ObserveEntries(ctx, "Y")
-		require.NoError(t, err)
-		require.Equal(t, beforeEntries, afterEntries)
-
-		afterSummaries, err := store.ListSessions(ctx, []string{"Y"})
-		require.NoError(t, err)
-		require.Equal(t, beforeSummaries, afterSummaries)
-
-		afterSchedules, err := store.ScheduledMessagesForConversation("Y")
-		require.NoError(t, err)
-		require.Equal(t, beforeSchedules, afterSchedules)
-
-		_, through, err := (stateDAO{db: store.db}).producer(ctx, "X")
-		require.NoError(t, err)
-		require.Zero(t, through, "failed Sync must not advance producer effects")
-
-		_, err = store.db.ExecContext(ctx, `ALTER TABLE session_summaries DROP CONSTRAINT reject_sync_summary`)
-		require.NoError(t, err)
-		require.NoError(t, rt.SyncConversation(ctx, "X", "Y"))
+		require.Equal(t, []string{"X", "X", "Y"}, delivered, "the reply reaches the destination once")
 
 		for id, want := range map[string][]string{"X": {"X-tag"}, "Y": {"Y-tag", "yellow"}} {
 			tags, err := sessionTags(ctx, store.db, id)
@@ -547,148 +168,98 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 			require.Equal(t, want, tags)
 		}
 
-		require.NoError(t, waiting.Wait())
-		synctest.Wait()
-		require.Equal(t, []string{"X", "X", "Y", "Y"}, delivered)
-		require.Equal(t, []string{"producer", "producer", "producer", "human"}, deliveryOrder)
-
-		summaries, err := store.ListSessions(ctx, []string{"Y"})
-		require.NoError(t, err)
-		require.Equal(t, []protocol.SessionSummary{{ConversationID: "Y", LastMessage: "done", LastUpdated: time.Unix(1, 123456000).UTC()}}, summaries)
-
-		for row, err := range store.SidebarSessions(ctx) {
-			require.NoError(t, err)
-
-			if row.Conversation.ID == "Y" {
-				require.False(t, row.Running)
-				require.False(t, row.Pinned)
-				require.Equal(t, []string{"Y-tag", "yellow"}, row.Tags)
-			}
-		}
-
-		require.NoError(t, rt.SyncConversation(ctx, "X", "Y"))
-
-		afterSync, err := store.ListSessions(ctx, []string{"Y"})
-		require.NoError(t, err)
-		require.Equal(t, summaries, afterSync)
-		synctest.Wait()
-		require.Len(t, delivered, 4)
-
 		entries, err := store.ObserveEntries(ctx, "Y")
 		require.NoError(t, err)
-		require.Len(t, entries, 7)
-
-		for _, observed := range entries {
-			if observed.Entry.Model == "work/X" {
-				require.Equal(t, "X", observed.SourceConversationID)
-				require.Equal(t, "X", observed.Entry.Agent)
-				require.Equal(t, new("high"), observed.Entry.ReasoningEffort)
-			}
-		}
+		require.Len(t, entries, 3, "the destination shows its own history, then the run's")
 
 		messages, err := replayInputMessages(entries[0].Entry.ReplayInput)
 		require.NoError(t, err)
 		require.Equal(t, "Y history", messages[0].text)
 
-		entries, err = store.ObserveEntries(ctx, "X")
-		require.NoError(t, err)
-		require.Len(t, entries, 6)
-		sourceEntries := entries
+		for _, observed := range entries[1:] {
+			require.Equal(t, "X", observed.SourceConversationID)
+			require.True(t, observed.Synced)
+		}
 
-		scheduled, err = store.ScheduledMessagesForConversation("Y")
+		require.Equal(t, "X", entries[1].Entry.Agent)
+		require.Equal(t, "work/X", entries[1].Entry.Model)
+		require.Equal(t, new("high"), entries[1].Entry.ReasoningEffort)
+
+		require.Equal(t, "done", sidebarSummaries(t, store)["Y"].LastMessage, "the destination's preview is the run's latest message")
+
+		var copies int
+		require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM entries WHERE conversation_id = 'Y'`).Scan(&copies))
+		require.Equal(t, 1, copies, "no run history is copied into the destination")
+
+		source := rt.threads.bridges["X"].(*Bridge)
+
+		require.NoError(t, store.PutScheduledMessage("existing", &protocol.ScheduledMessageState{ConversationID: "Y", Agent: "main", Message: "reset by the run", DueAt: time.Now().Add(time.Hour)}))
+
+		for _, turn := range []struct {
+			id       string
+			terminal protocol.Terminal
+		}{{"failed-effects", protocol.TerminalFailed}, {"producer-effects", ""}} {
+			require.NoError(t, startTurnDB(ctx, store.db, turn.id, "X", producer))
+			source.mu.Lock()
+			source.activeTurnID = turn.id
+			source.mu.Unlock()
+			require.NoError(t, source.ScheduleMessage(producer, time.Hour, "discarded by reset", false))
+			require.NoError(t, source.ResetScheduledMessages(producer))
+			require.NoError(t, source.ScheduleMessage(producer, 2*time.Hour, "after "+turn.id, true))
+
+			scheduled, err := store.ScheduledMessagesForConversation("Y")
+			require.NoError(t, err)
+			require.Len(t, scheduled, 1, "a running turn's schedule changes wait for its finish")
+			endTestTurn(t, store, "X", turn.id, turn.terminal)
+		}
+
+		source.mu.Lock()
+		source.activeTurnID = ""
+		source.mu.Unlock()
+
+		scheduled, err := store.ScheduledMessagesForConversation("Y")
 		require.NoError(t, err)
 		require.Len(t, scheduled, 1)
 
 		for _, message := range scheduled {
-			require.Equal(t, "after sync", message.Message)
+			require.Equal(t, protocol.ScheduledMessageState{ConversationID: "Y", Agent: "main", Message: "after producer-effects", DueAt: message.DueAt, Recurring: true, Interval: 2 * time.Hour}, message,
+				"only the successful turn's changes apply to the destination, with the destination's agent")
 		}
 
-		// These attachment-fallback turns exercise runtime routing, not provider
-		// continuation. Seed the Y-only reply because fallback does not record it.
-		reply := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", true)
-		reply.ConversationID = "Y"
-		reply.AttachmentPresence = protocol.AttachmentPresenceImages
-		reply.SlackReply = &protocol.SlackReplyTarget{MessageTS: "reply"}
-		require.NoError(t, rt.RunTurn(ctx, reply))
-
-		replay := replayInputForMessage("user", "Y-only reply after sync")
-		_, err = store.AppendEntryID(ctx, "Y", &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replay})
+		private, err := store.ScheduledMessagesForConversation("X")
 		require.NoError(t, err)
-		destinationEntries, err := store.ObserveEntries(ctx, "Y")
-		require.NoError(t, err)
-		require.Len(t, destinationEntries, 8)
+		require.Empty(t, private)
 
 		continuation := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
 		continuation.ConversationID, continuation.SyncDestination = "X", "Y"
 		continuation.AttachmentPresence = protocol.AttachmentPresenceImages
 		continuation.SlackReply = &protocol.SlackReplyTarget{MessageTS: "continuation"}
 		require.NoError(t, rt.RunTurn(ctx, continuation))
+
+		again, err := store.ScheduledMessagesForConversation("Y")
+		require.NoError(t, err)
+		require.Equal(t, scheduled, again, "a later call does not apply an earlier call's schedule again")
+
+		reply := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", true)
+		reply.ConversationID = "Y"
+		reply.AttachmentPresence = protocol.AttachmentPresenceImages
+		reply.SlackReply = &protocol.SlackReplyTarget{MessageTS: "reply"}
+		require.NoError(t, rt.RunTurn(ctx, reply))
 		synctest.Wait()
-		require.Equal(t, []string{"X", "X", "Y", "Y", "Y", "X"}, delivered)
+		require.Equal(t, []string{"producer", "producer", "producer", "continuation", "continuation", "reply"}, deliveryOrder)
 
-		entries, err = store.ObserveEntries(ctx, "X")
+		xEntries, err := store.ObserveEntries(ctx, "X")
 		require.NoError(t, err)
-		require.Equal(t, sourceEntries, entries, "Y history and reply must stay off X")
-		entries, err = store.ObserveEntries(ctx, "Y")
+		yEntries, err := store.ObserveEntries(ctx, "Y")
 		require.NoError(t, err)
-		require.Equal(t, destinationEntries, entries, "continuing X must not copy entries without another Sync")
+		require.Len(t, yEntries, len(xEntries)+1, "the destination shows the continued run without another copy, and its own history stays off the run")
 
-		scheduledAfter, err := store.ScheduledMessagesForConversation("Y")
-		require.NoError(t, err)
-		require.Equal(t, scheduled, scheduledAfter, "continuing X must not duplicate copied effects")
+		beforeDelete := sidebarSummaries(t, store)["Y"]
+		require.NotNil(t, beforeDelete)
 
-		require.NoError(t, rt.SyncConversation(ctx, "X", "Y"))
-		synctest.Wait()
-		require.Equal(t, []string{"X", "X", "Y", "Y", "Y", "X", "Y"}, delivered)
-
-		entries, err = store.ObserveEntries(ctx, "X")
-		require.NoError(t, err)
-		require.Equal(t, sourceEntries, entries, "subsequent Sync must not copy Y history or reply back to X")
-		entries, err = store.ObserveEntries(ctx, "Y")
-		require.NoError(t, err)
-		require.Equal(t, destinationEntries, entries, "subsequent Sync must not duplicate copied entries")
-
-		for id, message := range scheduled {
-			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, message.Message, false)
-			inbound.ConversationID = "Y"
-			request := &bridgeRequest{inbound: inbound, scheduledMessageID: id}
-			admitted, err := rt.threads.bridges["Y"].(*Bridge).activateInbound(ctx, request)
-			require.NoError(t, err)
-			require.True(t, admitted)
-			endTestTurn(t, store, "Y", request.turnID, protocol.TerminalComplete)
-		}
-
-		require.NoError(t, store.PutScheduledMessage("Z-existing", &protocol.ScheduledMessageState{ConversationID: "Z", Agent: "main", Message: "keep Z", DueAt: time.Now().Add(time.Hour)}))
-		beforeZ, err := store.ScheduledMessagesForConversation("Z")
-		require.NoError(t, err)
-
-		for _, pair := range [][2]string{{"X", "Y"}, {"X", "Z"}, {"Y", "Z"}} {
-			require.NoError(t, rt.SyncConversation(ctx, pair[0], pair[1]))
-		}
-
-		scheduled, err = store.ScheduledMessagesForConversation("Y")
-		require.NoError(t, err)
-		require.Empty(t, scheduled, "repeated Sync must not rearm a consumed one-shot")
-
-		afterZ, err := store.ScheduledMessagesForConversation("Z")
-		require.NoError(t, err)
-		require.Equal(t, beforeZ, afterZ, "alternate and onward history copies must not replay schedules or resets")
-
-		zEntries, err := store.ObserveEntries(ctx, "Z")
-		require.NoError(t, err)
-		require.Greater(t, len(zEntries), len(sourceEntries), "both copies still expose history")
-
-		beforeDelete, err := store.ListSessions(ctx, []string{"Y"})
-		require.NoError(t, err)
 		_, err = store.DeleteSession(ctx, "X")
 		require.NoError(t, err)
-		afterDelete, err := store.ListSessions(ctx, []string{"Y"})
-		require.NoError(t, err)
-		require.Equal(t, beforeDelete, afterDelete)
-
-		scheduledAfter, err = store.ScheduledMessagesForConversation("Y")
-		require.NoError(t, err)
-		require.Equal(t, scheduled, scheduledAfter, "subsequent Sync must not duplicate copied effects")
+		require.Equal(t, beforeDelete, sidebarSummaries(t, store)["Y"])
 	})
 }
 
@@ -777,47 +348,12 @@ func TestRuntimePersistedEnqueueAndProducerArrivalOrder(t *testing.T) {
 						content := protocol.InboundContent{AttachmentPresence: protocol.AttachmentPresenceImages}
 						require.NoError(t, rt.threads.stashQueueItem(ctx, protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID), &protocol.ThreadQueueItem{ID: "enqueue", Kind: protocol.InboundKindEnqueue, Source: protocol.SourceSlack, Content: content, Principal: "original author", StashAt: time.Now(), SlackChannel: target.ChannelID, SlackTS: "enqueue", SlackReply: &protocol.SlackReplyTarget{ChannelID: target.ChannelID, MessageTS: "enqueue", ThreadTS: target.ThreadID}}))
 					} else {
-						waiting.Go(func() error {
-							if err := rt.RunTurn(ctx, competing); err != nil {
-								return err
-							}
-
-							return rt.SyncConversation(ctx, tt.producerID, destination)
-						})
+						waiting.Go(func() error { return rt.RunTurn(ctx, competing) })
 					}
 
 					synctest.Wait()
 				}
 
-				require.Equal(t, []string{"X"}, delivered)
-
-				// The fallback turn has finished, but its real producer reservation
-				// still holds Y. Install X's active cancellation state at this boundary.
-				turnCtx, cancelTurn := context.WithCancel(ctx)
-				defer cancelTurn()
-
-				source := rt.threads.bridges["X"].(*Bridge)
-				source.mu.Lock()
-				source.activeReply, source.activeTurnCancel = producer, cancelTurn
-				source.mu.Unlock()
-
-				if rt.threads.InterruptConversation(destination) != producer {
-					t.Error("interrupt Y must return X's active inbound")
-				}
-
-				if !errors.Is(turnCtx.Err(), context.Canceled) {
-					t.Error("interrupt Y must cancel X's active turn")
-				}
-
-				synctest.Wait()
-				require.Equal(t, []string{"X"}, delivered, "interrupt must not release Y's waiting work")
-
-				failedSync, cancelSync := context.WithCancel(ctx)
-				cancelSync()
-				require.ErrorIs(t, rt.SyncConversation(failedSync, "X", destination), context.Canceled)
-				synctest.Wait()
-				require.Equal(t, []string{"X"}, delivered, "failed Sync must hold both waiting paths")
-				require.NoError(t, rt.SyncConversation(ctx, "X", destination))
 				require.NoError(t, waiting.Wait())
 				synctest.Wait()
 				cancel()
@@ -1497,14 +1033,14 @@ func TestRuntimeQueueEditKeepsPreparedWorkflow(t *testing.T) {
 
 			if test.failCommit {
 				_, err = store.db.ExecContext(t.Context(), `CREATE FUNCTION reject_queue_edit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'edit commit failed'; END $$;
-CREATE CONSTRAINT TRIGGER reject_queue_edit AFTER UPDATE ON thread_queue DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_queue_edit()`)
+CREATE CONSTRAINT TRIGGER reject_queue_edit AFTER UPDATE ON turns DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_queue_edit()`)
 				require.NoError(t, err)
 			}
 
 			changed, err := rt.EditQueueItem(t.Context(), "main", "workflow", test.text)
 			if test.failCommit {
 				require.ErrorContains(t, err, "edit commit failed")
-				_, err = store.db.ExecContext(t.Context(), `DROP TRIGGER reject_queue_edit ON thread_queue`)
+				_, err = store.db.ExecContext(t.Context(), `DROP TRIGGER reject_queue_edit ON turns`)
 			}
 
 			require.NoError(t, err)
@@ -1851,7 +1387,7 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 	readFinal(t, nt.finals)
 
 	jobs := func() []string {
-		rows, err := queryStrings(context.Background(), nt.service.db, `SELECT job_id || ' ' || status || ' ' || note_state || ' ' || result FROM background_jobs ORDER BY job_id`, "background rows")
+		rows, err := queryStrings(context.Background(), nt.service.db, `SELECT j.input_id || ' ' || `+testJobStatusSQL+` || ' ' || j.note || ' ' || j.result`+testJobsSQL+` ORDER BY j.input_id`, "background rows")
 		require.NoError(t, err)
 
 		return rows
@@ -1977,6 +1513,7 @@ func TestRuntimeListsAndStopsBackgroundJobs(t *testing.T) {
 
 	defer close(release)
 
+	reportTestRun(t, store, "cron:daily", "reports")
 	cron := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "cron:daily", origin: &protocol.InboundMessage{SyncDestination: "reports"}}
 	_, err := cron.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/loop", Kind: rocketcode.BackgroundKindTask, Label: "loop", CallID: "loop", SubagentKey: "/loop", Detached: true}, blockedWork(started, release))
 	require.NoError(t, err)
@@ -1988,7 +1525,7 @@ func TestRuntimeListsAndStopsBackgroundJobs(t *testing.T) {
 		finishTestBackgroundJob(t, store, job, backgroundKilled, false)
 	}
 
-	_, err = store.db.ExecContext(t.Context(), `UPDATE background_jobs SET note_state = $1 WHERE job_id = 'turn-2/call/consumed'`, noteConsumed)
+	_, err = store.db.ExecContext(t.Context(), `UPDATE turns SET note = $1 WHERE input_id = 'turn-2/call/consumed' AND NOT takes_lane`, noteConsumed)
 	require.NoError(t, err)
 
 	loop := protocol.BackgroundJob{ID: "turn-1/call/loop", Kind: "task", State: "running", Label: "loop", ToolCallID: "loop", SubagentKey: "/loop", Hidden: true}
@@ -2004,7 +1541,7 @@ func TestRuntimeListsAndStopsBackgroundJobs(t *testing.T) {
 	require.Equal(t, "cron:daily", <-notes, "the stopped note wakes the hidden run")
 
 	loop.State, loop.StoppedBy = "stopped", "user"
-	_, err = store.db.ExecContext(t.Context(), `UPDATE background_jobs SET note_state = $1 WHERE job_id = $2`, noteConsumed, killed.ID)
+	_, err = store.db.ExecContext(t.Context(), `UPDATE turns SET note = $1 WHERE input_id = $2 AND NOT takes_lane`, noteConsumed, killed.ID)
 	require.NoError(t, err)
 	jobs, _, err = rt.BackgroundJobs(t.Context(), "reports")
 	require.NoError(t, err)

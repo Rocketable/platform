@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	harness "github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
@@ -19,7 +20,7 @@ func TestShadowHistoryWaitingInventory(t *testing.T) {
 	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "other", Agent: "main"}))
 	_, err := store.db.ExecContext(ctx, `INSERT INTO shadow_turns
 (child_conversation_id, parent_source_conversation_id, parent_turn_id, inbound_json)
-SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shadow_bindings`)
+SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE shadow_parent IS NOT NULL`)
 	require.NoError(t, err)
 	view, err := store.ObserveHistory(ctx, "parent", "", 0, 0, 0, &HistoryInventory{})
 	require.NoError(t, err)
@@ -81,9 +82,9 @@ func TestShadowHistorySourcePagesAndChildRevision(t *testing.T) {
 	require.NoError(t, err)
 	_, err = store.db.ExecContext(ctx, `INSERT INTO shadow_turns
 (child_conversation_id, parent_source_conversation_id, parent_turn_id, inbound_json)
-SELECT b.child_conversation_id, b.parent_conversation_id, v.turn_id, '{}'
-FROM shadow_bindings b JOIN (VALUES ('parent', 'T1'), ('parent', 'T2'), ('producer', 'T1'), ('other', 'T1')) v(parent, turn_id)
-ON b.parent_conversation_id = v.parent ORDER BY v.parent, v.turn_id, b.shadow_agent`)
+SELECT b.conversation_id, b.shadow_parent, v.turn_id, '{}'
+FROM conversations b JOIN (VALUES ('parent', 'T1'), ('parent', 'T2'), ('producer', 'T1'), ('other', 'T1')) v(parent, turn_id)
+ON b.shadow_parent = v.parent ORDER BY v.parent, v.turn_id, b.shadow_agent`)
 	require.NoError(t, err)
 
 	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "same prompt", false)
@@ -105,10 +106,10 @@ ON b.parent_conversation_id = v.parent ORDER BY v.parent, v.turn_id, b.shadow_ag
 
 	producerID, err := store.AppendEntryID(ctx, "producer", first)
 	require.NoError(t, err)
-	_, err = store.db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
-SELECT 'parent', (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id, 'sync_source_conversation_id', 'producer'))::json, entry_timestamp FROM session_entries WHERE id = $1`, producerID)
+	_, err = store.db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
+SELECT 'parent', (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id, 'sync_source_conversation_id', 'producer'))::json, entry_timestamp FROM entries WHERE id = $1`, producerID)
 	require.NoError(t, err)
-	_, err = store.db.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = 'producer'`)
+	_, err = store.db.ExecContext(ctx, `DELETE FROM entries WHERE conversation_id = 'producer'`)
 	require.NoError(t, err)
 	view, err = store.ObserveHistory(ctx, "parent", "producer", 0, 0, 0, &HistoryInventory{})
 	require.NoError(t, err)
@@ -136,7 +137,7 @@ SELECT 'parent', (entry_json::jsonb || jsonb_build_object('sync_source_entry_id'
 	require.NoError(t, err)
 	require.True(t, running.Shadows[0].Turns[0].Running)
 	require.NotEqual(t, tail.Inventory.Shadows, running.Inventory.Shadows)
-	require.NoError(t, store.SaveTurnStep(ctx, child, "child-T2", json.RawMessage(`{"record":{"replay_input":[{"role":"assistant","content":"partial"}]}}`)))
+	require.NoError(t, saveTestTurn(ctx, store, child, "child-T2", nil, &harness.SessionEntry{ReplayInput: []json.RawMessage{json.RawMessage(`{"role":"assistant","content":"partial"}`)}}))
 	updated, err := store.ObserveHistory(ctx, "parent", "", secondID, 0, 0, &HistoryInventory{})
 	require.NoError(t, err)
 	require.NotEqual(t, running.Inventory.Shadows, updated.Inventory.Shadows)
@@ -145,7 +146,7 @@ SELECT 'parent', (entry_json::jsonb || jsonb_build_object('sync_source_entry_id'
 
 	for _, terminal := range []protocol.Terminal{protocol.TerminalComplete, protocol.TerminalFailed, protocol.TerminalStopped} {
 		if terminal != protocol.TerminalComplete {
-			_, err = store.db.ExecContext(ctx, `DELETE FROM active_turns WHERE id = 'child-T2'`)
+			_, err = store.db.ExecContext(ctx, `DELETE FROM turns WHERE id = 'child-T2'`)
 			require.NoError(t, err)
 			require.NoError(t, startTurnDB(ctx, store.db, "child-T2", child, protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "same prompt", false)))
 		}
@@ -168,7 +169,7 @@ SELECT 'parent', (entry_json::jsonb || jsonb_build_object('sync_source_entry_id'
 		require.NotEqual(t, updated.Inventory.Shadows, settled.Inventory.Shadows)
 	}
 
-	_, err = store.db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = $1 WHERE conversation_id = 'parent'`, fmt.Sprintf("%d:1", secondID))
+	_, err = store.db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $1 WHERE conversation_id = 'parent'`, fmt.Sprintf("%d:1", secondID))
 	require.NoError(t, err)
 	cut, err := store.ObserveHistory(ctx, "parent", "", 0, 0, 0, &HistoryInventory{})
 	require.NoError(t, err)
@@ -182,7 +183,7 @@ func TestShadowHistoryIsAbsentFromOrdinaryEnumeration(t *testing.T) {
 	ctx := t.Context()
 	runtime := &Runtime{Sessions: store}
 	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "parent", Agent: "main"}))
-	children, err := queryStrings(ctx, store.db, `SELECT child_conversation_id FROM shadow_bindings`, "test children")
+	children, err := queryStrings(ctx, store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL`, "test children")
 	require.NoError(t, err)
 
 	for _, id := range append(children, "parent") {
@@ -192,7 +193,7 @@ func TestShadowHistoryIsAbsentFromOrdinaryEnumeration(t *testing.T) {
 
 	var listed []string
 
-	for session, err := range store.SidebarSessions(ctx) {
+	for session, err := range store.sidebarSessions(ctx, nil) {
 		require.NoError(t, err)
 
 		listed = append(listed, session.Conversation.ID)
@@ -200,7 +201,7 @@ func TestShadowHistoryIsAbsentFromOrdinaryEnumeration(t *testing.T) {
 
 	require.Equal(t, []string{"parent"}, listed)
 
-	hits, _, err := store.SearchMessages(ctx, "searchable", nil)
+	hits, err := store.SearchMessages(ctx, "searchable", nil)
 	require.NoError(t, err)
 
 	for _, hit := range hits {
@@ -238,9 +239,10 @@ func TestShadowPublicMutationsAreReadOnly(t *testing.T) {
 	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "parent", Agent: "main"}))
 
 	var child string
-	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT child_conversation_id FROM shadow_bindings ORDER BY shadow_agent LIMIT 1`).Scan(&child))
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY shadow_agent LIMIT 1`).Scan(&child))
 	_, err := store.AppendEntryID(ctx, child, testSessionEntry("retained input", "retained answer"))
 	require.NoError(t, err)
+	require.NoError(t, store.startSubagent(ctx, child, harness.ChildKey{Path: "/task", Turn: "turn-1", Call: "task"}, "main", true))
 
 	for _, id := range []string{child, child + "/task"} {
 		for _, action := range []string{"fork", "delete", "upload", "stage", "redo", "prompt", "cancel", "goal", "pop", "promote", "delete queue", "reorder", "stash", "switch", "move background", "stop background", "answer"} {
@@ -313,12 +315,13 @@ func TestShadowHistoryChangeSignals(t *testing.T) {
 		require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}))
 	}
 
-	_, err := store.db.ExecContext(ctx, `UPDATE managed_conversations SET producer_inbound_json = '{"SyncDestination":"parent"}' WHERE conversation_id = 'producer'`)
+	_, err := store.db.ExecContext(ctx, `UPDATE conversations SET producer_inbound_json = '{"SyncDestination":"parent"}', reports_to = 'parent' WHERE conversation_id = 'producer'`)
 	require.NoError(t, err)
 
 	var child, producerChild string
-	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT child_conversation_id FROM shadow_bindings WHERE parent_conversation_id = 'parent' AND shadow_agent = 'main/a'`).Scan(&child))
-	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT child_conversation_id FROM shadow_bindings WHERE parent_conversation_id = 'producer' AND shadow_agent = 'main/a'`).Scan(&producerChild))
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT conversation_id FROM conversations WHERE shadow_parent = 'parent' AND shadow_agent = 'main/a'`).Scan(&child))
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT conversation_id FROM conversations WHERE shadow_parent = 'producer' AND shadow_agent = 'main/a'`).Scan(&producerChild))
+	require.NoError(t, store.startSubagent(ctx, child, harness.ChildKey{Path: "/task", Turn: "turn-1", Call: "task"}, "main", true))
 	conn, err := store.db.Conn(ctx)
 
 	require.NoError(t, err)
@@ -335,14 +338,14 @@ func TestShadowHistoryChangeSignals(t *testing.T) {
 		want        []string
 		rollback    bool
 	}{
-		{"child history", `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, '{"type":"turn"}', '')`, []any{child}, []string{child, "parent"}, false},
-		{"delegation history", `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, '{"type":"turn"}', '')`, []any{child + "/task"}, []string{child + "/task", "parent"}, false},
-		{"producer history", `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, '{"type":"turn"}', '')`, []any{producerChild}, []string{producerChild, "producer", "parent"}, false},
+		{"child history", `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, '{"type":"turn"}', '')`, []any{child}, []string{child, "parent"}, false},
+		{"delegation history", `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, '{"type":"turn"}', '')`, []any{child + "/task"}, []string{child + "/task", "parent"}, false},
+		{"producer history", `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, '{"type":"turn"}', '')`, []any{producerChild}, []string{producerChild, "producer", "parent"}, false},
 		{"manifest admission", `INSERT INTO shadow_turns (child_conversation_id, parent_source_conversation_id, parent_turn_id, inbound_json) VALUES ($1, 'parent', 'T', '{}')`, []any{child}, []string{"parent"}, false},
 		{"terminal state", `UPDATE shadow_turns SET terminal = 'failed' WHERE child_conversation_id = $1`, []any{child}, []string{"parent"}, false},
-		{"checkpoint", `INSERT INTO turn_steps (conversation_id, key, value) VALUES ($1, 'T', '{}')`, []any{child}, []string{child, "parent"}, false},
+		{"checkpoint", `INSERT INTO steps (conversation_id, key, value) VALUES ($1, 'T', '{}')`, []any{child}, []string{child, "parent"}, false},
 		{"rollback", `UPDATE shadow_turns SET terminal = 'stopped' WHERE child_conversation_id = $1`, []any{child}, nil, true},
-		{"binding removal", `DELETE FROM shadow_bindings WHERE child_conversation_id = $1`, []any{child}, []string{"parent"}, false},
+		{"binding removal", `UPDATE conversations SET shadow_parent = NULL WHERE conversation_id = $1`, []any{child}, []string{"parent"}, false},
 	} {
 		t.Run(step.name, func(t *testing.T) {
 			tx, err := store.db.BeginTx(ctx, nil)

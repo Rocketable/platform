@@ -28,32 +28,21 @@ func (noHistoryWorkers) historyBusy([]string) bool {
 	return false
 }
 
-// ownedHistoryIDs enumerates bindings before any cascade can erase ownership.
-// Delegation paths remain scoped to these explicit roots, not shadow names. The
-// histories under another top-level session are its own; subagent sessions belong to their root.
+// ownedHistoryIDs enumerates bindings before any cascade can erase ownership: the
+// roots, their shadows, and every conversation nested under one of them.
 func ownedHistoryIDs(ctx context.Context, db stateStoreDB, roots []string) ([]string, error) {
-	return queryStrings(ctx, db, `WITH shadow_parents AS (
-    SELECT DISTINCT parent_conversation_id AS id FROM shadow_bindings
+	return queryStrings(ctx, db, `WITH RECURSIVE shadow_parents AS (
+    SELECT DISTINCT shadow_parent AS id FROM conversations WHERE shadow_parent IS NOT NULL
 ), owners AS (
     SELECT unnest($1::text[]) AS id
-    UNION SELECT m.conversation_id FROM managed_conversations m JOIN shadow_parents p ON p.id = m.conversation_id
-        WHERE m.producer_inbound_json->>'SyncDestination' = ANY($1)
-    UNION SELECT e.private_conversation_id FROM external_mcp_sessions e JOIN shadow_parents p ON p.id IN (e.private_conversation_id, e.managed_conversation_id)
-        WHERE e.managed_conversation_id = ANY($1)
+    UNION SELECT m.conversation_id FROM conversations m JOIN shadow_parents p ON p.id = m.conversation_id
+        WHERE m.reports_to = ANY($1)
+    UNION SELECT e.external_run FROM conversations e JOIN shadow_parents p ON p.id IN (e.external_run, e.conversation_id)
+        WHERE e.conversation_id = ANY($1) AND e.external_id IS NOT NULL
 ), roots AS (
-    SELECT id FROM owners UNION SELECT b.child_conversation_id FROM shadow_bindings b JOIN owners o ON o.id = b.parent_conversation_id
-), histories AS (
-    SELECT conversation_id FROM session_entries UNION SELECT conversation_id FROM active_turns
-    UNION SELECT conversation_id FROM turn_steps UNION SELECT conversation_id FROM attachments
-    UNION SELECT conversation_id FROM background_jobs UNION SELECT conversation_id FROM session_summaries
-), nested AS (
-    SELECT h.conversation_id, r.id AS root FROM histories h JOIN roots r ON starts_with(h.conversation_id, r.id || '/')
-), claimed AS (
-    SELECT DISTINCT n.conversation_id, n.root FROM nested n JOIN managed_conversations m ON m.conversation_id <> n.root AND m.parent_conversation_id = ''
-        AND (m.conversation_id = n.conversation_id OR starts_with(n.conversation_id, m.conversation_id || '/'))
-)
-SELECT id FROM roots UNION SELECT n.conversation_id FROM nested n LEFT JOIN claimed c USING (conversation_id, root) WHERE c.conversation_id IS NULL
-ORDER BY 1`, "owned history IDs", roots)
+    SELECT id FROM owners UNION SELECT b.conversation_id FROM conversations b JOIN owners o ON o.id = b.shadow_parent
+), `+descendantsSQL+`
+SELECT id FROM roots UNION SELECT conversation_id FROM descendants ORDER BY 1`, "owned history IDs", roots)
 }
 
 // beginHistoryMutation returns locked ownership only after live family work settles.
@@ -121,11 +110,13 @@ func (s *SessionService) beginHistoryMutation(ctx context.Context, roots []strin
 
 		var pending []string
 
-		pending, err = queryStrings(ctx, tx, `SELECT m.conversation_id FROM managed_conversations m
-WHERE m.conversation_id = ANY($1) AND NOT (m.conversation_id = ANY($2::text[])) AND (
-    EXISTS (SELECT 1 FROM shadow_bindings b WHERE b.parent_conversation_id = m.conversation_id OR b.child_conversation_id = m.conversation_id)
-    OR EXISTS (SELECT 1 FROM external_mcp_sessions e JOIN shadow_bindings b ON b.parent_conversation_id = e.managed_conversation_id
-        WHERE e.private_conversation_id = m.conversation_id)) ORDER BY 1`, "unsettled shadow family workers", ids, pausedIDs)
+		pending, err = queryStrings(ctx, tx, `WITH shadowed AS (
+    SELECT shadow_parent AS id FROM conversations WHERE shadow_parent IS NOT NULL
+    UNION SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL
+    UNION SELECT e.external_run FROM conversations e JOIN conversations b ON b.shadow_parent = e.conversation_id WHERE e.external_id IS NOT NULL
+)
+SELECT m.conversation_id FROM conversations m JOIN shadowed s ON s.id = m.conversation_id
+WHERE m.conversation_id = ANY($1) AND NOT (m.conversation_id = ANY($2::text[])) ORDER BY 1`, "unsettled shadow family workers", ids, pausedIDs)
 		if err != nil {
 			return tx, nil, workers, err
 		}
@@ -176,13 +167,12 @@ WHERE child_conversation_id = ANY($1) AND terminal = ''`, ids, protocol.Terminal
 	}
 }
 
-// deleteOwnedConversations shares full removal between retention and failed MCP creation.
+// deleteOwnedConversations shares full removal between retention and failed MCP creation. A
+// family goes in one statement, since a conversation cannot go before its children.
 func deleteOwnedConversations(ctx context.Context, db stateStoreDB, ids []string) error {
-	for _, id := range ids {
-		for _, table := range []string{"active_turns", "turn_steps", "background_jobs", "conversation_goals", "thread_queue", "scheduled_messages", "managed_conversations"} {
-			if _, err := db.ExecContext(ctx, `DELETE FROM `+table+` WHERE conversation_id = $1`, id); err != nil {
-				return fmt.Errorf("delete owned %s: %w", table, err)
-			}
+	for _, table := range []string{"turns", "steps", "schedules", "conversations"} {
+		if _, err := db.ExecContext(ctx, `DELETE FROM `+table+` WHERE conversation_id = ANY($1)`, ids); err != nil {
+			return fmt.Errorf("delete owned %s: %w", table, err)
 		}
 	}
 
@@ -286,17 +276,19 @@ func settleHistoryWorkers(ctx context.Context, workers []*Bridge) error {
 
 // A mid-turn message selects its owning turn, including all physical checkpoints.
 // Unmaterialized future manifests belong to the same discarded branch.
-const shadowRevertSQL = `WITH affected AS (
-SELECT t.* FROM shadow_turns t WHERE t.parent_source_conversation_id = $1 AND t.id >= (
-    SELECT COALESCE(min(s.id) FILTER (WHERE s.parent_turn_id = $3), min(s.id) FILTER (WHERE (
-        EXISTS (SELECT 1 FROM session_entries e WHERE e.conversation_id = $1
-            AND e.id >= $2 AND e.entry_json->>'turn_id' = s.parent_turn_id)
-        OR NOT EXISTS (SELECT 1 FROM session_entries e WHERE e.conversation_id = $1 AND e.entry_json->>'turn_id' = s.parent_turn_id)
-            AND s.id > COALESCE((SELECT min(k.id) FROM shadow_turns k WHERE k.parent_source_conversation_id = $1 AND k.parent_turn_id = $3),
-                (SELECT max(k.id) FROM shadow_turns k WHERE k.parent_source_conversation_id = $1 AND EXISTS (
-                    SELECT 1 FROM session_entries e WHERE e.conversation_id = $1 AND e.id < $2 AND e.entry_json->>'turn_id' = k.parent_turn_id)), 0))))
-    FROM shadow_turns s WHERE s.parent_source_conversation_id = $1 AND s.child_conversation_id = t.child_conversation_id
-)) `
+const shadowRevertSQL = `WITH parent_saves AS (
+    SELECT entry_json->>'turn_id' AS turn_id, bool_or(id >= $2) AS later, bool_or(id < $2) AS earlier FROM entries WHERE conversation_id = $1 GROUP BY 1
+), parent_shadows AS (
+    SELECT s.id, s.child_conversation_id, s.parent_turn_id, p.later, p.earlier FROM shadow_turns s
+    LEFT JOIN parent_saves p ON p.turn_id = s.parent_turn_id WHERE s.parent_source_conversation_id = $1
+), cut_floor AS (
+    SELECT COALESCE(min(id) FILTER (WHERE parent_turn_id = $3), max(id) FILTER (WHERE earlier), 0) AS id FROM parent_shadows
+), child_cuts AS (
+    SELECT s.child_conversation_id, COALESCE(min(s.id) FILTER (WHERE s.parent_turn_id = $3), min(s.id) FILTER (WHERE s.later OR s.later IS NULL AND s.id > f.id)) AS id
+    FROM parent_shadows s CROSS JOIN cut_floor f GROUP BY s.child_conversation_id
+), affected AS (
+    SELECT t.* FROM shadow_turns t JOIN child_cuts c USING (child_conversation_id) WHERE t.parent_source_conversation_id = $1 AND t.id >= c.id
+) `
 
 // settleShadowRevert commits cancellation before interrupting either live side.
 // A crash after the commit cannot restart effects from the discarded branch.
@@ -316,7 +308,7 @@ func (r *Runtime) settleShadowRevert(ctx context.Context, parent string, boundar
 	}
 
 	children, err := queryStrings(ctx, tx, shadowRevertSQL+`SELECT DISTINCT a.child_conversation_id FROM affected a
-JOIN active_turns t ON t.conversation_id = a.child_conversation_id AND t.id = a.child_turn_id WHERE t.phase <> 'done' ORDER BY 1`, "reverted live children", parent, boundary.ID, boundary.Entry.TurnID)
+JOIN turns t ON t.conversation_id = a.child_conversation_id AND t.id = a.child_turn_id WHERE t.phase NOT IN ('waiting', 'done') ORDER BY 1`, "reverted live children", parent, boundary.ID, boundary.Entry.TurnID)
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +325,7 @@ func lockShadowHistory(ctx context.Context, db stateStoreDB, parent string) erro
 		return err
 	}
 
-	ids, err := queryStrings(ctx, db, `SELECT child_conversation_id FROM shadow_bindings WHERE parent_conversation_id = $1`, "shadow history locks", parent)
+	ids, err := queryStrings(ctx, db, `SELECT conversation_id FROM conversations WHERE shadow_parent = $1`, "shadow history locks", parent)
 	if err != nil {
 		return err
 	}
@@ -347,12 +339,13 @@ FROM affected a WHERE t.id = a.id AND t.terminal = ''`, parent, entry.ID, entry.
 		return fmt.Errorf("cancel reverted comparisons: %w", err)
 	}
 
-	_, err := execState(ctx, db, "stage comparison boundaries", shadowRevertSQL+`, boundaries AS (
-SELECT a.child_conversation_id, min(cut.id) AS id FROM affected a CROSS JOIN LATERAL (
-    SELECT e.id FROM session_entries e WHERE e.conversation_id = a.child_conversation_id AND e.entry_json->>'turn_id' = a.child_turn_id
-    UNION ALL SELECT t.history_anchor_id + 1 FROM active_turns t WHERE t.conversation_id = a.child_conversation_id AND t.id = a.child_turn_id
-) cut GROUP BY a.child_conversation_id)
-UPDATE managed_conversations m SET revert_message_id = b.id::text || ':0' FROM boundaries b WHERE m.conversation_id = b.child_conversation_id`, parent, entry.ID, entry.Entry.TurnID)
+	_, err := execState(ctx, db, "stage comparison boundaries", shadowRevertSQL+`, cuts AS (
+    SELECT a.child_conversation_id, e.id FROM affected a JOIN entries e ON e.conversation_id = a.child_conversation_id AND e.entry_json->>'turn_id' = a.child_turn_id
+    UNION ALL SELECT a.child_conversation_id, t.history_anchor_id + 1 FROM affected a JOIN turns t ON t.conversation_id = a.child_conversation_id AND t.id = a.child_turn_id
+), boundaries AS (
+    SELECT child_conversation_id, min(id) AS id FROM cuts GROUP BY child_conversation_id
+)
+UPDATE conversations m SET revert_message_id = b.id::text || ':0' FROM boundaries b WHERE m.conversation_id = b.child_conversation_id`, parent, entry.ID, entry.Entry.TurnID)
 
 	return err
 }
@@ -368,16 +361,16 @@ func commitShadowRevertDB(ctx context.Context, db stateStoreDB, parent string, e
 			return err
 		}
 
-		if _, err := db.ExecContext(ctx, `DELETE FROM session_entries e USING managed_conversations m WHERE e.conversation_id = $1 AND m.conversation_id = $1
+		if _, err := db.ExecContext(ctx, `DELETE FROM entries e USING conversations m WHERE e.conversation_id = $1 AND m.conversation_id = $1
     AND m.revert_message_id <> '' AND e.id >= split_part(m.revert_message_id, ':', 1)::bigint`, child); err != nil {
 			return fmt.Errorf("rewind comparison history: %w", err)
 		}
 
-		if _, err := db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = '' WHERE conversation_id = $1`, child); err != nil {
+		if _, err := db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = $1`, child); err != nil {
 			return fmt.Errorf("clear comparison cutoff: %w", err)
 		}
 
-		if _, err := db.ExecContext(ctx, `DELETE FROM session_summaries WHERE conversation_id = $1`, child); err != nil {
+		if _, err := db.ExecContext(ctx, `UPDATE conversations SET preview = NULL, last_updated = NULL WHERE conversation_id = $1`, child); err != nil {
 			return fmt.Errorf("clear comparison summary: %w", err)
 		}
 
@@ -392,12 +385,15 @@ func commitShadowRevertDB(ctx context.Context, db stateStoreDB, parent string, e
 	}
 
 	_, errExec := execState(ctx, db, "discard comparison branch", shadowRevertSQL+`, journals AS (
-DELETE FROM turn_steps s USING affected a WHERE s.conversation_id = a.child_conversation_id
+DELETE FROM steps s USING affected a WHERE s.conversation_id = a.child_conversation_id
     AND (s.key = a.child_turn_id OR starts_with(s.key, a.child_turn_id || '/'))
-), turns AS (DELETE FROM active_turns t USING affected a WHERE t.conversation_id = a.child_conversation_id AND t.id = a.child_turn_id)
+), child_turns AS (DELETE FROM turns t USING affected a WHERE t.conversation_id = a.child_conversation_id AND t.id = a.child_turn_id)
 DELETE FROM shadow_turns t USING affected a WHERE t.id = a.id`, parent, entry.ID, entry.Entry.TurnID)
+	if errExec != nil {
+		return errExec
+	}
 
-	return errExec
+	return recordRunning(ctx, db, children)
 }
 
 // turnInputSnapshot is the consumed stream, not an admission queue or a cursor.
@@ -432,7 +428,7 @@ func loadTurnInputs(ctx context.Context, db stateStoreDB, conversation, turn str
 
 	var data []byte
 
-	err := queryScalar(ctx, db, "load canonical input", `SELECT value FROM turn_steps WHERE conversation_id = $1 AND key = $2`, &data, conversation, turn+"/canonical")
+	err := queryScalar(ctx, db, "load canonical input", `SELECT value FROM steps WHERE conversation_id = $1 AND key = $2`, &data, conversation, turn+"/canonical")
 	if errors.Is(err, sql.ErrNoRows) {
 		return snapshot, false, nil
 	}
@@ -456,7 +452,7 @@ func saveTurnInputs(ctx context.Context, db stateStoreDB, conversation, turn str
 	// Both sides see the payload only after this transaction commits. Parent
 	// cleanup removes its journal copy, but not the child's unconsumed manifest.
 	if _, err := db.ExecContext(ctx, `WITH journaled AS (
-INSERT INTO turn_steps (conversation_id, key, value) VALUES ($1, $2 || '/canonical', $3)
+INSERT INTO steps (conversation_id, key, value) VALUES ($1, $2 || '/canonical', $3)
 ON CONFLICT (conversation_id, key) DO UPDATE SET value = excluded.value)
 UPDATE shadow_turns SET inputs = $3::jsonb->'inputs', context_entries = $3::jsonb - 'inputs' - 'environment' - 'closed',
 environment = $3::jsonb->'environment', input_closed = ($3::jsonb->>'closed')::boolean
@@ -474,12 +470,15 @@ WHERE parent_source_conversation_id = $1 AND parent_turn_id = $2`, conversation,
 // releaseShadowPayloads needs both durable closure and successful child saving.
 // A running child may already have checkpoints but still needs its final drain.
 func releaseShadowPayloads(ctx context.Context, db stateStoreDB, conversation, turn string) error {
-	_, err := execState(ctx, db, "release completed comparison payloads", `UPDATE shadow_turns t SET inbound_json = '{}', inputs = '[]', context_entries = '{}', environment = '{}'
-WHERE ((parent_source_conversation_id = $1 AND parent_turn_id = $2) OR (child_conversation_id = $1 AND child_turn_id = $2))
-    AND input_closed AND terminal = '' AND child_turn_id <> ''
-    AND NOT EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = t.child_conversation_id AND a.id = t.child_turn_id
-        AND (a.phase = 'running' OR a.terminal <> ''))
-    AND EXISTS (SELECT 1 FROM session_entries e WHERE e.conversation_id = t.child_conversation_id AND e.entry_json->>'turn_id' = t.child_turn_id)`, conversation, turn)
+	_, err := execState(ctx, db, "release completed comparison payloads", `WITH settled AS (
+    SELECT t.id, t.child_conversation_id, t.child_turn_id FROM shadow_turns t
+    LEFT JOIN turns a ON a.conversation_id = t.child_conversation_id AND a.id = t.child_turn_id AND (a.phase = 'running' OR a.terminal <> '')
+    WHERE (t.parent_source_conversation_id = $1 AND t.parent_turn_id = $2 OR t.child_conversation_id = $1 AND t.child_turn_id = $2)
+        AND t.input_closed AND t.terminal = '' AND t.child_turn_id <> '' AND a.id IS NULL
+), saved AS (
+    SELECT DISTINCT s.id FROM settled s JOIN entries e ON e.conversation_id = s.child_conversation_id AND e.entry_json->>'turn_id' = s.child_turn_id
+)
+UPDATE shadow_turns t SET inbound_json = '{}', inputs = '[]', context_entries = '{}', environment = '{}' FROM saved s WHERE t.id = s.id`, conversation, turn)
 
 	return err
 }
@@ -699,7 +698,7 @@ func (b *Bridge) startShadowWorkers(ctx context.Context, turn string) error {
 // Existing bindings survive removal and switching; the next activation fixes its roster.
 func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, parent, agent string) ([]string, error) {
 	var child bool
-	if err := queryScalar(ctx, db, "read shadow ownership", `SELECT EXISTS (SELECT 1 FROM shadow_bindings WHERE child_conversation_id = $1)`, &child, parent); err != nil || child {
+	if err := queryScalar(ctx, db, "read shadow ownership", `SELECT count(*) > 0 FROM conversations WHERE conversation_id = $1 AND shadow_parent IS NOT NULL`, &child, parent); err != nil || child {
 		return nil, err
 	}
 
@@ -735,14 +734,14 @@ func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, 
 
 	names := definitions.ShadowNames(agent)
 	if len(names) > 0 {
-		if _, err := (stateDAO{db: db}).createConversation(ctx, protocol.Conversation{ID: parent, Agent: agent}); err != nil {
+		if _, err := (stateDAO{db: db}).createConversation(ctx, protocol.Conversation{ID: parent, Agent: agent}, conversationFacts{kind: KindWebChat}); err != nil {
 			return nil, err
 		}
 	}
 
 	for _, name := range names {
 		var exists bool
-		if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM shadow_bindings WHERE parent_conversation_id = $1 AND parent_agent = $2 AND shadow_agent = $3)`, parent, agent, name).Scan(&exists); err != nil {
+		if err := db.QueryRowContext(ctx, `SELECT count(*) > 0 FROM conversations WHERE shadow_parent = $1 AND parent_agent = $2 AND shadow_agent = $3`, parent, agent, name).Scan(&exists); err != nil {
 			return nil, fmt.Errorf("read shadow binding: %w", err)
 		}
 
@@ -751,11 +750,11 @@ func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, 
 		}
 
 		id := rand.Text()
-		if _, err := (stateDAO{db: db}).createConversation(ctx, protocol.Conversation{ID: id, Agent: name}); err != nil {
+		if _, err := (stateDAO{db: db}).createConversation(ctx, protocol.Conversation{ID: id, Agent: name}, conversationFacts{kind: KindShadow}); err != nil {
 			return nil, err
 		}
 
-		if _, err := db.ExecContext(ctx, `INSERT INTO shadow_bindings (child_conversation_id, parent_conversation_id, parent_agent, shadow_agent) VALUES ($1, $2, $3, $4)`, id, parent, agent, name); err != nil {
+		if _, err := db.ExecContext(ctx, `UPDATE conversations SET shadow_parent = $2, parent_agent = $3, shadow_agent = $4 WHERE conversation_id = $1`, id, parent, agent, name); err != nil {
 			return nil, fmt.Errorf("attach shadow binding: %w", err)
 		}
 
@@ -815,8 +814,8 @@ func (s *SessionService) startShadowManifests(ctx context.Context, db stateStore
 	data, _ := json.Marshal(inbound)
 
 	_, err = execState(ctx, db, "start shadow manifests", `INSERT INTO shadow_turns (child_conversation_id, parent_source_conversation_id, parent_turn_id, inbound_json)
-SELECT child_conversation_id, $1, $3, $4 FROM shadow_bindings
-WHERE parent_conversation_id = $1 AND parent_agent = $2 AND shadow_agent = ANY($5)
+SELECT conversation_id, $1, $3, $4 FROM conversations
+WHERE shadow_parent = $1 AND parent_agent = $2 AND shadow_agent = ANY($5)
 ORDER BY shadow_agent`, parent, agent, turnID, string(removeSessionEntryNUL(data)), names)
 
 	return err
@@ -841,11 +840,9 @@ func (s *SessionService) claimShadowTurn(ctx context.Context, child string) (act
 	)
 
 	err = tx.QueryRowContext(ctx, `WITH head AS (
-    SELECT id, inbound_json, inputs FROM shadow_turns WHERE child_conversation_id = $1 AND child_turn_id = '' AND terminal = '' ORDER BY id LIMIT 1
-), unsettled AS (
-    SELECT count(*) > 0 AS busy FROM active_turns WHERE conversation_id = $1 AND phase <> $2
-)
-SELECT h.id, h.inbound_json FROM head h CROSS JOIN unsettled u WHERE jsonb_array_length(h.inputs) > 0 AND NOT u.busy`, child, turnDone).Scan(&id, &data)
+SELECT id, inbound_json, inputs FROM shadow_turns WHERE child_conversation_id = $1 AND child_turn_id = '' AND terminal = '' ORDER BY id LIMIT 1),
+busy AS (SELECT count(*) AS n FROM turns WHERE conversation_id = $1 AND phase NOT IN ('waiting', 'done'))
+SELECT h.id, h.inbound_json FROM head h CROSS JOIN busy b WHERE jsonb_array_length(h.inputs) > 0 AND b.n = 0`, child).Scan(&id, &data)
 	if errors.Is(err, sql.ErrNoRows) {
 		return activeTurn{}, false, nil
 	}

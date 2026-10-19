@@ -58,7 +58,7 @@ channel: "#ops"
 
 The `schedule:` frontmatter value is the cronjob frequency or cadence.
 
-Every active cron definition must set `channel:` to a channel listed in `slack.channels`. A non-empty cron reply starts a fresh managed Slack thread in that channel. An empty reply completes silently.
+`channel:` is optional. Set it to a channel listed in `slack.channels` to post reports there: a non-empty cron reply starts a fresh managed Slack thread in that channel, and an empty reply completes silently. Leave it out and the cron's runs post nowhere; people read and continue them from Web's Cron page. Never leave a `channel:` line empty.
 
 Use the configured channel exactly as it appears in `slack.channels`.
 
@@ -84,7 +84,7 @@ Do not write `channel: #triage`; YAML parses that as an empty value/comment. If 
 
 The optional `space:` frontmatter value is one Web space name, such as `space: "Billing"`. Without it, the cron uses its agent's `space`. Its runs are born in that space, which is created when missing. Web's Cron page and Run cron palette show a cron only in the space of that name, ignoring case; a cron with no space shows in every space. Set or change `space:` only when the human asks.
 
-Cron output starts a fresh managed thread. That thread is read-only in Slack; follow-up happens in its Web conversation (the report root's footer links it).
+With a channel, cron output starts a fresh managed thread. That thread is read-only in Slack; follow-up happens in its Web conversation (the report root's footer links it).
 
 Timestamp schedules are one-off crons. A one-off cron is a durable `cron/*.md` file that survives rocketclaw restarts until due, runs through normal cronjob execution and output routing, and self-deletes after one completed run attempt. Do not combine a timestamp schedule with any other schedule.
 

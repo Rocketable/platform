@@ -51,14 +51,6 @@ func TestSubmitExternalMCPInputPreservesPublicConversationMetadata(t *testing.T)
 
 				return nil
 			}
-			turns.SyncConversationFunc = func(_ context.Context, source, target string) error {
-				require.NotNil(t, captured, "the producer must run before Sync")
-				assert.Equal(t, conversationID, source)
-				assert.Equal(t, destination, target)
-
-				return nil
-			}
-
 			content := &protocol.InboundContent{Text: "prompt"}
 			metadata := map[string]string{"ticket": "123", protocol.InboundPrincipalNameMetadataKey: "Mallory", protocol.InboundPrincipalEmailMetadataKey: "mallory@example.com"}
 			result, accepted, err := submitExternalMCPInput(context.Background(), turns, "planner", conversationID, content, metadata, "alice", reply, "public-1")
@@ -288,7 +280,8 @@ func TestExternalMCPRepeatedIDKeepsLockedAgentAndRejectsChannelMismatch(t *testi
 	var agents []string
 
 	relay := &mcpRelayMock{
-		SendExternalMCPRelayFunc: func(_ context.Context, _, threadTS string, _ *protocol.ExternalMCPRelay) (*protocol.SlackReplyTarget, error) {
+		SendExternalMCPRelayFunc: func(_ context.Context, _, threadTS string, relay *protocol.ExternalMCPRelay) (*protocol.SlackReplyTarget, error) {
+			agents = append(agents, relay.Agent)
 			if threadTS == "" {
 				return &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}, nil
 			}
@@ -300,10 +293,6 @@ func TestExternalMCPRepeatedIDKeepsLockedAgentAndRejectsChannelMismatch(t *testi
 		inbound.CompleteResponseWithAttachments("answer", nil, nil)
 		return nil
 	})
-	turns.CreateConversationFunc = func(_ context.Context, conversation protocol.Conversation) error {
-		agents = append(agents, conversation.Agent)
-		return nil
-	}
 	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}, {Channel: "#triage", Agents: []string{"triage"}}}}}
 	server, err := startExternalMCPServer(t.Context(), cfg, relay, nil, &mcpAgentIndex{names: []string{"planner"}}, store, turns, testLogger())
 	require.NoError(t, err)
@@ -475,10 +464,8 @@ func testLogger() *slog.Logger {
 
 func mcpTurns(run func(*protocol.InboundMessage) error) *BackendMock {
 	return &BackendMock{
-		CreateConversationFunc: func(context.Context, protocol.Conversation) error { return nil },
 		RunTurnFunc: func(_ context.Context, inbound *protocol.InboundMessage) error {
 			return run(inbound)
 		},
-		SyncConversationFunc: func(context.Context, string, string) error { return nil },
 	}
 }

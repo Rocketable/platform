@@ -88,8 +88,25 @@ func TestStartupSweepsExpiredRetainedResults(t *testing.T) {
 	require.Equal(t, []string{mixed, mixed + " fresh"}, retainedResults(t, root))
 }
 
+// testJobsSQL selects the Background Jobs: the turns j, of conversations c, that do not take the lane.
+const testJobsSQL = ` FROM turns j LEFT JOIN conversations c USING (conversation_id) WHERE NOT j.takes_lane`
+
+// testJobStatusSQL is job j's status.
+const testJobStatusSQL = `CASE WHEN j.phase = 'running' THEN 'running' WHEN j.terminal = '' THEN 'completed' ELSE j.terminal END`
+
+// reportTestRun has the hidden run report to destination, as the run's first turn for it does.
+func reportTestRun(t *testing.T, store *SessionService, run, destination string) {
+	t.Helper()
+
+	_, err := store.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VALUES ($1, 'main', '', 'web_chat', TRUE) ON CONFLICT DO NOTHING`, destination)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, reports_to) VALUES ($1, 'main', '', 'cron_run', FALSE, $2)
+ON CONFLICT (conversation_id) DO UPDATE SET reports_to = excluded.reports_to`, run, destination)
+	require.NoError(t, err)
+}
+
 func testBackgroundJob(conversationID, jobID string) *backgroundJob {
-	return &backgroundJob{conversationID: conversationID, jobID: jobID, kind: backgroundExecute, agent: "main", label: "tests", callID: "call", origin: &protocol.InboundMessage{Source: protocol.SourceSlack}, runnerID: "runner-1"}
+	return &backgroundJob{conversationID: conversationID, jobID: jobID, kind: turnScript, agent: "main", label: "tests", callID: "call", origin: &protocol.InboundMessage{Source: protocol.SourceSlack}, runnerID: "runner-1"}
 }
 
 // finishTestBackgroundJob ends a job as its runner with a pending note.
@@ -221,7 +238,7 @@ func TestBackgroundJobFinishStoresNoteAndClearsJournal(t *testing.T) {
 	}
 
 	_, err := store.db.ExecContext(ctx, `CREATE FUNCTION reject_cleanup() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'cleanup failed'; END $$;
-CREATE TRIGGER reject_cleanup BEFORE DELETE ON turn_steps FOR EACH ROW EXECUTE FUNCTION reject_cleanup()`)
+CREATE TRIGGER reject_cleanup BEFORE DELETE ON steps FOR EACH ROW EXECUTE FUNCTION reject_cleanup()`)
 	require.NoError(t, err)
 
 	end := *job
@@ -234,7 +251,7 @@ CREATE TRIGGER reject_cleanup BEFORE DELETE ON turn_steps FOR EACH ROW EXECUTE F
 	require.Len(t, running, 2)
 	require.Equal(t, noteNone, running[0].noteState)
 
-	_, err = store.db.ExecContext(ctx, `DROP TRIGGER reject_cleanup ON turn_steps; DROP FUNCTION reject_cleanup()`)
+	_, err = store.db.ExecContext(ctx, `DROP TRIGGER reject_cleanup ON steps; DROP FUNCTION reject_cleanup()`)
 	require.NoError(t, err)
 
 	won, err := store.finishBackgroundJob(ctx, &end)
@@ -324,7 +341,7 @@ func TestFinishTurnConsumesOrReleasesNoteClaims(t *testing.T) {
 			_, err = store.finishTurn(ctx, "turn-2", finish)
 			require.NoError(t, err)
 
-			notes, err := queryStrings(ctx, store.db, `SELECT note_state || ' ' || wake::text || ' ' || claimed_turn_id FROM background_jobs`, "background notes")
+			notes, err := queryStrings(ctx, store.db, `SELECT j.note || ' ' || j.wake::text || ' ' || j.claimed_by`+testJobsSQL, "background notes")
 			require.NoError(t, err)
 
 			if tt.saved {
@@ -372,7 +389,7 @@ func TestHiddenRunTurnRetriesItsNotes(t *testing.T) {
 			_, err = store.finishTurn(ctx, turnID, &turnFinish{store: newSessionStore("main", store), outbound: protocol.NewOutboundMessage("main", ""), terminal: protocol.TerminalFailed, hidden: true})
 			require.NoError(t, err)
 
-			notes, err := queryStrings(ctx, store.db, `SELECT note_state || ' ' || wake::text || ' ' || claimed_turn_id || ' ' || wake_attempts || ' ' || wake_after_unix_ns FROM background_jobs`, "background notes")
+			notes, err := queryStrings(ctx, store.db, `SELECT j.note || ' ' || j.wake::text || ' ' || j.claimed_by || ' ' || j.wake_attempts || ' ' || j.run_at_unix_ns`+testJobsSQL, "background notes")
 			require.NoError(t, err)
 			require.Equal(t, []string{"pending true  " + strconv.Itoa(i+1) + " " + strconv.FormatInt(time.Now().Add(delay).UnixNano(), 10)}, notes)
 
@@ -401,7 +418,7 @@ func TestHiddenRunTurnRetriesItsNotes(t *testing.T) {
 		_, err = store.finishTurn(ctx, "running", &turnFinish{store: newSessionStore("main", store), entries: []harness.SessionEntry{*testSessionEntry("note", "answer")}, outbound: protocol.NewOutboundMessage("main", ""), hidden: true})
 		require.NoError(t, err)
 
-		notes, err := queryStrings(ctx, store.db, `SELECT note_state FROM background_jobs`, "background notes")
+		notes, err := queryStrings(ctx, store.db, `SELECT j.note`+testJobsSQL, "background notes")
 		require.NoError(t, err)
 		require.Equal(t, []string{"consumed", "consumed"}, notes)
 	})
@@ -424,7 +441,7 @@ func TestReleaseStaleBackgroundClaims(t *testing.T) {
 
 	require.NoError(t, store.releaseStaleBackgroundClaims(ctx))
 
-	notes, err := queryStrings(ctx, store.db, `SELECT job_id || '=' || claimed_turn_id || ' ' || wake::text FROM background_jobs ORDER BY job_id`, "background claims")
+	notes, err := queryStrings(ctx, store.db, `SELECT j.input_id || '=' || j.claimed_by || ' ' || j.wake::text`+testJobsSQL+` ORDER BY j.input_id`, "background claims")
 	require.NoError(t, err)
 	require.Equal(t, []string{"turn-1/call/a=live true", "turn-1/call/b= true"}, notes)
 }
@@ -450,6 +467,47 @@ func TestTurnCleanupKeepsBackgroundJournal(t *testing.T) {
 	require.Equal(t, []string{"turn-1/call/a/task"}, testTurnStepKeys(t, store, "main"), "running jobs keep their journals")
 }
 
+// Background Jobs are turns beside the lane: a running script and a failed one leave the conversation
+// idle, its session listed as not running, and its history without a live or ended turn.
+func TestBackgroundJobsStayOffTheLane(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
+	_, err := store.AppendEntryID(ctx, "main", testSessionEntry("hello", "hi"))
+	require.NoError(t, err)
+
+	createTestBackgroundJob(t, store, testBackgroundJob("main", "turn-1/call/running"))
+	failed := testBackgroundJob("main", "turn-1/call/failed")
+	createTestBackgroundJob(t, store, failed)
+	finishTestBackgroundJob(t, store, failed, backgroundFailed, true)
+	require.NoError(t, recordRunning(ctx, store.db, []string{"main"}))
+
+	active, err := store.HasActiveTurn(ctx, "main")
+	require.NoError(t, err)
+	require.False(t, active)
+
+	_, found, err := store.headTurn(ctx, "main")
+	require.NoError(t, err)
+	require.False(t, found)
+
+	transcript, err := store.ObserveTranscript(ctx, "main", 0, 0, nil)
+	require.NoError(t, err)
+	require.Len(t, transcript, 1, "only the saved entry")
+
+	var listed []string
+
+	for session, err := range store.sidebarSessions(ctx, nil) {
+		require.NoError(t, err)
+		require.False(t, session.Running)
+
+		listed = append(listed, session.Conversation.ID)
+	}
+
+	require.Equal(t, []string{"main"}, listed)
+}
+
 func TestBackgroundJobsListOwnAndDestinationJobs(t *testing.T) {
 	t.Parallel()
 
@@ -468,6 +526,8 @@ func TestBackgroundJobsListOwnAndDestinationJobs(t *testing.T) {
 	won, err := store.finishBackgroundJob(t.Context(), &end)
 	require.NoError(t, err)
 	require.True(t, won)
+
+	reportTestRun(t, store, "cron:daily", "main")
 
 	hidden := testBackgroundJob("cron:daily", "turn-9/call/report")
 	hidden.origin.SyncDestination = "main"
@@ -491,7 +551,7 @@ func TestPruneKeepsConversationsWithLiveBackgroundJobs(t *testing.T) {
 		wake   bool
 		note   noteState
 		keep   bool
-		// hidden runs the jobs in a hidden run whose sync destination is the conversation.
+		// hidden runs the jobs in a hidden run that reports to the conversation.
 		hidden bool
 	}{
 		{name: "running", status: backgroundRunning, note: noteNone, keep: true},
@@ -508,8 +568,9 @@ func TestPruneKeepsConversationsWithLiveBackgroundJobs(t *testing.T) {
 			managed := protocol.SlackThreadConversationID("C1", slackTestTS(old))
 			private, orphan := "external_mcp:planner:private", "cron:daily:old"
 
-			require.NoError(t, store.UpsertThread(thread, ThreadState{Agent: "planner"}))
-			require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: private, ManagedConversationID: managed}))
+			recordTestConversations(t, store, "planner", map[string]ConversationKind{thread: KindSlackThread})
+			recordPrivateHistories(t, store, map[string]ConversationKind{orphan: KindCronRun})
+			require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Thread: protocol.SlackReplyTarget{ChannelID: "C1", ThreadTS: slackTestTS(old)}, Agent: "planner", PrivateConversationID: private, ManagedConversationID: managed}))
 
 			for _, conversationID := range []string{thread, managed, private, orphan} {
 				_, err := store.AppendEntryID(ctx, conversationID, testSessionEntryAt(old, conversationID))
@@ -523,7 +584,8 @@ func TestPruneKeepsConversationsWithLiveBackgroundJobs(t *testing.T) {
 
 				job := testBackgroundJob(conversationID, "turn-1/call/a")
 				if tt.hidden {
-					job = testBackgroundJob("one-off-cron:hidden", "turn-1/call/"+conversationID)
+					reportTestRun(t, store, "one-off-cron:"+conversationID, conversationID)
+					job = testBackgroundJob("one-off-cron:"+conversationID, "turn-1/call/"+conversationID)
 					job.origin.SyncDestination = conversationID
 				}
 
@@ -534,7 +596,7 @@ func TestPruneKeepsConversationsWithLiveBackgroundJobs(t *testing.T) {
 				}
 			}
 
-			_, err := store.db.ExecContext(ctx, `UPDATE background_jobs SET note_state = $1 WHERE note_state = $2`, tt.note, notePending)
+			_, err := store.db.ExecContext(ctx, `UPDATE turns SET note = $1 WHERE note = $2`, tt.note, notePending)
 			require.NoError(t, err)
 			_, err = store.PruneStateBefore(ctx, cutoff, 0)
 			require.NoError(t, err)
@@ -551,7 +613,7 @@ func TestPruneKeepsConversationsWithLiveBackgroundJobs(t *testing.T) {
 			require.Equal(t, tt.keep, len(entries) == 1, "private conversation")
 
 			var rows int
-			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM background_jobs`).Scan(&rows))
+			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*)`+testJobsSQL).Scan(&rows))
 
 			if tt.keep {
 				require.Equal(t, 3, rows)
@@ -584,6 +646,8 @@ func TestConversationRemovalDeletesBackgroundJobs(t *testing.T) {
 		require.NoError(t, store.SaveTurnStep(ctx, conversationID, "turn-1/call/a/host/1", json.RawMessage(`{}`)))
 	}
 
+	reportTestRun(t, store, "cron:daily", "main")
+
 	hidden := testBackgroundJob("cron:daily", "turn-1/call/a")
 	hidden.origin.SyncDestination = "main"
 	createTestBackgroundJob(t, store, hidden)
@@ -597,7 +661,7 @@ func TestConversationRemovalDeletesBackgroundJobs(t *testing.T) {
 	require.ElementsMatch(t, []string{rocketcodeRetainedDir("other"), rocketcodeRetainedDir("other") + " other", rocketcodeRetainedDir(private), rocketcodeRetainedDir(private) + " " + private}, retainedResults(t, spill), "the deleted conversation's retained output goes with it")
 
 	require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: private, ManagedConversationID: "managed"}))
-	children, err := queryStrings(ctx, store.db, `SELECT child_conversation_id FROM shadow_bindings WHERE parent_conversation_id = 'managed'`, "failed MCP children")
+	children, err := queryStrings(ctx, store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent = 'managed'`, "failed MCP children")
 	require.NoError(t, err)
 	require.Len(t, children, 2)
 
@@ -633,6 +697,7 @@ func TestBackgroundJobChangeNotices(t *testing.T) {
 
 	store := newTestSessionService(t)
 	ctx := t.Context()
+	reportTestRun(t, store, "cron:daily", "visible")
 	conn, err := store.db.Conn(ctx)
 	require.NoError(t, err)
 
@@ -690,8 +755,8 @@ func TestBackgroundJobChangeNotices(t *testing.T) {
 	require.Empty(t, notices(), "claims carry no transcript change")
 
 	for _, statement := range []string{
-		`UPDATE background_jobs SET label = 'renamed' WHERE conversation_id = 'cron:daily'`,
-		`DELETE FROM background_jobs WHERE conversation_id = 'cron:daily'`,
+		`UPDATE turns SET label = 'renamed' WHERE conversation_id = 'cron:daily'`,
+		`DELETE FROM turns WHERE conversation_id = 'cron:daily'`,
 	} {
 		_, err = store.db.ExecContext(ctx, statement)
 		require.NoError(t, err)
@@ -699,16 +764,25 @@ func TestBackgroundJobChangeNotices(t *testing.T) {
 	}
 }
 
+// A chat shows background work while a Background Job of its own or of a hidden run reporting to
+// it runs, or while such a hidden run's turn runs.
 func TestSidebarMarksRunningBackgroundJobs(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
 
-	for _, id := range []string{"idle", "own", "destination"} {
+	for _, id := range []string{"idle", "own", "destination", "reported"} {
 		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "main"}))
 		_, err := store.AppendEntryID(t.Context(), id, testSessionEntry("question", "answer"))
 		require.NoError(t, err)
 	}
+
+	reportTestRun(t, store, "cron:daily", "destination")
+	reportTestRun(t, store, "cron:hourly", "reported")
+
+	run := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "check", false)
+	run.SyncDestination = "reported"
+	require.NoError(t, startTurnDB(t.Context(), store.db, "hourly-turn", "cron:hourly", run))
 
 	own, hidden := testBackgroundJob("own", "turn/call/a"), testBackgroundJob("cron:daily", "turn/call/b")
 	hidden.origin.SyncDestination = "destination"
@@ -723,11 +797,11 @@ func TestSidebarMarksRunningBackgroundJobs(t *testing.T) {
 
 	background := map[string]bool{}
 
-	for row, err := range store.SidebarSessions(t.Context()) {
+	for row, err := range store.sidebarSessions(t.Context(), nil) {
 		require.NoError(t, err)
 
 		background[row.Conversation.ID] = row.Background
 	}
 
-	require.Equal(t, map[string]bool{"idle": false, "own": true, "destination": true}, background)
+	require.Equal(t, map[string]bool{"idle": false, "own": true, "destination": true, "reported": true}, background)
 }

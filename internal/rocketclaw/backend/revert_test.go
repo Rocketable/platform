@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -240,7 +241,7 @@ func TestRevertStorageLifecycle(t *testing.T) {
 		second.ReplayInput = append(second.ReplayInput, testSessionEntry("steer", "later reply").ReplayInput...)
 		id, err := s.AppendEntryID(ctx, "parent", second)
 		require.NoError(t, err)
-		children, err := queryStrings(ctx, s.db, `SELECT child_conversation_id FROM shadow_bindings ORDER BY shadow_agent`, "mapped children")
+		children, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY shadow_agent`, "mapped children")
 		require.NoError(t, err)
 		_, err = s.db.ExecContext(ctx, `INSERT INTO shadow_turns (child_conversation_id, parent_source_conversation_id, parent_turn_id, inbound_json)
 VALUES ($1, 'parent', 'earlier-unmaterialized', '{}')`, children[1])
@@ -311,7 +312,7 @@ VALUES ($1, 'parent', $2, $3, '{}', '[{"id":"input","text":"prepared"}]')`, chil
 	})
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	_, err := s.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ('main', 'planner', '')`)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VALUES ('main', 'planner', '', 'web_chat', TRUE)`)
 	require.NoError(t, err)
 	first, err := s.AppendEntryID(ctx, "main", testSessionEntry("first", "reply"))
 	require.NoError(t, err)
@@ -369,7 +370,7 @@ VALUES ($1, 'parent', $2, $3, '{}', '[{"id":"input","text":"prepared"}]')`, chil
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("%d:0", first), marker, "failed admission preserves the marker and suffix")
 
-	_, err = s.db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = '' WHERE conversation_id = 'main'`)
+	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = 'main'`)
 	require.NoError(t, err)
 	entries, err = s.ObserveEntries(ctx, "main")
 	require.NoError(t, err)
@@ -382,7 +383,7 @@ func TestRevertKeepsKeptAndRunningSubagents(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	_, err := s.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ('main', 'planner', '')`)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VALUES ('main', 'planner', '', 'web_chat', TRUE)`)
 	require.NoError(t, err)
 
 	call := func(id string) json.RawMessage {
@@ -399,6 +400,12 @@ func TestRevertKeepsKeptAndRunningSubagents(t *testing.T) {
 	secondID, err := s.AppendEntryID(ctx, "main", second)
 	require.NoError(t, err)
 
+	recordLegacyDelegations(t, s, "main", "call_k")
+
+	for _, key := range []rocketcode.ChildKey{{Path: "/call_k-aaaaaaaa", Turn: "turn-1", Call: "call_k"}, {Path: "/call_r-bbbbbbbb", Turn: "turn-2", Call: "call_r"}, {Path: "/call_b-cccccccc", Turn: "turn-2", Call: "call_b"}} {
+		require.NoError(t, s.startSubagent(ctx, "main", key, "helper", true))
+	}
+
 	children := []string{"main/call_k", "main/call_k-aaaaaaaa", "main/call_r-bbbbbbbb", "main/call_b-cccccccc"}
 	for _, child := range children {
 		_, err := s.AppendEntryID(ctx, child, testSessionEntry("work", "done"))
@@ -406,7 +413,7 @@ func TestRevertKeepsKeptAndRunningSubagents(t *testing.T) {
 	}
 
 	job := testBackgroundJob("main", "turn-2/call/call_b")
-	job.kind, job.subagentKey = backgroundTask, "/call_b-cccccccc"
+	job.kind, job.subagentKey = turnNote, "/call_b-cccccccc"
 	createTestBackgroundJob(t, s, job)
 
 	seedActiveTurn(t, s, "main", "turn-2", nil)
@@ -428,7 +435,7 @@ func TestRevertKeepsKeptAndRunningSubagents(t *testing.T) {
 	require.NoError(t, commitRevertDB(ctx, tx, "main", marker))
 	require.NoError(t, tx.Commit())
 
-	kept, err := queryStrings(ctx, s.db, `SELECT DISTINCT conversation_id FROM session_entries WHERE conversation_id <> 'main' ORDER BY conversation_id`, "kept delegations")
+	kept, err := queryStrings(ctx, s.db, `SELECT DISTINCT conversation_id FROM entries WHERE conversation_id <> 'main' ORDER BY conversation_id`, "kept delegations")
 	require.NoError(t, err)
 	require.Equal(t, []string{"main/call_b-cccccccc", "main/call_k", "main/call_k-aaaaaaaa"}, kept)
 	require.Equal(t, []string{"turn-2/call/call_b/step"}, testTurnStepKeys(t, s, "main"), "the running job keeps its journal")
@@ -440,38 +447,111 @@ func TestRevertEligibility(t *testing.T) {
 	s := newTestSessionService(t)
 
 	ctx := t.Context()
-	for _, id := range []string{"slack-thread:C1:1.1", "cron:job:1", "web:cron:job:1", "child/call", "external", "private", "copied", "valid"} {
-		_, err := s.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, 'planner', '')`, id)
+	for _, c := range []struct{ id, kind, cronRun string }{
+		{"slack-thread:C1:1.1", "slack_thread", ""}, {"cron:job:1", "cron_run", ""}, {"web:cron:job:1", "web_chat", "cron:job:1"}, {"child/call", "subagent", ""},
+		{"external", "slack_thread", ""}, {"private", "external_mcp_run", ""}, {"copied", "web_chat", ""}, {"valid", "web_chat", ""},
+	} {
+		_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, cron_run) VALUES ($1, 'planner', '', $2, TRUE, NULLIF($3, ''))`, c.id, c.kind, c.cronRun)
 		require.NoError(t, err)
-		_, err = s.AppendEntryID(ctx, id, testSessionEntry("request", "reply"))
+		_, err = s.AppendEntryID(ctx, c.id, testSessionEntry("request", "reply"))
 		require.NoError(t, err)
 	}
 
 	require.NoError(t, s.UpsertExternalMCPSession("binding", &ExternalMCPSessionState{ManagedConversationID: "external", PrivateConversationID: "private", Agent: "planner"}))
-	_, err := s.db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || '{"sync_source_conversation_id":"cron:job:1"}'::jsonb)::json WHERE conversation_id = 'copied'`)
-	require.NoError(t, err)
 
-	for _, id := range []string{"slack-thread:C1:1.1", "cron:job:1", "web:cron:job:1", "child/call", "external", "private", "copied", "missing"} {
+	// Each chat Web lists, and each shadow, whoever started it; never a hidden run or a delegation.
+	for id, want := range map[string]bool{"slack-thread:C1:1.1": true, "web:cron:job:1": true, "external": true, "copied": true, "valid": true, "cron:job:1": false, "child/call": false, "private": false, "missing": false} {
 		_, allowed, _, err := s.RevertState(ctx, id)
 		require.NoError(t, err)
-		require.False(t, allowed, id)
-		_, _, err = stageRevertDB(ctx, s.db, id, "")
-		require.Error(t, err, id)
+		require.Equal(t, want, allowed, id)
+
+		if !want {
+			_, _, err = stageRevertDB(ctx, s.db, id, "")
+			require.ErrorIs(t, err, errRevertConversation, id)
+		}
+	}
+}
+
+// Undo reaches a person's Web messages only after the newest message of a cron run or External MCP
+// call, or one sent from Slack; a Slack thread's unlabeled messages count as sent from Slack.
+func TestRevertFloor(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	message := func(header, text string) *rocketcode.SessionEntry {
+		return testReplayEntry(fmt.Sprintf(`{"type":"message","role":"user"%s,"content":%q}`, header, text), `{"type":"message","role":"assistant","content":"reply"}`)
 	}
 
-	_, err = s.db.ExecContext(ctx, `UPDATE managed_conversations SET created_by = $1 WHERE conversation_id = 'valid'`, ThreadCreatedByCron)
-	require.NoError(t, err)
-	_, allowed, _, err := s.RevertState(ctx, "valid")
-	require.NoError(t, err)
-	require.False(t, allowed)
+	for _, tc := range []struct {
+		name string
+		kind ConversationKind
+		// steps are "run:", "slack:", "old:" (no label), or a person's Web message, named after the colon.
+		steps           []string
+		undoable, ahead []string
+	}{
+		{"cron report in a Web chat", KindWebChat, []string{"web:human1", "run:report", "web:human2"}, []string{"human2"}, []string{"human1", "report"}},
+		{"External MCP thread", KindSlackThread, []string{"run:mcp1", "run:mcp2", "web:human1", "web:human2", "run:mcp3", "web:human4"}, []string{"human4"}, []string{"human1", "human2", "mcp3"}},
+		{"Slack thread", KindSlackThread, []string{"run:mcp1", "slack:slack1", "web:human1", "slack:slack2", "web:human2"}, []string{"human2"}, []string{"human1", "slack2"}},
+		{"unlabeled Slack message", KindSlackThread, []string{"web:human1", "old:slack1", "web:human2"}, []string{"human2"}, []string{"human1", "slack1"}},
+		{"unlabeled Web message", KindWebChat, []string{"old:human1", "web:human2"}, []string{"human1", "human2"}, nil},
+	} {
+		chat, run := strings.ReplaceAll(tc.name, " ", "-"), "run-"+strings.ReplaceAll(tc.name, " ", "-")
+		recordTestConversations(t, s, "main", map[string]ConversationKind{chat: tc.kind, run: KindExternalMCPRun})
 
-	for _, source := range []string{"slack-thread:C1:1.1", "private"} {
-		_, err := s.db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_conversation_id', $1::text))::json WHERE conversation_id = 'copied'`, source)
+		ids := map[string]string{}
+
+		for i, step := range tc.steps {
+			source, text, _ := strings.Cut(step, ":")
+			if source == "run" {
+				finishTestRunTurn(t, s, run, chat, fmt.Sprintf("%s-%d", run, i), message("", text))
+
+				var id string
+				require.NoError(t, queryScalar(ctx, s.db, "run entry", `SELECT max(id)::text || ':0' FROM entries WHERE conversation_id = $1`, &id, run))
+				ids[text] = id
+
+				continue
+			}
+
+			header := map[string]string{"web": `,"prompt_header":"[Web principal=\"Ann\"]"`, "slack": `,"prompt_header":"[Slack]"`}[source]
+			id, err := s.AppendEntryID(ctx, chat, message(header, text))
+			require.NoError(t, err)
+
+			ids[text] = fmt.Sprintf("%d:0", id)
+		}
+
+		_, _, predecessor, err := s.RevertState(ctx, chat)
 		require.NoError(t, err)
-		_, allowed, _, err := s.RevertState(ctx, "copied")
-		require.NoError(t, err)
-		require.False(t, allowed, "copied routing facts cannot become pure Web")
+		require.Equal(t, ids[tc.undoable[len(tc.undoable)-1]], predecessor, tc.name)
+
+		for _, text := range append(slices.Clone(tc.undoable), tc.ahead...) {
+			tx, err := s.db.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			_, _, err = stageRevertDB(ctx, tx, chat, ids[text])
+			require.Equal(t, slices.Contains(tc.undoable, text), err == nil, "%s: undo %s: %v", tc.name, text, err)
+			require.NoError(t, tx.Rollback())
+		}
 	}
+
+	// A Slack message that arrives after an undo was staged cancels it when the next Web message comes.
+	const thread = "Slack-thread"
+
+	_, prompt, err := stageRevertDB(ctx, s.db, thread, "")
+	require.NoError(t, err)
+	require.Equal(t, "human2", prompt)
+
+	_, err = s.AppendEntryID(ctx, thread, message(`,"prompt_header":"[Slack]"`, "slack3"))
+	require.NoError(t, err)
+
+	bridge := &Bridge{config: Config{ConversationID: thread, SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
+	rt := &Runtime{Sessions: s, threads: newThreadBridgeManager(nil, s, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})}
+	require.NoError(t, rt.StashQueueItem(ctx, thread, &protocol.ThreadQueueItem{ID: "next", Source: protocol.SourceWeb, Principal: "Ann", Kind: protocol.InboundKindHeld, Message: "next"}))
+
+	marker, _, _, err := s.RevertState(ctx, thread)
+	require.NoError(t, err)
+	require.Empty(t, marker)
+	require.Equal(t, []string{"message:mcp1", "message:reply", "message:slack1", "message:reply", "message:human1", "message:reply", "message:slack2", "message:reply", "message:human2", "message:reply", "message:slack3", "message:reply"},
+		observedEntryTexts(t, s, thread), "nothing was cut")
 }
 
 func TestRevertPausesScheduledClaims(t *testing.T) {
@@ -479,7 +559,7 @@ func TestRevertPausesScheduledClaims(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	_, err := s.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ('main', 'planner', '')`)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VALUES ('main', 'planner', '', 'web_chat', TRUE)`)
 	require.NoError(t, err)
 	id, err := s.AppendEntryID(ctx, "main", testSessionEntry("first", "reply"))
 	require.NoError(t, err)
@@ -497,7 +577,7 @@ func TestRevertPausesScheduledClaims(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, scheduled, stored["later"])
 
-	_, err = s.db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = '' WHERE conversation_id = 'main'`)
+	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = 'main'`)
 	require.NoError(t, err)
 	advanced, claimed, err := s.ClaimScheduledMessage("later", "main", now, now)
 	require.NoError(t, err)
@@ -687,7 +767,7 @@ func TestRevertAdmissionRollbackAndConcurrentIdentity(t *testing.T) {
 	manager.bridges["main"] = b
 	rt := &Runtime{Sessions: s, threads: manager}
 	_, err = s.db.ExecContext(t.Context(), `CREATE FUNCTION reject_admission() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'admission failed'; END $$;
-        CREATE TRIGGER reject_admission BEFORE INSERT ON thread_queue FOR EACH ROW EXECUTE FUNCTION reject_admission()`)
+        CREATE TRIGGER reject_admission BEFORE INSERT ON turns FOR EACH ROW EXECUTE FUNCTION reject_admission()`)
 	require.NoError(t, err)
 
 	item := protocol.ThreadQueueItem{ID: "new", Kind: protocol.InboundKindHeld, Source: protocol.SourceWeb, Principal: "alice", Message: "edited"}
@@ -697,9 +777,9 @@ func TestRevertAdmissionRollbackAndConcurrentIdentity(t *testing.T) {
 	require.Equal(t, marker, current)
 
 	var raw string
-	require.NoError(t, s.db.QueryRowContext(t.Context(), `SELECT entry_json::text FROM session_entries WHERE id = $1`, id).Scan(&raw))
+	require.NoError(t, s.db.QueryRowContext(t.Context(), `SELECT entry_json::text FROM entries WHERE id = $1`, id).Scan(&raw))
 	require.Contains(t, raw, "answer")
-	_, err = s.db.ExecContext(t.Context(), `DROP TRIGGER reject_admission ON thread_queue; DROP FUNCTION reject_admission()`)
+	_, err = s.db.ExecContext(t.Context(), `DROP TRIGGER reject_admission ON turns; DROP FUNCTION reject_admission()`)
 	require.NoError(t, err)
 
 	var admissions errgroup.Group
@@ -888,7 +968,7 @@ func TestRevertMarkerGatesDoNotReadReplay(t *testing.T) {
 	ctx := t.Context()
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
 	// Deliberately unreadable replay makes any full-state predecessor scan fail.
-	_, err := s.db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', '{"type":"turn","replay_input":{}}', '')`)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', '{"type":"turn","replay_input":{}}', '')`)
 	require.NoError(t, err)
 
 	b := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
@@ -905,8 +985,8 @@ func TestRevertMarkerGatesDoNotReadReplay(t *testing.T) {
 	require.True(t, activated, "activation's locked marker check must not parse old replay")
 
 	var boundary int64
-	require.NoError(t, s.db.QueryRowContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', '{"type":"turn","replay_input":[{"type":"message","role":"user","content":"selected"}]}', '') RETURNING id`).Scan(&boundary))
-	_, err = s.db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = $1 WHERE conversation_id = 'main'`, fmt.Sprintf("%d:0", boundary))
+	require.NoError(t, s.db.QueryRowContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', '{"type":"turn","replay_input":[{"type":"message","role":"user","content":"selected"}]}', '') RETURNING id`).Scan(&boundary))
+	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $1 WHERE conversation_id = 'main'`, fmt.Sprintf("%d:0", boundary))
 	require.NoError(t, err)
 	queue, err = manager.queueItems("main")
 	require.NoError(t, err)
@@ -934,7 +1014,7 @@ func TestRevertPreservationFailureCompletesOwners(t *testing.T) {
 			request := bridgeRequest{inbound: inbound, queueItemID: "waiting", completion: completion}
 			require.NoError(t, s.PutThreadQueueItem("waiting", &protocol.ThreadQueueItem{ID: "waiting", ConversationID: "main", Source: protocol.SourceWeb, Kind: protocol.InboundKindEnqueue, Message: inbound.Text, Inbound: inbound}))
 			_, err = s.db.ExecContext(ctx, `CREATE FUNCTION reject_preservation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'preservation failed'; END $$;
-				CREATE TRIGGER reject_preservation BEFORE UPDATE ON thread_queue FOR EACH ROW EXECUTE FUNCTION reject_preservation()`)
+				CREATE TRIGGER reject_preservation BEFORE UPDATE ON turns FOR EACH ROW WHEN (OLD.phase = 'waiting') EXECUTE FUNCTION reject_preservation()`)
 			require.NoError(t, err)
 
 			b := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{}), historyMutation: path != "channel"}
@@ -971,7 +1051,7 @@ func TestRevertPreservationFailureCompletesOwners(t *testing.T) {
 
 			require.Empty(t, b.waiting)
 
-			_, err = s.db.ExecContext(ctx, `DROP TRIGGER reject_preservation ON thread_queue`)
+			_, err = s.db.ExecContext(ctx, `DROP TRIGGER reject_preservation ON turns`)
 			require.NoError(t, err)
 			queue, err := s.ThreadQueueForConversation("main")
 			require.NoError(t, err)
@@ -1124,14 +1204,13 @@ func TestRevertStashKeepsVoiceInbound(t *testing.T) {
 func TestRevertAdmissionRollbackAtEveryWrite(t *testing.T) {
 	t.Parallel()
 
-	for _, failure := range []struct{ table, operation string }{
-		{"session_entries", "DELETE"}, {"session_entries", "UPDATE"},
-		{"active_turns", "DELETE"}, {"turn_steps", "DELETE"},
-		{"thread_queue", "DELETE"}, {"managed_conversations", "UPDATE"},
-		{"session_summaries", "DELETE"}, {"session_summaries", "INSERT"},
-		{"thread_queue", "INSERT"},
+	for _, failure := range []struct{ table, operation, phase string }{
+		{"entries", "DELETE", ""}, {"entries", "UPDATE", ""},
+		{"turns", "DELETE", "done"}, {"steps", "DELETE", ""},
+		{"turns", "DELETE", "waiting"}, {"conversations", "UPDATE", ""},
+		{"turns", "INSERT", "waiting"},
 	} {
-		t.Run(failure.table+"/"+failure.operation, func(t *testing.T) {
+		t.Run(failure.table+"/"+failure.operation+"/"+failure.phase, func(t *testing.T) {
 			s := newTestSessionService(t)
 			ctx := t.Context()
 			require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
@@ -1146,7 +1225,7 @@ func TestRevertAdmissionRollbackAtEveryWrite(t *testing.T) {
 
 			inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindSteer, "old", true)
 			require.NoError(t, startTurnDB(ctx, s.db, "old-turn", "main", inbound))
-			_, err = s.db.ExecContext(ctx, `UPDATE active_turns SET phase = 'done'; INSERT INTO turn_steps (conversation_id, key, value) VALUES ('main', 'old-turn/retry/1', '{}')`)
+			_, err = s.db.ExecContext(ctx, `UPDATE turns SET phase = 'done'; INSERT INTO steps (conversation_id, key, value) VALUES ('main', 'old-turn/retry/1', '{}')`)
 			require.NoError(t, err)
 			require.NoError(t, s.PutThreadQueueItem("waiting", &protocol.ThreadQueueItem{ID: "waiting", ConversationID: "main", Source: protocol.SourceWeb, Message: "pending"}))
 
@@ -1154,19 +1233,29 @@ func TestRevertAdmissionRollbackAtEveryWrite(t *testing.T) {
 			_, _, err = stageRevertDB(ctx, s.db, "main", marker)
 			require.NoError(t, err)
 
-			const snapshot = `SELECT jsonb_build_array(
-				(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM session_entries e),
-				(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM active_turns a),
-				(SELECT jsonb_agg(to_jsonb(j) ORDER BY key) FROM turn_steps j),
-				(SELECT jsonb_agg(to_jsonb(q) ORDER BY queue_item_id) FROM thread_queue q),
-				(SELECT jsonb_agg(to_jsonb(m) ORDER BY conversation_id) FROM managed_conversations m),
-				(SELECT jsonb_agg(to_jsonb(s) ORDER BY conversation_id) FROM session_summaries s))::text`
+			const snapshot = `WITH entry_rows AS (
+				SELECT jsonb_agg(to_jsonb(e) ORDER BY id) AS agg FROM entries e
+			), turn_rows AS (
+				SELECT jsonb_agg(to_jsonb(a) ORDER BY id) AS agg FROM turns a
+			), step_rows AS (
+				SELECT jsonb_agg(to_jsonb(j) ORDER BY key) AS agg FROM steps j
+			), conversation_rows AS (
+				SELECT jsonb_agg(to_jsonb(m) ORDER BY conversation_id) AS agg FROM conversations m
+			)
+			SELECT jsonb_build_array(e.agg, a.agg, j.agg, m.agg)::text
+			FROM entry_rows e CROSS JOIN turn_rows a CROSS JOIN step_rows j CROSS JOIN conversation_rows m`
 
 			var before, after string
 			require.NoError(t, s.db.QueryRowContext(ctx, snapshot).Scan(&before))
 			_, err = s.db.ExecContext(ctx, `CREATE FUNCTION reject_branch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'branch write failed'; END $$`)
 			require.NoError(t, err)
-			_, err = s.db.ExecContext(ctx, fmt.Sprintf("CREATE TRIGGER reject_branch BEFORE %s ON %s FOR EACH ROW EXECUTE FUNCTION reject_branch()", failure.operation, failure.table))
+
+			when := "TRUE"
+			if failure.phase != "" {
+				when = map[string]string{"INSERT": "NEW", "DELETE": "OLD"}[failure.operation] + ".phase = '" + failure.phase + "'"
+			}
+
+			_, err = s.db.ExecContext(ctx, fmt.Sprintf("CREATE TRIGGER reject_branch BEFORE %s ON %s FOR EACH ROW WHEN (%s) EXECUTE FUNCTION reject_branch()", failure.operation, failure.table, when))
 			require.NoError(t, err)
 
 			b := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler)}
@@ -1231,7 +1320,7 @@ func TestRevertStorageFailuresAreNotEmptySuccess(t *testing.T) {
 func TestRevertStageFailurePreservesHistory(t *testing.T) {
 	t.Parallel()
 
-	for _, unavailable := range []string{"conversation_goals", "active_turns", "managed_conversations update", "settled delivery"} {
+	for _, unavailable := range []string{"goal", "turns", "conversations update", "settled delivery"} {
 		t.Run(unavailable, func(t *testing.T) {
 			s := newTestSessionService(t)
 			ctx := t.Context()
@@ -1245,9 +1334,11 @@ func TestRevertStageFailurePreservesHistory(t *testing.T) {
 			rt := &Runtime{Sessions: s, threads: manager}
 
 			switch unavailable {
-			case "managed_conversations update":
+			case "goal":
+				_, err = s.db.ExecContext(ctx, `ALTER TABLE conversations RENAME COLUMN goal_objective TO unavailable_goal_objective`)
+			case "conversations update":
 				_, err = s.db.ExecContext(ctx, `CREATE FUNCTION reject_stage() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'stage failed'; END $$;
-					CREATE TRIGGER reject_stage BEFORE UPDATE ON managed_conversations FOR EACH ROW EXECUTE FUNCTION reject_stage()`)
+					CREATE TRIGGER reject_stage BEFORE UPDATE ON conversations FOR EACH ROW EXECUTE FUNCTION reject_stage()`)
 			case "settled delivery":
 				err = startTurnDB(ctx, s.db, "delivering", "main", protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "running", true))
 				require.NoError(t, err)
@@ -1262,11 +1353,11 @@ func TestRevertStageFailurePreservesHistory(t *testing.T) {
 			require.False(t, b.historyMutation, "failed staging must release the transient barrier")
 
 			var marker string
-			require.NoError(t, s.db.QueryRowContext(ctx, `SELECT revert_message_id FROM managed_conversations WHERE conversation_id = 'main'`).Scan(&marker))
+			require.NoError(t, s.db.QueryRowContext(ctx, `SELECT revert_message_id FROM conversations WHERE conversation_id = 'main'`).Scan(&marker))
 			require.Empty(t, marker)
 
 			var raw string
-			require.NoError(t, s.db.QueryRowContext(ctx, `SELECT entry_json::text FROM session_entries WHERE id = $1`, id).Scan(&raw))
+			require.NoError(t, s.db.QueryRowContext(ctx, `SELECT entry_json::text FROM entries WHERE id = $1`, id).Scan(&raw))
 			require.Contains(t, raw, "answer")
 		})
 	}
@@ -1285,7 +1376,7 @@ func TestRevertCorruptHistoryCannotBeAdmitted(t *testing.T) {
 			require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
 
 			var id int64
-			require.NoError(t, s.db.QueryRowContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', $1, '') RETURNING id`, corrupt.raw).Scan(&id))
+			require.NoError(t, s.db.QueryRowContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', $1, '') RETURNING id`, corrupt.raw).Scan(&id))
 			_, _, err := stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", id))
 			require.ErrorContains(t, err, "decode revert boundary")
 

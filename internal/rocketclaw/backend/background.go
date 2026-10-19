@@ -79,7 +79,7 @@ func backgroundNote(job *backgroundJob) string {
 	case backgroundRunning, backgroundCompleted, backgroundFailed:
 	}
 
-	if job.kind == backgroundExecute {
+	if job.kind == turnScript {
 		return fmt.Sprintf("<execute id=%q state=%q description=%q>\n%s\n</execute>", job.jobID, job.status, job.label, body)
 	}
 
@@ -210,7 +210,12 @@ func (t backgroundTurn) Run(ctx context.Context, job *rocketcode.BackgroundJob, 
 
 	workCtx, cancel := context.WithCancelCause(context.WithoutCancel(ctx))
 
-	run := &backgroundRun{row: &backgroundJob{conversationID: key.conversationID, jobID: job.ID, kind: backgroundJobKind(job.Kind), agent: job.Agent, label: job.Label, callID: job.CallID, subagentKey: job.SubagentKey, origin: t.origin, runnerID: r.runnerID, input: job.Prompt}, cancel: cancel, recorded: make(chan struct{}), done: make(chan struct{}), attached: !job.Detached}
+	kind := turnNote
+	if job.Kind == rocketcode.BackgroundKindExecute {
+		kind = turnScript
+	}
+
+	run := &backgroundRun{row: &backgroundJob{conversationID: key.conversationID, jobID: job.ID, kind: kind, agent: job.Agent, label: job.Label, callID: job.CallID, subagentKey: job.SubagentKey, origin: t.origin, runnerID: r.runnerID, input: job.Prompt}, cancel: cancel, recorded: make(chan struct{}), done: make(chan struct{}), attached: !job.Detached}
 
 	r.mu.Lock()
 	flipped := run.attached && !r.attachedLocked(key.conversationID)
@@ -365,7 +370,7 @@ func (r *backgroundRegistry) recoverJobs(ctx context.Context) (resume func(conte
 	for i := range jobs {
 		job := &jobs[i]
 
-		if job.kind != backgroundTask {
+		if job.kind != turnNote {
 			end := *job
 			end.status, end.noteState, end.wake = backgroundKilled, notePending, hiddenRun(job.origin)
 
@@ -406,7 +411,7 @@ func (r *backgroundRegistry) recoverJobs(ctx context.Context) (resume func(conte
 			})
 		}
 
-		owners, err := queryStrings(ctx, r.store.db, `SELECT DISTINCT conversation_id FROM background_jobs WHERE note_state = $1 AND wake AND claimed_turn_id = '' ORDER BY 1`, "background wake owners", notePending)
+		owners, err := queryStrings(ctx, r.store.db, `SELECT DISTINCT conversation_id FROM turns WHERE note = $1 AND wake AND claimed_by = '' ORDER BY 1`, "background wake owners", notePending)
 		if err != nil {
 			return err
 		}
@@ -435,19 +440,19 @@ func (subagentTurn) Detach() bool { return true }
 // stopped or failed, running, or not yet started. It also returns the session's parent and the input of
 // the turn the session runs.
 const subagentTurnSQL = `WITH saved AS (
-    SELECT e.entry_json FROM session_entries e
+    SELECT e.entry_json FROM entries e
     CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item
     WHERE e.conversation_id = $1 AND item->>'input_id' = $2 ORDER BY e.id DESC LIMIT 1
-), turns AS (
-    SELECT terminal, COALESCE(outbound_json->>'Text', '') AS text FROM active_turns
-    WHERE conversation_id = $1 AND inbound_json->'Metadata'->>'web_message_id' = $2 ORDER BY created_at_unix_ns DESC LIMIT 1
+), turn AS (
+    SELECT terminal, COALESCE(outbound_json->>'Text', '') AS text FROM turns
+    WHERE conversation_id = $1 AND inbound_json->'Metadata'->>'web_message_id' = $2 AND phase <> 'waiting' AND takes_lane ORDER BY created_at_unix_ns DESC LIMIT 1
 ), queued AS (
-    SELECT count(*) AS rows FROM thread_queue WHERE conversation_id = $1 AND queue_item_id = $2
+    SELECT count(*) AS rows FROM turns WHERE conversation_id = $1 AND input_id = $2 AND phase = 'waiting'
 ), running AS (
     SELECT c.parent_conversation_id AS parent, a.inbound_json->'Metadata'->>'web_message_id' AS input
-    FROM active_turns a JOIN managed_conversations c USING (conversation_id) WHERE a.conversation_id = $1 AND a.phase = $3
+    FROM turns a JOIN conversations c USING (conversation_id) WHERE a.conversation_id = $1 AND a.phase = $3 AND a.takes_lane
 )
-SELECT s.entry_json, t.terminal, t.text, q.rows, r.parent, r.input FROM queued q LEFT JOIN saved s ON true LEFT JOIN turns t ON true LEFT JOIN running r ON true`
+SELECT s.entry_json, t.terminal, t.text, q.rows, r.parent, r.input FROM queued q LEFT JOIN saved s ON true LEFT JOIN turn t ON true LEFT JOIN running r ON true`
 
 // awaitSubagent waits until the turn of the subagent session conversationID that runs its input inputID
 // ends, and returns that turn's final answer, as a top-level turn's (runTurn), and attribution. A call that
@@ -511,7 +516,7 @@ func (r *backgroundRegistry) awaitSubagent(ctx context.Context, conversationID, 
 			// A stopped parent's queued input is held, before its turn ahead stops, until the next write
 			// releases it (releaseHeldInputs). Unlike a stash's, its inbound stays an enqueue.
 			if stopped && !jobStopped {
-				if _, err := execState(context.WithoutCancel(ctx), r.store.db, "hold subagent input", `UPDATE thread_queue SET kind = $3 WHERE conversation_id = $1 AND queue_item_id = $2 AND kind = $4`, conversationID, inputID, protocol.InboundKindHeld, protocol.InboundKindEnqueue); err != nil {
+				if _, err := execState(context.WithoutCancel(ctx), r.store.db, "hold subagent input", `UPDATE turns SET reason = $3, delivery = $4 WHERE conversation_id = $1 AND input_id = $2 AND phase = 'waiting' AND delivery = $5`, conversationID, inputID, waitHeld, protocol.InboundKindHeld, protocol.InboundKindEnqueue); err != nil {
 					return "", rocketcode.ReplayAttribution{}, err
 				}
 			}
@@ -605,12 +610,23 @@ func (r *backgroundRegistry) stop(ctx context.Context, conversationID, jobID str
 		return false, fmt.Errorf("background job %q is neither running nor waiting to report in this conversation", jobID)
 	}
 
+	// A stopped subagent's own detached jobs stop with it, so none of them wakes it again.
+	var sessions []string
+	if jobs[i].subagentKey != "" {
+		sessions, err = queryStrings(ctx, r.store.db, `WITH RECURSIVE roots AS (
+    SELECT $1::text AS id
+), `+descendantsSQL+`
+SELECT id FROM roots UNION ALL SELECT conversation_id FROM descendants`, "stopped subagent sessions", jobs[i].conversationID+jobs[i].subagentKey)
+		if err != nil {
+			return false, err
+		}
+	}
+
 	r.mu.Lock()
 	run, running := r.runs[backgroundKey{jobs[i].conversationID, jobID}]
 
-	// A stopped subagent's own detached jobs stop with it, so none of them wakes it again.
 	for key, owned := range r.runs {
-		if subagent := jobs[i].conversationID + jobs[i].subagentKey; running && jobs[i].subagentKey != "" && !owned.attached && (key.conversationID == subagent || strings.HasPrefix(key.conversationID, subagent+"/")) {
+		if running && !owned.attached && slices.Contains(sessions, key.conversationID) {
 			owned.cancel(errStoppedWithOwner)
 		}
 	}

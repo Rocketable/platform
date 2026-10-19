@@ -36,6 +36,9 @@ var _ channelFactsStore = &channelFactsStoreMock{}
 //			SlackChannelIDsFunc: func(ctx context.Context) ([]string, error) {
 //				panic("mock out the SlackChannelIDs method")
 //			},
+//			SlackThreadFunc: func(ctx context.Context, conversationID string) (string, string, error) {
+//				panic("mock out the SlackThread method")
+//			},
 //		}
 //
 //		// use mockedchannelFactsStore in code that requires channelFactsStore
@@ -57,6 +60,9 @@ type channelFactsStoreMock struct {
 
 	// SlackChannelIDsFunc mocks the SlackChannelIDs method.
 	SlackChannelIDsFunc func(ctx context.Context) ([]string, error)
+
+	// SlackThreadFunc mocks the SlackThread method.
+	SlackThreadFunc func(ctx context.Context, conversationID string) (string, string, error)
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -107,12 +113,20 @@ type channelFactsStoreMock struct {
 			// Ctx is the ctx argument value.
 			Ctx context.Context
 		}
+		// SlackThread holds details about calls to the SlackThread method.
+		SlackThread []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// ConversationID is the conversationID argument value.
+			ConversationID string
+		}
 	}
 	lockChannelFact       sync.RWMutex
 	lockLoadTurnStep      sync.RWMutex
 	lockRecordChannelFact sync.RWMutex
 	lockSaveTurnStep      sync.RWMutex
 	lockSlackChannelIDs   sync.RWMutex
+	lockSlackThread       sync.RWMutex
 }
 
 // ChannelFact calls ChannelFactFunc.
@@ -316,5 +330,41 @@ func (mock *channelFactsStoreMock) SlackChannelIDsCalls() []struct {
 	mock.lockSlackChannelIDs.RLock()
 	calls = mock.calls.SlackChannelIDs
 	mock.lockSlackChannelIDs.RUnlock()
+	return calls
+}
+
+// SlackThread calls SlackThreadFunc.
+func (mock *channelFactsStoreMock) SlackThread(ctx context.Context, conversationID string) (string, string, error) {
+	if mock.SlackThreadFunc == nil {
+		panic("channelFactsStoreMock.SlackThreadFunc: method is nil but channelFactsStore.SlackThread was just called")
+	}
+	callInfo := struct {
+		Ctx            context.Context
+		ConversationID string
+	}{
+		Ctx:            ctx,
+		ConversationID: conversationID,
+	}
+	mock.lockSlackThread.Lock()
+	mock.calls.SlackThread = append(mock.calls.SlackThread, callInfo)
+	mock.lockSlackThread.Unlock()
+	return mock.SlackThreadFunc(ctx, conversationID)
+}
+
+// SlackThreadCalls gets all the calls that were made to SlackThread.
+// Check the length with:
+//
+//	len(mockedchannelFactsStore.SlackThreadCalls())
+func (mock *channelFactsStoreMock) SlackThreadCalls() []struct {
+	Ctx            context.Context
+	ConversationID string
+} {
+	var calls []struct {
+		Ctx            context.Context
+		ConversationID string
+	}
+	mock.lockSlackThread.RLock()
+	calls = mock.calls.SlackThread
+	mock.lockSlackThread.RUnlock()
 	return calls
 }

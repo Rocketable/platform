@@ -19,7 +19,7 @@ var _ ChildSessions = &mockChildSessions{}
 //
 //		// make and configure a mocked ChildSessions
 //		mockedChildSessions := &mockChildSessions{
-//			AppendChildEntryFunc: func(ctx context.Context, key string, entry *SessionEntry) error {
+//			AppendChildEntryFunc: func(ctx context.Context, key ChildKey, entry *SessionEntry) error {
 //				panic("mock out the AppendChildEntry method")
 //			},
 //			AwaitSubagentFunc: func(ctx context.Context, key string, callKey string) (string, ReplayAttribution, error) {
@@ -36,7 +36,7 @@ var _ ChildSessions = &mockChildSessions{}
 //	}
 type mockChildSessions struct {
 	// AppendChildEntryFunc mocks the AppendChildEntry method.
-	AppendChildEntryFunc func(ctx context.Context, key string, entry *SessionEntry) error
+	AppendChildEntryFunc func(ctx context.Context, key ChildKey, entry *SessionEntry) error
 
 	// AwaitSubagentFunc mocks the AwaitSubagent method.
 	AwaitSubagentFunc func(ctx context.Context, key string, callKey string) (string, ReplayAttribution, error)
@@ -51,7 +51,7 @@ type mockChildSessions struct {
 			// Ctx is the ctx argument value.
 			Ctx context.Context
 			// Key is the key argument value.
-			Key string
+			Key ChildKey
 			// Entry is the entry argument value.
 			Entry *SessionEntry
 		}
@@ -78,13 +78,13 @@ type mockChildSessions struct {
 }
 
 // AppendChildEntry calls AppendChildEntryFunc.
-func (mock *mockChildSessions) AppendChildEntry(ctx context.Context, key string, entry *SessionEntry) error {
+func (mock *mockChildSessions) AppendChildEntry(ctx context.Context, key ChildKey, entry *SessionEntry) error {
 	if mock.AppendChildEntryFunc == nil {
 		panic("mockChildSessions.AppendChildEntryFunc: method is nil but ChildSessions.AppendChildEntry was just called")
 	}
 	callInfo := struct {
 		Ctx   context.Context
-		Key   string
+		Key   ChildKey
 		Entry *SessionEntry
 	}{
 		Ctx:   ctx,
@@ -103,12 +103,12 @@ func (mock *mockChildSessions) AppendChildEntry(ctx context.Context, key string,
 //	len(mockedChildSessions.AppendChildEntryCalls())
 func (mock *mockChildSessions) AppendChildEntryCalls() []struct {
 	Ctx   context.Context
-	Key   string
+	Key   ChildKey
 	Entry *SessionEntry
 } {
 	var calls []struct {
 		Ctx   context.Context
-		Key   string
+		Key   ChildKey
 		Entry *SessionEntry
 	}
 	mock.lockAppendChildEntry.RLock()

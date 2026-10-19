@@ -203,7 +203,14 @@ func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata 
 	progress := *metadata.progress
 	// The model stays absent until the turn ends; neither aliases nor parent attribution leak.
 	progress.Kind, progress.Agent, progress.Model = PublicProgressDelegation, agent.Name, ""
-	progress.SubagentKey = cmp.Or(params.Continue.SessionID, f.childKey+"/"+delegationName(metadata.callID, ToolCallKey(ctx)))
+	// The row names the subagent by its key under the history that holds the call.
+	key := ChildKey{Path: "/" + delegationName(metadata.callID, ToolCallKey(ctx)), Turn: metadata.observations.turnID, Call: metadata.callID}
+	if id := params.Continue.SessionID; id != "" {
+		key.Path = strings.TrimPrefix(id, f.childKey.Path) // backgroundTool checked that it names a child of this session.
+	}
+
+	progress.SubagentKey = key.Path
+	key = key.under(f.childKey.Path)
 
 	progress.State = PublicProgressReview
 	if err := metadata.observations.observe(ctx, &progress); err != nil {
@@ -216,11 +223,11 @@ func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata 
 	}
 
 	if params.Continue.SessionID == "" {
-		if blocked, err := f.guardTask(ctx, &agent, ChildRunStageDelegation, originatingAgent, params.Prompt, "", &progress, metadata, parentOutput); err != nil || blocked != "" {
+		if blocked, err := f.guardTask(ctx, &agent, key, ChildRunStageDelegation, originatingAgent, params.Prompt, "", &progress, metadata, parentOutput); err != nil || blocked != "" {
 			return blocked, err
 		}
 
-		if _, err := f.childSessions.WriteSubagent(ctx, &SubagentWrite{Key: progress.SubagentKey, CallKey: ToolCallKey(ctx), Agent: agent.Name, Delegator: originatingAgent, Prompt: params.Prompt}); err != nil {
+		if _, err := f.childSessions.WriteSubagent(ctx, &SubagentWrite{Key: key, CallKey: ToolCallKey(ctx), Agent: agent.Name, Delegator: originatingAgent, Prompt: params.Prompt}); err != nil {
 			return "", fmt.Errorf("write subagent: %w", err)
 		}
 	}
@@ -230,14 +237,14 @@ func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata 
 		return "", err
 	}
 
-	return f.awaitTask(ctx, originatingAgent, params.Prompt, ToolCallKey(ctx), &progress, metadata, parentOutput)
+	return f.awaitTask(ctx, originatingAgent, params.Prompt, ToolCallKey(ctx), key.Path, &progress, metadata, parentOutput)
 }
 
 // awaitTask answers the task call callKey by which originatingAgent delegated prompt to the subagent
-// session progress names, once that session's turn running it ends and the response guardrail of the
+// session at key, once that session's turn running it ends and the response guardrail of the
 // type the turn ended as, which a steer may have switched it to, approves its answer.
-func (f *toolFactory) awaitTask(ctx context.Context, originatingAgent, prompt, callKey string, progress *PublicProgress, metadata toolCallMetadata, parentOutput chan<- ChatResponse) (string, error) {
-	last, final, err := f.childSessions.AwaitSubagent(ctx, progress.SubagentKey, callKey)
+func (f *toolFactory) awaitTask(ctx context.Context, originatingAgent, prompt, callKey, key string, progress *PublicProgress, metadata toolCallMetadata, parentOutput chan<- ChatResponse) (string, error) {
+	last, final, err := f.childSessions.AwaitSubagent(ctx, key, callKey)
 	if err != nil {
 		return "", fmt.Errorf("await subagent: %w", err)
 	}
@@ -248,7 +255,7 @@ func (f *toolFactory) awaitTask(ctx context.Context, originatingAgent, prompt, c
 	}
 
 	agent := f.agents.Items[final.Agent]
-	if blocked, err := f.guardTask(ctx, &agent, ChildRunStageResponse, originatingAgent, prompt, last, progress, metadata, parentOutput); err != nil || blocked != "" {
+	if blocked, err := f.guardTask(ctx, &agent, ChildKey{Path: key}, ChildRunStageResponse, originatingAgent, prompt, last, progress, metadata, parentOutput); err != nil || blocked != "" {
 		return blocked, err
 	}
 
@@ -258,7 +265,7 @@ func (f *toolFactory) awaitTask(ctx context.Context, originatingAgent, prompt, c
 // guardTask runs agent's guardrail, if any, at stage of the task by which originatingAgent delegated
 // prompt to the subagent progress names, reviewing at the response stage the subagent's answer last
 // too, and returns the blocked task result when the guardrail rejects it.
-func (f *toolFactory) guardTask(ctx context.Context, agent *Agent, stage ChildRunStage, originatingAgent, prompt, last string, progress *PublicProgress, metadata toolCallMetadata, parentOutput chan<- ChatResponse) (blocked string, err error) {
+func (f *toolFactory) guardTask(ctx context.Context, agent *Agent, key ChildKey, stage ChildRunStage, originatingAgent, prompt, last string, progress *PublicProgress, metadata toolCallMetadata, parentOutput chan<- ChatResponse) (blocked string, err error) {
 	if agent.Guardrail == "" || f.inGuardrailRun {
 		return "", nil
 	}
@@ -275,7 +282,7 @@ func (f *toolFactory) guardTask(ctx context.Context, agent *Agent, stage ChildRu
 
 	guardrailAgent := f.agents.Items[agent.Guardrail]
 
-	decision := f.runGuardrail(ctx, &guardrailAgent, stage, strings.Join(lines, "\n"), agent.Name, progress.SubagentKey, metadata, parentOutput)
+	decision := f.runGuardrail(ctx, &guardrailAgent, stage, strings.Join(lines, "\n"), agent.Name, key, metadata, parentOutput)
 	if decision.Approved {
 		return "", nil
 	}
@@ -377,7 +384,7 @@ func (l *looper) asRecordAgent(ctx context.Context, record *SessionEntry, histor
 // to the subagent session at subagentKey, once that session's turn running it ends.
 func (r *Runtime) AwaitTask(ctx context.Context, jobID, subagentKey, delegator, prompt string) (string, error) {
 	// NewWithModelResolver installs its tool factory as the reviewer.
-	return r.PermissionReviewer.(*toolFactory).awaitTask(ctx, delegator, prompt, jobID, &PublicProgress{SubagentKey: subagentKey}, toolCallMetadata{observations: &turnObservations{journal: InertJournal{}}}, nil)
+	return r.PermissionReviewer.(*toolFactory).awaitTask(ctx, delegator, prompt, jobID, subagentKey, &PublicProgress{}, toolCallMetadata{observations: &turnObservations{journal: InertJournal{}}}, nil)
 }
 
 func (f *toolFactory) childSession(yield func(SessionEntry, error) bool) {
@@ -440,7 +447,7 @@ func (f *toolFactory) childSessionOut(ctx context.Context, entryType string) fun
 }
 
 // runGuardrail saves its run under subagentKey, the key of the subagent the task call runs.
-func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage ChildRunStage, message, guardedAgent, subagentKey string, metadata toolCallMetadata, parentOutput chan<- ChatResponse) guardrailDecision {
+func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage ChildRunStage, message, guardedAgent string, subagentKey ChildKey, metadata toolCallMetadata, parentOutput chan<- ChatResponse) guardrailDecision {
 	agent := *guardrail
 	agent.Permission = f.shellTemp.effectivePermissions(agent.Permission)
 	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)

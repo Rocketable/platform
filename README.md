@@ -122,7 +122,7 @@ Release note for mention-only Slack:
 
 MCP clients call `session_prompt` with a conversation ID, an agent, and a configured Slack channel. Each MCP conversation also gets a read-only Slack thread in that channel. Switch its agent or continue it from Web.
 
-Each active job file in `cron/` names a Slack `channel`. If the job's reply is empty, nothing is posted. Otherwise the reply starts a new read-only thread in that channel; follow up from its conversation in Web.
+A job file in `cron/` may name a Slack `channel`. Then an empty reply posts nothing, and any other reply starts a new read-only thread in that channel; follow up from its conversation in Web. A job without a `channel` posts nowhere: read or continue its runs from the Cron page in Web.
 
 Agents can use `rocketclaw_schedule_message` for a follow-up in the current conversation. `send_this_in` accepts positive durations up to `5040h` (210 days), including `12h` and `168h`. Set `recurring` to `false` for one message or `true` to repeat at that interval (at least `1m`) until scheduled messages are reset. Pending schedules protect their conversations and explicit owners from normal retention cleanup.
 

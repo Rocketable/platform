@@ -202,6 +202,7 @@ func TestWorkflowAgentRunnerTagLimits(t *testing.T) {
 	workspace := t.TempDir()
 	writeMainAgentSkills(t, workspace, "---\nmodel: gpt-6.1-sol\npermission:\n  read: allow\n  rocketclaw:\n    rocketclaw_set_tag: [[customer, internal]]\n---\nBase prompt\n")
 	service := newTestSessionServiceAt(t, workspace)
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"owning": KindWebChat})
 
 	var tools []string
 

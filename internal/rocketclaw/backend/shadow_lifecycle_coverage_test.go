@@ -29,10 +29,10 @@ BEGIN RAISE EXCEPTION 'shadow lifecycle write unavailable'; END $$`)
 }
 
 func TestShadowLifecycleAdmissionRollback(t *testing.T) {
-	for _, table := range []string{"shadow_bindings", "session_summaries", "session_entries", "background_jobs", "shadow_turns"} {
+	for _, table := range []string{"conversations", "entries", "turns", "shadow_turns"} {
 		t.Run(table, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)
-			_, err := (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"})
+			_, err := (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat})
 			require.NoError(t, err)
 			_, err = store.AppendEntryID(t.Context(), "parent", testSessionEntry("seed", "answer"))
 			require.NoError(t, err)
@@ -46,7 +46,7 @@ func TestShadowLifecycleAdmissionRollback(t *testing.T) {
 			require.False(t, admitted)
 			require.Empty(t, request.turnID)
 
-			for _, table := range []string{"shadow_bindings", "shadow_turns", "active_turns"} {
+			for _, table := range []string{"conversations WHERE shadow_parent IS NOT NULL", "shadow_turns", "turns"} {
 				var count int
 
 				require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM `+table).Scan(&count))
@@ -55,7 +55,7 @@ func TestShadowLifecycleAdmissionRollback(t *testing.T) {
 
 			var count int
 
-			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM managed_conversations`).Scan(&count))
+			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM conversations`).Scan(&count))
 			require.Equal(t, 1, count)
 
 			_, err = store.db.ExecContext(t.Context(), `DROP TRIGGER reject_shadow_lifecycle_write ON `+table)
@@ -64,7 +64,7 @@ func TestShadowLifecycleAdmissionRollback(t *testing.T) {
 			admitted, err = parent.activateInbound(t.Context(), &request)
 			require.NoError(t, err)
 			require.True(t, admitted)
-			children, err := queryStrings(t.Context(), store.db, `SELECT child_conversation_id FROM shadow_bindings ORDER BY 1`, "retried children")
+			children, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "retried children")
 			require.NoError(t, err)
 			require.Len(t, children, 2)
 
@@ -80,15 +80,15 @@ func TestShadowLifecycleAdmissionRollback(t *testing.T) {
 
 func TestShadowLifecycleClearRollback(t *testing.T) {
 	for _, step := range []struct{ table, event string }{
-		{"session_entries", "DELETE"}, {"session_summaries", "DELETE"},
-		{"active_turns", "DELETE"}, {"background_jobs", "DELETE"},
-		{"turn_steps", "DELETE"}, {"shadow_turns", "DELETE"},
+		{"entries", "DELETE"}, {"conversations", "UPDATE"},
+		{"turns", "DELETE"},
+		{"steps", "DELETE"}, {"shadow_turns", "DELETE"},
 		{"attachments", "DELETE"}, {"pending_attachment_deletions", "INSERT"},
 	} {
 		t.Run(step.table, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)
 			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
-			children, err := queryStrings(t.Context(), store.db, `SELECT child_conversation_id FROM shadow_bindings ORDER BY 1`, "clear children")
+			children, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "clear children")
 			require.NoError(t, err)
 
 			for _, id := range append(children, "parent") {
@@ -120,7 +120,7 @@ func TestShadowLifecycleClearRollback(t *testing.T) {
 			require.EqualValues(t, 3, deleted)
 			_, err = store.attachments.Get(t.Context(), "child-blob")
 			require.ErrorIs(t, err, fs.ErrNotExist)
-			bindings, err := queryStrings(t.Context(), store.db, `SELECT child_conversation_id FROM shadow_bindings ORDER BY 1`, "retained children")
+			bindings, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "retained children")
 			require.NoError(t, err)
 			require.Equal(t, children, bindings, "successful retry clears history, not family ownership")
 		})
@@ -151,7 +151,7 @@ func TestShadowLifecycleCaptureFailureAndRetry(t *testing.T) {
 
 	snapshot.ContextEntries = nil
 
-	rejectShadowLifecycleWrite(t, store, "turn_steps", "INSERT")
+	rejectShadowLifecycleWrite(t, store, "steps", "INSERT")
 
 	err = store.captureTurnInputs(t.Context(), "parent", request.turnID, &snapshot)
 	require.ErrorContains(t, err, "save canonical input and fan-out")
@@ -161,11 +161,11 @@ func TestShadowLifecycleCaptureFailureAndRetry(t *testing.T) {
 	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM shadow_turns WHERE inputs <> '[]' OR input_closed`).Scan(&prepared))
 	require.Zero(t, prepared, "failed capture must not expose a partial payload to either child")
 
-	_, err = store.db.ExecContext(t.Context(), `DROP TRIGGER reject_shadow_lifecycle_write ON turn_steps`)
+	_, err = store.db.ExecContext(t.Context(), `DROP TRIGGER reject_shadow_lifecycle_write ON steps`)
 	require.NoError(t, err)
 
 	require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &snapshot))
-	children, err := queryStrings(t.Context(), store.db, `SELECT child_conversation_id FROM shadow_bindings ORDER BY 1`, "captured children")
+	children, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "captured children")
 	require.NoError(t, err)
 
 	for _, child := range children {
@@ -237,7 +237,7 @@ func TestShadowLifecycleDefinitionFailureAndRetry(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			bindings, err := queryStrings(t.Context(), store.db, `SELECT shadow_agent FROM shadow_bindings ORDER BY 1`, "repaired definitions")
+			bindings, err := queryStrings(t.Context(), store.db, `SELECT shadow_agent FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "repaired definitions")
 			require.NoError(t, err)
 			require.Equal(t, []string{"main/a", "main/z"}, bindings)
 		})
@@ -246,9 +246,8 @@ func TestShadowLifecycleDefinitionFailureAndRetry(t *testing.T) {
 
 func TestShadowLifecycleRevertRollback(t *testing.T) {
 	for _, step := range []struct{ table, event string }{
-		{"session_entries", "DELETE"}, {"managed_conversations", "UPDATE"},
-		{"session_summaries", "DELETE"}, {"session_summaries", "INSERT"},
-		{"turn_steps", "DELETE"},
+		{"entries", "DELETE"}, {"conversations", "UPDATE"},
+		{"steps", "DELETE"},
 	} {
 		t.Run(step.table+" "+step.event, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)
@@ -258,7 +257,7 @@ func TestShadowLifecycleRevertRollback(t *testing.T) {
 			entry.TurnID = "parent-turn"
 			id, err := store.AppendEntryID(t.Context(), "parent", entry)
 			require.NoError(t, err)
-			children, err := queryStrings(t.Context(), store.db, `SELECT child_conversation_id FROM shadow_bindings ORDER BY 1`, "revert children")
+			children, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "revert children")
 			require.NoError(t, err)
 
 			for _, child := range children {
@@ -282,7 +281,7 @@ func TestShadowLifecycleRevertRollback(t *testing.T) {
 
 			var rows int
 
-			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM session_entries`).Scan(&rows))
+			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM entries`).Scan(&rows))
 			require.Equal(t, 3, rows, "failed branch commit retains physical rows on both sides")
 
 			_, err = store.db.ExecContext(t.Context(), `DROP TRIGGER reject_shadow_lifecycle_write ON `+step.table)
@@ -292,7 +291,7 @@ func TestShadowLifecycleRevertRollback(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, commitRevertDB(t.Context(), tx, "parent", marker))
 			require.NoError(t, tx.Commit())
-			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM session_entries`).Scan(&rows))
+			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM entries`).Scan(&rows))
 			require.Zero(t, rows)
 			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM shadow_turns`).Scan(&rows))
 			require.Zero(t, rows, "retry removes discarded manifests rather than reexecuting them")
@@ -305,7 +304,7 @@ func TestShadowLifecycleSettlementFailureReleasesFamily(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)
 			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
-			children, err := queryStrings(t.Context(), store.db, `SELECT child_conversation_id FROM shadow_bindings ORDER BY 1`, "settling children")
+			children, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "settling children")
 			require.NoError(t, err)
 
 			manager := &threadBridgeManager{store: store, bridges: map[string]directBridge{}}
@@ -379,7 +378,7 @@ func TestShadowLifecycleUnavailableStateDoesNotStartWork(t *testing.T) {
 	admitted, err := parent.activateInbound(t.Context(), &request)
 	require.NoError(t, err)
 	require.True(t, admitted)
-	children, err := queryStrings(t.Context(), store.db, `SELECT child_conversation_id FROM shadow_bindings ORDER BY 1`, "unavailable children")
+	children, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "unavailable children")
 	require.NoError(t, err)
 
 	child := &Bridge{shadow: true, log: store.log, config: Config{ConversationID: children[0], SessionService: store}, requestCh: make(chan bridgeRequest, 1)}
@@ -441,7 +440,7 @@ func TestShadowLifecycleDeferredCommitFailureAndRetry(t *testing.T) {
 
 			var child string
 
-			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings ORDER BY 1 LIMIT 1`).Scan(&child))
+			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1 LIMIT 1`).Scan(&child))
 			_, err = store.db.ExecContext(t.Context(), `CREATE FUNCTION reject_shadow_commit() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN RAISE EXCEPTION 'shadow commit unavailable'; END $$;
 CREATE CONSTRAINT TRIGGER reject_shadow_commit AFTER UPDATE ON shadow_turns DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_shadow_commit()`)
@@ -489,11 +488,10 @@ CREATE CONSTRAINT TRIGGER reject_shadow_commit AFTER UPDATE ON shadow_turns DEFE
 
 func TestShadowLifecycleFinishRollback(t *testing.T) {
 	for _, step := range []struct{ table, event string }{
-		{"shadow_turns", "UPDATE"}, {"active_turns", "UPDATE"},
-		{"session_entries", "INSERT"}, {"session_summaries", "INSERT"},
-		{"message_search", "INSERT"}, {"message_search", "DELETE"},
-		{"thread_queue", "DELETE"}, {"background_jobs", "UPDATE"},
-		{"turn_steps", "DELETE"},
+		{"shadow_turns", "UPDATE"}, {"turns", "UPDATE"},
+		{"entries", "INSERT"}, {"conversations", "UPDATE"},
+		{"turns", "DELETE"}, {"turns", "UPDATE OF note"},
+		{"steps", "DELETE"},
 	} {
 		t.Run(step.table+" "+step.event, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)
@@ -519,13 +517,13 @@ func TestShadowLifecycleFinishRollback(t *testing.T) {
 			require.Nil(t, outbound)
 
 			var phase turnPhase
-			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT phase FROM active_turns WHERE id = $1`, request.turnID).Scan(&phase))
+			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT phase FROM turns WHERE id = $1`, request.turnID).Scan(&phase))
 			require.Equal(t, turnRunning, phase)
 
 			var closed, saved int
 			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM shadow_turns WHERE input_closed`).Scan(&closed))
 			require.Zero(t, closed, "failed settlement cannot close the children's input window")
-			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM session_entries WHERE conversation_id = 'parent'`).Scan(&saved))
+			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM entries WHERE conversation_id = 'parent'`).Scan(&saved))
 			require.Zero(t, saved, "history must not survive a rolled back settlement")
 
 			canonical, found, err := loadTurnInputs(ctx, store.db, "parent", request.turnID)
@@ -567,14 +565,14 @@ func TestShadowTurnNamesParentPerson(t *testing.T) {
 
 	var childID string
 
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings ORDER BY 1 LIMIT 1`).Scan(&childID))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1 LIMIT 1`).Scan(&childID))
 	_, claimed, err := store.claimShadowTurn(t.Context(), childID)
 	require.NoError(t, err)
 	require.True(t, claimed)
 
 	var metadata string
 
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT inbound_json->>'Metadata' FROM active_turns WHERE conversation_id = $1`, childID).Scan(&metadata))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT inbound_json->>'Metadata' FROM turns WHERE conversation_id = $1`, childID).Scan(&metadata))
 	require.JSONEq(t, `{"rocketclaw_principal_name":"Alice Smith","rocketclaw_principal_email":"alice@example.com"}`, metadata)
 }
 
@@ -589,7 +587,7 @@ func TestShadowLifecycleStopNotificationCancelsOwningTurn(t *testing.T) {
 
 	var childID string
 
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings ORDER BY 1 LIMIT 1`).Scan(&childID))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1 LIMIT 1`).Scan(&childID))
 	turn, claimed, err := store.claimShadowTurn(t.Context(), childID)
 	require.NoError(t, err)
 	require.True(t, claimed)

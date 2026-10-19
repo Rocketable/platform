@@ -21,15 +21,19 @@ func (c *Connector) StartEvents(ctx context.Context, backend frontend.Backend) <
 
 		for event := range events {
 			message := event.Message
+
+			channelID, threadTS, err := c.facts.SlackThread(ctx, message.ConversationID)
+			if err != nil {
+				event.Acknowledgement <- err
+				continue
+			}
+
 			if message.ConsumedID != "" {
-				channelID, threadTS, ok := protocol.SlackThreadTarget(message.ConversationID)
-				if ok && message.ConsumedSource == protocol.SourceWeb && message.ConsumedText != "" {
+				if threadTS != "" && message.ConsumedSource == protocol.SourceWeb && message.ConsumedText != "" {
 					text := message.ConsumedRawText
 					if strings.TrimSpace(text) == "" && message.ConsumedText != text {
 						text = "(attachments)"
 					}
-
-					var err error
 
 					for _, chunk := range splitSlackText(text, slackBlockTextLimit, slackBlockTextLimit) {
 						blocks := []slack.Block{
@@ -53,11 +57,9 @@ func (c *Connector) StartEvents(ctx context.Context, backend frontend.Backend) <
 				continue
 			}
 
-			channelID, threadTS, ok := protocol.SlackThreadTarget(message.ConversationID)
-
 			switch {
 			case message.ConversationID == "":
-			case ok:
+			case threadTS != "":
 				if message.SlackReply == nil {
 					message.SlackReply = &protocol.SlackReplyTarget{}
 					if message.Cronjob == nil {
@@ -71,7 +73,7 @@ func (c *Connector) StartEvents(ctx context.Context, backend frontend.Backend) <
 				continue
 			}
 
-			err := c.SendResponse(ctx, message)
+			err = c.SendResponse(ctx, message)
 			if err != nil && message.Complete && ctx.Err() == nil {
 				c.AbortResponse(message)
 			}

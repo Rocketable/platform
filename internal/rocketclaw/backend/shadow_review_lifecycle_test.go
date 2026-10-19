@@ -19,6 +19,7 @@ import (
 func TestShadowReviewClearProducerHistory(t *testing.T) {
 	store, _ := newShadowTestStore(t)
 	require.NoError(t, store.RegisterExternalMCPConversation("external", "main", &ExternalMCPSessionState{ManagedConversationID: "visible", PrivateConversationID: "private", Agent: "main"}))
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"other": KindWebChat})
 
 	for _, id := range []string{"private", "projected-private", "unrelated/producer"} {
 		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "main"}))
@@ -35,7 +36,7 @@ func TestShadowReviewClearProducerHistory(t *testing.T) {
 		require.True(t, admitted)
 		require.NoError(t, store.captureTurnInputs(t.Context(), id, request.turnID, &turnInputSnapshot{Inputs: []rocketcode.PromptInput{{ID: "input", Texts: []string{"prepared"}}}, Closed: true}))
 		endTestTurn(t, store, id, request.turnID, "")
-		children, err := queryStrings(t.Context(), store.db, `SELECT child_conversation_id FROM shadow_bindings WHERE parent_conversation_id = $1`, "producer children", id)
+		children, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent = $1`, "producer children", id)
 		require.NoError(t, err)
 
 		for _, child := range children {
@@ -56,10 +57,11 @@ func TestShadowReviewClearProducerHistory(t *testing.T) {
 	_, err := store.DeleteSession(t.Context(), "visible")
 	require.NoError(t, err)
 
-	for _, table := range []string{"session_entries", "attachments", "active_turns"} {
+	for _, table := range []string{"entries", "attachments", "turns"} {
 		var count int
 
-		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM `+table+` WHERE conversation_id IN ('private', 'projected-private') OR conversation_id IN (SELECT child_conversation_id FROM shadow_bindings WHERE parent_conversation_id IN ('private', 'projected-private'))`).Scan(&count))
+		require.NoError(t, store.db.QueryRowContext(t.Context(), `WITH shadows AS (SELECT conversation_id FROM conversations WHERE shadow_parent IN ('private', 'projected-private'))
+SELECT count(*) FROM `+table+` t LEFT JOIN shadows s USING (conversation_id) WHERE t.conversation_id IN ('private', 'projected-private') OR s.conversation_id IS NOT NULL`).Scan(&count))
 		require.Zero(t, count, table)
 	}
 
@@ -76,7 +78,7 @@ func TestShadowReviewClearProducerHistory(t *testing.T) {
 	require.Zero(t, count)
 	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM shadow_turns WHERE parent_source_conversation_id = 'unrelated/producer'`).Scan(&count))
 	require.Equal(t, 2, count)
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM shadow_bindings WHERE parent_conversation_id = 'private'`).Scan(&count))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM conversations WHERE shadow_parent = 'private'`).Scan(&count))
 	require.Equal(t, 2, count, "bindings survive history clear")
 
 	bridge := &Bridge{log: store.log, config: Config{ConversationID: "private", Agent: "main", SessionService: store}}
@@ -137,7 +139,7 @@ func TestShadowReviewPayloadRelease(t *testing.T) {
 
 			var child string
 
-			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings WHERE shadow_agent = 'main/a'`).Scan(&child))
+			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'main/a'`).Scan(&child))
 			turn, claimed, err := store.claimShadowTurn(t.Context(), child)
 			require.NoError(t, err)
 			require.True(t, claimed)
@@ -275,21 +277,15 @@ func TestShadowReviewClearLiveProducer(t *testing.T) {
 		}
 	}
 
-	_, err = store.DeleteSession(t.Context(), "0visible")
+	// Nothing in the thread follows its External MCP message, so a wipe removes nothing and leaves
+	// the run and its comparison working, as undo would.
+	deleted, err := store.DeleteSession(t.Context(), "0visible")
 	require.NoError(t, err)
+	require.Zero(t, deleted)
+	require.NotEmpty(t, runningTestTurns(t, store))
 
-	for range 2 {
-		select {
-		case <-cancelled:
-		case <-time.After(3 * time.Second):
-			t.Fatal("clear did not settle producer and child")
-		}
-	}
+	var open int
 
-	var count int
-
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM shadow_turns`).Scan(&count))
-	require.Zero(t, count)
-	require.NoError(t, manager.StartActiveTurns(t.Context()))
-	require.Empty(t, runningTestTurns(t, store), "discarded work cannot resume")
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM shadow_turns WHERE terminal = ''`).Scan(&open))
+	require.Equal(t, 1, open)
 }

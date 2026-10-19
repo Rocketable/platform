@@ -3,6 +3,7 @@ package backend
 import (
 	"testing"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,7 +26,10 @@ func TestExternalMCPBindingPersistsPrivateAndManagedConversations(t *testing.T) 
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop()) })
 
-	binding := ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops"}
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"slack-thread:C1:2.2": KindSlackThread})
+
+	binding := ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops",
+		Thread: protocol.SlackReplyTarget{ChannelID: "C1", ThreadTS: "2.2"}}
 	require.NoError(t, store.UpsertExternalMCPSession("deploy-42", &binding))
 
 	got, ok, err := store.ExternalMCPSession("deploy-42")

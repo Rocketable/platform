@@ -282,7 +282,7 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 	queue, err := seed.ThreadQueueForConversation(conversationID)
 	require.NoError(t, err)
 	require.Equal(t, []string{"q1", "q2"}, []string{queue[0].ID, queue[1].ID})
-	_, err = seed.db.ExecContext(t.Context(), `UPDATE managed_conversations SET revert_message_id = '' WHERE conversation_id = $1`, conversationID)
+	_, err = seed.db.ExecContext(t.Context(), `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = $1`, conversationID)
 	require.NoError(t, err)
 	require.NoError(t, seed.Stop())
 	require.Equal(t, []string{"answer", "answer"}, runQueuedStartup(t, 20*time.Second))

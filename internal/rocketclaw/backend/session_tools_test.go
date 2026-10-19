@@ -38,8 +38,9 @@ func TestSessionTagToolsBridge(t *testing.T) {
 
 			writeMainAgentSkills(t, workspace, "---\nmodel: gpt-6.1-sol\npermission:\n  read: allow\n  rocketclaw:\n    rocketclaw_get_tags: allow\n"+groups+"---\nPrompt\n")
 			service := newTestSessionServiceAt(t, workspace)
+			recordPrivateHistories(t, service, map[string]ConversationKind{"external_mcp:owning": KindExternalMCPRun})
 			// A real PostgreSQL write failure must reach the tool without changing active tags.
-			_, err := service.db.ExecContext(t.Context(), `ALTER TABLE session_tags ADD CONSTRAINT reject_resolved CHECK (NOT (tags ? 'resolved'))`)
+			_, err := service.db.ExecContext(t.Context(), `ALTER TABLE conversations ADD CONSTRAINT reject_resolved CHECK (NOT (tags ? 'resolved'))`)
 			require.NoError(t, err)
 
 			// Each call is one execute script; tag tools are reachable only inside execute.
@@ -369,7 +370,7 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 		},
 	}
 	// A synced producer schedule stores untyped bookkeeping, not a replay message, in its trace.
-	schedule := &rocketcode.SessionEntry{Version: 1, Type: producerScheduleEntryType, Timestamp: entry.Timestamp, OutputTrace: []json.RawMessage{json.RawMessage(`{"conversation_id":"producer","agent":"main","message":"later","due_at":"2026-10-07T00:00:00Z"}`)}}
+	schedule := &rocketcode.SessionEntry{Version: 1, Type: "producer_schedule", Timestamp: entry.Timestamp, OutputTrace: []json.RawMessage{json.RawMessage(`{"conversation_id":"producer","agent":"main","message":"later","due_at":"2026-10-07T00:00:00Z"}`)}}
 	for _, id := range []string{"external_mcp:private", "cron:one", "exec:one", "slack-thread:C1:1", "web:stored", "unrecorded"} {
 		_, err := service.AppendEntryID(t.Context(), id, entry)
 		require.NoError(t, err)
@@ -380,7 +381,7 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 	snapshot := func() []string {
 		values := make([]string, 0, 8)
 
-		for _, table := range []string{"session_entries", "session_summaries", "managed_conversations", "external_mcp_sessions", "active_turns", "conversation_goals", "thread_queue", "scheduled_messages"} {
+		for _, table := range []string{"entries", "conversations", "turns", "schedules"} {
 			var value string
 
 			err := service.db.QueryRowContext(t.Context(), `SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text)::text, '[]') FROM `+table+` t`).Scan(&value)
@@ -444,7 +445,7 @@ func TestSessionToolsErrors(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	_, err = get.Call(ctx, json.RawMessage(`{"conversation_id":"broken","limit":100,"before_entry_id":0}`), nil)
 	require.ErrorIs(t, err, context.Canceled)
-	_, err = service.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id,entry_json,entry_timestamp) VALUES ('broken','{"timestamp":false}','2026-01-01T00:00:00Z')`)
+	_, err = service.db.ExecContext(t.Context(), `INSERT INTO entries (conversation_id,entry_json,entry_timestamp) VALUES ('broken','{"timestamp":false}','2026-01-01T00:00:00Z')`)
 	require.NoError(t, err)
 	_, err = list.Call(t.Context(), json.RawMessage(`{"since":"2000-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`), nil)
 	require.Error(t, err)
@@ -455,7 +456,7 @@ func TestSessionToolsErrors(t *testing.T) {
 	require.NoError(t, err)
 	_, err = list.Call(t.Context(), json.RawMessage(`{"since":"2000-01-01T00:00:00Z","until":"","limit":1,"include_message_preview":true}`), nil)
 	require.NoError(t, err)
-	_, err = service.db.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{"replay_input":[false]}' WHERE conversation_id = 'broken'`)
+	_, err = service.db.ExecContext(t.Context(), `UPDATE entries SET entry_json = '{"replay_input":[false]}' WHERE conversation_id = 'broken'`)
 	require.NoError(t, err)
 	_, err = list.Call(t.Context(), json.RawMessage(`{"since":"2000-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`), nil)
 	require.Error(t, err)
@@ -463,7 +464,7 @@ func TestSessionToolsErrors(t *testing.T) {
 	// Each undecodable stored item is reported in place without hiding the rest of the read.
 	var brokenID int64
 
-	require.NoError(t, service.db.QueryRowContext(t.Context(), `UPDATE session_entries SET entry_json = '{"replay_input":[{"type":"message","role":"user","content":"before"},false,{"type":"message","role":"user","content":"after"}],"output_trace":[false]}' WHERE conversation_id = 'broken' RETURNING id`).Scan(&brokenID))
+	require.NoError(t, service.db.QueryRowContext(t.Context(), `UPDATE entries SET entry_json = '{"replay_input":[{"type":"message","role":"user","content":"before"},false,{"type":"message","role":"user","content":"after"}],"output_trace":[false]}' WHERE conversation_id = 'broken' RETURNING id`).Scan(&brokenID))
 	result, err := get.Call(t.Context(), json.RawMessage(`{"conversation_id":"broken","limit":100,"before_entry_id":0}`), nil)
 	require.NoError(t, err)
 
@@ -726,13 +727,13 @@ func TestSessionsWriteStopWithoutPrompt(t *testing.T) {
 	require.False(t, write.Resumable, "a write cut off by a restart is reported interrupted, not run again")
 
 	_, err := store.db.ExecContext(t.Context(), `CREATE FUNCTION reject_goal_stop() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'goal stop failed'; END $$;
-CREATE TRIGGER reject_goal_stop BEFORE UPDATE ON conversation_goals FOR EACH STATEMENT EXECUTE FUNCTION reject_goal_stop()`)
+CREATE TRIGGER reject_goal_stop BEFORE UPDATE OF goal_status ON conversations FOR EACH STATEMENT EXECUTE FUNCTION reject_goal_stop()`)
 	require.NoError(t, err)
 
 	failed := sessionsWriteTool(&Bridge{config: Config{ConversationID: "web:failed", SessionService: store}, threads: manager}, new(protocol.InboundMessage), "main", "web:failed")
 	_, err = failed.Call(t.Context(), json.RawMessage(`{"session_id":"web:target","mode":"stop","prompt":"","title":"","agent":""}`), nil)
 	require.ErrorContains(t, err, "goal stop failed")
-	_, err = store.db.ExecContext(t.Context(), `DROP TRIGGER reject_goal_stop ON conversation_goals; DROP FUNCTION reject_goal_stop()`)
+	_, err = store.db.ExecContext(t.Context(), `DROP TRIGGER reject_goal_stop ON conversations; DROP FUNCTION reject_goal_stop()`)
 	require.NoError(t, err)
 
 	output, err := write.Call(t.Context(), json.RawMessage(`{"session_id":"web:target","mode":"stop","prompt":" ","title":"","agent":""}`), nil)
@@ -781,8 +782,8 @@ func TestSessionsWriteStopLineFollowsStoppedTurn(t *testing.T) {
 	assert.JSONEq(t, `{"outcome":"stopped","session_id":"`+nt.conversationID+`","url":"https://rc.example/s/`+base64.RawURLEncoding.EncodeToString([]byte(nt.conversationID))+`","turn_was_running":true}`, output.Output)
 
 	var early int
-	require.NoError(t, nt.service.db.QueryRowContext(t.Context(), `WITH running AS (SELECT count(*) AS turns FROM active_turns WHERE conversation_id = $1 AND phase = $2)
-SELECT COUNT(*) FROM session_entries, running WHERE conversation_id = $1 AND turns > 0`, nt.conversationID, turnRunning).Scan(&early))
+	require.NoError(t, nt.service.db.QueryRowContext(t.Context(), `WITH running AS (SELECT count(*) AS turns FROM turns WHERE conversation_id = $1 AND phase = $2)
+SELECT COUNT(*) FROM entries, running WHERE conversation_id = $1 AND turns > 0`, nt.conversationID, turnRunning).Scan(&early))
 	assert.Zero(t, early, "nothing is posted while the stopped turn has not saved")
 
 	assert.Equal(t, protocol.TerminalStopped, readFinal(t, nt.finals).Terminal)
@@ -848,7 +849,7 @@ func TestSessionsWriteRunsInTurn(t *testing.T) {
 				finals[final.ConversationID] = final
 			}
 
-			created, err := queryStrings(t.Context(), nt.service.db, `SELECT conversation_id FROM managed_conversations WHERE spawned_by = $1 AND created_by = 'Alice'`, "created sessions", caller)
+			created, err := queryStrings(t.Context(), nt.service.db, `SELECT conversation_id FROM conversations WHERE spawned_by = $1 AND created_by = 'Alice'`, "created sessions", caller)
 			require.NoError(t, err)
 			require.Len(t, created, 1, "the creator is recorded")
 			require.Contains(t, finals, created[0])
@@ -902,11 +903,15 @@ func TestCheckSessionTarget(t *testing.T) {
 	// "caller" or its subagent created "child", which created "grandchild". "creator" created "caller", and a
 	// person created searchChatH, which leaves spawned_by empty as a fork does. A one-off cron run creates for
 	// its visible chat searchChatE, and the private External MCP turn holds its managed chat searchChatX.
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"one-off-cron:run": KindOneOffCronRun})
+
 	for id, spawnedBy := range map[string]string{"caller": "creator", "creator": "", "child": "caller", "grandchild": "child", "cron-child": searchChatE, "one-off-cron:run": ""} {
 		require.NoError(t, s.UpsertThread(id, ThreadState{Agent: "main", spawnedBy: spawnedBy}))
 	}
 
-	s.reserveTurnPair(searchChatX, "external_mcp:private")
+	_, err := s.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, reports_to, kind, listed) VALUES ('external_mcp:private', 'main', '', $1, 'external_mcp_run', FALSE)
+ON CONFLICT (conversation_id) DO UPDATE SET reports_to = excluded.reports_to`, searchChatX)
+	require.NoError(t, err)
 
 	for _, tc := range []struct {
 		children                 bool
@@ -1005,7 +1010,7 @@ func TestSessionToolsCriteria(t *testing.T) {
 	require.NoError(t, err)
 
 	var firstB, firstW int64
-	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT min(id) FILTER (WHERE conversation_id = $1), min(id) FILTER (WHERE conversation_id = $2) FROM session_entries`, searchChatB, searchChatW).Scan(&firstB, &firstW))
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT min(id) FILTER (WHERE conversation_id = $1), min(id) FILTER (WHERE conversation_id = $2) FROM entries`, searchChatB, searchChatW).Scan(&firstB, &firstW))
 
 	// The fixture's Delegation History also holds billing, but is never listed.
 	output := call(&sessionListParams{Criteria: "billing", Since: epoch, Limit: 200})
@@ -1040,12 +1045,11 @@ func TestSessionToolsCriteria(t *testing.T) {
 	require.Equal(t, header+rowH+rowB+"[criteria: terms=tag:billing; text=]\n", call(&sessionListParams{Criteria: "tag:billing", Since: "2026-01-04T00:00:00Z", Limit: 200}))
 	require.Equal(t, header+rowH+rowB+strings.Replace(rowW, "\t1\t", "\t3\t", 1)+"[criteria: terms=tag:billing; text=]\n", call(&sessionListParams{Criteria: "tag:billing", Since: epoch, Limit: 200}))
 
-	unindexMessageSearch(t, s)
 	require.NoError(t, s.UpsertThread("missing", ThreadState{Agent: "main"}))
 	insertSessionEntryWithoutSummary(t, s, "missing", testSessionEntry("old", "answer"))
-	_, err = s.db.ExecContext(ctx, `DELETE FROM session_summaries WHERE conversation_id = 'missing'`)
+	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET preview = NULL, last_updated = NULL WHERE conversation_id = 'missing'`)
 	require.NoError(t, err)
-	require.Equal(t, header+"[criteria: terms=; text=missing]\n[message index incomplete]\n[session summaries incomplete]\n", call(&sessionListParams{Criteria: "missing", Since: epoch, Limit: 200}), "a chat without a summary is never listed")
+	require.Equal(t, header+"[criteria: terms=; text=missing]\n", call(&sessionListParams{Criteria: "missing", Since: epoch, Limit: 200}), "a chat without a summary is never listed")
 }
 
 // The tool returns the chats SearchSessions finds, so it lists what /search shows.
@@ -1086,4 +1090,53 @@ func TestSessionToolsCriteriaParity(t *testing.T) {
 		slices.Sort(got)
 		require.Equal(t, want, got, query)
 	}
+}
+
+// A subagent session or review history under a Slack thread keeps the thread's channel, which
+// decides the agents Web offers it, as when its ID named the channel.
+func TestChildConversationsKeepSlackChannel(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	thread := protocol.SlackThreadConversationID("C1", "1.1")
+	recordTestConversations(t, store, "main", map[string]ConversationKind{thread: KindSlackThread})
+
+	require.NoError(t, store.startSubagent(t.Context(), thread, rocketcode.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, "helper", true))
+	require.NoError(t, (&Bridge{config: Config{ConversationID: thread + "/call-1", SessionService: store}}).AppendChildEntry(t.Context(), rocketcode.ChildKey{Path: "/call-2-review-0a1b2c3d", Turn: "turn-2", Call: "call-2"}, testSessionEntry("review", "allowed")))
+
+	for _, child := range []string{thread + "/call-1", thread + "/call-1/call-2-review-0a1b2c3d"} {
+		channel, slackThread, err := store.SlackThread(t.Context(), child)
+		require.NoError(t, err)
+		assert.Equal(t, "C1", channel, child)
+		assert.Empty(t, slackThread, "only the Slack thread itself is one")
+	}
+}
+
+// A parked "Stopped by" line that cannot be decoded fails its post, which leaves it parked.
+func TestPostStopLinesKeepsUndecodableLine(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	key := stopLineStep + "parent/turn/call/c1"
+	require.NoError(t, s.SaveTurnStep(t.Context(), "main", key, json.RawMessage(`{"timestamp":"2026-10-19T00:00:00Z","replay_input":7}`)))
+	require.ErrorContains(t, s.postStopLines(t.Context(), "main"), "decode parked stop lines")
+	require.Equal(t, []string{key}, testTurnStepKeys(t, s, "main"))
+}
+
+// A summary reads past the newest entry only while it lacks a user or assistant message.
+func TestSessionToolSummaryReadsBackToLastMessages(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	ctx := t.Context()
+	at := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+
+	_, err := service.AppendEntryID(ctx, "chat", testSessionEntryAt(at, "asked"))
+	require.NoError(t, err)
+	_, err = service.AppendEntryID(ctx, "chat", &rocketcode.SessionEntry{Type: "turn", Timestamp: at.Add(time.Hour), ReplayInput: replayInputForMessage("assistant", "later reply")})
+	require.NoError(t, err)
+
+	summaries, err := service.sessionToolSummaries(ctx, []string{"chat", "none"}, true)
+	require.NoError(t, err)
+	require.Equal(t, []sessionListSummary{{ConversationID: "chat", Turns: 2, LastUpdated: "2026-09-24T13:00:00Z", LastUserMessage: "asked", LastAssistantMessage: "later reply"}, {ConversationID: "none"}}, summaries)
 }

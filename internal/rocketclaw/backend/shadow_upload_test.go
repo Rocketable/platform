@@ -20,7 +20,7 @@ func TestShadowConsumedUploadOwnership(t *testing.T) {
 	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(ctx, protocol.Conversation{ID: "parent", Agent: "main"}))
 
 	var child, copiedID string
-	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT child_conversation_id FROM shadow_bindings ORDER BY shadow_agent LIMIT 1`).Scan(&child))
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY shadow_agent LIMIT 1`).Scan(&child))
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT id FROM attachments WHERE conversation_id = $1`, child).Scan(&copiedID))
 	_, copied, err := store.InputAttachments(ctx, child, "attachment:"+copiedID)
 	require.NoError(t, err)
@@ -85,13 +85,13 @@ func TestShadowConsumedUploadOwnership(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, files, "an assistant's reference does not prove parent input consumption")
 
-	_, err = store.db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = $2 WHERE conversation_id = $1`, child, fmt.Sprintf("%d:1", entryID))
+	_, err = store.db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $2 WHERE conversation_id = $1`, child, fmt.Sprintf("%d:1", entryID))
 	require.NoError(t, err)
 	_, files, err = store.InputAttachments(ctx, child, texts[1])
 	require.NoError(t, err)
 	require.Empty(t, files, "hidden consumed steer is not an attachment grant")
 
-	_, err = store.db.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = $1`, child)
+	_, err = store.db.ExecContext(ctx, `DELETE FROM entries WHERE conversation_id = $1`, child)
 	require.NoError(t, err)
 	_, files, err = store.InputAttachments(ctx, child, texts[0])
 	require.NoError(t, err)

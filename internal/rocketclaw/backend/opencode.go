@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -245,7 +246,7 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 
 	ran := map[string]bool{}
 
-	if err := readRows(ctx, s.db, `SELECT conversation_id FROM opencode_sessions WHERE server = $1 AND running`, "running opencode sessions", func(row rowScanner) error {
+	if err := readRows(ctx, s.db, `SELECT conversation_id FROM conversations WHERE server = $1 AND running`, "running opencode sessions", func(row rowScanner) error {
 		var id string
 		if err := row.Scan(&id); err != nil {
 			return fmt.Errorf("scan running opencode session: %w", err)
@@ -299,11 +300,11 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 	}
 
 	var (
-		ids, titles, directories, agents, models []string
-		updated                                  []time.Time
-		running, backgrounds                     []bool
-		replies                                  []*string
-		oldest                                   time.Time
+		ids, titles, directories, agents, models, remotes []string
+		updated                                           []time.Time
+		running, backgrounds                              []bool
+		replies                                           []*string
+		oldest                                            time.Time
 	)
 
 	for _, session := range sessions.Data {
@@ -345,28 +346,26 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 
 		ids, titles, directories, agents, models = append(ids, id), append(titles, session.Title), append(directories, session.Location.Directory), append(agents, session.Agent), append(models, session.model())
 		updated, running, replies = append(updated, oldest), append(running, busy), append(replies, reply)
-		backgrounds = append(backgrounds, background[session.ID])
+		backgrounds, remotes = append(backgrounds, background[session.ID]), append(remotes, session.ID)
 	}
 
 	// A fetch below the limit is the whole root set, so every missing row was deleted; a full
 	// fetch proves deletions only inside its window. Rows stamped after the poll started were
 	// created meanwhile and stay. Kept rows are stamped too: offline means unreachable only.
 	_, err := execState(ctx, s.db, "sync opencode sessions", `WITH incoming AS (
-    SELECT * FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[], $11::boolean[], $12::text[], $13::text[]) AS t(conversation_id, title, directory, updated_at, running, reply, background, agent, model)
+    SELECT * FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[], $11::boolean[], $12::text[], $13::text[], $15::text[]) AS t(conversation_id, title, directory, updated_at, running, reply, background, agent, model, remote_session)
 ), upserted AS (
-    INSERT INTO opencode_sessions (conversation_id, server, title, directory, updated_at, running, synced_at, reply, background, agent, model)
-    SELECT conversation_id, $1, title, directory, updated_at, running, now(), reply, background, agent, model FROM incoming
+    INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, reply, background, model, remote_session)
+    SELECT conversation_id, agent, '', $14, FALSE, 'remote', $1, title, directory, updated_at, running, now(), reply, background, model, remote_session FROM incoming
     ON CONFLICT (conversation_id) DO UPDATE SET title = excluded.title, directory = excluded.directory,
-        updated_at = excluded.updated_at, running = excluded.running, background = excluded.background, synced_at = excluded.synced_at,
-        reply = COALESCE(excluded.reply, opencode_sessions.reply), agent = excluded.agent, model = excluded.model
+        last_updated = excluded.last_updated, running = excluded.running, background = excluded.background, synced_at = excluded.synced_at,
+        reply = COALESCE(excluded.reply, conversations.reply), agent = excluded.agent, model = excluded.model
 ), removed AS (
-    DELETE FROM opencode_sessions WHERE server = $1 AND conversation_id <> ALL($2) AND synced_at < $9 AND ($7 OR updated_at >= $8) RETURNING conversation_id
-), untagged AS (
-    DELETE FROM session_tags t USING removed r WHERE t.conversation_id = r.conversation_id
+    DELETE FROM conversations WHERE server = $1 AND conversation_id <> ALL($2) AND synced_at < $9 AND ($7 OR last_updated >= $8)
 )
-UPDATE opencode_sessions SET synced_at = now(), running = FALSE, background = FALSE
-WHERE server = $1 AND conversation_id <> ALL($2) AND NOT (synced_at < $9 AND ($7 OR updated_at >= $8))`,
-		name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies, backgrounds, agents, models)
+UPDATE conversations SET synced_at = now(), running = FALSE, background = FALSE
+WHERE server = $1 AND conversation_id <> ALL($2) AND NOT (synced_at < $9 AND ($7 OR last_updated >= $8))`,
+		name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies, backgrounds, agents, models, KindRemote, remotes)
 
 	return err
 }
@@ -393,10 +392,7 @@ func (s *SessionService) pruneOpenCode(ctx context.Context, name string, server 
 	}
 
 	// A list that fills the limit may be cut short, so it deletes nothing.
-	_, err := execState(ctx, s.db, "prune opencode sessions", `WITH removed AS (
-    DELETE FROM opencode_sessions WHERE server = $1 AND conversation_id <> ALL($2) AND synced_at < $3 AND $4 RETURNING conversation_id
-)
-DELETE FROM session_tags t USING removed r WHERE t.conversation_id = r.conversation_id`, name, ids, started, len(ids) < openCodePruneLimit)
+	_, err := execState(ctx, s.db, "prune opencode sessions", `DELETE FROM conversations WHERE server = $1 AND conversation_id <> ALL($2) AND synced_at < $3 AND $4`, name, ids, started, len(ids) < openCodePruneLimit)
 
 	return err
 }
@@ -423,8 +419,8 @@ func (s *SessionService) CreateOpenCodeSession(ctx context.Context, name string,
 
 	id := "opencode:" + name + ":" + session.ID
 
-	_, err := execState(ctx, s.db, "record opencode session", `INSERT INTO opencode_sessions (conversation_id, server, title, directory, updated_at, running, synced_at, agent, model)
-VALUES ($1, $2, $3, $4, $5, FALSE, now(), $6, $7) ON CONFLICT (conversation_id) DO NOTHING`, id, name, session.Title, session.Location.Directory, time.UnixMilli(session.Time.Updated).UTC(), session.Agent, session.model())
+	_, err := execState(ctx, s.db, "record opencode session", `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, model, remote_session)
+VALUES ($1, $7, '', $6, FALSE, 'remote', $2, $3, $4, $5, FALSE, now(), $8, $9) ON CONFLICT (conversation_id) DO NOTHING`, id, name, session.Title, session.Location.Directory, time.UnixMilli(session.Time.Updated).UTC(), KindRemote, session.Agent, session.model(), session.ID)
 
 	return id, err
 }
@@ -446,14 +442,16 @@ func AgentTags(agents rocketcode.Agents) map[string][]string {
 // ToggleManualTag toggles a tag a person chose. A remote OpenCode session takes any tag; a
 // RocketClaw session takes only a tag its agent allows, which clears the rest of its group.
 func (s *SessionService) ToggleManualTag(ctx context.Context, agents rocketcode.Agents, id, tag string) error {
-	var remote int
-	if err := queryScalar(ctx, s.db, "read opencode session", `SELECT count(*) FROM opencode_sessions WHERE conversation_id = $1`, &remote, id); err != nil {
+	kind, _, err := s.ConversationKind(ctx, id)
+	if err != nil {
 		return err
 	}
 
+	remote := kind == KindRemote
+
 	group := []string{tag}
 
-	if remote == 0 {
+	if !remote {
 		thread, _, err := s.Thread(id)
 		if err != nil {
 			return err
@@ -470,9 +468,23 @@ func (s *SessionService) ToggleManualTag(ctx context.Context, agents rocketcode.
 		group = groups[i]
 	}
 
-	_, err := s.toggleSessionTag(ctx, id, tag, group)
+	_, err = s.toggleSessionTag(ctx, id, tag, group)
 
 	return err
+}
+
+// ConversationKind returns what conversation id is, and whether it is recorded at all.
+func (s *SessionService) ConversationKind(ctx context.Context, id string) (kind ConversationKind, found bool, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT kind FROM conversations WHERE conversation_id = $1`, id).Scan(&kind)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+
+	if err != nil {
+		return "", false, fmt.Errorf("read conversation kind: %w", err)
+	}
+
+	return kind, true, nil
 }
 
 // ErrTagNotAllowed reports a manual tag a RocketClaw session's agent does not allow.

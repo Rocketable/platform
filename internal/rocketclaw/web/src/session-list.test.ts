@@ -5,9 +5,7 @@ import { RPCError } from "./api";
 import type { Session, SessionBatch } from "./types";
 import {
   mergeSessionRows,
-  MISSING_SUMMARY,
   readSessionEnumeration,
-  rowPreview,
   saveCompleteSessions,
   searchIsAuthoritative,
   shouldCommitSnapshot,
@@ -18,7 +16,6 @@ const alice = (sessions: Session[], flags: Partial<SessionBatch> = {}): SessionB
   sessions,
   owner: "alice",
   upstreamSuccess: false,
-  summariesComplete: true,
   ...flags,
 });
 
@@ -82,12 +79,11 @@ describe("session list reconciliation", () => {
     ]);
   });
 
-  test("commits only after success, summary completeness and exhaustion", () => {
-    expect(shouldCommitSnapshot({ upstreamSuccess: true, summariesComplete: true, exhausted: true, mismatch: false })).toBe(true);
-    expect(shouldCommitSnapshot({ upstreamSuccess: true, summariesComplete: true, exhausted: false, mismatch: false })).toBe(false);
-    expect(shouldCommitSnapshot({ upstreamSuccess: true, summariesComplete: false, exhausted: true, mismatch: false })).toBe(false);
-    expect(shouldCommitSnapshot({ upstreamSuccess: false, summariesComplete: true, exhausted: true, mismatch: false })).toBe(false);
-    expect(shouldCommitSnapshot({ upstreamSuccess: true, summariesComplete: true, exhausted: true, mismatch: true })).toBe(false);
+  test("commits only after success and exhaustion", () => {
+    expect(shouldCommitSnapshot({ upstreamSuccess: true, exhausted: true, mismatch: false })).toBe(true);
+    expect(shouldCommitSnapshot({ upstreamSuccess: true, exhausted: false, mismatch: false })).toBe(false);
+    expect(shouldCommitSnapshot({ upstreamSuccess: false, exhausted: true, mismatch: false })).toBe(false);
+    expect(shouldCommitSnapshot({ upstreamSuccess: true, exhausted: true, mismatch: true })).toBe(false);
   });
 
   test("strips preview and timestamp without removing routing metadata", () => {
@@ -96,18 +92,10 @@ describe("session list reconciliation", () => {
     ]);
   });
 
-  test("uses loading... only for live missing summaries", () => {
-    expect(rowPreview({ id: "x", preview: "text" }, true)).toBe("text");
-    expect(rowPreview({ id: "x" }, true)).toBe(MISSING_SUMMARY);
-    expect(rowPreview({ id: "x", preview: "" }, false)).toBe("");
-    expect(MISSING_SUMMARY).toBe("loading...");
-  });
-
-  test("search is not authoritative while refreshing or summaries are missing", () => {
-    expect(searchIsAuthoritative({ refreshing: false, enumerationComplete: true, summariesComplete: true })).toBe(true);
-    expect(searchIsAuthoritative({ refreshing: true, enumerationComplete: true, summariesComplete: true })).toBe(false);
-    expect(searchIsAuthoritative({ refreshing: false, enumerationComplete: true, summariesComplete: false })).toBe(false);
-    expect(searchIsAuthoritative({ refreshing: false, enumerationComplete: false, summariesComplete: true })).toBe(false);
+  test("search is not authoritative while refreshing or before the list is complete", () => {
+    expect(searchIsAuthoritative({ refreshing: false, enumerationComplete: true })).toBe(true);
+    expect(searchIsAuthoritative({ refreshing: true, enumerationComplete: true })).toBe(false);
+    expect(searchIsAuthoritative({ refreshing: false, enumerationComplete: false })).toBe(false);
   });
 
   test("merges a prefix, ignores owner mismatch, and does not treat a late throw as exhaustion", async () => {
@@ -120,11 +108,11 @@ describe("session list reconciliation", () => {
       (rows) => seen.push(rows),
     );
     expect(seen).toEqual([[{ id: "new", preview: "fresh" }, { id: "old", preview: "keep" }]]);
-    expect(result).toEqual({ received: [{ id: "new", preview: "fresh" }], upstreamSuccess: false, summariesComplete: false, exhausted: false, mismatch: true });
+    expect(result).toEqual({ received: [{ id: "new", preview: "fresh" }], upstreamSuccess: false, exhausted: false, mismatch: true });
     expect(shouldCommitSnapshot(result)).toBe(false);
 
     async function* lateFailure() {
-      yield alice([{ id: "one" }], { upstreamSuccess: true, summariesComplete: true });
+      yield alice([{ id: "one" }], { upstreamSuccess: true });
       throw new Error("cut");
     }
     const failed = await readSessionEnumeration("alice", lateFailure(), () => [], () => {});
@@ -141,28 +129,22 @@ describe("session list reconciliation", () => {
   });
 
   test("empty successful exhaustion is committable", async () => {
-    const result = await readSessionEnumeration("alice", batchesOf([alice([], { upstreamSuccess: true, summariesComplete: true })]), () => [{ id: "old" }], () => {});
+    const result = await readSessionEnumeration("alice", batchesOf([alice([], { upstreamSuccess: true })]), () => [{ id: "old" }], () => {});
     expect(result.received).toEqual([]);
     expect(shouldCommitSnapshot(result)).toBe(true);
   });
 
-  test("merges repeated IDs and keeps an earlier missing summary non-authoritative", async () => {
-    const observed: { summaries: [string, boolean][]; complete: boolean }[] = [];
+  test("merges repeated IDs, keeping each row's latest", async () => {
     const result = await readSessionEnumeration("alice", batchesOf([
-      alice([{ id: "legacy" }], { summariesComplete: false }),
+      alice([{ id: "first" }]),
       alice([{ id: "empty", preview: "" }]),
       alice([{ id: "empty", preview: "new message" }]),
-      alice([{ id: "missing" }], { summariesComplete: false }),
-      alice([{ id: "replaced" }], { summariesComplete: false }),
+      alice([{ id: "replaced" }]),
       alice([{ id: "replaced", preview: "ready" }]),
-      alice([], { upstreamSuccess: true, summariesComplete: false }),
-    ]), () => [], (_rows, summaries, complete) => observed.push({ summaries: [...summaries], complete }));
-    expect(result.received).toEqual([{ id: "legacy" }, { id: "empty", preview: "new message" }, { id: "missing" }, { id: "replaced", preview: "ready" }]);
-    expect(observed).toEqual([
-      { summaries: [["legacy", false]], complete: false },
-      { summaries: [["empty", true], ["missing", false], ["replaced", true]], complete: false },
-    ]);
-    expect(shouldCommitSnapshot(result)).toBe(false);
+      alice([], { upstreamSuccess: true }),
+    ]), () => [], () => {});
+    expect(result.received).toEqual([{ id: "first" }, { id: "empty", preview: "new message" }, { id: "replaced", preview: "ready" }]);
+    expect(shouldCommitSnapshot(result)).toBe(true);
   });
 
   test("publishes an immediate row and coalesced prefix before a held tail", async () => {
@@ -171,25 +153,20 @@ describe("session list reconciliation", () => {
     const published = Promise.withResolvers<void>();
     const rows = Array.from({ length: 446 }, (_, i) => ({ id: `row-${i}`, preview: `preview-${i}` }));
     const expected = rows.map((row, i) => i === 1 || i === 3 ? { id: row.id } : i === 2 ? { ...row, preview: "replacement" } : row);
-    const loading = new Set<string>();
     let baseline: Session[] = [];
     let publications = 0;
     async function* stream() {
       yield alice([rows[0]]);
       expect(baseline).toEqual([rows[0]]);
       for (const row of rows.slice(1)) yield alice([row]);
-      yield alice([{ id: "row-1" }, { id: "row-2" }, { id: "row-3" }], { summariesComplete: false });
+      yield alice([{ id: "row-1" }, { id: "row-2" }, { id: "row-3" }]);
       yield alice([{ id: "row-2", preview: "replacement" }]);
       consumed.resolve();
       await tail.promise;
       yield alice([], { upstreamSuccess: true });
     }
-    const reading = readSessionEnumeration("alice", stream(), () => baseline, (merged, summaries) => {
+    const reading = readSessionEnumeration("alice", stream(), () => baseline, (merged) => {
       baseline = merged;
-      for (const [id, ready] of summaries) {
-        if (ready) loading.delete(id);
-        else loading.add(id);
-      }
       publications += 1;
       if (merged.length === rows.length + 1) published.resolve();
     });
@@ -200,14 +177,13 @@ describe("session list reconciliation", () => {
       expect(publications).toBe(1);
       await published.promise;
       expect(baseline).toEqual([...expected, { id: "saved", preview: "keep" }]);
-      expect([...loading]).toEqual(["row-1", "row-3"]);
     } finally {
       tail.resolve();
     }
     const result = await reading;
     expect(result.received).toEqual(expected);
     expect(result.exhausted).toBe(true);
-    expect(shouldCommitSnapshot(result)).toBe(false);
+    expect(shouldCommitSnapshot(result)).toBe(true);
   });
 
   test("flushes a failed prefix but cancels pending publication on abort or owner mismatch", async () => {

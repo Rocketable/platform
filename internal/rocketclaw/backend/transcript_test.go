@@ -26,7 +26,7 @@ func TestRevertTranscriptPrefix(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	_, err := s.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ('main', 'planner', '')`)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VALUES ('main', 'planner', '', 'web_chat', TRUE)`)
 	require.NoError(t, err)
 	earlier, err := s.AppendEntryID(ctx, "main", testSessionEntry("earlier", "reply"))
 	require.NoError(t, err)
@@ -51,12 +51,14 @@ func TestRevertTranscriptPrefix(t *testing.T) {
 	_, err = s.AppendEntryID(ctx, "main", testSessionEntry("later", "abandoned later"))
 	require.NoError(t, err)
 
+	recordLegacyDelegations(t, s, "main", "kept-child", "discarded-child")
+
 	for _, child := range []string{"main/kept-child", "main/discarded-child"} {
 		_, err := s.AppendEntryID(ctx, child, testSessionEntry("child", "reply"))
 		require.NoError(t, err)
 	}
 
-	_, err = s.db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = $1 WHERE conversation_id = 'main'`, fmt.Sprintf("%d:4", boundary))
+	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $1 WHERE conversation_id = 'main'`, fmt.Sprintf("%d:4", boundary))
 	require.NoError(t, err)
 	replay, err := s.ObserveEntries(ctx, "main")
 	require.NoError(t, err)
@@ -75,7 +77,7 @@ func TestRevertTranscriptPrefix(t *testing.T) {
 
 	children, err := s.Delegations(ctx, "main", "", 0, 0)
 	require.NoError(t, err)
-	require.Equal(t, []string{"main/kept-child"}, children)
+	require.Equal(t, []Delegation{{ID: "main/kept-child", Parent: "main", CallID: "kept-child", Legacy: true, Kind: KindSubagent}}, children)
 
 	child, err := s.ObserveEntries(ctx, "main/discarded-child")
 	require.NoError(t, err)
@@ -91,7 +93,7 @@ func TestRevertTranscriptPrefix(t *testing.T) {
 		physical harness.SessionEntry
 		raw      string
 	)
-	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT entry_json FROM session_entries WHERE id = $1`, boundary).Scan(&raw))
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT entry_json FROM entries WHERE id = $1`, boundary).Scan(&raw))
 	require.NoError(t, json.Unmarshal([]byte(raw), &physical))
 	require.Equal(t, *entry, physical, "staging must leave saved bytes intact")
 
@@ -171,7 +173,7 @@ func TestObserveTranscript(t *testing.T) {
 
 	defer func() { _ = tx.Rollback() }()
 
-	id, err := appendSessionEntryDB(ctx, tx, "main", "main", saved)
+	id, err := appendSessionEntryDB(ctx, tx, "main", saved)
 	require.NoError(t, err)
 	uncommitted, err := s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
@@ -188,11 +190,10 @@ func TestObserveTranscript(t *testing.T) {
 	require.False(t, entries[1].Active)
 	require.NotEqual(t, initialRevision, entries[1].Revision)
 	// A producer's identical turn ID must not replace the destination's own turn.
-	producerID, err := s.AppendEntryID(ctx, "producer", saved)
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"main": KindWebChat, "producer": KindCronRun})
+	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET reports_to = 'main' WHERE conversation_id = 'producer'`)
 	require.NoError(t, err)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
-SELECT 'main', (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id, 'sync_source_conversation_id', conversation_id))::json, entry_timestamp
-FROM session_entries WHERE id = $1`, producerID)
+	producerID, err := s.AppendEntryID(ctx, "producer", saved)
 	require.NoError(t, err)
 	withProducer, err := s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
@@ -201,7 +202,7 @@ FROM session_entries WHERE id = $1`, producerID)
 	require.Equal(t, "producer", withProducer[2].SourceConversationID)
 	require.True(t, withProducer[2].Synced)
 
-	// A running hidden run that syncs here shows live after the history, under the key its synced copy takes.
+	// A running hidden run that reports here shows live after the history, under the key its saved entry takes.
 	hidden := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "hidden", false)
 	hidden.SyncDestination = "main"
 	require.NoError(t, startTurnDB(ctx, s.db, "producer-live", "producer", hidden))
@@ -219,28 +220,26 @@ FROM session_entries WHERE id = $1`, producerID)
 
 	copied := testSessionEntry("hidden", "done")
 	copied.TurnID = "producer-live"
-	copiedID, err := s.AppendEntryID(ctx, "producer", copied)
-	require.NoError(t, err)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
-SELECT 'main', (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id, 'sync_source_conversation_id', conversation_id))::json, entry_timestamp
-FROM session_entries WHERE id = $1`, copiedID)
+	_, err = s.AppendEntryID(ctx, "producer", copied)
 	require.NoError(t, err)
 	synced, err := s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
-	require.Len(t, synced, 4, "the synced copy replaces the live turn")
+	require.Len(t, synced, 4, "the run's saved entry replaces the live turn")
 	require.Equal(t, live[3].Key, synced[3].Key)
 	require.False(t, synced[3].Active)
 
-	_, err = s.db.ExecContext(ctx, `DELETE FROM active_turns WHERE id = 'producer-live'`)
+	_, err = s.db.ExecContext(ctx, `DELETE FROM turns WHERE id = 'producer-live'`)
 	require.NoError(t, err)
 
-	_, err = s.db.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = 'main' AND entry_json::jsonb ? 'sync_source_entry_id'`)
+	_, err = s.db.ExecContext(ctx, `DELETE FROM entries WHERE conversation_id = 'producer'`)
 	require.NoError(t, err)
 	require.NoError(t, clearTestTurn(ctx, s, checkpoint.TurnID))
 
 	checkpoint.TurnID = "failed-turn"
 	require.NoError(t, upsertTestTurn(ctx, s, checkpoint))
 	require.NoError(t, terminateTestTurn(ctx, s, checkpoint.TurnID, protocol.TerminalFailed))
+	require.Empty(t, testTurnStepKeys(t, s, "main"), "a failed turn leaves no step")
+
 	checkpoint.TurnID = "new-turn"
 	require.NoError(t, upsertTestTurn(ctx, s, checkpoint))
 	entries, err = s.ObserveTranscript(ctx, "main", 0, 0, nil)
@@ -403,6 +402,8 @@ func TestTranscriptChangesReachSyncDestination(t *testing.T) {
 	_, err, _ := next()
 	require.NoError(t, err, "initial refresh")
 
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"producer": KindCronRun, "destination": KindWebChat})
+
 	hidden := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "hidden", false)
 	hidden.SyncDestination = "destination"
 	require.NoError(t, startTurnDB(ctx, s.db, "hidden-turn", "producer", hidden))
@@ -437,7 +438,7 @@ func TestTranscriptChanges(t *testing.T) {
 
 	defer func() { _ = tx.Rollback() }()
 
-	_, err = tx.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('rolled-back', '{"replay_input":["SECRET"]}', '')`)
+	_, err = tx.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('rolled-back', '{"replay_input":["SECRET"]}', '')`)
 	require.NoError(t, err)
 	_, err = s.db.ExecContext(ctx, `SELECT pg_notify($1, 'barrier')`, channel)
 	require.NoError(t, err)
@@ -450,7 +451,11 @@ func TestTranscriptChanges(t *testing.T) {
 	}))
 	require.NoError(t, tx.Rollback())
 
-	// The same transaction ID is opaque, shared by its row changes, and content-free.
+	// The same transaction ID is opaque, shared by its row changes, and content-free. A hidden
+	// run's changes also reach the chat it reports to.
+	_, err = s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, reports_to, kind, listed) VALUES ('destination', 'main', '', NULL, 'web_chat', TRUE), ('source', 'main', '', 'destination', 'cron_run', FALSE)`)
+	require.NoError(t, err)
+
 	tx, err = s.db.BeginTx(ctx, nil)
 	require.NoError(t, err)
 
@@ -460,8 +465,8 @@ func TestTranscriptChanges(t *testing.T) {
 	require.NoError(t, tx.QueryRowContext(ctx, `SELECT pg_current_xact_id()::text`).Scan(&revision))
 
 	var sourceID int64
-	require.NoError(t, tx.QueryRowContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('source', '{"replay_input":["SECRET"]}', '') RETURNING id`).Scan(&sourceID))
-	_, err = tx.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('destination', jsonb_build_object('sync_source_entry_id', $1::bigint)::json, '')`, sourceID)
+	require.NoError(t, tx.QueryRowContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('source', '{"replay_input":["SECRET"]}', '') RETURNING id`).Scan(&sourceID))
+	_, err = tx.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('destination', jsonb_build_object('answer', $1::bigint)::json, '')`, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
 	require.NoError(t, conn.Raw(func(raw any) error {
@@ -478,7 +483,7 @@ func TestTranscriptChanges(t *testing.T) {
 		return nil
 	}))
 
-	_, err = s.db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || '{"response_id":"edited"}'::jsonb)::json WHERE conversation_id = 'destination'`)
+	_, err = s.db.ExecContext(ctx, `UPDATE entries SET entry_json = (entry_json::jsonb || '{"response_id":"edited"}'::jsonb)::json WHERE conversation_id = 'destination'`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Raw(func(raw any) error {
 		n, err := raw.(*stdlib.Conn).Conn().WaitForNotification(ctx)
@@ -492,7 +497,7 @@ func TestTranscriptChanges(t *testing.T) {
 		return nil
 	}))
 
-	// Deleting a source invalidates both its history and surviving synced copies.
+	// Deleting a run's history invalidates it and the chat it reports to.
 	_, err = s.DeleteSession(ctx, "source")
 	require.NoError(t, err)
 	require.NoError(t, conn.Raw(func(raw any) error {
@@ -539,7 +544,7 @@ func TestTranscriptChanges(t *testing.T) {
 
 	defer func() { _ = tx.Rollback() }()
 
-	_, err = appendSessionEntryDB(ctx, tx, "main", "main", testSessionEntry("hello", "SECRET"))
+	_, err = appendSessionEntryDB(ctx, tx, "main", testSessionEntry("hello", "SECRET"))
 	require.NoError(t, err)
 	require.NoError(t, tx.QueryRowContext(ctx, `SELECT pg_current_xact_id()::text`).Scan(&revision))
 	require.NoError(t, tx.Commit())
@@ -828,10 +833,11 @@ func TestCodeModeCallsSavedOnTheirOwn(t *testing.T) {
 	require.Equal(t, []string{"turn-1/call/exec/host/10 ok", "turn-1/call/exec/host/2 running", "turn-1/retry/1/call/exec/host/0 ok"}, calls(entries[0].Entry.OutputTrace))
 
 	var trace string
-	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT output_trace_json FROM active_turns WHERE id = 'turn-1'`).Scan(&trace))
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT output_trace_json FROM turns WHERE id = 'turn-1'`).Scan(&trace))
 	require.JSONEq(t, `[`+string(progress)+`]`, trace, "records never enter the row's trace")
 
 	require.NoError(t, terminateTestTurn(ctx, s, "turn-1", protocol.TerminalStopped))
+	require.Empty(t, testTurnStepKeys(t, s, "main"), "a stopped turn leaves no step")
 	save("turn-1", "3", "running")
 
 	entries, err = s.ObserveTranscript(ctx, "main", 0, 0, nil)
@@ -844,6 +850,58 @@ func TestCodeModeCallsSavedOnTheirOwn(t *testing.T) {
 	saved, err = journal.CodeModeCalls(ctx, "turn-1")
 	require.NoError(t, err)
 	require.Empty(t, saved, "a cleared row takes its records with it and cannot be recreated by one")
+}
+
+// A running turn's save writes its step and only its changed items, each once, and the live
+// transcript and a resumed turn read the record those saves leave.
+func TestJournalSavesTurnItemsOnce(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	journal := conversationJournal{store: s, conversationID: "main", log: slog.New(slog.DiscardHandler)}
+	require.NoError(t, startTurnDB(ctx, s.db, "turn-1", "main", protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "seed", true)))
+
+	item := func(text string) json.RawMessage {
+		return json.RawMessage(`{"type":"message","role":"user","content":"` + text + `"}`)
+	}
+	save := func(responseID string, lists ...harness.TurnItems) {
+		t.Helper()
+
+		step, err := json.Marshal(map[string]harness.SessionEntry{"record": {Version: 1, Type: "turn", TurnID: "turn-1", ResponseID: responseID}})
+		require.NoError(t, err)
+		require.NoError(t, journal.SaveTurn(ctx, "turn-1", step, lists))
+	}
+	replay := func() []string {
+		t.Helper()
+
+		entries, err := s.ObserveTranscript(ctx, "main", 0, 0, nil)
+		require.NoError(t, err)
+		require.Len(t, entries, 1)
+
+		items, err := journal.Items(ctx, "turn-1", harness.TurnReplayInput)
+		require.NoError(t, err)
+		require.Equal(t, entries[0].Entry.ReplayInput, items, "a resumed turn reads the replay the transcript shows")
+
+		texts := make([]string, len(items))
+		for i := range items {
+			texts[i] = string(items[i])
+		}
+
+		return texts
+	}
+
+	save("", harness.TurnItems{List: harness.TurnReplayInput, Items: []json.RawMessage{item("a"), item("b <c>")}}, harness.TurnItems{List: harness.TurnTrace, Items: []json.RawMessage{json.RawMessage(`{"id":"p"}`)}})
+	require.Equal(t, []string{string(item("a")), string(item("b <c>"))}, replay(), "items keep their bytes")
+
+	save("resp-1", harness.TurnItems{List: harness.TurnReplayInput, From: 2, Items: []json.RawMessage{item("c")}}, harness.TurnItems{List: harness.TurnTrace, From: 1})
+	require.Equal(t, []string{string(item("a")), string(item("b <c>")), string(item("c"))}, replay())
+	require.Equal(t, []string{"turn-1", "turn-1/replay_input/0000000000", "turn-1/replay_input/0000000001", "turn-1/replay_input/0000000002", "turn-1/trace/0000000000"}, testTurnStepKeys(t, s, "main"))
+
+	// Compaction rewrites the replay from its start; items past its new end go.
+	save("resp-1", harness.TurnItems{List: harness.TurnReplayInput, Items: []json.RawMessage{item("summary")}}, harness.TurnItems{List: harness.TurnTrace})
+	require.Equal(t, []string{string(item("summary"))}, replay())
+	require.Equal(t, []string{"turn-1", "turn-1/replay_input/0000000000"}, testTurnStepKeys(t, s, "main"))
 }
 
 // testCheckpoint seeds a running turn as a taken request records it: the row
@@ -860,7 +918,7 @@ type testCheckpoint struct {
 
 func upsertTestTurn(ctx context.Context, s *SessionService, c *testCheckpoint) error {
 	var exists bool
-	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM active_turns WHERE id = $1)`, c.TurnID).Scan(&exists); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) > 0 FROM turns WHERE id = $1`, c.TurnID).Scan(&exists); err != nil {
 		return fmt.Errorf("seed test turn: %w", err)
 	}
 
@@ -872,24 +930,34 @@ func upsertTestTurn(ctx context.Context, s *SessionService, c *testCheckpoint) e
 	}
 
 	record := harness.SessionEntry{Version: 1, Type: "turn", TurnID: c.TurnID, Agent: c.Agent, Model: c.DisplayModel, ReasoningEffort: c.ReasoningEffort, ReplayAttribution: c.ReplayAttribution, TokenUsage: c.TokenUsage, ReplayInput: c.ReplayInput, ResponseID: c.ResponseID}
+	if err := saveTestTurn(ctx, s, c.ConversationKey, c.TurnID, nil, &record); err != nil {
+		return fmt.Errorf("seed test turn: %w", err)
+	}
+
+	return conversationJournal{store: s, conversationID: c.ConversationKey, log: slog.New(slog.DiscardHandler)}.SaveTrace(ctx, c.TurnID, c.OutputTrace)
+}
+
+// saveTestTurn journals a turn's record as RocketCode saves it: its step, and its replay input as the turn's list.
+func saveTestTurn(ctx context.Context, s *SessionService, conversationID, turnID string, applied []string, record *harness.SessionEntry) error {
+	header := *record
+	header.ReplayInput = nil
 
 	data, err := json.Marshal(struct {
-		Record harness.SessionEntry `json:"record"`
-	}{record})
+		AppliedInputIDs []string             `json:"applied_input_ids,omitempty"`
+		Record          harness.SessionEntry `json:"record"`
+	}{applied, header})
 	if err != nil {
-		return fmt.Errorf("seed test turn: %w", err)
+		return fmt.Errorf("encode test turn step: %w", err)
 	}
 
-	journal := conversationJournal{store: s, conversationID: c.ConversationKey, log: slog.New(slog.DiscardHandler)}
-	if err := journal.Save(ctx, c.TurnID, data); err != nil {
-		return fmt.Errorf("seed test turn: %w", err)
-	}
+	journal := conversationJournal{store: s, conversationID: conversationID, log: slog.New(slog.DiscardHandler)}
 
-	return journal.SaveTrace(ctx, c.TurnID, c.OutputTrace)
+	return journal.SaveTurn(ctx, turnID, data, []harness.TurnItems{{List: harness.TurnReplayInput, Items: record.ReplayInput}})
 }
 
 func clearTestTurn(ctx context.Context, s *SessionService, turnID string) error {
-	_, err := s.db.ExecContext(ctx, `WITH turn AS (DELETE FROM active_turns WHERE id = $1 RETURNING conversation_id) DELETE FROM turn_steps WHERE key = $1 AND conversation_id IN (SELECT conversation_id FROM turn)`, turnID)
+	_, err := s.db.ExecContext(ctx, `WITH turn AS (DELETE FROM turns WHERE id = $1 RETURNING conversation_id)
+DELETE FROM steps s USING turn t WHERE s.conversation_id = t.conversation_id AND (s.key = $1 OR starts_with(s.key, $1 || '/'))`, turnID)
 	if err != nil {
 		return fmt.Errorf("seed test turn: %w", err)
 	}
@@ -899,7 +967,7 @@ func clearTestTurn(ctx context.Context, s *SessionService, turnID string) error 
 
 func terminateTestTurn(ctx context.Context, s *SessionService, turnID string, terminal protocol.Terminal) error {
 	var conversationID string
-	if err := s.db.QueryRowContext(ctx, `SELECT conversation_id FROM active_turns WHERE id = $1`, turnID).Scan(&conversationID); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT conversation_id FROM turns WHERE id = $1`, turnID).Scan(&conversationID); err != nil {
 		return fmt.Errorf("seed test turn: %w", err)
 	}
 
@@ -913,7 +981,7 @@ func terminateTestTurn(ctx context.Context, s *SessionService, turnID string, te
 func runningTestTurns(t *testing.T, s *SessionService) []string {
 	t.Helper()
 
-	ids, err := queryStrings(t.Context(), s.db, `SELECT id FROM active_turns WHERE phase <> $1 ORDER BY id`, "running test turns", turnDone)
+	ids, err := queryStrings(t.Context(), s.db, `SELECT id FROM turns WHERE phase NOT IN ($1, $2) AND takes_lane ORDER BY id`, "running test turns", turnWaiting, turnDone)
 	require.NoError(t, err)
 
 	return ids
@@ -923,8 +991,205 @@ func TestTranscriptObservationReportsUnreadableStoredEntries(t *testing.T) {
 	t.Parallel()
 
 	s := newTestSessionService(t)
-	_, err := s.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', '{"type":"turn","output_trace":1}', '')`)
+	_, err := s.db.ExecContext(t.Context(), `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', '{"type":"turn","output_trace":1}', '')`)
 	require.NoError(t, err)
 	_, err = s.ObserveTranscript(t.Context(), "main", 0, 0, nil)
 	require.ErrorContains(t, err, "decode transcript entry")
+}
+
+// A failed or running turn's record past jsonb's limit fails History, and a failed one its delegations
+// and undo's lookup, instead of being expanded in Postgres, as the jsonb records before it failed; a
+// smaller one still reads.
+func TestOversizedTurnRecordFailsReads(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+
+	// The live conversations' turns are still running.
+	for id, text := range map[string]string{"small": "hi", "large": strings.Repeat("x", 2000), "small-live": "hi", "live": strings.Repeat("x", 2000)} {
+		require.NoError(t, s.UpsertThread(id, ThreadState{Agent: "main"}))
+		seedActiveTurn(t, s, id, id, testReplayEntry(`{"type":"message","role":"user","content":"`+text+`"}`))
+
+		if !strings.HasSuffix(id, "live") {
+			endTestTurn(t, s, id, id, protocol.TerminalFailed)
+		}
+	}
+
+	// A record past the real limit, 256 MB, is too heavy for a test; this one's limit is 1000 bytes.
+	_, err := s.db.ExecContext(ctx, `DO $$ BEGIN EXECUTE replace(pg_get_functiondef('readable_replay(bigint)'::regprocedure), '268435455', '1000'); END $$`)
+	require.NoError(t, err)
+
+	for _, id := range []string{"small", "small-live"} {
+		view, err := s.ObserveHistory(ctx, id, "", 0, 0, 0, &HistoryInventory{})
+		require.NoError(t, err)
+		require.Len(t, view.Entries, 1)
+		require.Len(t, view.Entries[0].Entry.ReplayInput, 1)
+	}
+
+	// Each fails with the error jsonb's limit raised before.
+	const jsonbLimit = "ERROR: string too long to represent as jsonb string (SQLSTATE 54000)"
+
+	for _, id := range []string{"live", "large"} {
+		_, err = s.ObserveHistory(ctx, id, "", 0, 0, 0, &HistoryInventory{})
+		require.EqualError(t, err, "query transcript: "+jsonbLimit)
+	}
+
+	_, err = s.Delegations(ctx, "large", "", 0, 0)
+	require.ErrorContains(t, err, jsonbLimit)
+	_, _, err = revertInputDB(ctx, s.db, "large", "input")
+	require.ErrorContains(t, err, jsonbLimit)
+}
+
+// finishTestRunTurn runs one turn of the hidden run reporting to chat that saves entry.
+func finishTestRunTurn(t *testing.T, s *SessionService, run, chat, turnID string, entry *harness.SessionEntry) {
+	t.Helper()
+
+	inbound := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "work", true)
+	inbound.ConversationID, inbound.SyncDestination = run, chat
+	require.NoError(t, startTurnDB(t.Context(), s.db, turnID, run, inbound))
+	_, err := s.finishTurn(t.Context(), turnID, &turnFinish{store: newSessionStore(run, s), entries: []harness.SessionEntry{*entry}, outbound: protocol.NewOutboundMessage(run, "")})
+	require.NoError(t, err)
+	require.NoError(t, s.closeTurn(t.Context(), turnID))
+}
+
+func observedEntryTexts(t *testing.T, s *SessionService, conversationID string) []string {
+	t.Helper()
+
+	entries, err := s.ObserveEntries(t.Context(), conversationID)
+	require.NoError(t, err)
+
+	var texts []string
+
+	for i := range entries {
+		for _, raw := range entries[i].Entry.ReplayInput {
+			var item struct{ Type, Content string }
+			require.NoError(t, json.Unmarshal(raw, &item))
+			texts = append(texts, item.Type+":"+item.Content)
+		}
+	}
+
+	return texts
+}
+
+// AE1, AE3: a hidden run's turns wait in its chat's lane. The chat and its agent see the run's
+// history without its compaction; the run's agent sees only its own entries, compaction included.
+// History, search, and undo give the run's messages the same IDs, and a failed run turn shows only live.
+func TestHiddenRunViews(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+
+	const chat, run = "ticket-123", "external_mcp:main:ticket-123"
+
+	for _, id := range []string{chat, run} {
+		require.NoError(t, s.UpsertThread(id, ThreadState{Agent: "main"}))
+	}
+
+	finishTestRunTurn(t, s, run, chat, "run-1", testSessionEntry("mcp question", "mcp answer"))
+	_, err := s.AppendEntryID(ctx, chat, testSessionEntry("person follow-up", "person answer"))
+	require.NoError(t, err)
+	finishTestRunTurn(t, s, run, chat, "run-2", testReplayEntry(
+		`{"type":"compaction","content":"summary of earlier work"}`,
+		`{"type":"message","role":"user","content":"after compaction"}`,
+		`{"type":"message","role":"assistant","content":"compacted answer"}`,
+	))
+
+	require.Equal(t, []string{"message:mcp question", "message:mcp answer", "compaction:summary of earlier work", "message:after compaction", "message:compacted answer"},
+		observedEntryTexts(t, s, run), "the run's agent sees its own entries, compaction included, and not the person's")
+	require.Equal(t, []string{"message:mcp question", "message:mcp answer", "message:person follow-up", "message:person answer", "message:after compaction", "message:compacted answer"},
+		observedEntryTexts(t, s, chat), "the chat and its agent see the run's history without its compaction")
+
+	var copies int
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT count(*) FROM entries WHERE conversation_id = $1`, chat).Scan(&copies))
+	require.Equal(t, 1, copies, "nothing is copied into the chat")
+
+	entries, err := s.ObserveEntries(ctx, chat)
+	require.NoError(t, err)
+
+	compacted := entries[2].ID
+	hits, err := s.SearchMessages(ctx, "after compaction", nil)
+	require.NoError(t, err)
+	require.Equal(t, []MessageSearchHit{{ConversationID: chat, Role: "user", Text: "after compaction", MessageID: fmt.Sprintf("%d:0", compacted)}}, hits)
+
+	_, eligible, predecessor, floor, err := revertStateDB(ctx, s.db, chat)
+	require.NoError(t, err)
+	require.True(t, eligible)
+	require.Empty(t, predecessor, "undo keeps the run's messages")
+	require.Equal(t, fmt.Sprintf("%d:1", compacted), floor, "undo addresses the run's message as history and search do")
+
+	// A person's running turn holds the lane; the run's next turn waits behind it, on the chat's worker.
+	require.NoError(t, startTurnDB(ctx, s.db, "person-turn", chat, protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "more", true)))
+
+	waiting := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "next call", true)
+	waiting.ConversationID, waiting.SyncDestination = run, chat
+	require.NoError(t, startTurnDB(ctx, s.db, "run-3", run, waiting))
+
+	head, ok, err := s.headTurn(ctx, chat)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "person-turn", head.id)
+
+	lane, err := queryStrings(ctx, s.db, `SELECT id FROM (`+laneTurnSQL+`) lane`, "lane turns", chat)
+	require.NoError(t, err)
+	require.Equal(t, []string{"person-turn", "run-3"}, lane)
+
+	_, ok, err = s.headTurn(ctx, run)
+	require.NoError(t, err)
+	require.False(t, ok, "the run has no lane of its own")
+
+	live, err := s.ObserveTranscript(ctx, chat, 0, 0, nil)
+	require.NoError(t, err)
+	require.True(t, slices.ContainsFunc(live, func(entry ObservedSessionEntry) bool { return entry.Key == "turn:"+run+":run-3" && entry.Active }), "the running run turn shows live in its chat")
+
+	endTestTurn(t, s, run, "run-3", protocol.TerminalFailed)
+
+	ended, err := s.ObserveTranscript(ctx, chat, 0, 0, nil)
+	require.NoError(t, err)
+	require.False(t, slices.ContainsFunc(ended, func(entry ObservedSessionEntry) bool { return entry.Key == "turn:"+run+":run-3" }), "a failed run turn leaves its chat when it ends")
+}
+
+// Undo in a chat stops after a hidden run's entries, and a wipe keeps them as undo does, in the chat
+// and in the run.
+func TestUndoKeepsHiddenRunEntries(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+
+	const chat, run = "chat", "one-off-cron:cron/remind.md:20260101T000000Z:run"
+
+	for _, id := range []string{chat, run} {
+		require.NoError(t, s.UpsertThread(id, ThreadState{Agent: "main"}))
+	}
+
+	_, err := s.AppendEntryID(ctx, chat, testSessionEntry("first question", "first answer"))
+	require.NoError(t, err)
+	finishTestRunTurn(t, s, run, chat, "run-1", testSessionEntry("reminder prompt", "reminder answer"))
+	second, err := s.AppendEntryID(ctx, chat, testSessionEntry("second question", "second answer"))
+	require.NoError(t, err)
+
+	entries, err := s.ObserveEntries(ctx, chat)
+	require.NoError(t, err)
+
+	_, _, err = stageRevertDB(ctx, s.db, chat, fmt.Sprintf("%d:0", entries[1].ID))
+	require.ErrorContains(t, err, "past a message")
+
+	kept := []string{"message:first question", "message:first answer", "message:reminder prompt", "message:reminder answer"}
+	tx, err := s.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	marker, _, err := stageRevertDB(ctx, tx, chat, fmt.Sprintf("%d:0", second))
+	require.NoError(t, err)
+	require.NoError(t, commitRevertDB(ctx, tx, chat, marker))
+	require.NoError(t, tx.Commit())
+	require.Equal(t, kept, observedEntryTexts(t, s, chat))
+
+	_, err = s.AppendEntryID(ctx, chat, testSessionEntry("third question", "third answer"))
+	require.NoError(t, err)
+	deleted, err := s.DeleteSession(ctx, chat)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), deleted)
+	require.Equal(t, kept, observedEntryTexts(t, s, chat))
+	require.Equal(t, []string{"message:reminder prompt", "message:reminder answer"}, observedEntryTexts(t, s, run), "the run's next turn sees the same history")
 }

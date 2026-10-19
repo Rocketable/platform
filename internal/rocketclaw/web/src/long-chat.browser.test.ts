@@ -23,7 +23,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
       setTimeout(streamOpened.resolve, 200);
       return new Response(new ReadableStream({ start(controller) { controller.enqueue(`data: ${JSON.stringify({ conversationId: "long", revision: "" })}\n\n`); } }), { headers: { "Content-Type": "text/event-stream" } });
     }
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "long", name: "Long chat" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "long", name: "Long chat" }], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "long-chat" } });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "long" });
@@ -122,3 +122,34 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     server.stop(true);
   }
 }, 30_000);
+
+test("a chat that doesn't exist says so instead of loading forever", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/stream") return new Response(new ReadableStream({ start() {} }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
+    if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "missing" } });
+    if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "missing" });
+    if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
+    if (url.pathname === "/api/History") return Response.json({ code: 5, message: "web conversation: conversation is not recorded" }, { status: 404 });
+    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
+    if (url.pathname.startsWith("/api/")) return Response.json({});
+    const file = Bun.file(path.join(dist, url.pathname));
+    return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+  } });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.goto(`http://127.0.0.1:${server.port}/s/bm9uZQ`);
+    await page.getByText("This chat doesn't exist.").waitFor();
+    expect(await page.getByRole("link", { name: "Start a new chat" }).getAttribute("href")).toBe("/");
+    expect(await page.getByText("Loading conversation…").count()).toBe(0);
+    expect(await page.getByText("conversation is not recorded").count()).toBe(0);
+    expect(await page.getByRole("textbox", { name: "Message or $command" }).count()).toBe(0);
+  } finally {
+    await browser.close();
+    server.stop(true);
+  }
+});

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 )
 
 // ErrGoalAlreadyActive reports that a conversation already has an active goal.
@@ -16,8 +17,17 @@ var ErrBridgeStopped = errors.New("bridge stopped")
 // Conversation is an explicitly recorded conversation and its selected agent.
 // IDs are opaque to the Backend; frontends resolve presentation and policy.
 // Space names the Web space it is born in, created when missing; empty for none.
+// Run is set only for a cron run, which is created hidden; any other is a Web chat.
 type Conversation struct {
 	ID, Agent, CreatedBy, Space string
+	Run                         *CronRun
+}
+
+// CronRun locates a cron run: its definition's path, start time, and whether it ran once from Web.
+type CronRun struct {
+	Path   string
+	At     time.Time
+	OneOff bool
 }
 
 // ShadowBinding identifies a parent's independent comparison session. Turns
@@ -55,19 +65,6 @@ func SlackThreadConversationID(channelID, threadTS string) string {
 	}
 
 	return "slack-thread:" + channelID + ":" + threadTS
-}
-
-// SlackThreadTarget returns the Slack channel and thread timestamp for a Slack thread conversation ID.
-func SlackThreadTarget(conversationID string) (channelID, threadTS string, ok bool) {
-	rest, ok := strings.CutPrefix(strings.TrimSpace(conversationID), "slack-thread:")
-	if !ok {
-		return "", "", false
-	}
-
-	channelID, threadTS, ok = strings.Cut(rest, ":")
-	channelID, threadTS = strings.TrimSpace(channelID), strings.TrimSpace(threadTS)
-
-	return channelID, threadTS, ok && channelID != "" && threadTS != ""
 }
 
 // PrimaryTextRouter routes primary text connector conversations.

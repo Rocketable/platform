@@ -193,7 +193,8 @@ func (m *threadBridgeManager) Run(ctx context.Context) error {
 // StartActiveTurns starts every conversation worker that owns an unfinished
 // active turn; each runs that turn before any other work.
 func (m *threadBridgeManager) StartActiveTurns(ctx context.Context) error {
-	workers, err := queryStrings(ctx, m.store.db, `SELECT DISTINCT COALESCE(NULLIF(inbound_json->>'SyncDestination', ''), conversation_id) FROM active_turns WHERE phase <> $1 ORDER BY 1`, "active turn workers", turnDone)
+	workers, err := queryStrings(ctx, m.store.db, `SELECT DISTINCT COALESCE(m.reports_to, a.conversation_id) FROM turns a
+LEFT JOIN conversations m ON m.conversation_id = a.conversation_id WHERE a.phase NOT IN ('waiting', 'done') AND a.takes_lane ORDER BY 1`, "active turn workers")
 	if err != nil {
 		return err
 	}
@@ -243,7 +244,9 @@ func (m *threadBridgeManager) StartPendingScheduledMessages(ctx context.Context)
 		}
 	}
 
-	producers, err := m.store.pendingProducerIDs(ctx)
+	// A finished hidden run's scheduled messages wait for its handoff, which startup resumes.
+	producers, err := queryStrings(ctx, m.store.db, `WITH `+remindersSQL+`
+SELECT DISTINCT r.conversation_id FROM reminders r JOIN conversations c USING (conversation_id) WHERE c.producer_inbound_json IS NOT NULL ORDER BY 1`, "pending producer IDs")
 	if err != nil {
 		return err
 	}
@@ -355,11 +358,14 @@ func (m *threadBridgeManager) SubmitMention(ctx context.Context, agent string, t
 		seen     bool
 		position int
 	)
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM active_turns WHERE conversation_id = $1 AND inbound_json->'Metadata'->>'web_message_id' = $2)
-    OR EXISTS (SELECT 1 FROM thread_queue WHERE conversation_id = $1 AND queue_item_id = $2)
-    OR EXISTS (SELECT 1 FROM session_entries e CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item
-        WHERE e.conversation_id = $1 AND item->>'input_id' = $2),
-    (SELECT COALESCE(MAX(position), -1) + 1 FROM thread_queue WHERE conversation_id = $1)`, conversationID, id).Scan(&seen, &position); err != nil {
+	if err := tx.QueryRowContext(ctx, `WITH seen AS (
+    SELECT 1 FROM turns WHERE conversation_id = $1 AND takes_lane AND (input_id = $2 OR inbound_json->'Metadata'->>'web_message_id' = $2)
+    UNION ALL SELECT 1 FROM entries e CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item
+    WHERE e.conversation_id = $1 AND item->>'input_id' = $2 LIMIT 1
+), queued AS (
+    SELECT COALESCE(MAX(position), -1) + 1 AS position FROM turns WHERE conversation_id = $1 AND phase = 'waiting'
+)
+SELECT count(s.*) > 0, q.position FROM queued q LEFT JOIN seen s ON TRUE GROUP BY q.position`, conversationID, id).Scan(&seen, &position); err != nil {
 		return false, fmt.Errorf("read admitted Slack mention: %w", err)
 	}
 
@@ -367,7 +373,7 @@ func (m *threadBridgeManager) SubmitMention(ctx context.Context, agent string, t
 		return false, nil
 	}
 
-	created, err := (stateDAO{db: tx}).createConversation(ctx, protocol.Conversation{ID: conversationID, Agent: agent})
+	created, err := (stateDAO{db: tx}).createConversation(ctx, protocol.Conversation{ID: conversationID, Agent: agent}, conversationFacts{kind: KindSlackThread, slackChannel: target.ChannelID, slackThread: target.ThreadID})
 	if err != nil {
 		return false, err
 	}
@@ -414,7 +420,7 @@ func (m *threadBridgeManager) InterruptThread(target protocol.TextConversationTa
 }
 
 func (m *threadBridgeManager) StartQueuedConversations(ctx context.Context) error {
-	conversationIDs, err := queryStrings(ctx, m.store.db, `SELECT DISTINCT conversation_id FROM thread_queue ORDER BY conversation_id`, "queued conversation IDs")
+	conversationIDs, err := queryStrings(ctx, m.store.db, `SELECT DISTINCT conversation_id FROM turns WHERE phase = 'waiting' AND reason <> $1 ORDER BY conversation_id`, "queued conversation IDs", waitScheduled)
 	if err != nil {
 		return fmt.Errorf("load queued conversations: %w", err)
 	}
@@ -456,11 +462,13 @@ func (m *threadBridgeManager) PickLaterWork(ctx context.Context, conversationID 
 }
 
 func (m *threadBridgeManager) InterruptConversation(conversationID string) *protocol.InboundMessage {
-	conversationID = cmp.Or(m.store.reservedFor(conversationID), conversationID)
-
 	m.mu.Lock()
 	managed := m.bridges[conversationID]
 	m.mu.Unlock()
+
+	if lane, ok := managed.(*Bridge); ok {
+		managed = lane.stopTarget()
+	}
 
 	if managed == nil {
 		return nil
@@ -637,7 +645,7 @@ func (b *Bridge) admitAgentWrite(ctx context.Context, mode sessionWriteMode, inb
 
 	item := protocol.ThreadQueueItem{ID: inbound.Metadata["web_message_id"], ConversationID: b.config.ConversationID, Message: inbound.Text, Kind: inbound.Kind, Source: inbound.Source, Inbound: inbound, StashAt: time.Now().UTC()}
 
-	if err := tx.QueryRowContext(ctx, `SELECT CASE WHEN $2 THEN COALESCE(MIN(position) - 1, 0) ELSE COALESCE(MAX(position) + 1, 0) END FROM thread_queue WHERE conversation_id = $1`, b.config.ConversationID, mode == sessionWriteStop).Scan(&item.Position); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT CASE WHEN $2 THEN COALESCE(MIN(position) - 1, 0) ELSE COALESCE(MAX(position) + 1, 0) END FROM turns WHERE conversation_id = $1 AND phase = 'waiting'`, b.config.ConversationID, mode == sessionWriteStop).Scan(&item.Position); err != nil {
 		return "", resubmit, fmt.Errorf("read agent write position: %w", err)
 	}
 
@@ -667,10 +675,9 @@ func (b *Bridge) admitAgentWrite(ctx context.Context, mode sessionWriteMode, inb
 // rows whose inbound is still an enqueue, unlike a stash's. At position, a newer write's, they run before it,
 // as older rows; with no position they keep theirs. It returns them in queue order.
 func releaseHeldInputs(ctx context.Context, db stateStoreDB, conversationID string, position *int) ([]protocol.ThreadQueueItem, error) {
-	return queryRows(ctx, db, `WITH released AS (UPDATE thread_queue SET kind = $3, position = COALESCE($4, position)
-    WHERE conversation_id = $1 AND kind = $2 AND inbound_json->>'Kind' = $3
-    RETURNING queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply, inbound_json)
-SELECT * FROM released ORDER BY position, stash_at_unix_ns, queue_item_id COLLATE "C"`, "released held inputs", scanThreadQueueItem, conversationID, protocol.InboundKindHeld, protocol.InboundKindEnqueue, position)
+	return queryRows(ctx, db, `WITH released AS (UPDATE turns SET reason = $3, delivery = $4, position = COALESCE($5, position)
+    WHERE conversation_id = $1 AND phase = 'waiting' AND reason = $2 RETURNING `+waitingColumns+`)
+SELECT * FROM released ORDER BY position, created_at_unix_ns, input_id COLLATE "C"`, "released held inputs", scanThreadQueueItem, conversationID, waitHeld, waitQueued, protocol.InboundKindEnqueue, position)
 }
 
 // releaseHeld releases the inputs stopped parents held in b's queue (releaseHeldInputs) for a person's
@@ -762,7 +769,7 @@ func (m *threadBridgeManager) recordedBridge(ctx context.Context, conversationID
 
 func (m *threadBridgeManager) queueItems(conversationID string) ([]protocol.ThreadQueueItem, error) {
 	var marker string
-	if err := queryScalar(context.Background(), m.store.db, "read queue cutoff", `SELECT COALESCE((SELECT revert_message_id FROM managed_conversations WHERE conversation_id = $1), '')`, &marker, conversationID); err != nil || marker != "" {
+	if err := queryScalar(context.Background(), m.store.db, "read queue cutoff", `SELECT COALESCE(max(revert_message_id), '') FROM conversations WHERE conversation_id = $1`, &marker, conversationID); err != nil || marker != "" {
 		return nil, err
 	}
 
@@ -904,7 +911,7 @@ func (m *threadBridgeManager) deleteQueueItem(ctx context.Context, conversationI
 		bridge.mu.Unlock()
 	}
 
-	removed, err := execRows(ctx, m.store.db, "delete queue item", "count deleted queue items", `DELETE FROM thread_queue WHERE conversation_id = $1 AND queue_item_id = $2`, conversationID, id)
+	removed, err := execRows(ctx, m.store.db, "delete queue item", "count deleted queue items", `DELETE FROM turns WHERE conversation_id = $1 AND input_id = $2 AND phase = 'waiting'`, conversationID, id)
 	if err != nil || removed == 0 {
 		return false, err
 	}
@@ -999,7 +1006,11 @@ func (m *threadBridgeManager) ensureThreadBridge(ctx context.Context, conversati
 	}
 
 	var shadow, underShadow bool
-	if err := m.store.db.QueryRowContext(ctx, `SELECT COALESCE(bool_or(child_conversation_id = $1), FALSE), COALESCE(bool_or(child_conversation_id <> $1), FALSE) FROM shadow_bindings WHERE child_conversation_id = $1 OR starts_with($1, child_conversation_id || '/')`, conversationID).Scan(&shadow, &underShadow); err != nil {
+	if err := m.store.db.QueryRowContext(ctx, `WITH RECURSIVE starts AS (
+    SELECT $1::text AS id
+), `+ancestorsSQL+`
+SELECT COALESCE(bool_or(b.conversation_id = $1), FALSE), COALESCE(bool_or(b.conversation_id <> $1), FALSE) FROM ancestors a
+JOIN conversations b ON b.conversation_id = a.conversation_id WHERE b.shadow_parent IS NOT NULL`, conversationID).Scan(&shadow, &underShadow); err != nil {
 		return nil, fmt.Errorf("load worker ownership: %w", err)
 	}
 

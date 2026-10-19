@@ -28,7 +28,7 @@ for (const width of [1440, 390, 320]) test(`shadow comparison at ${width}px`, as
       streams.push(url.searchParams.get("id")!);
       return new Response(new ReadableStream<string>({ start(stream) { controller = stream; stream.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     }
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "parent", agent: "main" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "parent", agent: "main" }], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/DownloadAttachment") return new Response(new ReadableStream<Uint8Array>({ start(stream) { image = stream; imageRequested.resolve(); } }), { headers: { "Content-Type": "image/svg+xml" } });
     if (!url.pathname.startsWith("/api/")) {
       const file = Bun.file(path.join(dist, url.pathname));

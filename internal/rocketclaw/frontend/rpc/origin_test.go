@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
@@ -49,30 +50,41 @@ func TestChatOriginFactsMatchHistory(t *testing.T) {
 	oneOff := "one-off-cron:cron/report.md:20260905T020000.000000002Z:second"
 	cronSlack, plainSlack, destination := "slack-thread:C1:1.1", "slack-thread:C2:2.2", "slack-thread:C3:3.3"
 
+	for id, run := range map[string]*protocol.CronRun{
+		scheduled: {Path: "cron/daily.md", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}, oneOff: {Path: "cron/report.md", At: time.Date(2026, 9, 5, 2, 0, 0, 2, time.UTC), OneOff: true},
+	} {
+		require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: id, Agent: map[string]string{scheduled: "cron-agent", oneOff: "report-agent"}[id], CreatedBy: "cron", Run: run}))
+	}
+
 	for id, thread := range map[string]backend.ThreadState{
-		scheduled: {Agent: "cron-agent", CreatedBy: backend.ThreadCreatedByCron}, oneOff: {Agent: "report-agent", CreatedBy: backend.ThreadCreatedByCron},
 		cronSlack: {Agent: "main", CreatedBy: backend.ThreadCreatedByCron}, plainSlack: {Agent: "main", CreatedBy: "U1"},
-		destination: {Agent: "main"}, "external_mcp:private": {Agent: "producer"},
 		"web:" + scheduled: {Agent: "main", CreatedBy: "alice"}, "web:" + oneOff: {Agent: "main", CreatedBy: "alice"},
 		"web-cron-synced": {Agent: "main", CreatedBy: "alice"}, "web-later-cron": {Agent: "main", CreatedBy: "alice"}, "web-empty": {Agent: "main", CreatedBy: "alice"},
 	} {
 		require.NoError(t, sessions.UpsertThread(id, thread))
 	}
 
-	require.NoError(t, sessions.UpsertExternalMCPSession("ext-1", &backend.ExternalMCPSessionState{Agent: "producer", PrivateConversationID: "external_mcp:private", ManagedConversationID: destination, SlackChannel: "C3", OriginPairs: map[string]string{"Ticket": "T-1", "b": "two"}}))
+	// The Slack threads a mention and a cron report create, and the Web chats continuing cron runs.
+	_, err = db.ExecContext(ctx, `UPDATE conversations SET kind = 'slack_thread', slack_channel = split_part(conversation_id, ':', 2), slack_thread = split_part(conversation_id, ':', 3)
+WHERE conversation_id IN ($1, $2)`, cronSlack, plainSlack)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `UPDATE conversations SET cron_run = substr(conversation_id, 5) WHERE conversation_id IN ($1, $2)`, "web:"+scheduled, "web:"+oneOff)
+	require.NoError(t, err)
+	require.NoError(t, sessions.RegisterExternalMCPConversation("ext-1", "main", &backend.ExternalMCPSessionState{Thread: protocol.SlackReplyTarget{ChannelID: "C3", ThreadTS: "3.3"}, Agent: "producer", PrivateConversationID: "external_mcp:private", ManagedConversationID: destination, SlackChannel: "C3", OriginPairs: map[string]string{"Ticket": "T-1", "b": "two"}}))
 
-	// entry appends a turn; a source attributes it by entry ID, as SyncConversation does, or by name.
+	// entry appends a turn; a source attributes it by entry ID, as copies made before 049 do, or by name.
 	entry := func(id, source string, byEntryID bool) {
 		entryID, err := sessions.AppendEntryID(ctx, id, &rocketcode.SessionEntry{Type: "turn"})
 		require.NoError(t, err)
 
 		provenance := `jsonb_build_object('sync_source_conversation_id', $2::text)`
 		if byEntryID {
-			provenance = `jsonb_build_object('sync_source_entry_id', (SELECT MIN(id) FROM session_entries WHERE conversation_id = $2))`
+			provenance = `jsonb_build_object('sync_source_entry_id', f.id)`
 		}
 
 		if source != "" {
-			_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || `+provenance+`)::json WHERE id = $1`, entryID, source)
+			_, err = db.ExecContext(ctx, `WITH first_entry AS (SELECT MIN(id) AS id FROM entries WHERE conversation_id = $2)
+UPDATE entries e SET entry_json = (e.entry_json::jsonb || `+provenance+`)::json FROM first_entry f WHERE e.id = $1`, entryID, source)
 			require.NoError(t, err)
 		}
 	}
@@ -92,7 +104,7 @@ func TestChatOriginFactsMatchHistory(t *testing.T) {
 	}
 
 	// A reply that started before cron history synced in sorts its checkpoint ahead of every saved entry.
-	_, err = db.ExecContext(ctx, `INSERT INTO active_turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id)
+	_, err = db.ExecContext(ctx, `INSERT INTO turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id)
 VALUES ('early-reply', $1, '{}', '[]', 1, 1, 0)`, cronSlack)
 	require.NoError(t, err)
 
@@ -138,16 +150,18 @@ VALUES ('early-reply', $1, '{}', '[]', 1, 1, 0)`, cronSlack)
 			require.Equal(t, origin, history.Origin, "%s with limit %d", id, limit)
 		}
 	}
-	// Isolate physical origin from projection even for an ineligible copied origin;
-	// mutation denial is asserted separately by the unchanged Revert eligibility tests.
+	// Isolate physical origin from projection even for a copied origin; how far undo
+	// reaches is asserted separately by the Revert floor tests.
 	for _, id := range []string{"web-cron-synced", "web-later-cron"} {
-		_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = (SELECT MIN(id)::text || ':0' FROM session_entries WHERE conversation_id = $1) WHERE conversation_id = $1`, id)
+		_, err = db.ExecContext(ctx, `WITH first_entry AS (SELECT MIN(id) AS id FROM entries WHERE conversation_id = $1)
+UPDATE conversations c SET revert_message_id = f.id::text || ':0' FROM first_entry f WHERE c.conversation_id = $1`, id)
 		require.NoError(t, err)
 		history, err := server.history(ctx, &HistoryRequest{Id: id})
 		require.NoError(t, err)
 		require.Equal(t, bulk[id], history.Origin, "first-message cutoff cannot erase physical origin")
-		require.Equal(t, id == "web-later-cron", history.RevertEligible, "only the creating source decides pure-Web eligibility")
-		_, err = db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = '' WHERE conversation_id = $1`, id)
+		require.True(t, history.RevertEligible, "a Web chat can undo whatever its history holds")
+
+		_, err = db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = $1`, id)
 		require.NoError(t, err)
 	}
 

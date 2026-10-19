@@ -2,7 +2,6 @@ package backend
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -27,20 +26,45 @@ type messageSearchTestRow struct {
 	Role, Text, TextLower  string
 }
 
+// messageSearchTestRows reads the search text lines search finds in conversationID: the entries of the
+// conversations reporting to it, else of itself, and its turns, which have no entry and read as entry 0.
 func messageSearchTestRows(t *testing.T, s *SessionService, conversationID string) []messageSearchTestRow {
 	t.Helper()
 
-	// Turn rows have no entry and read as entry 0.
-	rows, err := queryRows(t.Context(), s.db, `SELECT COALESCE(entry_id, 0), replay_index, part_index, role, text, text_lower FROM message_search
-WHERE conversation_id = $1 ORDER BY entry_id NULLS FIRST, replay_index, part_index`, "message search rows", func(row rowScanner) (messageSearchTestRow, error) {
+	texts, err := queryRows(t.Context(), s.db, `WITH reporting AS (
+    SELECT conversation_id FROM conversations WHERE reports_to = $1
+), unreported AS (
+    SELECT $1::text AS conversation_id FROM conversations WHERE conversation_id = $1 AND reports_to IS NOT NULL
+), sources AS (
+    SELECT $1::text AS conversation_id UNION SELECT conversation_id FROM reporting EXCEPT SELECT conversation_id FROM unreported
+), shown AS (
+    SELECT e.id, e.search_text FROM sources r JOIN entries e USING (conversation_id) WHERE e.audience <> 'sandbox'
+    UNION ALL SELECT 0, search_text FROM turns WHERE conversation_id = $1
+)
+SELECT id, search_text FROM shown WHERE search_text IS NOT NULL ORDER BY id`, "message search rows", func(row rowScanner) (messageSearchTestRow, error) {
 		var r messageSearchTestRow
-		if err := row.Scan(&r.EntryID, &r.ReplayIndex, &r.PartIndex, &r.Role, &r.Text, &r.TextLower); err != nil {
-			return r, fmt.Errorf("scan message search row: %w", err)
+		if err := row.Scan(&r.EntryID, &r.Text); err != nil {
+			return r, fmt.Errorf("scan message search text: %w", err)
 		}
 
 		return r, nil
 	}, conversationID)
 	require.NoError(t, err)
+
+	var rows []messageSearchTestRow
+
+	for _, text := range texts {
+		for line := range strings.SplitSeq(text.Text, "\n") {
+			fields := [4]string{}
+			row := messageSearchTestRow{EntryID: text.EntryID}
+			head, encoded, _ := strings.Cut(line, " [")
+			_, err := fmt.Sscan(head, &row.ReplayIndex, &row.PartIndex)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal([]byte("["+encoded), &fields))
+			row.Role, row.Text, row.TextLower = fields[0], fields[2], fields[3]
+			rows = append(rows, row)
+		}
+	}
 
 	return rows
 }
@@ -106,10 +130,11 @@ func TestMessageSearchIndexesSavedEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, entries)
 
+	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindCronRun, "one-off-cron:once": KindOneOffCronRun})
+
 	for _, conversationID := range []string{"cron:daily", "one-off-cron:once"} {
 		_, err := s.AppendEntryID(ctx, conversationID, testSessionEntry("hidden prompt", "hidden answer"))
 		require.NoError(t, err)
-		require.Empty(t, messageSearchTestRows(t, s, conversationID), conversationID)
 	}
 
 	// A cron handoff's Web chat has a '/' from the job path, like a Delegation History.
@@ -119,12 +144,13 @@ func TestMessageSearchIndexesSavedEntries(t *testing.T) {
 	require.NoError(t, err)
 	_, err = s.AppendEntryID(ctx, handoff+"/call-1", testSessionEntry("handoff prompt", "delegated answer"))
 	require.NoError(t, err)
-	hits, _, err := s.SearchMessages(ctx, "handoff", nil)
+	hits, err := s.SearchMessages(ctx, "handoff", nil)
 	require.NoError(t, err)
 	require.Equal(t, []MessageSearchHit{
 		{ConversationID: handoff, Role: "user", Text: "handoff prompt", MessageID: fmt.Sprintf("%d:0", handoffID)},
 		{ConversationID: handoff, Role: "assistant", Text: "handoff answer", MessageID: fmt.Sprintf("%d:1", handoffID)},
 	}, hits, "the Delegation History stays out of search")
+	require.Empty(t, searchTestTexts(t, s, "hidden"), "search never reads a cron run")
 }
 
 func TestMessageSearchIndexesForkedAttachments(t *testing.T) {
@@ -145,7 +171,7 @@ func TestMessageSearchIndexesForkedAttachments(t *testing.T) {
 	require.Equal(t, "read this", rows[0].Text, "the copied attachment is visible inside the fork transaction")
 }
 
-func TestMessageSearchIndexesSyncedCopies(t *testing.T) {
+func TestMessageSearchIndexesBoundRunEntries(t *testing.T) {
 	t.Parallel()
 
 	s := newTestSessionService(t)
@@ -153,7 +179,7 @@ func TestMessageSearchIndexesSyncedCopies(t *testing.T) {
 	manager, _ := newTestBridgeManager(t, config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), s, make(chan *protocol.OutboundMessage, 4))
 	rt := &Runtime{Sessions: s, threads: manager}
 
-	require.NoError(t, s.UpsertThread("cron:daily", ThreadState{Agent: "job", CreatedBy: ThreadCreatedByCron}))
+	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindCronRun})
 	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "web-dest", Agent: "main"}))
 
 	reference := uploadTestAttachment(t, s, "cron:daily", "cron-file")
@@ -162,23 +188,320 @@ func TestMessageSearchIndexesSyncedCopies(t *testing.T) {
 		`{"type":"message","role":"assistant","content":"cron answer"}`,
 	))
 	require.NoError(t, err)
-	// History hides an entry whose source row is gone and whose producer was never recorded.
-	_, err = s.db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('cron:daily', '{"sync_source_entry_id":-1,"replay_input":[{"type":"message","role":"user","content":"orphan prompt"}]}', '')`)
-	require.NoError(t, err)
-	require.Empty(t, messageSearchTestRows(t, s, "cron:daily"))
+	require.Empty(t, messageSearchTestRows(t, s, "web-dest"))
+	require.Empty(t, messageSearchTestRows(t, s, "cron:daily"), "search shows no unbound run, so its entries get no text until it is bound")
 
-	require.NoError(t, rt.SyncConversation(ctx, "cron:daily", "web-dest"))
+	bindTestRun(t, s, "cron:daily", "web-dest")
 
 	entries, err := s.ObserveEntries(ctx, "web-dest")
 	require.NoError(t, err)
-	require.Len(t, entries, 2)
+	require.Len(t, entries, 1)
 	require.Equal(t, []messageSearchTestRow{
 		{entries[0].ID, 0, 0, "user", "cron report", "cron report"},
 		{entries[0].ID, 1, 0, "assistant", "cron answer", "cron answer"},
 	}, messageSearchTestRows(t, s, "web-dest"))
 
-	require.NoError(t, rt.SyncConversation(ctx, "cron:daily", "web-dest"))
-	require.Len(t, messageSearchTestRows(t, s, "web-dest"), 2, "a repeated Sync copies nothing new")
+	bindTestRun(t, s, "cron:daily", "web-dest")
+	require.Len(t, messageSearchTestRows(t, s, "web-dest"), 2, "binding again indexes nothing new")
+
+	// Binding a run whose entry History cannot show fails, as saving that entry would.
+	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:broken": KindCronRun})
+	_, err = s.db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('cron:broken', '{"replay_input":[{"type":"message","id":"msg_2","role":"assistant","content":[{"type":"output_text","text":"ok"},{"type":"refusal","refusal":"no","text":7}]}]}', '')`)
+	require.NoError(t, err)
+	_, _, err = (stateDAO{db: s.db}).bindRun(ctx, "cron:broken", "web-dest")
+	require.ErrorContains(t, err, "decode")
+}
+
+// A run's entries only its own context holds, such as the compaction originals 049 left there or
+// those a chat's undo or deletion cut, never match in the chat it reports to.
+func TestMessageSearchSkipsSandboxEntries(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindCronRun})
+	require.NoError(t, (&Runtime{Sessions: s}).CreateConversation(ctx, protocol.Conversation{ID: "chat", Agent: "main"}))
+	bindTestRun(t, s, "cron:daily", "chat")
+
+	reported, err := s.AppendEntryID(ctx, "cron:daily", testReplayEntry(`{"type":"compaction","id":"cmp_1","encrypted_content":"sealed"}`, `{"type":"message","role":"user","content":"report summary"}`))
+	require.NoError(t, err)
+	sandboxed, err := s.AppendEntryID(ctx, "cron:daily", testReplayEntry(`{"type":"message","role":"user","content":"compacted summary of earlier work"}`))
+	require.NoError(t, err)
+	_, err = s.db.ExecContext(ctx, `UPDATE entries SET audience = 'sandbox' WHERE id = $1`, sandboxed)
+	require.NoError(t, err)
+
+	hits, err := s.SearchMessages(ctx, "summary", nil)
+	require.NoError(t, err)
+	require.Equal(t, []MessageSearchHit{{ConversationID: "chat", Role: "user", Text: "report summary", MessageID: fmt.Sprintf("%d:0", reported)}}, hits)
+}
+
+// A Web chat that continues a run finds the run's messages, and lists its people, as its History
+// shows them, beside the chat the run reports to; a run it adopts is found there once.
+func TestMessageSearchFindsContinuedRun(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	manager, _ := newTestBridgeManager(t, config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), s, make(chan *protocol.OutboundMessage, 4))
+	rt := &Runtime{Sessions: s, threads: manager}
+	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindCronRun, "cron:other": KindCronRun})
+
+	for _, id := range []string{"thread", "web:cron:daily", "web:cron:other"} {
+		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}))
+	}
+
+	bindTestRun(t, s, "cron:daily", "thread")
+	report, err := s.AppendEntryID(ctx, "cron:daily", testReplayEntry(`{"type":"message","role":"user","prompt_header":"[Cron principal=\"Cron Writer\"]","content":"Revenue dropped in Germany"}`))
+	require.NoError(t, err)
+	adopted, err := s.AppendEntryID(ctx, "cron:other", testSessionEntry("Germany prompt", "other answer"))
+	require.NoError(t, err)
+
+	for _, run := range []string{"cron:daily", "cron:other"} {
+		require.NoError(t, rt.ContinueRun(ctx, run, "web:"+run))
+	}
+
+	require.Equal(t, map[string][]string{"thread": {"Cron Writer"}, "web:cron:daily": {"Cron Writer"}}, storedPrincipals(t, s))
+
+	hits, err := s.SearchMessages(ctx, "germany", nil)
+	require.NoError(t, err)
+	require.Equal(t, []MessageSearchHit{
+		{ConversationID: "thread", Role: "user", Text: "Revenue dropped in Germany", MessageID: fmt.Sprintf("%d:0", report)},
+		{ConversationID: "web:cron:daily", Role: "user", Text: "Revenue dropped in Germany", MessageID: fmt.Sprintf("%d:0", report)},
+		{ConversationID: "web:cron:other", Role: "user", Text: "Germany prompt", MessageID: fmt.Sprintf("%d:0", adopted)},
+	}, hits)
+
+	_, err = s.AppendEntryID(ctx, "cron:daily", testReplayEntry(`{"type":"message","role":"user","prompt_header":"[Cron principal=\"Ann\"]","content":"follow-up"}`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"Ann", "Cron Writer"}, storedPrincipals(t, s)["web:cron:daily"], "a later run message reaches the chat that continues it")
+}
+
+// storedPrincipals reads the principals each conversation's row holds, sorted.
+func storedPrincipals(t *testing.T, s *SessionService) map[string][]string {
+	t.Helper()
+
+	principals := map[string][]string{}
+
+	require.NoError(t, readRows(t.Context(), s.db, `WITH stored AS (
+    SELECT c.conversation_id, p.principal FROM conversations c CROSS JOIN LATERAL unnest(c.principals) AS p(principal)
+)
+SELECT conversation_id, principal FROM stored ORDER BY conversation_id COLLATE "C", principal COLLATE "C"`, "stored principals", func(row rowScanner) error {
+		var id, principal string
+		if err := row.Scan(&id, &principal); err != nil {
+			return fmt.Errorf("scan stored principal: %w", err)
+		}
+
+		principals[id] = append(principals[id], principal)
+
+		return nil
+	}))
+
+	return principals
+}
+
+// A chat's row holds the principals of the user messages it shows, its runs' included, as each
+// write and undo leaves them, and SearchSessions lists them from there.
+func TestMessagePrincipalsFollowHistory(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:weekly": KindCronRun})
+	require.NoError(t, (&Runtime{Sessions: s}).CreateConversation(ctx, protocol.Conversation{ID: "chat", Agent: "main"}))
+	bindTestRun(t, s, "cron:weekly", "chat")
+	_, err := s.AppendEntryID(ctx, "cron:weekly", testReplayEntry(`{"type":"message","role":"user","prompt_header":"[Cron principal=\"Cron Writer\"]","content":"report"}`))
+	require.NoError(t, err)
+
+	first, err := s.AppendEntryID(ctx, "chat", testReplayEntry(
+		`{"type":"message","role":"user","prompt_header":"[Web principal=\"Ann\"]","content":"[Web principal=\"Ann\"]\n\nfirst"}`,
+		`{"type":"message","role":"assistant","content":"reply"}`,
+		`{"type":"message","role":"user","prompt_header":"[Web principal=\"Bob\"]","content":"[Web principal=\"Bob\"]\n\nsecond"}`,
+		`{"type":"message","role":"assistant","content":"another reply"}`,
+	))
+	require.NoError(t, err)
+
+	all := map[string][]string{"chat": {"Ann", "Bob", "Cron Writer"}}
+	require.Equal(t, all, storedPrincipals(t, s))
+	search, _ := searchTestSessions(t, s, noSlackLookups{}, "", SearchFields)
+	require.Equal(t, all["chat"], search.Principals)
+
+	marker, _, err := stageRevertDB(ctx, s.db, "chat", fmt.Sprintf("%d:2", first))
+	require.NoError(t, err)
+	require.Equal(t, map[string][]string{"chat": {"Ann", "Cron Writer"}}, storedPrincipals(t, s), "a staged undo hides later messages' principals")
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	defer func() { _ = tx.Rollback() }()
+
+	require.NoError(t, lockSessionHistory(ctx, tx, "chat"))
+	require.NoError(t, commitRevertDB(ctx, tx, "chat", marker))
+	require.NoError(t, tx.Commit())
+	require.Equal(t, map[string][]string{"chat": {"Ann", "Cron Writer"}}, storedPrincipals(t, s), "the clipped entry keeps only its earlier principals")
+
+	_, err = s.DeleteSession(ctx, "chat")
+	require.NoError(t, err)
+	require.Equal(t, map[string][]string{"chat": {"Cron Writer"}}, storedPrincipals(t, s), "a cleared chat keeps its run's principals")
+}
+
+// Each write of a chat's principals or of search text fails, and changes nothing, when that write does.
+func TestMessagePrincipalsCommitWithTheirWrite(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	bridge := &Bridge{config: Config{ConversationID: "chat", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
+	rt := &Runtime{Sessions: s, threads: newThreadBridgeManager(nil, s, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})}
+	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindCronRun})
+	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "chat", Agent: "main"}))
+
+	prompt := func(principal string) *harness.SessionEntry {
+		header := `[Web principal=\"` + principal + `\"]`
+
+		return testReplayEntry(`{"type":"message","role":"user","prompt_header":"` + header + `","content":"` + header + `\n\nhello"}`)
+	}
+	reject := func(table, column string) {
+		statement := `DROP TRIGGER reject_write ON ` + table
+		if column != "" {
+			statement = `CREATE TRIGGER reject_write BEFORE UPDATE OF ` + column + ` ON ` + table + ` FOR EACH ROW EXECUTE FUNCTION reject_write()`
+		}
+
+		_, err := s.db.ExecContext(ctx, statement)
+		require.NoError(t, err)
+	}
+	inTx := func(write func(tx *sql.Tx) error) func() error {
+		return func() error {
+			tx, err := s.db.BeginTx(ctx, nil)
+			require.NoError(t, err)
+
+			defer func() { _ = tx.Rollback() }()
+
+			return write(tx)
+		}
+	}
+
+	_, err := s.db.ExecContext(ctx, `CREATE FUNCTION reject_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'write unavailable'; END $$`)
+	require.NoError(t, err)
+	first, err := s.AppendEntryID(ctx, "chat", prompt("Ann"))
+	require.NoError(t, err)
+	_, err = s.AppendEntryID(ctx, "cron:daily", prompt("Cron"))
+	require.NoError(t, err)
+	seedActiveTurn(t, s, "chat", "stopped", prompt("Bob"))
+	_, err = s.finishTurn(ctx, "stopped", &turnFinish{store: newSessionStore("chat", s), outbound: protocol.NewOutboundMessage("chat", ""), terminal: protocol.TerminalStopped})
+	require.NoError(t, err)
+
+	saved := testReplayEntry(`{"type":"message","role":"user","content":"saved"}`)
+	saved.TurnID = "stopped"
+	hideTurn := func() error { _, err := s.AppendEntryID(ctx, "chat", saved); return err }
+	bind := inTx(func(tx *sql.Tx) error { _, _, err := (stateDAO{db: tx}).bindRun(ctx, "cron:daily", "chat"); return err })
+
+	for _, tc := range []struct {
+		name, table, column string
+		write               func() error
+	}{
+		{"append", "conversations", "principals", func() error { _, err := s.AppendEntryID(ctx, "chat", prompt("Dan")); return err }},
+		{"hide turn", "conversations", "principals", hideTurn},
+		{"hide turn text", "turns", "search_text", hideTurn},
+		{"end turn", "conversations", "principals", func() error {
+			seedActiveTurn(t, s, "chat", "failed", prompt("Eve"))
+			_, err := s.finishTurn(ctx, "failed", &turnFinish{store: newSessionStore("chat", s), outbound: protocol.NewOutboundMessage("chat", ""), terminal: protocol.TerminalFailed})
+
+			return err
+		}},
+		{"bind", "conversations", "principals", bind},
+		{"bind text", "entries", "search_text", bind},
+		{"stage undo", "conversations", "principals", inTx(func(tx *sql.Tx) error {
+			_, _, err := stageRevertDB(ctx, tx, "chat", fmt.Sprintf("%d:0", first))
+			return err
+		})},
+		{"delete", "conversations", "principals", func() error { _, err := s.DeleteSession(ctx, "chat"); return err }},
+		{"prune", "conversations", "principals", inTx(func(tx *sql.Tx) error { _, err := deleteSessionEntries(ctx, tx, []string{"chat"}); return err })},
+	} {
+		reject(tc.table, tc.column)
+		require.ErrorContains(t, tc.write(), "write unavailable", tc.name)
+		reject(tc.table, "")
+	}
+
+	require.Equal(t, map[string][]string{"chat": {"Ann", "Bob"}}, storedPrincipals(t, s), "no failed write changed them")
+
+	// A stopped turn whose prompt's attachments cannot be read does not end.
+	seedActiveTurn(t, s, "chat", "attached", testReplayEntry(`{"type":"message","role":"user","content":"see attachment:file"}`))
+	_, err = s.db.ExecContext(ctx, `ALTER TABLE attachments RENAME TO unavailable_attachments`)
+	require.NoError(t, err)
+	_, err = s.finishTurn(ctx, "attached", &turnFinish{store: newSessionStore("chat", s), outbound: protocol.NewOutboundMessage("chat", ""), terminal: protocol.TerminalStopped})
+	require.ErrorContains(t, err, `relation "attachments" does not exist`)
+	_, err = s.db.ExecContext(ctx, `ALTER TABLE unavailable_attachments RENAME TO attachments`)
+	require.NoError(t, err)
+
+	_, _, err = stageRevertDB(ctx, s.db, "chat", fmt.Sprintf("%d:0", first))
+	require.NoError(t, err)
+	reject("conversations", "principals")
+	require.ErrorContains(t, rt.ClearRevert(ctx, "chat"), "write unavailable", "redo")
+}
+
+// A run first reporting to a chat when its turn starts does not show its earlier entries in that
+// chat's search: they were saved in the run's own view.
+func TestMessageSearchSkipsRunEntriesBeforeAttach(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindCronRun})
+	require.NoError(t, (&Runtime{Sessions: s}).CreateConversation(ctx, protocol.Conversation{ID: "chat", Agent: "main"}))
+	_, err := s.AppendEntryID(ctx, "cron:daily", testReplayEntry(`{"type":"compaction","id":"cmp_1","encrypted_content":"sealed"}`, `{"type":"message","role":"user","content":"early report"}`))
+	require.NoError(t, err)
+
+	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "next", true)
+	inbound.ConversationID, inbound.SyncDestination = "cron:daily", "chat"
+	require.NoError(t, startTurnDB(ctx, s.db, "turn-1", "cron:daily", inbound))
+	later, err := s.AppendEntryID(ctx, "cron:daily", testReplayEntry(`{"type":"message","role":"user","content":"later report"}`))
+	require.NoError(t, err)
+
+	hits, err := s.SearchMessages(ctx, "report", nil)
+	require.NoError(t, err)
+	require.Equal(t, []MessageSearchHit{{ConversationID: "chat", Role: "user", Text: "later report", MessageID: fmt.Sprintf("%d:0", later)}}, hits)
+}
+
+// Search finds a large stopped record's messages in the text saved when the turn ended, with
+// History's message ID, and never reads the record itself.
+func TestMessageSearchReadsStoppedTurnText(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	require.NoError(t, s.UpsertThread("chat", ThreadState{Agent: "main"}))
+	seedActiveTurn(t, s, "chat", "stopped", testReplayEntry(
+		`{"type":"message","role":"user","content":"find the needle"}`,
+		`{"type":"function_call","call_id":"call","name":"Read","arguments":"{}"}`,
+		`{"type":"function_call_output","call_id":"call","output":`+jsonString(strings.Repeat("tool output needle ", 1<<18))+`}`,
+		`{"type":"message","role":"assistant","content":"needle found"}`,
+	))
+	endTestTurn(t, s, "chat", "stopped", protocol.TerminalStopped)
+
+	var text string
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT search_text FROM turns WHERE id = 'stopped'`).Scan(&text))
+	require.Less(t, len(text), 200, "only the turn's messages are searchable")
+
+	_, err := s.db.ExecContext(ctx, `UPDATE turns SET replay = '[7]', record = '7' WHERE id = 'stopped'`)
+	require.NoError(t, err)
+
+	hits, err := s.SearchMessages(ctx, "needle", nil)
+	require.NoError(t, err)
+	require.Equal(t, []MessageSearchHit{{ConversationID: "chat", Role: "user", Text: "find the needle"}, {ConversationID: "chat", Role: "assistant", Text: "needle found"}}, hits)
+}
+
+// bindTestRun binds run to report to chat, as a delivered cron report or a due reminder does.
+func bindTestRun(t *testing.T, s *SessionService, run, chat string) {
+	t.Helper()
+
+	tx, err := s.db.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+
+	defer func() { _ = tx.Rollback() }()
+
+	require.NoError(t, lockHistories(t.Context(), tx, []string{run, chat}))
+	_, _, err = (stateDAO{db: tx}).bindRun(t.Context(), run, chat)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
 }
 
 func TestMessageSearchFollowsCommittedRevert(t *testing.T) {
@@ -245,7 +568,7 @@ func TestMessageSearchIndexesEndedTurns(t *testing.T) {
 	_, matches = searchTestSessions(t, s, noSlackLookups{}, `principal:"Stopped Writer"`, SearchFields)
 	require.Len(t, matches, 1)
 
-	// A runner arriving after the stop rewrites the record before its own finish.
+	// A runner arriving after the stop changes nothing search finds.
 	turn.ReplayInput = append(turn.ReplayInput, json.RawMessage(`{"type":"message","role":"assistant","content":"Late answer"}`))
 	require.NoError(t, upsertTestTurn(ctx, s, turn))
 	_, err = s.finishTurn(ctx, "turn-1", &turnFinish{store: newSessionStore("web-chat", s), outbound: protocol.NewOutboundMessage("web-chat", "late")})
@@ -253,7 +576,6 @@ func TestMessageSearchIndexesEndedTurns(t *testing.T) {
 	require.Equal(t, []messageSearchTestRow{
 		{0, 0, 0, "user", "stopped question", "stopped question"},
 		{0, 1, 0, "assistant", "Partial answer", "partial answer"},
-		{0, 2, 0, "assistant", "Late answer", "late answer"},
 	}, messageSearchTestRows(t, s, "web-chat"))
 
 	entry := testReplayEntry(`{"type":"message","role":"user","content":"saved question"}`)
@@ -288,20 +610,33 @@ func TestMessageSearchSkipsUndecodableTurnRecords(t *testing.T) {
 
 	s.log = slog.New(slog.NewTextHandler(&logs, nil))
 
-	for turnID, step := range map[string]string{
-		"bad-item":   `{"record":{"replay_input":[{"type":"message","role":"user","content":"attachment:none"},{"type":"message","id":"msg_2","role":"assistant","content":[{"type":"output_text","text":"ok"},{"type":"refusal","refusal":"no","text":7}]}]}}`,
-		"bad-record": `{"record":{"replay_input":7}}`,
+	for turnID, replay := range map[string][]json.RawMessage{
+		"bad-item":   {json.RawMessage(`{"type":"message","role":"user","content":"attachment:none"}`), json.RawMessage(`{"type":"message","id":"msg_2","role":"assistant","content":[{"type":"output_text","text":"ok"},{"type":"refusal","refusal":"no","text":7}]}`)},
+		"bad-record": {json.RawMessage(`7`)},
 	} {
-		seedActiveTurn(t, s, "web-chat", turnID, nil)
-		require.NoError(t, s.SaveTurnStep(ctx, "web-chat", turnID, json.RawMessage(step)))
+		seedActiveTurn(t, s, "web-chat", turnID, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: turnID, ReplayInput: replay})
 		endTestTurn(t, s, "web-chat", turnID, protocol.TerminalFailed)
 	}
 
-	failed, err := queryStrings(ctx, s.db, `SELECT id FROM active_turns WHERE terminal = $1 ORDER BY id`, "failed turns", protocol.TerminalFailed)
+	failed, err := queryStrings(ctx, s.db, `SELECT id FROM turns WHERE terminal = $1 ORDER BY id`, "failed turns", protocol.TerminalFailed)
 	require.NoError(t, err)
 	require.Equal(t, []string{"bad-item", "bad-record"}, failed)
 	require.Empty(t, messageSearchTestRows(t, s, "web-chat"))
 	require.Equal(t, 2, strings.Count(logs.String(), "\n"), logs.String())
+}
+
+// A turn whose step cannot become its row's record does not end, and keeps its steps.
+func TestFinishTurnKeepsUnreadableStep(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	seedActiveTurn(t, s, "web-chat", "turn-1", nil)
+	_, err := s.db.ExecContext(t.Context(), `INSERT INTO steps (conversation_id, key, value) VALUES ('web-chat', 'turn-1', '{"record":{"text":"\u0000"}}')`)
+	require.NoError(t, err)
+
+	require.ErrorContains(t, terminateTestTurn(t.Context(), s, "turn-1", protocol.TerminalStopped), "move turn record")
+	require.Equal(t, []string{"turn-1"}, runningTestTurns(t, s))
+	require.Equal(t, []string{"turn-1"}, testTurnStepKeys(t, s, "web-chat"))
 }
 
 func TestFinishTurnLocksHistoryBeforeTurnRow(t *testing.T) {
@@ -332,322 +667,16 @@ func TestFinishTurnLocksHistoryBeforeTurnRow(t *testing.T) {
 	}, 5*time.Second, time.Millisecond)
 
 	// Like commitRevertDB, the history lock holder still reaches the turn row.
-	_, err = tx.ExecContext(ctx, `SET LOCAL lock_timeout = '1s'; UPDATE active_turns SET updated_at_unix_ns = 0 WHERE id = 'turn-1'`)
+	_, err = tx.ExecContext(ctx, `SET LOCAL lock_timeout = '1s'; UPDATE turns SET updated_at_unix_ns = 0 WHERE id = 'turn-1'`)
 	require.NoError(t, err)
 	require.NoError(t, tx.Rollback())
 	require.NoError(t, group.Wait())
 }
 
-// unindexMessageSearch returns the database to its state just after the migration:
-// history saved, no index rows, no markers.
-func unindexMessageSearch(t *testing.T, s *SessionService) {
-	t.Helper()
-
-	_, err := s.db.ExecContext(t.Context(), `TRUNCATE message_search, message_search_indexed`)
-	require.NoError(t, err)
-}
-
-func messageSearchMarkers(t *testing.T, s *SessionService) []string {
-	t.Helper()
-
-	markers, err := queryStrings(t.Context(), s.db, `SELECT conversation_id FROM message_search_indexed ORDER BY conversation_id COLLATE "C"`, "message search markers")
-	require.NoError(t, err)
-
-	return markers
-}
-
-func TestMessageSearchBackfillIndexesVisibleChats(t *testing.T) {
-	t.Parallel()
-
-	s := newTestSessionService(t)
-	ctx := t.Context()
-
-	var logs bytes.Buffer
-
-	s.log = slog.New(slog.NewTextHandler(&logs, nil))
-	manager, _ := newTestBridgeManager(t, config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), s, make(chan *protocol.OutboundMessage, 4))
-	rt := &Runtime{Sessions: s, threads: manager}
-
-	require.NoError(t, s.UpsertThread("cron:daily", ThreadState{Agent: "job", CreatedBy: ThreadCreatedByCron}))
-	require.NoError(t, s.UpsertThread("one-off-cron:once", ThreadState{Agent: "job", CreatedBy: ThreadCreatedByCron}))
-	reference := uploadTestAttachment(t, s, "cron:daily", "cron-file")
-	_, err := s.AppendEntryID(ctx, "cron:daily", testReplayEntry(`{"type":"message","role":"user","content":`+jsonString("cron report\n\n"+reference)+`}`))
-	require.NoError(t, err)
-	_, err = s.AppendEntryID(ctx, "one-off-cron:once", testSessionEntry("once prompt", "once answer"))
-	require.NoError(t, err)
-
-	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "saved", Agent: "main"}))
-	require.NoError(t, rt.SyncConversation(ctx, "cron:daily", "saved"))
-	_, err = s.AppendEntryID(ctx, "saved", testSessionEntry("old question", "old answer"))
-	require.NoError(t, err)
-	seedActiveTurn(t, s, "saved", "stopped-turn", testReplayEntry(`{"type":"message","role":"user","content":"stopped question"}`))
-	endTestTurn(t, s, "saved", "stopped-turn", protocol.TerminalStopped)
-	_, err = s.AppendEntryID(ctx, "saved/call-1", testSessionEntry("delegated prompt", "delegated answer"))
-	require.NoError(t, err)
-
-	require.NoError(t, s.UpsertThread("quiet", ThreadState{Agent: "main"}))
-	_, err = s.AppendEntryID(ctx, "quiet", testReplayEntry(`{"type":"function_call","call_id":"call","name":"Read","arguments":"{}"}`, `{"type":"message","role":"assistant","content":" "}`))
-	require.NoError(t, err)
-
-	require.NoError(t, s.UpsertThread("damaged", ThreadState{Agent: "main"}))
-	_, err = s.AppendEntryID(ctx, "damaged", testSessionEntry("intact question", "intact answer"))
-	require.NoError(t, err)
-
-	require.NoError(t, s.RegisterExternalMCPConversation("public", "main", &ExternalMCPSessionState{PrivateConversationID: "private", ManagedConversationID: "managed", Agent: "main"}))
-	require.NoError(t, s.UpsertThread("private", ThreadState{Agent: "main"}))
-	_, err = s.AppendEntryID(ctx, "private", testSessionEntry("mcp question", "mcp answer"))
-	require.NoError(t, err)
-
-	want := map[string][]messageSearchTestRow{}
-	for _, id := range []string{"saved", "quiet", "damaged", "managed"} {
-		want[id] = messageSearchTestRows(t, s, id)
-	}
-
-	require.Len(t, want["saved"], 4, "the stopped turn, the synced report, and the saved entry")
-	require.Equal(t, "cron report", want["saved"][1].Text, "a synced entry's attachments belong to its producer")
-	require.Empty(t, want["quiet"])
-	unindexMessageSearch(t, s)
-
-	damaged := make([]int64, 2)
-	for i, entry := range []string{
-		`{"replay_input":[{"type":"message","id":"msg_2","role":"assistant","content":[{"type":"output_text","text":"lost"},{"type":"refusal","refusal":"no","text":7}]}]}`,
-		`{"replay_input":7}`,
-	} {
-		require.NoError(t, s.db.QueryRowContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('damaged', $1, '') RETURNING id`, entry).Scan(&damaged[i]))
-	}
-
-	logs.Reset()
-	require.NoError(t, s.backfillMessageSearch(ctx))
-
-	for id, rows := range want {
-		require.Equal(t, rows, messageSearchTestRows(t, s, id), id)
-	}
-
-	for _, id := range []string{"cron:daily", "one-off-cron:once", "private", "saved/call-1"} {
-		require.Empty(t, messageSearchTestRows(t, s, id), id)
-	}
-
-	require.Equal(t, []string{"damaged", "managed", "quiet", "saved"}, messageSearchMarkers(t, s), "hidden chats and Delegation Histories are never discovered")
-	require.Equal(t, 2, strings.Count(logs.String(), "\n"), logs.String())
-
-	for _, id := range damaged {
-		require.Contains(t, logs.String(), fmt.Sprintf("conversation_id=damaged entry_id=%d", id))
-	}
-
-	require.NoError(t, s.backfillMessageSearch(ctx))
-	require.Equal(t, want["saved"], messageSearchTestRows(t, s, "saved"), "a marked chat is not indexed again")
-	require.Equal(t, 2, strings.Count(logs.String(), "\n"), logs.String())
-}
-
-func TestMessageSearchBackfillResumesAfterCancel(t *testing.T) {
-	s := newTestSessionService(t)
-	ctx := t.Context()
-	want := map[string][]messageSearchTestRow{}
-
-	for _, id := range []string{"resume-a", "resume-b"} {
-		require.NoError(t, s.UpsertThread(id, ThreadState{Agent: "main"}))
-		_, err := s.AppendEntryID(ctx, id, testSessionEntry(id+" question", id+" answer"))
-		require.NoError(t, err)
-		want[id] = messageSearchTestRows(t, s, id)
-	}
-
-	unindexMessageSearch(t, s)
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	require.NoError(t, err)
-
-	defer func() { _ = tx.Rollback() }()
-
-	require.NoError(t, lockSessionHistory(ctx, tx, "resume-b"))
-
-	var holder int
-	require.NoError(t, tx.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&holder))
-
-	backfillCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	var group errgroup.Group
-	group.Go(func() error { return s.backfillMessageSearch(backfillCtx) })
-	// Cancel only once the backfill, past resume-a, waits on resume-b's history lock.
-	require.Eventually(t, func() bool {
-		var blocked bool
-		require.NoError(t, s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))`, holder).Scan(&blocked))
-
-		return blocked
-	}, 5*time.Second, time.Millisecond)
-	cancel()
-	require.Error(t, group.Wait())
-	require.NoError(t, tx.Rollback())
-	require.Equal(t, []string{"resume-a"}, messageSearchMarkers(t, s))
-	require.Empty(t, messageSearchTestRows(t, s, "resume-b"))
-
-	require.NoError(t, s.backfillMessageSearch(ctx))
-	require.Equal(t, []string{"resume-a", "resume-b"}, messageSearchMarkers(t, s))
-
-	for id, rows := range want {
-		require.Equal(t, rows, messageSearchTestRows(t, s, id), id)
-	}
-}
-
-func TestMessageSearchBackfillOverlapsMutation(t *testing.T) {
-	t.Parallel()
-
-	for _, action := range []string{"append", "undo", "delete", "stop"} {
-		t.Run(action, func(t *testing.T) {
-			s := newTestSessionService(t)
-			ctx := t.Context()
-			id, turnID := "overlap-"+action, "overlap-turn-"+action
-			require.NoError(t, s.UpsertThread(id, ThreadState{Agent: "main"}))
-			first, err := s.AppendEntryID(ctx, id, testReplayEntry(
-				`{"type":"message","role":"user","content":"keep prompt"}`,
-				`{"type":"message","role":"assistant","content":"keep answer"}`,
-				`{"type":"message","role":"user","content":"drop prompt"}`,
-				`{"type":"message","role":"assistant","content":"drop answer"}`,
-			))
-			require.NoError(t, err)
-			_, err = s.AppendEntryID(ctx, id, testSessionEntry("later question", "later answer"))
-			require.NoError(t, err)
-			seedActiveTurn(t, s, id, turnID, testReplayEntry(`{"type":"message","role":"user","content":"stopped question"}`))
-
-			marker, _, err := stageRevertDB(ctx, s.db, id, fmt.Sprintf("%d:2", first))
-			require.NoError(t, err)
-
-			if action != "undo" {
-				_, err = s.db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = '' WHERE conversation_id = $1`, id)
-				require.NoError(t, err)
-			}
-
-			unindexMessageSearch(t, s)
-
-			tx, err := s.db.BeginTx(ctx, nil)
-			require.NoError(t, err)
-
-			defer func() { _ = tx.Rollback() }()
-
-			require.NoError(t, lockSessionHistory(ctx, tx, id))
-
-			var group errgroup.Group
-			group.Go(func() error { return s.backfillMessageSearch(ctx) })
-			group.Go(func() error {
-				switch action {
-				case "append":
-					_, err := s.AppendEntryID(ctx, id, testSessionEntry("new question", "new answer"))
-					return err
-				case "undo":
-					tx, err := s.db.BeginTx(ctx, nil)
-					if err != nil {
-						return fmt.Errorf("begin undo commit: %w", err)
-					}
-
-					defer func() { _ = tx.Rollback() }()
-
-					if err := lockSessionHistory(ctx, tx, id); err != nil {
-						return err
-					}
-
-					if err := commitRevertDB(ctx, tx, id, marker); err != nil {
-						return err
-					}
-
-					return tx.Commit()
-				case "delete":
-					_, err := s.DeleteSession(ctx, id)
-					return err
-				}
-
-				_, err := s.finishTurn(ctx, turnID, &turnFinish{store: newSessionStore(id, s), outbound: protocol.NewOutboundMessage(id, ""), terminal: protocol.TerminalStopped})
-
-				return err
-			})
-			require.Eventually(t, func() bool {
-				var waiting int
-				require.NoError(t, s.db.QueryRowContext(ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND classid = 87901 AND objid = (hashtext($1)::bigint & 4294967295)::oid AND objsubid = 2 AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`, id).Scan(&waiting))
-
-				return waiting == 2
-			}, 5*time.Second, time.Millisecond)
-			require.NoError(t, tx.Commit())
-			require.NoError(t, group.Wait())
-			require.Equal(t, []string{id}, messageSearchMarkers(t, s))
-
-			rows := messageSearchTestRows(t, s, id)
-
-			switch action {
-			case "append":
-				require.Len(t, rows, 8)
-			case "undo":
-				require.Equal(t, []messageSearchTestRow{{first, 0, 0, "user", "keep prompt", "keep prompt"}, {first, 1, 0, "assistant", "keep answer", "keep answer"}}, rows)
-			case "delete":
-				require.Empty(t, rows)
-			case "stop":
-				require.Len(t, rows, 7)
-			}
-
-			// A fresh projection of the chat matches what the overlap left behind.
-			unindexMessageSearch(t, s)
-			require.NoError(t, s.backfillMessageSearch(ctx))
-			require.Equal(t, rows, messageSearchTestRows(t, s, id))
-		})
-	}
-}
-
-func TestMessageSearchMarksOnlyNewEmptyChats(t *testing.T) {
-	t.Parallel()
-
-	s := newTestSessionService(t)
-	ctx := t.Context()
-	rt := &Runtime{Sessions: s}
-
-	for _, tc := range []struct {
-		name   string
-		create func(id string) error
-	}{
-		{"create", func(id string) error { return rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}) }},
-		{"upsert", func(id string) error { return s.UpsertThread(id, ThreadState{Agent: "main"}) }},
-		{"external", func(id string) error {
-			return s.RegisterExternalMCPConversation("public-"+id, "main", &ExternalMCPSessionState{PrivateConversationID: "private-" + id, ManagedConversationID: id, Agent: "main"})
-		}},
-	} {
-		require.NoError(t, tc.create(tc.name+"-new"))
-		// History saved by an older binary before the chat's managed row.
-		insertSessionEntryWithoutSummary(t, s, tc.name+"-orphan", testSessionEntry("old question", "old answer"))
-		require.NoError(t, tc.create(tc.name+"-orphan"))
-
-		if tc.name != "external" {
-			_, err := s.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, 'main', '')`, tc.name+"-existing")
-			require.NoError(t, err)
-			require.NoError(t, tc.create(tc.name+"-existing"))
-			require.NoError(t, tc.create(tc.name+"-new"))
-		}
-	}
-
-	_, err := s.AppendEntryID(ctx, "create-new", testSessionEntry("source question", "source answer"))
-	require.NoError(t, err)
-	_, err = s.ForkConversation(ctx, "create-new", protocol.Conversation{ID: "fork", Agent: "main"}, "")
-	require.NoError(t, err)
-	require.Len(t, messageSearchTestRows(t, s, "fork"), 2)
-
-	// Committing an undo on a chat the backfill has not reached leaves it unmarked.
-	id, err := s.AppendEntryID(ctx, "upsert-existing", testSessionEntry("undo question", "undo answer"))
-	require.NoError(t, err)
-	marker, _, err := stageRevertDB(ctx, s.db, "upsert-existing", fmt.Sprintf("%d:0", id))
-	require.NoError(t, err)
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	require.NoError(t, err)
-
-	defer func() { _ = tx.Rollback() }()
-
-	require.NoError(t, lockSessionHistory(ctx, tx, "upsert-existing"))
-	require.NoError(t, commitRevertDB(ctx, tx, "upsert-existing", marker))
-	require.NoError(t, tx.Commit())
-
-	require.Equal(t, []string{"create-new", "external-new", "fork", "upsert-new"}, messageSearchMarkers(t, s))
-}
-
 func searchTestTexts(t *testing.T, s *SessionService, needle string, prefixes ...string) []string {
 	t.Helper()
 
-	hits, _, err := s.SearchMessages(t.Context(), needle, prefixes)
+	hits, err := s.SearchMessages(t.Context(), needle, prefixes)
 	require.NoError(t, err)
 
 	texts := make([]string, len(hits))
@@ -676,9 +705,8 @@ func TestSearchMessagesMatchesLowercasedSubstrings(t *testing.T) {
 	id, err := s.AppendEntryID(ctx, "web-chat", testReplayEntry(items...))
 	require.NoError(t, err)
 
-	hits, complete, err := s.SearchMessages(ctx, "alan", nil)
+	hits, err := s.SearchMessages(ctx, "alan", nil)
 	require.NoError(t, err)
-	require.True(t, complete)
 	require.Equal(t, []MessageSearchHit{
 		{ConversationID: "web-chat", Role: "user", Text: "Alan said hi", MessageID: fmt.Sprintf("%d:0", id)},
 		{ConversationID: "web-chat", Role: "user", Text: "alanine levels", MessageID: fmt.Sprintf("%d:1", id)},
@@ -707,9 +735,6 @@ func TestSearchMessagesShowsWhatHistoryShows(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	// Hidden chats an older binary left unmarked never make search incomplete.
-	_, err := s.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ('cron:old', 'job', ''), ('one-off-cron:old', 'job', '')`)
-	require.NoError(t, err)
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
 
 	first, err := s.AppendEntryID(ctx, "main", testReplayEntry(
@@ -726,17 +751,14 @@ func TestSearchMessagesShowsWhatHistoryShows(t *testing.T) {
 	third, err := s.AppendEntryID(ctx, "main", testSessionEntry("needle 8", "needle 9"))
 	require.NoError(t, err)
 
-	require.NoError(t, s.UpsertThread("cron:daily", ThreadState{Agent: "job", CreatedBy: ThreadCreatedByCron}))
-	cron, err := s.AppendEntryID(ctx, "cron:daily", testSessionEntry("needle cron", "answer"))
-	require.NoError(t, err)
-	// No write path indexes a cron run; this row proves the query hides it anyway.
-	_, err = s.db.ExecContext(ctx, `INSERT INTO message_search (conversation_id, entry_id, replay_index, part_index, role, text, text_lower) VALUES ('cron:daily', $1, 0, 0, 'user', 'needle cron', 'needle cron')`, cron)
+	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindCronRun})
+	_, err = s.AppendEntryID(ctx, "cron:daily", testSessionEntry("needle cron", "answer"))
 	require.NoError(t, err)
 	require.NoError(t, s.RegisterExternalMCPConversation("public", "main", &ExternalMCPSessionState{PrivateConversationID: "private", ManagedConversationID: "managed", Agent: "main"}))
 	require.NoError(t, s.UpsertThread("private", ThreadState{Agent: "main"}))
 	_, err = s.AppendEntryID(ctx, "private", testSessionEntry("needle private", "answer"))
 	require.NoError(t, err)
-	require.NotEmpty(t, messageSearchTestRows(t, s, "private"))
+	require.Empty(t, messageSearchTestRows(t, s, "private"), "search never shows a private External MCP conversation, so its entries get no text")
 
 	all := []MessageSearchHit{
 		{"main", "user", "needle 1", fmt.Sprintf("%d:0", first)},
@@ -749,41 +771,33 @@ func TestSearchMessagesShowsWhatHistoryShows(t *testing.T) {
 		{"main", "user", "needle 8", fmt.Sprintf("%d:0", third)},
 		{"main", "assistant", "needle 9", fmt.Sprintf("%d:1", third)},
 	}
-	hits, complete, err := s.SearchMessages(ctx, "needle", nil)
+	hits, err := s.SearchMessages(ctx, "needle", nil)
 	require.NoError(t, err)
-	require.True(t, complete)
 	require.Equal(t, all, hits, "the stopped turn sits after its anchor entry")
 
 	_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", third))
 	require.NoError(t, err)
-	hits, _, err = s.SearchMessages(ctx, "needle", nil)
+	hits, err = s.SearchMessages(ctx, "needle", nil)
 	require.NoError(t, err)
 	require.Equal(t, all[:7], hits, "an undo at a turn's first message hides the whole entry")
 
-	_, err = s.db.ExecContext(ctx, `UPDATE managed_conversations SET revert_message_id = '' WHERE conversation_id = 'main'`)
+	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = 'main'`)
 	require.NoError(t, err)
-	hits, _, err = s.SearchMessages(ctx, "needle", nil)
+	hits, err = s.SearchMessages(ctx, "needle", nil)
 	require.NoError(t, err)
 	require.Equal(t, all, hits, "Redo returns the messages")
 
 	_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:2", first))
 	require.NoError(t, err)
-	hits, _, err = s.SearchMessages(ctx, "needle", nil)
+	hits, err = s.SearchMessages(ctx, "needle", nil)
 	require.NoError(t, err)
 	require.Equal(t, all[:2], hits, "the undo hides later messages and the stopped turn anchored after it")
 
-	// A chat saved by an older binary before its marker.
-	_, err = s.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ('legacy', 'main', '')`)
+	// Search reads only the saved text, and fails on text it cannot read.
+	_, err = s.db.ExecContext(ctx, `UPDATE entries SET search_text = '0 0 ["needle"' WHERE id = $1`, first)
 	require.NoError(t, err)
-	hits, complete, err = s.SearchMessages(ctx, "needle", nil)
-	require.NoError(t, err)
-	require.False(t, complete)
-	require.Equal(t, all[:2], hits)
-
-	require.NoError(t, s.backfillMessageSearch(ctx))
-	_, complete, err = s.SearchMessages(ctx, "nothing matches", nil)
-	require.NoError(t, err)
-	require.True(t, complete)
+	_, err = s.SearchMessages(ctx, "needle", nil)
+	require.ErrorContains(t, err, "decode message search text")
 }
 
 func TestSearchMessagesMatchesGoReference(t *testing.T) {
@@ -859,8 +873,9 @@ func TestSearchMessagesMatchesGoReference(t *testing.T) {
 
 	require.Greater(t, len(want), 300)
 
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"cron:daily": KindCronRun, "private": KindExternalMCPRun})
+
 	for _, id := range []string{"cron:daily", "private"} {
-		require.NoError(t, s.UpsertThread(id, ThreadState{Agent: "main"}))
 		_, err := s.AppendEntryID(ctx, id, testReplayEntry(item("user"), item("assistant"), item("user")))
 		require.NoError(t, err)
 	}
@@ -880,45 +895,35 @@ func TestSearchMessagesMatchesGoReference(t *testing.T) {
 		searches = append(searches, search{needle: string(text[start:min(len(text), start+1+rng.IntN(4))])})
 	}
 
-	// A few hundred rows fit in a page or two, where the planner rightly skips
-	// the index; this transaction runs the same statement through the index.
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	require.NoError(t, err)
+	references := make([][]MessageSearchHit, len(searches))
 
-	defer func() { _ = tx.Rollback() }()
-
-	_, err = tx.ExecContext(ctx, `SET LOCAL enable_seqscan = off`)
-	require.NoError(t, err)
-
-	plan, err := queryStrings(ctx, tx, `EXPLAIN `+searchMessagesSQL, "message search plan", pgx.QueryExecModeExec, "", []string{"%ab %"})
-	require.NoError(t, err)
-	require.Contains(t, strings.Join(plan, "\n"), "message_search_text")
-
-	escape := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
-
-	for _, search := range searches {
-		var reference []MessageSearchHit
-
+	for i, search := range searches {
 		for _, hit := range want {
 			text := strings.ToLower(hit.Text)
 			if strings.Contains(text, search.needle) || slices.ContainsFunc(search.prefixes, func(prefix string) bool { return strings.Contains(text, prefix) }) {
-				reference = append(reference, hit)
+				references[i] = append(references[i], hit)
 			}
 		}
 
-		hits, complete, err := s.SearchMessages(ctx, search.needle, search.prefixes)
+		hits, err := s.SearchMessages(ctx, search.needle, search.prefixes)
 		require.NoError(t, err)
-		require.True(t, complete)
-		require.Equal(t, reference, hits, "%q %q", search.needle, search.prefixes)
+		require.Equal(t, references[i], hits, "%q %q", search.needle, search.prefixes)
+	}
 
-		patterns := []string{"%" + escape.Replace(search.needle) + "%"}
-		for _, prefix := range search.prefixes {
-			patterns = append(patterns, "%"+escape.Replace(prefix)+"%")
-		}
+	// A few hundred rows fit in a page or two, where the planner rightly skips
+	// the index; one connection without sequential scans runs the same searches through it.
+	// The migrations analyzed conversations while it was empty, so it is analyzed again first.
+	s.db.SetMaxOpenConns(1)
+	_, err := s.db.ExecContext(ctx, `ANALYZE conversations; SELECT gin_clean_pending_list('entries_search_text'::regclass); SET enable_seqscan = off`)
+	require.NoError(t, err)
 
-		var raw []byte
-		require.NoError(t, tx.QueryRowContext(ctx, searchMessagesSQL, pgx.QueryExecModeExec, "", patterns).Scan(&complete, &raw))
-		require.NoError(t, json.Unmarshal(raw, &hits))
-		require.Equal(t, reference, hits, "index scan %q %q", search.needle, search.prefixes)
+	plan, err := queryStrings(ctx, s.db, `EXPLAIN `+searchMessagesSQL, "message search plan", pgx.QueryExecModeExec, []string{"%ab %"})
+	require.NoError(t, err)
+	require.Contains(t, strings.Join(plan, "\n"), "entries_search_text")
+
+	for i, search := range searches {
+		hits, err := s.SearchMessages(ctx, search.needle, search.prefixes)
+		require.NoError(t, err)
+		require.Equal(t, references[i], hits, "index scan %q %q", search.needle, search.prefixes)
 	}
 }

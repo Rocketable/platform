@@ -19,7 +19,7 @@ test("transcript and entry HTTP proxy reach Go", async () => {
   expect(await call("Identity")).toEqual({ username: "alice", principal: "alice" });
   const batches = await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`));
   expect(batches.flatMap((batch) => batch.sessions.map((session) => session.id))).toEqual(["empty-web", id]);
-  expect(batches.at(-1)).toEqual({ sessions: [], owner: "alice", upstreamSuccess: true, summariesComplete: true, opencodeServers: {}, agentTags: {} });
+  expect(batches.at(-1)).toEqual({ sessions: [], owner: "alice", upstreamSuccess: true, opencodeServers: {}, agentTags: {} });
   const original = batches.flatMap((batch) => batch.sessions).find((session) => session.id === id)!;
   for (const details of [{ id, pinned: true }, { id, name: " Launch " }, { id, pinned: false }, { id, name: "" }]) {
     await call("UpdateSession", details);
@@ -188,7 +188,8 @@ test("transcript and entry HTTP proxy reach Go", async () => {
     }
   } finally { await browser.close(); web.stop(true); }
 
-  expect(await call("DeleteSessionEntries", { id })).toEqual({ deleted: "1" });
-  expect(await call("ListSessionEntries", { id })).toEqual({ entries: [] });
-  expect(await call("LoadSessionEntries", { id })).toEqual({ entries: [] });
+  // Every message here was copied from a run: a wipe keeps them, as undo would.
+  expect(await call("DeleteSessionEntries", { id })).toEqual({ deleted: "0" });
+  expect(await call("ListSessionEntries", { id })).not.toEqual({ entries: [] });
+  expect(await call("LoadSessionEntries", { id })).not.toEqual({ entries: [] });
 }, 60000);

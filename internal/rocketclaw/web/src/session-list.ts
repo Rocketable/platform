@@ -1,7 +1,6 @@
 import { RPCError } from "./api";
 import type { Remote, Session, SessionBatch } from "./types";
 
-export const MISSING_SUMMARY = "loading...";
 export const SESSION_HISTORY_CHANNEL = "rocketclaw-session-history";
 
 const epochs = new Map<string, number>();
@@ -119,22 +118,17 @@ export function stripSessionHistory(rows: Session[], id: string): Session[] {
   return rows.map((row) => (row.id === id ? { ...row, preview: "", updatedAt: "" } : row));
 }
 
-export function shouldCommitSnapshot(flags: { upstreamSuccess: boolean; summariesComplete: boolean; exhausted: boolean; mismatch: boolean }): boolean {
-  return flags.upstreamSuccess && flags.summariesComplete && flags.exhausted && !flags.mismatch;
+export function shouldCommitSnapshot(flags: { upstreamSuccess: boolean; exhausted: boolean; mismatch: boolean }): boolean {
+  return flags.upstreamSuccess && flags.exhausted && !flags.mismatch;
 }
 
-export function searchIsAuthoritative(flags: { refreshing: boolean; enumerationComplete: boolean; summariesComplete: boolean }): boolean {
-  return !flags.refreshing && flags.enumerationComplete && flags.summariesComplete;
-}
-
-export function rowPreview(session: Session, loading: boolean): string {
-  return session.preview || (loading ? MISSING_SUMMARY : "");
+export function searchIsAuthoritative(flags: { refreshing: boolean; enumerationComplete: boolean }): boolean {
+  return !flags.refreshing && flags.enumerationComplete;
 }
 
 export type EnumerationResult = {
   received: Session[];
   upstreamSuccess: boolean;
-  summariesComplete: boolean;
   exhausted: boolean;
   // An owner mismatch or explicit authentication rejection requires live identity revalidation.
   mismatch: boolean;
@@ -145,16 +139,14 @@ export async function readSessionEnumeration(
   owner: string,
   batches: AsyncIterable<SessionBatch> | Promise<AsyncIterable<SessionBatch>>,
   baseline: () => Session[],
-  onProgress: (rows: Session[], summaries: ReadonlyMap<string, boolean>, summariesComplete: boolean) => void,
+  onProgress: (rows: Session[]) => void,
   signal?: AbortSignal,
 ): Promise<EnumerationResult> {
   const byID = new Map<string, Session>();
-  const summaries = new Map<string, boolean>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let published = false;
   let dirty = false;
   let upstreamSuccess = false;
-  let summariesComplete = true;
   let exhausted = false;
   let mismatch = false;
   let remote: Remote | undefined;
@@ -164,8 +156,7 @@ export async function readSessionEnumeration(
     if (!dirty || signal?.aborted || mismatch) return;
     dirty = false;
     published ||= byID.size > 0;
-    onProgress(mergeSessionRows(baseline(), [...byID.values()]), new Map(summaries), summariesComplete);
-    summaries.clear();
+    onProgress(mergeSessionRows(baseline(), [...byID.values()]));
   };
   signal?.addEventListener("abort", cancel, { once: true });
   try {
@@ -173,16 +164,12 @@ export async function readSessionEnumeration(
       if (signal?.aborted) break;
       if (batch.owner !== owner) {
         mismatch = true;
-        upstreamSuccess = summariesComplete = false;
+        upstreamSuccess = false;
         break;
       }
-      for (const row of batch.sessions) {
-        byID.set(row.id, row);
-        summaries.set(row.id, batch.summariesComplete);
-      }
+      for (const row of batch.sessions) byID.set(row.id, row);
       upstreamSuccess = batch.upstreamSuccess;
       if (upstreamSuccess) remote = { servers: batch.opencodeServers ?? {}, agentTags: Object.fromEntries(Object.entries(batch.agentTags ?? {}).map(([agent, choices]) => [agent, choices.tags ?? []])) };
-      summariesComplete &&= batch.summariesComplete;
       dirty = true;
       // First useful row is immediate; subsequent display work coalesces over
       // 16 ms without awaiting the timer or slowing transport consumption.
@@ -202,5 +189,5 @@ export async function readSessionEnumeration(
     signal?.removeEventListener("abort", cancel);
   }
   flush();
-  return { received: [...byID.values()], upstreamSuccess, summariesComplete, exhausted, mismatch, remote };
+  return { received: [...byID.values()], upstreamSuccess, exhausted, mismatch, remote };
 }

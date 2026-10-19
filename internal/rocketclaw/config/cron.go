@@ -92,8 +92,10 @@ func ParseCronDefinition(data []byte, relativePath string) (protocol.OneOffCronj
 		return protocol.OneOffCronjob{}, nil, fmt.Errorf("parse cronjob %s frontmatter: schedule is required", relativePath)
 	}
 
-	if raw.Channel == "" {
-		return protocol.OneOffCronjob{}, nil, fmt.Errorf("parse cronjob %s frontmatter: channel is required", relativePath)
+	// Leaving channel out posts nowhere; a channel line that names none, as `channel: #ops` does
+	// since YAML reads # as a comment, is a mistake.
+	if raw.Channel.set && raw.Channel.name == "" {
+		return protocol.OneOffCronjob{}, nil, fmt.Errorf("parse cronjob %s frontmatter: channel must name a Slack channel; leave it out to post nowhere", relativePath)
 	}
 
 	oneOff := false
@@ -113,7 +115,7 @@ func ParseCronDefinition(data []byte, relativePath string) (protocol.OneOffCronj
 		return protocol.OneOffCronjob{}, nil, fmt.Errorf("parse cronjob %s schedules: timestamp schedules cannot be combined with other schedules", relativePath)
 	}
 
-	return protocol.OneOffCronjob{RelativePath: relativePath, Agent: cmp.Or(string(raw.Agent), "main"), TextChannel: string(raw.Channel), Space: raw.Space, Prompt: body}, schedules, nil
+	return protocol.OneOffCronjob{RelativePath: relativePath, Agent: cmp.Or(string(raw.Agent), "main"), TextChannel: raw.Channel.name, Space: raw.Space, Prompt: body}, schedules, nil
 }
 
 type cronFrontmatter struct {
@@ -164,9 +166,15 @@ func (a *cronFrontmatterAgent) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type cronFrontmatterChannel string
+// cronFrontmatterChannel is the channel line's Slack channel, empty when the line names none.
+type cronFrontmatterChannel struct {
+	name string
+	set  bool
+}
 
 func (c *cronFrontmatterChannel) UnmarshalJSON(data []byte) error {
+	c.set = true
+
 	var text string
 	if err := json.Unmarshal(data, &text); err == nil {
 		text = strings.TrimSpace(text)
@@ -174,7 +182,7 @@ func (c *cronFrontmatterChannel) UnmarshalJSON(data []byte) error {
 			text = "#" + text
 		}
 
-		*c = cronFrontmatterChannel(text)
+		c.name = text
 	}
 
 	return nil

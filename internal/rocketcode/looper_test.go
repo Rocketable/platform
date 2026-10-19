@@ -209,7 +209,7 @@ func compactParams(mock *mockResponsesAPI) []responses.ResponseCompactParams {
 func recordingJournal() *mockJournal {
 	var mu sync.Mutex
 
-	steps := map[string]json.RawMessage{}
+	steps, lists := map[string]json.RawMessage{}, map[string][]json.RawMessage{}
 	// keys holds Code Mode record keys in the order first saved.
 	keys, records := []string{}, map[string]json.RawMessage{}
 
@@ -229,6 +229,24 @@ func recordingJournal() *mockJournal {
 			steps[key] = slices.Clone(value)
 
 			return nil
+		},
+		SaveTurnFunc: func(_ context.Context, turnID string, step json.RawMessage, changed []TurnItems) error {
+			mu.Lock()
+			defer mu.Unlock()
+
+			steps[turnID] = slices.Clone(step)
+			for _, list := range changed {
+				key := turnID + "/" + string(list.List)
+				lists[key] = append(slices.Clone(lists[key][:list.From]), list.Items...)
+			}
+
+			return nil
+		},
+		ItemsFunc: func(_ context.Context, turnID string, list TurnList) ([]json.RawMessage, error) {
+			mu.Lock()
+			defer mu.Unlock()
+
+			return slices.Clone(lists[turnID+"/"+string(list)]), nil
 		},
 		SaveTraceFunc: func(context.Context, string, []json.RawMessage) error { return nil },
 		SaveCodeModeCallFunc: func(_ context.Context, _, key string, record json.RawMessage) error {
@@ -260,24 +278,53 @@ func recordingJournal() *mockJournal {
 	}
 }
 
-// turnSaves decodes every root turn step the journal saved, in order.
+// turnSaves decodes every root turn step the journal saved, in order, with the lists it had then.
 func turnSaves(t *testing.T, journal *mockJournal) []turnStep {
 	t.Helper()
 
 	var saves []turnStep
 
-	for _, call := range journal.SaveCalls() {
-		if strings.Contains(call.Key, "/") {
+	lists := map[TurnList][]json.RawMessage{}
+
+	for _, call := range journal.SaveTurnCalls() {
+		if strings.Contains(call.TurnID, "/") {
 			continue
 		}
 
-		var step turnStep
-		require.NoError(t, json.Unmarshal(call.Value, &step))
+		for _, list := range call.Lists {
+			lists[list.List] = append(slices.Clone(lists[list.List][:list.From]), list.Items...)
+		}
 
+		var step turnStep
+		require.NoError(t, json.Unmarshal(call.Step, &step))
+
+		step.Record.ReplayInput, step.Record.OutputTrace, step.Trace = lists[TurnReplayInput], lists[TurnOutputTrace], lists[TurnTrace]
 		saves = append(saves, step)
 	}
 
 	return saves
+}
+
+// turnSaveBytes returns how many bytes each root turn save wrote through the journal, in order.
+func turnSaveBytes(journal *mockJournal) []int {
+	var written []int
+
+	for _, call := range journal.SaveTurnCalls() {
+		if strings.Contains(call.TurnID, "/") {
+			continue
+		}
+
+		size := len(call.Step)
+		for _, list := range call.Lists {
+			for _, item := range list.Items {
+				size += len(item)
+			}
+		}
+
+		written = append(written, size)
+	}
+
+	return written
 }
 
 func permissionReviewerWith(decision permissionReviewDecision) *mockPermissionReviewer {
@@ -1443,7 +1490,7 @@ func TestJournalProviderResponseBeforeToolDispatch(t *testing.T) {
 		require.Equal(t, "call-1", pending.Output[0].CallID)
 		require.Equal(t, "read", pending.Output[0].Name)
 		require.JSONEq(t, `{"filePath":"README.md"}`, pending.Output[0].Arguments.OfString)
-		require.Len(t, sink.SaveCalls(), 3, "the call's started marker is journaled before it runs")
+		require.Len(t, sink.SaveCalls(), 1, "the call's started marker is journaled before it runs")
 
 		return TextToolResult("contents"), nil
 	}
@@ -2372,7 +2419,7 @@ func TestLooperDirectSkillRejectsBeforeModelRequest(t *testing.T) {
 			errDisk := errors.New("local persistence sentinel")
 
 			if failure == "start" {
-				sink.SaveFunc = func(context.Context, string, json.RawMessage) error { return errDisk }
+				sink.SaveTurnFunc = func(context.Context, string, json.RawMessage, []TurnItems) error { return errDisk }
 			}
 
 			if failure == "trace" {
@@ -2861,12 +2908,12 @@ func TestLooperResumesCancelledProviderCallWithoutRestartText(t *testing.T) {
 
 func TestLooperResumedTurnOfAnotherProviderIsConverted(t *testing.T) {
 	journal := recordingJournal()
-	step, err := json.Marshal(turnStep{Record: SessionEntry{Version: 1, Type: "turn", TurnID: "turn-1", Model: "work/model", ReplayInput: []json.RawMessage{
+	step, err := json.Marshal(turnStep{Record: SessionEntry{Version: 1, Type: "turn", TurnID: "turn-1", Model: "work/model"}})
+	require.NoError(t, err)
+	require.NoError(t, journal.SaveTurn(t.Context(), "turn-1", step, []TurnItems{{List: TurnReplayInput, Items: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","content":"question"}`),
 		json.RawMessage(`{"type":"reasoning","encrypted_content":"work-only","summary":[{"type":"summary_text","text":"thought it over"}]}`),
-	}}})
-	require.NoError(t, err)
-	require.NoError(t, journal.Save(t.Context(), "turn-1", step))
+	}}}))
 
 	mock := mockResponses(responseWithMessage("resp-final", "answer"))
 	_, err = runJournaledTurn(t.Context(), testLooper(mock), journal, "question")
@@ -3155,6 +3202,142 @@ func TestLooperResumesFromRecordedCallResults(t *testing.T) {
 			require.Equal(t, tc.interrupted, strings.Count(sent, genericAbortedToolOutputText))
 			require.Equal(t, tc.interrupted == 0, strings.Contains(sent, "running-result"), "shutdown lets the running call finish and keep its output")
 		})
+	}
+}
+
+// A turn cut off after 3 finished calls and mid-way through a 4th resumes without running the
+// finished calls again, reports the 4th interrupted, and keeps its accepted steer and applied inputs.
+func TestLooperResumesTurnCutOffMidCall(t *testing.T) {
+	journal := recordingJournal()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	runs := map[string]int{}
+
+	var mu sync.Mutex
+
+	tools := map[string]looperTool{}
+
+	for _, name := range []string{"lookup", "hang"} {
+		tool := testLooperTool(name)
+		tool.Call = func(ctx context.Context, args json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
+			mu.Lock()
+			runs[string(args)]++
+			mu.Unlock()
+
+			if name == "hang" {
+				cancel()
+				<-ctx.Done()
+
+				return ToolResult{}, ctx.Err()
+			}
+
+			return TextToolResult("result " + string(args)), nil
+		}
+		tools[name] = tool
+	}
+
+	allow := []PermissionRule{{Pattern: "*", Action: permissionAllow}}
+	permissions := PermissionSet{Buckets: []PermissionBucket{{Name: "lookup", Rules: allow}, {Name: "hang", Rules: allow}}}
+	run := func(ctx context.Context, loop *looper, applied *[][]string) ([]SessionEntry, error) {
+		loop.Tools, loop.Permissions, loop.ParallelToolCalls, loop.Journal = tools, permissions, 1, journal
+		loop.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, _ string, _ TurnPhase, ids []string) ([]PromptInput, error) {
+			*applied = append(*applied, ids)
+			return []PromptInput{{ID: "steer-1", Texts: []string{"also check the logs"}}}, nil
+		}}
+		output := make(chan ChatResponse, 20)
+
+		input := make(chan PromptInput, 1)
+		input <- PromptInput{ID: "initial", TurnID: "turn-1", Texts: []string{"work"}, Responses: output}
+
+		close(input)
+
+		var saved []SessionEntry
+
+		err := loop.Loop(ctx, input, emptySession(), func(entry SessionEntry) error {
+			saved = append(saved, entry)
+			return nil
+		}, make(chan os.Signal, 1))
+
+		collectResponses(output)
+
+		return saved, err
+	}
+
+	var cutApplied, resumedApplied [][]string
+
+	_, err := run(ctx, testLooper(mockResponses(
+		responseWithFunctionCalls("resp-1", []responses.ResponseFunctionToolCall{
+			testFunctionCall("tool-1", "call-1", "lookup", `{"n":1}`),
+			testFunctionCall("tool-2", "call-2", "lookup", `{"n":2}`),
+			testFunctionCall("tool-3", "call-3", "lookup", `{"n":3}`),
+		}),
+		responseWithFunctionCalls("resp-2", []responses.ResponseFunctionToolCall{testFunctionCall("tool-4", "call-4", "hang", `{}`)}),
+	)), &cutApplied)
+	require.Error(t, err)
+	require.Equal(t, [][]string{{"initial"}}, cutApplied, "the steer is accepted after the 3 finished calls")
+
+	mock := mockResponses(responseWithMessage("resp-final", "done"))
+	saved, err := run(t.Context(), testLooper(mock), &resumedApplied)
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{`{"n":1}`: 1, `{"n":2}`: 1, `{"n":3}`: 1, `{}`: 1}, runs, "no finished or cut-off call runs again")
+	require.Equal(t, [][]string{{"initial", "steer-1"}, {"initial", "steer-1"}}, resumedApplied, "the resumed turn knows the inputs it applied")
+
+	sent := marshalJSON(t, newParams(mock)[0].Input.OfInputItemList)
+	for _, text := range []string{"work", "also check the logs", `result {\"n\":1}`, `result {\"n\":2}`, `result {\"n\":3}`, genericAbortedToolOutputText} {
+		require.Equal(t, 1, strings.Count(sent, text), text)
+	}
+
+	require.Len(t, saved, 1)
+
+	recorded := marshalJSON(t, saved[0].ReplayInput)
+	for _, text := range []string{"also check the logs", `result {\"n\":1}`, genericAbortedToolOutputText, "done"} {
+		require.Equal(t, 1, strings.Count(recorded, text), text)
+	}
+
+	states := map[string]PublicProgressState{}
+
+	for _, progress := range PublicProgressFromTrace(saved[0].OutputTrace) {
+		if progress.Kind == PublicProgressTool {
+			states[progress.ID] = progress.State
+		}
+	}
+
+	require.Equal(t, map[string]PublicProgressState{"call-1": PublicProgressCompleted, "call-2": PublicProgressCompleted, "call-3": PublicProgressCompleted, "call-4": PublicProgressStopped}, states)
+}
+
+// A long turn's saves stay cheap: its 200th step writes about as many bytes as its 1st.
+func TestLooperTurnSavesWriteOnlyTheirNewItems(t *testing.T) {
+	const steps = 200
+
+	results := make([]*responses.Response, 0, steps+1)
+	for i := range steps {
+		results = append(results, responseWithFunctionCalls(fmt.Sprintf("resp-%03d", i), []responses.ResponseFunctionToolCall{testFunctionCall(fmt.Sprintf("tool-%03d", i), fmt.Sprintf("call-%03d", i), "lookup", fmt.Sprintf(`{"n":%03d}`, i))}))
+	}
+
+	loop := testLooper(mockResponses(append(results, responseWithMessage("resp-final", "done"))...))
+	tool := testLooperTool("lookup")
+	tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+		return TextToolResult(strings.Repeat("x", 1000)), nil
+	}
+	loop.Tools, loop.Permissions = map[string]looperTool{"lookup": tool}, PermissionSet{Buckets: []PermissionBucket{{Name: "lookup", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
+	journal := recordingJournal()
+	_, err := runJournaledTurn(t.Context(), loop, journal, "work")
+	require.NoError(t, err)
+
+	// The turn opens with one save, then each step saves its response and then its tool output.
+	written := turnSaveBytes(journal)
+	require.Len(t, written, 2*steps+2)
+
+	for _, first := range []int{1, 2} {
+		last := first + 2*(steps-1)
+		require.Less(t, written[last], written[first]*11/10, "save %d writes %d bytes, save %d writes %d", last, written[last], first, written[first])
+	}
+
+	// Each save changes the step itself, so a reader of the step alone sees the turn change.
+	for i, step := range turnSaves(t, journal) {
+		require.Equal(t, i+1, step.Revision)
 	}
 }
 
