@@ -399,11 +399,17 @@ Sessions and pages (New session, Search, Voice, Cron, Agents, Skills, Settings) 
 one strip, and a location never appears in two tabs. The URL always names the
 active tab.
 
-- **Preview tab.** Opening a location that is not already open (palette, Search
+- **Preview tab.** Opening a location that is not already open (Search
   results, links, footer buttons, page commands) shows it in the single preview
   tab, drawn in italics. The next such open replaces it; with no preview tab, the
   new one opens right of the active tab. Double-clicking the tab, typing a draft or
-  sending a message in it, or pinning it makes it permanent. A deep link or reload opens its location
+  sending a message in it, or pinning it makes it permanent. A session chosen in the
+  palette opens as a permanent tab right of the active tab, leaving the preview tab
+  in place, or makes its already open tab permanent. Arrowing through the palette's
+  sessions shows each in the preview tab, without adding history entries; a session
+  that would open in another space is skipped. The palette's commands act on the
+  location it opened at: typing or pressing a command returns there first, and
+  dismissing the palette returns there too. A deep link or reload opens its location
   as a permanent tab. Sending the first message from New session turns that tab
   into the new session's tab.
 - **Pinned tabs** are browser-only (unlike **Pin session**, which is shared and

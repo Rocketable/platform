@@ -1,7 +1,7 @@
 import { useSyncExternalStore, type ComponentProps } from "react";
 
-export function navigate(path: string) {
-  history.pushState(null, "", path);
+export function navigate(path: string, replace = false) {
+  history[replace ? "replaceState" : "pushState"](null, "", path);
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 

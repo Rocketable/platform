@@ -878,18 +878,19 @@ function home(tabs: Tab[], space: string) {
 }
 
 // An opened location replaces the current space's preview tab, or else opens right of the active tab, inside the active tab's group.
+// A permanent open leaves the preview tab alone and makes an already open tab permanent.
 // Activating any other tab enters its space, where it becomes the last active tab, and expands its group.
 // A session opens where the link points, marked unplaced until TabPlacement moves it to the space it was born in.
-function openTab(state: TabState, link: string): TabState {
+function openTab(state: TabState, link: string, preview = true): TabState {
   const [path, target] = pageSpace(state, link);
   const open = state.tabs.find((tab) => tab.path === path), current = open && path !== "/" ? open.space! : target;
-  const preview = state.tabs.findIndex((tab) => tab.preview && tab.space === current);
+  const slot = preview ? state.tabs.findIndex((tab) => tab.preview && tab.space === current) : -1;
   const group = state.tabs.find((tab) => tab.path === state.active && tab.space === current)?.group;
-  const at = preview >= 0 ? preview : state.tabs.findIndex((tab) => tab.path === state.active) + 1 || state.tabs.length;
-  const added = state.tabs.toSpliced(at, Number(preview >= 0), { path, preview: true, group, space: current, unplaced: path.startsWith("/s/") || undefined });
+  const at = slot >= 0 ? slot : state.tabs.findIndex((tab) => tab.path === state.active) + 1 || state.tabs.length;
+  const added = state.tabs.toSpliced(at, Number(slot >= 0), { path, preview, group, space: current, unplaced: path.startsWith("/s/") || undefined });
   return { ...state, active: path, space: current, last: { ...state.last, [current]: path },
     groups: state.groups.map((item) => item.id === open?.group && path !== state.active ? { ...item, collapsed: false } : item),
-    tabs: !open ? arrange(group && state.tabs[at]?.group !== group ? join(added, path, group, current) : added) : path === "/" ? home(state.tabs, current) : state.tabs };
+    tabs: !open ? arrange(group && state.tabs[at]?.group !== group ? join(added, path, group, current) : added) : path === "/" ? home(state.tabs, current) : preview ? state.tabs : state.tabs.map((tab) => tab.path === path ? { ...tab, preview: false } : tab) };
 }
 
 // Entering a space returns to its last active tab, else its first unpinned tab, else New session.
@@ -1071,6 +1072,8 @@ function useTabs() {
       setState((current) => openTab({ ...current, spaces, space: spaces[0].id, tabs: current.tabs.map((tab) => tab.space === doomed ? { path: tab.path, pinned: tab.pinned, group: tab.group, space: spaces[0].id } : tab) }, current.active));
     },
     promote: (path: string) => { if (state.tabs.some((tab) => tab.path === path && tab.preview)) update((tabs) => tabs.map((tab) => tab.path === path ? { ...tab, preview: false } : tab)); },
+    // The tab is opened with the navigation, in one render, so the URL never shows it as a preview first.
+    open: (path: string) => flushSync(() => { setState((current) => openTab(current, path, false)); navigate(path); }),
     // A moved tab takes the group of the tab it lands on.
     move: (from: string, to: string) => update((tabs) => moveQueueId(tabs.map((tab) => tab.path), from, to).map((path) => tabs.find((tab) => tab.path === path)!).map((tab) => tab.path === from && !tab.pinned ? { ...tab, group: tabs.find((other) => other.path === to)?.group } : tab)),
     // A new session's tab waits for its row to learn the space it was born in.
@@ -1609,6 +1612,7 @@ function paletteRows(
   sidebar: { rows: Session[]; loadingIds: ReadonlySet<string> },
   jobs: { stem: string; status: string; schedule?: string; agent?: string; channel?: string }[] | undefined,
   newChat: () => void,
+  open: (path: string) => void,
   openCron: () => void,
   runStem: (stem: string) => void,
   actions: { key: string; label: string; detail?: string; keep?: boolean; disabled?: boolean; run: () => void }[],
@@ -1645,7 +1649,7 @@ function paletteRows(
   return mode === "commands" ? commands : [...commands, ...sidebar.rows.map((session) => ({
     key: session.id,
     session, loading: sidebar.loadingIds.has(session.id),
-    run: () => navigate(sessionPath(session.id)),
+    run: () => open(sessionPath(session.id)),
   }))];
 }
 
@@ -1749,8 +1753,22 @@ function useRemoteCreation(query: string, close: () => void, restart: () => void
 function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string, ComposerDraft>; mode: "sessions" | "commands" | "cron" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | undefined) => void; newChat: () => void }) {
   const sidebar = useContext(Sidebar);
   const { setCommand, composer } = useContext(SessionCommands);
-  const { id } = useRoute();
-  const tabCommands = useContext(TabActions).commands(usePathname() || "/", sidebar.rows).map((item) => ({ ...item, key: `tab-${item.key}`, label: `Tabs: ${item.label}` }));
+  // Arrowing onto a session shows it in the preview tab. The palette remounts per opening and keeps acting on the
+  // location it opened at, returning there when dismissed and before running a choice. Typing, or pressing a
+  // command, returns there first, so commands render, and run, with that location's state.
+  const at = () => location.pathname + location.search + location.hash;
+  const [origin] = useState(() => ({ path: location.pathname, href: at() }));
+  const id = origin.path.startsWith("/s/") ? decodeSessionId(origin.path.slice(3)) : "";
+  const tabs = useContext(TabActions);
+  const back = () => { if (at() !== origin.href) flushSync(() => navigate(origin.href, true)); };
+  // Only a session that opens in this space is shown, so browsing never switches spaces.
+  const peek = (session?: Session) => {
+    const path = session ? sessionPath(session.id) : "", tab = tabs.state.tabs.find((item) => item.path === path);
+    const here = session && (tab ? tab.space === tabs.state.space : !session.spaceId || session.spaceId === tabs.state.space);
+    const target = here ? path : origin.href;
+    if (target !== at()) navigate(target, true);
+  };
+  const tabCommands = tabs.commands(origin.path, sidebar.rows).map((item) => ({ ...item, key: `tab-${item.key}`, label: `Tabs: ${item.label}` }));
   const actions = useSessionActions(sidebar.rows.find((row) => row.id === id), () => setMode(undefined));
   const choices = useQuery({ ...queries.agents({ conversationId: id }), enabled: id !== "" });
   const draft = drafts.get(id);
@@ -1809,7 +1827,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
   // The folder picker leaves session search, so typed folders are never sent as a search.
   const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(0); setMode("commands"); }, paletteCopy[mode ?? "sessions"]);
   const inSpace = useInSpace();
-  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim().toLowerCase(), { rows: search.rows, loadingIds: sidebar.loadingIds }, jobs.data?.filter(inSpace), newChat, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...timeline, ...outputs], recent));
+  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim().toLowerCase(), { rows: search.rows, loadingIds: sidebar.loadingIds }, jobs.data?.filter(inSpace), newChat, tabs.open, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...timeline, ...outputs], recent));
   const selected = items.length === 0 ? 0 : pick % items.length;
   // The palette opens with the first rows; the full list renders in the background.
   const shown = useDeferredValue(items, items.slice(0, 50));
@@ -1822,6 +1840,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
       setPick(0);
     }
     if (!item.keep) setMode(undefined);
+    back();
     item.run();
   };
   useEffect(() => { active.current?.scrollIntoView({ block: "nearest" }); }, [selected, mode]);
@@ -1832,17 +1851,20 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
       // In session search, Enter runs a command containing the typed text or one picked with the arrows; a fuzzy one on top yields to the sessions.
       if (item && !item.session && (mode !== "sessions" || moved.current || item.label!.toLowerCase().includes(query.trim().toLowerCase()))) return choose(item);
       setEntered(true);
-      search.enter(() => { const row = item?.session ? item : items.find(({ session }) => session); if (row) choose(row); }, (session) => choose({ key: session.id, session, run: () => navigate(sessionPath(session.id)) }));
+      search.enter(() => { const row = item?.session ? item : items.find(({ session }) => session); if (row) choose(row); }, (session) => choose({ key: session.id, session, run: () => tabs.open(sessionPath(session.id)) }));
     });
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") moved.current = true;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      moved.current = true;
+      peek(items[next % items.length]?.session);
+    }
     if (event.key !== "Enter") setPick(next);
   };
   return (
-    <Dialog open={mode !== undefined} onOpenChange={(open) => { if (!open) setMode(undefined); }}>
+    <Dialog open={mode !== undefined} onOpenChange={(open) => { if (!open) { setMode(undefined); back(); } }}>
       <DialogContent initialFocus={input} showCloseButton={false} className="top-[20%] flex max-h-[75vh] translate-y-0 flex-col overflow-hidden sm:max-w-lg [@media(pointer:coarse)]:top-[var(--search-top,1rem)] [@media(pointer:coarse)]:max-h-[var(--search-height,75vh)]">
         <DialogTitle className="sr-only">{copy.title}</DialogTitle>
         <DialogDescription className="sr-only">{copy.desc}</DialogDescription>
-        {mode === "sessions" ? <SessionSearch rows={sidebar.rows} catalog={agents.data?.agents ?? []} query={query} setQuery={(update) => { setPick(0); setEntered(false); moved.current = false; setQuery(update); }} search={search} inputRef={input} placeholder={copy.placeholder} onKeyDown={onKeyDown} /> : <Input
+        {mode === "sessions" ? <SessionSearch rows={sidebar.rows} catalog={agents.data?.agents ?? []} query={query} setQuery={(update) => { setPick(0); setEntered(false); moved.current = false; setQuery(update); peek(); }} search={search} inputRef={input} placeholder={copy.placeholder} onKeyDown={onKeyDown} /> : <Input
           ref={input}
           value={query}
           onChange={(event) => { setPick(0); setQuery(event.target.value); }}
@@ -1856,7 +1878,7 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
         <ul data-pending={search.pending} className="max-h-[min(24rem,50vh)] overflow-y-auto p-1 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
           {items.length === 0 ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, search, jobs.isLoading, remote.empty)}</li> : shown.map((item, index) => (
             <li key={item.key}>
-              <button disabled={item.disabled} ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start justify-center rounded-md px-3 text-left text-sm disabled:opacity-50", item.session ? "py-2" : "min-h-9 py-1.5 [@media(pointer:coarse)]:min-h-11", item.session && search.pending && "opacity-50", index === selected && "bg-accent")} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item)}>
+              <button disabled={item.disabled} ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start justify-center rounded-md px-3 text-left text-sm disabled:opacity-50", item.session ? "py-2" : "min-h-9 py-1.5 [@media(pointer:coarse)]:min-h-11", item.session && search.pending && "opacity-50", index === selected && "bg-accent")} onMouseDown={(event) => { event.preventDefault(); if (!item.session) peek(); }} onClick={() => choose(item)}>
                 {item.session ? <SessionRowContent session={item.session} loading={item.loading} /> : <><span className="font-medium">{item.label}</span>{item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}</>}
               </button>
             </li>
