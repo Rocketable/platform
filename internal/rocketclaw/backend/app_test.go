@@ -382,6 +382,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 				code = strings.Replace(code, "    return", "    bash(command=r'''touch "+waiting+" && until [ -f "+ended+" ]; do sleep 0.01; done''')\n    return", 1)
 			}
 
+			probeOutputs := make(chan string, 8) // PROBE
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
 				arguments, err := json.Marshal(struct {
@@ -394,6 +395,10 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 				output := fmt.Sprintf(`{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_b","name":"execute","arguments":%q}`, arguments)
 
 				if strings.Contains(string(body), "function_call_output") {
+					select { // PROBE
+					case probeOutputs <- string(body):
+					default:
+					}
 					output = `{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}`
 				}
 
@@ -483,6 +488,12 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 
 			select {
 			case err := <-done:
+				if t.Failed() { // PROBE
+					for len(probeOutputs) > 0 {
+						t.Logf("PROBE provider got: %s", <-probeOutputs)
+					}
+					t.Logf("PROBE logs:\n%s", logs.String())
+				}
 				require.NoError(t, err)
 			case <-time.After(10 * time.Second):
 				t.Fatal("shutdown did not finish after bash")

@@ -229,8 +229,13 @@ for (const width of [1280, 320]) test(`copy page link across pages at ${width}px
   await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search", exact: true }).click();
   await page.getByRole("dialog").waitFor({ state: "detached" });
   await page.waitForURL((url: URL) => url.pathname === "/search");
-  await page.getByRole("main").getByRole("textbox", { name: "Search sessions", exact: true }).fill("two words & +%");
-  await page.waitForURL((url: URL) => url.searchParams.get("q") === "two words & +%");
+  const probeBox = page.getByRole("main").getByRole("textbox", { name: "Search sessions", exact: true }); // PROBE
+  const probeBefore = JSON.stringify({ url: page.url(), value: await probeBox.inputValue(), main: (await page.getByRole("main").innerText()).slice(0, 300) });
+  await probeBox.fill("two words & +%");
+  await page.waitForURL((url: URL) => url.searchParams.get("q") === "two words & +%", { timeout: 10_000 }).catch(async (error: unknown) => {
+    console.error("PROBE before", probeBefore, "after", JSON.stringify({ url: page.url(), value: await probeBox.inputValue(), main: (await page.getByRole("main").innerText()).slice(0, 300) }));
+    throw error;
+  });
   await page.evaluate(() => { location.hash = "match%2Ftwo"; });
   await copy.click();
   await status.filter({ hasText: "Page link copied" }).waitFor();

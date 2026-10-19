@@ -1,0 +1,81 @@
+name: flake-probe (temporary, do not merge)
+
+on:
+  pull_request:
+
+env:
+  ROCKETCLAW_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/rocketclaw_test?sslmode=disable
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
+        copy: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+      - name: Start PostgreSQL
+        run: >-
+          nohup docker run -d --name postgres -p 5432:5432
+          -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rocketclaw_test
+          postgres:18 > "$RUNNER_TEMP/postgres.log" 2>&1 &
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/go-build
+          key: go-rocketclaw-${{ github.sha }}
+          restore-keys: go-rocketclaw-
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile
+        working-directory: internal/rocketclaw/web
+      - name: Install Playwright and Chromium for browser tests
+        run: |
+          dir="$HOME/.cache/playwright-core"
+          mkdir -p "$dir" && cd "$dir" && bun add playwright-core@1.63.0
+          ./node_modules/.bin/playwright-core install --with-deps --no-shell chromium
+          echo "ROCKETCLAW_PLAYWRIGHT_MODULE=$dir/node_modules/playwright-core" >> "$GITHUB_ENV"
+          echo "ROCKETCLAW_CHROMIUM=$(bun -e 'console.log(require("playwright-core").chromium.executablePath())')" >> "$GITHUB_ENV"
+      - name: Wait for PostgreSQL
+        timeout-minutes: 2
+        run: until docker exec postgres pg_isready -h 127.0.0.1 -U postgres -d rocketclaw_test; do sleep 1; done
+      - name: Shard
+        working-directory: internal/rocketclaw
+        run: |
+          tests=$(grep -rhoE '^func Test[A-Za-z0-9_]*\(' --include='*_test.go' ../../cmd/rocketclaw . | sed -E 's/^func (.*)\(/\1/' | grep -vx TestMain | sort -u | awk -v n=4 -v i=${{ matrix.shard }} 'NR % n == i' | paste -sd'|' -)
+          make coverage-profile COVERPROFILE=probe.out GOTESTRUN="^($tests)\$\$" 2>&1 | tee "$RUNNER_TEMP/out.log"
+      - if: always()
+        run: grep -a -A3 'PROBE\|--- FAIL' "$RUNNER_TEMP/out.log" | head -400 || true
+
+  web:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        copy: [1, 2, 3, 4, 5, 6]
+    defaults:
+      run:
+        working-directory: internal/rocketclaw/web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile
+      - name: Install Playwright and Chromium for browser tests
+        working-directory: .
+        run: |
+          dir="$HOME/.cache/playwright-core"
+          mkdir -p "$dir" && cd "$dir" && bun add playwright-core@1.63.0
+          ./node_modules/.bin/playwright-core install --with-deps --no-shell chromium
+          echo "ROCKETCLAW_PLAYWRIGHT_MODULE=$dir/node_modules/playwright-core" >> "$GITHUB_ENV"
+          echo "ROCKETCLAW_CHROMIUM=$(bun -e 'console.log(require("playwright-core").chromium.executablePath())')" >> "$GITHUB_ENV"
+      - run: bun run build
+      - name: Web tests
+        run: for i in 1 2 3 4 5 6 7 8; do echo src/tabs.browser.test.ts; done | xargs -n 1 -P 2 bun test

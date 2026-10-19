@@ -1527,7 +1527,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await matrixDialog.getByRole("button", { name: "pinned", exact: true }).waitFor();
     expect(await operatorChoices.allTextContents()).toEqual(["pinned", "forked"]);
     await matrixSearch.fill("sort:");
-    await matrixDialog.getByRole("button", { name: "newest", exact: true }).waitFor();
+    await matrixDialog.getByRole("button", { name: "newest", exact: true }).waitFor({ timeout: 10_000 }).catch(async (error: unknown) => { // PROBE
+      console.error("PROBE sort input", JSON.stringify(await matrixSearch.inputValue()), "pills", JSON.stringify(await matrixDialog.getByRole("button", { name: /^(tag|is|sort|agent):/ }).allTextContents()), "dialog", JSON.stringify((await matrixDialog.innerText()).slice(0, 600)));
+      throw error;
+    });
     expect(await operatorChoices.allTextContents()).toEqual(["newest", "oldest"]);
     await matrixSearch.fill("agent:");
     const lastSuggestion = matrixDialog.getByRole("button", { name: "agent9", exact: true });

@@ -222,6 +222,7 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell string, p
 	cmd.Stderr = outputWriter
 	cmd.Cancel = func() error {
 		timedOut = true
+		fmt.Fprintf(os.Stderr, "PROBE shell cancel pid=%d cause=%v command=%.120q\n", cmd.Process.Pid, context.Cause(commandCtx), params.Command)
 
 		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			return fmt.Errorf("terminate command group: %w", err)
@@ -239,6 +240,11 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell string, p
 
 	err = cmd.Run()
 	_ = outputWriter.Close()
+	if cmd.ProcessState != nil { // PROBE
+		if status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+			fmt.Fprintf(os.Stderr, "PROBE shell exit pid=%d state=%v err=%v command=%.120q\n", cmd.Process.Pid, cmd.ProcessState, err, params.Command)
+		}
+	}
 
 	if cmd.Process == nil {
 		return bashFailure(err.Error())
