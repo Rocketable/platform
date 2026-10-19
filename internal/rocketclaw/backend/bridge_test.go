@@ -849,10 +849,17 @@ func TestPickLaterWorkDoesNotClaimScheduledWhenTurnBusy(t *testing.T) {
 func TestBridgeStopDoesNotClassifyOrdinaryTurnAsInterrupted(t *testing.T) {
 	t.Parallel()
 
-	bridge := &Bridge{stopCh: make(chan struct{}), activeReply: protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "ordinary", true)}
-	_, bridge.activeTurnCancel = context.WithCancel(t.Context())
-	require.NoError(t, bridge.Stop())
-	assert.False(t, bridge.activeTurnInterrupted)
+	// The turn ends with its bridge context's cause even when Stop comes first, so a shutdown lets its running calls
+	// finish and a lost run lock still stops them.
+	for _, cause := range []error{errShutdown, context.Canceled} {
+		bridgeCtx, cancelBridge := context.WithCancelCause(t.Context())
+		turn, cancel := context.WithCancel(bridgeCtx)
+		bridge := &Bridge{stopCh: make(chan struct{}), activeReply: protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "ordinary", true), activeTurnCancel: cancel}
+		require.NoError(t, bridge.Stop())
+		cancelBridge(cause)
+		assert.False(t, bridge.activeTurnInterrupted)
+		assert.ErrorIs(t, context.Cause(turn), cause)
+	}
 }
 
 func TestInterruptActiveWorkflowCancelsWithoutSignalChannel(t *testing.T) {
