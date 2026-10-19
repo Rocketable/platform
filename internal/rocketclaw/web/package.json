@@ -33,7 +33,7 @@
   },
   "devDependencies": {
     "@sentry/cli": "^3.8.0",
-    "@shadcn/lint": "^0.2.1",
+    "@shadcn/lint": "^0.2.3",
     "@types/bun": "^1.4.3",
     "@types/mdast": "^4.0.4",
     "@types/node": "^26.6.5",
