@@ -547,10 +547,9 @@ func (s Skills) skillFiles(dir string) ([]string, error) {
 		files = files[:10]
 	}
 
-	wrapped := make([]string, 0, len(files))
-	for _, file := range files {
-		wrapped = append(wrapped, fmt.Sprintf("<file>%s</file>", file))
+	for i, file := range files {
+		files[i] = fmt.Sprintf("<file>%s</file>", file)
 	}
 
-	return wrapped, nil
+	return files, nil
 }
