@@ -871,6 +871,14 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 		}
 	}
 
+	// The turn is over before later work is picked: a timer that fired during it finds its work due
+	// below, and one that fires from here on runs it.
+	for _, done := range []*Bridge{b, handler} {
+		done.mu.Lock()
+		done.handling = false
+		done.mu.Unlock()
+	}
+
 	b.pickLaterWorkLogged(ctx, handler, request.inbound)
 
 	if handler != b {
