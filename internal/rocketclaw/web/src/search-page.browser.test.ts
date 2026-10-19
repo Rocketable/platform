@@ -581,6 +581,33 @@ test("newer search replaces an in-flight search and retries errors", async () =>
   }
 }, 30_000);
 
+test("a search answer arriving keeps the selected search text, so typing replaces it", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const started = Promise.withResolvers<void>();
+  const held = Promise.withResolvers<void>();
+  const { server, origin } = serve([], async ({ query }) => {
+    if (query === "old words") { started.resolve(); await held.promise; }
+    return response(query);
+  });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.goto(`${origin}/search`);
+    const search = page.getByRole("textbox", { name: "Search sessions" });
+    await search.fill("old words");
+    await started.promise;
+    await search.selectText();
+    held.resolve();
+    await page.getByRole("status").filter({ hasText: "Searching…" }).waitFor({ state: "hidden" });
+    await page.keyboard.type("new");
+    expect(await search.inputValue()).toBe("new");
+  } finally {
+    held.resolve();
+    await browser.close();
+    server.stop(true);
+  }
+}, 30_000);
+
 test("message matches jump after history loads and last close returns to the last visible message", async () => {
   const { chromium: engine } = await import(playwright!);
   const messages = (prefix: string) => Array.from({ length: 18 }, (_, i) => [

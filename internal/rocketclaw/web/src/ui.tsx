@@ -2030,11 +2030,11 @@ function usePills(query: string, setQuery: (update: (query: string) => string) =
   const terms = useMemo(() => (response?.terms ?? []).filter((term) => query.slice(0, term.end) === read.slice(0, term.end)), [query, read, response]);
   const pills = useMemo(() => terms.filter((term) => /\s/.test(query[term.end] ?? "")), [query, terms]);
   const input = cutTerms(query, pills);
-  // Keep the caret in place when pills take text out of the input.
+  // Keep the caret in place when pills take text out of the input; an answer that leaves the text alone keeps the selection.
   useLayoutEffect(() => {
     const at = cutTerms(query.slice(0, caret.current), pills).length;
     if (inputRef.current === document.activeElement) inputRef.current!.setSelectionRange(at, at);
-  }, [inputRef, pills, query]);
+  }, [inputRef, input]);
   const toQuery = (at: number, after: boolean) => pills.reduce((position, term) => term.start < position || after && term.start === position ? position + term.end + 1 - term.start : position, at);
   const change = (next: string, at = next.length) => {
     caret.current = at;
