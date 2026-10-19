@@ -711,6 +711,25 @@ func TestOneShotScheduleActivatesOnce(t *testing.T) {
 	assert.Empty(t, runningTestTurns(t, store))
 }
 
+// A timer that saw the bridge running can reach its schedule after the bridge stopped; it must not
+// claim a run it cannot submit, or a recurring schedule skips that run.
+func TestStoppedBridgeLeavesDueScheduleUnclaimed(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "thread-1", SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+	now := time.Now().UTC()
+	scheduled := protocol.ScheduledMessageState{ConversationID: "thread-1", Agent: "main", Message: "hourly", DueAt: now, Recurring: true, Interval: time.Hour}
+	require.NoError(t, store.PutScheduledMessage("s1", &scheduled))
+	require.NoError(t, bridge.Stop())
+
+	require.ErrorIs(t, bridge.submitDueScheduled(t.Context(), "s1", &scheduled, now), protocol.ErrBridgeStopped)
+
+	pending, err := store.ScheduledMessagesForConversation("thread-1")
+	require.NoError(t, err)
+	assert.True(t, pending["s1"].DueAt.Equal(now), "the next start still finds the run due")
+}
+
 func TestPickLaterWorkSkipsWhenGoalStillActive(t *testing.T) {
 	t.Parallel()
 
