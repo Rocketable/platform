@@ -2228,10 +2228,6 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       const detailsPage = await browser.newPage({ viewport: { width, height: 844 } });
       await detailsPage.goto(`${origin}/s/${Buffer.from("named").toString("base64url")}`);
       await detailsPage.getByRole("button", { name: "Choose agent", exact: true }).waitFor();
-      if (width === 390) {
-        expect(await detailsPage.locator("main").getByRole("button", { name: "Pin session", exact: true }).count()).toBe(0);
-        expect(await detailsPage.locator("main").getByRole("button", { name: "Name session", exact: true }).count()).toBe(0);
-      }
       expect(await detailsPage.getByRole("button", { name: "Steer", exact: true }).isDisabled()).toBe(true);
       if (width === 390) {
         await detailsPage.setViewportSize({ width: 320, height: 568 });
@@ -2258,8 +2254,13 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         await detailsPage.close();
         continue;
       }
-      await detailsPage.locator("main").getByRole("button", { name: "Pin session", exact: true }).click();
-      await detailsPage.locator("main").getByRole("button", { name: "Unpin session", exact: true }).waitFor();
+      const commands = detailsPage.getByRole("dialog", { name: "Run command", exact: true });
+      const sessionCommand = async (label: string) => {
+        await detailsPage.keyboard.press("Control+Shift+p");
+        await commands.getByRole("button", { name: `Sessions: ${label}`, exact: true }).click();
+        await commands.waitFor({ state: "hidden" });
+      };
+      await sessionCommand("Pin session");
       await detailsPage.keyboard.press("Control+p");
       const detailsPalette = detailsPage.getByRole("dialog", { name: "Go to session or command", exact: true });
       const search = detailsPalette.getByPlaceholder("Search sessions");
@@ -2268,9 +2269,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await settled();
       expect(await detailsPalette.locator('li > button [data-slot="session-title"]').allTextContents()).toEqual(["Original preview", "Pinned preview"]);
       await detailsPage.keyboard.press("Escape");
-      await detailsPage.locator("main").getByRole("button", { name: "Unpin session", exact: true }).click();
-      await detailsPage.locator("main").getByRole("button", { name: "Pin session", exact: true }).waitFor();
-      await detailsPage.locator("main").getByRole("button", { name: "Name session", exact: true }).click();
+      await sessionCommand("Unpin session");
+      await sessionCommand("Name session");
       const dialog = detailsPage.getByRole("dialog", { name: "Name session", exact: true });
       await dialog.getByLabel("Session name").fill("  Release notes  ");
       ctrl.updateError = true;
@@ -2280,9 +2280,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       ctrl.updateError = false;
       await dialog.getByRole("button", { name: "Save", exact: true }).click();
       await dialog.waitFor({ state: "hidden" });
-      await detailsPage.locator("main").getByRole("button", { name: "Name session", exact: true }).waitFor();
       await detailsPage.reload();
-      await detailsPage.locator("main").getByRole("button", { name: "Pin session", exact: true }).waitFor();
+      await detailsPage.getByRole("button", { name: "Choose agent", exact: true }).waitFor();
       await detailsPage.keyboard.press("Control+p");
       await detailsPalette.getByText("Release notes", { exact: true }).waitFor();
       await search.fill("Release notes");
@@ -2292,17 +2291,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await settled();
       expect(await detailsPalette.locator('li > button').count()).toBe(1);
       await detailsPage.keyboard.press("Escape");
-      const pinBox = await detailsPage.locator("main").getByRole("button", { name: "Pin session", exact: true }).boundingBox();
-      const sendBox = await detailsPage.getByRole("button", { name: "Send", exact: true }).boundingBox();
-      expect(pinBox!.x + pinBox!.width).toBeLessThanOrEqual(sendBox!.x);
-      expect(Math.abs(pinBox!.y - sendBox!.y)).toBeLessThan(8);
-      const rename = detailsPage.locator("main").getByRole("button", { name: "Name session", exact: true });
-      expect(await rename.innerText()).toBe("");
-      await detailsPage.locator("textarea").hover();
-      await rename.hover();
-      await detailsPage.locator('[data-slot="tooltip-content"]').filter({ hasText: "Name session" }).waitFor();
       expect(await detailsPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-      await detailsPage.locator("main").getByRole("button", { name: "Name session", exact: true }).click();
+      await sessionCommand("Name session");
       expect(await dialog.getByLabel("Session name").inputValue()).toBe("Release notes");
       await dialog.getByLabel("Session name").fill("");
       await dialog.getByRole("button", { name: "Save", exact: true }).click();

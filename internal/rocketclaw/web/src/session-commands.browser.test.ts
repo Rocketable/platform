@@ -316,10 +316,9 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await page.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button').length === 1);
     expect(await palette.getByRole("img", { name: "Forked session", exact: true }).count()).toBe(1);
     await page.keyboard.press("Escape");
-    if (width >= 768) {
-      await page.locator("main").getByRole("button", { name: "Open original conversation", exact: true }).click();
-      await page.waitForURL("**/s/" + btoa("source").replace(/=+$/, ""));
-    }
+    await page.keyboard.press("Meta+Shift+p");
+    await commands.getByRole("button", { name: "Sessions: Open original conversation", exact: true }).click();
+    await page.waitForURL("**/s/" + btoa("source").replace(/=+$/, ""));
     forkParents.destination = "source";
 
     // Handoff originates from an ordinary session, independent of the fork above.

@@ -16,7 +16,7 @@ import { queries, mutations, listSessions, rpc, RPCError } from "./api";
 import { draftContent } from "./drafts";
 import { holdWakeLock, setVoiceSticky, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, Layers, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Tag, TextCursorInput, Undo2, Wrench, X } from "lucide-react";
+import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, Layers, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Undo2, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useDeferredValue, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -1985,25 +1985,13 @@ function useSessionActions(session: Session | undefined, onSuccess?: () => void)
   // People tag remote OpenCode sessions freely and RocketClaw sessions only as their agent allows.
   const choices = session?.server ? [...tags] : agentTags[session?.agent ?? ""] ?? [];
   const items = session ? [
-    ...(session.forkedFrom ? [{ key: "origin", label: "Open original conversation", icon: CornerUpLeft, run: () => navigate(sessionPath(session.forkedFrom!)) }] : []),
-    { key: "name", label: "Name session", icon: TextCursorInput, run: () => setCommand({ mode: "name", source: id }) },
-    { key: "pin", label: session.pinned ? "Unpin session" : "Pin session", icon: Pin, pressed: !!session.pinned, keep: true, run: () => update.mutate({ id, pinned: !session.pinned }) },
-    ...choices.map((tag) => ({ key: `tag-${tag}`, label: `${tags.has(tag) ? "Remove" : "Add"} tag ${tag}`, icon: Tag, pressed: tags.has(tag), keep: true, run: () => update.mutate({ id, tag }) })),
-    ...(session.server ? [{ key: "add-tag", label: "Add tag…", icon: Tag, run: () => setCommand({ mode: "tag", source: id }) }] : []),
+    ...(session.forkedFrom ? [{ key: "origin", label: "Open original conversation", run: () => navigate(sessionPath(session.forkedFrom!)) }] : []),
+    { key: "name", label: "Name session", run: () => setCommand({ mode: "name", source: id }) },
+    { key: "pin", label: session.pinned ? "Unpin session" : "Pin session", keep: true, run: () => update.mutate({ id, pinned: !session.pinned }) },
+    ...choices.map((tag) => ({ key: `tag-${tag}`, label: `${tags.has(tag) ? "Remove" : "Add"} tag ${tag}`, keep: true, run: () => update.mutate({ id, tag }) })),
+    ...(session.server ? [{ key: "add-tag", label: "Add tag…", run: () => setCommand({ mode: "tag", source: id }) }] : []),
   ].map((item) => ({ ...item, disabled: update.isPending })) : [];
   return { items, error: update.error };
-}
-
-function SessionActions({ session }: { session?: Session }) {
-  const { items, error } = useSessionActions(session);
-  return <>{items.map(({ key, label, icon: Icon, pressed, disabled, run }) => <Tooltip key={key}>
-    <TooltipTrigger render={<Button variant="ghost" size="icon" className="size-11 sm:size-8" disabled={disabled} />} aria-label={label} aria-pressed={pressed} onClick={run}><Icon className={cn(pressed && "fill-current")} /></TooltipTrigger><TooltipContent>{label}</TooltipContent>
-  </Tooltip>)}{error ? <span role="alert" className="text-xs text-destructive">{error.message}</span> : null}</>;
-}
-
-function SessionHeaderActions({ id }: { id: string }) {
-  const sidebar = useContext(Sidebar);
-  return <SessionActions session={sidebar.rows.find((row) => row.id === id)} />;
 }
 
 // With tag, it adds a typed tag to a remote OpenCode session, suggesting tags already in use.
@@ -4056,7 +4044,7 @@ function Composer({
               setText(event.target.value);
             }}
             placeholder={placeholder}
-            className="min-h-16 max-h-[40dvh] overflow-y-auto"
+            className="min-h-16 max-h-[40dvh] overflow-y-auto sm:mt-2 sm:min-h-[52px] sm:w-[calc(100%-0.75rem)]"
             onKeyDown={(event) => {
               if (event.key === "Enter" && event.altKey && (event.metaKey || event.ctrlKey) && !event.shiftKey) {
                 event.preventDefault();
@@ -4096,19 +4084,18 @@ function Composer({
               }
             }}
           />
-          <InputGroupAddon align="block-end">
-            <Tooltip><TooltipTrigger render={<InputGroupButton size="icon-sm" variant="outline" className="size-11 sm:size-8" disabled={sending} />} aria-label="Add files" onClick={() => fileInput.current?.click()}><Plus /></TooltipTrigger><TooltipContent>Add files</TooltipContent></Tooltip>
+          <InputGroupAddon align="block-end" className="sm:mt-0.5">
+            <Tooltip><TooltipTrigger render={<InputGroupButton size="icon-sm" className="size-11 sm:-ml-0.5 sm:size-7" disabled={sending} />} aria-label="Add files" onClick={() => fileInput.current?.click()}><Plus /></TooltipTrigger><TooltipContent>Add files</TooltipContent></Tooltip>
             <AgentPicker catalog={catalog} selected={selected} setAgent={setAgent} open={agentOpen} setOpen={setAgentOpen} disabled={sending || catalog.length === 0} />
-            <div className="hidden md:contents"><SessionHeaderActions id={sessionId} /></div>
-            <InputGroupButton size="sm" variant={steerOff ? "quiet" : "ghost"} className="ml-auto h-11 sm:h-8" disabled={sending || empty} onClick={() => void send("STASH")}>Stash</InputGroupButton>
+            <InputGroupButton size="sm" variant={steerOff ? "quiet" : "ghost"} className="ml-auto h-11 sm:h-7" disabled={sending || empty} onClick={() => void send("STASH")}>Stash</InputGroupButton>
             <Tooltip>
-              <TooltipTrigger render={<InputGroupButton size="sm" className="h-11 sm:h-8" disabled={steerOff} />} aria-label="Steer" onClick={() => void send("STEER")}>
+              <TooltipTrigger render={<InputGroupButton size="sm" className="h-11 sm:h-7" disabled={steerOff} />} aria-label="Steer" onClick={() => void send("STEER")}>
                 Steer
               </TooltipTrigger>
               <TooltipContent>Guide the current response <ModEnterKeys mac={mac} /></TooltipContent>
             </Tooltip>
             <VoiceToggle sessionId={sessionId} />
-            <Tooltip><TooltipTrigger render={<InputGroupButton size="icon-sm" variant="default" className="size-11 sm:size-8" disabled={sending} />} aria-label={stopping ? "Stop" : "Send"} onClick={() => void (stopping ? stop() : send())}>
+            <Tooltip><TooltipTrigger render={<InputGroupButton size="icon-sm" variant="default" className="size-11 sm:-mr-0.5 sm:size-7" disabled={sending} />} aria-label={stopping ? "Stop" : "Send"} onClick={() => void (stopping ? stop() : send())}>
               {stopping ? <Square /> : <Send />}
             </TooltipTrigger><TooltipContent>{stopping ? "Stop response" : sendLabel}</TooltipContent></Tooltip>
           </InputGroupAddon>
@@ -4123,7 +4110,7 @@ function Composer({
 function AgentPicker({ catalog, selected, setAgent, open, setOpen, disabled }: { catalog: Agent[]; selected: string; setAgent: (name: string) => void; open: boolean; setOpen: (open: boolean) => void; disabled: boolean }) {
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
-      <DropdownMenuTrigger disabled={disabled} aria-label="Choose agent" title={selected} render={<InputGroupButton size="sm" variant="outline" className="min-h-11 min-w-0 max-w-36 shrink sm:min-h-0" />}>
+      <DropdownMenuTrigger disabled={disabled} aria-label="Choose agent" title={selected} render={<InputGroupButton size="sm" className="min-h-11 min-w-0 max-w-[220px] shrink sm:-ml-1 sm:h-7 sm:min-h-0" />}>
         <Bot /><span className={cn("min-w-0 truncate", !selected && "text-muted-foreground")}>{selected || "Choose agent"}</span><ChevronDown />
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" className="w-[min(28rem,calc(100vw-2rem))]">
@@ -4574,7 +4561,7 @@ function VoiceToggle({ sessionId }: { sessionId: string }) {
   // Phones talk on the Voice page: a narrow composer row has no room for another button.
   return <>
     <span aria-live="polite" title={notice} className="hidden max-w-48 truncate text-xs text-muted-foreground empty:absolute sm:inline">{notice}</span>
-    <Tooltip><TooltipTrigger render={<Button type="button" variant={calling ? "secondary" : "ghost"} size="icon" className="hidden sm:inline-flex sm:size-8" disabled={sessionId === ""} />} aria-label="Voice call" aria-pressed={calling} onClick={() => void (calling ? stopVoice() : startVoice(sessionId, speaker))}>
+    <Tooltip><TooltipTrigger render={<Button type="button" variant={calling ? "secondary" : "ghost"} size="icon" className="hidden sm:inline-flex sm:size-7" disabled={sessionId === ""} />} aria-label="Voice call" aria-pressed={calling} onClick={() => void (calling ? stopVoice() : startVoice(sessionId, speaker))}>
       {state === "connecting" ? <LoaderCircle className="animate-spin" /> : calling ? <MicOff /> : <Mic />}
     </TooltipTrigger><TooltipContent>{calling ? `End voice call (${state})` : "Start voice call"}</TooltipContent></Tooltip>
   </>;
