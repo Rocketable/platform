@@ -737,6 +737,47 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	require.Zero(t, service.db.Stats().InUse)
 }
 
+func TestSidebarSessionsPreviewAllocationBudget(t *testing.T) {
+	result := testing.Benchmark(BenchmarkSidebarSessions)
+	require.Positive(t, result.N)
+	require.Less(t, result.AllocedBytesPerOp(), int64(7<<20))
+}
+
+func BenchmarkSidebarSessions(b *testing.B) {
+	service, err := NewSessionService(b.TempDir())
+	require.NoError(b, err)
+	b.Cleanup(func() { require.NoError(b, service.Stop()) })
+
+	previews := make([]string, 32)
+	for i := range previews {
+		id := fmt.Sprintf("sidebar-%02d", i)
+		previews[i] = strings.Repeat(id, 8192)
+		require.NoError(b, service.UpsertThread(id, ThreadState{Agent: "main"}))
+		_, err := service.AppendEntryID(b.Context(), id, testSessionEntry("question", previews[i]))
+		require.NoError(b, err)
+	}
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		var rows []SidebarSession
+
+		for row, err := range service.SidebarSessions(b.Context()) {
+			require.NoError(b, err)
+
+			rows = append(rows, row)
+		}
+
+		require.Len(b, rows, 32)
+
+		for i := range rows {
+			row := &rows[i]
+			require.Equal(b, fmt.Sprintf("sidebar-%02d", i), row.Conversation.ID)
+			require.Equal(b, previews[i], row.Summary.LastMessage)
+		}
+	}
+}
+
 func TestSidebarSessionsCloseRowsOnEarlyStopAndCancellation(t *testing.T) {
 	t.Parallel()
 

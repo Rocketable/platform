@@ -1120,7 +1120,7 @@ ORDER BY pinned DESC, COALESCE(updated, '0001-01-01 00:00:00+00'::timestamptz) D
 		for rows.Next() {
 			var (
 				row     SidebarSession
-				preview []byte
+				preview sql.NullString
 				tags    []byte
 				updated sql.NullTime
 			)
@@ -1135,7 +1135,7 @@ ORDER BY pinned DESC, COALESCE(updated, '0001-01-01 00:00:00+00'::timestamptz) D
 			}
 
 			if updated.Valid {
-				row.Summary = &protocol.SessionSummary{ConversationID: row.Conversation.ID, LastMessage: string(preview), LastUpdated: updated.Time.UTC()}
+				row.Summary = &protocol.SessionSummary{ConversationID: row.Conversation.ID, LastMessage: preview.String, LastUpdated: updated.Time.UTC()}
 			}
 
 			if !yield(row, nil) {
