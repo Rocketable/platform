@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -29,6 +30,31 @@ func TestRunRejectsInvalidArgs(t *testing.T) {
 				t.Fatalf("Run(%q) error = %v; want %q", tt.args, err, tt.want)
 			}
 		})
+	}
+}
+
+func TestConfigAttrs(t *testing.T) {
+	cfg := config{
+		Addr:      "127.0.0.1:8443",
+		HTTPAddr:  "127.0.0.1:8080",
+		Host:      "example.ts.net",
+		CertCache: "cert-cache",
+		Routes: []routeConfig{
+			{Path: "/first", Target: "http://localhost:7070/hook"},
+			{Path: "/second", Target: "https://localhost:7071/events"},
+		},
+	}
+	want := []slog.Attr{
+		slog.String("addr", "127.0.0.1:8443"),
+		slog.String("http_addr", "127.0.0.1:8080"),
+		slog.String("host", "example.ts.net"),
+		slog.String("cert_cache", "cert-cache"),
+		slog.Int("route_count", 2),
+		slog.GroupAttrs("route_0", slog.String("path", "/first"), slog.String("target", "http://localhost:7070/hook")),
+		slog.GroupAttrs("route_1", slog.String("path", "/second"), slog.String("target", "https://localhost:7071/events")),
+	}
+	if got := configAttrs(cfg); !slices.EqualFunc(got, want, slog.Attr.Equal) {
+		t.Fatalf("configAttrs = %v; want %v", got, want)
 	}
 }
 
