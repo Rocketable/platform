@@ -642,7 +642,8 @@ test("an idle tab with background work shows an hourglass; a running turn keeps 
   await page.goto(`${origin}${href("delta")}`);
   await tab("Delta").waitFor();
   await page.goto(`${origin}${href("echo")}`);
-  await tab("Echo").waitFor();
+  // A saved name can render before the live list restores activity.
+  await tab("Echo").and(page.locator('[aria-description$="Background work running"]')).waitFor();
   expect(await tab("Echo").getAttribute("aria-description")).toEndWith("Background work running");
   expect(await tab("Echo").locator("svg").getAttribute("class")).toContain("lucide-hourglass");
   expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running");
