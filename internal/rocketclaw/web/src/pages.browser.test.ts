@@ -134,8 +134,10 @@ test("a sandboxed page reads its agent's Page Data only with its token and from 
     parent.postMessage({ type: "rocketclaw.read", id: 5, key: "missing", token }, "*");
   });
   await frame.waitForFunction(() => (window as any).replies.length === 2);
-  expect(await frame.evaluate(() => (window as any).replies)).toEqual([{ type: "rocketclaw.read", id: 4, value: { total: 3 } }, { type: "rocketclaw.read", id: 5, error: "page not found" }]);
-  expect(reads).toEqual([{ agent: "reporter", path: "revenue", data: true }, { agent: "reporter", path: "missing", data: true }]);
+  // Independent reads can finish in either order; each reply belongs to its request ID.
+  expect(await frame.evaluate(() => (window as any).replies.toSorted((a: { id: number }, b: { id: number }) => a.id - b.id))).toEqual([{ type: "rocketclaw.read", id: 4, value: { total: 3 } }, { type: "rocketclaw.read", id: 5, error: "page not found" }]);
+  expect(reads).toHaveLength(2);
+  expect(reads).toEqual(expect.arrayContaining([{ agent: "reporter", path: "revenue", data: true }, { agent: "reporter", path: "missing", data: true }]));
   expect(await page.evaluate(() => (window as any).replies.filter((reply: object) => "value" in reply || "error" in reply))).toEqual([]);
 }), 60_000);
 
