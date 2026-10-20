@@ -522,7 +522,10 @@ func TestAcquireTokenReportsOutputErrors(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		_, err := AcquireBrowserToken(ctx, errorWriter{err: errors.New("write failed")})
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+
+		_, err = acquireBrowserToken(ctx, errorWriter{err: errors.New("write failed")}, listener)
 		require.ErrorContains(t, err, "write OAuth authorization URL")
 	})
 
