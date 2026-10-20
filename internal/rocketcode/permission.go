@@ -274,13 +274,9 @@ func parsePermissionRules(permission string, node *yaml.Node) ([]PermissionRule,
 }
 
 func parsePermissionAction(value string) (PermissionAction, string, error) {
-	switch PermissionAction(value) {
-	case PermissionAllow:
-		return PermissionAllow, "", nil
-	case PermissionDeny:
-		return PermissionDeny, "", nil
-	case PermissionAuto:
-		return PermissionAuto, "", nil
+	switch action := PermissionAction(value); action {
+	case PermissionAllow, PermissionDeny, PermissionAuto:
+		return action, "", nil
 	case "ask":
 		return "", "", fmt.Errorf("permission action %q is not supported", value)
 	default:
