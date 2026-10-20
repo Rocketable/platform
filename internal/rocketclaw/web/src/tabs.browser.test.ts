@@ -83,6 +83,7 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
 const strip = (page: any) => page.getByRole("tablist", { name: "Open tabs" });
 const names = (page: any) => strip(page).getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
 const italic = (tab: any) => tab.evaluate((node: HTMLElement) => getComputedStyle(node).fontStyle === "italic");
+const animation = (locator: any) => locator.evaluate((node: Element) => getComputedStyle(node).animationName);
 // Group headers are the strip's only controls that report aria-expanded.
 const order = (page: any) => strip(page).locator('[role="tab"], [aria-expanded]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
 // Saves reach the server after the page changes, so a test waits for them before reloading.
@@ -542,7 +543,7 @@ test("narrow top strip scrolls and running tabs keep a reachable close control",
   await page.mouse.wheel(0, 100);
   await page.waitForFunction(() => document.querySelector('[role="tablist"][aria-label="Open tabs"]')!.scrollLeft === 100);
   await page.mouse.move(0, 400);
-  expect(await strip(page).getByRole("img", { name: "Turn running" }).evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("1");
+  expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running");
   const close = strip(page).getByRole("button", { name: "Close Delta" });
   expect(await close.evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("1");
   await close.focus();
@@ -606,22 +607,83 @@ test("narrow left placement is a drawer opened by the top-left button or a right
   expect(new URL(page.url()).pathname).toBe("/config");
 }), 60_000);
 
-test("running tab shows a dot instead of close until hover or focus at desktop width", () => withPage({}, async (page, origin) => {
+test("running tab title shimmers without shifting, and a pinned running tab pulses its icon", () => withPage({}, async (page, origin) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  const title = (name: string) => tab(name).getByText(name, { exact: true });
+  const indent = (name: string) => title(name).evaluate((node: HTMLElement) => node.getBoundingClientRect().left - node.parentElement!.getBoundingClientRect().left);
   await page.goto(`${origin}${href("delta")}`);
   await tab("Delta").waitFor();
   await page.goto(`${origin}${href("alpha")}`);
   await tab("Delta").waitFor();
   await page.mouse.move(640, 600);
-  const close = strip(page).getByRole("button", { name: "Close Delta" });
-  const dot = strip(page).getByRole("img", { name: "Turn running" });
-  expect(await close.evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("0");
-  expect(await dot.evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("1");
-  await tab("Delta").focus();
-  expect(await close.evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("1");
+  expect(await animation(title("Delta"))).not.toBe("none");
+  expect(await animation(title("Alpha"))).toBe("none");
+  expect(await strip(page).getByRole("button", { name: "Close Delta" }).evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("1");
   await tab("Delta").click();
   await page.waitForURL(`**${href("delta")}`);
-  expect(await dot.evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("1");
+  expect(await animation(title("Delta"))).not.toBe("none");
+  expect(await indent("Delta")).toBe(await indent("Alpha"));
+  expect(await strip(page).getByRole("img", { name: "Turn running" }).count()).toBe(0);
+  expect(await animation(tab("Delta").locator("svg"))).toBe("none");
+  await menu(page, "Delta", "Pin");
+  await menu(page, "Alpha", "Pin");
+  expect(await animation(tab("Delta").locator("svg"))).not.toBe("none");
+  expect(await animation(tab("Alpha").locator("svg"))).toBe("none");
+  await menu(page, "Delta", "Move tabs to left");
+  expect(await animation(title("Delta"))).not.toBe("none");
+  expect(await animation(tab("Delta").locator("svg"))).toBe("none");
+}), 60_000);
+
+test("the shimmer visibly sweeps the selected and other running titles in both themes", () => withPage({}, async (page, origin) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  const sweep = async (name: string) => {
+    const title = tab(name).getByText(name, { exact: true });
+    const levels: number[] = [];
+    for (const progress of [0, 0.2, 0.35, 0.5, 0.65, 0.8]) {
+      await title.evaluate((node: Element, progress: number) => { const run = node.getAnimations()[0]!; run.pause(); run.currentTime = Number(run.effect!.getTiming().duration) * progress; }, progress);
+      const png = (await title.screenshot()).toString("base64");
+      levels.push(await page.evaluate(async (png: string) => {
+        const image = new Image();
+        image.src = `data:image/png;base64,${png}`;
+        await image.decode();
+        const canvas = Object.assign(document.createElement("canvas"), { width: image.width, height: image.height });
+        const context = canvas.getContext("2d")!;
+        context.drawImage(image, 0, 0);
+        const { data } = context.getImageData(0, 0, image.width, image.height);
+        let sum = 0;
+        for (let i = 0; i < data.length; i += 4) sum += (data[i]! + data[i + 1]! + data[i + 2]!) / 3;
+        return sum / (data.length / 4);
+      }, png));
+    }
+    return Math.max(...levels) - Math.min(...levels);
+  };
+  await page.goto(`${origin}${href("alpha")}`);
+  await tab("Alpha").waitFor();
+  await page.goto(`${origin}${href("delta")}`);
+  await tab("Alpha").waitFor();
+  await page.mouse.move(640, 600);
+  for (const scheme of ["dark", "light"] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    expect(await sweep("Delta")).toBeGreaterThan(8);
+  }
+  await tab("Alpha").click();
+  await page.waitForURL(`**${href("alpha")}`);
+  for (const scheme of ["dark", "light"] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    expect(await sweep("Delta")).toBeGreaterThan(8);
+  }
+}), 60_000);
+
+test("with reduced motion a running tab's title and pinned icon stay still", () => withPage({ reducedMotion: "reduce" }, async (page, origin) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  await page.goto(`${origin}${href("delta")}`);
+  const title = tab("Delta").getByText("Delta", { exact: true });
+  await title.waitFor();
+  expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running");
+  expect(await title.evaluate((node: Element) => getComputedStyle(node).backgroundImage)).toBe("none");
+  await menu(page, "Delta", "Pin");
+  expect(await tab("Delta").getAttribute("aria-description")).toBe("Turn running");
+  expect(await animation(tab("Delta").locator("svg"))).toBe("none");
 }), 60_000);
 
 test("tab groups take a name and color, collapse, adopt opened tabs, follow drags, and survive reload", () => withPage({}, async (page, origin, _prompts, saved) => {
@@ -667,12 +729,12 @@ test("tab groups take a name and color, collapse, adopt opened tabs, follow drag
   await openFromPalette(page, "Delta");
   await page.waitForURL(`**${href("delta")}`);
   expect(await order(page)).toEqual(["Work", "Alpha", "Bravo", "Delta", "Charlie"]);
-  expect(await tab("Delta").getAttribute("aria-description")).toBe("Group Work, Space: Main");
+  expect(await tab("Delta").getAttribute("aria-description")).toBe("Group Work, Space: Main, Turn running");
   await tab("Charlie").dragTo(tab("Alpha"));
   expect(await order(page)).toEqual(["Work", "Charlie", "Alpha", "Bravo", "Delta"]);
   await menu(page, "Delta", "Remove from group");
   expect(await order(page)).toEqual(["Work", "Charlie", "Alpha", "Bravo", "Delta"]);
-  expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main");
+  expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running");
   await tab("Alpha").dragTo(tab("Delta"));
   expect(await order(page)).toEqual(["Work", "Charlie", "Bravo", "Delta", "Alpha"]);
   expect(await tab("Alpha").getAttribute("aria-description")).toBe("Space: Main");
