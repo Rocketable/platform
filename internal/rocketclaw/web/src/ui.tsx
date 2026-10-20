@@ -1137,9 +1137,6 @@ function TabPlacement() {
 // An open session tab whose turn ends raises a desktop notification that opens it, unless it is the tab in view.
 // It is titled by the session's name, else its agent, or a remote OpenCode session by its tab title, and shows
 // the start of the reply: a RocketClaw row's preview is its last message, an OpenCode row's reply its last answer.
-// ponytail: rows refresh on the sidebar poll, so a turn shorter than a poll goes unseen and a hidden window's
-// throttled timers can delay the notification; server push would fix both. Every window that saw the turn notifies
-// under the session's tag, so the system shows one notification, even while another window has the tab in view.
 function TabNotifications() {
   const { rows } = useContext(Sidebar), { state } = useContext(TabActions);
   const running = useRef(new Set<string>());
