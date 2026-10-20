@@ -430,9 +430,8 @@ func TestSearchSessionsTermOffsets(t *testing.T) {
 }
 
 // A term's offsets do not re-encode the query before it, so a 1 MiB query parses in linear time.
+// Keep the wall-clock check separate from parallel package tests.
 func TestSearchSessionsLongQueryParse(t *testing.T) {
-	t.Parallel()
-
 	const pairs = 1 << 17
 
 	start := time.Now()
