@@ -1,6 +1,6 @@
 module github.com/Rocketable/platform
 
-go 1.27.2
+go 1.27.3
 
 require (
 	cirello.io/pglock v1.18.0
