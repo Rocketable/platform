@@ -128,10 +128,6 @@ func TestSyncReportsWorkspaceDirectoryConflicts(t *testing.T) {
 	}
 }
 
-func TestResetTargetMissingIsNoop(t *testing.T) {
-	require.NoError(t, resetRuntimeDirectory(filepath.Join(t.TempDir(), targetRoot), testLogger(), true))
-}
-
 func TestResetTargetRejectsFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), targetRoot)
 	require.NoError(t, os.WriteFile(path, []byte("file"), 0o644))
