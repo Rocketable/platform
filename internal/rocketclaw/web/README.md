@@ -508,9 +508,10 @@ active tab.
   intact, to the first space. **New tab in group** brings New session into the
   group's space as well as the group.
 - **Running turns** make the tab's title shimmer with a moving gradient, so the
-  title stays in place. A pinned top-strip tab, which has no title, pulses its
-  icon instead. With reduced motion both stay still. Screen readers hear “Turn
-  running” in the tab's description.
+  title stays in place. A pinned top-strip tab, which has no title, shimmers its
+  icon instead. With reduced motion the title or icon shows a still gradient
+  that fades toward its end. Screen readers hear “Turn running” in the tab's
+  description.
 - **Keyboard.** The strip is a `tablist` with one Tab stop. Arrow keys (Left/Right
   or Up/Down), Home, and End move focus; Enter or Space activates. Anywhere in
   the app, Cmd/Ctrl+[ and Cmd/Ctrl+] activate the previous and next tab, wrapping

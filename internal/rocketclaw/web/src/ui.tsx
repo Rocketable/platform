@@ -1319,8 +1319,8 @@ function TabItem({ tab, description, rule, active, vertical, editing, endEdit, p
     <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className={cn("flex min-w-0", vertical ? "flex-1" : "max-w-80")} />}>
       <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={session.running ? [description, "Turn running"].filter(Boolean).join(", ") : description} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
         onClick={() => { if (!active) navigate(tab.path); }} onDoubleClick={promote}>
-        <Icon aria-hidden="true" className="size-4 shrink-0 group-data-[running=true]:only:motion-safe:animate-pulse" />
-        {editing ? <TabRename session={session} placeholder={title} endEdit={endEdit} /> : tab.pinned && !vertical ? null : <span className="truncate group-data-[running=true]:shimmer dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>}
+        <Icon aria-hidden="true" className="size-4 shrink-0 group-data-[running=true]:only:motion-safe:shimmer-icon group-data-[running=true]:only:motion-reduce:shimmer-icon-still" />
+        {editing ? <TabRename session={session} placeholder={title} endEdit={endEdit} /> : tab.pinned && !vertical ? null : <span className="truncate motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>}
       </div>
     </TooltipTrigger><TooltipContent side="bottom">{title}</TooltipContent></Tooltip>
     {active ? <button type="button" aria-label="Tab actions" className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground last:mr-1 hover:bg-accent hover:text-foreground" onClick={(event) => openMenu(event.currentTarget)}><Ellipsis className="size-3.5" /></button> : null}
