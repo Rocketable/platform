@@ -2436,17 +2436,14 @@ func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion) (respo
 		}
 
 		return responses.ResponseInputItemUnionParam{OfMessage: &assistant}, true
-	case "reasoning":
+	case "reasoning", "compaction", "compaction_summary":
 		summary := ""
 		if len(item.Summary) > 0 {
 			summary = item.Summary[0].Text
 		}
 
-		return reasoningReplayInput(item.ID, summary, item.EncryptedContent), true
-	case "compaction", "compaction_summary":
-		summary := ""
-		if len(item.Summary) > 0 {
-			summary = item.Summary[0].Text
+		if item.Type == "reasoning" {
+			return reasoningReplayInput(item.ID, summary, item.EncryptedContent), true
 		}
 
 		if summary == "" {

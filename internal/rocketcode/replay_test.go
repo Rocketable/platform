@@ -26,6 +26,18 @@ func TestResponseOutputReplayText(t *testing.T) {
 			wantCompacted: `{"type":"message","role":"user","content":""}`,
 		},
 		{
+			name:          "reasoning uses first summary",
+			input:         `{"type":"reasoning","id":"rsn","encrypted_content":"sealed","summary":[{"text":" first\n"},{"text":"later"}],"content":[{"type":"output_text","text":"ignored"}]}`,
+			want:          `{"type":"reasoning","id":"rsn","encrypted_content":"sealed","summary":[{"text":" first\n","type":"summary_text"}]}`,
+			wantCompacted: `{"type":"reasoning","id":"rsn","encrypted_content":"sealed","summary":[{"text":" first\n","type":"summary_text"}]}`,
+		},
+		{
+			name:          "empty reasoning does not use content",
+			input:         `{"type":"reasoning","id":"rsn","encrypted_content":"sealed","content":[{"type":"output_text","text":"ignored"}]}`,
+			want:          `{"type":"reasoning","id":"rsn","encrypted_content":"sealed","summary":[{"text":"","type":"summary_text"}]}`,
+			wantCompacted: `{"type":"reasoning","id":"rsn","encrypted_content":"sealed","summary":[{"text":"","type":"summary_text"}]}`,
+		},
+		{
 			name:          "compaction content",
 			input:         `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":[{"type":"output_text","text":" first\n"},{"type":"refusal","refusal":"refused"},{"type":"output_text","text":"世界 "}]}`,
 			want:          `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":" first\n世界 "}`,
