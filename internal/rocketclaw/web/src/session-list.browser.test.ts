@@ -2597,9 +2597,22 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await heldRow.getByText("$stop", { exact: true }).count()).toBe(1);
     expect(ctrl.queue[0].delivery).toBe("QUEUE");
     expect(await stashPage.getByRole("region", { name: "Pending steers", exact: true }).count()).toBe(0);
-    await heldRow.getByRole("button", { name: "Steer", exact: true }).click();
+    const steerRelease = Promise.withResolvers<void>();
+    let steers = 0;
+    await stashPage.route("**/api/SteerQueueItem", async (route: { continue(): Promise<void> }) => {
+      steers++;
+      await steerRelease.promise;
+      await route.continue();
+    });
+    const steer = heldRow.getByRole("button", { name: "Steer", exact: true });
+    await steer.click();
+    // A second click while the steer is in flight would claim the row again and fail as not recorded.
+    await steer.click({ force: true });
+    expect(await steer.isDisabled()).toBe(true);
+    steerRelease.resolve();
     await stashPage.getByRole("region", { name: "Pending steers", exact: true }).getByText("$stop", { exact: true }).waitFor();
     expect(ctrl.queue[0].delivery).toBe("STEER");
+    expect(steers).toBe(1);
     await stashPage.locator("textarea").fill("busy stash");
     // Running: Stash lights up together with Steer.
     expect((await stashButton.getAttribute("class"))?.split(/\s+/)).not.toContain("opacity-50");

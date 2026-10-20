@@ -210,7 +210,7 @@ function QueuePanel({
   items: QueueItem[];
   busy: boolean;
   sending: boolean;
-  onSteer: (id: string, text: string) => void;
+  onSteer: (id: string) => Promise<unknown>;
   onPop: (id: string) => Promise<unknown>;
   onRemove: (id: string) => void;
   onReorder: (itemIds: string[]) => void;
@@ -219,6 +219,7 @@ function QueuePanel({
   const dragId = useRef<string | null>(null);
   const [order, setOrder] = useState<string[] | null>(null);
   const [poppingId, setPoppingId] = useState("");
+  const [steeringId, setSteeringId] = useState("");
   const queueActionLabel = busy ? "Steer" : "Send";
   if (items.length === 0 && !jobs) {
     return null;
@@ -280,10 +281,12 @@ function QueuePanel({
               type="button"
               variant="ghost"
               size="sm"
-              disabled={sending || (item.delivery === "STASH" && poppingId !== "")}
+              disabled={sending || (item.delivery === "STASH" && poppingId !== "") || item.id === steeringId}
               onClick={async () => {
                 if (item.delivery !== "STASH") {
-                  onSteer(item.id, item.text);
+                  // The first steer claims the row; a second click would find it gone.
+                  setSteeringId(item.id);
+                  try { await onSteer(item.id); } finally { setSteeringId(""); }
                   return;
                 }
                 setPoppingId(item.id);
@@ -3795,7 +3798,7 @@ function SessionComposer({
   const prompt = useMutation({ mutationFn: mutations.prompt, onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["queue"] }); } });
   const agents = useQuery({ ...queries.agents({ conversationId: id }), refetchInterval: 2000 });
   const removeQueueItem = useMutation({ mutationFn: mutations.removeQueueItem, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["queue"] }) });
-  const steerQueueItem = useMutation({ mutationFn: mutations.steerQueueItem, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["queue"] }) });
+  const steerQueueItem = useMutation({ mutationFn: mutations.steerQueueItem, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["queue"] }) });
   const popQueueItem = useMutation({ mutationFn: mutations.popQueueItem, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["queue"] }) });
   const reorderQueue = useMutation({ mutationFn: mutations.reorderQueue, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["queue"] }) });
   const invalidateSidebar = useContext(SidebarInvalidation);
@@ -4027,7 +4030,7 @@ function Composer({
   queued: QueueItem[];
   send: (delivery?: PromptDelivery) => Promise<void>;
   stop: () => Promise<void>;
-  steerQueued: (id: string, text: string) => Promise<void>;
+  steerQueued: (id: string) => Promise<void>;
   popQueued: (id: string) => Promise<unknown>;
   removeQueued: (id: string) => void;
   reorderQueued: (itemIds: string[]) => void;
@@ -4083,7 +4086,7 @@ function Composer({
             ))}
           </ul>
         ) : null}
-        <QueuePanel conversationId={sessionId} items={queued} busy={busy} sending={sending} onSteer={(id, itemText) => void steerQueued(id, itemText)} onPop={popQueued} onRemove={removeQueued} onReorder={reorderQueued} jobs={jobs} />
+        <QueuePanel conversationId={sessionId} items={queued} busy={busy} sending={sending} onSteer={steerQueued} onPop={popQueued} onRemove={removeQueued} onReorder={reorderQueued} jobs={jobs} />
         <PromptInput files={files} setFiles={setFiles} sending={sending} fileInput={fileInput}>
           <InputGroupTextarea
             ref={messageInput}
