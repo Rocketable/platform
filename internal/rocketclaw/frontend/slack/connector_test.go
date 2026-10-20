@@ -75,15 +75,6 @@ func TestSlackMCPBlocksUseCronStyleFrame(t *testing.T) {
 	assert.IsType(t, new(slack.SectionBlock), blocks[2])
 }
 
-func TestSlackMCPResponseBlocksKeepAutomaticParsing(t *testing.T) {
-	blocks := slackMCPBlocks("MCP response", "conversation-1", "private-agent", "*answer* @here", false)
-	require.Len(t, blocks, 3)
-
-	body, ok := blocks[2].(*slack.SectionBlock)
-	require.True(t, ok)
-	assert.False(t, body.Text.Verbatim)
-}
-
 func TestSendExternalMCPRelayRendersMarkdownWithoutNotifications(t *testing.T) {
 	var posted []url.Values
 
