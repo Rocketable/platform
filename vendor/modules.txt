@@ -909,8 +909,8 @@ mvdan.cc/sh/v3/syntax
 # sigs.k8s.io/yaml v1.6.0
 ## explicit; go 1.22
 sigs.k8s.io/yaml
-# tailscale.com v1.104.1
-## explicit; go 1.27.1
+# tailscale.com v1.104.2
+## explicit; go 1.27.3
 tailscale.com
 tailscale.com/appc
 tailscale.com/atomicfile
