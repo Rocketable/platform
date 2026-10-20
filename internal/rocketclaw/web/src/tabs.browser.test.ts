@@ -84,6 +84,7 @@ const strip = (page: any) => page.getByRole("tablist", { name: "Open tabs" });
 const names = (page: any) => strip(page).getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
 const italic = (tab: any) => tab.evaluate((node: HTMLElement) => getComputedStyle(node).fontStyle === "italic");
 const animation = (locator: any) => locator.evaluate((node: Element) => getComputedStyle(node).animationName);
+const mask = (locator: any) => locator.evaluate((node: Element) => getComputedStyle(node).maskImage);
 // Group headers are the strip's only controls that report aria-expanded.
 const order = (page: any) => strip(page).locator('[role="tab"], [aria-expanded]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
 // Saves reach the server after the page changes, so a test waits for them before reloading.
@@ -607,7 +608,7 @@ test("narrow left placement is a drawer opened by the top-left button or a right
   expect(new URL(page.url()).pathname).toBe("/config");
 }), 60_000);
 
-test("running tab title shimmers without shifting, and a pinned running tab pulses its icon", () => withPage({}, async (page, origin) => {
+test("running tab title shimmers without shifting, and a pinned running tab shimmers its icon", () => withPage({}, async (page, origin) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const title = (name: string) => tab(name).getByText(name, { exact: true });
   const indent = (name: string) => title(name).evaluate((node: HTMLElement) => node.getBoundingClientRect().left - node.parentElement!.getBoundingClientRect().left);
@@ -628,7 +629,9 @@ test("running tab title shimmers without shifting, and a pinned running tab puls
   await menu(page, "Delta", "Pin");
   await menu(page, "Alpha", "Pin");
   expect(await animation(tab("Delta").locator("svg"))).not.toBe("none");
+  expect(await mask(tab("Delta").locator("svg"))).toStartWith("linear-gradient(");
   expect(await animation(tab("Alpha").locator("svg"))).toBe("none");
+  expect(await mask(tab("Alpha").locator("svg"))).toBe("none");
   await menu(page, "Delta", "Move tabs to left");
   expect(await animation(title("Delta"))).not.toBe("none");
   expect(await animation(tab("Delta").locator("svg"))).toBe("none");
@@ -674,16 +677,22 @@ test("the shimmer visibly sweeps the selected and other running titles in both t
   }
 }), 60_000);
 
-test("with reduced motion a running tab's title and pinned icon stay still", () => withPage({ reducedMotion: "reduce" }, async (page, origin) => {
+test("with reduced motion a running tab's title and pinned icon show a still gradient", () => withPage({ reducedMotion: "reduce" }, async (page, origin) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  const gradient = (name: string) => tab(name).getByText(name, { exact: true }).evaluate((node: Element) => getComputedStyle(node).backgroundImage);
+  await page.goto(`${origin}${href("alpha")}`);
+  await tab("Alpha").waitFor();
   await page.goto(`${origin}${href("delta")}`);
   const title = tab("Delta").getByText("Delta", { exact: true });
   await title.waitFor();
   expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running");
-  expect(await title.evaluate((node: Element) => getComputedStyle(node).backgroundImage)).toBe("none");
+  expect(await animation(title)).toBe("none");
+  expect(await gradient("Delta")).toStartWith("linear-gradient(");
+  expect(await gradient("Alpha")).toBe("none");
   await menu(page, "Delta", "Pin");
   expect(await tab("Delta").getAttribute("aria-description")).toBe("Turn running");
   expect(await animation(tab("Delta").locator("svg"))).toBe("none");
+  expect(await mask(tab("Delta").locator("svg"))).toStartWith("linear-gradient(");
 }), 60_000);
 
 test("tab groups take a name and color, collapse, adopt opened tabs, follow drags, and survive reload", () => withPage({}, async (page, origin, _prompts, saved) => {
