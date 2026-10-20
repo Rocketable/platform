@@ -84,7 +84,7 @@ func TestRevertSettlesAndPreservesWaitingWork(t *testing.T) {
 	go func() { done <- rt.RunTurn(t.Context(), active) }()
 
 	<-requests
-	require.NoError(t, s.BeginGoal("main", "continue forever", "", 0))
+	require.NoError(t, s.BeginGoal("main", &GoalState{Objective: "continue forever", MaxTurns: 0}))
 
 	for _, id := range []string{"queued-1", "queued-2"} {
 		require.NoError(t, s.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: "main", Message: id, Source: protocol.SourceWeb, Position: 10}))

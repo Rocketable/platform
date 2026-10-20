@@ -48,6 +48,8 @@ In the Slack app's **Event Subscriptions**, subscribe to the bot events [`channe
 
 Web resolves Slack tags such as `<@U123>` and `<!subteam^S123>` to names, and message search matches those names. Add the bot scopes `users:read` and `usergroups:read` under **OAuth & Permissions**, then reinstall the app. RocketClaw reloads the names every 8 hours. Without a scope, the affected tags show their Slack ID instead.
 
+Add `users:read.email` too, then reinstall the app, so a Slack mention's turn gets the sender's email in `ROCKETCLAW_PRINCIPAL_EMAIL` and `ROCKETCLAW_PRINCIPAL_ID`. Without it, Slack turns get only `ROCKETCLAW_PRINCIPAL_NAME`.
+
 ## Slack Channel Scenarios
 
 | Scenario | How To Trigger | Notes |

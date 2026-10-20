@@ -805,14 +805,14 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 46, n)
+	assert.Equal(t, 47, n)
 	require.Error(t, first.db.QueryRowContext(t.Context(), `SELECT 1 FROM store_bootstrap`).Scan(&n))
 
 	second, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop()) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 46, n)
+	assert.Equal(t, 47, n)
 }
 
 func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
@@ -860,7 +860,7 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 
 				var count int
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-				require.Equal(t, 46, count)
+				require.Equal(t, 47, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations WHERE applied_at='2026-01-01Z'`).Scan(&count))
 				require.Equal(t, prefix, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM session_tags`).Scan(&count))
@@ -913,7 +913,7 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 46, n)
+	assert.Equal(t, 47, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
 }
 
@@ -1091,7 +1091,7 @@ func TestSessionServiceActiveGoalThreads(t *testing.T) {
 			require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
 		}
 
-		require.NoError(t, store.BeginGoal(id, "work", "", 1))
+		require.NoError(t, store.BeginGoal(id, &GoalState{Objective: "work", MaxTurns: 1}))
 	}
 
 	_, err = store.db.ExecContext(t.Context(), `UPDATE conversation_goals SET status = '' WHERE conversation_id = 'legacy'`)
@@ -1112,7 +1112,7 @@ func TestSessionServiceBeginGoalPersistsCheckScript(t *testing.T) {
 
 	store := newTestSessionService(t)
 
-	require.NoError(t, store.BeginGoal("thread-1", " fix lint ", " ./scripts/check.sh --linter-mode ", 3))
+	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: " fix lint ", CheckScript: " ./scripts/check.sh --linter-mode ", MaxTurns: 3}))
 	goal, ok, err := store.Goal("thread-1")
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -1120,7 +1120,7 @@ func TestSessionServiceBeginGoalPersistsCheckScript(t *testing.T) {
 	assert.Equal(t, "./scripts/check.sh --linter-mode", goal.CheckScript)
 	assert.Equal(t, 3, goal.MaxTurns)
 
-	require.NoError(t, store.BeginGoal("thread-2", "write docs", " ", 1))
+	require.NoError(t, store.BeginGoal("thread-2", &GoalState{Objective: "write docs", CheckScript: " ", MaxTurns: 1}))
 	goal, ok, err = store.Goal("thread-2")
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -1132,8 +1132,8 @@ func TestSessionServiceBeginGoalRejectsActiveGoal(t *testing.T) {
 
 	store := newTestSessionService(t)
 
-	require.NoError(t, store.BeginGoal("thread-1", "first", "", 3))
-	err := store.BeginGoal("thread-1", "second", "", 3)
+	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: "first", MaxTurns: 3}))
+	err := store.BeginGoal("thread-1", &GoalState{Objective: "second", MaxTurns: 3})
 	require.ErrorIs(t, err, protocol.ErrGoalAlreadyActive)
 
 	goal, ok, err := store.Goal("thread-1")
@@ -1147,10 +1147,10 @@ func TestSessionServiceBeginGoalAllowsGoalAfterTerminal(t *testing.T) {
 
 	store := newTestSessionService(t)
 
-	require.NoError(t, store.BeginGoal("thread-1", "first", "", 3))
+	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: "first", MaxTurns: 3}))
 	_, err := store.UpdateGoalStatus("thread-1", GoalStatusComplete, "done")
 	require.NoError(t, err)
-	require.NoError(t, store.BeginGoal("thread-1", "second", "./check.sh", 1))
+	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: "second", CheckScript: "./check.sh", MaxTurns: 1}))
 
 	goal, ok, err := store.Goal("thread-1")
 	require.NoError(t, err)
@@ -1165,7 +1165,7 @@ func TestSessionServiceProgressGoalKeepsGoalActiveAndRecordsNote(t *testing.T) {
 
 	store := newTestSessionService(t)
 
-	require.NoError(t, store.BeginGoal("thread-1", "first", "", 3))
+	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: "first", MaxTurns: 3}))
 	goal, err := store.UpdateGoalStatus("thread-1", GoalStatusProgress, "next step")
 	require.NoError(t, err)
 	assert.Equal(t, GoalStatusActive, goal.Status)
@@ -1462,7 +1462,7 @@ func TestSessionServiceBeginGoalRejectsConcurrentActiveStarts(t *testing.T) {
 		go func(i int) {
 			defer group.Done()
 
-			errCh <- service.BeginGoal("thread", fmt.Sprintf("goal %02d", i), "", 5)
+			errCh <- service.BeginGoal("thread", &GoalState{Objective: fmt.Sprintf("goal %02d", i), MaxTurns: 5})
 		}(i)
 	}
 
@@ -1491,7 +1491,7 @@ func TestSessionServiceConcurrentGoalTurnsPreserveAccounting(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	require.NoError(t, service.BeginGoal("thread", "ship it", "", 20))
+	require.NoError(t, service.BeginGoal("thread", &GoalState{Objective: "ship it", MaxTurns: 20}))
 
 	errCh := make(chan error, 20)
 
@@ -1558,7 +1558,7 @@ func TestDeleteSessionDeletesOnlyTarget(t *testing.T) {
 	_, err = service.AppendEntryID(context.Background(), "thread", testSessionEntry("thread", "assistant"))
 	require.NoError(t, err)
 	require.NoError(t, service.UpsertThread("main", ThreadState{Agent: "ops"}))
-	require.NoError(t, service.BeginGoal("main", "ship it", "", 5))
+	require.NoError(t, service.BeginGoal("main", &GoalState{Objective: "ship it", MaxTurns: 5}))
 	seedActiveTurn(t, service, "main", "unshadowed-active", nil)
 	manager := newThreadBridgeManager(service.definitions, service, service.log, func(cfg Config) directBridge {
 		cfg.SessionService = service
@@ -1900,9 +1900,9 @@ func TestSessionServiceRejectsBlankKeys(t *testing.T) {
 
 	require.ErrorContains(t, store.UpsertThread(" ", ThreadState{Agent: "agent"}), "thread conversation ID is required")
 	require.ErrorContains(t, store.UpsertExternalMCPSession(" ", &ExternalMCPSessionState{}), "external MCP conversation ID is required")
-	require.EqualError(t, store.BeginGoal(" ", "obj", "", 1), "goal conversation ID is required")
-	require.EqualError(t, store.BeginGoal("thread-1", " ", "", 1), "goal objective is required")
-	require.NoError(t, store.BeginGoal("thread-1", "obj", "", -1))
+	require.EqualError(t, store.BeginGoal(" ", &GoalState{Objective: "obj", MaxTurns: 1}), "goal conversation ID is required")
+	require.EqualError(t, store.BeginGoal("thread-1", &GoalState{Objective: " ", MaxTurns: 1}), "goal objective is required")
+	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: "obj", MaxTurns: -1}))
 	goal, ok, err := store.Goal("thread-1")
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -1967,8 +1967,8 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	seedActiveTurn(t, store, oldThread, "stale-turn", &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "stale-turn"})
 
 	orphanGoal := protocol.SlackThreadConversationID("DGOAL", slackTestTS(oldTime))
-	require.NoError(t, store.BeginGoal(orphanGoal, "stale goal", "", 1))
-	require.NoError(t, store.BeginGoal(activeOldThread, "keep", "", 1))
+	require.NoError(t, store.BeginGoal(orphanGoal, &GoalState{Objective: "stale goal", MaxTurns: 1}))
+	require.NoError(t, store.BeginGoal(activeOldThread, &GoalState{Objective: "keep", MaxTurns: 1}))
 	listed, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM managed_conversations ORDER BY conversation_id`, "managed conversation IDs")
 	require.NoError(t, err)
 	assert.Contains(t, listed, activeOldThread)

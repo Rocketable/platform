@@ -18,6 +18,12 @@ import (
 	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
+// popQueueItemSQL moves a held row ($4) to the tail of the ready queue as kind $3, in its stored
+// request too, so it runs as that kind.
+const popQueueItemSQL = `WITH tail AS (SELECT COALESCE(MAX(position), -1) + 1 AS position FROM thread_queue WHERE conversation_id = $1 AND park_after = '')
+UPDATE thread_queue SET kind = $3, park_after = '', position = tail.position, inbound_json = jsonb_set(inbound_json::jsonb, '{Kind}', to_jsonb($3::text))
+FROM tail WHERE conversation_id = $1 AND queue_item_id = $2 AND kind = $4`
+
 // Physical saved turns resolve checkpoint supersession before the exclusive
 // boundary is applied. All history readers share this inventory.
 const sessionHistorySQL = `visibility AS (
@@ -699,10 +705,7 @@ func (r *Runtime) mutateWebQueue(ctx context.Context, conversationID, id string,
 	}
 
 	if kind == protocol.InboundKindEnqueue {
-		changed, err := execRows(ctx, tx, "pop Web queue item", "count popped queue items", `UPDATE thread_queue SET kind = $3, park_after = '',
-            inbound_json = jsonb_set(inbound_json::jsonb, '{Kind}', to_jsonb($3::text)),
-            position = (SELECT COALESCE(MAX(position), -1) + 1 FROM thread_queue WHERE conversation_id = $1 AND park_after = '')
-            WHERE conversation_id = $1 AND queue_item_id = $2 AND kind = $4`, conversationID, id, kind, protocol.InboundKindHeld)
+		changed, err := execRows(ctx, tx, "pop Web queue item", "count popped queue items", popQueueItemSQL, conversationID, id, kind, protocol.InboundKindHeld)
 		if err != nil || changed == 0 {
 			return false, err
 		}
@@ -816,7 +819,7 @@ func (r *Runtime) admitWeb(ctx context.Context, b *Bridge, request *bridgeReques
 	}
 
 	if goal.Objective != "" {
-		if err := beginGoalDB(ctx, tx, inbound.ConversationID, &GoalState{Objective: goal.Objective, CheckScript: goal.CheckScript, MaxTurns: goal.MaxTurns}); err != nil {
+		if err := beginGoalDB(ctx, tx, inbound.ConversationID, &GoalState{Objective: goal.Objective, CheckScript: goal.CheckScript, MaxTurns: goal.MaxTurns, PrincipalName: inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], PrincipalEmail: inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey]}); err != nil {
 			return false, err
 		}
 	}

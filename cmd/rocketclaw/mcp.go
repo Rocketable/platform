@@ -253,6 +253,8 @@ func submitExternalMCPInput(ctx context.Context, turns frontend.Backend, usedAge
 	delete(inbound.Metadata, protocol.InboundOriginMetadataKey)
 	delete(inbound.Metadata, protocol.InboundMediaMetadataKey)
 	delete(inbound.Metadata, protocol.InboundPrincipalMetadataKey)
+	delete(inbound.Metadata, protocol.InboundPrincipalNameMetadataKey)
+	delete(inbound.Metadata, protocol.InboundPrincipalEmailMetadataKey)
 
 	principal = strings.TrimSpace(principal)
 	externalConversationID = strings.TrimSpace(externalConversationID)

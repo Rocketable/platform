@@ -555,6 +555,31 @@ func TestShadowLifecycleFinishRollback(t *testing.T) {
 	}
 }
 
+// A shadow's running-turn inbound, which its subagents act for, names the parent's person but not
+// the parent's prompt principal.
+func TestShadowTurnNamesParentPerson(t *testing.T) {
+	store, _ := newShadowTestStore(t)
+	parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
+	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
+	request.inbound.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "Alice Smith", protocol.InboundPrincipalNameMetadataKey: "Alice Smith", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}
+	admitted, err := parent.activateInbound(t.Context(), &request)
+	require.NoError(t, err)
+	require.True(t, admitted)
+	require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &turnInputSnapshot{Inputs: []rocketcode.PromptInput{{ID: "initial", Texts: []string{"start"}}}}))
+
+	var childID string
+
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings ORDER BY 1 LIMIT 1`).Scan(&childID))
+	_, claimed, err := store.claimShadowTurn(t.Context(), childID)
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	var metadata string
+
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT inbound_json->>'Metadata' FROM active_turns WHERE conversation_id = $1`, childID).Scan(&metadata))
+	require.JSONEq(t, `{"rocketclaw_principal_name":"Alice Smith","rocketclaw_principal_email":"alice@example.com"}`, metadata)
+}
+
 func TestShadowLifecycleStopNotificationCancelsOwningTurn(t *testing.T) {
 	store, _ := newShadowTestStore(t)
 	parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}

@@ -527,6 +527,10 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 			require.Equal(t, "parent", capturedEnv[rocketclawConversationIDEnv])
 			require.NotContains(t, capturedEnv, "ROCKETCLAW_SHADOW", "shadow environment must not mutate captured parent inputs")
 
+			// A Web or Slack parent's env holds only its person; the shadow gains no conversation ID the parent lacked.
+			childConfig = child.rocketcodeConfig(root.Name(), map[string]string{"ROCKETCLAW_PRINCIPAL_NAME": "Alice"}, prohibited...)
+			require.Equal(t, map[string]string{"ROCKETCLAW_PRINCIPAL_NAME": "Alice", "ROCKETCLAW_SHADOW": "main/a"}, childConfig.ShellEnv)
+
 			// A subagent of the shadow runs as a session of its own, under the shadow's limits.
 			manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), func(c Config) directBridge {
 				return NewConversation(cfg, publisher, &Config{ConversationID: c.ConversationID, Agent: c.Agent, SessionService: store}, slog.New(slog.DiscardHandler))

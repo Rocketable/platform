@@ -337,7 +337,7 @@ func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "planner"}))
-	require.NoError(t, beginGoalDB(t.Context(), store.db, conversationID, &GoalState{Objective: "ship it", MaxTurns: 5}))
+	require.NoError(t, beginGoalDB(t.Context(), store.db, conversationID, &GoalState{Objective: "ship it", MaxTurns: 5, PrincipalName: "Alice", PrincipalEmail: "alice@example.com"}))
 
 	bridge := newDirectBridgeMock()
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
@@ -350,6 +350,7 @@ func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
 	require.NoError(t, manager.StartActiveGoals(t.Context()))
 	require.Len(t, submittedMessages(bridge), 1)
 	assert.Equal(t, protocol.GoalActionContinue, submittedMessages(bridge)[0].GoalAction)
+	assert.Equal(t, map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}, submittedMessages(bridge)[0].Metadata, "the restart continuation keeps the goal's setter")
 	assert.Equal(t, "Continue the active goal loop.", submittedMessages(bridge)[0].Text)
 	assert.Equal(t, conversationID, submittedMessages(bridge)[0].ConversationID)
 	assert.Equal(t, &protocol.SlackReplyTarget{}, submittedMessages(bridge)[0].SlackReply)
@@ -362,7 +363,7 @@ func TestThreadBridgeManagerSkipsActiveGoalContinuationForResumedTurn(t *testing
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "planner"}))
-	require.NoError(t, store.BeginGoal(conversationID, "ship it", "", 5))
+	require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "ship it", MaxTurns: 5}))
 	seedActiveTurn(t, store, conversationID, "turn-resumed", nil)
 
 	bridge := newDirectBridgeMock()
@@ -378,10 +379,10 @@ func TestThreadBridgeManagerAllowsGoalAfterCompletedGoal(t *testing.T) {
 
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
-	require.NoError(t, store.BeginGoal(conversationID, "first", "", 5))
+	require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "first", MaxTurns: 5}))
 	_, err := store.UpdateGoalStatus(conversationID, GoalStatusComplete, "done")
 	require.NoError(t, err)
-	require.NoError(t, store.BeginGoal(conversationID, "second", "", 5))
+	require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "second", MaxTurns: 5}))
 
 	goal, ok, err := store.Goal(conversationID)
 	require.NoError(t, err)
@@ -457,7 +458,7 @@ func TestThreadBridgeManagerInterruptSlackThreadInterruptsActiveTurn(t *testing.
 
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
-	require.NoError(t, store.BeginGoal(conversationID, "first", "", 5))
+	require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "first", MaxTurns: 5}))
 
 	marker := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "111.222"}
 
@@ -908,7 +909,7 @@ func TestWriteSessionDeliversByMode(t *testing.T) {
 		bridge := runningTestBridge(t, store, manager, target)
 		bridge.inputOpen = false
 
-		require.NoError(t, store.BeginGoal(target, "ship it", "", 5))
+		require.NoError(t, store.BeginGoal(target, &GoalState{Objective: "ship it", MaxTurns: 5}))
 		require.NoError(t, store.PutScheduledMessage("due", &protocol.ScheduledMessageState{ConversationID: target, Message: "scheduled", DueAt: time.Now().Add(-time.Minute)}))
 
 		outcome, _, err := manager.writeSession(t.Context(), target, "after goal", sessionWriteEnqueue, agentWrite("later"))
@@ -978,7 +979,7 @@ func TestWriteSessionStopRunsFirst(t *testing.T) {
 
 	bridge.requestCh <- bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "sync", false)}
 
-	require.NoError(t, store.BeginGoal(target, "ship it", "", 5))
+	require.NoError(t, store.BeginGoal(target, &GoalState{Objective: "ship it", MaxTurns: 5}))
 
 	outcome, running, err := manager.writeSession(t.Context(), target, "stop", sessionWriteStop, agentWrite("do this instead"))
 	require.NoError(t, err)

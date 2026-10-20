@@ -1539,8 +1539,8 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 	}
 
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &content, true)
-	if principal := c.slackPrincipal(ctx, ev.User); principal != "" {
-		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
+	if principal, name, email := c.slackPrincipal(ctx, ev.User); principal != "" {
+		inbound.Metadata[protocol.InboundPrincipalMetadataKey], inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey] = principal, name, email
 	}
 
 	inbound.SlackReply = new(*replyTarget)
@@ -1787,23 +1787,24 @@ func (c *Connector) refreshNames(ctx context.Context) {
 	c.namesAt = time.Now()
 }
 
-func (c *Connector) slackPrincipal(ctx context.Context, userID string) string {
+// slackPrincipal returns the prompt principal and, when Slack names the user, that name and the profile
+// email, which is empty without the users:read.email scope.
+func (c *Connector) slackPrincipal(ctx context.Context, userID string) (principal, name, email string) {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
-		return ""
+		return "", "", ""
 	}
 
 	user, err := c.api.GetUserInfoContext(ctx, userID)
 	if err != nil {
-		return userID
+		return userID, "", ""
 	}
 
-	name := slackDisplayName(user)
-	if name == "" {
-		return userID
+	if name = slackDisplayName(user); name == "" {
+		return userID, "", ""
 	}
 
-	return name + " (" + userID + ")"
+	return name + " (" + userID + ")", name, user.Profile.Email
 }
 
 func slackPendingKey(replyTarget *protocol.SlackReplyTarget) string {

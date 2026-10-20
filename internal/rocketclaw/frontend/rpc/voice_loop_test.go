@@ -90,7 +90,7 @@ func startVoiceLoop(t *testing.T, auth string, engine *mockBackend, stream *mock
 	conn, err := voiceDial(t.Context(), dialect.sideband("call"), nil)
 	require.NoError(t, err)
 
-	call := &voiceCall{server: &Server{backend: engine}, dialect: dialect, id: "call", conn: conn, stream: stream, conversationID: "chat", principal: "alice"}
+	call := &voiceCall{server: &Server{backend: engine}, dialect: dialect, id: "call", conn: conn, stream: stream, conversationID: "chat", principal: "alice", username: "alice@example.com"}
 	ctx, cancel := context.WithCancelCause(t.Context())
 
 	calls, groupCtx := errgroup.WithContext(ctx)
@@ -250,6 +250,7 @@ func TestVoiceLoopHandOffs(t *testing.T) {
 
 					assert.Equal(t, []any{"chat", protocol.InboundKindSteer, protocol.SourceWeb, "alice", inbound.Text}, []any{call.S, item.Kind, item.Source, item.Principal, item.Message}, item.ID)
 					assert.Equal(t, []any{"chat", protocol.InboundKindSteer, protocol.SourceWeb, true, "alice", "Voice", item.ID}, []any{inbound.ConversationID, inbound.Kind, inbound.Source, inbound.Human, inbound.Metadata[protocol.InboundPrincipalMetadataKey], inbound.Metadata[protocol.InboundMediaMetadataKey], inbound.Metadata["web_message_id"]}, item.ID)
+					assert.Equal(t, []string{"alice", "alice@example.com"}, []string{inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey]}, "the hand-off names the caller")
 				}
 
 				assert.Equal(t, tc.want, got)

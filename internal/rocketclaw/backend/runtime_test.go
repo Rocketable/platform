@@ -1250,6 +1250,7 @@ func TestRuntimeStartGoalRecordsGoalAndQueuesKickoff(t *testing.T) {
 	webGoal := func() *protocol.InboundMessage {
 		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "ship it"}, true)
 		inbound.ConversationID = conversationID
+		inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey] = "Alice", "alice@example.com"
 
 		return inbound
 	}
@@ -1268,6 +1269,7 @@ func TestRuntimeStartGoalRecordsGoalAndQueuesKickoff(t *testing.T) {
 	assert.Equal(t, GoalStatusActive, goal.Status)
 	assert.Equal(t, "ship it", goal.Objective)
 	assert.Equal(t, 3, goal.MaxTurns)
+	assert.Equal(t, []string{"Alice", "alice@example.com"}, []string{goal.PrincipalName, goal.PrincipalEmail}, "the goal records the person who set it")
 	require.Len(t, bridge.requestCh, 1)
 	kickoff := (<-bridge.requestCh).inbound
 	assert.Equal(t, protocol.GoalActionKickoff, kickoff.GoalAction)
@@ -1277,6 +1279,19 @@ func TestRuntimeStartGoalRecordsGoalAndQueuesKickoff(t *testing.T) {
 	assert.Empty(t, bridge.requestCh)
 
 	require.ErrorContains(t, rt.StartGoal(t.Context(), &protocol.InboundMessage{ConversationID: "web:missing"}, protocol.GoalRequest{Objective: "x"}), `conversation "web:missing" is not recorded`)
+
+	// A Slack thread opened in Web is not revert-eligible, so its goal starts through BeginGoal.
+	slackThread := protocol.SlackThreadConversationID("C123", "1.1")
+	require.NoError(t, store.UpsertThread(slackThread, ThreadState{Agent: "main"}))
+	manager.bridges[slackThread] = bridge
+	inbound := webGoal()
+	inbound.ConversationID = slackThread
+	require.NoError(t, rt.StartGoal(t.Context(), inbound, protocol.GoalRequest{Objective: "ship it"}))
+
+	goal, exists, err = store.Goal(slackThread)
+	require.NoError(t, err)
+	require.True(t, exists)
+	assert.Equal(t, []string{"Alice", "alice@example.com"}, []string{goal.PrincipalName, goal.PrincipalEmail})
 }
 
 func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
@@ -1317,6 +1332,37 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 	require.True(t, promoted)
 
 	require.NoError(t, manager.PickLaterWork(t.Context(), conversationID))
+}
+
+// A Web stash in a conversation Web cannot revert, such as a Slack thread, keeps its full request, so
+// once popped it runs as queued work that still names its writer.
+func TestRuntimePoppedWebStashRunsAsEnqueue(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	conversationID := protocol.SlackThreadConversationID("C123", "1.1")
+	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	runTestManager(t, manager)
+	manager.bridges = map[string]directBridge{conversationID: bridge}
+	rt := &Runtime{threads: manager, Sessions: store}
+
+	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindHeld, &protocol.InboundContent{Text: "$workflow ship"}, true)
+	inbound.ConversationID = conversationID
+	inbound.Metadata["web_message_id"], inbound.Metadata[protocol.InboundPrincipalNameMetadataKey] = "held", "Alice"
+	require.NoError(t, rt.StashQueueItem(t.Context(), conversationID, &protocol.ThreadQueueItem{ID: "held", Kind: protocol.InboundKindHeld, Message: inbound.Text, Principal: "Alice", Source: protocol.SourceWeb, Inbound: inbound}))
+	require.Empty(t, bridge.requestCh)
+
+	popped, err := rt.PopQueueItem(t.Context(), conversationID, "held")
+	require.NoError(t, err)
+	require.True(t, popped)
+
+	request := <-bridge.requestCh
+	require.Equal(t, "held", request.queueItemID)
+	require.Equal(t, protocol.InboundKindEnqueue, request.inbound.Kind, "a popped stash runs as queued work")
+	require.Equal(t, "Alice", request.inbound.Metadata[protocol.InboundPrincipalNameMetadataKey])
 }
 
 func TestRuntimeHeldQueueManualRelease(t *testing.T) {

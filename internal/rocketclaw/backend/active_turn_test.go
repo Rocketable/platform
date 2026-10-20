@@ -215,7 +215,7 @@ func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
 	newBridge, service, requests, finals := newResumeTestBridges(t, false)
 	crashed := newBridge()
 	conversationID := crashed.config.ConversationID
-	require.NoError(t, service.BeginGoal(conversationID, "ship it", "", 5))
+	require.NoError(t, service.BeginGoal(conversationID, &GoalState{Objective: "ship it", MaxTurns: 5}))
 
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "continue", false)
 	msg.GoalAction, msg.ConversationID = protocol.GoalActionContinue, conversationID
@@ -644,8 +644,8 @@ func TestLegacyCronScheduleResumesIntoCanonical(t *testing.T) {
 			}
 
 			require.NoError(t, store.UpsertThread("cron:legacy", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
-			// Back to before 027_producer_handoff and the seventeen migrations that follow it.
-			_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(t.Context(), store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 18)
+			// Back to before 027_producer_handoff and the eighteen migrations that follow it.
+			_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(t.Context(), store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 19)
 			require.NoError(t, err)
 
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "original legacy job", false)
@@ -2272,12 +2272,19 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 	t.Parallel()
 
 	script := "def main():\n    rocketclaw_attach_files_to_response(attachments=[{'path': '', 'name': 'report.txt', 'mime_type': '', 'content': 'hello', 'content_base64': ''}])\n" +
+		"    bash(command=\"printf '%s|%s' \\\"${ROCKETCLAW_PRINCIPAL_NAME-unset}\\\" \\\"${ROCKETCLAW_PRINCIPAL_EMAIL-unset}\\\" > principal.txt\")\n" +
 		"    return rocketclaw_sessions_write(session_id='', mode='enqueue', prompt='child task', title='Child', agent='')\n"
 
 	for _, tc := range []struct {
 		source                  protocol.Source
 		principal, agent, maker string
-	}{{protocol.SourceWeb, "Alice", "main", "Alice"}, {protocol.SourceExternalMCP, "Bob", "main", "Bob"}, {protocol.SourceSystem, "", "job", string(ThreadCreatedByCron)}} {
+		person                  map[string]string
+		env                     string
+	}{
+		{protocol.SourceWeb, "Alice", "main", "Alice", map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}, "Alice|alice@example.com"},
+		{protocol.SourceExternalMCP, "Bob", "main", "Bob", nil, "unset|unset"},
+		{protocol.SourceSystem, "", "job", string(ThreadCreatedByCron), nil, "unset|unset"},
+	} {
 		t.Run(string(tc.source), func(t *testing.T) {
 			t.Parallel()
 
@@ -2306,7 +2313,7 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 				writeAgent(t, nt.cfg.Workspace, agent, "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n---\nPrompt\n")
 			}
 
-			writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmode: subagent\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw: {rocketclaw_attach_files_to_response: allow, rocketclaw_schedule_message: allow, rocketclaw_sessions_write: allow}\n---\nResearch\n")
+			writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmode: subagent\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n  rocketclaw: {rocketclaw_attach_files_to_response: allow, rocketclaw_schedule_message: allow, rocketclaw_sessions_write: allow}\n---\nResearch\n")
 			nt.cfg.Web = config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
 
 			manager, _ := nt.run(t, ignoreOutbound)
@@ -2323,6 +2330,7 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 			} else {
 				prompt := protocol.NewInboundMessage(tc.source, protocol.InboundKindPrompt, "hello", true)
 				prompt.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: tc.principal}
+				maps.Copy(prompt.Metadata, tc.person)
 				require.NoError(t, nt.bridge(t, manager, root).Submit(t.Context(), prompt))
 			}
 
@@ -2338,6 +2346,10 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 			created, err := queryStrings(t.Context(), nt.service.db, `SELECT agent || ' ' || created_by FROM managed_conversations WHERE spawned_by = $1`, "created sessions", root)
 			require.NoError(t, err)
 			assert.Equal(t, []string{tc.agent + " " + tc.maker}, created, "the created session keeps the top-level turn's agent and creator")
+
+			env, err := os.ReadFile(filepath.Join(nt.cfg.Workspace, "principal.txt"))
+			require.NoError(t, err)
+			assert.Equal(t, tc.env, string(env), "the subagent's shell sees the top-level turn's person")
 		})
 	}
 }
