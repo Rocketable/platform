@@ -2562,7 +2562,9 @@ func TestVoiceSettings(t *testing.T) {
 	prune := func() {
 		t.Helper()
 
-		_, err := store.PruneStateBefore(ctx, time.Now(), 0)
+		// The cutoff is an hour ahead: conversations carry the database's clock,
+		// which may run ahead of this process's.
+		_, err := store.PruneStateBefore(ctx, time.Now().Add(time.Hour), 0)
 		require.NoError(t, err)
 	}
 
