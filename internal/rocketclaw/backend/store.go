@@ -1065,6 +1065,10 @@ type SidebarSession struct {
 	SpaceID string
 	// Reply is a remote OpenCode session's newest assistant text, read when its last seen turn ended.
 	Reply string
+	// Model is a remote OpenCode session's selected model, "<provider>/<model>"; its
+	// Conversation.Agent is its selected agent. Both are empty until it has them.
+	// SearchSessions fills a RocketClaw chat's Model with its agent's configured model.
+	Model string
 }
 
 // SidebarSessions yields pinned records first, then recent-first, bytewise-ID order.
@@ -1100,7 +1104,7 @@ SELECT
     '' AS directory,
     FALSE AS offline,
     COALESCE(c.space_id, '') AS space_id,
-    '' AS reply
+    '' AS reply, '' AS model
 FROM visible_chats c
 -- Exception to the no-subquery rule: keep the history check per conversation and stop at its
 -- first entry. A CTE would read every stored entry on each refresh, about twice as slow.
@@ -1113,8 +1117,8 @@ LEFT JOIN session_summaries s ON s.conversation_id = c.conversation_id
 LEFT JOIN session_tags t ON t.conversation_id = c.conversation_id
 WHERE h.found OR r.conversation_id IS NOT NULL
 ), remote AS (
-SELECT o.conversation_id, '', '', convert_to(o.title, 'UTF8'), o.updated_at, o.running, o.background, o.pinned, o.name, '', COALESCE(t.tags, '[]'::jsonb),
-    o.server, o.directory, o.synced_at < now() - interval '15 seconds', '', COALESCE(o.reply, '')
+SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.updated_at, o.running, o.background, o.pinned, o.name, '', COALESCE(t.tags, '[]'::jsonb),
+    o.server, o.directory, o.synced_at < now() - interval '15 seconds', '', COALESCE(o.reply, ''), o.model
 FROM opencode_sessions o
 LEFT JOIN session_tags t ON t.conversation_id = o.conversation_id
 -- Rows of servers no longer configured stay stored, hidden, and return with their server.
@@ -1137,7 +1141,7 @@ ORDER BY pinned DESC, COALESCE(updated, '0001-01-01 00:00:00+00'::timestamptz) D
 				tags    []byte
 				updated sql.NullTime
 			)
-			if err := rows.Scan(&row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply); err != nil {
+			if err := rows.Scan(&row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.Model); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
 				return
 			}

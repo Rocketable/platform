@@ -1720,7 +1720,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await many.evaluate(() => (window as unknown as { searchFetches: number }).searchFetches)).toBe(1); // Typing settles into one request.
     manySearchHold.resolve();
     // The shown list follows the response in a background render.
-    await many.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button').length === 1);
+    await many.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button [data-slot="session-title"]').length === 1);
     expect(await manyDialog.getByText("Search fixture 0", { exact: true }).count()).toBe(1);
     await manyDialog.getByPlaceholder("Search sessions").fill("not-in-any-row");
     await manyDialog.getByText("Search fixture 0", { exact: true }).waitFor();
@@ -2365,10 +2365,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await detailsPalette.getByText("Release notes", { exact: true }).waitFor();
       await search.fill("Release notes");
       await settled();
-      expect(await detailsPalette.locator('li > button').count()).toBe(1);
+      expect(await detailsPalette.locator('li > button [data-slot="session-title"]').count()).toBe(1);
       await search.fill("Original preview");
       await settled();
-      expect(await detailsPalette.locator('li > button').count()).toBe(1);
+      expect(await detailsPalette.locator('li > button [data-slot="session-title"]').count()).toBe(1);
       await detailsPage.keyboard.press("Escape");
       expect(await detailsPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await sessionCommand("Name session");

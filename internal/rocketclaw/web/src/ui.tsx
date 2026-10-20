@@ -102,9 +102,9 @@ function slackRooms(sessions: { id: string; title?: string }[]) {
 
 // The query's last word, and whether it is an unfinished operator: a bare key, a strict prefix of an is:/sort: keyword, or an unclosed quote.
 function typingWord(query: string) {
-  const word = /(?:^|\s)((?:tag|cron|agent|room|principal):"(?:[^"\\]|\\.)*\\?|\S*)$/i.exec(query)![1];
+  const word = /(?:^|\s)((?:tag|cron|agent|room|principal|server|model):"(?:[^"\\]|\\.)*\\?|\S*)$/i.exec(query)![1];
   const lower = word.toLowerCase();
-  return { word, unfinished: /^(?:tag|cron|agent|room|principal):(?:"(?:[^"\\]|\\.)*\\?)?$/.test(lower) || /^(?:is|sort):/.test(lower) && ["is:pinned", "is:forked", "is:cron", "sort:newest", "sort:oldest"].some((keyword) => keyword !== lower && keyword.startsWith(lower)) };
+  return { word, unfinished: /^(?:tag|cron|agent|room|principal|server|model):(?:"(?:[^"\\]|\\.)*\\?)?$/.test(lower) || /^(?:is|sort):/.test(lower) && ["is:pinned", "is:forked", "is:cron", "sort:newest", "sort:oldest"].some((keyword) => keyword !== lower && keyword.startsWith(lower)) };
 }
 
 function termValue(value: string) {
@@ -1657,7 +1657,7 @@ function SessionCommandPicker({ items, query, setQuery, forking, disabled }: { i
 function paletteRows(
   mode: "sessions" | "commands" | "cron",
   needle: string,
-  sidebar: { rows: Session[]; loadingIds: ReadonlySet<string> },
+  sidebar: { rows: Session[]; loadingIds: ReadonlySet<string>; response?: SearchSessionsResponse },
   jobs: { stem: string; status: string; schedule?: string; agent?: string; channel?: string }[] | undefined,
   newChat: () => void,
   open: (path: string) => void,
@@ -1665,7 +1665,7 @@ function paletteRows(
   runStem: (stem: string) => void,
   actions: { key: string; label: string; detail?: string; keep?: boolean; disabled?: boolean; run: () => void }[],
   recent: string[],
-): { key: string; label?: string; detail?: string; session?: Session; loading?: boolean; keep?: boolean; disabled?: boolean; run: () => void }[] {
+): { key: string; label?: string; detail?: string; session?: Session; hit?: SearchHitProps; loading?: boolean; keep?: boolean; disabled?: boolean; run: () => void }[] {
   if (mode === "cron") {
     return (jobs ?? []).filter((job) => job.status !== "ran" && (needle === "" || `${job.stem} ${job.schedule ?? ""} ${job.agent ?? ""} ${job.channel ?? ""}`.toLowerCase().includes(needle))).map((job) => ({
       key: job.stem, label: job.stem, detail: [job.schedule, job.agent, job.channel].filter(Boolean).join(" · "), keep: true, run: () => runStem(job.stem),
@@ -1681,7 +1681,7 @@ function paletteRows(
     return letters.length >= 3 && at === letters.length ? 2 : 3;
   };
   // Session search lists commands, which match at once, above the server's rows; an empty query or a filter lists sessions only.
-  const commands = mode === "sessions" && (needle === "" || /(?:^|\s)(?:tag|cron|agent|room|principal|is|sort):\S/.test(needle)) ? [] : [
+  const commands = mode === "sessions" && (needle === "" || /(?:^|\s)(?:tag|cron|agent|room|principal|server|model|is|sort):\S/.test(needle)) ? [] : [
     ...actions,
     { key: "new", label: "Sessions: New", run: newChat },
     { key: "search", label: "Sessions: Search", run: () => navigate("/search") },
@@ -1694,11 +1694,22 @@ function paletteRows(
     const rank = (key: string) => level(key) >= 0 ? Infinity : recent.indexOf(key) + 1 || Infinity;
     return tier(a.label) - tier(b.label) || rank(a.key) - rank(b.key) || (level(a.key) >= 0 && level(b.key) >= 0 ? level(a.key) - level(b.key) : a.label.localeCompare(b.label));
   });
-  return mode === "commands" ? commands : [...commands, ...sidebar.rows.map((session) => ({
-    key: session.id,
-    session, loading: sidebar.loadingIds.has(session.id),
-    run: () => open(sessionPath(session.id)),
-  }))];
+  // A search response lists, as /search does, each session, then the field holding the text, then its message hits.
+  const { response } = sidebar;
+  const fields = new Map((response?.matches ?? []).map((match) => [match.conversationId, match]));
+  const hits = Map.groupBy(response?.messages ?? [], (match) => match.conversationId);
+  const hit = (kind: string, text: string) => ({ kind, text, needle: response!.needle, tagIds: response!.mentionIds });
+  return mode === "commands" ? commands : [...commands, ...sidebar.rows.flatMap((session) => {
+    const path = sessionPath(session.id), field = fields.get(session.id);
+    return [
+      { key: session.id, session, loading: sidebar.loadingIds.has(session.id), run: () => open(path) },
+      ...(field?.field ? [{ key: `${session.id}:field`, session, hit: hit(field.field, field.text), run: () => open(path) }] : []),
+      ...(hits.get(session.id) ?? []).map(({ message }, i) => ({ key: `${session.id}:${message.messageId || i}`, session, hit: hit(message.role === "user" ? "You" : "Assistant", message.text), run: () => {
+        open(path);
+        if (message.messageId) navigate(`${path}?message=${encodeURIComponent(message.messageId)}`, true);
+      } })),
+    ];
+  })];
 }
 
 // The server reads and matches the query. While typing, an unfinished last word is left out; Enter sends everything.
@@ -1753,6 +1764,8 @@ function useSessionSearch(query: string, messages: boolean, entered: boolean) {
     error: sent && result.query === sent ? result.error : undefined,
     // Before any response for typed text the rows are the sidebar's, in its order.
     rows: sent && result.query ? found.map(({ session }) => session) : rows,
+    // The response the rows come from, if any.
+    response: sent && result.query ? result.response : undefined,
     // enter acts on the shown rows when they are the response for the whole query, never on a dimmed older list;
     // otherwise it sends the query at once, or waits for it in flight, and opens the first row of that response.
     enter: (shown: () => void, open: (session: Session) => void) => {
@@ -1859,7 +1872,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, vertical }: { drafts: 
   useLayoutEffect(() => { if (mode !== undefined) input.current?.focus(); }, [mode]);
   const agents = useQuery({ ...queries.agents(), staleTime: 60_000, enabled: mode === "sessions" });
   const active = useRef<HTMLButtonElement>(null);
-  const search = useSessionSearch(mode === "sessions" ? query : "", false, entered);
+  const search = useSessionSearch(mode === "sessions" ? query : "", true, entered);
   const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000, enabled: mode === "commands" || mode === "cron" });
   const runCron = useMutation({
     mutationFn: mutations.runCron,
@@ -1875,7 +1888,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, vertical }: { drafts: 
   // The folder picker leaves session search, so typed folders are never sent as a search.
   const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(0); setMode("commands"); }, paletteCopy[mode ?? "sessions"]);
   const inSpace = useInSpace();
-  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim().toLowerCase(), { rows: search.rows, loadingIds: sidebar.loadingIds }, jobs.data?.filter(inSpace), newChat, tabs.open, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...timeline, ...outputs], recent));
+  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim().toLowerCase(), { rows: search.rows, loadingIds: sidebar.loadingIds, response: search.response }, jobs.data?.filter(inSpace), newChat, tabs.open, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...timeline, ...outputs], recent));
   const selected = items.length === 0 ? 0 : pick % items.length;
   // The palette opens with the first rows; the full list renders in the background.
   const shown = useDeferredValue(items, items.slice(0, 50));
@@ -1922,12 +1935,12 @@ function CommandPalette({ drafts, mode, setMode, newChat, vertical }: { drafts: 
         />}
         {runCron.error || actions.error ? <p role="alert" className="px-3 text-sm text-destructive">{(runCron.error ?? actions.error)?.message}</p> : null}
         {remote.alert}
-        {search.error ? <p role="alert" className="px-3 text-sm text-destructive">Search failed: {search.error}</p> : null}
+        {mode === "sessions" ? <div className="px-3 text-sm empty:hidden"><SearchStatus search={search} /></div> : null}
         <ul data-pending={search.pending} className="max-h-[min(24rem,50vh)] overflow-y-auto p-1 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
           {items.length === 0 ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, search, jobs.isLoading, remote.empty)}</li> : shown.map((item, index) => (
             <li key={item.key}>
-              <button disabled={item.disabled} ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start justify-center rounded-md px-3 text-left text-sm disabled:opacity-50", item.session ? "py-2" : "min-h-9 py-1.5 [@media(pointer:coarse)]:min-h-11", item.session && search.pending && "opacity-50", index === selected && "bg-accent")} onMouseDown={(event) => { event.preventDefault(); if (!item.session) peek(); }} onClick={() => choose(item)}>
-                {item.session ? <SessionRowContent session={item.session} loading={item.loading} /> : <PaletteCommandContent item={item} mode={mode} />}
+              <button disabled={item.disabled} ref={index === selected ? active : null} type="button" className={cn("flex w-full items-start rounded-md px-3 text-left text-sm disabled:opacity-50", item.hit ? "gap-3 py-1 pl-6" : "flex-col justify-center", item.session ? !item.hit && "py-2" : "min-h-9 py-1.5 [@media(pointer:coarse)]:min-h-11", item.session && search.pending && "opacity-50", index === selected && "bg-accent")} onMouseDown={(event) => { event.preventDefault(); if (!item.session) peek(); }} onClick={() => choose(item)}>
+                {item.hit ? <SearchHit {...item.hit} /> : item.session ? <SessionRowContent session={item.session} loading={item.loading} /> : <PaletteCommandContent item={item} mode={mode} />}
               </button>
             </li>
           ))}
@@ -2254,11 +2267,18 @@ function windowed(text: string, needle: string, tagIds: string[]) {
   return `${start ? "…\n" : ""}${lines.slice(start, end).join("\n")}${end < lines.length ? "\n…" : ""}`;
 }
 
+type SearchHitProps = { kind: string; text: string; needle: string; tagIds: string[] };
+
+// A found session's field or message, as /search and the palette show it under the session.
+function SearchHit({ kind, text, needle, tagIds }: SearchHitProps) {
+  return <><span className="w-16 shrink-0 text-xs text-muted-foreground">{kind}</span><div className="min-w-0"><TranscriptText text={windowed(text, needle, tagIds)} needle={needle} interactive={false} /></div></>;
+}
+
 function SearchResultGroup({ session, hits, text, field, needle, tagIds }: { session: Session; hits: MessageMatch[]; text: string; field: string; needle: string; tagIds: string[] }) {
   const count = hits.length + Number(!!field);
   const label = sessionTitle(session, false);
   const clean = useCleanText(label);
-  const row = (href: string, kind: string, body: string, key?: string) => <li key={key}><Link href={href} className="flex min-h-11 min-w-0 items-start gap-3 px-2 py-1 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring sm:min-h-7"><span className="w-16 shrink-0 text-xs text-muted-foreground">{kind}</span><div className="min-w-0"><TranscriptText text={windowed(body, needle, tagIds)} needle={needle} interactive={false} /></div></Link></li>;
+  const row = (href: string, kind: string, body: string, key?: string) => <li key={key}><Link href={href} className="flex min-h-11 min-w-0 items-start gap-3 px-2 py-1 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring sm:min-h-7"><SearchHit kind={kind} text={body} needle={needle} tagIds={tagIds} /></Link></li>;
   return <li role="group" aria-label={clean} className="min-w-0">
     <h2 className="flex min-w-0 items-center gap-1 text-sm font-medium"><Link href={sessionPath(session.id)} title={clean} className="min-w-0 truncate py-1 hover:underline focus-visible:outline-2 focus-visible:outline-ring"><InlineText text={label} /></Link><span className="shrink-0 text-muted-foreground">({count})</span>{session.pinned ? <Pin aria-label="Pinned" className="size-3 shrink-0" /> : null}</h2>
     <ul className="mt-1 border-l pl-2 text-sm leading-5">
@@ -2268,10 +2288,13 @@ function SearchResultGroup({ session, hits, text, field, needle, tagIds }: { ses
   </li>;
 }
 
-function SearchStatus({ pending, error, empty, incomplete, unindexed, unsummarized, retry }: { pending: boolean; error?: string; empty: boolean; incomplete: boolean; unindexed: boolean; unsummarized: boolean; retry: () => void }) {
+// The palette lists sessions itself when nothing matched, so only /search passes empty.
+function SearchStatus({ search, empty = false, incomplete = false }: { search: ReturnType<typeof useSessionSearch>; empty?: boolean; incomplete?: boolean }) {
+  const { pending, error, response } = search;
+  const unindexed = !pending && response?.indexComplete === false, unsummarized = !pending && response?.summariesComplete === false;
   return <>
     {pending ? <p role="status" className="text-muted-foreground">Searching…</p> : null}
-    {error ? <p role="alert" className="text-destructive">Search failed: {error} <button type="button" className="underline" onClick={retry}>Retry</button></p> : null}
+    {error ? <p role="alert" className="text-destructive">Search failed: {error} <button type="button" className="underline" onClick={() => void search.run(search.sent)}>Retry</button></p> : null}
     {unindexed ? <p role="status" className="text-muted-foreground">Message results may be incomplete while chats are still being indexed.</p> : null}
     {unsummarized ? <p role="status" className="text-muted-foreground">Results may be incomplete while chat summaries are still loading.</p> : null}
     {empty && (incomplete || !unindexed && !unsummarized) ? <p role="status" className="text-muted-foreground">{incomplete ? "Session search is still loading." : "No matches"}</p> : null}
@@ -2290,7 +2313,7 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
       <SessionSearch rows={rows} catalog={catalog} query={tab.query} setQuery={(update) => { setEntered(false); edit((item) => ({ query: update(item.query) })); }} search={search} inputRef={input} onKeyDown={(event) => { if (event.key === "Enter") { onFirstSubmit(); setEntered(true); void search.run(tab.query.trimEnd()); } }} />
     </div>
     <div className="min-h-0 flex-1 overflow-y-auto text-sm" aria-label="Search results">
-      <SearchStatus pending={search.pending} error={search.error} empty={!!search.sent && !search.pending && !search.error && search.found.length === 0} incomplete={!searchIsAuthoritative(sidebar) || search.missing} unindexed={!search.pending && response?.indexComplete === false} unsummarized={!search.pending && response?.summariesComplete === false} retry={() => void search.run(search.sent)} />
+      <SearchStatus search={search} empty={!!search.sent && !search.pending && !search.error && search.found.length === 0} incomplete={!searchIsAuthoritative(sidebar) || search.missing} />
       {search.sent ? <ul data-pending={search.pending} className="flex min-w-0 flex-col gap-4 data-[pending=true]:opacity-50">
         {search.found.map(({ match, session }) => <SearchResultGroup key={session.id} session={session} hits={hits.get(session.id) ?? []} text={match.text} field={match.field} needle={response!.needle} tagIds={response!.mentionIds} />)}
       </ul> : <p className="text-muted-foreground">Type to search messages and conversations.</p>}
@@ -2299,11 +2322,15 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
 }
 
 // Values offered for the operator word being typed; a completed value commits on space or Enter instead of offering itself again.
+// Remote OpenCode sessions add their servers, agents and models; RocketClaw agents bring their configured models.
 function searchChoices(word: string, rows: Session[], catalog: Agent[], principals: string[]) {
-  const typed = /^(tag|cron|agent|room|principal|is|sort):"?(.*?)"?$/is.exec(word);
+  const typed = /^(tag|cron|agent|room|principal|server|model|is|sort):"?(.*?)"?$/is.exec(word);
   const key = typed?.[1].toLowerCase() ?? "", needle = typed?.[2].toLowerCase() ?? "";
-  const names = key === "principal" ? principals : key === "room" ? slackRooms(rows) : key === "cron" ? [...new Set(rows.flatMap((row) => row.cronName ? [row.cronName] : []))] : key === "tag" ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : key === "sort" ? ["newest", "oldest"] : ["pinned", "forked", "cron"];
-  const offered = !key ? [] : (key === "agent" ? catalog.map(({ name, model, reasoning }) => ({ key: name, detail: [model, reasoning].filter(Boolean).join(" · ") })) : names.map((name) => ({ key: name, detail: "" }))).filter((item) => item.key.toLowerCase().includes(needle));
+  const remote = (field: "server" | "agent" | "model") => [...new Set(rows.flatMap((row) => row.server && row[field] ? [row[field]!] : []))];
+  const names = key === "principal" ? principals : key === "room" ? slackRooms(rows) : key === "cron" ? [...new Set(rows.flatMap((row) => row.cronName ? [row.cronName] : []))] : key === "tag" ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : key === "sort" ? ["newest", "oldest"]
+    : key === "server" ? remote("server") : key === "model" ? [...new Set([...catalog.flatMap(({ model }) => model ? [model] : []), ...remote("model")])] : ["pinned", "forked", "cron"];
+  const agents = [...catalog.map(({ name, model, reasoning }) => ({ key: name, detail: [model, reasoning].filter(Boolean).join(" · ") })), ...remote("agent").filter((name) => !catalog.some((agent) => agent.name === name)).map((name) => ({ key: name, detail: "OpenCode" }))];
+  const offered = !key ? [] : (key === "agent" ? agents : names.map((name) => ({ key: name, detail: "" }))).filter((item) => item.key.toLowerCase().includes(needle));
   return { key, choices: offered.some((item) => item.key.toLowerCase() === needle) ? [] : offered };
 }
 

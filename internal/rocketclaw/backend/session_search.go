@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
 // SearchKey is the lowercased key of a session search filter term.
@@ -27,6 +28,8 @@ const (
 	keyIs        SearchKey = "is"
 	keySort      SearchKey = "sort"
 	keyPrincipal SearchKey = "principal"
+	keyServer    SearchKey = "server"
+	keyModel     SearchKey = "model"
 )
 
 // SearchTerm is a filter term of a session search query: its text, decoded value
@@ -85,7 +88,7 @@ type SessionSearch struct {
 }
 
 // parseSessionQuery reads query as Web's search regex
-// /(?:^|\s)(is:(?:pinned|forked|cron)|sort:(?:newest|oldest)|(?:tag|cron|agent|room|principal):("(?:[^"\\]|\\.)*"|\S+))(?=\s|$)/gi
+// /(?:^|\s)(is:(?:pinned|forked|cron)|sort:(?:newest|oldest)|(?:tag|cron|agent|room|principal|server|model):("(?:[^"\\]|\\.)*"|\S+))(?=\s|$)/gi
 // did, decoding quoted values as JSON; a value that is empty or does not decode
 // leaves its term as text. text is query without each term and the one
 // whitespace character before it, trimmed.
@@ -117,7 +120,7 @@ func parseSessionQuery(query string) (terms []SearchTerm, text string) {
 			found = found && (term.Value == "pinned" || term.Value == "forked" || term.Value == "cron")
 		case keySort:
 			found = found && (term.Value == "newest" || term.Value == "oldest")
-		case keyTag, keyCron, keyAgent, keyRoom, keyPrincipal:
+		case keyTag, keyCron, keyAgent, keyRoom, keyPrincipal, keyServer, keyModel:
 			term.Value = value
 			if strings.HasPrefix(value, `"`) {
 				start := pos + len(key) + 1
@@ -227,7 +230,8 @@ func (s *SessionService) SidebarChats(ctx context.Context, slack slackLookup) it
 	}
 }
 
-// passes requires any room term to match, and every other filter term.
+// passes requires any room term to match, and every other filter term. A model
+// term matches part of the chat's model, ignoring case.
 func (c *SidebarChat) passes(terms []SearchTerm, principals []string) bool {
 	hasRoom, roomMatch := false, false
 
@@ -243,6 +247,10 @@ func (c *SidebarChat) passes(terms []SearchTerm, principals []string) bool {
 			ok = c.Session.Conversation.Agent == term.Value
 		case keyPrincipal:
 			ok = slices.Contains(principals, term.Value)
+		case keyServer:
+			ok = c.Session.Server == term.Value
+		case keyModel:
+			ok = strings.Contains(strings.ToLower(c.Session.Model), strings.ToLower(term.Value))
 		case keyRoom:
 			hasRoom, roomMatch = true, roomMatch || c.Room == term.Value
 			continue
@@ -275,6 +283,7 @@ func sessionLabel(id string) string {
 // SidebarChats, those passing the filters whose fields hold the needle and,
 // when messages is set, those with message hits. Without a sort: term they keep
 // sidebar order, chats with hits first; with one, they follow summary time.
+// Either way, chats whose whole model is a model: value come first.
 func (s *SessionService) SearchSessions(ctx context.Context, query string, messages bool, slack slackLookup) (*SessionSearch, error) {
 	search := &SessionSearch{IndexComplete: true, SummariesComplete: true}
 	search.Terms, search.Text = parseSessionQuery(query)
@@ -289,6 +298,14 @@ func (s *SessionService) SearchSessions(ctx context.Context, query string, messa
 		search.IndexComplete = complete
 	}
 
+	// A RocketClaw chat's model is its agent's configured model, read only for a model: term.
+	var agents rocketcode.Agents
+	if slices.ContainsFunc(search.Terms, func(term SearchTerm) bool { return term.Key == keyModel }) {
+		if agents, _, err = LoadRuntimeDefinitions(s.definitions, s.definitions.Clone().RuntimeDirName()); err != nil {
+			return nil, fmt.Errorf("load agents for model search: %w", err)
+		}
+	}
+
 	var chats []SidebarChat
 
 	hits := make(map[string]bool) // Whether each chat that passed the filters has hits.
@@ -300,6 +317,10 @@ func (s *SessionService) SearchSessions(ctx context.Context, query string, messa
 
 		search.SummariesComplete = search.SummariesComplete && chat.Session.Summary != nil
 		search.Principals = append(search.Principals, principals[chat.Session.Conversation.ID]...)
+
+		if chat.Session.Server == "" {
+			chat.Session.Model = agents.Items[chat.Session.Conversation.Agent].Model
+		}
 
 		if chat.passes(search.Terms, principals[chat.Session.Conversation.ID]) {
 			chats = append(chats, chat)
@@ -372,6 +393,9 @@ func (s *SessionService) SearchSessions(ctx context.Context, query string, messa
 	return search, nil
 }
 
+// sortMatches puts chats whose whole model is a model: value, ignoring case,
+// ahead of partial model matches, then orders each part by summary time for a
+// sort: term.
 func (search *SessionSearch) sortMatches() {
 	var sort string
 
@@ -381,28 +405,40 @@ func (search *SessionSearch) sortMatches() {
 		}
 	}
 
-	if sort != "" {
-		// Missing times sort last, then everything by bytewise ID.
-		slices.SortFunc(search.Matches, func(a, b SessionMatch) int {
-			var at, bt time.Time
-			if a.Chat.Session.Summary != nil {
-				at = a.Chat.Session.Summary.LastUpdated
-			}
+	whole := func(match *SessionMatch) int {
+		if slices.ContainsFunc(search.Terms, func(term SearchTerm) bool {
+			return term.Key == keyModel && strings.EqualFold(term.Value, match.Chat.Session.Model)
+		}) {
+			return 1
+		}
 
-			if b.Chat.Session.Summary != nil {
-				bt = b.Chat.Session.Summary.LastUpdated
-			}
-
-			order := at.Compare(bt)
-
-			switch {
-			case at.IsZero() || bt.IsZero():
-				order = bt.Compare(at)
-			case sort == "newest":
-				order = -order
-			}
-
-			return cmp.Or(order, strings.Compare(a.Chat.Session.Conversation.ID, b.Chat.Session.Conversation.ID))
-		})
+		return 0
 	}
+
+	slices.SortStableFunc(search.Matches, func(a, b SessionMatch) int {
+		if order := whole(&b) - whole(&a); order != 0 || sort == "" {
+			return order
+		}
+
+		// Missing times sort last, then everything by bytewise ID.
+		var at, bt time.Time
+		if a.Chat.Session.Summary != nil {
+			at = a.Chat.Session.Summary.LastUpdated
+		}
+
+		if b.Chat.Session.Summary != nil {
+			bt = b.Chat.Session.Summary.LastUpdated
+		}
+
+		order := at.Compare(bt)
+
+		switch {
+		case at.IsZero() || bt.IsZero():
+			order = bt.Compare(at)
+		case sort == "newest":
+			order = -order
+		}
+
+		return cmp.Or(order, strings.Compare(a.Chat.Session.Conversation.ID, b.Chat.Session.Conversation.ID))
+	})
 }

@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -405,6 +406,67 @@ func TestOpenCodeUpstreamFailuresWriteNothing(t *testing.T) {
 
 	require.Error(t, s.pruneOpenCode(ctx, "box", config.OpenCodeConfig{URL: gone.URL, Password: "pw", Port: 4100}))
 	assert.Empty(t, remoteSidebar(t, s), "a failed poll writes nothing")
+}
+
+// Remote sessions carry their selected agent and model; a RocketClaw chat's model is its agent's
+// configured one. model: matches part of a model, ranking chats with the whole model first.
+func TestSearchSessionsFiltersByServerAgentAndModel(t *testing.T) {
+	s := newOpenCodeTestService(t, "box", "lab")
+	ctx := t.Context()
+
+	root, err := os.OpenRoot(s.definitions.Clone().Workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.MkdirAll(".rocketclaw/agents", 0o755))
+	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
+	require.NoError(t, root.WriteFile(".rocketclaw/agents/main.md", []byte("---\nmodel: gpt-6.1-sol\n---\nPrompt\n"), 0o644))
+	require.NoError(t, s.UpsertThread("web-session:local", ThreadState{Agent: "main"}))
+	_, err = s.AppendEntryID(ctx, "web-session:local", testSessionEntry("question", "answer"))
+	require.NoError(t, err)
+
+	remote := func(id, agent, model string, updated int64) openCodeSession {
+		session := openCodeTestSession(id, id, "/srv", updated)
+		session.Agent = agent
+		session.Model.ProviderID, session.Model.ID, _ = strings.Cut(model, "/")
+
+		return session
+	}
+
+	for name, sessions := range map[string][]openCodeSession{
+		"box": {remote("ses_fast", "plan", "anthropic/claude-opus-4-7-fast", 4000), remote("ses_opus", "build", "anthropic/claude-opus-4-7", 3000)},
+		"lab": {remote("ses_new", "build", "", 2000)},
+	} {
+		server := httptest.NewServer(&fakeOpenCode{sessions: sessions})
+		t.Cleanup(server.Close)
+		require.NoError(t, s.syncOpenCode(ctx, name, config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100}, &openCodeShells{}))
+	}
+
+	rows := remoteSidebar(t, s)
+	require.Len(t, rows, 3)
+	assert.Equal(t, []string{"plan", "anthropic/claude-opus-4-7-fast"}, []string{rows[0].Conversation.Agent, rows[0].Model})
+	assert.Equal(t, []string{"build", ""}, []string{rows[2].Conversation.Agent, rows[2].Model})
+
+	for query, want := range map[string][]string{
+		"server:box":                        {"opencode:box:ses_fast", "opencode:box:ses_opus"},
+		"server:lab agent:build":            {"opencode:lab:ses_new"},
+		"agent:build":                       {"opencode:box:ses_opus", "opencode:lab:ses_new"},
+		"model:OPUS":                        {"opencode:box:ses_fast", "opencode:box:ses_opus"},
+		"model:anthropic/claude-opus-4-7":   {"opencode:box:ses_opus", "opencode:box:ses_fast"},
+		"model:gpt-6.1":                     {"web-session:local"},
+		"model:gpt-6.1-sol agent:main":      {"web-session:local"},
+		"server:box model:opus agent:build": {"opencode:box:ses_opus"},
+		"server:other":                      {},
+	} {
+		search, err := s.SearchSessions(ctx, query, false, noSlackLookups{})
+		require.NoError(t, err)
+
+		ids := make([]string, 0, len(search.Matches))
+		for _, match := range search.Matches {
+			ids = append(ids, match.Chat.Session.Conversation.ID)
+		}
+
+		assert.Equal(t, want, ids, query)
+	}
 }
 
 func TestCreateOpenCodeSessionListsItAtOnce(t *testing.T) {
