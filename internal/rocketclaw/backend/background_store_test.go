@@ -698,3 +698,36 @@ func TestBackgroundJobChangeNotices(t *testing.T) {
 		require.ElementsMatch(t, []string{"cron:daily", "visible"}, notices(), statement)
 	}
 }
+
+func TestSidebarMarksRunningBackgroundJobs(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+
+	for _, id := range []string{"idle", "own", "destination"} {
+		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "main"}))
+		_, err := store.AppendEntryID(t.Context(), id, testSessionEntry("question", "answer"))
+		require.NoError(t, err)
+	}
+
+	own, hidden := testBackgroundJob("own", "turn/call/a"), testBackgroundJob("cron:daily", "turn/call/b")
+	hidden.origin.SyncDestination = "destination"
+
+	for _, job := range []*backgroundJob{own, hidden} {
+		createTestBackgroundJob(t, store, job)
+	}
+
+	finished := testBackgroundJob("idle", "turn/call/c")
+	createTestBackgroundJob(t, store, finished)
+	finishTestBackgroundJob(t, store, finished, backgroundCompleted, true)
+
+	background := map[string]bool{}
+
+	for row, err := range store.SidebarSessions(t.Context()) {
+		require.NoError(t, err)
+
+		background[row.Conversation.ID] = row.Background
+	}
+
+	require.Equal(t, map[string]bool{"idle": false, "own": true, "destination": true}, background)
+}

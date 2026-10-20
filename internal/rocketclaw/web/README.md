@@ -512,6 +512,10 @@ active tab.
   icon instead. With reduced motion the title or icon shows a still gradient
   that fades toward its end. Screen readers hear “Turn running” in the tab's
   description.
+- **Background work** that can wake an idle session swaps the tab's chat icon for an
+  hourglass: a running Background Job, its own or that of a hidden run reporting to it, or a
+  remote OpenCode session's running child session (a background subagent) or shell command.
+  A running turn keeps the chat icon. Screen readers hear “Background work running”.
 - **Keyboard.** The strip is a `tablist` with one Tab stop. Arrow keys (Left/Right
   or Up/Down), Home, and End move focus; Enter or Space activates. Anywhere in
   the app, Cmd/Ctrl+[ and Cmd/Ctrl+] activate the previous and next tab, wrapping

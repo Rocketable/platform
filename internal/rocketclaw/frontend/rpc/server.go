@@ -186,7 +186,7 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 			return err
 		}
 
-		session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, AllowedAgents: allChoices, Running: row.Running, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply}
+		session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, AllowedAgents: allChoices, Running: row.Running, Background: row.Background, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply}
 
 		if _, _, slack := protocol.SlackThreadTarget(conversation.ID); slack {
 			session.AllowedAgents = slices.DeleteFunc(slices.Clone(allChoices), func(name string) bool { return !slices.Contains(chat.RoomAgents, name) })

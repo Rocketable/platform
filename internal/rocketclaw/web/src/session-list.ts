@@ -73,7 +73,7 @@ export async function loadSavedSessions(owner: string, protocol: string): Promis
     return await new Promise((resolve, reject) => {
       const tx = db.transaction("snapshots", "readonly");
       const request = tx.objectStore("snapshots").get([owner, protocol]);
-      tx.oncomplete = () => resolve(epoch === snapshotEpoch(owner, protocol) ? request.result?.map((row: Session) => row.running ? { ...row, running: false } : row) : undefined);
+      tx.oncomplete = () => resolve(epoch === snapshotEpoch(owner, protocol) ? request.result?.map((row: Session) => row.running || row.background ? { ...row, running: false, background: false } : row) : undefined);
       tx.onabort = () => reject(tx.error);
     });
   } finally {

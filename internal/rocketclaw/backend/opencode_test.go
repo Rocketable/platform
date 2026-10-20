@@ -1,8 +1,10 @@
 package backend
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -23,6 +25,13 @@ type fakeOpenCode struct {
 	created  []string
 	// replies holds each session's newest assistant text; a session missing here fails the read.
 	replies map[string]string
+	// parents maps a child session to its parent. locations are the loaded locations, and shells
+	// maps each to its running shells, by ID, with their sessions; a location missing from shells
+	// fails its list. The event stream sends events after its connected event.
+	parents   map[string]string
+	locations []string
+	shells    map[string]map[string]string
+	events    chan string
 }
 
 func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -41,6 +50,43 @@ func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": active})
+	case "GET /api/debug/location":
+		locations := []map[string]string{}
+		for _, directory := range f.locations {
+			locations = append(locations, map[string]string{"directory": directory})
+		}
+
+		_ = json.NewEncoder(w).Encode(locations)
+	case "GET /api/shell":
+		running, ok := f.shells[r.URL.Query().Get("location[directory]")]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		shells := []map[string]any{}
+		for id, session := range running {
+			shells = append(shells, map[string]any{"id": id, "status": "running", "metadata": map[string]string{"sessionID": session}})
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": shells})
+	case "GET /api/event":
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"server.connected\",\"data\":{}}\n\n: heartbeat\n\n")
+		w.(http.Flusher).Flush()
+
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case event, ok := <-f.events:
+				if !ok {
+					return
+				}
+
+				_, _ = fmt.Fprintf(w, "data: %s\n\n", event)
+				w.(http.Flusher).Flush()
+			}
+		}
 	case "POST /api/session":
 		var body struct {
 			Location struct{ Directory string } `json:"location"`
@@ -50,7 +96,11 @@ func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.created = append(f.created, body.Location.Directory)
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": openCodeTestSession("ses_new", "", body.Location.Directory, 5000)})
 	default:
-		id, _ := strings.CutSuffix(strings.TrimPrefix(r.URL.Path, "/api/session/"), "/message")
+		id, messages := strings.CutSuffix(strings.TrimPrefix(r.URL.Path, "/api/session/"), "/message")
+		if parent, ok := f.parents[id]; ok && !messages {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]string{"parentID": parent}})
+			return
+		}
 
 		reply, ok := f.replies[id]
 		if !ok || r.URL.RawQuery != "type=assistant&order=desc&limit=1" {
@@ -116,7 +166,7 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	box := config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100}
-	require.NoError(t, s.syncOpenCode(ctx, "box", box))
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 
 	rows := remoteSidebar(t, s)
 	require.Len(t, rows, 3)
@@ -131,22 +181,22 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	// even when a later read would fail; a failed read when the next turn ends clears it.
 	fake.active, fake.replies = nil, map[string]string{"ses_b": "Done: tests pass."}
 
-	require.NoError(t, s.syncOpenCode(ctx, "box", box))
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 
 	fake.replies = nil
 
-	require.NoError(t, s.syncOpenCode(ctx, "box", box))
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 
 	rows = remoteSidebar(t, s)
 	assert.Equal(t, []string{"", "Done: tests pass.", ""}, []string{rows[0].Reply, rows[1].Reply, rows[2].Reply})
 
 	fake.active = []string{"ses_b"}
 
-	require.NoError(t, s.syncOpenCode(ctx, "box", box))
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 
 	fake.active = nil
 
-	require.NoError(t, s.syncOpenCode(ctx, "box", box))
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 	assert.Empty(t, remoteSidebar(t, s)[1].Reply)
 
 	// Pin, name, and tag survive later syncs and state pruning.
@@ -173,12 +223,12 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	// A below-limit fetch is the whole root set, so a missing session was deleted (R6).
 	fake.sessions = fake.sessions[:2]
 
-	require.NoError(t, s.syncOpenCode(ctx, "box", box))
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 	assert.Len(t, remoteSidebar(t, s), 2)
 
 	// A failed poll writes nothing; rows age into offline once their stamp is stale.
 	box.Password = "wrong"
-	errSync := s.syncOpenCode(ctx, "box", box)
+	errSync := s.syncOpenCode(ctx, "box", box, &openCodeShells{})
 	require.ErrorAs(t, errSync, new(*openCodeError))
 	require.EqualError(t, errSync, "opencode box /api/session?parentID=null&limit=100: status 401")
 
@@ -188,6 +238,79 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	rows = remoteSidebar(t, s)
 	require.Len(t, rows, 2)
 	assert.True(t, rows[0].Offline)
+}
+
+func TestSyncOpenCodeMarksBackgroundWork(t *testing.T) {
+	s := newOpenCodeTestService(t, "box")
+	ctx := t.Context()
+	fake := &fakeOpenCode{
+		sessions: []openCodeSession{openCodeTestSession("ses_a", "", "/srv/app", 4000), openCodeTestSession("ses_b", "", "/srv/app", 3000), openCodeTestSession("ses_c", "", "/srv/api", 2000), openCodeTestSession("ses_d", "", "/srv/gone", 1000)},
+		// ses_b's background subagent runs, and a grandchild of ses_c runs a shell.
+		active:  []string{"ses_a", "ses_b_child"},
+		parents: map[string]string{"ses_b_child": "ses_b", "ses_c_grandchild": "ses_c_child", "ses_c_child": "ses_c"},
+	}
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	box := config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100}
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{running: map[string]string{"sh_1": "ses_c_grandchild"}}))
+
+	rows := remoteSidebar(t, s)
+	require.Len(t, rows, 4)
+	assert.Equal(t, []bool{true, false, false, false}, []bool{rows[0].Running, rows[1].Running, rows[2].Running, rows[3].Running})
+	assert.Equal(t, []bool{false, true, true, false}, []bool{rows[0].Background, rows[1].Background, rows[2].Background, rows[3].Background})
+
+	fake.active = nil
+
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+	assert.False(t, slices.ContainsFunc(remoteSidebar(t, s), func(row SidebarSession) bool { return row.Background }))
+}
+
+func TestOpenCodeShellsFollowEvents(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	fake := &fakeOpenCode{
+		// /srv/gone is loaded but its list fails. sh_old's exit is on the stream before the list
+		// that still names it, and it must apply after.
+		locations: []string{"/srv/app", "/srv/gone"},
+		shells:    map[string]map[string]string{"/srv/app": {"sh_old": "ses_a", "sh_kept": "ses_b"}},
+		events:    make(chan string, 4),
+	}
+	fake.events <- `{"type":"shell.exited","data":{"id":"sh_old","status":"exited"}}`
+
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	shells := &openCodeShells{running: map[string]string{"sh_stale": "ses_z"}}
+	done := make(chan error, 1)
+
+	go func() {
+		done <- shells.follow(ctx, "box", config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100})
+	}()
+
+	running := func(want map[string]string) func() bool {
+		return func() bool {
+			shells.mu.Lock()
+			defer shells.mu.Unlock()
+
+			return maps.Equal(want, shells.running)
+		}
+	}
+	require.Eventually(t, running(map[string]string{"sh_kept": "ses_b"}), 5*time.Second, 10*time.Millisecond, "connecting replaces stale shells with the loaded locations'")
+
+	for _, event := range []string{
+		`{"type":"shell.created","data":{"info":{"id":"sh_new","status":"running","metadata":{"sessionID":"ses_c"}}}}`,
+		`{"type":"session.text.delta","data":{"info":"not a shell"}}`,
+		`{"type":"shell.deleted","data":{"id":"sh_kept"}}`,
+	} {
+		fake.events <- event
+	}
+
+	require.Eventually(t, running(map[string]string{"sh_new": "ses_c"}), 5*time.Second, 10*time.Millisecond)
+
+	close(fake.events)
+	require.NoError(t, <-done, "an ended stream returns so the caller reconnects")
 }
 
 func TestSyncOpenCodeKeepsRowsOutsideTheWindow(t *testing.T) {
@@ -203,14 +326,14 @@ func TestSyncOpenCodeKeepsRowsOutsideTheWindow(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	box := config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100}
-	require.NoError(t, s.syncOpenCode(ctx, "box", box))
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 
 	// The newest 100 form a full window: the oldest row leaves the fetch but stays listed, online.
 	oldest := "opencode:box:" + fake.sessions[openCodeSyncLimit].ID
 	fake.sessions = fake.sessions[:openCodeSyncLimit]
 	_, err := s.db.ExecContext(ctx, `UPDATE opencode_sessions SET synced_at = now() - interval '1 minute'`)
 	require.NoError(t, err)
-	require.NoError(t, s.syncOpenCode(ctx, "box", box))
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 
 	rows := remoteSidebar(t, s)
 	i := slices.IndexFunc(rows, func(row SidebarSession) bool { return row.Conversation.ID == oldest })
@@ -274,7 +397,7 @@ func TestOpenCodeUpstreamFailuresWriteNothing(t *testing.T) {
 
 	for _, url := range []string{gone.URL, activeFails.URL, malformed.URL} {
 		box := config.OpenCodeConfig{URL: url, Password: "pw", Port: 4100}
-		require.Error(t, s.syncOpenCode(ctx, "box", box), url)
+		require.Error(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}), url)
 
 		_, err := s.CreateOpenCodeSession(ctx, "box", box, "/srv")
 		require.Error(t, err, url)

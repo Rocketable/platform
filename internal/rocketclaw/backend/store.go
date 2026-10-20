@@ -1049,10 +1049,14 @@ type SidebarSession struct {
 	Conversation protocol.Conversation
 	Summary      *protocol.SessionSummary
 	Running      bool
-	Pinned       bool
-	Name         string
-	ForkedFrom   string
-	Tags         []string
+	// Background reports work that can wake the session after its turn: a running Background Job,
+	// its own or a hidden run's reporting to it, or a remote OpenCode session's running child
+	// session or shell command.
+	Background bool
+	Pinned     bool
+	Name       string
+	ForkedFrom string
+	Tags       []string
 	// Server names the remote OpenCode server of a synced session, empty for RocketClaw's own.
 	Server    string
 	Directory string
@@ -1074,6 +1078,10 @@ running AS (
     SELECT DISTINCT ON (conversation_id) conversation_id, inbound_json->>'Text' AS prompt, to_timestamp(created_at_unix_ns / 1e9) AS started_at
     FROM active_turns WHERE phase <> 'done'
     ORDER BY conversation_id, created_at_unix_ns
+), background AS (
+    SELECT conversation_id FROM background_jobs WHERE status = $3
+    UNION
+    SELECT sync_destination FROM background_jobs WHERE status = $3 AND sync_destination <> ''
 )
 , local AS (
 SELECT
@@ -1083,6 +1091,7 @@ SELECT
     CASE WHEN h.found THEN s.preview ELSE convert_to(r.prompt, 'UTF8') END AS preview,
     CASE WHEN h.found THEN s.last_updated ELSE r.started_at END AS updated,
     r.conversation_id IS NOT NULL AS running,
+    b.conversation_id IS NOT NULL AS background,
     c.pinned,
     c.name,
     c.forked_from,
@@ -1099,11 +1108,12 @@ LEFT JOIN LATERAL (
     SELECT TRUE AS found FROM session_entries e WHERE e.conversation_id = c.conversation_id LIMIT 1
 ) h ON TRUE
 LEFT JOIN running r ON r.conversation_id = c.conversation_id
+LEFT JOIN background b ON b.conversation_id = c.conversation_id
 LEFT JOIN session_summaries s ON s.conversation_id = c.conversation_id
 LEFT JOIN session_tags t ON t.conversation_id = c.conversation_id
 WHERE h.found OR r.conversation_id IS NOT NULL
 ), remote AS (
-SELECT o.conversation_id, '', '', convert_to(o.title, 'UTF8'), o.updated_at, o.running, o.pinned, o.name, '', COALESCE(t.tags, '[]'::jsonb),
+SELECT o.conversation_id, '', '', convert_to(o.title, 'UTF8'), o.updated_at, o.running, o.background, o.pinned, o.name, '', COALESCE(t.tags, '[]'::jsonb),
     o.server, o.directory, o.synced_at < now() - interval '15 seconds', '', COALESCE(o.reply, '')
 FROM opencode_sessions o
 LEFT JOIN session_tags t ON t.conversation_id = o.conversation_id
@@ -1113,7 +1123,7 @@ WHERE o.server = ANY($2)
 SELECT * FROM local UNION ALL SELECT * FROM remote
 )
 SELECT * FROM chats
-ORDER BY pinned DESC, COALESCE(updated, '0001-01-01 00:00:00+00'::timestamptz) DESC, conversation_id COLLATE "C"`, "", slices.Collect(maps.Keys(s.definitions.Clone().OpenCode)))
+ORDER BY pinned DESC, COALESCE(updated, '0001-01-01 00:00:00+00'::timestamptz) DESC, conversation_id COLLATE "C"`, "", slices.Collect(maps.Keys(s.definitions.Clone().OpenCode)), backgroundRunning)
 		if err != nil {
 			yield(SidebarSession{}, fmt.Errorf("query sidebar sessions: %w", err))
 			return
@@ -1127,7 +1137,7 @@ ORDER BY pinned DESC, COALESCE(updated, '0001-01-01 00:00:00+00'::timestamptz) D
 				tags    []byte
 				updated sql.NullTime
 			)
-			if err := rows.Scan(&row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply); err != nil {
+			if err := rows.Scan(&row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
 				return
 			}
