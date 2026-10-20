@@ -16,7 +16,7 @@ import { queries, mutations, listSessions, rpc, RPCError } from "./api";
 import { draftContent } from "./drafts";
 import { holdWakeLock, setVoiceSticky, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, Layers, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Undo2, Wrench, X } from "lucide-react";
+import { BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, Hourglass, Layers, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Undo2, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useDeferredValue, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -1309,18 +1309,25 @@ function SpaceMenu({ tabs: { state, pending, enter, addSpace, renameSpace, delet
   </DropdownMenu>;
 }
 
+// A running turn wins over background work, which can wake the session after its turn.
+function tabActivity(session: Session) {
+  if (session.running) return ["Turn running", MessageSquare] as const;
+  return session.background ? ["Background work running", Hourglass] as const : ["", MessageSquare] as const;
+}
+
 function TabItem({ tab, description, rule, active, vertical, editing, endEdit, promote, close, openMenu }: { tab: Tab; description?: string; rule?: ReactNode; active: boolean; vertical: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: Element) => void }) {
   const sidebar = useContext(Sidebar);
   const id = tab.path.startsWith("/s/") ? decodeSessionId(tab.path.slice(3)) : "";
   const session = sidebar.rows.find((row) => row.id === id) ?? { id };
-  const [label, Icon] = pageTab(tab.path) ?? [sessionTitle(session, sidebar.loadingIds.has(id)), MessageSquare];
+  const [activity, SessionIcon] = tabActivity(session);
+  const [label, Icon] = pageTab(tab.path) ?? [sessionTitle(session, sidebar.loadingIds.has(id)), SessionIcon];
   const title = useCleanText(label);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
   return <div data-tab={tab.path} data-running={session.running} draggable={!editing} className={cn("group relative flex shrink-0 items-center", vertical ? "rounded-md" : "border-r", active ? "bg-sidebar-row-active" : "hover:bg-accent")}>
     {rule}
     <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className={cn("flex min-w-0", vertical ? "flex-1" : "max-w-80")} />}>
-      <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={session.running ? [description, "Turn running"].filter(Boolean).join(", ") : description} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
+      <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={activity ? [description, activity].filter(Boolean).join(", ") : description} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
         onClick={() => { if (!active) navigate(tab.path); }} onDoubleClick={promote}>
         <Icon aria-hidden="true" className="size-4 shrink-0 group-data-[running=true]:only:motion-safe:shimmer-icon group-data-[running=true]:only:motion-reduce:shimmer-icon-still" />
         {editing ? <TabRename session={session} placeholder={title} endEdit={endEdit} /> : tab.pinned && !vertical ? null : <span className="truncate motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>}

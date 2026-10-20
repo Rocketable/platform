@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,10 +12,12 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketcode"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -22,6 +25,9 @@ const (
 	openCodeSyncInterval = 5 * time.Second
 	openCodePruneLimit   = 1_000_000
 	openCodePruneEvery   = 24 * time.Hour
+	// openCodeShellsEvery bounds how long running shells can drift, as over a connection that died
+	// without closing, by reconnecting and listing them again.
+	openCodeShellsEvery = 15 * time.Minute
 )
 
 // openCodeSession is the part of an OpenCode v2 Session.Info the Web lists.
@@ -47,10 +53,138 @@ func (e *openCodeError) Error() string {
 	return fmt.Sprintf("opencode %s %s: status %d", e.Server, e.Path, e.Status)
 }
 
+// openCodeShells is one server's running shell commands: the session that started each, by
+// shell ID. Its event stream keeps it current; each sync reads it.
+type openCodeShells struct {
+	mu      sync.Mutex
+	running map[string]string
+}
+
+// follow keeps shells current from one connection to name's event stream, until the stream
+// ends or ctx does. On connecting, it lists the shells of every location the server has loaded,
+// where every shell runs, and reads no events meanwhile, so the events that arrived during the
+// list apply after it. Listing only loaded locations never makes the server load one. A location
+// whose list fails, such as one deleted from disk, adds no shells.
+func (shells *openCodeShells) follow(ctx context.Context, name string, server config.OpenCodeConfig) error {
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(server.URL, "/")+"/api/event", http.NoBody) // Config validation already parsed the URL.
+	request.SetBasicAuth("opencode", server.Password)
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("follow opencode %s events: %w", name, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+
+	if response.StatusCode/100 != 2 {
+		return &openCodeError{Server: name, Path: "/api/event", Status: response.StatusCode}
+	}
+
+	lines := bufio.NewScanner(response.Body)
+	lines.Buffer(nil, 64<<20) // An event carries whole tool inputs and outputs.
+
+	for lines.Scan() {
+		var event struct {
+			Type string `json:"type"`
+			Data struct {
+				ID   string `json:"id"`
+				Info struct {
+					ID       string `json:"id"`
+					Status   string `json:"status"`
+					Metadata struct {
+						SessionID string `json:"sessionID"`
+					} `json:"metadata"`
+				} `json:"info"`
+			} `json:"data"`
+		}
+
+		// Other events' data may not fit this shape; they are skipped either way.
+		data, ok := bytes.CutPrefix(lines.Bytes(), []byte("data: "))
+		if !ok || json.Unmarshal(data, &event) != nil {
+			continue
+		}
+
+		switch event.Type {
+		case "server.connected":
+			var locations []struct {
+				Directory string `json:"directory"`
+			}
+			if err := openCodeCall(ctx, name, server, http.MethodGet, "/api/debug/location", nil, &locations); err != nil {
+				return err
+			}
+
+			running := map[string]string{}
+
+			for _, location := range locations {
+				var listed struct {
+					Data []struct {
+						ID       string `json:"id"`
+						Metadata struct {
+							SessionID string `json:"sessionID"`
+						} `json:"metadata"`
+					} `json:"data"`
+				}
+
+				if openCodeCall(ctx, name, server, http.MethodGet, "/api/shell?"+url.Values{"location[directory]": {location.Directory}}.Encode(), nil, &listed) == nil {
+					for _, shell := range listed.Data {
+						running[shell.ID] = shell.Metadata.SessionID
+					}
+				}
+			}
+
+			shells.mu.Lock()
+			shells.running = running
+			shells.mu.Unlock()
+		case "shell.created":
+			if event.Data.Info.Status == "running" {
+				shells.mu.Lock()
+				shells.running[event.Data.Info.ID] = event.Data.Info.Metadata.SessionID
+				shells.mu.Unlock()
+			}
+		case "shell.exited", "shell.deleted":
+			shells.mu.Lock()
+			delete(shells.running, event.Data.ID)
+			shells.mu.Unlock()
+		}
+	}
+
+	if err := lines.Err(); err != nil {
+		return fmt.Errorf("read opencode %s events: %w", name, err)
+	}
+
+	return nil
+}
+
 // SyncOpenCode keeps each configured server's newest root sessions in the store every
 // interval until ctx ends. A failed poll writes nothing, so that server's rows age into offline.
-// At start and then daily, it also drops stored sessions the server no longer has.
+// At start and then daily, it also drops stored sessions the server no longer has. Each server's
+// event stream keeps its running shells, reconnecting an interval after it drops and every
+// openCodeShellsEvery; shells that start or end while it is down show at the next connection.
 func (s *SessionService) SyncOpenCode(ctx context.Context, servers map[string]config.OpenCodeConfig) {
+	var following errgroup.Group
+	defer func() { _ = following.Wait() }()
+
+	shells := make(map[string]*openCodeShells, len(servers))
+
+	for name, server := range servers {
+		running := &openCodeShells{running: map[string]string{}}
+		shells[name] = running
+
+		following.Go(func() error {
+			for {
+				connection, cancel := context.WithTimeout(ctx, openCodeShellsEvery)
+				_ = running.follow(connection, name, server)
+
+				cancel()
+
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(openCodeSyncInterval):
+				}
+			}
+		})
+	}
+
 	ticker := time.NewTicker(openCodeSyncInterval)
 	defer ticker.Stop()
 
@@ -58,7 +192,7 @@ func (s *SessionService) SyncOpenCode(ctx context.Context, servers map[string]co
 
 	for {
 		for name, server := range servers {
-			_ = s.syncOpenCode(ctx, name, server)
+			_ = s.syncOpenCode(ctx, name, server, shells[name])
 
 			if time.Since(pruned[name]) >= openCodePruneEvery && s.pruneOpenCode(ctx, name, server) == nil {
 				pruned[name] = time.Now()
@@ -73,7 +207,7 @@ func (s *SessionService) SyncOpenCode(ctx context.Context, servers map[string]co
 	}
 }
 
-func (s *SessionService) syncOpenCode(ctx context.Context, name string, server config.OpenCodeConfig) error {
+func (s *SessionService) syncOpenCode(ctx context.Context, name string, server config.OpenCodeConfig, shells *openCodeShells) error {
 	// The state store stamps synced_at, so its clock, not this process's, marks the start.
 	var started time.Time
 	if err := queryScalar(ctx, s.db, "read state store clock", `SELECT now()`, &started); err != nil {
@@ -109,10 +243,50 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		return err
 	}
 
+	// Work outside a root's own turn can wake it: a running child session, as a background
+	// subagent's is, or a running shell command of the root or a child, as a background command is.
+	roots, owners := map[string]bool{}, map[string]bool{}
+	for _, session := range sessions.Data {
+		roots[session.ID] = true
+	}
+
+	for id := range active.Data {
+		if !roots[id] {
+			owners[id] = true
+		}
+	}
+
+	shells.mu.Lock()
+	for _, session := range shells.running {
+		owners[session] = true
+	}
+	shells.mu.Unlock()
+
+	// A walk that fails or leaves the listed roots marks a session no row reads.
+	background := map[string]bool{}
+
+	for id := range owners {
+		for id != "" && !roots[id] {
+			var parent struct {
+				Data struct {
+					ParentID string `json:"parentID"`
+				} `json:"data"`
+			}
+
+			if openCodeCall(ctx, name, server, http.MethodGet, "/api/session/"+url.PathEscape(id), nil, &parent) != nil {
+				break
+			}
+
+			id = parent.Data.ParentID
+		}
+
+		background[id] = true
+	}
+
 	var (
 		ids, titles, directories []string
 		updated                  []time.Time
-		running                  []bool
+		running, backgrounds     []bool
 		replies                  []*string
 		oldest                   time.Time
 	)
@@ -156,27 +330,28 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 
 		ids, titles, directories = append(ids, id), append(titles, session.Title), append(directories, session.Location.Directory)
 		updated, running, replies = append(updated, oldest), append(running, busy), append(replies, reply)
+		backgrounds = append(backgrounds, background[session.ID])
 	}
 
 	// A fetch below the limit is the whole root set, so every missing row was deleted; a full
 	// fetch proves deletions only inside its window. Rows stamped after the poll started were
 	// created meanwhile and stay. Kept rows are stamped too: offline means unreachable only.
 	_, err := execState(ctx, s.db, "sync opencode sessions", `WITH incoming AS (
-    SELECT * FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[]) AS t(conversation_id, title, directory, updated_at, running, reply)
+    SELECT * FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[], $11::boolean[]) AS t(conversation_id, title, directory, updated_at, running, reply, background)
 ), upserted AS (
-    INSERT INTO opencode_sessions (conversation_id, server, title, directory, updated_at, running, synced_at, reply)
-    SELECT conversation_id, $1, title, directory, updated_at, running, now(), reply FROM incoming
+    INSERT INTO opencode_sessions (conversation_id, server, title, directory, updated_at, running, synced_at, reply, background)
+    SELECT conversation_id, $1, title, directory, updated_at, running, now(), reply, background FROM incoming
     ON CONFLICT (conversation_id) DO UPDATE SET title = excluded.title, directory = excluded.directory,
-        updated_at = excluded.updated_at, running = excluded.running, synced_at = excluded.synced_at,
+        updated_at = excluded.updated_at, running = excluded.running, background = excluded.background, synced_at = excluded.synced_at,
         reply = COALESCE(excluded.reply, opencode_sessions.reply)
 ), removed AS (
     DELETE FROM opencode_sessions WHERE server = $1 AND conversation_id <> ALL($2) AND synced_at < $9 AND ($7 OR updated_at >= $8) RETURNING conversation_id
 ), untagged AS (
     DELETE FROM session_tags t USING removed r WHERE t.conversation_id = r.conversation_id
 )
-UPDATE opencode_sessions SET synced_at = now(), running = FALSE
+UPDATE opencode_sessions SET synced_at = now(), running = FALSE, background = FALSE
 WHERE server = $1 AND conversation_id <> ALL($2) AND NOT (synced_at < $9 AND ($7 OR updated_at >= $8))`,
-		name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies)
+		name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies, backgrounds)
 
 	return err
 }

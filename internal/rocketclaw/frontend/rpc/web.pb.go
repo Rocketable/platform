@@ -230,7 +230,10 @@ type Session struct {
 	// The Web space the session was born in, empty for none.
 	SpaceId string `protobuf:"bytes,20,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
 	// A remote OpenCode session's newest assistant text, read when its last seen turn ended.
-	Reply         string `protobuf:"bytes,21,opt,name=reply,proto3" json:"reply,omitempty"`
+	Reply string `protobuf:"bytes,21,opt,name=reply,proto3" json:"reply,omitempty"`
+	// Work that can wake the session after its turn runs: a running Background Job, or a remote
+	// OpenCode session's running child session or shell command.
+	Background    bool `protobuf:"varint,22,opt,name=background,proto3" json:"background,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -389,6 +392,13 @@ func (x *Session) GetReply() string {
 		return x.Reply
 	}
 	return ""
+}
+
+func (x *Session) GetBackground() bool {
+	if x != nil {
+		return x.Background
+	}
+	return false
 }
 
 type HistoryRequest struct {
@@ -6445,7 +6455,7 @@ var File_web_proto protoreflect.FileDescriptor
 const file_web_proto_rawDesc = "" +
 	"\n" +
 	"\tweb.proto\x12\x03rpc\"\x15\n" +
-	"\x13ListSessionsRequest\"\xe4\x03\n" +
+	"\x13ListSessionsRequest\"\x84\x04\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
@@ -6467,7 +6477,10 @@ const file_web_proto_rawDesc = "" +
 	"\tdirectory\x18\x12 \x01(\tR\tdirectory\x12\x18\n" +
 	"\aoffline\x18\x13 \x01(\bR\aoffline\x12\x19\n" +
 	"\bspace_id\x18\x14 \x01(\tR\aspaceId\x12\x14\n" +
-	"\x05reply\x18\x15 \x01(\tR\x05replyJ\x04\b\x06\x10\aJ\x04\b\v\x10\fJ\x04\b\f\x10\r\"\xba\x01\n" +
+	"\x05reply\x18\x15 \x01(\tR\x05reply\x12\x1e\n" +
+	"\n" +
+	"background\x18\x16 \x01(\bR\n" +
+	"backgroundJ\x04\b\x06\x10\aJ\x04\b\v\x10\fJ\x04\b\f\x10\r\"\xba\x01\n" +
 	"\x0eHistoryRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x124\n" +
 	"\x16source_conversation_id\x18\x02 \x01(\tR\x14sourceConversationId\x12\x1a\n" +

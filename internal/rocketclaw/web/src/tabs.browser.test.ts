@@ -4,13 +4,13 @@ import path from "node:path";
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
-const rows: { id: string; name: string; agent: string; running?: boolean; spaceId?: string }[] = [
+const rows: { id: string; name: string; agent: string; running?: boolean; background?: boolean; spaceId?: string }[] = [
   { id: "alpha", name: "Alpha", agent: "main" },
   { id: "bravo", name: "Bravo", agent: "main" },
   { id: "charlie", name: "Charlie", agent: "main" },
-  { id: "delta", name: "Delta", agent: "main", running: true },
-  // Echo was born in the ops space.
-  { id: "echo", name: "Echo", agent: "main", spaceId: "ops" },
+  { id: "delta", name: "Delta", agent: "main", running: true, background: true },
+  // Echo was born in the ops space, and its background work runs while no turn does.
+  { id: "echo", name: "Echo", agent: "main", spaceId: "ops", background: true },
 ];
 const href = (id: string) => `/s/${Buffer.from(id).toString("base64url")}`;
 type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; pinned?: boolean; group?: string; space?: string }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; placement: string }; revision: number; refused: number };
@@ -635,6 +635,18 @@ test("running tab title shimmers without shifting, and a pinned running tab shim
   await menu(page, "Delta", "Move tabs to left");
   expect(await animation(title("Delta"))).not.toBe("none");
   expect(await animation(tab("Delta").locator("svg"))).toBe("none");
+}), 60_000);
+
+test("an idle tab with background work shows an hourglass; a running turn keeps the chat icon", () => withPage({}, async (page, origin) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  await page.goto(`${origin}${href("delta")}`);
+  await tab("Delta").waitFor();
+  await page.goto(`${origin}${href("echo")}`);
+  await tab("Echo").waitFor();
+  expect(await tab("Echo").getAttribute("aria-description")).toEndWith("Background work running");
+  expect(await tab("Echo").locator("svg").getAttribute("class")).toContain("lucide-hourglass");
+  expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running");
+  expect(await tab("Delta").locator("svg").getAttribute("class")).toContain("lucide-message-square");
 }), 60_000);
 
 test("the shimmer visibly sweeps the selected and other running titles in both themes", () => withPage({}, async (page, origin) => {

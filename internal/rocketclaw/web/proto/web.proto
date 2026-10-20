@@ -32,6 +32,9 @@ message Session {
   string space_id = 20;
   // A remote OpenCode session's newest assistant text, read when its last seen turn ended.
   string reply = 21;
+  // Work that can wake the session after its turn runs: a running Background Job, or a remote
+  // OpenCode session's running child session or shell command.
+  bool background = 22;
 }
 
 message HistoryRequest {
