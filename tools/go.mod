@@ -1,6 +1,6 @@
 module github.com/Rocketable/platform/tools
 
-go 1.27.2
+go 1.27.3
 
 require github.com/vektra/mockery/v3 v3.8.1
 
@@ -42,6 +42,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-// Go 1.27.2 writes export data version 5. mockery v3.8.1 pins
+// Go 1.27.3 writes export data version 5. mockery v3.8.1 pins
 // x/tools v0.51.0. This replace keeps go generate on v0.52.0.
 replace golang.org/x/tools => golang.org/x/tools v0.52.0
