@@ -100,7 +100,13 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 
 	predeclared := make(starlark.StringDict, len(catalog)+len(host)+len(concurrency))
 	for name, tool := range catalog {
-		predeclared[name] = newMCPToolBuiltin(tool, decide, call, observe)
+		predeclared[name] = newKwargsBuiltin(name, tool.InputSchema, observe, func(ctx context.Context, callArgs map[string]any) (string, error) {
+			if err := decide(ctx, tool.Server+"."+tool.Name, callArgs); err != nil {
+				return "", err
+			}
+
+			return call(ctx, tool.Server, tool.Name, callArgs)
+		})
 	}
 
 	for _, tool := range host {
@@ -191,16 +197,6 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 	}
 
 	return string(encoded.(starlark.String)), nil
-}
-
-func newMCPToolBuiltin(tool ToolDesc, decide DecideFunc, call CallFunc, observe ToolCallObserver) *starlark.Builtin {
-	return newKwargsBuiltin(StarlarkName(tool.Server, tool.Name), tool.InputSchema, observe, func(ctx context.Context, callArgs map[string]any) (string, error) {
-		if err := decide(ctx, tool.Server+"."+tool.Name, callArgs); err != nil {
-			return "", err
-		}
-
-		return call(ctx, tool.Server, tool.Name, callArgs)
-	})
 }
 
 func newHostToolBuiltin(tool HostTool, observe ToolCallObserver) *starlark.Builtin {
