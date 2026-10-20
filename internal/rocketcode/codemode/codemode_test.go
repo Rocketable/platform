@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"go.starlark.net/starlark"
 )
 
 func allowAll(context.Context, string, map[string]any) error { return nil }
@@ -219,6 +221,7 @@ func TestRunInvalidSchemaArgsDoesNotCall(t *testing.T) {
 		{"unencodable argument", `demo_echo(message=lambda: "hi")`, "demo_echo arguments: encode kwargs:", nil},
 		{"invalid schema type", `demo_echo()`, "parse input schema:", map[string]any{"type": 1}},
 		{"unresolved schema reference", `demo_echo()`, "resolve input schema:", map[string]any{"$ref": "#/$defs/missing"}},
+		{"unencodable schema", `demo_echo()`, "encode input schema:", map[string]any{"default": make(chan string)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			called := false
@@ -330,8 +333,11 @@ func nilCall(context.Context, string, string, map[string]any) (string, error) {
 }
 
 func TestRunHostTool(t *testing.T) {
+	var keys []string
+
 	got, err := Run(t.Context(), `def main():
-    return read(filePath="a.txt")
+    first = read(filePath="a.txt")
+    return first + read(filePath="a.txt")
 `, nil, allowAll, nilCall, noToolCallObserver, []HostTool{{
 		Name: "read",
 		InputSchema: map[string]any{
@@ -339,10 +345,12 @@ func TestRunHostTool(t *testing.T) {
 			"properties": map[string]any{"filePath": map[string]any{"type": "string"}},
 			"required":   []any{"filePath"},
 		},
-		Call: func(_ context.Context, args map[string]any) (string, error) {
+		Call: func(ctx context.Context, args map[string]any) (string, error) {
 			if args["filePath"] != "a.txt" {
 				t.Fatalf("args = %#v", args)
 			}
+
+			keys = append(keys, CallKey(ctx))
 
 			return "contents", nil
 		},
@@ -351,7 +359,69 @@ func TestRunHostTool(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 
-	if got != "contents" {
-		t.Fatalf("Run() = %q, want contents", got)
+	if got != "contentscontents" || strings.Join(keys, ",") != "0,1" {
+		t.Fatalf("Run() = %q, call keys = %q, want contentscontents and [0 1]", got, keys)
 	}
+}
+
+func TestRunRejectsHostToolNames(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		host []HostTool
+		want string
+	}{
+		{"empty name", []HostTool{{Call: nilCallHost}}, "host tool name is required"},
+		{"MCP collision", []HostTool{{Name: "demo_echo", Call: nilCallHost}}, `builtin name collision "demo_echo"`},
+		{"concurrency collision", []HostTool{{Name: "gather", Call: nilCallHost}}, `builtin name collision "gather"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Run(t.Context(), "def main():\n    return 'unused'\n", []ToolDesc{{Server: "demo", Name: "echo"}}, allowAll, nilCall, noToolCallObserver, tc.host)
+			if err == nil || err.Error() != tc.want || got != "" {
+				t.Fatalf("Run() = %q, %v, want no result and %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunHostToolValueAndError(t *testing.T) {
+	errHost := errors.New("host failed")
+	for _, tc := range []struct {
+		name string
+		tool HostTool
+		want string
+		err  error
+	}{
+		{
+			name: "value takes precedence over string call",
+			tool: HostTool{
+				Name: "read",
+				Call: nilCallHost,
+				CallValue: func(context.Context, map[string]any) (starlark.Value, error) {
+					return starlark.Tuple{starlark.String("contents"), starlark.MakeInt(7)}, nil
+				},
+			},
+			want: `["contents",7]`,
+		},
+		{
+			name: "string call failure",
+			tool: HostTool{
+				Name: "read",
+				Call: func(context.Context, map[string]any) (string, error) {
+					return "partial contents", errHost
+				},
+			},
+			err: errHost,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Run(t.Context(), "def main():\n    return read()\n", nil, allowAll, nilCall, noToolCallObserver, []HostTool{tc.tool})
+			if got != tc.want || !errors.Is(err, tc.err) {
+				t.Fatalf("Run() = %q, %v, want %q, %v", got, err, tc.want, tc.err)
+			}
+		})
+	}
+}
+
+func nilCallHost(context.Context, map[string]any) (string, error) {
+	return "", errors.New("unexpected host call")
 }
