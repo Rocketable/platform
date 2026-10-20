@@ -276,9 +276,15 @@ func (m *threadBridgeManager) StartActiveGoals(ctx context.Context) error {
 			return fmt.Errorf("start active goal bridge: %w", err)
 		}
 
+		goal, _, err := m.store.Goal(conversationID)
+		if err != nil {
+			return fmt.Errorf("load active goal: %w", err)
+		}
+
 		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "Continue the active goal loop.", false)
 		inbound.GoalAction = protocol.GoalActionContinue
 		inbound.ConversationID = conversationID
+		inbound.Metadata = map[string]string{protocol.InboundPrincipalNameMetadataKey: goal.PrincipalName, protocol.InboundPrincipalEmailMetadataKey: goal.PrincipalEmail}
 		inbound.SlackReply = &protocol.SlackReplyTarget{}
 
 		if err := managed.Submit(ctx, inbound); err != nil {

@@ -350,7 +350,7 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 	service := newTestSessionService(t)
 	require.NoError(t, service.UpsertThread("web:empty", ThreadState{Agent: "main"}))
 	require.NoError(t, service.UpsertThread("web:stored", ThreadState{Agent: "main"}))
-	require.NoError(t, service.BeginGoal("web:stored", "work", "", 3))
+	require.NoError(t, service.BeginGoal("web:stored", &GoalState{Objective: "work", MaxTurns: 3}))
 
 	entry := &rocketcode.SessionEntry{Version: 1, Type: "replay", Timestamp: time.Now().UTC(), Model: "model", ResponseID: "response",
 		TokenUsage: &rocketcode.TokenUsage{CompletionReasoningTokens: 7},
@@ -720,7 +720,7 @@ func TestSessionsWriteStopWithoutPrompt(t *testing.T) {
 	store := newTestSessionService(t)
 	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}}), store: store, bridges: map[string]directBridge{}}
 	bridge := runningTestBridge(t, store, manager, "web:target")
-	require.NoError(t, store.BeginGoal("web:target", "ship it", "", 5))
+	require.NoError(t, store.BeginGoal("web:target", &GoalState{Objective: "ship it", MaxTurns: 5}))
 
 	write := sessionsWriteTool(&Bridge{config: Config{ConversationID: "web:sender", SessionService: store}, threads: manager}, new(protocol.InboundMessage), "main", "web:sender")
 	require.False(t, write.Resumable, "a write cut off by a restart is reported interrupted, not run again")

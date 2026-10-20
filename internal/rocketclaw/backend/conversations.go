@@ -356,7 +356,7 @@ func (r *Runtime) StartGoal(ctx context.Context, inbound *protocol.InboundMessag
 		}
 	}
 
-	if err := r.Sessions.BeginGoal(inbound.ConversationID, goal.Objective, goal.CheckScript, goal.MaxTurns); err != nil {
+	if err := r.Sessions.BeginGoal(inbound.ConversationID, &GoalState{Objective: goal.Objective, CheckScript: goal.CheckScript, MaxTurns: goal.MaxTurns, PrincipalName: inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], PrincipalEmail: inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey]}); err != nil {
 		return fmt.Errorf("persist goal: %w", err)
 	}
 
@@ -404,7 +404,7 @@ func (r *Runtime) PopQueueItem(ctx context.Context, conversationID, id string) (
 		return r.mutateWebQueue(ctx, conversationID, id, protocol.InboundKindEnqueue)
 	}
 
-	changed, err := execRows(ctx, r.Sessions.db, "pop queue item", "count popped queue items", `UPDATE thread_queue SET kind = $3, park_after = '', position = (SELECT COALESCE(MAX(position), -1) + 1 FROM thread_queue WHERE conversation_id = $1 AND park_after = '') WHERE conversation_id = $1 AND queue_item_id = $2 AND kind = $4`, conversationID, id, protocol.InboundKindEnqueue, protocol.InboundKindHeld)
+	changed, err := execRows(ctx, r.Sessions.db, "pop queue item", "count popped queue items", popQueueItemSQL, conversationID, id, protocol.InboundKindEnqueue, protocol.InboundKindHeld)
 	if err != nil || changed == 0 {
 		return false, err
 	}

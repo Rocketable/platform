@@ -34,13 +34,13 @@ func (e voiceEndError) Error() string {
 // voiceCall is one live call. Only its call loop writes to or replaces conn, or touches the fields after it.
 // The loop also writes notices to the browser's stream, which the handler writes only before and after the loop.
 type voiceCall struct {
-	server                    *Server
-	dialect                   voiceDialect
-	header                    http.Header
-	id                        string // the OpenAI session or call
-	conn                      *websocket.Conn
-	stream                    grpc.ServerStream
-	conversationID, principal string
+	server                              *Server
+	dialect                             voiceDialect
+	header                              http.Header
+	id                                  string // the OpenAI session or call
+	conn                                *websocket.Conn
+	stream                              grpc.ServerStream
+	conversationID, principal, username string
 
 	said                  []voiceEvent    // the lines, by speaker, said since the previous hand-off
 	final                 map[string]bool // speakers whose latest line has its final transcript
@@ -236,7 +236,7 @@ func (s *Server) voice(request *VoiceRequest, stream grpc.ServerStream) error {
 		cancel(err)
 	}
 
-	call := &voiceCall{server: s, dialect: dialect, header: header, id: callID, conn: conn, stream: stream, conversationID: id, principal: principal}
+	call := &voiceCall{server: s, dialect: dialect, header: header, id: callID, conn: conn, stream: stream, conversationID: id, principal: principal, username: username}
 	snapshots := make(chan voiceSnapshot)
 
 	calls, groupCtx := errgroup.WithContext(callCtx)
@@ -466,7 +466,7 @@ func (c *voiceCall) handOff(ctx context.Context, event voiceEvent) error {
 
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: message}, true)
 	inbound.ConversationID = c.conversationID
-	inbound.Metadata[protocol.InboundPrincipalMetadataKey] = c.principal
+	inbound.Metadata[protocol.InboundPrincipalMetadataKey], inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey] = c.principal, c.principal, c.username
 	inbound.Metadata[protocol.InboundMediaMetadataKey] = "Voice"
 	inbound.Metadata["web_message_id"] = event.id
 

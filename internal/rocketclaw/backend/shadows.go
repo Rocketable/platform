@@ -857,6 +857,10 @@ AND NOT EXISTS (SELECT 1 FROM active_turns WHERE conversation_id = $1 AND phase 
 	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, parent.Text, false)
 	inbound.ConversationID = child
 	inbound.PreserveWhitespace, inbound.Workflow = parent.PreserveWhitespace, parent.Workflow
+	// The shadow's subagents act for the parent's person, as the shadow's captured environment does.
+	if name := parent.Metadata[protocol.InboundPrincipalNameMetadataKey]; name != "" {
+		inbound.Metadata = map[string]string{protocol.InboundPrincipalNameMetadataKey: name, protocol.InboundPrincipalEmailMetadataKey: parent.Metadata[protocol.InboundPrincipalEmailMetadataKey]}
+	}
 
 	turnID := fmt.Sprintf("shadow-turn-%d", id)
 	if err := startTurnDB(ctx, tx, turnID, child, inbound); err != nil {

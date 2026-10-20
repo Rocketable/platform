@@ -87,6 +87,9 @@ type GoalState struct {
 	Note        string    `json:"note,omitempty"`
 	CreatedAt   time.Time `json:"created_at,omitzero"`
 	UpdatedAt   time.Time `json:"updated_at,omitzero"`
+	// PrincipalName and PrincipalEmail name the person who set the goal.
+	PrincipalName  string `json:"principal_name,omitempty"`
+	PrincipalEmail string `json:"principal_email,omitempty"`
 }
 
 type sessionStore struct {
@@ -257,28 +260,28 @@ func (s *SessionService) UpsertThread(conversationID string, thread ThreadState)
 }
 
 // BeginGoal records a new active goal for a managed conversation.
-func (s *SessionService) BeginGoal(conversationID, objective, checkScript string, maxTurns int) error {
+func (s *SessionService) BeginGoal(conversationID string, goal *GoalState) error {
 	conversationID = strings.TrimSpace(conversationID)
-	objective = strings.TrimSpace(objective)
-	checkScript = strings.TrimSpace(checkScript)
+	goal.Objective = strings.TrimSpace(goal.Objective)
+	goal.CheckScript = strings.TrimSpace(goal.CheckScript)
 
 	if conversationID == "" {
 		return errors.New("goal conversation ID is required")
 	}
 
-	if objective == "" {
+	if goal.Objective == "" {
 		return errors.New("goal objective is required")
 	}
 
-	maxTurns = max(maxTurns, 0)
+	goal.MaxTurns = max(goal.MaxTurns, 0)
 
-	return beginGoalDB(context.Background(), s.db, conversationID, &GoalState{Objective: objective, CheckScript: checkScript, MaxTurns: maxTurns})
+	return beginGoalDB(context.Background(), s.db, conversationID, goal)
 }
 
 func beginGoalDB(ctx context.Context, db stateStoreDB, conversationID string, goal *GoalState) error {
 	now := time.Now().UTC()
 
-	rows, err := execRows(ctx, db, "begin goal", "count goal start", `INSERT INTO conversation_goals (conversation_id, objective, check_script, max_turns, turns_used, status, note, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT(conversation_id) DO UPDATE SET objective = excluded.objective, check_script = excluded.check_script, max_turns = excluded.max_turns, turns_used = excluded.turns_used, status = excluded.status, note = excluded.note, created_at_unix_ns = excluded.created_at_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns WHERE conversation_goals.status NOT IN ('', $10)`, conversationID, goal.Objective, goal.CheckScript, goal.MaxTurns, 0, GoalStatusActive, "", timeUnixNano(now), timeUnixNano(now), GoalStatusActive)
+	rows, err := execRows(ctx, db, "begin goal", "count goal start", `INSERT INTO conversation_goals (conversation_id, objective, check_script, max_turns, turns_used, status, note, created_at_unix_ns, updated_at_unix_ns, principal_name, principal_email) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $11, $12) ON CONFLICT(conversation_id) DO UPDATE SET objective = excluded.objective, check_script = excluded.check_script, max_turns = excluded.max_turns, turns_used = excluded.turns_used, status = excluded.status, note = excluded.note, created_at_unix_ns = excluded.created_at_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns, principal_name = excluded.principal_name, principal_email = excluded.principal_email WHERE conversation_goals.status NOT IN ('', $10)`, conversationID, goal.Objective, goal.CheckScript, goal.MaxTurns, 0, GoalStatusActive, "", timeUnixNano(now), timeUnixNano(now), GoalStatusActive, goal.PrincipalName, goal.PrincipalEmail)
 	if err != nil {
 		return err
 	}

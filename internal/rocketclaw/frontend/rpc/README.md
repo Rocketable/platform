@@ -481,7 +481,9 @@ startup. An explicit mapping takes precedence; otherwise Go runs `tailscale whoi
 --json` for the browser IP and uses `UserProfile.LoginName` as its identity.
 New prompts instead record `UserProfile.DisplayName` as their principal, with the
 login as the fallback for a missing or blank display name. A manual mapping uses
-its configured name for both. Admission, conversation ownership, inbound routing,
+its configured name for both. Prompts also give their turn the principal as
+`ROCKETCLAW_PRINCIPAL_NAME` and the login as `ROCKETCLAW_PRINCIPAL_EMAIL`.
+Admission, conversation ownership, inbound routing,
 and Config's Tailscale user stay login-based. `Identity.username` remains the login;
 the separate `Identity.principal` is used only for new composer/handoff previews.
 Successful lookups are cached per IP for five minutes and shared with the Config

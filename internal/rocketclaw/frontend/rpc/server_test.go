@@ -997,8 +997,14 @@ func TestSessionEntries(t *testing.T) {
 			require.Equal(t, "Alice Smith", item.GetPrincipal())
 		}
 
-		for _, item := range stored {
+		person := map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice Smith", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}
+
+		for i, item := range stored {
 			require.Equal(t, "Alice Smith", item.Principal)
+			require.NotNil(t, item.Inbound, "a queued or stashed prompt keeps its full request")
+			require.Equal(t, []protocol.InboundKind{protocol.InboundKindEnqueue, protocol.InboundKindHeld}[i], item.Inbound.Kind)
+			require.Equal(t, item.ID, item.Inbound.Metadata["web_message_id"])
+			require.Subset(t, item.Inbound.Metadata, person, "the queued request names its writer")
 			require.NoError(t, sessions.DeleteThreadQueueItem(item.ID))
 		}
 
@@ -1007,6 +1013,7 @@ func TestSessionEntries(t *testing.T) {
 
 		inbound := turns[len(turns)-1]
 		require.Equal(t, "Alice Smith", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+		require.Subset(t, inbound.Metadata, person)
 	})
 
 	for _, values := range [][]string{nil, {"alice"}, {"192.0.2.2"}, {"192.0.2.1", "192.0.2.1"}} {
@@ -1074,7 +1081,7 @@ func TestSessionEntries(t *testing.T) {
 
 	thread := backend.ThreadState{Agent: "main"}
 	require.NoError(t, sessions.UpsertThread(id, thread))
-	require.NoError(t, sessions.BeginGoal(id, "keep goal", "", 3))
+	require.NoError(t, sessions.BeginGoal(id, &backend.GoalState{Objective: "keep goal", MaxTurns: 3}))
 	goal, exists, err := sessions.Goal(id)
 	require.NoError(t, err)
 	require.True(t, exists)

@@ -4127,7 +4127,8 @@ func TestSlackDollarTextReachesOrdinaryRouting(t *testing.T) {
 				assert.Equal(t, protocol.InboundKindPrompt, inbound.Kind)
 				assert.Empty(t, posted)
 				assert.Equal(t, text, inbound.Metadata[protocol.InboundRawTextMetadataKey])
-				assert.Equal(t, "U123", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+				assert.Equal(t, "Ann (U123)", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+				assert.Equal(t, []string{"Ann", "ann@example.com"}, []string{inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey]}, "the mention names its sender")
 				assert.Contains(t, inbound.Text, "attachment text")
 				assert.Equal(t, "C123", inbound.SlackReply.ChannelID)
 			})
@@ -4350,12 +4351,14 @@ func TestSlackPrincipal(t *testing.T) {
 		ok      bool
 		display string
 		real    string
-		want    string
+		email   string
+		want    []string // principal, person's name, email
 	}{
-		{name: "display name", userID: userID, ok: true, display: "Ulderico", real: "Other", want: "Ulderico (U0ADDPB7P4K)"},
-		{name: "real name when display empty", userID: userID, ok: true, real: "Ulderico Cirello", want: "Ulderico Cirello (U0ADDPB7P4K)"},
-		{name: "users.info error", userID: userID, want: userID},
-		{name: "empty user ID", want: ""},
+		{name: "display name", userID: userID, ok: true, display: "Ulderico", real: "Other", email: "u@example.com", want: []string{"Ulderico (U0ADDPB7P4K)", "Ulderico", "u@example.com"}},
+		{name: "real name when display empty", userID: userID, ok: true, real: "Ulderico Cirello", want: []string{"Ulderico Cirello (U0ADDPB7P4K)", "Ulderico Cirello", ""}},
+		{name: "no name", userID: userID, ok: true, email: "u@example.com", want: []string{userID, "", ""}},
+		{name: "users.info error", userID: userID, want: []string{userID, "", ""}},
+		{name: "empty user ID", want: []string{"", "", ""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			connector := newTestConnector("http://slack.test")
@@ -4381,6 +4384,7 @@ func TestSlackPrincipal(t *testing.T) {
 							"profile": map[string]any{
 								"display_name": tc.display,
 								"real_name":    "forbidden-profile-real-name",
+								"email":        tc.email,
 							},
 						},
 					})
@@ -4389,7 +4393,8 @@ func TestSlackPrincipal(t *testing.T) {
 				connector = newTestConnector(server.URL)
 			}
 
-			assert.Equal(t, tc.want, connector.slackPrincipal(t.Context(), tc.userID))
+			principal, name, email := connector.slackPrincipal(t.Context(), tc.userID)
+			assert.Equal(t, tc.want, []string{principal, name, email})
 		})
 	}
 }
@@ -4599,7 +4604,7 @@ func newSlackStackTestServer(t *testing.T, posted *[]url.Values, reactions *[]st
 
 			writeJSON(t, w, map[string]any{"ok": true})
 		case "/users.info":
-			writeJSON(t, w, map[string]any{"ok": true})
+			writeJSON(t, w, map[string]any{"ok": true, "user": map[string]any{"id": "U123", "profile": map[string]any{"display_name": "Ann", "email": "ann@example.com"}}})
 		// slack-go v0.30.1 sends the file token only to the API host.
 		case "/image.png", "/notes.txt":
 			_, err := w.Write([]byte("acquired " + r.URL.Path))

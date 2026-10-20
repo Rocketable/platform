@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -2037,6 +2038,7 @@ func (b *Bridge) finishGoalTurn(ctx context.Context, request *bridgeRequest) err
 	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "Continue the active goal loop.\n\n"+goalSteeringPrompt(&goal), false)
 	inbound.GoalAction = protocol.GoalActionContinue
 	inbound.ConversationID = b.config.ConversationID
+	inbound.Metadata = map[string]string{protocol.InboundPrincipalNameMetadataKey: goal.PrincipalName, protocol.InboundPrincipalEmailMetadataKey: goal.PrincipalEmail}
 
 	inbound.SlackReply = &protocol.SlackReplyTarget{}
 	if msg != nil && msg.SlackReply != nil {
@@ -2251,6 +2253,16 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 					entry := rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: replayInput}
 					snapshot.ContextEntries = append(snapshot.ContextEntries, entry)
 				}
+			}
+		}
+
+		// origin is the top-level turn's inbound, so a subagent acts for the same person.
+		if name, email := origin.Metadata[protocol.InboundPrincipalNameMetadataKey], origin.Metadata[protocol.InboundPrincipalEmailMetadataKey]; name != "" {
+			shellEnv = maps.Collect(maps.All(shellEnv))
+			shellEnv["ROCKETCLAW_PRINCIPAL_NAME"] = name
+
+			if email != "" {
+				shellEnv["ROCKETCLAW_PRINCIPAL_EMAIL"], shellEnv["ROCKETCLAW_PRINCIPAL_ID"] = email, fmt.Sprintf("%x", sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email)))))
 			}
 		}
 	}
@@ -2626,7 +2638,7 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 		maps.Copy(env, shellEnv)
 
 		env["ROCKETCLAW_SHADOW"] = b.config.Agent
-		if shellEnv != nil {
+		if _, ok := shellEnv[rocketclawConversationIDEnv]; ok {
 			env[rocketclawConversationIDEnv] = b.config.ConversationID
 		}
 
@@ -3551,7 +3563,7 @@ func externalMCPMetadataEnv(conversationID string, metadata map[string]string) m
 
 	for key, value := range metadata {
 		switch key {
-		case protocol.InboundOriginMetadataKey, protocol.InboundMediaMetadataKey, protocol.InboundPrincipalMetadataKey, "source":
+		case protocol.InboundOriginMetadataKey, protocol.InboundMediaMetadataKey, protocol.InboundPrincipalMetadataKey, protocol.InboundPrincipalNameMetadataKey, protocol.InboundPrincipalEmailMetadataKey, "source":
 			continue
 		}
 

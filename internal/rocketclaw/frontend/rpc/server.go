@@ -1300,7 +1300,7 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 }
 
 func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptResponse, error) {
-	_, principal, err := s.principal(ctx)
+	username, principal, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1395,10 +1395,17 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		return nil, err
 	}
 
+	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, kind, &content, true)
+	inbound.ConversationID = request.Id
+
+	inbound.Metadata[protocol.InboundPrincipalMetadataKey], inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey] = principal, principal, username
+
+	inbound.Metadata["web_message_id"] = cmp.Or(request.MessageId, rand.Text())
+
 	if kind == protocol.InboundKindEnqueue || kind == protocol.InboundKindHeld {
 		item := &protocol.ThreadQueueItem{
-			ID: cmp.Or(request.MessageId, rand.Text()), Message: text, Principal: principal, Source: protocol.SourceWeb,
-			Kind: kind, Content: content, StashAt: time.Now().UTC(),
+			ID: inbound.Metadata["web_message_id"], Message: text, Principal: principal, Source: protocol.SourceWeb,
+			Kind: kind, Content: content, StashAt: time.Now().UTC(), Inbound: inbound,
 		}
 		if err := s.backend.StashQueueItem(ctx, request.Id, item); err != nil {
 			return nil, fmt.Errorf("web prompt: %w", err)
@@ -1407,12 +1414,6 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		return &PromptResponse{}, nil
 	}
 
-	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, kind, &content, true)
-	inbound.ConversationID = request.Id
-
-	inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
-
-	inbound.Metadata["web_message_id"] = cmp.Or(request.MessageId, rand.Text())
 	if goal.Objective != "" {
 		inbound.Metadata["web_goal_prompt"] = request.Text + strings.TrimPrefix(inbound.Text, text)
 	}

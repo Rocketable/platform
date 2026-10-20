@@ -346,7 +346,7 @@ permission:
 ---
 Prompt
 `, "#!/bin/sh\nprintf passed\n")
-	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh", 3))
+	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", &GoalState{Objective: "fix lint", CheckScript: "./scripts/check.sh", MaxTurns: 3}))
 
 	result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"complete","note":"finished lint"}`), nil)
 	require.NoError(t, err)
@@ -388,7 +388,7 @@ permission:
 ---
 Prompt
 `, "#!/bin/sh\nprintf passed\n")
-			require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh", 3))
+			require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", &GoalState{Objective: "fix lint", CheckScript: "./scripts/check.sh", MaxTurns: 3}))
 
 			result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
 			require.NoError(t, err)
@@ -416,7 +416,7 @@ permission: {}
 ---
 Prompt
 `, "#!/bin/sh\nexit 7\n")
-	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh", 3))
+	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", &GoalState{Objective: "fix lint", CheckScript: "./scripts/check.sh", MaxTurns: 3}))
 
 	tool := updateGoalTool(bridge)
 	assert.Contains(t, fmt.Sprint(tool.Parameters), "what you are thinking")
@@ -444,7 +444,7 @@ permission:
 ---
 Prompt
 `, "#!/bin/sh\nprintf failed\nexit 7\n")
-	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh", 3))
+	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", &GoalState{Objective: "fix lint", CheckScript: "./scripts/check.sh", MaxTurns: 3}))
 
 	result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
 	require.NoError(t, err)
@@ -469,7 +469,7 @@ permission:
 ---
 Prompt
 `, "#!/bin/sh\nexit 0\n")
-	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh --dangerous", 3))
+	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", &GoalState{Objective: "fix lint", CheckScript: "./scripts/check.sh --dangerous", MaxTurns: 3}))
 
 	result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
 	require.NoError(t, err)
@@ -493,7 +493,7 @@ permission:
 ---
 Prompt
 `, "#!/bin/sh\nexit 7\n")
-	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh", 3))
+	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", &GoalState{Objective: "fix lint", CheckScript: "./scripts/check.sh", MaxTurns: 3}))
 
 	result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"blocked","note":"need credentials"}`), nil)
 	require.NoError(t, err)
@@ -509,7 +509,7 @@ func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
 	t.Parallel()
 
 	bridge := newGoalAccountingTestBridge(t)
-	require.NoError(t, beginGoalDB(t.Context(), bridge.config.SessionService.db, "thread-1", &GoalState{Objective: "ship it", MaxTurns: 3}))
+	require.NoError(t, beginGoalDB(t.Context(), bridge.config.SessionService.db, "thread-1", &GoalState{Objective: "ship it", MaxTurns: 3, PrincipalName: "Alice"}))
 
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "ship it", false)
 	msg.GoalAction = protocol.GoalActionKickoff
@@ -524,6 +524,7 @@ func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
 	continuation := (<-bridge.requestCh).inbound
 	assert.Equal(t, protocol.GoalActionContinue, continuation.GoalAction)
 	assert.Equal(t, &protocol.SlackReplyTarget{}, continuation.SlackReply)
+	assert.Equal(t, map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: ""}, continuation.Metadata, "the continuation keeps the goal's setter")
 
 	msg = protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "continue", false)
 	msg.GoalAction = protocol.GoalActionContinue
@@ -735,7 +736,7 @@ func TestPickLaterWorkSkipsWhenGoalStillActive(t *testing.T) {
 
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, store.BeginGoal(conversationID, "ship it", "", 3))
+	require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "ship it", MaxTurns: 3}))
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0}))
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
@@ -776,7 +777,7 @@ func TestPickLaterWorkAfterStopGoalStartsLaterWork(t *testing.T) {
 
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, store.BeginGoal(conversationID, "ship it", "", 3))
+	require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "ship it", MaxTurns: 3}))
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, SlackChannel: "C123", SlackTS: "111.222"}))
 	require.NoError(t, store.StopGoal(conversationID))
 
@@ -1095,7 +1096,7 @@ func TestPublishFinalDoesNotReuseCompletedGoal(t *testing.T) {
 	defer bus.Close()
 
 	store := newTestSessionService(t)
-	require.NoError(t, store.BeginGoal("thread-1", "ship it", "", 3))
+	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: "ship it", MaxTurns: 3}))
 	_, err := store.UpdateGoalStatus("thread-1", GoalStatusComplete, "done")
 	require.NoError(t, err)
 
@@ -3589,6 +3590,85 @@ func TestAskUserQuestionToolOmitsResponseChannel(t *testing.T) {
 	assert.Equal(t, "slack-thread:C1:1", got.ConversationID)
 }
 
+func TestRunTurnExposesPrincipalEnv(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  read: allow\n  bash: allow\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	var (
+		requestBody struct {
+			Input []struct {
+				Content json.RawMessage `json:"content"`
+				Output  any             `json:"output"`
+			} `json:"input"`
+		}
+		requests int
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestBody.Input = nil
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&requestBody))
+		w.Header().Set("Content-Type", "application/json")
+
+		requests++
+		if requests%2 == 1 {
+			writeRawRunFunctionCall(t, w, "resp_call", "execute", executeBashScript(`printf '%s|%s|%s|%s' "${ROCKETCLAW_PRINCIPAL_NAME-unset}" "${ROCKETCLAW_PRINCIPAL_EMAIL-unset}" "${ROCKETCLAW_PRINCIPAL_ID-unset}" "${ROCKETCLAW_CONVERSATION_ID-unset}"`))
+
+			return
+		}
+
+		writeRawRunMessage(t, w, "resp_1", "msg_1", "ok")
+	}))
+	t.Cleanup(server.Close)
+
+	service, err := NewSessionService(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Stop()) })
+
+	runtime := config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}})
+
+	require.NoError(t, service.RegisterExternalMCPConversation("public-1", "planner", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:private", ManagedConversationID: protocol.SlackThreadConversationID("C123", "111.222"), OriginPairs: map[string]string{"a": "first"}}))
+
+	for _, tc := range []struct {
+		name, conversationID string
+		metadata             map[string]string
+		want                 string
+	}{
+		{"name and email", "web-1", map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice Smith", protocol.InboundPrincipalEmailMetadataKey: "Alice@Example.com "}, "Alice Smith|Alice@Example.com |ff8d9819fc0e12bf0d24892e45987e249a28dce836a85cad60e28eaaa8c6d976|unset"},
+		{"name only", "web-2", map[string]string{protocol.InboundPrincipalNameMetadataKey: "Bob"}, "Bob|unset|unset|unset"},
+		{"no person", "web-3", nil, "unset|unset|unset|unset"},
+		{"person in an External MCP thread", "external_mcp:planner:private", map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice Smith", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}, "Alice Smith|alice@example.com|ff8d9819fc0e12bf0d24892e45987e249a28dce836a85cad60e28eaaa8c6d976|external_mcp:planner:private"},
+	} {
+		bridge := &Bridge{runtime: runtime, config: Config{ConversationID: tc.conversationID, Agent: "planner", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
+
+		if strings.HasPrefix(tc.conversationID, "external_mcp:") {
+			// The thread's metadata is saved once an External MCP turn ran.
+			seed := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "hello", true)
+			seed.ConversationID, seed.Metadata = tc.conversationID, map[string]string{"a": "first"}
+			_, err := runTestTurn(t.Context(), bridge, seed, "seed-"+tc.conversationID)
+			require.NoError(t, err)
+		}
+
+		msg := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "hello", true)
+		msg.ConversationID, msg.Metadata = tc.conversationID, tc.metadata
+
+		_, err := runTestTurn(t.Context(), bridge, msg, "turn-"+tc.conversationID)
+		require.NoError(t, err, tc.name)
+		require.NotEmpty(t, requestBody.Input, tc.name)
+		assert.Equal(t, tc.want, requestBody.Input[len(requestBody.Input)-1].Output, tc.name)
+
+		for i := range requestBody.Input {
+			assert.NotContains(t, string(requestBody.Input[i].Content), "PRINCIPAL", "%s: the model never sees the person's keys", tc.name)
+
+			if email := tc.metadata[protocol.InboundPrincipalEmailMetadataKey]; email != "" {
+				assert.NotContains(t, strings.ToLower(string(requestBody.Input[i].Content)), strings.TrimSpace(strings.ToLower(email)), "%s: nor the email, unless a command prints it", tc.name)
+			}
+		}
+	}
+}
+
 func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	t.Parallel()
 
@@ -4413,7 +4493,7 @@ func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
-	require.NoError(t, service.BeginGoal("thread-1", "ship it", "", 5))
+	require.NoError(t, service.BeginGoal("thread-1", &GoalState{Objective: "ship it", MaxTurns: 5}))
 	_, err = service.UpdateGoalStatus("thread-1", GoalStatusProgress, "patched parser; checking connectors")
 	require.NoError(t, err)
 
@@ -4476,7 +4556,7 @@ func TestRunTurnSkipsActiveGoalDeveloperMessageWithoutNote(t *testing.T) {
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
-	require.NoError(t, service.BeginGoal("thread-1", "ship it", "", 5))
+	require.NoError(t, service.BeginGoal("thread-1", &GoalState{Objective: "ship it", MaxTurns: 5}))
 
 	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "thread-1", Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "continue", false)
@@ -4579,7 +4659,7 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 	inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.1"}
 	assert.False(t, bridge.newOutboundMessage(inbound, "turn-1", "reply", false).GoalTurn)
 
-	require.NoError(t, store.BeginGoal("thread-1", "ship it", "", 3))
+	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: "ship it", MaxTurns: 3}))
 
 	outbound := bridge.newOutboundMessage(inbound, "turn-2", "reply", false)
 	assert.True(t, outbound.GoalTurn)
@@ -4619,7 +4699,7 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 	assert.False(t, outbound.GoalActive)
 	assert.Equal(t, 3, outbound.GoalTurnNumber)
 
-	require.NoError(t, store.BeginGoal("thread-2", "ship it forever", "", 0))
+	require.NoError(t, store.BeginGoal("thread-2", &GoalState{Objective: "ship it forever", MaxTurns: 0}))
 
 	bridge.config.ConversationID = "thread-2"
 	outbound = bridge.newOutboundMessage(inbound, "turn-5", "reply", false)
@@ -4640,7 +4720,7 @@ func TestWorkflowFinalOutboundPreservesMetadata(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
-	require.NoError(t, store.BeginGoal("thread-1", "ship it", "", 3))
+	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: "ship it", MaxTurns: 3}))
 	bridge := &Bridge{config: Config{ConversationID: "thread-1", Agent: "main", SessionService: store}}
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow audit", true)
 	inbound.Workflow = protocol.WorkflowInvocation{Name: "audit"}
@@ -5058,7 +5138,7 @@ func TestBackgroundNoteEntersRunningTurn(t *testing.T) {
 
 			msg := nt.slackPrompt("hello")
 			if goal {
-				require.NoError(t, nt.service.BeginGoal(nt.conversationID, "ship it", "", 1))
+				require.NoError(t, nt.service.BeginGoal(nt.conversationID, &GoalState{Objective: "ship it", MaxTurns: 1}))
 
 				msg = protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "Continue the active goal loop.", false)
 				msg.GoalAction = protocol.GoalActionContinue

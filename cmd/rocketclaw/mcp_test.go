@@ -60,7 +60,8 @@ func TestSubmitExternalMCPInputPreservesPublicConversationMetadata(t *testing.T)
 			}
 
 			content := &protocol.InboundContent{Text: "prompt"}
-			result, accepted, err := submitExternalMCPInput(context.Background(), turns, "planner", conversationID, content, map[string]string{"ticket": "123"}, "alice", reply, "public-1")
+			metadata := map[string]string{"ticket": "123", protocol.InboundPrincipalNameMetadataKey: "Mallory", protocol.InboundPrincipalEmailMetadataKey: "mallory@example.com"}
+			result, accepted, err := submitExternalMCPInput(context.Background(), turns, "planner", conversationID, content, metadata, "alice", reply, "public-1")
 
 			require.NoError(t, err)
 			assert.True(t, accepted)
@@ -69,6 +70,8 @@ func TestSubmitExternalMCPInputPreservesPublicConversationMetadata(t *testing.T)
 			assert.Equal(t, "public-1", captured.Metadata["external_conversation_id"])
 			assert.Equal(t, "123", captured.Metadata["ticket"])
 			assert.Equal(t, "alice", captured.Metadata[protocol.InboundPrincipalMetadataKey])
+			assert.NotContains(t, captured.Metadata, protocol.InboundPrincipalNameMetadataKey, "an External MCP caller cannot name a person")
+			assert.NotContains(t, captured.Metadata, protocol.InboundPrincipalEmailMetadataKey)
 			assert.Equal(t, conversationID, captured.ConversationID)
 			assert.Equal(t, destination, captured.SyncDestination)
 			assert.False(t, captured.RequireOutputDecision, "MCP output does not use the cron decision contract")

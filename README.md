@@ -100,6 +100,7 @@ Slack has no commands. `$stop`, `$agent`, `$goal`, `$enqueue`, skill names, and 
 Set up the Slack app with the bot event `app_mention` and these bot scopes, then reinstall it:
 
 - `users:read` and `usergroups:read`, so the web page shows names instead of Slack IDs.
+- `users:read.email`, so a mention's turn gets the sender's email as `ROCKETCLAW_PRINCIPAL_EMAIL` (see [Agents and permissions](#agents-and-permissions)). Without it, Slack turns get only `ROCKETCLAW_PRINCIPAL_NAME`.
 - `channels:read` and `channels:history`, so the bot can expand threads forwarded from public channels. It never joins channels on its own.
 
 The `message.*` event subscriptions and Interactivity are no longer used and can be removed.
@@ -149,6 +150,14 @@ permission:
 For the `bash` tool, RocketCode checks every command in a script on its own, and each command must be allowed. When several rules match, the last one wins. Scripts it cannot parse are refused, even with `bash: allow`.
 
 Bash rules match command text, not everything a program can do. An executable-path wildcard such as `./scripts/*` does not match executable paths containing `..`; name such an executable explicitly if it is intended. This check is not a shell sandbox: an approved script can still launch other programs or follow symlinks. To put a sandbox in front of one agent's shell commands, set `customShell` in that agent's frontmatter to the absolute path of a wrapper program; see the [cheatsheet](cmd/rocketclaw/CHEATSHEET.md#agent-frontmatter-and-permissions) for what the wrapper must do.
+
+A turn that a person starts from Web, voice, or Slack tells its shell commands who asked:
+
+- `ROCKETCLAW_PRINCIPAL_NAME`: the person's name. On Web it is the Tailscale display name, or the login when that is blank. On Slack it is the Slack display name, or the real name when that is blank.
+- `ROCKETCLAW_PRINCIPAL_EMAIL`: on Web, the Tailscale login; on Slack, the profile email.
+- `ROCKETCLAW_PRINCIPAL_ID`: the lowercase hex SHA-256 of the email after trimming spaces and lowercasing it, so `Alice@Example.com` and `alice@example.com` get the same ID.
+
+With a `web_users` mapping, Web uses the configured value as both name and email. When RocketClaw has no email, only the name is set. The same person's values reach the subagents and shadows of that turn, the later turns of a `$goal` they set, and their queued or stashed messages when those run. A steer into a running turn keeps the values that turn started with. Cron turns, External MCP turns, messages one agent sends another, goal checks, and workflow workers get none of them. A name is a display name its owner can change, so use it for attribution only. Permission patterns that grant access per person should use `${ROCKETCLAW_PRINCIPAL_ID}` or `${ROCKETCLAW_PRINCIPAL_EMAIL}`. Such a rule covers everything that runs with that person's values: steers and promoted queued messages that other people deliver into the person's running turn, the later turns of the person's `$goal`, and a background subagent that starts after the person's turn ended, which takes the values of whichever top-level turn runs then. Per-person rules keep people's work apart for convenience; they are not an authorization boundary between people. The values say who asked for the turn, not a credential: permission patterns read them from the turn, but a script sees whatever value the command that runs it sets.
 
 Some features are off until you turn them on under `permission.rocketclaw`:
 

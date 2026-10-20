@@ -23,6 +23,10 @@ const (
 	InboundMediaMetadataKey = "rocketclaw_media"
 	// InboundPrincipalMetadataKey identifies the trusted human principal for prompt provenance.
 	InboundPrincipalMetadataKey = "rocketclaw_principal"
+	// InboundPrincipalNameMetadataKey names the person a turn's shell sees as ROCKETCLAW_PRINCIPAL_NAME.
+	InboundPrincipalNameMetadataKey = "rocketclaw_principal_name"
+	// InboundPrincipalEmailMetadataKey is that person's email, the source of ROCKETCLAW_PRINCIPAL_EMAIL and _ID.
+	InboundPrincipalEmailMetadataKey = "rocketclaw_principal_email"
 	// InboundAllowedAgentsMetadataKey lists source-surface allowed agents for model-created child conversations.
 	InboundAllowedAgentsMetadataKey = "rocketclaw_allowed_agents"
 	// InboundSenderSessionMetadataKey names the session whose agent wrote the inbound.
