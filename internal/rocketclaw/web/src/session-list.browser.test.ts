@@ -170,6 +170,84 @@ test("pending saves and owner switches cannot leak owners or overwrite newer sna
 
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
+for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["Linux x86_64", "Ctrl", "Alt"]]) {
+  test(`actual App command hints match existing bindings on ${platform}`, async () => {
+    const { chromium: engine } = await import(playwright!);
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+      const url = new URL(request.url);
+      if (!url.pathname.startsWith("/api/")) return new Response(Bun.file(path.join(dist, url.pathname.startsWith("/assets/") ? url.pathname : "index.html")));
+      if (url.pathname === "/api/ListSessions") return new Response('data: {"sessions":[],"owner":"tester","upstreamSuccess":true,"summariesComplete":true}\n\nevent: complete\ndata: {}\n\n', { headers: { "Content-Type": "text/event-stream" } });
+      if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
+      if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "command-hints" });
+      if (url.pathname === "/api/ListConfig") return Response.json({ config: {} });
+      if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
+      if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "LEFT" } });
+      return Response.json({});
+    } });
+    const browser = await engine.launch({ executablePath: chromium, headless: true });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+      await page.addInitScript((value: string) => Object.defineProperty(navigator, "platform", { value }), platform);
+      await page.goto(`http://127.0.0.1:${server.port}`);
+      const draft = page.getByPlaceholder("Message a new session");
+      await draft.fill("draft cleared only by invocation");
+      await page.keyboard.press(modifier === "⌘" ? "Meta+Shift+p" : "Control+Shift+p");
+      const dialog = page.getByRole("dialog", { name: "Run command", exact: true });
+      const create = dialog.getByRole("button", { name: "Sessions: New", exact: true });
+      await create.waitFor();
+      expect(await create.locator("kbd").allTextContents()).toEqual([modifier, alternate, "N"]);
+      expect(await dialog.getByRole("button", { name: "Sessions: Search", exact: true }).locator("kbd").count()).toBe(0);
+      expect(await dialog.locator("li > button kbd").count()).toBe(3); // No invented bindings on other commands.
+      const help = dialog.getByRole("complementary", { name: "Keyboard shortcuts" });
+      expect(await help.locator("kbd").allTextContents()).toEqual([`${modifier}+P`, `${modifier}+Shift+P`, `${modifier}+[`, `${modifier}+]`, `${modifier}+B`]);
+      for (const width of [1280, 320]) {
+        await page.setViewportSize({ width, height: 800 });
+        await help.locator("kbd").filter({ hasText: `${modifier}+B` }).waitFor({ state: width === 1280 ? "visible" : "hidden" });
+        expect(await help.locator("kbd").allTextContents()).toEqual([`${modifier}+P`, `${modifier}+Shift+P`, `${modifier}+[`, `${modifier}+]`, ...(width === 1280 ? [`${modifier}+B`] : [])]);
+        await dialog.evaluate((node: HTMLElement) => Promise.all(node.getAnimations({ subtree: true }).map((animation) => animation.finished)));
+        expect(await dialog.evaluate((node: HTMLElement) => node.scrollWidth <= node.clientWidth && [...node.querySelectorAll("kbd")].every((key) => {
+          const bounds = key.getBoundingClientRect(), parent = node.getBoundingClientRect();
+          return bounds.width > 0 && bounds.left >= parent.left && bounds.right <= parent.right && bounds.bottom <= parent.bottom;
+        }))).toBe(true);
+        await dialog.screenshot({ path: path.join(screenshots, `command-hints-${platform.split(" ")[0]}-${width}.png`) });
+      }
+      await dialog.getByPlaceholder("Type a command", { exact: true }).fill("sessions: new");
+      await create.waitFor();
+      expect(await dialog.locator("li > button").count()).toBe(1);
+      await dialog.getByPlaceholder("Type a command", { exact: true }).press("ArrowDown");
+      await dialog.getByPlaceholder("Type a command", { exact: true }).press("Enter");
+      await dialog.waitFor({ state: "hidden" });
+      await page.waitForFunction(() => document.querySelector("textarea")?.value === "");
+      expect(await draft.inputValue()).toBe("");
+      await page.keyboard.press(modifier === "⌘" ? "Meta+p" : "Control+p");
+      const sessions = page.getByRole("dialog", { name: "Go to session or command", exact: true });
+      await sessions.getByPlaceholder("Search sessions and commands", { exact: true }).fill("sessions: new");
+      await sessions.getByRole("button", { name: "Sessions: New", exact: true }).waitFor();
+      expect(await sessions.getByRole("button", { name: "Sessions: New", exact: true }).locator("kbd").allTextContents()).toEqual([modifier, alternate, "N"]);
+      for (const hasTouch of [true, false]) {
+        const shortPage = await browser.newPage({ viewport: { width: 320, height: 256 }, hasTouch, isMobile: hasTouch });
+        await shortPage.addInitScript((value: string) => Object.defineProperty(navigator, "platform", { value }), platform);
+        await shortPage.goto(`http://127.0.0.1:${server.port}`);
+        await shortPage.getByPlaceholder("Message a new session").fill("Short-screen draft");
+        await shortPage.keyboard.press(modifier === "⌘" ? "Meta+Shift+p" : "Control+Shift+p");
+        const shortMenu = shortPage.getByRole("dialog", { name: "Run command", exact: true });
+        await shortMenu.getByRole("button", { name: "Sessions: New", exact: true }).waitFor();
+        expect(await shortMenu.getByRole("complementary", { name: "Keyboard shortcuts" }).isVisible()).toBe(false);
+        expect(await shortMenu.getByRole("button", { name: "Sessions: New", exact: true }).locator("kbd").allTextContents()).toEqual([modifier, alternate, "N"]);
+        expect(await shortMenu.locator("ul").evaluate((el: HTMLElement) => el.clientHeight >= 44)).toBe(true);
+        await shortMenu.getByPlaceholder("Type a command", { exact: true }).fill("sessions: new");
+        await shortMenu.getByRole("button", { name: "Sessions: New", exact: true }).click();
+        await shortMenu.waitFor({ state: "hidden" });
+        await shortPage.waitForFunction(() => document.querySelector("textarea")?.value === "");
+        await shortPage.close();
+      }
+    } finally {
+      await browser.close();
+      server.stop(true);
+    }
+  }, 30_000);
+}
+
 test("room autocomplete keeps selections and full labels on each search surface", async () => {
   const { chromium: engine } = await import(playwright!);
   const rows: Session[] = [
@@ -625,6 +703,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await target.getByRole("dialog", { name: "Go to session or command", exact: true }).getByRole("button").filter({ hasText: text }).click();
     };
     await page.addInitScript(() => {
+      Object.defineProperty(navigator, "platform", { value: "MacIntel" });
       const open = IDBFactory.prototype.open;
       Object.defineProperty(window, "__delayOpen", { value: sessionStorage.getItem("delaySnapshotOpen") === "1", writable: true });
       sessionStorage.removeItem("delaySnapshotOpen");
@@ -797,7 +876,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
     expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
     expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "List Agents", "List Skills",
-      "Output: MarkdownCurrent · Render messages as Markdown, including headings and tables.", "Output: RawShow messages with Slack formatting.", "Pages: Index", "Sessions: New", "Sessions: Search", "Settings", "Tabs: Add to new group", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Move tabs to left", "Tabs: Pin",
+      "Output: MarkdownCurrent · Render messages as Markdown, including headings and tables.", "Output: RawShow messages with Slack formatting.", "Pages: Index", "Sessions: New⌘OptionN", "Sessions: Search", "Settings", "Tabs: Add to new group", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Move tabs to left", "Tabs: Pin",
       // Timeline levels follow the Config slider, with its descriptions, and mark the active level.
       "Timeline: Messages onlyHide all activity.", "Timeline: QuietGroup subagents and skills. Hide other activity.", "Timeline: CompactCurrent · Group all activity with details collapsed.",
       "Timeline: DetailedExpand execute output. Show subagents and skills separately and group other activity.", "Timeline: EverythingShow all activity separately and expanded.", "Voice"]);
@@ -2622,6 +2701,67 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await stashPage.getByRole("region", { name: "Messages", exact: true }).getByText("busy stash", { exact: true }).count()).toBe(0);
     expect(await stashPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await stashPage.close();
+
+    // Reading queued/stashed text is local, including for one very long row.
+    const queueText = `First line with **literal markup**\n\n  Indented line\n${"unbroken".repeat(100)}\n${"Another complete line\n".repeat(30)}Final line`;
+    for (const width of [1280, 320]) for (const count of [1, 3]) {
+      ctrl.history = [];
+      ctrl.running = false;
+      ctrl.queue = [
+        { id: "expand-target", text: queueText, delivery: count === 1 ? "STASH" : "QUEUE", principal: ctrl.principal, attachments: [uploadedFiles.find(({ meta }) => meta.name === "held.txt")!.meta] },
+        ...Array.from({ length: count - 1 }, (_, index): QueueItem => ({ id: `expand-other-${index}`, text: `Other message ${index}`, delivery: "STASH", principal: ctrl.principal })),
+      ];
+      const originalQueue = JSON.stringify(ctrl.queue);
+      const queuePage = await browser.newPage({ viewport: { width, height: 800 } });
+      const mutations: string[] = [];
+      queuePage.on("request", (request: { url(): string }) => {
+        if (/\/api\/(Prompt|PopQueueItem|SteerQueueItem|RemoveQueueItem|ReorderQueue)$/.test(request.url())) mutations.push(request.url());
+      });
+      await queuePage.goto(`${origin}/s/${Buffer.from(`queue-expansion-${width}-${count}`).toString("base64url")}`);
+      const target = queuePage.locator('[data-queue-id="expand-target"]');
+      await target.getByRole("link", { name: "Download held.txt", exact: true }).waitFor();
+      const attachmentHref = await target.getByRole("link").getAttribute("href");
+      await queuePage.locator("textarea").fill("Draft stays here");
+      const compact = await target.textContent();
+      const expand = target.getByRole("button", { name: "Expand message", exact: true });
+      expect(await expand.getAttribute("aria-expanded")).toBe("false");
+      await expand.focus();
+      await queuePage.keyboard.press("Enter");
+      const collapse = target.getByRole("button", { name: "Collapse message", exact: true });
+      await collapse.waitFor();
+      expect(await collapse.getAttribute("aria-expanded")).toBe("true");
+      const fullText = target.getByText(queueText, { exact: true });
+      expect(await fullText.textContent()).toBe(queueText);
+      expect(await fullText.evaluate((el: HTMLElement) => {
+        const style = getComputedStyle(el);
+        return style.whiteSpace === "pre-wrap" && el.scrollWidth <= el.clientWidth && el.clientHeight >= parseFloat(style.lineHeight) * 35;
+      })).toBe(true);
+      expect(await queuePage.locator("[data-queue-id]").evaluateAll((rows: HTMLElement[]) => rows.map((row) => row.dataset.queueId))).toEqual(ctrl.queue.map((item) => item.id));
+      expect(await queuePage.getByRole("button", { name: "Collapse message", exact: true }).count()).toBe(1);
+      expect(await target.getByRole("link").getAttribute("href")).toBe(attachmentHref);
+      expect(await target.getByRole("link").evaluate((el: HTMLElement) => el.closest("button, summary") === null)).toBe(true);
+      expect(await target.getByRole("button", { name: count === 1 ? "Pop" : "Send", exact: true }).count()).toBe(1);
+      expect(await target.getByRole("button", { name: "Remove", exact: true }).count()).toBe(1);
+      expect(await target.getByRole("button", { name: "Reorder", exact: true }).count()).toBe(1);
+      expect(await queuePage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      const composerBox = (await queuePage.locator("textarea").boundingBox())!;
+      expect(composerBox.y).toBeGreaterThanOrEqual(0);
+      expect(composerBox.y + composerBox.height).toBeLessThanOrEqual(800);
+      expect(await target.locator("..").evaluate((el: HTMLElement) => el.scrollHeight > el.clientHeight && getComputedStyle(el).overflowY === "auto")).toBe(true);
+      await queuePage.screenshot({ path: path.join(screenshots, `queue-expanded-${width}-${count}.png`) });
+      await target.locator("..").evaluate((el: HTMLElement) => { el.scrollTop = el.scrollHeight; });
+      expect(await fullText.evaluate((el: HTMLElement) => el.getBoundingClientRect().bottom <= el.closest("ul")!.getBoundingClientRect().bottom)).toBe(true);
+      await collapse.focus();
+      await queuePage.keyboard.press("Space");
+      await expand.waitFor();
+      expect(await expand.getAttribute("aria-expanded")).toBe("false");
+      expect(await fullText.count()).toBe(0);
+      expect(await target.textContent()).toBe(compact);
+      expect(await queuePage.locator("textarea").inputValue()).toBe("Draft stays here");
+      expect(JSON.stringify(ctrl.queue)).toBe(originalQueue);
+      expect(mutations).toEqual([]);
+      await queuePage.close();
+    }
 
     // A session whose agent is no longer listed shows, and moves to, the first listed agent.
     type PromptResponse = { url: () => string; request: () => { postDataJSON: () => { text: string } } };

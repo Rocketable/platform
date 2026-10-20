@@ -220,6 +220,7 @@ function QueuePanel({
   const [order, setOrder] = useState<string[] | null>(null);
   const [poppingId, setPoppingId] = useState("");
   const [steeringId, setSteeringId] = useState("");
+  const [expanded, setExpanded] = useState(() => new Set<string>());
   const queueActionLabel = busy ? "Steer" : "Send";
   if (items.length === 0 && !jobs) {
     return null;
@@ -238,9 +239,9 @@ function QueuePanel({
   return (
     <div className="mb-2 rounded-lg bg-muted p-2 shadow-[inset_0_0_0_1px_var(--border)]">
       {jobs}
-      <ul className={cn("flex flex-col gap-0.5", items.length > 3 && "max-h-32 overflow-y-auto")}>
+      <ul className="flex max-h-32 flex-col gap-0.5 overflow-y-auto">
         {rows.map((item) => (
-          <li key={item.id} data-queue-id={item.id} className="flex items-center gap-2 rounded-md px-2 py-1">
+          <li key={item.id} data-queue-id={item.id} className="flex flex-wrap items-center gap-2 rounded-md px-2 py-1">
             <button
               type="button"
               className="cursor-grab touch-none p-1 text-muted-foreground"
@@ -274,8 +275,15 @@ function QueuePanel({
             </button>
             <span className="min-w-0 flex-1 truncate text-sm">
               {item.principal ? <span data-slot="message-author" className="text-muted-foreground after:content-['_·_']">{item.principal}</span> : null}
-              <span><InlineText text={item.text.replace(/\s+/g, " ")} /></span>
+              {expanded.has(item.id) ? null : <span><InlineText text={item.text.replace(/\s+/g, " ")} /></span>}
             </span>
+            <button type="button" className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent" aria-label={expanded.has(item.id) ? "Collapse message" : "Expand message"} aria-expanded={expanded.has(item.id)} onClick={() => setExpanded((current) => {
+              const next = new Set(current);
+              if (next.has(item.id)) next.delete(item.id); else next.add(item.id);
+              return next;
+            })}>
+              <ChevronRight className={cn("size-3.5", expanded.has(item.id) && "rotate-90")} />
+            </button>
             <MessageAttachments attachments={item.attachments} conversationId={conversationId} />
             <Button
               type="button"
@@ -298,6 +306,7 @@ function QueuePanel({
             <button type="button" className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent" aria-label="Remove" onClick={() => onRemove(item.id)}>
               <X className="h-3.5 w-3.5" />
             </button>
+            {expanded.has(item.id) ? <p className="w-full whitespace-pre-wrap wrap-anywhere text-sm">{item.text}</p> : null}
           </li>
         ))}
       </ul>
@@ -1468,7 +1477,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   return (
           <DraftScope value={scope}><SessionCommands value={commands}><TabActions value={tabs}><TabPlacement /><TabNotifications />
            {command ? <SessionCommandDialog key={`${command.mode}:${command.source}`} command={command} drafts={drafts} onDraftChange={onDraftChange} /> : null}
-            <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} />
+            <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} vertical={vertical} />
          <div className="flex h-dvh min-h-0 flex-col overflow-hidden overscroll-y-none bg-background">
             <BottomNavigation>
               {vertical ? <SidebarToggle open={sidebar.open} toggle={sidebar.toggle} /> : null}
@@ -1789,7 +1798,7 @@ function useRemoteCreation(query: string, close: () => void, restart: () => void
   };
 }
 
-function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string, ComposerDraft>; mode: "sessions" | "commands" | "cron" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | undefined) => void; newChat: () => void }) {
+function CommandPalette({ drafts, mode, setMode, newChat, vertical }: { drafts: Map<string, ComposerDraft>; mode: "sessions" | "commands" | "cron" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | undefined) => void; newChat: () => void; vertical: boolean }) {
   const sidebar = useContext(Sidebar);
   const { setCommand, composer } = useContext(SessionCommands);
   // Arrowing onto a session shows it in the preview tab. The palette remounts per opening and keeps acting on the
@@ -1918,14 +1927,30 @@ function CommandPalette({ drafts, mode, setMode, newChat }: { drafts: Map<string
           {items.length === 0 ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, search, jobs.isLoading, remote.empty)}</li> : shown.map((item, index) => (
             <li key={item.key}>
               <button disabled={item.disabled} ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start justify-center rounded-md px-3 text-left text-sm disabled:opacity-50", item.session ? "py-2" : "min-h-9 py-1.5 [@media(pointer:coarse)]:min-h-11", item.session && search.pending && "opacity-50", index === selected && "bg-accent")} onMouseDown={(event) => { event.preventDefault(); if (!item.session) peek(); }} onClick={() => choose(item)}>
-                {item.session ? <SessionRowContent session={item.session} loading={item.loading} /> : <><span className="font-medium">{item.label}</span>{item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}</>}
+                {item.session ? <SessionRowContent session={item.session} loading={item.loading} /> : <PaletteCommandContent item={item} mode={mode} />}
               </button>
             </li>
           ))}
         </ul>
+        <PaletteNavigationHints vertical={vertical} />
       </DialogContent>
     </Dialog>
   );
+}
+
+function PaletteCommandContent({ item, mode }: { item: ReturnType<typeof paletteRows>[number]; mode: "sessions" | "commands" | "cron" | undefined }) {
+  const keys = /(Mac|iPod|iPhone|iPad)/.test(navigator.platform) ? ["⌘", "Option", "N"] : ["Ctrl", "Alt", "N"];
+  return <>
+    <span className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1"><span className="font-medium">{item.label}</span>{mode !== "cron" && item.key === "new" ? <span aria-hidden="true" className="inline-flex items-center gap-0.5">{keys.map((key) => <kbd key={key} className="inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-[2px] bg-muted px-1 text-[10px] font-medium text-muted-foreground">{key}</kbd>)}</span> : null}</span>
+    {item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}
+  </>;
+}
+
+function PaletteNavigationHints({ vertical }: { vertical: boolean }) {
+  const mod = /(Mac|iPod|iPhone|iPad)/.test(navigator.platform) ? "⌘" : "Ctrl";
+  return <aside aria-label="Keyboard shortcuts" className="flex shrink-0 flex-wrap gap-x-4 gap-y-2 border-t pt-2 text-xs text-muted-foreground [@media(pointer:coarse),(max-height:30rem)]:hidden">
+    {[["Search sessions and commands", `${mod}+P`], ["Commands only", `${mod}+Shift+P`], ["Previous tab (close menu first)", `${mod}+[`], ["Next tab (close menu first)", `${mod}+]`], ...(vertical ? [["Toggle sidebar", `${mod}+B`]] : [])].map(([label, keys]) => <span key={label} className="inline-flex flex-wrap items-center gap-1"><span>{label}</span><kbd className="inline-flex h-3.5 items-center justify-center rounded-[2px] bg-muted px-1 text-[10px] font-medium text-muted-foreground">{keys}</kbd></span>)}
+  </aside>;
 }
 
 function paletteEmpty(mode: "sessions" | "commands" | "cron" | undefined, sidebar: SidebarView, search: ReturnType<typeof useSessionSearch>, loadingJobs: boolean, folders?: string) {

@@ -674,6 +674,11 @@ page offers Retry, and Cmd/Ctrl+P retries on the next keystroke.
 Cmd/Ctrl+Shift+P opens the same palette with commands only. It always offers
 **Sessions: New**, **Sessions: Search**, **Voice**, **Cron: Dashboard**, **Cron: Run**,
 **List Agents**, **List Skills**, and **Settings**.
+**Sessions: New** shows its existing shortcut: **⌘ Option N** on Mac or
+**Ctrl Alt N** elsewhere. Unbound commands have no shortcut hint. On fine-pointer
+devices with a viewport taller than 30rem, the palette's wrapping footer shows
+the existing palette-opening keys and previous/next-tab keys for use after closing the menu;
+it also shows **⌘/Ctrl+B** when the desktop left sidebar is in use.
 Timeline detail levels are also available, from `Timeline: Messages only` through
 `Timeline: Everything`.
 Like VS Code, selected commands appear first, newest first;
@@ -747,6 +752,12 @@ text is saved literally. Pop moves the row to the end of the ordinary queue.
 The button shows **Popping…** while releasing it, and waiting rows show **Queued**.
 It may run immediately when idle. While busy, the released row offers **Steer**
 as usual. Stashed rows can be reordered or removed, but cannot steer directly.
+Each queued or stashed row has an **Expand message** control; activate it with
+Enter or Space to read the complete original text, with line breaks, indentation,
+and long words wrapped to fit. **Collapse message** restores the compact inline
+preview. Expansion is read-only: it keeps attachments, order, delivery, actions,
+and the composer draft unchanged. Long text scrolls inside the queue panel, even
+with one row, so the composer stays on screen.
 Failed Stash keeps the draft and files for retry. If Pop shows an error, check
 the refreshed queue: the message may already be queued if starting work failed.
 Live updates and refresh read the same persisted transcript. A chat opens with
