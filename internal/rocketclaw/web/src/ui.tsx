@@ -1314,18 +1314,17 @@ function TabItem({ tab, description, rule, active, vertical, editing, endEdit, p
   const title = useCleanText(label);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
-  return <div data-tab={tab.path} draggable={!editing} className={cn("group relative flex shrink-0 items-center", vertical ? "rounded-md" : "border-r", active ? "bg-sidebar-row-active" : "hover:bg-accent")}>
+  return <div data-tab={tab.path} data-running={session.running} draggable={!editing} className={cn("group relative flex shrink-0 items-center", vertical ? "rounded-md" : "border-r", active ? "bg-sidebar-row-active" : "hover:bg-accent")}>
     {rule}
     <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className={cn("flex min-w-0", vertical ? "flex-1" : "max-w-80")} />}>
-      <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={description} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
+      <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={session.running ? [description, "Turn running"].filter(Boolean).join(", ") : description} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
         onClick={() => { if (!active) navigate(tab.path); }} onDoubleClick={promote}>
-        <Icon aria-hidden="true" className="size-4 shrink-0" />
-        {session.running ? <span role="img" aria-label="Turn running" className="hidden size-2 shrink-0 rounded-full bg-foreground in-aria-selected:block [@media(hover:none)]:block" /> : null}
-        {editing ? <TabRename session={session} placeholder={title} endEdit={endEdit} /> : tab.pinned && !vertical ? null : <span className="truncate">{title}</span>}
+        <Icon aria-hidden="true" className="size-4 shrink-0 group-data-[running=true]:only:motion-safe:animate-pulse" />
+        {editing ? <TabRename session={session} placeholder={title} endEdit={endEdit} /> : tab.pinned && !vertical ? null : <span className="truncate group-data-[running=true]:shimmer dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>}
       </div>
     </TooltipTrigger><TooltipContent side="bottom">{title}</TooltipContent></Tooltip>
     {active ? <button type="button" aria-label="Tab actions" className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground last:mr-1 hover:bg-accent hover:text-foreground" onClick={(event) => openMenu(event.currentTarget)}><Ellipsis className="size-3.5" /></button> : null}
-    {tab.pinned ? <span className="mr-1 flex size-6 shrink-0 items-center justify-center text-muted-foreground"><Pin aria-label="Pinned" className="size-3.5" /></span> : <TabClose title={title} running={!!session.running} active={active} close={close} />}
+    {tab.pinned ? <span className="mr-1 flex size-6 shrink-0 items-center justify-center text-muted-foreground"><Pin aria-label="Pinned" className="size-3.5" /></span> : <button type="button" aria-label={`Close ${title}`} className="mr-1 flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={close}><X className="size-3.5" /></button>}
   </div>;
 }
 
@@ -1344,16 +1343,6 @@ function TabRename({ session, placeholder, endEdit }: { session: Session; placeh
       if (event.key === "Enter" || event.key === "Escape") event.currentTarget.blur();
     }}
     onBlur={(event) => { const value = event.currentTarget.value; if (value === name) endEdit(); else update.mutate({ id: session.id, name: value }); }} />;
-}
-
-// A running turn's dot holds the close button's place until hover, focus, or activation.
-// Where close owns the slot (active or touch), TabItem shows the dot before the title instead.
-function TabClose({ title, running, active, close }: { title: string; running: boolean; active: boolean; close: () => void }) {
-  const dot = running && !active;
-  return <span className="relative mr-1 flex size-6 shrink-0 items-center justify-center">
-    <button type="button" aria-label={`Close ${title}`} className={cn("flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring", dot && "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100")} onClick={close}><X className="size-3.5" /></button>
-    {dot ? <span role="img" aria-label="Turn running" className="pointer-events-none absolute size-2 rounded-full bg-foreground group-hover:opacity-0 group-focus-within:opacity-0 [@media(hover:none)]:hidden" /> : null}
-  </span>;
 }
 
 function persistComposerDraft(draft: ComposerDraft) {
