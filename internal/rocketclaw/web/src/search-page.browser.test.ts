@@ -16,7 +16,7 @@ const response = (query: string, matches: Match[] = [], terms: (string | [string
 });
 
 // serve answers the App's requests with rows and a SearchSessions fixture, and records every API path.
-function serve(rows: object[], search: (input: { query: string; messages: boolean }) => Promise<object> | object, agents = [{ name: "main" }]) {
+function serve(rows: object[], search: (input: { query: string; messages: boolean }) => Promise<object> | object, agents: object[] = [{ name: "main" }]) {
   const paths = new Set<string>();
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
@@ -331,7 +331,7 @@ test("Cmd+P asks the server as you type, shows its pills, and Enter opens the fi
     expect(requests).toEqual([]); // Unfinished operators are not sent.
     await input.fill("foo");
     await titles(["Charlie", "Alpha"]);
-    expect(requests).toEqual([{ query: "foo", messages: false }]);
+    expect(requests).toEqual([{ query: "foo", messages: true }]);
 
     const pills = palette.getByRole("button", { name: /^tag:/ });
     await input.fill("tag:bu");
@@ -512,6 +512,60 @@ test("/search renders the server's groups, notices and pills", async () => {
     expect(paths.has("/api/SearchOrigins")).toBe(false);
   } finally {
     hold.resolve();
+    await browser.close();
+    server.stop(true);
+  }
+}, 30_000);
+
+test("Cmd+P lists what /search does: each session, its field and message hits, and the notices", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const requests: { query: string; messages: boolean }[] = [];
+  const rows = [
+    { id: "third", name: "Pinned conversation", preview: "Other text", agent: "main", pinned: true },
+    { id: "second", name: "", title: "", preview: "Needle notes\nOther text", agent: "main" },
+    { id: "fourth", name: "Origin chat", preview: "Other text", agent: "main" },
+    { id: "opencode:box:ses", name: "Remote", preview: "Other text", server: "box", agent: "build", model: "anthropic/claude-opus-4-7" },
+  ];
+  const message = (messageId: string, role: string, text: string) => ({ conversationId: "third", message: { messageId, role, text, complete: true } });
+  const { server, origin } = serve(rows, (input) => {
+    requests.push(input);
+    if (input.query === "partial") return response(input.query, [], [], { indexComplete: false, summariesComplete: false });
+    return response(input.query, [{ conversationId: "third", field: "" }, { conversationId: "second", text: "Needle notes\nOther text" }, { conversationId: "fourth", field: "Origin", text: "cron source: /notes/needle.md" }], [], { messages: [message("1:0", "user", "Context before NEEDLE then needle"), message("1:1", "assistant", "A second needle response")] });
+  }, [{ name: "main", model: "gpt-6.1-sol" }]);
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.goto(origin);
+    await page.getByRole("button", { name: "Search sessions and commands", exact: true }).waitFor();
+    await page.keyboard.press("Control+p");
+    const palette = page.getByRole("dialog", { name: "Go to session" });
+    const input = palette.getByPlaceholder("Search sessions");
+    await input.fill("needle");
+    const hit = palette.getByRole("button", { name: /Context before NEEDLE/ });
+    await hit.waitFor();
+    // Each session's title, then the kind of each row under it, in the server's order.
+    const listed = await palette.locator("li > button").evaluateAll((buttons: Element[]) => buttons.map((button) => button.querySelector('[data-slot="session-title"]')?.textContent ?? button.firstElementChild!.textContent));
+    expect(listed.slice(listed.indexOf("Pinned conversation"))).toEqual(["Pinned conversation", "You", "Assistant", "Needle notes", "Preview", "Origin chat", "Origin"]);
+    expect(await hit.locator("mark").allTextContents()).toEqual(["NEEDLE", "needle"]);
+    expect(await palette.getByRole("button", { name: /cron source/ }).locator("mark").textContent()).toBe("needle");
+    expect(requests).toEqual([{ query: "needle", messages: true }]);
+
+    await input.fill("partial");
+    await palette.getByText("Message results may be incomplete while chats are still being indexed.").waitFor();
+    await palette.getByText("Results may be incomplete while chat summaries are still loading.").waitFor();
+
+    // Remote sessions suggest their servers, agents and models; RocketClaw agents their configured models.
+    for (const [typed, offered] of [["server:", ["box"]], ["agent:", ["main", "build"]], ["model:", ["gpt-6.1-sol", "anthropic/claude-opus-4-7"]], ["model:OPUS", ["anthropic/claude-opus-4-7"]]] as const) {
+      await input.fill(typed);
+      const choices = palette.locator("ul.bg-popover li span.font-medium");
+      await choices.first().waitFor();
+      expect(await choices.allTextContents()).toEqual([...offered]);
+    }
+
+    await input.fill("needle");
+    await palette.getByRole("button", { name: /A second needle response/ }).click();
+    await page.waitForURL((url: URL) => url.pathname === `/s/${Buffer.from("third").toString("base64url")}` && url.searchParams.get("message") === "1:1");
+  } finally {
     await browser.close();
     server.stop(true);
   }

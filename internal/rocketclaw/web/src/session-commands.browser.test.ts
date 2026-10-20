@@ -313,7 +313,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await search.fill("IS:FORKED");
     await palette.locator('ul[data-pending="false"]').waitFor();
     // The shown list follows the response in a background render.
-    await page.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button').length === 1);
+    await page.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button [data-slot="session-title"]').length === 1);
     expect(await palette.getByRole("img", { name: "Forked session", exact: true }).count()).toBe(1);
     await page.keyboard.press("Escape");
     await page.keyboard.press("Meta+Shift+p");

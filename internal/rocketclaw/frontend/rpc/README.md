@@ -450,7 +450,9 @@ frame it. Everyone the Web admits gets full control of every configured OpenCode
 server, including its shell. Remote sessions are listed from a copy RocketClaw
 syncs every 5 seconds; once a day the server's full list removes copies of sessions
 it no longer has. When a sync sees a session's turn end, it also copies the text of
-its newest assistant message, which the Web's notification shows. `Prompt` refuses their `opencode:` IDs. People tag remote sessions
+its newest assistant message, which the Web's notification shows. Each copy keeps
+the session's selected agent and model, which `ListSessions` sends as `agent` and
+`model` for search. `Prompt` refuses their `opencode:` IDs. People tag remote sessions
 with any tag and RocketClaw sessions with tags their agent allows.
 
 Phones get the secure page that voice needs from the `web.tsnet` listener (see the

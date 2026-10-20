@@ -604,7 +604,10 @@ with the same query, or saves a new one, so Back from a result
 reuses that tab. Older links and saved searches with `agent=` or `room=` filters are
 read once as the query `agent:<value> room:<value> <query>`, quoting values that
 contain spaces, and saved searches are rewritten that way. Cmd/Ctrl+P still opens
-the palette, which lists every conversation. Each dialog opening
+the palette, which lists every conversation. Once text is sent, it searches as
+the Search page does, message text included, and lists the same results in the
+same order: each conversation, then its matched field and message excerpts as
+their own rows; a message row opens at that message. Each dialog opening
 clears text, pills, and result selection and focuses the input.
 Once text is typed, matching commands appear above the conversations; an empty
 query, or one with a filter such as `tag:customer` or `is:pinned`, lists
@@ -617,8 +620,8 @@ with the arrow keys; otherwise Enter opens the first conversation, as above.
 Clicking a command always runs it.
 
 Matching happens on the server: Cmd/Ctrl+P and the Search page send the typed
-query once typing pauses for 250 ms (the Search page also at least once a second
-while typing), Enter sends it at once, and a newer query cancels the older request.
+query once typing pauses for 250 ms (and at least once a second while typing),
+Enter sends it at once, and a newer query cancels the older request.
 Results refresh when conversations appear in the session list. An empty
 Cmd/Ctrl+P lists the session list without a request; it opens with the first 50
 rows and renders the rest in the background. Until new results arrive,
@@ -633,6 +636,14 @@ with spaces, such as `room:"general chat"`. Typing `agent:` or `room:` suggests
 values; choosing one by click, arrows, Tab, or Enter writes the filter into the
 query. Choosing an agent replaces earlier agent filters; choosing a room keeps
 earlier rooms. Multiple room filters match either room.
+A remote OpenCode session's agent is the one it has selected, so `agent:build`
+also finds those. `server:box` keeps the remote sessions of the configured
+OpenCode server `box`, exactly. `model:opus` keeps conversations whose model
+contains the value, ignoring case: a remote session's selected model, such as
+`anthropic/claude-opus-4-7`, or a RocketClaw chat's agent's configured model.
+Conversations whose whole model equals the value come first. Typing `server:`
+or `model:` suggests the servers and models in use, and typing `agent:` also
+suggests remote sessions' agents.
 Suggestion keys take priority over results; Escape dismisses suggestions first,
 then closes the dialog. Both Cmd/Ctrl+P and the Search page accept exact,
 case-sensitive tag filters: `tag:customer`, or `tag:"Needs review"` for a name
@@ -655,7 +666,7 @@ search surface, overriding pinned-first and message-hit grouping; rows without
 activity come last, equal times order by conversation ID, and the last `sort:` wins.
 Typing `is:` suggests `pinned`, `forked`, and `cron`; typing `sort:` suggests
 `newest` and `oldest`. While typing, a last word that is an unfinished filter
-(a bare `tag:`, `cron:`, `agent:`, `principal:`, or `room:`, a partial `is:` or `sort:` term
+(a bare `tag:`, `cron:`, `agent:`, `principal:`, `room:`, `server:`, or `model:`, a partial `is:` or `sort:` term
 such as `is:pin`, or an unclosed quote) is not sent; Enter, opening a saved
 search, and following a link send the whole query. Unknown complete terms such
 as `is:foo` stay ordinary text. Filter pills show the server's reading of the
@@ -666,11 +677,11 @@ text to it; a pill inside or right after the edited text moves in front of it.
 Pills show the full filter text, wrapping long values to fit the available width.
 A conversation the server finds before the session list has loaded it shows
 loading feedback rather than “No matches”. Until the server finishes indexing
-existing chats, the Search page says message results may be incomplete, and
-until every chat has a summary it says results may be incomplete, instead of
-reporting “No matches”. A message hit from a stopped or failed turn opens its
-chat without jumping to a message. A failed search shows an error: the Search
-page offers Retry, and Cmd/Ctrl+P retries on the next keystroke.
+existing chats, Cmd/Ctrl+P and the Search page say message results may be
+incomplete, and until every chat has a summary they say results may be
+incomplete; the Search page says so instead of reporting “No matches”. A message
+hit from a stopped or failed turn opens its chat without jumping to a message. A
+failed search shows an error with Retry, and the next keystroke also retries.
 Cmd/Ctrl+Shift+P opens the same palette with commands only. It always offers
 **Sessions: New**, **Sessions: Search**, **Voice**, **Cron: Dashboard**, **Cron: Run**,
 **List Agents**, **List Skills**, and **Settings**.

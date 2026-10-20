@@ -40,6 +40,21 @@ type openCodeSession struct {
 	Location struct {
 		Directory string `json:"directory"`
 	} `json:"location"`
+	// Agent and Model are the session's selected agent and model, absent until it has them.
+	Agent string `json:"agent"`
+	Model struct {
+		ID         string `json:"id"`
+		ProviderID string `json:"providerID"`
+	} `json:"model"`
+}
+
+// model is the session's selected model as "<provider>/<model>", empty without one.
+func (o *openCodeSession) model() string {
+	if o.Model.ID == "" {
+		return ""
+	}
+
+	return o.Model.ProviderID + "/" + o.Model.ID
 }
 
 // openCodeError is an OpenCode server answering a request with a failure status.
@@ -284,11 +299,11 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 	}
 
 	var (
-		ids, titles, directories []string
-		updated                  []time.Time
-		running, backgrounds     []bool
-		replies                  []*string
-		oldest                   time.Time
+		ids, titles, directories, agents, models []string
+		updated                                  []time.Time
+		running, backgrounds                     []bool
+		replies                                  []*string
+		oldest                                   time.Time
 	)
 
 	for _, session := range sessions.Data {
@@ -328,7 +343,7 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 			}
 		}
 
-		ids, titles, directories = append(ids, id), append(titles, session.Title), append(directories, session.Location.Directory)
+		ids, titles, directories, agents, models = append(ids, id), append(titles, session.Title), append(directories, session.Location.Directory), append(agents, session.Agent), append(models, session.model())
 		updated, running, replies = append(updated, oldest), append(running, busy), append(replies, reply)
 		backgrounds = append(backgrounds, background[session.ID])
 	}
@@ -337,13 +352,13 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 	// fetch proves deletions only inside its window. Rows stamped after the poll started were
 	// created meanwhile and stay. Kept rows are stamped too: offline means unreachable only.
 	_, err := execState(ctx, s.db, "sync opencode sessions", `WITH incoming AS (
-    SELECT * FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[], $11::boolean[]) AS t(conversation_id, title, directory, updated_at, running, reply, background)
+    SELECT * FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[], $11::boolean[], $12::text[], $13::text[]) AS t(conversation_id, title, directory, updated_at, running, reply, background, agent, model)
 ), upserted AS (
-    INSERT INTO opencode_sessions (conversation_id, server, title, directory, updated_at, running, synced_at, reply, background)
-    SELECT conversation_id, $1, title, directory, updated_at, running, now(), reply, background FROM incoming
+    INSERT INTO opencode_sessions (conversation_id, server, title, directory, updated_at, running, synced_at, reply, background, agent, model)
+    SELECT conversation_id, $1, title, directory, updated_at, running, now(), reply, background, agent, model FROM incoming
     ON CONFLICT (conversation_id) DO UPDATE SET title = excluded.title, directory = excluded.directory,
         updated_at = excluded.updated_at, running = excluded.running, background = excluded.background, synced_at = excluded.synced_at,
-        reply = COALESCE(excluded.reply, opencode_sessions.reply)
+        reply = COALESCE(excluded.reply, opencode_sessions.reply), agent = excluded.agent, model = excluded.model
 ), removed AS (
     DELETE FROM opencode_sessions WHERE server = $1 AND conversation_id <> ALL($2) AND synced_at < $9 AND ($7 OR updated_at >= $8) RETURNING conversation_id
 ), untagged AS (
@@ -351,7 +366,7 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 )
 UPDATE opencode_sessions SET synced_at = now(), running = FALSE, background = FALSE
 WHERE server = $1 AND conversation_id <> ALL($2) AND NOT (synced_at < $9 AND ($7 OR updated_at >= $8))`,
-		name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies, backgrounds)
+		name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies, backgrounds, agents, models)
 
 	return err
 }
@@ -408,8 +423,8 @@ func (s *SessionService) CreateOpenCodeSession(ctx context.Context, name string,
 
 	id := "opencode:" + name + ":" + session.ID
 
-	_, err := execState(ctx, s.db, "record opencode session", `INSERT INTO opencode_sessions (conversation_id, server, title, directory, updated_at, running, synced_at)
-VALUES ($1, $2, $3, $4, $5, FALSE, now()) ON CONFLICT (conversation_id) DO NOTHING`, id, name, session.Title, session.Location.Directory, time.UnixMilli(session.Time.Updated).UTC())
+	_, err := execState(ctx, s.db, "record opencode session", `INSERT INTO opencode_sessions (conversation_id, server, title, directory, updated_at, running, synced_at, agent, model)
+VALUES ($1, $2, $3, $4, $5, FALSE, now(), $6, $7) ON CONFLICT (conversation_id) DO NOTHING`, id, name, session.Title, session.Location.Directory, time.UnixMilli(session.Time.Updated).UTC(), session.Agent, session.model())
 
 	return id, err
 }
