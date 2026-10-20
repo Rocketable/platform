@@ -775,7 +775,8 @@ test("tab group editor moves New session in, ungroups, and closes; pins leave gr
   await strip(page).getByRole("button", { name: "Work", exact: true }).click();
   await until(() => saved.state.placement === "LEFT" && saved.state.groups.some((group) => group.collapsed));
   await page.reload();
-  await tab("Charlie").waitFor();
+  // Charlie comes from the URL before saved tabs load; Bravo waits for the saved placement and group too.
+  await tab("Bravo").waitFor();
   expect(await strip(page).getAttribute("aria-orientation")).toBe("vertical");
   expect(await order(page)).toEqual(["Bravo", "Work", "Charlie"]);
   await tab("Bravo").focus();
