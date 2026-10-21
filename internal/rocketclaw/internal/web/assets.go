@@ -52,7 +52,7 @@ func Handler(sentry config.SentryConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
 
-		if slices.Contains([]string{"/", "/cron", "/agents", "/skills", "/config", "/search", "/voice", "/pages"}, r.URL.Path) || strings.HasPrefix(r.URL.Path, "/s/") || strings.HasPrefix(r.URL.Path, "/skills/") || strings.HasPrefix(r.URL.Path, "/pages/") {
+		if slices.Contains([]string{"/", "/cron", "/agents", "/skills", "/config", "/search", "/voice", "/pages", "/shortcuts"}, r.URL.Path) || strings.HasPrefix(r.URL.Path, "/s/") || strings.HasPrefix(r.URL.Path, "/skills/") || strings.HasPrefix(r.URL.Path, "/pages/") {
 			if sentry.DSN != "" {
 				http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(index))
 

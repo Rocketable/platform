@@ -66,6 +66,20 @@ type SidebarChat struct {
 	Origin string
 }
 
+// SearchScope is what a session search's free text matches.
+type SearchScope int
+
+const (
+	// SearchFields matches names, rooms, previews, agents, session labels,
+	// servers, folders and origins.
+	SearchFields SearchScope = iota
+	// SearchMessages matches the fields and message text.
+	SearchMessages
+	// SearchFilters applies only the filters and leaves free text to the
+	// caller, which matches it against the titles it shows.
+	SearchFilters
+)
+
 // SessionMatch is a chat a session search found and the field whose text holds
 // the needle; an empty Field means only message text did.
 type SessionMatch struct {
@@ -280,11 +294,11 @@ func sessionLabel(id string) string {
 }
 
 // SearchSessions reads query in Web's session search language and finds, among
-// SidebarChats, those passing the filters whose fields hold the needle and,
-// when messages is set, those with message hits. Without a sort: term they keep
+// SidebarChats, those passing the filters whose scope's text holds the needle;
+// SearchMessages also finds those with message hits. Without a sort: term they keep
 // sidebar order, chats with hits first; with one, they follow summary time.
 // Either way, chats whose whole model is a model: value come first.
-func (s *SessionService) SearchSessions(ctx context.Context, query string, messages bool, slack slackLookup) (*SessionSearch, error) {
+func (s *SessionService) SearchSessions(ctx context.Context, query string, scope SearchScope, slack slackLookup) (*SessionSearch, error) {
 	search := &SessionSearch{IndexComplete: true, SummariesComplete: true}
 	search.Terms, search.Text = parseSessionQuery(query)
 	search.Needle = strings.ToLower(search.Text)
@@ -331,7 +345,7 @@ func (s *SessionService) SearchSessions(ctx context.Context, query string, messa
 	slices.Sort(search.Principals)
 	search.Principals = slices.Compact(search.Principals)
 
-	if messages && search.Needle != "" {
+	if scope == SearchMessages && search.Needle != "" {
 		found, mentions, complete, err := s.SearchMessagesMentioning(ctx, search.Needle, slack)
 		if err != nil {
 			return nil, err
@@ -354,6 +368,11 @@ func (s *SessionService) SearchSessions(ctx context.Context, query string, messa
 
 			row := &chat.Session
 			if hits[row.Conversation.ID] != withHits {
+				continue
+			}
+
+			if scope == SearchFilters {
+				search.Matches = append(search.Matches, SessionMatch{Chat: *chat})
 				continue
 			}
 

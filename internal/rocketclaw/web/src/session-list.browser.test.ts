@@ -197,17 +197,17 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
       await create.waitFor();
       expect(await create.locator("kbd").allTextContents()).toEqual([modifier, alternate, "N"]);
       expect(await dialog.getByRole("button", { name: "Sessions: Search", exact: true }).locator("kbd").count()).toBe(0);
-      expect(await dialog.locator("li > button kbd").count()).toBe(3); // No invented bindings on other commands.
-      const help = dialog.getByRole("complementary", { name: "Keyboard shortcuts" });
-      expect(await help.locator("kbd").allTextContents()).toEqual([`${modifier}+P`, `${modifier}+Shift+P`, `${modifier}+[`, `${modifier}+]`, `${modifier}+B`]);
+      // Each command with a working shortcut shows it on its row; the sidebar toggle exists only while Cmd/Ctrl+B works.
+      const keys = async () => Object.fromEntries(await dialog.locator("li > button").filter({ has: page.locator("kbd") }).evaluateAll((buttons: Element[]) => buttons.map((button) => [button.firstElementChild!.firstElementChild!.textContent, [...button.querySelectorAll("kbd")].map((key) => key.textContent)])));
+      expect(await dialog.getByRole("complementary").count()).toBe(0); // No shortcut footer.
       for (const width of [1280, 320]) {
         await page.setViewportSize({ width, height: 800 });
-        await help.locator("kbd").filter({ hasText: `${modifier}+B` }).waitFor({ state: width === 1280 ? "visible" : "hidden" });
-        expect(await help.locator("kbd").allTextContents()).toEqual([`${modifier}+P`, `${modifier}+Shift+P`, `${modifier}+[`, `${modifier}+]`, ...(width === 1280 ? [`${modifier}+B`] : [])]);
+        await dialog.getByRole("button", { name: "Tabs: Toggle sidebar", exact: true }).waitFor({ state: width === 1280 ? "visible" : "detached" });
+        expect(await keys()).toEqual({ "Sessions: New": [modifier, alternate, "N"], "Tabs: Next": [modifier, "]"], "Tabs: Previous": [modifier, "["], ...(width === 1280 ? { "Tabs: Toggle sidebar": [modifier, "B"] } : {}) });
         await dialog.evaluate((node: HTMLElement) => Promise.all(node.getAnimations({ subtree: true }).map((animation) => animation.finished)));
         expect(await dialog.evaluate((node: HTMLElement) => node.scrollWidth <= node.clientWidth && [...node.querySelectorAll("kbd")].every((key) => {
           const bounds = key.getBoundingClientRect(), parent = node.getBoundingClientRect();
-          return bounds.width > 0 && bounds.left >= parent.left && bounds.right <= parent.right && bounds.bottom <= parent.bottom;
+          return bounds.width > 0 && bounds.left >= parent.left && bounds.right <= parent.right;
         }))).toBe(true);
         await dialog.screenshot({ path: path.join(screenshots, `command-hints-${platform.split(" ")[0]}-${width}.png`) });
       }
@@ -224,6 +224,16 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
       await sessions.getByPlaceholder("Search sessions and commands", { exact: true }).fill("sessions: new");
       await sessions.getByRole("button", { name: "Sessions: New", exact: true }).waitFor();
       expect(await sessions.getByRole("button", { name: "Sessions: New", exact: true }).locator("kbd").allTextContents()).toEqual([modifier, alternate, "N"]);
+      // The read-only Shortcuts page lists every key the palette shows, plus the message box's and Escape.
+      await sessions.getByPlaceholder("Search sessions and commands", { exact: true }).fill("keyboard");
+      await sessions.getByRole("button", { name: "Help: Keyboard Shortcuts", exact: true }).click();
+      await page.waitForURL("**/shortcuts");
+      const shortcutList = page.getByRole("list", { name: "Keyboard shortcuts" });
+      expect(await shortcutList.getByRole("listitem").evaluateAll((items: Element[]) => items.map((item) => [...item.querySelectorAll("kbd")].map((key) => key.textContent)))).toEqual([
+        [modifier, "P"], [modifier, "Shift", "P"], [modifier, alternate, "N"], [modifier, "["], [modifier, "]"], [modifier, "B"], ["Escape"], [modifier, "Enter"], [modifier, alternate, "Enter"]]);
+      await page.getByRole("dialog").waitFor({ state: "detached" });
+      await page.keyboard.press("Escape"); // A page tab closes with Escape.
+      await page.waitForURL((url: URL) => url.pathname !== "/shortcuts");
       for (const hasTouch of [true, false]) {
         const shortPage = await browser.newPage({ viewport: { width: 320, height: 256 }, hasTouch, isMobile: hasTouch });
         await shortPage.addInitScript((value: string) => Object.defineProperty(navigator, "platform", { value }), platform);
@@ -232,7 +242,6 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
         await shortPage.keyboard.press(modifier === "⌘" ? "Meta+Shift+p" : "Control+Shift+p");
         const shortMenu = shortPage.getByRole("dialog", { name: "Run command", exact: true });
         await shortMenu.getByRole("button", { name: "Sessions: New", exact: true }).waitFor();
-        expect(await shortMenu.getByRole("complementary", { name: "Keyboard shortcuts" }).isVisible()).toBe(false);
         expect(await shortMenu.getByRole("button", { name: "Sessions: New", exact: true }).locator("kbd").allTextContents()).toEqual([modifier, alternate, "N"]);
         expect(await shortMenu.locator("ul").evaluate((el: HTMLElement) => el.clientHeight >= 44)).toBe(true);
         await shortMenu.getByPlaceholder("Type a command", { exact: true }).fill("sessions: new");
@@ -458,7 +467,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
   // Fixed SearchSessions fixtures: the conversation IDs, in server order, and the filter terms each query returns.
   const searches: Record<string, string[]> = {
     "needle-17mib": ["kept"], "PREVIEW": ["slack-thread:C:1", "kept"], "ORIGINAL-KEY": ["kept"], "preview": ["slack-thread:C:1"], "partial preview 445": ["prefix-445"],
-    "origin-only-needle": ["perf-0"], "IS:PINNED": ["named", "pinned"], "Release notes": ["named"], "Original preview": ["named"], "agent:main room:room matching": ["slack-thread:C:active", "slack-thread:C:resolved"],
+    "is:pinned fixture 0": ["perf-0"], "IS:PINNED": ["named", "pinned"], "Release notes": ["named"], "Original preview": ["named"], "agent:main room:room matching": ["slack-thread:C:active", "slack-thread:C:resolved"],
   };
   const searchTerms: Record<string, string[]> = { "agent:main": ["agent:main"], "agent:main room:ro": ["agent:main"], "agent:main room:room": ["agent:main", "room:room"], "agent:main room:room matching": ["agent:main", "room:room"], "tag:customer": ["tag:customer"] };
   const cronOpens: string[] = [];
@@ -630,8 +639,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         case "/api/RunCronJob": cronRunCalls++; return Response.json({ id: await cronHold.promise });
         case "/api/SearchSessions":
           searchQueries.push(input.query);
-          if (input.query === "origin-only-needle") await manySearchHold.promise;
-          if (input.query === "not-in-any-row") await lastSearchHold.promise;
+          if (input.query === "is:pinned fixture 0") await manySearchHold.promise;
+          if (input.query === "is:pinned not-in-any-row") await lastSearchHold.promise;
           if (ctrl.searchError) throw new RPCError("search unavailable", 13);
           return Response.json({
             terms: (searchTerms[input.query] ?? []).map((text) => ({ key: text.slice(0, text.indexOf(":")), text, start: input.query.indexOf(text), end: input.query.indexOf(text) + text.length })),
@@ -777,7 +786,9 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await shown(sessionPalette, "Huge");
     await hidden(sessionPalette, "will vanish");
     expect(historyRequests).toEqual([]);
-    await search.fill("needle-17mib");
+    await search.fill("needle-17mib"); // Text past the title's first line is the body, which Cmd+P never matches.
+    await hidden(sessionPalette, "Huge");
+    await search.fill("HUG");
     await shown(sessionPalette, "Huge");
     await search.fill("no-such-preview");
     await shown(sessionPalette, "loading...");
@@ -854,13 +865,15 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await sessionPalette.getByRole("button", { name: "room:room", exact: true }).click();
     await sessionPalette.getByRole("button", { name: "agent:main", exact: true }).click();
     expect(historyRequests).toEqual([]); // Search is the server's; it never reads per-chat histories.
-    await search.fill("PREVIEW"); // Rows follow the server's order.
-    await sessionPalette.getByRole("button").filter({ hasText: "will vanish" }).waitFor({ state: "detached" }); // The empty query's rows stay until the server answers.
-    await sessionPalette.getByRole("button").filter({ hasText: "saved preview" }).waitFor();
-    expect(await sessionPalette.getByRole("button").locator('[data-slot="session-title"]').allTextContents()).toEqual(["filter preview", "saved preview"]);
+    searchQueries.length = 0;
+    await search.fill("PREVIEW"); // Plain text matches titles here, in the session list's order, with no request.
+    await sessionPalette.getByRole("button").filter({ hasText: "will vanish" }).waitFor({ state: "detached" });
+    await sessionPalette.getByRole("button").filter({ hasText: "filter preview" }).waitFor();
+    expect(await sessionPalette.getByRole("button").locator('[data-slot="session-title"]').allTextContents()).toEqual(["saved preview", "filter preview"]);
     await search.fill("no-such-origin");
     await sessionPalette.getByText("loading...", { exact: true }).waitFor();
-    await search.fill("ORIGINAL-KEY");
+    await search.fill("SAVED");
+    expect(searchQueries).toEqual([]);
     const opened = page.waitForResponse((response: { url: () => string; request: () => { postDataJSON: () => { id: string } } }) => response.url().endsWith("/api/History") && response.request().postDataJSON().id === "kept");
     await search.press("Enter");
     await opened;
@@ -875,8 +888,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const commandPalette = page.getByRole("dialog", { name: "Run command", exact: true });
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
     expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
-    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "List Agents", "List Skills",
-      "Output: MarkdownCurrent · Render messages as Markdown, including headings and tables.", "Output: RawShow messages with Slack formatting.", "Pages: Index", "Sessions: New⌘OptionN", "Sessions: Search", "Settings", "Tabs: Add to new group", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Move tabs to left", "Tabs: Pin",
+    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "Help: Keyboard Shortcuts", "List Agents", "List Skills",
+      "Output: MarkdownCurrent · Render messages as Markdown, including headings and tables.", "Output: RawShow messages with Slack formatting.", "Pages: Index", "Sessions: New⌘OptionN", "Sessions: Search", "Settings", "Tabs: Add to new group", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Move tabs to left", "Tabs: Next⌘]", "Tabs: Pin", "Tabs: Previous⌘[",
       // Timeline levels follow the Config slider, with its descriptions, and mark the active level.
       "Timeline: Messages onlyHide all activity.", "Timeline: QuietGroup subagents and skills. Hide other activity.", "Timeline: CompactCurrent · Group all activity with details collapsed.",
       "Timeline: DetailedExpand execute output. Show subagents and skills separately and group other activity.", "Timeline: EverythingShow all activity separately and expanded.", "Voice"]);
@@ -890,12 +903,12 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const commandRows = sessionPalette.locator("ul > li > button").filter({ hasNot: page.locator('[data-slot="session-title"]') });
     await search.fill("tabs: close");
     await sessionPalette.getByRole("button", { name: "Tabs: Close", exact: true }).waitFor();
-    // An exact match leads; recent then alphabetical contiguous matches follow, ahead of the server's sessions.
-    expect(await commandRows.allTextContents()).toEqual(["Tabs: Close", "Tabs: Close others", "Tabs: Close all", "Tabs: Close to the right"]);
+    // An exact match leads; recent then alphabetical contiguous matches follow, ahead of the sessions, and the Search hand-off comes last.
+    expect(await commandRows.allTextContents()).toEqual(["Tabs: Close", "Tabs: Close others", "Tabs: Close all", "Tabs: Close to the right", "Search everywhere for 'tabs: close'"]);
     expect(await sessionPalette.locator("ul > li > button").first().textContent()).toBe("Tabs: Close");
     await search.fill("tabs: close t");
     await sessionPalette.getByRole("button", { name: "Tabs: Close all", exact: true }).waitFor({ state: "detached" });
-    expect(await commandRows.allTextContents()).toEqual(["Tabs: Close to the right", "Tabs: Close others"]); // A contiguous match beats a recent fuzzy one.
+    expect(await commandRows.allTextContents()).toEqual(["Tabs: Close to the right", "Tabs: Close others", "Search everywhere for 'tabs: close t'"]); // A contiguous match beats a recent fuzzy one.
     await search.fill("cron: run"); // A bare key is not a filter.
     await sessionPalette.getByRole("button", { name: "Cron: Run", exact: true }).waitFor();
     await search.fill("is:pinned cron: run");
@@ -969,10 +982,13 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await search.fill("lg"); // Fuzzy matching starts at three letters.
     await listAgents.waitFor({ state: "detached" });
     await search.fill("lag");
-    await search.press("Enter"); // A fuzzy command on top yields to the sessions, and none match.
-    await page.waitForTimeout(300); // Past the search pause.
-    expect(page.url()).toBe(origin + "/");
-    expect(await listAgents.isVisible()).toBe(true);
+    await search.press("Enter"); // A fuzzy command on top yields to the sessions; none match, so Search takes the text.
+    await page.waitForURL("**/search?q=lag");
+    await page.goBack();
+    await page.waitForURL(origin + "/");
+    await navigationSearch.click();
+    await search.fill("lag");
+    await listAgents.waitFor();
     await search.press("ArrowDown");
     await search.press("ArrowUp");
     await search.press("Enter"); // Picked with the arrows, it runs without waiting for session results.
@@ -1440,8 +1456,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     blocked.resolve();
     await shown(page, "new protocol preview");
 
-    // Recovery searches must match Bob's replacement row, not the earlier Alice rows.
-    searches.preview = ["gone"];
+    // Recovery title matches must find Bob's replacement row, not the earlier Alice rows.
     for (const rejection of ["mismatch", "unauthorized"] as const) {
       await page.keyboard.press("Control+p");
       await sessionPalette.waitFor();
@@ -1454,9 +1469,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await hidden(page, "new protocol preview");
       await hidden(page, "unconfirmed owner preview");
       await page.keyboard.press("Control+p");
-      const filtered = page.waitForResponse("**/api/SearchSessions");
       await search.fill("preview");
-      await filtered;
       await hidden(page, "new protocol preview");
       blocked = Promise.withResolvers();
       ctrl.yieldBatches = complete([row("gone", "new protocol preview")], "bob");
@@ -1690,7 +1703,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await openSessions(failure);
     const failureDialog = failure.getByRole("dialog", { name: "Go to session or command", exact: true });
     await failureDialog.getByText("Winner", { exact: true }).waitFor();
-    await failureDialog.getByPlaceholder("Search sessions").fill("absent");
+    await failureDialog.getByPlaceholder("Search sessions").fill("is:pinned absent"); // Only a filter asks the server.
     await failureDialog.getByRole("alert").filter({ hasText: "Search failed: search unavailable" }).waitFor();
     await failureDialog.getByText("Search incomplete", { exact: true }).waitFor();
     expect(await failureDialog.getByText("No matches", { exact: true }).count()).toBe(0);
@@ -1714,16 +1727,17 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await openSessions(many);
     const manyDialog = many.getByRole("dialog", { name: "Go to session or command", exact: true });
     await many.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button').length === 96);
-    await manyDialog.getByPlaceholder("Search sessions").pressSequentially("origin-only-needle", { delay: 20 });
-    await many.waitForFunction(() => document.querySelector('[role="dialog"] ul[data-pending="true"]') !== null); // The previous list stays, dimmed.
+    await manyDialog.getByPlaceholder("Search sessions").pressSequentially("is:pinned fixture 0", { delay: 20 });
+    await many.waitForFunction(() => document.querySelector('[role="dialog"] ul[data-pending="true"]') !== null); // The title matches stay, dimmed, until the response.
     await many.waitForTimeout(300);
     expect(await many.evaluate(() => (window as unknown as { searchFetches: number }).searchFetches)).toBe(1); // Typing settles into one request.
     manySearchHold.resolve();
     // The shown list follows the response in a background render.
     await many.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button [data-slot="session-title"]').length === 1);
     expect(await manyDialog.getByText("Search fixture 0", { exact: true }).count()).toBe(1);
-    await manyDialog.getByPlaceholder("Search sessions").fill("not-in-any-row");
-    await manyDialog.getByText("Search fixture 0", { exact: true }).waitFor();
+    await manyDialog.getByPlaceholder("Search sessions").fill("is:pinned not-in-any-row");
+    // While the next response is held, the earlier response's rows are matched against the new text at once.
+    await manyDialog.getByText("Search fixture 0", { exact: true }).waitFor({ state: "detached" });
     lastSearchHold.resolve();
     await manyDialog.getByText("No matches", { exact: true }).waitFor();
     expect(await many.evaluate(() => (window as unknown as { searchFetches: number }).searchFetches)).toBe(2);
@@ -2366,9 +2380,9 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await search.fill("Release notes");
       await settled();
       expect(await detailsPalette.locator('li > button [data-slot="session-title"]').count()).toBe(1);
-      await search.fill("Original preview");
+      await search.fill("Original preview"); // A named session's preview is no longer its title.
       await settled();
-      expect(await detailsPalette.locator('li > button [data-slot="session-title"]').count()).toBe(1);
+      expect(await detailsPalette.locator('li > button [data-slot="session-title"]').count()).toBe(0);
       await detailsPage.keyboard.press("Escape");
       expect(await detailsPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await sessionCommand("Name session");

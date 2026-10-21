@@ -523,7 +523,7 @@ func TestSearchSessionsSharedFlightCancellation(t *testing.T) {
 			server.searchMu.Lock()
 			defer server.searchMu.Unlock()
 
-			return server.searches[" true tag:A x"].waiters == 2
+			return server.searches[fmt.Sprintf(" %d tag:A x", backend.SearchMessages)].waiters == 2
 		}, time.Second, time.Millisecond)
 	}
 	principal := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
@@ -626,6 +626,18 @@ func TestSearchSessionsResponse(t *testing.T) {
 		MentionIds:    []string{"U7"},
 		IndexComplete: true,
 	}, response), "%v", response)
+
+	// Filters wins over messages: every tag:A chat passes, whatever the free text, and no message is read.
+	response, err = server.searchSessions(ctx, &SearchSessionsRequest{Query: "tag:A Billing", Messages: true, Filters: true})
+	require.NoError(t, err)
+
+	ids := make([]string, 0, len(response.Matches))
+	for _, match := range response.Matches {
+		ids = append(ids, match.ConversationId)
+	}
+
+	require.ElementsMatch(t, []string{"slack-thread:C1:1.1", "web-session:desk"}, ids)
+	require.Empty(t, response.Messages)
 }
 
 func TestSearchMessagesFindsHistoryMessages(t *testing.T) {

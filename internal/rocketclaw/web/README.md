@@ -604,11 +604,15 @@ with the same query, or saves a new one, so Back from a result
 reuses that tab. Older links and saved searches with `agent=` or `room=` filters are
 read once as the query `agent:<value> room:<value> <query>`, quoting values that
 contain spaces, and saved searches are rewritten that way. Cmd/Ctrl+P still opens
-the palette, which lists every conversation. Once text is sent, it searches as
-the Search page does, message text included, and lists the same results in the
-same order: each conversation, then its matched field and message excerpts as
-their own rows; a message row opens at that message. Each dialog opening
-clears text, pills, and result selection and focuses the input.
+the palette, which lists every conversation. It is the quick look and the
+Search page is the deep dig: the palette matches only the title a row shows (its
+name, else its preview's first line), as it reads on screen, so `**Done.**` matches
+"done." and a Slack mention matches the name it shows. It never matches message
+text or other fields, and lists each conversation once. A match past the start of
+a long title shows the title from just before it, highlighted. Typed text ends the list with **Search everywhere
+for '…'**, which opens the Search page with that text, also when it is already
+open. Each dialog opening clears text, pills, and result selection and focuses
+the input.
 Once text is typed, matching commands appear above the conversations; an empty
 query, or one with a filter such as `tag:customer` or `is:pinned`, lists
 conversations only. A bare key such as `cron:` is not a filter. Commands match
@@ -616,20 +620,30 @@ case-insensitively: a label equal to the text comes first, then labels containin
 it, then, once three or more characters are typed, labels containing them in order
 with gaps. Within each group the command order below applies. Enter runs the
 highlighted command at once when its label contains the text or it was picked
-with the arrow keys; otherwise Enter opens the first conversation, as above.
+with the arrow keys; otherwise Enter opens the first conversation, as above, and
+plain text that matches no conversation opens Search everywhere.
 Clicking a command always runs it.
 
-Matching happens on the server: Cmd/Ctrl+P and the Search page send the typed
-query once typing pauses for 250 ms (and at least once a second while typing),
-Enter sends it at once, and a newer query cancels the older request.
+Cmd/Ctrl+P matches plain text against titles in the browser as you type, with no
+request. A query with a filter, even a bare key such as `principal:`, goes to the
+server, which applies only the filters; the palette matches the rest against the
+titles of the conversations that pass, the same way as plain text. A failed
+filtered search lists no conversations.
+The Search page sends every query to the server. Queries are sent once typing
+pauses for 250 ms (the Search page also at least once a second while typing),
+Enter sends one at once, and a newer query cancels the older request.
 Results refresh when conversations appear in the session list. An empty
 Cmd/Ctrl+P lists the session list without a request; it opens with the first 50
-rows and renders the rest in the background. Until new results arrive,
-the previous list stays visible, dimmed, and a spinner replaces the search icon.
-Enter in Cmd/Ctrl+P opens the first result for the text typed so far, waiting
-for it if needed; with no result, or after a failed search, it does nothing.
-Search matches names, titles, previews, agents, session labels, origin card fields,
-and original MCP metadata keys and values, case-insensitively, as one phrase.
+rows and renders the rest in the background. Until new results arrive, the
+previous list stays visible, dimmed (in Cmd/Ctrl+P, the title matches for the
+text without its filters), and a spinner replaces the search icon. With nothing
+to list, Cmd/Ctrl+P shows “No matches” or loading feedback above Search
+everywhere. Enter in Cmd/Ctrl+P on a filtered query opens the first result for
+the text typed so far, waiting for it if needed; with no result, or after a
+failed search, it does nothing.
+The Search page matches names, titles, previews, agents, session labels, origin
+card fields, and original MCP metadata keys and values, case-insensitively, as
+one phrase.
 `agent:main` and `room:general` are filters in the query text: exact,
 case-sensitive matches on the agent or on a Slack thread's room; quote values
 with spaces, such as `room:"general chat"`. Typing `agent:` or `room:` suggests
@@ -677,19 +691,23 @@ text to it; a pill inside or right after the edited text moves in front of it.
 Pills show the full filter text, wrapping long values to fit the available width.
 A conversation the server finds before the session list has loaded it shows
 loading feedback rather than “No matches”. Until the server finishes indexing
-existing chats, Cmd/Ctrl+P and the Search page say message results may be
-incomplete, and until every chat has a summary they say results may be
-incomplete; the Search page says so instead of reporting “No matches”. A message
+existing chats, the Search page and a filtered Cmd/Ctrl+P query say message
+results may be incomplete, and until every chat has a summary they say results
+may be incomplete; the Search page says so instead of reporting “No matches”. A message
 hit from a stopped or failed turn opens its chat without jumping to a message. A
 failed search shows an error with Retry, and the next keystroke also retries.
 Cmd/Ctrl+Shift+P opens the same palette with commands only. It always offers
 **Sessions: New**, **Sessions: Search**, **Voice**, **Cron: Dashboard**, **Cron: Run**,
-**List Agents**, **List Skills**, and **Settings**.
-**Sessions: New** shows its existing shortcut: **⌘ Option N** on Mac or
-**Ctrl Alt N** elsewhere. Unbound commands have no shortcut hint. On fine-pointer
-devices with a viewport taller than 30rem, the palette's wrapping footer shows
-the existing palette-opening keys and previous/next-tab keys for use after closing the menu;
-it also shows **⌘/Ctrl+B** when the desktop left sidebar is in use.
+**List Agents**, **List Skills**, **Settings**, **Tabs: Previous**, **Tabs: Next**,
+and **Help: Keyboard Shortcuts**, plus **Tabs: Toggle sidebar** while Cmd/Ctrl+B
+works (tabs in the desktop left sidebar). In both palettes a command bound to a
+key shows it on the right of its row, OpenCode style: **⌘ Option N** on Mac or
+**Ctrl Alt N** elsewhere for **Sessions: New**, **⌘ [** and **⌘ ]** for the tab
+commands, and **⌘ B** for the sidebar toggle. Unbound commands have no shortcut
+hint. **Help: Keyboard Shortcuts** opens the read-only `/shortcuts` page, which
+lists every shortcut from the same list: the palette keys, new session, tab
+stepping, the sidebar toggle, Escape on a page tab, and the message box's steer
+and stash keys.
 Timeline detail levels are also available, from `Timeline: Messages only` through
 `Timeline: Everything`.
 Like VS Code, selected commands appear first, newest first;

@@ -236,13 +236,13 @@ func TestMessageSearchIndexesEndedTurns(t *testing.T) {
 		{0, 0, 0, "user", "stopped question", "stopped question"},
 		{0, 1, 0, "assistant", "Partial answer", "partial answer"},
 	}, messageSearchTestRows(t, s, "web-chat"), "History shows the stopped turn's record, not its progress log")
-	search, matches := searchTestSessions(t, s, noSlackLookups{}, `principal:"Stopped Writer"`, false)
+	search, matches := searchTestSessions(t, s, noSlackLookups{}, `principal:"Stopped Writer"`, SearchFields)
 	require.Empty(t, search.Principals, "a chat without saved history is not listed in the sidebar")
 	require.Empty(t, matches)
 
 	_, err = s.AppendEntryID(ctx, "web-chat", testReplayEntry())
 	require.NoError(t, err)
-	_, matches = searchTestSessions(t, s, noSlackLookups{}, `principal:"Stopped Writer"`, false)
+	_, matches = searchTestSessions(t, s, noSlackLookups{}, `principal:"Stopped Writer"`, SearchFields)
 	require.Len(t, matches, 1)
 
 	// A runner arriving after the stop rewrites the record before its own finish.
@@ -261,7 +261,7 @@ func TestMessageSearchIndexesEndedTurns(t *testing.T) {
 	id, err := s.AppendEntryID(ctx, "web-chat", entry)
 	require.NoError(t, err)
 	require.Equal(t, []messageSearchTestRow{{id, 0, 0, "user", "saved question", "saved question"}}, messageSearchTestRows(t, s, "web-chat"), "the turn's saved entry hides it")
-	_, matches = searchTestSessions(t, s, noSlackLookups{}, `principal:"Stopped Writer"`, false)
+	_, matches = searchTestSessions(t, s, noSlackLookups{}, `principal:"Stopped Writer"`, SearchFields)
 	require.Empty(t, matches, "the saved entry replaces the stopped turn's principal too")
 
 	require.NoError(t, upsertTestTurn(ctx, s, &testCheckpoint{TurnID: "turn-2", ConversationKey: "web-chat", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"failed question"}`)}}))
@@ -274,7 +274,7 @@ func TestMessageSearchIndexesEndedTurns(t *testing.T) {
 	_, err = s.DeleteSession(ctx, "web-chat")
 	require.NoError(t, err)
 	require.Empty(t, messageSearchTestRows(t, s, "web-chat"), "turn rows cascade with their turn")
-	search, _ = searchTestSessions(t, s, noSlackLookups{}, "", false)
+	search, _ = searchTestSessions(t, s, noSlackLookups{}, "", SearchFields)
 	require.Empty(t, search.Principals)
 }
 

@@ -256,7 +256,7 @@ test("arrowing through the palette previews sessions in this space; Escape retur
 for (const width of [1280, 320]) test(`copy page link across pages at ${width}px`, () => withPage({ viewport: { width, height: 800 }, hasTouch: width === 320, permissions: ["clipboard-read", "clipboard-write"] }, async (page, origin) => {
   const copy = page.getByRole("button", { name: "Copy page link", exact: true });
   const status = page.locator("footer").getByRole("status");
-  for (const pathname of ["/", `${href("alpha")}?view=one%20%26%20two#result%2Fthree`, "/search?q=tag%3A%22two%20words%22%20%26%20%2B%25#result%2Ftwo", "/cron", "/agents", "/skills", "/skills/example", "/config", "/voice"]) {
+  for (const pathname of ["/", `${href("alpha")}?view=one%20%26%20two#result%2Fthree`, "/search?q=tag%3A%22two%20words%22%20%26%20%2B%25#result%2Ftwo", "/cron", "/agents", "/skills", "/skills/example", "/config", "/voice", "/shortcuts"]) {
     await page.goto(`${origin}${pathname}`);
     // Search normalizes its address after identity loads; compare the clipboard with that settled URL.
     if (pathname.startsWith("/search")) await page.waitForURL(`${origin}/search?q=tag%3A%22two+words%22+%26+%2B%25`);
@@ -442,6 +442,11 @@ test("saved tabs, deep links, keyboard, page close, palette commands, and placem
   await page.keyboard.press("Control+b");
   await strip(page).waitFor();
   expect(await page.locator("footer").getByRole("button", { name: "Hide sidebar", exact: true }).getAttribute("aria-expanded")).toBe("true");
+  for (const state of ["hidden", "visible"] as const) { // The palette runs the same toggle as Cmd/Ctrl+B.
+    await page.keyboard.press("Control+Shift+p");
+    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Tabs: Toggle sidebar" }).click();
+    await strip(page).waitFor({ state });
+  }
   const width = (await strip(page).boundingBox()).width;
   await page.getByRole("separator", { name: "Resize tabs" }).focus();
   await page.keyboard.press("ArrowRight");
@@ -489,6 +494,11 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
   await page.waitForURL(`**${href("charlie")}`);
   await page.keyboard.press("Meta+BracketLeft");
   await page.waitForURL(`**${href("bravo")}`);
+  for (const [command, id] of [["Tabs: Next", "charlie"], ["Tabs: Previous", "bravo"]]) { // The palette closes, then steps like the brackets.
+    await page.keyboard.press("Control+Shift+p");
+    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: command }).click();
+    await page.waitForURL(`**${href(id)}`);
+  }
 
   const field = strip(page).getByRole("textbox", { name: "Session name" });
   await menu(page, "Alpha", "Rename session");
