@@ -97,6 +97,49 @@ func TestWebFetchRejectsInvalidURL(t *testing.T) {
 	require.EqualError(t, err, "URL must start with http:// or https://")
 }
 
+func TestWebFetchChallengeRetry(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		status int
+	}{
+		{name: "success", status: http.StatusOK},
+		{name: "second challenge", status: http.StatusForbidden},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var agents []string
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				agents = append(agents, r.UserAgent())
+				if len(agents) == 1 {
+					w.Header().Set("Cf-Mitigated", "challenge")
+					w.WriteHeader(http.StatusForbidden)
+
+					return
+				}
+
+				w.Header().Set("Cf-Mitigated", "challenge")
+				w.WriteHeader(tt.status)
+				_, _ = io.WriteString(w, "retried content")
+			}))
+
+			got, err := webFetch(t.Context(), testWebFetchParams(server.URL, "text"))
+			server.Close()
+
+			require.Len(t, agents, 2)
+			require.Contains(t, agents[0], "Mozilla/5.0")
+			require.Equal(t, "www.rocketable.com", agents[1])
+
+			if tt.status == http.StatusForbidden {
+				require.EqualError(t, err, "request failed with status 403")
+				require.Equal(t, ToolResult{}, got)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, TextToolResult("retried content"), got)
+			}
+		})
+	}
+}
+
 func TestWebFetchBodyLimit(t *testing.T) {
 	for _, size := range []int{maxAttachmentBytes, maxAttachmentBytes + 1} {
 		t.Run(strconv.Itoa(size), func(t *testing.T) {
