@@ -48,6 +48,9 @@ packages:
       bridgeFactory:
         config:
           structname: bridgeFactoryMock
+      inboundImageEncoder:
+        config:
+          structname: inboundImageEncoderMock
       runLockWork:
         config:
           structname: runLockWorkMock

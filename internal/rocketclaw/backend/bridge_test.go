@@ -1839,14 +1839,14 @@ func TestReduceResizedImageWithinLimitReportsEncoderErrorsAndExhaustion(t *testi
 
 	img := image.NewNRGBA(image.Rect(0, 0, 4, 4))
 
-	_, err := reduceResizedImageWithinLimit(img, 1000, 1, func(image.Image, int) ([]byte, int, error) {
+	_, err := reduceResizedImageWithinLimit(img, 1000, 1, &inboundImageEncoderMock{encodeWithinLimitFunc: func(image.Image, int) ([]byte, int, error) {
 		return nil, 0, assert.AnError
-	})
+	}})
 	require.ErrorIs(t, err, assert.AnError)
 
-	_, err = reduceResizedImageWithinLimit(img, 1000, 1, func(image.Image, int) ([]byte, int, error) {
+	_, err = reduceResizedImageWithinLimit(img, 1000, 1, &inboundImageEncoderMock{encodeWithinLimitFunc: func(image.Image, int) ([]byte, int, error) {
 		return nil, 1000, nil
-	})
+	}})
 	require.ErrorIs(t, err, errInboundAttachmentReductionNotEnough)
 }
 

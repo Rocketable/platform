@@ -3739,13 +3739,15 @@ func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (
 
 	flattened := flattenInboundImageForJPEG(img)
 
-	candidate, candidateSize, err := encodeInboundImageAsJPEGWithinLimit(flattened, targetLimit)
+	encoder := inboundJPEGEncoder{}
+
+	candidate, candidateSize, err := encoder.encodeWithinLimit(flattened, targetLimit)
 	if err != nil {
 		return nil, "", false, err
 	}
 
 	if candidate == nil {
-		candidate, err = reduceResizedImageWithinLimit(flattened, candidateSize, targetLimit, encodeInboundImageAsJPEGWithinLimit)
+		candidate, err = reduceResizedImageWithinLimit(flattened, candidateSize, targetLimit, encoder)
 		if err != nil {
 			return nil, "", false, err
 		}
@@ -3766,20 +3768,16 @@ func resizePNGWithinLimit(data []byte, targetLimit int) (transformed []byte, cha
 		return encoded, !bytes.Equal(encoded, data), nil
 	}
 
-	transformed, err = reduceResizedImageWithinLimit(src, len(encoded), targetLimit, func(img image.Image, targetLimit int) ([]byte, int, error) {
-		encoded := encodeInboundPNG(img)
-
-		if len(encoded) <= targetLimit {
-			return encoded, len(encoded), nil
-		}
-
-		return nil, len(encoded), nil
-	})
+	transformed, err = reduceResizedImageWithinLimit(src, len(encoded), targetLimit, inboundPNGEncoder{})
 
 	return transformed, transformed != nil, err
 }
 
-func reduceResizedImageWithinLimit(src image.Image, currentSize, targetLimit int, encode func(image.Image, int) ([]byte, int, error)) ([]byte, error) {
+type inboundImageEncoder interface {
+	encodeWithinLimit(image.Image, int) ([]byte, int, error)
+}
+
+func reduceResizedImageWithinLimit(src image.Image, currentSize, targetLimit int, encoder inboundImageEncoder) ([]byte, error) {
 	bounds := src.Bounds()
 
 	currentWidth, currentHeight := bounds.Dx(), bounds.Dy()
@@ -3796,7 +3794,7 @@ func reduceResizedImageWithinLimit(src image.Image, currentSize, targetLimit int
 		resized := image.NewNRGBA(image.Rect(0, 0, nextWidth, nextHeight))
 		xdraw.CatmullRom.Scale(resized, resized.Bounds(), src, bounds, xdraw.Over, nil)
 
-		candidate, candidateSize, err := encode(resized, targetLimit)
+		candidate, candidateSize, err := encoder.encodeWithinLimit(resized, targetLimit)
 		if err != nil {
 			return nil, err
 		}
@@ -3829,7 +3827,9 @@ func flattenInboundImageForJPEG(src image.Image) *image.NRGBA {
 	return flattened
 }
 
-func encodeInboundImageAsJPEGWithinLimit(img image.Image, targetLimit int) (candidate []byte, candidateSize int, err error) {
+type inboundJPEGEncoder struct{}
+
+func (inboundJPEGEncoder) encodeWithinLimit(img image.Image, targetLimit int) (candidate []byte, candidateSize int, err error) {
 	bestSize := math.MaxInt
 
 	for quality := 95; quality >= 50; quality -= 5 {
@@ -3845,6 +3845,18 @@ func encodeInboundImageAsJPEGWithinLimit(img image.Image, targetLimit int) (cand
 	}
 
 	return nil, bestSize, nil
+}
+
+type inboundPNGEncoder struct{}
+
+func (inboundPNGEncoder) encodeWithinLimit(img image.Image, targetLimit int) (candidate []byte, candidateSize int, err error) {
+	encoded := encodeInboundPNG(img)
+
+	if len(encoded) <= targetLimit {
+		return encoded, len(encoded), nil
+	}
+
+	return nil, len(encoded), nil
 }
 
 // encodeInboundPNG receives decoded PNGs or positive-sized resized NRGBA images;
