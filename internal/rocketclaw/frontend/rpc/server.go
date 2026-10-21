@@ -1482,7 +1482,12 @@ func (s *Server) listQueue(ctx context.Context, request *ListQueueRequest) (*Lis
 	response := &ListQueueResponse{}
 
 	for i := range items {
-		input, err := s.inputEvent(ctx, request.Id, strings.Join(append([]string{items[i].Message}, items[i].Content.TextAttachments...), "\n\n"))
+		text := strings.Join(append([]string{items[i].Message}, items[i].Content.TextAttachments...), "\n\n")
+		if inbound := items[i].Inbound; inbound != nil {
+			text = inbound.Text
+		}
+
+		input, err := s.inputEvent(ctx, request.Id, text)
 		if err != nil {
 			return nil, err
 		}
@@ -1499,7 +1504,20 @@ func (s *Server) listQueue(ctx context.Context, request *ListQueueRequest) (*Lis
 			principal = "agent " + inbound.Metadata[protocol.InboundSenderAgentMetadataKey] + " (session " + inbound.Metadata[protocol.InboundSenderSessionMetadataKey] + ")"
 		}
 
-		response.Items = append(response.Items, &QueueItem{Id: items[i].ID, Text: input.Text, Attachments: input.Attachments, Delivery: delivery, Principal: principal})
+		item := &QueueItem{Id: items[i].ID, Text: input.Text, Attachments: input.Attachments, Delivery: delivery, Principal: principal}
+
+		text = items[i].Message
+		if inbound := items[i].Inbound; inbound != nil {
+			if raw, ok := inbound.Metadata[protocol.InboundRawTextMetadataKey]; ok {
+				text = raw
+			}
+		}
+
+		if text != input.Text {
+			item.EditText = new(text)
+		}
+
+		response.Items = append(response.Items, item)
 	}
 
 	return response, nil
@@ -1526,6 +1544,8 @@ func (s *Server) queueItem(ctx context.Context, method string, request *QueueIte
 		ok, err = s.backend.PopQueueItem(ctx, request.Id, request.ItemId)
 	case "RemoveQueueItem":
 		ok, err = s.backend.DeleteQueueItem(ctx, request.Id, request.ItemId)
+	case "EditQueueItem":
+		ok, err = s.backend.EditQueueItem(ctx, request.Id, request.ItemId, request.Text)
 	}
 
 	if err != nil {

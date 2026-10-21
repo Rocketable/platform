@@ -674,6 +674,9 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         case "/api/SteerQueueItem":
           ctrl.queue = ctrl.queue.map((item) => item.id === input.itemId ? { ...item, delivery: "STEER" } : item);
           return Response.json({});
+        case "/api/EditQueueItem":
+          ctrl.queue = ctrl.queue.map((item) => item.id === input.itemId ? { ...item, text: input.text } : item);
+          return Response.json({});
         case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
         default: return Response.json({});
       }
@@ -2706,6 +2709,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await stashPage.getByRole("region", { name: "Pending steers", exact: true }).getByText("$stop", { exact: true }).waitFor();
     expect(ctrl.queue[0].delivery).toBe("STEER");
     expect(steers).toBe(1);
+    expect(await heldRow.getByRole("button", { name: "Edit", exact: true }).count()).toBe(0);
     await stashPage.locator("textarea").fill("busy stash");
     // Running: Stash lights up together with Steer.
     expect((await stashButton.getAttribute("class"))?.split(/\s+/)).not.toContain("opacity-50");
@@ -2729,11 +2733,12 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       const queuePage = await browser.newPage({ viewport: { width, height: 800 } });
       const mutations: string[] = [];
       queuePage.on("request", (request: { url(): string }) => {
-        if (/\/api\/(Prompt|PopQueueItem|SteerQueueItem|RemoveQueueItem|ReorderQueue)$/.test(request.url())) mutations.push(request.url());
+        if (/\/api\/(Prompt|PopQueueItem|SteerQueueItem|RemoveQueueItem|EditQueueItem|ReorderQueue)$/.test(request.url())) mutations.push(request.url());
       });
       await queuePage.goto(`${origin}/s/${Buffer.from(`queue-expansion-${width}-${count}`).toString("base64url")}`);
       const target = queuePage.locator('[data-queue-id="expand-target"]');
       await target.getByRole("link", { name: "Download held.txt", exact: true }).waitFor();
+      expect(await target.getByRole("button", { name: "Edit", exact: true }).count()).toBe(1);
       const attachmentHref = await target.getByRole("link").getAttribute("href");
       await queuePage.locator("textarea").fill("Draft stays here");
       const compact = await target.textContent();
@@ -2774,6 +2779,144 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       expect(await queuePage.locator("textarea").inputValue()).toBe("Draft stays here");
       expect(JSON.stringify(ctrl.queue)).toBe(originalQueue);
       expect(mutations).toEqual([]);
+
+      const editor = queuePage.getByRole("textbox", { name: "Edit queued message", exact: true });
+      await target.getByRole("button", { name: "Edit", exact: true }).click();
+      expect(await editor.inputValue()).toBe(queueText);
+      await editor.fill("discard this edit");
+      await target.getByRole("button", { name: "Cancel", exact: true }).click();
+      expect(JSON.stringify(ctrl.queue)).toBe(originalQueue);
+      expect(await queuePage.locator("textarea").inputValue()).toBe("Draft stays here");
+      expect(mutations).toEqual([]);
+
+      await target.getByRole("button", { name: "Edit", exact: true }).click();
+      await editor.fill("Revised\n  queue text");
+      await queuePage.route("**/api/EditQueueItem", (route: { fulfill(input: { status: number; json: { code: number; message: string } }): Promise<void> }) => route.fulfill({ status: 500, json: { code: 13, message: "Edit failed; retry" } }));
+      await target.getByRole("button", { name: "Save", exact: true }).click();
+      await shown(queuePage, "Edit failed; retry");
+      expect(await editor.inputValue()).toBe("Revised\n  queue text");
+      expect(JSON.stringify(ctrl.queue)).toBe(originalQueue);
+      await queuePage.unroute("**/api/EditQueueItem");
+      const editRelease = Promise.withResolvers<void>();
+      let edits = 0;
+      await queuePage.route("**/api/EditQueueItem", async (route: { continue(): Promise<void> }) => {
+        edits++;
+        await editRelease.promise;
+        await route.continue();
+      });
+      await queuePage.screenshot({ path: path.join(screenshots, `queue-editing-${width}-${count}.png`) });
+      expect(await queuePage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await target.getByRole("button", { name: "Save", exact: true }).click();
+      const saving = target.getByRole("button", { name: "Saving…", exact: true });
+      await saving.waitFor();
+      await saving.click({ force: true });
+      expect(await saving.isDisabled()).toBe(true);
+      for (const name of ["Cancel", "Remove", "Reorder", count === 1 ? "Pop" : "Send"]) expect(await target.getByRole("button", { name, exact: true }).isDisabled()).toBe(true);
+      expect(await editor.isDisabled()).toBe(true);
+      if (width === 1280 && count === 3) {
+        const documentBefore = await queuePage.evaluateHandle(() => document);
+        // Match navigation.tsx's SPA navigation; a reload would replace the mutation cache.
+        await queuePage.evaluate((pathname: string) => {
+          history.pushState(null, "", pathname);
+          window.dispatchEvent(new PopStateEvent("popstate"));
+        }, `/s/${Buffer.from("queue-navigation-other").toString("base64url")}`);
+        await queuePage.waitForURL(`**/s/${Buffer.from("queue-navigation-other").toString("base64url")}`);
+        await queuePage.waitForFunction(() => document.querySelector("textarea")?.value === "");
+        expect(await target.getByRole("button", { name: "Edit", exact: true }).isEnabled()).toBe(true);
+        transcriptStreams.delete(`queue-expansion-${width}-${count}`);
+        await queuePage.goBack();
+        await queuePage.waitForFunction(() => document.querySelector("textarea")?.value === "Draft stays here");
+        expect(await documentBefore.evaluate((before: Document) => before === document)).toBe(true);
+        for (const name of ["Edit", "Remove", "Reorder", "Send"]) {
+          expect(await target.getByRole("button", { name, exact: true }).isDisabled()).toBe(true);
+        }
+        const other = queuePage.locator('[data-queue-id="expand-other-0"]');
+        expect(await other.getByRole("button", { name: "Pop", exact: true }).isDisabled()).toBe(true);
+        expect(await editor.count()).toBe(0);
+        expect(edits).toBe(1);
+        expect(ctrl.queue[0].text).toBe(queueText);
+      }
+      editRelease.resolve();
+      await editor.waitFor({ state: "hidden" });
+      await target.getByText("Revised queue text", { exact: true }).waitFor();
+      expect(edits).toBe(1);
+      expect(ctrl.queue).toEqual(JSON.parse(originalQueue).map((item: QueueItem) => item.id === "expand-target" ? { ...item, text: "Revised\n  queue text" } : item));
+      expect(await queuePage.locator("textarea").inputValue()).toBe("Draft stays here");
+      expect(await target.getByRole("link").getAttribute("href")).toBe(attachmentHref);
+      if (width === 1280 && count === 3) {
+        for (const name of ["Edit", "Remove", "Reorder", "Send"]) {
+          expect(await target.getByRole("button", { name, exact: true }).isEnabled()).toBe(true);
+        }
+        await target.getByRole("button", { name: "Edit", exact: true }).click();
+        await editor.fill("Later edit after navigation");
+        await target.getByRole("button", { name: "Save", exact: true }).click();
+        await editor.waitFor({ state: "hidden" });
+        await target.getByText("Later edit after navigation", { exact: true }).waitFor();
+        expect(ctrl.queue[0].text).toBe("Later edit after navigation");
+        expect(edits).toBe(2);
+      }
+      transcriptStreams.delete(`queue-expansion-${width}-${count}`);
+      await queuePage.reload();
+      await target.getByText(width === 1280 && count === 3 ? "Later edit after navigation" : "Revised queue text", { exact: true }).waitFor();
+      await queuePage.waitForFunction(() => document.querySelector("textarea")?.value === "Draft stays here");
+      expect(await queuePage.locator("textarea").inputValue()).toBe("Draft stays here");
+      if (width === 1280 && count === 3) {
+        await target.getByRole("button", { name: "Edit", exact: true }).click();
+        await editor.fill("consumed while editing");
+        ctrl.queue = ctrl.queue.filter((item) => item.id !== "expand-target");
+        const id = `queue-expansion-${width}-${count}`;
+        (await transcriptStream(id).promise).enqueue(`data: ${JSON.stringify({ conversationId: id, revision: "consumed" })}\n\n`);
+        await target.waitFor({ state: "hidden" });
+        const remaining = queuePage.locator('[data-queue-id="expand-other-0"]');
+        expect(await remaining.getByRole("button", { name: "Edit", exact: true }).isEnabled()).toBe(true);
+        await remaining.getByRole("button", { name: "Edit", exact: true }).click();
+        expect(await editor.inputValue()).toBe("Other message 0");
+        await remaining.getByRole("button", { name: "Cancel", exact: true }).click();
+        expect(await queuePage.locator("textarea").inputValue()).toBe("Draft stays here");
+        expect(mutations.filter((url) => url.endsWith("/api/Prompt"))).toEqual([]);
+        expect(mutations.every((url) => url.endsWith("/api/EditQueueItem"))).toBe(true);
+      }
+      if (width === 320 && count === 3) {
+        await queuePage.unroute("**/api/EditQueueItem");
+        await target.getByRole("button", { name: "Edit", exact: true }).click();
+        await editor.fill("consumed before save");
+        await queuePage.route("**/api/EditQueueItem", (route: { fulfill(input: { status: number; json: { code: number; message: string } }): Promise<void> }) => {
+          ctrl.queue = ctrl.queue.filter((item) => item.id !== "expand-target");
+          return route.fulfill({ status: 404, json: { code: 5, message: "queue item is not recorded" } });
+        });
+        await target.getByRole("button", { name: "Save", exact: true }).click();
+        await target.waitFor({ state: "hidden" });
+        await shown(queuePage, "This message is no longer waiting.");
+        expect(await queuePage.locator("textarea").inputValue()).toBe("Draft stays here");
+        const remaining = queuePage.locator('[data-queue-id="expand-other-0"]');
+        expect(await remaining.getByRole("button", { name: "Edit", exact: true }).isEnabled()).toBe(true);
+        await remaining.getByRole("button", { name: "Edit", exact: true }).click();
+        expect(await editor.inputValue()).toBe("Other message 0");
+        await remaining.getByRole("button", { name: "Cancel", exact: true }).click();
+        expect(ctrl.queue.some((item) => item.id === "expand-target")).toBe(false);
+        await queuePage.unroute("**/api/EditQueueItem");
+        const consumedSave = Promise.withResolvers<void>();
+        await queuePage.route("**/api/EditQueueItem", async (route: { fulfill(input: { status: number; json: { code: number; message: string } }): Promise<void> }) => {
+          await consumedSave.promise;
+          return route.fulfill({ status: 404, json: { code: 5, message: "queue item is not recorded" } });
+        });
+        await remaining.getByRole("button", { name: "Edit", exact: true }).click();
+        await remaining.getByRole("button", { name: "Save", exact: true }).click();
+        await remaining.getByRole("button", { name: "Saving…", exact: true }).waitFor();
+        ctrl.queue = ctrl.queue.filter((item) => item.id !== "expand-other-0");
+        const id = `queue-expansion-${width}-${count}`;
+        (await transcriptStream(id).promise).enqueue(`data: ${JSON.stringify({ conversationId: id, revision: "consumed-during-save" })}\n\n`);
+        await remaining.waitFor({ state: "hidden" });
+        const last = queuePage.locator('[data-queue-id="expand-other-1"]');
+        expect(await last.getByRole("button", { name: "Edit", exact: true }).isDisabled()).toBe(true);
+        consumedSave.resolve();
+        await last.getByRole("button", { name: "Edit", exact: true }).click();
+        expect(await editor.inputValue()).toBe("Other message 1");
+        await last.getByRole("button", { name: "Cancel", exact: true }).click();
+        expect(await queuePage.locator("textarea").inputValue()).toBe("Draft stays here");
+        expect(mutations.filter((url) => url.endsWith("/api/Prompt"))).toEqual([]);
+        expect(mutations.every((url) => url.endsWith("/api/EditQueueItem"))).toBe(true);
+      }
       await queuePage.close();
     }
 

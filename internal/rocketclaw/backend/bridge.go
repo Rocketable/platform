@@ -190,6 +190,40 @@ func (request *bridgeRequest) closeWorkflow() error {
 	return err
 }
 
+func (request *bridgeRequest) claimQueueItem(ctx context.Context, db stateStoreDB, conversationID string) (protocol.ThreadQueueItem, bool, error) {
+	item, claimed, err := (stateDAO{db: db}).claimThreadQueueItem(ctx, conversationID, request.queueItemID)
+	if err != nil || !claimed {
+		return item, false, err
+	}
+
+	content := item.Content
+	content.Text = item.Message
+
+	current := item.Inbound
+	if current == nil {
+		current = protocol.NewInboundMessageFromContent(item.Source, item.Kind, &content, true)
+	}
+
+	if request.inbound.Text != current.Text {
+		if err := request.closeWorkflow(); err != nil {
+			return item, false, err
+		}
+	}
+
+	request.inbound.Text = current.Text
+	if raw, ok := current.Metadata[protocol.InboundRawTextMetadataKey]; ok {
+		if request.inbound.Metadata == nil {
+			request.inbound.Metadata = make(map[string]string)
+		}
+
+		request.inbound.Metadata[protocol.InboundRawTextMetadataKey] = raw
+	}
+
+	request.inbound.Workflow = inboundWorkflow(request.inbound)
+
+	return item, true, nil
+}
+
 type runResult struct {
 	turnID, text     string
 	responseID       string
@@ -918,7 +952,7 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 		owner = request.producer
 	}
 
-	agent := cmp.Or(request.workflow.agent, request.inbound.Metadata[inboundAgentMetadataKey], owner.agentSnapshot())
+	agent := owner.agentSnapshot()
 
 	if request.queueItemID != "" && request.producer == nil && request.inbound.GoalAction != protocol.GoalActionKickoff {
 		goal, found, err := b.config.SessionService.Goal(b.config.ConversationID)
@@ -965,12 +999,14 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 	if request.queueItemID != "" {
 		var claimed bool
 
-		queuedItem, claimed, err = (stateDAO{db: tx}).claimThreadQueueItem(ctx, owner.config.ConversationID, request.queueItemID)
+		queuedItem, claimed, err = request.claimQueueItem(ctx, tx, owner.config.ConversationID)
 		if err != nil || !claimed {
 			b.log.Info("queue claim unavailable", "event", "queue_claim_unavailable", "conversation_id", owner.config.ConversationID, "queue_item_id", request.queueItemID, "error_type", fmt.Sprintf("%T", err))
 			return false, err
 		}
 	}
+
+	agent = cmp.Or(request.workflow.agent, request.inbound.Metadata[inboundAgentMetadataKey], agent)
 
 	if request.scheduledMessageID != "" && !request.scheduledMessageRecurring {
 		deleted, err := (stateDAO{db: tx}).deleteScheduledMessage(ctx, request.scheduledMessageID)

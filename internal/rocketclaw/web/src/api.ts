@@ -98,6 +98,7 @@ export const mutations = {
   updateSession: (input: { id: string; pinned?: boolean; name?: string; tag?: string }) => rpc("UpdateSession", input),
   removeQueueItem: (input: { id: string; itemId: string }) => rpc("RemoveQueueItem", input),
   steerQueueItem: (input: { id: string; itemId: string }) => rpc("SteerQueueItem", input),
+  editQueueItem: (input: { id: string; itemId: string; text: string }) => rpc("EditQueueItem", input),
   reorderQueue: (input: { id: string; itemIds: string[] }) => rpc("ReorderQueue", input),
   moveToBackground: (input: { conversationId: string }) => rpc("MoveToBackground", input),
   stopBackgroundJob: (input: { conversationId: string; jobId: string }) => rpc("StopBackgroundJob", input),

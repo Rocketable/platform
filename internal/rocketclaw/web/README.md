@@ -787,6 +787,12 @@ and long words wrapped to fit. **Collapse message** restores the compact inline
 preview. Expansion is read-only: it keeps attachments, order, delivery, actions,
 and the composer draft unchanged. Long text scrolls inside the queue panel, even
 with one row, so the composer stays on screen.
+**Edit** opens a text box in the queued or stashed row. **Save** changes its text
+without moving it or changing its attachments, delivery, author, or routing;
+**Cancel** discards the edit. Neither action changes the composer draft.
+While saving, conflicting row controls are disabled. A failed save keeps the
+edited text for retry; a message already consumed cannot be edited or recreated.
+Pending steers are not editable.
 Failed Stash keeps the draft and files for retry. If Pop shows an error, check
 the refreshed queue: the message may already be queued if starting work failed.
 Live updates and refresh read the same persisted transcript. A chat opens with

@@ -41,6 +41,9 @@ var _ frontend.Backend = &BackendMock{}
 //			DeleteQueueItemFunc: func(context1 context.Context, s string, s1 string) (bool, error) {
 //				panic("mock out the DeleteQueueItem method")
 //			},
+//			EditQueueItemFunc: func(context1 context.Context, s string, s1 string, s2 string) (bool, error) {
+//				panic("mock out the EditQueueItem method")
+//			},
 //			ListConversationsFunc: func(context1 context.Context) ([]protocol.Conversation, error) {
 //				panic("mock out the ListConversations method")
 //			},
@@ -116,6 +119,9 @@ type BackendMock struct {
 
 	// DeleteQueueItemFunc mocks the DeleteQueueItem method.
 	DeleteQueueItemFunc func(context1 context.Context, s string, s1 string) (bool, error)
+
+	// EditQueueItemFunc mocks the EditQueueItem method.
+	EditQueueItemFunc func(context1 context.Context, s string, s1 string, s2 string) (bool, error)
 
 	// ListConversationsFunc mocks the ListConversations method.
 	ListConversationsFunc func(context1 context.Context) ([]protocol.Conversation, error)
@@ -219,6 +225,17 @@ type BackendMock struct {
 			S string
 			// S1 is the s1 argument value.
 			S1 string
+		}
+		// EditQueueItem holds details about calls to the EditQueueItem method.
+		EditQueueItem []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+			// S1 is the s1 argument value.
+			S1 string
+			// S2 is the s2 argument value.
+			S2 string
 		}
 		// ListConversations holds details about calls to the ListConversations method.
 		ListConversations []struct {
@@ -348,6 +365,7 @@ type BackendMock struct {
 	lockCompletionNotes         sync.RWMutex
 	lockCreateConversation      sync.RWMutex
 	lockDeleteQueueItem         sync.RWMutex
+	lockEditQueueItem           sync.RWMutex
 	lockListConversations       sync.RWMutex
 	lockMoveToBackground        sync.RWMutex
 	lockPendingQuestions        sync.RWMutex
@@ -596,6 +614,50 @@ func (mock *BackendMock) DeleteQueueItemCalls() []struct {
 	mock.lockDeleteQueueItem.RLock()
 	calls = mock.calls.DeleteQueueItem
 	mock.lockDeleteQueueItem.RUnlock()
+	return calls
+}
+
+// EditQueueItem calls EditQueueItemFunc.
+func (mock *BackendMock) EditQueueItem(context1 context.Context, s string, s1 string, s2 string) (bool, error) {
+	if mock.EditQueueItemFunc == nil {
+		panic("BackendMock.EditQueueItemFunc: method is nil but Backend.EditQueueItem was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+		S1       string
+		S2       string
+	}{
+		Context1: context1,
+		S:        s,
+		S1:       s1,
+		S2:       s2,
+	}
+	mock.lockEditQueueItem.Lock()
+	mock.calls.EditQueueItem = append(mock.calls.EditQueueItem, callInfo)
+	mock.lockEditQueueItem.Unlock()
+	return mock.EditQueueItemFunc(context1, s, s1, s2)
+}
+
+// EditQueueItemCalls gets all the calls that were made to EditQueueItem.
+// Check the length with:
+//
+//	len(mockedBackend.EditQueueItemCalls())
+func (mock *BackendMock) EditQueueItemCalls() []struct {
+	Context1 context.Context
+	S        string
+	S1       string
+	S2       string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+		S1       string
+		S2       string
+	}
+	mock.lockEditQueueItem.RLock()
+	calls = mock.calls.EditQueueItem
+	mock.lockEditQueueItem.RUnlock()
 	return calls
 }
 

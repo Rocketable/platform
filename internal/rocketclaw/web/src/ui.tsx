@@ -8,6 +8,7 @@ import { Drawer } from "@base-ui/react/drawer";
 import { Tabs } from "@base-ui/react/tabs";
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from "@/components/ui/input-group";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -221,8 +222,13 @@ function QueuePanel({
   const [poppingId, setPoppingId] = useState("");
   const [steeringId, setSteeringId] = useState("");
   const [expanded, setExpanded] = useState(() => new Set<string>());
+  const [edit, setEdit] = useState<{ id: string; text: string }>();
+  const saving = useRef(false);
+  const update = useMutation({ mutationKey: ["editQueueItem", conversationId], mutationFn: mutations.editQueueItem, onSettled: () => queryClient.invalidateQueries({ queryKey: ["queue"] }) });
+  const settling = useIsMutating({ mutationKey: ["editQueueItem", conversationId] }) > 0;
+  if (edit && !settling && !items.some((item) => item.id === edit.id && item.delivery !== "STEER")) setEdit(undefined);
   const queueActionLabel = busy ? "Steer" : "Send";
-  if (items.length === 0 && !jobs) {
+  if (items.length === 0 && !jobs && !update.error) {
     return null;
   }
   const ids = order ?? items.map((item) => item.id);
@@ -239,6 +245,7 @@ function QueuePanel({
   return (
     <div className="mb-2 rounded-lg bg-muted p-2 shadow-[inset_0_0_0_1px_var(--border)]">
       {jobs}
+      {update.error ? <p role="alert" className="px-2 text-sm text-destructive">{update.error instanceof RPCError && update.error.code === 5 ? "This message is no longer waiting." : update.error.message}</p> : null}
       <ul className="flex max-h-32 flex-col gap-0.5 overflow-y-auto">
         {rows.map((item) => (
           <li key={item.id} data-queue-id={item.id} className="flex flex-wrap items-center gap-2 rounded-md px-2 py-1">
@@ -246,6 +253,7 @@ function QueuePanel({
               type="button"
               className="cursor-grab touch-none p-1 text-muted-foreground"
               aria-label="Reorder"
+              disabled={settling || edit?.id === item.id}
               onPointerDown={(event) => {
                 if (event.button !== 0) {
                   return;
@@ -277,7 +285,7 @@ function QueuePanel({
               {item.principal ? <span data-slot="message-author" className="text-muted-foreground after:content-['_·_']">{item.principal}</span> : null}
               {expanded.has(item.id) ? null : <span><InlineText text={item.text.replace(/\s+/g, " ")} /></span>}
             </span>
-            <button type="button" className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent" aria-label={expanded.has(item.id) ? "Collapse message" : "Expand message"} aria-expanded={expanded.has(item.id)} onClick={() => setExpanded((current) => {
+            <button type="button" disabled={edit?.id === item.id} className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent" aria-label={expanded.has(item.id) ? "Collapse message" : "Expand message"} aria-expanded={expanded.has(item.id)} onClick={() => setExpanded((current) => {
               const next = new Set(current);
               if (next.has(item.id)) next.delete(item.id); else next.add(item.id);
               return next;
@@ -285,11 +293,12 @@ function QueuePanel({
               <ChevronRight className={cn("size-3.5", expanded.has(item.id) && "rotate-90")} />
             </button>
             <MessageAttachments attachments={item.attachments} conversationId={conversationId} />
+            {item.delivery !== "STEER" ? <Button type="button" variant="ghost" size="sm" disabled={sending || settling || !!edit || poppingId !== "" || steeringId !== ""} onClick={() => { update.reset(); setEdit({ id: item.id, text: item.editText ?? item.text }); }}>Edit</Button> : null}
             <Button
               type="button"
               variant="ghost"
               size="sm"
-              disabled={sending || (item.delivery === "STASH" && poppingId !== "") || item.id === steeringId}
+              disabled={sending || settling || edit?.id === item.id || (item.delivery === "STASH" && poppingId !== "") || item.id === steeringId}
               onClick={async () => {
                 if (item.delivery !== "STASH") {
                   // The first steer claims the row; a second click would find it gone.
@@ -303,10 +312,23 @@ function QueuePanel({
             >
               {item.id === poppingId ? "Popping…" : item.delivery === "STASH" ? "Pop" : queueActionLabel}
             </Button>
-            <button type="button" className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent" aria-label="Remove" onClick={() => onRemove(item.id)}>
+            <button type="button" disabled={settling || edit?.id === item.id} className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent" aria-label="Remove" onClick={() => onRemove(item.id)}>
               <X className="h-3.5 w-3.5" />
             </button>
-            {expanded.has(item.id) ? <p className="w-full whitespace-pre-wrap wrap-anywhere text-sm">{item.text}</p> : null}
+            {edit?.id === item.id ? <FieldGroup className="w-full">
+              <Field data-disabled={settling}>
+                <FieldLabel className="sr-only" htmlFor={`queue-edit-${item.id}`}>Edit queued message</FieldLabel>
+                <Textarea id={`queue-edit-${item.id}`} autoFocus value={edit.text} disabled={settling} className="max-h-48 overflow-y-auto" onChange={(event) => setEdit({ ...edit, text: event.target.value })} />
+              </Field>
+              <div className="flex gap-2">
+                <Button type="button" size="sm" disabled={sending || settling} onClick={async () => {
+                  if (saving.current) return;
+                  saving.current = true;
+                  try { await update.mutateAsync({ id: conversationId, itemId: edit.id, text: edit.text }); setEdit(undefined); } catch { /* The mutation keeps the error and edited text visible. */ } finally { saving.current = false; }
+                }}>{settling ? "Saving…" : "Save"}</Button>
+                <Button type="button" variant="ghost" size="sm" disabled={settling} onClick={() => { setEdit(undefined); update.reset(); }}>Cancel</Button>
+              </div>
+            </FieldGroup> : expanded.has(item.id) ? <p className="w-full whitespace-pre-wrap wrap-anywhere text-sm">{item.text}</p> : null}
           </li>
         ))}
       </ul>
@@ -4199,7 +4221,7 @@ function Composer({
             ))}
           </ul>
         ) : null}
-        <QueuePanel conversationId={sessionId} items={queued} busy={busy} sending={sending} onSteer={steerQueued} onPop={popQueued} onRemove={removeQueued} onReorder={reorderQueued} jobs={jobs} />
+        <QueuePanel key={sessionId} conversationId={sessionId} items={queued} busy={busy} sending={sending} onSteer={steerQueued} onPop={popQueued} onRemove={removeQueued} onReorder={reorderQueued} jobs={jobs} />
         <PromptInput files={files} setFiles={setFiles} sending={sending} fileInput={fileInput}>
           <InputGroupTextarea
             ref={messageInput}
