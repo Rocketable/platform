@@ -59,10 +59,10 @@ type sandboxedShellSystem struct {
 	spillRel     string
 	shellTemp    shellTempConfig
 	env          []string
-	shellCommand ShellCommandFunc
+	shellCommand shellCommander
 }
 
-func newSandboxedShellSystem(root *os.Root, shellTemp *shellTempConfig, env []string, shellCommand ShellCommandFunc) *sandboxedShellSystem {
+func newSandboxedShellSystem(root *os.Root, shellTemp *shellTempConfig, env []string, shellCommand shellCommander) *sandboxedShellSystem {
 	return &sandboxedShellSystem{
 		mu:           sync.Mutex{},
 		root:         root,
@@ -89,7 +89,7 @@ func RunBash(ctx context.Context, root *os.Root, shellTempDir string, shellEnv m
 		return BashResult{}, err
 	}
 
-	sss := newSandboxedShellSystem(root, &shellTemp, env, DefaultShellCommand)
+	sss := newSandboxedShellSystem(root, &shellTemp, env, DefaultShellCommand{})
 
 	return sss.Bash(ctx, customShell, bashParams(command)), nil
 }
@@ -189,7 +189,7 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell string, p
 
 	timedOut := false
 
-	shell, args := sss.shellCommand.withCustomShell(customShell, params.Command)
+	shell, args := withCustomShell(sss.shellCommand, customShell, params.Command)
 	if strings.TrimSpace(shell) == "" {
 		return bashFailure("shell command path is required")
 	}

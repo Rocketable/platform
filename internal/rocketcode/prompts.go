@@ -19,11 +19,11 @@ type promptExpansionEnvironment struct {
 	hostDir      string
 	shellTemp    shellTempConfig
 	env          []string
-	shellCommand ShellCommandFunc
+	shellCommand shellCommander
 	customShell  string
 }
 
-func newPromptExpansionEnvironment(root *os.Root, shellTemp shellTempConfig, env []string, shellCommand ShellCommandFunc) (promptExpansionEnvironment, error) {
+func newPromptExpansionEnvironment(root *os.Root, shellTemp shellTempConfig, env []string, shellCommand shellCommander) (promptExpansionEnvironment, error) {
 	var zero promptExpansionEnvironment
 
 	if root == nil {
@@ -55,7 +55,7 @@ func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, pr
 			return ""
 		}
 
-		shell, args := e.shellCommand.withCustomShell(e.customShell, command)
+		shell, args := withCustomShell(e.shellCommand, e.customShell, command)
 		cmd := exec.CommandContext(context.WithoutCancel(ctx), shell, args...)
 		cmd.Dir = e.hostDir
 		cmd.Env = append(os.Environ(), e.env...)
@@ -82,7 +82,10 @@ func expandAgentPrompt(ctx context.Context, agent *Agent, enabled bool, env *pro
 }
 
 // DefaultShellCommand uses Bash to match the permission parser's grammar.
+type DefaultShellCommand struct{}
+
+// Command selects Bash and its arguments for command.
 // Privileged mode disables startup files and inherited functions and shell options.
-func DefaultShellCommand(command string) (path string, args []string) {
+func (DefaultShellCommand) Command(command string) (path string, args []string) {
 	return "/bin/bash", []string{"--noprofile", "--norc", "-p", "-c", command}
 }
