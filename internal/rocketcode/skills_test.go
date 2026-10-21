@@ -397,7 +397,7 @@ func TestFindSkillsToolVisibilityFollowsSkillPermission(t *testing.T) {
 		factory := testSkillFactory(t, skills, nil)
 		agent := agentWithSkillRules(PermissionRule{Pattern: "*", Action: permissionDeny})
 
-		tools := factory.toolsFor(agent)
+		tools, _ := factory.assembleTools(agent)
 
 		require.NotContains(t, tools, "find_skills")
 	})
@@ -409,7 +409,7 @@ func TestFindSkillsToolVisibilityFollowsSkillPermission(t *testing.T) {
 			PermissionRule{Pattern: "docs-helper", Action: permissionAllow},
 		)
 
-		tools := factory.toolsFor(agent)
+		tools, _ := factory.assembleTools(agent)
 
 		require.Contains(t, tools, "find_skills")
 	})

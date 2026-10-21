@@ -106,13 +106,6 @@ func CodeModeOnlyHostTool(name string) bool {
 	}
 }
 
-// toolsFor returns model-facing tools (no code-mode-only host tools).
-func (f *toolFactory) toolsFor(agent *Agent) map[string]looperTool {
-	model, _ := f.assembleTools(agent)
-
-	return model
-}
-
 // assembleTools builds model-facing tools and the internal code-mode host registry.
 func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]looperTool) {
 	tools := make(map[string]looperTool, len(f.baseTools)+4)

@@ -971,12 +971,12 @@ func TestToolsForIncludesExecuteWhenConfigured(t *testing.T) {
 		agents:      Agents{Items: map[string]Agent{}},
 	}
 
-	tools := factory.toolsFor(&Agent{Permission: permissions})
+	tools, _ := factory.assembleTools(&Agent{Permission: permissions})
 	require.Contains(t, tools, executeToolName)
 	require.Contains(t, tools, loadExecuteResultToolName)
 	assert.NotContains(t, tools, "read")
 
-	tools = factory.toolsFor(&Agent{})
+	tools, _ = factory.assembleTools(&Agent{})
 	require.NotContains(t, tools, executeToolName)
 	require.NotContains(t, tools, loadExecuteResultToolName)
 }
