@@ -94,6 +94,11 @@ packages:
       channelFactsStore:
         config:
           structname: channelFactsStoreMock
+  github.com/Rocketable/platform/internal/rocketclaw/oai:
+    interfaces:
+      directorySyncer:
+        config:
+          structname: directorySyncerMock
   github.com/Rocketable/platform/internal/rocketclaw/protocol:
     interfaces:
       OutboundPublisher:
