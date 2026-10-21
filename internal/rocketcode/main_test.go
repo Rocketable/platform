@@ -109,7 +109,7 @@ func TestRuntimeAwaitTask(t *testing.T) {
 		"main.md":       {Data: []byte("---\nmodel: gpt-5.4\n---\nPARENT PROMPT")},
 		"researcher.md": {Data: []byte("---\nmodel: gpt-5.4\n---\nCHILD PROMPT")},
 		"guarded.md":    {Data: []byte("---\nmodel: gpt-5.4\nguardrail: researcher\n---\nGUARDED PROMPT")},
-	}, passThroughAgentModel)
+	}, &mockAgentModelRenderer{RenderAgentModelFunc: func(model string) (string, error) { return model, nil }})
 	require.Empty(t, agents.Errors)
 
 	sessions := &mockChildSessions{
@@ -270,7 +270,7 @@ func TestNewBindsBashToEachAgentCustomShell(t *testing.T) {
 	agents := LoadAgents(fstest.MapFS{
 		"boxed.md": {Data: []byte("---\nmodel: gpt-5.4\ncustomShell: " + shell + "\npermission: {bash: allow, task: allow}\n---\nBOXED")},
 		"plain.md": {Data: []byte("---\nmodel: gpt-5.4\npermission: {bash: allow, task: allow}\n---\nPLAIN")},
-	}, passThroughAgentModel)
+	}, &mockAgentModelRenderer{RenderAgentModelFunc: func(model string) (string, error) { return model, nil }})
 	require.Empty(t, agents.Errors)
 
 	run := func(t *testing.T, tool looperTool) string {

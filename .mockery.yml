@@ -136,6 +136,9 @@ packages:
           structname: agentRunnerMock
   github.com/Rocketable/platform/internal/rocketcode:
     interfaces:
+      agentModelRenderer:
+        config:
+          structname: mockAgentModelRenderer
       SteerDrain:
         config:
           structname: mockSteerDrain

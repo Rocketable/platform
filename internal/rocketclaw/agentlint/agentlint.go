@@ -191,7 +191,7 @@ func AgentGraphDOT(runtimeRoot string, cfg *config.Config) (string, error) {
 func loadRuntimeAgentInfos(runtimeRoot string, cfg *config.Config) (map[string]*agentInfo, []Finding, error) {
 	agentsRoot := filepath.Join(runtimeRoot, "agents")
 
-	agentLoad := rocketcode.LoadAgents(os.DirFS(agentsRoot), cfg.RenderAgentModel)
+	agentLoad := rocketcode.LoadAgents(os.DirFS(agentsRoot), cfg)
 	if len(agentLoad.Errors) > 0 {
 		return nil, nil, fmt.Errorf("load agents: %w", agentLoad.Errors[0])
 	}
