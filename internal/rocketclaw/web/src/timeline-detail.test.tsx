@@ -39,6 +39,7 @@ test("matching ignores hidden rows' collapse and reports Custom otherwise", () =
 });
 
 test("another tab's value for the key reloads with Compact fallbacks; other keys are ignored", () => {
+  const stored = new Map(saved);
   const calls: string[] = [];
   const unsubscribe = [subscribeTimelineRows(() => calls.push("a")), subscribeTimelineRows(() => calls.push("b"))];
   const cases: [string | null, TimelineRows][] = [
@@ -66,7 +67,7 @@ test("another tab's value for the key reloads with Compact fallbacks; other keys
   expect(calls).toEqual([]);
   expect(timelineRows()).toBe(before);
   for (const stop of unsubscribe) stop();
-  expect(saved.size).toBe(0);
+  expect(saved).toEqual(stored);
 });
 
 test("setters write the saved shape and notify subscribers once", () => {
