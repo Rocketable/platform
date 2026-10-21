@@ -358,7 +358,7 @@ func callExecute(ctx context.Context, registry *mcpclient.Registry, permissions 
 			return errors.Join(errCheck, tc.observations.recordCodeModeCall(ctx, record.finish(ToolResult{}, errCheck), false))
 		},
 		mcpCall,
-		emitNestedExecuteToolDiagnostic,
+		executeToolDiagnostics{},
 		host,
 	)
 	if errRun != nil {
@@ -906,10 +906,12 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 	return result, errors.Join(errRun, saveStep(ctx, tc.looper.Journal, key, &want), tc.observations.recordCodeModeCall(ctx, record.finish(result, errRun), false))
 }
 
-// emitNestedExecuteToolDiagnostic reports a nested code-mode tool call into thinking traces.
+type executeToolDiagnostics struct{}
+
+// ObserveToolCall reports a nested code-mode tool call into thinking traces.
 // Uses emitChatResponse (blocking send) so nested steps are not dropped when the output
 // buffer is full — unlike emitDiagnosticChatResponse, which drops under backpressure.
-func emitNestedExecuteToolDiagnostic(ctx context.Context, path []string, nestedName string, args map[string]any) {
+func (executeToolDiagnostics) ObserveToolCall(ctx context.Context, path []string, nestedName string, args map[string]any) {
 	tc, ok := toolCallContextFrom(ctx)
 	if !ok || tc.looper == nil || !tc.looper.Diagnostics || tc.output == nil {
 		return
