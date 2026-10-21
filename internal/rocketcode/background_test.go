@@ -420,7 +420,7 @@ func TestSteerSwitchesRunningSessionType(t *testing.T) {
 			agents := LoadAgents(fstest.MapFS{
 				"child.md":    {Data: []byte("---\nmodel: gpt-5.4\npermission: {probe: allow}\n---\nCHILD PROMPT")},
 				"reviewer.md": {Data: []byte("---\nmodel: gpt-6.1-sol\npermission: {probe: deny}\n---\nREVIEWER PROMPT")},
-			}, passThroughAgentModel)
+			}, &mockAgentModelRenderer{RenderAgentModelFunc: func(model string) (string, error) { return model, nil }})
 			require.Empty(t, agents.Errors)
 
 			steers := []PromptInput{{ID: "steer-1", Role: PromptInputRoleUser, Texts: []string{"review it instead"}, Agent: tc.steer}}

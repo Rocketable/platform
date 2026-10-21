@@ -93,9 +93,13 @@ func (e *AgentMaxRecursionError) Unwrap() error {
 	return e.Err
 }
 
+type agentModelRenderer interface {
+	RenderAgentModel(string) (string, error)
+}
+
 // LoadAgents loads top-level Markdown agents and immediate shadows in each
 // matching directory. Shadow names retain their parent path.
-func LoadAgents(fsys fs.FS, resolveModel func(string) (string, error)) AgentLoadResult {
+func LoadAgents(fsys fs.FS, models agentModelRenderer) AgentLoadResult {
 	result := AgentLoadResult{
 		Agents: Agents{Items: map[string]Agent{}},
 		Errors: nil,
@@ -144,7 +148,7 @@ func LoadAgents(fsys fs.FS, resolveModel func(string) (string, error)) AgentLoad
 	}
 
 	for _, filePath := range files {
-		agent, err := loadAgent(fsys, filePath, resolveModel)
+		agent, err := loadAgent(fsys, filePath, models)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 			continue
@@ -160,7 +164,7 @@ func LoadAgents(fsys fs.FS, resolveModel func(string) (string, error)) AgentLoad
 	return result
 }
 
-func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, error)) (Agent, error) {
+func loadAgent(fsys fs.FS, filePath string, models agentModelRenderer) (Agent, error) {
 	data, err := fs.ReadFile(fsys, filePath)
 	if err != nil {
 		return Agent{}, fmt.Errorf("%s: read agent: %w", filePath, err)
@@ -214,7 +218,7 @@ func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, e
 
 	modelRef, modelEffort, _ := strings.Cut(modelField.Value, "#")
 
-	model, err := resolveModel(modelRef)
+	model, err := models.RenderAgentModel(modelRef)
 	if err != nil {
 		return Agent{}, fmt.Errorf("%s: model: %w", filePath, err)
 	}
@@ -266,10 +270,6 @@ func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, e
 		FrontmatterNode: frontmatterNode,
 		FileMode:        info.Mode(),
 	}, nil
-}
-
-func passThroughAgentModel(model string) (string, error) {
-	return model, nil
 }
 
 func parseAgentFrontmatter(content []byte) (frontmatter map[string]any, frontmatterNode *yaml.Node, prompt string, err error) {

@@ -2810,7 +2810,7 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 
 // loadAgentDefinitions keeps comparison failures separate from ordinary definitions.
 func loadAgentDefinitions(fsys fs.FS, cfg *config.Config) (rocketcode.Agents, error) {
-	result := rocketcode.LoadAgents(fsys, cfg.RenderAgentModel)
+	result := rocketcode.LoadAgents(fsys, cfg)
 
 	var errLoads []error
 
