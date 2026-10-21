@@ -116,23 +116,30 @@ func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequ
 		return response, nil
 	}
 
-	found, err := s.sharedSearch(ctx, needle, func(scanCtx context.Context) (any, error) {
-		hits, mentions, complete, err := s.sessions.SearchMessagesMentioning(scanCtx, needle, s.channels)
-		if err != nil {
-			return nil, fmt.Errorf("web message search: %w", err)
-		}
-
-		response.Matches = messageMatches(hits)
-		response.TagIds = backend.MentionedIDs(hits, mentions)
-		response.IndexComplete = complete
-
-		return response, nil
-	})
+	found, err := s.sharedSearch(ctx, needle, messageSearch{needle: needle, response: response})
 	if err != nil {
 		return nil, err
 	}
 
 	return found.(*SearchMessagesResponse), nil
+}
+
+type messageSearch struct {
+	needle   string
+	response *SearchMessagesResponse
+}
+
+func (work messageSearch) search(scanCtx context.Context, s *Server) (any, error) {
+	hits, mentions, complete, err := s.sessions.SearchMessagesMentioning(scanCtx, work.needle, s.channels)
+	if err != nil {
+		return nil, fmt.Errorf("web message search: %w", err)
+	}
+
+	work.response.Matches = messageMatches(hits)
+	work.response.TagIds = backend.MentionedIDs(hits, mentions)
+	work.response.IndexComplete = complete
+
+	return work.response, nil
 }
 
 func (s *Server) searchSessions(ctx context.Context, request *SearchSessionsRequest) (*SearchSessionsResponse, error) {
@@ -151,29 +158,36 @@ func (s *Server) searchSessions(ctx context.Context, request *SearchSessionsRequ
 	}
 
 	// A leading space keeps this key apart from SearchMessages' trimmed needles.
-	found, err := s.sharedSearch(ctx, fmt.Sprintf(" %d %s", scope, query), func(scanCtx context.Context) (any, error) {
-		search, err := s.sessions.SearchSessions(scanCtx, query, scope, s.channels)
-		if err != nil {
-			return nil, fmt.Errorf("web session search: %w", err)
-		}
-
-		response := &SearchSessionsResponse{Text: search.Text, Needle: search.Needle, Messages: messageMatches(search.Hits), MentionIds: search.MentionIDs, IndexComplete: search.IndexComplete, SummariesComplete: search.SummariesComplete, Principals: search.Principals}
-		for _, term := range search.Terms {
-			response.Terms = append(response.Terms, &SearchTerm{Key: string(term.Key), Text: term.Text, Start: int32(term.Start), End: int32(term.End)})
-		}
-
-		for i := range search.Matches {
-			match := &search.Matches[i]
-			response.Matches = append(response.Matches, &SessionMatch{ConversationId: match.Chat.Session.Conversation.ID, Field: string(match.Field), Text: match.Text})
-		}
-
-		return response, nil
-	})
+	found, err := s.sharedSearch(ctx, fmt.Sprintf(" %d %s", scope, query), sessionSearch{query: query, scope: scope})
 	if err != nil {
 		return nil, err
 	}
 
 	return found.(*SearchSessionsResponse), nil
+}
+
+type sessionSearch struct {
+	query string
+	scope backend.SearchScope
+}
+
+func (work sessionSearch) search(scanCtx context.Context, s *Server) (any, error) {
+	search, err := s.sessions.SearchSessions(scanCtx, work.query, work.scope, s.channels)
+	if err != nil {
+		return nil, fmt.Errorf("web session search: %w", err)
+	}
+
+	response := &SearchSessionsResponse{Text: search.Text, Needle: search.Needle, Messages: messageMatches(search.Hits), MentionIds: search.MentionIDs, IndexComplete: search.IndexComplete, SummariesComplete: search.SummariesComplete, Principals: search.Principals}
+	for _, term := range search.Terms {
+		response.Terms = append(response.Terms, &SearchTerm{Key: string(term.Key), Text: term.Text, Start: int32(term.Start), End: int32(term.End)})
+	}
+
+	for i := range search.Matches {
+		match := &search.Matches[i]
+		response.Matches = append(response.Matches, &SessionMatch{ConversationId: match.Chat.Session.Conversation.ID, Field: string(match.Field), Text: match.Text})
+	}
+
+	return response, nil
 }
 
 func messageMatches(hits []backend.MessageSearchHit) []*MessageMatch {
@@ -185,10 +199,14 @@ func messageMatches(hits []backend.MessageSearchHit) []*MessageMatch {
 	return matches
 }
 
+type searchWork interface {
+	search(context.Context, *Server) (any, error)
+}
+
 // sharedSearch runs search once for the callers waiting on key and stops it only
 // when all of them stop waiting. All authenticated Web callers share the same
 // humanConversation visibility set.
-func (s *Server) sharedSearch(ctx context.Context, key string, search func(context.Context) (any, error)) (any, error) {
+func (s *Server) sharedSearch(ctx context.Context, key string, work searchWork) (any, error) {
 	s.searchMu.Lock()
 	scanCtx := ctx
 
@@ -220,7 +238,7 @@ func (s *Server) sharedSearch(ctx context.Context, key string, search func(conte
 	result := s.searchGroup.DoChan(key, func() (any, error) {
 		defer close(flight.done)
 
-		return search(scanCtx)
+		return work.search(scanCtx, s)
 	})
 	s.searchMu.Unlock()
 
