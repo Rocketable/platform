@@ -16,7 +16,7 @@ const response = (query: string, matches: Match[] = [], terms: (string | [string
 });
 
 // serve answers the App's requests with rows and a SearchSessions fixture, and records every API path.
-function serve(rows: object[], search: (input: { query: string; messages: boolean }) => Promise<object> | object, agents: object[] = [{ name: "main" }]) {
+function serve(rows: object[], search: (input: { query: string; filters?: boolean; messages?: boolean }) => Promise<object> | object, agents: object[] = [{ name: "main" }]) {
   const paths = new Set<string>();
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
@@ -298,18 +298,21 @@ test("search URL follows the active tab, folds legacy filters, and reopens a mat
   }
 }, 30_000);
 
-test("Cmd+P asks the server as you type, shows its pills, and Enter opens the first row for the typed text", async () => {
+test("Cmd+P matches titles at once, asks the server only for filters, and Enter opens the first row", async () => {
   const { chromium: engine } = await import(playwright!);
-  const requests: { query: string; messages: boolean }[] = [];
+  const requests: { query: string; filters?: boolean; messages?: boolean }[] = [];
   const held = Promise.withResolvers<void>();
   const started = Promise.withResolvers<void>();
+  const filterHeld = Promise.withResolvers<void>();
   let failing = true;
-  const { server, paths, origin } = serve([{ id: "a", name: "Alpha", agent: "main", tags: ["bug"] }, { id: "b", name: "Bravo", agent: "main" }, { id: "c", name: "Charlie", agent: "main" }], async (input) => {
+  const { server, paths, origin } = serve([{ id: "a", name: "Alpha", agent: "main", tags: ["bug"] }, { id: "b", name: "Bravo", agent: "main", preview: "charlie in the body" }, { id: "c", name: "Charlie", agent: "main" }], async (input) => {
     requests.push(input);
     const { query } = input;
     if (query === "tag:bug x") { started.resolve(); await held.promise; }
-    if (query === "boom" && failing) throw new Error("search unavailable");
-    const ids = ({ foo: ["c", "a"], fas: ["a"], fast: ["b"], boom: ["c"], "tag:bug x": ["a"] } as Record<string, string[]>)[query] ?? [];
+    if (query === "CHAR is:pinned") await filterHeld.promise;
+    if (query === "is:pinned brav" && failing) throw new Error("search unavailable");
+    // As the server does for Cmd+P, the fixture applies only the filters: Alpha and Bravo are pinned, Alpha is tagged bug.
+    const ids = query.startsWith("tag:bug ") ? ["a"] : query.includes("is:pinned") ? ["a", "b"] : [];
     return response(query, ids.map((conversationId) => ({ conversationId })), query.startsWith("tag:") ? [query.split(" ")[0]] : []);
   });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
@@ -327,16 +330,22 @@ test("Cmd+P asks the server as you type, shows its pills, and Enter opens the fi
     await input.fill("is:pi");
     await palette.getByRole("button", { name: "pinned", exact: true }).waitFor();
     for (const typing of ["sort:ne", "agent:", "   "]) await input.fill(typing);
+    await input.fill("CHAR"); // A title match, never the body: Bravo only says charlie in its preview.
+    await titles(["Charlie"]);
+    expect(await palette.getByRole("button", { name: "Search everywhere for 'CHAR'", exact: true }).count()).toBe(1);
     await page.waitForTimeout(400);
-    expect(requests).toEqual([]); // Unfinished operators are not sent.
-    await input.fill("foo");
-    await titles(["Charlie", "Alpha"]);
-    expect(requests).toEqual([{ query: "foo", messages: true }]);
+    expect(requests).toEqual([]); // Unfinished operators and plain text are not sent.
+    await input.fill("CHAR is:pinned"); // Adding a filter keeps the title matches, dimmed, until the server answers.
+    await page.waitForFunction(() => document.querySelector('[role="dialog"] ul[data-pending="true"]') !== null);
+    await titles(["Charlie"]);
+    filterHeld.resolve();
+    await titles([]);
 
     const pills = palette.getByRole("button", { name: /^tag:/ });
     await input.fill("tag:bu");
     await titles([]);
-    expect(requests.at(-1)!.query).toBe("tag:bu");
+    while (requests.at(-1)?.query !== "tag:bu") await page.waitForTimeout(50);
+    expect(requests.at(-1)).toEqual({ query: "tag:bu", filters: true });
     expect(await pills.count()).toBe(0); // A term still being typed stays in the input.
     await input.pressSequentially("g x");
     await started.promise;
@@ -352,33 +361,36 @@ test("Cmd+P asks the server as you type, shows its pills, and Enter opens the fi
     await pills.first().click();
     expect(await input.inputValue()).toBe("xy");
 
-    await input.fill("fas");
-    await titles(["Alpha"]);
-    await input.pressSequentially("t");
-    await input.press("Enter"); // Before the pause ends: Enter sends "fast" and opens its first row, not Alpha.
+    await input.fill("is:pinned a"); // The server's pinned rows, matched by title here.
+    await titles(["Alpha", "Bravo"]);
+    await input.pressSequentially("v");
+    await input.press("Enter"); // Before the pause ends: Enter sends the text and opens the first row whose title holds it, not Alpha.
     await page.waitForURL(`**/s/${Buffer.from("b").toString("base64url")}`);
-    expect(requests.filter(({ query }) => query === "fast")).toHaveLength(1);
+    expect(requests.filter(({ query }) => query === "is:pinned av")).toHaveLength(1);
 
     await page.keyboard.press("Control+p");
-    await input.fill("nothing");
-    await input.press("Enter");
-    await page.waitForTimeout(300);
-    expect(requests.at(-1)!.query).toBe("nothing");
-    expect(await palette.isVisible()).toBe(true); // An empty response opens nothing.
-    await input.fill("boom");
+    const opened = page.url();
+    await input.fill("is:pinned nothing");
+    await palette.getByText("No matches", { exact: true }).waitFor();
+    await input.press("Enter"); // A filtered query with no result opens nothing, not even Search everywhere.
+    await page.waitForTimeout(100);
+    expect(await palette.isVisible()).toBe(true);
+    await input.fill("is:pinned brav");
     await palette.getByRole("alert").filter({ hasText: "Search failed" }).waitFor();
     await palette.getByText("Search incomplete", { exact: true }).waitFor();
-    await input.press("Enter");
+    await input.press("Enter"); // A failed search opens nothing either.
     await page.waitForTimeout(100);
-    expect(await palette.isVisible()).toBe(true); // A failed response opens nothing.
+    expect(await palette.isVisible()).toBe(true);
+    expect(page.url()).toBe(opened);
     failing = false;
     await input.press("End");
     await input.pressSequentially(" "); // The next keystroke retries the same text.
-    await titles(["Charlie"]);
+    await titles(["Bravo"]);
     expect(await palette.getByRole("alert").count()).toBe(0);
     expect(paths.has("/api/SearchOrigins")).toBe(false);
   } finally {
     held.resolve();
+    filterHeld.resolve();
     await browser.close();
     server.stop(true);
   }
@@ -386,7 +398,7 @@ test("Cmd+P asks the server as you type, shows its pills, and Enter opens the fi
 
 test("/search renders the server's groups, notices and pills", async () => {
   const { chromium: engine } = await import(playwright!);
-  const requests: { query: string; messages: boolean }[] = [];
+  const requests: { query: string; filters?: boolean; messages?: boolean }[] = [];
   const hold = Promise.withResolvers<void>();
   const rows = [
     { id: "third", name: "Pinned conversation", preview: "Other text", agent: "main", pinned: true },
@@ -517,20 +529,20 @@ test("/search renders the server's groups, notices and pills", async () => {
   }
 }, 30_000);
 
-test("Cmd+P lists what /search does: each session, its field and message hits, and the notices", async () => {
+test("Cmd+P shows one row per session and hands its text to /search, which finds message hits", async () => {
   const { chromium: engine } = await import(playwright!);
-  const requests: { query: string; messages: boolean }[] = [];
+  const requests: { query: string; filters?: boolean; messages?: boolean }[] = [];
   const rows = [
     { id: "third", name: "Pinned conversation", preview: "Other text", agent: "main", pinned: true },
     { id: "second", name: "", title: "", preview: "Needle notes\nOther text", agent: "main" },
-    { id: "fourth", name: "Origin chat", preview: "Other text", agent: "main" },
     { id: "opencode:box:ses", name: "Remote", preview: "Other text", server: "box", agent: "build", model: "anthropic/claude-opus-4-7" },
+    { id: "md", name: "", preview: "**Done.** Updated the runbook", agent: "main" },
+    { id: "long", name: "Weekly report about many unrelated things and then the deploy checklist", agent: "main" },
   ];
   const message = (messageId: string, role: string, text: string) => ({ conversationId: "third", message: { messageId, role, text, complete: true } });
   const { server, origin } = serve(rows, (input) => {
     requests.push(input);
-    if (input.query === "partial") return response(input.query, [], [], { indexComplete: false, summariesComplete: false });
-    return response(input.query, [{ conversationId: "third", field: "" }, { conversationId: "second", text: "Needle notes\nOther text" }, { conversationId: "fourth", field: "Origin", text: "cron source: /notes/needle.md" }], [], { messages: [message("1:0", "user", "Context before NEEDLE then needle"), message("1:1", "assistant", "A second needle response")] });
+    return response(input.query, [{ conversationId: "third", field: "" }, { conversationId: "second", text: "Needle notes\nOther text" }], [], { messages: [message("1:0", "user", "Context before NEEDLE then needle")] });
   }, [{ name: "main", model: "gpt-6.1-sol" }]);
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
@@ -541,18 +553,12 @@ test("Cmd+P lists what /search does: each session, its field and message hits, a
     const palette = page.getByRole("dialog", { name: "Go to session" });
     const input = palette.getByPlaceholder("Search sessions");
     await input.fill("needle");
-    const hit = palette.getByRole("button", { name: /Context before NEEDLE/ });
-    await hit.waitFor();
-    // Each session's title, then the kind of each row under it, in the server's order.
-    const listed = await palette.locator("li > button").evaluateAll((buttons: Element[]) => buttons.map((button) => button.querySelector('[data-slot="session-title"]')?.textContent ?? button.firstElementChild!.textContent));
-    expect(listed.slice(listed.indexOf("Pinned conversation"))).toEqual(["Pinned conversation", "You", "Assistant", "Needle notes", "Preview", "Origin chat", "Origin"]);
-    expect(await hit.locator("mark").allTextContents()).toEqual(["NEEDLE", "needle"]);
-    expect(await palette.getByRole("button", { name: /cron source/ }).locator("mark").textContent()).toBe("needle");
-    expect(requests).toEqual([{ query: "needle", messages: true }]);
-
-    await input.fill("partial");
-    await palette.getByText("Message results may be incomplete while chats are still being indexed.").waitFor();
-    await palette.getByText("Results may be incomplete while chat summaries are still loading.").waitFor();
+    const handoff = palette.getByRole("button", { name: "Search everywhere for 'needle'", exact: true });
+    await handoff.waitFor();
+    await palette.getByRole("button").filter({ hasText: "Needle notes" }).waitFor();
+    // The title match is one row, with no message or field rows, and the hand-off comes last.
+    expect(await palette.locator("li > button").evaluateAll((buttons: Element[]) => buttons.map((button) => button.querySelector('[data-slot="session-title"]')?.textContent ?? button.textContent))).toEqual(["Needle notes", "Search everywhere for 'needle'"]);
+    expect(requests).toEqual([]);
 
     // Remote sessions suggest their servers, agents and models; RocketClaw agents their configured models.
     for (const [typed, offered] of [["server:", ["box"]], ["agent:", ["main", "build"]], ["model:", ["gpt-6.1-sol", "anthropic/claude-opus-4-7"]], ["model:OPUS", ["anthropic/claude-opus-4-7"]]] as const) {
@@ -562,9 +568,39 @@ test("Cmd+P lists what /search does: each session, its field and message hits, a
       expect(await choices.allTextContents()).toEqual([...offered]);
     }
 
+    await input.fill("done. updated"); // Markdown reads as the row shows it.
+    await palette.getByRole("button").filter({ hasText: "Done. Updated the runbook" }).waitFor();
+    await input.fill("CHECKLIST"); // A match deep in a long title shows from just before it, highlighted.
+    const long = palette.locator('[data-slot="session-title"]').filter({ hasText: "checklist" });
+    await long.locator("mark").waitFor();
+    expect(await long.textContent()).toBe("…then the deploy checklist");
+    expect(await long.locator("mark").textContent()).toBe("checklist");
+    await input.fill("zzz"); // No title matches: the empty state shows above the hand-off.
+    await palette.getByText("No matches", { exact: true }).waitFor();
     await input.fill("needle");
-    await palette.getByRole("button", { name: /A second needle response/ }).click();
-    await page.waitForURL((url: URL) => url.pathname === `/s/${Buffer.from("third").toString("base64url")}` && url.searchParams.get("message") === "1:1");
+    await handoff.click();
+    await page.waitForURL("**/search?q=needle");
+    const results = page.getByLabel("Search results");
+    await results.getByRole("link", { name: /Context before NEEDLE/ }).waitFor();
+    expect(requests).toEqual([{ query: "needle", messages: true }]);
+
+    // From the Search page itself, the hand-off opens the new text there too.
+    await page.keyboard.press("Control+p");
+    await input.fill("pinned");
+    await palette.getByRole("button", { name: "Search everywhere for 'pinned'", exact: true }).click();
+    await page.waitForURL("**/search?q=pinned");
+    await palette.waitFor({ state: "hidden" });
+    expect(await page.getByRole("textbox", { name: "Search sessions", exact: true }).inputValue()).toBe("pinned");
+    expect(await page.getByRole("tablist", { name: "Searches" }).getByRole("tab").allTextContents()).toEqual(["needle", "pinned"]);
+    // Back and Forward between the two entries switch the open search with the address.
+    const searchInput = page.getByRole("textbox", { name: "Search sessions", exact: true });
+    await page.goBack();
+    await page.waitForURL("**/search?q=needle");
+    await page.waitForFunction(() => (document.querySelector('input[aria-label="Search sessions"]') as HTMLInputElement | null)?.value === "needle");
+    await page.goForward();
+    await page.waitForURL("**/search?q=pinned");
+    await page.waitForFunction(() => (document.querySelector('input[aria-label="Search sessions"]') as HTMLInputElement | null)?.value === "pinned");
+    expect(await searchInput.inputValue()).toBe("pinned");
   } finally {
     await browser.close();
     server.stop(true);

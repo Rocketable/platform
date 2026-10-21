@@ -195,7 +195,8 @@ message SearchMessagesResponse {
   repeated string tag_ids = 2;
   bool index_complete = 3;
 }
-message SearchSessionsRequest { string query = 1; bool messages = 2; }
+// filters applies only the filters, leaving free text to the caller, and wins over messages.
+message SearchSessionsRequest { string query = 1; bool messages = 2; bool filters = 3; }
 // A filter term; start and end are UTF-16 code-unit offsets in the submitted query.
 message SearchTerm {
   string key = 1;

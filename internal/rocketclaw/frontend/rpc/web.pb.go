@@ -1830,10 +1830,12 @@ func (x *SearchMessagesResponse) GetIndexComplete() bool {
 	return false
 }
 
+// filters applies only the filters, leaving free text to the caller, and wins over messages.
 type SearchSessionsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Query         string                 `protobuf:"bytes,1,opt,name=query,proto3" json:"query,omitempty"`
 	Messages      bool                   `protobuf:"varint,2,opt,name=messages,proto3" json:"messages,omitempty"`
+	Filters       bool                   `protobuf:"varint,3,opt,name=filters,proto3" json:"filters,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1878,6 +1880,13 @@ func (x *SearchSessionsRequest) GetQuery() string {
 func (x *SearchSessionsRequest) GetMessages() bool {
 	if x != nil {
 		return x.Messages
+	}
+	return false
+}
+
+func (x *SearchSessionsRequest) GetFilters() bool {
+	if x != nil {
+		return x.Filters
 	}
 	return false
 }
@@ -6611,10 +6620,11 @@ const file_web_proto_rawDesc = "" +
 	"\x16SearchMessagesResponse\x12+\n" +
 	"\amatches\x18\x01 \x03(\v2\x11.rpc.MessageMatchR\amatches\x12\x17\n" +
 	"\atag_ids\x18\x02 \x03(\tR\x06tagIds\x12%\n" +
-	"\x0eindex_complete\x18\x03 \x01(\bR\rindexComplete\"I\n" +
+	"\x0eindex_complete\x18\x03 \x01(\bR\rindexComplete\"c\n" +
 	"\x15SearchSessionsRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12\x1a\n" +
-	"\bmessages\x18\x02 \x01(\bR\bmessages\"Z\n" +
+	"\bmessages\x18\x02 \x01(\bR\bmessages\x12\x18\n" +
+	"\afilters\x18\x03 \x01(\bR\afilters\"Z\n" +
 	"\n" +
 	"SearchTerm\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x12\n" +

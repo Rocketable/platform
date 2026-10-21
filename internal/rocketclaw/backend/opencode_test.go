@@ -216,7 +216,7 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	assert.Equal(t, "old work", rows[0].Name)
 	assert.Equal(t, []string{"customer"}, rows[0].Tags)
 
-	search, err := s.SearchSessions(ctx, "/srv/api", false, nil)
+	search, err := s.SearchSessions(ctx, "/srv/api", SearchFields, nil)
 	require.NoError(t, err)
 	require.Len(t, search.Matches, 1)
 	assert.Equal(t, "opencode:box:ses_b", search.Matches[0].Chat.Session.Conversation.ID)
@@ -457,7 +457,7 @@ func TestSearchSessionsFiltersByServerAgentAndModel(t *testing.T) {
 		"server:box model:opus agent:build": {"opencode:box:ses_opus"},
 		"server:other":                      {},
 	} {
-		search, err := s.SearchSessions(ctx, query, false, noSlackLookups{})
+		search, err := s.SearchSessions(ctx, query, SearchFields, noSlackLookups{})
 		require.NoError(t, err)
 
 		ids := make([]string, 0, len(search.Matches))

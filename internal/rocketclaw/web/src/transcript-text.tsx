@@ -1,4 +1,4 @@
-import { Fragment, useState, useSyncExternalStore, type ReactElement, type ReactNode } from "react";
+import { Fragment, useCallback, useMemo, useState, useSyncExternalStore, type ReactElement, type ReactNode } from "react";
 import type { Parent, RootContent } from "mdast";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -213,15 +213,20 @@ export function cleanText(text: string, names: Record<string, string>): string {
   return out + text.slice(last);
 }
 
+// mentionIds lists the Slack users, channels and groups text tags without a label, whose names cleanText looks up.
+export function mentionIds(text: string): string[] {
+  return [...text.matchAll(/<@([UW][A-Z0-9]+)>|<#(C[A-Z0-9]+)>|<!subteam\^(S[A-Z0-9]+)>/g)].map((match) => match[1] ?? match[2] ?? match[3]);
+}
+
+// useSlackNames maps the loaded names of ids; it keeps its result while ids and their names are unchanged.
+export function useSlackNames(ids: string[]): Record<string, string> {
+  const combine = useCallback((results: { data?: string }[]) => Object.fromEntries(ids.flatMap((id, index) => results[index].data ? [[id, results[index].data]] : [])), [ids]);
+  return useQueries({ queries: ids.map((id) => queries.slackName(id)), combine });
+}
+
 export function useCleanText(text: string): string {
-  const ids = [...new Set([...text.matchAll(/<@([UW][A-Z0-9]+)>|<#(C[A-Z0-9]+)>|<!subteam\^(S[A-Z0-9]+)>/g)].map((match) => match[1] ?? match[2] ?? match[3]))];
-  const results = useQueries({ queries: ids.map((id) => queries.slackName(id)) });
-  const names: Record<string, string> = {};
-  for (const [index, id] of ids.entries()) {
-    const name = results[index].data;
-    if (name) names[id] = name;
-  }
-  return cleanText(text, names);
+  const ids = useMemo(() => [...new Set(mentionIds(text))], [text]);
+  return cleanText(text, useSlackNames(ids));
 }
 
 function blockNodes(text: string, needle?: string, interactive = true): ReactNode[] {

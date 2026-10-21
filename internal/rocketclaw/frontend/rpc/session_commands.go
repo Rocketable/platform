@@ -143,9 +143,16 @@ func (s *Server) searchSessions(ctx context.Context, request *SearchSessionsRequ
 	// Leading whitespace moves term offsets, so only trailing whitespace is dropped.
 	query := strings.TrimRightFunc(request.Query, unicode.IsSpace)
 
+	scope := backend.SearchFields
+	if request.Filters {
+		scope = backend.SearchFilters
+	} else if request.Messages {
+		scope = backend.SearchMessages
+	}
+
 	// A leading space keeps this key apart from SearchMessages' trimmed needles.
-	found, err := s.sharedSearch(ctx, fmt.Sprintf(" %t %s", request.Messages, query), func(scanCtx context.Context) (any, error) {
-		search, err := s.sessions.SearchSessions(scanCtx, query, request.Messages, s.channels)
+	found, err := s.sharedSearch(ctx, fmt.Sprintf(" %d %s", scope, query), func(scanCtx context.Context) (any, error) {
+		search, err := s.sessions.SearchSessions(scanCtx, query, scope, s.channels)
 		if err != nil {
 			return nil, fmt.Errorf("web session search: %w", err)
 		}
