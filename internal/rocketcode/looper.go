@@ -2537,10 +2537,7 @@ func webSearchOutputActionJSON(action *responses.ResponseOutputItemUnionAction) 
 		value["pattern"] = action.Pattern
 	}
 
-	data, err := json.Marshal(value)
-	if err != nil {
-		return "{}"
-	}
+	data, _ := json.Marshal(value) // The map contains only strings and string slices.
 
 	return string(data)
 }
