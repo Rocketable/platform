@@ -185,7 +185,6 @@ type looper struct {
 	// sandbox host tools plus embedder custom tools (e.g. rocketclaw_*).
 	CodeModeHosts          map[string]looperTool
 	permissionReviewInput  []responses.ResponseInputItemUnionParam
-	RewriteHistory         func([]responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam
 	Diagnostics            bool
 	AutoApprovePermissions bool
 	PermissionReviewer     permissionReviewer
@@ -853,7 +852,6 @@ func (l *looper) runTurn(
 
 		if resp == nil {
 			history := append(append([]responses.ResponseInputItemUnionParam{}, baseHistory...), turnItems...)
-			history = l.rewriteHistory(history)
 			history = pruneHistoryBeforeLatestCompaction(history)
 
 			params := l.buildParams(history)
@@ -1791,14 +1789,6 @@ func responseChatResponses(items []responses.ResponseOutputItemUnion) []ChatResp
 	}
 
 	return result
-}
-
-func (l *looper) rewriteHistory(items []responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam {
-	if l.RewriteHistory == nil {
-		return items
-	}
-
-	return l.RewriteHistory(items)
 }
 
 func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) responses.ResponseNewParams {
