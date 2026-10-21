@@ -52,9 +52,7 @@ func webFetch(ctx context.Context, params webFetchToolParams) (ToolResult, error
 		timeout = time.Duration(params.TimeoutSecond) * time.Second
 	}
 
-	if timeout > maxWebFetchTimeout {
-		timeout = maxWebFetchTimeout
-	}
+	timeout = min(timeout, maxWebFetchTimeout)
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
