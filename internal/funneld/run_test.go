@@ -23,6 +23,7 @@ func TestRunRejectsInvalidArgs(t *testing.T) {
 	}{
 		{"unknown flag", []string{"--unknown"}, "flag provided but not defined: -unknown"},
 		{"positional argument", []string{"unexpected"}, "funneld takes flags only, got extra arguments: [unexpected]"},
+		{"invalid TLS address", []string{"--config", writeConfig(t, `{"addr":"invalid","host":"example.ts.net","routes":[{"path":"/hook","target":"http://localhost:7070/hook"}]}`)}, "listen invalid: listen tcp: address invalid: missing port in address"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			err := Run(t.Context(), "funneld", tt.args)
