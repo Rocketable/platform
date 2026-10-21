@@ -696,7 +696,7 @@ test("with reduced motion a running tab's title and pinned icon show a still gra
   await tab("Alpha").waitFor();
   await page.goto(`${origin}${href("delta")}`);
   const title = tab("Delta").getByText("Delta", { exact: true });
-  await title.waitFor();
+  await tab("Delta").and(page.locator('[aria-description$="Turn running"]')).waitFor();
   expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running");
   expect(await animation(title)).toBe("none");
   expect(await gradient("Delta")).toStartWith("linear-gradient(");
