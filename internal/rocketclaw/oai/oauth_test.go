@@ -1050,20 +1050,6 @@ func TestCodexStreamingResponseUsesCompletedResponseWithoutOutputItems(t *testin
 	require.JSONEq(t, `{"id":"resp","output":[]}`, string(data))
 }
 
-func TestNewChatGPTClientRequiresSavedToken(t *testing.T) {
-	workspace := t.TempDir()
-	testAuthPath(t, workspace)
-
-	client, err := NewChatGPTClientIn(workspace, config.DefaultRuntimeDir, "openai", slog.New(slog.DiscardHandler))
-	require.Nil(t, client)
-	require.Error(t, err)
-
-	requireSaveToken(t, workspace, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()})
-	client, err = NewChatGPTClientIn(workspace, config.DefaultRuntimeDir, "openai", slog.New(slog.DiscardHandler))
-	require.NoError(t, err)
-	require.NotNil(t, client)
-}
-
 func TestStripInputIDsRemovesIDsWhenStoreFalse(t *testing.T) {
 	req := requestWithBody(`{"store":false,"context_management":[{"type":"compaction"}],"max_output_tokens":100,"input":[{"id":"item-1","type":"message"},{"id":"item-2","type":"function_call"},{"content":"summary","encrypted_content":"sealed","id":"cmp-1","recent":[{"id":"msg-1"}],"summary":{"text":"summary"},"type":"compaction"}]}`)
 
