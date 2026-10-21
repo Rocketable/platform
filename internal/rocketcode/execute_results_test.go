@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
@@ -39,6 +40,44 @@ func TestClipExecuteHead(t *testing.T) {
 	head, oversized = clipExecuteHead(long)
 	require.True(t, oversized)
 	require.Equal(t, long[:executeHeadMaxBytes], head)
+}
+
+func TestSweepRetainedResults(t *testing.T) {
+	root, err := os.OpenRoot(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	require.NoError(t, root.MkdirAll("retained/empty", 0o700))
+
+	for _, tc := range []struct {
+		path string
+		age  time.Duration
+	}{
+		{"retained/expired/old.txt", retainedResultTTL + time.Hour},
+		{"retained/mixed/old.txt", retainedResultTTL + time.Hour},
+		{"retained/mixed/fresh.txt", retainedResultTTL - time.Hour},
+		{"retained/recent/fresh.txt", retainedResultTTL - time.Hour},
+		{"retained/regular.txt", retainedResultTTL + time.Hour},
+	} {
+		require.NoError(t, root.MkdirAll(filepath.Dir(tc.path), 0o700))
+		require.NoError(t, root.WriteFile(tc.path, []byte(tc.path), 0o600))
+
+		modified := time.Now().Add(-tc.age)
+		require.NoError(t, root.Chtimes(tc.path, modified, modified))
+	}
+
+	SweepRetainedResults(root, "retained")
+
+	for _, path := range []string{"retained/empty", "retained/expired", "retained/mixed/old.txt"} {
+		_, err := root.Stat(path)
+		require.ErrorIs(t, err, os.ErrNotExist, path)
+	}
+
+	for _, path := range []string{"retained/mixed/fresh.txt", "retained/recent/fresh.txt", "retained/regular.txt"} {
+		data, err := root.ReadFile(path)
+		require.NoError(t, err)
+		require.Equal(t, path, string(data))
+	}
 }
 
 func TestSaveExecuteResult(t *testing.T) {
