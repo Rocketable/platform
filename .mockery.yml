@@ -151,6 +151,11 @@ packages:
       responsesAPI:
         config:
           structname: mockResponsesAPI
+  github.com/Rocketable/platform/internal/rocketcode/codemode:
+    interfaces:
+      ToolCallObserver:
+        config:
+          structname: toolCallObserverMock
   google.golang.org/grpc:
     interfaces:
       ServerStream:

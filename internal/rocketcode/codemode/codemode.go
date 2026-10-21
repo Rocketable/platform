@@ -31,7 +31,9 @@ type CallFunc func(ctx context.Context, server, name string, args map[string]any
 type DecideFunc func(ctx context.Context, subject string, args map[string]any) error
 
 // ToolCallObserver observes a tool call and its Code Mode concurrency path.
-type ToolCallObserver func(ctx context.Context, path []string, name string, args map[string]any)
+type ToolCallObserver interface {
+	ObserveToolCall(ctx context.Context, path []string, name string, args map[string]any)
+}
 
 // HostTool is a non-MCP builtin (e.g. read, glob). Call includes permission enforcement.
 type HostTool struct {
@@ -249,7 +251,7 @@ func newKwargsValueBuiltin(name string, schema map[string]any, observe ToolCallO
 			return nil, errCtx
 		}
 
-		observe(ctx, threadPath(thread), name, callArgs)
+		observe.ObserveToolCall(ctx, threadPath(thread), name, callArgs)
 
 		return call(context.WithValue(ctx, callKeyContext{}, nextKey(thread)), callArgs)
 	})

@@ -16,7 +16,7 @@ func TestGatherOrderedResults(t *testing.T) {
         lambda: slow(id="a", ms=30),
         lambda: slow(id="b", ms=5),
     ])
-`, nil, allowAll, nilCall, noToolCallObserver, []HostTool{{
+`, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{{
 		Name: "slow",
 		Call: func(ctx context.Context, args map[string]any) (string, error) {
 			ms := int(args["ms"].(float64))
@@ -50,7 +50,7 @@ func TestGatherFailFastCancelsSibling(t *testing.T) {
         lambda: boom(),
         lambda: hang(),
     ], concurrency=2)
-`, nil, allowAll, nilCall, noToolCallObserver, []HostTool{
+`, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{
 		{
 			Name: "boom",
 			Call: func(context.Context, map[string]any) (string, error) {
@@ -98,7 +98,7 @@ func TestMapConcurrencyLimit(t *testing.T) {
 
 	_, err := Run(t.Context(), `def main():
     return map([1, 2, 3, 4, 5], lambda n: work(n=n), concurrency=2)
-`, nil, allowAll, nilCall, noToolCallObserver, []HostTool{{
+`, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{{
 		Name: "work",
 		Call: func(_ context.Context, _ map[string]any) (string, error) {
 			mu.Lock()
@@ -140,9 +140,11 @@ func TestToolCallObserverReceivesConcurrencyPath(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			path := ""
 
-			_, err := Run(t.Context(), test.source, nil, allowAll, nilCall, func(_ context.Context, steps []string, _ string, _ map[string]any) {
+			observer := &toolCallObserverMock{ObserveToolCallFunc: func(_ context.Context, steps []string, _ string, _ map[string]any) {
 				path = strings.Join(steps, "/")
-			}, []HostTool{{
+			}}
+
+			_, err := Run(t.Context(), test.source, nil, allowAll, nilCall, observer, []HostTool{{
 				Name: "echo",
 				Call: func(_ context.Context, _ map[string]any) (string, error) {
 					return "ok", nil
@@ -175,7 +177,7 @@ func TestConcurrencyRejectsInvalidArguments(t *testing.T) {
 		{"missing race callables", "race()", "race arguments: race: missing argument for callables"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := Run(t.Context(), "def main():\n    return "+tc.expression+"\n", nil, allowAll, nilCall, noToolCallObserver, nil)
+			got, err := Run(t.Context(), "def main():\n    return "+tc.expression+"\n", nil, allowAll, nilCall, inertToolCallObserver{}, nil)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Run() error = %v, want %q", err, tc.want)
 			}
@@ -190,7 +192,7 @@ func TestConcurrencyRejectsInvalidArguments(t *testing.T) {
 func TestEmptyGatherAndRace(t *testing.T) {
 	got, err := Run(t.Context(), `def main():
     return gather([])
-`, nil, allowAll, nilCall, noToolCallObserver, nil)
+`, nil, allowAll, nilCall, inertToolCallObserver{}, nil)
 	if err != nil {
 		t.Fatalf("empty gather error = %v", err)
 	}
@@ -201,7 +203,7 @@ func TestEmptyGatherAndRace(t *testing.T) {
 
 	_, err = Run(t.Context(), `def main():
     return race([])
-`, nil, allowAll, nilCall, noToolCallObserver, nil)
+`, nil, allowAll, nilCall, inertToolCallObserver{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "race") {
 		t.Fatalf("empty race error = %v", err)
 	}
@@ -218,7 +220,7 @@ func TestRaceSuccessWins(t *testing.T) {
         lambda: slow(),
         lambda: fast(),
     ], concurrency=2)
-`, nil, allowAll, nilCall, noToolCallObserver, []HostTool{
+`, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{
 		{
 			Name: "fast",
 			Call: func(context.Context, map[string]any) (string, error) {
@@ -263,7 +265,7 @@ func TestRaceSuccessWins(t *testing.T) {
 func TestRaceAllBranchesFail(t *testing.T) {
 	got, err := Run(t.Context(), `def main():
     return race([lambda: 1 // 0, lambda: 1 // 0])
-`, nil, allowAll, nilCall, noToolCallObserver, nil)
+`, nil, allowAll, nilCall, inertToolCallObserver{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "floored division by zero") {
 		t.Fatalf("race error = %v, want division by zero", err)
 	}
@@ -279,7 +281,7 @@ func TestRaceFirstFailureWins(t *testing.T) {
         lambda: fail_fast(),
         lambda: slow_ok(),
     ], concurrency=2)
-`, nil, allowAll, nilCall, noToolCallObserver, []HostTool{
+`, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{
 		{
 			Name: "fail_fast",
 			Call: func(context.Context, map[string]any) (string, error) {
@@ -309,7 +311,7 @@ func TestNestedGather(t *testing.T) {
         lambda: gather([lambda: echo(v="a"), lambda: echo(v="b")]),
         lambda: echo(v="c"),
     ])
-`, nil, allowAll, nilCall, noToolCallObserver, []HostTool{{
+`, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{{
 		Name: "echo",
 		Call: func(_ context.Context, args map[string]any) (string, error) {
 			return args["v"].(string), nil
@@ -334,7 +336,7 @@ func TestNestedGatherAtMaxConcurrency(t *testing.T) {
 
 	src := "def main():\n    return gather([\n        " + strings.Join(callables, ",\n        ") + fmt.Sprintf("\n    ], concurrency=%d)\n", MaxConcurrency)
 
-	got, err := Run(t.Context(), src, nil, allowAll, nilCall, noToolCallObserver, []HostTool{{
+	got, err := Run(t.Context(), src, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{{
 		Name: "echo",
 		Call: func(_ context.Context, args map[string]any) (string, error) {
 			return args["v"].(string), nil
@@ -358,7 +360,7 @@ func TestGatherRootCancel(t *testing.T) {
 	go func() {
 		_, err := Run(ctx, `def main():
     return gather([lambda: hang()], concurrency=1)
-`, nil, allowAll, nilCall, noToolCallObserver, []HostTool{{
+`, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{{
 			Name: "hang",
 			Call: func(callCtx context.Context, _ map[string]any) (string, error) {
 				<-callCtx.Done()
