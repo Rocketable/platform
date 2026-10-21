@@ -847,7 +847,6 @@ type grepTarget struct {
 	root     *os.Root
 	hostRoot string
 	files    []string
-	close    func()
 }
 
 func (sfs *sandboxedFileSystem) Grep(ctx context.Context, pattern, searchPath, include string) string {
@@ -862,7 +861,12 @@ func (sfs *sandboxedFileSystem) Grep(ctx context.Context, pattern, searchPath, i
 	if err != nil {
 		return err.Error()
 	}
-	defer target.close()
+
+	if target.root != sfs.root {
+		defer func() {
+			_ = target.root.Close()
+		}()
+	}
 
 	files := target.files
 	if len(files) == 1 && files[0] == "." {
@@ -939,7 +943,7 @@ func (sfs *sandboxedFileSystem) readPermissionSubject(name string) string {
 }
 
 func (sfs *sandboxedFileSystem) resolveGrepTarget(searchPath string) (grepTarget, error) {
-	target := grepTarget{root: sfs.root, hostRoot: sfs.root.Name(), files: []string{"."}, close: func() {}}
+	target := grepTarget{root: sfs.root, hostRoot: sfs.root.Name(), files: []string{"."}}
 	if searchPath == "" {
 		return target, nil
 	}
@@ -972,7 +976,6 @@ func (sfs *sandboxedFileSystem) resolveGrepTarget(searchPath string) (grepTarget
 
 		target.root = root
 		target.hostRoot = filepath.Join(target.hostRoot, searchPath)
-		target.close = func() { _ = root.Close() }
 
 		return target, nil
 	}
@@ -992,7 +995,6 @@ func (sfs *sandboxedFileSystem) resolveGrepTarget(searchPath string) (grepTarget
 
 	target.root = root
 	target.hostRoot = filepath.Join(target.hostRoot, dir)
-	target.close = func() { _ = root.Close() }
 
 	return target, nil
 }
