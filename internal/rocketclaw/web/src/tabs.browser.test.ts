@@ -820,7 +820,7 @@ test("tab group editor moves New session in, ungroups, and closes; pins leave gr
   await until(() => saved.state.groups.some((group) => group.color === "Grey"));
   saved.state.groups = [];
   await page.reload();
-  await tab("Charlie").waitFor();
+  await tab("Bravo").waitFor();
   expect(await order(page)).toEqual(["Bravo", "Charlie"]);
   expect(await tab("Charlie").getAttribute("aria-description")).toBe("Space: Main");
 }), 60_000);
