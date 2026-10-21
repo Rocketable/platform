@@ -560,10 +560,7 @@ func canonicalToolArguments(raw json.RawMessage) string {
 		return string(raw)
 	}
 
-	buf, err := json.Marshal(value)
-	if err != nil {
-		return string(raw)
-	}
+	buf, _ := json.Marshal(value) // Values decoded into any are JSON-encodable.
 
 	return string(buf)
 }
