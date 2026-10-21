@@ -318,7 +318,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
     await shown("23:1");
     await atEnd(false);
     const latest = panel.getByRole("button", { name: "Scroll to latest", exact: true });
-    expect(await latest.getAttribute("data-active")).toBe("true");
+    await latest.and(panel.locator('[data-active="true"]')).waitFor();
     await latest.click();
     await atEnd(true);
     // Opened without an answer, it starts at its end.
