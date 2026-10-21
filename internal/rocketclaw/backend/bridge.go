@@ -92,10 +92,14 @@ const (
 	toolModeWorkflow   toolMode = "workflow"
 )
 
+type runtimeRestarter interface {
+	restart(string) (string, error)
+}
+
 // Config controls one rocketcode bridge conversation.
 type Config struct {
 	ConversationID, Agent string
-	RequestRestart        func(string) (string, error)
+	RequestRestart        runtimeRestarter
 	RequestReload         runtimeReloader
 	UserQuestionAsker     protocol.UserQuestionAsker
 	SessionService        *SessionService
@@ -2861,14 +2865,14 @@ func parseReasonArg(raw json.RawMessage, op string) (string, error) {
 	return reason, nil
 }
 
-func restartTool(requestRestart func(string) (string, error)) rocketcode.Tool {
+func restartTool(requestRestart runtimeRestarter) rocketcode.Tool {
 	return rocketcode.Tool{Name: restartToolName, TurnBound: true, Description: "Restart rocketclaw only after completing an explicitly requested runtime configuration change that requires restart, such as changes to rocketclaw.json, femtoclaw.json, or configured overlay entries. Use rocketclaw_reload instead for agents/, skills/, cron/, scripts/, or already-configured overlay repository content changes. The reason field must explain why rocketclaw needs to restart. Do not call this after memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.", Permission: "rocketclaw", VisibilitySubjects: []string{restartToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{restartToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		reason, err := parseReasonArg(raw, "restart")
 		if err != nil {
 			return rocketcode.ToolResult{}, err
 		}
 
-		output, err := requestRestart(reason)
+		output, err := requestRestart.restart(reason)
 		if err != nil {
 			return rocketcode.ToolResult{}, err
 		}

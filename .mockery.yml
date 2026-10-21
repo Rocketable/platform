@@ -26,6 +26,9 @@ packages:
       runtimeReloader:
         config:
           structname: runtimeReloaderMock
+      runtimeRestarter:
+        config:
+          structname: runtimeRestarterMock
       externalMCPAgents:
         config:
           structname: externalMCPAgentsMock

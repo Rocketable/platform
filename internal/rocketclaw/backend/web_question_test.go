@@ -175,7 +175,7 @@ func TestWebTurnQuestionContinuesAfterRestart(t *testing.T) {
 	finals := make(chan *protocol.OutboundMessage, 4)
 	cfg := config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}})
 	newBridge := func(rt *Runtime) *Bridge {
-		return NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: testNoopRestart, SessionService: service, UserQuestionAsker: rt.questions}, slog.New(slog.DiscardHandler))
+		return NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: testNoopRestart}, SessionService: service, UserQuestionAsker: rt.questions}, slog.New(slog.DiscardHandler))
 	}
 	pending := func(rt *Runtime) []protocol.AskUserQuestionRequest {
 		var listed []protocol.AskUserQuestionRequest
