@@ -20,19 +20,19 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// ShellCommandFunc selects the process used to run a bash tool command string.
-// The returned path and args are passed to exec.Command (for example
-// DefaultShellCommand returns "/bin/bash" with --noprofile --norc -p -c and the command).
-type ShellCommandFunc func(command string) (path string, args []string)
+// shellCommander selects the executable and arguments for a Bash command.
+type shellCommander interface {
+	Command(command string) (path string, args []string)
+}
 
 // withCustomShell runs command as the only argument of an agent's customShell,
-// or through f when the agent declares none.
-func (f ShellCommandFunc) withCustomShell(customShell, command string) (path string, args []string) {
+// or through shell when the agent declares none.
+func withCustomShell(shell shellCommander, customShell, command string) (path string, args []string) {
 	if customShell != "" {
 		return customShell, []string{command}
 	}
 
-	return f(command)
+	return shell.Command(command)
 }
 
 // Config contains runtime settings supplied by the embedding application.
@@ -65,10 +65,10 @@ type Config struct {
 	// ChildContext supplies host messages to guardrails and permission reviewers.
 	ChildContext []SessionEntry
 	// ShellCommand builds the executable used for bash tool (and prompt !`…`)
-	// commands. Required; pass DefaultShellCommand to match permission validation.
+	// commands. Required; pass DefaultShellCommand{} to match permission validation.
 	// Custom implementations must preserve the validated Bash syntax and semantics.
 	// An agent's customShell overrides it for that agent.
-	ShellCommand ShellCommandFunc
+	ShellCommand shellCommander
 	MCPServers   map[string]mcpclient.ServerConfig
 	MCPWorkspace string
 }

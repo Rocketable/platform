@@ -865,7 +865,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 }
 
 func testConfig(shellTempDir string) *Config {
-	return &Config{Model: "", ReasoningEffort: "", Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 0, ShellTempDir: shellTempDir, RetainedResultDir: "retained", AutoApprovePermissions: false, Observability: ObservabilityConfig{}, ChildSessions: InertChildSessions{}, Journal: InertJournal{}, BackgroundJobs: InertBackgroundJobs{}, CustomTools: nil, ShellEnv: nil, ShellCommand: DefaultShellCommand}
+	return &Config{Model: "", ReasoningEffort: "", Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 0, ShellTempDir: shellTempDir, RetainedResultDir: "retained", AutoApprovePermissions: false, Observability: ObservabilityConfig{}, ChildSessions: InertChildSessions{}, Journal: InertJournal{}, BackgroundJobs: InertBackgroundJobs{}, CustomTools: nil, ShellEnv: nil, ShellCommand: DefaultShellCommand{}}
 }
 
 func testWorkspaceConfig(t *testing.T, workspace string) *Config {

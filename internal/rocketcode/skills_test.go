@@ -603,7 +603,7 @@ Args: $ARGUMENTS
 `), 0o644))
 
 	loaded := LoadSkills(os.DirFS(dir), dir).Skills
-	env, err := newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, DefaultShellCommand)
+	env, err := newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, DefaultShellCommand{})
 	require.NoError(t, err)
 
 	factory := testSkillFactory(t, loaded, nil)
@@ -680,7 +680,7 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 	})
 
 	t.Run("skill tool expands shell commands in runtime root", func(t *testing.T) {
-		env, err := newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, DefaultShellCommand)
+		env, err := newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, DefaultShellCommand{})
 		require.NoError(t, err)
 
 		factory := testSkillFactory(t, loaded, nil)
@@ -700,7 +700,7 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 	})
 
 	t.Run("skill expands through the loading agent shell", func(t *testing.T) {
-		env, err := newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, DefaultShellCommand)
+		env, err := newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, DefaultShellCommand{})
 		require.NoError(t, err)
 
 		shell := writeCustomShell(t, root)

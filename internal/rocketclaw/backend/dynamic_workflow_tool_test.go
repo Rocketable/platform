@@ -288,7 +288,7 @@ def main(args):
 		RetainedResultDir: "retained",
 		ChildSessions:     rocketcode.InertChildSessions{},
 		Journal:           rocketcode.InertJournal{},
-		ShellCommand:      rocketcode.DefaultShellCommand,
+		ShellCommand:      rocketcode.DefaultShellCommand{},
 	}, root, agents, skills, "main", io.Discard)
 	require.NoError(t, err)
 

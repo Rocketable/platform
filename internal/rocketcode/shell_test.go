@@ -32,7 +32,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	require.NoError(t, root.WriteFile(".env.example", []byte("SECRET=example\n"), 0o644))
 
 	shellTemp := testShellTempConfig(t, root, outputDir)
-	sss := newSandboxedShellSystem(root, &shellTemp, nil, DefaultShellCommand)
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, DefaultShellCommand{})
 
 	t.Run("basic success", func(t *testing.T) {
 		got := sss.Bash(context.Background(), "", bashParams{Command: "echo test", TimeoutMillisecond: 0, Workdir: "", Description: "Echo test"}).String()
@@ -166,7 +166,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	})
 
 	t.Run("applies configured env", func(t *testing.T) {
-		sss := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=configured"}, DefaultShellCommand)
+		sss := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=configured"}, DefaultShellCommand{})
 
 		got := sss.Bash(context.Background(), "", bashParams{Command: `printf %s "$ROCKETCLAW_CONVERSATION_ID"`, TimeoutMillisecond: 0, Workdir: "", Description: "configured env"})
 
@@ -176,7 +176,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	t.Run("configured env overrides process env", func(t *testing.T) {
 		t.Setenv("ROCKETCLAW_CONVERSATION_ID", "old")
 
-		sss := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=new"}, DefaultShellCommand)
+		sss := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=new"}, DefaultShellCommand{})
 
 		got := sss.Bash(context.Background(), "", bashParams{Command: `printf %s "$ROCKETCLAW_CONVERSATION_ID"`, TimeoutMillisecond: 0, Workdir: "", Description: "override env"})
 
@@ -184,7 +184,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	})
 
 	t.Run("tmpdir overrides configured env", func(t *testing.T) {
-		sss := newSandboxedShellSystem(root, &shellTemp, []string{"TMPDIR=/not/rocketcode"}, DefaultShellCommand)
+		sss := newSandboxedShellSystem(root, &shellTemp, []string{"TMPDIR=/not/rocketcode"}, DefaultShellCommand{})
 
 		got := sss.Bash(context.Background(), "", bashParams{Command: `printf %s "$TMPDIR"`, TimeoutMillisecond: 0, Workdir: "", Description: "tmpdir precedence"})
 
@@ -319,14 +319,12 @@ func TestShellCommandOverride(t *testing.T) {
 	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o755))
 	shellTemp := testShellTempConfig(t, root, outputDir)
 
-	var saw string
-
-	sss := newSandboxedShellSystem(root, &shellTemp, nil, func(command string) (string, []string) {
-		saw = command
+	shell := &mockShellCommander{CommandFunc: func(string) (string, []string) {
 		return "/bin/sh", []string{"-c", "printf mocked"}
-	})
+	}}
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, shell)
 	got := sss.Bash(context.Background(), "", bashParams{Command: "gh pr view 1", TimeoutMillisecond: 0})
 
-	require.Equal(t, "gh pr view 1", saw)
+	require.Equal(t, "gh pr view 1", shell.CommandCalls()[0].Command)
 	require.Contains(t, got.String(), "mocked")
 }

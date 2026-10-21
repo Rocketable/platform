@@ -2105,7 +2105,7 @@ Prompt
 
 	shellTempDir := filepath.Join(workspace, "shell-tmp")
 	require.NoError(t, os.Mkdir(shellTempDir, 0o755))
-	_, err = rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{ShellTempDir: shellTempDir, RetainedResultDir: "retained", ChildSessions: rocketcode.InertChildSessions{}, Journal: rocketcode.InertJournal{}, ShellCommand: rocketcode.DefaultShellCommand}, root, agents, skills, "main", io.Discard)
+	_, err = rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{ShellTempDir: shellTempDir, RetainedResultDir: "retained", ChildSessions: rocketcode.InertChildSessions{}, Journal: rocketcode.InertJournal{}, ShellCommand: rocketcode.DefaultShellCommand{}}, root, agents, skills, "main", io.Discard)
 	require.NoError(t, err)
 }
 
