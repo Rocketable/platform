@@ -10,11 +10,13 @@ const fromOtherTab = (key: string, value: string | null) => dispatchEvent(Object
 const levelRows = (id: string) => timelineLevels.find((level) => level.id === id)!.rows;
 const compact = levelRows("compact");
 
+// Observe startup before other tests change the shared settings.
+const initial = { rows: timelineRows(), again: timelineRows(), stored: new Map(saved) };
 test("nothing stored reads as Compact, stays stable and writes nothing", () => {
-  expect(timelineRows()).toEqual(compact);
-  expect(timelineRows()).toBe(timelineRows());
-  expect(timelineLevel(timelineRows())?.id).toBe("compact");
-  expect(saved.size).toBe(0);
+  expect(initial.rows).toEqual(compact);
+  expect(initial.rows).toBe(initial.again);
+  expect(timelineLevel(initial.rows)?.id).toBe("compact");
+  expect(initial.stored.size).toBe(0);
 });
 
 test("levels and categories match R4 in slider order", () => {
