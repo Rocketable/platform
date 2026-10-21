@@ -3342,37 +3342,64 @@ func TestLooperClassifiesTerminalTooManyRequestsErrors(t *testing.T) {
 }
 
 func TestLooperRetriesTooManyRequestsRequestError(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		headers := http.Header{"Retry-After-Ms": []string{"2000"}, "X-Request-ID": []string{"req-rate"}}
-		calls := 0
-		mock := mockResponseFunc(func(context.Context, *responses.ResponseNewParams) (*responses.Response, error) {
-			calls++
-			if calls == 1 {
-				return nil, openAIError("too_many_requests", "Too Many Requests", headers)
-			}
+	for _, tc := range []struct {
+		name    string
+		headers http.Header
+		wait    time.Duration
+	}{
+		{"milliseconds", http.Header{"Retry-After-Ms": {"2000"}}, 2 * time.Second},
+		{"fractional seconds", http.Header{"Retry-After": {"0.25"}}, 250 * time.Millisecond},
+		{"request reset", http.Header{"X-Ratelimit-Reset-Requests": {"3s"}}, 3 * time.Second},
+		{"token reset", http.Header{"X-Ratelimit-Reset-Tokens": {"4s"}}, 4 * time.Second},
+		{"longest header", http.Header{"Retry-After-Ms": {"500"}, "Retry-After": {"2"}, "X-Ratelimit-Reset-Requests": {"3s"}, "X-Ratelimit-Reset-Tokens": {"1s"}}, 3 * time.Second},
+		{"HTTP date", http.Header{"Retry-After": {"Sat, 01 Jan 2000 00:00:05 UTC"}}, 5 * time.Second},
+		{"past date", http.Header{"Retry-After": {"Fri, 31 Dec 1999 23:59:59 UTC"}}, time.Second},
+		{"invalid headers", http.Header{"Retry-After-Ms": {"NaN"}, "Retry-After": {"invalid"}, "X-Ratelimit-Reset-Requests": {"-1s"}}, time.Second},
+		{"zero delay", http.Header{"Retry-After": {"0"}}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				headers := tc.headers.Clone()
+				headers.Set("X-Request-ID", "req-rate")
 
-			return responseWithMessage("resp-ok", "done"), nil
+				start := time.Now()
+				calls := 0
+				mock := mockResponseFunc(func(context.Context, *responses.ResponseNewParams) (*responses.Response, error) {
+					calls++
+					if calls == 1 {
+						return nil, openAIError("too_many_requests", "Too Many Requests", headers)
+					}
+
+					return responseWithMessage("resp-ok", "done"), nil
+				})
+				looper := testLooper(mock)
+				looper.Diagnostics = true
+				output := make(chan ChatResponse, 10)
+
+				input := make(chan PromptInput, 1)
+				input <- testPromptInput(PromptInputRoleUser, "question", output)
+
+				close(input)
+
+				err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+
+				require.NoError(t, err)
+				require.Len(t, newParams(mock), 2)
+				require.Equal(t, tc.wait, time.Since(start))
+
+				wantHeaders := map[string]string{"x-request-id": "req-rate"}
+				for name, values := range tc.headers {
+					wantHeaders[strings.ToLower(name)] = values[0]
+				}
+
+				diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticRetry, HTTPStatus: http.StatusTooManyRequests, Code: "too_many_requests", Message: "Too Many Requests", Attempt: 1, RetryAfter: tc.wait.String(), Headers: wantHeaders}
+				require.Equal(t, []ChatResponse{
+					providerDiagnosticResponse(diagnostic),
+					assistantMessage("done"),
+				}, collectResponses(output))
+			})
 		})
-		looper := testLooper(mock)
-		looper.Diagnostics = true
-		output := make(chan ChatResponse, 10)
-
-		input := make(chan PromptInput, 1)
-		input <- testPromptInput(PromptInputRoleUser, "question", output)
-
-		close(input)
-
-		err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
-
-		require.NoError(t, err)
-		require.Len(t, newParams(mock), 2)
-
-		diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticRetry, HTTPStatus: http.StatusTooManyRequests, Code: "too_many_requests", Message: "Too Many Requests", Attempt: 1, RetryAfter: "2s", Headers: map[string]string{"retry-after-ms": "2000", "x-request-id": "req-rate"}}
-		require.Equal(t, []ChatResponse{
-			providerDiagnosticResponse(diagnostic),
-			assistantMessage("done"),
-		}, collectResponses(output))
-	})
+	}
 }
 
 func TestLooperReportsRequestErrorsInDiagnostics(t *testing.T) {
