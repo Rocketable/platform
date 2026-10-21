@@ -210,7 +210,7 @@ func updateAuthFileIn(workspace, runtimeDir string, create bool, update func(*au
 		return false, err
 	}
 
-	committed, err := writeAuthFile(path, file, syncDirectory)
+	committed, err := writeAuthFile(path, file, localDirectorySyncer{})
 	if err != nil {
 		err = fmt.Errorf("write OpenAI OAuth token: %w", err)
 	}
@@ -218,7 +218,13 @@ func updateAuthFileIn(workspace, runtimeDir string, create bool, update func(*au
 	return committed, err
 }
 
-func writeAuthFile(path string, file authFile, syncDir func(string) error) (bool, error) {
+type directorySyncer interface {
+	syncDirectory(path string) error
+}
+
+type localDirectorySyncer struct{}
+
+func writeAuthFile(path string, file authFile, syncDir directorySyncer) (bool, error) {
 	data, _ := json.MarshalIndent(file, "", "  ")
 
 	data = append(data, '\n')
@@ -242,14 +248,14 @@ func writeAuthFile(path string, file authFile, syncDir func(string) error) (bool
 		return false, fmt.Errorf("replace OpenAI OAuth token: %w", err)
 	}
 
-	if err := syncDir(filepath.Dir(path)); err != nil {
+	if err := syncDir.syncDirectory(filepath.Dir(path)); err != nil {
 		return true, fmt.Errorf("sync OpenAI OAuth token dir: %w", err)
 	}
 
 	return true, nil
 }
 
-func syncDirectory(path string) error {
+func (localDirectorySyncer) syncDirectory(path string) error {
 	dir, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open directory: %w", err)

@@ -956,7 +956,8 @@ func TestWriteAuthFileReportsPostRenameFailuresAsCommitted(t *testing.T) {
 		t.Run(operation, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "auth.json")
 			errInjected := errors.New(operation)
-			committed, err := writeAuthFile(path, authFile{Providers: map[string]Token{"work": {Refresh: "refresh"}}}, func(string) error { return errInjected })
+			syncDir := &directorySyncerMock{syncDirectoryFunc: func(string) error { return errInjected }}
+			committed, err := writeAuthFile(path, authFile{Providers: map[string]Token{"work": {Refresh: "refresh"}}}, syncDir)
 			require.True(t, committed)
 			require.ErrorIs(t, err, errInjected)
 			data, err := os.ReadFile(path)
