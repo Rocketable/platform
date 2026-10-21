@@ -47,6 +47,10 @@ type directBridge interface {
 	PickLaterWork(ctx context.Context) error
 }
 
+type bridgeFactory interface {
+	newBridge(*Config) directBridge
+}
+
 type threadStart struct {
 	conversationID, agent, spawnedBy string
 	createdBy                        ThreadCreator
@@ -56,7 +60,7 @@ type threadBridgeManager struct {
 	log     *slog.Logger
 	runtime *config.LockedConfig
 	store   *SessionService
-	factory func(Config) directBridge
+	factory bridgeFactory
 
 	// wake tells Run that a bridge is waiting for its loop.
 	wake chan struct{}
@@ -107,7 +111,7 @@ func (noSlackLookups) SlackTagsMatching(context.Context, string) []string {
 
 var _ protocol.PrimaryTextRouter = (*threadBridgeManager)(nil)
 
-func newThreadBridgeManager(runtime *config.LockedConfig, store *SessionService, logger *slog.Logger, factory func(Config) directBridge) *threadBridgeManager {
+func newThreadBridgeManager(runtime *config.LockedConfig, store *SessionService, logger *slog.Logger, factory bridgeFactory) *threadBridgeManager {
 	return &threadBridgeManager{
 		log: logger.With("component", "thread_bridges"), runtime: runtime, store: store, factory: factory,
 		wake:    make(chan struct{}, 1),
@@ -1006,7 +1010,7 @@ func (m *threadBridgeManager) ensureThreadBridge(ctx context.Context, conversati
 		return managed, nil
 	}
 
-	managed = m.factory(Config{ConversationID: conversationID, Agent: agent})
+	managed = m.factory.newBridge(&Config{ConversationID: conversationID, Agent: agent})
 	if bridge, ok := managed.(*Bridge); ok {
 		bridge.threads, bridge.shadow, bridge.underShadow, bridge.parent = m, shadow, underShadow, thread.parent
 		if thread.parent != "" {

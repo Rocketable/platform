@@ -32,7 +32,7 @@ func TestRevertQueueAdmissionAndRetry(t *testing.T) {
 	require.NoError(t, err)
 
 	bridge := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
-	manager := newThreadBridgeManager(nil, s, bridge.log, func(Config) directBridge { return bridge })
+	manager := newThreadBridgeManager(nil, s, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 	rt := &Runtime{Sessions: s, threads: manager}
 	item := protocol.ThreadQueueItem{ID: "replacement", Source: protocol.SourceWeb, Principal: "alice", Kind: protocol.InboundKindHeld, Message: "edited"}
 	require.NoError(t, rt.StashQueueItem(ctx, "main", &item))
@@ -72,7 +72,7 @@ func TestRevertSettlesAndPreservesWaitingWork(t *testing.T) {
 	id, err := s.AppendEntryID(t.Context(), "main", testSessionEntry("replace", "abandoned"))
 	require.NoError(t, err)
 
-	manager := newThreadBridgeManager(b.runtime, s, b.log, func(Config) directBridge { return b })
+	manager := newThreadBridgeManager(b.runtime, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
 	manager.bridges["main"] = b
 	rt := &Runtime{Sessions: s, threads: manager, Cfg: b.runtime}
 	runTestBridge(t, b)
@@ -181,7 +181,7 @@ func TestRevertWaitsForDeliverySettlement(t *testing.T) {
 
 				return nil
 			}}
-			manager := newThreadBridgeManager(b.runtime, s, b.log, func(Config) directBridge { return b })
+			manager := newThreadBridgeManager(b.runtime, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
 			manager.bridges["main"] = b
 			rt := &Runtime{Sessions: s, threads: manager, Cfg: b.runtime}
 			runTestBridge(t, b)
@@ -280,10 +280,10 @@ VALUES ($1, 'parent', $2, $3, '{}', '[{"id":"input","text":"prepared"}]')`, chil
 		require.NoError(t, s.db.QueryRowContext(ctx, `SELECT count(*) FROM shadow_turns WHERE parent_turn_id <> 'first' AND terminal = $1 AND input_closed`, protocol.TerminalStopped).Scan(&stopped))
 		require.Equal(t, 3, stopped, "an inactive group's earlier unmaterialized manifest is not part of the suffix")
 
-		manager := newThreadBridgeManager(s.definitions, s, s.log, func(cfg Config) directBridge {
+		manager := newThreadBridgeManager(s.definitions, s, s.log, &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
 			cfg.SessionService = s
-			return NewConversation(s.definitions, discardPublisher{}, &cfg, s.log)
-		})
+			return NewConversation(s.definitions, discardPublisher{}, cfg, s.log)
+		}})
 		rt := &Runtime{Sessions: s, threads: manager}
 		require.NoError(t, rt.ClearRevert(ctx, "parent"))
 		entries, err = s.ObserveEntries(ctx, children[0])
@@ -525,7 +525,7 @@ func TestRevertProviderPrefixAndCompletedRetry(t *testing.T) {
 	id, err := s.AppendEntryID(t.Context(), "main", entry)
 	require.NoError(t, err)
 
-	manager := newThreadBridgeManager(b.runtime, s, b.log, func(Config) directBridge { return b })
+	manager := newThreadBridgeManager(b.runtime, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
 	manager.bridges["main"] = b
 	rt := &Runtime{Sessions: s, threads: manager, Cfg: b.runtime}
 	runTestBridge(t, b)
@@ -569,7 +569,7 @@ func TestRevertCompletedFallbackAndPreparationFailure(t *testing.T) {
 	id, err := s.AppendEntryID(t.Context(), "main", testSessionEntry("earlier", "answer"))
 	require.NoError(t, err)
 
-	manager := newThreadBridgeManager(b.runtime, s, b.log, func(Config) directBridge { return b })
+	manager := newThreadBridgeManager(b.runtime, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
 	manager.bridges["main"] = b
 	rt := &Runtime{Sessions: s, threads: manager, Cfg: b.runtime}
 	runTestBridge(t, b)
@@ -683,7 +683,7 @@ func TestRevertAdmissionRollbackAndConcurrentIdentity(t *testing.T) {
 	require.NoError(t, err)
 
 	b := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
-	manager := newThreadBridgeManager(nil, s, b.log, func(Config) directBridge { return b })
+	manager := newThreadBridgeManager(nil, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
 	manager.bridges["main"] = b
 	rt := &Runtime{Sessions: s, threads: manager}
 	_, err = s.db.ExecContext(t.Context(), `CREATE FUNCTION reject_admission() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'admission failed'; END $$;
@@ -769,7 +769,7 @@ func TestRevertBusyAdmissionAndRecordedDrain(t *testing.T) {
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "waiting"}, true)
 	inbound.ConversationID, inbound.Metadata["web_message_id"] = "main", "waiting"
 	b := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{}), historyMutation: true}
-	manager := newThreadBridgeManager(nil, s, b.log, func(Config) directBridge { return b })
+	manager := newThreadBridgeManager(nil, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
 	manager.bridges["main"] = b
 	rt := &Runtime{Sessions: s, threads: manager}
 
@@ -847,7 +847,7 @@ func TestRevertLatestUnsavedTurn(t *testing.T) {
 	}
 
 	b := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
-	manager := newThreadBridgeManager(nil, s, b.log, func(Config) directBridge { return b })
+	manager := newThreadBridgeManager(nil, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
 	manager.bridges["main"] = b
 	rt := &Runtime{Sessions: s, threads: manager}
 
@@ -892,7 +892,7 @@ func TestRevertMarkerGatesDoNotReadReplay(t *testing.T) {
 	require.NoError(t, err)
 
 	b := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
-	manager := newThreadBridgeManager(nil, s, b.log, func(Config) directBridge { return b })
+	manager := newThreadBridgeManager(nil, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
 	manager.bridges["main"] = b
 	queue, err := manager.queueItems("main")
 	require.NoError(t, err)
@@ -938,7 +938,7 @@ func TestRevertPreservationFailureCompletesOwners(t *testing.T) {
 			require.NoError(t, err)
 
 			b := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{}), historyMutation: path != "channel"}
-			manager := newThreadBridgeManager(nil, s, b.log, func(Config) directBridge { return b })
+			manager := newThreadBridgeManager(nil, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
 			manager.bridges["main"] = b
 			rt := &Runtime{Sessions: s, threads: manager}
 
@@ -1004,7 +1004,7 @@ func TestRevertBranchCancelsPreservedOwners(t *testing.T) {
 	require.NoError(t, err)
 
 	b := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
-	manager := newThreadBridgeManager(nil, s, b.log, func(Config) directBridge { return b })
+	manager := newThreadBridgeManager(nil, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
 	manager.bridges["main"] = b
 	rt := &Runtime{Sessions: s, threads: manager}
 
@@ -1046,7 +1046,7 @@ func TestRevertLegacyQueuePromotionAndEnqueue(t *testing.T) {
 	b.config.ConversationID = "main"
 
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
-	manager := newThreadBridgeManager(b.runtime, s, b.log, func(Config) directBridge { return b })
+	manager := newThreadBridgeManager(b.runtime, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
 	manager.bridges["main"] = b
 	rt := &Runtime{Sessions: s, threads: manager, Cfg: b.runtime}
 	runTestBridge(t, b)
@@ -1083,7 +1083,7 @@ func TestRevertStashKeepsVoiceInbound(t *testing.T) {
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills/docs-helper", 0o755))
 	require.NoError(t, root.WriteFile(".rocketclaw/skills/docs-helper/SKILL.md", []byte("---\nname: docs-helper\ndescription: Write docs\n---\n\nUse this skill for docs.\n"), 0o644))
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
-	manager := newThreadBridgeManager(crashed.runtime, s, crashed.log, func(Config) directBridge { return crashed })
+	manager := newThreadBridgeManager(crashed.runtime, s, crashed.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return crashed }})
 	manager.bridges["main"] = crashed
 	rt := &Runtime{Sessions: s, threads: manager, Cfg: crashed.runtime}
 	voice := func(id, text string) protocol.ThreadQueueItem {
@@ -1189,7 +1189,7 @@ func TestRevertStorageFailuresAreNotEmptySuccess(t *testing.T) {
 	ctx := t.Context()
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
 	b := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
-	manager := newThreadBridgeManager(nil, s, b.log, func(Config) directBridge { return b })
+	manager := newThreadBridgeManager(nil, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
 	manager.bridges["main"] = b
 	rt := &Runtime{Sessions: s, threads: manager}
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "new"}, true)
@@ -1240,7 +1240,7 @@ func TestRevertStageFailurePreservesHistory(t *testing.T) {
 			require.NoError(t, err)
 
 			b := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
-			manager := newThreadBridgeManager(nil, s, b.log, func(Config) directBridge { return b })
+			manager := newThreadBridgeManager(nil, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
 			manager.bridges["main"] = b
 			rt := &Runtime{Sessions: s, threads: manager}
 

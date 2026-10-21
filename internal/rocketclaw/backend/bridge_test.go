@@ -1442,13 +1442,13 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 	)
 
 	// The subagent's session runs on its own bridge.
-	manager = newThreadBridgeManager(locked, service, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
+	manager = newThreadBridgeManager(locked, service, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
 		cfg.SessionService = service
-		child := NewConversation(locked, bus, &cfg, slog.New(slog.DiscardHandler))
+		child := NewConversation(locked, bus, cfg, slog.New(slog.DiscardHandler))
 		child.background = registry
 
 		return child
-	})
+	}})
 	registry = newBackgroundRegistry(service, manager, testLogger())
 	service.jobs = registry
 
@@ -4988,13 +4988,13 @@ func (nt *noteTest) run(t *testing.T, observe func(*protocol.OutboundMessage)) (
 
 		return nil
 	}}
-	manager = newThreadBridgeManager(config.NewLockedConfig(nt.cfg), nt.service, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
+	manager = newThreadBridgeManager(config.NewLockedConfig(nt.cfg), nt.service, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
 		cfg.SessionService, cfg.RequestRestart = nt.service, &runtimeRestarterMock{restartFunc: testNoopRestart}
-		bridge := NewConversation(config.NewLockedConfig(nt.cfg), publisher, &cfg, slog.New(slog.DiscardHandler))
+		bridge := NewConversation(config.NewLockedConfig(nt.cfg), publisher, cfg, slog.New(slog.DiscardHandler))
 		bridge.threads, bridge.background = manager, registry
 
 		return bridge
-	})
+	}})
 	registry = newBackgroundRegistry(nt.service, manager, testLogger())
 	nt.service.jobs = registry
 

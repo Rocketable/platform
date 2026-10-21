@@ -45,6 +45,9 @@ packages:
       directBridge:
         config:
           structname: directBridgeMock
+      bridgeFactory:
+        config:
+          structname: bridgeFactoryMock
       runLockWork:
         config:
           structname: runLockWorkMock
