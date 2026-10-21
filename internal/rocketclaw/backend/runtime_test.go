@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1332,6 +1333,255 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 	require.True(t, promoted)
 
 	require.NoError(t, manager.PickLaterWork(t.Context(), conversationID))
+
+	for len(bridge.requestCh) > 0 {
+		<-bridge.requestCh
+	}
+
+	for n, original := range []struct{ text, composed, attachment string }{
+		{"original", "original\n\n indented attachment text", " indented attachment text"},
+		{" ", " indented attachment text", " indented attachment text"},
+		{" \t ", " indented attachment text", " indented attachment text"},
+		{"", " indented attachment text", " indented attachment text"},
+		{" ", " ", ""},
+		{" \t ", " \t ", ""},
+		{"", "", ""},
+		{" ", " ", " "},
+	} {
+		for _, live := range []bool{false, true} {
+			id := fmt.Sprintf("edited-%d-%t", n, live)
+			content := protocol.InboundContent{Text: original.text, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("image")}}}
+			want := "$skill inspect exact\ntext"
+
+			if original.attachment != "" {
+				content.TextAttachments = []string{original.attachment}
+				want += "\n\n" + original.attachment
+			}
+
+			inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindEnqueue, &content, true)
+			inbound.ConversationID, inbound.SlackReply = conversationID, first.SlackReply
+			inbound.Metadata[protocol.InboundPrincipalMetadataKey] = "original author"
+			item := protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Message: content.Text, Content: content, Source: inbound.Source, Kind: inbound.Kind, Inbound: inbound}
+			require.NoError(t, store.PutThreadQueueItem(id, &item))
+
+			request := bridgeRequest{inbound: inbound, queueItemID: id}
+			if live {
+				bridge.waiting = []bridgeRequest{request}
+			}
+
+			changed, err := rt.EditQueueItem(t.Context(), conversationID, id, "$skill inspect exact\ntext")
+			require.NoError(t, err)
+			require.True(t, changed)
+
+			if live {
+				require.Equal(t, want, bridge.waiting[0].inbound.Text)
+				bridge.waiting = nil
+			} else {
+				require.Equal(t, original.composed, request.inbound.Text, "offered requests refresh at claim")
+			}
+
+			admitted, err := bridge.activateInbound(t.Context(), &request)
+			require.NoError(t, err)
+			require.True(t, admitted)
+			require.Equal(t, want, request.inbound.Text)
+			require.Nil(t, inboundDirectSkill(request.inbound), "Slack text keeps its original framing, not Web command interpretation")
+			require.Contains(t, buildPrompt(request.inbound, nil, false), "original author")
+			require.Equal(t, content.Attachments, request.inbound.Attachments)
+			require.Equal(t, first.SlackReply, bridge.newOutboundMessage(request.inbound, "turn", "answer", true).SlackReply)
+			changed, err = rt.EditQueueItem(t.Context(), conversationID, id, "too late")
+			require.NoError(t, err)
+			require.False(t, changed, "consumed input is never recreated")
+
+			items, err := store.ThreadQueueForConversation(conversationID)
+			require.NoError(t, err)
+			require.False(t, slices.ContainsFunc(items, func(item protocol.ThreadQueueItem) bool { return item.ID == id }))
+		}
+	}
+
+	for range 8 {
+		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindEnqueue, &protocol.InboundContent{Text: "before"}, true)
+		inbound.ConversationID = conversationID
+		require.NoError(t, store.PutThreadQueueItem("race", &protocol.ThreadQueueItem{ID: "race", ConversationID: conversationID, Message: "before", Kind: protocol.InboundKindEnqueue, Inbound: inbound}))
+		request := bridgeRequest{inbound: inbound, queueItemID: "race"}
+
+		var (
+			edited, admitted bool
+			race             errgroup.Group
+		)
+		race.Go(func() error {
+			var err error
+
+			edited, err = rt.EditQueueItem(t.Context(), conversationID, "race", "after")
+
+			return err
+		})
+		race.Go(func() error {
+			var err error
+
+			admitted, err = bridge.activateInbound(t.Context(), &request)
+
+			return err
+		})
+		require.NoError(t, race.Wait())
+		require.True(t, admitted)
+
+		if edited {
+			require.Equal(t, "after", request.inbound.Text)
+		} else {
+			require.Equal(t, "before", request.inbound.Text)
+		}
+
+		_, claimed, err := (stateDAO{db: store.db}).claimThreadQueueItem(t.Context(), conversationID, "race")
+		require.NoError(t, err)
+		require.False(t, claimed)
+	}
+}
+
+func TestRuntimeQueueEditKeepsPreparedWorkflow(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name, text, want, agent, override string
+		waiting, failCommit               bool
+	}{
+		{name: "unchanged", text: "$workflow audit", want: "prepared workflow completed", waiting: true},
+		{name: "failed commit", text: "changed text", want: "prepared workflow completed", waiting: true, failCommit: true},
+		{name: "replace waiting", text: "$workflow revised", want: "replacement workflow completed", waiting: true},
+		{name: "replace offered", text: "$workflow revised", want: "replacement workflow completed"},
+		{name: "plain uses current agent", text: "plain edited input", want: "answer", agent: "other"},
+		{name: "plain keeps explicit agent", text: "plain edited input", want: "answer", agent: "main", override: "main"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			newBridge, store, requests, finals := newResumeTestBridges(t, false)
+			bridge := newBridge()
+			bridge.config.ConversationID = "main"
+
+			require.NoError(t, store.UpsertThread("main", ThreadState{Agent: "main"}))
+			manager := newThreadBridgeManager(bridge.runtime, store, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
+			manager.bridges["main"] = bridge
+			rt := &Runtime{Sessions: store, threads: manager, Cfg: bridge.runtime}
+			root, err := os.OpenRoot(bridge.runtime.Clone().Workspace)
+
+			require.NoError(t, err)
+			defer func() { require.NoError(t, root.Close()) }()
+
+			require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o700))
+			require.NoError(t, root.WriteFile(".rocketclaw/workflows/audit.star", []byte("meta = {\"name\": \"audit\", \"description\": \"Audit\", \"phases\": []}\ndef main(args): return \"prepared workflow completed\"\n"), 0o600))
+			require.NoError(t, root.WriteFile(".rocketclaw/workflows/revised.star", []byte("meta = {\"name\": \"revised\", \"description\": \"Revised\", \"phases\": []}\ndef main(args): return \"replacement workflow completed\"\n"), 0o600))
+
+			inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindEnqueue, &protocol.InboundContent{Text: "$workflow audit"}, true)
+			inbound.ConversationID, inbound.Metadata["web_message_id"], inbound.Workflow = "main", "workflow", protocol.WorkflowInvocation{Name: "audit"}
+			inbound.Metadata[inboundAgentMetadataKey] = test.override
+			request := bridgeRequest{inbound: inbound, completion: &turnCompletion{done: make(chan struct{})}}
+			fresh, err := rt.admitWeb(t.Context(), bridge, &request, protocol.GoalRequest{})
+			require.NoError(t, err)
+			require.True(t, fresh)
+
+			request.queueItemID = "workflow"
+			require.NoError(t, bridge.enqueue(t.Context(), &request, "prepared workflow"))
+
+			if test.waiting {
+				stop := protocol.NewInboundMessageFromContent(protocol.SourceSystem, protocol.InboundKindEnqueue, &protocol.InboundContent{Text: "stop"}, false)
+				stop.ConversationID, stop.Metadata["web_message_id"] = "main", "stop"
+				_, _, err = bridge.admitAgentWrite(t.Context(), sessionWriteStop, stop)
+				require.NoError(t, err)
+				require.Len(t, bridge.waiting, 1)
+			}
+
+			require.NoError(t, root.Remove(".rocketclaw/workflows/audit.star"))
+
+			if test.agent != "" {
+				require.NoError(t, root.WriteFile(".rocketclaw/agents/other.md", []byte("---\ndescription: Other\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nOther queue instructions\n"), 0o600))
+				bridge.SwitchAgent("other")
+			}
+
+			if test.failCommit {
+				_, err = store.db.ExecContext(t.Context(), `CREATE FUNCTION reject_queue_edit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'edit commit failed'; END $$;
+CREATE CONSTRAINT TRIGGER reject_queue_edit AFTER UPDATE ON thread_queue DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_queue_edit()`)
+				require.NoError(t, err)
+			}
+
+			changed, err := rt.EditQueueItem(t.Context(), "main", "workflow", test.text)
+			if test.failCommit {
+				require.ErrorContains(t, err, "edit commit failed")
+				_, err = store.db.ExecContext(t.Context(), `DROP TRIGGER reject_queue_edit ON thread_queue`)
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, !test.failCommit, changed)
+
+			if test.waiting {
+				_, err = rt.DeleteQueueItem(t.Context(), "main", "stop")
+				require.NoError(t, err)
+			}
+
+			if test.agent != "" {
+				request = <-bridge.requestCh
+				activated, err := bridge.activateInbound(t.Context(), &request)
+				require.NoError(t, err)
+				require.True(t, activated)
+				snapshot, _, err := loadTurnInputs(t.Context(), store.db, "main", request.turnID)
+				require.NoError(t, err)
+				require.Equal(t, test.agent, snapshot.Agent)
+				bridge.handle(t.Context(), &request)
+			} else {
+				runTestBridge(t, bridge)
+			}
+
+			<-request.completion.done
+			require.NoError(t, request.completion.err)
+			final := readFinal(t, finals)
+			require.Equal(t, test.want, final.Text)
+
+			if test.agent != "" {
+				require.Equal(t, test.agent, final.Agent)
+				require.Equal(t, test.agent == "other", strings.Contains(<-requests, "Other queue instructions"))
+			}
+		})
+	}
+}
+
+func TestRuntimeQueueEditRejectsPreservedSteer(t *testing.T) {
+	t.Parallel()
+
+	newBridge, store, _, _ := newResumeTestBridges(t, false)
+	bridge := newBridge()
+	bridge.config.ConversationID = "main"
+
+	require.NoError(t, store.UpsertThread("main", ThreadState{Agent: "main"}))
+	manager := newThreadBridgeManager(bridge.runtime, store, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
+	manager.bridges["main"] = bridge
+	rt := &Runtime{Sessions: store, threads: manager, Cfg: bridge.runtime}
+	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "original steer"}, true)
+	inbound.ConversationID, inbound.Metadata["web_message_id"] = "main", "steer"
+	request := bridgeRequest{inbound: inbound, queueItemID: "steer"}
+	fresh, err := rt.admitWeb(t.Context(), bridge, &request, protocol.GoalRequest{})
+	require.NoError(t, err)
+	require.True(t, fresh)
+	require.NoError(t, bridge.enqueue(t.Context(), &request, "pending steer"))
+
+	stop := protocol.NewInboundMessageFromContent(protocol.SourceSystem, protocol.InboundKindEnqueue, &protocol.InboundContent{Text: "stop"}, false)
+	stop.ConversationID, stop.Metadata["web_message_id"] = "main", "stop"
+	_, _, err = bridge.admitAgentWrite(t.Context(), sessionWriteStop, stop)
+	require.NoError(t, err)
+	require.Len(t, bridge.waiting, 1)
+	changed, err := rt.EditQueueItem(t.Context(), "main", "steer", "changed")
+	require.NoError(t, err)
+	require.False(t, changed)
+
+	items, err := store.ThreadQueueForConversation("main")
+	require.NoError(t, err)
+	require.Equal(t, protocol.InboundKindSteer, items[1].Kind)
+	require.Equal(t, "original steer", items[1].Inbound.Text)
+	require.NoError(t, startTurnDB(t.Context(), store.db, "active", "main", protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "active", true)))
+
+	bridge.inputOpen, bridge.activeTurnID = true, "active"
+	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &items[1]))
+	require.Len(t, bridge.steers, 1)
+	changed, err = rt.EditQueueItem(t.Context(), "main", "steer", "changed after offer")
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, "original steer", bridge.steers[0].inbound.Text)
 }
 
 // A Web stash in a conversation Web cannot revert, such as a Slack thread, keeps its full request, so

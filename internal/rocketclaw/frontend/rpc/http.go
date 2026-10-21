@@ -41,7 +41,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 		mux.HandleFunc(route, servePage(connection, app))
 	}
 
-	for method := range strings.FieldsSeq("Protocol Identity Reload Prompt History ForkSession StageRevert ClearRevert SearchMessages SearchSessions SlackNames Handoff ListAgents CreateSession ListConfig ListSkills ListWorkflows UpdateSession ListCronJobs RunCronJob GetPage ListPages ListSessionEntries LoadSessionEntries DeleteSessionEntries ListQueue SteerQueueItem PopQueueItem RemoveQueueItem ReorderQueue MoveToBackground StopBackgroundJob AnswerQuestion VoiceSettings Tabs") {
+	for method := range strings.FieldsSeq("Protocol Identity Reload Prompt History ForkSession StageRevert ClearRevert SearchMessages SearchSessions SlackNames Handoff ListAgents CreateSession ListConfig ListSkills ListWorkflows UpdateSession ListCronJobs RunCronJob GetPage ListPages ListSessionEntries LoadSessionEntries DeleteSessionEntries ListQueue SteerQueueItem PopQueueItem RemoveQueueItem EditQueueItem ReorderQueue MoveToBackground StopBackgroundJob AnswerQuestion VoiceSettings Tabs") {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 		responseType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Output().FullName())
@@ -354,7 +354,7 @@ func httpInput(w http.ResponseWriter, r *http.Request, request proto.Message, me
 		required = "stem"
 	case "MoveToBackground":
 		required = "conversationId"
-	case "SteerQueueItem", "PopQueueItem", "RemoveQueueItem":
+	case "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "EditQueueItem":
 		required = "id itemId"
 	case "ReorderQueue":
 		required = "id itemIds"

@@ -500,6 +500,7 @@ message QueueItem {
   repeated Attachment attachments = 3;
   PromptDelivery delivery = 4;
   string principal = 5;
+  optional string edit_text = 6;
 }
 
 message ListQueueRequest {
@@ -513,6 +514,7 @@ message ListQueueResponse {
 message QueueItemRequest {
   string id = 1;
   string item_id = 2;
+  string text = 3;
 }
 
 message QueueItemResponse {}
@@ -726,6 +728,7 @@ service Web {
   rpc RemoveQueueItem(QueueItemRequest) returns (QueueItemResponse);
   rpc SteerQueueItem(QueueItemRequest) returns (QueueItemResponse);
   rpc PopQueueItem(QueueItemRequest) returns (QueueItemResponse);
+  rpc EditQueueItem(QueueItemRequest) returns (QueueItemResponse);
   rpc ReorderQueue(ReorderQueueRequest) returns (QueueItemResponse);
   rpc MoveToBackground(MoveToBackgroundRequest) returns (MoveToBackgroundResponse);
   rpc StopBackgroundJob(StopBackgroundJobRequest) returns (StopBackgroundJobResponse);

@@ -48,6 +48,90 @@ import (
 	"tailscale.com/tailcfg"
 )
 
+func TestQueueEdit(t *testing.T) {
+	h := startVoiceHarness(t)
+	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	_, err := invoke[PromptResponse](ctx, h.conn, "Prompt", &PromptRequest{Id: "main", MessageId: "waiting", Text: "original", Delivery: PromptDelivery_STASH})
+	require.NoError(t, err)
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, h.url+"/api/EditQueueItem", strings.NewReader(`{"id":"main","itemId":"waiting","text":"  corrected\ntext  "}`))
+	require.NoError(t, err)
+	response, err := http.DefaultClient.Do(request)
+
+	require.NoError(t, err)
+	defer func() { require.NoError(t, response.Body.Close()) }()
+
+	body, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, response.StatusCode, string(body))
+
+	items, err := h.rt.QueueItems("main")
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Equal(t, "  corrected\ntext  ", items[0].Inbound.Text)
+
+	require.NoError(t, h.rt.Sessions.SaveAttachment(ctx, "main", "", &protocol.OutboundAttachment{ID: "note", Name: "note.txt", MIMEType: "text/plain", Data: []byte("keep attached")}, true))
+	require.NoError(t, h.rt.Sessions.BeginGoal("main", &backend.GoalState{Objective: "hold queued work"}))
+
+	for _, delivery := range []PromptDelivery{PromptDelivery_QUEUE, PromptDelivery_STASH} {
+		id := "item-" + delivery.String()
+		_, err := invoke[PromptResponse](ctx, h.conn, "Prompt", &PromptRequest{Id: "main", MessageId: id, Text: "original", Delivery: delivery, AttachmentIds: []string{"note"}})
+		require.NoError(t, err)
+		before, err := h.rt.Sessions.ThreadQueueForConversation("main")
+		require.NoError(t, err)
+
+		index := slices.IndexFunc(before, func(item protocol.ThreadQueueItem) bool { return item.ID == id })
+		expected := before[index]
+		suffix := strings.TrimPrefix(expected.Inbound.Text, "original")
+		expected.Message, expected.Content.Text = "  revised\nbody  ", "  revised\nbody  "
+		expected.Inbound.Text = expected.Message + suffix
+		expected.Inbound.Metadata[protocol.InboundRawTextMetadataKey] = expected.Message
+		_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "main", ItemId: id, Text: expected.Message})
+		require.NoError(t, err)
+		after, err := h.rt.Sessions.ThreadQueueForConversation("main")
+		require.NoError(t, err)
+
+		before[index] = expected
+		require.Equal(t, before, after, "only text changes; identity, attachments, ordering and routing survive")
+
+		listed, err := invoke[ListQueueResponse](ctx, h.conn, "ListQueue", &ListQueueRequest{Id: "main"})
+		require.NoError(t, err)
+
+		row := listed.Items[index]
+		require.Equal(t, expected.Message, row.Text)
+		require.Len(t, row.Attachments, 1)
+		require.Equal(t, delivery, row.Delivery)
+
+		for _, text := range []string{"", " \t "} {
+			_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "main", ItemId: id, Text: text})
+			require.NoError(t, err)
+			listed, err = invoke[ListQueueResponse](ctx, h.conn, "ListQueue", &ListQueueRequest{Id: "main"})
+			require.NoError(t, err)
+
+			row = listed.Items[index]
+			require.Empty(t, row.Text, "attachment references remain separate from visible text")
+			require.Len(t, row.Attachments, 1)
+
+			if text != "" {
+				require.Equal(t, new(text), row.EditText, "the editor keeps literal whitespace omitted from attachment-only prompts")
+			}
+		}
+
+		_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "nokey", ItemId: id, Text: "wrong conversation"})
+		require.Equal(t, codes.NotFound, status.Code(err))
+		_, err = invoke[QueueItemResponse](ctx, h.conn, "RemoveQueueItem", &QueueItemRequest{Id: "main", ItemId: id})
+		require.NoError(t, err)
+		_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "main", ItemId: id, Text: "too late"})
+		require.Equal(t, codes.NotFound, status.Code(err))
+		items, err = h.rt.Sessions.ThreadQueueForConversation("main")
+		require.NoError(t, err)
+		require.False(t, slices.ContainsFunc(items, func(item protocol.ThreadQueueItem) bool { return item.ID == id }))
+	}
+
+	require.NoError(t, h.rt.Sessions.PutThreadQueueItem("steer", &protocol.ThreadQueueItem{ID: "steer", ConversationID: "main", Kind: protocol.InboundKindSteer, Message: "unchanged"}))
+	_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "main", ItemId: "steer", Text: "changed"})
+	require.Equal(t, codes.NotFound, status.Code(err))
+}
+
 func TestRevertWireContract(t *testing.T) {
 	const marker = "9007199254741001:4"
 
@@ -1345,7 +1429,7 @@ func TestSessionEntries(t *testing.T) {
 				{ID: "later-first", Kind: protocol.InboundKindEnqueue, Message: "first later message", Principal: "Bob Smith"},
 				{ID: "steering", Kind: protocol.InboundKindSteer, Message: "guide the current response", Principal: "Bob Smith"},
 				{ID: "later-second", Kind: protocol.InboundKindEnqueue, Message: "second later message"},
-				{ID: "agent", Kind: protocol.InboundKindHeld, Message: "from an agent", Inbound: &protocol.InboundMessage{Metadata: map[string]string{protocol.InboundSenderSessionMetadataKey: "web:a", protocol.InboundSenderAgentMetadataKey: "planner"}}},
+				{ID: "agent", Kind: protocol.InboundKindHeld, Message: "from an agent", Inbound: &protocol.InboundMessage{Text: "from an agent", Metadata: map[string]string{protocol.InboundSenderSessionMetadataKey: "web:a", protocol.InboundSenderAgentMetadataKey: "planner"}}},
 			}, nil
 		}
 		queued, err := invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: id})
@@ -1608,6 +1692,7 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 				{"StageRevert", &StageRevertRequest{Id: child}},
 				{"MoveToBackground", &MoveToBackgroundRequest{ConversationId: child}},
 				{"RemoveQueueItem", &QueueItemRequest{Id: child}},
+				{"EditQueueItem", &QueueItemRequest{Id: child, ItemId: "item", Text: "changed"}},
 			} {
 				_, err := invoke[PromptResponse](ctx, connection, mutation.method, mutation.request)
 				require.Error(t, err, mutation.method)
@@ -1650,6 +1735,8 @@ SELECT child_conversation_id, parent_conversation_id, 'waiting', '{}' FROM shado
 		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: hidden, Text: "$stop", Delivery: PromptDelivery_STASH})
 		require.Equal(t, codes.PermissionDenied, status.Code(err))
 		_, err = invoke[QueueItemResponse](ctx, connection, "RemoveQueueItem", &QueueItemRequest{Id: hidden, ItemId: "q1"})
+		require.Equal(t, codes.PermissionDenied, status.Code(err))
+		_, err = invoke[QueueItemResponse](ctx, connection, "EditQueueItem", &QueueItemRequest{Id: hidden, ItemId: "q1", Text: "changed"})
 		require.Equal(t, codes.PermissionDenied, status.Code(err))
 	}
 

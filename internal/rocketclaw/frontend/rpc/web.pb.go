@@ -4643,6 +4643,7 @@ type QueueItem struct {
 	Attachments   []*Attachment          `protobuf:"bytes,3,rep,name=attachments,proto3" json:"attachments,omitempty"`
 	Delivery      PromptDelivery         `protobuf:"varint,4,opt,name=delivery,proto3,enum=rpc.PromptDelivery" json:"delivery,omitempty"`
 	Principal     string                 `protobuf:"bytes,5,opt,name=principal,proto3" json:"principal,omitempty"`
+	EditText      *string                `protobuf:"bytes,6,opt,name=edit_text,json=editText,proto3,oneof" json:"edit_text,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4708,6 +4709,13 @@ func (x *QueueItem) GetDelivery() PromptDelivery {
 func (x *QueueItem) GetPrincipal() string {
 	if x != nil {
 		return x.Principal
+	}
+	return ""
+}
+
+func (x *QueueItem) GetEditText() string {
+	if x != nil && x.EditText != nil {
+		return *x.EditText
 	}
 	return ""
 }
@@ -4804,6 +4812,7 @@ type QueueItemRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	ItemId        string                 `protobuf:"bytes,2,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
+	Text          string                 `protobuf:"bytes,3,opt,name=text,proto3" json:"text,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4848,6 +4857,13 @@ func (x *QueueItemRequest) GetId() string {
 func (x *QueueItemRequest) GetItemId() string {
 	if x != nil {
 		return x.ItemId
+	}
+	return ""
+}
+
+func (x *QueueItemRequest) GetText() string {
+	if x != nil {
+		return x.Text
 	}
 	return ""
 }
@@ -6837,20 +6853,24 @@ const file_web_proto_rawDesc = "" +
 	"\x15UpdateSessionResponse\"\x11\n" +
 	"\x0fProtocolRequest\"5\n" +
 	"\x10ProtocolResponse\x12!\n" +
-	"\fproto_sha256\x18\x01 \x01(\tR\vprotoSha256\"\xb1\x01\n" +
+	"\fproto_sha256\x18\x01 \x01(\tR\vprotoSha256\"\xe1\x01\n" +
 	"\tQueueItem\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\x121\n" +
 	"\vattachments\x18\x03 \x03(\v2\x0f.rpc.AttachmentR\vattachments\x12/\n" +
 	"\bdelivery\x18\x04 \x01(\x0e2\x13.rpc.PromptDeliveryR\bdelivery\x12\x1c\n" +
-	"\tprincipal\x18\x05 \x01(\tR\tprincipal\"\"\n" +
+	"\tprincipal\x18\x05 \x01(\tR\tprincipal\x12 \n" +
+	"\tedit_text\x18\x06 \x01(\tH\x00R\beditText\x88\x01\x01B\f\n" +
+	"\n" +
+	"_edit_text\"\"\n" +
 	"\x10ListQueueRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"9\n" +
 	"\x11ListQueueResponse\x12$\n" +
-	"\x05items\x18\x01 \x03(\v2\x0e.rpc.QueueItemR\x05items\";\n" +
+	"\x05items\x18\x01 \x03(\v2\x0e.rpc.QueueItemR\x05items\"O\n" +
 	"\x10QueueItemRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
-	"\aitem_id\x18\x02 \x01(\tR\x06itemId\"\x13\n" +
+	"\aitem_id\x18\x02 \x01(\tR\x06itemId\x12\x12\n" +
+	"\x04text\x18\x03 \x01(\tR\x04text\"\x13\n" +
 	"\x11QueueItemResponse\"@\n" +
 	"\x13ReorderQueueRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
@@ -6972,7 +6992,7 @@ const file_web_proto_rawDesc = "" +
 	"\x06UPDATE\x10\x03*!\n" +
 	"\fTabPlacement\x12\a\n" +
 	"\x03TOP\x10\x00\x12\b\n" +
-	"\x04LEFT\x10\x012\xa0\x14\n" +
+	"\x04LEFT\x10\x012\xe0\x14\n" +
 	"\x03Web\x126\n" +
 	"\x10UploadAttachment\x12\x0f.rpc.Attachment\x1a\x0f.rpc.Attachment(\x01\x128\n" +
 	"\x12DownloadAttachment\x12\x0f.rpc.Attachment\x1a\x0f.rpc.Attachment0\x01\x12E\n" +
@@ -7012,7 +7032,8 @@ const file_web_proto_rawDesc = "" +
 	"\tListQueue\x12\x15.rpc.ListQueueRequest\x1a\x16.rpc.ListQueueResponse\x12@\n" +
 	"\x0fRemoveQueueItem\x12\x15.rpc.QueueItemRequest\x1a\x16.rpc.QueueItemResponse\x12?\n" +
 	"\x0eSteerQueueItem\x12\x15.rpc.QueueItemRequest\x1a\x16.rpc.QueueItemResponse\x12=\n" +
-	"\fPopQueueItem\x12\x15.rpc.QueueItemRequest\x1a\x16.rpc.QueueItemResponse\x12@\n" +
+	"\fPopQueueItem\x12\x15.rpc.QueueItemRequest\x1a\x16.rpc.QueueItemResponse\x12>\n" +
+	"\rEditQueueItem\x12\x15.rpc.QueueItemRequest\x1a\x16.rpc.QueueItemResponse\x12@\n" +
 	"\fReorderQueue\x12\x18.rpc.ReorderQueueRequest\x1a\x16.rpc.QueueItemResponse\x12O\n" +
 	"\x10MoveToBackground\x12\x1c.rpc.MoveToBackgroundRequest\x1a\x1d.rpc.MoveToBackgroundResponse\x12R\n" +
 	"\x11StopBackgroundJob\x12\x1d.rpc.StopBackgroundJobRequest\x1a\x1e.rpc.StopBackgroundJobResponse\x12Q\n" +
@@ -7225,54 +7246,56 @@ var file_web_proto_depIdxs = []int32{
 	73,  // 78: rpc.Web.RemoveQueueItem:input_type -> rpc.QueueItemRequest
 	73,  // 79: rpc.Web.SteerQueueItem:input_type -> rpc.QueueItemRequest
 	73,  // 80: rpc.Web.PopQueueItem:input_type -> rpc.QueueItemRequest
-	75,  // 81: rpc.Web.ReorderQueue:input_type -> rpc.ReorderQueueRequest
-	76,  // 82: rpc.Web.MoveToBackground:input_type -> rpc.MoveToBackgroundRequest
-	78,  // 83: rpc.Web.StopBackgroundJob:input_type -> rpc.StopBackgroundJobRequest
-	80,  // 84: rpc.Web.ListSessionEntries:input_type -> rpc.SessionEntriesRequest
-	80,  // 85: rpc.Web.LoadSessionEntries:input_type -> rpc.SessionEntriesRequest
-	80,  // 86: rpc.Web.DeleteSessionEntries:input_type -> rpc.SessionEntriesRequest
-	37,  // 87: rpc.Web.UploadAttachment:output_type -> rpc.Attachment
-	37,  // 88: rpc.Web.DownloadAttachment:output_type -> rpc.Attachment
-	16,  // 89: rpc.Web.ListSessions:output_type -> rpc.ListSessionsResponse
-	19,  // 90: rpc.Web.CreateSession:output_type -> rpc.CreateSessionResponse
-	34,  // 91: rpc.Web.Join:output_type -> rpc.ConversationChange
-	99,  // 92: rpc.Web.Voice:output_type -> rpc.VoiceEvent
-	92,  // 93: rpc.Web.VoiceSettings:output_type -> rpc.VoiceSettingsResponse
-	98,  // 94: rpc.Web.Tabs:output_type -> rpc.TabsResponse
-	39,  // 95: rpc.Web.Prompt:output_type -> rpc.PromptResponse
-	51,  // 96: rpc.Web.ListCronJobs:output_type -> rpc.ListCronJobsResponse
-	58,  // 97: rpc.Web.RunCronJob:output_type -> rpc.RunCronJobResponse
-	53,  // 98: rpc.Web.GetPage:output_type -> rpc.Page
-	55,  // 99: rpc.Web.ListPages:output_type -> rpc.ListPagesResponse
-	60,  // 100: rpc.Web.AnswerQuestion:output_type -> rpc.AnswerQuestionResponse
-	6,   // 101: rpc.Web.History:output_type -> rpc.HistoryResponse
-	21,  // 102: rpc.Web.ForkSession:output_type -> rpc.ForkSessionResponse
-	13,  // 103: rpc.Web.StageRevert:output_type -> rpc.StageRevertResponse
-	15,  // 104: rpc.Web.ClearRevert:output_type -> rpc.ClearRevertResponse
-	24,  // 105: rpc.Web.SearchMessages:output_type -> rpc.SearchMessagesResponse
-	28,  // 106: rpc.Web.SearchSessions:output_type -> rpc.SearchSessionsResponse
-	30,  // 107: rpc.Web.SlackNames:output_type -> rpc.SlackNamesResponse
-	32,  // 108: rpc.Web.Handoff:output_type -> rpc.HandoffResponse
-	43,  // 109: rpc.Web.ListAgents:output_type -> rpc.ListAgentsResponse
-	46,  // 110: rpc.Web.ListSkills:output_type -> rpc.ListSkillsResponse
-	49,  // 111: rpc.Web.ListWorkflows:output_type -> rpc.ListWorkflowsResponse
-	65,  // 112: rpc.Web.ListConfig:output_type -> rpc.ListConfigResponse
-	67,  // 113: rpc.Web.UpdateSession:output_type -> rpc.UpdateSessionResponse
-	69,  // 114: rpc.Web.Protocol:output_type -> rpc.ProtocolResponse
-	87,  // 115: rpc.Web.Identity:output_type -> rpc.IdentityResponse
-	89,  // 116: rpc.Web.Reload:output_type -> rpc.ReloadResponse
-	72,  // 117: rpc.Web.ListQueue:output_type -> rpc.ListQueueResponse
-	74,  // 118: rpc.Web.RemoveQueueItem:output_type -> rpc.QueueItemResponse
-	74,  // 119: rpc.Web.SteerQueueItem:output_type -> rpc.QueueItemResponse
-	74,  // 120: rpc.Web.PopQueueItem:output_type -> rpc.QueueItemResponse
-	74,  // 121: rpc.Web.ReorderQueue:output_type -> rpc.QueueItemResponse
-	77,  // 122: rpc.Web.MoveToBackground:output_type -> rpc.MoveToBackgroundResponse
-	79,  // 123: rpc.Web.StopBackgroundJob:output_type -> rpc.StopBackgroundJobResponse
-	82,  // 124: rpc.Web.ListSessionEntries:output_type -> rpc.ListSessionEntriesResponse
-	84,  // 125: rpc.Web.LoadSessionEntries:output_type -> rpc.LoadSessionEntriesResponse
-	85,  // 126: rpc.Web.DeleteSessionEntries:output_type -> rpc.DeleteSessionEntriesResponse
-	87,  // [87:127] is the sub-list for method output_type
-	47,  // [47:87] is the sub-list for method input_type
+	73,  // 81: rpc.Web.EditQueueItem:input_type -> rpc.QueueItemRequest
+	75,  // 82: rpc.Web.ReorderQueue:input_type -> rpc.ReorderQueueRequest
+	76,  // 83: rpc.Web.MoveToBackground:input_type -> rpc.MoveToBackgroundRequest
+	78,  // 84: rpc.Web.StopBackgroundJob:input_type -> rpc.StopBackgroundJobRequest
+	80,  // 85: rpc.Web.ListSessionEntries:input_type -> rpc.SessionEntriesRequest
+	80,  // 86: rpc.Web.LoadSessionEntries:input_type -> rpc.SessionEntriesRequest
+	80,  // 87: rpc.Web.DeleteSessionEntries:input_type -> rpc.SessionEntriesRequest
+	37,  // 88: rpc.Web.UploadAttachment:output_type -> rpc.Attachment
+	37,  // 89: rpc.Web.DownloadAttachment:output_type -> rpc.Attachment
+	16,  // 90: rpc.Web.ListSessions:output_type -> rpc.ListSessionsResponse
+	19,  // 91: rpc.Web.CreateSession:output_type -> rpc.CreateSessionResponse
+	34,  // 92: rpc.Web.Join:output_type -> rpc.ConversationChange
+	99,  // 93: rpc.Web.Voice:output_type -> rpc.VoiceEvent
+	92,  // 94: rpc.Web.VoiceSettings:output_type -> rpc.VoiceSettingsResponse
+	98,  // 95: rpc.Web.Tabs:output_type -> rpc.TabsResponse
+	39,  // 96: rpc.Web.Prompt:output_type -> rpc.PromptResponse
+	51,  // 97: rpc.Web.ListCronJobs:output_type -> rpc.ListCronJobsResponse
+	58,  // 98: rpc.Web.RunCronJob:output_type -> rpc.RunCronJobResponse
+	53,  // 99: rpc.Web.GetPage:output_type -> rpc.Page
+	55,  // 100: rpc.Web.ListPages:output_type -> rpc.ListPagesResponse
+	60,  // 101: rpc.Web.AnswerQuestion:output_type -> rpc.AnswerQuestionResponse
+	6,   // 102: rpc.Web.History:output_type -> rpc.HistoryResponse
+	21,  // 103: rpc.Web.ForkSession:output_type -> rpc.ForkSessionResponse
+	13,  // 104: rpc.Web.StageRevert:output_type -> rpc.StageRevertResponse
+	15,  // 105: rpc.Web.ClearRevert:output_type -> rpc.ClearRevertResponse
+	24,  // 106: rpc.Web.SearchMessages:output_type -> rpc.SearchMessagesResponse
+	28,  // 107: rpc.Web.SearchSessions:output_type -> rpc.SearchSessionsResponse
+	30,  // 108: rpc.Web.SlackNames:output_type -> rpc.SlackNamesResponse
+	32,  // 109: rpc.Web.Handoff:output_type -> rpc.HandoffResponse
+	43,  // 110: rpc.Web.ListAgents:output_type -> rpc.ListAgentsResponse
+	46,  // 111: rpc.Web.ListSkills:output_type -> rpc.ListSkillsResponse
+	49,  // 112: rpc.Web.ListWorkflows:output_type -> rpc.ListWorkflowsResponse
+	65,  // 113: rpc.Web.ListConfig:output_type -> rpc.ListConfigResponse
+	67,  // 114: rpc.Web.UpdateSession:output_type -> rpc.UpdateSessionResponse
+	69,  // 115: rpc.Web.Protocol:output_type -> rpc.ProtocolResponse
+	87,  // 116: rpc.Web.Identity:output_type -> rpc.IdentityResponse
+	89,  // 117: rpc.Web.Reload:output_type -> rpc.ReloadResponse
+	72,  // 118: rpc.Web.ListQueue:output_type -> rpc.ListQueueResponse
+	74,  // 119: rpc.Web.RemoveQueueItem:output_type -> rpc.QueueItemResponse
+	74,  // 120: rpc.Web.SteerQueueItem:output_type -> rpc.QueueItemResponse
+	74,  // 121: rpc.Web.PopQueueItem:output_type -> rpc.QueueItemResponse
+	74,  // 122: rpc.Web.EditQueueItem:output_type -> rpc.QueueItemResponse
+	74,  // 123: rpc.Web.ReorderQueue:output_type -> rpc.QueueItemResponse
+	77,  // 124: rpc.Web.MoveToBackground:output_type -> rpc.MoveToBackgroundResponse
+	79,  // 125: rpc.Web.StopBackgroundJob:output_type -> rpc.StopBackgroundJobResponse
+	82,  // 126: rpc.Web.ListSessionEntries:output_type -> rpc.ListSessionEntriesResponse
+	84,  // 127: rpc.Web.LoadSessionEntries:output_type -> rpc.LoadSessionEntriesResponse
+	85,  // 128: rpc.Web.DeleteSessionEntries:output_type -> rpc.DeleteSessionEntriesResponse
+	88,  // [88:129] is the sub-list for method output_type
+	47,  // [47:88] is the sub-list for method input_type
 	47,  // [47:47] is the sub-list for extension type_name
 	47,  // [47:47] is the sub-list for extension extendee
 	0,   // [0:47] is the sub-list for field type_name
@@ -7285,6 +7308,7 @@ func file_web_proto_init() {
 	}
 	file_web_proto_msgTypes[32].OneofWrappers = []any{}
 	file_web_proto_msgTypes[63].OneofWrappers = []any{}
+	file_web_proto_msgTypes[67].OneofWrappers = []any{}
 	file_web_proto_msgTypes[88].OneofWrappers = []any{}
 	file_web_proto_msgTypes[96].OneofWrappers = []any{
 		(*VoiceEvent_Answer)(nil),

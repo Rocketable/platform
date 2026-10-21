@@ -430,6 +430,118 @@ func (r *Runtime) PromoteQueueItem(ctx context.Context, conversationID, id strin
 	return r.threads.promoteQueueItem(ctx, conversationID, id)
 }
 
+// EditQueueItem changes only the text of a queued or held input that has not been claimed.
+func (r *Runtime) EditQueueItem(ctx context.Context, conversationID, id, text string) (bool, error) {
+	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
+		return false, err
+	}
+
+	b, err := r.threads.recordedBridge(ctx, conversationID)
+	if err != nil {
+		return false, err
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.historyMutation {
+		return false, errors.New("conversation history is busy")
+	}
+
+	tx, err := r.Sessions.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin queue edit: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := lockSessionHistory(ctx, tx, conversationID); err != nil {
+		return false, err
+	}
+
+	var marker string
+	if err := queryScalar(ctx, tx, "read queue edit cutoff", `SELECT COALESCE(revert_message_id, '') FROM managed_conversations WHERE conversation_id = $1`, &marker, conversationID); err != nil {
+		return false, err
+	}
+
+	if marker != "" {
+		return false, errors.New("conversation history is reverted")
+	}
+
+	item, err := scanThreadQueueItem(tx.QueryRowContext(ctx, `SELECT queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply, inbound_json
+FROM thread_queue WHERE conversation_id = $1 AND queue_item_id = $2 AND kind IN ($3, $4) FOR UPDATE`, conversationID, id, protocol.InboundKindEnqueue, protocol.InboundKindHeld))
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, err
+	}
+
+	item.Message, item.Content.Text = text, text
+
+	var inbound *string
+
+	updated := item.Content
+	if item.Inbound != nil {
+		if raw, ok := item.Inbound.Metadata[protocol.InboundRawTextMetadataKey]; ok && (len(updated.TextAttachments) > 0 || item.Inbound.Text != raw) {
+			suffix := item.Inbound.Text
+			if strings.TrimSpace(raw) != "" {
+				suffix = strings.TrimPrefix(strings.TrimPrefix(suffix, raw), "\n\n")
+			}
+
+			updated.TextAttachments = nil
+			if suffix != "" {
+				updated.TextAttachments = []string{suffix}
+			}
+		}
+	}
+
+	updatedText := protocol.NewInboundMessageFromContent(item.Source, item.Kind, &updated, true).Text
+	if item.Inbound != nil {
+		item.Inbound.Text = updatedText
+		if item.Inbound.Metadata == nil {
+			item.Inbound.Metadata = make(map[string]string)
+		}
+
+		item.Inbound.Metadata[protocol.InboundRawTextMetadataKey] = text
+		item.Inbound.Workflow = inboundWorkflow(item.Inbound)
+		data, _ := json.Marshal(item.Inbound)
+		inbound = new(string(removeSessionEntryNUL(data)))
+	}
+
+	content, _ := json.Marshal(item.Content)
+	if _, err := tx.ExecContext(ctx, `UPDATE thread_queue SET message = $3, content = $4, inbound_json = $5 WHERE conversation_id = $1 AND queue_item_id = $2`, conversationID, id, text, content, inbound); err != nil {
+		return false, fmt.Errorf("edit queue text: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit queue edit: %w", err)
+	}
+
+	for i := range b.waiting {
+		request := &b.waiting[i]
+		if request.queueItemID != id {
+			continue
+		}
+
+		if request.inbound.Text != updatedText {
+			if err := request.closeWorkflow(); err != nil {
+				return false, err
+			}
+		}
+
+		request.inbound.Text = updatedText
+		if request.inbound.Metadata == nil {
+			request.inbound.Metadata = make(map[string]string)
+		}
+
+		request.inbound.Metadata[protocol.InboundRawTextMetadataKey] = text
+		request.inbound.Workflow = inboundWorkflow(request.inbound)
+	}
+
+	return true, nil
+}
+
 // DeleteQueueItem drops one waiting steer or enqueue so it never runs.
 func (r *Runtime) DeleteQueueItem(ctx context.Context, conversationID, id string) (bool, error) {
 	if err := rejectShadowMutation(ctx, r.threads.store.db, conversationID); err != nil {

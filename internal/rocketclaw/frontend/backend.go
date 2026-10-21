@@ -23,6 +23,7 @@ type Backend interface {
 	PromoteQueueItem(context.Context, string, string) (bool, error)
 	PopQueueItem(context.Context, string, string) (bool, error)
 	DeleteQueueItem(context.Context, string, string) (bool, error)
+	EditQueueItem(context.Context, string, string, string) (bool, error)
 	ReorderQueueItems(string, []string) error
 	StashQueueItem(context.Context, string, *protocol.ThreadQueueItem) error
 	WorkflowDescriptions() ([]protocol.WorkflowDescription, error)

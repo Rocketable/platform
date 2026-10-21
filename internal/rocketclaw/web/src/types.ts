@@ -8,7 +8,7 @@ export type BackgroundJob = { jobId: string; kind: string; state: string; label:
 export type PendingQuestion = { id: string; question: string; details: string; options: { label: string; value: string; description: string }[]; multiple: boolean };
 export type SessionEntryMeta = { id: string; type?: string; timestamp?: string };
 export type SessionEntryData = { id: string; json?: string };
-export type QueueItem = { id: string; text: string; attachments?: Attachment[]; delivery?: PromptDelivery; principal?: string };
+export type QueueItem = { id: string; text: string; editText?: string; attachments?: Attachment[]; delivery?: PromptDelivery; principal?: string };
 export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; allowedAgents?: string[]; running?: boolean; background?: boolean; pinned?: boolean; name?: string; forkedFrom?: string; tags?: string[]; cron?: boolean; cronName?: string; server?: string; directory?: string; offline?: boolean; spaceId?: string; reply?: string; model?: string };
 // Remote OpenCode servers with their relay ports, and the tags people may set on their sessions.
 export type Remote = { servers: Record<string, number>; agentTags: Record<string, string[]> };
