@@ -2454,8 +2454,16 @@ func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion) (respo
 	case "function_call":
 		return responses.ResponseInputItemUnionParam{OfFunctionCall: &responses.ResponseFunctionToolCallParam{Arguments: item.Arguments.OfString, CallID: item.CallID, Name: item.Name, ID: openai.String(item.ID), Type: "function_call"}}, true
 	case "web_search_call":
-		action, ok := webSearchOutputActionParam(&item.Action)
-		if !ok {
+		var action responses.ResponseFunctionWebSearchActionUnionParam
+
+		switch item.Action.Type {
+		case "search":
+			action.OfSearch = &responses.ResponseFunctionWebSearchActionSearchParam{Queries: item.Action.Queries}
+		case "open_page":
+			action.OfOpenPage = &responses.ResponseFunctionWebSearchActionOpenPageParam{URL: openai.String(item.Action.URL)}
+		case "find_in_page":
+			action.OfFind = &responses.ResponseFunctionWebSearchActionFindParam{URL: item.Action.URL, Pattern: item.Action.Pattern}
+		default:
 			return responses.ResponseInputItemUnionParam{}, false
 		}
 
@@ -2507,19 +2515,6 @@ func CompactionCheckpointText(compaction *responses.ResponseCompactionItemParam)
 	}
 
 	return "<context_checkpoint>\nPrior conversation was compacted, but only provider-native encrypted compaction data is available for a different provider. The compacted details cannot be rehydrated here.\n</context_checkpoint>"
-}
-
-func webSearchOutputActionParam(action *responses.ResponseOutputItemUnionAction) (responses.ResponseFunctionWebSearchActionUnionParam, bool) {
-	switch action.Type {
-	case "search":
-		return responses.ResponseFunctionWebSearchActionUnionParam{OfSearch: &responses.ResponseFunctionWebSearchActionSearchParam{Queries: action.Queries}}, true
-	case "open_page":
-		return responses.ResponseFunctionWebSearchActionUnionParam{OfOpenPage: &responses.ResponseFunctionWebSearchActionOpenPageParam{URL: openai.String(action.URL)}}, true
-	case "find_in_page":
-		return responses.ResponseFunctionWebSearchActionUnionParam{OfFind: &responses.ResponseFunctionWebSearchActionFindParam{URL: action.URL, Pattern: action.Pattern}}, true
-	default:
-		return responses.ResponseFunctionWebSearchActionUnionParam{}, false
-	}
 }
 
 func webSearchOutputActionJSON(action *responses.ResponseOutputItemUnionAction) string {
