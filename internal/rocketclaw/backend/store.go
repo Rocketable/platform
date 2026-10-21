@@ -500,7 +500,7 @@ func (s *SessionService) ClaimScheduledMessage(id, conversationID string, dueAt,
 
 	row := tx.QueryRowContext(context.Background(), `SELECT scheduled_message_id, conversation_id, agent, message, due_at_unix_ns, recurring, interval_ns FROM scheduled_messages WHERE scheduled_message_id = $1`, strings.TrimSpace(id))
 
-	_, message, err = scanScheduledMessage(row)
+	_, message, err = (scheduledMessageScanner{}).scan(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return protocol.ScheduledMessageState{}, false, nil
@@ -697,22 +697,26 @@ func (s *SessionService) ActiveGoalThreads() (map[string]ThreadState, error) {
 	threads, err := queryMap(context.Background(), s.db, `SELECT g.conversation_id, m.agent, m.created_by
 FROM conversation_goals g JOIN managed_conversations m ON m.conversation_id = g.conversation_id
 WHERE g.status = '' OR g.status = $1
-ORDER BY g.conversation_id`, "active goal threads", func(row rowScanner) (string, ThreadState, error) {
-		var (
-			conversationID string
-			thread         ThreadState
-		)
-		if err := row.Scan(&conversationID, &thread.Agent, &thread.CreatedBy); err != nil {
-			return "", ThreadState{}, fmt.Errorf("scan active goal thread: %w", err)
-		}
-
-		return conversationID, thread, nil
-	}, GoalStatusActive)
+ORDER BY g.conversation_id`, "active goal threads", activeGoalThreadScanner{}, GoalStatusActive)
 	if err != nil || len(threads) == 0 {
 		return nil, err
 	}
 
 	return threads, nil
+}
+
+type activeGoalThreadScanner struct{}
+
+func (activeGoalThreadScanner) scan(row rowScanner) (string, ThreadState, error) {
+	var (
+		conversationID string
+		thread         ThreadState
+	)
+	if err := row.Scan(&conversationID, &thread.Agent, &thread.CreatedBy); err != nil {
+		return "", ThreadState{}, fmt.Errorf("scan active goal thread: %w", err)
+	}
+
+	return conversationID, thread, nil
 }
 
 type pruneKind int
@@ -773,7 +777,7 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time,
 		return PruneStateStats{}, err
 	}
 
-	externalSessions, err := queryMap(ctx, s.db, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel, origin_pairs FROM external_mcp_sessions ORDER BY external_conversation_id`, "external MCP sessions", scanExternalMCPSession)
+	externalSessions, err := queryMap(ctx, s.db, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel, origin_pairs FROM external_mcp_sessions ORDER BY external_conversation_id`, "external MCP sessions", externalMCPSessionScanner{})
 	if err != nil {
 		return PruneStateStats{}, err
 	}
@@ -1873,11 +1877,15 @@ func queryRows[T any](ctx context.Context, db stateStoreDB, query, label string,
 	return out, nil
 }
 
-func queryMap[K comparable, V any](ctx context.Context, db stateStoreDB, query, label string, scan func(rowScanner) (K, V, error), args ...any) (map[K]V, error) {
+type mapRowScanner[K comparable, V any] interface {
+	scan(rowScanner) (K, V, error)
+}
+
+func queryMap[K comparable, V any](ctx context.Context, db stateStoreDB, query, label string, scan mapRowScanner[K, V], args ...any) (map[K]V, error) {
 	out := map[K]V{}
 
 	err := readRows(ctx, db, query, label, func(row rowScanner) error {
-		key, value, err := scan(row)
+		key, value, err := scan.scan(row)
 		if err != nil {
 			return err
 		}

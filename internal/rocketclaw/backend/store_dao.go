@@ -167,7 +167,7 @@ func (d stateDAO) projectProducerEffects(ctx context.Context, source, destinatio
 	// schedule/reset entries, preserving their IDs, due times, and cadence.
 	schedules, err := queryMap(ctx, d.db, `UPDATE scheduled_messages SET conversation_id = $2, agent = $3
 WHERE conversation_id = $1
-RETURNING scheduled_message_id, conversation_id, agent, message, due_at_unix_ns, recurring, interval_ns`, "rehome producer schedules", scanScheduledMessage, source, destination, agent)
+RETURNING scheduled_message_id, conversation_id, agent, message, due_at_unix_ns, recurring, interval_ns`, "rehome producer schedules", scheduledMessageScanner{}, source, destination, agent)
 	if err != nil {
 		return nil, err
 	}
@@ -348,7 +348,7 @@ func (s *SessionService) SetThreadAgentIfExists(conversationID, agent string) (b
 }
 
 func (d stateDAO) externalMCPSession(ctx context.Context, externalConversationID string) (ExternalMCPSessionState, bool, error) {
-	_, session, err := scanExternalMCPSession(d.db.QueryRowContext(ctx, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel, origin_pairs FROM external_mcp_sessions WHERE external_conversation_id = $1`, strings.TrimSpace(externalConversationID)))
+	_, session, err := (externalMCPSessionScanner{}).scan(d.db.QueryRowContext(ctx, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel, origin_pairs FROM external_mcp_sessions WHERE external_conversation_id = $1`, strings.TrimSpace(externalConversationID)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return ExternalMCPSessionState{}, false, nil
 	}
@@ -362,7 +362,7 @@ func (d stateDAO) externalMCPSession(ctx context.Context, externalConversationID
 
 // ExternalMCPSessionByConversationID returns the public ID and binding for either session ID.
 func (s *SessionService) ExternalMCPSessionByConversationID(conversationID string) (externalConversationID string, session ExternalMCPSessionState, ok bool, err error) {
-	externalConversationID, session, err = scanExternalMCPSession(s.db.QueryRowContext(context.Background(), `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel, origin_pairs FROM external_mcp_sessions WHERE private_conversation_id = $1 OR managed_conversation_id = $2`, strings.TrimSpace(conversationID), strings.TrimSpace(conversationID)))
+	externalConversationID, session, err = (externalMCPSessionScanner{}).scan(s.db.QueryRowContext(context.Background(), `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel, origin_pairs FROM external_mcp_sessions WHERE private_conversation_id = $1 OR managed_conversation_id = $2`, strings.TrimSpace(conversationID), strings.TrimSpace(conversationID)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ExternalMCPSessionState{}, false, nil
 	}
@@ -374,7 +374,9 @@ func (s *SessionService) ExternalMCPSessionByConversationID(conversationID strin
 	return externalConversationID, session, true, nil
 }
 
-func scanExternalMCPSession(scanner rowScanner) (string, ExternalMCPSessionState, error) {
+type externalMCPSessionScanner struct{}
+
+func (externalMCPSessionScanner) scan(scanner rowScanner) (string, ExternalMCPSessionState, error) {
 	var (
 		externalConversationID string
 		session                ExternalMCPSessionState
@@ -445,7 +447,7 @@ func (d stateDAO) scheduledMessages(ctx context.Context, conversationID string) 
 		args = append(args, strings.TrimSpace(conversationID))
 	}
 
-	messages, err := queryMap(ctx, d.db, query, "scheduled messages", scanScheduledMessage, args...)
+	messages, err := queryMap(ctx, d.db, query, "scheduled messages", scheduledMessageScanner{}, args...)
 	if err != nil || len(messages) == 0 {
 		return nil, err
 	}
@@ -1171,7 +1173,9 @@ type rowScanner interface {
 	Scan(...any) error
 }
 
-func scanScheduledMessage(scanner rowScanner) (id string, message protocol.ScheduledMessageState, err error) {
+type scheduledMessageScanner struct{}
+
+func (scheduledMessageScanner) scan(scanner rowScanner) (id string, message protocol.ScheduledMessageState, err error) {
 	var (
 		dueAt, interval int64
 		recurring       int
