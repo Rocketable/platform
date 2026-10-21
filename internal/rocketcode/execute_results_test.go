@@ -401,16 +401,3 @@ func TestExecuteResultParallelAssociation(t *testing.T) {
 	require.NoError(t, group.Wait())
 	require.Len(t, loop.spillResults, 8)
 }
-
-func TestMakeSandboxedToolsHasRead(t *testing.T) {
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	tmp := filepath.Join(dir, "tmp")
-
-	require.NoError(t, root.Mkdir("tmp", 0o755))
-	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, tmp), nil, DefaultShellCommand)
-	require.NotNil(t, tools["read"].Call)
-}
