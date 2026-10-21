@@ -75,7 +75,7 @@ func SyncInWithOverlays(workspace, runtimeDir string, overlays []string, logger 
 	}
 
 	for _, root := range [...]string{agentsRoot, workspaceCron} {
-		if err := syncFSFiltered(payload, root, filepath.Join(workspace, root), "unpacking embedded rocketclaw setup files", logger, false, false, nil); err != nil {
+		if err := syncFSFiltered(payload, root, filepath.Join(workspace, root), "unpacking embedded rocketclaw setup files", logger, false, false, inertFileFilter{}); err != nil {
 			return fmt.Errorf("unpack embedded rocketclaw overlay %s: %w", root, err)
 		}
 	}
@@ -110,12 +110,12 @@ func SyncInWithOverlays(workspace, runtimeDir string, overlays []string, logger 
 
 // SyncEffectiveRuntimeAssets materializes startup-equivalent runtime assets into target without touching runtime state or workspace script symlinks.
 func SyncEffectiveRuntimeAssets(workspace, target string, overlays []string, logger *slog.Logger) error {
-	if err := syncFSFiltered(payload, payloadRoot, target, "syncing embedded rocketclaw skeleton", logger, true, false, nil); err != nil {
+	if err := syncFSFiltered(payload, payloadRoot, target, "syncing embedded rocketclaw skeleton", logger, true, false, inertFileFilter{}); err != nil {
 		return fmt.Errorf("sync embedded rocketclaw skeleton: %w", err)
 	}
 
 	for _, root := range [...]string{agentsRoot, workspaceCron} {
-		if err := syncFSFiltered(payload, root, filepath.Join(target, root), "syncing embedded rocketclaw runtime assets", logger, true, false, nil); err != nil {
+		if err := syncFSFiltered(payload, root, filepath.Join(target, root), "syncing embedded rocketclaw runtime assets", logger, true, false, inertFileFilter{}); err != nil {
 			return fmt.Errorf("sync embedded rocketclaw runtime assets %s: %w", root, err)
 		}
 	}
@@ -437,13 +437,7 @@ func overlayWorkspaceIn(workspace, target string, logger *slog.Logger) error {
 			logger,
 			true,
 			true,
-			func(name string, d fs.DirEntry) bool {
-				if root == scriptsRoot && d.Type()&os.ModeSymlink != 0 && isRuntimeScriptSymlink(workspace, filepath.Join(workspace, filepath.FromSlash(name))) {
-					return true
-				}
-
-				return !d.IsDir() && strings.HasSuffix(strings.ToLower(filepath.Base(name)), "example.md")
-			},
+			workspaceOverlayFilter{workspace: workspace, root: root},
 		); err != nil {
 			return err
 		}
@@ -577,7 +571,7 @@ func applyGitOverlay(target string, overlay OverlayInfo, logger *slog.Logger) er
 			return fmt.Errorf("stat overlay directory %s: %w", root, err)
 		}
 
-		if err := syncFSFiltered(os.DirFS(overlay.ClonePath), root, filepath.Join(target, root), "applying configured rocketclaw overlay", logger, true, true, nil); err != nil {
+		if err := syncFSFiltered(os.DirFS(overlay.ClonePath), root, filepath.Join(target, root), "applying configured rocketclaw overlay", logger, true, true, inertFileFilter{}); err != nil {
 			return err
 		}
 	}
@@ -644,7 +638,30 @@ func resetRuntimeDirectory(target string, logger *slog.Logger, preserveOverlays 
 	return nil
 }
 
-func syncFSFiltered(src fs.FS, root, target, message string, logger *slog.Logger, overwrite, preserveExecutable bool, skip func(string, fs.DirEntry) bool) error {
+type fileFilter interface {
+	skip(string, fs.DirEntry) bool
+}
+
+type inertFileFilter struct{}
+
+func (inertFileFilter) skip(string, fs.DirEntry) bool {
+	return false
+}
+
+type workspaceOverlayFilter struct {
+	workspace string
+	root      string
+}
+
+func (f workspaceOverlayFilter) skip(name string, d fs.DirEntry) bool {
+	if f.root == scriptsRoot && d.Type()&os.ModeSymlink != 0 && isRuntimeScriptSymlink(f.workspace, filepath.Join(f.workspace, filepath.FromSlash(name))) {
+		return true
+	}
+
+	return !d.IsDir() && strings.HasSuffix(strings.ToLower(filepath.Base(name)), "example.md")
+}
+
+func syncFSFiltered(src fs.FS, root, target, message string, logger *slog.Logger, overwrite, preserveExecutable bool, filter fileFilter) error {
 	logger.Info(message, "path", target)
 
 	if err := fs.WalkDir(src, root, func(name string, d fs.DirEntry, err error) error {
@@ -652,7 +669,7 @@ func syncFSFiltered(src fs.FS, root, target, message string, logger *slog.Logger
 			return fmt.Errorf("walk skeleton source %s: %w", name, err)
 		}
 
-		if skip != nil && skip(name, d) {
+		if filter.skip(name, d) {
 			logger.Debug("skipped rocketclaw overlay file", "path", name)
 			return nil
 		}

@@ -28,7 +28,7 @@ func TestSyncFSOverwritesEmbeddedFiles(t *testing.T) {
 		".rocketclaw/nested/tool.txt": {Data: []byte("nested")},
 	}
 
-	require.NoError(t, syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, false, nil))
+	require.NoError(t, syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, false, inertFileFilter{}))
 
 	data, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
 	require.NoError(t, err)
@@ -49,7 +49,7 @@ func TestSyncFSPreservesExtraFiles(t *testing.T) {
 		".rocketclaw/AGENTS.md": {Data: []byte("seed")},
 	}
 
-	require.NoError(t, syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, false, nil))
+	require.NoError(t, syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, false, inertFileFilter{}))
 
 	data, err := os.ReadFile(filepath.Join(root, "keep.txt"))
 	require.NoError(t, err)
@@ -224,7 +224,7 @@ func TestSyncFSFilteredPreservesExistingWhenOverwriteFalse(t *testing.T) {
 		".rocketclaw/AGENTS.md": {Data: []byte("new")},
 	}
 
-	require.NoError(t, syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), false, false, nil))
+	require.NoError(t, syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), false, false, inertFileFilter{}))
 
 	data, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
 	require.NoError(t, err)
@@ -242,7 +242,7 @@ func TestSyncFSFilteredPreservesSourceExecutableBit(t *testing.T) {
 		"scripts/plain.sh": {Data: []byte("plain"), Mode: 0o644},
 	}
 
-	require.NoError(t, syncFSFiltered(src, scriptsRoot, root, "test sync", testLogger(), true, true, nil))
+	require.NoError(t, syncFSFiltered(src, scriptsRoot, root, "test sync", testLogger(), true, true, inertFileFilter{}))
 
 	info, err := os.Stat(filepath.Join(root, "run"))
 	require.NoError(t, err)
@@ -254,7 +254,7 @@ func TestSyncFSFilteredPreservesSourceExecutableBit(t *testing.T) {
 }
 
 func TestSyncFSFilteredReportsMissingSourceRoot(t *testing.T) {
-	err := syncFSFiltered(fstest.MapFS{}, payloadRoot, filepath.Join(t.TempDir(), targetRoot), "test sync", testLogger(), true, false, nil)
+	err := syncFSFiltered(fstest.MapFS{}, payloadRoot, filepath.Join(t.TempDir(), targetRoot), "test sync", testLogger(), true, false, inertFileFilter{})
 	require.ErrorContains(t, err, "copy skeleton source")
 	require.ErrorContains(t, err, "walk skeleton source")
 }
@@ -268,7 +268,7 @@ func TestSyncFSFilteredReportsTargetDirectoryForFile(t *testing.T) {
 		".rocketclaw/AGENTS.md": {Data: []byte("seed")},
 	}
 
-	err := syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, false, nil)
+	err := syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, false, inertFileFilter{})
 	require.ErrorContains(t, err, "write skeleton file")
 }
 
@@ -282,7 +282,7 @@ func TestSyncFSFilteredReportsTargetFileForDirectory(t *testing.T) {
 		".rocketclaw/nested/file.txt": {Data: []byte("seed")},
 	}
 
-	err := syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, false, nil)
+	err := syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, false, inertFileFilter{})
 	require.ErrorContains(t, err, "create skeleton directory")
 }
 
@@ -863,7 +863,7 @@ func TestSyncFSRootMapping(t *testing.T) {
 			}
 
 			target := filepath.Join(t.TempDir(), "target")
-			require.NoError(t, syncFSFiltered(src, tt.root, target, "test sync", testLogger(), true, false, nil))
+			require.NoError(t, syncFSFiltered(src, tt.root, target, "test sync", testLogger(), true, false, inertFileFilter{}))
 
 			if tt.want == "." {
 				info, err := os.Stat(target)
