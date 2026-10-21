@@ -54,7 +54,7 @@ func TestRocketcodeConfigIncludesMCPServers(t *testing.T) {
 		},
 	}
 	store := newTestSessionService(t)
-	bridge := NewConversation(config.NewLockedConfig(cfg), discardPublisher{}, &Config{ConversationID: "c", Agent: "main", RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}, RequestRestart: testNoopRestart, UserQuestionAsker: &webQuestions{store: store, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}, SessionService: store}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(config.NewLockedConfig(cfg), discardPublisher{}, &Config{ConversationID: "c", Agent: "main", RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}, RequestRestart: &runtimeRestarterMock{restartFunc: testNoopRestart}, UserQuestionAsker: &webQuestions{store: store, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}, SessionService: store}, slog.New(slog.DiscardHandler))
 	rc := bridge.rocketcodeConfig(t.TempDir(), nil)
 	require.Len(t, rc.MCPServers, 1)
 	assert.Equal(t, mcpclient.ServerConfig(cfg.MCPServers["demo"]), rc.MCPServers["demo"])
@@ -68,7 +68,7 @@ func TestRocketcodeConfigIncludesMCPServers(t *testing.T) {
 	assert.Equal(t, rc.MCPServers["demo"], mcpclient.ServerConfig(cfg.MCPServers["demo"]))
 	assert.Equal(t, rc.MCPServers, bridge.rocketcodeConfig(t.TempDir(), nil).MCPServers)
 
-	empty := NewConversation(config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), discardPublisher{}, &Config{ConversationID: "c2", Agent: "main", RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}, RequestRestart: testNoopRestart, UserQuestionAsker: &webQuestions{store: store, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}, SessionService: store}, slog.New(slog.DiscardHandler))
+	empty := NewConversation(config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), discardPublisher{}, &Config{ConversationID: "c2", Agent: "main", RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}, RequestRestart: &runtimeRestarterMock{restartFunc: testNoopRestart}, UserQuestionAsker: &webQuestions{store: store, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}, SessionService: store}, slog.New(slog.DiscardHandler))
 	emptyRC := empty.rocketcodeConfig(t.TempDir(), nil)
 	assert.Nil(t, emptyRC.MCPServers)
 }

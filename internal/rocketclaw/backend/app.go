@@ -52,6 +52,41 @@ type lockedRun struct {
 	sessions   *SessionService
 }
 
+type runShutdown struct {
+	logger           *slog.Logger
+	cancelWork       context.CancelCauseFunc
+	restartRequested chan struct{}
+
+	once sync.Once
+}
+
+func (s *runShutdown) restart(reason string) (string, error) {
+	started := s.start(reason, true)
+
+	if !started {
+		s.logger.Warn("restart requested while shutdown already in progress", "reason", reason)
+	}
+
+	return "restart requested; runtime cancellation started", nil
+}
+
+func (s *runShutdown) start(reason string, restart bool) bool {
+	started := false
+
+	s.once.Do(func() {
+		started = true
+
+		if restart {
+			close(s.restartRequested)
+		}
+
+		s.logger.Warn("shutdown requested; canceling rocketclaw work", "reason", reason, "restart", restart)
+		s.cancelWork(errShutdown)
+	})
+
+	return started
+}
+
 // Run starts rocketclaw and blocks until the context is canceled or a fatal error occurs.
 func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, assemble FrontendAssembler) error {
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -136,12 +171,12 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 
 	defer cancelWork(errShutdown)
 
+	shutdown := &runShutdown{logger: logger, cancelWork: cancelWork, restartRequested: make(chan struct{})}
+
 	var (
-		shutdownOnce     sync.Once
-		restartRequested = make(chan struct{})
-		threadBridges    *threadBridgeManager
-		background       *backgroundRegistry
-		stops            []func(context.Context) error
+		threadBridges *threadBridgeManager
+		background    *backgroundRegistry
+		stops         []func(context.Context) error
 	)
 
 	if err := rocketcodeSessions.sweepRetainedResults(); err != nil {
@@ -197,33 +232,6 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		}
 	}
 
-	startShutdown := func(reason string, restart bool) bool {
-		started := false
-
-		shutdownOnce.Do(func() {
-			started = true
-
-			if restart {
-				close(restartRequested)
-			}
-
-			logger.Warn("shutdown requested; canceling rocketclaw work", "reason", reason, "restart", restart)
-			cancelWork(errShutdown)
-		})
-
-		return started
-	}
-
-	requestRestart := func(reason string) (string, error) { //nolint:unparam // Config.RequestRestart requires error; restart cancellation never fails.
-		started := startShutdown(reason, true)
-
-		if !started {
-			logger.Warn("restart requested while shutdown already in progress", "reason", reason)
-		}
-
-		return "restart requested; runtime cancellation started", nil
-	}
-
 	logger.Info(
 		"initializing rocketclaw runtime",
 		"workspace", cfg.Workspace,
@@ -233,7 +241,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 	questions := &webQuestions{store: rocketcodeSessions, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}
 
 	threadBridges = newThreadBridgeManager(s.cfg, rocketcodeSessions, logger, func(Config Config) directBridge {
-		Config.RequestRestart = requestRestart
+		Config.RequestRestart = shutdown
 		Config.RequestReload = rt
 		Config.UserQuestionAsker = questions
 		Config.SessionService = rocketcodeSessions
@@ -253,7 +261,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 
 	defer func() {
 		logger.Info("shutting down rocketclaw runtime")
-		startShutdown("runtime cleanup", false)
+		shutdown.start("runtime cleanup", false)
 
 		if err := bridgeLoops.Wait(); err != nil {
 			logger.Warn("stop thread bridges", "error", err)
@@ -349,13 +357,13 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 
 	select {
 	case <-s.signal:
-		startShutdown("shutdown signal", false)
+		shutdown.start("shutdown signal", false)
 	case <-workCtx.Done():
 	case <-copyDone:
 	}
 
 	select {
-	case <-restartRequested:
+	case <-shutdown.restartRequested:
 		return ErrRestartRequested
 	default:
 	}
