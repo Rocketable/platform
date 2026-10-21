@@ -11,53 +11,38 @@ import (
 
 func TestExpandPromptShellCommands(t *testing.T) {
 	t.Run("returns original prompt when there are no substitutions", func(t *testing.T) {
-		called := false
+		env := testPromptExpansionEnvironment(t)
 		prompt := "plain prompt"
 
-		got := expandPromptShellCommands(prompt, func(command string) string {
-			called = true
-			return command
-		})
+		got := env.expandShellCommands(t.Context(), prompt)
 
 		require.Equal(t, prompt, got)
-		require.False(t, called)
 	})
 
 	t.Run("replaces every shell substitution with runner output", func(t *testing.T) {
-		commands := []string{}
-		got := expandPromptShellCommands("before !`git status` middle !`pwd` after", func(command string) string {
-			commands = append(commands, command)
-			switch command {
-			case "git status":
-				return "STATUS"
-			case "pwd":
-				return "/tmp/project"
-			default:
-				return ""
-			}
-		})
+		env := testPromptExpansionEnvironment(t)
+		got := env.expandShellCommands(t.Context(), "before !`printf STATUS; printf 1 >> order.txt` middle !`printf /workspace/project; printf 2 >> order.txt` after")
 
-		require.Equal(t, []string{"git status", "pwd"}, commands)
-		require.Equal(t, "before STATUS middle /tmp/project after", got)
+		order, err := env.root.ReadFile("order.txt")
+		require.NoError(t, err)
+		require.Equal(t, "12", string(order))
+		require.Equal(t, "before STATUS middle /workspace/project after", got)
 	})
 
 	t.Run("allows empty runner output", func(t *testing.T) {
-		got := expandPromptShellCommands("prefix !`false` suffix", func(string) string { return "" })
+		env := testPromptExpansionEnvironment(t)
+		got := env.expandShellCommands(t.Context(), "prefix !`false` suffix")
 
 		require.Equal(t, "prefix  suffix", got)
 	})
 
 	t.Run("does not treat empty backticks as a shell command", func(t *testing.T) {
-		called := false
+		env := testPromptExpansionEnvironment(t)
 		prompt := "before !`` after"
 
-		got := expandPromptShellCommands(prompt, func(command string) string {
-			called = true
-			return command
-		})
+		got := env.expandShellCommands(t.Context(), prompt)
 
 		require.Equal(t, prompt, got)
-		require.False(t, called)
 	})
 }
 

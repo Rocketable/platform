@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strings"
 )
 
 var promptShellPattern = regexp.MustCompile("!`([^`]+)`")
@@ -49,7 +48,9 @@ func newPromptExpansionEnvironment(root *os.Root, shellTemp shellTempConfig, env
 }
 
 func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, prompt string) string {
-	return expandPromptShellCommands(prompt, func(command string) string {
+	return promptShellPattern.ReplaceAllStringFunc(prompt, func(match string) string {
+		command := match[2 : len(match)-1]
+
 		if err := e.shellTemp.ensureTempDir(e.root); err != nil {
 			return ""
 		}
@@ -68,31 +69,6 @@ func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, pr
 
 		return stdout.String()
 	})
-}
-
-func expandPromptShellCommands(prompt string, run func(string) string) string {
-	if prompt == "" || run == nil {
-		return prompt
-	}
-
-	matches := promptShellPattern.FindAllStringSubmatchIndex(prompt, -1)
-	if len(matches) == 0 {
-		return prompt
-	}
-
-	var output strings.Builder
-	output.Grow(len(prompt))
-
-	last := 0
-	for _, match := range matches {
-		output.WriteString(prompt[last:match[0]])
-		output.WriteString(run(prompt[match[2]:match[3]]))
-		last = match[1]
-	}
-
-	output.WriteString(prompt[last:])
-
-	return output.String()
 }
 
 func expandAgentPrompt(ctx context.Context, agent *Agent, enabled bool, env *promptExpansionEnvironment) {
