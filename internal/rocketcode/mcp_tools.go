@@ -947,13 +947,9 @@ func codeModeHostRequiredFields(name string, params map[string]any) []string {
 	case "read":
 		// filePath or filename accepted by Call; neither forced here.
 		return nil
-	default:
-		return schemaRequiredStrings(params["required"])
 	}
-}
 
-func schemaRequiredStrings(raw any) []string {
-	switch required := raw.(type) {
+	switch required := params["required"].(type) {
 	case []string:
 		return slices.Clone(required)
 	case []any:
