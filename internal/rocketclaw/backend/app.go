@@ -240,17 +240,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 
 	questions := &webQuestions{store: rocketcodeSessions, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}
 
-	threadBridges = newThreadBridgeManager(s.cfg, rocketcodeSessions, logger, func(Config Config) directBridge {
-		Config.RequestRestart = shutdown
-		Config.RequestReload = rt
-		Config.UserQuestionAsker = questions
-		Config.SessionService = rocketcodeSessions
-
-		bridge := NewConversation(s.cfg, rt, &Config, logger)
-		bridge.background = background
-
-		return bridge
-	})
+	threadBridges = newThreadBridgeManager(s.cfg, rocketcodeSessions, logger, conversationFactory{rt: rt, restart: shutdown})
 	background = newBackgroundRegistry(rocketcodeSessions, threadBridges, logger.With("component", "background_jobs"))
 	rocketcodeSessions.jobs = background
 	rocketcodeSessions.historyWorkers = threadBridges
@@ -369,6 +359,23 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 	}
 
 	return nil
+}
+
+type conversationFactory struct {
+	rt      *Runtime
+	restart runtimeRestarter
+}
+
+func (f conversationFactory) newBridge(cfg *Config) directBridge {
+	cfg.RequestRestart = f.restart
+	cfg.RequestReload = f.rt
+	cfg.UserQuestionAsker = f.rt.questions
+	cfg.SessionService = f.rt.Sessions
+
+	bridge := NewConversation(f.rt.Cfg, f.rt, cfg, f.rt.Log)
+	bridge.background = f.rt.background
+
+	return bridge
 }
 
 func validateRuntimeAssets(cfg *config.LockedConfig, runtimeDir string) error {

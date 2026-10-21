@@ -129,10 +129,10 @@ func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
 	require.NoError(t, store.UpsertThread(protocol.SlackThreadConversationID("D123", "111.222"), ThreadState{Agent: "selected"}))
 
 	created := make([]Config, 0, 2)
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
-		created = append(created, cfg)
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
+		created = append(created, *cfg)
 		return newDirectBridgeMock()
-	})
+	}})
 	runTestManager(t, manager)
 
 	require.NoError(t, manager.StartPendingScheduledMessages(t.Context()))
@@ -155,12 +155,12 @@ func TestThreadBridgeManagerDropsBridgeWhenThreadIsNotPersisted(t *testing.T) {
 	store := newWorkspaceSessionService(t)
 	bridges := make([]*directBridgeMock, 0, 2)
 	cfg := &config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rocketclaw", Origin: "https://rocketclaw.example.ts.net"}}}
-	manager := newThreadBridgeManager(config.NewLockedConfig(cfg), store, slog.New(slog.DiscardHandler), func(Config) directBridge {
+	manager := newThreadBridgeManager(config.NewLockedConfig(cfg), store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge {
 		bridge := newDirectBridgeMock()
 		bridges = append(bridges, bridge)
 
 		return bridge
-	})
+	}})
 	runTestManager(t, manager)
 
 	start := &threadStart{agent: "main"}
@@ -221,7 +221,7 @@ func TestThreadBridgeManagerMentionThreadRecognizesReportThreads(t *testing.T) {
 	require.NoError(t, store.RegisterExternalMCPConversation("external", "main", &ExternalMCPSessionState{PrivateConversationID: "external_mcp:private", ManagedConversationID: protocol.SlackThreadConversationID("C123", "2.2"), Agent: "main"}))
 	require.NoError(t, store.UpsertThread(protocol.SlackThreadConversationID("C123", "3.3"), ThreadState{Agent: "main"}))
 
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return newDirectBridgeMock() })
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return newDirectBridgeMock() }})
 
 	for _, tt := range []struct {
 		name, threadTS   string
@@ -250,7 +250,7 @@ func TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce(t *testing.T) {
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
 	target := slackTarget("D123", "111.222")
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{}), handling: true, inputOpen: true}
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 
 	submitTo := func(manager *threadBridgeManager, text, messageTS string) bool {
 		t.Helper()
@@ -294,7 +294,7 @@ func TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce(t *testing.T) {
 	require.True(t, activated)
 	require.False(t, submit("first", "111.222"), "a redelivery mid-turn")
 
-	restarted := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return newDirectBridgeMock() })
+	restarted := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return newDirectBridgeMock() }})
 	require.False(t, submitTo(restarted, "first", "111.222"), "a redelivery after a restart, while the active turn waits to resume")
 
 	entry := testSessionEntry("first", "answer")
@@ -318,7 +318,7 @@ func TestThreadBridgeManagerSubmitMentionKeepsMentionForStoppedBridge(t *testing
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, stopped: true}
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 
 	inbound := newThreadInboundMessage("first", "111.222", "111.222")
 	protocol.SetInboundAllowedAgents(inbound, []string{"main"})
@@ -340,11 +340,11 @@ func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
 	require.NoError(t, beginGoalDB(t.Context(), store.db, conversationID, &GoalState{Objective: "ship it", MaxTurns: 5, PrincipalName: "Alice", PrincipalEmail: "alice@example.com"}))
 
 	bridge := newDirectBridgeMock()
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
-		assert.Equal(t, Config{ConversationID: conversationID, Agent: "planner"}, cfg)
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
+		assert.Equal(t, Config{ConversationID: conversationID, Agent: "planner"}, *cfg)
 
 		return bridge
-	})
+	}})
 	runTestManager(t, manager)
 
 	require.NoError(t, manager.StartActiveGoals(t.Context()))
@@ -367,7 +367,7 @@ func TestThreadBridgeManagerSkipsActiveGoalContinuationForResumedTurn(t *testing
 	seedActiveTurn(t, store, conversationID, "turn-resumed", nil)
 
 	bridge := newDirectBridgeMock()
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 	runTestManager(t, manager)
 
 	require.NoError(t, manager.StartActiveGoals(t.Context()))
@@ -399,7 +399,7 @@ func TestThreadBridgeManagerPickLaterWorkUsesLiveBridge(t *testing.T) {
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
 
 	bridge := newDirectBridgeMock()
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 	runTestManager(t, manager)
 	require.NoError(t, manager.PickLaterWork(t.Context(), conversationID))
 	require.Len(t, bridge.PickLaterWorkCalls(), 1)
@@ -415,9 +415,9 @@ func TestStartQueuedConversationsReportsLaterWorkErrors(t *testing.T) {
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{}))
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "one"}))
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge {
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge {
 		return newDirectBridgeMock()
-	})
+	}})
 	runTestManager(t, manager)
 	require.ErrorContains(t, manager.StartQueuedConversations(t.Context()), "text thread agent is required")
 }
@@ -436,7 +436,7 @@ func TestStartQueuedConversationsWakesEachRecordedConversationOnce(t *testing.T)
 	require.NoError(t, store.PutThreadQueueItem("q3", &protocol.ThreadQueueItem{ID: "q3", ConversationID: second, Message: "three"}))
 
 	woke := map[string]int{}
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
 		bridge := newDirectBridgeMock()
 		conversationID := cfg.ConversationID
 		bridge.PickLaterWorkFunc = func(context.Context) error {
@@ -445,7 +445,7 @@ func TestStartQueuedConversationsWakesEachRecordedConversationOnce(t *testing.T)
 		}
 
 		return bridge
-	})
+	}})
 	runTestManager(t, manager)
 
 	require.NoError(t, manager.StartQueuedConversations(t.Context()))
@@ -485,7 +485,7 @@ func TestThreadBridgeManagerStashListAndDeleteQueue(t *testing.T) {
 	t.Parallel()
 
 	store := newWorkspaceSessionService(t)
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return newDirectBridgeMock() })
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return newDirectBridgeMock() }})
 	runTestManager(t, manager)
 
 	target := protocol.SlackThreadConversationID("C123", "111.222")
@@ -533,10 +533,10 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 
 	var created Config
 
-	manager := newThreadBridgeManager(config.NewLockedConfig(&config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080"}}), store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
-		created = cfg
+	manager := newThreadBridgeManager(config.NewLockedConfig(&config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080"}}), store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
+		created = *cfg
 		return bridge
-	})
+	}})
 	runTestManager(t, manager)
 
 	caller := &Bridge{config: Config{ConversationID: "web:caller", SessionService: store}, threads: manager}
@@ -587,10 +587,10 @@ func TestThreadBridgeManagerWebURLUsesTsnetOrigin(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
 	cfg := &config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rocketclaw", Origin: "https://rocketclaw.example.ts.net"}}}
-	manager := newThreadBridgeManager(config.NewLockedConfig(cfg), nil, slog.New(slog.DiscardHandler), func(Config) directBridge {
+	manager := newThreadBridgeManager(config.NewLockedConfig(cfg), nil, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge {
 		t.Fatal("no conversation should start")
 		return nil
-	})
+	}})
 
 	url, err := manager.WebURL(t.Context(), "web:1")
 	require.NoError(t, err)
@@ -603,10 +603,10 @@ func TestSessionsWriteRejectsUnavailableAgents(t *testing.T) {
 	writeAppTestAgent(t, workspace, "main", "---\ndescription: Test agent\nmodel: gpt-6.1-sol\n---\nPrompt\n")
 
 	store := newWorkspaceSessionService(t)
-	manager := newThreadBridgeManager(config.NewLockedConfig(&config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080"}}), store, slog.New(slog.DiscardHandler), func(Config) directBridge {
+	manager := newThreadBridgeManager(config.NewLockedConfig(&config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080"}}), store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge {
 		t.Fatal("no conversation should start")
 		return nil
-	})
+	}})
 	runTestManager(t, manager)
 
 	write := func(origin *protocol.InboundMessage, agentName, agent, want string) {
@@ -638,12 +638,12 @@ func TestThreadBridgeManagerStopStopsActiveBridges(t *testing.T) {
 
 	store := newWorkspaceSessionService(t)
 	bridges := make([]*directBridgeMock, 0, 2)
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge {
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge {
 		bridge := newDirectBridgeMock()
 		bridges = append(bridges, bridge)
 
 		return bridge
-	})
+	}})
 	shutdown := runTestManager(t, manager)
 
 	for _, id := range []string{"first", "second"} {

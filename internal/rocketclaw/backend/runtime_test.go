@@ -422,10 +422,10 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 
 		rt := &Runtime{Sessions: store, Cfg: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), Log: slog.New(slog.DiscardHandler)}
 
-		rt.threads = newThreadBridgeManager(rt.Cfg, store, rt.Log, func(cfg Config) directBridge {
+		rt.threads = newThreadBridgeManager(rt.Cfg, store, rt.Log, &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
 			cfg.SessionService = store
-			return NewConversation(rt.Cfg, rt, &cfg, rt.Log)
-		})
+			return NewConversation(rt.Cfg, rt, cfg, rt.Log)
+		}})
 
 		shutdown := runTestManager(t, rt.threads)
 		defer func() { require.NoError(t, shutdown()) }()
@@ -713,10 +713,10 @@ func TestRuntimePersistedEnqueueAndProducerArrivalOrder(t *testing.T) {
 
 				rt := &Runtime{Sessions: store, Cfg: new(config.LockedConfig), Log: slog.New(slog.DiscardHandler)}
 
-				rt.threads = newThreadBridgeManager(rt.Cfg, store, rt.Log, func(cfg Config) directBridge {
+				rt.threads = newThreadBridgeManager(rt.Cfg, store, rt.Log, &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
 					cfg.SessionService = store
-					return NewConversation(rt.Cfg, rt, &cfg, rt.Log)
-				})
+					return NewConversation(rt.Cfg, rt, cfg, rt.Log)
+				}})
 
 				shutdown := runTestManager(t, rt.threads)
 				defer func() { require.NoError(t, shutdown()) }()
@@ -869,11 +869,11 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 		rt := &Runtime{Sessions: store, Cfg: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), Log: slog.New(slog.DiscardHandler)}
 		atStart, resume := make(chan struct{}), make(chan struct{})
 
-		rt.threads = newThreadBridgeManager(rt.Cfg, store, rt.Log, func(cfg Config) directBridge {
+		rt.threads = newThreadBridgeManager(rt.Cfg, store, rt.Log, &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
 			cfg.SessionService = store
 
-			return NewConversation(rt.Cfg, rt, &cfg, rt.Log)
-		})
+			return NewConversation(rt.Cfg, rt, cfg, rt.Log)
+		}})
 
 		shutdown := runTestManager(t, rt.threads)
 		defer func() { require.NoError(t, shutdown()) }()
@@ -1175,7 +1175,7 @@ func TestRuntimeRunTurnCancelPublishesEmptyComplete(t *testing.T) {
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 	runTestManager(t, manager)
 	rt := &Runtime{threads: manager, Sessions: store}
 	events := rt.Subscribe(t.Context())
@@ -1216,10 +1216,10 @@ func TestRuntimeRunTurnRejectsUnrecordedConversationAndSyncDestination(t *testin
 	t.Parallel()
 
 	store := newTestSessionService(t)
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
 		cfg.SessionService = store
-		return &Bridge{log: slog.New(slog.DiscardHandler), config: cfg, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
-	})
+		return &Bridge{log: slog.New(slog.DiscardHandler), config: *cfg, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+	}})
 	runTestManager(t, manager)
 	rt := &Runtime{threads: manager, Sessions: store}
 	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "hello", true)
@@ -1242,7 +1242,7 @@ func TestRuntimeStartGoalRecordsGoalAndQueuesKickoff(t *testing.T) {
 
 	cfg := &config.Config{Workspace: filepath.Join(t.TempDir(), "missing")}
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, Agent: "main", SessionService: store}, requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
-	manager := newThreadBridgeManager(config.NewLockedConfig(cfg), store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	manager := newThreadBridgeManager(config.NewLockedConfig(cfg), store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 	runTestManager(t, manager)
 	manager.bridges = map[string]directBridge{conversationID: bridge}
 	rt := &Runtime{threads: manager, Sessions: store, Cfg: config.NewLockedConfig(cfg)}
@@ -1303,7 +1303,7 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{})}
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 	runTestManager(t, manager)
 	manager.bridges = map[string]directBridge{conversationID: bridge}
 	rt := &Runtime{threads: manager, Sessions: store}
@@ -1344,7 +1344,7 @@ func TestRuntimePoppedWebStashRunsAsEnqueue(t *testing.T) {
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 	runTestManager(t, manager)
 	manager.bridges = map[string]directBridge{conversationID: bridge}
 	rt := &Runtime{threads: manager, Sessions: store}
@@ -1378,7 +1378,7 @@ func TestRuntimeHeldQueueManualRelease(t *testing.T) {
 
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
 	bridge := &Bridge{log: logger, config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{})}
-	manager := newThreadBridgeManager(nil, store, logger, func(Config) directBridge { return bridge })
+	manager := newThreadBridgeManager(nil, store, logger, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 	runTestManager(t, manager)
 	manager.bridges = map[string]directBridge{conversationID: bridge}
 	rt := &Runtime{threads: manager, Sessions: store}
@@ -1480,9 +1480,9 @@ func TestRuntimeHeldQueueManualRelease(t *testing.T) {
 func TestAttachSlack(t *testing.T) {
 	t.Parallel()
 
-	manager := newThreadBridgeManager(new(config.LockedConfig), nil, slog.New(slog.DiscardHandler), func(Config) directBridge {
+	manager := newThreadBridgeManager(new(config.LockedConfig), nil, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge {
 		return nil
-	})
+	}})
 	runTestManager(t, manager)
 
 	room, choices, err := manager.slackLookups.SidebarChannelAgentChoices(t.Context(), "C1")
@@ -1555,13 +1555,13 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 		registry *backgroundRegistry
 	)
 
-	manager = newThreadBridgeManager(config.NewLockedConfig(nt.cfg), nt.service, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
+	manager = newThreadBridgeManager(config.NewLockedConfig(nt.cfg), nt.service, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
 		cfg.SessionService, cfg.RequestRestart, cfg.UserQuestionAsker = nt.service, &runtimeRestarterMock{restartFunc: testNoopRestart}, asker
-		bridge := NewConversation(config.NewLockedConfig(nt.cfg), finalsPublisher{finals: nt.finals}, &cfg, slog.New(slog.DiscardHandler))
+		bridge := NewConversation(config.NewLockedConfig(nt.cfg), finalsPublisher{finals: nt.finals}, cfg, slog.New(slog.DiscardHandler))
 		bridge.threads, bridge.background = manager, registry
 
 		return bridge
-	})
+	}})
 	registry = newBackgroundRegistry(nt.service, manager, testLogger())
 	nt.service.jobs = registry
 

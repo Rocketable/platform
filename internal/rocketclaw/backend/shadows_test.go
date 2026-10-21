@@ -369,7 +369,7 @@ func TestShadowImplicitCreation(t *testing.T) {
 
 	conversation := protocol.SlackThreadConversationID("C1", "1.1")
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversation, Agent: "main", SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{}), handling: true}
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 	inbound := newThreadInboundMessage("mention", "1.1", "1.1")
 	protocol.SetInboundAllowedAgents(inbound, []string{"main"})
 	inbound.SlackReply.ChannelID = "C1"
@@ -532,9 +532,9 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 			require.Equal(t, map[string]string{"ROCKETCLAW_PRINCIPAL_NAME": "Alice", "ROCKETCLAW_SHADOW": "main/a"}, childConfig.ShellEnv)
 
 			// A subagent of the shadow runs as a session of its own, under the shadow's limits.
-			manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), func(c Config) directBridge {
+			manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(c *Config) directBridge {
 				return NewConversation(cfg, publisher, &Config{ConversationID: c.ConversationID, Agent: c.Agent, SessionService: store}, slog.New(slog.DiscardHandler))
-			})
+			}})
 			managed, err := manager.ensureThreadBridge(t.Context(), childID+"/call-1", ThreadState{Agent: "main", parent: childID})
 			require.NoError(t, err)
 
@@ -722,10 +722,10 @@ func TestShadowLiveFinalDrain(t *testing.T) {
 
 		return nil
 	}}
-	manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), func(bridgeCfg Config) directBridge {
+	manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(bridgeCfg *Config) directBridge {
 		bridgeCfg.SessionService = store
-		return NewConversation(cfg, publisher, &bridgeCfg, slog.New(slog.DiscardHandler))
-	})
+		return NewConversation(cfg, publisher, bridgeCfg, slog.New(slog.DiscardHandler))
+	}})
 	shutdown := runTestManager(t, manager)
 	t.Cleanup(func() { require.NoError(t, shutdown()) })
 	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
@@ -1500,10 +1500,10 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 	cfg := config.NewLockedConfig(&config.Config{Workspace: root.Name(), OpenAI: config.OpenAIConfig{APIBaseURL: server.URL, APIKey: "test"}})
 	store.definitions = cfg
 	finals := make(chan *protocol.OutboundMessage, 4)
-	manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), func(bridgeCfg Config) directBridge {
+	manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(bridgeCfg *Config) directBridge {
 		bridgeCfg.SessionService, bridgeCfg.RequestRestart = store, &runtimeRestarterMock{restartFunc: testNoopRestart}
-		return NewConversation(cfg, finalsPublisher{finals: finals}, &bridgeCfg, slog.New(slog.DiscardHandler))
-	})
+		return NewConversation(cfg, finalsPublisher{finals: finals}, bridgeCfg, slog.New(slog.DiscardHandler))
+	}})
 	require.NoError(t, store.UpsertThread("parent", ThreadState{Agent: "main"}))
 	parent, err := manager.recordedBridge(t.Context(), "parent")
 	require.NoError(t, err)

@@ -1560,10 +1560,10 @@ func TestDeleteSessionDeletesOnlyTarget(t *testing.T) {
 	require.NoError(t, service.UpsertThread("main", ThreadState{Agent: "ops"}))
 	require.NoError(t, service.BeginGoal("main", &GoalState{Objective: "ship it", MaxTurns: 5}))
 	seedActiveTurn(t, service, "main", "unshadowed-active", nil)
-	manager := newThreadBridgeManager(service.definitions, service, service.log, func(cfg Config) directBridge {
+	manager := newThreadBridgeManager(service.definitions, service, service.log, &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
 		cfg.SessionService = service
-		return NewConversation(service.definitions, discardPublisher{}, &cfg, service.log)
-	})
+		return NewConversation(service.definitions, discardPublisher{}, cfg, service.log)
+	}})
 	_, err = manager.recordedBridge(t.Context(), "main")
 	require.NoError(t, err)
 

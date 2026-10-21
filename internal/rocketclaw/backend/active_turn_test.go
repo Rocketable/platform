@@ -481,10 +481,10 @@ func TestStartActiveTurnsStartsRowWorkers(t *testing.T) {
 		logs    strings.Builder
 	)
 
-	manager := newThreadBridgeManager(nil, service, slog.New(slog.NewTextHandler(&logs, nil)), func(cfg Config) directBridge {
+	manager := newThreadBridgeManager(nil, service, slog.New(slog.NewTextHandler(&logs, nil)), &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
 		started = append(started, cfg.ConversationID)
 		return newDirectBridgeMock()
-	})
+	}})
 	runTestManager(t, manager)
 	require.NoError(t, manager.StartActiveTurns(t.Context()))
 	assert.Equal(t, []string{managedID}, started, "the destination worker owns the private row; an unrecorded conversation gets no worker")
@@ -496,10 +496,10 @@ func TestStartActiveTurnsStartsRowWorkers(t *testing.T) {
 func newTestBridgeManager(t *testing.T, cfg *config.LockedConfig, service *SessionService, finals chan *protocol.OutboundMessage) (manager *threadBridgeManager, shutdown func() error) {
 	t.Helper()
 
-	manager = newThreadBridgeManager(cfg, service, slog.New(slog.DiscardHandler), func(bridgeCfg Config) directBridge {
+	manager = newThreadBridgeManager(cfg, service, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(bridgeCfg *Config) directBridge {
 		bridgeCfg.SessionService, bridgeCfg.RequestRestart = service, &runtimeRestarterMock{restartFunc: testNoopRestart}
-		return NewConversation(cfg, finalsPublisher{finals: finals}, &bridgeCfg, slog.New(slog.DiscardHandler))
-	})
+		return NewConversation(cfg, finalsPublisher{finals: finals}, bridgeCfg, slog.New(slog.DiscardHandler))
+	}})
 
 	return manager, runTestManager(t, manager)
 }

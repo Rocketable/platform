@@ -139,12 +139,12 @@ func TestShadowReviewOwnershipReadIsolation(t *testing.T) {
 	cfg := config.NewLockedConfig(&config.Config{Workspace: root.Name()})
 	constructed := 0
 
-	manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), func(bridgeCfg Config) directBridge {
+	manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(bridgeCfg *Config) directBridge {
 		constructed++
 		bridgeCfg.SessionService = store
 
-		return NewConversation(cfg, discardPublisher{}, &bridgeCfg, store.log)
-	})
+		return NewConversation(cfg, discardPublisher{}, bridgeCfg, store.log)
+	}})
 	for _, id := range []string{"existing", "blocked"} {
 		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "main"}))
 	}
