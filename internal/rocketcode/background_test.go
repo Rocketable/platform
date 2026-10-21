@@ -43,7 +43,7 @@ func TestBackgroundSchemasFollowPermission(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"child": testAgent("child")}})
 			factory.backgroundJobs = tc.jobs
-			model := factory.toolsFor(&Agent{Name: "main", Permission: parsePermissionYAML(t, tc.permissions)})
+			model, _ := factory.assembleTools(&Agent{Name: "main", Permission: parsePermissionYAML(t, tc.permissions)})
 
 			require.Equal(t, executeDescription(), model[executeToolName].Definition.Description.Value)
 
@@ -643,7 +643,8 @@ func continueTestTask(t *testing.T, mock *mockResponsesAPI, jobs BackgroundJobs,
 	factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"child": *child, "reviewer": reviewer, "safety": testAgent("safety")}})
 	factory.backgroundJobs = jobs
 	factory.childSessions = sessions
-	task := factory.toolsFor(&Agent{Name: "main", Permission: parsePermissionYAML(t, backgroundPermissions)})["task"]
+	tools, _ := factory.assembleTools(&Agent{Name: "main", Permission: parsePermissionYAML(t, backgroundPermissions)})
+	task := tools["task"]
 
 	return func(callID, subagentType, prompt, continueID string) (string, []PublicProgress, error) {
 		parent := testLooper(mockResponses())

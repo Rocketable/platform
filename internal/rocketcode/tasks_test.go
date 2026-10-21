@@ -470,7 +470,7 @@ func TestTaskToolPermissionDefaults(t *testing.T) {
 	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
 
 	t.Run("startup agent denies tools by default", func(t *testing.T) {
-		tools := factory.toolsFor(nil)
+		tools, _ := factory.assembleTools(nil)
 
 		require.Empty(t, tools)
 	})
@@ -479,7 +479,7 @@ func TestTaskToolPermissionDefaults(t *testing.T) {
 		agent := testAgentWithPermission(PermissionSet{Buckets: nil})
 		agent.Name = "plain"
 
-		tools := factory.toolsFor(agent)
+		tools, _ := factory.assembleTools(agent)
 
 		require.Empty(t, tools)
 	})
@@ -504,7 +504,7 @@ func TestTaskToolPermissionDefaults(t *testing.T) {
 		agent := testAgentWithPermission(permissionSetForActions(map[string]PermissionAction{"task": permissionAllow}))
 		agent.Name = "main"
 
-		tools := factory.toolsFor(agent)
+		tools, _ := factory.assembleTools(agent)
 
 		require.NotContains(t, tools, "task")
 	})
@@ -513,7 +513,7 @@ func TestTaskToolPermissionDefaults(t *testing.T) {
 		agent := testAgentWithPermission(permissionSetForActions(map[string]PermissionAction{"bash": permissionDeny}))
 		agent.Name = "main"
 
-		tools := factory.toolsFor(agent)
+		tools, _ := factory.assembleTools(agent)
 
 		require.NotContains(t, tools, "bash")
 		require.NotContains(t, tools, "read")
@@ -537,7 +537,7 @@ func TestTaskToolPermissionDefaults(t *testing.T) {
 		agent := testAgentWithPermission(permissionSetForActions(map[string]PermissionAction{"websearch": permissionAllow}))
 		agent.Name = "main"
 
-		tools := factory.toolsFor(agent)
+		tools, _ := factory.assembleTools(agent)
 
 		require.Contains(t, tools, "websearch")
 		require.Equal(t, "web_search", *tools["websearch"].Hosted.GetType())
@@ -550,7 +550,7 @@ func TestTaskToolPermissionDefaults(t *testing.T) {
 		}}}})
 		agent.Name = "main"
 
-		tools := factory.toolsFor(agent)
+		tools, _ := factory.assembleTools(agent)
 
 		require.Contains(t, tools, "task")
 	})
@@ -562,7 +562,7 @@ func TestTaskToolPermissionDefaults(t *testing.T) {
 		}}}})
 		agent.Name = "main"
 
-		tools := factory.toolsFor(agent)
+		tools, _ := factory.assembleTools(agent)
 
 		require.Contains(t, tools, "skill")
 	})
