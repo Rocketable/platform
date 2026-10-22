@@ -16,7 +16,7 @@ jobs:
           ref: refs/tags/${{ github.event.release.tag_name }}
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.4.3"
+          bun-version: "1.4.4"
       - name: Save the JavaScript embedded in the release tag
         run: |
           mkdir -p .tmp/sentry-release
