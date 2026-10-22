@@ -767,6 +767,7 @@ screenshot copied to the clipboard. Pending files stay in
 selection order and can be removed individually. Send accepts files without text;
 Enter and **Send** queue later work while a turn is running. The **Steer** button
 immediately left of Send guides the active response; Cmd/Ctrl+Enter does the same.
+After sending, focus returns to the composer so the next message can be typed.
 Steers wait in **Waiting to steer**, separate from both chat and the later-work
 queue. A persisted input in a History delta moves that input into chat at the point
 it was used, with its attachments. Identical texts remain separate inputs, tracked
