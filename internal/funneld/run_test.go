@@ -1,7 +1,9 @@
 package funneld
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -56,6 +58,27 @@ func TestConfigAttrs(t *testing.T) {
 	}
 	if got := configAttrs(cfg); !slices.EqualFunc(got, want, slog.Attr.Equal) {
 		t.Fatalf("configAttrs = %v; want %v", got, want)
+	}
+
+	var logs bytes.Buffer
+	logConfiguredRoutes(t.Context(), slog.New(slog.NewJSONHandler(&logs, nil)), cfg.Routes)
+	decoder := json.NewDecoder(&logs)
+	for i, route := range cfg.Routes {
+		var record struct {
+			Message string `json:"msg"`
+			Route   int    `json:"route"`
+			Path    string `json:"path"`
+			Target  string `json:"target"`
+		}
+		if err := decoder.Decode(&record); err != nil {
+			t.Fatal(err)
+		}
+		if record.Message != "funneld route configured" || record.Route != i || record.Path != route.Path || record.Target != route.Target {
+			t.Fatalf("route log = %+v; want route %d: %+v", record, i, route)
+		}
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		t.Fatalf("after route logs error = %v; want EOF", err)
 	}
 }
 
