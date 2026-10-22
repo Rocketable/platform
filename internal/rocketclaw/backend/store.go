@@ -12,6 +12,7 @@ import (
 	"iter"
 	"log/slog"
 	"maps"
+	"net/http"
 	"net/url"
 	"os"
 	"slices"
@@ -433,11 +434,50 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 }
 
 // UpdateConversationDetails changes shared display metadata without touching history.
-// Nil fields are left unchanged.
+// Nil fields are left unchanged. Remote names also update the OpenCode title.
 func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversationID string, pinned *bool, name *string) (bool, error) {
-	rows, err := execRows(ctx, s.db, "update conversation details", "count updated conversation details", `UPDATE conversations SET pinned = COALESCE($2, pinned), name = COALESCE($3, name) WHERE conversation_id = $1`, conversationID, pinned, name)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin conversation details update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 
-	return rows > 0, err
+	if name != nil {
+		var server, id string
+
+		err := tx.QueryRowContext(ctx, `SELECT server, remote_session FROM conversations WHERE conversation_id = $1 AND kind = $2 FOR UPDATE`, conversationID, KindRemote).Scan(&server, &id)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return false, fmt.Errorf("read opencode session server: %w", err)
+		}
+
+		if err == nil {
+			upstream, ok := s.definitions.Clone().OpenCode[server]
+			if !ok {
+				return false, fmt.Errorf("opencode server %q is not configured", server)
+			}
+
+			body := struct {
+				Title string `json:"title"`
+			}{Title: *name}
+
+			if err := openCodeCall(ctx, server, upstream, http.MethodPatch, "/api/session/"+url.PathEscape(id), &body, nil); err != nil {
+				return false, err
+			}
+		}
+	}
+
+	rows, err := execRows(ctx, tx, "update conversation details", "count updated conversation details", `UPDATE conversations SET pinned = COALESCE($2, pinned), name = COALESCE($3, name),
+    title = CASE WHEN kind = $4 THEN COALESCE($3, title) ELSE title END,
+    synced_at = CASE WHEN kind = $4 AND $3 IS NOT NULL THEN clock_timestamp() ELSE synced_at END WHERE conversation_id = $1`, conversationID, pinned, name, KindRemote)
+	if err != nil {
+		return false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit conversation details update: %w", err)
+	}
+
+	return rows > 0, nil
 }
 
 // ExternalMCPSession returns a persisted external MCP session mapping.

@@ -2180,7 +2180,7 @@ function NameSessionDialog({ id, tag = false }: { id: string; tag?: boolean }) {
   return <Dialog open onOpenChange={(open) => { if (!open) setCommand(undefined); }}>
         <DialogContent>
           <DialogTitle>{tag ? "Add tag" : "Name session"}</DialogTitle>
-          <DialogDescription>{tag ? "Pick a tag already in use or type a new one. Search tag:<name> to find tagged sessions." : "Shared with everyone who can see this session. Leave blank to show the last message."}</DialogDescription>
+          <DialogDescription>{tag ? "Pick a tag already in use or type a new one. Search tag:<name> to find tagged sessions." : session?.server ? "Shared with everyone who can see this session. Leave blank to clear the OpenCode title too." : "Shared with everyone who can see this session. Leave blank to show the last message."}</DialogDescription>
           <form className="mt-4 flex flex-col gap-3" action={save}>
             <FieldGroup>
               <Field data-invalid={!!update.error}>

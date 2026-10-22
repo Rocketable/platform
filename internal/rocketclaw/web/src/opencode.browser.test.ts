@@ -56,6 +56,13 @@ test("remote OpenCode sessions list, open in the relay frame, tag, and start", a
     await page.screenshot({ path: path.join(shots, "opencode-session.png") });
     expect(calls.filter(({ path, body }) => (path === "/api/History" || path === "/stream" || path === "/api/ListQueue") && body.id?.startsWith("opencode:"))).toEqual([]);
 
+    await page.keyboard.press("Control+Shift+p");
+    await page.getByPlaceholder("Type a command").fill("Name session");
+    await page.getByRole("button", { name: "Sessions: Name session" }).click();
+    const rename = page.getByRole("dialog", { name: "Name session", exact: true });
+    await rename.getByText("Shared with everyone who can see this session. Leave blank to clear the OpenCode title too.", { exact: true }).waitFor();
+    await rename.getByRole("button", { name: "Cancel", exact: true }).click();
+
     // People type any tag on a remote session; tags already in use are suggested, agent tags are not offered.
     await page.keyboard.press("Control+Shift+p");
     await page.getByPlaceholder("Type a command").fill("tag");
