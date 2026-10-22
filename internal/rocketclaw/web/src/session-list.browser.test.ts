@@ -2743,7 +2743,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         ...Array.from({ length: count - 1 }, (_, index): QueueItem => ({ id: `expand-other-${index}`, text: `Other message ${index}`, delivery: "STASH", principal: ctrl.principal })),
       ];
       const originalQueue = JSON.stringify(ctrl.queue);
-      const queuePage = await browser.newPage({ viewport: { width, height: 800 } });
+      const queuePage = await browser.newPage({ viewport: { width, height: 640 } });
       const mutations: string[] = [];
       queuePage.on("request", (request: { url(): string }) => {
         if (/\/api\/(Prompt|PopQueueItem|SteerQueueItem|RemoveQueueItem|EditQueueItem|ReorderQueue)$/.test(request.url())) mutations.push(request.url());
@@ -2778,7 +2778,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       expect(await queuePage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       const composerBox = (await queuePage.locator("textarea").boundingBox())!;
       expect(composerBox.y).toBeGreaterThanOrEqual(0);
-      expect(composerBox.y + composerBox.height).toBeLessThanOrEqual(800);
+      expect(composerBox.y + composerBox.height).toBeLessThanOrEqual(640);
       expect(await target.locator("..").evaluate((el: HTMLElement) => el.scrollHeight > el.clientHeight && getComputedStyle(el).overflowY === "auto")).toBe(true);
       await queuePage.screenshot({ path: path.join(screenshots, `queue-expanded-${width}-${count}.png`) });
       await target.locator("..").evaluate((el: HTMLElement) => { el.scrollTop = el.scrollHeight; });
@@ -2796,6 +2796,13 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       const editor = queuePage.getByRole("textbox", { name: "Edit queued message", exact: true });
       await target.getByRole("button", { name: "Edit", exact: true }).click();
       expect(await editor.inputValue()).toBe(queueText);
+      expect(await target.evaluate((row: HTMLElement) => {
+        const panel = row.closest("ul")!.getBoundingClientRect();
+        return [row.querySelector("textarea")!, ...row.querySelectorAll("form button")].every((control) => {
+          const box = control.getBoundingClientRect();
+          return box.top >= panel.top && box.bottom <= panel.bottom;
+        });
+      })).toBe(true);
       await editor.fill("discard this edit");
       await target.getByRole("button", { name: "Cancel", exact: true }).click();
       expect(JSON.stringify(ctrl.queue)).toBe(originalQueue);
@@ -2879,6 +2886,16 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await target.getByText(width === 1280 && count === 3 ? "Later edit after navigation" : "Revised queue text", { exact: true }).waitFor();
       await queuePage.waitForFunction(() => document.querySelector("textarea")?.value === "Draft stays here");
       expect(await queuePage.locator("textarea").inputValue()).toBe("Draft stays here");
+      if (count === 3) {
+        const last = queuePage.locator('[data-queue-id="expand-other-1"]');
+        await last.getByRole("button", { name: "Edit", exact: true }).click();
+        await editor.fill(queueText);
+        expect(await last.evaluate((row: HTMLElement) => {
+          const panel = row.closest("ul")!.getBoundingClientRect();
+          return [...row.querySelectorAll("form button")].every((control) => control.getBoundingClientRect().bottom <= panel.bottom);
+        })).toBe(true);
+        await last.getByRole("button", { name: "Cancel", exact: true }).click();
+      }
       if (width === 1280 && count === 3) {
         await target.getByRole("button", { name: "Edit", exact: true }).click();
         await editor.fill("consumed while editing");
