@@ -490,7 +490,6 @@ func (s *SessionService) SearchSessions(ctx context.Context, query string, scope
 // readChats are the chats a narrow search reads: candidates and those with hits, each once, or nil
 // for every chat when they are many, as reading a long list costs more than reading every chat,
 // which SearchSessions filters the same way.
-// ponytail: a fixed cut, near where Wallace's 5.8k chats break even; it could follow the chat count.
 func readChats(candidates []string, hits []MessageSearchHit) []string {
 	for _, hit := range hits {
 		candidates = append(candidates, hit.ConversationID)
