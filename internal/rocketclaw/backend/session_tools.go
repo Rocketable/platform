@@ -821,7 +821,7 @@ WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entrie
 				// Trace-only events have no recorded interleaving with replay items.
 				for s, source := range [][]json.RawMessage{entry.ReplayInput, entry.OutputTrace} {
 					for j, raw := range source {
-						kind := replayInputRawKind(raw)
+						kind := rocketcode.ReplayInputRawKind(raw)
 						if kind == "" && s == 1 {
 							// Only replay input holds untyped messages; untyped trace data is entry bookkeeping such as a producer schedule.
 							kind = entry.Type

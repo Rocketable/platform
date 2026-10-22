@@ -2287,7 +2287,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 			replayItemCount++
 
 			historyBytes += len(raw)
-			if replayInputRawKind(raw) == "compaction" {
+			if rocketcode.ReplayInputRawKind(raw) == "compaction" {
 				compactionCount++
 			}
 		}
@@ -3323,17 +3323,6 @@ func ReplayInputMessageRoleText(item *responses.ResponseInputItemUnionParam, raw
 	}
 
 	return role, strings.Join(parts, ""), true, nil
-}
-
-func replayInputRawKind(raw json.RawMessage) string {
-	var object struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(raw, &object); err != nil {
-		return ""
-	}
-
-	return object.Type
 }
 
 const defaultReplyInstruction = "Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."

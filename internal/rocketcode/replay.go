@@ -90,7 +90,7 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 	for i := range raw {
 		var item responses.ResponseInputItemUnionParam
 		if err := json.Unmarshal(raw[i], &item); err != nil {
-			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: replayInputRawKind(raw[i]), Cause: fmt.Errorf("unmarshal SDK replay input: %w", err)}
+			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: ReplayInputRawKind(raw[i]), Cause: fmt.Errorf("unmarshal SDK replay input: %w", err)}
 		}
 
 		var storedMessage struct {
@@ -99,7 +99,7 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 			ItemID string `json:"id"`
 		}
 		if err := json.Unmarshal(raw[i], &storedMessage); err != nil {
-			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: replayInputRawKind(raw[i]), Cause: fmt.Errorf("decode replay message metadata: %w", err)}
+			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: ReplayInputRawKind(raw[i]), Cause: fmt.Errorf("decode replay message metadata: %w", err)}
 		}
 
 		if item.OfMessage != nil {
@@ -128,7 +128,7 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 				Recent  *json.RawMessage `json:"recent"`
 			}
 			if err := json.Unmarshal(raw[i], &stored); err != nil {
-				return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: replayInputRawKind(raw[i]), Cause: fmt.Errorf("decode compaction replay extras: %w", err)}
+				return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: ReplayInputRawKind(raw[i]), Cause: fmt.Errorf("decode compaction replay extras: %w", err)}
 			}
 
 			extra := map[string]any{}
@@ -151,12 +151,12 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 
 		data, err := json.Marshal(item)
 		if err != nil {
-			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: replayInputRawKind(raw[i]), Cause: fmt.Errorf("marshal SDK replay input: %w", err)}
+			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: ReplayInputRawKind(raw[i]), Cause: fmt.Errorf("marshal SDK replay input: %w", err)}
 		}
 
 		var roundTrip responses.ResponseInputItemUnionParam
 		if err := json.Unmarshal(data, &roundTrip); err != nil {
-			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: replayInputRawKind(raw[i]), Cause: fmt.Errorf("round-trip SDK replay input: %w", err)}
+			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: ReplayInputRawKind(raw[i]), Cause: fmt.Errorf("round-trip SDK replay input: %w", err)}
 		}
 
 		items = append(items, item)
@@ -173,7 +173,8 @@ func responseInputKind(item *responses.ResponseInputItemUnionParam) string {
 	return ""
 }
 
-func replayInputRawKind(raw json.RawMessage) string {
+// ReplayInputRawKind returns the stored item's type, or an empty string on decode failure.
+func ReplayInputRawKind(raw json.RawMessage) string {
 	var object struct {
 		Type string `json:"type"`
 	}
