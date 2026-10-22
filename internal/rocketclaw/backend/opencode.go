@@ -478,6 +478,9 @@ func (s *SessionService) ToggleManualTag(ctx context.Context, agents rocketcode.
 // ErrTagNotAllowed reports a manual tag a RocketClaw session's agent does not allow.
 var ErrTagNotAllowed = errors.New("the session's agent does not allow this tag")
 
+// ErrRemoteSession refuses to delete a remote OpenCode session's history, which its server keeps.
+var ErrRemoteSession = errors.New("a remote OpenCode session's history stays on its server")
+
 func openCodeCall(ctx context.Context, name string, server config.OpenCodeConfig, method, path string, body, out any) error {
 	ctx, cancel := context.WithTimeout(ctx, openCodeSyncInterval)
 	defer cancel()

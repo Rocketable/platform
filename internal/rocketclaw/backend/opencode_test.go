@@ -506,3 +506,19 @@ VALUES ('opencode:box:ses_a', 'box', '', '/srv', now(), FALSE, now(), FALSE), ('
 	require.Len(t, rows, 2)
 	assert.True(t, rows[0].Pinned)
 }
+
+// A remote session's history stays on its server: deleting its entries is refused, and its row,
+// updated time included, stays as it was.
+func TestDeleteSessionRefusesRemoteSessions(t *testing.T) {
+	s := newOpenCodeTestService(t, "box")
+	_, err := s.db.ExecContext(t.Context(), `INSERT INTO opencode_sessions (conversation_id, server, title, directory, updated_at, running, synced_at)
+VALUES ('opencode:box:ses_a', 'box', 'title', '/srv', '2026-10-01T00:00:00Z', FALSE, now())`)
+	require.NoError(t, err)
+
+	_, err = s.DeleteSession(t.Context(), "opencode:box:ses_a")
+	require.ErrorIs(t, err, ErrRemoteSession)
+
+	var updated time.Time
+	require.NoError(t, s.db.QueryRowContext(t.Context(), `SELECT updated_at FROM opencode_sessions WHERE conversation_id = 'opencode:box:ses_a'`).Scan(&updated))
+	assert.Equal(t, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), updated.UTC())
+}

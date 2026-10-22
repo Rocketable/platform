@@ -35,6 +35,10 @@ func (s *Server) uploadAttachment(stream grpc.ServerStream) error {
 		return fmt.Errorf("receive upload metadata: %w", err)
 	}
 
+	if err := validRequest(first.ProtoReflect()); err != nil {
+		return err
+	}
+
 	if err := s.visibleConversation(ctx, first.ConversationId); err != nil {
 		return err
 	}
@@ -81,6 +85,10 @@ func (s *Server) downloadAttachment(stream grpc.ServerStream) error {
 	request := &Attachment{}
 	if err := stream.RecvMsg(request); err != nil {
 		return fmt.Errorf("receive download request: %w", err)
+	}
+
+	if err := validRequest(request.ProtoReflect()); err != nil {
+		return err
 	}
 	// Replay scanning keeps authorization tied to surviving history; index references if histories outgrow this.
 	history, err := s.history(stream.Context(), &HistoryRequest{Id: request.ConversationId})

@@ -142,6 +142,10 @@ func (s *Server) DeleteSessionEntries(ctx context.Context, request *SessionEntri
 	}
 
 	deleted, err := s.sessions.DeleteSession(ctx, request.Id)
+	if errors.Is(err, backend.ErrRemoteSession) {
+		return nil, fmt.Errorf("web entries: %w", status.Error(codes.FailedPrecondition, err.Error()))
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("web entries: %w", status.Error(codes.Internal, "delete session entries"))
 	}
