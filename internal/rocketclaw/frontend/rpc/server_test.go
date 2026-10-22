@@ -608,7 +608,7 @@ func TestSearchSessionsSharedFlightCancellation(t *testing.T) {
 			server.searchMu.Lock()
 			defer server.searchMu.Unlock()
 
-			return server.searches[fmt.Sprintf(" %d tag:A x", backend.SearchMessages)].waiters == 2
+			return server.searches[fmt.Sprintf(" %d \"alice\" tag:A x", backend.SearchMessages)].waiters == 2
 		}, time.Second, time.Millisecond)
 	}
 	principal := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
@@ -655,6 +655,65 @@ func TestSearchSessionsSharedFlightCancellation(t *testing.T) {
 	require.NoError(t, shared.err)
 	require.Equal(t, "x", shared.response.Needle)
 	require.Empty(t, started, "identical searches run once")
+}
+
+// Alice's search waits in its room lookup while Bob's starts, so a flight shared across callers
+// would hand Bob her results.
+func TestSearchSessionsUnreadPerCaller(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	for _, id := range []string{"slack-thread:C1:1.1", "web-session:alice", "web-session:bob"} {
+		require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main"}))
+		_, err := sessions.AppendEntryID(t.Context(), id, &rocketcode.SessionEntry{})
+		require.NoError(t, err)
+	}
+
+	_, err = openTestTurns(t, dsn).db.ExecContext(t.Context(), `INSERT INTO web_tabs (username, path, conversation_id, unread_at) VALUES ('alice', '/s/a', 'web-session:alice', now()), ('bob', '/s/b', 'web-session:bob', now())`)
+	require.NoError(t, err)
+
+	release := make(chan struct{})
+	server := &Server{
+		sessions: sessions,
+		channels: &mockChannels{SidebarChannelAgentChoicesFunc: func(context.Context, string) (string, []string, error) {
+			<-release
+			return "support", nil, nil
+		}},
+		usernames: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice", netip.MustParseAddr("192.0.2.2"): "bob"},
+	}
+
+	found := make([][]string, 2)
+
+	var searches errgroup.Group
+
+	for i, ip := range []string{"192.0.2.1", "192.0.2.2"} {
+		searches.Go(func() error {
+			response, err := server.searchSessions(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", ip)), &SearchSessionsRequest{Query: "is:unread"})
+			for _, match := range response.GetMatches() {
+				found[i] = append(found[i], match.ConversationId)
+			}
+
+			return err
+		})
+		assert.Eventually(t, func() bool {
+			server.searchMu.Lock()
+			defer server.searchMu.Unlock()
+
+			waiting := 0
+			for _, flight := range server.searches {
+				waiting += flight.waiters
+			}
+
+			return waiting == i+1
+		}, time.Second, time.Millisecond)
+	}
+
+	close(release)
+	require.NoError(t, searches.Wait())
+	require.Equal(t, [][]string{{"web-session:alice"}, {"web-session:bob"}}, found, "each caller gets their own unread sessions")
 }
 
 func TestSearchSessionsResponse(t *testing.T) {
@@ -3734,7 +3793,7 @@ func TestContinueCronRun(t *testing.T) {
 			var listed bool
 
 			rooms := &mockChannels{SidebarChannelAgentChoicesFunc: func(context.Context, string) (string, []string, error) { return "", nil, nil }}
-			for chat, err := range sessions.SidebarChats(ctx, rooms, nil) {
+			for chat, err := range sessions.SidebarChats(ctx, "", rooms, nil) {
 				require.NoError(t, err)
 
 				listed = listed || chat.Session.Conversation.ID == "web:"+run && chat.Session.Summary.LastMessage == "daily report"

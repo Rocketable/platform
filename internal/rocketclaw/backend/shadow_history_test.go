@@ -188,7 +188,7 @@ func TestShadowHistoryIsAbsentFromOrdinaryEnumeration(t *testing.T) {
 
 	var listed []string
 
-	for session, err := range store.sidebarSessions(ctx, nil) {
+	for session, err := range store.sidebarSessions(ctx, "", nil) {
 		require.NoError(t, err)
 
 		listed = append(listed, session.Conversation.ID)

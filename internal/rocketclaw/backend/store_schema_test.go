@@ -161,7 +161,7 @@ LEFT JOIN pg_index i ON i.indexrelid = c.oid WHERE c.oid IN ('entries'::regclass
 
 	listed := 0
 
-	for _, err := range store.sidebarSessions(ctx, nil) {
+	for _, err := range store.sidebarSessions(ctx, "", nil) {
 		require.NoError(t, err)
 
 		listed++
@@ -1299,7 +1299,7 @@ FROM conversations ORDER BY conversation_id COLLATE "C"`, "conversations")
 
 	var listed []string
 
-	for row, err := range store.sidebarSessions(ctx, nil) {
+	for row, err := range store.sidebarSessions(ctx, "", nil) {
 		require.NoError(t, err)
 
 		listed = append(listed, row.Conversation.ID)

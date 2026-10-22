@@ -3,10 +3,12 @@ package rpc
 import (
 	"bufio"
 	"context"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -21,11 +23,14 @@ type relayUpstream struct {
 	hits   int
 	auth   string
 	origin string
+	body   string
 }
 
 func (u *relayUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	u.hits++
 	u.origin = r.Header.Get("Origin")
+	body, _ := io.ReadAll(r.Body)
+	u.body = string(body)
 
 	if user, password, ok := r.BasicAuth(); ok && user == "opencode" {
 		u.auth = password
@@ -85,10 +90,36 @@ func TestOpenCodeRelay(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, serve("192.0.2.10:5000", http.Header{"Origin": {"http://rocketclaw.example:4100"}}).Code)
 	assert.Equal(t, upstream.URL, fake.origin, "OpenCode sees its own origin")
+
+	// Prompts carry the admitted sender; everything else reaches OpenCode byte-for-byte.
+	for _, test := range []struct{ method, path, body, want string }{
+		{http.MethodPost, "/api/session/s1/prompt", `{"parts":[],"metadata":{"displayText":"hi","agent":"build"}}`, `{"parts":[],"metadata":{"displayText":"hi","agent":"build","rocketclaw_username":"alice"}}`},
+		{http.MethodPost, "/api/session/s1/prompt", `{"parts":[]}`, `{"parts":[],"metadata":{"rocketclaw_username":"alice"}}`},
+		{http.MethodPost, "/api/session/s1/prompt", `{"metadata":{"rocketclaw_username":"mallory"}}`, `{"metadata":{"rocketclaw_username":"alice"}}`},
+		{http.MethodPost, "/api/session/s1/prompt", `not json`, `not json`},
+		{http.MethodPost, "/api/session/s1/prompt", ``, ``},
+		{http.MethodPost, "/api/session/s1/command", `{"metadata":{"rocketclaw_username":"mallory"}}`, `{"metadata":{"rocketclaw_username":"mallory"}}`},
+		{http.MethodPost, "/api/session/s1/shell", `{ "command": "ls" }`, `{ "command": "ls" }`},
+		{http.MethodGet, "/api/session/s1/prompt", `{ "parts": [] }`, `{ "parts": [] }`},
+	} {
+		request := httptest.NewRequestWithContext(t.Context(), test.method, "http://rocketclaw.example:4100"+test.path, strings.NewReader(test.body))
+		request.RemoteAddr = "192.0.2.10:5000"
+
+		response := httptest.NewRecorder()
+		relay.ServeHTTP(response, request)
+		require.Equal(t, http.StatusOK, response.Code, test.body)
+
+		if test.want == test.body {
+			assert.Equal(t, test.want, fake.body, "%s %s passes unchanged", test.method, test.path)
+		} else {
+			assert.JSONEq(t, test.want, fake.body, test.body)
+		}
+	}
 }
 
 func TestOpenCodeRelayOnTheTailnetStreams(t *testing.T) {
-	upstream := httptest.NewServer(&relayUpstream{})
+	fake := &relayUpstream{}
+	upstream := httptest.NewServer(fake)
 	t.Cleanup(upstream.Close)
 
 	// The tailnet listener admits like the Web there: a Tailscale user, whatever the IP.
@@ -108,4 +139,13 @@ func TestOpenCodeRelayOnTheTailnetStreams(t *testing.T) {
 	line, err := bufio.NewReader(response.Body).ReadString('\n')
 	require.NoError(t, err)
 	assert.Equal(t, "data: hello\n", line, "events arrive while the stream stays open")
+
+	prompt, err := http.NewRequestWithContext(t.Context(), http.MethodPost, relay.URL+"/api/session/s1/prompt", strings.NewReader(`{"parts":[]}`))
+	require.NoError(t, err)
+
+	sent, err := relay.Client().Do(prompt)
+	require.NoError(t, err)
+	require.NoError(t, sent.Body.Close())
+	require.Equal(t, http.StatusOK, sent.StatusCode)
+	assert.JSONEq(t, `{"parts":[],"metadata":{"rocketclaw_username":"zoe@example.com"}}`, fake.body, "a tailnet prompt carries the tailnet login")
 }

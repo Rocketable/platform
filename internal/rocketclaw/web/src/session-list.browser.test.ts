@@ -1656,10 +1656,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await matrixPills.first().waitFor();
     expect(await matrixSearch.inputValue()).toBe("");
     await matrixPills.first().click();
-    const operatorChoices = matrixDialog.getByRole("button", { name: /^(?:pinned|forked|newest|oldest)$/ });
+    const operatorChoices = matrixDialog.getByRole("button", { name: /^(?:pinned|forked|unread|newest|oldest)$/ });
     await matrixSearch.fill("is:");
     await matrixDialog.getByRole("button", { name: "pinned", exact: true }).waitFor();
-    expect(await operatorChoices.allTextContents()).toEqual(["pinned", "forked"]);
+    expect(await operatorChoices.allTextContents()).toEqual(["pinned", "forked", "unread"]);
     await matrixSearch.fill("sort:");
     await matrixDialog.getByRole("button", { name: "newest", exact: true }).waitFor();
     expect(await operatorChoices.allTextContents()).toEqual(["newest", "oldest"]);

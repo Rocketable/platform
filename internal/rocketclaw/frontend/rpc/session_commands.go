@@ -148,7 +148,8 @@ func (work messageSearch) search(scanCtx context.Context, s *Server) (any, error
 }
 
 func (s *Server) searchSessions(ctx context.Context, request *SearchSessionsRequest) (*SearchSessionsResponse, error) {
-	if _, _, err := s.principal(ctx); err != nil {
+	username, _, err := s.principal(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -163,7 +164,7 @@ func (s *Server) searchSessions(ctx context.Context, request *SearchSessionsRequ
 	}
 
 	// A leading space keeps this key apart from SearchMessages' trimmed needles.
-	found, err := s.sharedSearch(ctx, fmt.Sprintf(" %d %s", scope, query), sessionSearch{query: query, scope: scope})
+	found, err := s.sharedSearch(ctx, fmt.Sprintf(" %d %q %s", scope, username, query), sessionSearch{username: username, query: query, scope: scope})
 	if err != nil {
 		return nil, err
 	}
@@ -172,12 +173,12 @@ func (s *Server) searchSessions(ctx context.Context, request *SearchSessionsRequ
 }
 
 type sessionSearch struct {
-	query string
-	scope backend.SearchScope
+	username, query string
+	scope           backend.SearchScope
 }
 
 func (work sessionSearch) search(scanCtx context.Context, s *Server) (any, error) {
-	search, err := s.sessions.SearchSessions(scanCtx, work.query, work.scope, s.channels)
+	search, err := s.sessions.SearchSessions(scanCtx, work.username, work.query, work.scope, s.channels)
 	if err != nil {
 		return nil, fmt.Errorf("web session search: %w", err)
 	}

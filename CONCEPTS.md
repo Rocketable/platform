@@ -197,6 +197,10 @@ A named place in the Web that holds tabs, shared by everyone: the server keeps o
 
 The Space a session was born in: its agent's `space:`, or for a cron's sessions the cron's, else the cron agent's, else for a Web session the space the person was in. A named space that does not exist yet is created with the session. A session opens in its Birth Space; a person may move its tab elsewhere and later restore it. Deleting the space clears it. Sessions from before Birth Spaces, and those started outside the Web other than cron report threads, have none.
 
+### Unread
+
+A session's per-person mark that a turn the person sent a Web message into has ended and they have not looked at it since. Other people's turns, and turns with no Web sender, mark no one. Having the session's tab active in a focused window clears the mark on all of that person's devices. Unrelated to the per-chat `web_unread` flag that migration 017 removed.
+
 ## Hosted Pages
 
 ### Hosted Page

@@ -32,6 +32,7 @@ import (
 // NewHTTPHandler bridges the browser API to the local Web service.
 func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) http.Handler {
 	mux := http.NewServeMux()
+	protection := http.NewCrossOriginProtection()
 	app := web.Handler(sentry)
 	mux.Handle("GET /", app)
 	mux.Handle("GET /api/", http.NotFoundHandler())
@@ -81,6 +82,15 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 			)
 
 			switch method {
+			case "ListSessions":
+				// Ending views and clearing marks takes a same-origin poll, by the rule protection holds
+				// unsafe methods to; it lets every GET through.
+				post := *r
+				post.Method = http.MethodPost
+
+				if protection.Check(&post) == nil {
+					request = &ListSessionsRequest{Viewing: r.URL.Query().Get("viewing")}
+				}
 			case "/stream":
 				method, request, response, required = "Join", &JoinRequest{Id: r.URL.Query().Get("id")}, &ConversationChange{}, "id"
 			case "DownloadAttachment", "UploadAttachment":
@@ -153,7 +163,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 		})
 	}
 
-	return http.NewCrossOriginProtection().Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return protection.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		address, err := netip.ParseAddrPort(r.RemoteAddr)
 		if err != nil {
 			httpRPCError(w, status.Error(codes.Unauthenticated, "invalid remote address"))

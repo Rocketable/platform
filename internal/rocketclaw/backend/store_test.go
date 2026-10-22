@@ -679,7 +679,7 @@ INSERT INTO legacy_lane_work (conversation_id, position, queue_item_id, kind) VA
 	assert.Equal(t, protocol.InboundKind("steer"), items[0].Kind)
 }
 
-// The State Store ends with its 14 tables, shadow_turns and shadow_steps, and the retired tables and 049's manifest
+// The State Store ends with its 16 tables, shadow_turns and shadow_steps, and the retired tables and 049's manifest
 // under legacy_ names; nothing ties a legacy table to a live row or notifies for it.
 func TestSessionServiceHeadSchemaTables(t *testing.T) {
 	t.Parallel()
@@ -693,7 +693,7 @@ func TestSessionServiceHeadSchemaTables(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{
 		"conversations", "turns", "entries", "steps", "schedules", "attachments", "pending_attachment_deletions", "slack_channel_facts",
-		"voice_settings", "hosted_pages", "web_spaces", "web_tab_states", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
+		"voice_settings", "hosted_pages", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
 		"legacy_entry_md5", "legacy_history", "legacy_listed", "legacy_shown", "legacy_lane_work", "legacy_row_counts", "legacy_hidden_run_buckets",
 		"legacy_unrecorded_conversations", "legacy_unmoved_facts", "legacy_turn_steps",
 		"legacy_thread_queue", "legacy_background_jobs", "legacy_scheduled_messages", "legacy_cron_schedules", "legacy_cron_schedule_runs",
@@ -2698,13 +2698,13 @@ func TestWebSpaces(t *testing.T) {
 
 	state, revision, err := store.TabState(ctx, "alice")
 	require.NoError(t, err)
-	assert.Nil(t, state)
+	assert.Zero(t, state)
 	assert.Zero(t, revision)
 
-	save := func(state string, revision int64) bool {
+	save := func(space string, revision int64) bool {
 		t.Helper()
 
-		saved, err := store.SaveTabState(ctx, "alice", []byte(state), revision)
+		saved, err := store.SaveTabState(ctx, "alice", &TabState{Space: space}, revision)
 		require.NoError(t, err)
 
 		return saved
@@ -2715,12 +2715,12 @@ func TestWebSpaces(t *testing.T) {
 
 	state, revision, err = store.TabState(ctx, "alice")
 	require.NoError(t, err)
-	assert.Equal(t, []byte("second"), state)
+	assert.Equal(t, TabState{Space: "second", Last: map[string]string{}}, state)
 	assert.Equal(t, int64(2), revision)
 
 	state, revision, err = store.TabState(ctx, "bob")
 	require.NoError(t, err)
-	assert.Nil(t, state, "each person has their own state")
+	assert.Zero(t, state, "each person has their own state")
 	assert.Zero(t, revision)
 }
 
@@ -2791,7 +2791,7 @@ FROM conversations c WHERE c.shadow_parent IS NULL`, "kinds", func(row rowScanne
 
 	var listed []string
 
-	for row, err := range store.sidebarSessions(ctx, nil) {
+	for row, err := range store.sidebarSessions(ctx, "", nil) {
 		require.NoError(t, err)
 
 		listed = append(listed, row.Conversation.ID)

@@ -4,13 +4,15 @@ import path from "node:path";
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
-const rows: { id: string; name: string; agent: string; running?: boolean; background?: boolean; spaceId?: string }[] = [
+const rows: { id: string; name: string; agent: string; running?: boolean; background?: boolean; spaceId?: string; unreadAt?: string }[] = [
   { id: "alpha", name: "Alpha", agent: "main" },
   { id: "bravo", name: "Bravo", agent: "main" },
   { id: "charlie", name: "Charlie", agent: "main" },
   { id: "delta", name: "Delta", agent: "main", running: true, background: true },
   // Echo was born in the ops space, and its background work runs while no turn does.
   { id: "echo", name: "Echo", agent: "main", spaceId: "ops", background: true },
+  // A turn of the person's ended unseen, and another runs now.
+  { id: "foxtrot", name: "Foxtrot", agent: "main", running: true, unreadAt: "2026-10-22T10:00:00Z" },
 ];
 const href = (id: string) => `/s/${Buffer.from(id).toString("base64url")}`;
 type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; pinned?: boolean; group?: string; space?: string }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; placement: string }; revision: number; refused: number };
@@ -715,6 +717,32 @@ test("with reduced motion a running tab's title and pinned icon show a still gra
   expect(await tab("Delta").getAttribute("aria-description")).toBe("Turn running");
   expect(await animation(tab("Delta").locator("svg"))).toBe("none");
   expect(await mask(tab("Delta").locator("svg"))).toStartWith("linear-gradient(");
+}), 60_000);
+
+test("an unread tab shows a bold title and a primary bar on its top edge, pinned and in the sidebar too", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  // The bar is the tab's 2px absolutely placed child flush with its top edge; the title is the tab's text span.
+  const cue = (id: string) => strip(page).locator(`[data-tab="${href(id)}"]`).evaluate((root: HTMLElement) => {
+    const probe = root.appendChild(Object.assign(document.createElement("i"), { style: "background-color: var(--primary)" }));
+    const primary = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    const bar = [...root.children].find((node) => getComputedStyle(node).position === "absolute" && node.getBoundingClientRect().top === root.getBoundingClientRect().top && node.getBoundingClientRect().height === 2);
+    const title = root.querySelector('[role="tab"] > span');
+    return { bar: bar ? getComputedStyle(bar).backgroundColor === primary : false, weight: title ? getComputedStyle(title).fontWeight : "" };
+  });
+  await openSaved(page, origin, href("alpha"), "Alpha", saved);
+  await openSaved(page, origin, href("foxtrot"), "Foxtrot", saved);
+  expect(await cue("foxtrot")).toEqual({ bar: true, weight: "700" });
+  expect(await cue("alpha")).toEqual({ bar: false, weight: "400" });
+  expect(await tab("Foxtrot").getAttribute("aria-description")).toBe("Space: Main, Turn running, Unread");
+  // A pinned tab in the top strip has no title, so the bar alone shows it.
+  await menu(page, "Foxtrot", "Pin");
+  expect(await cue("foxtrot")).toEqual({ bar: true, weight: "" });
+  expect(await tab("Foxtrot").getAttribute("aria-description")).toBe("Turn running, Unread");
+  await menu(page, "Foxtrot", "Move tabs to left");
+  expect(await strip(page).getAttribute("aria-orientation")).toBe("vertical");
+  expect(await cue("foxtrot")).toEqual({ bar: true, weight: "700" });
+  expect(await cue("alpha")).toEqual({ bar: false, weight: "400" });
 }), 60_000);
 
 test("tab groups take a name and color, collapse, adopt opened tabs, follow drags, and survive reload", () => withPage({}, async (page, origin, _prompts, saved) => {

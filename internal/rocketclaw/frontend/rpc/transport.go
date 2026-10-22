@@ -78,11 +78,16 @@ func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 
 		return withoutDatabaseText("Voice", s.voice(request, stream))
 	}}, {StreamName: "ListSessions", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
-		if err := stream.RecvMsg(&ListSessionsRequest{}); err != nil {
+		request := &ListSessionsRequest{}
+		if err := stream.RecvMsg(request); err != nil {
 			return fmt.Errorf("receive web session list: %w", err)
 		}
 
-		return withoutDatabaseText("ListSessions", s.listSessions(stream))
+		if err := validRequest(request.ProtoReflect()); err != nil {
+			return err
+		}
+
+		return withoutDatabaseText("ListSessions", s.listSessions(request, stream))
 	}}}
 	registrar.RegisterService(&desc, s)
 }

@@ -173,7 +173,7 @@ func TestForkConversation(t *testing.T) {
 	spaces, err := sessions.Spaces(t.Context())
 	require.NoError(t, err)
 
-	for row, err := range sessions.sidebarSessions(t.Context(), nil) {
+	for row, err := range sessions.sidebarSessions(t.Context(), "", nil) {
 		require.NoError(t, err)
 		require.Equal(t, parents[row.Conversation.ID], row.ForkedFrom)
 		require.Equal(t, spaces[1].ID, row.SpaceID, "a fork keeps its source's birth space")

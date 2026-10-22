@@ -244,15 +244,25 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		return err
 	}
 
-	ran := map[string]bool{}
+	// through is a session's newest handled idle marker, in OpenCode milliseconds, 0 before its first.
+	type storedSession struct {
+		ran     bool
+		updated time.Time
+		through int64
+	}
 
-	if err := readRows(ctx, s.db, `SELECT conversation_id FROM conversations WHERE server = $1 AND running`, "running opencode sessions", func(row rowScanner) error {
-		var id string
-		if err := row.Scan(&id); err != nil {
-			return fmt.Errorf("scan running opencode session: %w", err)
+	stored := map[string]storedSession{}
+
+	if err := readRows(ctx, s.db, `SELECT conversation_id, running, last_updated, COALESCE(read_through, 0) FROM conversations WHERE server = $1`, "stored opencode sessions", func(row rowScanner) error {
+		var (
+			id      string
+			session storedSession
+		)
+		if err := row.Scan(&id, &session.ran, &session.updated, &session.through); err != nil {
+			return fmt.Errorf("scan stored opencode session: %w", err)
 		}
 
-		ran[id] = true
+		stored[id] = session
 
 		return nil
 	}, name); err != nil {
@@ -305,19 +315,56 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		running, backgrounds                              []bool
 		replies                                           []*string
 		oldest                                            time.Time
+		cursors                                           []*int64
+		markedIDs, markedUsers                            []string
 	)
 
 	for _, session := range sessions.Data {
 		id := "opencode:" + name + ":" + session.ID
 		oldest = time.UnixMilli(session.Time.Updated).UTC()
 		_, busy := active.Data[session.ID]
+		last := stored[id]
+
+		// An idle session the last sync saw running, or whose time.updated moved because a prompt
+		// was accepted, may have ended turns since its cursor. Each idle marker ends a turn covering
+		// every prompt since the previous one, so the stamped prompts after the cursor and no later
+		// than the newest marker name the turns' senders. A failed read leaves the cursor in place,
+		// and the cursor never moves back.
+		var cursor *int64
+
+		if !busy && (last.ran || session.Time.Updated > last.updated.UnixMilli()) {
+			var idle, users struct {
+				Data []struct {
+					Metadata struct {
+						Username string `json:"rocketclaw_username"`
+					} `json:"metadata"`
+					Time struct {
+						Created int64 `json:"created"`
+					} `json:"time"`
+				} `json:"data"`
+			}
+
+			// ponytail: only the 50 newest prompts are read, so a turn holding more leaves its
+			// older senders unmarked; page back to the cursor if turns grow that large.
+			path := "/api/session/" + url.PathEscape(session.ID) + "/message?type="
+			if openCodeCall(ctx, name, server, http.MethodGet, path+"idle&order=desc&limit=1", nil, &idle) == nil && len(idle.Data) > 0 &&
+				openCodeCall(ctx, name, server, http.MethodGet, path+"user&order=desc&limit=50", nil, &users) == nil {
+				cursor = &idle.Data[0].Time.Created
+
+				for _, message := range users.Data {
+					if message.Time.Created > last.through && message.Time.Created <= *cursor {
+						markedIDs, markedUsers = append(markedIDs, id), append(markedUsers, message.Metadata.Username)
+					}
+				}
+			}
+		}
 
 		// A session the last sync saw running and this one sees idle finished a turn. Its reply is
 		// written with its idle state, so a reader never sees the turn end without it. A failed
 		// read clears the reply rather than holding back the whole list.
 		var reply *string
 
-		if ran[id] && !busy {
+		if last.ran && !busy {
 			var messages struct {
 				Data []struct {
 					Content []struct {
@@ -346,7 +393,7 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 
 		ids, titles, directories, agents, models = append(ids, id), append(titles, session.Title), append(directories, session.Location.Directory), append(agents, session.Agent), append(models, session.model())
 		updated, running, replies = append(updated, oldest), append(running, busy), append(replies, reply)
-		backgrounds, remotes = append(backgrounds, background[session.ID]), append(remotes, session.ID)
+		backgrounds, remotes, cursors = append(backgrounds, background[session.ID]), append(remotes, session.ID), append(cursors, cursor)
 	}
 
 	// A fetch below the limit is the whole root set, so every missing row was deleted; a full
@@ -356,21 +403,30 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 	// Session.Info.title is also the shared name, including when cleared (OpenCode v2
 	// https://opencode.ai/v2/openapi.json#/paths/~1api~1session/get).
 	_, err := execState(ctx, s.db, "sync opencode sessions", `WITH incoming AS (
-    SELECT * FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[], $11::boolean[], $12::text[], $13::text[], $15::text[]) AS t(conversation_id, title, directory, updated_at, running, reply, background, agent, model, remote_session)
+    SELECT * FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[], $11::boolean[], $12::text[], $13::text[], $15::text[], $16::bigint[]) AS t(conversation_id, title, directory, updated_at, running, reply, background, agent, model, remote_session, read_through)
 ), upserted AS (
-    INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, reply, background, model, remote_session, name)
-    SELECT conversation_id, agent, '', $14, FALSE, 'remote', $1, title, directory, updated_at, running, now(), reply, background, model, remote_session, title FROM incoming
+    INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, reply, background, model, remote_session, name, read_through)
+    SELECT conversation_id, agent, '', $14, FALSE, 'remote', $1, title, directory, updated_at, running, now(), reply, background, model, remote_session, title, read_through FROM incoming
     ON CONFLICT (conversation_id) DO UPDATE SET
         title = CASE WHEN conversations.synced_at > $9 THEN conversations.title ELSE excluded.title END,
         name = CASE WHEN conversations.synced_at > $9 THEN conversations.name ELSE excluded.name END, directory = excluded.directory,
         last_updated = excluded.last_updated, running = excluded.running, background = excluded.background, synced_at = excluded.synced_at,
-        reply = COALESCE(excluded.reply, conversations.reply), agent = excluded.agent, model = excluded.model
+        reply = COALESCE(excluded.reply, conversations.reply), agent = excluded.agent, model = excluded.model,
+        read_through = GREATEST(excluded.read_through, conversations.read_through)
+), marks AS (
+    SELECT DISTINCT conversation_id, username, $14 AS kind FROM unnest($17::text[], $18::text[]) AS m(conversation_id, username) WHERE username <> ''
+), marked AS (
+    INSERT INTO web_tabs (username, path, conversation_id, unread_at)
+    SELECT c.username, `+tabPathSQL+`, c.conversation_id, now() FROM marks c
+    LEFT JOIN web_tab_states p ON p.username = c.username AND p.viewing = c.conversation_id AND p.viewed_at >= now() - interval '10 seconds'
+    WHERE p.username IS NULL
+    ON CONFLICT (username, path) DO UPDATE SET unread_at = now(), conversation_id = excluded.conversation_id
 ), removed AS (
     DELETE FROM conversations WHERE server = $1 AND conversation_id <> ALL($2) AND synced_at < $9 AND ($7 OR last_updated >= $8)
 )
 UPDATE conversations SET synced_at = now(), running = FALSE, background = FALSE
 WHERE server = $1 AND conversation_id <> ALL($2) AND NOT (synced_at < $9 AND ($7 OR last_updated >= $8))`,
-		name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies, backgrounds, agents, models, KindRemote, remotes)
+		name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies, backgrounds, agents, models, KindRemote, remotes, cursors, markedIDs, markedUsers)
 
 	return err
 }

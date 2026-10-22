@@ -470,7 +470,7 @@ ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, v.conversation_id CO
 // keeps the matches whose summary time is within the normalized since and until
 // bounds, newest first unless criteria has a sort: term.
 func (s *SessionService) searchSessionsWithin(ctx context.Context, criteria string, params *sessionListParams, slack slackLookup) (*SessionSearch, []SessionMatch, error) {
-	search, err := s.SearchSessions(ctx, criteria, SearchMessages, slack)
+	search, err := s.SearchSessions(ctx, "", criteria, SearchMessages, slack)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -498,7 +498,7 @@ func TestBackgroundJobsStayOffTheLane(t *testing.T) {
 
 	var listed []string
 
-	for session, err := range store.sidebarSessions(ctx, nil) {
+	for session, err := range store.sidebarSessions(ctx, "", nil) {
 		require.NoError(t, err)
 		require.False(t, session.Running)
 
@@ -797,7 +797,7 @@ func TestSidebarMarksRunningBackgroundJobs(t *testing.T) {
 
 	background := map[string]bool{}
 
-	for row, err := range store.sidebarSessions(t.Context(), nil) {
+	for row, err := range store.sidebarSessions(t.Context(), "", nil) {
 		require.NoError(t, err)
 
 		background[row.Conversation.ID] = row.Background

@@ -4,7 +4,10 @@ package rpc;
 
 option go_package = "github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc";
 
-message ListSessionsRequest {}
+message ListSessionsRequest {
+  // The session of the caller's active tab while its window has focus, else empty.
+  string viewing = 1;
+}
 
 message Session {
   string id = 1;
@@ -42,6 +45,8 @@ message Session {
   string remote_session_id = 25;
   // What the session is called when it has no name or preview.
   string label = 26;
+  // When a turn the caller sent into ended unseen, RFC3339Nano; empty once read.
+  string unread_at = 27;
 }
 
 // What a conversation is, as RocketClaw records it when it creates the conversation.
