@@ -315,20 +315,23 @@ function QueuePanel({
             <button type="button" disabled={settling || edit?.id === item.id} className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent" aria-label="Remove" onClick={() => onRemove(item.id)}>
               <X className="h-3.5 w-3.5" />
             </button>
-            {edit?.id === item.id ? <FieldGroup className="w-full">
+            {edit?.id === item.id ? <form className="w-full" onSubmit={async (event) => {
+              event.preventDefault();
+              if (sending || settling || saving.current) return;
+              saving.current = true;
+              try { await update.mutateAsync({ id: conversationId, itemId: edit.id, text: edit.text }); setEdit(undefined); } catch { /* The mutation keeps the error and edited text visible. */ } finally { saving.current = false; }
+            }}><FieldGroup>
               <Field data-disabled={settling}>
                 <FieldLabel className="sr-only" htmlFor={`queue-edit-${item.id}`}>Edit queued message</FieldLabel>
-                <Textarea id={`queue-edit-${item.id}`} autoFocus value={edit.text} disabled={settling} className="max-h-48 overflow-y-auto" onChange={(event) => setEdit({ ...edit, text: event.target.value })} />
+                <Textarea id={`queue-edit-${item.id}`} autoFocus value={edit.text} disabled={settling} className="max-h-48 overflow-y-auto" onChange={(event) => setEdit({ ...edit, text: event.target.value })} onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); event.currentTarget.form!.requestSubmit(); }
+                }} />
               </Field>
               <div className="flex gap-2">
-                <Button type="button" size="sm" disabled={sending || settling} onClick={async () => {
-                  if (saving.current) return;
-                  saving.current = true;
-                  try { await update.mutateAsync({ id: conversationId, itemId: edit.id, text: edit.text }); setEdit(undefined); } catch { /* The mutation keeps the error and edited text visible. */ } finally { saving.current = false; }
-                }}>{settling ? "Saving…" : "Save"}</Button>
+                <Button type="submit" size="sm" disabled={sending || settling}>{settling ? "Saving…" : "Save"}</Button>
                 <Button type="button" variant="ghost" size="sm" disabled={settling} onClick={() => { setEdit(undefined); update.reset(); }}>Cancel</Button>
               </div>
-            </FieldGroup> : expanded.has(item.id) ? <p className="w-full whitespace-pre-wrap wrap-anywhere text-sm">{item.text}</p> : null}
+            </FieldGroup></form> : expanded.has(item.id) ? <p className="w-full whitespace-pre-wrap wrap-anywhere text-sm">{item.text}</p> : null}
           </li>
         ))}
       </ul>
