@@ -408,18 +408,34 @@ test("revert replaces only the captured untouched draft, Redo leaves it alone, a
   const original = globalThis.fetch;
   const response = Promise.withResolvers<Response>();
   const requests: { id: string; messageId?: string }[] = [];
-  globalThis.fetch = Object.assign(async (_url: URL | RequestInfo, init?: RequestInit) => { requests.push(JSON.parse(init!.body as string)); return response.promise; }, { preconnect: original.preconnect });
+  const attachment = { id: "file & 1", conversationId: "source/one", name: "restored.bin", mimeType: "application/octet-stream" };
+  const contents = new Uint8Array([0, 1, 255]);
+  globalThis.fetch = Object.assign(async (url: URL | RequestInfo, init?: RequestInit) => {
+    if (String(url).startsWith("/api/DownloadAttachment?")) {
+      expect(new URL(String(url), "http://localhost").searchParams).toEqual(new URLSearchParams({ conversationId: attachment.conversationId, id: attachment.id }));
+      return new Response(contents, { headers: { "Content-Type": "text/plain" } });
+    }
+    requests.push(JSON.parse(init!.body as string)); return response.promise.then((result) => result.clone());
+  }, { preconnect: original.preconnect });
   const owner = { sessionId: "first", text: "previous", files: [{ id: "old", file: new File(["old"], "old.txt") }], agent: "current", edit: 0, submission: 0, sending: false, historyEpoch: 0, lines: [] };
   const other = { text: "another session" };
   try {
     const staging = revertComposer(owner, "9007199254740993:4", false, async () => {}, () => {});
-    response.resolve(Response.json({ revertMessageId: "9007199254740993:4", prompt: { text: "  $skill original\n", attachments: [] } }));
+    response.resolve(Response.json({ revertMessageId: "9007199254740993:4", prompt: { text: "  $skill original\n", attachments: [attachment] } }));
     await staging;
-    expect(owner).toMatchObject({ text: "  $skill original\n", files: [], agent: "current", focus: 1 });
+    expect(owner).toMatchObject({ text: "  $skill original\n", agent: "current", focus: 1 });
+    expect(owner.files).toHaveLength(1);
+    expect(owner.files[0].id).not.toBe("old");
+    expect(owner.files[0].file.name).toBe(attachment.name);
+    expect(owner.files[0].file.type).toBe(attachment.mimeType);
+    expect(new Uint8Array(await owner.files[0].file.arrayBuffer())).toEqual(contents);
+    const restored = owner.files;
     expect(other.text).toBe("another session");
     expect(requests).toEqual([{ id: "first", messageId: "9007199254740993:4" }]);
     await revertComposer(owner, undefined, true, async () => {}, () => {});
     expect(owner.text).toBe("  $skill original\n");
+    expect(owner.files).toBe(restored);
+    expect(owner).toMatchObject({ error: "" });
     const delayed = Promise.withResolvers<Response>();
     globalThis.fetch = Object.assign(async () => delayed.promise, { preconnect: original.preconnect });
     const late = revertComposer(owner, undefined, false, async () => {}, () => {});
@@ -427,9 +443,16 @@ test("revert replaces only the captured untouched draft, Redo leaves it alone, a
     delayed.resolve(Response.json({ revertMessageId: "1:0", prompt: { text: "old" } }));
     await late;
     expect(owner.text).toBe("newer edit");
+    globalThis.fetch = Object.assign(async (url: URL | RequestInfo) => String(url).startsWith("/api/DownloadAttachment?") ? new Response("missing", { status: 404 }) : Response.json({ prompt: { text: "must not replace edits", attachments: [attachment] } }), { preconnect: original.preconnect });
+    await revertComposer(owner, undefined, false, async () => {}, () => {});
+    expect(owner).toMatchObject({ text: "newer edit", error: "Could not restore restored.bin", reverting: false });
+    expect(owner.files).toBe(restored);
     globalThis.fetch = Object.assign(async () => Response.json({ message: "mutation failed", code: 13 }, { status: 500 }), { preconnect: original.preconnect });
     await revertComposer(owner, undefined, false, async () => {}, () => {});
     expect(owner).toMatchObject({ text: "newer edit", error: "mutation failed", reverting: false });
+    globalThis.fetch = Object.assign(async () => Response.json({ prompt: { text: "without files", attachments: [] } }), { preconnect: original.preconnect });
+    await revertComposer(owner, undefined, false, async () => {}, () => {});
+    expect(owner).toMatchObject({ text: "without files", files: [], error: "", reverting: false });
   } finally { globalThis.fetch = original; }
 });
 
@@ -725,15 +748,16 @@ for (const action of ["pop", "promote"] as const) test(`queue ${action} switches
   }
 });
 
-test("stopping leaves busy status to History, which may already contain a running next turn", async () => {
+for (const failure of [false, true]) test(`stopping leaves busy status to History and reports prompt failures: failure=${failure}`, async () => {
   const draft = { submission: 0, lines: [], busy: true };
-  let reads = 0;
+  let reads = 0, error = "previous error";
   await stopComposer({ draft, id: "session", busy: true,
-    prompt: { mutateAsync: async (request: object) => { expect(request).toEqual({ id: "session", text: "$stop" }); } },
+    prompt: { mutateAsync: async (request: object) => { expect(request).toEqual({ id: "session", text: "$stop" }); if (failure) throw new Error("stop refused"); } },
     refreshHistory: async () => { reads++; applyHistoryDelta(draft, view([], { running: true })); },
-    setSendError: (error: string) => { expect(error).toBe(""); },
+    setSendError: (value: string) => { error = value; },
   });
-  expect(reads).toBe(1);
+  expect(reads).toBe(failure ? 0 : 1);
+  expect(error).toBe(failure ? "stop refused" : "");
   expect(draft.busy).toBe(true);
 });
 
