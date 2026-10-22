@@ -702,9 +702,9 @@ func listedBackgroundJobs(jobs []backgroundJob, conversationID string) []protoco
 
 // Drain commits the offered input before advancing any consumed state. A bound
 // child instead reads its parent's stream and waits at the final-answer boundary.
-func (b *Bridge) Drain(ctx context.Context, phase rocketcode.TurnPhase, applied []string) ([]rocketcode.PromptInput, error) {
+func (b *Bridge) Drain(ctx context.Context, responseID string, phase rocketcode.TurnPhase, applied []string) ([]rocketcode.PromptInput, error) {
 	if b.shadow {
-		return b.drainShadowInputs(ctx, phase, applied)
+		return b.drainShadowInputs(ctx, responseID, phase, applied)
 	}
 
 	// Slow persistence delays this bridge's admissions. Separating transactional
@@ -741,6 +741,7 @@ func (b *Bridge) Drain(ctx context.Context, phase rocketcode.TurnPhase, applied 
 	}
 
 	inputs := slices.Clone(snapshot.Inputs)
+	segment := shadowStepSegment(applied, snapshot.Resets)
 
 	// Completion Notes are claimed under b.mu, so a note this last step misses finds notesOpen false
 	// and wakes the conversation. A resumed turn is offered the notes it held once more.
@@ -766,6 +767,11 @@ func (b *Bridge) Drain(ctx context.Context, phase rocketcode.TurnPhase, applied 
 		header, _, _ := strings.Cut(prompt, "\n\n")
 		directSkill := inboundDirectSkill(request.inbound)
 		inputs = append(inputs, rocketcode.PromptInput{ID: request.queueItemID, Texts: []string{prompt}, Header: header, Attachments: attachmentsFromInbound(request.inbound.Attachments), DirectSkill: directSkill, Agent: request.inbound.Metadata[inboundAgentMetadataKey]})
+
+		if request.inbound.Human && !slices.Contains(snapshot.Resets, request.queueItemID) {
+			snapshot.Resets = append(snapshot.Resets, request.queueItemID)
+		}
+
 		b.log.Info("steer injected", "event", "steer_injected", "conversation_id", b.config.ConversationID, "queue_item_id", request.queueItemID, "phase", phase)
 	}
 	// A restart reoffers accepted steers and held notes, while the canonical
@@ -786,6 +792,14 @@ func (b *Bridge) Drain(ctx context.Context, phase rocketcode.TurnPhase, applied 
 
 	if len(offered) == 0 && phase == rocketcode.TurnPhaseFinalAnswer {
 		snapshot.Closed = true
+	}
+
+	// The response this drain follows is one step of budget for this turn's shadows, recorded
+	// before the turn's next response and once even when a restart drains it again.
+	if _, err := tx.ExecContext(ctx, `INSERT INTO shadow_steps (shadow_turn_id, child, response_id, segment)
+SELECT id, FALSE, $3, $4 FROM shadow_turns WHERE parent_source_conversation_id = $1 AND parent_turn_id = $2 ON CONFLICT DO NOTHING`, b.config.ConversationID, b.activeTurnID, responseID, segment); err != nil {
+		b.mu.Unlock()
+		return nil, inputPersistenceError{cause: fmt.Errorf("record parent step: %w", err)}
 	}
 
 	if err := saveTurnInputs(ctx, tx, b.config.ConversationID, b.activeTurnID, &snapshot); err != nil {

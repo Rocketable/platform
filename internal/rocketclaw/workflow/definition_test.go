@@ -102,19 +102,6 @@ def main(args):
 			if definition.program == nil {
 				t.Errorf("Load()[%q].program = nil", tt.name)
 			}
-
-			if definition.Source != tt.source || definition.Path != "runtime/workflows/"+tt.file {
-				t.Errorf("Load()[%q] did not retain the validated source/path", tt.name)
-			}
-
-			if err := root.Remove("runtime/workflows/" + tt.file); err != nil {
-				t.Fatal(err)
-			}
-
-			recovered, err := Compile(definition.Path, definition.Name, definition.Source)
-			if err != nil || recovered.program == nil {
-				t.Fatalf("Compile saved source after deletion: definition = %v, error = %v", recovered, err)
-			}
 		})
 	}
 }

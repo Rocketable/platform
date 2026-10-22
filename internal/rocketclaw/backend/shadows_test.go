@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -36,7 +37,7 @@ func testDrainInputs(t *testing.T, drain *Bridge, phase rocketcode.TurnPhase) []
 		applied = append(applied, snapshot.Inputs[i].ID)
 	}
 
-	inputs, err := drain.Drain(t.Context(), phase, applied)
+	inputs, err := drain.Drain(t.Context(), "resp-"+rand.Text(), phase, applied)
 	require.NoError(t, err)
 
 	return inputs
@@ -497,6 +498,9 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, admitted)
 			require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &turnInputSnapshot{Inputs: []rocketcode.PromptInput{{ID: "initial", Texts: []string{"write"}}}, Closed: true}))
+			// The parent answered in two steps, so the shadow's tool batch and answer fit its budget of three.
+			_, err = store.db.ExecContext(t.Context(), `INSERT INTO shadow_steps (shadow_turn_id, child, response_id, segment) SELECT id, FALSE, 'parent-' || n, 0 FROM shadow_turns CROSS JOIN generate_series(1, 2) n`)
+			require.NoError(t, err)
 
 			var childID string
 			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings WHERE shadow_agent = 'main/a'`).Scan(&childID))
@@ -589,7 +593,7 @@ func TestShadowConsumedBatchIsAtomic(t *testing.T) {
 	parent.steers = []bridgeRequest{{queueItemID: "s1", inbound: steer, completion: completion}}
 	_, err = store.db.ExecContext(t.Context(), `ALTER TABLE shadow_turns ADD CONSTRAINT reject_fanout CHECK (inputs = '[]'::jsonb)`)
 	require.NoError(t, err)
-	_, err = parent.Drain(t.Context(), rocketcode.TurnPhaseFinalAnswer, nil)
+	_, err = parent.Drain(t.Context(), "resp-1", rocketcode.TurnPhaseFinalAnswer, nil)
 	require.Error(t, err, "fan-out failure must stop parent consumption")
 	require.Zero(t, parent.steersRead)
 	require.Empty(t, parent.notesOffered)
@@ -613,7 +617,7 @@ func TestShadowConsumedBatchIsAtomic(t *testing.T) {
 	require.NoError(t, err)
 
 	parent.threads = &threadBridgeManager{bridges: map[string]directBridge{}}
-	inputs, err := parent.Drain(t.Context(), rocketcode.TurnPhaseFinalAnswer, nil)
+	inputs, err := parent.Drain(t.Context(), "resp-1", rocketcode.TurnPhaseFinalAnswer, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"note", "moved", "s1"}, []string{inputs[0].ID, inputs[1].ID, inputs[2].ID})
 	require.Equal(t, buildPrompt(steer, nil, true), inputs[2].Texts[0])
@@ -625,7 +629,7 @@ func TestShadowConsumedBatchIsAtomic(t *testing.T) {
 	data, err := json.Marshal(inputs)
 	require.NoError(t, err)
 	require.JSONEq(t, string(data), string(mirrored))
-	inputs, err = parent.Drain(t.Context(), rocketcode.TurnPhaseFinalAnswer, []string{"note", "moved", "s1"})
+	inputs, err = parent.Drain(t.Context(), "resp-2", rocketcode.TurnPhaseFinalAnswer, []string{"note", "moved", "s1"})
 	require.NoError(t, err)
 	require.Empty(t, inputs)
 	require.False(t, parent.inputOpen)
@@ -1194,176 +1198,6 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 	}
 }
 
-func TestShadowWorkflowCapturedSource(t *testing.T) {
-	for _, mutation := range []string{"change", "delete"} {
-		t.Run(mutation, func(t *testing.T) {
-			store, root := newShadowTestStore(t)
-			require.NoError(t, root.Remove(".rocketclaw/agents/main/z.md"))
-			require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o700))
-			require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o700))
-
-			source := `meta = {"name": "audit", "description": "Captured audit"}
-review = worker(name = "review", instructions = "Explicit review", model = "review", tools = ["execute"])
-def main(args):
-    base = agent(args)
-    checked = agent(args, worker = review, schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]})
-    return base + str(checked["ok"])
-`
-			require.NoError(t, root.WriteFile(".rocketclaw/workflows/audit.star", []byte(source), 0o600))
-
-			for _, name := range []string{"main", "main/a"} {
-				model := "gpt-main"
-				if name != "main" {
-					model = "gpt-shadow-a"
-				}
-
-				require.NoError(t, root.WriteFile(".rocketclaw/agents/"+name+".md", fmt.Appendf(nil, "---\nmodel: %s\npermission: {bash: allow}\n---\nSystem %s", model, name), 0o600))
-			}
-
-			type providerRequest struct {
-				Model        string            `json:"model"`
-				Instructions string            `json:"instructions"`
-				Input        []json.RawMessage `json:"input"`
-				Text         json.RawMessage   `json:"text"`
-			}
-
-			requests := make(chan providerRequest, 8)
-			shellOutputs := make(chan string, 4)
-
-			interruptParent := make(chan struct{}, 1)
-			interruptParent <- struct{}{}
-
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				var request providerRequest
-				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-					t.Error(err)
-					return
-				}
-
-				for _, input := range request.Input {
-					var entry struct{ Type, Output string }
-					if err := json.Unmarshal(input, &entry); err != nil {
-						t.Error(err)
-						return
-					}
-
-					if entry.Type == "function_call_output" {
-						shellOutputs <- entry.Output
-
-						text := "base"
-						if request.Model == "gpt-review" {
-							text = `{"ok":true}`
-						}
-
-						w.Header().Set("Content-Type", "application/json")
-						writeRawRunMessage(t, w, "response", "message", text)
-
-						return
-					}
-				}
-
-				requests <- request
-
-				if request.Model == "gpt-main" {
-					select {
-					case <-interruptParent:
-						<-r.Context().Done()
-						return
-					default:
-					}
-				}
-
-				w.Header().Set("Content-Type", "application/json")
-
-				arguments, _ := json.Marshal(struct{ Code, Description string }{`def main():
-    return bash(command="printf 'shadow=%s' \"$ROCKETCLAW_SHADOW\"")
-`, "read shadow identity"})
-				_, _ = fmt.Fprintf(w, `{"id":"call","status":"completed","output":[{"id":"fc","type":"function_call","status":"completed","call_id":"environment","name":"execute","arguments":%q}]}`, arguments)
-			}))
-			t.Cleanup(server.Close)
-			cfg := config.NewLockedConfig(&config.Config{Workspace: root.Name(), Models: map[string]string{"review": "gpt-review"}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL, APIKey: "test"}})
-			store.definitions = cfg
-			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
-
-			var childID string
-			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings`).Scan(&childID))
-			// An earlier unprepared head makes this child lag without delaying the parent.
-			_, err := store.db.ExecContext(t.Context(), `INSERT INTO shadow_turns (child_conversation_id, parent_source_conversation_id, parent_turn_id, inbound_json) VALUES ($1, 'parent', 'lag', '{}')`, childID)
-			require.NoError(t, err)
-
-			finals := make(chan *protocol.OutboundMessage, 8)
-			manager, shutdown := newTestBridgeManager(t, cfg, store, finals)
-			t.Cleanup(func() { require.NoError(t, shutdown()) })
-
-			parent, err := manager.recordedBridge(t.Context(), "parent")
-			require.NoError(t, err)
-
-			inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "$workflow audit original args", true)
-			inbound.Workflow = protocol.WorkflowInvocation{Name: "audit", Args: "original args"}
-			require.NoError(t, parent.Submit(t.Context(), inbound))
-			require.Equal(t, "gpt-main", (<-requests).Model)
-			require.NoError(t, shutdown())
-			require.Empty(t, finals, "shutdown does not deliver unfinished workflow output")
-
-			if mutation == "delete" {
-				require.NoError(t, root.Remove(".rocketclaw/workflows/audit.star"))
-			} else {
-				require.NoError(t, root.WriteFile(".rocketclaw/workflows/audit.star", []byte("meta = {\"name\": \"audit\", \"description\": \"Changed\"}\ndef main(args): return \"WRONG\"\n"), 0o600))
-			}
-
-			manager, shutdown = newTestBridgeManager(t, cfg, store, finals)
-			require.NoError(t, manager.StartActiveTurns(t.Context()))
-			final := readFinal(t, finals)
-			require.Equal(t, "baseTrue", final.Text, "parent recovery recompiles captured source too")
-
-			for range 2 {
-				<-requests
-				require.Equal(t, "shadow=", <-shellOutputs, "parent workflow has no shadow identity")
-			}
-
-			require.Eventually(t, func() bool {
-				active, err := store.HasActiveTurn(t.Context(), "parent")
-				return err == nil && !active
-			}, 3*time.Second, time.Millisecond)
-			require.NoError(t, shutdown())
-			_, err = store.db.ExecContext(t.Context(), `DELETE FROM shadow_turns WHERE parent_turn_id = 'lag'`)
-			require.NoError(t, err)
-			manager, shutdown = newTestBridgeManager(t, cfg, store, finals)
-			require.NoError(t, manager.StartActiveTurns(t.Context()))
-
-			var base providerRequest
-			select {
-			case base = <-requests:
-			case <-time.After(3 * time.Second):
-				t.Fatal("saved workflow did not start the lagging child")
-			}
-
-			require.Equal(t, "gpt-shadow-a", base.Model)
-			require.Contains(t, base.Instructions, "System main/a")
-			require.Contains(t, string(base.Input[0]), "original args")
-
-			review := <-requests
-			require.Equal(t, "gpt-review", review.Model)
-			require.Contains(t, review.Instructions, "Explicit review")
-			require.Contains(t, string(review.Text), "json_schema")
-
-			for range 2 {
-				require.Equal(t, "shadow=main/a", <-shellOutputs, "base and explicit workflow workers retain the owning shadow identity")
-			}
-
-			require.Eventually(t, func() bool {
-				entries, err := store.ObserveEntries(t.Context(), childID)
-				return err == nil && len(entries) == 1
-			}, 3*time.Second, time.Millisecond)
-			require.Empty(t, finals)
-
-			var count int
-			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM shadow_turns`).Scan(&count))
-			require.Equal(t, 1, count, "workflow worker calls do not create outer manifests")
-		})
-	}
-}
-
 func TestShadowAdmissionPinsAgent(t *testing.T) {
 	store, root := newShadowTestStore(t)
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o700))
@@ -1679,6 +1513,9 @@ func TestShadowFinalWaitCancellationAndClosure(t *testing.T) {
 
 	snapshot := turnInputSnapshot{Inputs: []rocketcode.PromptInput{{ID: "initial", Texts: []string{"start"}}, {ID: "s1", Texts: []string{"same text"}}}}
 	require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &snapshot))
+	// Two parent steps give the child's three final-answer drains their budget.
+	_, err = store.db.ExecContext(t.Context(), `INSERT INTO shadow_steps (shadow_turn_id, child, response_id, segment) SELECT id, FALSE, 'parent-' || n, 0 FROM shadow_turns CROSS JOIN generate_series(1, 2) n`)
+	require.NoError(t, err)
 
 	var childID string
 	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings ORDER BY shadow_agent LIMIT 1`).Scan(&childID))
@@ -1692,7 +1529,7 @@ func TestShadowFinalWaitCancellationAndClosure(t *testing.T) {
 
 	var group errgroup.Group
 	group.Go(func() error {
-		inputs, err := child.Drain(ctx, rocketcode.TurnPhaseFinalAnswer, []string{"initial", "s1"})
+		inputs, err := child.Drain(ctx, "child-1", rocketcode.TurnPhaseFinalAnswer, []string{"initial", "s1"})
 		require.Empty(t, inputs)
 
 		return err
@@ -1708,7 +1545,7 @@ func TestShadowFinalWaitCancellationAndClosure(t *testing.T) {
 
 	group = errgroup.Group{}
 	group.Go(func() error {
-		inputs, err := child.Drain(t.Context(), rocketcode.TurnPhaseFinalAnswer, []string{"initial", "s1"})
+		inputs, err := child.Drain(t.Context(), "child-2", rocketcode.TurnPhaseFinalAnswer, []string{"initial", "s1"})
 		require.Equal(t, []rocketcode.PromptInput{{ID: "s2", Texts: []string{"same text"}}}, inputs)
 
 		return err
@@ -1720,7 +1557,7 @@ func TestShadowFinalWaitCancellationAndClosure(t *testing.T) {
 	require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &snapshot))
 	require.NoError(t, parent.notifyShadowInputs(t.Context(), request.turnID))
 	require.NoError(t, group.Wait())
-	inputs, err := child.Drain(t.Context(), rocketcode.TurnPhaseFinalAnswer, []string{"initial", "s1", "s2"})
+	inputs, err := child.Drain(t.Context(), "child-3", rocketcode.TurnPhaseFinalAnswer, []string{"initial", "s1", "s2"})
 	require.NoError(t, err)
 	require.Empty(t, inputs, "a preexisting closed state is observed after wait registration")
 
@@ -1729,6 +1566,161 @@ func TestShadowFinalWaitCancellationAndClosure(t *testing.T) {
 	_, err = store.db.ExecContext(t.Context(), `UPDATE shadow_turns SET terminal = $2 WHERE parent_turn_id = $1`, request.turnID, protocol.TerminalStopped)
 	require.NoError(t, err)
 	require.NoError(t, parent.notifyShadowInputs(t.Context(), request.turnID))
+}
+
+// startShadowStepTurn admits a parent turn whose shadows main/a and main/z have each claimed their copy.
+func startShadowStepTurn(t *testing.T) (*SessionService, *Bridge, map[string]*Bridge) {
+	t.Helper()
+
+	store, _ := newShadowTestStore(t)
+	parent := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
+	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
+	admitted, err := parent.activateInbound(t.Context(), &request)
+	require.NoError(t, err)
+	require.True(t, admitted)
+	require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &turnInputSnapshot{Inputs: []rocketcode.PromptInput{{ID: "initial", Texts: []string{"start"}}}}))
+	parent.activeTurnID = request.turnID
+
+	children := map[string]*Bridge{}
+	parent.threads = &threadBridgeManager{bridges: map[string]directBridge{}}
+
+	for _, agent := range []string{"main/a", "main/z"} {
+		var id string
+		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT child_conversation_id FROM shadow_bindings WHERE shadow_agent = $1`, agent).Scan(&id))
+		turn, claimed, err := store.claimShadowTurn(t.Context(), id)
+		require.NoError(t, err)
+		require.True(t, claimed)
+
+		child := NewConversation(store.definitions, discardPublisher{}, &Config{ConversationID: id, Agent: agent, SessionService: store}, slog.New(slog.DiscardHandler))
+		child.shadow, child.activeTurnID = true, turn.id
+		children[agent], parent.threads.bridges[id] = child, child
+	}
+
+	return store, parent, children
+}
+
+func drainShadowStep(t *testing.T, b *Bridge, responseID string, phase rocketcode.TurnPhase, applied ...string) []rocketcode.PromptInput {
+	t.Helper()
+
+	inputs, err := b.Drain(t.Context(), responseID, phase, applied)
+	require.NoError(t, err)
+
+	return inputs
+}
+
+func shadowLimitNote(t *testing.T, store *SessionService, b *Bridge) (note string) {
+	t.Helper()
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT limit_note FROM shadow_turns WHERE child_turn_id = $1`, b.activeTurnID).Scan(&note))
+
+	return note
+}
+
+func TestShadowStepLimit(t *testing.T) {
+	store, parent, children := startShadowStepTurn(t)
+	answered, limited := children["main/a"], children["main/z"]
+
+	// A shadow ahead of its parent pauses until the parent's next step raises its budget.
+	drainShadowStep(t, parent, "p1", rocketcode.TurnPhaseToolLoop, "initial")
+
+	ahead := make(chan error, 1)
+
+	go func() {
+		_, err := limited.Drain(t.Context(), "z1", rocketcode.TurnPhaseToolLoop, []string{"initial"})
+		ahead <- err
+	}()
+
+	require.Never(t, func() bool { return len(ahead) > 0 }, 200*time.Millisecond, time.Millisecond, "one parent step leaves the shadow's first step at its budget")
+	drainShadowStep(t, parent, "p2", rocketcode.TurnPhaseToolLoop, "initial")
+	require.NoError(t, <-ahead)
+
+	// The parent ends its turn at its tenth step; p2 drained again after a restart is still one step.
+	for _, id := range []string{"p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9"} {
+		drainShadowStep(t, parent, id, rocketcode.TurnPhaseToolLoop, "initial")
+	}
+
+	drainShadowStep(t, parent, "p10", rocketcode.TurnPhaseFinalAnswer, "initial")
+
+	for i := range 12 {
+		drainShadowStep(t, answered, fmt.Sprintf("a%d", i+1), rocketcode.TurnPhaseToolLoop, "initial")
+	}
+
+	drainShadowStep(t, answered, "a13", rocketcode.TurnPhaseFinalAnswer, "initial")
+	require.Empty(t, shadowLimitNote(t, store, answered), "an answer within the budget completes normally")
+
+	cancelled := false
+	limited.activeTurnCancel = func() { cancelled = true }
+
+	for i := 2; i <= 14; i++ {
+		drainShadowStep(t, limited, fmt.Sprintf("z%d", i), rocketcode.TurnPhaseToolLoop, "initial")
+	}
+
+	drainShadowStep(t, limited, "z14", rocketcode.TurnPhaseToolLoop, "initial")
+	require.False(t, cancelled, "z14 drained again after a restart is still one step")
+
+	drainShadowStep(t, limited, "z15", rocketcode.TurnPhaseToolLoop, "initial")
+	require.True(t, cancelled, "the fifteenth step's tool results end the turn")
+	require.True(t, limited.activeTurnInterrupted)
+
+	// The stop says why in Web, outside the replay that later model context reads.
+	stopped, err := limited.finishStoppedShadow(t.Context(), &bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "start", false), turnID: limited.activeTurnID})
+	require.NoError(t, err)
+	require.True(t, stopped)
+
+	entries, err := store.ObserveTranscript(t.Context(), limited.config.ConversationID, 0, 0, nil)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, []rocketcode.PublicProgress{{ID: "shadow-step-limit", Kind: rocketcode.PublicProgressText, State: rocketcode.PublicProgressStopped, Text: "Hit the step limit: 15 vs. parent's 10."}}, rocketcode.PublicProgressFromTrace(entries[0].Entry.OutputTrace))
+	require.Empty(t, entries[0].Entry.ReplayInput)
+}
+
+func TestShadowStepLimitRestartsAtPersonMessages(t *testing.T) {
+	store, parent, children := startShadowStepTurn(t)
+	limited := children["main/z"]
+
+	// The parent's first step takes a person's steer, another agent's steer, and a system notice;
+	// only the person's steer starts a new count.
+	parent.steers = []bridgeRequest{
+		{queueItemID: "s1", inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindSteer, "also check the logs", true), completion: &turnCompletion{done: make(chan struct{})}},
+		{queueItemID: "agent", inbound: protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindSteer, "from another agent", false), completion: &turnCompletion{done: make(chan struct{})}},
+	}
+	parent.movedNotes = []rocketcode.PromptInput{systemPromptInput("moved", "moved notice")}
+	require.Len(t, drainShadowStep(t, parent, "p1", rocketcode.TurnPhaseToolLoop, "initial"), 3)
+
+	mirrored, _, err := store.shadowInputs(t.Context(), limited.config.ConversationID, limited.activeTurnID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"s1"}, mirrored.Resets)
+
+	// Out of steps before the steer, the shadow still takes it, then counts again from zero.
+	require.Len(t, drainShadowStep(t, limited, "z1", rocketcode.TurnPhaseToolLoop, "initial"), 3)
+
+	cancelled := make(chan struct{})
+	limited.activeTurnCancel = func() { close(cancelled) }
+	paused := make(chan error, 1)
+
+	go func() {
+		_, err := limited.Drain(t.Context(), "z2", rocketcode.TurnPhaseToolLoop, []string{"initial", "moved", "s1", "agent"})
+		paused <- err
+	}()
+
+	require.Never(t, func() bool { return len(paused) > 0 }, 200*time.Millisecond, time.Millisecond, "the parent has taken no step since the steer")
+	drainShadowStep(t, parent, "p2", rocketcode.TurnPhaseFinalAnswer, "initial", "moved", "s1", "agent")
+	require.NoError(t, <-paused)
+	<-cancelled
+	require.Equal(t, "Hit the step limit: 1 vs. parent's 1.", shadowLimitNote(t, store, limited))
+}
+
+func TestShadowWorkflowTurnsHaveNoShadows(t *testing.T) {
+	store, _ := newShadowTestStore(t)
+	parent := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
+	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "$workflow audit", true)}
+	request.inbound.Workflow = protocol.WorkflowInvocation{Name: "audit"}
+	admitted, err := parent.activateInbound(t.Context(), &request)
+	require.NoError(t, err)
+	require.True(t, admitted)
+
+	var count int
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM shadow_turns`).Scan(&count))
+	require.Zero(t, count)
 }
 
 // Deleting a Web copy while its producer's family holds history locks waits for

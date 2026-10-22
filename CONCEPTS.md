@@ -156,6 +156,10 @@ more shadows.
 A saved comparison child that receives each parent turn's ordered consumed
 inputs, with its own history, model, tool results, and failures. Web pairs turns
 by their recorded source and turn identity, not prompt text or completion order.
+A shadow may take at most 1.5 times its parent's model responses, rounded down,
+counted from the turn's first message and again from each steer a person sends:
+ahead of a running parent it pauses, and after the parent's turn ends it stops
+once out of steps, with a Web-only note. Workflow turns have no shadows.
 Shadow output has no connector delivery. Shadows execute permitted tools for
 real in the shared workspace; output separation is not a dry-run sandbox.
 

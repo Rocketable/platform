@@ -77,17 +77,19 @@ const (
 )
 
 // SteerDrain collects waiting steers and Completion Notes after a tool batch, or when a no-tool answer would otherwise end the turn.
+// Each drain follows one provider response, named by responseID; a turn resumed
+// after a restart drains its journaled response again under the same ID.
 // Applied identities include replayed and compacted inputs. A final drain may
 // wait for new input; errors must prevent accepting the pending final answer.
 type SteerDrain interface {
-	Drain(context.Context, TurnPhase, []string) ([]PromptInput, error)
+	Drain(ctx context.Context, responseID string, phase TurnPhase, applied []string) ([]PromptInput, error)
 }
 
 // InertSteerDrain never supplies additional input.
 type InertSteerDrain struct{}
 
 // Drain does not wait or supply input.
-func (InertSteerDrain) Drain(context.Context, TurnPhase, []string) ([]PromptInput, error) {
+func (InertSteerDrain) Drain(context.Context, string, TurnPhase, []string) ([]PromptInput, error) {
 	return nil, nil
 }
 
@@ -1073,7 +1075,7 @@ func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Resp
 // appendSteers skips a drained input whose ID is already in the turn, since a
 // resumed turn's embedder re-offers every steer it accepted.
 func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, phase TurnPhase, applied *[]string) (bool, error) {
-	inputs, err := l.SteerDrain.Drain(ctx, phase, slices.Clone(*applied))
+	inputs, err := l.SteerDrain.Drain(ctx, record.ResponseID, phase, slices.Clone(*applied))
 	if err != nil {
 		return false, fmt.Errorf("drain turn input: %w", err)
 	}

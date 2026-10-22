@@ -402,17 +402,17 @@ DELETE FROM shadow_turns t USING affected a WHERE t.id = a.id`, parent, entry.ID
 
 // turnInputSnapshot is the consumed stream, not an admission queue or a cursor.
 // Applied identities advance only in RocketCode's own journal checkpoint.
+// Resets lists the consumed inputs a person sent into the running turn: each
+// starts a fresh shadow step count, as the turn's first input does.
 type turnInputSnapshot struct {
-	Agent          string                      `json:"agent"`
-	Inputs         []rocketcode.PromptInput    `json:"inputs"`
-	ContextEntries []rocketcode.SessionEntry   `json:"context_entries"`
-	ChildContext   []rocketcode.SessionEntry   `json:"child_context"`
-	Environment    map[string]string           `json:"environment"`
-	Closed         bool                        `json:"closed"`
-	GoalTurn       bool                        `json:"goal_turn"`
-	Workflow       protocol.WorkflowInvocation `json:"workflow"`
-	WorkflowSource string                      `json:"workflow_source"`
-	WorkflowPath   string                      `json:"workflow_path"`
+	Agent          string                    `json:"agent"`
+	Inputs         []rocketcode.PromptInput  `json:"inputs"`
+	ContextEntries []rocketcode.SessionEntry `json:"context_entries"`
+	ChildContext   []rocketcode.SessionEntry `json:"child_context"`
+	Environment    map[string]string         `json:"environment"`
+	Closed         bool                      `json:"closed"`
+	GoalTurn       bool                      `json:"goal_turn"`
+	Resets         []string                  `json:"resets"`
 }
 
 // emptyTurnInputsError reports a turn whose saved input holds no prompt to run.
@@ -445,7 +445,7 @@ func loadTurnInputs(ctx context.Context, db stateStoreDB, conversation, turn str
 		return snapshot, false, fmt.Errorf("decode canonical input: %w", err)
 	}
 
-	return snapshot, len(snapshot.Inputs) > 0 || snapshot.WorkflowSource != "", nil
+	return snapshot, len(snapshot.Inputs) > 0, nil
 }
 
 func saveTurnInputs(ctx context.Context, db stateStoreDB, conversation, turn string, snapshot *turnInputSnapshot) error {
@@ -533,7 +533,16 @@ func (s *SessionService) captureTurnInputs(ctx context.Context, conversation, tu
 	return nil
 }
 
-func (b *Bridge) drainShadowInputs(ctx context.Context, phase rocketcode.TurnPhase, applied []string) ([]rocketcode.PromptInput, error) {
+// shadowStepSegment numbers the stretch of a turn a step belongs to: the
+// person-sent inputs the turn applied before the step.
+func shadowStepSegment(applied, resets []string) int {
+	return len(slices.DeleteFunc(slices.Clone(applied), func(id string) bool { return !slices.Contains(resets, id) }))
+}
+
+// drainShadowInputs holds a shadow to floor(1.5 x) its parent's steps since the
+// last message a person sent: ahead of its parent it waits for the parent's next
+// step, and after the parent's turn it ends once out of steps.
+func (b *Bridge) drainShadowInputs(ctx context.Context, responseID string, phase rocketcode.TurnPhase, applied []string) ([]rocketcode.PromptInput, error) {
 	// Register before rereading durable state, so a commit between registration
 	// and the query cannot strand a final-answer wait. No lock crosses the wait.
 	b.mu.Lock()
@@ -548,15 +557,50 @@ func (b *Bridge) drainShadowInputs(ctx context.Context, phase rocketcode.TurnPha
 		b.mu.Unlock()
 	}()
 
+	db := b.config.SessionService.db
+
 	for {
 		snapshot, _, err := b.config.SessionService.shadowInputs(ctx, b.config.ConversationID, turn)
 		if err != nil {
 			return nil, inputPersistenceError{cause: err}
 		}
 
+		// The step is recorded before its budget is read, and once even when a restart drains its response again.
+		segment := shadowStepSegment(applied, snapshot.Resets)
+		if _, err := db.ExecContext(ctx, `INSERT INTO shadow_steps (shadow_turn_id, child, response_id, segment)
+SELECT id, TRUE, $3, $4 FROM shadow_turns WHERE child_conversation_id = $1 AND child_turn_id = $2 ON CONFLICT DO NOTHING`, b.config.ConversationID, turn, responseID, segment); err != nil {
+			return nil, inputPersistenceError{cause: fmt.Errorf("record shadow step: %w", err)}
+		}
+
+		var steps, parentSteps int
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE s.child), count(*) FILTER (WHERE NOT s.child)
+FROM shadow_turns t JOIN shadow_steps s ON s.shadow_turn_id = t.id
+WHERE t.child_conversation_id = $1 AND t.child_turn_id = $2 AND s.segment = $3`, b.config.ConversationID, turn, segment).Scan(&steps, &parentSteps); err != nil {
+			return nil, inputPersistenceError{cause: fmt.Errorf("read shadow step budget: %w", err)}
+		}
+
+		capped := steps >= parentSteps*3/2
 		inputs := slices.DeleteFunc(snapshot.Inputs, func(input rocketcode.PromptInput) bool { return slices.Contains(applied, input.ID) })
-		if len(inputs) > 0 || snapshot.Closed || phase != rocketcode.TurnPhaseFinalAnswer {
+
+		switch {
+		case !capped && (len(inputs) > 0 || snapshot.Closed || phase != rocketcode.TurnPhaseFinalAnswer):
 			return inputs, nil
+		case slices.ContainsFunc(inputs, func(input rocketcode.PromptInput) bool { return slices.Contains(snapshot.Resets, input.ID) }):
+			// A person's next message starts a fresh count, so it always gets through.
+			return inputs, nil
+		case snapshot.Closed && phase == rocketcode.TurnPhaseFinalAnswer:
+			// Out of steps after the parent's turn, an answer stands.
+			return nil, nil
+		case snapshot.Closed:
+			// Out of steps after the parent's turn, this tool batch's results end the turn.
+			note := fmt.Sprintf("Hit the step limit: %d vs. parent's %d.", steps, parentSteps)
+			if _, err := db.ExecContext(ctx, `UPDATE shadow_turns SET terminal = $3, limit_note = $4 WHERE child_conversation_id = $1 AND child_turn_id = $2 AND terminal = ''`, b.config.ConversationID, turn, protocol.TerminalStopped, note); err != nil {
+				return nil, inputPersistenceError{cause: fmt.Errorf("stop shadow at step limit: %w", err)}
+			}
+
+			b.InterruptActiveTurn()
+
+			return nil, nil
 		}
 
 		select {
@@ -748,56 +792,16 @@ func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, 
 }
 
 // admitShadowInputs fixes identity and roster in the parent's admission transaction.
+// Workflow turns have no shadows.
 func (b *Bridge) admitShadowInputs(ctx context.Context, db stateStoreDB, request *bridgeRequest, agent, turn string) error {
-	if err := b.config.SessionService.startShadowManifests(ctx, db, b.config.ConversationID, agent, turn, request.inbound); err != nil {
-		return err
-	}
-	// Prepared workflows fix their agent before activation. Other requests fix it
-	// here, atomically with the roster, for execution and restart.
-	snapshot := turnInputSnapshot{Agent: agent, Inputs: []rocketcode.PromptInput{}}
-
-	if definition := request.workflow.definition; definition != nil {
-		var shadowed bool
-		if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM shadow_turns WHERE parent_source_conversation_id = $1 AND parent_turn_id = $2)`, b.config.ConversationID, turn).Scan(&shadowed); err != nil {
-			return fmt.Errorf("read admitted workflow roster: %w", err)
-		}
-
-		if shadowed {
-			snapshot.Workflow, snapshot.WorkflowSource, snapshot.WorkflowPath = request.inbound.Workflow, definition.Source, definition.Path
-		}
-	}
-
-	return saveTurnInputs(ctx, db, b.config.ConversationID, turn, &snapshot)
-}
-
-// prepareWorkflowShadows captures deferred preparation before waking children.
-func (b *Bridge) prepareWorkflowShadows(ctx context.Context, request *bridgeRequest) error {
-	if b.shadow {
-		return nil
-	}
-
-	snapshot, _, err := loadTurnInputs(ctx, b.config.SessionService.db, b.config.ConversationID, request.turnID)
-	if err != nil {
-		return inputPersistenceError{cause: err}
-	}
-
-	var shadowed bool
-	if err := b.config.SessionService.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM shadow_turns WHERE parent_source_conversation_id = $1 AND parent_turn_id = $2)`, b.config.ConversationID, request.turnID).Scan(&shadowed); err != nil {
-		return inputPersistenceError{cause: err}
-	}
-
-	if shadowed && snapshot.WorkflowSource == "" {
-		snapshot.Workflow, snapshot.WorkflowSource, snapshot.WorkflowPath = request.inbound.Workflow, request.workflow.definition.Source, request.workflow.definition.Path
-		if err := b.config.SessionService.captureTurnInputs(ctx, b.config.ConversationID, request.turnID, &snapshot); err != nil {
+	if request.inbound.Workflow.Name == "" {
+		if err := b.config.SessionService.startShadowManifests(ctx, db, b.config.ConversationID, agent, turn, request.inbound); err != nil {
 			return err
 		}
 	}
-
-	if err := b.startShadowWorkers(ctx, request.turnID); err != nil {
-		return inputPersistenceError{cause: err}
-	}
-
-	return nil
+	// Prepared workflows fix their agent before activation. Other requests fix it
+	// here, atomically with the roster, for execution and restart.
+	return saveTurnInputs(ctx, db, b.config.ConversationID, turn, &turnInputSnapshot{Agent: agent, Inputs: []rocketcode.PromptInput{}})
 }
 
 // startShadowManifests fixes the roster in the same transaction as parent admission.
@@ -837,9 +841,11 @@ func (s *SessionService) claimShadowTurn(ctx context.Context, child string) (act
 	)
 
 	err = tx.QueryRowContext(ctx, `WITH head AS (
-SELECT id, inbound_json, inputs, context_entries FROM shadow_turns WHERE child_conversation_id = $1 AND child_turn_id = '' AND terminal = '' ORDER BY id LIMIT 1)
-SELECT id, inbound_json FROM head WHERE (jsonb_array_length(inputs) > 0 OR COALESCE(context_entries->>'workflow_source', '') <> '')
-AND NOT EXISTS (SELECT 1 FROM active_turns WHERE conversation_id = $1 AND phase <> $2)`, child, turnDone).Scan(&id, &data)
+    SELECT id, inbound_json, inputs FROM shadow_turns WHERE child_conversation_id = $1 AND child_turn_id = '' AND terminal = '' ORDER BY id LIMIT 1
+), unsettled AS (
+    SELECT count(*) > 0 AS busy FROM active_turns WHERE conversation_id = $1 AND phase <> $2
+)
+SELECT h.id, h.inbound_json FROM head h CROSS JOIN unsettled u WHERE jsonb_array_length(h.inputs) > 0 AND NOT u.busy`, child, turnDone).Scan(&id, &data)
 	if errors.Is(err, sql.ErrNoRows) {
 		return activeTurn{}, false, nil
 	}
@@ -856,7 +862,7 @@ AND NOT EXISTS (SELECT 1 FROM active_turns WHERE conversation_id = $1 AND phase 
 	// belong to the parent, never to its comparison child.
 	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, parent.Text, false)
 	inbound.ConversationID = child
-	inbound.PreserveWhitespace, inbound.Workflow = parent.PreserveWhitespace, parent.Workflow
+	inbound.PreserveWhitespace = parent.PreserveWhitespace
 	// The shadow's subagents act for the parent's person, as the shadow's captured environment does.
 	if name := parent.Metadata[protocol.InboundPrincipalNameMetadataKey]; name != "" {
 		inbound.Metadata = map[string]string{protocol.InboundPrincipalNameMetadataKey: name, protocol.InboundPrincipalEmailMetadataKey: parent.Metadata[protocol.InboundPrincipalEmailMetadataKey]}

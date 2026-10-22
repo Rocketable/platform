@@ -798,9 +798,9 @@ func (s *SessionService) finishTurn(ctx context.Context, turnID string, finish *
 	}
 
 	// Closure belongs to settlement, including fallback, preparation failure,
-	// workflow completion and stop. Unprepared turns remain terminal-only.
+	// and stop. Unprepared turns remain terminal-only.
 	if _, err := tx.ExecContext(ctx, `UPDATE shadow_turns SET input_closed = TRUE,
-terminal = CASE WHEN terminal <> '' THEN terminal WHEN (child_turn_id = '' AND jsonb_array_length(inputs) = 0 AND COALESCE(context_entries->>'workflow_source', '') = '') OR $3 = 'stopped' THEN $3 ELSE terminal END
+terminal = CASE WHEN terminal <> '' THEN terminal WHEN (child_turn_id = '' AND jsonb_array_length(inputs) = 0) OR $3 = 'stopped' THEN $3 ELSE terminal END
 WHERE parent_source_conversation_id = $1 AND parent_turn_id = $2`, finish.store.conversationID, turnID, cmp.Or(finish.outbound.Terminal, protocol.TerminalComplete)); err != nil {
 		return nil, inputPersistenceError{cause: fmt.Errorf("close mirrored input: %w", err)}
 	}
@@ -835,6 +835,16 @@ WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntry
 		}
 
 		return &stored, s.loadAttachmentData(ctx, stored.Attachments)
+	}
+
+	// A shadow stopped at its step limit says so in Web. The note is display-only
+	// trace, never replay input, so later model context does not see it.
+	if _, err := tx.ExecContext(ctx, `UPDATE active_turns a SET output_trace_json = (a.output_trace_json::jsonb || jsonb_build_array(jsonb_build_object('type', 'rocketcode_public_progress',
+    'progress', jsonb_build_object('id', 'shadow-step-limit', 'kind', 'text', 'state', $2::text, 'text', t.limit_note,
+        'agent', COALESCE(s.value::jsonb #>> '{record,agent}', ''), 'model', COALESCE(s.value::jsonb #>> '{record,model}', '')))))::text
+FROM shadow_turns t LEFT JOIN turn_steps s ON s.conversation_id = t.child_conversation_id AND s.key = t.child_turn_id
+WHERE a.id = $1 AND t.child_turn_id = $1 AND $2 = 'stopped' AND t.limit_note <> ''`, turnID, finish.terminal); err != nil {
+		return nil, fmt.Errorf("note shadow step limit: %w", err)
 	}
 
 	if err := finish.preserveStoppedInput(ctx, tx, turnID); err != nil {

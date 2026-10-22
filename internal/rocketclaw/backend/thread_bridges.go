@@ -198,7 +198,7 @@ func (m *threadBridgeManager) StartActiveTurns(ctx context.Context) error {
 		return err
 	}
 
-	pending, err := queryStrings(ctx, m.store.db, `SELECT DISTINCT child_conversation_id FROM shadow_turns WHERE child_turn_id = '' AND terminal = '' AND (jsonb_array_length(inputs) > 0 OR COALESCE(context_entries->>'workflow_source', '') <> '')`, "pending shadow workers")
+	pending, err := queryStrings(ctx, m.store.db, `SELECT DISTINCT child_conversation_id FROM shadow_turns WHERE child_turn_id = '' AND terminal = '' AND jsonb_array_length(inputs) > 0`, "pending shadow workers")
 	if err != nil {
 		return err
 	}

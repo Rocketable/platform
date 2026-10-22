@@ -644,8 +644,8 @@ func TestLegacyCronScheduleResumesIntoCanonical(t *testing.T) {
 			}
 
 			require.NoError(t, store.UpsertThread("cron:legacy", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
-			// Back to before 027_producer_handoff and the twenty migrations that follow it.
-			_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(t.Context(), store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 21)
+			// Back to before 027_producer_handoff and the twenty-one migrations that follow it.
+			_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecMaxContext(t.Context(), store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 22)
 			require.NoError(t, err)
 
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "original legacy job", false)
@@ -1588,32 +1588,6 @@ func TestResumedTurnFailurePostsInternalErrorFinal(t *testing.T) {
 			break
 		}
 	}
-}
-
-// A turn whose saved input holds no prompt fails as a normal turn instead of
-// crashing the process, and the conversation keeps serving later messages.
-func TestCapturedTurnWithoutPromptFailsTurn(t *testing.T) {
-	t.Parallel()
-
-	newBridge, service, requests, finals := newResumeTestBridges(t, false)
-	bridge := newBridge()
-	conversationID := bridge.config.ConversationID
-
-	msg := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "hello", true)
-	msg.ConversationID = conversationID
-	require.NoError(t, startTurnDB(t.Context(), service.db, "turn-empty", conversationID, msg))
-	require.NoError(t, service.SaveTurnStep(t.Context(), conversationID, "turn-empty/canonical", json.RawMessage(`{"workflow_source":"saved"}`)))
-
-	runTestBridge(t, bridge)
-
-	failed := readFinal(t, finals)
-	assert.Equal(t, "turn-empty", failed.TurnID)
-	assert.Equal(t, protocol.TerminalFailed, failed.Terminal)
-	assert.Equal(t, internalErrorResponse+"\n\n"+emptyTurnInputsError{TurnID: "turn-empty"}.Error(), failed.Text)
-	assert.Empty(t, requests, "the empty turn never reaches the model")
-
-	require.NoError(t, bridge.Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "next", true)))
-	assert.Equal(t, "answer", readFinal(t, finals).Text)
 }
 
 // A resumed turn does not post its web input's consume card a second time.
