@@ -578,7 +578,9 @@ func sessionEntries(entries []SessionEntry) func(func(SessionEntry, error) bool)
 	}
 }
 
-func discardSession(SessionEntry) error { return nil }
+func discardSession() *mockSessionWriter {
+	return &mockSessionWriter{AppendFunc: func(context.Context, *SessionEntry) error { return nil }}
+}
 
 func TestLooperReloadsSessionWithCurrentRuntimeConfig(t *testing.T) {
 	replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
@@ -614,11 +616,11 @@ func TestLooperReloadsSessionWithCurrentRuntimeConfig(t *testing.T) {
 
 	close(input)
 
-	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{turn}), func(entry SessionEntry) error {
-		saved = append(saved, entry)
+	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{turn}), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+		saved = append(saved, *entry)
 
 		return nil
-	}, interrupts)
+	}}, interrupts)
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("new answer")}, collectResponses(output))
 	require.Len(t, newParams(mock), 1)
@@ -665,11 +667,11 @@ func TestLooperSendsAndReplaysDeveloperPromptInput(t *testing.T) {
 
 	var saved []SessionEntry
 
-	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-		saved = append(saved, entry)
+	err := looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+		saved = append(saved, *entry)
 
 		return nil
-	}, make(chan os.Signal, 1))
+	}}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.JSONEq(t, `{"content":"keep this rule","role":"developer","type":"message"}`, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList[0]))
@@ -831,7 +833,7 @@ func TestLooperClosesPromptResponseChannelAfterTurn(t *testing.T) {
 
 	close(input)
 
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
@@ -854,9 +856,10 @@ func TestLooperAppendsOneSessionEntryPerCompletedTurn(t *testing.T) {
 
 	close(input)
 
-	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-		return store.appendEntry(&entry)
-	}, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+		saved := *entry
+		return store.appendEntry(&saved)
+	}}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("first answer")}, collectResponses(firstOutput))
@@ -882,7 +885,7 @@ func TestLoopClosesPromptResponsesWhenSessionLoadFails(t *testing.T) {
 		yield(SessionEntry{Version: 1, Type: "turn", Timestamp: time.Time{}, ResponseID: "", Model: "", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":""}`)}, OutputTrace: nil}, nil)
 	}
 
-	err := looper.Loop(context.Background(), input, badSession, discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, badSession, discardSession(), make(chan os.Signal, 1))
 
 	require.Error(t, err)
 
@@ -974,11 +977,11 @@ func TestLooperPersistsAndReplaysCompactionItems(t *testing.T) {
 
 	var saved []SessionEntry
 
-	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-		saved = append(saved, entry)
+	err := looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+		saved = append(saved, *entry)
 
 		return nil
-	}, interrupts)
+	}}, interrupts)
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
 
@@ -1008,11 +1011,11 @@ func TestLooperContinuesAfterCompactionOnlyResponse(t *testing.T) {
 
 	var saved []SessionEntry
 
-	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-		saved = append(saved, entry)
+	err := looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+		saved = append(saved, *entry)
 
 		return nil
-	}, make(chan os.Signal, 1))
+	}}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
@@ -1059,11 +1062,11 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{
 		{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), Agent: "old", Model: "work/model-a", ReasoningEffort: new("high"), ReplayInput: replayInput[:3]},
 		{Version: 1, Type: "turn", ReplayInput: replayInput[3:]},
-	}), func(entry SessionEntry) error {
-		saved = append(saved, entry)
+	}), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+		saved = append(saved, *entry)
 
 		return nil
-	}, make(chan os.Signal, 1))
+	}}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
@@ -1129,7 +1132,7 @@ func TestLooperProgressiveCompactionKeepsToolCallWithOutput(t *testing.T) {
 
 			close(input)
 
-			err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
+			err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession(), make(chan os.Signal, 1))
 
 			require.NoError(t, err)
 			require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
@@ -1169,7 +1172,7 @@ func TestLooperDoesNotCompactUnansweredToolCall(t *testing.T) {
 
 	close(input)
 
-	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
+	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession(), make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
@@ -1189,7 +1192,7 @@ func TestLooperDoesNotCompactOtherProviderErrors(t *testing.T) {
 
 	close(input)
 
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 	require.Error(t, err)
 	require.Empty(t, compactParams(mock))
@@ -1227,7 +1230,7 @@ func TestLooperStopsOnCompactedRetryError(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			err = loop.Loop(t.Context(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", ReplayInput: replay}}), discardSession, make(chan os.Signal, 1))
+			err = loop.Loop(t.Context(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", ReplayInput: replay}}), discardSession(), make(chan os.Signal, 1))
 			diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticError, Code: "invalid_prompt", Message: "bad prompt", HTTPStatus: http.StatusBadRequest}
 
 			if failedResponse {
@@ -1269,11 +1272,11 @@ func TestLooperPersistsAndReplaysWebSearchCalls(t *testing.T) {
 
 	var saved []SessionEntry
 
-	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-		saved = append(saved, entry)
+	err := looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+		saved = append(saved, *entry)
 
 		return nil
-	}, make(chan os.Signal, 1))
+	}}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer with citation")}, collectResponses(output))
@@ -1311,11 +1314,11 @@ func TestWebSearchOutputWithEmptyActionTypeIsTraceOnly(t *testing.T) {
 
 	var saved []SessionEntry
 
-	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-		saved = append(saved, entry)
+	err := looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+		saved = append(saved, *entry)
 
 		return nil
-	}, make(chan os.Signal, 1))
+	}}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
@@ -1347,11 +1350,11 @@ func TestLooperInjectsCompactionSteering(t *testing.T) {
 
 	var saved []SessionEntry
 
-	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-		saved = append(saved, entry)
+	err := looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+		saved = append(saved, *entry)
 
 		return nil
-	}, interrupts)
+	}}, interrupts)
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
 	require.Equal(t, []ChatResponse{assistantMessage("next answer")}, collectResponses(nextOutput))
@@ -1434,7 +1437,7 @@ func TestLooperPermissionReviewUsesPrunedHistory(t *testing.T) {
 
 	close(input)
 
-	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
+	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", ReplayInput: replayInput}}), discardSession(), make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Len(t, reviewedRequests(reviewer), 1)
@@ -1465,7 +1468,7 @@ func TestJournalTurnBeforeFirstProviderCall(t *testing.T) {
 
 	close(input)
 
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
 }
@@ -1502,7 +1505,7 @@ func TestJournalProviderResponseBeforeToolDispatch(t *testing.T) {
 
 	close(input)
 
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
 }
@@ -1559,7 +1562,7 @@ func TestJournalAfterCompactionRecoveryBeforeProviderRetry(t *testing.T) {
 
 	close(input)
 
-	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
+	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession(), make(chan os.Signal, 1))
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
 	require.Equal(t, 2, providerCalls)
@@ -1625,11 +1628,11 @@ func TestLooperDispatchesToolCalls(t *testing.T) {
 
 	var saved []SessionEntry
 
-	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-		saved = append(saved, entry)
+	err := looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+		saved = append(saved, *entry)
 
 		return nil
-	}, interrupts)
+	}}, interrupts)
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
 	callsMu.Lock()
@@ -1691,7 +1694,7 @@ func TestLooperJournalsCompletedToolOutputBeforeContinuation(t *testing.T) {
 
 	close(input)
 
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 
@@ -1723,7 +1726,9 @@ func TestLooperClosesObservationsAfterCompletedSessionEntry(t *testing.T) {
 		lateWorker errgroup.Group
 	)
 
-	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
+	err := looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entryPointer *SessionEntry) error {
+		entry := *entryPointer
+
 		require.Equal(t, turnSaves(t, sink)[0].Record.TurnID, entry.TurnID)
 		require.Contains(t, marshalJSON(t, entry), `"turn_id":"`+entry.TurnID+`"`)
 		require.Equal(t, []PublicProgress{progress}, PublicProgressFromTrace(entry.OutputTrace))
@@ -1737,7 +1742,7 @@ func TestLooperClosesObservationsAfterCompletedSessionEntry(t *testing.T) {
 		saved = append(saved, entry)
 
 		return nil
-	}, make(chan os.Signal, 1))
+	}}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.NoError(t, lateWorker.Wait())
@@ -1762,7 +1767,7 @@ func TestLooperReportsToolErrorsInBand(t *testing.T) {
 		input <- testPromptInput(PromptInputRoleUser, "run tool", output)
 
 		close(input)
-		err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+		err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 		require.NoError(t, err)
 		require.Equal(t, []ChatResponse{assistantMessage("recovered")}, collectResponses(output))
@@ -1968,11 +1973,11 @@ func TestLooperSendsAndReplaysUserAttachments(t *testing.T) {
 
 	var saved []SessionEntry
 
-	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-		saved = append(saved, entry)
+	err := looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+		saved = append(saved, *entry)
 
 		return nil
-	}, make(chan os.Signal, 1))
+	}}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), `"role":"user"`)
@@ -2001,11 +2006,11 @@ func TestLooperSendsAndReplaysDeveloperAttachments(t *testing.T) {
 
 	var saved []SessionEntry
 
-	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-		saved = append(saved, entry)
+	err := looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+		saved = append(saved, *entry)
 
 		return nil
-	}, make(chan os.Signal, 1))
+	}}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	serialized := marshalJSON(t, newParams(mock)[0].Input.OfInputItemList)
@@ -2038,7 +2043,7 @@ func TestLooperSendsToolOutputAttachments(t *testing.T) {
 
 	close(input)
 
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	serialized := marshalJSON(t, newParams(mock)[1].Input.OfInputItemList)
@@ -2078,7 +2083,7 @@ func TestLooperDeniesToolCallsInBand(t *testing.T) {
 	input <- testPromptInput(PromptInputRoleUser, "run denied tool", output)
 
 	close(input)
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("recovered")}, collectResponses(output))
@@ -2266,7 +2271,7 @@ func TestLooperAppliesWebFetchURLPermissions(t *testing.T) {
 
 		close(input)
 
-		err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+		err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 		require.NoError(t, err)
 		serialized := marshalJSON(t, newParams(mock)[1].Input.OfInputItemList)
@@ -2304,7 +2309,7 @@ func TestLooperAppliesWebFetchURLPermissions(t *testing.T) {
 
 		close(input)
 
-		err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+		err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 		require.NoError(t, err)
 		require.True(t, called)
@@ -2352,7 +2357,7 @@ func TestLooperGatesSkillByName(t *testing.T) {
 	input <- testPromptInput(PromptInputRoleUser, "load skills", output)
 
 	close(input)
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"docs-helper"}, calls)
@@ -2390,7 +2395,7 @@ Use this skill for docs.
 
 	close(input)
 
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
@@ -2432,10 +2437,10 @@ func TestLooperDirectSkillRejectsBeforeModelRequest(t *testing.T) {
 			input <- PromptInput{DirectSkill: &PromptInputDirectSkill{}, Responses: output}
 
 			close(input)
-			err := looper.Loop(t.Context(), input, emptySession(), func(SessionEntry) error {
+			err := looper.Loop(t.Context(), input, emptySession(), &mockSessionWriter{AppendFunc: func(context.Context, *SessionEntry) error {
 				saves++
 				return nil
-			}, make(chan os.Signal, 1))
+			}}, make(chan os.Signal, 1))
 			got := collectResponses(output)
 
 			if failure == "none" {
@@ -2494,11 +2499,11 @@ Use this skill for docs.
 
 			close(input)
 
-			err := looper.Loop(context.Background(), input, emptySession(), func(SessionEntry) error {
+			err := looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(context.Context, *SessionEntry) error {
 				saves++
 
 				return nil
-			}, make(chan os.Signal, 1))
+			}}, make(chan os.Signal, 1))
 
 			got := collectResponses(output)
 
@@ -2590,10 +2595,10 @@ func TestLooperMixedSkillSteersDoNotSilentlyLoseAcceptedWork(t *testing.T) {
 
 	var saved []SessionEntry
 
-	err := looper.Loop(t.Context(), input, emptySession(), func(entry SessionEntry) error {
-		saved = append(saved, entry)
+	err := looper.Loop(t.Context(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+		saved = append(saved, *entry)
 		return nil
-	}, make(chan os.Signal, 1))
+	}}, make(chan os.Signal, 1))
 	calls, errRead := factory.promptExpansion.root.ReadFile("calls")
 	require.NoError(t, errRead)
 	// The batch has already been accepted and drained. A preparation failure must
@@ -2628,7 +2633,7 @@ func TestLooperEmitsToolDiagnosticsWhenEnabled(t *testing.T) {
 	input <- testPromptInput(PromptInputRoleUser, "what time is it?", output)
 
 	close(input)
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 
@@ -2654,7 +2659,7 @@ func TestLooperEmitsHostedWebSearchDiagnosticsWhenEnabled(t *testing.T) {
 	input <- testPromptInput(PromptInputRoleUser, "search web", output)
 
 	close(input)
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 
@@ -2738,7 +2743,7 @@ func TestLooperTrapsDoomLoopInBand(t *testing.T) {
 	input <- testPromptInput(PromptInputRoleUser, "repeat", output)
 
 	close(input)
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	callsMu.Lock()
@@ -2760,7 +2765,7 @@ func TestLooperPrintsReasoningSummary(t *testing.T) {
 	input <- testPromptInput(PromptInputRoleUser, "question", output)
 
 	close(input)
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, interrupts)
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), interrupts)
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{reasoningSummary("think briefly"), assistantMessage("final answer")}, collectResponses(output))
 }
@@ -2787,7 +2792,7 @@ func TestLooperStreamsReasoningBeforeToolCalls(t *testing.T) {
 
 	close(input)
 
-	require.NoError(t, looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1)))
+	require.NoError(t, looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1)))
 
 	got := collectResponses(output)
 	require.GreaterOrEqual(t, len(got), 3)
@@ -2809,9 +2814,10 @@ func TestLooperUpdatesSessionStoreAfterCompletedTurn(t *testing.T) {
 	close(input)
 
 	interrupts := make(chan os.Signal, 1)
-	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-		return store.appendEntry(&entry)
-	}, interrupts)
+	err := looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+		saved := *entry
+		return store.appendEntry(&saved)
+	}}, interrupts)
 	require.NoError(t, err)
 	require.Len(t, store.saves, 1)
 	require.Len(t, store.saves[0], 1)
@@ -2844,11 +2850,11 @@ func TestLooperOmitsInterruptedTurnsFromSession(t *testing.T) {
 	var group errgroup.Group
 
 	group.Go(func() error {
-		return looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-			saved = append(saved, entry)
+		return looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+			saved = append(saved, *entry)
 
 			return nil
-		}, interrupts)
+		}}, interrupts)
 	})
 
 	<-started
@@ -2879,7 +2885,7 @@ func runJournaledTurn(ctx context.Context, looper *looper, journal *mockJournal,
 
 	close(input)
 
-	err := looper.Loop(ctx, input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(ctx, input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 	return collectResponses(output), err
 }
@@ -3113,7 +3119,7 @@ func TestLooperDrainErrorLeavesFinalAnswerUnaccepted(t *testing.T) {
 	input <- PromptInput{ID: "initial", TurnID: "turn-1", Texts: []string{"work"}, Responses: output}
 
 	close(input)
-	err := loop.Loop(t.Context(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := loop.Loop(t.Context(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 	require.ErrorIs(t, err, errDrain)
 	require.Empty(t, collectResponses(output))
 	saves := turnSaves(t, journal)
@@ -3255,10 +3261,10 @@ func TestLooperResumesTurnCutOffMidCall(t *testing.T) {
 
 		var saved []SessionEntry
 
-		err := loop.Loop(ctx, input, emptySession(), func(entry SessionEntry) error {
-			saved = append(saved, entry)
+		err := loop.Loop(ctx, input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+			saved = append(saved, *entry)
 			return nil
-		}, make(chan os.Signal, 1))
+		}}, make(chan os.Signal, 1))
 
 		collectResponses(output)
 
@@ -3386,10 +3392,10 @@ func TestLooperResumedTurnKeepsCodeModeCalls(t *testing.T) {
 
 	var saved []SessionEntry
 
-	require.NoError(t, resumed.Loop(t.Context(), input, emptySession(), func(entry SessionEntry) error {
-		saved = append(saved, entry)
+	require.NoError(t, resumed.Loop(t.Context(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+		saved = append(saved, *entry)
 		return nil
-	}, make(chan os.Signal, 1)))
+	}}, make(chan os.Signal, 1)))
 	require.Len(t, saved, 1)
 	require.Equal(t, []CodeModeCall{record}, CodeModeCallsFromTrace(saved[0].OutputTrace), "the finished turn keeps a record saved before its restart")
 }
@@ -3406,7 +3412,7 @@ func TestLooperPrintsCommentaryResponses(t *testing.T) {
 
 	interrupts := make(chan os.Signal, 1)
 
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, interrupts)
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), interrupts)
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantCommentary("working"), assistantMessage("final")}, collectResponses(output))
 }
@@ -3443,7 +3449,7 @@ func TestLooperRetriesRateLimitExceededFailedResponse(t *testing.T) {
 
 		close(input)
 
-		err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+		err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 		require.NoError(t, err)
 		require.Len(t, newParams(mock), 2)
@@ -3493,7 +3499,7 @@ func TestLooperReportsFailedResponsesInDiagnostics(t *testing.T) {
 
 	close(input)
 
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 	require.EqualError(t, err, "run turn: request response: response failed: invalid_prompt: bad prompt")
 
@@ -3512,7 +3518,7 @@ func TestLooperReportsOpenAIRequestErrorsInDiagnostics(t *testing.T) {
 
 	close(input)
 
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 	require.EqualError(t, err, "run turn: request response: new response: provider retry limit: status 429")
 	require.Len(t, newParams(mock), 1)
@@ -3553,7 +3559,7 @@ func TestLooperClassifiesTerminalTooManyRequestsErrors(t *testing.T) {
 
 			close(input)
 
-			err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+			err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 			require.Error(t, err)
 			require.True(t, tc.want(err))
@@ -3602,7 +3608,7 @@ func TestLooperRetriesTooManyRequestsRequestError(t *testing.T) {
 
 				close(input)
 
-				err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+				err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 				require.NoError(t, err)
 				require.Len(t, newParams(mock), 2)
@@ -3634,7 +3640,7 @@ func TestLooperReportsRequestErrorsInDiagnostics(t *testing.T) {
 
 	close(input)
 
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 	require.EqualError(t, err, "run turn: request response: new response: network exploded")
 
@@ -3648,11 +3654,10 @@ func TestLooperLoopRequiresDependencies(t *testing.T) {
 	interrupts := make(chan os.Signal, 1)
 
 	var nilCtx context.Context
-	require.EqualError(t, looper.Loop(nilCtx, input, emptySession(), discardSession, interrupts), "context is required")
-	require.EqualError(t, looper.Loop(context.Background(), nil, emptySession(), discardSession, interrupts), "input channel is required")
-	require.EqualError(t, looper.Loop(context.Background(), input, nil, discardSession, interrupts), "sessionIn is required")
-	require.EqualError(t, looper.Loop(context.Background(), input, emptySession(), nil, interrupts), "sessionOut is required")
-	require.EqualError(t, looper.Loop(context.Background(), input, emptySession(), discardSession, nil), "interrupts channel is required")
+	require.EqualError(t, looper.Loop(nilCtx, input, emptySession(), discardSession(), interrupts), "context is required")
+	require.EqualError(t, looper.Loop(context.Background(), nil, emptySession(), discardSession(), interrupts), "input channel is required")
+	require.EqualError(t, looper.Loop(context.Background(), input, nil, discardSession(), interrupts), "sessionIn is required")
+	require.EqualError(t, looper.Loop(context.Background(), input, emptySession(), discardSession(), nil), "interrupts channel is required")
 
 	close(input)
 }
@@ -3665,7 +3670,7 @@ func TestLooperLoopRequiresPromptResponseChannel(t *testing.T) {
 
 	close(input)
 
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 	require.EqualError(t, err, "prompt response channel is required")
 }
@@ -3711,7 +3716,7 @@ func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
 
 	close(input)
 
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
@@ -3772,10 +3777,10 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 
 	var saved []SessionEntry
 
-	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-		saved = append(saved, entry)
+	err := looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+		saved = append(saved, *entry)
 		return nil
-	}, make(chan os.Signal, 1))
+	}}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Len(t, newParams(mock), 2)
@@ -3803,7 +3808,7 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 	close(input)
 
 	looper.Client = mockResponses(responseWithMessage("resp-replayed", "done"))
-	require.NoError(t, looper.Loop(t.Context(), input, sessionEntries(saved), discardSession, make(chan os.Signal, 1)))
+	require.NoError(t, looper.Loop(t.Context(), input, sessionEntries(saved), discardSession(), make(chan os.Signal, 1)))
 
 	calls, err := root.ReadFile("calls")
 	require.NoError(t, err)
@@ -3885,7 +3890,7 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 		)
 
 		group.Go(func() error {
-			return looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error { saved = entry; return nil }, make(chan os.Signal, 1))
+			return looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error { saved = *entry; return nil }}, make(chan os.Signal, 1))
 		})
 		<-started
 		<-started
@@ -3992,10 +3997,10 @@ func TestLooperInjectsSteersWhenNoTools(t *testing.T) {
 
 	var saved []SessionEntry
 
-	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-		saved = append(saved, entry)
+	err := looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+		saved = append(saved, *entry)
 		return nil
-	}, make(chan os.Signal, 1))
+	}}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("4"), assistantMessage("done")}, collectResponses(output))

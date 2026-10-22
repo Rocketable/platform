@@ -136,6 +136,9 @@ packages:
           structname: agentRunnerMock
   github.com/Rocketable/platform/internal/rocketcode:
     interfaces:
+      sessionWriter:
+        config:
+          structname: mockSessionWriter
       shellCommander:
         config:
           structname: mockShellCommander

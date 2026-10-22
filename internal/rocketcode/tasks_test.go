@@ -691,7 +691,7 @@ func TestLooperRunsTaskToolCall(t *testing.T) {
 	close(input)
 
 	interrupts := make(chan os.Signal, 1)
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, interrupts)
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), interrupts)
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("parent done")}, collectResponses(output))
@@ -744,7 +744,7 @@ func TestChildRunsAppendUnderToolCallKeys(t *testing.T) {
 
 	close(input)
 
-	require.NoError(t, looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1)))
+	require.NoError(t, looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1)))
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
 
 	calls := sessions.AppendChildEntryCalls()
@@ -797,7 +797,7 @@ func TestPermissionReviewKeyIsUniquePerToolCall(t *testing.T) {
 
 		close(input)
 
-		require.NoError(t, looper.Loop(t.Context(), input, emptySession(), discardSession, make(chan os.Signal, 1)))
+		require.NoError(t, looper.Loop(t.Context(), input, emptySession(), discardSession(), make(chan os.Signal, 1)))
 
 		progress := PublicProgressFromTrace(looper.observations.trace)
 		rows = append(rows, progress[slices.IndexFunc(progress, func(item PublicProgress) bool { return item.ID == "call_0" })])
