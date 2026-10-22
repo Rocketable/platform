@@ -2803,9 +2803,15 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       expect(mutations).toEqual([]);
 
       await target.getByRole("button", { name: "Edit", exact: true }).click();
-      await editor.fill("Revised\n  queue text");
+      await editor.fill("Revised");
+      await editor.press("Shift+Enter");
+      await queuePage.keyboard.type("  queue text");
+      expect(await editor.inputValue()).toBe("Revised\n  queue text");
+      await editor.dispatchEvent("keydown", { key: "Enter", isComposing: true });
+      await editor.dispatchEvent("keydown", { key: "Enter", keyCode: 229 });
+      expect(mutations).toEqual([]);
       await queuePage.route("**/api/EditQueueItem", (route: { fulfill(input: { status: number; json: { code: number; message: string } }): Promise<void> }) => route.fulfill({ status: 500, json: { code: 13, message: "Edit failed; retry" } }));
-      await target.getByRole("button", { name: "Save", exact: true }).click();
+      await editor.press("Enter");
       await shown(queuePage, "Edit failed; retry");
       expect(await editor.inputValue()).toBe("Revised\n  queue text");
       expect(JSON.stringify(ctrl.queue)).toBe(originalQueue);
@@ -2819,7 +2825,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       });
       await queuePage.screenshot({ path: path.join(screenshots, `queue-editing-${width}-${count}.png`) });
       expect(await queuePage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-      await target.getByRole("button", { name: "Save", exact: true }).click();
+      await editor.press("Enter");
       const saving = target.getByRole("button", { name: "Saving…", exact: true });
       await saving.waitFor();
       await saving.click({ force: true });

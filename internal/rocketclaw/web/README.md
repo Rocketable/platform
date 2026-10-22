@@ -792,6 +792,7 @@ with one row, so the composer stays on screen.
 **Edit** opens a text box in the queued or stashed row. **Save** changes its text
 without moving it or changing its attachments, delivery, author, or routing;
 **Cancel** discards the edit. Neither action changes the composer draft.
+Enter saves an edit without sending it; Shift+Enter inserts a line break.
 While saving, conflicting row controls are disabled. A failed save keeps the
 edited text for retry; a message already consumed cannot be edited or recreated.
 Pending steers are not editable.
