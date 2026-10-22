@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, expect, jest, spyOn, test } from "bun:test";
-import { holdWakeLock, setVoiceSticky, startVoice, stopVoice, subscribeVoice, voiceChoice, voiceView } from "./voice";
+import { holdWakeLock, setVoiceSticky, startVoice, stopVoice, subscribeVoice, voiceChoice, voiceLevel, voiceView } from "./voice";
 
 // Minimal stand-ins for the browser media, WebRTC and page APIs a call touches.
 class FakeChannel {
@@ -21,6 +21,7 @@ class FakePeer {
   closed = false;
   connectionState = "new";
   onconnectionstatechange: (() => void) | null = null;
+  ontrack!: (event: { streams: object[] }) => void;
   constructor() { peers.push(this); }
   addTrack(track: unknown) { this.tracks.push(track); }
   createDataChannel(label: string) { this.label = label; return this.channel; }
@@ -37,7 +38,8 @@ type Wire = { url: string; method?: string; body: { conversationId: string; sdp:
 
 let peers: FakePeer[] = [], wires: Wire[] = [], tracks: { stopped: boolean; stop(): void }[] = [], locks: { released: boolean }[] = [];
 let micDenied = false, micPrompt: Promise<unknown> | undefined, reply: Response | undefined, openOnAnswer = false;
-const page = Object.assign(new EventTarget(), { visibilityState: "visible", createElement: () => ({}) });
+let audio = { muted: false };
+const page = Object.assign(new EventTarget(), { visibilityState: "visible", createElement: () => (audio = { muted: false }) });
 const media = { getUserMedia: async () => {
   await micPrompt;
   if (micDenied) throw new DOMException("denied", "NotAllowedError");
@@ -50,6 +52,8 @@ let notes: number[] = [];
 class FakeSound {
   currentTime = 0;
   destination = {};
+  createAnalyser() { return { fftSize: 0, getFloatTimeDomainData(samples: Float32Array) { samples.fill(0.125); } }; }
+  createMediaStreamSource(_stream: object) { return { connect() {} }; }
   createOscillator() {
     const beep = { frequency: { value: 0 }, connect: (node: unknown) => node, start: () => notes.push(beep.frequency.value), stop() {} };
     return beep;
@@ -300,6 +304,42 @@ test("a reply too long to speak shows as written, and the voice's next words sta
   expect(voiceView().captions).toEqual([{ id: 0, role: "assistant", text: "A long reply.", written: true }, { id: 1, role: "assistant", text: "It is on the screen." }]);
   stopVoice();
   await done;
+});
+
+test("a typed message mutes playback until the voice answers new speech", async () => {
+  const { done, wire, peer } = await live("conversation");
+  expect(voiceLevel()).toBe(0);
+  peer.ontrack({ streams: [{}] });
+  expect(voiceLevel()).toBe(0.5);
+  wire.push({ typed: true });
+  await until(() => audio.muted);
+  expect(voiceLevel()).toBe(0);
+  peer.channel.emit({ type: "session.output_transcript.delta", delta: "Typed answer" });
+  expect(audio.muted).toBe(true);
+  peer.channel.emit({ type: "session.input_transcript.delta", delta: " " });
+  peer.channel.emit({ type: "session.output_transcript.delta", delta: "Still muted" });
+  expect(audio.muted).toBe(true);
+  peer.channel.emit({ type: "session.input_transcript.delta", delta: "Spoken question" });
+  expect(audio.muted).toBe(true);
+  wire.push({ reply: "Written answer" });
+  await until(() => voiceView().captions.at(-1)?.written);
+  peer.channel.emit({ type: "session.output_transcript.delta", delta: "Continued answer" });
+  expect(audio.muted).toBe(true);
+  peer.channel.emit({ type: "session.input_transcript.delta", delta: "Another question" });
+  wire.push({ typed: true });
+  wire.push({ notice: "Typed again" });
+  await until(() => voiceView().notice === "Typed again");
+  peer.ontrack({ streams: [{}] });
+  expect(voiceLevel()).toBe(0);
+  peer.channel.emit({ type: "session.output_transcript.delta", delta: "Another typed answer" });
+  expect(audio.muted).toBe(true);
+  peer.channel.emit({ type: "session.input_transcript.delta", delta: "New spoken question" });
+  peer.channel.emit({ type: "session.output_transcript.delta", delta: "Spoken answer" });
+  expect(audio.muted).toBe(false);
+  expect(voiceLevel()).toBe(0.5);
+  stopVoice();
+  await done;
+  expect(voiceLevel()).toBe(0);
 });
 
 test("the retry shows its note and goes live once its channel opens", async () => {
