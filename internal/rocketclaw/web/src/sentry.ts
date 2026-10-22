@@ -1,7 +1,7 @@
 import { init, globalHandlersIntegration, linkedErrorsIntegration, dedupeIntegration, captureConsoleIntegration, browserTracingIntegration, interactionsIntegration } from "@sentry/react";
 
-// ui.tsx refreshes these every two seconds. As traced requests they would keep each pageload and navigation open until the SDK's final timeout, and start a new trace whenever none is open.
-const refreshed = new Set(["/api/Protocol", "/api/Identity", "/api/ListSessions", "/api/ListAgents", "/api/ListQueue"]);
+// ui.tsx refreshes these in the background (the index page each minute to spot a new build). As traced requests they would keep each pageload and navigation open until the SDK's final timeout, and start a new trace whenever none is open.
+const refreshed = new Set(["/", "/api/Protocol", "/api/Identity", "/api/ListSessions", "/api/ListAgents", "/api/ListQueue"]);
 
 const sentryConfig = document.getElementById("sentry-config");
 if (sentryConfig) {
