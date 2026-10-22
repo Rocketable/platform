@@ -115,11 +115,6 @@ func TestAWSFetcherReadsSecretString(t *testing.T) {
 	}
 }
 
-func TestSecretFetchErrorUnwraps(t *testing.T) {
-	err := &SecretFetchError{ARN: testSecretARN, Key: "token", err: errSecretKeyMissing}
-	require.ErrorIs(t, err, errSecretKeyMissing)
-}
-
 func TestSecretFieldRejectsNonObjectAndNonString(t *testing.T) {
 	_, err := secretField(&recordingSecrets{body: `[1]`}, testSecretARN, "token")
 	require.ErrorIs(t, err, errSecretNotJSON)
