@@ -891,6 +891,10 @@ no level read as Custom. Everything expands every tool call, thinking trace, and
 and every category has a Collapse switch. A browser that never chose shows Compact. The setting is saved
 in this browser under `timeline-detail`, applies to every open timeline at once,
 including other tabs, and is not sent to the server.
+Messages only hides failed tool panels too, but shows a small “A tool failed” status
+on the turn. Raise timeline detail in the command palette to see the failure details.
+Delivered files and background-job rows remain visible. Other detail levels keep
+their existing failure visibility.
 The down-arrow appears above the chat composer when away from the latest message.
 It scrolls to the latest message and resumes following live replies. Reading earlier
 messages keeps automatic scrolling paused.
@@ -946,7 +950,7 @@ row. Collapse decides whether Execute calls and reasoning start open; a summary 
 of only reasoning shows the reasoning text itself when opened. Opening or
 closing an item survives live updates of the same turn. Replies always appear. A
 failed call (a result starting with `tool call failed`, `denied` or `aborted`) appears
-on its own when its category is hidden, and a call that delivers files always appears
+on its own when its category is hidden, except in Messages only. A call that delivers files always appears
 on its own. While a turn runs, **Working…** shows at every level. The chat has no
 database-entry inspection panel.
 Activity rows are shadcn/ui [Trace](https://ui.shadcn.com/docs/components/base/trace)

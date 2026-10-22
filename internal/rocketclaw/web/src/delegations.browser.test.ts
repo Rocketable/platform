@@ -211,6 +211,10 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
     result("call-d", "emitted"),
     script("call-e", { code: "def main():\n    pass", description: "Still testing" }, { state: "working", scriptReason: "Running tests is in scope.", codeModeCalls: [call("bash", { command: "make test" }, { status: "running" })] }),
     event("assistant", "Done"),
+    event("user", "Check another action"),
+    script("call-blocked", { code: "blocked_action()", description: "Blocked action" }),
+    result("call-blocked", "blocked", { state: "blocked" }),
+    event("assistant", "Action denied"),
   ] } });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
@@ -338,13 +342,28 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
     await a.locator('[aria-label="Script"]').waitFor();
     expect(await a.getByRole("button", { name: "Show script", exact: true }).count()).toBe(0);
 
-    // Messages hides a successful block; a failed one still shows, with the toggle.
-    await level("messages");
+    // Quiet hides a successful block; a failed one still shows, with the toggle.
+    await level("quiet");
     await block("call-c").waitFor();
     expect(await a.count()).toBe(0);
     expect(await block("call-c").locator('[aria-label="Script"]').count()).toBe(0);
     await block("call-c").getByRole("button", { name: "Show script", exact: true }).click();
     expect(await block("call-c").locator('[aria-label="Script"]').innerText()).toBe('def main():\n    return bash(command="ls")');
+    await level("messages");
+    await block("call-c").waitFor({ state: "detached" });
+    await block("call-blocked").waitFor({ state: "detached" });
+    const failure = page.locator("main").getByRole("status").filter({ hasText: "A tool failed" });
+    expect(await failure.count()).toBe(2);
+    expect(await failure.first().getAttribute("title")).toBe("Increase timeline detail in the command palette to see tool details.");
+    expect(await page.locator("main").getByText("tool call failed: boom", { exact: true }).count()).toBe(0);
+    expect((await failure.first().boundingBox())!.height).toBeLessThan(32);
+    // Raising the level through the palette restores the failure's full panel.
+    await page.keyboard.press("Control+Shift+p");
+    await page.getByPlaceholder("Type a command").fill("Timeline:");
+    await page.getByRole("button", { name: /^Timeline: Detailed/ }).click();
+    await block("call-c").getByText("tool call failed: boom", { exact: true }).waitFor();
+    await block("call-blocked").locator('[aria-label="Result"]').getByText("blocked", { exact: true }).waitFor();
+    expect(await failure.count()).toBe(0);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();
