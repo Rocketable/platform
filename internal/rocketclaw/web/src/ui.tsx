@@ -246,7 +246,7 @@ function QueuePanel({
     <div className="mb-2 rounded-lg bg-muted p-2 shadow-[inset_0_0_0_1px_var(--border)]">
       {jobs}
       {update.error ? <p role="alert" className="px-2 text-sm text-destructive">{update.error instanceof RPCError && update.error.code === 5 ? "This message is no longer waiting." : update.error.message}</p> : null}
-      <ul className="flex max-h-32 flex-col gap-0.5 overflow-y-auto">
+      <ul className={cn("flex flex-col gap-0.5 overflow-y-auto", edit ? "max-h-[50dvh]" : "max-h-32")}>
         {rows.map((item) => (
           <li key={item.id} data-queue-id={item.id} className="flex flex-wrap items-center gap-2 rounded-md px-2 py-1">
             <button
@@ -315,7 +315,7 @@ function QueuePanel({
             <button type="button" disabled={settling || edit?.id === item.id} className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent" aria-label="Remove" onClick={() => onRemove(item.id)}>
               <X className="h-3.5 w-3.5" />
             </button>
-            {edit?.id === item.id ? <form className="w-full" onSubmit={async (event) => {
+            {edit?.id === item.id ? <form className="w-full" ref={(form) => { form?.scrollIntoView({ block: "nearest" }); }} onSubmit={async (event) => {
               event.preventDefault();
               if (sending || settling || saving.current) return;
               saving.current = true;
@@ -323,7 +323,7 @@ function QueuePanel({
             }}><FieldGroup>
               <Field data-disabled={settling}>
                 <FieldLabel className="sr-only" htmlFor={`queue-edit-${item.id}`}>Edit queued message</FieldLabel>
-                <Textarea id={`queue-edit-${item.id}`} autoFocus value={edit.text} disabled={settling} className="max-h-48 overflow-y-auto" onChange={(event) => setEdit({ ...edit, text: event.target.value })} onKeyDown={(event) => {
+                <Textarea id={`queue-edit-${item.id}`} autoFocus value={edit.text} disabled={settling} className="max-h-[min(12rem,20dvh)] overflow-y-auto" onChange={(event) => setEdit({ ...edit, text: event.target.value })} onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); event.currentTarget.form!.requestSubmit(); }
                 }} />
               </Field>

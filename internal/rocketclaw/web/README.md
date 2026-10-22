@@ -793,6 +793,8 @@ with one row, so the composer stays on screen.
 without moving it or changing its attachments, delivery, author, or routing;
 **Cancel** discards the edit. Neither action changes the composer draft.
 Enter saves an edit without sending it; Shift+Enter inserts a line break.
+The panel grows while editing so the text box, Save, and Cancel fit together;
+long text scrolls within the text box.
 While saving, conflicting row controls are disabled. A failed save keeps the
 edited text for retry; a message already consumed cannot be edited or recreated.
 Pending steers are not editable.
