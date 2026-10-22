@@ -424,8 +424,9 @@ active tab.
   tab, or use the **…** button on the active tab (for touch) to reach Close,
   Close others, Close to the right, Close all, Pin/Unpin, and Move tabs to
   left/top. Session tabs also offer **Rename session**, which edits the name in
-  the tab itself: Enter or clicking away saves, Escape cancels, and a blank name
-  shows the last message again. The command palette offers the same commands as
+  the tab itself: Enter or clicking away saves and Escape cancels. A blank name
+  shows the last message again for RocketClaw sessions; for remote sessions, it
+  clears the OpenCode title too. The command palette offers the same commands as
   **Tabs: …** for the active tab.
 - **Width and full names.** Top tabs fit their title up to 20rem, then truncate.
   Hovering a tab shows its full title in a tooltip; while it shows, the first
@@ -904,9 +905,13 @@ Use the rename icon beside the pin in the chat to set an optional name. Chat act
 buttons have descriptive tooltips. Add files sits at the far left, before the agent
 selector. On mobile, these and the session actions sit above Steer and Send. The name
 replaces the session row's last-message preview without changing the messages; both
-the name and the preview remain searchable. Clear the name to restore the preview.
+the name and the preview remain searchable. For RocketClaw sessions, clear the name
+to restore the preview.
 Pins and names are shared with everyone who can see the session and persist
 across reloads and devices.
+Remote OpenCode names sync both ways: renaming or clearing the name here updates
+OpenCode, and a title changed or cleared in OpenCode appears here on the next sync.
+A failed OpenCode update leaves the local name unchanged.
 
 Cron runs are grouped beneath their definition, with links to their chat.
 Search above the grid filters both the grid and the groups by case-insensitive

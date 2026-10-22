@@ -17,6 +17,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 // fakeOpenCode serves the OpenCode v2 routes the sync and create paths call.
@@ -98,6 +99,30 @@ func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": openCodeTestSession("ses_new", "", body.Location.Directory, 5000)})
 	default:
 		id, messages := strings.CutSuffix(strings.TrimPrefix(r.URL.Path, "/api/session/"), "/message")
+		if r.Method == http.MethodPatch && !messages {
+			var body struct {
+				Title *string `json:"title"`
+			}
+			if json.NewDecoder(r.Body).Decode(&body) != nil || body.Title == nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			for i := range f.sessions {
+				if f.sessions[i].ID == id {
+					f.sessions[i].Title = *body.Title
+
+					w.WriteHeader(http.StatusNoContent)
+
+					return
+				}
+			}
+
+			w.WriteHeader(http.StatusNotFound)
+
+			return
+		}
+
 		if parent, ok := f.parents[id]; ok && !messages {
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]string{"parentID": parent}})
 			return
@@ -167,12 +192,18 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	box := config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100}
+
+	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
+		cfg.OpenCode["box"] = box
+		return nil
+	}))
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 
 	rows := remoteSidebar(t, s)
 	require.Len(t, rows, 3)
 	assert.Equal(t, "opencode:box:ses_a", rows[0].Conversation.ID)
 	assert.Equal(t, "Alpha", rows[0].Summary.LastMessage)
+	assert.Equal(t, "Alpha", rows[0].Name)
 	assert.Equal(t, "/srv/api", rows[1].Directory)
 	assert.True(t, rows[1].Running)
 	assert.False(t, rows[0].Running)
@@ -204,6 +235,10 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	updated, err := s.UpdateConversationDetails(ctx, "opencode:box:ses_c", new(true), new("old work"))
 	require.NoError(t, err)
 	require.True(t, updated)
+	// OpenCode v2 session.update uses PATCH and returns 204, not a JSON session:
+	// https://opencode.ai/v2/openapi.json#/paths/~1api~1session~1{sessionID}/patch
+	assert.Equal(t, "old work", fake.sessions[2].Title, "renaming in RocketClaw must rename the OpenCode session")
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 
 	_, err = s.toggleSessionTag(ctx, "opencode:box:ses_c", "customer", []string{"customer"})
 	require.NoError(t, err)
@@ -215,6 +250,51 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	assert.Equal(t, "opencode:box:ses_c", rows[0].Conversation.ID, "pinned rows sort first")
 	assert.Equal(t, "old work", rows[0].Name)
 	assert.Equal(t, []string{"customer"}, rows[0].Tags)
+	assert.Equal(t, "old work", rows[0].Summary.LastMessage)
+
+	// The v2 Session.Info.title from GET /api/session is the shared name, not a local alias:
+	// https://opencode.ai/v2/openapi.json#/paths/~1api~1session/get
+	for _, title := range []string{"Delta", ""} {
+		fake.sessions[2].Title = title
+
+		require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+		rows = remoteSidebar(t, s)
+		assert.Equal(t, title, rows[0].Name, "an upstream rename or clear must replace the local name")
+		assert.Equal(t, title, rows[0].Summary.LastMessage)
+		assert.True(t, rows[0].Pinned)
+		assert.Equal(t, []string{"customer"}, rows[0].Tags)
+	}
+
+	_, err = s.UpdateConversationDetails(ctx, "opencode:box:ses_c", nil, new("old work"))
+	require.NoError(t, err)
+
+	// Pins still work while OpenCode refuses writes, but a refused rename saves nothing locally.
+	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
+		cfg.OpenCode["box"] = config.OpenCodeConfig{URL: server.URL, Password: "wrong", Port: 4100}
+		return nil
+	}))
+	updated, err = s.UpdateConversationDetails(ctx, "opencode:box:ses_c", new(false), nil)
+	require.NoError(t, err)
+	require.True(t, updated)
+	updated, err = s.UpdateConversationDetails(ctx, "opencode:box:ses_c", new(true), new("refused"))
+	require.ErrorAs(t, err, new(*openCodeError))
+	assert.False(t, updated)
+	assert.Equal(t, "old work", remoteSidebar(t, s)[2].Name)
+	assert.False(t, remoteSidebar(t, s)[2].Pinned)
+	assert.Equal(t, "old work", fake.sessions[2].Title)
+
+	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
+		cfg.OpenCode["box"] = box
+		return nil
+	}))
+	_, err = s.UpdateConversationDetails(ctx, "opencode:box:ses_c", new(true), nil)
+	require.NoError(t, err)
+	updated, err = s.UpdateConversationDetails(ctx, "opencode:box:ses_c", nil, new(""))
+	require.NoError(t, err)
+	require.True(t, updated)
+	assert.Empty(t, fake.sessions[2].Title, "clearing a name also clears the remote title")
+	assert.Empty(t, remoteSidebar(t, s)[0].Name)
+	assert.Empty(t, remoteSidebar(t, s)[0].Summary.LastMessage)
 
 	search, err := s.SearchSessions(ctx, "/srv/api", SearchFields, nil)
 	require.NoError(t, err)
@@ -239,6 +319,127 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	rows = remoteSidebar(t, s)
 	require.Len(t, rows, 2)
 	assert.True(t, rows[0].Offline)
+}
+
+func TestOpenCodeRenamesKeepRemoteAndLocalOrder(t *testing.T) {
+	s := newOpenCodeTestService(t, "box")
+	ctx := t.Context()
+	titles := make(chan string, 2)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct{ Title string }
+
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		titles <- body.Title
+
+		if body.Title == "first" {
+			<-release
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
+		cfg.OpenCode["box"] = config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100}
+		return nil
+	}))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, remote_session, title, directory, last_updated, running, synced_at) VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', 'ses_a', 'original', '/srv', now(), FALSE, now())`)
+	require.NoError(t, err)
+
+	var renames errgroup.Group
+	renames.Go(func() error {
+		_, err := s.UpdateConversationDetails(ctx, "opencode:box:ses_a", nil, new("first"))
+		return err
+	})
+	require.Equal(t, "first", <-titles)
+
+	secondDone := make(chan struct{})
+
+	renames.Go(func() error {
+		defer close(secondDone)
+
+		_, err := s.UpdateConversationDetails(ctx, "opencode:box:ses_a", nil, new("second"))
+
+		return err
+	})
+
+	secondApplied := false
+
+	assert.Eventually(t, func() bool {
+		select {
+		case <-titles:
+			secondApplied = true
+			return true
+		default:
+			var blocked int
+
+			err := queryScalar(ctx, s.db, "read blocked rename", `WITH blocked AS (
+    SELECT pid FROM pg_stat_activity WHERE wait_event_type = 'Lock'
+), sessions AS (
+    SELECT pid FROM pg_locks WHERE relation = 'conversations'::regclass
+)
+SELECT count(*) FROM blocked JOIN sessions USING (pid)`, &blocked)
+
+			return err == nil && blocked > 0
+		}
+	}, 5*time.Second, 10*time.Millisecond)
+
+	if secondApplied {
+		<-secondDone
+	}
+
+	close(release)
+	require.NoError(t, renames.Wait())
+	assert.Equal(t, "second", remoteSidebar(t, s)[0].Name, "local name must match the last title applied upstream, not HTTP response order")
+}
+
+func TestOpenCodeRenameSurvivesEarlierPoll(t *testing.T) {
+	for _, name := range []string{"renamed", ""} {
+		t.Run(name, func(t *testing.T) {
+			s := newOpenCodeTestService(t, "box")
+			ctx := t.Context()
+			fake := &fakeOpenCode{sessions: []openCodeSession{openCodeTestSession("ses_a", "original", "/srv/app", 1000)}}
+			listed, release := make(chan struct{}), make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/session/active" {
+					close(listed)
+					<-release
+				}
+
+				fake.ServeHTTP(w, r)
+			}))
+			t.Cleanup(server.Close)
+			box := config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100}
+
+			require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
+				cfg.OpenCode["box"] = box
+				return nil
+			}))
+			_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, remote_session, title, name, directory, last_updated, running, synced_at) VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', 'ses_a', 'original', 'original', '/srv/app', now(), FALSE, now())`)
+			require.NoError(t, err)
+
+			var poll errgroup.Group
+			poll.Go(func() error {
+				return s.syncOpenCode(ctx, "box", box, &openCodeShells{})
+			})
+			<-listed
+
+			updated, err := s.UpdateConversationDetails(ctx, "opencode:box:ses_a", nil, &name)
+
+			close(release)
+
+			errPoll := poll.Wait()
+
+			require.NoError(t, err)
+			require.True(t, updated)
+			require.NoError(t, errPoll)
+			assert.Equal(t, name, fake.sessions[0].Title)
+			rows := remoteSidebar(t, s)
+			require.Len(t, rows, 1)
+			assert.Equal(t, name, rows[0].Name)
+			assert.Equal(t, name, rows[0].Summary.LastMessage)
+		})
+	}
 }
 
 func TestSyncOpenCodeMarksBackgroundWork(t *testing.T) {
@@ -356,6 +557,13 @@ func TestSyncOpenCodeKeepsRowsOutsideTheWindow(t *testing.T) {
 func TestToggleManualTag(t *testing.T) {
 	s := newOpenCodeTestService(t, "box")
 	ctx := t.Context()
+	server := httptest.NewServer(&fakeOpenCode{sessions: []openCodeSession{openCodeTestSession("ses_a", "", "/srv", 1000)}})
+	t.Cleanup(server.Close)
+	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
+		cfg.OpenCode["box"] = config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100}
+		return nil
+	}))
+
 	agents := rocketcode.Agents{Items: map[string]rocketcode.Agent{"main": {Frontmatter: map[string]any{"permission": map[string]any{"rocketclaw": map[string]any{setTagToolName: []any{[]any{"customer", "internal"}}}}}}}}
 
 	require.NoError(t, s.UpsertThread("web", ThreadState{Agent: "main"}))

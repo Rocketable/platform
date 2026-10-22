@@ -351,13 +351,18 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 
 	// A fetch below the limit is the whole root set, so every missing row was deleted; a full
 	// fetch proves deletions only inside its window. Rows stamped after the poll started were
-	// created meanwhile and stay. Kept rows are stamped too: offline means unreachable only.
+	// created or renamed meanwhile and stay. Earlier polls must not undo a rename's title/name.
+	// Kept rows are stamped too: offline means unreachable only.
+	// Session.Info.title is also the shared name, including when cleared (OpenCode v2
+	// https://opencode.ai/v2/openapi.json#/paths/~1api~1session/get).
 	_, err := execState(ctx, s.db, "sync opencode sessions", `WITH incoming AS (
     SELECT * FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[], $11::boolean[], $12::text[], $13::text[], $15::text[]) AS t(conversation_id, title, directory, updated_at, running, reply, background, agent, model, remote_session)
 ), upserted AS (
-    INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, reply, background, model, remote_session)
-    SELECT conversation_id, agent, '', $14, FALSE, 'remote', $1, title, directory, updated_at, running, now(), reply, background, model, remote_session FROM incoming
-    ON CONFLICT (conversation_id) DO UPDATE SET title = excluded.title, directory = excluded.directory,
+    INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, reply, background, model, remote_session, name)
+    SELECT conversation_id, agent, '', $14, FALSE, 'remote', $1, title, directory, updated_at, running, now(), reply, background, model, remote_session, title FROM incoming
+    ON CONFLICT (conversation_id) DO UPDATE SET
+        title = CASE WHEN conversations.synced_at > $9 THEN conversations.title ELSE excluded.title END,
+        name = CASE WHEN conversations.synced_at > $9 THEN conversations.name ELSE excluded.name END, directory = excluded.directory,
         last_updated = excluded.last_updated, running = excluded.running, background = excluded.background, synced_at = excluded.synced_at,
         reply = COALESCE(excluded.reply, conversations.reply), agent = excluded.agent, model = excluded.model
 ), removed AS (
@@ -517,6 +522,11 @@ func openCodeCall(ctx context.Context, name string, server config.OpenCodeConfig
 
 	if response.StatusCode/100 != 2 {
 		return &openCodeError{Server: name, Path: path, Status: response.StatusCode}
+	}
+
+	// OpenCode v2 session.update returns 204: https://opencode.ai/v2/openapi.json
+	if out == nil {
+		return nil
 	}
 
 	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
