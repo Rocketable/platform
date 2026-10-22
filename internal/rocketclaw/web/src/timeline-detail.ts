@@ -120,7 +120,7 @@ export const timelineFailure = /^(tool call (failed|denied|aborted)|subagent tas
 // (renderable, toolGroupType, groupContent): replies and separate items end a run of grouped items.
 export function projectTimeline<T extends TimelineItem>(items: T[], rows: TimelineRows) {
   const projected: ({ kind: "line"; line: T; open?: boolean } | TimelineGroup<T>)[] = [];
-  const everything = timelineLevel(rows)?.id === "everything";
+  const level = timelineLevel(rows)?.id;
   let group: TimelineGroup<T> | undefined;
   for (const line of items) {
     const id = line.role === "tool" ? categoryByTool[line.toolName ?? ""] ?? "tools" : categoryByRole[line.role];
@@ -131,9 +131,9 @@ export function projectTimeline<T extends TimelineItem>(items: T[], rows: Timeli
     }
     const { placement, details } = rows[id];
     // Categories without a Collapse setting start closed, as OpenCode's do, except at Everything.
-    const open = collapsible.has(id) ? details === "expanded" : everything;
+    const open = collapsible.has(id) ? details === "expanded" : level === "everything";
     const pinned = [line, ...(line.toolParts ?? [])].some((part) => part.attachments?.length);
-    const failed = line.role === "tool" && (line.state === "background" || timelineFailure.test((line.toolName ? line.toolParts?.[0]?.text : line.text) ?? ""));
+    const failed = line.role === "tool" && (line.state === "background" || (level !== "messages" && timelineFailure.test((line.toolName ? line.toolParts?.[0]?.text : line.text) ?? "")));
     if (placement === "hidden" && !pinned && !failed) continue;
     if (placement === "grouped" && !pinned) {
       if (!group) projected.push(group = { kind: "group", key: line.id, label: "", members: [] });

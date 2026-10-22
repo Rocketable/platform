@@ -113,18 +113,19 @@ test("rows keep time order, merge grouped runs and split at replies and separate
   expect(shape([{ id: "orphan", role: "tool", text: "orphan output" }], "compact")).toEqual(["Used 1 tool[orphan]"]);
 });
 
-test("failed calls surface when hidden, stay grouped when grouped, and delivered files never hide", () => {
+test("Messages only hides failed panels, other levels keep them, and delivered files never hide", () => {
   const failed = call("e2", "execute", "tool call failed: execute: run code mode: boom");
   expect(shape([call("s1", "skill"), failed, call("s2", "skill")], "quiet")).toEqual(["Used 1 tool[s1]", "e2+", "Used 1 tool[s2]"]);
   expect(shape([call("e1", "execute"), failed], "quiet")).toEqual(["e2+"]);
   expect(shape([call("e1", "execute"), failed], "compact")).toEqual(["Used 2 tools[e1,e2]"]);
-  expect(shape([call("w1", "websearch", "tool call denied: no rule")], "messages")).toEqual(["w1+"]);
-  expect(shape([call("w1", "websearch", "tool call aborted because the process restarted")], "messages")).toEqual(["w1+"]);
-  expect(shape([call("task1", "task", "subagent task aborted because the process restarted")], "messages")).toEqual(["task1+"]);
+  expect(shape([failed], "messages")).toEqual([]);
+  expect(shape([call("w1", "websearch", "tool call denied: no rule")], "messages")).toEqual([]);
+  expect(shape([call("w1", "websearch", "tool call aborted because the process restarted")], "messages")).toEqual([]);
+  expect(shape([call("task1", "task", "subagent task aborted because the process restarted")], "messages")).toEqual([]);
   expect(shape([call("e1", "execute", "tool call rejected: repeated identical call")], "messages")).toEqual([]);
-  // A call moved to the background shows at every level, like a failure.
   expect(shape([{ ...call("e3", "execute"), state: "background" }, { ...call("task2", "task"), state: "background" }], "messages")).toEqual(["e3+", "task2+"]);
   expect(shape([call("f1", "rocketclaw_attach_files_to_response", "attached", [{ id: "file" }])], "messages")).toEqual(["f1+"]);
+  expect(shape([call("f1", "execute", "tool call failed: after attaching", [{ id: "file" }])], "messages")).toEqual(["f1+"]);
   expect(shape([call("e1", "execute"), call("f1", "rocketclaw_attach_files_to_response", "attached", [{ id: "file" }]), call("e2", "execute")], "compact")).toEqual(["Used 1 tool[e1]", "f1+", "Used 1 tool[e2]"]);
 });
 

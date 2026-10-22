@@ -3009,6 +3009,7 @@ function TurnContent({ turn, detail, conversationId, hasSandboxed, comparison = 
   return <>
       {comparison ? null : turn.user.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
       <TranscriptLines rows={projectTimeline(turn.items, detail)} conversationId={conversationId} hasSandboxed={hasSandboxed} />
+      {timelineLevel(detail)?.id === "messages" && turn.items.some((line) => line.role === "tool" && (line.state === "blocked" || toolStatus(line, false) === "error")) ? <p role="status" title="Increase timeline detail in the command palette to see tool details." className="mb-4 flex items-center gap-1 text-xs text-muted-foreground"><CircleAlert aria-hidden="true" className="size-3.5" />A tool failed</p> : null}
     </>;
 }
 
