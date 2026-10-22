@@ -406,7 +406,7 @@ func (inertChatObserver) observe(ChatResponse) {}
 
 // runPrompt runs texts as the only turn of l, journaled under turnID, passes each output item to
 // observer as it arrives, and returns the turn's last assistant message.
-func (l *looper) runPrompt(ctx context.Context, turnID string, texts []string, sessionIn iter.Seq2[SessionEntry, error], sessionOut func(SessionEntry) error, observer chatObserver) (last string, err error) {
+func (l *looper) runPrompt(ctx context.Context, turnID string, texts []string, sessionIn iter.Seq2[SessionEntry, error], sessionOut sessionWriter, observer chatObserver) (last string, err error) {
 	output := make(chan ChatResponse)
 
 	input := make(chan PromptInput, 1)
@@ -434,16 +434,21 @@ func (l *looper) runPrompt(ctx context.Context, turnID string, texts []string, s
 	return last, err
 }
 
-// childSessionOut saves the entries of a hidden run under f.childKey, as entryType when not empty.
-func (f *toolFactory) childSessionOut(ctx context.Context, entryType string) func(SessionEntry) error {
-	return func(entry SessionEntry) error {
-		entry.Type = cmp.Or(entryType, entry.Type)
-		if err := f.childSessions.AppendChildEntry(ctx, f.childKey, &entry); err != nil {
-			return fmt.Errorf("append child session entry: %w", err)
-		}
+// childSessionWriter saves a hidden run under its factory's childKey, as entryType when not empty.
+type childSessionWriter struct {
+	factory   *toolFactory
+	entryType string
+}
 
-		return nil
+func (w childSessionWriter) Append(ctx context.Context, entry *SessionEntry) error {
+	saved := *entry
+
+	saved.Type = cmp.Or(w.entryType, saved.Type)
+	if err := w.factory.childSessions.AppendChildEntry(ctx, w.factory.childKey, &saved); err != nil {
+		return fmt.Errorf("append child session entry: %w", err)
 	}
+
+	return nil
 }
 
 // runGuardrail saves its run under subagentKey, the key of the subagent the task call runs.
@@ -468,7 +473,7 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 		observer = &guardrailDiagnostics{output: parentOutput, guardedAgent: guardedAgent, guardrailAgent: agent.Name, stage: stage, metadata: metadata}
 	}
 
-	last, err := child.runPrompt(ctx, "", []string{message}, f.childSession, childFactory.childSessionOut(ctx, guardrailEntryType), observer)
+	last, err := child.runPrompt(ctx, "", []string{message}, f.childSession, childSessionWriter{factory: &childFactory, entryType: guardrailEntryType}, observer)
 	if err != nil {
 		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail failed: " + err.Error()}
 	}

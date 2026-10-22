@@ -146,7 +146,7 @@ func TestSessionTagToolsBridge(t *testing.T) {
 			close(input)
 
 			memory := new(memoryStore)
-			require.NoError(t, runtime.Loop(t.Context(), input, memory.in(), memory.out, make(chan os.Signal)))
+			require.NoError(t, runtime.Loop(t.Context(), input, memory.in(), memory, make(chan os.Signal)))
 			require.Len(t, outputs, len(calls))
 			tags, err := sessionTags(t.Context(), service.db, "external_mcp:owning")
 			require.NoError(t, err)
@@ -183,7 +183,7 @@ func TestSessionTagToolsBridge(t *testing.T) {
 
 					close(input)
 
-					require.NoError(t, runtime.Loop(t.Context(), input, storedEntries(t, service, "external_mcp:owning"), memory.out, make(chan os.Signal)))
+					require.NoError(t, runtime.Loop(t.Context(), input, storedEntries(t, service, "external_mcp:owning"), memory, make(chan os.Signal)))
 					tags, err := sessionTags(t.Context(), service.db, "external_mcp:owning")
 					require.NoError(t, err)
 
@@ -645,7 +645,7 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			close(input)
 
 			store := &memoryStore{}
-			require.NoError(t, runtime.Loop(t.Context(), input, storedEntries(t, service, "external_mcp:private"), store.out, make(chan os.Signal)))
+			require.NoError(t, runtime.Loop(t.Context(), input, storedEntries(t, service, "external_mcp:private"), store, make(chan os.Signal)))
 
 			require.Equal(t, probe+1, requests)
 			require.Len(t, outputs, probe)

@@ -2532,7 +2532,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	looperStarted := time.Now()
 
-	group.Go(func() error { return looper.Loop(turnCtx, input, sessionIn, staged.out, interrupts) })
+	group.Go(func() error { return looper.Loop(turnCtx, input, sessionIn, staged, interrupts) })
 
 	firstOutput, firstText := false, false
 

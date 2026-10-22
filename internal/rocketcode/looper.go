@@ -297,7 +297,11 @@ type Runtime = looper
 
 // Looper processes prompt input streams with a configured runtime.
 type Looper interface {
-	Loop(ctx context.Context, input <-chan PromptInput, sessionIn iter.Seq2[SessionEntry, error], sessionOut func(SessionEntry) error, interrupts <-chan os.Signal) error
+	Loop(ctx context.Context, input <-chan PromptInput, sessionIn iter.Seq2[SessionEntry, error], sessionOut sessionWriter, interrupts <-chan os.Signal) error
+}
+
+type sessionWriter interface {
+	Append(context.Context, *SessionEntry) error
 }
 
 type toolCallSignature struct {
@@ -612,7 +616,7 @@ func (l *looper) Loop(
 	ctx context.Context,
 	input <-chan PromptInput,
 	sessionIn iter.Seq2[SessionEntry, error],
-	sessionOut func(SessionEntry) error,
+	sessionOut sessionWriter,
 	interrupts <-chan os.Signal,
 ) (err error) {
 	if ctx == nil {
@@ -625,10 +629,6 @@ func (l *looper) Loop(
 
 	if sessionIn == nil {
 		return errors.New("sessionIn is required")
-	}
-
-	if sessionOut == nil {
-		return errors.New("sessionOut is required")
 	}
 
 	if interrupts == nil {
@@ -717,7 +717,7 @@ func (l *looper) Loop(
 
 		errSave := observations.err
 		if errSave == nil {
-			if errAppend := sessionOut(turn); errAppend != nil {
+			if errAppend := sessionOut.Append(ctx, &turn); errAppend != nil {
 				errSave = fmt.Errorf("append session turn: %w", errAppend)
 			}
 		}

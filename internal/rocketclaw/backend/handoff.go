@@ -57,7 +57,7 @@ func GenerateHandoff(ctx context.Context, locked *config.LockedConfig, agent, tr
 	close(input)
 
 	var group errgroup.Group
-	group.Go(func() error { return runtime.Loop(ctx, input, memory.in(), memory.out, make(chan os.Signal, 1)) })
+	group.Go(func() error { return runtime.Loop(ctx, input, memory.in(), memory, make(chan os.Signal, 1)) })
 
 	var text strings.Builder
 

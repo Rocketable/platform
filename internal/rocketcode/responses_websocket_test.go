@@ -251,7 +251,7 @@ func TestWebsocketStorageFailureDoesNotRetryOrReuseUnreadEvents(t *testing.T) {
 	input <- testPromptInput(PromptInputRoleUser, "hello", output)
 
 	close(input)
-	err := loop.Loop(ctx, input, emptySession(), discardSession, make(chan os.Signal, 1))
+	err := loop.Loop(ctx, input, emptySession(), discardSession(), make(chan os.Signal, 1))
 	require.ErrorIs(t, err, errPersist)
 	_, ok := errors.AsType[progressPersistenceError](err)
 	require.True(t, ok)

@@ -148,7 +148,7 @@ func TestNewWithModelResolverResolvesRootAgent(t *testing.T) {
 	input <- testPromptInput(PromptInputRoleUser, "hello", output)
 
 	close(input)
-	require.NoError(t, loop.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1)))
+	require.NoError(t, loop.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1)))
 	require.Len(t, workRequests, 1)
 	require.Contains(t, <-workRequests, `"model":"gpt-6.1-sol"`)
 	require.Empty(t, defaultRequests)
@@ -276,10 +276,10 @@ func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
 
 			var saved SessionEntry
 
-			require.NoError(t, loop.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-				saved = entry
+			require.NoError(t, loop.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+				saved = *entry
 				return nil
-			}, make(chan os.Signal, 1)))
+			}}, make(chan os.Signal, 1)))
 
 			var restored SessionEntry
 			require.NoError(t, json.Unmarshal([]byte(marshalJSON(t, saved)), &restored))
@@ -402,7 +402,7 @@ func TestOpenAIResponsesModeUsesResponsesEndpoint(t *testing.T) {
 
 	close(input)
 
-	err := loop.Loop(context.Background(), input, func(func(SessionEntry, error) bool) {}, func(SessionEntry) error { return nil }, make(chan os.Signal, 1))
+	err := loop.Loop(context.Background(), input, func(func(SessionEntry, error) bool) {}, discardSession(), make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Equal(t, "/responses", route)
@@ -448,7 +448,7 @@ func TestOpenAIResponsesModeStripsPersistedCompactionMetadata(t *testing.T) {
 	close(input)
 
 	session := sessionEntries([]SessionEntry{{ReplayInput: []json.RawMessage{json.RawMessage(`{"content":"private-content-value","encrypted_content":"sealed","id":"cmp-1","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}`)}}})
-	err := loop.Loop(context.Background(), input, session, func(SessionEntry) error { return nil }, make(chan os.Signal, 1))
+	err := loop.Loop(context.Background(), input, session, discardSession(), make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.NotContains(t, body, "private-content-value")

@@ -1238,7 +1238,7 @@ func TestMemoryStoreAppendAndLoad(t *testing.T) {
 
 	entry := testSessionEntry("memory", "assistant")
 
-	require.NoError(t, store.out(*entry))
+	require.NoError(t, store.Append(t.Context(), entry))
 	require.Equal(t, []harness.SessionEntry{*entry}, collectEntries(t, store.in()))
 
 	for got, err := range store.in() {

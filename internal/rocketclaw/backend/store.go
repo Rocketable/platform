@@ -2091,6 +2091,12 @@ func hideDSN(err error, databaseURL, op string) error {
 
 type memoryStore struct{ entries []harness.SessionEntry }
 
+// Append retains a completed turn in memory.
+func (m *memoryStore) Append(_ context.Context, entry *harness.SessionEntry) error {
+	m.entries = append(m.entries, *entry)
+	return nil
+}
+
 func (m *memoryStore) in() iter.Seq2[harness.SessionEntry, error] {
 	return func(yield func(harness.SessionEntry, error) bool) {
 		for i := range m.entries {
@@ -2099,10 +2105,4 @@ func (m *memoryStore) in() iter.Seq2[harness.SessionEntry, error] {
 			}
 		}
 	}
-}
-
-//nolint:gocritic // rocketcode requires this callback shape.
-func (m *memoryStore) out(entry harness.SessionEntry) error {
-	m.entries = append(m.entries, entry)
-	return nil
 }
