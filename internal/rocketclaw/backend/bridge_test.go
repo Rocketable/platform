@@ -5668,11 +5668,10 @@ func TestEmptyProducerWakeLeavesDestinationFree(t *testing.T) {
 
 	wake := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
 	wake.ConversationID, wake.SyncDestination = private, managed
-	require.NoError(t, nt.bridge(t, manager, managed).enqueue(t.Context(), &bridgeRequest{inbound: wake, backgroundWake: true, producer: nt.bridge(t, manager, private)}, "submit background wake"))
-
-	nt.waitIdle(t, manager, managed)
-	assert.Empty(t, nt.requests)
 	destination := nt.bridge(t, manager, managed)
+	destination.handle(t.Context(), &bridgeRequest{inbound: wake, backgroundWake: true, producer: nt.bridge(t, manager, private)})
+
+	assert.Empty(t, nt.requests)
 	assert.Same(t, destination, destination.stopTarget(), "a stop on the destination is not left routed to the producer")
 }
 
