@@ -40,7 +40,7 @@ A workspace contains `AGENTS.md` and, optionally, `agents/`, `skills/`, `scripts
 
 ### Web page
 
-The web page is the main way to work with RocketClaw. It is built into RocketClaw and listens on `0.0.0.0:3000`. To change that, set `"web": {"listen_address": "127.0.0.1:3000"}`. Links RocketClaw hands out use the tsnet node's HTTPS name once that node serves (see [Voice](#voice)), and this machine's Tailscale address otherwise.
+The web page is the main way to work with RocketClaw. It is built into RocketClaw and serves HTTPS on `0.0.0.0:3000`; plain `http://` does not answer. To change the address, set `"web": {"listen_address": "127.0.0.1:3000"}`. To use your own certificate, set both `"tls_cert_file"` and `"tls_key_file"` under `web` to PEM files; without them RocketClaw makes a self-signed certificate at each start, which browsers warn about until you accept it. Over HTTPS, browsers carry every tab over one connection, so many open tabs never run out of connections. Links RocketClaw hands out use the tsnet node's HTTPS name once that node serves (see [Voice](#voice)), and this machine's Tailscale address otherwise.
 
 RocketClaw identifies each browser by IP address, using the `web_users` map (for example `"web_users": {"100.64.0.10": "alice"}`) or, failing that, a Tailscale lookup. It refuses browsers it cannot identify. See the [Web README](internal/rocketclaw/web/README.md) for the page's features and optional Sentry error tracking.
 
@@ -59,7 +59,7 @@ Per call, OpenAI receives your microphone audio; up to 40 of the conversation's 
 
 A call ends when you stop it, when the page closes or stays hidden for 30 seconds, when the page loses its connection to RocketClaw, when the browser's audio connection fails, or when OpenAI ends the call. There are no idle or no-speech timers. If the audio connection is not up 20 seconds after OpenAI answers, the browser retries once on the same microphone. If RocketClaw's connection to OpenAI drops, the `chatgpt` route reconnects, as Codex does, and the Voice page shows "Reconnecting to the agent…" meanwhile; the `api_key` route ends the call as lost. With **Sticky** on, the Voice page instead starts a new call after any of these connection losses, with sound cues, until you hang up; see the [Web README](internal/rocketclaw/web/README.md#voice).
 
-The microphone needs a secure page: HTTPS, or `http://127.0.0.1:3000` on the RocketClaw machine. For a phone or another device, RocketClaw can join your tailnet as its own Tailscale node (tsnet) and serve the web page over HTTPS. Turn on MagicDNS and HTTPS certificates for the tailnet, then add `web.tsnet`:
+The microphone needs a secure page: HTTPS with a certificate the browser trusts. For a phone or another device, RocketClaw can join your tailnet as its own Tailscale node (tsnet) and serve the web page over HTTPS. Turn on MagicDNS and HTTPS certificates for the tailnet, then add `web.tsnet`:
 
 ```json
 "web": {"tsnet": {"hostname": "rocketclaw", "tags": ["tag:rocketclaw"]}}
@@ -79,7 +79,7 @@ The microphone needs a secure page: HTTPS, or `http://127.0.0.1:3000` on the Roc
 - The node keeps its state outside the workspace, in `rocketclaw/tsnet-<hostname>` under the OS user config directory (`~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` or `~/.config` on Linux). Tailscale's log upload is off.
 - Never use `tailscale funnel`: it would put RocketClaw on the public internet.
 
-The `listen_address` listener keeps its IP rules: `web_users`, then a Tailscale lookup. It never trusts `Tailscale-User-*` headers. A browser on the RocketClaw machine can use `http://127.0.0.1:3000` after mapping `127.0.0.1` to yourself: `"web_users": {"127.0.0.1": "you@example.com"}` (`localhost` may connect from `::1`, which needs its own mapping). Tailscale logins and `web_users` names are separate, so one person may appear under two names.
+The `listen_address` listener keeps its IP rules: `web_users`, then a Tailscale lookup. It never trusts `Tailscale-User-*` headers. A browser on the RocketClaw machine can use `https://127.0.0.1:3000` after mapping `127.0.0.1` to yourself: `"web_users": {"127.0.0.1": "you@example.com"}` (`localhost` may connect from `::1`, which needs its own mapping). Tailscale logins and `web_users` names are separate, so one person may appear under two names.
 
 Processes on this machine, including agent tools and MCP servers, can still act as the owner: through the `listen_address` listener, or through this machine's own Tailscale address. See the [transport README](internal/rocketclaw/frontend/rpc/README.md#identity-boundary) for the identity details.
 

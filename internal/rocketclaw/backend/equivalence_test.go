@@ -470,8 +470,8 @@ func TestStateStoreEquivalenceCapture(t *testing.T) {
 	servers, err := equivOpenCodeServers(ctx, s.db)
 	require.NoError(t, err)
 
-	for i, server := range servers {
-		cfg.OpenCode[server] = config.OpenCodeConfig{URL: "http://127.0.0.1:9", Port: 40000 + i}
+	for _, server := range servers {
+		cfg.OpenCode[server] = config.OpenCodeConfig{URL: "http://127.0.0.1:9"}
 	}
 
 	s.definitions = config.NewLockedConfig(cfg)

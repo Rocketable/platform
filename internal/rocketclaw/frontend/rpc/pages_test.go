@@ -77,7 +77,7 @@ func TestPages(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := NewHTTPHandler(connection, config.SentryConfig{})
+	handler := NewHTTPHandler(connection, config.SentryConfig{}, nil)
 	app := httptest.NewRecorder()
 	handler.ServeHTTP(app, httptest.NewRequest(http.MethodGet, "/", http.NoBody))
 
@@ -204,7 +204,7 @@ func TestPagesRealBrowser(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
 	// Pages have an opaque origin, so their requests carry Origin: null; their POSTs' answers are recorded.
-	handler := NewHTTPHandler(connection, cfg.Web.Sentry)
+	handler := NewHTTPHandler(connection, cfg.Web.Sentry, cfg.OpenCode)
 
 	var (
 		mu      sync.Mutex

@@ -29,14 +29,17 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 )
 
-// NewHTTPHandler bridges the browser API to the local Web service.
-func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) http.Handler {
+// NewHTTPHandler bridges the browser API to the local Web service, and each remote OpenCode
+// server's API to the browsers the Web admits under /oc/{server}/api/.
+func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, servers map[string]config.OpenCodeConfig) http.Handler {
 	mux := http.NewServeMux()
 	protection := http.NewCrossOriginProtection()
 	app := web.Handler(sentry)
 	mux.Handle("GET /", app)
 	mux.Handle("GET /api/", http.NotFoundHandler())
 	mux.Handle("POST /api/", http.NotFoundHandler())
+
+	handleOpenCode(mux, connection, servers)
 
 	for _, route := range []string{"GET /pages/{space}/{agent}/{path...}", "GET /pages-raw/{agent}/{path...}"} {
 		mux.HandleFunc(route, servePage(connection, app))

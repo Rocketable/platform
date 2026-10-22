@@ -1,0 +1,395 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": [
+      "ESNext",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js",
+    "strict": true,
+    "noUnusedLocals": true,
+    "skipLibCheck": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "allowJs": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "types": [
+      "vite/client",
+      "bun",
+      "node"
+    ],
+    "paths": {
+      "@/*": [
+        "./packages/app/src/*"
+      ],
+      "@rocketclaw/host/*": [
+        "./host/*"
+      ],
+      "@opencode/app": [
+        "./packages/app/src/index.ts"
+      ],
+      "@opencode/app/desktop": [
+        "./packages/app/src/desktop.ts"
+      ],
+      "@opencode/app/desktop-menu": [
+        "./packages/app/src/shell/commands/desktop-menu.ts"
+      ],
+      "@opencode/app/i18n/desktop-native": [
+        "./packages/app/src/runtime/i18n/desktop-native.ts"
+      ],
+      "@opencode/app/vite": [
+        "./packages/app/vite.js"
+      ],
+      "@opencode/app/index.css": [
+        "./packages/app/src/index.css"
+      ],
+      "@opencode/ui/accordion": [
+        "./packages/ui/src/data-display/accordion/accordion.tsx"
+      ],
+      "@opencode/ui/avatar": [
+        "./packages/ui/src/data-display/avatar/avatar.tsx"
+      ],
+      "@opencode/ui/badge": [
+        "./packages/ui/src/data-display/badge/badge.tsx"
+      ],
+      "@opencode/ui/button": [
+        "./packages/ui/src/actions/button/button.tsx"
+      ],
+      "@opencode/ui/button.css": [
+        "./packages/ui/src/actions/button/button.css"
+      ],
+      "@opencode/ui/checkbox": [
+        "./packages/ui/src/forms/checkbox/checkbox.tsx"
+      ],
+      "@opencode/ui/dialog": [
+        "./packages/ui/src/overlays/dialog/dialog.tsx"
+      ],
+      "@opencode/ui/diff-changes": [
+        "./packages/ui/src/data-display/diff-changes/diff-changes.tsx"
+      ],
+      "@opencode/ui/divider": [
+        "./packages/ui/src/layout/divider/divider.tsx"
+      ],
+      "@opencode/ui/field": [
+        "./packages/ui/src/forms/field/field.tsx"
+      ],
+      "@opencode/ui/file-tree.css": [
+        "./packages/ui/src/styles/file-tree.css"
+      ],
+      "@opencode/ui/icon": [
+        "./packages/ui/src/icons/icon/icon.tsx"
+      ],
+      "@opencode/ui/icons/catalog": [
+        "./packages/ui/src/icons/catalog.ts"
+      ],
+      "@opencode/ui/icon-button": [
+        "./packages/ui/src/actions/icon-button/icon-button.tsx"
+      ],
+      "@opencode/ui/inline-input": [
+        "./packages/ui/src/forms/inline-input/inline-input.tsx"
+      ],
+      "@opencode/ui/keybind": [
+        "./packages/ui/src/data-display/keybind/keybind.tsx"
+      ],
+      "@opencode/ui/line-comment": [
+        "./packages/ui/src/data-display/line-comment/line-comment.tsx"
+      ],
+      "@opencode/ui/loader": [
+        "./packages/ui/src/feedback/loader/loader.tsx"
+      ],
+      "@opencode/ui/menu": [
+        "./packages/ui/src/navigation/menu/menu.tsx"
+      ],
+      "@opencode/ui/progress-circle": [
+        "./packages/ui/src/feedback/progress-circle/progress-circle.tsx"
+      ],
+      "@opencode/ui/project-avatar": [
+        "./packages/ui/src/data-display/project-avatar/project-avatar.tsx"
+      ],
+      "@opencode/ui/radio": [
+        "./packages/ui/src/forms/radio/radio.tsx"
+      ],
+      "@opencode/ui/segmented-control": [
+        "./packages/ui/src/navigation/segmented-control/segmented-control.tsx"
+      ],
+      "@opencode/ui/select": [
+        "./packages/ui/src/forms/select/select.tsx"
+      ],
+      "@opencode/ui/split-button": [
+        "./packages/ui/src/actions/split-button/split-button.tsx"
+      ],
+      "@opencode/ui/switch": [
+        "./packages/ui/src/forms/switch/switch.tsx"
+      ],
+      "@opencode/ui/tab-state-indicator": [
+        "./packages/ui/src/navigation/tab-state-indicator.tsx"
+      ],
+      "@opencode/ui/tabs": [
+        "./packages/ui/src/navigation/tabs/tabs.tsx"
+      ],
+      "@opencode/ui/text-input": [
+        "./packages/ui/src/forms/text-input/text-input.tsx"
+      ],
+      "@opencode/ui/text-input.css": [
+        "./packages/ui/src/forms/text-input/text-input.css"
+      ],
+      "@opencode/ui/textarea": [
+        "./packages/ui/src/forms/textarea/textarea.tsx"
+      ],
+      "@opencode/ui/text-shimmer": [
+        "./packages/ui/src/typography/text-shimmer/text-shimmer.tsx"
+      ],
+      "@opencode/ui/toast": [
+        "./packages/ui/src/feedback/toast/toast.tsx"
+      ],
+      "@opencode/ui/tooltip": [
+        "./packages/ui/src/overlays/tooltip/tooltip.tsx"
+      ],
+      "@opencode/ui/wordmark": [
+        "./packages/ui/src/typography/wordmark/wordmark.tsx"
+      ],
+      "@opencode/ui/*": [
+        "./packages/ui/src/components/*.tsx"
+      ],
+      "@opencode/ui/i18n/*": [
+        "./packages/ui/src/i18n/*.ts"
+      ],
+      "@opencode/ui/hooks": [
+        "./packages/ui/src/hooks/index.ts"
+      ],
+      "@opencode/ui/context": [
+        "./packages/ui/src/context/index.ts"
+      ],
+      "@opencode/ui/context/*": [
+        "./packages/ui/src/context/*.tsx"
+      ],
+      "@opencode/ui/storybook/scaffold": [
+        "./packages/ui/src/storybook/scaffold.tsx"
+      ],
+      "@opencode/ui/storybook/fixtures": [
+        "./packages/ui/src/storybook/fixtures.ts"
+      ],
+      "@opencode/ui/styles": [
+        "./packages/ui/src/styles/index.css"
+      ],
+      "@opencode/ui/styles/tokens": [
+        "./packages/ui/src/styles/tokens/index.css"
+      ],
+      "@opencode/ui/styles/tokens/*": [
+        "./packages/ui/src/styles/tokens/*"
+      ],
+      "@opencode/ui/styles/tailwind": [
+        "./packages/ui/src/styles/tailwind/index.css"
+      ],
+      "@opencode/ui/theme": [
+        "./packages/ui/src/theme/index.ts"
+      ],
+      "@opencode/ui/theme/*": [
+        "./packages/ui/src/theme/*.ts"
+      ],
+      "@opencode/ui/theme/context": [
+        "./packages/ui/src/theme/context.tsx"
+      ],
+      "@opencode/ui/icons/provider": [
+        "./packages/ui/src/components/provider-icons/types.ts"
+      ],
+      "@opencode/ui/icons/file-type": [
+        "./packages/ui/src/components/file-icons/types.ts"
+      ],
+      "@opencode/ui/icons/app": [
+        "./packages/ui/src/components/app-icons/types.ts"
+      ],
+      "@opencode/ui/fonts/*": [
+        "./packages/ui/src/assets/fonts/*"
+      ],
+      "@opencode/ui/audio/*": [
+        "./packages/ui/src/assets/audio/*"
+      ],
+      "@opencode/session-ui/actions": [
+        "./packages/session-ui/src/actions.ts"
+      ],
+      "@opencode/session-ui/document": [
+        "./packages/session-ui/src/document.ts"
+      ],
+      "@opencode/session-ui/message": [
+        "./packages/session-ui/src/message/current-message.tsx"
+      ],
+      "@opencode/session-ui/timeline/projection": [
+        "./packages/session-ui/src/timeline/projection.ts"
+      ],
+      "@opencode/session-ui/timeline/detail": [
+        "./packages/session-ui/src/timeline/detail.ts"
+      ],
+      "@opencode/session-ui/timeline/row": [
+        "./packages/session-ui/src/timeline/session-timeline-row.tsx"
+      ],
+      "@opencode/session-ui/timeline": [
+        "./packages/session-ui/src/timeline/session-timeline.tsx"
+      ],
+      "@opencode/session-ui/basic-tool": [
+        "./packages/session-ui/src/components/basic-tool.tsx"
+      ],
+      "@opencode/session-ui/dock-prompt": [
+        "./packages/session-ui/src/components/dock-prompt.tsx"
+      ],
+      "@opencode/session-ui/file": [
+        "./packages/session-ui/src/components/file.tsx"
+      ],
+      "@opencode/session-ui/file-media": [
+        "./packages/session-ui/src/components/file-media.tsx"
+      ],
+      "@opencode/session-ui/file-search": [
+        "./packages/session-ui/src/components/file-search.tsx"
+      ],
+      "@opencode/session-ui/file-ssr": [
+        "./packages/session-ui/src/components/file-ssr.tsx"
+      ],
+      "@opencode/session-ui/line-comment": [
+        "./packages/session-ui/src/components/line-comment.tsx"
+      ],
+      "@opencode/session-ui/line-comment-annotations": [
+        "./packages/session-ui/src/components/line-comment-annotations.tsx"
+      ],
+      "@opencode/session-ui/markdown": [
+        "./packages/session-ui/src/components/markdown.tsx"
+      ],
+      "@opencode/session-ui/message-part": [
+        "./packages/session-ui/src/components/message-part.tsx"
+      ],
+      "@opencode/session-ui/message-nav": [
+        "./packages/session-ui/src/components/message-nav.tsx"
+      ],
+      "@opencode/session-ui/session-review": [
+        "./packages/session-ui/src/components/session-review.tsx"
+      ],
+      "@opencode/session-ui/session-retry": [
+        "./packages/session-ui/src/components/session-retry.tsx"
+      ],
+      "@opencode/session-ui/tool-count-label": [
+        "./packages/session-ui/src/components/tool-count-label.tsx"
+      ],
+      "@opencode/session-ui/tool-count-summary": [
+        "./packages/session-ui/src/components/tool-count-summary.tsx"
+      ],
+      "@opencode/session-ui/tool-error-card": [
+        "./packages/session-ui/src/components/tool-error-card.tsx"
+      ],
+      "@opencode/session-ui/tool-status-title": [
+        "./packages/session-ui/src/components/tool-status-title.tsx"
+      ],
+      "@opencode/session-ui/session-diff": [
+        "./packages/session-ui/src/components/session-diff.ts"
+      ],
+      "@opencode/session-ui/message-file": [
+        "./packages/session-ui/src/components/message-file.ts"
+      ],
+      "@opencode/session-ui/attachment-card": [
+        "./packages/session-ui/src/message/attachment-card.tsx"
+      ],
+      "@opencode/session-ui/comment-card": [
+        "./packages/session-ui/src/message/comment-card.tsx"
+      ],
+      "@opencode/session-ui/markdown-stream": [
+        "./packages/session-ui/src/components/markdown-stream.ts"
+      ],
+      "@opencode/session-ui/markdown-cache": [
+        "./packages/session-ui/src/components/markdown-cache.tsx"
+      ],
+      "@opencode/session-ui/line-comment-styles": [
+        "./packages/session-ui/src/components/line-comment-styles.ts"
+      ],
+      "@opencode/session-ui/pierre": [
+        "./packages/session-ui/src/pierre/index.ts"
+      ],
+      "@opencode/session-ui/pierre/*": [
+        "./packages/session-ui/src/pierre/*.ts"
+      ],
+      "@opencode/session-ui/context": [
+        "./packages/session-ui/src/context/index.ts"
+      ],
+      "@opencode/session-ui/context/*": [
+        "./packages/session-ui/src/context/*.tsx"
+      ],
+      "@opencode/session-ui/styles": [
+        "./packages/session-ui/src/styles/index.css"
+      ],
+      "@opencode/session-ui/storybook": [
+        "./packages/session-ui/src/storybook/index.ts"
+      ],
+      "@opencode/session-ui/v2/*.css": [
+        "./packages/session-ui/src/v2/components/*.css"
+      ],
+      "@opencode/session-ui/v2/*": [
+        "./packages/session-ui/src/v2/components/*.tsx"
+      ],
+      "@opencode/gui-extensions/renderer": [
+        "./packages/gui-extensions/src/renderer.ts"
+      ],
+      "@opencode/gui-extensions/main": [
+        "./packages/gui-extensions/src/main.ts"
+      ],
+      "@opencode/gui-extensions/sdk": [
+        "./packages/gui-extensions/src/sdk/index.ts"
+      ],
+      "@opencode/gui-extensions/sdk/main": [
+        "./packages/gui-extensions/src/sdk/main.ts"
+      ],
+      "@opencode/gui-extensions/sdk/bridge": [
+        "./packages/gui-extensions/src/sdk/bridge.ts"
+      ],
+      "@opencode/gui-extensions/updater": [
+        "./packages/gui-extensions/src/updater/contract.ts"
+      ],
+      "@opencode/client": [
+        "./packages/client/src/promise/index.ts"
+      ],
+      "@opencode/client/promise": [
+        "./packages/client/src/promise/index.ts"
+      ],
+      "@opencode/client/promise/api": [
+        "./packages/client/src/promise/api.ts"
+      ],
+      "@opencode/client/service": [
+        "./packages/client/src/promise/service.ts"
+      ],
+      "@opencode/client/solid": [
+        "./packages/client/src/solid/index.ts"
+      ],
+      "@opencode/client/effect": [
+        "./packages/client/src/effect/index.ts"
+      ],
+      "@opencode/client/effect/api": [
+        "./packages/client/src/effect/api.ts"
+      ],
+      "@opencode/client/effect/service": [
+        "./packages/client/src/effect/service.ts"
+      ],
+      "@opencode/schema": [
+        "./packages/schema/src/index.ts"
+      ],
+      "@opencode/schema/*": [
+        "./packages/schema/src/*.ts"
+      ],
+      "@opencode/util/effect/layer-node": [
+        "./packages/util/src/effect/layer-node.ts"
+      ],
+      "@opencode/util/*": [
+        "./packages/util/src/*.ts"
+      ]
+    }
+  },
+  "include": [
+    "packages",
+    "host"
+  ],
+  "exclude": [
+    "packages/app/test-browser",
+    "packages/client/test"
+  ]
+}

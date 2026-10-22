@@ -1,0 +1,1 @@
+function e(e,t){let n=new Date(e),r=new Date().getTime()-n.getTime(),i=Math.floor(r/1e3),a=Math.floor(i/60),o=Math.floor(a/60),s=Math.floor(o/24);return i<60?t(`common.time.justNow`):a<60?t(`common.time.minutesAgo.short`,{count:a}):o<24?t(`common.time.hoursAgo.short`,{count:o}):t(`common.time.daysAgo.short`,{count:s})}export{e as t};

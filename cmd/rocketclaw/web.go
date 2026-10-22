@@ -2,13 +2,21 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"net/http"
-	"strconv"
+	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -20,6 +28,12 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 	cfg := rt.Cfg.Clone()
 	// Only HTTP is network-accessible; principal metadata stays inside the process.
 	listener := bufconn.Listen(1 << 20)
+	certificate, err := webCertificate(cfg.Web)
+	if err != nil {
+		_ = listener.Close()
+		return nil, err
+	}
+
 	httpListener, err := net.Listen("tcp", cfg.Web.ListenAddress)
 	if err != nil {
 		_ = listener.Close()
@@ -31,7 +45,7 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 			return listener.DialContext(ctx)
 		}))
-	httpServer := &http.Server{Handler: rpc.NewHTTPHandler(connection, cfg.Web.Sentry)}
+	httpServer := &http.Server{Handler: rpc.NewHTTPHandler(connection, cfg.Web.Sentry, cfg.OpenCode), TLSConfig: &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}}
 	server := grpc.NewServer()
 	web := rpc.New(rt, rt.Sessions, rt.Cfg, channels, cronjobs)
 	web.Register(server)
@@ -40,13 +54,8 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 
 	closeTailnet := func() error { return nil }
 
-	relays := make(map[int]http.Handler, len(cfg.OpenCode))
-	for _, server := range cfg.OpenCode {
-		relays[server.Port] = rpc.NewOpenCodeRelay(server)
-	}
-
 	if tailnet := cfg.Web.Tsnet; tailnet != nil {
-		if closeTailnet, err = startTailnet(rt, tailnet, httpServer.Handler, relays, &serving); err != nil {
+		if closeTailnet, err = startTailnet(rt, tailnet, httpServer.Handler, &serving); err != nil {
 			_ = httpListener.Close()
 			_ = listener.Close()
 			_ = connection.Close()
@@ -63,13 +72,14 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 		return nil
 	})
 	serving.Go(func() error {
-		if err := httpServer.Serve(httpListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		// HTTPS lets browsers carry every tab over one HTTP/2 connection instead of six HTTP/1.1 ones.
+		if err := httpServer.ServeTLS(httpListener, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("serve Web HTTP: %w", err)
 		}
 
 		return nil
 	})
-	rt.Log.Info("started Web HTTP", "address", httpListener.Addr().String())
+	rt.Log.Info("started Web HTTPS", "address", httpListener.Addr().String(), "self_signed", cfg.Web.TLSCertFile == "")
 
 	ctxSync, cancelSync := context.WithCancel(context.Background())
 	if len(cfg.OpenCode) > 0 {
@@ -79,15 +89,9 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 		})
 	}
 
-	var relayServers []*http.Server
-
-	stop := func(context.Context) error {
+	return func(context.Context) error {
 		errs := []error{httpServer.Close()}
 		_ = httpListener.Close()
-
-		for _, relay := range relayServers {
-			errs = append(errs, relay.Close())
-		}
 
 		cancelSync()
 		errs = append(errs, closeTailnet())
@@ -99,26 +103,41 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 		}
 
 		return nil
-	}
+	}, nil
+}
 
-	host, _, _ := net.SplitHostPort(cfg.Web.ListenAddress) // Listening on it above proved it parses.
-	for port, relay := range relays {
-		listener, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+// webCertificate loads web's configured certificate, or makes a self-signed one for this start.
+func webCertificate(web config.WebConfig) (tls.Certificate, error) {
+	if web.TLSCertFile != "" {
+		certificate, err := tls.LoadX509KeyPair(web.TLSCertFile, web.TLSKeyFile)
 		if err != nil {
-			return nil, errors.Join(fmt.Errorf("start OpenCode relay: %w", err), stop(context.Background()))
+			return tls.Certificate{}, fmt.Errorf("load Web certificate: %w", err)
 		}
 
-		relayServer := &http.Server{Handler: web.AdmitHTTP(relay)}
-		relayServers = append(relayServers, relayServer)
-
-		serving.Go(func() error {
-			if err := relayServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				return fmt.Errorf("serve OpenCode relay: %w", err)
-			}
-
-			return nil
-		})
+		return certificate, nil
 	}
 
-	return stop, nil
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("make Web certificate key: %w", err)
+	}
+
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(now.UnixNano()),
+		Subject:      pkix.Name{CommonName: "RocketClaw"},
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.AddDate(1, 0, 0),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("make Web certificate: %w", err)
+	}
+
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
 }

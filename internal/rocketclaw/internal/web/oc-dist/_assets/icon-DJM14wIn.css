@@ -1,0 +1,1 @@
+:dir(rtl):where([data-oc-view],[data-oc-view] *) [data-slot=icon-svg][data-directional]{transform:scaleX(-1)}

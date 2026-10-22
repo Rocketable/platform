@@ -2,11 +2,17 @@ package main
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -33,7 +39,7 @@ func TestPublicWebDoesNotExposeDiagnostics(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := rpc.NewHTTPHandler(connection, config.SentryConfig{})
+	handler := rpc.NewHTTPHandler(connection, config.SentryConfig{}, nil)
 
 	for _, prefix := range []string{"/debug/pprof/", "/s/debug/pprof/"} {
 		for _, path := range []string{"", "heap", "allocs", "goroutine", "profile?seconds=1", "trace?seconds=0.01", "cmdline", "symbol", "block", "mutex", "unknown"} {
@@ -126,10 +132,13 @@ func TestWebRPC(t *testing.T) {
 	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, stop(t.Context())) }()
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+cfg.Web.ListenAddress+"/api/Identity", strings.NewReader("{}"))
+	// Without a configured certificate the Web serves a self-signed one, which this client accepts.
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, ForceAttemptHTTP2: true}}
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "https://"+cfg.Web.ListenAddress+"/api/Identity", strings.NewReader("{}"))
 	require.NoError(t, err)
-	responseHTTP, err := http.DefaultClient.Do(request)
+	responseHTTP, err := client.Do(request)
 	require.NoError(t, err)
+	require.Equal(t, 2, responseHTTP.ProtoMajor, "HTTPS lets browsers multiplex every tab over one HTTP/2 connection")
 	var identity struct {
 		Username string `json:"username"`
 	}
@@ -137,9 +146,9 @@ func TestWebRPC(t *testing.T) {
 	require.NoError(t, responseHTTP.Body.Close())
 	require.Equal(t, http.StatusOK, responseHTTP.StatusCode)
 	require.Equal(t, "alice", identity.Username)
-	request, err = http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+cfg.Web.ListenAddress+"/", nil)
+	request, err = http.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+cfg.Web.ListenAddress+"/", nil)
 	require.NoError(t, err)
-	responseHTTP, err = http.DefaultClient.Do(request)
+	responseHTTP, err = client.Do(request)
 	require.NoError(t, err)
 	body, err := io.ReadAll(responseHTTP.Body)
 	require.NoError(t, err)
@@ -154,7 +163,7 @@ func TestWebRPC(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestWebRPCRelaysAndSyncsOpenCode(t *testing.T) {
+func TestWebRPCProxiesAndSyncsOpenCode(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if user, password, ok := r.BasicAuth(); !ok || user != "opencode" || password != "pw" {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -172,31 +181,31 @@ func TestWebRPCRelaysAndSyncsOpenCode(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	// A port that was free a moment ago becomes the relay's.
+	// A port that was free a moment ago becomes the Web's.
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	port := probe.Addr().(*net.TCPAddr).Port
+	address := probe.Addr().String()
 	require.NoError(t, probe.Close())
 
-	servers := map[string]config.OpenCodeConfig{"box": {URL: upstream.URL, Password: "pw", Port: port}}
+	servers := map[string]config.OpenCodeConfig{"box": {URL: upstream.URL, Password: "pw"}}
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenCode: servers}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
-	cfg := &config.Config{Workspace: t.TempDir(), Web: config.WebConfig{ListenAddress: "127.0.0.1:0"}, WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}, OpenCode: servers}
+	cfg := &config.Config{Workspace: t.TempDir(), Web: config.WebConfig{ListenAddress: address}, WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}, OpenCode: servers}
 	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.DiscardHandler), Sessions: sessions}
 	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
 	require.NoError(t, err)
 
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/", port), http.NoBody)
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+address+"/oc/box/api/info", http.NoBody)
 	require.NoError(t, err)
-	response, err := http.DefaultClient.Do(request)
+	response, err := (&http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}).Do(request)
 	require.NoError(t, err)
 	body, err := io.ReadAll(response.Body)
 	require.NoError(t, errors.Join(err, response.Body.Close()))
-	assert.Equal(t, "opencode web", string(body), "the relay serves OpenCode with its password")
+	assert.Equal(t, "opencode web", string(body), "the Web proxies OpenCode with its password")
 
 	// The sync's first poll runs when the Web starts.
 	require.Eventually(t, func() bool {
@@ -212,22 +221,42 @@ func TestWebRPCRelaysAndSyncsOpenCode(t *testing.T) {
 	require.NoError(t, stop(t.Context()))
 }
 
-func TestWebRPCFailsWhenARelayPortIsTaken(t *testing.T) {
-	taken, err := net.Listen("tcp", "127.0.0.1:0")
+// A configured certificate is the one the Web serves; one that cannot load stops the start.
+func TestWebRPCServesConfiguredCertificate(t *testing.T) {
+	dir := t.TempDir()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, taken.Close()) })
-
-	gone := httptest.NewServer(http.NotFoundHandler())
-	gone.Close()
-
-	servers := map[string]config.OpenCodeConfig{"box": {URL: gone.URL, Password: "pw", Port: taken.Addr().(*net.TCPAddr).Port}}
-	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(1), IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)}, NotAfter: time.Now().Add(time.Hour)}, &x509.Certificate{SerialNumber: big.NewInt(1)}, &key.PublicKey, key)
 	require.NoError(t, err)
-	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenCode: servers}, slog.New(slog.DiscardHandler))
+	keyDER, err := x509.MarshalECPrivateKey(key)
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cert.pem"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "key.pem"), pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600))
 
-	cfg := &config.Config{Workspace: t.TempDir(), Web: config.WebConfig{ListenAddress: "127.0.0.1:0"}, OpenCode: servers}
-	_, err = startWebRPC(&backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.DiscardHandler), Sessions: sessions}, &mockWebChannels{}, &mockWebCron{})
-	require.ErrorContains(t, err, "start OpenCode relay")
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	address := probe.Addr().String()
+	require.NoError(t, probe.Close())
+
+	cfg := &config.Config{Workspace: t.TempDir(), Web: config.WebConfig{ListenAddress: address, TLSCertFile: filepath.Join(dir, "cert.pem"), TLSKeyFile: filepath.Join(dir, "missing.pem")}}
+	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.DiscardHandler)}
+	_, err = startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
+	require.ErrorContains(t, err, "load Web certificate")
+
+	cfg.Web.TLSKeyFile = filepath.Join(dir, "key.pem")
+	rt.Cfg.Store(cfg)
+	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, stop(t.Context())) })
+
+	leaf, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	trusted := x509.NewCertPool()
+	trusted.AddCert(leaf)
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+address+"/", http.NoBody)
+	require.NoError(t, err)
+	response, err := (&http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: trusted}}}).Do(request)
+	require.NoError(t, err, "only the configured certificate verifies")
+	require.NoError(t, response.Body.Close())
+	require.Equal(t, http.StatusOK, response.StatusCode)
 }

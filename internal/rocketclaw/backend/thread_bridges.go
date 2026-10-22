@@ -498,7 +498,7 @@ func (m *threadBridgeManager) webOrigin(ctx context.Context) (string, error) {
 
 	host, _, _ := strings.Cut(strings.TrimSpace(string(tailscaleIPs)), "\n")
 
-	return "http://" + net.JoinHostPort(host, port), nil
+	return "https://" + net.JoinHostPort(host, port), nil
 }
 
 // createSession creates a Web session named title for start's agent, unless allowed excludes it, and

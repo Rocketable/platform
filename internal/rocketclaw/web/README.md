@@ -447,6 +447,18 @@ active tab.
   neighbour, or its left one at the end. Closing the last tab opens New session;
   New session alone does not close. Closing with the × button or the menu moves
   keyboard focus to the selected tab.
+- **Remote OpenCode sessions.** A remote session's tab shows OpenCode's own
+  session view, copied into RocketClaw at `internal/rocketclaw/oc/` and mounted in
+  the page with no frame. It reaches its server through the Web's
+  `/oc/<server>/api/` route and follows RocketClaw's light or dark mode. Any session
+  of a configured server opens, listed yet or not. A server that is offline before
+  the view first opens shows a notice; once open, the view shows its own
+  reconnecting banner. Forks and other referenced sessions open in new tabs, child
+  sessions open inside the view, and deleting the shown session closes its tab.
+  Escape never closes a remote session's tab, and while OpenCode's terminal has
+  focus every key goes to it, RocketClaw's shortcuts included. Elsewhere in the
+  view, RocketClaw's shortcuts win: ⌘P and ⌘⇧P open RocketClaw's palette, and ⌘K
+  opens OpenCode's.
 - **Notifications.** When an open session tab, RocketClaw or remote OpenCode,
   becomes unread for you (see Unread below), the browser shows a desktop
   notification with the start of its reply. Other people's turns never notify
@@ -751,6 +763,10 @@ For the current session it also offers **Open original conversation** (when fork
 **Name session**, **Pin/Unpin**, **Fork session**,
 **Handoff session**, **Choose agent**, and **Stop turn** while running.
 Fork, handoff, rename, and agent selection open their controls directly.
+For a remote OpenCode session it offers **Copy server link**, which copies the
+shown session's address on its own server (the server asks whoever opens it to
+sign in), and, while the view is open, **OpenCode commands**, which opens
+OpenCode's palette.
 **Command: Start goal ($goal)**, **Command: Run workflow ($workflow)**,
 **Command: Invoke skill ($skill)**, **Command: Enqueue work ($enqueue)**,
 **Command: Stash work ($stash)**, and **Command: Steer turn ($steer)**

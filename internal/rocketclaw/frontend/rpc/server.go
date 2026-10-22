@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"slices"
@@ -259,10 +260,12 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 	s.listings[owner] = s.listings[owner][max(0, len(s.listings[owner])-sessionListingsKept):]
 	s.listingsMu.Unlock()
 
-	done := &ListSessionsResponse{Owner: owner, UpstreamSuccess: true, OpencodeServers: make(map[string]int32), Version: listing.version, Order: order}
+	done := &ListSessionsResponse{Owner: owner, UpstreamSuccess: true, OpencodeServers: make(map[string]string), Version: listing.version, Order: order}
 
 	for name, server := range s.cfg.Clone().OpenCode {
-		done.OpencodeServers[name] = int32(server.Port)
+		// Only the origin: a configured URL may carry credentials. Config validation parsed it.
+		origin, _ := url.Parse(server.URL)
+		done.OpencodeServers[name] = origin.Scheme + "://" + origin.Host
 	}
 
 	definitions, err := agents()

@@ -21,7 +21,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 )
 
-//go:embed dist
+//go:embed dist all:oc-dist
 var assets embed.FS
 
 // sentryBootstrap is the browser SDK configuration embedded in the index page.
@@ -44,6 +44,7 @@ func release(build *debug.BuildInfo) string {
 // Handler serves application routes and compiled assets without a frontend runtime.
 func Handler(sentry config.SentryConfig) http.Handler {
 	files, _ := fs.Sub(assets, "dist")
+	ocFiles, _ := fs.Sub(assets, "oc-dist")
 
 	var index []byte
 	if sentry.DSN != "" {
@@ -56,6 +57,12 @@ func Handler(sentry config.SentryConfig) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
+
+		if name, ok := strings.CutPrefix(r.URL.Path, "/oc-ui/"); ok {
+			serveFile(w, r, ocFiles, name, "_assets")
+
+			return
+		}
 
 		name := strings.TrimPrefix(r.URL.Path, "/")
 

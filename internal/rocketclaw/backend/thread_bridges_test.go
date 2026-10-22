@@ -559,7 +559,7 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 
 	require.NotEmpty(t, conversationID)
 	assert.Empty(t, slackThread)
-	assert.JSONEq(t, fmt.Sprintf(`{"outcome":"created","session_id":%q,"url":%q}`, conversationID, "http://100.95.197.99:8080/s/"+base64.RawURLEncoding.EncodeToString([]byte(conversationID))), output.Output)
+	assert.JSONEq(t, fmt.Sprintf(`{"outcome":"created","session_id":%q,"url":%q}`, conversationID, "https://100.95.197.99:8080/s/"+base64.RawURLEncoding.EncodeToString([]byte(conversationID))), output.Output)
 	assert.Equal(t, Config{ConversationID: conversationID, Agent: "main"}, created)
 	require.Len(t, submittedMessages(bridge), 1)
 

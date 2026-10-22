@@ -443,20 +443,21 @@ The HTTP proxy forwards only the connection's remote IP. It ignores
 headers. Do not put another HTTP reverse proxy in front of it: that would identify
 the proxy rather than the browser.
 
-Each `opencode` server gets a relay on its own `port`, on the Web listen host and,
-with `web.tsnet`, on the tailnet node. The relay admits exactly the browsers the
-Web admits (by IP on the plain listener, by Tailscale user on the tailnet), adds
-the server's password, and serves OpenCode's own web app, which the Web frames at
-`/server/<base64url relay origin>/session/<id>`. It refuses any request, WebSocket
-upgrades included, whose `Origin` is another site, sends OpenCode its own origin so
-OpenCode's terminal origin check still holds, and lets only pages on the same host
-frame it. Everyone the Web admits gets full control of every configured OpenCode
-server, including its shell. The relay writes the admitted username into each
-prompt's message `metadata` as `rocketclaw_username`, replacing any value the
-client sent. The field only attributes turns for unread marks and notifications
-and must never gate access: anyone the Web admits can bypass the relay through
-OpenCode's shell, and anyone with the server's password can call OpenCode
-directly, so either can forge it. Remote sessions are listed from a copy RocketClaw
+Each `opencode` server's API is proxied at `/oc/<name>/api/` on the Web's own
+listeners, for HTTP, the event stream, and the terminal WebSocket. The route admits
+exactly the browsers the Web admits, by calling `Identity` (by IP on the plain
+listener, by Tailscale user on the tailnet), and adds the server's password. It
+refuses any request, WebSocket upgrades included, whose `Origin` is another site,
+and sends OpenCode its own origin so OpenCode's terminal origin check still holds.
+Cookies cross in neither direction, OpenCode's sign-in challenge never reaches the
+browser, and every proxied response is sandboxed, so a file opened directly never
+runs as RocketClaw. Everyone the Web admits gets full control of every configured
+OpenCode server, including its shell. The proxy writes the admitted username into
+each prompt's message `metadata` as `rocketclaw_username`, replacing any value the
+client sent. The field only attributes turns for unread marks and notifications and
+must never gate access: anyone the Web admits can bypass the proxy through
+OpenCode's shell, and anyone with the server's password can call OpenCode directly,
+so either can forge it. Remote sessions are listed from a copy RocketClaw
 syncs every 5 seconds; once a day the server's full list removes copies of sessions
 it no longer has. When a sync sees a session's turn end, it also copies the text of
 its newest assistant message, which the Web's notification shows, and marks unread
@@ -465,7 +466,10 @@ still found, because OpenCode moves the session's updated time when it accepts a
 prompt. Each copy keeps
 the session's selected agent and model, which `ListSessions` sends as `agent` and
 `model` for search. `Prompt` refuses their `opencode:` IDs. People tag remote sessions
-with any tag and RocketClaw sessions with tags their agent allows.
+with any tag and RocketClaw sessions with tags their agent allows. Naming a remote
+session renames it on its server; a name RocketClaw stored before names synced with
+OpenCode moves to the server at the first sync the server accepts it.
+`ListSessions` sends each server's origin, never its configured URL or password.
 
 Phones get the secure page that voice needs from the `web.tsnet` listener (see the
 root README for setup). There, a wrapping handler asks the node's `LocalClient().WhoIs`

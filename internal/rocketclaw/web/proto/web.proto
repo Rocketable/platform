@@ -189,7 +189,7 @@ message ListSessionsResponse {
   reserved 4;
   // Sent with the completion message: remote servers, and per agent the tags people may set
   // on its sessions. Remote OpenCode sessions take any tag.
-  map<string, int32> opencode_servers = 5; // Server name to its relay port.
+  map<string, string> opencode_servers = 5; // Server name to its origin, for links to its sessions.
   map<string, TagChoices> agent_tags = 6;
   // Also sent with the completion message: this listing's version, for the next request's since, and
   // every session ID in list order. A row not sent is unchanged since that version; an ID missing

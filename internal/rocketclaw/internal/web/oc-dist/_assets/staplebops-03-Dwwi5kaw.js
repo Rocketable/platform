@@ -1,0 +1,1 @@
+var e=`/oc-ui/_assets/staplebops-03-Aug82oH0.aac`;export{e as default};
