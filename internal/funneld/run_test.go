@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -131,6 +132,17 @@ func TestLoadConfigFromArgs(t *testing.T) {
 				t.Fatalf("CertCache = %q; want %q", cfg.CertCache, defaultCertCache)
 			}
 		})
+	}
+}
+
+func TestLoadConfigMissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.json")
+	cfg, err := loadConfigFromArgs([]string{"--config", path}, os.Getenv)
+	if !errors.Is(err, os.ErrNotExist) || !strings.Contains(err.Error(), "read config "+path) {
+		t.Fatalf("loadConfigFromArgs error = %v; want missing config %q", err, path)
+	}
+	if !reflect.DeepEqual(cfg, config{}) {
+		t.Fatalf("loadConfigFromArgs config = %+v; want zero config on error", cfg)
 	}
 }
 
