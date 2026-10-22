@@ -1840,8 +1840,9 @@ const paletteCopy = { sessions: { title: "Go to session or command", desc: "Sear
 // session: a typed folder, or one of that server's sessions' folders.
 function useRemoteCreation(query: string, close: () => void, restart: () => void, copy: { title: string; desc: string; placeholder: string }) {
   const sidebar = useContext(Sidebar);
+  const tabs = useContext(TabActions);
   const [server, setServer] = useState<string>();
-  const create = useMutation({ mutationFn: mutations.createSession, onSuccess: (created) => { sidebar.invalidateQueries(); close(); navigate(sessionPath(created)); } });
+  const create = useMutation({ mutationFn: mutations.createSession, onSuccess: (created) => { sidebar.invalidateQueries(); close(); tabs.open(sessionPath(created)); } });
   const typed = query.trim();
   const items: ReturnType<typeof paletteRows> = !server ? [] : [...new Set([typed, ...sidebar.rows.flatMap((row) => row.server === server && row.directory ? [row.directory] : [])])]
     .filter((directory) => directory.startsWith("/") && directory.toLowerCase().includes(typed.toLowerCase()))

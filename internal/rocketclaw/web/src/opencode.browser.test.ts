@@ -36,7 +36,7 @@ test("remote OpenCode sessions list, open in the relay frame, tag, and start", a
       case "/api/CreateSession":
         if (failCreate) { failCreate = false; return Response.json({ code: 14, message: "box did not answer" }, { status: 503 }); }
         return Response.json({ id: "opencode:box:ses_new" });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: `/s/${encode("opencode:box:ses_a")}`, preview: true, space: "main" }], groups: [], space: "main", last: {}, placement: "TOP" } });
       default: return Response.json({});
     }
   } });
@@ -78,6 +78,9 @@ test("remote OpenCode sessions list, open in the relay frame, tag, and start", a
     await page.getByText("This OpenCode session is no longer available.").waitFor();
 
     // A new session takes a typed folder; a failed create shows its error and the next try opens the session.
+    await page.goto(`${base}/s/${encode("opencode:box:ses_a")}`);
+    const tabs = page.getByRole("tablist", { name: "Open tabs" });
+    await tabs.getByRole("tab", { name: "Alpha work", exact: true }).waitFor();
     await page.keyboard.press("Control+Shift+p");
     await page.getByPlaceholder("Type a command").fill("new on box");
     await page.getByRole("button", { name: "Sessions: New on box" }).click();
@@ -87,6 +90,9 @@ test("remote OpenCode sessions list, open in the relay frame, tag, and start", a
     await page.getByText("box did not answer").waitFor();
     await folder.press("Enter");
     await page.waitForURL(`${base}/s/${encode("opencode:box:ses_new")}`);
+    expect(await tabs.getByRole("tab", { name: "Alpha work", exact: true }).count()).toBe(1);
+    expect(await tabs.getByRole("tab").count()).toBe(2);
+    expect(await tabs.locator('[aria-selected="true"]').evaluate((node: HTMLElement) => getComputedStyle(node).fontStyle)).not.toBe("italic");
     expect(calls.filter(({ path }) => path === "/api/CreateSession").map(({ body }) => body)).toEqual([{ opencodeServer: "box", directory: "/srv/fresh" }, { opencodeServer: "box", directory: "/srv/fresh" }]);
     expect(errors).toEqual([]);
   } finally {
