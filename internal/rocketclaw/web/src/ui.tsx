@@ -3746,6 +3746,7 @@ async function sendComposer(input: {
     dispatchedEdit = ++draft.edit;
     const response = input.prompt.mutateAsync({ id: sessionId, text: input.text, delivery, messageId: optimistic.id, ...(attachments.length ? { attachmentIds: attachments.map((file) => file.id) } : {}) });
     draft.sending = false;
+    draft.focus = (draft.focus ?? 0) + 1;
     input.onDraftChange();
     input.setAgentOpen(false);
     const privateText = await response;
@@ -3957,6 +3958,13 @@ function SessionComposer({
   const space = useContext(TabActions).state.space;
   const create = useMutation({ mutationFn: (input: { agent?: string }) => mutations.createSession({ ...input, spaceId: space }), onSuccess: invalidateSidebar });
   const { text, files, sending, agent } = draft;
+  const messageInput = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const input = messageInput.current!;
+    if (!draft.focus || id !== draft.sessionId || input.matches(":disabled")) return;
+    draft.focus = undefined;
+    if (document.activeElement === document.body || document.activeElement === input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+  });
   const [, setTyped] = useState(0);
   // Typing redraws only this composer; a whole-app redraw per keystroke made long chats lag.
   // A draft or a send keeps the preview tab.
@@ -4045,7 +4053,7 @@ function SessionComposer({
         files={files}
         setFiles={setFiles}
         sending={[sending, draft.reverting, question.answering].some(Boolean)}
-        focus={draft.focus}
+        messageInput={messageInput}
         historyCommand={(redo) => void revert.run(undefined, redo)}
         sessionId={id}
         text={text}
@@ -4130,7 +4138,7 @@ function Composer({
   files,
   setFiles,
   sending,
-  focus,
+  messageInput,
   historyCommand,
   sessionId,
   text,
@@ -4160,7 +4168,7 @@ function Composer({
   files: PendingFile[];
   setFiles: (files: PendingFile[]) => void;
   sending: boolean;
-  focus?: number;
+  messageInput: React.RefObject<HTMLTextAreaElement | null>;
   historyCommand: (redo: boolean) => void;
   sessionId: string;
   text: string;
@@ -4190,11 +4198,7 @@ function Composer({
   const mac = typeof navigator === "object" && /(Mac|iPod|iPhone|iPad)/.test(navigator.platform);
   const selectedButton = useRef<HTMLButtonElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const messageInput = useRef<HTMLTextAreaElement>(null);
   const { composer } = useContext(SessionCommands);
-  useEffect(() => {
-    if (focus) { const input = messageInput.current!; input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
-  }, [focus]);
   useImperativeHandle(composer, () => (command) => {
     // The agent picker keeps focus so desktop typing searches agents.
     if (command === "agent") return setAgentOpen(true);

@@ -1014,13 +1014,14 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await page.getByPlaceholder("Message a new session").fill("hello\n\nwhile held");
     // A send during an identity refresh has no provisional author, so send just after a refresh.
     await page.waitForResponse("**/api/Identity");
-    await page.getByRole("button", { name: "Send" }).click();
+    await page.getByPlaceholder("Message a new session").press("Enter");
     await ctrl.promptStarted.promise;
     expect(ctrl.prompt).toEqual(["web-session:new:hello\n\nwhile held"]);
     expect(await page.locator('[data-slot="bubble-content"] [data-slot="message-author"]').textContent()).toBe("Alice Smith");
     await page.waitForURL("**/s/d2ViLXNlc3Npb246bmV3");
     await page.getByPlaceholder("Queue a follow-up · ⌘⏎ steers").waitFor();
     await page.locator("textarea:enabled").waitFor();
+    expect(await page.locator("textarea").evaluate((input: HTMLTextAreaElement) => document.activeElement === input)).toBe(true);
     expect(await page.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
     // Selecting chat text offers quoting without replacing the native context menu.
     await page.locator("textarea").fill("My draft");
@@ -1105,6 +1106,18 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       }
       const request = (await intervention).postDataJSON();
       expect(request).toEqual({ id: "web-session:new", text: "identical follow-up", delivery, messageId: expect.any(String) });
+      if (delivery === "QUEUE") {
+        await page.waitForFunction(() => document.querySelector("textarea")?.value === "");
+        expect(await page.locator("textarea").evaluate((input: HTMLTextAreaElement) => document.activeElement === input)).toBe(true);
+        await page.keyboard.type("Next draft");
+        expect(await page.locator("textarea").inputValue()).toBe("Next draft");
+        await page.evaluate((pathname: string) => { history.pushState(null, "", pathname); dispatchEvent(new PopStateEvent("popstate")); }, `/s/${Buffer.from("focus-other").toString("base64url")}`);
+        await page.waitForFunction(() => document.querySelector("textarea")?.value === "" && !document.querySelector("fieldset:disabled"));
+        transcriptStreams.delete("web-session:new");
+        await page.goBack();
+        await page.waitForFunction(() => document.querySelector("textarea")?.value === "Next draft" && !document.querySelector("fieldset:disabled"));
+        expect(await page.locator("textarea").evaluate((input: HTMLTextAreaElement) => document.activeElement === input)).toBe(false);
+      }
       interventionIds.push(request.messageId);
       expect(await chat.getByText("identical follow-up", { exact: true }).count()).toBe(0);
       if (delivery === "STEER") await parking.getByText("identical follow-up", { exact: true }).nth(interventionIds.length - 2).waitFor();
