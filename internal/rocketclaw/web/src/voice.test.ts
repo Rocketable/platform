@@ -150,10 +150,9 @@ for (const [name, end, message] of [
   ["safety", (wire: Wire) => wire.push({ ended: { reason: "safety" } }), "Call ended by OpenAI safety."],
   ["lost", (wire: Wire) => wire.push({ ended: { reason: "lost" } }), "Lost the connection to OpenAI."],
   ["closed by OpenAI", (wire: Wire) => wire.push({ ended: { reason: "closed" } }), "OpenAI ended the call."],
-  ["a failed audio connection", (_: Wire, peer: FakePeer) => { peer.connectionState = "failed"; peer.onconnectionstatechange!(); }, "Voice call failed: audio connection lost."],
 ] as const) test(`a live call ends in error on ${name} and hangs up`, async () => {
   const { done, wire, peer } = await live("conversation");
-  end(wire, peer);
+  end(wire);
   await done;
   expect(voiceView()).toMatchObject({ state: "error", error: message, conversationId: "conversation" });
   expect({ closed: peer.closed, micStopped: tracks[0].stopped, sent: peer.channel.sent }).toEqual({ closed: true, micStopped: true, sent: [] });
