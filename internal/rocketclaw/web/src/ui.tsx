@@ -525,6 +525,21 @@ function ProtocolGuard() {
   return null;
 }
 
+// The index page names the hashed script and stylesheet of the build the server runs; once it stops naming this page's, a newer (or rolled-back) build is live.
+function WebAppUpdate() {
+  const [{ script, styles }] = useState(() => ({ script: document.querySelector('script[type="module"]')!.getAttribute("src")!, styles: document.querySelector('link[rel="stylesheet"]')!.getAttribute("href")! }));
+  const index = useQuery({ queryKey: ["web-build"], queryFn: async ({ signal }) => {
+    const response = await fetch("/", { signal });
+    if (!response.ok) throw new Error(`Index page check failed: HTTP ${response.status}`);
+    return response.text();
+  }, refetchInterval: 60_000, retry: false });
+  const updated = index.data !== undefined && !(index.data.includes(script) && index.data.includes(styles));
+  return <div className={cn("flex shrink-0 items-center gap-3 pr-12 pl-3 text-sm", updated && "border-b bg-muted py-1.5")}>
+    <p role="status">{updated ? "A new version of RocketClaw is available." : ""}</p>
+    {updated ? <Button size="sm" onClick={() => window.location.reload()}>Refresh</Button> : null}
+  </div>;
+}
+
 type SidebarView = {
   rows: Session[];
   refreshing: boolean;
@@ -1406,9 +1421,9 @@ function persistComposerDraft(draft: ComposerDraft) {
 export function App() {
   const identity = useQuery(queries.identity(), queryClient), config = useQuery(queries.config(), queryClient);
   const scope = identity.isSuccess && config.isSuccess ? JSON.stringify(["authenticated-username", location.origin, identity.data.username, config.data.workspace ?? ""]) : undefined;
-  return <QueryClientProvider client={queryClient}><TooltipProvider><ProtocolGuard /><SidebarOwner>
+  return <QueryClientProvider client={queryClient}><TooltipProvider><ProtocolGuard /><div className="flex h-dvh flex-col"><WebAppUpdate /><SidebarOwner>
     <SessionApp scope={scope} scopeError={identity.error?.message ?? config.error?.message} />
-  </SidebarOwner></TooltipProvider></QueryClientProvider>;
+  </SidebarOwner></div></TooltipProvider></QueryClientProvider>;
 }
 
 function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string }) {
@@ -1507,7 +1522,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
           <DraftScope value={scope}><SessionCommands value={commands}><TabActions value={tabs}><TabPlacement /><TabNotifications />
            {command ? <SessionCommandDialog key={`${command.mode}:${command.source}`} command={command} drafts={drafts} onDraftChange={onDraftChange} /> : null}
             <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} keyCommands={keyCommands(tabs.step, sidebar.toggle, vertical)} />
-         <div className="flex h-dvh min-h-0 flex-col overflow-hidden overscroll-y-none bg-background">
+         <div className="flex min-h-0 flex-1 flex-col overflow-hidden overscroll-y-none bg-background">
             <BottomNavigation>
               {vertical ? <SidebarToggle open={sidebar.open} toggle={sidebar.toggle} /> : null}
               <div className="min-w-0 max-w-full justify-self-center overflow-x-auto md:col-start-2 overflow-y-hidden scrollbar-none">

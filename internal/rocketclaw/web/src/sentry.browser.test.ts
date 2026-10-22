@@ -149,8 +149,8 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
     await page.getByText("private-chat-text", { exact: true }).waitFor();
     if (rate === 1) {
       await sessionNavigation.promise;
-      // Requests repeated every two seconds are not user-facing latency and must not hold pageloads and navigations open.
-      expect(spans.filter((span) => ["/api/Protocol", "/api/Identity", "/api/ListSessions", "/api/ListAgents", "/api/ListQueue"].includes(new URL(span.attributes["url.full"]?.value ?? "http://x/").pathname))).toEqual([]);
+      // Background refreshes are not user-facing latency and must not hold pageloads and navigations open.
+      expect(spans.filter((span) => span.attributes["sentry.op"]?.value === "http.client" && ["/", "/api/Protocol", "/api/Identity", "/api/ListSessions", "/api/ListAgents", "/api/ListQueue"].includes(new URL(span.attributes["url.full"]!.value).pathname))).toEqual([]);
       expect(spans.some((span) => span.attributes["url.full"]?.value.endsWith("/api/History"))).toBe(true);
     }
     await page.evaluate(() => { Object.defineProperty(navigator, "clipboard", { value: { writeText: async () => { throw new Error("clipboard failure"); } } }); });

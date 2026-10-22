@@ -254,8 +254,9 @@ pure layout or style work, are not reported. Other browsers report
 are available. Click tracing uses Sentry's experimental Interactions integration.
 Page loads and navigations are named by screen (`/s/:id` for any session).
 The two-second background refreshes (`Protocol`, `Identity`, `ListSessions`,
-`ListAgents`, and `ListQueue`) are not traced, so they neither keep page loads
-and navigations open nor start traces of their own.
+`ListAgents`, and `ListQueue`) and the once-a-minute check of the index page (`/`)
+are not traced, so they neither keep page loads and navigations open nor start
+traces of their own.
 
 Performance sampling defaults to `0.1` (10%). Set `1` to trace every operation
 while checking the setup, then lower it to control volume. Rates must be between
@@ -1036,7 +1037,12 @@ finite SSE fetch at `GET /api/ListSessions`. A terminal snapshot is not transpor
 completion: only `event: complete` followed by successful EOF permits a saved
 snapshot. Errors, cancellation, and EOF without that event fail enumeration.
 `POST /api/Protocol` returns `{ "protoSha256": "…" }`; polling reloads the page
-when the protocol changes. `GET /stream?id=<url-encoded-raw-id>` delivers only
+when the protocol changes. A web-only release leaves the protocol unchanged, so each
+open page also fetches `GET /` once a minute and whenever a hidden tab becomes
+visible. When that index page no longer names the page's own hashed script and
+stylesheet, a bar at the top says a new version of RocketClaw is available and
+offers **Refresh**; nothing refreshes without that click, and a rollback to the
+page's build removes the bar. `GET /stream?id=<url-encoded-raw-id>` delivers only
 content-free conversation-change hints via EventSource. Each hint triggers a History
 delta read from the last applied revision; opening or reconnecting also catches up.
 
