@@ -83,12 +83,15 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	_, err = server.prompt(ctx, &PromptRequest{Id: created.Id, Text: "hello"})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "a remote session is recorded from its creation, before any sync")
 
+	_, err = openTestTurns(t, dsn).db.ExecContext(t.Context(), `INSERT INTO web_tabs (username, path, conversation_id, unread_at) VALUES ('alice', '/oc/a', $1, '2026-10-22T10:00:00Z')`, created.Id)
+	require.NoError(t, err)
+
 	var (
 		rows []*Session
 		done *ListSessionsResponse
 	)
 
-	require.NoError(t, server.listSessions(&mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
+	require.NoError(t, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
 		response := message.(*ListSessionsResponse)
 		rows = append(rows, response.Sessions...)
 
@@ -104,6 +107,7 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	assert.Equal(t, "/srv/app", rows[0].GetDirectory())
 	assert.Equal(t, []string{"billing"}, rows[0].GetTags())
 	assert.False(t, rows[0].GetOffline())
+	assert.Equal(t, "2026-10-22T10:00:00Z", rows[0].GetUnreadAt(), "a remote session carries the caller's mark")
 	assert.True(t, proto.Equal(&ListSessionsResponse{
 		Owner: "alice", UpstreamSuccess: true,
 		OpencodeServers: map[string]int32{"box": 4100, "down": 4101},

@@ -932,7 +932,7 @@ func (c *equivCapture) capture() {
 
 	c.surface("search_sessions", func(ctx context.Context) error {
 		for key, query := range terms {
-			search, err := s.SearchSessions(ctx, query, SearchMessages, noSlackLookups{})
+			search, err := s.SearchSessions(ctx, "", query, SearchMessages, noSlackLookups{})
 			if err != nil {
 				return err
 			}
@@ -1624,7 +1624,7 @@ func equivSearchMessages(ctx context.Context, s *SessionService, needle string) 
 func equivSidebarChats(ctx context.Context, s *SessionService) ([]SidebarChat, error) {
 	var chats []SidebarChat
 
-	for chat, err := range s.SidebarChats(ctx, noSlackLookups{}, nil) {
+	for chat, err := range s.SidebarChats(ctx, "", noSlackLookups{}, nil) {
 		if err != nil {
 			return nil, err
 		}

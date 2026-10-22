@@ -695,7 +695,7 @@ func TestResumedCronRowPostsRootOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "Reports", spaces[len(spaces)-1].Name)
 
-	for row, err := range service.sidebarSessions(t.Context(), nil) {
+	for row, err := range service.sidebarSessions(t.Context(), "", nil) {
 		require.NoError(t, err)
 		assert.Equal(t, spaces[len(spaces)-1].ID, row.SpaceID)
 	}
@@ -710,7 +710,7 @@ func TestResumedCronRowPostsRootOnce(t *testing.T) {
 
 	listed := false
 
-	for row, err := range service.sidebarSessions(t.Context(), nil) {
+	for row, err := range service.sidebarSessions(t.Context(), "", nil) {
 		require.NoError(t, err)
 
 		if row.Conversation.ID == destination {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
+	"github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc"
 	slackconnector "github.com/Rocketable/platform/internal/rocketclaw/frontend/slack"
 )
 
@@ -46,6 +47,10 @@ func (processAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-
 		}
 
 		stops = append(stops, externalMCP.Close)
+	}
+
+	if err := rpc.ConvertTabStates(rt.RunCtx, rt.Sessions); err != nil {
+		return nil, nil, nil, err
 	}
 
 	stopWeb, err := startWebRPC(rt, slack, cronjobs)

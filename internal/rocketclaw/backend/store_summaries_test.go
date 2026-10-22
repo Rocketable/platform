@@ -72,7 +72,7 @@ func sidebarSummaries(t *testing.T, s *SessionService) map[string]*protocol.Sess
 
 	summaries := map[string]*protocol.SessionSummary{}
 
-	for row, err := range s.sidebarSessions(t.Context(), nil) {
+	for row, err := range s.sidebarSessions(t.Context(), "", nil) {
 		require.NoError(t, err)
 
 		summaries[row.Conversation.ID] = row.Summary
@@ -188,7 +188,7 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 
 			var rows []SidebarSession
 
-			for row, err := range service.sidebarSessions(t.Context(), nil) {
+			for row, err := range service.sidebarSessions(t.Context(), "", nil) {
 				require.NoError(t, err, "sidebar enumeration must not decode replay history")
 
 				rows = append(rows, row)
@@ -242,7 +242,7 @@ FROM pg_index WHERE indrelid = 'entries'::regclass`
 
 	var ids []string
 
-	for row, err := range service.sidebarSessions(ctx, nil) {
+	for row, err := range service.sidebarSessions(ctx, "", nil) {
 		require.NoError(t, err)
 
 		ids = append(ids, row.Conversation.ID)
@@ -282,7 +282,7 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 
 	var ids []string
 
-	for row, err := range service.sidebarSessions(ctx, nil) {
+	for row, err := range service.sidebarSessions(ctx, "", nil) {
 		require.NoError(t, err)
 
 		ids = append(ids, row.Conversation.ID)
@@ -301,7 +301,7 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 	_, err = service.UpdateConversationDetails(ctx, "a", nil, new(""))
 	require.NoError(t, err)
 
-	for row, err := range service.sidebarSessions(ctx, nil) {
+	for row, err := range service.sidebarSessions(ctx, "", nil) {
 		require.NoError(t, err)
 
 		switch row.Conversation.ID {
@@ -333,7 +333,7 @@ func TestSidebarSessionsListFirstTurnBeforeHistory(t *testing.T) {
 	only := func() SidebarSession {
 		var got []SidebarSession
 
-		for row, err := range service.sidebarSessions(ctx, nil) {
+		for row, err := range service.sidebarSessions(ctx, "", nil) {
 			require.NoError(t, err)
 
 			got = append(got, row)
@@ -400,7 +400,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 
 	var got []SidebarSession
 
-	for row, err := range service.sidebarSessions(t.Context(), nil) {
+	for row, err := range service.sidebarSessions(t.Context(), "", nil) {
 		require.NoError(t, err)
 
 		got = append(got, row)
@@ -429,7 +429,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	_, err = service.toggleSessionTag(t.Context(), "a", "internal", []string{"customer", "internal"})
 	require.NoError(t, err)
 
-	for row, err := range service.sidebarSessions(t.Context(), nil) {
+	for row, err := range service.sidebarSessions(t.Context(), "", nil) {
 		require.NoError(t, err)
 
 		if row.Conversation.ID == "a" {
@@ -455,7 +455,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 
 	var remaining []string
 
-	for row, err := range service.sidebarSessions(t.Context(), nil) {
+	for row, err := range service.sidebarSessions(t.Context(), "", nil) {
 		require.NoError(t, err)
 
 		remaining = append(remaining, row.Conversation.ID)
@@ -468,7 +468,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	_, err = service.db.ExecContext(t.Context(), `UPDATE conversations SET last_updated = '-infinity' WHERE conversation_id = 'zero'`)
 	require.NoError(t, err)
 
-	next, stop := iter.Pull2(service.sidebarSessions(t.Context(), nil))
+	next, stop := iter.Pull2(service.sidebarSessions(t.Context(), "", nil))
 	defer stop()
 
 	_, err, ok := next()
@@ -505,7 +505,7 @@ func BenchmarkSidebarSessions(b *testing.B) {
 	for b.Loop() {
 		var rows []SidebarSession
 
-		for row, err := range service.sidebarSessions(b.Context(), nil) {
+		for row, err := range service.sidebarSessions(b.Context(), "", nil) {
 			require.NoError(b, err)
 
 			rows = append(rows, row)
@@ -533,7 +533,7 @@ func TestSidebarSessionsCloseRowsOnEarlyStopAndCancellation(t *testing.T) {
 
 	before := service.db.Stats().InUse
 
-	next, stop := iter.Pull2(service.sidebarSessions(t.Context(), nil))
+	next, stop := iter.Pull2(service.sidebarSessions(t.Context(), "", nil))
 	defer stop()
 
 	row, err, ok := next()
@@ -546,7 +546,7 @@ func TestSidebarSessionsCloseRowsOnEarlyStopAndCancellation(t *testing.T) {
 	cancel()
 
 	// Cancellation before the first read must also report failure, not an empty list.
-	next, stop = iter.Pull2(service.sidebarSessions(ctx, nil))
+	next, stop = iter.Pull2(service.sidebarSessions(ctx, "", nil))
 	defer stop()
 
 	row, err, ok = next()
@@ -685,7 +685,7 @@ func TestSidebarSessionsCancelPendingDatabaseRow(t *testing.T) {
 
 	var reading errgroup.Group
 	reading.Go(func() error {
-		for _, err := range service.sidebarSessions(ctx, nil) {
+		for _, err := range service.sidebarSessions(ctx, "", nil) {
 			if err != nil {
 				return err
 			}

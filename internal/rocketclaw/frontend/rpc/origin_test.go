@@ -131,7 +131,7 @@ VALUES ('early-reply', $1, '{}', '[]', 1, 1, 0)`, cronSlack)
 
 	listed := make(map[string]string)
 
-	require.NoError(t, server.listSessions(&mockServerStream{ContextFunc: func() context.Context {
+	require.NoError(t, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context {
 		return ctx
 	}, SendMsgFunc: func(message any) error {
 		for _, session := range message.(*ListSessionsResponse).Sessions {

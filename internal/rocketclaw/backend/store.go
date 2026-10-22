@@ -1070,6 +1070,8 @@ type SidebarSession struct {
 	// Conversation.Agent is its selected agent. Both are empty until it has them.
 	// SearchSessions fills a RocketClaw chat's Model with its agent's configured model.
 	Model string
+	// UnreadAt is when a turn the listing person sent into ended unseen, zero once read.
+	UnreadAt time.Time
 	// Origin holds the facts that decide its chat origin, as ChatOriginFacts reads them.
 	Origin ChatOriginFacts
 }
@@ -1278,7 +1280,7 @@ func (s *SessionService) Stop() error {
 // not nil. Conversations without stored history are omitted until their first entry arrives,
 // except while a turn runs: then its prompt is the preview and its start the update time.
 // Breaking iteration or cancelling ctx closes the database rows.
-func (s *SessionService) sidebarSessions(ctx context.Context, chats []string) iter.Seq2[SidebarSession, error] {
+func (s *SessionService) sidebarSessions(ctx context.Context, username string, chats []string) iter.Seq2[SidebarSession, error] {
 	return func(yield func(SidebarSession, error) bool) {
 		rows, err := s.db.QueryContext(ctx, `WITH `+visibleChatsSQL+chatOriginSQL+shownChatsSQL+`,
 running AS (
@@ -1293,6 +1295,8 @@ running AS (
     SELECT c.reports_to FROM jobs j JOIN conversations c USING (conversation_id) WHERE c.reports_to IS NOT NULL
     UNION
     SELECT c.reports_to FROM running r JOIN conversations c USING (conversation_id) WHERE c.reports_to IS NOT NULL
+), reads AS (
+    SELECT conversation_id, unread_at FROM web_tabs WHERE username = $6 AND conversation_id IS NOT NULL
 ), local AS (
 SELECT
     c.conversation_id,
@@ -1316,24 +1320,27 @@ SELECT
     '' AS model,
     c.kind,
     '' AS remote_session,
+    u.unread_at,
     `+originColumns+`
 FROM shown c
+LEFT JOIN reads u ON u.conversation_id = c.conversation_id
 LEFT JOIN conversations run ON run.conversation_id = c.cron_run
 LEFT JOIN running r ON r.conversation_id = c.conversation_id
 LEFT JOIN background b ON b.conversation_id = c.conversation_id
 WHERE (c.found OR c.running) AND ($5::text[] IS NULL OR c.conversation_id = ANY($5))
 ), remote AS (
 SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updated, o.running, o.background, o.pinned, o.name, '', COALESCE(o.tags, '[]'::jsonb),
-    o.server, o.directory, o.synced_at < now() - interval '15 seconds', '', COALESCE(o.reply, ''), '', '', COALESCE(o.model, ''), o.kind, o.remote_session,
+    o.server, o.directory, o.synced_at < now() - interval '15 seconds', '', COALESCE(o.reply, ''), '', '', COALESCE(o.model, ''), o.kind, o.remote_session, u.unread_at,
     '', '', '', 'null'::jsonb, '', '', '', NULL::bigint, FALSE
 FROM conversations o
+LEFT JOIN reads u ON u.conversation_id = o.conversation_id
 -- Rows of servers no longer configured stay stored, hidden, and return with their server.
 WHERE o.kind = 'remote' AND o.server = ANY($4) AND ($5::text[] IS NULL OR o.conversation_id = ANY($5))
 ), chats AS (
 SELECT * FROM local UNION ALL SELECT * FROM remote
 )
 SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, KindOneOffCronRun,
-			slices.Collect(maps.Keys(s.definitions.Clone().OpenCode)), chats)
+			slices.Collect(maps.Keys(s.definitions.Clone().OpenCode)), chats, username)
 		if err != nil {
 			yield(SidebarSession{}, fmt.Errorf("query sidebar sessions: %w", err))
 			return
@@ -1348,13 +1355,14 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 				preview sql.NullString
 				tags    []byte
 				updated sql.NullTime
+				unread  sql.NullTime
 			)
-			if err := scanChatOrigin(rows, &row.Origin, &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession); err != nil {
+			if err := scanChatOrigin(rows, &row.Origin, &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
 				return
 			}
 
-			row.Origin.ConversationID, row.Origin.CreatedBy = row.Conversation.ID, ThreadCreator(row.Conversation.CreatedBy)
+			row.Origin.ConversationID, row.Origin.CreatedBy, row.UnreadAt = row.Conversation.ID, ThreadCreator(row.Conversation.CreatedBy), unread.Time.UTC()
 
 			if err := json.Unmarshal(tags, &row.Tags); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("decode sidebar tags: %w", err))

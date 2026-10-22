@@ -1060,7 +1060,7 @@ func TestSessionToolsCriteriaParity(t *testing.T) {
 	list := listSessionsTool(s, &threadBridgeManager{slackLookups: slack})
 
 	for _, query := range []string{"tag:customer", "outage", "outage tag:", "billing", "support sort:oldest", "is:cron", "is:pinned is:forked", "agent:main", "room:support", "room:C9", "room:support room:C9", "room:support room:C9 billing", "room:support room:C9 tag:customer", "cron:daily", "t-1", "ada", "status:open"} {
-		search, err := s.SearchSessions(t.Context(), query, SearchMessages, slack)
+		search, err := s.SearchSessions(t.Context(), "", query, SearchMessages, slack)
 		require.NoError(t, err)
 
 		want := make([]string, 0, len(search.Matches))

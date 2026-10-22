@@ -5,11 +5,14 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
+	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -339,27 +342,220 @@ DELETE FROM web_spaces USING others WHERE web_spaces.id = $1`, id)
 	return err
 }
 
-// TabState returns username's saved Web tab state and its revision; nil and 0 when none is saved.
-func (s *SessionService) TabState(ctx context.Context, username string) (state []byte, revision int64, err error) {
-	err = s.db.QueryRowContext(ctx, `SELECT state, revision FROM web_tab_states WHERE username = $1`, username).Scan(&state, &revision)
+// Tab is one open Web tab; Group and Space are the ids of its group and space.
+type Tab struct {
+	Path            string
+	Pinned, Preview bool
+	Group, Space    string
+}
+
+// TabGroup is one Web tab group.
+type TabGroup struct {
+	ID, Name, Color string
+	Collapsed       bool
+}
+
+// TabState is one person's Web tabs and groups in strip order, the space they are in, the last
+// active tab of each space by space id, and the strip's placement, TOP or LEFT.
+type TabState struct {
+	Tabs      []Tab
+	Groups    []TabGroup
+	Space     string
+	Last      map[string]string
+	Placement string
+}
+
+// tabPathSQL is conversation c's Web tab path, as the Web's rowPath and encodeSessionId spell it.
+const tabPathSQL = `CASE WHEN c.kind = '` + string(KindRemote) + `' THEN '/oc/' ELSE '/s/' END || rtrim(translate(replace(encode(convert_to(c.conversation_id, 'UTF8'), 'base64'), E'\n', ''), '+/', '-_'), '=')`
+
+// tabConversation is the conversation a /s/ or /oc/ tab path opens, as the Web's decodeSessionId
+// reads it, which takes legacy URI-encoded IDs too; else "".
+func tabConversation(path string) string {
+	encoded, ok := strings.CutPrefix(path, "/s/")
+	if !ok {
+		if encoded, ok = strings.CutPrefix(path, "/oc/"); !ok {
+			return ""
+		}
+	}
+
+	if unescaped, err := url.PathUnescape(encoded); err == nil {
+		encoded = unescaped
+	}
+
+	if id, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(strings.NewReplacer("+", "-", "/", "_").Replace(encoded), "=")); err == nil {
+		encoded = string(id)
+	}
+
+	// Bytes that are not UTF-8 name no conversation, and the database takes only UTF-8.
+	return strings.ToValidUTF8(encoded, "\uFFFD")
+}
+
+// TabState returns username's saved Web tab state and its revision; the zero state and 0 when none is saved.
+func (s *SessionService) TabState(ctx context.Context, username string) (TabState, int64, error) {
+	// One snapshot, so a concurrent save is read whole or not at all.
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return TabState{}, 0, fmt.Errorf("begin tab state read: %w", err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	var (
+		state    = TabState{Last: map[string]string{}}
+		revision int64
+	)
+
+	err = tx.QueryRowContext(ctx, `SELECT space, placement, revision FROM web_tab_states WHERE username = $1`, username).Scan(&state.Space, &state.Placement, &revision)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, 0, nil
+		return TabState{}, 0, nil
 	}
 
 	if err != nil {
-		return nil, 0, fmt.Errorf("read tab state: %w", err)
+		return TabState{}, 0, fmt.Errorf("read tab state: %w", err)
 	}
 
-	return state, revision, nil
+	err = readRows(ctx, tx, `SELECT path, pinned, preview, group_id, space, position IS NOT NULL, last FROM web_tabs
+WHERE username = $1 AND (position IS NOT NULL OR last) ORDER BY position`, "tabs", func(row rowScanner) error {
+		var (
+			tab        Tab
+			open, last bool
+		)
+
+		if err := row.Scan(&tab.Path, &tab.Pinned, &tab.Preview, &tab.Group, &tab.Space, &open, &last); err != nil {
+			return fmt.Errorf("scan tab: %w", err)
+		}
+
+		if open {
+			state.Tabs = append(state.Tabs, tab)
+		}
+
+		if last {
+			state.Last[tab.Space] = tab.Path
+		}
+
+		return nil
+	}, username)
+	if err != nil {
+		return TabState{}, 0, err
+	}
+
+	state.Groups, err = queryRows(ctx, tx, `SELECT id, name, color, collapsed FROM web_tab_groups WHERE username = $1 ORDER BY position`, "tab groups", func(row rowScanner) (TabGroup, error) {
+		var group TabGroup
+		return group, row.Scan(&group.ID, &group.Name, &group.Color, &group.Collapsed)
+	}, username)
+
+	return state, revision, err
+}
+
+// LegacyTabStates returns, by username, the tab states still saved as one protobuf blob.
+func (s *SessionService) LegacyTabStates(ctx context.Context) (map[string][]byte, error) {
+	states := map[string][]byte{}
+
+	return states, readRows(ctx, s.db, `SELECT username, state FROM web_tab_states WHERE state IS NOT NULL`, "legacy tab states", func(row rowScanner) error {
+		var (
+			username string
+			state    []byte
+		)
+
+		if err := row.Scan(&username, &state); err != nil {
+			return fmt.Errorf("scan legacy tab state: %w", err)
+		}
+
+		states[username] = state
+
+		return nil
+	})
 }
 
 // SaveTabState replaces username's saved Web tab state when it was made from the saved revision,
-// and reports whether it did.
-func (s *SessionService) SaveTabState(ctx context.Context, username string, state []byte, revision int64) (bool, error) {
-	saved, err := execRows(ctx, s.db, "save tab state", "count saved tab state", `INSERT INTO web_tab_states (username, state, revision) VALUES ($1, $2, $3 + 1)
-ON CONFLICT (username) DO UPDATE SET state = excluded.state, revision = excluded.revision WHERE web_tab_states.revision = $3`, username, state, revision)
+// and reports whether it did; a save also drops a tab state still saved as one protobuf blob.
+// Saves never write unread_at: a closed tab stays while unread or some space's last tab. A session
+// tab names its conversation under the path marks use, and one of a session that does not exist is
+// dropped.
+func (s *SessionService) SaveTabState(ctx context.Context, username string, state *TabState, revision int64) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin tab state save: %w", err)
+	}
 
-	return saved > 0, err
+	defer func() { _ = tx.Rollback() }()
+
+	if claimed, err := execRows(ctx, tx, "save tab state", "count saved tab state", `INSERT INTO web_tab_states (username, space, placement, revision) VALUES ($1, $2, $3, $4 + 1)
+ON CONFLICT (username) DO UPDATE SET space = excluded.space, placement = excluded.placement, revision = excluded.revision, state = NULL
+WHERE web_tab_states.revision = $4`, username, state.Space, state.Placement, revision); err != nil || claimed == 0 {
+		return false, err
+	}
+
+	// A space's last tab that is closed is a row of its own after the open tabs.
+	tabs := slices.Clip(state.Tabs)
+	for space, path := range state.Last {
+		if !slices.ContainsFunc(state.Tabs, func(tab Tab) bool { return tab.Path == path }) {
+			tabs = append(tabs, Tab{Path: path, Space: space})
+		}
+	}
+
+	var (
+		paths, conversations, groups, spaces []string
+		pinned, previews, lasts              []bool
+		groupIDs, names, colors              []string
+		collapsed                            []bool
+	)
+
+	for _, tab := range tabs {
+		paths, conversations, groups, spaces = append(paths, tab.Path), append(conversations, tabConversation(tab.Path)), append(groups, tab.Group), append(spaces, tab.Space)
+		pinned, previews, lasts = append(pinned, tab.Pinned), append(previews, tab.Preview), append(lasts, state.Last[tab.Space] == tab.Path)
+	}
+
+	for _, group := range state.Groups {
+		groupIDs, names, colors, collapsed = append(groupIDs, group.ID), append(names, group.Name), append(colors, group.Color), append(collapsed, group.Collapsed)
+	}
+
+	if _, err := execState(ctx, tx, "clear tab state", `WITH groups AS (
+    DELETE FROM web_tab_groups WHERE username = $1
+), closed AS (
+    DELETE FROM web_tabs WHERE username = $1 AND unread_at IS NULL
+)
+UPDATE web_tabs SET position = NULL, pinned = FALSE, preview = FALSE, group_id = '', space = '', last = FALSE
+WHERE username = $1 AND unread_at IS NOT NULL`, username); err != nil {
+		return false, err
+	}
+
+	// Two paths naming one tab, as a legacy spelling and the canonical one do, keep the open one.
+	if _, err := execState(ctx, tx, "write tab state", `WITH groups AS (
+    INSERT INTO web_tab_groups (username, id, position, name, color, collapsed)
+    SELECT $1, id, n - 1, name, color, collapsed FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[]) WITH ORDINALITY AS g(id, name, color, collapsed, n)
+), incoming AS (
+    SELECT COALESCE(`+tabPathSQL+`, t.path) AS path, c.conversation_id, CASE WHEN t.n <= $6 THEN t.n - 1 END AS position,
+        t.pinned, t.preview, t.group_id, t.space, t.last
+    FROM unnest($7::text[], $8::text[], $9::boolean[], $10::boolean[], $11::text[], $12::text[], $13::boolean[]) WITH ORDINALITY AS t(path, conversation_id, pinned, preview, group_id, space, last, n)
+    LEFT JOIN conversations c ON c.conversation_id = t.conversation_id
+    WHERE t.conversation_id = '' OR c.conversation_id IS NOT NULL
+)
+INSERT INTO web_tabs (username, path, conversation_id, position, pinned, preview, group_id, space, last)
+SELECT DISTINCT ON (path) $1, path, conversation_id, position, pinned, preview, group_id, space, last FROM incoming ORDER BY path, position NULLS LAST, space
+ON CONFLICT (username, path) DO UPDATE SET conversation_id = excluded.conversation_id, position = excluded.position, pinned = excluded.pinned,
+    preview = excluded.preview, group_id = excluded.group_id, space = excluded.space, last = excluded.last`,
+		username, groupIDs, names, colors, collapsed, len(state.Tabs), paths, conversations, pinned, previews, groups, spaces, lasts); err != nil {
+		return false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit tab state: %w", err)
+	}
+
+	return true, nil
+}
+
+// ViewSession records that username has conversationID in view now, which clears their mark on it
+// and ends their view of every other session. A conversationID naming no conversation writes nothing.
+func (s *SessionService) ViewSession(ctx context.Context, username, conversationID string) error {
+	_, err := execState(ctx, s.db, "record session view", `WITH viewed AS (
+    INSERT INTO web_tab_states (username, revision, viewing, viewed_at) SELECT $1, 0, conversation_id, now() FROM conversations WHERE conversation_id = $2
+    ON CONFLICT (username) DO UPDATE SET viewing = excluded.viewing, viewed_at = excluded.viewed_at
+)
+UPDATE web_tabs SET unread_at = NULL WHERE username = $1 AND conversation_id = $2 AND unread_at IS NOT NULL`, username, conversationID)
+
+	return err
 }
 
 // SetThreadAgentIfExists updates a managed conversation agent without creating a thread.
@@ -957,6 +1153,26 @@ WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntry
 UPDATE turns a SET replay = r.replay, record = CASE WHEN a.terminal <> '' THEN (`+turnRecordSQL+`)::json END, applied_input_ids = s.value::jsonb->'applied_input_ids'
 FROM steps s, replay r WHERE a.id = $2 AND s.conversation_id = $1 AND s.key = $2`, finish.store.conversationID, turnID); err != nil {
 		return nil, fmt.Errorf("move turn record: %w", err)
+	}
+
+	// Each Web person who sent a listed session's turn its input or an applied steer finds the
+	// session unread on its tab, unless they viewed it in the last 10 seconds by the database clock.
+	if _, err := tx.ExecContext(ctx, `WITH turn AS (
+    SELECT a.inbound_json, a.applied_input_ids FROM turns a JOIN conversations c ON c.conversation_id = $1 AND c.listed WHERE a.id = $2
+), inbounds AS (
+    SELECT inbound_json AS inbound FROM turn
+    UNION ALL SELECT steer->'inbound' FROM turn t JOIN steps s ON s.conversation_id = $1 AND s.key = $2 || '/steers'
+    CROSS JOIN LATERAL json_array_elements(s.value) steer WHERE t.applied_input_ids ? (steer->>'id')
+), senders AS (
+    SELECT DISTINCT inbound->'Metadata'->>$3::text AS username FROM inbounds
+    WHERE inbound->>'Source' = $4 AND inbound->>'Human' = 'true' AND inbound->'Metadata'->>$3::text <> ''
+)
+INSERT INTO web_tabs (username, path, conversation_id, unread_at)
+SELECT s.username, `+tabPathSQL+`, c.conversation_id, now() FROM senders s JOIN conversations c ON c.conversation_id = $1
+LEFT JOIN web_tab_states p ON p.username = s.username AND p.viewing = $1 AND p.viewed_at >= now() - interval '10 seconds'
+WHERE p.username IS NULL
+ON CONFLICT (username, path) DO UPDATE SET unread_at = now(), conversation_id = excluded.conversation_id`, finish.store.conversationID, turnID, protocol.InboundPrincipalEmailMetadataKey, protocol.SourceWeb); err != nil {
+		return nil, fmt.Errorf("mark turn senders unread: %w", err)
 	}
 
 	// A shadow stopped at its step limit says so in Web. The note is display-only

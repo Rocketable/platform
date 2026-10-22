@@ -153,12 +153,18 @@ func (s *Server) DeleteSessionEntries(ctx context.Context, request *SessionEntri
 	return &DeleteSessionEntriesResponse{Deleted: deleted}, nil
 }
 
-func (s *Server) listSessions(stream grpc.ServerStream) error {
+func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerStream) error {
 	ctx := stream.Context()
 
 	owner, _, err := s.principal(ctx)
 	if err != nil {
 		return err
+	}
+
+	if request.Viewing != "" {
+		if err := s.sessions.ViewSession(ctx, owner, request.Viewing); err != nil {
+			return fmt.Errorf("web session view: %w", err)
+		}
 	}
 
 	var allChoices []string
@@ -175,7 +181,7 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 		return definitions, nil
 	})
 
-	for chat, err := range s.sessions.SidebarChats(ctx, s.channels, nil) {
+	for chat, err := range s.sessions.SidebarChats(ctx, owner, s.channels, nil) {
 		if err != nil {
 			return err
 		}
@@ -199,6 +205,10 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 			if !summary.LastUpdated.IsZero() {
 				session.UpdatedAt = summary.LastUpdated.Format(time.RFC3339Nano)
 			}
+		}
+
+		if !row.UnreadAt.IsZero() {
+			session.UnreadAt = row.UnreadAt.Format(time.RFC3339Nano)
 		}
 
 		if err := stream.SendMsg(&ListSessionsResponse{Sessions: []*Session{session}, Owner: owner}); err != nil {

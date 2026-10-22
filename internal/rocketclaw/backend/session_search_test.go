@@ -118,7 +118,7 @@ func newSessionSearchFixture(t *testing.T) (*SessionService, *slackFrontendMock)
 func searchTestSessions(t *testing.T, s *SessionService, slack slackLookup, query string, scope SearchScope) (*SessionSearch, []searchTestMatch) {
 	t.Helper()
 
-	search, err := s.SearchSessions(t.Context(), query, scope, slack)
+	search, err := s.SearchSessions(t.Context(), "", query, scope, slack)
 	require.NoError(t, err)
 
 	matches := make([]searchTestMatch, 0, len(search.Matches))
@@ -338,6 +338,44 @@ func TestSearchSessionsFilters(t *testing.T) {
 			require.Empty(t, search.Hits, query+text)
 		}
 	}
+}
+
+// Turn ends that mark sessions unread are written directly; alice's view of searchChatW clears its mark.
+// The fixture opens no tabs, so every marked session's tab is closed.
+func TestSearchSessionsUnread(t *testing.T) {
+	t.Parallel()
+
+	s, slack := newSessionSearchFixture(t)
+	ctx := t.Context()
+	_, err := s.db.ExecContext(ctx, `INSERT INTO web_tabs (username, path, conversation_id, unread_at) VALUES ('alice', $1, $1, now()), ('alice', $2, $2, now()), ('alice', $3, $3, now()), ('alice', $4, $4, now()), ('bob', $5, $5, now())`,
+		searchChatA, searchChatH, searchChatD, searchChatW, searchChatB)
+	require.NoError(t, err)
+	require.NoError(t, s.ViewSession(ctx, "alice", searchChatW))
+
+	for _, tc := range []struct {
+		username, query string
+		ids             []string
+	}{
+		{"alice", "is:unread", []string{searchChatA, searchChatH, searchChatD}},
+		{"alice", "IS:UNREAD agent:main", []string{searchChatA, searchChatD}},
+		{"alice", "is:unread support", []string{searchChatA}},
+		{"bob", "is:unread", []string{searchChatB}},
+	} {
+		search, err := s.SearchSessions(ctx, tc.username, tc.query, SearchFields, slack)
+		require.NoError(t, err)
+
+		ids := make([]string, 0, len(search.Matches))
+		for i := range search.Matches {
+			ids = append(ids, search.Matches[i].Chat.Session.Conversation.ID)
+		}
+
+		require.Equal(t, tc.ids, ids, "%s %s", tc.username, tc.query)
+	}
+
+	search, criteria, err := s.searchSessionsWithin(ctx, "is:unread", &sessionListParams{}, slack)
+	require.NoError(t, err)
+	require.Empty(t, search.Text, "is:unread is a filter for the agent tool too")
+	require.Empty(t, criteria, "the agent tool searches for no person")
 }
 
 // An ASCII needle reads only the chats whose words may hold it, so each word a match can come from

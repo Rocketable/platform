@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +36,14 @@ type fakeOpenCode struct {
 	locations []string
 	shells    map[string]map[string]string
 	events    chan string
+	messages  map[string][]openCodeTestMessage
+	reads     []string
+}
+
+type openCodeTestMessage struct {
+	Type     string
+	Username string
+	Created  int64
 }
 
 func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -128,6 +138,45 @@ func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		f.reads = append(f.reads, id+"?"+r.URL.RawQuery)
+
+		if query := r.URL.Query(); query.Get("type") != "assistant" {
+			history := f.messages[id]
+			limit, _ := strconv.Atoi(query.Get("limit"))
+
+			if len(history) == 0 || query.Get("order") != "desc" || limit < 1 {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+
+			type wireMessage struct {
+				Type     string            `json:"type"`
+				Metadata map[string]string `json:"metadata"`
+				Time     struct {
+					Created int64 `json:"created"`
+				} `json:"time"`
+			}
+
+			data := []wireMessage{}
+			for _, message := range slices.Backward(history) {
+				if message.Type == query.Get("type") && len(data) < limit {
+					wire := wireMessage{Type: message.Type, Metadata: map[string]string{"displayText": "hi"}}
+					if message.Username != "" {
+						wire.Metadata["rocketclaw_username"] = message.Username
+					}
+
+					wire.Time.Created = message.Created
+					data = append(data, wire)
+				}
+			}
+
+			_ = json.NewEncoder(w).Encode(struct {
+				Data []wireMessage `json:"data"`
+			}{data})
+
+			return
+		}
+
 		reply, ok := f.replies[id]
 		if !ok || r.URL.RawQuery != "type=assistant&order=desc&limit=1" {
 			w.WriteHeader(http.StatusNotFound)
@@ -170,7 +219,7 @@ func remoteSidebar(t *testing.T, s *SessionService) []SidebarSession {
 
 	var rows []SidebarSession
 
-	for row, err := range s.sidebarSessions(t.Context(), nil) {
+	for row, err := range s.sidebarSessions(t.Context(), "", nil) {
 		require.NoError(t, err)
 
 		if row.Server != "" {
@@ -296,7 +345,7 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	assert.Empty(t, remoteSidebar(t, s)[0].Name)
 	assert.Empty(t, remoteSidebar(t, s)[0].Summary.LastMessage)
 
-	search, err := s.SearchSessions(ctx, "/srv/api", SearchFields, nil)
+	search, err := s.SearchSessions(ctx, "", "/srv/api", SearchFields, nil)
 	require.NoError(t, err)
 	require.Len(t, search.Matches, 1)
 	assert.Equal(t, "opencode:box:ses_b", search.Matches[0].Chat.Session.Conversation.ID)
@@ -466,6 +515,117 @@ func TestSyncOpenCodeMarksBackgroundWork(t *testing.T) {
 
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 	assert.False(t, slices.ContainsFunc(remoteSidebar(t, s), func(row SidebarSession) bool { return row.Background }))
+}
+
+// An OpenCode turn end marks the people whose stamped prompts it ran, once each (R13, R14, AE7).
+func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
+	s := newOpenCodeTestService(t, "box")
+	ctx := t.Context()
+	fake := &fakeOpenCode{messages: map[string][]openCodeTestMessage{}}
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	box := config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100}
+	id, err := s.CreateOpenCodeSession(ctx, "box", box, "/srv/app")
+	require.NoError(t, err)
+
+	unread := func(username string) []string {
+		ids := []string{}
+
+		for row, err := range s.sidebarSessions(ctx, username, nil) {
+			require.NoError(t, err)
+
+			if !row.UnreadAt.IsZero() {
+				ids = append(ids, row.Conversation.ID)
+			}
+		}
+
+		return ids
+	}
+	turn := func(updated int64, busy bool, messages ...openCodeTestMessage) {
+		t.Helper()
+
+		_, err := s.db.ExecContext(ctx, `DELETE FROM web_tabs; DELETE FROM web_tab_states`)
+		require.NoError(t, err)
+
+		fake.sessions = []openCodeSession{openCodeTestSession("ses_new", "", "/srv/app", updated)}
+
+		fake.active = nil
+		if busy {
+			fake.active = []string{"ses_new"}
+		}
+
+		fake.messages["ses_new"] = append(fake.messages["ses_new"], messages...)
+
+		require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+	}
+	prompt := func(username string, created int64) openCodeTestMessage {
+		return openCodeTestMessage{Type: "user", Username: username, Created: created}
+	}
+	idle := func(created int64) openCodeTestMessage { return openCodeTestMessage{Type: "idle", Created: created} }
+
+	// A session created here marks Alice when its first turn, seen busy, ends.
+	turn(5000, true, prompt("alice", 5100))
+	assert.Empty(t, fake.reads, "a busy session reads no messages")
+	turn(5000, false, idle(5200))
+	assert.Equal(t, []string{id}, unread("alice"))
+	assert.Empty(t, unread("bob"))
+
+	paths, err := queryStrings(ctx, s.db, `SELECT path FROM web_tabs`, "marked tabs")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/oc/" + base64.RawURLEncoding.EncodeToString([]byte(id))}, paths, "the mark is on the tab path the Web spells")
+
+	// A turn never seen busy is found by its moved time.updated; Alice's prompt before the cursor
+	// and an unstamped TUI prompt mark no one.
+	turn(6000, false, prompt("bob", 5900), prompt("", 5950), idle(6000))
+	assert.Equal(t, []string{id}, unread("bob"))
+	assert.Empty(t, unread("alice"))
+
+	// An idle session whose time.updated did not move reads no messages.
+	reads := len(fake.reads)
+
+	turn(6000, false)
+	assert.Len(t, fake.reads, reads)
+
+	// A TUI-only turn and a /command turn with no user message mark no one.
+	turn(7000, false, prompt("", 6500), idle(6600), idle(7000))
+	assert.Empty(t, unread("alice"))
+	assert.Empty(t, unread("bob"))
+	assert.Empty(t, unread(""))
+
+	// Two turns that ended between polls, after a sync saw the session busy, mark both senders.
+	turn(7000, true)
+	turn(7000, false, prompt("alice", 7100), idle(7200), prompt("bob", 7300), prompt("bob", 7350), idle(7400))
+	assert.Equal(t, []string{id}, unread("alice"))
+	assert.Equal(t, []string{id}, unread("bob"))
+
+	// Alice viewed the session 3 seconds ago, so only Bob, who viewed it long ago, is marked.
+	_, err = s.db.ExecContext(ctx, `DELETE FROM web_tabs; DELETE FROM web_tab_states`)
+	require.NoError(t, err)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, revision, viewing, viewed_at) VALUES ('alice', 0, $1, now() - interval '3 seconds'), ('bob', 0, $1, now() - interval '30 seconds')`, id)
+	require.NoError(t, err)
+
+	fake.sessions = []openCodeSession{openCodeTestSession("ses_new", "", "/srv/app", 7600)}
+	fake.messages["ses_new"] = append(fake.messages["ses_new"], prompt("alice", 7500), prompt("bob", 7550), idle(7600))
+
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+	assert.Empty(t, unread("alice"))
+	assert.Equal(t, []string{id}, unread("bob"))
+
+	// A failed message read leaves the cursor, so the next turn end marks the missed sender too.
+	// Carol's prompt after the newest marker belongs to a turn that has not ended.
+	fake.messages["ses_new"] = append(fake.messages["ses_new"], prompt("alice", 7900), idle(8000))
+	history := fake.messages["ses_new"]
+	delete(fake.messages, "ses_new")
+	turn(8000, false)
+	assert.Empty(t, unread("alice"))
+
+	fake.messages["ses_new"] = history
+
+	turn(8200, false, prompt("bob", 8100), idle(8200), prompt("carol", 8300))
+	assert.Equal(t, []string{id}, unread("alice"))
+	assert.Equal(t, []string{id}, unread("bob"))
+	assert.Empty(t, unread("carol"))
 }
 
 func TestOpenCodeShellsFollowEvents(t *testing.T) {
@@ -676,7 +836,7 @@ func TestSearchSessionsFiltersByServerAgentAndModel(t *testing.T) {
 		"server:box model:opus agent:build": {"opencode:box:ses_opus"},
 		"server:other":                      {},
 	} {
-		search, err := s.SearchSessions(ctx, query, SearchFields, noSlackLookups{})
+		search, err := s.SearchSessions(ctx, "", query, SearchFields, noSlackLookups{})
 		require.NoError(t, err)
 
 		ids := make([]string, 0, len(search.Matches))

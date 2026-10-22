@@ -23,10 +23,7 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 
 	switch {
 	case request.State != nil:
-		var state []byte
-		if state, err = proto.Marshal(request.State); err == nil {
-			saved, err = s.sessions.SaveTabState(ctx, username, state, request.Revision)
-		}
+		saved, err = s.sessions.SaveTabState(ctx, username, savedTabState(request.State), request.Revision)
 	case request.CreateSpace != "":
 		err = s.sessions.CreateSpace(ctx, request.CreateSpace)
 	case request.RenameSpace != nil:
@@ -42,7 +39,7 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 	// A save answers with the state it saved; anything else, a refused save included, reads it.
 	var (
 		spaces   []backend.Space
-		state    []byte
+		state    backend.TabState
 		response = &TabsResponse{Stale: request.State != nil && !saved}
 	)
 
@@ -55,13 +52,15 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 	}
 
 	if err == nil && !saved {
-		response.State = &TabState{}
 		state, response.Revision, err = s.sessions.TabState(ctx, username)
-		// Unreadable saved tabs read as none; the next save, made from this revision, replaces them.
-		if errUnmarshal := proto.Unmarshal(state, response.State); err == nil && errUnmarshal != nil {
-			slog.Warn("read saved web tabs", "username", username, "error", errUnmarshal)
+		response.State = &TabState{Space: state.Space, Last: state.Last, Placement: TabPlacement(TabPlacement_value[state.Placement])}
 
-			response.State = &TabState{}
+		for _, tab := range state.Tabs {
+			response.State.Tabs = append(response.State.Tabs, &Tab{Path: tab.Path, Pinned: tab.Pinned, Preview: tab.Preview, Group: tab.Group, Space: tab.Space})
+		}
+
+		for _, group := range state.Groups {
+			response.State.Groups = append(response.State.Groups, &TabGroup{Id: group.ID, Name: group.Name, Color: group.Color, Collapsed: group.Collapsed})
 		}
 	}
 
@@ -74,4 +73,46 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 	}
 
 	return response, nil
+}
+
+// savedTabState is state as the backend saves it.
+func savedTabState(state *TabState) *backend.TabState {
+	saved := &backend.TabState{Space: state.Space, Last: state.Last, Placement: state.Placement.String()}
+	for _, tab := range state.Tabs {
+		saved.Tabs = append(saved.Tabs, backend.Tab{Path: tab.Path, Pinned: tab.Pinned, Preview: tab.Preview, Group: tab.Group, Space: tab.Space})
+	}
+
+	for _, group := range state.Groups {
+		saved.Groups = append(saved.Groups, backend.TabGroup{ID: group.Id, Name: group.Name, Color: group.Color, Collapsed: group.Collapsed})
+	}
+
+	return saved
+}
+
+// ConvertTabStates moves tab states saved as one protobuf blob into rows, each as one more save;
+// an unreadable blob becomes no tabs. It runs before Web serves, and a rerun finds nothing to convert.
+func ConvertTabStates(ctx context.Context, sessions *backend.SessionService) error {
+	legacy, err := sessions.LegacyTabStates(ctx)
+	if err != nil {
+		return fmt.Errorf("convert saved web tabs: %w", err)
+	}
+
+	for username, data := range legacy {
+		state := &TabState{}
+		if err := proto.Unmarshal(data, state); err != nil {
+			slog.Warn("read saved web tabs", "username", username, "error", err)
+			proto.Reset(state)
+		}
+
+		_, revision, err := sessions.TabState(ctx, username)
+		if err == nil {
+			_, err = sessions.SaveTabState(ctx, username, savedTabState(state), revision)
+		}
+
+		if err != nil {
+			return fmt.Errorf("convert saved web tabs: %w", err)
+		}
+	}
+
+	return nil
 }

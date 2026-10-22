@@ -439,16 +439,16 @@ active tab.
   New session alone does not close. Closing with the × button or the menu moves
   keyboard focus to the selected tab.
 - **Notifications.** When an open session tab, RocketClaw or remote OpenCode,
-  finishes answering, the browser shows a desktop notification with the start
-  of its reply. A RocketClaw session's notification is titled by its name, or
-  its agent when it has none; an OpenCode session's by its tab title. Clicking
-  the notification opens the tab. The tab in view (the active tab while the
-  window has focus) does not notify, though another RocketClaw window with the
-  same tab open still does. Notifications are on by default: the first click or
+  becomes unread for you (see Unread below), the browser shows a desktop
+  notification with the start of its reply. Other people's turns never notify
+  you. A RocketClaw session's notification is titled by its name, or its agent
+  when it has none; an OpenCode session's by its tab title. Clicking the
+  notification opens the tab. The tab in view (the active tab while the window
+  has focus) does not notify. Notifications are on by default: the first click or
   key press asks for the browser's permission, the earliest a browser allows;
-  turn them off in the browser's site settings. A finished turn is noticed on the session list's
-  poll, so a reply shorter than one poll may not notify, and a hidden window may
-  notify late.
+  turn them off in the browser's site settings. A new mark is noticed on the
+  session list's poll, so a hidden window may notify late; a page load never
+  notifies for sessions that were already unread.
 - **Reordering.** Drag a tab onto another. With a tab focused, Shift+Arrow moves it.
   A moved tab joins the group of the tab it lands on, or leaves its group when it
   lands on an ungrouped tab.
@@ -521,6 +521,17 @@ active tab.
   hourglass: a running Background Job, its own or that of a hidden run reporting to it, or a
   remote OpenCode session's running child session (a background subagent) or shell command.
   A running turn keeps the chat icon. Screen readers hear “Background work running”.
+- **Unread** sessions show a bold title and a thin bar along the tab's top edge;
+  a pinned top-strip tab shows the bar. A session becomes unread for you when a
+  turn ends, finished, failed, or stopped, that holds a message you sent from the
+  Web, unless you had its tab in view in the last 10 seconds. Other people's
+  turns, Slack mentions, crons, an agent waking on its own, and remote OpenCode
+  turns with no recorded sender (`/command`, shell runs, prompts typed in
+  OpenCode's own app outside RocketClaw) mark no one. Having the tab active in a
+  focused window clears the mark on all your devices; the server keeps it on your
+  tab for the session, even while that tab is closed, so it waits for you after a
+  reload or on another device. Screen readers hear
+  “Unread” in the tab's description.
 - **Keyboard.** The strip is a `tablist` with one Tab stop. Arrow keys (Left/Right
   or Up/Down), Home, and End move focus; Enter or Space activates. Anywhere in
   the app, Cmd/Ctrl+[ and Cmd/Ctrl+] activate the previous and next tab, wrapping
@@ -540,9 +551,12 @@ active tab.
   one save at a time. A save made from tabs older than another window's save is
   refused; the window then merges in that newer save, keeping what it opened,
   closed, or changed itself, and saves again, so neither window's changes are
-  lost. Saved tabs that can no longer be read count as none and are replaced by
-  the next save. Groups with no tabs are dropped, tabs whose space is gone join
-  the first space keeping their group, and tabs whose group is gone leave it. A
+  lost. The server keeps one row per tab and per group. A session's tab is saved
+  only while the session exists, and deleting a session removes its tab for
+  everyone. Tabs saved by older servers as one blob are unpacked once at startup;
+  ones that can no longer be read count as none. Groups with no tabs are dropped,
+  tabs whose space is gone join the first space keeping their group, and tabs
+  whose group is gone leave it. A
   window reloads them when it becomes visible or regains focus: it takes in
   changes made elsewhere, merged with its own unsaved ones, but stays on its own
   tab, unless that tab was closed elsewhere. The address is the active tab, so a
@@ -683,7 +697,7 @@ once, pinned first, retaining recent-first order within each group.
 `sort:newest` or `sort:oldest` instead orders results by last activity on every
 search surface, overriding pinned-first and message-hit grouping; rows without
 activity come last, equal times order by conversation ID, and the last `sort:` wins.
-Typing `is:` suggests `pinned`, `forked`, and `cron`; typing `sort:` suggests
+Typing `is:` suggests `pinned`, `forked`, `cron`, and `unread` (your unread sessions, closed tabs included); typing `sort:` suggests
 `newest` and `oldest`. While typing, a last word that is an unfinished filter
 (a bare `tag:`, `cron:`, `agent:`, `principal:`, `room:`, `server:`, or `model:`, a partial `is:` or `sort:` term
 such as `is:pin`, or an unclosed quote) is not sent; Enter, opening a saved

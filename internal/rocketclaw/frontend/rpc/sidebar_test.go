@@ -63,7 +63,7 @@ func TestSidebarReusesAgentChoices(t *testing.T) {
 
 		rows := 0
 
-		require.NoError(t, server.listSessions(&mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
+		require.NoError(t, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
 			for _, session := range message.(*ListSessionsResponse).Sessions {
 				require.Len(t, session.AllowedAgents, count)
 
@@ -96,7 +96,7 @@ func TestSidebarReusesAgentChoices(t *testing.T) {
 func BenchmarkSidebarAgentChoices(b *testing.B) {
 	server, ctx := sidebarChoicesFixture(b, 64)
 	for b.Loop() {
-		require.NoError(b, server.listSessions(&mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(any) error { return nil }}))
+		require.NoError(b, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(any) error { return nil }}))
 	}
 }
 

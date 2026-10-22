@@ -1,11 +1,15 @@
 package rpc
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
+	"path"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"google.golang.org/grpc/codes"
@@ -27,6 +31,30 @@ func NewOpenCodeRelay(server config.OpenCodeConfig) http.Handler {
 			if r.In.Header.Get("Origin") != "" {
 				r.Out.Header.Set("Origin", upstream.Scheme+"://"+upstream.Host)
 			}
+
+			if prompt, _ := path.Match("/api/session/*/prompt", r.In.URL.Path); !prompt || r.In.Method != http.MethodPost || r.Out.Body == nil {
+				return
+			}
+
+			// OpenCode stores a prompt's metadata on its user message; the sender rides there.
+			// A failed read forwards what arrived, which OpenCode rejects as malformed.
+			raw, _ := io.ReadAll(r.Out.Body)
+
+			var body, stamped map[string]json.RawMessage
+			if json.Unmarshal(raw, &body) == nil && body != nil {
+				_ = json.Unmarshal(body["metadata"], &stamped)
+				if stamped == nil {
+					stamped = map[string]json.RawMessage{}
+				}
+
+				md, _ := metadata.FromOutgoingContext(r.In.Context())
+				stamped["rocketclaw_username"], _ = json.Marshal(md.Get("rocketclaw-tailnet-login-bin")[0])
+				body["metadata"], _ = json.Marshal(stamped)
+				raw, _ = json.Marshal(body)
+			}
+
+			r.Out.Body = io.NopCloser(bytes.NewReader(raw))
+			r.Out.ContentLength = int64(len(raw))
 		},
 		FlushInterval: -1,
 	}
@@ -58,11 +86,13 @@ func (s *Server) AdmitHTTP(next http.Handler) http.Handler {
 			return
 		}
 
-		if _, _, err := s.principal(metadata.NewIncomingContext(r.Context(), metadata.Pairs("rocketclaw-principal", address.Addr().Unmap().String()))); err != nil {
+		username, _, err := s.principal(metadata.NewIncomingContext(r.Context(), metadata.Pairs("rocketclaw-principal", address.Addr().Unmap().String())))
+		if err != nil {
 			httpRPCError(w, err)
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		// The relay reads the sender where NewTailnetHandler leaves the tailnet login.
+		next.ServeHTTP(w, r.WithContext(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-tailnet-login-bin", username)))
 	})
 }

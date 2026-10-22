@@ -114,7 +114,7 @@ function slackRooms(sessions: { id: string; title?: string; kind?: ConversationK
 function typingWord(query: string) {
   const word = /(?:^|\s)((?:tag|cron|agent|room|principal|server|model):"(?:[^"\\]|\\.)*\\?|\S*)$/i.exec(query)![1];
   const lower = word.toLowerCase();
-  return { word, unfinished: /^(?:tag|cron|agent|room|principal|server|model):(?:"(?:[^"\\]|\\.)*\\?)?$/.test(lower) || /^(?:is|sort):/.test(lower) && ["is:pinned", "is:forked", "is:cron", "sort:newest", "sort:oldest"].some((keyword) => keyword !== lower && keyword.startsWith(lower)) };
+  return { word, unfinished: /^(?:tag|cron|agent|room|principal|server|model):(?:"(?:[^"\\]|\\.)*\\?)?$/.test(lower) || /^(?:is|sort):/.test(lower) && ["is:pinned", "is:forked", "is:cron", "is:unread", "sort:newest", "sort:oldest"].some((keyword) => keyword !== lower && keyword.startsWith(lower)) };
 }
 
 function termValue(value: string) {
@@ -644,7 +644,8 @@ function SidebarOwner({ children }: { children: ReactNode }) {
       setView((current) => ({ ...current, refreshing: true, enumerationComplete: false }));
       const snapshotGeneration = await loadSnapshotGeneration(currentOwner, currentProtocol).catch(() => undefined);
       if (ac.signal.aborted || captured !== gen.current) return;
-      readSessionEnumeration(currentOwner, Promise.resolve(listSessions(ac.signal)), () => rowsRef.current, (merged) => {
+      const viewing = document.hasFocus() ? pathSession(location.pathname) : "";
+      readSessionEnumeration(currentOwner, Promise.resolve(listSessions(ac.signal, `/api/ListSessions?${new URLSearchParams({ viewing })}`)), () => rowsRef.current, (merged) => {
         if (ac.signal.aborted || captured !== gen.current) {
           return;
         }
@@ -694,7 +695,7 @@ function SidebarOwner({ children }: { children: ReactNode }) {
     return () => channel.close();
   }, [owner, protocol.data, forgetHistory]);
   const visible = owner !== undefined && ownerRef.current === owner && protocolRef.current === protocol.data;
-  const value = useMemo(() => ({ ...view, rows: visible ? view.rows : [], invalidateQueries: bump }), [view, visible, bump]);
+  const value = useMemo(() => ({ ...view, rows: visible ? view.rows : [], enumerationComplete: visible && view.enumerationComplete, invalidateQueries: bump }), [view, visible, bump]);
   return (
     <SidebarInvalidation.Provider value={bump}>
       <Sidebar.Provider value={value}>{children}</Sidebar.Provider>
@@ -1168,21 +1169,25 @@ function TabPlacement() {
   return null;
 }
 
-// An open session tab whose turn ends raises a desktop notification that opens it, unless it is the tab in view.
+// An open session tab whose unread mark moves past the one this window last saw raises a desktop notification that
+// opens it, unless it is the tab in view. Marks come only from this person's own turns, so other people's stay quiet.
+// The first complete live list after a page load or owner change only records the marks; restored rows never count.
 // It is titled by the session's name, else its agent, or a remote OpenCode session by its tab title, and shows
 // the start of the reply: a RocketClaw row's preview is its last message, an OpenCode row's reply its last answer.
-// ponytail: rows refresh on the sidebar poll, so a turn shorter than a poll goes unseen and a hidden window's
-// throttled timers can delay the notification; server push would fix both. Every window that saw the turn notifies
-// under the session's tag, so the system shows one notification, even while another window has the tab in view.
+// ponytail: rows refresh on the sidebar poll, so a hidden window's throttled timers can delay the notification;
+// server push would fix it. Every window that saw the mark notifies under the session's tag, so the system shows
+// one notification, even while another window has the tab in view.
 function TabNotifications() {
-  const { rows } = useContext(Sidebar), { state } = useContext(TabActions);
-  const running = useRef(new Set<string>());
+  const { rows, enumerationComplete } = useContext(Sidebar), { state } = useContext(TabActions);
+  const owner = useQuery(queries.identity()).data?.username;
+  const seen = useRef<{ owner?: string; unread?: Map<string, string> }>({});
   useEffect(() => {
-    const ran = running.current;
-    running.current = new Set(rows.flatMap((row) => row.running ? [row.id] : []));
-    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    if (!enumerationComplete) return;
+    const last = seen.current.owner === owner ? seen.current.unread : undefined;
+    seen.current = { owner, unread: new Map(rows.map((row) => [row.id, row.unreadAt ?? ""])) };
+    if (!last || !("Notification" in window) || Notification.permission !== "granted") return;
     for (const row of rows) {
-      if (row.running || !ran.has(row.id)) continue;
+      if (!row.unreadAt || row.unreadAt === last.get(row.id)) continue;
       const path = rowPath(row);
       if (!state.tabs.some((tab) => tab.path === path) || (document.hasFocus() && state.active === path)) continue;
       // A notification replacing one with its tag alerts again in Chromium only with renotify, which TypeScript's DOM types omit.
@@ -1194,7 +1199,7 @@ function TabNotifications() {
       try { notification = new Notification(cleanText(title, {}), options); } catch { return; }
       notification.onclick = () => { focus(); navigate(path); notification.close(); };
     }
-  }, [rows, state.tabs, state.active]);
+  }, [rows, enumerationComplete, owner, state.tabs, state.active]);
   // Notifications are on by default: the browser asks for its permission on the first click or key press, the
   // earliest a browser lets a page ask.
   useEffect(() => {
@@ -1354,8 +1359,8 @@ function SpaceMenu({ tabs: { state, pending, enter, addSpace, renameSpace, delet
 
 // A running turn wins over background work, which can wake the session after its turn.
 function tabActivity(session: Session) {
-  if (session.running) return ["Turn running", MessageSquare] as const;
-  return session.background ? ["Background work running", Hourglass] as const : ["", MessageSquare] as const;
+  const [activity, Icon] = session.running ? ["Turn running", MessageSquare] as const : session.background ? ["Background work running", Hourglass] as const : ["", MessageSquare] as const;
+  return [[activity, session.unreadAt && "Unread"].filter(Boolean).join(", "), Icon] as const;
 }
 
 function TabItem({ tab, description, rule, active, vertical, editing, endEdit, promote, close, openMenu }: { tab: Tab; description?: string; rule?: ReactNode; active: boolean; vertical: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: Element) => void }) {
@@ -1367,13 +1372,14 @@ function TabItem({ tab, description, rule, active, vertical, editing, endEdit, p
   const title = useCleanText(label);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
-  return <div data-tab={tab.path} data-running={session.running} draggable={!editing} className={cn("group relative flex shrink-0 items-center", vertical ? "rounded-md" : "border-r", active ? "bg-sidebar-row-active" : "hover:bg-accent")}>
+  return <div data-tab={tab.path} data-running={session.running} data-unread={!!session.unreadAt} draggable={!editing} className={cn("group relative flex shrink-0 items-center", vertical ? "rounded-md" : "border-r", active ? "bg-sidebar-row-active" : "hover:bg-accent")}>
     {rule}
+    <span className="pointer-events-none absolute inset-x-0 top-0 hidden h-0.5 bg-primary group-data-[unread=true]:block" />
     <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className={cn("flex min-w-0", vertical ? "flex-1" : "max-w-80")} />}>
       <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={activity ? [description, activity].filter(Boolean).join(", ") : description} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
         onClick={() => { if (!active) navigate(tab.path); }} onDoubleClick={promote}>
         <Icon aria-hidden="true" className="size-4 shrink-0 group-data-[running=true]:only:motion-safe:shimmer-icon group-data-[running=true]:only:motion-reduce:shimmer-icon-still" />
-        {editing ? <TabRename session={session} placeholder={title} endEdit={endEdit} /> : tab.pinned && !vertical ? null : <span className="truncate motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>}
+        {editing ? <TabRename session={session} placeholder={title} endEdit={endEdit} /> : tab.pinned && !vertical ? null : <span className="truncate group-data-[unread=true]:font-bold motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>}
       </div>
     </TooltipTrigger><TooltipContent side="bottom">{title}</TooltipContent></Tooltip>
     {active ? <button type="button" aria-label="Tab actions" className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground last:mr-1 hover:bg-accent hover:text-foreground" onClick={(event) => openMenu(event.currentTarget)}><Ellipsis className="size-3.5" /></button> : null}
@@ -2405,7 +2411,7 @@ function searchChoices(word: string, rows: Session[], catalog: Agent[], principa
   const key = typed?.[1].toLowerCase() ?? "", needle = typed?.[2].toLowerCase() ?? "";
   const remote = (field: "server" | "agent" | "model") => [...new Set(rows.flatMap((row) => row.server && row[field] ? [row[field]!] : []))];
   const names = key === "principal" ? principals : key === "room" ? slackRooms(rows) : key === "cron" ? [...new Set(rows.flatMap((row) => row.cronName ? [row.cronName] : []))] : key === "tag" ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : key === "sort" ? ["newest", "oldest"]
-    : key === "server" ? remote("server") : key === "model" ? [...new Set([...catalog.flatMap(({ model }) => model ? [model] : []), ...remote("model")])] : ["pinned", "forked", "cron"];
+    : key === "server" ? remote("server") : key === "model" ? [...new Set([...catalog.flatMap(({ model }) => model ? [model] : []), ...remote("model")])] : ["pinned", "forked", "cron", "unread"];
   const agents = [...catalog.map(({ name, model, reasoning }) => ({ key: name, detail: [model, reasoning].filter(Boolean).join(" · ") })), ...remote("agent").filter((name) => !catalog.some((agent) => agent.name === name)).map((name) => ({ key: name, detail: "OpenCode" }))];
   const offered = !key ? [] : (key === "agent" ? agents : names.map((name) => ({ key: name, detail: "" }))).filter((item) => item.key.toLowerCase().includes(needle));
   return { key, choices: offered.some((item) => item.key.toLowerCase() === needle) ? [] : offered };

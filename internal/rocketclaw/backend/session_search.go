@@ -102,7 +102,7 @@ type SessionSearch struct {
 }
 
 // parseSessionQuery reads query as Web's search regex
-// /(?:^|\s)(is:(?:pinned|forked|cron)|sort:(?:newest|oldest)|(?:tag|cron|agent|room|principal|server|model):("(?:[^"\\]|\\.)*"|\S+))(?=\s|$)/gi
+// /(?:^|\s)(is:(?:pinned|forked|cron|unread)|sort:(?:newest|oldest)|(?:tag|cron|agent|room|principal|server|model):("(?:[^"\\]|\\.)*"|\S+))(?=\s|$)/gi
 // did, decoding quoted values as JSON; a value that is empty or does not decode
 // leaves its term as text. text is query without each term and the one
 // whitespace character before it, trimmed.
@@ -131,7 +131,7 @@ func parseSessionQuery(query string) (terms []SearchTerm, text string) {
 
 		switch term.Key {
 		case keyIs:
-			found = found && (term.Value == "pinned" || term.Value == "forked" || term.Value == "cron")
+			found = found && (term.Value == "pinned" || term.Value == "forked" || term.Value == "cron" || term.Value == "unread")
 		case keySort:
 			found = found && (term.Value == "newest" || term.Value == "oldest")
 		case keyTag, keyCron, keyAgent, keyRoom, keyPrincipal, keyServer, keyModel:
@@ -190,12 +190,12 @@ func parseSessionQuery(query string) (terms []SearchTerm, text string) {
 }
 
 // SidebarChats yields the sidebar's chats, or only those of chats when not nil, with their room,
-// resolved through slack once per channel, cron and origin.
-func (s *SessionService) SidebarChats(ctx context.Context, slack slackLookup, chats []string) iter.Seq2[SidebarChat, error] {
+// resolved through slack once per channel, cron, origin and username's unread marks.
+func (s *SessionService) SidebarChats(ctx context.Context, username string, slack slackLookup, chats []string) iter.Seq2[SidebarChat, error] {
 	return func(yield func(SidebarChat, error) bool) {
 		rooms := make(map[string]SidebarChat)
 
-		for row, err := range s.sidebarSessions(ctx, chats) {
+		for row, err := range s.sidebarSessions(ctx, username, chats) {
 			var chat SidebarChat
 			if err == nil {
 				chat, err = sidebarChat(ctx, slack, rooms, &row)
@@ -321,7 +321,8 @@ func (c *SidebarChat) passes(terms []SearchTerm, principals []string) bool {
 			hasRoom, roomMatch = true, roomMatch || c.Room == term.Value
 			continue
 		case keyIs:
-			ok = term.Value == "pinned" && c.Session.Pinned || term.Value == "forked" && c.Session.ForkedFrom != "" || term.Value == "cron" && c.Cron
+			ok = term.Value == "pinned" && c.Session.Pinned || term.Value == "forked" && c.Session.ForkedFrom != "" || term.Value == "cron" && c.Cron ||
+				term.Value == "unread" && !c.Session.UnreadAt.IsZero()
 		case keySort:
 			ok = true
 		}
@@ -347,8 +348,9 @@ func (row *SidebarSession) Label() string {
 // SidebarChats, those passing the filters whose scope's text holds the needle;
 // SearchMessages also finds those with message hits. Without a sort: term they keep
 // sidebar order, chats with hits first; with one, they follow summary time.
-// Either way, chats whose whole model is a model: value come first.
-func (s *SessionService) SearchSessions(ctx context.Context, query string, scope SearchScope, slack slackLookup) (*SessionSearch, error) {
+// Either way, chats whose whole model is a model: value come first. Rows carry username's
+// unread marks; an empty username is no person.
+func (s *SessionService) SearchSessions(ctx context.Context, username, query string, scope SearchScope, slack slackLookup) (*SessionSearch, error) {
 	search := &SessionSearch{}
 	search.Terms, search.Text = parseSessionQuery(query)
 	search.Needle = strings.ToLower(search.Text)
@@ -387,7 +389,7 @@ func (s *SessionService) SearchSessions(ctx context.Context, query string, scope
 		})
 	} else {
 		group.Go(func() (err error) {
-			rows, err = s.sidebarRows(groupCtx, nil)
+			rows, err = s.sidebarRows(groupCtx, username, nil)
 			return err
 		})
 	}
@@ -398,7 +400,7 @@ func (s *SessionService) SearchSessions(ctx context.Context, query string, scope
 
 	if narrow {
 		var err error
-		if rows, err = s.sidebarRows(ctx, readChats(chats, found)); err != nil {
+		if rows, err = s.sidebarRows(ctx, username, readChats(chats, found)); err != nil {
 			return nil, err
 		}
 	}
@@ -504,11 +506,10 @@ func readChats(candidates []string, hits []MessageSearchHit) []string {
 	return candidates
 }
 
-// sidebarRows collects sidebarSessions of chats.
-func (s *SessionService) sidebarRows(ctx context.Context, chats []string) ([]SidebarSession, error) {
+func (s *SessionService) sidebarRows(ctx context.Context, username string, chats []string) ([]SidebarSession, error) {
 	var rows []SidebarSession
 
-	for row, err := range s.sidebarSessions(ctx, chats) {
+	for row, err := range s.sidebarSessions(ctx, username, chats) {
 		if err != nil {
 			return nil, err
 		}

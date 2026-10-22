@@ -240,7 +240,9 @@ func (TabPlacement) EnumDescriptor() ([]byte, []int) {
 }
 
 type ListSessionsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The session of the caller's active tab while its window has focus, else empty.
+	Viewing       string `protobuf:"bytes,1,opt,name=viewing,proto3" json:"viewing,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -273,6 +275,13 @@ func (x *ListSessionsRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ListSessionsRequest.ProtoReflect.Descriptor instead.
 func (*ListSessionsRequest) Descriptor() ([]byte, []int) {
 	return file_web_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *ListSessionsRequest) GetViewing() string {
+	if x != nil {
+		return x.Viewing
+	}
+	return ""
 }
 
 type Session struct {
@@ -308,7 +317,9 @@ type Session struct {
 	// A remote OpenCode session's own ID on its server.
 	RemoteSessionId string `protobuf:"bytes,25,opt,name=remote_session_id,json=remoteSessionId,proto3" json:"remote_session_id,omitempty"`
 	// What the session is called when it has no name or preview.
-	Label         string `protobuf:"bytes,26,opt,name=label,proto3" json:"label,omitempty"`
+	Label string `protobuf:"bytes,26,opt,name=label,proto3" json:"label,omitempty"`
+	// When a turn the caller sent into ended unseen, RFC3339Nano; empty once read.
+	UnreadAt      string `protobuf:"bytes,27,opt,name=unread_at,json=unreadAt,proto3" json:"unread_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -500,6 +511,13 @@ func (x *Session) GetRemoteSessionId() string {
 func (x *Session) GetLabel() string {
 	if x != nil {
 		return x.Label
+	}
+	return ""
+}
+
+func (x *Session) GetUnreadAt() string {
+	if x != nil {
+		return x.UnreadAt
 	}
 	return ""
 }
@@ -6629,8 +6647,9 @@ var File_web_proto protoreflect.FileDescriptor
 
 const file_web_proto_rawDesc = "" +
 	"\n" +
-	"\tweb.proto\x12\x03rpc\"\x15\n" +
-	"\x13ListSessionsRequest\"\x87\x05\n" +
+	"\tweb.proto\x12\x03rpc\"/\n" +
+	"\x13ListSessionsRequest\x12\x18\n" +
+	"\aviewing\x18\x01 \x01(\tR\aviewing\"\xa4\x05\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
@@ -6659,7 +6678,8 @@ const file_web_proto_rawDesc = "" +
 	"\x05model\x18\x17 \x01(\tR\x05model\x12)\n" +
 	"\x04kind\x18\x18 \x01(\x0e2\x15.rpc.ConversationKindR\x04kind\x12*\n" +
 	"\x11remote_session_id\x18\x19 \x01(\tR\x0fremoteSessionId\x12\x14\n" +
-	"\x05label\x18\x1a \x01(\tR\x05labelJ\x04\b\x06\x10\aJ\x04\b\v\x10\fJ\x04\b\f\x10\r\"\xba\x01\n" +
+	"\x05label\x18\x1a \x01(\tR\x05label\x12\x1b\n" +
+	"\tunread_at\x18\x1b \x01(\tR\bunreadAtJ\x04\b\x06\x10\aJ\x04\b\v\x10\fJ\x04\b\f\x10\r\"\xba\x01\n" +
 	"\x0eHistoryRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x124\n" +
 	"\x16source_conversation_id\x18\x02 \x01(\tR\x14sourceConversationId\x12\x1a\n" +
