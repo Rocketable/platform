@@ -23,19 +23,29 @@ import (
 
 func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if user, password, ok := r.BasicAuth(); !ok || user != "opencode" || password != "pw" || r.URL.Path != "/api/session" {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
+		user, password, ok := r.BasicAuth()
 
-		_, _ = w.Write([]byte(`{"data":{"id":"ses_new","title":"","time":{"updated":5000},"location":{"directory":"/srv/app"}}}`))
+		switch {
+		case !ok || user != "opencode" || password != "pw":
+			w.WriteHeader(http.StatusUnauthorized)
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/session/ses_new":
+			w.WriteHeader(http.StatusNoContent)
+		case r.URL.Path == "/api/session":
+			_, _ = w.Write([]byte(`{"data":{"id":"ses_new","title":"","time":{"updated":5000},"location":{"directory":"/srv/app"}}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}))
 	t.Cleanup(upstream.Close)
 
 	down := httptest.NewServer(http.NotFoundHandler())
 	down.Close()
 
-	servers := map[string]config.OpenCodeConfig{"box": {URL: upstream.URL, Password: "pw", Port: 4100}, "down": {URL: down.URL, Password: "pw", Port: 4101}}
+	servers := map[string]config.OpenCodeConfig{
+		"box":   {URL: upstream.URL, Password: "pw"},
+		"down":  {URL: down.URL, Password: "pw"},
+		"creds": {URL: "https://user:secret@box.example:4096/x?auth_token=t", Password: "pw"},
+	}
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenCode: servers}, slog.New(slog.DiscardHandler))
@@ -72,6 +82,9 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	_, err = server.updateSession(ctx, &UpdateSessionRequest{Id: created.Id, Tag: new(" ")})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "a blank tag")
 
+	_, err = server.updateSession(ctx, &UpdateSessionRequest{Id: created.Id, Name: new(" Renamed ")})
+	require.NoError(t, err, "a remote session is renamed on its server")
+
 	require.NoError(t, sessions.UpsertThread("web", backend.ThreadState{Agent: "main"}))
 
 	_, err = server.updateSession(ctx, &UpdateSessionRequest{Id: "web", Tag: new("customer")})
@@ -106,11 +119,13 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	assert.Equal(t, "box", rows[0].GetServer())
 	assert.Equal(t, "/srv/app", rows[0].GetDirectory())
 	assert.Equal(t, []string{"billing"}, rows[0].GetTags())
+	assert.Equal(t, "Renamed", rows[0].GetPreview(), "a remote row carries its title as its preview")
+	assert.Equal(t, "Renamed", rows[0].GetName(), "the name is the server title")
 	assert.False(t, rows[0].GetOffline())
 	assert.Equal(t, "2026-10-22T10:00:00Z", rows[0].GetUnreadAt(), "a remote session carries the caller's mark")
 	assert.True(t, proto.Equal(&ListSessionsResponse{
 		Owner: "alice", UpstreamSuccess: true, Version: done.GetVersion(), Order: []string{created.Id},
-		OpencodeServers: map[string]int32{"box": 4100, "down": 4101},
+		OpencodeServers: map[string]string{"box": upstream.URL, "down": down.URL, "creds": "https://box.example:4096"},
 		AgentTags:       map[string]*TagChoices{"main": {Tags: []string{"customer", "internal"}}},
 	}, done), "%v", done)
 }

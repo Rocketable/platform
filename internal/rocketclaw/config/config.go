@@ -96,9 +96,13 @@ func (c *Config) RuntimeDirName() string {
 
 // WebConfig controls the Web listener and conversation presentation.
 type WebConfig struct {
-	ListenAddress string       `json:"listen_address,omitempty"`
-	Sentry        SentryConfig `json:"sentry,omitzero"`
-	Tsnet         *TsnetConfig `json:"tsnet,omitempty"`
+	ListenAddress string `json:"listen_address,omitempty"`
+	// TLSCertFile and TLSKeyFile are the PEM certificate and key the listen_address listener serves
+	// HTTPS with. Without them it serves a self-signed certificate made at each start.
+	TLSCertFile string       `json:"tls_cert_file,omitempty"`
+	TLSKeyFile  string       `json:"tls_key_file,omitempty"`
+	Sentry      SentryConfig `json:"sentry,omitzero"`
+	Tsnet       *TsnetConfig `json:"tsnet,omitempty"`
 }
 
 // TsnetConfig runs an embedded Tailscale node serving the Web over tailnet HTTPS.
@@ -117,6 +121,14 @@ type SentryConfig struct {
 	DSN              string   `json:"dsn,omitempty"`
 	Environment      string   `json:"environment,omitempty"`
 	TracesSampleRate *float64 `json:"traces_sample_rate,omitempty"`
+}
+
+func (c *WebConfig) validate() error {
+	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
+		return errors.New("web.tls_cert_file and web.tls_key_file must be set together")
+	}
+
+	return c.Sentry.validate()
 }
 
 func (c SentryConfig) validate() error {
@@ -159,11 +171,10 @@ type MCPServerConfig struct {
 	Headers map[string]string `json:"headers,omitempty"`
 }
 
-// OpenCodeConfig names one remote OpenCode server the Web lists and relays on Port.
+// OpenCodeConfig names one remote OpenCode server the Web lists and proxies under /oc/{name}/.
 type OpenCodeConfig struct {
 	URL      string `json:"url"`
 	Password string `json:"password"`
-	Port     int    `json:"port"`
 }
 
 // MCP server names follow the same character rules as MCP tool names in the
@@ -354,7 +365,7 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	if err := c.Web.Sentry.validate(); err != nil {
+	if err := c.Web.validate(); err != nil {
 		return err
 	}
 
@@ -609,7 +620,6 @@ func (c *Config) validateMCPServers() error {
 	return nil
 }
 
-// validateOpenCode leaves port clashes to the relay listeners, which fail startup on bind.
 func (c *Config) validateOpenCode() error {
 	for _, name := range slices.Sorted(maps.Keys(c.OpenCode)) {
 		server := c.OpenCode[name]
@@ -623,8 +633,6 @@ func (c *Config) validateOpenCode() error {
 			return fmt.Errorf("opencode[%q]: url must be an http or https URL", name)
 		case server.Password == "":
 			return fmt.Errorf("opencode[%q]: password is required", name)
-		case server.Port < 1 || server.Port > 65535:
-			return fmt.Errorf("opencode[%q]: port must be between 1 and 65535", name)
 		}
 	}
 

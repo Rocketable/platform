@@ -1,0 +1,1 @@
+var e=`/oc-ui/_assets/alert-02-CS75AsoP.aac`;export{e as default};

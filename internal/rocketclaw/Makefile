@@ -15,7 +15,10 @@ vendor: .FORCE
 web-assets: .FORCE
 	cd web && bun install --frozen-lockfile && bun run build
 
-generate: web-assets vendor
+oc-assets: .FORCE
+	cd oc && bun install --frozen-lockfile && $(MAKE) build
+
+generate: web-assets oc-assets vendor
 	go generate ./skel ../../cmd/rocketclaw
 
 lint: web-assets vendor

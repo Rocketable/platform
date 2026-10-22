@@ -240,7 +240,7 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	server := httptest.NewServer(fake)
 	t.Cleanup(server.Close)
 
-	box := config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100}
+	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
 
 	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
 		cfg.OpenCode["box"] = box
@@ -319,7 +319,7 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 
 	// Pins still work while OpenCode refuses writes, but a refused rename saves nothing locally.
 	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
-		cfg.OpenCode["box"] = config.OpenCodeConfig{URL: server.URL, Password: "wrong", Port: 4100}
+		cfg.OpenCode["box"] = config.OpenCodeConfig{URL: server.URL, Password: "wrong"}
 		return nil
 	}))
 	updated, err = s.UpdateConversationDetails(ctx, "opencode:box:ses_c", new(false), nil)
@@ -389,7 +389,7 @@ func TestOpenCodeRenamesKeepRemoteAndLocalOrder(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
-		cfg.OpenCode["box"] = config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100}
+		cfg.OpenCode["box"] = config.OpenCodeConfig{URL: server.URL, Password: "pw"}
 		return nil
 	}))
 	_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, remote_session, title, directory, last_updated, running, synced_at) VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', 'ses_a', 'original', '/srv', now(), FALSE, now())`)
@@ -458,7 +458,7 @@ func TestOpenCodeRenameSurvivesEarlierPoll(t *testing.T) {
 				fake.ServeHTTP(w, r)
 			}))
 			t.Cleanup(server.Close)
-			box := config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100}
+			box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
 
 			require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
 				cfg.OpenCode["box"] = box
@@ -503,7 +503,7 @@ func TestSyncOpenCodeMarksBackgroundWork(t *testing.T) {
 	server := httptest.NewServer(fake)
 	t.Cleanup(server.Close)
 
-	box := config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100}
+	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{running: map[string]string{"sh_1": "ses_c_grandchild"}}))
 
 	rows := remoteSidebar(t, s)
@@ -525,7 +525,7 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	server := httptest.NewServer(fake)
 	t.Cleanup(server.Close)
 
-	box := config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100}
+	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
 	id, err := s.CreateOpenCodeSession(ctx, "box", box, "/srv/app")
 	require.NoError(t, err)
 
@@ -648,7 +648,7 @@ func TestOpenCodeShellsFollowEvents(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- shells.follow(ctx, "box", config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100})
+		done <- shells.follow(ctx, "box", config.OpenCodeConfig{URL: server.URL, Password: "pw"})
 	}()
 
 	running := func(want map[string]string) func() bool {
@@ -687,7 +687,7 @@ func TestSyncOpenCodeKeepsRowsOutsideTheWindow(t *testing.T) {
 	server := httptest.NewServer(fake)
 	t.Cleanup(server.Close)
 
-	box := config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100}
+	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 
 	// The newest 100 form a full window: the oldest row leaves the fetch but stays listed, online.
@@ -720,7 +720,7 @@ func TestToggleManualTag(t *testing.T) {
 	server := httptest.NewServer(&fakeOpenCode{sessions: []openCodeSession{openCodeTestSession("ses_a", "", "/srv", 1000)}})
 	t.Cleanup(server.Close)
 	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
-		cfg.OpenCode["box"] = config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100}
+		cfg.OpenCode["box"] = config.OpenCodeConfig{URL: server.URL, Password: "pw"}
 		return nil
 	}))
 
@@ -756,6 +756,45 @@ VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 	assert.Equal(t, []string{`opencode:box:ses_a remote ["billing", "urgent"] t Named opencode:box:ses_a`, `web web_chat ["internal"] t Named web`}, facts)
 }
 
+func TestOpenCodeMovesOldNamesToTheServer(t *testing.T) {
+	s := newOpenCodeTestService(t, "box")
+	ctx := t.Context()
+	fake := &fakeOpenCode{sessions: []openCodeSession{openCodeTestSession("ses_a", "Alpha", "/srv/app", 2000), openCodeTestSession("ses_b", "Beta", "/srv/app", 1000)}}
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
+
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+
+	names := func() []string {
+		var names []string
+
+		require.NoError(t, readRows(ctx, s.db, `SELECT name || '|' || title FROM conversations WHERE server = 'box' ORDER BY conversation_id`, "read names", func(row rowScanner) error {
+			var name string
+			if err := row.Scan(&name); err != nil {
+				return fmt.Errorf("scan name: %w", err)
+			}
+
+			names = append(names, name)
+
+			return nil
+		}))
+
+		return names
+	}
+
+	// A name stored before names synced with OpenCode moves there once the server accepts it.
+	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET name = 'old work' WHERE conversation_id = 'opencode:box:ses_b'`)
+	require.NoError(t, err)
+	require.NoError(t, s.pushOpenCodeNames(ctx, "box", config.OpenCodeConfig{URL: server.URL, Password: "wrong"}))
+	assert.Equal(t, []string{"Alpha|Alpha", "old work|Beta"}, names(), "a refused name stays to move later")
+
+	require.NoError(t, s.pushOpenCodeNames(ctx, "box", box))
+	assert.Equal(t, []string{"Alpha", "old work"}, []string{fake.sessions[0].Title, fake.sessions[1].Title})
+	assert.Equal(t, []string{"Alpha|Alpha", "old work|old work"}, names())
+}
+
 func TestOpenCodeUpstreamFailuresWriteNothing(t *testing.T) {
 	s := newOpenCodeTestService(t, "box")
 	ctx := t.Context()
@@ -776,14 +815,14 @@ func TestOpenCodeUpstreamFailuresWriteNothing(t *testing.T) {
 	t.Cleanup(malformed.Close)
 
 	for _, url := range []string{gone.URL, activeFails.URL, malformed.URL} {
-		box := config.OpenCodeConfig{URL: url, Password: "pw", Port: 4100}
+		box := config.OpenCodeConfig{URL: url, Password: "pw"}
 		require.Error(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}), url)
 
 		_, err := s.CreateOpenCodeSession(ctx, "box", box, "/srv")
 		require.Error(t, err, url)
 	}
 
-	require.Error(t, s.pruneOpenCode(ctx, "box", config.OpenCodeConfig{URL: gone.URL, Password: "pw", Port: 4100}))
+	require.Error(t, s.pruneOpenCode(ctx, "box", config.OpenCodeConfig{URL: gone.URL, Password: "pw"}))
 	assert.Empty(t, remoteSidebar(t, s), "a failed poll writes nothing")
 }
 
@@ -817,7 +856,7 @@ func TestSearchSessionsFiltersByServerAgentAndModel(t *testing.T) {
 	} {
 		server := httptest.NewServer(&fakeOpenCode{sessions: sessions})
 		t.Cleanup(server.Close)
-		require.NoError(t, s.syncOpenCode(ctx, name, config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100}, &openCodeShells{}))
+		require.NoError(t, s.syncOpenCode(ctx, name, config.OpenCodeConfig{URL: server.URL, Password: "pw"}, &openCodeShells{}))
 	}
 
 	rows := remoteSidebar(t, s)
@@ -855,7 +894,7 @@ func TestCreateOpenCodeSessionListsItAtOnce(t *testing.T) {
 
 	s := newOpenCodeTestService(t, "box")
 
-	id, err := s.CreateOpenCodeSession(t.Context(), "box", config.OpenCodeConfig{URL: server.URL, Password: "pw", Port: 4100}, "/srv/app")
+	id, err := s.CreateOpenCodeSession(t.Context(), "box", config.OpenCodeConfig{URL: server.URL, Password: "pw"}, "/srv/app")
 	require.NoError(t, err)
 	assert.Equal(t, "opencode:box:ses_new", id)
 	assert.Equal(t, []string{"/srv/app"}, fake.created)

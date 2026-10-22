@@ -1,0 +1,1 @@
+var e=/^(New session|Child session) - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;function t(t){return t.title?t.title.match(e)?.[1]??t.title:t.parentID?`Child session`:`New session`}var n=/^(New session|Child session) - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;function r(e){return t(e)}function i(e){return e&&(e.match(n)?.[1]??e)}export{i as n,r as t};

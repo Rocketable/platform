@@ -25,6 +25,7 @@ cloc:
 	cd internal/rocketcode; $(MAKE) cloc
 	cd internal/funneld; $(MAKE) cloc
 	cd internal/rocketclaw/web; $(MAKE) cloc
+	cd internal/rocketclaw/oc; $(MAKE) cloc
 
 check-cloc-budget:
 	cd internal/rocketclaw; $(MAKE) check-cloc-budget

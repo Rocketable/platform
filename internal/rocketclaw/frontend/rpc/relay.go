@@ -4,29 +4,57 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httputil"
-	"net/netip"
 	"net/url"
 	"path"
+	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
 )
 
-// NewOpenCodeRelay serves one remote OpenCode server at the root of its own port with the
-// server's password. It refuses any request, WebSocket upgrades included, whose Origin is
-// another site, and sends the upstream its own origin so OpenCode's PTY check still holds.
-// Only pages on the same host may frame it. Callers add admission.
-func NewOpenCodeRelay(server config.OpenCodeConfig) http.Handler {
+func handleOpenCode(mux *http.ServeMux, connection *grpc.ClientConn, servers map[string]config.OpenCodeConfig) {
+	proxies := make(map[string]http.Handler, len(servers))
+	for name, server := range servers {
+		proxies[name] = http.StripPrefix("/oc/"+name, openCodeProxy(server))
+	}
+
+	// Registered per method, as "GET /" leaves no room for a method-less pattern.
+	for method := range strings.FieldsSeq("GET POST PUT PATCH DELETE") {
+		mux.HandleFunc(method+" /oc/{server}/api/{path...}", func(w http.ResponseWriter, r *http.Request) {
+			proxy, ok := proxies[r.PathValue("server")]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+
+			identity := &IdentityResponse{}
+			if err := connection.Invoke(r.Context(), "/rpc.Web/Identity", &IdentityRequest{}, identity); err != nil {
+				httpRPCError(w, err)
+				return
+			}
+
+			// The proxy stamps prompts with the person Identity admitted.
+			proxy.ServeHTTP(w, r.WithContext(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-username", identity.Username)))
+		})
+	}
+}
+
+// openCodeProxy serves one remote OpenCode server's API under /oc/{server}/ on the Web's own
+// origin, with the server's password. It refuses any request, WebSocket upgrades included,
+// whose Origin is another site, and sends the upstream its own origin so OpenCode's PTY check
+// still holds. Cookies cross in neither direction, the browser is never asked to sign in, and a
+// response opened directly runs sandboxed rather than as RocketClaw. Prompts carry the sender
+// as metadata.rocketclaw_username. Callers add admission and the admitted username.
+func openCodeProxy(server config.OpenCodeConfig) http.Handler {
 	upstream, _ := url.Parse(server.URL) // Config validation already parsed it.
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(upstream)
 			r.Out.SetBasicAuth("opencode", server.Password)
+			r.Out.Header.Del("Cookie")
 
 			if r.In.Header.Get("Origin") != "" {
 				r.Out.Header.Set("Origin", upstream.Scheme+"://"+upstream.Host)
@@ -48,13 +76,21 @@ func NewOpenCodeRelay(server config.OpenCodeConfig) http.Handler {
 				}
 
 				md, _ := metadata.FromOutgoingContext(r.In.Context())
-				stamped["rocketclaw_username"], _ = json.Marshal(md.Get("rocketclaw-tailnet-login-bin")[0])
+				stamped["rocketclaw_username"], _ = json.Marshal(md.Get("rocketclaw-username")[0])
 				body["metadata"], _ = json.Marshal(stamped)
 				raw, _ = json.Marshal(body)
 			}
 
 			r.Out.Body = io.NopCloser(bytes.NewReader(raw))
 			r.Out.ContentLength = int64(len(raw))
+		},
+		ModifyResponse: func(response *http.Response) error {
+			response.Header.Del("Set-Cookie")
+			response.Header.Del("WWW-Authenticate")
+			response.Header.Set("Content-Security-Policy", "sandbox")
+			response.Header.Set("X-Content-Type-Options", "nosniff")
+
+			return nil
 		},
 		FlushInterval: -1,
 	}
@@ -70,29 +106,6 @@ func NewOpenCodeRelay(server config.OpenCodeConfig) http.Handler {
 			return
 		}
 
-		host := (&url.URL{Host: r.Host}).Hostname()
-		w.Header().Set("Content-Security-Policy", "frame-ancestors http://"+net.JoinHostPort(host, "*")+" https://"+net.JoinHostPort(host, "*"))
 		proxy.ServeHTTP(w, r)
-	})
-}
-
-// AdmitHTTP serves next only to browsers the Web admits by their IP: web_users, then Tailscale.
-// The tailnet listener admits with NewTailnetHandler instead.
-func (s *Server) AdmitHTTP(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		address, err := netip.ParseAddrPort(r.RemoteAddr)
-		if err != nil {
-			httpRPCError(w, status.Error(codes.Unauthenticated, "invalid remote address"))
-			return
-		}
-
-		username, _, err := s.principal(metadata.NewIncomingContext(r.Context(), metadata.Pairs("rocketclaw-principal", address.Addr().Unmap().String())))
-		if err != nil {
-			httpRPCError(w, err)
-			return
-		}
-
-		// The relay reads the sender where NewTailnetHandler leaves the tailnet login.
-		next.ServeHTTP(w, r.WithContext(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-tailnet-login-bin", username)))
 	})
 }

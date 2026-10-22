@@ -208,7 +208,10 @@ func (s *SessionService) SyncOpenCode(ctx context.Context, servers map[string]co
 
 	for {
 		for name, server := range servers {
-			_ = s.syncOpenCode(ctx, name, server, shells[name])
+			// An unreachable server would fail the whole sync; the next round tries again.
+			if s.pushOpenCodeNames(ctx, name, server) == nil {
+				_ = s.syncOpenCode(ctx, name, server, shells[name])
+			}
 
 			if time.Since(pruned[name]) >= openCodePruneEvery && s.pruneOpenCode(ctx, name, server) == nil {
 				pruned[name] = time.Now()
@@ -429,6 +432,42 @@ WHERE server = $1 AND conversation_id <> ALL($2) AND NOT (synced_at < $9 AND ($7
 	return err
 }
 
+// pushOpenCodeNames moves names stored before names synced with OpenCode, which differ from their
+// titles, to the server, once the server accepts each; a session it refuses keeps its name.
+func (s *SessionService) pushOpenCodeNames(ctx context.Context, name string, server config.OpenCodeConfig) error {
+	named := map[string]string{}
+
+	if err := readRows(ctx, s.db, `SELECT remote_session, name FROM conversations WHERE server = $1 AND kind = $2 AND name <> '' AND name <> title`, "named opencode sessions", func(row rowScanner) error {
+		var remote, title string
+		if err := row.Scan(&remote, &title); err != nil {
+			return fmt.Errorf("scan named opencode session: %w", err)
+		}
+
+		named[remote] = title
+
+		return nil
+	}, name, KindRemote); err != nil {
+		return err
+	}
+
+	for remote, title := range named {
+		err := openCodeCall(ctx, name, server, http.MethodPatch, "/api/session/"+url.PathEscape(remote), &openCodeTitle{Title: title}, nil)
+		if _, refused := errors.AsType[*openCodeError](err); refused {
+			continue
+		}
+
+		if err != nil {
+			return err
+		}
+
+		if _, err := execState(ctx, s.db, "move opencode session name", `UPDATE conversations SET title = name WHERE server = $1 AND remote_session = $2`, name, remote); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // pruneOpenCode drops name's stored sessions missing from its full root list. It never adds
 // sessions, so old ones nobody opened stay out of the list.
 func (s *SessionService) pruneOpenCode(ctx context.Context, name string, server config.OpenCodeConfig) error {
@@ -482,6 +521,10 @@ func (s *SessionService) CreateOpenCodeSession(ctx context.Context, name string,
 VALUES ($1, $7, '', $6, FALSE, 'remote', $2, $3, $4, $5, FALSE, now(), $8, $9) ON CONFLICT (conversation_id) DO NOTHING`, id, name, session.Title, session.Location.Directory, time.UnixMilli(session.Time.Updated).UTC(), KindRemote, session.Agent, session.model(), session.ID)
 
 	return id, err
+}
+
+type openCodeTitle struct {
+	Title string `json:"title"`
 }
 
 // AgentTags lists, per agent with tag groups, the tags people may set on its sessions.

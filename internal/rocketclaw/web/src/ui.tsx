@@ -40,6 +40,7 @@ import { cn } from "@/lib/utils";
 import type { Agent, Attachment as AttachmentMeta, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, Remote, Session, SavedTabs, TranscriptEvent, VoiceSettings } from "@/types";
 import { runPreload } from "@/preload";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
+import type { MountOptions, Mounted } from "../../oc/host/api";
 import {
   invalidatePendingSaves,
   loadSavedSessions,
@@ -1525,7 +1526,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
     return () => { newChatOwner.current = undefined; };
   }, [newChat]);
   const onKey = useEffectEvent((event: KeyboardEvent) => {
-    if (event.defaultPrevented || event.repeat) return;
+    if (event.defaultPrevented || event.repeat || inTerminal(event)) return;
     if ((event.metaKey || event.ctrlKey) && !event.altKey && event.code === "KeyP") {
       event.preventDefault();
       openPalette(event.shiftKey ? "commands" : "sessions");
@@ -1548,7 +1549,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   });
 
   const onEscape = useEffectEvent((event: KeyboardEvent) => {
-    if (event.defaultPrevented || event.repeat || showChat || event.key !== "Escape") return;
+    if (event.defaultPrevented || event.repeat || showChat || event.key !== "Escape" || route.remote) return;
     if (document.querySelector('[role="dialog"], [role="listbox"], [role="menu"], [role="tooltip"]')) return;
     event.preventDefault();
     closeTab([location.pathname]);
@@ -2144,23 +2145,75 @@ const SessionRowContent = memo(function SessionRowContent({ session, age = relat
   </span>;
 });
 
-// A remote OpenCode session shows OpenCode's own web app through its server's relay
-// (internal/rocketclaw/frontend/rpc/relay.go). A frame already open stays while the server blips.
+const remoteView = { route: "", shown: "", openPalette: () => {} };
+
+const inTerminal = (event: KeyboardEvent) => event.target instanceof Element && !!event.target.closest('[data-component="terminal"]');
+
+// A remote session's link on its own server, for the session the open view shows, and that view's palette.
+// The link is OpenCode's own session route; the server asks whoever opens it to sign in.
+function remoteActions(id: string, origin: string, remoteSessionId: string) {
+  const open = remoteView.route === id;
+  const shown = open ? remoteView.shown : remoteSessionId;
+  return [
+    { key: "server-link", label: "Copy server link", run: () => void copyText(`${origin}/server/${encodeSessionId(origin)}/session/${shown}`, document.body) },
+    ...(open ? [{ key: "opencode-commands", label: "OpenCode commands", run: () => remoteView.openPalette() }] : []),
+  ];
+}
+
+// The copied OpenCode view's entry (internal/rocketclaw/oc/host/entry.ts), loaded at run time so the Web never
+// builds its Solid code.
+const ocEntry = "/oc-ui/_assets/index.js";
+type OcModule = { mount(element: HTMLElement, options: MountOptions): Mounted };
+
+// A remote OpenCode session mounts the copied OpenCode view, which reaches its server through the Web's
+// /oc/<server>/api/ proxy. Any session of a configured server opens, listed yet or not; a view already open
+// stays while the server blips and shows that state itself.
 function RemoteSession({ id }: { id: string }) {
   const sidebar = useContext(Sidebar);
-  const session = sidebar.rows.find((row) => row.id === id);
-  const port = sidebar.remote?.servers[session?.server ?? ""];
-  const [opened, setOpened] = useState(false);
-  const ready = !!port && !!session && !session.offline;
-  useEffect(() => { if (ready) setOpened(true); }, [ready]);
+  const tabs = useContext(TabActions);
+  const container = useRef<HTMLDivElement>(null);
+  const [, server = "", ...rest] = id.split(":");
+  const sessionID = rest.join(":");
+  const configured = !!sidebar.remote?.servers[server];
+  const offline = sidebar.rows.find((row) => row.id === id)?.offline;
+  const [reported, setReported] = useState(false);
+  const [failed, setFailed] = useState("");
+  // Each retry loads the entry from a fresh URL, as browsers may keep a failed module load.
+  const [retries, setRetries] = useState(0);
+  const create = useMutation({ mutationFn: mutations.createSession, onSuccess: (created) => { sidebar.invalidateQueries(); tabs.open(rowPath({ id: created, kind: "REMOTE_OPENCODE" })); } });
+  const ready = configured && (!offline || reported);
+  const openSession = useEffectEvent((other: string) => tabs.open(rowPath({ id: `opencode:${server}:${other}`, kind: "REMOTE_OPENCODE" })));
+  // A press while a create runs is the same request; once it settles, success or failure, a press starts another.
+  const creating = useRef(false);
+  const newSession = useEffectEvent((directory: string) => {
+    if (creating.current) return;
+    creating.current = true;
+    create.mutate({ opencodeServer: server, directory }, { onSettled: () => { creating.current = false; } });
+  });
+  const closeTab = useEffectEvent(() => tabs.close([rowPath({ id, kind: "REMOTE_OPENCODE" })]));
+  const reportSession = useEffectEvent((other: string) => { remoteView.shown = other; setReported(true); });
+  useEffect(() => {
+    if (!ready) return;
+    let view: Mounted | undefined, gone = false;
+    void (import(/* @vite-ignore */ retries ? `${ocEntry}?retry=${retries}` : ocEntry) as Promise<OcModule>).then(({ mount }) => {
+      if (gone) return;
+      view = mount(container.current!, { server, url: `${location.origin}/oc/${server}`, sessionID, navigation: { openSession, newSession, closeTab, reportSession } });
+      Object.assign(remoteView, { route: id, shown: sessionID, openPalette: view.openPalette });
+    }, (error: Error) => setFailed(error.message));
+    return () => {
+      gone = true;
+      view?.dispose();
+      Object.assign(remoteView, { route: "", shown: "", openPalette: () => {} });
+    };
+  }, [ready, id, server, sessionID, retries]);
   if (!id) return null;
-  if (!session || !port) return <p role="status" className="m-auto p-4 text-sm text-muted-foreground">{sidebar.enumerationComplete ? "This OpenCode session is no longer available." : "Loading…"}</p>;
-  if (session.offline && !opened) return <p role="status" className="m-auto p-4 text-sm text-muted-foreground">{session.server} is offline; this session reopens when it is reachable.</p>;
-  const origin = `${location.protocol}//${location.hostname}:${port}`;
-  // Approved exception: the relay is another origin (its own port), so allow-same-origin cannot
-  // reach this page; OpenCode needs it for storage and a real Origin, which the relay requires.
-  // react-doctor-disable-next-line react-doctor/iframe-missing-sandbox
-  return <iframe title={sessionTitle(session)} sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals" className="min-h-0 w-full flex-1 border-0" src={`${origin}/server/${encodeSessionId(origin)}/session/${encodeURIComponent(session.remoteSessionId ?? "")}`} />;
+  if (!configured) return <p role="status" className="m-auto p-4 text-sm text-muted-foreground">{sidebar.enumerationComplete ? "This OpenCode session is no longer available." : "Loading…"}</p>;
+  if (!ready) return <p role="status" className="m-auto p-4 text-sm text-muted-foreground">{server} is offline; this session reopens when it is reachable.</p>;
+  return <>
+    {reported || failed ? null : <p role="status" className="p-4 text-sm text-muted-foreground">Loading…</p>}
+    {failed || create.error ? <p role="alert" className="px-3 text-sm text-destructive">{failed || create.error?.message}{failed ? <> <button type="button" className="underline" onClick={() => { setFailed(""); setRetries((count) => count + 1); }}>Retry</button></> : null}</p> : null}
+    <div ref={container} className="flex min-h-0 w-full flex-1 flex-col" />
+  </>;
 }
 
 // A hosted page runs in an opaque origin and reads its agent's Page Data by asking this tab. The answer goes only
@@ -2209,7 +2262,8 @@ function PageIndex({ show }: { show: boolean }) {
 
 function useSessionActions(session: Session | undefined, onSuccess?: () => void) {
   const invalidate = useContext(SidebarInvalidation);
-  const agentTags = useContext(Sidebar).remote?.agentTags ?? {};
+  const remote = useContext(Sidebar).remote;
+  const agentTags = remote?.agentTags ?? {};
   const { setCommand } = useContext(SessionCommands);
   const saved = () => { invalidate(); onSuccess?.(); };
   const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: saved });
@@ -2222,7 +2276,7 @@ function useSessionActions(session: Session | undefined, onSuccess?: () => void)
     { key: "name", label: "Name session", run: () => setCommand({ mode: "name", source: id }) },
     { key: "pin", label: session.pinned ? "Unpin session" : "Pin session", keep: true, run: () => update.mutate({ id, pinned: !session.pinned }) },
     ...choices.map((tag) => ({ key: `tag-${tag}`, label: `${tags.has(tag) ? "Remove" : "Add"} tag ${tag}`, keep: true, run: () => update.mutate({ id, tag }) })),
-    ...(session.server ? [{ key: "add-tag", label: "Add tag…", run: () => setCommand({ mode: "tag", source: id }) }] : []),
+    ...(session.server ? [{ key: "add-tag", label: "Add tag…", run: () => setCommand({ mode: "tag", source: id }) }, ...remoteActions(id, remote?.servers[session.server] ?? "", session.remoteSessionId ?? "")] : []),
   ].map((item) => ({ ...item, disabled: update.isPending })) : [];
   return { items, error: update.error };
 }

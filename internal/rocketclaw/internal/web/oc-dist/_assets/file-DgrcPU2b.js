@@ -1,0 +1,1 @@
+import{t as e}from"./helper-8XvPQmim.js";var t=e({name:`FileComponent`,init:e=>e.component}),n=t.provider,r=t.use;export{r as n,n as t};

@@ -1518,7 +1518,7 @@ type ListSessionsResponse struct {
 	UpstreamSuccess bool                   `protobuf:"varint,3,opt,name=upstream_success,json=upstreamSuccess,proto3" json:"upstream_success,omitempty"`
 	// Sent with the completion message: remote servers, and per agent the tags people may set
 	// on its sessions. Remote OpenCode sessions take any tag.
-	OpencodeServers map[string]int32       `protobuf:"bytes,5,rep,name=opencode_servers,json=opencodeServers,proto3" json:"opencode_servers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"` // Server name to its relay port.
+	OpencodeServers map[string]string      `protobuf:"bytes,5,rep,name=opencode_servers,json=opencodeServers,proto3" json:"opencode_servers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // Server name to its origin, for links to its sessions.
 	AgentTags       map[string]*TagChoices `protobuf:"bytes,6,rep,name=agent_tags,json=agentTags,proto3" json:"agent_tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Also sent with the completion message: this listing's version, for the next request's since, and
 	// every session ID in list order. A row not sent is unchanged since that version; an ID missing
@@ -1580,7 +1580,7 @@ func (x *ListSessionsResponse) GetUpstreamSuccess() bool {
 	return false
 }
 
-func (x *ListSessionsResponse) GetOpencodeServers() map[string]int32 {
+func (x *ListSessionsResponse) GetOpencodeServers() map[string]string {
 	if x != nil {
 		return x.OpencodeServers
 	}
@@ -6807,7 +6807,7 @@ const file_web_proto_rawDesc = "" +
 	"\x05order\x18\b \x03(\tR\x05order\x1aB\n" +
 	"\x14OpencodeServersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\x1aM\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1aM\n" +
 	"\x0eAgentTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12%\n" +
 	"\x05value\x18\x02 \x01(\v2\x0f.rpc.TagChoicesR\x05value:\x028\x01J\x04\b\x04\x10\x05\" \n" +

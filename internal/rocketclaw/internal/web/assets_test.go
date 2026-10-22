@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"runtime/debug"
 	"strings"
 	"testing"
@@ -47,6 +48,43 @@ func TestEmbeddedApplication(t *testing.T) {
 		require.Equal(t, http.StatusOK, response.Code)
 		require.Equal(t, data, response.Body.Bytes())
 	}
+}
+
+// Vite names the asset directory and some chunks with a leading underscore, which only an all: embed keeps.
+func TestEmbeddedOCApplication(t *testing.T) {
+	handler := Handler(config.SentryConfig{})
+	files := os.DirFS("oc-dist")
+	underscored := 0
+
+	err := fs.WalkDir(files, ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+
+		if strings.Contains("/"+path, "/_") {
+			underscored++
+		}
+
+		data, err := fs.ReadFile(files, path)
+		require.NoError(t, err)
+
+		target := "/oc-ui/" + path
+		// Every built file is named for its content except the entry, which RocketClaw imports by name.
+		cache := "public, max-age=31536000, immutable"
+		if !strings.HasPrefix(path, "_assets/") || path == "_assets/index.js" {
+			cache = "no-cache"
+		}
+
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, http.NoBody))
+		require.Equal(t, http.StatusOK, response.Code, target)
+		require.Equal(t, cache, response.Header().Get("Cache-Control"), target)
+		require.Equal(t, string(data), response.Body.String(), target)
+
+		return nil
+	})
+	require.NoError(t, err)
+	require.Positive(t, underscored)
 }
 
 func TestEmbeddedFileCaching(t *testing.T) {

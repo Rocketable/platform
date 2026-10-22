@@ -1,0 +1,1 @@
+import{$ as e,it as t}from"./dist-CAogbCvn.js";import{C as n}from"./5WXHJDCZ-kj0k6OpZ.js";function r(n,r){let[a,o]=t(i(r?.()));return e(()=>{o(n()?.tagName.toLowerCase()||i(r?.()))}),a}function i(e){return n(e)?e:void 0}export{r as t};

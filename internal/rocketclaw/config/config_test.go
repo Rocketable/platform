@@ -576,7 +576,7 @@ func TestValidateMCPServers(t *testing.T) {
 }
 
 func TestValidateOpenCode(t *testing.T) {
-	valid := OpenCodeConfig{URL: "https://box.example:4096", Password: "token", Port: 4100}
+	valid := OpenCodeConfig{URL: "https://box.example:4096", Password: "token"}
 
 	for _, tt := range []struct {
 		name    string
@@ -587,7 +587,6 @@ func TestValidateOpenCode(t *testing.T) {
 		{name: "valid", mutate: func(*OpenCodeConfig) {}, key: "box"},
 		{name: "bad scheme", mutate: func(s *OpenCodeConfig) { s.URL = "ftp://box" }, key: "box", wantErr: `opencode["box"]: url must be an http or https URL`},
 		{name: "empty password", mutate: func(s *OpenCodeConfig) { s.Password = "" }, key: "box", wantErr: `opencode["box"]: password is required`},
-		{name: "port out of range", mutate: func(s *OpenCodeConfig) { s.Port = 70000 }, key: "box", wantErr: `opencode["box"]: port must be between 1 and 65535`},
 		{name: "bad name", mutate: func(*OpenCodeConfig) {}, key: "box:1", wantErr: `opencode["box:1"]`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -638,11 +637,12 @@ func TestLoadDefaultsWorkspaceToConfigDirectory(t *testing.T) {
 	  "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
 	  "openai": {"api_key": "test-key"},
 	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
-	  "mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
+	  "mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"},
+	  "opencode": {"box": {"url": "https://box.example:4096", "password": "pw", "port": 4100}}
 	}`), 0o600))
 
 	cfg, err := Load(path, "", AWSFetcher{})
-	require.NoError(t, err)
+	require.NoError(t, err, "a config written for relay ports still loads")
 	assert.Equal(t, dir, cfg.Workspace)
 }
 
@@ -898,4 +898,11 @@ func validConfig() *Config {
 	cfg.OpenAI.APIKey = "test-key"
 
 	return cfg
+}
+
+func TestWebCertificateNeedsBothFiles(t *testing.T) {
+	for _, web := range []WebConfig{{TLSCertFile: "cert.pem"}, {TLSKeyFile: "key.pem"}} {
+		cfg := &Config{Workspace: t.TempDir(), Web: web}
+		require.ErrorContains(t, cfg.Validate(), "web.tls_cert_file and web.tls_key_file")
+	}
 }

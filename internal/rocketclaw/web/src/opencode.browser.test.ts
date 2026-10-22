@@ -1,28 +1,55 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
 import type { Session } from "./types";
+import { linked, fetch as openCode, reset, server as fake } from "../../oc/host/test/server";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
+const ocDist = path.resolve(import.meta.dir, "../../internal/web/oc-dist");
 const shots = path.resolve(import.meta.dir, "../../../../.tmp/web-screenshots");
 const encode = (text: string) => btoa(text).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const route = (id: string) => `/oc/${encode(id)}`;
+// The box server's own address, which RocketClaw only ever sends as an origin.
+const box = "http://box.test:4096";
 
-test("remote OpenCode sessions list, open in the relay frame, tag, and start", async () => {
-  const { chromium: engine } = await import(playwright!);
+// A RocketClaw Web serving the built view at /oc-ui/ and the fake OpenCode server behind /oc/box/api/.
+function start(placement: "TOP" | "LEFT") {
+  reset();
   const rows: Session[] = [
-    { id: "opencode:box:ses_a", kind: "REMOTE_OPENCODE", remoteSessionId: "ses_a", preview: "Alpha work", server: "box", directory: "/srv/app", updatedAt: new Date().toISOString() },
+    { id: "opencode:box:ses_a", kind: "REMOTE_OPENCODE", remoteSessionId: "ses_a", preview: "Alpha work", server: "box", directory: "/repo", updatedAt: new Date().toISOString() },
     { id: "opencode:box:ses_off", kind: "REMOTE_OPENCODE", remoteSessionId: "ses_off", preview: "Old work", server: "box", directory: "/srv/old", offline: true, tags: ["billing"] },
   ];
   const calls: { path: string; body: { id?: string; [key: string]: unknown } }[] = [];
+  // The view's entry waits until released, so its loading state can be seen.
+  let release = () => {};
+  const entry = new Promise<void>((resolve) => { release = resolve; });
   let failCreate = true;
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
+  // Terminal sockets the view holds open, counted where OpenCode would serve them.
+  const terminals = { open: 0 };
+  // A test holds session creates here to press again while one is still running.
+  const creates = { hold: Promise.resolve() };
+  // Loads of the view's entry left to fail, as a network blip or a deploy mid-load would.
+  const entryFailures = { remaining: 0 };
+  const web = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, websocket: { open() { terminals.open++; }, close() { terminals.open--; }, message() {} }, async fetch(request, server) {
     const url = new URL(request.url);
+    if (/^\/oc\/box\/api\/pty\/[^/]+\/connect$/.test(url.pathname)) return server.upgrade(request) ? undefined : new Response("not a WebSocket", { status: 400 });
+    if (url.pathname.startsWith("/oc/box/api/")) return openCode(request);
+    if (url.pathname.startsWith("/oc-ui/")) {
+      if (url.pathname === "/oc-ui/_assets/index.js") {
+        await entry;
+        if (entryFailures.remaining > 0) {
+          entryFailures.remaining--;
+          return new Response("unavailable", { status: 503 });
+        }
+      }
+      return new Response(Bun.file(path.join(ocDist, url.pathname.slice("/oc-ui/".length))));
+    }
     if (url.pathname === "/stream") {
       calls.push({ path: url.pathname, body: { id: url.searchParams.get("id") ?? "" } });
       return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     }
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, opencodeServers: { box: 4100 }, agentTags: { main: { tags: ["customer"] } } })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, opencodeServers: { box }, agentTags: { main: { tags: ["customer"] } } })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
@@ -34,27 +61,180 @@ test("remote OpenCode sessions list, open in the relay frame, tag, and start", a
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/CreateSession":
+        await creates.hold;
         if (failCreate) { failCreate = false; return Response.json({ code: 14, message: "box did not answer" }, { status: 503 }); }
-        return Response.json({ id: "opencode:box:ses_new" });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: `/s/${encode("opencode:box:ses_a")}`, preview: true, space: "main" }], groups: [], space: "main", last: {}, placement: "TOP" } });
+        return Response.json({ id: "opencode:box:ses_child" });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: route("opencode:box:ses_a"), preview: true, space: "main" }], groups: [], space: "main", last: {}, placement } });
       default: return Response.json({});
     }
   } });
+  return { web, calls, release, terminals, creates, entryFailures, base: `http://127.0.0.1:${web.port}` };
+}
+
+async function until(check: () => boolean | Promise<boolean>) {
+  for (let tries = 0; tries < 250; tries++) {
+    if (await check()) return;
+    await Bun.sleep(20);
+  }
+  throw new Error("timed out");
+}
+
+test("a remote session mounts OpenCode's view in the page, with RocketClaw's keys, commands, and tabs around it", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const { web, calls, release, terminals, base } = start("TOP");
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, permissions: ["clipboard-read", "clipboard-write"] });
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error: Error) => errors.push(error.message));
+    const tabs = page.getByRole("tablist", { name: "Open tabs" });
+    const view = page.locator("main [data-oc-view]");
+    const palette = page.locator("[data-oc-portal] .command-palette");
+    const rocketPalette = (mode: "sessions" | "commands") => page.getByPlaceholder(mode === "sessions" ? "Search sessions and commands" : "Type a command");
+    const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
+    const command = async (label: string) => {
+      await page.keyboard.press("ControlOrMeta+Shift+p");
+      await rocketPalette("commands").fill(label);
+      await page.getByRole("button", { name: `Sessions: ${label}` }).click();
+    };
+    // RocketClaw's look, measured on its own page and text: fonts are page-wide, so a leaked one changes text width.
+    const look = () => page.evaluate(async () => {
+      await document.fonts.ready;
+      const probe = document.createElement("span");
+      probe.className = "font-sans";
+      probe.textContent = "RocketClaw sessions Wwiil 0123";
+      document.body.append(probe);
+      const width = probe.getBoundingClientRect().width;
+      probe.remove();
+      const body = getComputedStyle(document.body);
+      const strip = getComputedStyle(document.querySelector('[aria-label="Open tabs"]')!);
+      return { width, background: body.backgroundColor, color: body.color, font: body.fontFamily, strip: [strip.backgroundColor, strip.fontFamily, strip.fontSize] };
+    });
+
+    await page.goto(base);
+    await tabs.getByRole("tab", { name: "Alpha work", exact: true }).waitFor();
+    const before = await look();
+
+    // Opening the session shows Loading… until the view reports it, then the view itself: no frame.
+    await tabs.getByRole("tab", { name: "Alpha work", exact: true }).click();
+    await page.getByRole("status").filter({ hasText: "Loading…" }).waitFor();
+    release();
+    await view.getByText("answer in ses_a").waitFor();
+    expect(await page.getByRole("status").filter({ hasText: "Loading…" }).count()).toBe(0);
+    expect(await page.locator("iframe").count()).toBe(0);
+    expect(fake.requests.some((request) => request.startsWith("GET /oc/box/api/session/ses_a"))).toBe(true);
+    expect(calls.filter(({ path, body }) => (path === "/api/History" || path === "/stream" || path === "/api/ListQueue") && body.id?.startsWith("opencode:"))).toEqual([]);
+    expect(await look()).toEqual(before);
+    await page.screenshot({ path: path.join(shots, "opencode-session.png") });
+
+    // Leaving and coming back leaves one view and one event stream.
+    await page.goBack();
+    await until(async () => await view.count() === 0 && fake.streams === 0);
+    await page.goForward();
+    await view.getByText("answer in ses_a").waitFor();
+    await until(() => fake.streams === 1);
+    await Bun.sleep(200);
+    expect([await page.locator("[data-oc-view]:not([data-oc-portal])").count(), fake.streams]).toEqual([1, 1]);
+
+    // Escape belongs to the view: twice from the composer, and twice after clicking timeline text, the tab stays.
+    const tabCount = await tabs.getByRole("tab").count();
+    await view.locator("[data-component=composer] [contenteditable=true]").click();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    await view.getByText("answer in ses_a").click();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    expect([page.url(), await tabs.getByRole("tab").count()]).toEqual([`${base}${route("opencode:box:ses_a")}`, tabCount]);
+
+    // From inside the view, ⌘P is RocketClaw's palette and ⌘K OpenCode's.
+    await view.locator("[data-component=composer] [contenteditable=true]").click();
+    await page.keyboard.press("ControlOrMeta+p");
+    await rocketPalette("sessions").waitFor();
+    expect(await palette.count()).toBe(0);
+    await page.keyboard.press("Escape");
+    await view.locator("[data-component=composer] [contenteditable=true]").click();
+    await page.keyboard.press("ControlOrMeta+k");
+    await palette.waitFor();
+    expect(await rocketPalette("sessions").count()).toBe(0);
+    await page.keyboard.press("Escape");
+    await until(async () => await palette.count() === 0);
+
+    // OpenCode's own terminal opens with Ctrl+` and keeps every key while it has focus, RocketClaw's shortcuts included.
+    await view.locator("[data-component=composer] [contenteditable=true]").click();
+    await page.keyboard.press("Control+Backquote");
+    await view.locator('[data-component="terminal"]').waitFor();
+    await until(() => terminals.open === 1);
+    await view.locator('[data-component="terminal"]').click();
+    await page.keyboard.press("ControlOrMeta+p");
+    await Bun.sleep(100);
+    expect(await rocketPalette("sessions").count()).toBe(0);
+
+    // Leaving the session closes the terminal's socket with the rest of the view.
+    await page.goBack();
+    await until(async () => await view.count() === 0 && terminals.open === 0 && fake.streams === 0);
+    await page.goForward();
+    await view.getByText("answer in ses_a").waitFor();
+
+    // The server link names the shown session on its own server, with no password.
+    await command("Copy server link");
+    await until(async () => await clipboard() === `${box}/server/${encode(box)}/session/ses_a`);
+    await command("OpenCode commands");
+    await palette.waitFor();
+    await page.keyboard.press("Escape");
+    await until(async () => await palette.count() === 0);
+
+    // A child session opens inside the view, and the link follows it. RocketClaw's default timeline detail shows its card.
+    await view.locator("[data-component=task-tool-card]").first().click();
+    await view.getByText("answer in ses_child").waitFor();
+    await command("Copy server link");
+    await until(async () => await clipboard() === `${box}/server/${encode(box)}/session/ses_child`);
+    expect(page.url()).toBe(`${base}${route("opencode:box:ses_a")}`);
+
+    // Forking opens the fork, a session the list has not seen, in a new RocketClaw tab.
+    await page.goto(`${base}${route("opencode:box:ses_a")}`);
+    release();
+    await view.getByText("answer in ses_a").waitFor();
+    await page.keyboard.press("ControlOrMeta+k");
+    await palette.locator("input").fill("Fork from message");
+    await palette.locator(".command-palette-row", { hasText: "Fork from message" }).click();
+    await page.locator("[data-oc-portal]").locator("[role=option], button", { hasText: "question in ses_a" }).first().click();
+    await page.waitForURL(new RegExp(`/oc/${encode("opencode:box:ses_fork_").slice(0, -2)}`));
+    await view.getByText(/answer in ses_fork_/).waitFor();
+    const forkTabs = await tabs.getByRole("tab").count();
+
+    // Deleting the shown session closes its tab.
+    await view.locator("[aria-label='More options']").first().click();
+    await page.locator("[data-oc-portal] [role=menuitem]", { hasText: "Delete" }).click();
+    await page.locator("[data-oc-portal] button", { hasText: "Delete session" }).click();
+    await until(async () => await tabs.getByRole("tab").count() === forkTabs - 1);
+    expect(page.url()).not.toContain(encode("opencode:box:ses_fork_").slice(0, -2));
+    expect(errors).toEqual([]);
+  } finally {
+    await browser.close();
+    web.stop(true);
+  }
+}, 60_000);
+
+test("remote sessions list, tag, go offline, start, and keep the theme toggle clear of the view", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const { web, calls, release, creates, entryFailures, base } = start("LEFT");
+  release();
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
-    const base = `http://127.0.0.1:${server.port}`;
 
-    // The frame loads OpenCode's own session page from the relay on the same host.
-    await page.goto(`${base}/oc/${encode("opencode:box:ses_a")}`);
-    const frame = page.locator("iframe");
-    await frame.waitFor({ state: "attached" });
-    const relay = "http://127.0.0.1:4100";
-    expect(await frame.getAttribute("src")).toBe(`${relay}/server/${encode(relay)}/session/ses_a`);
-    await page.screenshot({ path: path.join(shots, "opencode-session.png") });
-    expect(calls.filter(({ path, body }) => (path === "/api/History" || path === "/stream" || path === "/api/ListQueue") && body.id?.startsWith("opencode:"))).toEqual([]);
+    // With vertical tabs, RocketClaw's fixed theme toggle does not cover the view's review toggle.
+    await page.goto(`${base}${route("opencode:box:ses_a")}`);
+    const review = page.locator("main [data-oc-view] [data-slot=session-review-toggle]");
+    await review.waitFor();
+    const [theme, toggle] = [await page.locator("div.fixed.top-2.right-2").boundingBox(), await review.boundingBox()];
+    expect(theme!.y + theme!.height <= toggle!.y || toggle!.x + toggle!.width <= theme!.x).toBe(true);
+    // Moving clear of it, the review toggle does not land on the session header's own buttons.
+    const details = await page.locator('main [data-oc-view] [aria-label="Session details"]').boundingBox();
+    expect(details!.x + details!.width <= toggle!.x || toggle!.x + toggle!.width <= details!.x).toBe(true);
 
     await page.keyboard.press("Control+Shift+p");
     await page.getByPlaceholder("Type a command").fill("Name session");
@@ -72,22 +252,19 @@ test("remote OpenCode sessions list, open in the relay frame, tag, and start", a
     expect(await page.locator("datalist option").evaluateAll((options: Element[]) => options.map((option) => (option as HTMLOptionElement).value))).toEqual(["billing"]);
     await tag.fill("billing");
     await tag.press("Enter");
-    for (let tries = 0; tries < 50 && !calls.some(({ path }) => path === "/api/UpdateSession"); tries++) await Bun.sleep(20);
+    await until(() => calls.some(({ path }) => path === "/api/UpdateSession"));
     expect(calls.find(({ path }) => path === "/api/UpdateSession")?.body).toEqual({ id: "opencode:box:ses_a", tag: "billing" });
 
-    // An offline server's session shows a notice instead of a frame, however it is opened.
-    // Moving in-app from an open frame to an offline session still shows the notice.
-    await page.getByRole("button", { name: "Search sessions" }).click();
-    await page.getByRole("dialog", { name: "Go to session" }).getByText("Old work").click();
+    // An offline server's session shows a notice instead of the view; a server no longer configured, another.
+    await page.goto(`${base}${route("opencode:box:ses_off")}`);
     await page.getByText("box is offline; this session reopens when it is reachable.").waitFor();
-    expect(await frame.count()).toBe(0);
-    await page.goto(`${base}/oc/${encode("opencode:box:ses_gone")}`);
+    expect(await page.locator("[data-oc-view]").count()).toBe(0);
+    await page.goto(`${base}${route("opencode:gone:ses_x")}`);
     await page.getByText("This OpenCode session is no longer available.").waitFor();
 
     // A new session takes a typed folder; a failed create shows its error and the next try opens the session.
-    await page.goto(`${base}/s/${encode("opencode:box:ses_a")}`);
-    const tabs = page.getByRole("tablist", { name: "Open tabs" });
-    await tabs.getByRole("tab", { name: "Alpha work", exact: true }).waitFor();
+    await page.goto(`${base}${route("opencode:box:ses_a")}`);
+    await page.locator("main [data-oc-view]").getByText("answer in ses_a").waitFor();
     await page.keyboard.press("Control+Shift+p");
     await page.getByPlaceholder("Type a command").fill("new on box");
     await page.getByRole("button", { name: "Sessions: New on box" }).click();
@@ -96,15 +273,55 @@ test("remote OpenCode sessions list, open in the relay frame, tag, and start", a
     await folder.press("Enter");
     await page.getByText("box did not answer").waitFor();
     await folder.press("Enter");
-    await page.waitForURL(`${base}/oc/${encode("opencode:box:ses_new")}`);
-    expect(await tabs.getByRole("tab", { name: "Alpha work", exact: true }).count()).toBe(1);
-    expect(await tabs.getByRole("tab").count()).toBe(2);
-    expect(await tabs.locator('[aria-selected="true"]').evaluate((node: HTMLElement) => getComputedStyle(node).fontStyle)).not.toBe("italic");
+    await page.waitForURL(`${base}${route("opencode:box:ses_child")}`);
+    await page.locator("main [data-oc-view]").getByText("answer in ses_child").waitFor();
     expect(calls.filter(({ path }) => path === "/api/CreateSession").map(({ body }) => body)).toEqual([{ opencodeServer: "box", directory: "/srv/fresh" }, { opencodeServer: "box", directory: "/srv/fresh" }]);
 
+    // OpenCode's New session, from inside the view, goes through RocketClaw: the session's own folder, a new tab.
+    const view = page.locator("main [data-oc-view]");
+    const palette = page.locator("[data-oc-portal] .command-palette");
+    await page.goto(`${base}${route("opencode:box:ses_a")}`);
+    await view.getByText("answer in ses_a").waitFor();
+    await page.keyboard.press("ControlOrMeta+k");
+    await palette.locator("input").fill("New session");
+    await palette.locator(".command-palette-row", { hasText: "New session" }).first().click();
+    await page.waitForURL(`${base}${route("opencode:box:ses_child")}`);
+    await view.getByText("answer in ses_child").waitFor();
+    expect(calls.filter(({ path }) => path === "/api/CreateSession").map(({ body }) => body).slice(2)).toEqual([{ opencodeServer: "box", directory: "/repo" }]);
+
+    // Pressing New session again while the first is still being created starts one session, not two.
+    const created = () => calls.filter(({ path }) => path === "/api/CreateSession").length;
+    await page.goto(`${base}${route("opencode:box:ses_a")}`);
+    await view.getByText("answer in ses_a").waitFor();
+    let finish = () => {};
+    creates.hold = new Promise<void>((resolve) => { finish = resolve; });
+    const before = created();
+    await page.keyboard.press("ControlOrMeta+Shift+s");
+    await until(() => created() === before + 1);
+    await page.keyboard.press("ControlOrMeta+Shift+s");
+    await Bun.sleep(300);
+    finish();
+    await page.waitForURL(`${base}${route("opencode:box:ses_child")}`);
+    await Bun.sleep(300);
+    expect(created()).toBe(before + 1);
+
+    // A session the conversation mentions opens in its own RocketClaw tab.
+    await page.goto(`${base}${route("opencode:box:ses_a")}`);
+    await view.locator(`button[data-session-id="${linked}"]`).click();
+    await page.waitForURL(`${base}${route(`opencode:box:${linked}`)}`);
+    await view.getByText(`answer in ${linked}`).waitFor();
     expect(errors).toEqual([]);
+
+    // When the view's code fails to load, Retry loads it again without reloading the page.
+    const fresh = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    entryFailures.remaining = 1;
+    await fresh.goto(`${base}${route("opencode:box:ses_a")}`);
+    await fresh.getByRole("alert").waitFor();
+    await fresh.getByRole("button", { name: "Retry", exact: true }).click();
+    await fresh.locator("main [data-oc-view]").getByText("answer in ses_a").waitFor();
+    expect(await fresh.getByRole("alert").count()).toBe(0);
   } finally {
     await browser.close();
-    server.stop(true);
+    web.stop(true);
   }
-}, 30_000);
+}, 60_000);

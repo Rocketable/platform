@@ -700,7 +700,7 @@ func TestSessionsGetURLTool(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "tailscale"), []byte("#!/bin/sh\necho 100.95.197.99\n"), 0o755))
 	t.Setenv("PATH", bin)
 
-	for origin, want := range map[string]string{"": "http://100.95.197.99:8080", "https://rocketclaw.example.ts.net": "https://rocketclaw.example.ts.net"} {
+	for origin, want := range map[string]string{"": "https://100.95.197.99:8080", "https://rocketclaw.example.ts.net": "https://rocketclaw.example.ts.net"} {
 		cfg := &config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rocketclaw", Origin: origin}}}
 		tool := sessionsGetURLTool(&threadBridgeManager{runtime: config.NewLockedConfig(cfg), store: s})
 

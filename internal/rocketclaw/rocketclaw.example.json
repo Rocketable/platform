@@ -50,8 +50,7 @@
   "opencode": {
     "devbox": {
       "url": "http://devbox.example.ts.net:4096",
-      "password": "set-me",
-      "port": 4100
+      "password": "set-me"
     }
   },
   "slack": {
