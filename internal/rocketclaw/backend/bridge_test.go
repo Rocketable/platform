@@ -2201,7 +2201,7 @@ func TestSeedReplayTextIncludesWebSearchContext(t *testing.T) {
 func TestReplayInputRawKindReportsInvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	assert.Empty(t, replayInputRawKind(json.RawMessage("{")))
+	assert.Empty(t, rocketcode.ReplayInputRawKind(json.RawMessage("{")))
 }
 
 func TestBuildPromptCoversAttachments(t *testing.T) {
