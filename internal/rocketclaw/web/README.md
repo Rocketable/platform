@@ -309,7 +309,7 @@ not acceptance by a hosted Sentry project.
 
 The `Upload Sentry source maps` workflow runs when you publish a GitHub release,
 including a prerelease. Creating a tag or saving a draft release alone does not
-trigger it. It checks out the release tag, rebuilds the frontend with Bun 1.4.3,
+trigger it. It checks out the release tag, rebuilds the frontend with Bun 1.4.4,
 and uploads the maps only if every rebuilt JavaScript bundle matches the JavaScript
 already embedded in that tag. CSS and fonts do not have uploaded source maps and
 are not compared. It does not modify the tag, publish binaries, or attach
@@ -333,7 +333,7 @@ After correcting credentials, rerun the failed workflow from the Actions tab.
 
 ## Local checks
 
-Use Bun 1.4.3 or newer. From this directory, run:
+Use Bun 1.4.4 or newer. From this directory, run:
 
 ```sh
 bun install --frozen-lockfile
