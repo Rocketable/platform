@@ -43,7 +43,6 @@ type workflowAgentRunner struct {
 	skills        rocketcode.Skills
 	resolver      *modelResolver
 	customTools   []rocketcode.Tool
-	shellEnv      map[string]string
 }
 
 // workflowWorkerStep is a finished workflow worker's recorded result.
@@ -138,7 +137,6 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 
 	runtimeConfig := rocketcode.Config{AutoApproverModel: r.cfg.AutoApproverModel, ShellTempDir: filepath.Join(r.cfg.Workspace, filepath.FromSlash(shellTempRel)), SpillDir: rocketcodeSpillDir(r.cfg), RetainedResultDir: filepath.Join("retained", "unused"), ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: r.cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: r.cfg.Instrumentation.HideInputs, HideOutputs: r.cfg.Instrumentation.HideOutputs}}, ChildSessions: rocketcode.InertChildSessions{}, Journal: r.journal, BackgroundJobs: rocketcode.InertBackgroundJobs{}, ShellCommand: rocketcode.DefaultShellCommand{}}
 	runtimeConfig.CustomTools = r.customTools
-	runtimeConfig.ShellEnv = r.shellEnv
 
 	runtime, err := rocketcode.NewWithModelResolver(r.resolver, &runtimeConfig, r.root, callAgents, r.skills, r.agent, io.Discard)
 	if err != nil {

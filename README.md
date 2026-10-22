@@ -215,6 +215,19 @@ removed work is not copied. A shadow keeps its own replies, tool results, and
 history. The parent never waits for a shadow's answer. Model calls, cost, and tool
 work increase with each shadow.
 
+A shadow may take at most 1.5 times the parent's steps, rounded down, counted
+from the message that starts the turn and again from each steer a person sends
+into it. Messages from other agents and system notices, such as Background Job
+Completion Notes, do not restart the count. A step is one model response in the
+turn itself; subagents, retries, and permission reviews do not count, and a step
+repeated after a restart counts once. A shadow that gets ahead of a parent still
+running pauses until the parent's next step gives it room. A person's steer
+always reaches the shadow, even one out of steps. Once the parent's turn has
+ended, a shadow out of steps lets its last tool calls finish and then stops, and
+its Web comparison tab shows `Hit the step limit` with both counts.
+That note is for people only; the shadow's model never sees it. A shadow whose
+answer comes within the limit completes normally.
+
 **Shadows run real tools. This is not a dry run.** They share the workspace and
 external services with the parent, so allowed file edits, shell commands, and
 external writes can race or happen more than once. Each shadow uses its own
@@ -227,9 +240,8 @@ name, such as `some-important-agent/name-of-shadow-agent`, alongside the other
 during a shadow run.
 
 The same inputs do not mean identical model conversations: system instructions,
-model, independent history, tool results, and compaction can differ. A saved
-workflow runs from the same source and arguments, with the shadow as its base
-agent; explicit workflow worker settings still override that base.
+model, independent history, tool results, and compaction can differ. Workflow
+turns have no shadows.
 
 Inspect shadows in the Web comparison tabs beside their parent. Their output
 stays there, without an extra Slack reply, cron report, or MCP response. Shadows

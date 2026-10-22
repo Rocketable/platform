@@ -424,7 +424,7 @@ func TestSteerSwitchesRunningSessionType(t *testing.T) {
 			require.Empty(t, agents.Errors)
 
 			steers := []PromptInput{{ID: "steer-1", Role: PromptInputRoleUser, Texts: []string{"review it instead"}, Agent: tc.steer}}
-			drain := &mockSteerDrain{DrainFunc: func(context.Context, TurnPhase, []string) ([]PromptInput, error) {
+			drain := &mockSteerDrain{DrainFunc: func(context.Context, string, TurnPhase, []string) ([]PromptInput, error) {
 				drained := steers
 				steers = nil
 
@@ -560,7 +560,7 @@ func TestSteerSwitchConvertsTurnForProvider(t *testing.T) {
 	loop, err := factory.newLooper(&child, "")
 	require.NoError(t, err)
 
-	loop.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, TurnPhase, []string) ([]PromptInput, error) {
+	loop.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, string, TurnPhase, []string) ([]PromptInput, error) {
 		if len(steers) == 0 {
 			return nil, nil
 		}

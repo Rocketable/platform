@@ -19,7 +19,7 @@ var _ SteerDrain = &mockSteerDrain{}
 //
 //		// make and configure a mocked SteerDrain
 //		mockedSteerDrain := &mockSteerDrain{
-//			DrainFunc: func(context1 context.Context, turnPhase TurnPhase, strings []string) ([]PromptInput, error) {
+//			DrainFunc: func(ctx context.Context, responseID string, phase TurnPhase, applied []string) ([]PromptInput, error) {
 //				panic("mock out the Drain method")
 //			},
 //		}
@@ -30,41 +30,45 @@ var _ SteerDrain = &mockSteerDrain{}
 //	}
 type mockSteerDrain struct {
 	// DrainFunc mocks the Drain method.
-	DrainFunc func(context1 context.Context, turnPhase TurnPhase, strings []string) ([]PromptInput, error)
+	DrainFunc func(ctx context.Context, responseID string, phase TurnPhase, applied []string) ([]PromptInput, error)
 
 	// calls tracks calls to the methods.
 	calls struct {
 		// Drain holds details about calls to the Drain method.
 		Drain []struct {
-			// Context1 is the context1 argument value.
-			Context1 context.Context
-			// TurnPhase is the turnPhase argument value.
-			TurnPhase TurnPhase
-			// Strings is the strings argument value.
-			Strings []string
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// ResponseID is the responseID argument value.
+			ResponseID string
+			// Phase is the phase argument value.
+			Phase TurnPhase
+			// Applied is the applied argument value.
+			Applied []string
 		}
 	}
 	lockDrain sync.RWMutex
 }
 
 // Drain calls DrainFunc.
-func (mock *mockSteerDrain) Drain(context1 context.Context, turnPhase TurnPhase, strings []string) ([]PromptInput, error) {
+func (mock *mockSteerDrain) Drain(ctx context.Context, responseID string, phase TurnPhase, applied []string) ([]PromptInput, error) {
 	if mock.DrainFunc == nil {
 		panic("mockSteerDrain.DrainFunc: method is nil but SteerDrain.Drain was just called")
 	}
 	callInfo := struct {
-		Context1  context.Context
-		TurnPhase TurnPhase
-		Strings   []string
+		Ctx        context.Context
+		ResponseID string
+		Phase      TurnPhase
+		Applied    []string
 	}{
-		Context1:  context1,
-		TurnPhase: turnPhase,
-		Strings:   strings,
+		Ctx:        ctx,
+		ResponseID: responseID,
+		Phase:      phase,
+		Applied:    applied,
 	}
 	mock.lockDrain.Lock()
 	mock.calls.Drain = append(mock.calls.Drain, callInfo)
 	mock.lockDrain.Unlock()
-	return mock.DrainFunc(context1, turnPhase, strings)
+	return mock.DrainFunc(ctx, responseID, phase, applied)
 }
 
 // DrainCalls gets all the calls that were made to Drain.
@@ -72,14 +76,16 @@ func (mock *mockSteerDrain) Drain(context1 context.Context, turnPhase TurnPhase,
 //
 //	len(mockedSteerDrain.DrainCalls())
 func (mock *mockSteerDrain) DrainCalls() []struct {
-	Context1  context.Context
-	TurnPhase TurnPhase
-	Strings   []string
+	Ctx        context.Context
+	ResponseID string
+	Phase      TurnPhase
+	Applied    []string
 } {
 	var calls []struct {
-		Context1  context.Context
-		TurnPhase TurnPhase
-		Strings   []string
+		Ctx        context.Context
+		ResponseID string
+		Phase      TurnPhase
+		Applied    []string
 	}
 	mock.lockDrain.RLock()
 	calls = mock.calls.Drain

@@ -2436,7 +2436,7 @@ Use this skill for docs.
 			call := PromptInput{ID: "original-input", Texts: []string{"$" + skillName + " !`touch executed`"}, DirectSkill: &PromptInputDirectSkill{Name: skillName, Arguments: "!`touch executed`"}, Responses: output}
 
 			if steer {
-				looper.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, TurnPhase, []string) ([]PromptInput, error) {
+				looper.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, string, TurnPhase, []string) ([]PromptInput, error) {
 					return []PromptInput{call}, nil
 				}}
 
@@ -2528,7 +2528,7 @@ func TestLooperMixedSkillSteersDoNotSilentlyLoseAcceptedWork(t *testing.T) {
 		{Texts: []string{"plain neighboring request"}},
 		{Texts: []string{"$docs-helper last"}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "last"}},
 	}
-	looper.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, TurnPhase, []string) ([]PromptInput, error) {
+	looper.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, string, TurnPhase, []string) ([]PromptInput, error) {
 		batch := steers
 		steers = nil
 
@@ -2895,7 +2895,7 @@ func TestLooperResumedTurnInjectsEachSteerOnce(t *testing.T) {
 		return TextToolResult("looked-up"), nil
 	}
 	cut.Tools, cut.Permissions = map[string]looperTool{"lookup": tool}, PermissionSet{Buckets: []PermissionBucket{{Name: "lookup", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
-	cut.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, TurnPhase, []string) ([]PromptInput, error) {
+	cut.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, string, TurnPhase, []string) ([]PromptInput, error) {
 		return []PromptInput{{ID: "steer-1", Texts: []string{"injected before the cut"}}}, nil
 	}}
 	_, err := runJournaledTurn(ctx, cut, journal, "work")
@@ -2904,7 +2904,7 @@ func TestLooperResumedTurnInjectsEachSteerOnce(t *testing.T) {
 	mock := mockResponses(responseWithMessage("resp-1", "first"), responseWithMessage("resp-2", "done"))
 	resumed := testLooper(mock)
 	offered := false
-	resumed.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, TurnPhase, []string) ([]PromptInput, error) {
+	resumed.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, string, TurnPhase, []string) ([]PromptInput, error) {
 		if offered {
 			return nil, nil
 		}
@@ -2920,6 +2920,44 @@ func TestLooperResumedTurnInjectsEachSteerOnce(t *testing.T) {
 	sent := marshalJSON(t, newParams(mock)[1].Input.OfInputItemList)
 	require.Equal(t, 1, strings.Count(sent, "injected before the cut"))
 	require.Equal(t, 1, strings.Count(sent, "drained but not journaled"))
+}
+
+// A turn cut after a drain but before its checkpoint drains the journaled response again under
+// the same ID on resume, so an embedder that records steps by response ID counts it once.
+func TestLooperResumedTurnDrainsUnderSameResponseID(t *testing.T) {
+	journal := recordingJournal()
+	ctx, cancel := context.WithCancel(t.Context())
+
+	defer cancel()
+
+	tool := testLooperTool("lookup")
+	tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+		return TextToolResult("looked-up"), nil
+	}
+	tools, permissions := map[string]looperTool{"lookup": tool}, PermissionSet{Buckets: []PermissionBucket{{Name: "lookup", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
+
+	var drained []string
+
+	drain := &mockSteerDrain{DrainFunc: func(_ context.Context, responseID string, _ TurnPhase, _ []string) ([]PromptInput, error) {
+		drained = append(drained, responseID)
+		if len(drained) == 1 {
+			cancel()
+			return nil, context.Canceled
+		}
+
+		return nil, nil
+	}}
+
+	cut := testLooper(mockResponses(responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "lookup", `{}`)})))
+	cut.Tools, cut.Permissions, cut.SteerDrain = tools, permissions, drain
+	_, err := runJournaledTurn(ctx, cut, journal, "work")
+	require.ErrorIs(t, err, context.Canceled)
+
+	resumed := testLooper(mockResponses(responseWithMessage("resp-final", "done")))
+	resumed.Tools, resumed.Permissions, resumed.SteerDrain = tools, permissions, drain
+	_, err = runJournaledTurn(t.Context(), resumed, journal, "work")
+	require.NoError(t, err)
+	require.Equal(t, []string{"resp-tool", "resp-tool", "resp-final"}, drained)
 }
 
 func TestLooperResumedCompactedTurnKeepsInputIdentities(t *testing.T) {
@@ -2959,7 +2997,7 @@ func TestLooperResumedCompactedTurnKeepsInputIdentities(t *testing.T) {
 				return TextToolResult("found"), nil
 			}
 			cut.Tools, cut.Permissions = map[string]looperTool{"lookup": tool}, PermissionSet{Buckets: []PermissionBucket{{Name: "lookup", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
-			cut.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, phase TurnPhase, applied []string) ([]PromptInput, error) {
+			cut.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, _ string, phase TurnPhase, applied []string) ([]PromptInput, error) {
 				if !slices.Contains(applied, "s1") {
 					return []PromptInput{{ID: "s1", Texts: []string{"already consumed"}}}, nil
 				}
@@ -2985,7 +3023,7 @@ func TestLooperResumedCompactedTurnKeepsInputIdentities(t *testing.T) {
 			resumedProvider := mockResponses(responseWithMessage("first", "answer"), responseWithMessage("last", "done"))
 			resumed := testLooper(resumedProvider)
 			offered := false
-			resumed.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, _ TurnPhase, applied []string) ([]PromptInput, error) {
+			resumed.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, _ string, _ TurnPhase, applied []string) ([]PromptInput, error) {
 				require.Contains(t, applied, "s1")
 
 				if offered {
@@ -3015,7 +3053,7 @@ func TestLooperDrainErrorLeavesFinalAnswerUnaccepted(t *testing.T) {
 	mock := mockResponses(responseWithMessage("first", "not yet accepted"))
 	loop := testLooper(mock)
 	errDrain := errors.New("capture failed")
-	loop.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, phase TurnPhase, applied []string) ([]PromptInput, error) {
+	loop.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, _ string, phase TurnPhase, applied []string) ([]PromptInput, error) {
 		require.Equal(t, TurnPhaseFinalAnswer, phase)
 		require.Equal(t, []string{"initial"}, applied)
 
@@ -3476,7 +3514,7 @@ func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
 		return TextToolResult("looked-up"), nil
 	}
 	looper.Tools = map[string]looperTool{"lookup": tool}
-	looper.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, phase TurnPhase, _ []string) ([]PromptInput, error) {
+	looper.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, _ string, phase TurnPhase, _ []string) ([]PromptInput, error) {
 		if phase != TurnPhaseToolLoop {
 			return nil, nil
 		}
@@ -3535,7 +3573,7 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 		return TextToolResult("looked-up"), nil
 	}
 	looper.Tools = map[string]looperTool{"lookup": tool, "skill": factory.skillTool()}
-	looper.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, phase TurnPhase, _ []string) ([]PromptInput, error) {
+	looper.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, _ string, phase TurnPhase, _ []string) ([]PromptInput, error) {
 		if phase != TurnPhaseToolLoop {
 			return nil, nil
 		}
@@ -3639,7 +3677,7 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 			return TextToolResult(fmt.Sprintf("result-%d", params.Index)), nil
 		}
 		looper.Tools = map[string]looperTool{"first": {Definition: testFunctionToolParam("first"), Call: block}, "second": {Definition: testFunctionToolParam("second"), Call: block}, "third": {Definition: testFunctionToolParam("third"), Call: block}}
-		looper.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, phase TurnPhase, _ []string) ([]PromptInput, error) {
+		looper.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, _ string, phase TurnPhase, _ []string) ([]PromptInput, error) {
 			mu.Lock()
 
 			phases = append(phases, phase)
@@ -3754,7 +3792,7 @@ func TestLooperInjectsSteersWhenNoTools(t *testing.T) {
 	})
 	looper := testLooper(mock)
 	looper.Journal = sink
-	looper.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, phase TurnPhase, _ []string) ([]PromptInput, error) {
+	looper.SteerDrain = &mockSteerDrain{DrainFunc: func(_ context.Context, _ string, phase TurnPhase, _ []string) ([]PromptInput, error) {
 		phases = append(phases, phase)
 		if phase != TurnPhaseFinalAnswer || len(phases) > 1 {
 			return nil, nil

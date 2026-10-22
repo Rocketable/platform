@@ -1859,46 +1859,28 @@ func (b *Bridge) prepareWorkflow(request *bridgeRequest) error {
 		return err
 	}
 
-	var definition *workflow.Definition
-	if snapshot.WorkflowSource != "" {
-		definition, err = workflow.Compile(snapshot.WorkflowPath, snapshot.Workflow.Name, snapshot.WorkflowSource)
-		msg.Workflow = snapshot.Workflow
-	} else {
-		runtimeCfg := b.runtime.Clone()
+	runtimeCfg := b.runtime.Clone()
 
-		root, errRoot := os.OpenRoot(runtimeCfg.Workspace)
-		if errRoot != nil {
-			return fmt.Errorf("open workspace root: %w", errRoot)
-		}
-
-		defer func() { _ = root.Close() }()
-
-		var definitions map[string]*workflow.Definition
-
-		definitions, err = workflow.Load(root, runtimeCfg.RuntimeDirName())
-		definition = definitions[msg.Workflow.Name]
+	root, err := os.OpenRoot(runtimeCfg.Workspace)
+	if err != nil {
+		return fmt.Errorf("open workspace root: %w", err)
 	}
 
+	defer func() { _ = root.Close() }()
+
+	definitions, err := workflow.Load(root, runtimeCfg.RuntimeDirName())
 	if err != nil {
 		return fmt.Errorf("load workflow definition: %w", err)
 	}
 
+	definition := definitions[msg.Workflow.Name]
 	if definition == nil {
 		return fmt.Errorf("workflow %q is not configured", msg.Workflow.Name)
 	}
 
-	agent := b.agentSnapshot()
-	if !b.shadow {
-		agent = cmp.Or(snapshot.Agent, agent)
-	}
-
-	runner, err := newWorkflowAgentRunner(b.runtime, agent, rocketcode.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, cmp.Or(msg.SyncDestination, b.config.ConversationID))...)
+	runner, err := newWorkflowAgentRunner(b.runtime, cmp.Or(snapshot.Agent, b.agentSnapshot()), rocketcode.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, cmp.Or(msg.SyncDestination, b.config.ConversationID))...)
 	if err != nil {
 		return fmt.Errorf("prepare workflow agent runner: %w", err)
-	}
-
-	if b.shadow {
-		runner.shellEnv = map[string]string{"ROCKETCLAW_SHADOW": agent}
 	}
 
 	runner.definition = definition
@@ -1920,10 +1902,6 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 	runner := &incoming.workflow
 	defer func() { err = errors.Join(err, incoming.closeWorkflow()) }()
 
-	if err := b.prepareWorkflowShadows(ctx, incoming); err != nil {
-		return result, err
-	}
-
 	request := workflow.RunRequest{RunID: turnID, Args: msg.Workflow.Args}
 
 	turnCtx, cancel := context.WithCancel(ctx)
@@ -1943,13 +1921,11 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 		cancel()
 	}()
 
-	if !b.shadow {
-		outbound := b.newOutboundMessage(msg, turnID, "", false)
+	outbound := b.newOutboundMessage(msg, turnID, "", false)
 
-		outbound.Agent = runner.agent
-		if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
-			return result, fmt.Errorf("publish workflow start: %w", err)
-		}
+	outbound.Agent = runner.agent
+	if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
+		return result, fmt.Errorf("publish workflow start: %w", err)
 	}
 
 	workflowResult, errRun := workflow.Run(turnCtx, runner.definition, request, runner)
@@ -2431,7 +2407,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	if captured && len(snapshot.Inputs) == 0 {
 		b.log.Error("turn has captured input but no prompt", "conversation_id", b.config.ConversationID, "turn_id", turnID, "shadow", b.shadow,
-			"agent", snapshot.Agent, "closed", snapshot.Closed, "goal_turn", snapshot.GoalTurn, "workflow", snapshot.Workflow.Name,
+			"agent", snapshot.Agent, "closed", snapshot.Closed, "goal_turn", snapshot.GoalTurn,
 			"context_entries", len(snapshot.ContextEntries), "child_context", len(snapshot.ChildContext))
 
 		return runResult{}, emptyTurnInputsError{TurnID: turnID}

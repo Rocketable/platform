@@ -132,7 +132,7 @@ func TestShadowReviewPayloadRelease(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, admitted)
 
-			snapshot := turnInputSnapshot{Inputs: []rocketcode.PromptInput{{ID: "image-input", Texts: []string{"prepared bytes"}, Attachments: []rocketcode.Attachment{{MIME: "image/png", URL: "data:image/png;base64,aW1hZ2U="}}}}, Environment: map[string]string{"source": "captured bytes"}, WorkflowSource: "workflow bytes"}
+			snapshot := turnInputSnapshot{Inputs: []rocketcode.PromptInput{{ID: "image-input", Texts: []string{"prepared bytes"}, Attachments: []rocketcode.Attachment{{MIME: "image/png", URL: "data:image/png;base64,aW1hZ2U="}}}}, Environment: map[string]string{"source": "captured bytes"}}
 			require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &snapshot))
 
 			var child string

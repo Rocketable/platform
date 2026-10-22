@@ -29,8 +29,6 @@ var workflowNamePattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 // Definition is a compiled workflow definition.
 type Definition struct {
 	Name         string
-	Path         string
-	Source       string
 	Description  string
 	Phases       []string
 	WorkerModels []string
@@ -127,7 +125,7 @@ func Load(root *os.Root, runtimeDir string) (definitions map[string]*Definition,
 	return definitions, nil
 }
 
-// Compile validates saved source and retains it for durable invocation snapshots.
+// Compile validates a workflow's source.
 func Compile(filename, name, source string) (*Definition, error) {
 	predeclared := starlark.StringDict{
 		"worker": starlark.NewBuiltin("worker", func(_ *starlark.Thread, _ *starlark.Builtin, _ starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
@@ -177,8 +175,6 @@ func Compile(filename, name, source string) (*Definition, error) {
 
 	return &Definition{
 		Name:         definitionName,
-		Path:         filename,
-		Source:       source,
 		Description:  description,
 		Phases:       phases,
 		WorkerModels: workerModels,

@@ -181,7 +181,7 @@ func TestShadowLifecycleCaptureFailureAndRetry(t *testing.T) {
 		require.NoError(t, err)
 
 		bridge := &Bridge{shadow: true, config: Config{ConversationID: child, SessionService: store}, activeTurnID: turn.id}
-		_, err = bridge.Drain(t.Context(), rocketcode.TurnPhaseFinalAnswer, nil)
+		_, err = bridge.Drain(t.Context(), "resp-1", rocketcode.TurnPhaseFinalAnswer, nil)
 		require.ErrorContains(t, err, "decode mirrored input")
 		require.Nil(t, bridge.shadowInputWake, "failed durable read unregisters the waiter")
 	}
@@ -386,7 +386,7 @@ func TestShadowLifecycleUnavailableStateDoesNotStartWork(t *testing.T) {
 	parent.threads = &threadBridgeManager{store: store, bridges: map[string]directBridge{children[0]: child}}
 	require.NoError(t, store.Stop())
 
-	for _, operation := range []string{"claim", "capture", "drain", "wake", "notify", "recover stopped", "prepare workflow", "clear", "revert", "history"} {
+	for _, operation := range []string{"claim", "capture", "drain", "wake", "notify", "recover stopped", "clear", "revert", "history"} {
 		t.Run(operation, func(t *testing.T) {
 			var err error
 
@@ -399,7 +399,7 @@ func TestShadowLifecycleUnavailableStateDoesNotStartWork(t *testing.T) {
 			case "capture":
 				err = store.captureTurnInputs(t.Context(), "parent", request.turnID, &turnInputSnapshot{})
 			case "drain":
-				_, err = child.Drain(t.Context(), rocketcode.TurnPhaseFinalAnswer, nil)
+				_, err = child.Drain(t.Context(), "resp-1", rocketcode.TurnPhaseFinalAnswer, nil)
 				require.Nil(t, child.shadowInputWake)
 			case "wake":
 				err = parent.startShadowWorkers(t.Context(), request.turnID)
@@ -407,8 +407,6 @@ func TestShadowLifecycleUnavailableStateDoesNotStartWork(t *testing.T) {
 				err = parent.notifyShadowInputs(t.Context(), request.turnID)
 			case "recover stopped":
 				_, err = child.finishStoppedShadow(t.Context(), &request)
-			case "prepare workflow":
-				err = parent.prepareWorkflowShadows(t.Context(), &request)
 			case "clear":
 				_, err = store.DeleteSession(t.Context(), "parent")
 			case "revert":

@@ -779,7 +779,7 @@ func TestPromotedAgentQueueItemStaysNonHuman(t *testing.T) {
 		require.Len(t, bridge.steers, 1)
 		assert.False(t, bridge.steers[0].inbound.Human)
 
-		inputs, err := bridge.Drain(t.Context(), rocketcode.TurnPhaseToolLoop, nil)
+		inputs, err := bridge.Drain(t.Context(), "resp-1", rocketcode.TurnPhaseToolLoop, nil)
 		require.NoError(t, err)
 		require.Len(t, inputs, 1)
 		assert.Nil(t, inputs[0].DirectSkill)
@@ -873,7 +873,7 @@ func TestWriteSessionDeliversByMode(t *testing.T) {
 				require.Len(t, bridge.steers, 1, "later work does not admit the steer's row again")
 				assert.Empty(t, bridge.requestCh)
 
-				inputs, err := bridge.Drain(t.Context(), rocketcode.TurnPhaseToolLoop, nil)
+				inputs, err := bridge.Drain(t.Context(), "resp-1", rocketcode.TurnPhaseToolLoop, nil)
 				require.NoError(t, err)
 				require.Len(t, inputs, 1)
 				assert.True(t, strings.HasPrefix(inputs[0].Header, `[System sender="steer from session web:sender (agent planner)"`), inputs[0].Header)
