@@ -73,10 +73,8 @@ type Connector struct {
 	socketEvents chan socketmode.Event
 	inboundStop  context.CancelFunc
 
-	newSocketClient func(*slack.Client) *socketmode.Client
-	runSocketClient func(context.Context, *socketmode.Client) error
-	ackSocketEvent  func(*socketmode.Client, socketmode.Request, ...any) error
-	reconnectDelay  time.Duration
+	sockets        socketClientFactory
+	reconnectDelay time.Duration
 
 	mu               sync.Mutex
 	responseMu       sync.Mutex
@@ -99,6 +97,28 @@ type Connector struct {
 type channelObservation struct {
 	name string
 	at   time.Time
+}
+
+type socketClient interface {
+	RunContext(context.Context) error
+	Ack(socketmode.Request, ...any) error
+}
+
+type socketConnection struct {
+	client socketClient
+	events <-chan socketmode.Event
+}
+
+type socketClientFactory interface {
+	newClient(*slack.Client) socketConnection
+}
+
+type slackSocketFactory struct{}
+
+func (slackSocketFactory) newClient(api *slack.Client) socketConnection {
+	client := socketmode.New(api)
+
+	return socketConnection{client: client, events: client.Events}
 }
 
 type channelFactsStore interface {
@@ -151,15 +171,7 @@ func New(cfg *config.SlackConfig, threadRouter protocol.PrimaryTextRouter, facts
 		threadRouter: threadRouter,
 		facts:        facts, factsWake: make(chan struct{}, 1), refreshWake: make(chan struct{}, 1), observations: make(map[string]channelObservation),
 		api: api, socketEvents: make(chan socketmode.Event, 50),
-		newSocketClient: func(api *slack.Client) *socketmode.Client {
-			return socketmode.New(api)
-		},
-		runSocketClient: func(ctx context.Context, client *socketmode.Client) error {
-			return client.RunContext(ctx)
-		},
-		ackSocketEvent: func(client *socketmode.Client, req socketmode.Request, payload ...any) error {
-			return client.Ack(req, payload...)
-		},
+		sockets:        slackSocketFactory{},
 		reconnectDelay: time.Second,
 		replies:        map[string]slackReplyState{}, pending: map[string]slackReplyState{},
 		nameByID: map[string]string{},
@@ -1339,12 +1351,12 @@ func (c *Connector) eventLoop(ctx context.Context) {
 
 func (c *Connector) runSocketLoop(ctx context.Context) {
 	for ctx.Err() == nil {
-		client := c.newSocketClient(c.api)
+		connection := c.sockets.newClient(c.api)
 		runCtx, cancel := context.WithCancel(ctx)
 		done := make(chan error, 1)
 
 		go func() {
-			done <- c.runSocketClient(runCtx, client)
+			done <- connection.client.RunContext(runCtx)
 		}()
 
 		var errRun error
@@ -1356,14 +1368,14 @@ func (c *Connector) runSocketLoop(ctx context.Context) {
 				cancel()
 
 				return
-			case event, ok := <-client.Events:
+			case event, ok := <-connection.events:
 				if !ok {
 					cancel()
 					break clientLoop
 				}
 
 				if (event.Type == socketmode.EventTypeEventsAPI || event.Type == socketmode.EventTypeInteractive) && event.Request != nil {
-					if err := c.ackSocketEvent(client, *event.Request); err != nil {
+					if err := connection.client.Ack(*event.Request); err != nil {
 						c.log.Warn("ack Slack socket event", "error", err)
 					}
 				}

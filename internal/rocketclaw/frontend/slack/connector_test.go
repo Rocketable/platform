@@ -442,26 +442,26 @@ func TestSocketLoopRecreatesClientAndKeepsStableEventChannel(t *testing.T) {
 	connector := newTestConnector("http://slack.test")
 	connector.reconnectDelay = 0
 
-	clients := make(chan *socketmode.Client, 2)
+	clients := make(chan *socketClientMock, 2)
 	releases := make(chan struct{})
-	connector.newSocketClient = func(api *slack.Client) *socketmode.Client {
-		client := socketmode.New(api)
+	errStale := errors.New("stale socket")
+	connector.sockets = &socketClientFactoryMock{newClientFunc: func(*slack.Client) socketConnection {
+		events := make(chan socketmode.Event, 50)
+		client := &socketClientMock{RunContextFunc: func(ctx context.Context) error {
+			events <- socketmode.Event{Type: socketmode.EventTypeConnecting}
+
+			select {
+			case <-releases:
+				return errStale
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}}
+
 		clients <- client
 
-		return client
-	}
-
-	errStale := errors.New("stale socket")
-	connector.runSocketClient = func(ctx context.Context, client *socketmode.Client) error {
-		client.Events <- socketmode.Event{Type: socketmode.EventTypeConnecting}
-
-		select {
-		case <-releases:
-			return errStale
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
+		return socketConnection{client: client, events: events}
+	}}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -492,13 +492,17 @@ func TestStopCancelsSocketLoop(t *testing.T) {
 
 	started := make(chan struct{})
 	done := make(chan struct{})
-	connector.runSocketClient = func(ctx context.Context, _ *socketmode.Client) error {
-		close(started)
-		<-ctx.Done()
-		close(done)
+	connector.sockets = &socketClientFactoryMock{newClientFunc: func(*slack.Client) socketConnection {
+		client := &socketClientMock{RunContextFunc: func(ctx context.Context) error {
+			close(started)
+			<-ctx.Done()
+			close(done)
 
-		return ctx.Err()
-	}
+			return ctx.Err()
+		}}
+
+		return socketConnection{client: client, events: make(chan socketmode.Event, 50)}
+	}}
 
 	go connector.runSocketLoop(inboundCtx)
 
@@ -543,13 +547,17 @@ func TestStartStopCancelsInboundContext(t *testing.T) {
 	connector.facts = facts
 	started := make(chan struct{})
 	done := make(chan struct{})
-	connector.runSocketClient = func(ctx context.Context, _ *socketmode.Client) error {
-		close(started)
-		<-ctx.Done()
-		close(done)
+	connector.sockets = &socketClientFactoryMock{newClientFunc: func(*slack.Client) socketConnection {
+		client := &socketClientMock{RunContextFunc: func(ctx context.Context) error {
+			close(started)
+			<-ctx.Done()
+			close(done)
 
-		return ctx.Err()
-	}
+			return ctx.Err()
+		}}
+
+		return socketConnection{client: client, events: make(chan socketmode.Event, 50)}
+	}}
 
 	require.NoError(t, connector.Authenticate())
 	assert.Equal(t, "UBOT", connector.botUserID)
@@ -579,43 +587,41 @@ func TestSocketLoopRecreatesWhenStableEventChannelIsFull(t *testing.T) {
 
 	connector.reconnectDelay = 0
 
-	clients := make(chan *socketmode.Client, 2)
+	clients := make(chan *socketClientMock, 2)
 	release := make(chan struct{})
 	sentEvent := make(chan struct{}, 1)
 	clientDone := make(chan struct{}, 2)
 	loopDone := make(chan struct{})
-	connector.newSocketClient = func(api *slack.Client) *socketmode.Client {
-		client := socketmode.New(api)
+	errStale := errors.New("stale socket")
+	connector.sockets = &socketClientFactoryMock{newClientFunc: func(*slack.Client) socketConnection {
+		events := make(chan socketmode.Event)
+		client := &socketClientMock{RunContextFunc: func(ctx context.Context) error {
+			defer func() { clientDone <- struct{}{} }()
 
-		client.Events = make(chan socketmode.Event)
+			select {
+			case events <- socketmode.Event{Type: socketmode.EventTypeConnecting}:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+
+			select {
+			case sentEvent <- struct{}{}:
+			default:
+			}
+
+			select {
+			case <-release:
+				return errStale
+			case <-ctx.Done():
+				<-loopDone
+				return ctx.Err()
+			}
+		}}
+
 		clients <- client
 
-		return client
-	}
-
-	errStale := errors.New("stale socket")
-	connector.runSocketClient = func(ctx context.Context, client *socketmode.Client) error {
-		defer func() { clientDone <- struct{}{} }()
-
-		select {
-		case client.Events <- socketmode.Event{Type: socketmode.EventTypeConnecting}:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-
-		select {
-		case sentEvent <- struct{}{}:
-		default:
-		}
-
-		select {
-		case <-release:
-			return errStale
-		case <-ctx.Done():
-			<-loopDone
-			return ctx.Err()
-		}
-	}
+		return socketConnection{client: client, events: events}
+	}}
 
 	ctx, cancel := context.WithCancel(t.Context())
 
@@ -630,7 +636,7 @@ func TestSocketLoopRecreatesWhenStableEventChannelIsFull(t *testing.T) {
 
 	release <- struct{}{}
 
-	var secondClient *socketmode.Client
+	var secondClient *socketClientMock
 	select {
 	case secondClient = <-clients:
 	case <-time.After(time.Second):
@@ -661,24 +667,24 @@ func TestSocketLoopRecreatesWhenClientEventChannelCloses(t *testing.T) {
 	connector := newTestConnector("http://slack.test")
 	connector.reconnectDelay = 0
 
-	clients := make(chan *socketmode.Client, 2)
+	clients := make(chan *socketClientMock, 2)
 	created := 0
-	connector.newSocketClient = func(api *slack.Client) *socketmode.Client {
-		client := socketmode.New(api)
+	connector.sockets = &socketClientFactoryMock{newClientFunc: func(*slack.Client) socketConnection {
+		events := make(chan socketmode.Event, 50)
+		client := &socketClientMock{RunContextFunc: func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}}
 
 		created++
 		if created == 1 {
-			close(client.Events)
+			close(events)
 		}
 
 		clients <- client
 
-		return client
-	}
-	connector.runSocketClient = func(ctx context.Context, _ *socketmode.Client) error {
-		<-ctx.Done()
-		return ctx.Err()
-	}
+		return socketConnection{client: client, events: events}
+	}}
 
 	ctx := t.Context()
 
@@ -711,34 +717,40 @@ func TestSocketLoopAcksEventsAPIBeforeEnqueue(t *testing.T) {
 	connector.reconnectDelay = 0
 	errStale := errors.New("stale socket")
 	sent := false
-	connector.runSocketClient = func(ctx context.Context, client *socketmode.Client) error {
-		if sent {
-			<-ctx.Done()
+	connector.sockets = &socketClientFactoryMock{newClientFunc: func(*slack.Client) socketConnection {
+		events := make(chan socketmode.Event, 50)
+		client := &socketClientMock{
+			RunContextFunc: func(ctx context.Context) error {
+				if sent {
+					<-ctx.Done()
 
-			return ctx.Err()
+					return ctx.Err()
+				}
+
+				sent = true
+
+				events <- socketmode.Event{
+					Type:    socketmode.EventTypeEventsAPI,
+					Request: &socketmode.Request{EnvelopeID: "blocked"},
+					Data:    slackevents.EventsAPIEvent{},
+				}
+
+				<-ackSeen
+				<-release
+
+				return errStale
+			},
+			AckFunc: func(req socketmode.Request, _ ...any) error {
+				acked <- req.EnvelopeID
+
+				close(ackSeen)
+
+				return nil
+			},
 		}
 
-		sent = true
-
-		client.Events <- socketmode.Event{
-			Type:    socketmode.EventTypeEventsAPI,
-			Request: &socketmode.Request{EnvelopeID: "blocked"},
-			Data:    slackevents.EventsAPIEvent{},
-		}
-
-		<-ackSeen
-		<-release
-
-		return errStale
-	}
-
-	connector.ackSocketEvent = func(_ *socketmode.Client, req socketmode.Request, _ ...any) error {
-		acked <- req.EnvelopeID
-
-		close(ackSeen)
-
-		return nil
-	}
+		return socketConnection{client: client, events: events}
+	}}
 
 	ctx := t.Context()
 
@@ -788,22 +800,28 @@ func TestEventLoopIgnoresInteractiveEvents(t *testing.T) {
 func TestSocketLoopEnqueuesEventsAPIWhenAckFails(t *testing.T) {
 	connector := newTestConnector("http://slack.test")
 	connector.reconnectDelay = 0
-	connector.runSocketClient = func(ctx context.Context, client *socketmode.Client) error {
-		client.Events <- socketmode.Event{
-			Type:    socketmode.EventTypeEventsAPI,
-			Request: &socketmode.Request{EnvelopeID: "ack-failed"},
-			Data:    slackevents.EventsAPIEvent{},
+	errAck := errors.New("ack failed")
+	connector.sockets = &socketClientFactoryMock{newClientFunc: func(*slack.Client) socketConnection {
+		events := make(chan socketmode.Event, 50)
+		client := &socketClientMock{
+			RunContextFunc: func(ctx context.Context) error {
+				events <- socketmode.Event{
+					Type:    socketmode.EventTypeEventsAPI,
+					Request: &socketmode.Request{EnvelopeID: "ack-failed"},
+					Data:    slackevents.EventsAPIEvent{},
+				}
+
+				<-ctx.Done()
+
+				return ctx.Err()
+			},
+			AckFunc: func(socketmode.Request, ...any) error {
+				return errAck
+			},
 		}
 
-		<-ctx.Done()
-
-		return ctx.Err()
-	}
-
-	errAck := errors.New("ack failed")
-	connector.ackSocketEvent = func(_ *socketmode.Client, _ socketmode.Request, _ ...any) error {
-		return errAck
-	}
+		return socketConnection{client: client, events: events}
+	}}
 
 	ctx := t.Context()
 
@@ -4430,15 +4448,7 @@ func newTestConnectorWithOptions(apiURL string, channels []config.SlackChannelCo
 	connector.threadRouter = router
 	connector.api = slack.New("xoxb-test", slack.OptionAPIURL(apiURL+"/"))
 	connector.socketEvents = make(chan socketmode.Event, 50)
-	connector.newSocketClient = func(api *slack.Client) *socketmode.Client {
-		return socketmode.New(api)
-	}
-	connector.runSocketClient = func(ctx context.Context, client *socketmode.Client) error {
-		return client.RunContext(ctx)
-	}
-	connector.ackSocketEvent = func(client *socketmode.Client, req socketmode.Request, payload ...any) error {
-		return client.Ack(req, payload...)
-	}
+	connector.sockets = slackSocketFactory{}
 	connector.reconnectDelay = time.Second
 	connector.replies = map[string]slackReplyState{}
 	connector.pending = map[string]slackReplyState{}

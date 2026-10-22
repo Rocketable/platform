@@ -100,6 +100,12 @@ packages:
           structname: mockTailnetWhoIs
   github.com/Rocketable/platform/internal/rocketclaw/frontend/slack:
     interfaces:
+      socketClient:
+        config:
+          structname: socketClientMock
+      socketClientFactory:
+        config:
+          structname: socketClientFactoryMock
       channelFactsStore:
         config:
           structname: channelFactsStoreMock
