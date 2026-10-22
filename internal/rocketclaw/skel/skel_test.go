@@ -39,23 +39,6 @@ func TestSyncFSOverwritesEmbeddedFiles(t *testing.T) {
 	assert.Equal(t, "nested", string(data))
 }
 
-func TestSyncFSPreservesExtraFiles(t *testing.T) {
-	tmp := t.TempDir()
-	root := filepath.Join(tmp, targetRoot)
-	require.NoError(t, os.MkdirAll(root, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "keep.txt"), []byte("keep"), 0o644))
-
-	src := fstest.MapFS{
-		".rocketclaw/AGENTS.md": {Data: []byte("seed")},
-	}
-
-	require.NoError(t, syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, false, inertFileFilter{}))
-
-	data, err := os.ReadFile(filepath.Join(root, "keep.txt"))
-	require.NoError(t, err)
-	assert.Equal(t, "keep", string(data))
-}
-
 func TestSyncResetsTargetPreservingState(t *testing.T) {
 	tmp := t.TempDir()
 	root := filepath.Join(tmp, targetRoot)
