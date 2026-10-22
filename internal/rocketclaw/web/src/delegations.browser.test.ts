@@ -48,7 +48,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel 
       delegations: ["chat/call-task", "chat/call-task-0a1b2c3d", "chat/call_0-review-1a2b3c4d", "chat/call-fresh-2b3c4d5e", "chat/call-fresh-review-3c4d5e6f", "chat/call-old"], reviewRationales: { "chat/call-task": "The task is in scope.", "chat/call_0-review-1a2b3c4d": "The requested change is outside the allowed scope.", "chat/call-fresh-review-3c4d5e6f": "The read-only check is within the requested scope." } },
     "chat/call-task": { messages: [event("assistant", "Task call allowed")], delegations: [] },
     "chat/call_0-review-1a2b3c4d": { messages: [event("assistant", "Bash call allowed")], delegations: [] },
-    "chat/call-task-0a1b2c3d": { messages: [event("user", "Review this"), event("tool", `execute {"code":"print(1)"}`, { toolName: "execute", toolCallId: "call-inner" }), event("assistant", "Child done")], delegations: ["chat/call-task-0a1b2c3d/call-inner"] },
+    "chat/call-task-0a1b2c3d": { messages: [event("user", "Review this"), event("tool", `execute {"code":"print('checking every configured region for configuration drift')"}`, { toolName: "execute", toolCallId: "call-inner" }), event("assistant", "Child done")], delegations: ["chat/call-task-0a1b2c3d/call-inner"] },
     "chat/call-task-0a1b2c3d/call-inner": { messages: [event("assistant", "Inner review allowed")], delegations: [] },
   };
   const server = serve(histories);
@@ -110,11 +110,13 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel 
     await panel.getByText("Child done", { exact: true }).waitFor();
     expect(await panel.getByRole("link", { name: /^Open permission review/ }).count()).toBe(0);
 
-    await panel.getByRole("link", { name: "Open delegation: Run · print(1)", exact: true }).click();
+    await panel.getByRole("link", { name: "Open delegation: Run · print('checking every configured region for configuration drift')", exact: true }).click();
     await panel.getByText("Inner review allowed", { exact: true }).waitFor();
     expect(delegation()).toBe("chat/call-task-0a1b2c3d/call-inner");
     expect(await crumbs.getByRole("link").allTextContents()).toEqual(["Conversation", "task"]);
-    expect(await crumbs.locator('[aria-current="page"]').textContent()).toBe("Run · print(1)");
+    expect(await crumbs.locator('[aria-current="page"]').textContent()).toBe("Run · print('checking every configured region for configuration drift')");
+    // A long last step shortens first; the steps before it stay whole.
+    expect(await crumbs.getByRole("link", { name: "task", exact: true }).evaluate((link: HTMLElement) => link.scrollWidth <= link.clientWidth && link.clientWidth > 0)).toBe(true);
     await Bun.write(path.resolve(import.meta.dir, `../../../../.tmp/delegation-panel-${width}.png`), await page.screenshot());
     await panel.getByRole("link", { name: "Back to task", exact: true }).click();
     await panel.getByText("Child done", { exact: true }).waitFor();

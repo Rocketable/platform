@@ -3627,9 +3627,10 @@ function DelegationTranscript({ id, child }: { id: string; child: string }) {
   const close = () => navigate(panelHref());
   const body = <>
     <header className="flex shrink-0 items-center gap-1 border-b p-2 text-xs lg:pr-12">
-      <nav aria-label="Delegation breadcrumbs" className="flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap">
+      <nav aria-label="Delegation breadcrumbs" className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden whitespace-nowrap">
         <Link href={panelHref()} className="shrink-0 hover:underline">Conversation</Link>
-        {levels.map(({ level, label }, index) => <span key={level} className="flex min-w-0 items-center gap-1"><span aria-hidden="true">/</span>{index === levels.length - 1 ? <span aria-current="page" title={label} className="min-w-0 truncate font-medium">{label}</span> : <Link href={panelHref(level)} title={label} className="min-w-0 truncate hover:underline">{label}</Link>}</span>)}
+        {/* Only the current level shortens, down to a few characters; the levels before it keep up to 10rem each. */}
+        {levels.map(({ level, label }, index) => <span key={level} className={cn("flex min-w-0 items-center gap-1", index === levels.length - 1 ? "min-w-16" : "max-w-40 shrink-0")}><span aria-hidden="true">/</span>{index === levels.length - 1 ? <span aria-current="page" title={label} className="min-w-0 truncate font-medium">{label}</span> : <Link href={panelHref(level)} title={label} className="min-w-0 truncate hover:underline">{label}</Link>}</span>)}
       </nav>
       <Button variant="ghost" size="icon-sm" aria-label="Close delegation" onClick={close}><X /></Button>
     </header>
