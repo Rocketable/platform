@@ -18,6 +18,13 @@ import (
 	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
+var (
+	// ErrInvalidRevertMessage is a saved message ID undo cannot read.
+	ErrInvalidRevertMessage = errors.New("invalid revert message ID")
+	// ErrRevertMessageGone is an undo target the conversation does not hold.
+	ErrRevertMessageGone = errors.New("revert message is no longer in the session")
+)
+
 // popQueueItemSQL moves a held row ($4) to the tail of the ready queue as kind $3, in its stored
 // request too, so it runs as that kind.
 const popQueueItemSQL = `WITH tail AS (SELECT COALESCE(MAX(position), -1) + 1 AS position FROM thread_queue WHERE conversation_id = $1 AND park_after = '')
@@ -77,13 +84,19 @@ func revertBoundary(ctx context.Context, db stateStoreDB, conversationID, messag
 
 	index, errIndex := strconv.Atoi(indexText)
 	if !ok || errID != nil || errIndex != nil || id <= 0 || index < 0 || strconv.FormatInt(id, 10) != idText || strconv.Itoa(index) != indexText {
-		return ObservedSessionEntry{}, 0, errors.New("invalid revert message ID")
+		return ObservedSessionEntry{}, 0, ErrInvalidRevertMessage
 	}
 
 	entry := ObservedSessionEntry{ID: id}
 
 	var raw string
-	if err := db.QueryRowContext(ctx, `SELECT entry_json FROM session_entries WHERE conversation_id = $1 AND id = $2`, conversationID, id).Scan(&raw); err != nil {
+
+	err := db.QueryRowContext(ctx, `SELECT entry_json FROM session_entries WHERE conversation_id = $1 AND id = $2`, conversationID, id).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return entry, 0, ErrRevertMessageGone
+	}
+
+	if err != nil {
 		return entry, 0, fmt.Errorf("read revert boundary: %w", err)
 	}
 
@@ -92,7 +105,7 @@ func revertBoundary(ctx context.Context, db stateStoreDB, conversationID, messag
 	}
 
 	if index >= len(entry.Entry.ReplayInput) {
-		return entry, 0, errors.New("revert message is no longer in the session")
+		return entry, 0, ErrRevertMessageGone
 	}
 
 	items, err := rocketcode.ReplayInputToParams(entry.Entry.ReplayInput[index : index+1])
@@ -321,7 +334,7 @@ func revertInputDB(ctx context.Context, db stateStoreDB, conversationID, inputID
 )
 SELECT COALESCE(saved.message_id, ''), COALESCE(recorded.turn_id, '') FROM saved FULL JOIN recorded ON TRUE`, conversationID, inputID).Scan(&messageID, &turnID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", "", errors.New("revert message is no longer in the session")
+		return "", "", ErrRevertMessageGone
 	}
 
 	if err != nil {

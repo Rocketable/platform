@@ -2,12 +2,21 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
+
+// maxIDBytes bounds an ID a request names; stored IDs are far shorter.
+const maxIDBytes = 1024
 
 // Register publishes the implemented portion of rpc.Web. Other methods retain
 // gRPC's Unimplemented response; they are not successful empty handlers.
@@ -25,8 +34,14 @@ func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 				return nil, err
 			}
 
+			if err := validRequest(request.ProtoReflect()); err != nil {
+				return nil, err
+			}
+
 			handler := func(ctx context.Context, request any) (any, error) {
-				return s.webCall(ctx, method, request)
+				response, err := s.webCall(ctx, method, request)
+
+				return response, withoutDatabaseText(method, err)
 			}
 			if interceptor != nil {
 				return interceptor(ctx, request, &grpc.UnaryServerInfo{Server: s, FullMethod: "/rpc.Web/" + method}, handler)
@@ -37,31 +52,106 @@ func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	}
 
 	desc.Streams = []grpc.StreamDesc{{StreamName: "UploadAttachment", ClientStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
-		return s.uploadAttachment(stream)
+		return withoutDatabaseText("UploadAttachment", s.uploadAttachment(stream))
 	}}, {StreamName: "DownloadAttachment", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
-		return s.downloadAttachment(stream)
+		return withoutDatabaseText("DownloadAttachment", s.downloadAttachment(stream))
 	}}, {StreamName: "Join", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
 		request := &JoinRequest{}
 		if err := stream.RecvMsg(request); err != nil {
 			return fmt.Errorf("receive web join: %w", err)
 		}
 
-		return s.join(request, stream)
+		if err := validRequest(request.ProtoReflect()); err != nil {
+			return err
+		}
+
+		return withoutDatabaseText("Join", s.join(request, stream))
 	}}, {StreamName: "Voice", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
 		request := &VoiceRequest{}
 		if err := stream.RecvMsg(request); err != nil {
 			return fmt.Errorf("receive web voice: %w", err)
 		}
 
-		return s.voice(request, stream)
+		if err := validRequest(request.ProtoReflect()); err != nil {
+			return err
+		}
+
+		return withoutDatabaseText("Voice", s.voice(request, stream))
 	}}, {StreamName: "ListSessions", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
 		if err := stream.RecvMsg(&ListSessionsRequest{}); err != nil {
 			return fmt.Errorf("receive web session list: %w", err)
 		}
 
-		return s.listSessions(stream)
+		return withoutDatabaseText("ListSessions", s.listSessions(stream))
 	}}}
 	registrar.RegisterService(&desc, s)
+}
+
+// validRequest refuses a request holding a string no stored value may: one with a NUL character,
+// which PostgreSQL text cannot hold, or an ID, a field named id or ending in _id or _ids, with
+// surrounding spaces or over maxIDBytes, so a lookup never trims or truncates it into another.
+func validRequest(message protoreflect.Message) error {
+	var err error
+
+	message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
+		switch {
+		case field.IsList():
+			for i := range value.List().Len() {
+				if err = validValue(field, value.List().Get(i)); err != nil {
+					return false
+				}
+			}
+		case field.IsMap():
+			value.Map().Range(func(key protoreflect.MapKey, value protoreflect.Value) bool {
+				err = errors.Join(validValue(field.MapKey(), key.Value()), validValue(field.MapValue(), value))
+
+				return err == nil
+			})
+		default:
+			err = validValue(field, value)
+		}
+
+		return err == nil
+	})
+
+	return err
+}
+
+func validValue(field protoreflect.FieldDescriptor, value protoreflect.Value) error {
+	if field.Kind() == protoreflect.MessageKind {
+		return validRequest(value.Message())
+	}
+
+	if field.Kind() != protoreflect.StringKind {
+		return nil
+	}
+
+	name, text := string(field.Name()), value.String()
+	id := name == "id" || strings.HasSuffix(name, "_id") || strings.HasSuffix(name, "_ids")
+
+	switch {
+	case strings.ContainsRune(text, 0):
+		return status.Errorf(codes.InvalidArgument, "%s holds a NUL character", name)
+	case id && len(text) > maxIDBytes:
+		return status.Errorf(codes.InvalidArgument, "%s is longer than %d bytes", name, maxIDBytes)
+	case id && strings.TrimSpace(text) != text:
+		return status.Errorf(codes.InvalidArgument, "%s has surrounding spaces", name)
+	}
+
+	return nil
+}
+
+// withoutDatabaseText keeps a database error's own text, which can name tables and values, out of
+// the response of method: the caller gets Internal with what the server was doing, and the log the
+// whole error.
+func withoutDatabaseText(method string, err error) error {
+	if errPg, ok := errors.AsType[*pgconn.PgError](err); ok {
+		slog.Error("web call failed in the database", "method", method, "error", err)
+
+		return fmt.Errorf("web %s: %w", method, status.Error(codes.Internal, strings.TrimSuffix(err.Error(), errPg.Error())+"database error"))
+	}
+
+	return err
 }
 
 func (s *Server) webCall(ctx context.Context, method string, request any) (any, error) {

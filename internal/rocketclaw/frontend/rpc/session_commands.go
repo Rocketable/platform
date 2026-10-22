@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -74,7 +75,12 @@ func (s *Server) stageRevert(ctx context.Context, request *StageRevertRequest) (
 	}
 
 	marker, text, err := s.backend.StageRevert(ctx, request.Id, request.MessageId)
-	if err != nil {
+	switch {
+	case errors.Is(err, backend.ErrInvalidRevertMessage):
+		return nil, fmt.Errorf("web revert: %w", status.Error(codes.InvalidArgument, err.Error()))
+	case errors.Is(err, backend.ErrRevertMessageGone):
+		return nil, fmt.Errorf("web revert: %w", status.Error(codes.NotFound, err.Error()))
+	case err != nil:
 		return nil, fmt.Errorf("web revert: %w", err)
 	}
 

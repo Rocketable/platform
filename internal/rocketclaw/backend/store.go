@@ -922,6 +922,15 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 		return 0, err
 	}
 
+	var remote bool
+	if err := queryScalar(ctx, s.db, "read opencode session", `SELECT count(*) > 0 FROM opencode_sessions WHERE conversation_id = $1`, &remote, conversationID); err != nil {
+		return 0, err
+	}
+
+	if remote {
+		return 0, ErrRemoteSession
+	}
+
 	tx, ids, workers, err := s.beginHistoryMutation(ctx, []string{conversationID}, false)
 	if err != nil {
 		return 0, err
