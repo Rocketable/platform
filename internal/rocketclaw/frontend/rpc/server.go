@@ -210,6 +210,8 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 	listing := sessionListing{version: rand.Text(), rows: map[string]uint64{}}
 	order := []string{}
 
+	var encoded []byte
+
 	for chat, err := range s.sessions.SidebarChats(ctx, owner, s.channels, nil) {
 		if err != nil {
 			return err
@@ -240,7 +242,7 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 			session.UnreadAt = row.UnreadAt.Format(time.RFC3339Nano)
 		}
 
-		encoded, _ := proto.MarshalOptions{Deterministic: true}.Marshal(session) // A built Session always encodes.
+		encoded, _ = proto.MarshalOptions{Deterministic: true}.MarshalAppend(encoded[:0], session) // A built Session always encodes.
 		fingerprint := fnv.New64a()
 		_, _ = fingerprint.Write(encoded)
 		listing.rows[session.Id] = fingerprint.Sum64()

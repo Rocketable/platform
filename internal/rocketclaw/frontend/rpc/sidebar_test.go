@@ -101,6 +101,28 @@ func BenchmarkSidebarAgentChoices(b *testing.B) {
 	}
 }
 
+func TestSidebarFingerprintAllocationBudget(t *testing.T) {
+	result := testing.Benchmark(BenchmarkSidebarFingerprints)
+	require.Positive(t, result.N)
+	require.Less(t, result.AllocedBytesPerOp(), int64(4<<20))
+}
+
+func BenchmarkSidebarFingerprints(b *testing.B) {
+	server, ctx := sidebarChoicesFixture(b, 32)
+	name := strings.Repeat("example", 8192)
+
+	for i := range 32 {
+		_, err := server.sessions.UpdateConversationDetails(ctx, fmt.Sprintf("chat-%02d", i), nil, &name)
+		require.NoError(b, err)
+	}
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		require.NoError(b, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(any) error { return nil }}))
+	}
+}
+
 func TestSidebarSendFailures(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
