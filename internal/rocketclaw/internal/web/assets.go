@@ -8,6 +8,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"html"
 	"io/fs"
 	"mime"
 	"net/http"
@@ -42,57 +43,59 @@ func release(build *debug.BuildInfo) string {
 }
 
 // Handler serves application routes and compiled assets without a frontend runtime.
-func Handler(sentry config.SentryConfig) http.Handler {
+// A non-empty serverName prefixes the page title so browser tabs tell servers apart.
+func Handler(sentry config.SentryConfig, serverName string) http.Handler {
 	files, _ := fs.Sub(assets, "dist")
 	ocFiles, _ := fs.Sub(assets, "oc-dist")
 
-	var index []byte
+	// The embedded index exists.
+	page, _ := fs.ReadFile(files, "index.html")
+	index := string(page)
+
+	if serverName != "" {
+		index = strings.Replace(index, "<title>RocketClaw</title>", "<title>"+html.EscapeString(serverName)+" - RocketClaw</title>", 1)
+	}
+
 	if sentry.DSN != "" {
-		// The embedded index exists, and validated JSON config contains only serializable values.
-		index, _ = fs.ReadFile(files, "index.html")
+		// Validated JSON config contains only serializable values.
 		build, _ := debug.ReadBuildInfo()
 		data, _ := json.Marshal(sentryBootstrap{SentryConfig: sentry, Release: release(build)}) // HTML escaping prevents closing the script element.
-		index = []byte(strings.Replace(string(index), "</head>", `<script id="sentry-config" type="application/json">`+string(data)+`</script></head>`, 1))
+		index = strings.Replace(index, "</head>", `<script id="sentry-config" type="application/json">`+string(data)+`</script></head>`, 1)
 	}
+
+	page = []byte(index)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
 
-		if name, ok := strings.CutPrefix(r.URL.Path, "/oc-ui/"); ok {
-			serveFile(w, r, ocFiles, name, "_assets")
+		if slices.Contains([]string{"/", "/cron", "/agents", "/skills", "/config", "/search", "/voice", "/pages", "/shortcuts"}, r.URL.Path) || strings.HasPrefix(r.URL.Path, "/s/") || strings.HasPrefix(r.URL.Path, "/oc/") || strings.HasPrefix(r.URL.Path, "/skills/") || strings.HasPrefix(r.URL.Path, "/pages/") {
+			serveFile(w, r, "index.html", page, "assets")
 
 			return
 		}
 
-		name := strings.TrimPrefix(r.URL.Path, "/")
-
-		if slices.Contains([]string{"/", "/cron", "/agents", "/skills", "/config", "/search", "/voice", "/pages", "/shortcuts"}, r.URL.Path) || strings.HasPrefix(r.URL.Path, "/s/") || strings.HasPrefix(r.URL.Path, "/oc/") || strings.HasPrefix(r.URL.Path, "/skills/") || strings.HasPrefix(r.URL.Path, "/pages/") {
-			if sentry.DSN != "" {
-				http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(index))
-
-				return
-			}
-
-			name = "index.html"
+		root, name, immutable := files, strings.TrimPrefix(r.URL.Path, "/"), "assets"
+		if ocName, ok := strings.CutPrefix(r.URL.Path, "/oc-ui/"); ok {
+			root, name, immutable = ocFiles, ocName, "_assets"
 		}
 
-		serveFile(w, r, files, name, "assets")
+		data, err := fs.ReadFile(root, name)
+		if err != nil {
+			http.NotFound(w, r)
+
+			return
+		}
+
+		serveFile(w, r, name, data, immutable)
 	})
 }
 
 // hashed matches a built file's name that carries its content hash.
 var hashed = regexp.MustCompile(`-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$`)
 
-// serveFile sends a built file with an ETag, gzip-compressed for browsers that accept it. A file in the immutable
+// serveFile sends a built file's data with an ETag, gzip-compressed for browsers that accept it. A file in the immutable
 // directory named for its content never changes under that name, so browsers keep it without asking again.
-func serveFile(w http.ResponseWriter, r *http.Request, files fs.FS, name, immutable string) {
-	data, err := fs.ReadFile(files, name)
-	if err != nil {
-		http.NotFound(w, r)
-
-		return
-	}
-
+func serveFile(w http.ResponseWriter, r *http.Request, name string, data []byte, immutable string) {
 	if path.Dir(name) == immutable && hashed.MatchString(path.Base(name)) {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	}

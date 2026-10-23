@@ -67,7 +67,7 @@ func TestShadowUploadCardsAndDownloads(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	httpServer := httptest.NewServer(NewHTTPHandler(connection, cfg.Web.Sentry, cfg.OpenCode))
+	httpServer := httptest.NewServer(NewHTTPHandler(connection, cfg.Web.Sentry, cfg.OpenCode, ""))
 	t.Cleanup(httpServer.Close)
 	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 	image, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ1sAAAAASUVORK5CYII=")

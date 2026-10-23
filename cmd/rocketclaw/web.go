@@ -8,11 +8,14 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
 	"net"
 	"net/http"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
@@ -22,7 +25,31 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
+	"tailscale.com/ipn/ipnstate"
 )
+
+// serverName names this server in browser tabs: server_display_name, else its Tailscale
+// node name (the tsnet hostname, or this machine's node), else nothing.
+func serverName(cfg *config.Config) string {
+	if cfg.ServerDisplayName != "" {
+		return cfg.ServerDisplayName
+	}
+
+	if cfg.Web.Tsnet != nil {
+		return cfg.Web.Tsnet.Hostname
+	}
+
+	output, err := exec.Command("tailscale", "status", "--json", "--peers=false").Output()
+
+	var status ipnstate.Status
+	if err != nil || json.Unmarshal(output, &status) != nil || status.Self == nil {
+		return ""
+	}
+
+	name, _, _ := strings.Cut(status.Self.DNSName, ".")
+
+	return name
+}
 
 func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs rpc.CronJobs) (func(context.Context) error, error) {
 	cfg := rt.Cfg.Clone()
@@ -45,7 +72,7 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 			return listener.DialContext(ctx)
 		}))
-	httpServer := &http.Server{Handler: rpc.NewHTTPHandler(connection, cfg.Web.Sentry, cfg.OpenCode), TLSConfig: &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}}
+	httpServer := &http.Server{Handler: rpc.NewHTTPHandler(connection, cfg.Web.Sentry, cfg.OpenCode, serverName(cfg)), TLSConfig: &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}}
 	server := grpc.NewServer()
 	web := rpc.New(rt, rt.Sessions, rt.Cfg, channels, cronjobs)
 	web.Register(server)

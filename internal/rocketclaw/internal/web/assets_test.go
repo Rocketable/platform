@@ -22,7 +22,7 @@ func TestEmbeddedApplication(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(index), "<script")
 
-	handler := Handler(config.SentryConfig{})
+	handler := Handler(config.SentryConfig{}, "")
 
 	for _, path := range []string{"/", "/s/conversation", "/oc/b3BlbmNvZGU6Ym94OnNlc19h", "/cron", "/agents", "/skills", "/skills/release", "/config", "/search", "/voice", "/pages", "/shortcuts", "/pages/Ops/main%2Freview/index.html"} {
 		response := httptest.NewRecorder()
@@ -52,7 +52,7 @@ func TestEmbeddedApplication(t *testing.T) {
 
 // Vite names the asset directory and some chunks with a leading underscore, which only an all: embed keeps.
 func TestEmbeddedOCApplication(t *testing.T) {
-	handler := Handler(config.SentryConfig{})
+	handler := Handler(config.SentryConfig{}, "")
 	files := os.DirFS("oc-dist")
 	underscored := 0
 
@@ -88,7 +88,7 @@ func TestEmbeddedOCApplication(t *testing.T) {
 }
 
 func TestEmbeddedFileCaching(t *testing.T) {
-	handler := Handler(config.SentryConfig{})
+	handler := Handler(config.SentryConfig{}, "")
 	serve := func(path string, header http.Header) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodGet, path, http.NoBody)
 		maps.Copy(request.Header, header)
@@ -132,9 +132,19 @@ func TestEmbeddedFileCaching(t *testing.T) {
 	}
 }
 
+func TestServerNameTitle(t *testing.T) {
+	for _, path := range []string{"/", "/s/conversation"} {
+		response := httptest.NewRecorder()
+		Handler(config.SentryConfig{}, "lab <1>").ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, http.NoBody))
+		require.Equal(t, http.StatusOK, response.Code)
+		require.Contains(t, response.Body.String(), "<title>lab &lt;1&gt; - RocketClaw</title>")
+		require.NotEmpty(t, response.Header().Get("ETag"))
+	}
+}
+
 func TestSentryBootstrap(t *testing.T) {
 	sentry := config.SentryConfig{DSN: "https://public@o1.ingest.sentry.io/1", Environment: "</script><script>alert(1)</script>", TracesSampleRate: new(0.25)}
-	handler := Handler(sentry)
+	handler := Handler(sentry, "")
 
 	for _, path := range []string{"/", "/s/conversation", "/search"} {
 		response := httptest.NewRecorder()
