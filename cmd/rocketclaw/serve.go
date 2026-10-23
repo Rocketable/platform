@@ -130,10 +130,13 @@ func logBuildIdentity(logger *slog.Logger, build *debug.BuildInfo) {
 // (SIGINT) then forces the exit. A repeated SIGTERM does not: systemd sends SIGTERM again to the processes left
 // once a unit's main process exits, which happens at once when `go run` starts RocketClaw.
 func shutdownSignals() (context.Context, context.CancelFunc) {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	context.AfterFunc(ctx, func() {
+	ctxSignal, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	context.AfterFunc(ctxSignal, func() {
 		signal.Notify(make(chan os.Signal, 1), syscall.SIGTERM)
 		stop()
+		// Restore interrupt handling before the caller starts shutting down.
+		cancel(context.Cause(ctxSignal))
 	})
 
 	return ctx, stop
