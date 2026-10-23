@@ -4699,11 +4699,24 @@ function useVoiceSettings(username: string) {
   const settings = useQuery(queries.voiceSettings(username));
   const saved = settings.data ?? { conversationId: "", agent: "", voice: "", transcript: false };
   const save = (next: VoiceSettings) => queryClient.setQueryData(queries.voiceSettings(username).queryKey, next);
+  const version = useRef({ agent: 0, voice: 0, transcript: 0 });
   const update = useMutation({
     mutationFn: (change: Partial<Omit<VoiceSettings, "conversationId">>) => mutations.voiceSettings({ action: "UPDATE", ...change }),
-    onMutate: (change) => { save({ ...saved, ...change }); return saved; },
-    onError: (_error, _change, before) => save(before!),
-    onSuccess: save,
+    onMutate: (change) => {
+      for (const key of ["agent", "voice", "transcript"] as const) if (key in change) version.current[key]++;
+      save({ ...saved, ...change });
+      return { saved, version: { ...version.current } };
+    },
+    onError: (_error, _change, before) => save(before!.saved),
+    // Keep newer local changes, while accepting replies to independent settings.
+    onSuccess: (next, _change, before) => {
+      const current = queryClient.getQueryData<VoiceSettings>(queries.voiceSettings(username).queryKey)!;
+      save({ ...next,
+        agent: before.version.agent === version.current.agent ? next.agent : current.agent,
+        voice: before.version.voice === version.current.voice ? next.voice : current.voice,
+        transcript: before.version.transcript === version.current.transcript ? next.transcript : current.transcript,
+      });
+    },
   });
   const [callId, setCallId] = useState("");
   const call = useOwnVoice(callId);
