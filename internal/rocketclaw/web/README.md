@@ -428,6 +428,15 @@ active tab.
   shows the last message again for RocketClaw sessions; for remote sessions, it
   clears the OpenCode title too. The command palette offers the same commands as
   **Tabs: …** for the active tab.
+- **Selecting tabs.** Cmd/Ctrl+click adds a tab to the selection or removes it,
+  and Shift+click selects the shown tabs from the active tab to the clicked one;
+  the active tab stays active and always belongs to the selection. The menu of a
+  selected tab acts on every selected tab for Close, Pin/Unpin (only the tabs not
+  already in that state), the group commands, and the moves to another space, and
+  it drops Rename session and Restore; any other tab's menu acts on that tab alone.
+  Activating another tab, a plain click on the active one, or Escape on a focused
+  tab drops the selection. Selected tabs are highlighted, and screen readers hear
+  “In selection” in their description.
 - **Width and full names.** Top tabs fit their title up to 20rem, then truncate.
   Hovering a tab shows its full title in a tooltip; while it shows, the first
   Escape dismisses it.
@@ -451,11 +460,16 @@ active tab.
   notifies for sessions that were already unread.
 - **Reordering.** Drag a tab onto another. With a tab focused, Shift+Arrow moves it.
   A moved tab joins the group of the tab it lands on, or leaves its group when it
-  lands on an ungrouped tab.
-- **Groups.** Named, colored groups of adjacent tabs, as in Chrome. The tab menu
-  offers **Add to new group** (an unnamed group in the next color, with its
-  editor open and the name field focused), **Add to group "…"** for each other
-  group, and **Remove from group**. A group's header sits before its tabs: a
+  lands on an ungrouped tab. Drag a group's header, or press Shift+Arrow on it, to
+  move the whole group before or after the tab or group it lands on. A group
+  header is also a drop target, standing for its first tab, so a collapsed group
+  can be passed or joined.
+- **Groups.** Named, colored groups of adjacent tabs, as in Chrome. The tab menu's
+  **Add to group** submenu, like **Move to space**, offers **New group** (an
+  unnamed group in the next color, with its editor open and the name field
+  focused) and each other group by name; the menu also offers **Remove from
+  group**. The command palette offers the adds as **Tabs: Add to new group** and
+  **Tabs: Add to group "…"**. A group's header sits before its tabs: a
   colored chip with the name, or a color dot when unnamed. Clicking it collapses
   or expands the group. Right-click, Shift+F10, or the header's **…** button opens
   the editor: name (saved on Enter or leaving the field), nine colors, **New tab

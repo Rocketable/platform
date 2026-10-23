@@ -79,7 +79,8 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     expect(await page.evaluate(() => (window as unknown as { transcriptRenders: number }).transcriptRenders)).toBeLessThan(typed.length / 2);
     // Naming a tab group redraws only its field too; tab state belongs to the whole app.
     await page.getByRole("tab", { name: "Long chat", exact: true }).click({ button: "right" });
-    await page.getByRole("menuitem", { name: "Add to new group" }).click();
+    await page.getByRole("menuitem", { name: "Add to group" }).click();
+    await page.getByRole("menuitem", { name: "New group" }).click();
     const group = page.getByRole("textbox", { name: "Group name" });
     await group.waitFor();
     await page.evaluate(() => { (window as unknown as { transcriptRenders: number }).transcriptRenders = 0; });

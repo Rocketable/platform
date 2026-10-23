@@ -750,7 +750,7 @@ test("tab groups take a name and color, collapse, adopt opened tabs, follow drag
   const header = strip(page).getByRole("button", { name: "Work", exact: true });
   const field = page.getByRole("textbox", { name: "Group name" });
   for (const [id, name] of [["alpha", "Alpha"], ["bravo", "Bravo"], ["charlie", "Charlie"]]) await openSaved(page, origin, href(id), name, saved);
-  await menu(page, "Alpha", "Add to new group");
+  await menu(page, "Alpha", "Add to group", "New group");
   await field.waitFor();
   expect(await field.evaluate((node: HTMLInputElement) => document.activeElement === node)).toBe(true);
   await page.keyboard.type("Work");
@@ -758,7 +758,7 @@ test("tab groups take a name and color, collapse, adopt opened tabs, follow drag
   await page.getByRole("radio", { name: "Green" }).check();
   await page.keyboard.press("Escape");
   await field.waitFor({ state: "detached" });
-  await menu(page, "Bravo", 'Add to group "Work"');
+  await menu(page, "Bravo", "Add to group", "Work");
   expect(await order(page)).toEqual(["Work", "Alpha", "Bravo", "Charlie"]);
   expect(await tab("Bravo").getAttribute("aria-description")).toBe("Group Work, Space: Main");
   expect(await tab("Charlie").getAttribute("aria-description")).toBe("Space: Main");
@@ -799,15 +799,91 @@ test("tab groups take a name and color, collapse, adopt opened tabs, follow drag
   expect(await tab("Alpha").getAttribute("aria-description")).toBe("Space: Main");
 }), 60_000);
 
+test("Cmd/Ctrl+click and Shift+click select tabs that the tab menu groups and ungroups together", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  const items = async (name: string) => {
+    await tab(name).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Close", exact: true }).waitFor();
+    const listed = await page.getByRole("menuitem").allInnerTexts();
+    await page.keyboard.press("Escape");
+    await page.getByRole("menu").waitFor({ state: "hidden" });
+    return listed;
+  };
+  for (const [id, name] of [["alpha", "Alpha"], ["bravo", "Bravo"], ["charlie", "Charlie"], ["delta", "Delta"]]) await openSaved(page, origin, href(id), name, saved);
+  await tab("Alpha").click();
+  await page.waitForURL(`**${href("alpha")}`);
+  await tab("Charlie").click({ modifiers: ["ControlOrMeta"] });
+  expect(page.url()).toEndWith(href("alpha"));
+  expect(await tab("Charlie").getAttribute("aria-description")).toBe("In selection, Space: Main");
+  // An unselected tab's menu acts on it alone, and a selected one's menu has no Rename session.
+  expect(await items("Bravo")).toContain("Rename session");
+  expect(await items("Charlie")).not.toContain("Rename session");
+  await menu(page, "Charlie", "Add to group", "New group");
+  await page.keyboard.type("Work");
+  await page.keyboard.press("Escape");
+  expect(await order(page)).toEqual(["Work", "Alpha", "Charlie", "Bravo", "Delta"]);
+
+  // Shift+click selects the shown tabs from the active one; the selection joins a group together.
+  await menu(page, "Delta", "Add to group", "New group");
+  await page.keyboard.press("Escape");
+  await tab("Bravo").click({ modifiers: ["Shift"] });
+  expect(await page.evaluate(() => getSelection()!.toString())).toBe("");
+  expect(await tab("Bravo").getAttribute("aria-description")).toBe("In selection, Space: Main");
+  expect(await tab("Delta").getAttribute("aria-description")).toBe("Group Blue group, Space: Main, Turn running");
+  await menu(page, "Bravo", "Add to group", "Blue group");
+  expect(await order(page)).toEqual(["Blue group", "Delta", "Alpha", "Charlie", "Bravo"]);
+  await menu(page, "Alpha", "Remove from group");
+  expect(await order(page)).toEqual(["Blue group", "Delta", "Alpha", "Charlie", "Bravo"]);
+  expect(await tab("Charlie").getAttribute("aria-description")).toBe("In selection, Space: Main");
+
+  // Escape on a tab drops the selection; a plain click on the active tab does too.
+  await tab("Alpha").focus();
+  await page.keyboard.press("Escape");
+  expect(await tab("Bravo").getAttribute("aria-description")).toBe("Space: Main");
+  await tab("Bravo").click({ modifiers: ["ControlOrMeta"] });
+  await tab("Alpha").click();
+  expect(await tab("Bravo").getAttribute("aria-description")).toBe("Space: Main");
+  expect(page.url()).toEndWith(href("alpha"));
+}), 60_000);
+
+test("a group moves whole by dragging its header onto a tab or a collapsed group's header, or with Shift+Arrow", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const header = (name: string) => strip(page).getByRole("button", { name, exact: true });
+  const group = async (tab: string, name: string) => {
+    await menu(page, tab, "Add to group", "New group");
+    await page.keyboard.type(name);
+    await page.keyboard.press("Escape");
+    await page.getByRole("textbox", { name: "Group name" }).waitFor({ state: "detached" });
+  };
+  for (const [id, name] of [["alpha", "Alpha"], ["bravo", "Bravo"], ["charlie", "Charlie"], ["delta", "Delta"]]) await openSaved(page, origin, href(id), name, saved);
+  await group("Alpha", "Work");
+  await menu(page, "Bravo", "Add to group", "Work");
+  await header("Work").dragTo(strip(page).getByRole("tab", { name: "Delta", exact: true }));
+  expect(await order(page)).toEqual(["Charlie", "Delta", "Work", "Alpha", "Bravo"]);
+
+  await group("Charlie", "Ops");
+  await header("Ops").click();
+  expect(await order(page)).toEqual(["Ops", "Delta", "Work", "Alpha", "Bravo"]);
+  await header("Work").dragTo(header("Ops"));
+  expect(await order(page)).toEqual(["Work", "Alpha", "Bravo", "Ops", "Delta"]);
+
+  await header("Work").focus();
+  await page.keyboard.press("Shift+ArrowRight");
+  expect(await order(page)).toEqual(["Ops", "Work", "Alpha", "Bravo", "Delta"]);
+  expect(await header("Work").evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
+  await page.keyboard.press("Shift+ArrowLeft");
+  expect(await order(page)).toEqual(["Work", "Alpha", "Bravo", "Ops", "Delta"]);
+  await until(() => saved.state.tabs.map((tab) => tab.path).join() === ["alpha", "bravo", "charlie", "delta"].map(href).join());
+}), 60_000);
+
 test("tab group editor moves New session in, ungroups, and closes; pins leave groups; collapsed groups skip arrow keys; a lost group is dropped", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const field = page.getByRole("textbox", { name: "Group name" });
   for (const [link, name] of [["/", "New session"], [href("alpha"), "Alpha"], [href("bravo"), "Bravo"], [href("charlie"), "Charlie"]]) await openSaved(page, origin, link, name, saved);
-  await menu(page, "Alpha", "Add to new group");
+  await menu(page, "Alpha", "Add to group", "New group");
   await page.keyboard.type("Work");
   await page.keyboard.press("Enter");
   await field.waitFor({ state: "detached" });
-  await menu(page, "Bravo", 'Add to group "Work"');
+  await menu(page, "Bravo", "Add to group", "Work");
   expect(await order(page)).toEqual(["New session", "Work", "Alpha", "Bravo", "Charlie"]);
 
   await strip(page).getByRole("button", { name: "Edit Work", exact: true }).click();
@@ -842,17 +918,17 @@ test("tab group editor moves New session in, ungroups, and closes; pins leave gr
 
   await tab("Alpha").click();
   await page.waitForURL(`**${href("alpha")}`);
-  await menu(page, "Alpha", "Add to new group");
+  await menu(page, "Alpha", "Add to group", "New group");
   await page.keyboard.press("Escape");
   await field.waitFor({ state: "detached" });
-  await menu(page, "New session", 'Add to group "Grey group"');
+  await menu(page, "New session", "Add to group", "Grey group");
   expect(await order(page)).toEqual(["Bravo", "Grey group", "Alpha", "New session", "Charlie"]);
   await strip(page).getByRole("button", { name: "Edit Grey group", exact: true }).click();
   await page.getByRole("button", { name: "Close group", exact: true }).click();
   await page.waitForURL(`**${href("charlie")}`);
   expect(await order(page)).toEqual(["Bravo", "Charlie"]);
 
-  await menu(page, "Charlie", "Add to new group");
+  await menu(page, "Charlie", "Add to group", "New group");
   await page.keyboard.press("Escape");
   // A tab whose group the saved state no longer has leaves the group.
   await until(() => saved.state.groups.some((group) => group.color === "Grey"));
@@ -1025,11 +1101,11 @@ test("a group lives in one space: menus offer only this space's groups, groups m
   const editor = (item: string) => edit.click().then(() => page.getByRole("button", { name: item, exact: true }).click());
   const green = page.getByRole("radio", { name: "Green" });
   for (const [link, name] of [["/", "New session"], [href("alpha"), "Alpha"], [href("bravo"), "Bravo"], [href("charlie"), "Charlie"]]) await openSaved(page, origin, link, name, saved);
-  await menu(page, "Alpha", "Add to new group");
+  await menu(page, "Alpha", "Add to group", "New group");
   await page.keyboard.type("Work");
   await green.check();
   await page.keyboard.press("Escape");
-  await menu(page, "Bravo", 'Add to group "Work"');
+  await menu(page, "Bravo", "Add to group", "Work");
 
   // A new space takes New session, and its tab menu offers no group from Main.
   await chooseSpace(page, "New space");
@@ -1037,7 +1113,7 @@ test("a group lives in one space: menus offer only this space's groups, groups m
   await page.keyboard.press("Enter");
   await page.getByRole("button", { name: "Space: Ops" }).waitFor();
   await tab("New session").click({ button: "right" });
-  expect(await page.getByRole("menuitem").allInnerTexts()).toEqual(["Close", "Close others", "Close to the right", "Close all", "Pin", "Add to new group", "Move to space", "Move tabs to left"]);
+  expect(await page.getByRole("menuitem").allInnerTexts()).toEqual(["Close", "Close others", "Close to the right", "Close all", "Pin", "Add to group", "Move to space", "Move tabs to left"]);
   await page.getByRole("menuitem", { name: "Move to space", exact: true }).click();
   const spaces = page.getByRole("menu").nth(1);
   await spaces.waitFor();

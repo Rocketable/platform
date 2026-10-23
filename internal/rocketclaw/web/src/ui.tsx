@@ -1055,7 +1055,7 @@ function useTabs() {
     if (!queue.saving) flush();
   }, [state]);
   // Moving a tab makes it permanent and takes it out of its group, keeping its pin; moving the active tab follows it to its new space.
-  const moveTo = (path: string, space: string) => setState((current) => openTab({ ...current, tabs: current.tabs.map((tab) => tab.path === path ? { path, pinned: tab.pinned, space } : tab) }, current.active));
+  const moveTo = (paths: Set<string>, space: string) => setState((current) => openTab({ ...current, tabs: current.tabs.map((tab) => paths.has(tab.path) ? { path: tab.path, pinned: tab.pinned, space } : tab) }, current.active));
   // An unplaced session moves to the space it was born in once its row names it; an unknown new space is fetched first.
   // A background window holds stale tabs, so it waits until it is focused and has reloaded.
   const settle = (rows: Session[]) => {
@@ -1067,7 +1067,7 @@ function useTabs() {
         void mutations.tabs({}).then((view) => setState((current) => view.spaces.some((space) => space.id === birth) ? { ...current, spaces: view.spaces } : current));
         return;
       }
-      if (birth && birth !== tab.space) moveTo(tab.path, birth);
+      if (birth && birth !== tab.space) moveTo(new Set([tab.path]), birth);
       else setState((current) => ({ ...current, tabs: current.tabs.map((item) => item.path === tab.path ? { ...item, unplaced: undefined } : item) }));
     }
   };
@@ -1123,30 +1123,39 @@ function useTabs() {
     open: (path: string) => flushSync(() => { setState((current) => openTab(current, path, false)); navigate(path); }),
     // A moved tab takes the group of the tab it lands on.
     move: (from: string, to: string) => update((tabs) => moveQueueId(tabs.map((tab) => tab.path), from, to).map((path) => tabs.find((tab) => tab.path === path)!).map((tab) => tab.path === from && !tab.pinned ? { ...tab, group: tabs.find((other) => other.path === to)?.group } : tab)),
+    // A moved group lands whole before or after the tab it lands on, or that tab's whole group, the way a moved tab does.
+    moveGroup: (id: string, to: string) => update((tabs) => {
+      const members = tabs.filter((tab) => tab.group === id), rest = tabs.filter((tab) => tab.group !== id), target = tabs.find((tab) => tab.path === to)!;
+      if (target.group === id) return tabs;
+      const block = rest.filter((tab) => tab === target || (!!target.group && tab.group === target.group));
+      return rest.toSpliced(tabs.indexOf(target) > tabs.indexOf(members[0]) ? rest.indexOf(block.at(-1)!) + 1 : rest.indexOf(block[0]), 0, ...members);
+    }),
     // A new session's tab waits for its row to learn the space it was born in.
     create: (id: string) => update((tabs) => tabs.map((tab) => tab.path === "/" ? { path: sessionPath(id), pinned: tab.pinned, group: tab.group, space: tab.space, unplaced: true } : tab)),
-    commands: (path: string, rows: Session[]) => {
-      const tab = state.tabs.find((item) => item.path === path);
-      const birth = state.spaces.find((space) => space.id === rows.find((row) => rowPath(row) === path)?.spaceId);
+    // Close, Pin or Unpin, the group commands, and the moves act on paths, the selected tabs; sub names an item's submenu and its label there.
+    commands: (path: string, rows: Session[], paths = new Set([path])): { key: string; label: string; sub?: { menu: string; label: string }; run: () => void }[] => {
+      const tab = state.tabs.find((item) => item.path === path), free = state.tabs.filter((item) => paths.has(item.path) && !item.pinned), grouped = new Set(free.map((item) => item.path));
+      const birth = paths.size === 1 && state.spaces.find((space) => space.id === rows.find((row) => rowPath(row) === path)?.spaceId);
       return [
-        { key: "close", label: "Close", run: () => close([path]) },
+        { key: "close", label: "Close", run: () => close([...paths]) },
         { key: "close-others", label: "Close others", run: () => close(unpinned(shown).filter((other) => other !== path), path) },
         { key: "close-right", label: "Close to the right", run: () => close(unpinned(shown.slice(shown.findIndex((tab) => tab.path === path) + 1)), path) },
         { key: "close-all", label: "Close all", run: () => close(unpinned(shown)) },
-        { key: "pin", label: tab?.pinned ? "Unpin" : "Pin", run: () => update((tabs) => tabs.map((tab) => tab.path !== path ? tab : tab.pinned ? { path, space: state.space } : { path, pinned: true, space: state.space })) },
+        // Pin pins the unpinned selected tabs, and Unpin unpins the pinned ones.
+        { key: "pin", label: tab?.pinned ? "Unpin" : "Pin", run: () => update((tabs) => tabs.map((item) => !paths.has(item.path) || !item.pinned !== !tab?.pinned ? item : tab?.pinned ? { path: item.path, space: state.space } : { path: item.path, pinned: true, space: state.space })) },
         ...tab?.pinned ? [] : [
-          { key: "group-new", label: "Add to new group", run: () => {
+          { key: "group-new", label: "Add to new group", sub: { menu: "Add to group", label: "New group" }, run: () => {
             const id = crypto.getRandomValues(new Uint32Array(2)).join("-");
             setState((current) => ({ ...current, groups: [...current.groups, { id, name: "", color: Object.keys(groupColors)[groups.length % Object.keys(groupColors).length] }] }));
-            regroup((item) => item.path === path, id);
+            regroup((item) => grouped.has(item.path), id);
             setEditor({ id, open: true });
           } },
-          ...groups.filter((group) => group.id !== tab?.group).map((group) => ({ key: `group-${group.id}`, label: `Add to group "${groupName(group)}"`, run: () => update((tabs) => join(tabs, path, group.id, state.space)) })),
-          ...tab?.group ? [{ key: "group-remove", label: "Remove from group", run: () => regroup((item) => item.path === path) }] : [],
+          ...groups.filter((group) => free.some((item) => item.group !== group.id)).map((group) => ({ key: `group-${group.id}`, label: `Add to group "${groupName(group)}"`, sub: { menu: "Add to group", label: groupName(group) }, run: () => update((tabs) => free.reduce((joined, item) => join(joined, item.path, group.id, state.space), tabs)) })),
+          ...free.some((item) => item.group) ? [{ key: "group-remove", label: "Remove from group", run: () => regroup((item) => grouped.has(item.path)) }] : [],
         ],
         // A session moved to another space can go back to the space it was born in.
-        ...birth && birth.id !== tab?.space ? [{ key: "restore", label: `Restore to "${birth.name}"`, run: () => moveTo(path, birth.id) }] : [],
-        ...state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move to "${space.name}"`, space: space.name, run: () => moveTo(path, space.id) })),
+        ...birth && birth.id !== tab?.space ? [{ key: "restore", label: `Restore to "${birth.name}"`, run: () => moveTo(paths, birth.id) }] : [],
+        ...state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move to "${space.name}"`, sub: { menu: "Move to space", label: space.name }, run: () => moveTo(paths, space.id) })),
         { key: "placement", label: `Move tabs to ${next}`, run: () => place(next) },
       ];
     },
@@ -1220,9 +1229,11 @@ function useInSpace() {
   return (item: { space?: string }) => !item.space || item.space.toLowerCase() === name;
 }
 
+const arrows: Record<string, number> = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
+
 function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs>; vertical: boolean; newChat: () => void }) {
   const { rows } = useContext(Sidebar);
-  const { state, shown, groups, pathname, close, promote, move, commands, edit, editor, setEditor, groupCommands } = tabs, space = state.spaces.find((item) => item.id === state.space)?.name;
+  const { state, shown, groups, pathname, close, promote, move, moveGroup, commands, edit, editor, setEditor, groupCommands } = tabs, space = state.spaces.find((item) => item.id === state.space)?.name;
   const [menu, setMenu] = useState<{ path: string; anchor: Element | { getBoundingClientRect: () => DOMRect } }>();
   const [editing, setEditing] = useState<string>();
   const pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
@@ -1231,8 +1242,12 @@ function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs
   const selected = () => list.current!.querySelector<HTMLElement>('[aria-selected="true"]')!;
   const header = () => list.current!.querySelector<HTMLElement>(`[data-group="${editor?.id}"]`);
   const group = groups.find((item) => item.id === editor?.id);
-  const items: { key: string; label: string; space?: string; run: () => void }[] = menu ? [...pathSession(menu.path) ? [{ key: "rename", label: "Rename session", run: () => setEditing(menu.path) }] : [], ...commands(menu.path, rows)] : [];
-  const moves = items.filter((item) => item.space !== undefined);
+  // Cmd/Ctrl+click and Shift+click select tabs besides the active one; activating a tab or Escape drops them.
+  const [picked, setPicked] = useState({ at: pathname, paths: new Set<string>() });
+  const selection = new Set(shown.flatMap((tab) => tab.path === pathname || (picked.at === pathname && picked.paths.has(tab.path)) ? [tab.path] : []));
+  // The menu of a selected tab acts on every selected tab; any other tab's menu acts on that tab alone.
+  const targets = menu && !selection.has(menu.path) ? new Set([menu.path]) : selection;
+  const items: ReturnType<typeof commands> = menu ? [...pathSession(menu.path) && targets.size === 1 ? [{ key: "rename", label: "Rename session", run: () => setEditing(menu.path) }] : [], ...commands(menu.path, rows, targets)] : [];
   const popupClass = "min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none", itemClass = "flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent";
   const option = ({ key, label, run }: (typeof items)[number]) => <Menu.Item key={key} onClick={() => { refocus.current = key; run(); }} className={itemClass}>{label}</Menu.Item>;
   return <div className={cn("flex shrink-0", vertical ? "h-full flex-col" : "mr-12 border-b")}>
@@ -1244,6 +1259,17 @@ function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs
         event.preventDefault();
         setMenu({ path, anchor: { getBoundingClientRect: () => DOMRect.fromRect({ x: event.clientX, y: event.clientY }) } });
       }}
+      // A selecting click keeps the active tab; Shift+click selects the rendered tabs from the active one to it.
+      onClickCapture={(event) => {
+        const path = pathOf(event);
+        if (!path || !(event.target as Element).closest('[role="tab"]')) return;
+        const rendered = [...event.currentTarget.querySelectorAll<HTMLElement>("[data-tab]")].map((node) => node.dataset.tab!);
+        const [from, to] = [rendered.indexOf(pathname), rendered.indexOf(path)].toSorted((a, b) => a - b);
+        if (event.shiftKey) setPicked({ at: pathname, paths: new Set(rendered.slice(from, to + 1)) });
+        else if (event.metaKey || event.ctrlKey) setPicked({ at: pathname, paths: selection.symmetricDifference(new Set([path])) });
+        else return setPicked({ at: pathname, paths: new Set() });
+        event.stopPropagation();
+      }}
       onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
       onDoubleClick={(event) => { if (event.target === event.currentTarget) newChat(); }}
       // A mouse wheel only scrolls vertically, so the top strip turns it sideways; Firefox reports wheel lines, not pixels.
@@ -1254,15 +1280,25 @@ function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs
         event.preventDefault();
         close([path]);
       }}
-      onDragStart={(event) => event.dataTransfer.setData("application/x-rocketclaw-tab", pathOf(event)!)}
+      onDragStart={(event) => {
+        const group = (event.target as Element).closest<HTMLElement>("[data-group]")?.dataset.group;
+        event.dataTransfer.setData(group ? "application/x-rocketclaw-group" : "application/x-rocketclaw-tab", group ?? pathOf(event)!);
+      }}
       onDragOver={(event) => event.preventDefault()}
+      // A group header stands for its first tab, the only drop target a collapsed group shows.
       onDrop={(event) => {
-        const path = pathOf(event);
-        if (path) move(event.dataTransfer.getData("application/x-rocketclaw-tab"), path);
+        const header = (event.target as Element).closest<HTMLElement>("[data-group]")?.dataset.group, group = event.dataTransfer.getData("application/x-rocketclaw-group");
+        const path = pathOf(event) ?? shown.find((tab) => !!header && tab.group === header)?.path;
+        if (path && group) moveGroup(group, path);
+        else if (path) move(event.dataTransfer.getData("application/x-rocketclaw-tab"), path);
       }}
       onKeyDown={(event) => {
         const tab = event.target as HTMLElement, path = pathOf(event)!;
         if (tab.role !== "tab") return;
+        if (event.key === "Escape" && selection.size > 1 && !menu) {
+          event.preventDefault();
+          return setPicked({ at: pathname, paths: new Set() });
+        }
         if ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu") {
           event.preventDefault();
           setMenu({ path, anchor: tab });
@@ -1275,7 +1311,7 @@ function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs
         }
         // Collapsed groups hide tabs, so keys walk the rendered tabs.
         const rendered = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')];
-        const step = ({ ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 } as Record<string, number>)[event.key];
+        const step = arrows[event.key];
         const position = event.key === "Home" ? 0 : event.key === "End" ? rendered.length - 1 : step ? rendered.indexOf(tab) + step : -1;
         if (!rendered[position]) return;
         event.preventDefault();
@@ -1286,17 +1322,26 @@ function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs
       }}>
       {shown.flatMap((tab, index) => {
         const group = groups.find((item) => item.id === tab.group);
-        const openEditor = () => setEditor({ id: group!.id, open: true });
+        const openEditor = () => setEditor({ id: group!.id, open: true }), chosen = tab.path !== pathname && selection.has(tab.path);
         return [
-          group && shown[index - 1]?.group !== group.id ? <div key={group.id} data-group={group.id} className={cn("flex shrink-0 items-center", vertical ? "pt-1" : "border-r px-1")} onContextMenu={(event) => { event.preventDefault(); openEditor(); }}>
+          group && shown[index - 1]?.group !== group.id ? <div key={group.id} data-group={group.id} draggable className={cn("flex shrink-0 items-center", vertical ? "pt-1" : "border-r px-1")} onContextMenu={(event) => { event.preventDefault(); openEditor(); }}>
             <button type="button" aria-expanded={!group.collapsed} aria-label={groupName(group)} className="flex h-7 min-w-0 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => edit(group.id, { collapsed: !group.collapsed })}
-              onKeyDown={(event) => { if ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu") { event.preventDefault(); openEditor(); } }}>
+              onKeyDown={(event) => {
+                if ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu") { event.preventDefault(); openEditor(); }
+                // Shift+Arrow moves the group past the tab or group next to it.
+                const button = event.currentTarget, step = event.shiftKey ? arrows[event.key] : 0;
+                const neighbor = step && shown[step < 0 ? shown.findIndex((item) => item.group === group.id) - 1 : shown.findLastIndex((item) => item.group === group.id) + 1];
+                if (!neighbor) return;
+                event.preventDefault();
+                flushSync(() => moveGroup(group.id, neighbor.path));
+                button.focus();
+              }}>
               <span className={cn("rounded-full", group.name ? "max-w-48 truncate px-2 py-0.5 text-xs font-medium text-black" : "size-3", groupColors[group.color])}>{group.name}</span>
             </button>
             <button type="button" aria-label={`Edit ${groupName(group)}`} className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground" onClick={openEditor}><Ellipsis className="size-3.5" /></button>
           </div> : null,
           // A collapsed group still shows its active tab.
-          group?.collapsed && tab.path !== pathname ? null : <TabItem key={tab.path} tab={tab} description={tab.pinned ? undefined : `${group ? `Group ${groupName(group)}, ` : ""}Space: ${space}`} rule={group && <span className={cn("pointer-events-none shrink-0", vertical ? "my-1.5 ml-1 w-0.5 self-stretch" : "absolute inset-x-0 bottom-0 h-0.5", groupColors[group.color])} />} active={tab.path === pathname} vertical={vertical} editing={tab.path === editing} endEdit={() => setEditing(undefined)} promote={() => promote(tab.path)} close={() => { flushSync(() => close([tab.path])); selected().focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} />,
+          group?.collapsed && tab.path !== pathname ? null : <TabItem key={tab.path} tab={tab} description={[chosen && "In selection", !tab.pinned && `${group ? `Group ${groupName(group)}, ` : ""}Space: ${space}`].filter(Boolean).join(", ") || undefined} chosen={chosen} rule={group && <span className={cn("pointer-events-none shrink-0", vertical ? "my-1.5 ml-1 w-0.5 self-stretch" : "absolute inset-x-0 bottom-0 h-0.5", groupColors[group.color])} />} active={tab.path === pathname} vertical={vertical} editing={tab.path === editing} endEdit={() => setEditing(undefined)} promote={() => promote(tab.path)} close={() => { flushSync(() => close([tab.path])); selected().focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} />,
         ];
       })}
     </div>
@@ -1319,10 +1364,10 @@ function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs
     </Popover.Root>
     <Menu.Root open={!!menu} onOpenChange={(open) => { if (!open) setMenu(undefined); }}>
       <Menu.Portal><Menu.Positioner anchor={menu?.anchor} sideOffset={4} align="start" className="z-50 outline-none"><Menu.Popup finalFocus={() => { const key = refocus.current; refocus.current = ""; return key.startsWith("close") ? selected() : !["rename", "group-new"].includes(key); }} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className={popupClass}>
-        {/* Moves to other spaces sit in one submenu, named by space. */}
-        {items.map((item) => item.space === undefined ? option(item) : item !== moves[0] ? null : <Menu.SubmenuRoot key="spaces">
-          <Menu.SubmenuTrigger className={cn(itemClass, "justify-between gap-4 data-popup-open:bg-accent")}>Move to space<ChevronRight className="size-4" /></Menu.SubmenuTrigger>
-          <Menu.Portal><Menu.Positioner className="z-50 outline-none"><Menu.Popup className={popupClass}>{moves.map((move) => option({ ...move, label: move.space! }))}</Menu.Popup></Menu.Positioner></Menu.Portal>
+        {/* Items sharing a submenu, the group adds and the moves to other spaces, sit in it where its first item would be. */}
+        {items.map((item) => !item.sub ? option(item) : item !== items.find((other) => other.sub?.menu === item.sub!.menu) ? null : <Menu.SubmenuRoot key={item.sub.menu}>
+          <Menu.SubmenuTrigger className={cn(itemClass, "justify-between gap-4 data-popup-open:bg-accent")}>{item.sub.menu}<ChevronRight className="size-4" /></Menu.SubmenuTrigger>
+          <Menu.Portal><Menu.Positioner className="z-50 outline-none"><Menu.Popup className={popupClass}>{items.filter((other) => other.sub?.menu === item.sub!.menu).map((other) => option({ ...other, label: other.sub!.label }))}</Menu.Popup></Menu.Positioner></Menu.Portal>
         </Menu.SubmenuRoot>)}
       </Menu.Popup></Menu.Positioner></Menu.Portal>
     </Menu.Root>
@@ -1363,7 +1408,7 @@ function tabActivity(session: Session) {
   return [[activity, session.unreadAt && "Unread"].filter(Boolean).join(", "), Icon] as const;
 }
 
-function TabItem({ tab, description, rule, active, vertical, editing, endEdit, promote, close, openMenu }: { tab: Tab; description?: string; rule?: ReactNode; active: boolean; vertical: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: Element) => void }) {
+function TabItem({ tab, description, chosen, rule, active, vertical, editing, endEdit, promote, close, openMenu }: { tab: Tab; description?: string; chosen: boolean; rule?: ReactNode; active: boolean; vertical: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: Element) => void }) {
   const sidebar = useContext(Sidebar);
   const id = pathSession(tab.path);
   const session = sidebar.rows.find((row) => row.id === id) ?? { id };
@@ -1372,7 +1417,7 @@ function TabItem({ tab, description, rule, active, vertical, editing, endEdit, p
   const title = useCleanText(label);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
-  return <div data-tab={tab.path} data-running={session.running} data-unread={!!session.unreadAt} draggable={!editing} className={cn("group relative flex shrink-0 items-center", vertical ? "rounded-md" : "border-r", active ? "bg-sidebar-row-active" : "hover:bg-accent")}>
+  return <div data-tab={tab.path} data-running={session.running} data-unread={!!session.unreadAt} draggable={!editing} className={cn("group relative flex shrink-0 items-center", vertical ? "rounded-md" : "border-r", active ? "bg-sidebar-row-active" : "hover:bg-accent", { "bg-accent": chosen })}>
     {rule}
     <span className="pointer-events-none absolute inset-x-0 top-0 hidden h-0.5 bg-primary group-data-[unread=true]:block" />
     <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className={cn("flex min-w-0", vertical ? "flex-1" : "max-w-80")} />}>
