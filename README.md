@@ -288,7 +288,7 @@ Sign in per provider with `rocketclaw oai login [provider] [--headless]`. Use `r
 
 ## Data and storage
 
-- `database_url` sets the PostgreSQL database. Only one RocketClaw process uses a database at a time; others wait. RocketClaw upgrades the database schema at startup. Older RocketClaw versions refuse to start on an upgraded database, so you cannot roll back by swapping in an older binary.
+- `database_url` sets the PostgreSQL database. Only one RocketClaw process uses a database at a time; others wait. RocketClaw upgrades the database schema at startup; a database last run by a version before v0.2.0 must be started with v0.2.0 first. Older RocketClaw versions refuse to start on an upgraded database, so you cannot roll back by swapping in an older binary.
 - `attachments` sets where uploaded and generated files are kept. By default they go in `<workspace>/.rocketclaw/attachments`. You can pick another folder or an existing S3 bucket:
 
   ```json

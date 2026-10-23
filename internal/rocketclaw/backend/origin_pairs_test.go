@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	migrate "github.com/rubenv/sql-migrate"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,45 +22,6 @@ func TestExternalMCPOriginDetailsStayOutsideHistory(t *testing.T) {
 		entries, err := store.ObserveEntries(t.Context(), id)
 		require.NoError(t, err)
 		require.Empty(t, entries)
-	}
-}
-
-func TestExternalMCPOriginPairsMigration(t *testing.T) {
-	t.Parallel()
-
-	store := newTestSessionService(t)
-	source := migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}
-	set := migrate.MigrationSet{TableName: "pg_migrations"}
-	_, err := set.ExecVersionContext(t.Context(), store.db, "postgres", source, migrate.Down, 24)
-	require.NoError(t, err)
-	_, err = store.db.ExecContext(t.Context(), `INSERT INTO external_mcp_sessions
-(external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) VALUES
-('with-details', 'private', 'managed', 'helper', '#triage'),
-('without-details', 'empty-private', 'empty-managed', 'helper', '#triage');
-INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES
-('private', '{"type":"mcp_external_origin_pairs","output_trace":[{"pairs":{"topic":"first","note":"Unicode Ω"}}]}', ''),
-('private', '{"type":"mcp_external_origin_pairs","output_trace":[{"pairs":{"topic":"later"}}]}', ''),
-('managed', '{"type":"mcp_external_origin_pairs","output_trace":[{"pairs":{"topic":"copy"}}]}', ''),
-('private', '{"type":"turn","output_trace":[{"text":"answer"}]}', ''),
-('unbound', '{"type":"mcp_external_origin_pairs","output_trace":[{"pairs":{"topic":"archived"}}]}', '');`)
-	require.NoError(t, err)
-
-	for range 2 {
-		n, err := set.ExecMaxContext(t.Context(), store.db, "postgres", source, migrate.Up, 1)
-		require.NoError(t, err)
-		require.Equal(t, 1, n)
-
-		pairs, err := queryStrings(t.Context(), store.db, `SELECT external_conversation_id || ':' || origin_pairs::text FROM external_mcp_sessions ORDER BY 1`, "migrated origin pairs")
-		require.NoError(t, err)
-		require.Equal(t, []string{`with-details:{"note": "Unicode Ω", "topic": "first"}`, "without-details:null"}, pairs)
-		// This deliberately tests physical migration output at schema 024,
-		// before the current application's history projection columns exist.
-		entries, err := queryStrings(t.Context(), store.db, `SELECT conversation_id || ':' || (entry_json->>'type') FROM session_entries ORDER BY conversation_id`, "migrated origin entries")
-		require.NoError(t, err)
-		require.Equal(t, []string{"private:turn", "unbound:mcp_external_origin_pairs"}, entries)
-		n, err = set.ExecMaxContext(t.Context(), store.db, "postgres", source, migrate.Down, 1)
-		require.NoError(t, err)
-		require.Equal(t, 1, n)
 	}
 }
 
