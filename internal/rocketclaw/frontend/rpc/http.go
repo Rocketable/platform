@@ -30,11 +30,11 @@ import (
 )
 
 // NewHTTPHandler bridges the browser API to the local Web service, and each remote OpenCode
-// server's API to the browsers the Web admits under /oc/{server}/api/.
-func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, servers map[string]config.OpenCodeConfig) http.Handler {
+// server's API to the browsers the Web admits under /oc/{server}/api/. serverName prefixes the page title.
+func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, servers map[string]config.OpenCodeConfig, serverName string) http.Handler {
 	mux := http.NewServeMux()
 	protection := http.NewCrossOriginProtection()
-	app := web.Handler(sentry)
+	app := web.Handler(sentry, serverName)
 	mux.Handle("GET /", app)
 	mux.Handle("GET /api/", http.NotFoundHandler())
 	mux.Handle("POST /api/", http.NotFoundHandler())

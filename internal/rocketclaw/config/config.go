@@ -28,6 +28,7 @@ type Config struct {
 	Models            map[string]string          `json:"models,omitempty"`
 	WebUsers          map[netip.Addr]string      `json:"web_users,omitempty"`
 	Web               WebConfig                  `json:"web,omitzero"`
+	ServerDisplayName string                     `json:"server_display_name,omitempty"`
 	Environment       []string                   `json:"environment,omitempty"`
 	Logging           LoggingConfig              `json:"logging"`
 	MCPExternal       MCPExternalConfig          `json:"mcp_external"`

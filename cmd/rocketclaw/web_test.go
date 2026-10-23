@@ -39,7 +39,7 @@ func TestPublicWebDoesNotExposeDiagnostics(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := rpc.NewHTTPHandler(connection, config.SentryConfig{}, nil)
+	handler := rpc.NewHTTPHandler(connection, config.SentryConfig{}, nil, "")
 
 	for _, prefix := range []string{"/debug/pprof/", "/s/debug/pprof/"} {
 		for _, path := range []string{"", "heap", "allocs", "goroutine", "profile?seconds=1", "trace?seconds=0.01", "cmdline", "symbol", "block", "mutex", "unknown"} {
@@ -259,4 +259,24 @@ func TestWebRPCServesConfiguredCertificate(t *testing.T) {
 	require.NoError(t, err, "only the configured certificate verifies")
 	require.NoError(t, response.Body.Close())
 	require.Equal(t, http.StatusOK, response.StatusCode)
+}
+
+func TestServerName(t *testing.T) {
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "tailscale"), []byte("#!/bin/sh\n[ \"$*\" = \"status --json --peers=false\" ] && echo '{\"Self\":{\"DNSName\":\"mac-mini.tail1.ts.net.\"}}'\n"), 0o755))
+	t.Setenv("PATH", bin)
+
+	for _, tt := range []struct {
+		cfg  config.Config
+		want string
+	}{
+		{cfg: config.Config{ServerDisplayName: "lab", Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc"}}}, want: "lab"},
+		{cfg: config.Config{Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc"}}}, want: "rc"},
+		{cfg: config.Config{}, want: "mac-mini"},
+	} {
+		require.Equal(t, tt.want, serverName(&tt.cfg))
+	}
+
+	t.Setenv("PATH", t.TempDir())
+	require.Empty(t, serverName(&config.Config{}))
 }
