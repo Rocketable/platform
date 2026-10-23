@@ -7,6 +7,9 @@ option go_package = "github.com/Rocketable/platform/internal/rocketclaw/frontend
 message ListSessionsRequest {
   // The session of the caller's active tab while its window has focus, else empty.
   string viewing = 1;
+  // The version of the last complete listing the caller holds. When the server still knows it, the
+  // listing sends only the rows that changed since; otherwise it sends every row.
+  string since = 2;
 }
 
 message Session {
@@ -188,6 +191,11 @@ message ListSessionsResponse {
   // on its sessions. Remote OpenCode sessions take any tag.
   map<string, int32> opencode_servers = 5; // Server name to its relay port.
   map<string, TagChoices> agent_tags = 6;
+  // Also sent with the completion message: this listing's version, for the next request's since, and
+  // every session ID in list order. A row not sent is unchanged since that version; an ID missing
+  // from order is gone.
+  string version = 7;
+  repeated string order = 8;
 }
 
 message TagChoices {

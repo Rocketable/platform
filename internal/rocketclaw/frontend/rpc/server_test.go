@@ -1161,7 +1161,8 @@ func TestSessionEntries(t *testing.T) {
 
 	empty, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
-	require.True(t, proto.Equal(&ListSessionsResponse{Owner: "alice", UpstreamSuccess: true}, empty))
+	require.NotEmpty(t, empty.GetVersion())
+	require.True(t, proto.Equal(&ListSessionsResponse{Owner: "alice", UpstreamSuccess: true, Version: empty.GetVersion()}, empty))
 
 	// Invalid protobuf bytes must fail decoding, even for an otherwise empty request.
 	malformedIdentity := &IdentityRequest{}

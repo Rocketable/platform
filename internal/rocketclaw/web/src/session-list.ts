@@ -114,6 +114,16 @@ export function mergeSessionRows(baseline: Session[], received: Session[]): Sess
   return [...received, ...baseline.filter((row) => !seen.has(row.id))];
 }
 
+// A listing made since a version the caller holds sends only the rows changed since; its order names every row, so
+// the held rows fill in the rest and a row missing from it is gone. Undefined when a row is in neither, which a full
+// listing repairs. A listing without an order is complete as received.
+export function listedRows(held: Session[], received: Session[], order: string[] | undefined): Session[] | undefined {
+  if (!order) return received;
+  const byID = new Map([...held, ...received].map((row) => [row.id, row]));
+  const rows = order.flatMap((id) => byID.get(id) ?? []);
+  return rows.length === order.length ? rows : undefined;
+}
+
 export function stripSessionHistory(rows: Session[], id: string): Session[] {
   return rows.map((row) => (row.id === id ? { ...row, preview: "", updatedAt: "" } : row));
 }
@@ -133,6 +143,9 @@ export type EnumerationResult = {
   // An owner mismatch or explicit authentication rejection requires live identity revalidation.
   mismatch: boolean;
   remote?: Remote;
+  // From the completion message: the listing's version and every session ID in order.
+  version?: string;
+  order?: string[];
 };
 
 export async function readSessionEnumeration(
@@ -150,6 +163,8 @@ export async function readSessionEnumeration(
   let exhausted = false;
   let mismatch = false;
   let remote: Remote | undefined;
+  let version: string | undefined;
+  let order: string[] | undefined;
   const cancel = () => clearTimeout(timer);
   const flush = () => {
     timer = undefined;
@@ -169,7 +184,10 @@ export async function readSessionEnumeration(
       }
       for (const row of batch.sessions) byID.set(row.id, row);
       upstreamSuccess = batch.upstreamSuccess;
-      if (upstreamSuccess) remote = { servers: batch.opencodeServers ?? {}, agentTags: Object.fromEntries(Object.entries(batch.agentTags ?? {}).map(([agent, choices]) => [agent, choices.tags ?? []])) };
+      if (upstreamSuccess) {
+        ({ version, order } = batch);
+        remote = { servers: batch.opencodeServers ?? {}, agentTags: Object.fromEntries(Object.entries(batch.agentTags ?? {}).map(([agent, choices]) => [agent, choices.tags ?? []])) };
+      }
       dirty = true;
       // First useful row is immediate; subsequent display work coalesces over
       // 16 ms without awaiting the timer or slowing transport consumption.
@@ -189,5 +207,5 @@ export async function readSessionEnumeration(
     signal?.removeEventListener("abort", cancel);
   }
   flush();
-  return { received: [...byID.values()], upstreamSuccess, exhausted, mismatch, remote };
+  return { received: [...byID.values()], upstreamSuccess, exhausted, mismatch, remote, version, order };
 }

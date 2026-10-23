@@ -351,7 +351,7 @@ func TestHTTPStreams(t *testing.T) {
 				require.NoError(t, err)
 
 				response := httptest.NewRecorder()
-				httpEvents(response, stream, &ListSessionsResponse{Sessions: []*Session{{Title: "\xff"}}}, nil)
+				httpEvents(response, httptest.NewRequest(http.MethodGet, "/api/ListSessions", http.NoBody), stream, &ListSessionsResponse{Sessions: []*Session{{Title: "\xff"}}}, nil)
 				require.Equal(t, "text/event-stream", response.Header().Get("Content-Type"))
 				require.Contains(t, response.Body.String(), "event: error\n")
 				require.Contains(t, response.Body.String(), "invalid UTF-8")
@@ -527,6 +527,7 @@ func TestHTTPStreams(t *testing.T) {
 
 				require.Contains(t, response.Header.Get("Content-Disposition"), "filename*=utf-8''")
 			default:
+				require.True(t, response.Uncompressed, "the session list crosses the network compressed")
 				require.Contains(t, string(body), strings.Repeat("x", 100000))
 				require.Contains(t, string(body), `"sessions":[]`)
 				first, _, _ := strings.Cut(string(body), "\n")

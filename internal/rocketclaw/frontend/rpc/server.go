@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"maps"
 	"net/netip"
@@ -57,7 +58,21 @@ type Server struct {
 	// voiceCalls holds each person's live voice call by username; their newer call replaces it.
 	voiceMu    sync.Mutex
 	voiceCalls map[string]*context.CancelCauseFunc
+
+	// listings holds each person's latest session listings by username, oldest first, so a poll
+	// naming one it holds receives only the rows changed since.
+	listingsMu sync.Mutex
+	listings   map[string][]sessionListing
 }
+
+// sessionListing is one complete session listing: its version and each row's fingerprint by ID.
+type sessionListing struct {
+	version string
+	rows    map[string]uint64
+}
+
+// sessionListingsKept bounds the listings kept per person, one for each tab or device polling at once.
+const sessionListingsKept = 8
 
 type searchFlight struct {
 	cancel  context.CancelFunc
@@ -90,7 +105,7 @@ type CronJobs interface {
 // The host must restrict RPC access to the trusted Web proxy: the metadata
 // carries the browser IP, not an independently authenticated network peer.
 func New(core frontend.Backend, sessions *backend.SessionService, cfg *config.LockedConfig, channels ChannelAgentChoices, cronjobs CronJobs) *Server {
-	return &Server{backend: core, sessions: sessions, usernames: cfg.Clone().WebUsers, cfg: cfg, channels: channels, cronjobs: cronjobs, voiceCalls: map[string]*context.CancelCauseFunc{}}
+	return &Server{backend: core, sessions: sessions, usernames: cfg.Clone().WebUsers, cfg: cfg, channels: channels, cronjobs: cronjobs, voiceCalls: map[string]*context.CancelCauseFunc{}, listings: map[string][]sessionListing{}}
 }
 
 // ListSessionEntries returns ordered entry identifiers and metadata.
@@ -181,6 +196,19 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 		return definitions, nil
 	})
 
+	var since map[string]uint64
+
+	s.listingsMu.Lock()
+	for _, listing := range s.listings[owner] {
+		if listing.version == request.Since {
+			since = listing.rows
+		}
+	}
+	s.listingsMu.Unlock()
+
+	listing := sessionListing{version: rand.Text(), rows: map[string]uint64{}}
+	order := []string{}
+
 	for chat, err := range s.sessions.SidebarChats(ctx, owner, s.channels, nil) {
 		if err != nil {
 			return err
@@ -211,12 +239,28 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 			session.UnreadAt = row.UnreadAt.Format(time.RFC3339Nano)
 		}
 
+		encoded, _ := proto.MarshalOptions{Deterministic: true}.Marshal(session) // A built Session always encodes.
+		fingerprint := fnv.New64a()
+		_, _ = fingerprint.Write(encoded)
+		listing.rows[session.Id] = fingerprint.Sum64()
+		order = append(order, session.Id)
+
+		if seen, ok := since[session.Id]; ok && seen == listing.rows[session.Id] {
+			continue
+		}
+
 		if err := stream.SendMsg(&ListSessionsResponse{Sessions: []*Session{session}, Owner: owner}); err != nil {
 			return fmt.Errorf("send web session: %w", err)
 		}
 	}
 
-	done := &ListSessionsResponse{Owner: owner, UpstreamSuccess: true, OpencodeServers: make(map[string]int32)}
+	s.listingsMu.Lock()
+	s.listings[owner] = append(s.listings[owner], listing)
+	s.listings[owner] = s.listings[owner][max(0, len(s.listings[owner])-sessionListingsKept):]
+	s.listingsMu.Unlock()
+
+	done := &ListSessionsResponse{Owner: owner, UpstreamSuccess: true, OpencodeServers: make(map[string]int32), Version: listing.version, Order: order}
+
 	for name, server := range s.cfg.Clone().OpenCode {
 		done.OpencodeServers[name] = int32(server.Port)
 	}

@@ -4,6 +4,7 @@ import { isFunctionDeclaration } from "typescript/unstable/ast/is";
 import { RPCError } from "./api";
 import type { Session, SessionBatch } from "./types";
 import {
+  listedRows,
   mergeSessionRows,
   readSessionEnumeration,
   saveCompleteSessions,
@@ -77,6 +78,26 @@ describe("session list reconciliation", () => {
       { id: "same", preview: "after", updatedAt: "2" },
       { id: "old", preview: "keep", updatedAt: "1" },
     ]);
+  });
+
+  test("rebuilds a listing made since a held version in the server's order", () => {
+    const held: Session[] = [{ id: "a", preview: "1" }, { id: "b", preview: "1" }, { id: "gone", preview: "1" }];
+    expect(listedRows(held, [{ id: "b", preview: "2" }, { id: "new", preview: "fresh" }], ["new", "b", "a"])).toEqual([
+      { id: "new", preview: "fresh" },
+      { id: "b", preview: "2" },
+      { id: "a", preview: "1" },
+    ]);
+    expect(listedRows(held, [], ["a", "unknown"])).toBeUndefined();
+    expect(listedRows(held, [{ id: "only" }], undefined)).toEqual([{ id: "only" }]);
+  });
+
+  test("reports the completion's version and order", async () => {
+    async function* batches() {
+      yield alice([{ id: "b" }]);
+      yield alice([], { upstreamSuccess: true, version: "v2", order: ["a", "b"] });
+    }
+    const result = await readSessionEnumeration("alice", batches(), () => [], () => {});
+    expect([result.version, result.order]).toEqual(["v2", ["a", "b"]]);
   });
 
   test("commits only after success and exhaustion", () => {

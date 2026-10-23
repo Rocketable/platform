@@ -44,6 +44,7 @@ import {
   invalidatePendingSaves,
   loadSavedSessions,
   loadSnapshotGeneration,
+  listedRows,
   mergeSessionRows,
   readSessionEnumeration,
   saveCompleteSessions,
@@ -590,6 +591,8 @@ function SidebarOwner({ children }: { children: ReactNode }) {
   const gen = useRef(0);
   const rowsRef = useRef<Session[]>([]);
   const committed = useRef(false);
+  // The last complete listing's version and rows; the next poll asks for only what changed since.
+  const listing = useRef<{ version: string; rows: Session[] }>({ version: "", rows: [] });
   const ownerRef = useRef(owner);
   const protocolRef = useRef(protocol.data);
   const bump = useCallback(() => {
@@ -601,6 +604,7 @@ function SidebarOwner({ children }: { children: ReactNode }) {
     gen.current += 1;
     rowsRef.current = [];
     committed.current = false;
+    listing.current = { version: "", rows: [] };
     setView({ rows: [], refreshing: false, enumerationComplete: false });
   }, []);
   useEffect(() => {
@@ -645,8 +649,10 @@ function SidebarOwner({ children }: { children: ReactNode }) {
       const snapshotGeneration = await loadSnapshotGeneration(currentOwner, currentProtocol).catch(() => undefined);
       if (ac.signal.aborted || captured !== gen.current) return;
       const viewing = document.hasFocus() ? pathSession(location.pathname) : "";
-      readSessionEnumeration(currentOwner, Promise.resolve(listSessions(ac.signal, `/api/ListSessions?${new URLSearchParams({ viewing })}`)), () => rowsRef.current, (merged) => {
-        if (ac.signal.aborted || captured !== gen.current) {
+      const held = listing.current;
+      readSessionEnumeration(currentOwner, Promise.resolve(listSessions(ac.signal, `/api/ListSessions?${new URLSearchParams({ viewing, since: held.version })}`)), () => rowsRef.current, (merged) => {
+        // Only changed rows arrive since a held version; they show in place once the listing completes.
+        if (ac.signal.aborted || captured !== gen.current || held.version) {
           return;
         }
         rowsRef.current = merged;
@@ -655,18 +661,22 @@ function SidebarOwner({ children }: { children: ReactNode }) {
         if (ac.signal.aborted || captured !== gen.current) {
           return;
         }
+        const rows = shouldCommitSnapshot(result) ? listedRows(held.rows, result.received, result.order) : undefined;
         if (result.mismatch) {
           reset();
           ownerRef.current = undefined;
           // A fast same-owner refetch can hide the intermediate pending state.
           void queryClient.resetQueries({ queryKey: ["identity"] }).then(() => setIdentityGeneration((value) => value + 1));
-        } else if (shouldCommitSnapshot(result)) {
+        } else if (rows) {
+          listing.current = { version: result.version ?? "", rows };
           committed.current = true;
-          rowsRef.current = result.received;
-          setView({ rows: result.received, enumerationComplete: true, refreshing: false, remote: result.remote });
-          void saveCompleteSessions(currentOwner, currentProtocol, result.received, snapshotGeneration).catch(() => {});
+          rowsRef.current = rows;
+          setView({ rows, enumerationComplete: true, refreshing: false, remote: result.remote });
+          void saveCompleteSessions(currentOwner, currentProtocol, rows, snapshotGeneration).catch(() => {});
         } else {
-          setView((current) => ({ ...current, enumerationComplete: result.exhausted && result.upstreamSuccess && !result.mismatch, refreshing: false, remote: result.remote ?? current.remote }));
+          // A listing that could not be rebuilt leaves the version, so the next poll gets every row.
+          if (shouldCommitSnapshot(result)) listing.current = { version: "", rows: [] };
+          setView((current) => ({ ...current, enumerationComplete: false, refreshing: false, remote: result.remote ?? current.remote }));
         }
       }).then(() => {
         if (!ac.signal.aborted && captured === gen.current) void delay(2000, ac.signal).then(tick);
@@ -684,6 +694,7 @@ function SidebarOwner({ children }: { children: ReactNode }) {
     invalidatePendingSaves(owner, protocol.data);
     bump();
     committed.current = false;
+    listing.current = { version: "", rows: [] };
     rowsRef.current = stripSessionHistory(rowsRef.current, id);
     setView((current) => ({ ...current, rows: rowsRef.current }));
   }, [owner, protocol.data, bump]);

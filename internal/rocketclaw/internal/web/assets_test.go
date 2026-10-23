@@ -1,8 +1,11 @@
 package web
 
 import (
+	"compress/gzip"
 	"encoding/json"
+	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"runtime/debug"
@@ -20,7 +23,7 @@ func TestEmbeddedApplication(t *testing.T) {
 
 	handler := Handler(config.SentryConfig{})
 
-	for _, path := range []string{"/", "/s/conversation", "/cron", "/agents", "/skills", "/skills/release", "/config", "/search", "/voice", "/pages", "/shortcuts", "/pages/Ops/main%2Freview/index.html"} {
+	for _, path := range []string{"/", "/s/conversation", "/oc/b3BlbmNvZGU6Ym94OnNlc19h", "/cron", "/agents", "/skills", "/skills/release", "/config", "/search", "/voice", "/pages", "/shortcuts", "/pages/Ops/main%2Freview/index.html"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, http.NoBody))
 		require.Equal(t, http.StatusOK, response.Code, path)
@@ -43,6 +46,51 @@ func TestEmbeddedApplication(t *testing.T) {
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/"+strings.TrimPrefix(path, "dist/"), http.NoBody))
 		require.Equal(t, http.StatusOK, response.Code)
 		require.Equal(t, data, response.Body.Bytes())
+	}
+}
+
+func TestEmbeddedFileCaching(t *testing.T) {
+	handler := Handler(config.SentryConfig{})
+	serve := func(path string, header http.Header) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, path, http.NoBody)
+		maps.Copy(request.Header, header)
+
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+
+		return response
+	}
+
+	scripts, err := fs.Glob(assets, "dist/assets/main-*.js")
+	require.NoError(t, err)
+	require.Len(t, scripts, 1)
+	data, err := assets.ReadFile(scripts[0])
+	require.NoError(t, err)
+
+	path := "/" + strings.TrimPrefix(scripts[0], "dist/")
+
+	// A file named for its content never changes, so browsers keep it without asking again.
+	plain := serve(path, nil)
+	require.Equal(t, "public, max-age=31536000, immutable", plain.Header().Get("Cache-Control"))
+	require.Empty(t, plain.Header().Get("Content-Encoding"))
+	require.Equal(t, data, plain.Body.Bytes())
+
+	compressed := serve(path, http.Header{"Accept-Encoding": {"gzip, br"}})
+	require.Equal(t, "gzip", compressed.Header().Get("Content-Encoding"))
+	require.Contains(t, compressed.Header().Get("Content-Type"), "javascript")
+	require.Less(t, compressed.Body.Len(), len(data)/2)
+	reader, err := gzip.NewReader(compressed.Body)
+	require.NoError(t, err)
+	unpacked, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.Equal(t, data, unpacked)
+
+	// The page and files without a content hash are checked on each load, and an unchanged one is not sent again.
+	for _, path := range []string{"/", "/s/conversation", "/assets/inter-OFL.txt"} {
+		first := serve(path, nil)
+		require.Equal(t, "no-cache", first.Header().Get("Cache-Control"), path)
+		require.NotEmpty(t, first.Header().Get("ETag"), path)
+		require.Equal(t, http.StatusNotModified, serve(path, http.Header{"If-None-Match": {first.Header().Get("ETag")}}).Code, path)
 	}
 }
 
