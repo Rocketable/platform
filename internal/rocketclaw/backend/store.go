@@ -1347,16 +1347,16 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 		}
 		defer func() { _ = rows.Close() }()
 
-		var sessions []*SidebarSession
+		var (
+			sessions []*SidebarSession
+			preview  sql.NullString
+			tags     []byte
+			updated  sql.NullTime
+			unread   sql.NullTime
+		)
 
 		for rows.Next() {
-			var (
-				row     SidebarSession
-				preview sql.NullString
-				tags    []byte
-				updated sql.NullTime
-				unread  sql.NullTime
-			)
+			var row SidebarSession
 			if err := scanChatOrigin(rows, &row.Origin, &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
 				return
