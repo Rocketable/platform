@@ -49,7 +49,7 @@ func TestInterpolatePermissions(t *testing.T) {
 			for _, bucket := range []string{"edit", "bash", "skill", "mcp", "custom"} {
 				agent := Agent{Name: "main", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: bucket, Rules: []PermissionRule{{Pattern: tc.pattern, Action: PermissionAllow}}}}}}
 				original := agent.Permission
-				interpolatePermissions(&agent, []string{"ROCKETCLAW_METADATA_FRUIT=" + tc.value})
+				InterpolatePermissions(&agent, []string{"ROCKETCLAW_METADATA_FRUIT=" + tc.value})
 				require.Equal(t, tc.pattern, original.Buckets[0].Rules[0].Pattern)
 				require.Equal(t, PermissionAllow, agent.Permission.evaluate(bucket, tc.allowed).Action)
 				require.Equal(t, PermissionDeny, agent.Permission.evaluate(bucket, tc.denied).Action)
@@ -63,25 +63,25 @@ func TestInterpolatePermissions(t *testing.T) {
 
 	for _, env := range [][]string{nil, {}, {"OTHER=banana"}, {"ROCKETCLAW_METADATA_FRUIT="}} {
 		agent := Agent{Name: "main", Permission: parsePermissionYAML(t, `edit: {"${ROCKETCLAW_METADATA_FRUIT}": allow}`)}
-		interpolatePermissions(&agent, env)
+		InterpolatePermissions(&agent, env)
 		require.Empty(t, agent.Permission.Buckets[0].Rules)
 
 		denied := Agent{Name: "main", Permission: parsePermissionYAML(t, `bash: {"*": allow, "intercom-write --conversation ${ROCKETCLAW_METADATA_FRUIT} *": deny}`)}
-		interpolatePermissions(&denied, env)
+		InterpolatePermissions(&denied, env)
 		require.Equal(t, PermissionDeny, denied.Permission.evaluate("bash", "intercom-write --conversation apple note").Action, "a deny rule without its variable denies as if it were *")
 	}
 
 	unchanged := Agent{Permission: parsePermissionYAML(t, `edit: {"$ROCKETCLAW_X/${OTHER}/${ROCKETCLAW_X:-fallback}": allow}`)}
 	before := unchanged
-	interpolatePermissions(&unchanged, nil)
+	InterpolatePermissions(&unchanged, nil)
 	require.Equal(t, before, unchanged)
 
 	folded := Agent{Permission: parsePermissionYAML(t, "read: {'*': allow, '${ROCKETCLAW_VALUE}\u0301/*': deny}")}
-	interpolatePermissions(&folded, []string{"ROCKETCLAW_VALUE=e"})
+	InterpolatePermissions(&folded, []string{"ROCKETCLAW_VALUE=e"})
 	require.Equal(t, PermissionDeny, folded.Permission.evaluateRules("read", "É/note.txt", true).Action)
 
 	agent := Agent{Permission: parsePermissionYAML(t, `bash: {"printf '${ROCKETCLAW_VALUE}' > out": allow}`)}
-	interpolatePermissions(&agent, []string{"ROCKETCLAW_VALUE=*?"})
+	InterpolatePermissions(&agent, []string{"ROCKETCLAW_VALUE=*?"})
 
 	for _, tc := range []struct {
 		script string

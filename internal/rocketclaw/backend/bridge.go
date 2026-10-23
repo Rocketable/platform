@@ -1968,6 +1968,14 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 	runner := &incoming.workflow
 	defer func() { err = errors.Join(err, incoming.closeWorkflow()) }()
 
+	// Workflow steps run with the environment of an ordinary turn of this conversation.
+	shellEnv, _, err := b.turnShellEnv(ctx, b.config.ConversationID, msg, new([]rocketcode.SessionEntry))
+	if err != nil {
+		return result, err
+	}
+
+	runner.shellEnv = b.shellEnvFor(shellEnv)
+
 	request := workflow.RunRequest{RunID: turnID, Args: msg.Workflow.Args}
 
 	turnCtx, cancel := context.WithCancel(ctx)
@@ -2244,74 +2252,8 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 			}
 		}
 
-		// A subagent reads the External MCP metadata of its top-level session and turn, as its shell had
-		// when it ran inside that turn.
-		metadataEntry, foundMetadata, err := b.config.SessionService.externalMCPMetadataEntry(ctx, self)
-		if err != nil {
-			return runResult{}, fmt.Errorf("load external MCP metadata: %w", err)
-		}
-
-		if foundMetadata || origin.Source == protocol.SourceExternalMCP {
-			var entries []ObservedSessionEntry
-			if foundMetadata {
-				entries = []ObservedSessionEntry{metadataEntry}
-			}
-
-			metadataConversationID := self
-
-			_, session, paired, err := b.config.SessionService.ExternalMCPSessionByConversationID(self)
-			if err != nil {
-				return runResult{}, fmt.Errorf("load external MCP pairing for metadata environment: %w", err)
-			}
-
-			if paired && session.PrivateConversationID != "" {
-				metadataConversationID = session.PrivateConversationID
-			}
-
-			metadataEnv, ok := externalMCPStoredMetadataEnv(metadataConversationID, entries)
-			if !ok {
-				metadataEnv = externalMCPMetadataEnv(b.config.ConversationID, origin.Metadata)
-			}
-
-			replayInput := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", metadataEnv))
-
-			childContext = append(childContext, rocketcode.SessionEntry{Version: 1, ReplayInput: replayInput})
-			shellEnv = metadataEnv
-
-			if !ok {
-				if _, err := b.config.SessionService.AppendEntryID(context.Background(), b.config.ConversationID, &rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Now().UTC(), ReplayInput: replayInput}); err != nil {
-					return runResult{}, fmt.Errorf("append external MCP metadata: %w", err)
-				}
-			} else {
-				metadataEnv[rocketclawConversationIDEnv] = b.config.ConversationID
-
-				transientEnv := externalMCPMetadataEnv(b.config.ConversationID, origin.Metadata)
-				for key := range metadataEnv {
-					delete(transientEnv, key)
-				}
-
-				if len(transientEnv) > 0 {
-					shellEnv = maps.Clone(metadataEnv)
-					maps.Copy(shellEnv, transientEnv)
-
-					replayInput := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP turn has additional metadata:", transientEnv))
-
-					childContext = append(childContext, rocketcode.SessionEntry{Version: 1, ReplayInput: replayInput})
-
-					entry := rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: replayInput}
-					snapshot.ContextEntries = append(snapshot.ContextEntries, entry)
-				}
-			}
-		}
-
-		// origin is the top-level turn's inbound, so a subagent acts for the same person.
-		if name, email := origin.Metadata[protocol.InboundPrincipalNameMetadataKey], origin.Metadata[protocol.InboundPrincipalEmailMetadataKey]; name != "" {
-			shellEnv = maps.Collect(maps.All(shellEnv))
-			shellEnv["ROCKETCLAW_PRINCIPAL_NAME"] = name
-
-			if email != "" {
-				shellEnv["ROCKETCLAW_PRINCIPAL_EMAIL"], shellEnv["ROCKETCLAW_PRINCIPAL_ID"] = email, fmt.Sprintf("%x", sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email)))))
-			}
+		if shellEnv, childContext, err = b.turnShellEnv(ctx, self, origin, &snapshot.ContextEntries); err != nil {
+			return runResult{}, err
 		}
 	}
 
@@ -2394,7 +2336,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		}
 	}
 
-	if tool, ok := b.maybeDynamicWorkflowTool(root, &agent, agentName, tagConversationID); ok {
+	if tool, ok := b.maybeDynamicWorkflowTool(root, &agent, agentName, tagConversationID, b.shellEnvFor(shellEnv)); ok {
 		customTools = append(customTools, tool)
 	}
 
@@ -2670,28 +2612,118 @@ func rocketcodeShellTempRel(runtimeDir, conversationID string) string {
 	return filepath.ToSlash(filepath.Join(runtimeDir, ".rocketcode", "tmp", id))
 }
 
+// turnShellEnv builds the shell environment of a turn that acts for the top-level session self and its
+// turn's inbound origin: the External MCP metadata and the person who asked. A subagent reads them from
+// its top-level session and turn, as its shell had when it ran inside that turn. It returns the metadata
+// messages child runs see, and appends the turn's additional metadata to contextEntries.
+func (b *Bridge) turnShellEnv(ctx context.Context, self string, origin *protocol.InboundMessage, contextEntries *[]rocketcode.SessionEntry) (map[string]string, []rocketcode.SessionEntry, error) {
+	var (
+		shellEnv     map[string]string
+		childContext []rocketcode.SessionEntry
+	)
+
+	metadataEntry, foundMetadata, err := b.config.SessionService.externalMCPMetadataEntry(ctx, self)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load external MCP metadata: %w", err)
+	}
+
+	if foundMetadata || origin.Source == protocol.SourceExternalMCP {
+		var entries []ObservedSessionEntry
+		if foundMetadata {
+			entries = []ObservedSessionEntry{metadataEntry}
+		}
+
+		metadataConversationID := self
+
+		_, session, paired, err := b.config.SessionService.ExternalMCPSessionByConversationID(self)
+		if err != nil {
+			return nil, nil, fmt.Errorf("load external MCP pairing for metadata environment: %w", err)
+		}
+
+		if paired && session.PrivateConversationID != "" {
+			metadataConversationID = session.PrivateConversationID
+		}
+
+		metadataEnv, ok := externalMCPStoredMetadataEnv(metadataConversationID, entries)
+		if !ok {
+			metadataEnv = externalMCPMetadataEnv(b.config.ConversationID, origin.Metadata)
+		}
+
+		replayInput := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", metadataEnv))
+
+		childContext = append(childContext, rocketcode.SessionEntry{Version: 1, ReplayInput: replayInput})
+		shellEnv = metadataEnv
+
+		if !ok {
+			if _, err := b.config.SessionService.AppendEntryID(context.Background(), b.config.ConversationID, &rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Now().UTC(), ReplayInput: replayInput}); err != nil {
+				return nil, nil, fmt.Errorf("append external MCP metadata: %w", err)
+			}
+		} else {
+			metadataEnv[rocketclawConversationIDEnv] = b.config.ConversationID
+
+			transientEnv := externalMCPMetadataEnv(b.config.ConversationID, origin.Metadata)
+			for key := range metadataEnv {
+				delete(transientEnv, key)
+			}
+
+			if len(transientEnv) > 0 {
+				shellEnv = maps.Clone(metadataEnv)
+				maps.Copy(shellEnv, transientEnv)
+
+				replayInput := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP turn has additional metadata:", transientEnv))
+
+				childContext = append(childContext, rocketcode.SessionEntry{Version: 1, ReplayInput: replayInput})
+
+				entry := rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: replayInput}
+				*contextEntries = append(*contextEntries, entry)
+			}
+		}
+	}
+
+	// origin is the top-level turn's inbound, so a subagent acts for the same person.
+	if name, email := origin.Metadata[protocol.InboundPrincipalNameMetadataKey], origin.Metadata[protocol.InboundPrincipalEmailMetadataKey]; name != "" {
+		shellEnv = maps.Collect(maps.All(shellEnv))
+		shellEnv["ROCKETCLAW_PRINCIPAL_NAME"] = name
+
+		if email != "" {
+			shellEnv["ROCKETCLAW_PRINCIPAL_EMAIL"], shellEnv["ROCKETCLAW_PRINCIPAL_ID"] = email, fmt.Sprintf("%x", sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email)))))
+		}
+	}
+
+	return shellEnv, childContext, nil
+}
+
+// shellEnvFor is turnEnv as this conversation's commands see it: a shadow's, or a subagent's under a
+// shadow, also names the shadow agent and, when the turn has one, its own conversation ID.
+func (b *Bridge) shellEnvFor(turnEnv map[string]string) map[string]string {
+	if !b.shadow && !b.underShadow {
+		return turnEnv
+	}
+
+	env := make(map[string]string, len(turnEnv)+1)
+	maps.Copy(env, turnEnv)
+
+	env["ROCKETCLAW_SHADOW"] = b.config.Agent
+	if _, ok := turnEnv[rocketclawConversationIDEnv]; ok {
+		env[rocketclawConversationIDEnv] = b.config.ConversationID
+	}
+
+	return env
+}
+
 func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]string, customTools ...rocketcode.Tool) rocketcode.Config {
 	runtimeCfg := b.runtime.Clone()
 	tools := make([]rocketcode.Tool, 0, 6+len(customTools))
+	shellEnv = b.shellEnvFor(shellEnv)
 
 	tools = append(tools, reloadTool(b.config.RequestReload), listSessionsTool(b.config.SessionService, b.threads), getSessionTool(b.config.SessionService), sessionsGetURLTool(b.threads), stopBackgroundJobTool(b.background, b.config.ConversationID))
 	if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err == nil && ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
-		tools = append(tools, updateGoalTool(b))
+		tools = append(tools, updateGoalTool(b, shellEnv))
 	}
 
 	tools = append(tools, customTools...)
 
 	if b.shadow || b.underShadow {
-		env := make(map[string]string, len(shellEnv)+1)
-		maps.Copy(env, shellEnv)
-
-		env["ROCKETCLAW_SHADOW"] = b.config.Agent
-		if _, ok := shellEnv[rocketclawConversationIDEnv]; ok {
-			env[rocketclawConversationIDEnv] = b.config.ConversationID
-		}
-
-		shellEnv = env
-
 		tools = slices.DeleteFunc(tools, func(tool rocketcode.Tool) bool {
 			return slices.Contains([]string{askUserQuestionToolName, sessionsWriteToolName, scheduleMessageToolName, resetScheduledMessagesToolName, updateGoalToolName, reloadToolName, restartToolName}, tool.Name)
 		})
@@ -3134,7 +3166,8 @@ func askUserQuestionTool(asker protocol.UserQuestionAsker, msg *protocol.Inbound
 	}}
 }
 
-func updateGoalTool(b *Bridge) rocketcode.Tool {
+// updateGoalTool runs the goal's check script with shellEnv, the environment of the turn that calls it.
+func updateGoalTool(b *Bridge, shellEnv map[string]string) rocketcode.Tool {
 	store := b.config.SessionService
 	conversationID := b.config.ConversationID
 
@@ -3154,7 +3187,7 @@ func updateGoalTool(b *Bridge) rocketcode.Tool {
 			}
 
 			if ok && strings.TrimSpace(current.CheckScript) != "" {
-				output, passed := b.runGoalCheck(ctx, current.CheckScript)
+				output, passed := b.runGoalCheck(ctx, current.CheckScript, shellEnv)
 				if !passed {
 					return rocketcode.TextToolResult(output), nil
 				}
@@ -3174,7 +3207,7 @@ func updateGoalTool(b *Bridge) rocketcode.Tool {
 	}}
 }
 
-func (b *Bridge) runGoalCheck(ctx context.Context, script string) (string, bool) {
+func (b *Bridge) runGoalCheck(ctx context.Context, script string, shellEnv map[string]string) (string, bool) {
 	runtimeCfg := b.runtime.Clone()
 
 	root, err := os.OpenRoot(runtimeCfg.Workspace)
@@ -3196,6 +3229,14 @@ func (b *Bridge) runGoalCheck(ctx context.Context, script string) (string, bool)
 		return "goal check failed before execution: active agent " + agentName + " is not configured", false
 	}
 
+	// The check's permission rules see the variables of the turn that runs it.
+	env := make([]string, 0, len(shellEnv))
+	for key, value := range shellEnv {
+		env = append(env, key+"="+value)
+	}
+
+	rocketcode.InterpolatePermissions(&agent, env)
+
 	command, err := validateGoalCheckScript(root, runtimeCfg.Workspace, script, agent.Permission)
 	if err != nil {
 		return "goal check failed before execution: " + err.Error(), false
@@ -3206,7 +3247,7 @@ func (b *Bridge) runGoalCheck(ctx context.Context, script string) (string, bool)
 		return "goal check failed before execution: " + err.Error(), false
 	}
 
-	result, err := rocketcode.RunBash(ctx, root, filepath.Join(runtimeCfg.Workspace, filepath.FromSlash(shellTempRel)), nil, agent.CustomShell, rocketcode.BashCommand{Command: command, TimeoutMillisecond: goalCheckTimeout, Workdir: "", Description: "Run goal completion check"})
+	result, err := rocketcode.RunBash(ctx, root, filepath.Join(runtimeCfg.Workspace, filepath.FromSlash(shellTempRel)), shellEnv, agent.CustomShell, rocketcode.BashCommand{Command: command, TimeoutMillisecond: goalCheckTimeout, Workdir: "", Description: "Run goal completion check"})
 	if err != nil {
 		return "goal check failed before execution: " + err.Error(), false
 	}

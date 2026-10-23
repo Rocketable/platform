@@ -40,7 +40,8 @@ func parseDynamicWorkflowParams(raw json.RawMessage) (dynamicWorkflowParams, err
 	return params, nil
 }
 
-func (b *Bridge) dynamicWorkflowTool(permissions rocketcode.PermissionSet, agentName, tagConversationID string, definitions map[string]*workflow.Definition) (rocketcode.Tool, bool) {
+// dynamicWorkflowTool runs a workflow's steps with shellEnv, the environment of the turn that calls it.
+func (b *Bridge) dynamicWorkflowTool(permissions rocketcode.PermissionSet, agentName, tagConversationID string, definitions map[string]*workflow.Definition, shellEnv map[string]string) (rocketcode.Tool, bool) {
 	allowed := slices.DeleteFunc(workflow.Descriptions(definitions), func(description protocol.WorkflowDescription) bool {
 		action, _ := permissions.Evaluate("workflow", description.Name)
 		return action != rocketcode.PermissionAllow
@@ -93,7 +94,7 @@ func (b *Bridge) dynamicWorkflowTool(permissions rocketcode.PermissionSet, agent
 				return rocketcode.ToolResult{}, err
 			}
 
-			result, err := b.runNestedWorkflow(ctx, agentName, tagConversationID, params.Name, definitions[params.Name], params.Args)
+			result, err := b.runNestedWorkflow(ctx, agentName, tagConversationID, params.Name, definitions[params.Name], params.Args, shellEnv)
 			if err != nil {
 				return rocketcode.ToolResult{}, err
 			}
@@ -103,7 +104,7 @@ func (b *Bridge) dynamicWorkflowTool(permissions rocketcode.PermissionSet, agent
 	}, true
 }
 
-func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *rocketcode.Agent, agentName, tagConversationID string) (rocketcode.Tool, bool) {
+func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *rocketcode.Agent, agentName, tagConversationID string, shellEnv map[string]string) (rocketcode.Tool, bool) {
 	runtimeCfg := b.runtime.Clone()
 
 	if !slices.ContainsFunc(agent.Permission.Buckets, func(bucket rocketcode.PermissionBucket) bool {
@@ -120,10 +121,10 @@ func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *rocketcode.Agent
 		return rocketcode.Tool{}, false
 	}
 
-	return b.dynamicWorkflowTool(agent.Permission, agentName, tagConversationID, definitions)
+	return b.dynamicWorkflowTool(agent.Permission, agentName, tagConversationID, definitions, shellEnv)
 }
 
-func (b *Bridge) runNestedWorkflow(ctx context.Context, agentName, tagConversationID, name string, definition *workflow.Definition, args string) (resultText string, err error) {
+func (b *Bridge) runNestedWorkflow(ctx context.Context, agentName, tagConversationID, name string, definition *workflow.Definition, args string, shellEnv map[string]string) (resultText string, err error) {
 	if definition == nil {
 		return "", fmt.Errorf("workflow %q is not configured", name)
 	}
@@ -133,6 +134,8 @@ func (b *Bridge) runNestedWorkflow(ctx context.Context, agentName, tagConversati
 		return "", fmt.Errorf("prepare nested workflow agent runner: %w", err)
 	}
 	defer func() { err = errors.Join(err, agentRun.Close()) }()
+
+	agentRun.shellEnv = shellEnv
 
 	result, errRun := workflow.Run(ctx, definition, workflow.RunRequest{
 		RunID: rocketcode.ToolCallKey(ctx), Args: args,

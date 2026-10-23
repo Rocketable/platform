@@ -286,14 +286,14 @@ func NewWithProviders(
 	return NewWithModelResolver(openAIModelResolver{client: providers.OpenAI}, configInput, root, agents, skills, defaultAgent, diagnosticsWriter)
 }
 
-// interpolateAllAgentPermissions resolves ${ROCKETCLAW_*} patterns in every agent's permission rules against env,
-// dropping rules whose variable is absent or empty.
+// interpolateAllAgentPermissions resolves ${ROCKETCLAW_*} patterns in every agent's permission rules against env
+// (InterpolatePermissions).
 func interpolateAllAgentPermissions(agents map[string]Agent, env []string) map[string]Agent {
 	prepared := make(map[string]Agent, len(agents))
 
 	for name := range agents {
 		agent := agents[name]
-		interpolatePermissions(&agent, env)
+		InterpolatePermissions(&agent, env)
 		prepared[name] = agent
 	}
 

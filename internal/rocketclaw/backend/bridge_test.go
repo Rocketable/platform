@@ -345,10 +345,11 @@ permission:
     "./scripts/check.sh": allow
 ---
 Prompt
-`, "#!/bin/sh\nprintf passed\n")
+`, "#!/bin/sh\ntest \"$ROCKETCLAW_METADATA_TICKET\" = T-1 && printf passed\n")
 	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", &GoalState{Objective: "fix lint", CheckScript: "./scripts/check.sh", MaxTurns: 3}))
 
-	result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"complete","note":"finished lint"}`), nil)
+	// The check runs with the environment of the turn that calls the tool.
+	result, err := updateGoalTool(bridge, map[string]string{"ROCKETCLAW_METADATA_TICKET": "T-1"}).Call(t.Context(), []byte(`{"status":"complete","note":"finished lint"}`), nil)
 	require.NoError(t, err)
 	assert.Equal(t, "goal marked complete", result.Output)
 
@@ -390,7 +391,7 @@ Prompt
 `, "#!/bin/sh\nprintf passed\n")
 			require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", &GoalState{Objective: "fix lint", CheckScript: "./scripts/check.sh", MaxTurns: 3}))
 
-			result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
+			result, err := updateGoalTool(bridge, nil).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantOutput, result.Output)
 
@@ -418,7 +419,7 @@ Prompt
 `, "#!/bin/sh\nexit 7\n")
 	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", &GoalState{Objective: "fix lint", CheckScript: "./scripts/check.sh", MaxTurns: 3}))
 
-	tool := updateGoalTool(bridge)
+	tool := updateGoalTool(bridge, nil)
 	assert.Contains(t, fmt.Sprint(tool.Parameters), "what you are thinking")
 
 	result, err := tool.Call(t.Context(), []byte(`{"status":"progress","note":"patched parser; tests next"}`), nil)
@@ -446,7 +447,7 @@ Prompt
 `, "#!/bin/sh\nprintf failed\nexit 7\n")
 	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", &GoalState{Objective: "fix lint", CheckScript: "./scripts/check.sh", MaxTurns: 3}))
 
-	result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
+	result, err := updateGoalTool(bridge, nil).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
 	require.NoError(t, err)
 	assert.Contains(t, result.Output, "goal check did not pass")
 	assert.Contains(t, result.Output, "failed")
@@ -471,7 +472,7 @@ Prompt
 `, "#!/bin/sh\nexit 0\n")
 	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", &GoalState{Objective: "fix lint", CheckScript: "./scripts/check.sh --dangerous", MaxTurns: 3}))
 
-	result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
+	result, err := updateGoalTool(bridge, nil).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
 	require.NoError(t, err)
 	assert.Contains(t, result.Output, "not allowed by agent bash permission")
 
@@ -495,7 +496,7 @@ Prompt
 `, "#!/bin/sh\nexit 7\n")
 	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", &GoalState{Objective: "fix lint", CheckScript: "./scripts/check.sh", MaxTurns: 3}))
 
-	result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"blocked","note":"need credentials"}`), nil)
+	result, err := updateGoalTool(bridge, nil).Call(t.Context(), []byte(`{"status":"blocked","note":"need credentials"}`), nil)
 	require.NoError(t, err)
 	assert.Equal(t, "goal marked blocked", result.Output)
 

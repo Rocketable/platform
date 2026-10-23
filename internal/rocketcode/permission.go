@@ -85,7 +85,10 @@ var permissionEnvPattern = regexp.MustCompile(`\$\{(ROCKETCLAW_[A-Za-z0-9_]+)\}`
 
 var errRocketClawExactNames = errors.New("name each rocketclaw tool; wildcards and the scalar form are not supported")
 
-func interpolatePermissions(agent *Agent, env []string) {
+// InterpolatePermissions resolves ${ROCKETCLAW_*} references in agent's permission rules against env,
+// a list of KEY=VALUE entries: a rule whose variable is absent or empty is dropped, except that a deny
+// rule matches as if the variable were *.
+func InterpolatePermissions(agent *Agent, env []string) {
 	values := make(map[string]string)
 
 	for _, entry := range env {
