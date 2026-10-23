@@ -42,12 +42,12 @@ func TestTabs(t *testing.T) {
 
 		return out
 	}
-	rows := func(query string) []string {
+	aliceTabs := func() []string {
 		t.Helper()
 
 		var out []string
 
-		result, err := db.QueryContext(t.Context(), query)
+		result, err := db.QueryContext(t.Context(), `SELECT format('%s %s %s', path, position, unread_at IS NOT NULL) FROM web_tabs WHERE username = 'alice' ORDER BY path COLLATE "C"`)
 		require.NoError(t, err)
 
 		defer func() { require.NoError(t, result.Close()) }()
@@ -62,11 +62,7 @@ func TestTabs(t *testing.T) {
 
 		return out
 	}
-	aliceTabs := func() []string {
-		return rows(`SELECT format('%s %s %s', path, position, unread_at IS NOT NULL) FROM web_tabs WHERE username = 'alice' ORDER BY path COLLATE "C"`)
-	}
 
-	// Tabs saved as one blob move into rows at startup as one more save; unreadable ones become none.
 	// /search is the ops space's last tab, though closed.
 	saved := &TabState{
 		Tabs:      []*Tab{{Path: "/", Space: "main"}, {Path: "/s/YQ", Pinned: true, Group: "g", Space: "main"}, {Path: "/s/Yg", Preview: true, Space: "ops"}},
@@ -75,30 +71,27 @@ func TestTabs(t *testing.T) {
 		Last:      map[string]string{"main": "/s/YQ", "ops": "/search"},
 		Placement: TabPlacement_LEFT,
 	}
-	legacy, err := proto.Marshal(saved)
+	response, err := call("127.0.0.1", &TabsRequest{State: saved})
 	require.NoError(t, err)
-	_, err = db.ExecContext(t.Context(), `INSERT INTO web_tab_states (username, state, revision) VALUES ('alice', $1, 4), ('bob', $2, 2)`, legacy, []byte{0xff})
-	require.NoError(t, err)
-	require.NoError(t, ConvertTabStates(t.Context(), sessions))
-	assert.Equal(t, []string{"alice t", "bob t"}, rows(`SELECT format('%s %s', username, state IS NULL) FROM web_tab_states ORDER BY 1`))
+	assert.False(t, response.Stale)
 
-	response, err := call("127.0.0.1", &TabsRequest{})
+	response, err = call("127.0.0.1", &TabsRequest{})
 	require.NoError(t, err)
-	assert.True(t, proto.Equal(saved, response.State), "a read returns the converted state")
-	assert.Equal(t, int64(5), response.Revision)
+	assert.True(t, proto.Equal(saved, response.State), "a read returns the saved state")
+	assert.Equal(t, int64(1), response.Revision)
 	assert.Equal(t, []string{"Main"}, names(response))
 
 	response, err = call("192.0.2.2", &TabsRequest{})
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(&TabState{}, response.State), "bob has his own state")
-	assert.Equal(t, int64(3), response.Revision)
+	assert.Equal(t, int64(0), response.Revision)
 
 	// A save made from an older revision is refused and answered with the newer saved state.
-	response, err = call("127.0.0.1", &TabsRequest{State: &TabState{Space: "main"}, Revision: 4})
+	response, err = call("127.0.0.1", &TabsRequest{State: &TabState{Space: "main"}, Revision: 0})
 	require.NoError(t, err)
 	assert.True(t, response.Stale)
 	assert.True(t, proto.Equal(saved, response.State))
-	assert.Equal(t, int64(5), response.Revision)
+	assert.Equal(t, int64(1), response.Revision)
 
 	// Alice has b's open tab and c's closed one unread. A save keeps both marks, writes a's tab saved in the
 	// old URI spelling under its canonical path, drops tabs of sessions that do not exist, even ones whose
@@ -108,31 +101,23 @@ func TestTabs(t *testing.T) {
 	require.NoError(t, err)
 
 	next := &TabState{Tabs: []*Tab{{Path: "/s/a", Space: "main"}, {Path: "/s/bm9uZQ", Space: "main"}, {Path: "/s/_w", Space: "main"}}, Space: "main", Last: map[string]string{"main": "/s/a"}}
-	response, err = call("127.0.0.1", &TabsRequest{State: next, Revision: 5})
+	response, err = call("127.0.0.1", &TabsRequest{State: next, Revision: 1})
 	require.NoError(t, err)
 	assert.False(t, response.Stale)
 	assert.True(t, proto.Equal(next, response.State), "the save answers with the saved state")
-	assert.Equal(t, int64(6), response.Revision)
+	assert.Equal(t, int64(2), response.Revision)
 	assert.Equal(t, []string{"/s/YQ 0 f", "/s/Yg  t", "/s/Yw  t"}, aliceTabs())
 
 	response, err = call("127.0.0.1", &TabsRequest{})
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(&TabState{Tabs: []*Tab{{Path: "/s/YQ", Space: "main"}}, Space: "main", Last: map[string]string{"main": "/s/YQ"}}, response.State))
 
-	// A second startup finds nothing left to convert.
-	require.NoError(t, ConvertTabStates(t.Context(), sessions))
-
-	response, err = call("127.0.0.1", &TabsRequest{})
-	require.NoError(t, err)
-	assert.Len(t, response.State.Tabs, 1)
-	assert.Equal(t, int64(6), response.Revision)
-
 	// Deleting a session deletes its tabs.
 	_, err = db.ExecContext(t.Context(), `DELETE FROM conversations WHERE conversation_id = 'b'`)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/s/YQ 0 f", "/s/Yw  t"}, aliceTabs())
 
-	response, err = call("192.0.2.2", &TabsRequest{State: &TabState{Space: "main"}, Revision: 3})
+	response, err = call("192.0.2.2", &TabsRequest{State: &TabState{Space: "main"}, Revision: 0})
 	require.NoError(t, err)
 	assert.False(t, response.Stale)
 

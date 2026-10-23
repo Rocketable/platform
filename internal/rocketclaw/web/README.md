@@ -553,10 +553,8 @@ active tab.
   closed, or changed itself, and saves again, so neither window's changes are
   lost. The server keeps one row per tab and per group. A session's tab is saved
   only while the session exists, and deleting a session removes its tab for
-  everyone. Tabs saved by older servers as one blob are unpacked once at startup;
-  ones that can no longer be read count as none. Groups with no tabs are dropped,
-  tabs whose space is gone join the first space keeping their group, and tabs
-  whose group is gone leave it. A
+  everyone. Groups with no tabs are dropped, tabs whose space is gone join the
+  first space keeping their group, and tabs whose group is gone leave it. A
   window reloads them when it becomes visible or regains focus: it takes in
   changes made elsewhere, merged with its own unsaved ones, but stays on its own
   tab, unless that tab was closed elsewhere. The address is the active tab, so a
