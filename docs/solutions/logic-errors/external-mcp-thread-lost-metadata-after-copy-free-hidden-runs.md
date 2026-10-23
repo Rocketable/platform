@@ -57,7 +57,7 @@ In this session's runs with realistic data (thousands of threads, each with a me
 
 The caller in `bridge.go` needed no change. It already matches the stored entry against the paired private run's ID and then sets `ROCKETCLAW_CONVERSATION_ID` to the thread (`internal/rocketclaw/backend/bridge.go:2284`).
 
-Fixed in PR #613 (open, unmerged as of this writing).
+Fixed in PR #613, released in v0.2.1.
 
 ## Why This Works
 
