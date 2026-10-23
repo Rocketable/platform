@@ -823,17 +823,26 @@ function SidebarToggle({ open, toggle }: { open: boolean; toggle: () => void }) 
 }
 
 function CopyPageLink() {
-  const [status, setStatus] = useState<"copied" | "error">();
+  const pathname = usePathname();
+  const [result, setResult] = useState<{ pathname: string; status?: "copied" | "error" }>();
+  if (result && result.pathname !== pathname) setResult(undefined);
+  useEffect(() => {
+    if (result?.status !== "copied") return;
+    const timer = setTimeout(() => setResult(undefined), 2000);
+    return () => clearTimeout(timer);
+  }, [result]);
+  const status = result?.status;
   const Icon = status === "copied" ? Check : status === "error" ? CircleAlert : Share;
   const message = status === "copied" ? "Page link copied" : status === "error" ? "Could not copy page link. Copy the address from your browser." : "";
   return <div className="shrink-0">
     <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)]" />} aria-label="Copy page link" onClick={async () => {
-      setStatus(undefined);
+      const pending = { pathname };
+      setResult(pending);
       try {
         await copyText(location.href, document.body);
-        setStatus("copied");
+        setResult((current) => current === pending ? { pathname, status: "copied" } : current);
       } catch {
-        setStatus("error");
+        setResult((current) => current === pending ? { pathname, status: "error" } : current);
       }
     }}>
       <Icon className={cn("size-[var(--navigation-icon)]", status === "error" && "text-destructive")} />

@@ -2,8 +2,8 @@
 
 Every page has a **Copy page link** share icon in the bottom navigation, on desktop
 and mobile. It copies the full current address, including query and fragment,
-and shows whether copying succeeded. Plain HTTP uses the same clipboard fallback
-as message copying.
+and shows whether copying succeeded. The success checkmark clears after two seconds
+or when switching pages. Plain HTTP uses the same clipboard fallback as message copying.
 
 Assistant replies show a smaller, muted footer with known
 `agent (provider/model#effort)` details; `#effort` is omitted when absent.
