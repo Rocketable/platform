@@ -370,6 +370,9 @@
       "@opencode/client/effect/service": [
         "./packages/client/src/effect/service.ts"
       ],
+      "@opencode/client/mcp": [
+        "./packages/client/src/mcp.ts"
+      ],
       "@opencode/schema": [
         "./packages/schema/src/index.ts"
       ],
