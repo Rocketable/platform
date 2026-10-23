@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
@@ -47,10 +48,8 @@ func runServe(args []string) error {
 		"log_level", cfg.Logging.Level,
 	)
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := shutdownSignals()
 	defer stop()
-
-	context.AfterFunc(ctx, stop)
 
 	var build debug.BuildInfo
 	if info, ok := debug.ReadBuildInfo(); ok {
@@ -125,4 +124,17 @@ func logBuildIdentity(logger *slog.Logger, build *debug.BuildInfo) {
 	}
 
 	logger.LogAttrs(context.Background(), slog.LevelInfo, "starting rocketclaw", attrs...)
+}
+
+// shutdownSignals is canceled by the first SIGINT or SIGTERM, which starts the graceful shutdown. A second Ctrl-C
+// (SIGINT) then forces the exit. A repeated SIGTERM does not: systemd sends SIGTERM again to the processes left
+// once a unit's main process exits, which happens at once when `go run` starts RocketClaw.
+func shutdownSignals() (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	context.AfterFunc(ctx, func() {
+		signal.Notify(make(chan os.Signal, 1), syscall.SIGTERM)
+		stop()
+	})
+
+	return ctx, stop
 }
