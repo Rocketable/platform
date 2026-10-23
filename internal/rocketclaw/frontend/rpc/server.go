@@ -228,7 +228,12 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 			Kind: conversationKind(row.Kind), RemoteSessionId: row.RemoteSession, Label: row.Label()}
 
 		if row.SlackChannel != "" {
-			session.AllowedAgents = slices.DeleteFunc(slices.Clone(allChoices), func(name string) bool { return !slices.Contains(chat.RoomAgents, name) })
+			session.AllowedAgents = make([]string, 0, min(len(allChoices), len(chat.RoomAgents)))
+			for _, name := range allChoices {
+				if slices.Contains(chat.RoomAgents, name) {
+					session.AllowedAgents = append(session.AllowedAgents, name)
+				}
+			}
 		}
 
 		if summary := row.Summary; summary != nil {
