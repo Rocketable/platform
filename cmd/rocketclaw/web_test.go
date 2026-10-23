@@ -39,7 +39,7 @@ func TestPublicWebDoesNotExposeDiagnostics(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := rpc.NewHTTPHandler(connection, config.SentryConfig{}, nil, "")
+	handler := rpc.NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "")
 
 	for _, prefix := range []string{"/debug/pprof/", "/s/debug/pprof/"} {
 		for _, path := range []string{"", "heap", "allocs", "goroutine", "profile?seconds=1", "trace?seconds=0.01", "cmdline", "symbol", "block", "mutex", "unknown"} {

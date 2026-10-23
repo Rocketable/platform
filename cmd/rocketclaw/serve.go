@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/posthog/posthog-go"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -39,7 +40,24 @@ func runServe(args []string) error {
 		return fmt.Errorf("resolve config path: %w", err)
 	}
 
-	logger := newLogger(cfg.Logging.Level).With("process_start", processStart)
+	var mirrors []slog.Handler
+
+	if cfg.PostHog.ProjectToken != "" {
+		client, err := posthog.NewWithConfig(cfg.PostHog.ProjectToken, posthog.Config{Endpoint: cfg.PostHog.Host, ShutdownTimeout: 5 * time.Second})
+		if err != nil {
+			return fmt.Errorf("start PostHog client: %w", err)
+		}
+
+		defer func() {
+			if err := client.Close(); err != nil {
+				slog.Warn("close PostHog client", "error", err)
+			}
+		}()
+
+		mirrors = postHogMirrors(client, serverName(cfg))
+	}
+
+	logger := newLogger(cfg.Logging.Level, mirrors...).With("process_start", processStart)
 	logger.Info(
 		"loaded rocketclaw configuration",
 		"config_path", selected.Path,

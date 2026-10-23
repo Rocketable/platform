@@ -241,7 +241,7 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 				request.Header.Set("Tailscale-User-Name", "Alice")
 
 				response := httptest.NewRecorder()
-				NewHTTPHandler(connection, config.SentryConfig{}, nil, "").ServeHTTP(response, request)
+				NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "").ServeHTTP(response, request)
 
 				// Protocol negotiation answers any caller; every other method needs the mapping.
 				code := tt.code
@@ -310,7 +310,7 @@ func TestTailnetIdentity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			whois := &mockTailnetWhoIs{WhoIsFunc: func(context.Context, string) (*apitype.WhoIsResponse, error) { return tt.who, tt.err }}
 
-			next := NewHTTPHandler(connection, config.SentryConfig{}, nil, "")
+			next := NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "")
 			if tt.identity == "" {
 				next = http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("refused caller reached the Web handler") })
 			}

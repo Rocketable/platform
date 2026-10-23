@@ -170,7 +170,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 		require.NoError(t, err)
 
 		html = regexp.MustCompile(`<script type="module" src="[^"]+"></script>`).ReplaceAll(html, []byte(`<script type="module" src="/current.js"></script>`))
-		handler := NewHTTPHandler(connection, cfg.Web.Sentry, cfg.OpenCode, "")
+		handler := NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "")
 		httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.URL.Path == "/current.js":
@@ -459,7 +459,7 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := NewHTTPHandler(connection, cfg.Web.Sentry, cfg.OpenCode, "")
+	handler := NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "")
 	request := httptest.NewRequest(http.MethodPost, "/api/Reload", strings.NewReader(`{"reason":"updated assets"}`))
 	request.RemoteAddr = "192.0.2.1:1234"
 	response := httptest.NewRecorder()
@@ -556,7 +556,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	httpServer := httptest.NewServer(NewHTTPHandler(connection, cfg.Web.Sentry, cfg.OpenCode, ""))
+	httpServer := httptest.NewServer(NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, ""))
 	t.Cleanup(httpServer.Close)
 	runWebTest(t, "src/revert-transport.test.ts", "ROCKETCLAW_REVERT_TEST_URL="+httpServer.URL)
 

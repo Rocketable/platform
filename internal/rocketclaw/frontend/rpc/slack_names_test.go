@@ -58,7 +58,7 @@ func TestSlackNames(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
 	response := httptest.NewRecorder()
-	NewHTTPHandler(connection, config.SentryConfig{}, nil, "").ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/SlackNames", strings.NewReader(`{"ids":["U1","S1","C1","Umissing"]}`)))
+	NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "").ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/SlackNames", strings.NewReader(`{"ids":["U1","S1","C1","Umissing"]}`)))
 	require.Equal(t, http.StatusOK, response.Code)
 
 	var body struct {

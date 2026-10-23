@@ -46,7 +46,7 @@ func release(build *debug.BuildInfo) string {
 
 // Handler serves application routes and compiled assets without a frontend runtime.
 // A non-empty serverName prefixes the page title so browser tabs tell servers apart.
-func Handler(sentry config.SentryConfig, serverName string) http.Handler {
+func Handler(sentry config.SentryConfig, posthog config.PostHogConfig, serverName string) http.Handler {
 	files, _ := fs.Sub(assets, "dist")
 	ocFiles, _ := fs.Sub(assets, "oc-dist")
 
@@ -63,6 +63,11 @@ func Handler(sentry config.SentryConfig, serverName string) http.Handler {
 		build, _ := debug.ReadBuildInfo()
 		data, _ := json.Marshal(sentryBootstrap{SentryConfig: sentry, Release: release(build)}) // HTML escaping prevents closing the script element.
 		index = strings.Replace(index, "</head>", `<script id="sentry-config" type="application/json">`+string(data)+`</script></head>`, 1)
+	}
+
+	if posthog.ProjectToken != "" {
+		data, _ := json.Marshal(posthog)
+		index = strings.Replace(index, "</head>", `<script id="posthog-config" type="application/json">`+string(data)+`</script></head>`, 1)
 	}
 
 	page = []byte(index)

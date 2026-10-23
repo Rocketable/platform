@@ -20,6 +20,7 @@ See [LICENSE](LICENSE) for the full license terms.
 - Runs saved workflows written in Starlark, a small Python-like language.
 - Sends model requests to OpenAI or to any service with the same API, and can use several services side by side.
 - Can send traces of agent runs to OpenTelemetry-compatible tools.
+- Can send events, errors, traces, and browser sessions to PostHog Cloud.
 
 ## Main parts
 
@@ -313,6 +314,30 @@ When profiling is enabled, RocketClaw also samples blocking events at an average
 ```sh
 ssh -N -L 127.0.0.1:6060:127.0.0.1:6060 trusted-host
 ```
+
+### PostHog
+
+Set a PostHog project token to send data to PostHog Cloud. Leave it out to send nothing.
+
+```json
+{
+  "posthog": {
+    "project_token": "phc_...",
+    "host": "https://us.i.posthog.com"
+  }
+}
+```
+
+`host` defaults to US Cloud; use `https://eu.i.posthog.com` for EU Cloud. Only a public project token (`phc_...`) is accepted, because the browser receives it. Never use a personal API key here.
+
+With a token, RocketClaw sends:
+
+- Every log line at info level or above as an event. The event is named by the line's `event` field, such as `turn_started` or `cron_completed`, or else by its message, such as `rocketclaw health`. All of the line's fields become event properties.
+- Warnings and errors to Error Tracking, with the stack of the code that logged them.
+- Browser page views, clicks, heatmaps, Web Vitals, JavaScript errors, and session replays. Replays record typed text, console logs, and network requests in full, and each browser is identified by its Web username.
+- Traces of agent turns, model calls, and tools, but only while `instrumentation.enabled` is true. They go to PostHog's AI Observability (model, tokens, latency, and reply text for each model call) and to its distributed tracing. `instrumentation.collector_endpoint` is then optional, and when set, traces also keep going there. Each trace belongs to the person who sent the turn: their email when known, else their principal name. Turns nobody sent, such as cron jobs, have no person. The request messages of each model call are not sent, because they repeat the whole conversation and PostHog rejects exports over 4 MB. Only the message that started the turn is sent, as the trace's input.
+
+Traces carry the text of prompts, replies, and tool calls unless `instrumentation.hide_inputs` or `instrumentation.hide_outputs` hides it. To get console logs and network requests in replays, also turn them on in the PostHog project settings.
 
 ## Repository layout
 

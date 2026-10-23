@@ -99,5 +99,9 @@
     "api_key": "",
     "hide_inputs": true,
     "hide_outputs": true
+  },
+  "posthog": {
+    "project_token": "",
+    "host": "https://us.i.posthog.com"
   }
 }

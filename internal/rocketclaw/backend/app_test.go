@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 )
 
 func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
@@ -289,17 +291,32 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 	require.Empty(t, runQueuedStartup(t, time.Second))
 }
 
-func TestConfigureInstrumentationStartsAndStopsExporter(t *testing.T) {
-	collector := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+func TestConfigureInstrumentationExportsToCollectorAndPostHog(t *testing.T) {
+	var mu sync.Mutex
+
+	authorizations := map[string]string{}
+	collector := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		authorizations[r.URL.Path] = r.Header.Get("Authorization")
+	}))
 	t.Cleanup(collector.Close)
 
 	stop, err := configureInstrumentation(t.Context(), config.InstrumentationConfig{
 		Enabled: true, CollectorEndpoint: collector.URL, ProjectName: "rocketclaw-test", APIKey: "token",
-	})
+	}, config.PostHogConfig{ProjectToken: "phc_test", Host: collector.URL})
 	require.NoError(t, err)
+
+	_, span := otel.Tracer("test").Start(t.Context(), "turn")
+	span.End()
 	require.NoError(t, stop(t.Context()))
 
-	_, err = configureInstrumentation(t.Context(), config.InstrumentationConfig{Enabled: true, CollectorEndpoint: "not-a-url"})
+	mu.Lock()
+	assert.Equal(t, map[string]string{"/v1/traces": "Bearer token", "/i/v0/ai/otel": "Bearer phc_test", "/i/v1/traces": "Bearer phc_test"}, authorizations)
+	mu.Unlock()
+
+	_, err = configureInstrumentation(t.Context(), config.InstrumentationConfig{Enabled: true, CollectorEndpoint: "not-a-url"}, config.PostHogConfig{})
 	require.ErrorContains(t, err, "parse instrumentation.collector_endpoint")
 }
 

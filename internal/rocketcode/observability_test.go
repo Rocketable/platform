@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	otelsemconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 )
 
 func TestTokenUsageAttributes(t *testing.T) {
@@ -23,6 +24,7 @@ func TestTokenUsageAttributes(t *testing.T) {
 	require.Equal(t, []attribute.KeyValue{
 		attribute.Int64(semconv.LLMTokenCountCompletion, 5),
 		attribute.Int64(semconv.LLMTokenCountPromptDetailsCacheWrite, 4),
+		otelsemconv.GenAIUsageOutputTokens(5),
 	}, usage.attributes())
 }
 
@@ -104,6 +106,14 @@ func TestObservabilityEmitsAgentProviderAndToolSpans(t *testing.T) {
 	require.Contains(t, spans[2].Attributes(), attribute.Int64(semconv.LLMTokenCountCompletionDetailsReasoning, 2))
 	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.InputValue, `{"filePath":"secret.txt"}`))
 	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.OutputValue, "file contents"))
+
+	// PostHog reads only OpenTelemetry GenAI attributes as LLM analytics.
+	require.Subset(t, spans[3].Attributes(), []attribute.KeyValue{otelsemconv.GenAIOperationNameInvokeAgent, otelsemconv.GenAIAgentName("main")})
+	require.Subset(t, spans[2].Attributes(), []attribute.KeyValue{
+		otelsemconv.GenAIOperationNameChat, otelsemconv.GenAIRequestModel("gpt-6-luna"), otelsemconv.GenAIProviderNameKey.String("openai"), otelsemconv.GenAIResponseID("resp-final"),
+		otelsemconv.GenAIUsageInputTokens(12), otelsemconv.GenAIUsageOutputTokens(5), otelsemconv.GenAIOutputMessagesKey.String(`[{"content":"final answer","role":"assistant"}]`),
+	})
+	require.Subset(t, spans[1].Attributes(), []attribute.KeyValue{otelsemconv.GenAIOperationNameExecuteTool, otelsemconv.GenAIToolName("read"), otelsemconv.GenAIToolCallID("call-1")})
 }
 
 func TestObservabilityUsesResolvedProviderAndModel(t *testing.T) {
@@ -159,6 +169,7 @@ func TestObservabilityRedactionComesFromConfigObject(t *testing.T) {
 	require.Len(t, spans, 2)
 	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.InputValue, instrumentation.RedactedValue))
 	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.OutputValue, instrumentation.RedactedValue))
+	require.Contains(t, spans[0].Attributes(), otelsemconv.GenAIOutputMessagesKey.String(`[{"content":"`+instrumentation.RedactedValue+`","role":"assistant"}]`))
 }
 
 func TestObservabilityEmitsProviderDiagnosticSpanEvents(t *testing.T) {
