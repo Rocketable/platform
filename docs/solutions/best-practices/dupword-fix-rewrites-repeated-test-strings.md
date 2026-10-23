@@ -32,7 +32,7 @@ tags:
 
 `internal/rocketclaw/.golangci.yml` enables `dupword`, and `internal/rocketclaw/Makefile` runs `golangci-lint run --fix ./...` in both `lint` and `test`. `dupword` flags consecutive duplicate words in comments and string literals, and its fix deletes the duplicate. Inside a test fixture that is code, not prose, the deletion silently changes behavior.
 
-It happened while adding producer-turn tag coverage to `TestRuntimeProducerKeepsDestinationUntilSync` (`internal/rocketclaw/backend/runtime_test.go`), pending on the `alex-desiderata` change. The fake model returned a Starlark program as a JSON string that toggled a tag off and on:
+It happened while adding producer-turn tag coverage to `TestRuntimeProducerKeepsDestinationUntilSync` (`internal/rocketclaw/backend/runtime_test.go`, since renamed `TestRuntimeProducerReportsToDestination`), pending on the `alex-desiderata` change. The fake model returned a Starlark program as a JSON string that toggled a tag off and on:
 
 ```text
 rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_set_tag(tag=\"yellow\")
@@ -43,7 +43,7 @@ rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_set_tag(tag=\"yellow\"), rocketcl
 ## Guidance
 
 - Keep repeated calls in a fixture string from appearing back to back. Interleave a different call, for example a `rocketclaw_get_tags()` read between toggles, which also asserts each intermediate state.
-- After `make lint` or `make test`, inspect `jj diff` before committing. An unexpected edit inside a string literal is this linter, not a concurrent writer.
+- After `make lint` or `make test`, inspect `jj diff --git` before committing. An unexpected edit inside a string literal is this linter, not a concurrent writer.
 - Do not suppress `dupword` with `//nolint` without approval (`AGENTS.md`); restructure the fixture instead.
 
 ## Applicability

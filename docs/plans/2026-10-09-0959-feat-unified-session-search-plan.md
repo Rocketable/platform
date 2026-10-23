@@ -181,7 +181,7 @@ Who decides what, per surface:
 - Browser search today: `internal/rocketclaw/web/src/ui.tsx` (`sessionSearchTerms`, `matchesSession`, `sessionMatchesSearch`, `compareSessions`, `useSessionOrigins`, `paletteRows`, `SearchResults`, `SearchMatches`, `searchInput`, `SessionSearch`, `SearchTabs`).
 - Server pieces: `internal/rocketclaw/frontend/rpc/server.go` (`listSessions`, `decideOrigin`, `creatingCronLocator`, `parseCronRun`), `internal/rocketclaw/frontend/rpc/session_commands.go` (`searchMessages`, `searchOrigins`), `internal/rocketclaw/backend/store.go` (`SidebarSessions`, `ChatOriginFacts`), `internal/rocketclaw/backend/message_search.go` (`SearchMessages`, `visibleChatsSQL`).
 - Slack late binding: `internal/rocketclaw/backend/runtime.go` (`SlackFrontend`, `AttachSlack`), `internal/rocketclaw/backend/thread_bridges.go` (`cronRootSender`, `noCronRoots`), `internal/rocketclaw/frontend/slack/connector.go`.
-- Visibility by query, never by ID shape: `docs/solutions/logic-errors/slash-in-conversation-id-is-not-a-delegation-history.md`.
+- Visibility by query, never by ID shape: `CONCEPTS.md` (Delegation History).
 - Prior search decisions still in force: `docs/plans/2026-10-02-1252-feat-session-tags-plan.md` (exact tags, quoting), `docs/plans/2026-10-05-1839-fix-web-search-links-tags-feedback-plan.md` (`sort:` semantics, deep links; its "operators stay client-side" note is superseded here), `docs/plans/2026-09-29-1053-feat-web-search-page-plan.md` (timing, shared flight), `docs/plans/2026-10-08-1107-feat-indexed-message-search-plan.md` (Go lowercase, unnamed statement, `index_complete`).
 - CLOC at planning time: Go 22,236 of 23,500 (hazard above 23,000); web 5,615 of 7,500.
 

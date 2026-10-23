@@ -38,7 +38,7 @@ An agent type with a `guardrail` is promised that every delegation prompt is rev
 
 ## Solution
 - The delegation and response reviews share `toolFactory.guardTask` (`internal/rocketcode/tasks.go`). A new subagent's prompt is reviewed in `runTask`, and a continue's prompt in `backgroundTool` (`internal/rocketcode/background.go`), each right before `ChildSessions.WriteSubagent` delivers it into the subagent's session. A rejected prompt is never queued or steered, and the caller gets the usual `delegation blocked` result.
-- Every answer leaves through `toolFactory.awaitTask`, which waits for the subagent session's turn (`ChildSessions.AwaitSubagent`) and runs the response review and the `<task_result>` wrapping. A background job resumed after a restart answers through `Runtime.AwaitTask`, the same code; the job row keeps the prompt (`background_jobs.input`) the review quotes.
+- Every answer leaves through `toolFactory.awaitTask`, which waits for the subagent session's turn (`ChildSessions.AwaitSubagent`) and runs the response review and the `<task_result>` wrapping. A background job resumed after a restart answers through `Runtime.AwaitTask`, the same code; the job's `turns` row keeps the prompt (`turns.message`) the review quotes.
 
 ## Why This Works
 The guardrail contract is about prompts reaching a subagent and answers leaving it. There are exactly two places where either happens, `WriteSubagent` and `AwaitSubagent`, and every task path goes through them, whether the subagent is idle, running, or busy with queued work.

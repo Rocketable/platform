@@ -1,7 +1,7 @@
 ---
 title: Saved Queue Rows Never Started After Restart
 date: 2026-09-20
-last_updated: 2026-10-05
+last_updated: 2026-10-22
 category: docs/solutions/logic-errors/
 module: internal/rocketclaw/backend
 problem_type: logic_error
@@ -35,30 +35,32 @@ RocketClaw could save a waiting message and then stop before that conversation's
 
 ## What Didn't Work
 
-Deleting the old backlog and waiting for new activity would drop saved work. A separate replay path would duplicate ordinary processing and risk competing with live workers. Blocking later work on leftover unfinished-turn records would strand later messages behind a failed live turn that still had an `active_turns` row.
+Deleting the old backlog and waiting for new activity would drop saved work. A separate replay path would duplicate ordinary processing and risk competing with live workers. Blocking later work on leftover unfinished-turn records would strand later messages behind a failed live turn that still had an unfinished-turn row (then `active_turns`).
 
 ## Solution
 
-Keep queued conversations through retention, then discover distinct `thread_queue.conversation_id` values once at startup, after Slack is attached and conversations with an unfinished turn have been started. Each recorded conversation reuses the existing worker and later-work rules.
+Keep queued conversations through retention, then discover the distinct conversations that have waiting `turns` rows other than scheduled messages (formerly `thread_queue`) once at startup, after Slack is attached and conversations with an unfinished turn have been started. Each recorded conversation reuses the existing worker and later-work rules.
 
-Since 2026-10-05 (step-journal change, pending) there is no separate recovery phase. An interrupted turn is an `active_turns` row that is not `done`; each bridge loop runs its conversation's oldest such row before anything else (`headTurn`), and `StartActiveTurns` wakes those workers before `StartQueuedConversations`. A turn that failed or was stopped is kept with phase `done` for the transcript, so it never holds back later queue rows.
+Since 2026-10-05 (step-journal change) there is no separate recovery phase. An interrupted turn is a lane-taking `turns` row that is neither `waiting` nor `done`; each worker runs its oldest such row, its own or that of a hidden run that reports to it, before anything else (`headTurn`), and `StartActiveTurns` wakes those workers before `StartQueuedConversations`. A turn that failed or was stopped is kept with phase `done` for the transcript, so it never holds back later queue rows.
 
-```1572:1576:internal/rocketclaw/backend/store.go
-func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, conversationID string, cutoff time.Time) (bool, error) {
-	queued, err := conversationExists(ctx, db, `thread_queue`, `conversation_id`, conversationID)
-	if err != nil || queued {
+```1854:1857:internal/rocketclaw/backend/store.go
+	pending, err := conversationHasPendingWork(ctx, db, conversationID)
+	if err != nil || pending {
 		return false, err
 	}
 ```
 
-```456:469:internal/rocketclaw/backend/thread_bridges.go
-func (m *threadBridgeManager) StartQueuedConversations() error {
-	conversationIDs, err := m.store.queuedConversationIDs(context.Background())
+`conversationHasPendingWork` counts, among other work, `SELECT 1 FROM turns WHERE conversation_id = $1 AND phase = 'waiting'`.
+
+```422:435:internal/rocketclaw/backend/thread_bridges.go
+func (m *threadBridgeManager) StartQueuedConversations(ctx context.Context) error {
+	conversationIDs, err := queryStrings(ctx, m.store.db, `SELECT DISTINCT conversation_id FROM turns WHERE phase = 'waiting' AND reason <> $1 ORDER BY conversation_id`, "queued conversation IDs", waitScheduled)
 	if err != nil {
 		return fmt.Errorf("load queued conversations: %w", err)
 	}
+
 	for _, conversationID := range conversationIDs {
-		if err := m.PickLaterWork(context.Background(), conversationID); err != nil {
+		if err := m.PickLaterWork(ctx, conversationID); err != nil {
 			return err
 		}
 	}
@@ -67,9 +69,9 @@ func (m *threadBridgeManager) StartQueuedConversations() error {
 }
 ```
 
-A private External MCP turn's row runs on its destination worker (the row's `SyncDestination`) with the private conversation as producer; after it finishes, both sides pick later work. Schedule deletion and park-link clearing share one transaction so a failed delete cannot unpark waiting rows.
+A private External MCP turn's row runs on its destination worker (the chat its conversation reports to, `conversations.reports_to`, recorded from `SyncDestination` when the turn starts); after it finishes, both sides pick later work. Schedule deletion and park-link clearing share one transaction so a failed delete cannot unpark waiting rows.
 
-The code change is pending in [PR #68](https://github.com/Rocketable/platform/pull/68). Production cleanup of Wallace's six historical rows remains operator work and is not part of the fix.
+The code change landed in [PR #68](https://github.com/Rocketable/platform/pull/68). Production cleanup of Wallace's six historical rows remains operator work and is not part of the fix.
 
 ## Why This Works
 
@@ -81,5 +83,5 @@ Keep a real-store startup test that seeds queued rows with no other work, assert
 
 ## Related Issues
 
-- [PR #68](https://github.com/Rocketable/platform/pull/68) (pending): recover saved queues on startup
+- [PR #68](https://github.com/Rocketable/platform/pull/68): recover saved queues on startup
 - Investigation: `docs/investigations/2026-09-20-wallace-stranded-mcp-queue.md`
