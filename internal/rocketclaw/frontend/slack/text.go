@@ -27,15 +27,40 @@ func splitSlackText(text string, preferredLimit, hardLimit int) []string {
 
 	chunks := make([]string, 0, len(runes)/preferredLimit+1)
 	for len(runes) > 0 {
-		if len(runes) < hardLimit {
+		// Slack escapes these characters when returning blocks; budget that form so a footer edit still fits.
+		size, preferredEnd, hardEnd := 0, 0, 0
+
+		for i, r := range runes {
+			width := 1
+
+			switch r {
+			case '&':
+				width = len("&amp;")
+			case '<', '>':
+				width = len("&lt;")
+			}
+
+			if size+width > hardLimit {
+				break
+			}
+
+			size += width
+
+			hardEnd = i + 1
+			if size <= preferredLimit {
+				preferredEnd = hardEnd
+			}
+		}
+
+		if hardEnd == len(runes) && size < hardLimit {
 			chunks = append(chunks, string(runes))
 			break
 		}
 
-		end := min(len(runes), hardLimit)
-		if bound := slackBoundary(runes[:min(len(runes), preferredLimit)]); bound > 0 {
+		end := hardEnd
+		if bound := slackBoundary(runes[:preferredEnd]); bound > 0 {
 			end = bound
-		} else if bound := slackBoundary(runes[:min(len(runes), hardLimit)]); bound > 0 {
+		} else if bound := slackBoundary(runes[:hardEnd]); bound > 0 {
 			end = bound
 		}
 

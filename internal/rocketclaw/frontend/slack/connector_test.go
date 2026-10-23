@@ -199,6 +199,17 @@ func TestSplitSlackResponseTextBoundaries(t *testing.T) {
 	chunks = splitSlackText(lateBoundary, slackPreferredChunkSize, slackTextLimit)
 	require.Len(t, chunks, 2)
 	assert.Len(t, []rune(chunks[0]), slackPreferredChunkSize+1)
+
+	for _, symbol := range []string{"&", "<", ">"} {
+		text := strings.Repeat("é"+symbol+" ", 1200)
+		chunks := splitSlackText(text, slackBlockTextLimit, slackBlockTextLimit)
+		assert.Equal(t, text, strings.Join(chunks, ""))
+
+		for _, chunk := range chunks {
+			escaped := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(chunk)
+			assert.LessOrEqual(t, len([]rune(escaped)), slackBlockTextLimit)
+		}
+	}
 }
 
 func TestGoalMessageLayoutMatchesCronStyle(t *testing.T) {
@@ -1681,6 +1692,18 @@ func TestExternalMCPRootFooterShowsLatestTurnState(t *testing.T) {
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": fmt.Sprintf("555.%d", posts)})
 		case "/chat.update":
 			if r.Form.Get("ts") == "555.1" {
+				var blocks slack.Blocks
+				if !assert.NoError(t, json.Unmarshal([]byte(r.Form.Get("blocks")), &blocks)) {
+					return
+				}
+
+				for _, block := range blocks.BlockSet {
+					if section, ok := block.(*slack.SectionBlock); ok && len([]rune(section.Text.Text)) > slackBlockTextLimit {
+						writeJSON(t, w, map[string]any{"ok": false, "error": "invalid_blocks"})
+						return
+					}
+				}
+
 				rootBlocks = append(rootBlocks, r.Form.Get("blocks"))
 				rootFileIDs = r.Form.Get("file_ids")
 			}
@@ -1694,7 +1717,18 @@ func TestExternalMCPRootFooterShowsLatestTurnState(t *testing.T) {
 				return
 			}
 
-			writeJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{{"ts": "555.1", "text": rootText, "blocks": json.RawMessage(rootBlocks[len(rootBlocks)-1]), "files": []map[string]any{{"id": "F1"}}}}})
+			var blocks slack.Blocks
+			if !assert.NoError(t, json.Unmarshal([]byte(rootBlocks[len(rootBlocks)-1]), &blocks)) {
+				return
+			}
+
+			for _, block := range blocks.BlockSet {
+				if section, ok := block.(*slack.SectionBlock); ok {
+					section.Text.Text = strings.ReplaceAll(section.Text.Text, ">", "&gt;")
+				}
+			}
+
+			writeJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{{"ts": "555.1", "text": rootText, "blocks": blocks, "files": []map[string]any{{"id": "F1"}}}}})
 		case "/reactions.add", "/reactions.remove", "/chat.delete":
 			writeJSON(t, w, map[string]any{"ok": true})
 		default:
@@ -1736,7 +1770,8 @@ func TestExternalMCPRootFooterShowsLatestTurnState(t *testing.T) {
 		require.NoError(t, connector.SendResponse(t.Context(), final))
 	}
 
-	turn("", "first", "turn-1", protocol.TerminalComplete, "first answer")
+	request := strings.Repeat("> ", 1000) + "first"
+	turn("", request, "turn-1", protocol.TerminalComplete, "first answer")
 	require.Len(t, rootBlocks, 3, "the root is posted, given its working footer, then its final state")
 	assert.Equal(t, `["F1"]`, rootFileIDs, "the turn-end edit resends the root's attachments")
 
@@ -1750,7 +1785,19 @@ func TestExternalMCPRootFooterShowsLatestTurnState(t *testing.T) {
 	_, posted := slackContextTexts(t, rootBlocks[0])
 	_, edited := slackContextTexts(t, rootBlocks[len(rootBlocks)-1])
 	assert.Equal(t, posted+1, edited, "the root keeps its request blocks")
-	assert.Contains(t, rootBlocks[len(rootBlocks)-1], `"text":"first"`)
+
+	var root slack.Blocks
+	require.NoError(t, json.Unmarshal([]byte(rootBlocks[len(rootBlocks)-1]), &root))
+
+	var body strings.Builder
+
+	for _, block := range root.BlockSet {
+		if section, ok := block.(*slack.SectionBlock); ok {
+			body.WriteString(section.Text.Text)
+		}
+	}
+
+	assert.Equal(t, strings.ReplaceAll(request, ">", "&gt;"), body.String())
 
 	failReplies = true
 	writes := len(rootBlocks)
