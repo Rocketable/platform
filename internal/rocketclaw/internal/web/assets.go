@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"html"
+	"io"
 	"io/fs"
 	"mime"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -65,11 +67,13 @@ func Handler(sentry config.SentryConfig, serverName string) http.Handler {
 
 	page = []byte(index)
 
+	var gzipWriters sync.Pool
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
 
 		if slices.Contains([]string{"/", "/cron", "/agents", "/skills", "/config", "/search", "/voice", "/pages", "/shortcuts"}, r.URL.Path) || strings.HasPrefix(r.URL.Path, "/s/") || strings.HasPrefix(r.URL.Path, "/oc/") || strings.HasPrefix(r.URL.Path, "/skills/") || strings.HasPrefix(r.URL.Path, "/pages/") {
-			serveFile(w, r, "index.html", page, "assets")
+			serveFile(w, r, "index.html", page, "assets", &gzipWriters)
 
 			return
 		}
@@ -86,7 +90,7 @@ func Handler(sentry config.SentryConfig, serverName string) http.Handler {
 			return
 		}
 
-		serveFile(w, r, name, data, immutable)
+		serveFile(w, r, name, data, immutable, &gzipWriters)
 	})
 }
 
@@ -95,7 +99,7 @@ var hashed = regexp.MustCompile(`-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$`)
 
 // serveFile sends a built file's data with an ETag, gzip-compressed for browsers that accept it. A file in the immutable
 // directory named for its content never changes under that name, so browsers keep it without asking again.
-func serveFile(w http.ResponseWriter, r *http.Request, name string, data []byte, immutable string) {
+func serveFile(w http.ResponseWriter, r *http.Request, name string, data []byte, immutable string, writers *sync.Pool) {
 	if path.Dir(name) == immutable && hashed.MatchString(path.Base(name)) {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	}
@@ -117,9 +121,18 @@ func serveFile(w http.ResponseWriter, r *http.Request, name string, data []byte,
 		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			var compressed bytes.Buffer
 
-			writer := gzip.NewWriter(&compressed)
+			writer, ok := writers.Get().(*gzip.Writer)
+			if !ok {
+				writer = gzip.NewWriter(io.Discard)
+			}
+
+			writer.Reset(&compressed)
 			_, _ = writer.Write(data)
 			_ = writer.Close()
+			// Keep the compressor, not this response's buffer.
+			writer.Reset(io.Discard)
+			writers.Put(writer)
+
 			data, tag = compressed.Bytes(), tag+"-gzip"
 
 			w.Header().Set("Content-Encoding", "gzip")
