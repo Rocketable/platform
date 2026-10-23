@@ -32,7 +32,7 @@ function serve(histories: Record<string, History>) {
         return Response.json({ ...history, messages, revision: input.id, reset: true, replacedKeys: [], removedKeys: [], entryKeys: [input.id], running: false, terminal: "", backgroundJobs: [] });
       }
       case "/api/ListQueue": return Response.json({ items: [] });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
+      case "/api/Tabs": return Response.json({ revision: "1", spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
       default: return Response.json({});
     }
   } });
@@ -63,7 +63,12 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel 
     await page.locator("main").getByText("Review finished", { exact: true }).waitFor();
     // The default Compact level folds both calls into one closed Chain of Thought row.
     await page.locator("main").getByRole("button", { name: "Used 6 tools", exact: true }).click();
-    for (const title of ["task", "task", "task", "bash · ls", "bash · rm", "bash · old"]) await page.locator("main").getByRole("button", { name: title, exact: true, expanded: false }).first().click();
+    // Auto-scroll can move the next click target while a panel is still growing.
+    await page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>('main [data-slot="trace-collapsible-content"][data-open]')].every((panel) => panel.style.getPropertyValue("--collapsible-panel-height") === "auto"));
+    for (const title of ["task", "task", "task", "bash · ls", "bash · rm", "bash · old"]) {
+      await page.locator("main").getByRole("button", { name: title, exact: true, expanded: false }).first().click();
+      await page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>('main [data-slot="trace-collapsible-content"][data-open]')].every((panel) => panel.style.getPropertyValue("--collapsible-panel-height") === "auto"));
+    }
     const href = async (link: { getAttribute(name: string): Promise<string | null> }) => new URL(await link.getAttribute("href") ?? "", page.url()).searchParams.get("delegation");
     expect(await open.count()).toBe(4);
     expect(await href(open.nth(1))).toBe("chat/call-task-0a1b2c3d");
