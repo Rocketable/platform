@@ -1635,6 +1635,57 @@ func TestShutdownReleasesCronRunnerWait(t *testing.T) {
 // U7, AE4: a saved workflow interrupted by shutdown after two finished phases and
 // one of two parallel workers resumes without re-running any finished worker. Its
 // summary matches an uninterrupted run, and $stop on the resumed run still stops it.
+// A workflow turn's steps run with the environment of an ordinary turn, such as the person who asked.
+func TestWorkflowTurnStepsSeeTurnEnvironment(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "workflows"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "workflows", "who.star"), []byte("meta = {\"name\": \"who\", \"description\": \"Who\"}\ndef main(args): return agent(\"print\")\n"), 0o600))
+	service := newTestSessionServiceAt(t, workspace)
+
+	outputs := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Input []struct{ Type, Output string }
+		}
+		if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if last := body.Input[len(body.Input)-1]; last.Type == "function_call_output" {
+			outputs <- last.Output
+
+			writeRawRunMessage(t, w, "done", "message", "done")
+
+			return
+		}
+
+		writeRawRunFunctionCall(t, w, "print", "execute", executeBashScript(`printf %s "${ROCKETCLAW_PRINCIPAL_NAME-unset}"`))
+	}))
+	t.Cleanup(server.Close)
+
+	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+
+	finals := make(chan *protocol.OutboundMessage, 4)
+	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
+	bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: testNoopRestart}, SessionService: service}, slog.New(slog.DiscardHandler))
+	runTestBridge(t, bridge)
+
+	msg := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "$workflow who", true)
+	msg.Workflow = protocol.WorkflowInvocation{Name: "who"}
+	msg.Metadata = map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice"}
+	require.NoError(t, bridge.Submit(t.Context(), msg))
+
+	readFinal(t, finals)
+	require.Equal(t, "Alice", <-outputs)
+}
+
 func TestInterruptedWorkflowResumesWithRecordedWorkers(t *testing.T) {
 	t.Parallel()
 

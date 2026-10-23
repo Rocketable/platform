@@ -37,6 +37,9 @@ func ValidateGoalCheckScriptStart(locked *config.LockedConfig, agentName, script
 		return fmt.Errorf("goal check script agent %q is not configured", strings.TrimSpace(agentName))
 	}
 
+	// No turn runs yet: a rule built from a turn's variable grants nothing, and a deny rule still denies.
+	rocketcode.InterpolatePermissions(&agent, nil)
+
 	_, err = validateGoalCheckScript(root, cfg.Workspace, script, agent.Permission)
 
 	return err
